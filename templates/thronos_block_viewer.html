@@ -3,7 +3,7 @@
 {% block content %}
 <div class="container mx-auto px-4 py-8">
     <h1 class="text-3xl font-bold mb-6 text-white">Thronos Block Explorer</h1>
-    
+
     <div class="overflow-x-auto bg-gray-800 rounded-lg shadow-xl">
         <table class="min-w-full text-left text-gray-300">
             <thead class="bg-gray-700 text-gray-100 uppercase font-semibold text-sm">
@@ -59,9 +59,7 @@
 <script>
 function copy_to_clipboard(elm_id) {
     const text = document.getElementById(elm_id).textContent;
-    navigator.clipboard.writeText(text).then(() => {
-        // Optional: Visual feedback could be added here
-    }).catch(err => {
+    navigator.clipboard.writeText(text).catch(err => {
         console.error('Failed to copy: ', err);
     });
 }

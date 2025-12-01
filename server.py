@@ -309,51 +309,7 @@ def serve_contract(filename):
 
 @app.route("/viewer")
 def viewer():
-    """
-    Thronos Block Explorer view.
-    Διαβάζει το phantom_tx_chain.json, φιλτράρει μόνο τα blocks
-    (entries με reward) και τα περνάει στο template ως 'blocks'.
-    """
-    chain = load_json(CHAIN_FILE, [])
-
-    blocks = []
-    for i, entry in enumerate(chain):
-        if not isinstance(entry, dict):
-            continue
-
-        # Block = ό,τι έχει reward (mined ή auto-mined pledge)
-        if entry.get("reward") is None:
-            continue
-
-        height = entry.get("height", i)
-
-        # Υπολογισμός burned fee / pool fee
-        fee_burned = 0.0
-        rs = entry.get("reward_split")
-        if isinstance(rs, dict):
-            # Κανονικό mined block: καίμε το 10%
-            fee_burned = rs.get("burn", 0.0)
-        elif "pool_fee" in entry:
-            # Auto-mined pledge block
-            fee_burned = entry.get("pool_fee", 0.0)
-        elif "fee_burned" in entry:
-            # fallback για πιθανό μελλοντικό σχήμα
-            fee_burned = entry.get("fee_burned", 0.0)
-
-        blocks.append({
-            # αυτό που ζητάει το template:
-            "index": height,
-            "hash": entry.get("block_hash") or entry.get("tx_id", ""),
-            "fee_burned": fee_burned,
-            # προς το παρόν δεν έχουμε embedded TXs ανά block, οπότε κενή λίστα
-            "transactions": [],
-            "nonce": entry.get("nonce", "-"),
-        })
-
-    # Να τα βλέπεις από το πιο πρόσφατο προς τα πίσω
-    blocks.sort(key=lambda b: b["index"], reverse=True)
-
-    return render_template("thronos_block_viewer.html", blocks=blocks)
+    return render_template("thronos_block_viewer.html")
 
 @app.route("/wallet")
 def wallet_page():

@@ -866,7 +866,8 @@ def admin_migrate_seeds():
     changed = []
 
     for p in pledges:
-        if p.get("send_seed_hash") and p.get("send_auth_hash"):\n            continue
+        if p.get("send_seed_hash") and p.get("send_auth_hash"):
+            continue
 
         thr_addr    = p["thr_address"]
         btc_address = p["btc_address"]

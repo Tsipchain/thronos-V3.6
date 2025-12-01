@@ -8,12 +8,6 @@
 # - migration για ήδη υπάρχοντα pledges -> send_seed / send_auth_hash
 # - last_block.json για σταθερό viewer/home status
 # - recovery flow via steganography
-# - Dynamic Difficulty & Halving
-# - AI Agent Auto-Registration
-# - Token Chart & Network Stats
-# - Bitcoin Bridge Watcher & IoT Nodes
-# - SHA256d PoW Support
-# - Quantum-Secured AI Chat
 
 import os
 import json
@@ -21,20 +15,12 @@ import time
 import hashlib
 import logging
 import secrets
-import random
-import uuid
-import zipfile
-import io
-import struct
-import binascii
-from datetime import datetime
-from PIL import Image
 
 import requests
 from flask import (
     Flask, request, jsonify,
     render_template, send_from_directory,
-    redirect, url_for, send_file
+    redirect, url_for
 )
 from werkzeug.utils import secure_filename
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -42,7 +28,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from phantom_gateway_mainnet import get_btc_txns
 from secure_pledge_embed import create_secure_pdf_contract
 from phantom_decode import decode_payload_from_image
-from ai_agent_service import ThronosAI
 
 # ─── CONFIG ────────────────────────────────────────
 app = Flask(__name__)
@@ -50,45 +35,40 @@ app = Flask(__name__)
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
+# Railway volume → /app/data
+# Ensure DATA_DIR is persistent. If run locally, it will be under current dir/data.
+# On Railway, mount a volume to /app/data.
 DATA_DIR   = os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data"))
 os.makedirs(DATA_DIR, exist_ok=True)
 
 LEDGER_FILE   = os.path.join(DATA_DIR, "ledger.json")
 CHAIN_FILE    = os.path.join(DATA_DIR, "phantom_tx_chain.json")
 PLEDGE_CHAIN  = os.path.join(DATA_DIR, "pledge_chain.json")
-LAST_BLOCK_FILE = os.path.join(DATA_DIR, "last_block.json")
-WHITELIST_FILE = os.path.join(DATA_DIR, "free_pledge_whitelist.json")
-AI_CREDS_FILE = os.path.join(DATA_DIR, "ai_agent_credentials.json")
-WATCHER_LEDGER_FILE = os.path.join(DATA_DIR, "watcher_ledger.json")
-IOT_DATA_FILE = os.path.join(DATA_DIR, "iot_data.json")
 
+# κρατάμε πάντα μια σύνοψη του τελευταίου block/tx
+LAST_BLOCK_FILE = os.path.join(DATA_DIR, "last_block.json")
+
+# Whitelist για free pledges (χωρίς BTC)
+WHITELIST_FILE = os.path.join(DATA_DIR, "free_pledge_whitelist.json")
 ADMIN_SECRET   = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
 
 BTC_RECEIVER  = "1QFeDPwEF8yEgPEfP79hpc8pHytXMz9oEQ"
 MIN_AMOUNT    = 0.00001
 
+# ΣΗΜΑΝΤΙΚΟ: Τα contracts (PDF/PNG) στο DATA_DIR (volume) – ΔΕΝ χάνονται σε redeploy
 CONTRACTS_DIR = os.path.join(DATA_DIR, "contracts")
 os.makedirs(CONTRACTS_DIR, exist_ok=True)
 
-UPLOADS_DIR = os.path.join(DATA_DIR, "uploads")
-os.makedirs(UPLOADS_DIR, exist_ok=True)
+SEND_FEE = 0.0015  # THR fee που καίγεται σε κάθε send
+MINING_DIFFICULTY = 5 # Number of leading zeros required for PoW
 
-SEND_FEE = 0.0015
-
-# --- Mining Config ---
-# Initial difficulty: 5 hex zeros (20 bits). 2^256 / 2^20 = 2^236
-INITIAL_TARGET = 2 ** 236
-TARGET_BLOCK_TIME = 60  # seconds
-RETARGET_INTERVAL = 10  # blocks
-
+# New Fee Distribution Config
 AI_WALLET_ADDRESS = "THR_AI_AGENT_WALLET_V1"
 BURN_ADDRESS = "0x0"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("pledge")
 
-# Initialize AI
-ai_agent = ThronosAI()
 
 # ─── HELPERS ───────────────────────────────────────
 def load_json(path, default):
@@ -104,52 +84,18 @@ def save_json(path, data):
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
 
-def sha256d(data):
-    """Double SHA-256 hash."""
-    return hashlib.sha256(hashlib.sha256(data).digest()).digest()
-
-def target_to_bits(target):
-    """Converts a target integer to compact 'nbits' format."""
-    if target == 0:
-        return 0
-    target_hex = hex(target)[2:]
-    if len(target_hex) % 2 != 0:
-        target_hex = '0' + target_hex
-    
-    # Convert to bytes
-    target_bytes = bytes.fromhex(target_hex)
-    
-    # If the first bit is 1 (>= 0x80), we need to prepend a zero byte 
-    # because compact format is signed but target is unsigned
-    if target_bytes[0] >= 0x80:
-        target_bytes = b'\x00' + target_bytes
-        
-    exponent = len(target_bytes)
-    coefficient = target_bytes[:3]
-    
-    # If we have fewer than 3 bytes, pad right with zeros
-    if len(coefficient) < 3:
-        coefficient = coefficient + b'\x00' * (3 - len(coefficient))
-        
-    # Combine: exponent (1 byte) + coefficient (3 bytes)
-    # But exponent is stored as the most significant byte
-    bits_val = (exponent << 24) | int.from_bytes(coefficient, 'big')
-    return bits_val
 
 def calculate_reward(height: int) -> float:
-    """
-    Halving Schedule:
-    Epoch 0 (0-209,999): 1.0 THR
-    Halves every 210,000 blocks.
-    Ends after Epoch 9 (2,100,000+ blocks).
-    """
     halvings = height // 210000
-    if halvings > 9:
-        return 0.0
     return round(1.0 / (2 ** halvings), 6)
 
 
 def update_last_block(entry, is_block=True):
+    """
+    Γράφει μια μικρή σύνοψη του τελευταίου block/tx στο LAST_BLOCK_FILE,
+    ώστε ο viewer & το home να έχουν πάντα status ακόμη κι αν το chain
+    αδειάσει κάποτε.
+    """
     summary = {
         "height": entry.get("height"),
         "block_hash": entry.get("block_hash") or entry.get("tx_id"),
@@ -159,199 +105,50 @@ def update_last_block(entry, is_block=True):
     }
     save_json(LAST_BLOCK_FILE, summary)
 
-def verify_btc_payment(btc_address, min_amount=MIN_AMOUNT):
-    try:
-        txns = get_btc_txns(btc_address, BTC_RECEIVER)
-        paid = any(
-            tx["to"] == BTC_RECEIVER and tx["amount_btc"] >= min_amount
-            for tx in txns
-        )
-        return paid, txns
-    except Exception as e:
-        logger.error(f"Watcher Error: {e}")
-        return False, []
-
-def get_mining_target():
+def verify_btc_payment(btc_address, min_amount):
     """
-    Calculates the required target for the NEXT block based on DDA.
+    Placeholder for Watcher logic.
+    In the future, this function will:
+    1. Check the BTC network for transactions to BTC_RECEIVER from btc_address.
+    2. Verify confirmations.
+    3. Return True if payment is verified.
     """
-    chain = load_json(CHAIN_FILE, [])
-    # Filter only blocks (not transfers)
-    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
-    
-    if len(blocks) < RETARGET_INTERVAL:
-        return INITIAL_TARGET
-        
-    last_block = blocks[-1]
-    # Default to INITIAL_TARGET if 'target' key missing (e.g. old blocks or pledge blocks)
-    last_target = int(last_block.get("target", INITIAL_TARGET))
-    
-    # Only adjust if we hit the interval
-    if len(blocks) % RETARGET_INTERVAL != 0:
-        return last_target
-        
-    # Retarget Logic
-    start_block = blocks[-RETARGET_INTERVAL]
-    
-    try:
-        t_fmt = "%Y-%m-%d %H:%M:%S UTC"
-        t_end = datetime.strptime(last_block["timestamp"], t_fmt).timestamp()
-        t_start = datetime.strptime(start_block["timestamp"], t_fmt).timestamp()
-    except Exception as e:
-        logger.error(f"Time parse error during retarget: {e}")
-        return last_target
-        
-    actual_time = t_end - t_start
-    expected_time = RETARGET_INTERVAL * TARGET_BLOCK_TIME
-    
-    if actual_time <= 0: actual_time = 1
-    
-    ratio = actual_time / expected_time
-    # Clamp oscillation
-    if ratio < 0.25: ratio = 0.25
-    if ratio > 4.00: ratio = 4.00
-    
-    new_target = int(last_target * ratio)
-    
-    # Clamp to min difficulty (max target)
-    if new_target > INITIAL_TARGET:
-        new_target = INITIAL_TARGET
-        
-    return new_target
-
-def ensure_ai_wallet():
-    """
-    Checks if the AI Wallet exists in the pledge chain.
-    If not, creates a 'System Pledge' for it so it has a valid Send Secret.
-    """
-    pledges = load_json(PLEDGE_CHAIN, [])
-    ai_pledge = next((p for p in pledges if p.get("thr_address") == AI_WALLET_ADDRESS), None)
-    
-    if not ai_pledge:
-        print(f"🤖 Initializing AI Agent Wallet: {AI_WALLET_ADDRESS}")
-        
-        # Generate credentials
-        send_seed = secrets.token_hex(16)
-        send_seed_hash = hashlib.sha256(send_seed.encode()).hexdigest()
-        send_auth_hash = hashlib.sha256(f"{send_seed}:auth".encode()).hexdigest()
-        
-        new_pledge = {
-            "btc_address": "SYSTEM_AI_RESERVE",
-            "pledge_text": "Thronos AI Agent Genesis Allocation",
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-            "pledge_hash": "AI_GENESIS_" + secrets.token_hex(8),
-            "thr_address": AI_WALLET_ADDRESS,
-            "send_seed_hash": send_seed_hash,
-            "send_auth_hash": send_auth_hash,
-            "has_passphrase": False,
-            "is_system": True
-        }
-        
-        pledges.append(new_pledge)
-        save_json(PLEDGE_CHAIN, pledges)
-        
-        # Save credentials for the user/agent to use
-        creds = {
-            "thr_address": AI_WALLET_ADDRESS,
-            "auth_secret": send_seed,
-            "note": "Copy these into your ai_agent/agent_config.json"
-        }
-        save_json(AI_CREDS_FILE, creds)
-        print(f"✅ AI Wallet Registered. Credentials saved to {AI_CREDS_FILE}")
-    else:
-        print(f"🤖 AI Wallet {AI_WALLET_ADDRESS} is already registered.")
-
-def decode_iot_steganography(image_path):
-    """
-    Decodes LSB steganography from IoT node images.
-    Format: JSON string + "###END###"
-    """
-    try:
-        img = Image.open(image_path)
-        width, height = img.size
-        pixels = img.load()
-        
-        binary_data = ""
-        delimiter = "###END###"
-        
-        # Simplified extraction for MVP
-        chars = []
-        current_byte = ""
-        
-        for y in range(height):
-            for x in range(width):
-                r, g, b = pixels[x, y]
-                for val in (r, g, b):
-                    current_byte += str(val & 1)
-                    if len(current_byte) == 8:
-                        char = chr(int(current_byte, 2))
-                        chars.append(char)
-                        current_byte = ""
-                        
-                        if len(chars) >= len(delimiter):
-                            tail = "".join(chars[-len(delimiter):])
-                            if tail == delimiter:
-                                json_str = "".join(chars[:-len(delimiter)])
-                                return json.loads(json_str)
-        return None
-    except Exception as e:
-        print(f"Stego Decode Error: {e}")
-        return None
+    # TODO: Implement actual BTC node connection or robust API check here.
+    # For now, we rely on phantom_gateway_mainnet.get_btc_txns called in pledge_submit
+    pass
 
 # ─── BASIC PAGES ───────────────────────────────────
 @app.route("/")
 def home():
     return render_template("index.html")
 
+
 @app.route("/contracts/<path:filename>")
 def serve_contract(filename):
+    # Σερβίρει PDF + PNG από data/contracts (volume)
     return send_from_directory(CONTRACTS_DIR, filename)
+
 
 @app.route("/viewer")
 def viewer():
     return render_template("thronos_block_viewer.html")
 
+
 @app.route("/wallet")
 def wallet_page():
     return render_template("wallet_viewer.html")
+
 
 @app.route("/send")
 def send_page():
     return render_template("send.html")
 
-@app.route("/tokenomics")
-def tokenomics_page():
-    return render_template("tokenomics.html")
-
-@app.route("/whitepaper")
-def whitepaper_page():
-    return render_template("whitepaper.html")
-
-@app.route("/roadmap")
-def roadmap_page():
-    return render_template("roadmap.html")
-
-@app.route("/token_chart")
-def token_chart_page():
-    return render_template("token_chart.html")
-
-# ─── NEW SERVICES PAGES ────────────────────────────
-@app.route("/bridge")
-def bridge_page():
-    return render_template("bridge.html")
-
-@app.route("/iot")
-def iot_page():
-    return render_template("iot.html")
-
-@app.route("/chat")
-def chat_page():
-    return render_template("chat.html")
 
 # ─── RECOVERY FLOW ─────────────────────────────────
 @app.route("/recovery")
 def recovery_page():
     return render_template("recovery.html")
+
 
 @app.route("/recover_submit", methods=["POST"])
 def recover_submit():
@@ -368,17 +165,22 @@ def recover_submit():
     
     if file:
         filename = secure_filename(file.filename)
+        # Save temporarily in DATA_DIR to avoid permission issues
         temp_path = os.path.join(DATA_DIR, f"temp_{int(time.time())}_{filename}")
         try:
             file.save(temp_path)
+            
+            # Attempt decode with passphrase
             payload = decode_payload_from_image(temp_path, passphrase)
+            
+            # Clean up
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             
             if payload:
                 return jsonify(status="success", payload=payload), 200
             else:
-                return jsonify(error="Failed to decode or decrypt."), 400
+                return jsonify(error="Failed to decode or decrypt. Check your file and passphrase."), 400
         except Exception as e:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
@@ -386,19 +188,27 @@ def recover_submit():
             
     return jsonify(error="Unknown error"), 500
 
-# ─── STATUS APIs ───────────────────────────────────
+
+# ─── STATUS APIs (για home + viewer) ───────────────
 @app.route("/chain")
 def get_chain():
     return jsonify(load_json(CHAIN_FILE, [])), 200
 
+
 @app.route("/last_block")
 def api_last_block():
+    """
+    Επιστρέφει σύνοψη τελευταίου block/tx από last_block.json.
+    Αν δεν υπάρχει ακόμα, γυρνάει κενό dict.
+    """
     summary = load_json(LAST_BLOCK_FILE, {})
     return jsonify(summary), 200
+
 
 @app.route("/last_block_hash")
 def last_block_hash():
     chain = load_json(CHAIN_FILE, [])
+    # μόνο κανονικά blocks (όχι transfers)
     blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
     if blocks:
         last = blocks[-1]
@@ -410,229 +220,56 @@ def last_block_hash():
     else:
         return jsonify(last_hash="0" * 64, height=-1, timestamp=None)
 
+
 @app.route("/mining_info")
 def mining_info():
     """
-    Returns info for miners: current target, difficulty, reward.
+    Provides all necessary info for miners/proxy:
+    - difficulty (leading zeros)
+    - target (hex target)
+    - nbits (compact target)
+    - last_hash
     """
-    target = get_mining_target()
-    nbits = target_to_bits(target)
-    
     chain = load_json(CHAIN_FILE, [])
-    height = len(chain) # Next height
-    reward = calculate_reward(height)
+    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
     
+    if blocks:
+        last_hash = blocks[-1].get("block_hash", "")
+    else:
+        last_hash = "0" * 64
+
+    # Calculate Target from Difficulty
+    # Difficulty 5 means target is 00000FFFFF... (256 bits)
+    # This is a simplification. Real target calculation is more complex.
+    # For our MVP:
+    target_int = int("F" * (64 - MINING_DIFFICULTY), 16)
+    target_hex = f"{target_int:064x}"
+    
+    # Fake nbits for Stratum (usually 4 bytes)
+    # We'll just use a placeholder that the proxy can read
+    nbits = "1d00ffff" 
+
     return jsonify({
-        "target": hex(target),
-        "nbits": hex(nbits), # Return hex string of nbits
-        "difficulty_int": int(INITIAL_TARGET / target),
-        "reward": reward,
-        "height": height
+        "difficulty": MINING_DIFFICULTY,
+        "difficulty_int": 1, # Stratum difficulty (1 = simplest)
+        "target": target_hex,
+        "last_hash": last_hash,
+        "nbits": nbits
     }), 200
 
-@app.route("/api/network_stats")
-def network_stats():
-    pledges = load_json(PLEDGE_CHAIN, [])
-    chain = load_json(CHAIN_FILE, [])
-    ledger = load_json(LEDGER_FILE, {})
-    
-    # Calculate some stats
-    pledge_count = len(pledges)
-    tx_count = len(chain)
-    burned = ledger.get(BURN_ADDRESS, 0)
-    ai_balance = ledger.get(AI_WALLET_ADDRESS, 0)
-    
-    # Get pledge growth over time
-    pledge_dates = {}
-    for p in pledges:
-        # timestamp format: "2025-12-01 12:00:00 UTC"
-        ts = p.get("timestamp", "").split(" ")[0] # Just date
-        pledge_dates[ts] = pledge_dates.get(ts, 0) + 1
-        
-    sorted_dates = sorted(pledge_dates.keys())
-    cumulative_pledges = []
-    running_total = 0
-    for d in sorted_dates:
-        running_total += pledge_dates[d]
-        cumulative_pledges.append({"date": d, "count": running_total})
-        
-    return jsonify({
-        "pledge_count": pledge_count,
-        "tx_count": tx_count,
-        "burned": burned,
-        "ai_balance": ai_balance,
-        "pledge_growth": cumulative_pledges
-    })
-
-# ─── NEW SERVICES APIs ─────────────────────────────
-@app.route("/api/bridge/data")
-def bridge_data():
-    """Returns the content of the watcher ledger."""
-    data = load_json(WATCHER_LEDGER_FILE, [])
-    return jsonify(data), 200
-
-@app.route("/api/iot/data")
-def iot_data():
-    """Returns IoT vehicle data from the JSON store."""
-    data = load_json(IOT_DATA_FILE, [])
-    if not data:
-        return jsonify([]), 200
-    return jsonify(data), 200
-
-@app.route("/api/iot/submit", methods=["POST"])
-def iot_submit():
-    """
-    Receives a steganographically encoded image from a vehicle node.
-    Decodes it and updates the IoT data store.
-    """
-    if 'file' not in request.files:
-        return jsonify(error="No file uploaded"), 400
-        
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify(error="No file selected"), 400
-        
-    try:
-        # Save temp file
-        filename = secure_filename(file.filename)
-        temp_path = os.path.join(UPLOADS_DIR, f"iot_temp_{int(time.time())}_{filename}")
-        file.save(temp_path)
-        
-        # Decode
-        data = decode_iot_steganography(temp_path)
-        
-        # Cleanup
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-            
-        if not data:
-            return jsonify(error="Failed to decode steganography"), 400
-            
-        # Validate Data Structure
-        if "vehicle_id" not in data:
-            return jsonify(error="Invalid data format"), 400
-            
-        # Update IoT Data Store
-        iot_list = load_json(IOT_DATA_FILE, [])
-        
-        # Remove old entry for this vehicle if exists
-        iot_list = [v for v in iot_list if v.get("vehicle_id") != data["vehicle_id"]]
-        
-        # Add new entry
-        iot_list.append(data)
-        
-        # Keep list size manageable
-        if len(iot_list) > 100:
-            iot_list = iot_list[-100:]
-            
-        save_json(IOT_DATA_FILE, iot_list)
-        
-        print(f"🚗 IoT Update: {data['vehicle_id']} | Odo: {data.get('odometer')}")
-        return jsonify(status="success", vehicle_id=data["vehicle_id"]), 200
-        
-    except Exception as e:
-        print(f"IoT Submit Error: {e}")
-        return jsonify(error=str(e)), 500
-
-@app.route("/api/chat", methods=["POST"])
-def api_chat():
-    """
-    Handles chat requests to the AI Agent.
-    """
-    data = request.get_json() or {}
-    user_message = data.get("message", "").strip()
-    
-    if not user_message:
-        return jsonify(error="Message required"), 400
-        
-    result = ai_agent.generate_response(user_message)
-    return jsonify(result), 200
-
-@app.route("/register_node", methods=["POST"])
-def register_node():
-    """
-    Registers a new IoT node and returns a downloadable zip kit.
-    """
-    address = request.form.get("address", "").strip()
-    secret = request.form.get("secret", "").strip()
-    
-    if not address or not secret:
-        return "Address and Secret are required", 400
-        
-    node_id = str(uuid.uuid4())
-    
-    # 1. Create node_config.json
-    config = {
-        "node_id": node_id,
-        "wallet_address": address,
-        "secret": secret,
-        "server_url": "https://thrchain.up.railway.app"
-    }
-    config_json = json.dumps(config, indent=4)
-    
-    # 2. Create start_iot.py
-    start_script = f"""
-import os
-import sys
-import subprocess
-
-print("Starting Thronos IoT Vehicle Node...")
-print("Node ID: {node_id}")
-print("Wallet: {address}")
-
-try:
-    # Run the main node script
-    subprocess.run([sys.executable, "iot_vehicle_node.py"], check=True)
-except KeyboardInterrupt:
-    print("\\nNode stopped.")
-except Exception as e:
-    print(f"Error: {{e}}")
-    input("Press Enter to exit...")
-"""
-
-    # 3. Read iot_vehicle_node.py
-    try:
-        with open(os.path.join(BASE_DIR, "iot_vehicle_node.py"), "r") as f:
-            node_script = f.read()
-    except FileNotFoundError:
-        node_script = "# iot_vehicle_node.py not found on server."
-        
-    # 4. Create Zip
-    memory_file = io.BytesIO()
-    with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("node_config.json", config_json)
-        zf.writestr("start_iot.py", start_script)
-        zf.writestr("iot_vehicle_node.py", node_script)
-        
-        # Include PIC OF THE /images/photo1764616626.jpg
-        pic_path = os.path.join(BASE_DIR, "PIC OF THE /images/photo1764616626.jpg")
-        if os.path.exists(pic_path):
-            zf.write(pic_path, "PIC OF THE /images/photo1764616626.jpg")
-        else:
-            zf.writestr("PIC OF THE /images/photo1764616626.jpg", "") 
-            
-        zf.writestr("README.txt", "1. Install Python 3.\\n2. Run 'pip install requests pillow cryptography'.\\n3. Run 'python start_iot.py'.")
-        
-    memory_file.seek(0)
-    
-    return send_file(
-        memory_file,
-        mimetype='application/zip',
-        as_attachment=True,
-        download_name=f'iot_node_kit_{node_id[:8]}.zip'
-    )
 
 # ─── PLEDGE FLOW ───────────────────────────────────
 @app.route("/pledge")
 def pledge_form():
     return render_template("pledge_form.html")
 
+
 @app.route("/pledge_submit", methods=["POST"])
 def pledge_submit():
     data = request.get_json() or {}
     btc_address = (data.get("btc_address") or "").strip()
     pledge_text = (data.get("pledge_text") or "").strip()
-    passphrase  = (data.get("passphrase") or "").strip()
+    passphrase  = (data.get("passphrase") or "").strip()  # Optional passphrase
 
     if not btc_address:
         return jsonify(error="Missing BTC address"), 400
@@ -640,13 +277,16 @@ def pledge_submit():
     pledges = load_json(PLEDGE_CHAIN, [])
     exists = next((p for p in pledges if p["btc_address"] == btc_address), None)
     if exists:
+        # Ήδη υπάρχει pledge για αυτό το BTC.
         return jsonify(
             status="already_verified",
             thr_address=exists["thr_address"],
             pledge_hash=exists["pledge_hash"],
             pdf_filename=exists.get("pdf_filename", f"pledge_{exists['thr_address']}.pdf"),
+            # send_secret ΔΕΝ το ξαναδίνουμε εδώ
         ), 200
 
+    # --- BTC verification ή free mode με whitelist ---
     free_list   = load_json(WHITELIST_FILE, [])
     is_dev_free = btc_address in free_list
 
@@ -654,7 +294,11 @@ def pledge_submit():
         paid = True
         txns = []
     else:
-        paid, txns = verify_btc_payment(btc_address)
+        txns = get_btc_txns(btc_address, BTC_RECEIVER)
+        paid = any(
+            tx["to"] == BTC_RECEIVER and tx["amount_btc"] >= MIN_AMOUNT
+            for tx in txns
+        )
 
     if not paid:
         return jsonify(
@@ -663,12 +307,15 @@ def pledge_submit():
             txns=txns,
         ), 200
 
+    # Δημιουργία THR address + pledge hash
     thr_addr = f"THR{int(time.time() * 1000)}"
     phash = hashlib.sha256((btc_address + pledge_text).encode()).hexdigest()
 
-    send_seed      = secrets.token_hex(16)
+    # Send seed (seed phrase για /send_thr)
+    send_seed      = secrets.token_hex(16)  # 32 hex chars
     send_seed_hash = hashlib.sha256(send_seed.encode()).hexdigest()
     
+    # Υπολογισμός send_auth_hash με υποστήριξη passphrase
     if passphrase:
         auth_string = f"{send_seed}:{passphrase}:auth"
     else:
@@ -684,12 +331,15 @@ def pledge_submit():
         "thr_address": thr_addr,
         "send_seed_hash": send_seed_hash,
         "send_auth_hash": send_auth_hash,
-        "has_passphrase": bool(passphrase)
+        "has_passphrase": bool(passphrase) # Flag για να ξέρουμε αν απαιτείται passphrase
     }
 
+    # Ύψος chain για το QR / secure PDF
     chain  = load_json(CHAIN_FILE, [])
     height = len(chain)
 
+    # Δημιουργία secure PDF (AES + QR + stego PNG, με send_seed)
+    # Pass the passphrase for encryption
     pdf_name = create_secure_pdf_contract(
         btc_address=btc_address,
         pledge_text=pledge_text,
@@ -701,6 +351,7 @@ def pledge_submit():
         passphrase=passphrase 
     )
 
+    # κρατάμε και το filename πίσω στο pledge
     pledge_entry["pdf_filename"] = pdf_name
     pledges.append(pledge_entry)
     save_json(PLEDGE_CHAIN, pledges)
@@ -710,9 +361,11 @@ def pledge_submit():
         thr_address=thr_addr,
         pledge_hash=phash,
         pdf_filename=pdf_name,
-        send_secret=send_seed,
+        send_secret=send_seed,  # ΜΟΝΟ στον client (σαν seed)
     ), 200
 
+
+# ─── WALLET APIS ───────────────────────────────────
 @app.route("/wallet_data/<thr_addr>")
 def wallet_data(thr_addr):
     ledger  = load_json(LEDGER_FILE, {})
@@ -727,10 +380,13 @@ def wallet_data(thr_addr):
     ]
     return jsonify(balance=bal, transactions=history), 200
 
+
 @app.route("/wallet/<thr_addr>")
 def wallet_redirect(thr_addr):
     return redirect(url_for("wallet_data", thr_addr=thr_addr)), 302
 
+
+# ─── SEND THR (auth_secret = send_seed από PDF/stego) ─────
 @app.route("/send_thr", methods=["POST"])
 def send_thr():
     data = request.get_json() or {}
@@ -738,8 +394,8 @@ def send_thr():
     from_thr    = (data.get("from_thr") or "").strip()
     to_thr      = (data.get("to_thr") or "").strip()
     amount_raw  = data.get("amount", 0)
-    auth_secret = (data.get("auth_secret") or "").strip()
-    passphrase  = (data.get("passphrase") or "").strip()
+    auth_secret = (data.get("auth_secret") or "").strip()  # εδώ βάζει ο χρήστης το seed
+    passphrase  = (data.get("passphrase") or "").strip()   # Optional passphrase
 
     try:
         amount = float(amount_raw)
@@ -765,6 +421,8 @@ def send_thr():
     if not stored_auth_hash:
         return jsonify(error="send_not_enabled_for_this_thr"), 400
 
+    # auth_secret = send_seed -> hash για auth
+    # Check if passphrase is required/provided and construct auth string accordingly
     if sender_pledge.get("has_passphrase"):
         if not passphrase:
              return jsonify(error="passphrase_required"), 400
@@ -812,6 +470,8 @@ def send_thr():
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
+
+    # ενημερώνουμε last_block.json (εδώ τύπου transfer)
     update_last_block(tx, is_block=False)
 
     return jsonify(
@@ -821,6 +481,7 @@ def send_thr():
         new_balance_to=receiver_balance,
     ), 200
 
+
 # ─── ADMIN WHITELIST + MIGRATION ───────────────────
 @app.route("/admin/whitelist", methods=["GET"])
 def admin_whitelist_page():
@@ -828,6 +489,7 @@ def admin_whitelist_page():
     if secret != ADMIN_SECRET:
         return "Forbidden (wrong or missing secret)", 403
     return render_template("admin_whitelist.html", admin_secret=secret)
+
 
 @app.route("/admin/whitelist/add", methods=["POST"])
 def admin_whitelist_add():
@@ -846,6 +508,7 @@ def admin_whitelist_add():
 
     return jsonify(status="ok", whitelist=wl), 200
 
+
 @app.route("/admin/whitelist/list", methods=["GET"])
 def admin_whitelist_list():
     secret = request.args.get("secret", "")
@@ -855,8 +518,19 @@ def admin_whitelist_list():
     wl = load_json(WHITELIST_FILE, [])
     return jsonify(whitelist=wl), 200
 
+
 @app.route("/admin/migrate_seeds", methods=["POST", "GET"])
 def admin_migrate_seeds():
+    """
+    Migration για ΠΑΛΙΑ pledges:
+
+    - βρίσκει entries χωρίς send_seed_hash
+    - δημιουργεί send_seed, send_seed_hash, send_auth_hash
+    - ξαναφτιάχνει PDF με stego fire + seed
+    - επιστρέφει {thr_address, btc_address, send_seed, pdf_filename}
+      για να κρατήσεις τα νέα seeds.
+    """
+
     payload = request.get_json() or {}
     secret = request.args.get("secret", "") or payload.get("secret", "")
     if secret != ADMIN_SECRET:
@@ -867,7 +541,7 @@ def admin_migrate_seeds():
 
     for p in pledges:
         if p.get("send_seed_hash") and p.get("send_auth_hash"):
-            continue
+            continue  # ήδη migrated
 
         thr_addr    = p["thr_address"]
         btc_address = p["btc_address"]
@@ -880,7 +554,7 @@ def admin_migrate_seeds():
 
         p["send_seed_hash"] = send_seed_hash
         p["send_auth_hash"] = send_auth_hash
-        p["has_passphrase"] = False
+        p["has_passphrase"] = False # Migration assumes no passphrase for old pledges
 
         chain  = load_json(CHAIN_FILE, [])
         height = len(chain)
@@ -906,93 +580,61 @@ def admin_migrate_seeds():
     save_json(PLEDGE_CHAIN, pledges)
     return jsonify(migrated=changed), 200
 
+
 # ─── MINING ENDPOINT ───────────────────────────────
 @app.route("/submit_block", methods=["POST"])
 def submit_block():
     """
     Accepts PoW submissions from miners.
-    Supports both Legacy (String) and Stratum (SHA256d Header).
+    Requires: thr_address, nonce, pow_hash, prev_hash
     """
     data = request.get_json() or {}
-    
     thr_address = data.get("thr_address")
     nonce = data.get("nonce")
+    pow_hash = data.get("pow_hash")
+    prev_hash = data.get("prev_hash")
     
-    # Common checks
-    if not thr_address or nonce is None:
+    if not all([thr_address, nonce is not None, pow_hash, prev_hash]):
         return jsonify(error="Missing mining data"), 400
         
     # 1. Verify last hash matches current chain tip
     chain = load_json(CHAIN_FILE, [])
+    # Get last block (filter out transfers if needed, or just take last entry)
+    # For simplicity, we check against what the miner claims is prev_hash
+    # In production, we must strictly check against server's actual last block hash
+    
     blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
     if blocks:
         server_last_hash = blocks[-1].get("block_hash", "")
     else:
         server_last_hash = "0" * 64
         
-    # Check if Stratum (Merkle Root present)
-    is_stratum = "merkle_root" in data
-    
-    pow_hash = ""
-    prev_hash = ""
-    
-    if is_stratum:
-        # Stratum / SHA256d Verification
-        merkle_root = data.get("merkle_root")
-        prev_hash = data.get("prev_hash")
-        time_val = data.get("time")
-        nbits = data.get("nbits")
-        version = data.get("version", 1)
+    if prev_hash != server_last_hash:
+        return jsonify(error="Stale block (prev_hash mismatch)"), 400
         
-        if not all([merkle_root, prev_hash, time_val, nbits]):
-             return jsonify(error="Missing Stratum fields"), 400
-             
-        if prev_hash != server_last_hash:
-            return jsonify(error="Stale block (prev_hash mismatch)"), 400
-            
-        # Construct Header (Little Endian)
-        # Version (4) + PrevHash (32) + Merkle (32) + Time (4) + Bits (4) + Nonce (4)
-        try:
-            header = struct.pack("<I", version)
-            header += bytes.fromhex(prev_hash)[::-1] # Reverse for LE
-            header += bytes.fromhex(merkle_root)[::-1]
-            header += struct.pack("<I", time_val)
-            header += struct.pack("<I", nbits)
-            header += struct.pack("<I", nonce)
-            
-            # Double SHA256
-            hash_bytes = sha256d(header)
-            # Result is LE, reverse to get BE hex string for comparison
-            pow_hash = hash_bytes[::-1].hex()
-            
-        except Exception as e:
-            return jsonify(error=f"Header construction failed: {e}"), 400
-            
-    else:
-        # Legacy String Verification
-        pow_hash = data.get("pow_hash")
-        prev_hash = data.get("prev_hash")
-        
-        if prev_hash != server_last_hash:
-            return jsonify(error="Stale block (prev_hash mismatch)"), 400
-            
-        nonce_str = str(nonce).encode()
-        check_data = (prev_hash + thr_address).encode() + nonce_str
-        check_hash = hashlib.sha256(check_data).hexdigest()
-        
-        if check_hash != pow_hash:
-            return jsonify(error="Invalid hash calculation"), 400
-            
-    # 3. Verify Target (Dynamic Difficulty)
-    current_target = get_mining_target()
-    hash_int = int(pow_hash, 16)
+    # 2. Verify PoW
+    # Re-calculate hash: sha256(prev_hash + thr_address + nonce)
+    nonce_str = str(nonce).encode()
+    check_data = (prev_hash + thr_address).encode() + nonce_str
+    check_hash = hashlib.sha256(check_data).hexdigest()
     
-    if hash_int > current_target:
-        return jsonify(error=f"Insufficient difficulty. Target: {hex(current_target)}"), 400
+    if check_hash != pow_hash:
+        return jsonify(error="Invalid hash calculation"), 400
+        
+    # 3. Verify Difficulty
+    # Hardcoded difficulty 5 for now (must match miner)
+    DIFFICULTY = 5
+    if not check_hash.startswith("0" * DIFFICULTY):
+        return jsonify(error=f"Insufficient difficulty (needs {DIFFICULTY} zeros)"), 400
         
     # 4. Reward Distribution
     height = len(chain)
     total_reward = calculate_reward(height)
+    
+    # New Split:
+    # 80% to Miner
+    # 10% to AI Agent
+    # 10% Burned
     
     miner_share = round(total_reward * 0.80, 6)
     ai_share    = round(total_reward * 0.10, 6)
@@ -1011,9 +653,7 @@ def submit_block():
             "burn": burn_share
         },
         "height": height,
-        "type": "block",
-        "target": current_target,
-        "is_stratum": is_stratum
+        "type": "block"
     }
     
     chain.append(new_block)
@@ -1021,14 +661,22 @@ def submit_block():
     
     # Update Ledger
     ledger = load_json(LEDGER_FILE, {})
+    
+    # Miner gets 80%
     ledger[thr_address] = round(ledger.get(thr_address, 0.0) + miner_share, 6)
+    
+    # AI Agent gets 10%
     ledger[AI_WALLET_ADDRESS] = round(ledger.get(AI_WALLET_ADDRESS, 0.0) + ai_share, 6)
+    
+    # Burn address gets 10% (optional, but good for tracking)
     ledger[BURN_ADDRESS] = round(ledger.get(BURN_ADDRESS, 0.0) + burn_share, 6)
+    
     save_json(LEDGER_FILE, ledger)
     
+    # Update Last Block Summary
     update_last_block(new_block, is_block=True)
     
-    print(f"⛏️  Miner {thr_address} found block #{height}! Reward: {total_reward} THR (Stratum: {is_stratum})")
+    print(f"⛏️  Miner {thr_address} found block #{height}! Reward: {total_reward} THR (Miner: {miner_share}, AI: {ai_share}, Burn: {burn_share})")
     
     return jsonify(status="accepted", height=height, reward=miner_share), 200
 
@@ -1036,16 +684,16 @@ def submit_block():
 # ─── BACKGROUND MINTER ─────────────────────────────
 def submit_mining_block_for_pledge(thr_addr):
     """
-    Auto-mint blocks for pledges.
+    Μικρό helper ώστε να βάζουμε σωστό height + last_block update
+    όταν ο background miner κάνει auto-mint blocks για τα pledges.
     """
     chain = load_json(CHAIN_FILE, [])
     height = len(chain)
     r   = calculate_reward(height)
+    # Pledge blocks might follow different rules, but let's apply fee here too for consistency or keep it simple
+    # For pledge blocks, let's keep original logic or apply small fee
     fee = 0.005
     to_miner = round(r - fee, 6)
-    
-    # Use current target to keep chain consistent, though we don't do PoW here
-    current_target = get_mining_target()
 
     block = {
         "thr_address": thr_addr,
@@ -1058,7 +706,6 @@ def submit_mining_block_for_pledge(thr_addr):
         "pool_fee": fee,
         "reward_to_miner": to_miner,
         "height": height,
-        "target": current_target
     }
 
     chain.append(block)
@@ -1092,8 +739,6 @@ scheduler = BackgroundScheduler(daemon=True)
 scheduler.add_job(mint_first_blocks, "interval", minutes=1)
 scheduler.start()
 
-# Run AI Wallet Check on Startup
-ensure_ai_wallet()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 3333))

@@ -14,6 +14,7 @@
 # - Bitcoin Bridge Watcher & IoT Nodes
 # - SHA256d PoW Support
 # - Quantum-Secured AI Chat
+# - AI Autonomous Driving Service
 
 import os
 import json
@@ -219,6 +220,51 @@ def get_mining_target():
         
     return new_target
 
+# ─── VIEWER HELPER ─────────────────────────────────
+def get_blocks_for_viewer():
+    """
+    Returns unified block list for thronos_block_viewer.html
+    with fields: index, hash, fee_burned, transactions, nonce.
+    """
+    chain = load_json(CHAIN_FILE, [])
+
+    # Keep only entries that are blocks (have reward)
+    raw_blocks = [
+        b for b in chain
+        if isinstance(b, dict) and b.get("reward") is not None
+    ]
+
+    blocks = []
+    for b in raw_blocks:
+        height = b.get("height")
+        if height is None:
+            height = len(blocks)
+
+        block_hash = b.get("block_hash", "")
+
+        # burned fee from pool_fee or reward_split["burn"]
+        fee_burned = 0.0
+        if "pool_fee" in b:
+            fee_burned = float(b.get("pool_fee", 0.0))
+        elif isinstance(b.get("reward_split"), dict):
+            fee_burned = float(b["reward_split"].get("burn", 0.0))
+
+        nonce = b.get("nonce")
+        if nonce is None:
+            nonce = "-"
+
+        blocks.append({
+            "index": height,
+            "hash": block_hash,
+            "fee_burned": fee_burned,
+            "transactions": [],  # placeholder for future TX mapping
+            "nonce": nonce,
+        })
+
+    # Sort from newest to oldest
+    blocks.sort(key=lambda x: x["index"], reverse=True)
+    return blocks
+
 def ensure_ai_wallet():
     """
     Checks if the AI Wallet exists in the pledge chain.
@@ -309,7 +355,8 @@ def serve_contract(filename):
 
 @app.route("/viewer")
 def viewer():
-    return render_template("thronos_block_viewer.html")
+    blocks = get_blocks_for_viewer()
+    return render_template("thronos_block_viewer.html", blocks=blocks)
 
 @app.route("/wallet")
 def wallet_page():
@@ -414,11 +461,19 @@ def last_block_hash():
 def mining_info():
     """
     Returns info for miners: current target, difficulty, reward.
+    CRITICAL UPDATE: Must include 'last_hash' for Stratum Proxy.
     """
     target = get_mining_target()
     nbits = target_to_bits(target)
     
     chain = load_json(CHAIN_FILE, [])
+    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    
+    if blocks:
+        last_hash = blocks[-1].get("block_hash", "")
+    else:
+        last_hash = "0" * 64
+        
     height = len(chain) # Next height
     reward = calculate_reward(height)
     
@@ -427,7 +482,8 @@ def mining_info():
         "nbits": hex(nbits), # Return hex string of nbits
         "difficulty_int": int(INITIAL_TARGET / target),
         "reward": reward,
-        "height": height
+        "height": height,
+        "last_hash": last_hash # Added for USB Miner compatibility
     }), 200
 
 @app.route("/api/network_stats")
@@ -463,6 +519,12 @@ def network_stats():
         "ai_balance": ai_balance,
         "pledge_growth": cumulative_pledges
     })
+
+@app.route("/api/blocks")
+def api_blocks():
+    """JSON blocks for JS viewer etc."""
+    blocks = get_blocks_for_viewer()
+    return jsonify(blocks), 200
 
 # ─── NEW SERVICES APIs ─────────────────────────────
 @app.route("/api/bridge/data")
@@ -527,12 +589,56 @@ def iot_submit():
             
         save_json(IOT_DATA_FILE, iot_list)
         
-        print(f"🚗 IoT Update: {data['vehicle_id']} | Odo: {data.get('odometer')}")
+        print(f"🚗 IoT Update: {data['vehicle_id']} | Mode: {data['status'].get('mode', 'MANUAL')}")
         return jsonify(status="success", vehicle_id=data["vehicle_id"]), 200
         
     except Exception as e:
         print(f"IoT Submit Error: {e}")
         return jsonify(error=str(e)), 500
+
+@app.route("/api/iot/autonomous_request", methods=["POST"])
+def iot_autonomous_request():
+    """
+    Handles requests from IoT nodes to activate AI Autonomous Driving.
+    Requires THR payment.
+    """
+    data = request.get_json() or {}
+    wallet = data.get("wallet")
+    amount = data.get("amount", 0)
+    
+    if not wallet or amount <= 0:
+        return jsonify(status="denied", message="Invalid request"), 400
+        
+    # Check Balance
+    ledger = load_json(LEDGER_FILE, {})
+    balance = float(ledger.get(wallet, 0.0))
+    
+    if balance < amount:
+        return jsonify(status="denied", message="Insufficient THR funds"), 400
+        
+    # Process Payment (Send to AI Wallet)
+    ledger[wallet] = round(balance - amount, 6)
+    ledger[AI_WALLET_ADDRESS] = round(ledger.get(AI_WALLET_ADDRESS, 0.0) + amount, 6)
+    save_json(LEDGER_FILE, ledger)
+    
+    # Log Transaction
+    chain = load_json(CHAIN_FILE, [])
+    tx = {
+        "type": "service_payment",
+        "service": "AI_AUTOPILOT",
+        "from": wallet,
+        "to": AI_WALLET_ADDRESS,
+        "amount": amount,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "tx_id": f"SRV-{len(chain)}-{int(time.time())}"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+    
+    print(f"🤖 AI Autopilot Activated for {wallet}. Payment: {amount} THR")
+    
+    return jsonify(status="granted", message="AI Driver Activated"), 200
 
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
@@ -590,7 +696,7 @@ except Exception as e:
     input("Press Enter to exit...")
 """
 
-    # 3. Read iot_vehicle_node.py
+    # 3. Read iot_vehicle_node.py from disk
     try:
         with open(os.path.join(BASE_DIR, "iot_vehicle_node.py"), "r") as f:
             node_script = f.read()
@@ -604,12 +710,12 @@ except Exception as e:
         zf.writestr("start_iot.py", start_script)
         zf.writestr("iot_vehicle_node.py", node_script)
         
-        # Include PIC OF THE /images/photo1764616626.jpg
-        pic_path = os.path.join(BASE_DIR, "PIC OF THE /images/photo1764616626.jpg")
+        # Include PIC OF THE FIRE
+        pic_path = os.path.join(BASE_DIR, "pic_of_the_fire.png")
         if os.path.exists(pic_path):
-            zf.write(pic_path, "PIC OF THE /images/photo1764616626.jpg")
+            zf.write(pic_path, "pic_of_the_fire.png")
         else:
-            zf.writestr("PIC OF THE /images/photo1764616626.jpg", "") 
+            zf.writestr("pic_of_the_fire.png", "") 
             
         zf.writestr("README.txt", "1. Install Python 3.\\n2. Run 'pip install requests pillow cryptography'.\\n3. Run 'python start_iot.py'.")
         

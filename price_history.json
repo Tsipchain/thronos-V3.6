@@ -1,0 +1,12 @@
+[
+  {
+    "timestamp": 1746898342.7097726,
+    "thr_in_btc": 1e-05,
+    "update_source": "pledge_transaction"
+  },
+  {
+    "timestamp": 1746898606.4049783,
+    "thr_in_btc": 1.0001703421345319e-05,
+    "update_source": "pledge_transaction"
+  }
+]

@@ -1,0 +1,16 @@
+[
+  {
+    "index": 0,
+    "timestamp": "2025-05-04T10:43:51.927988Z",
+    "tx": {
+      "txid": "GENESIS0000000000000000000000000000000000000000000000000000000000",
+      "from": "null",
+      "to": "network",
+      "amount": 1,
+      "unit": "THR",
+      "message": "When power fails, the fire endures. Stay away from the course."
+    },
+    "previous_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "hash": "2a4f9109b0cfc1b069229f90a561f1f0158d69e5c637638e9a08cf6d76748a43"
+  }
+]

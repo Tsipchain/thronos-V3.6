@@ -1,0 +1,14 @@
+# Phantom Miner Configuration
+WATCH_DIR=watch_incoming
+CHAIN_PATH=phantom_tx_chain.json
+
+# Binance API Configuration
+BINANCE_API_KEY=e3b52803-5409-4826-b8fc-df54c6d7ff62
+BINANCE_API_SECRET=CYp0iMQMvkqADYIEtrpFI50KnPl55dsu
+
+# Thronos Local Node Options
+THRONOS_NODE_PORT=5000
+THRONOS_CHAIN_ID=thronos-mainnet
+
+# BTC Watcher Address
+WATCH_ADDRESS=3JZq4atUahhuA9rLhXLMhhTo133J9rF97j

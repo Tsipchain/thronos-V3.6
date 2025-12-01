@@ -1,0 +1,7 @@
+[
+  {"id":"I_SEC_BOOST","name":"Security Booster","desc":"Temporary threat resistance for missions","price_drx":150},
+  {"id":"I_HASH_TOOL","name":"Hash Toolkit","desc":"Faster algorithm solves","price_drx":200},
+  {"id":"I_DBL_REWARD","name":"DRX Doubler (30m)","desc":"Double DRX from missions for 30 minutes","price_drx":400},
+  {"id":"I_NFT_SHARD","name":"NFT Shard","desc":"Combine shards to mint a rare NFT","price_drx":800},
+  {"id":"I_COS_SKIN1","name":"Hunter Skin: Neon","desc":"Cosmetic outfit","price_drx":120}
+]

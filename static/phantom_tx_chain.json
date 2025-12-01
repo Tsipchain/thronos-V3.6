@@ -1,0 +1,14 @@
+[
+  {
+    "timestamp": "2025-05-04T19:38:36.179754",
+    "miner_btc_address": "3KUGVJ96T3JHuUrEHMeAvDKSo1zM9tD9nF",
+    "thr_address": "THR569A01C347B280DC46C40E0600",
+    "pledge_hash": "569a01c347b280dc46c40e06002920e89707f23cfcd789b5226c329204a1e077",
+    "pledge_text": "I hereby pledge allegiance to the fire that never dies.",
+    "reward": 1.0,
+    "pool_fee": 0.005,
+    "reward_to_miner": 0.995,
+    "block_hash": "THR-0"
+  }
+]
+

@@ -1,0 +1,7 @@
+{
+  "ADMIN_KEY": "changeme",
+  "XRPL_NETWORK": "wss://s.altnet.rippletest.net:51233",
+  "AUTH_WALLET_SEED": "sEXAMPLE_REPLACE_ME",
+  "CURRENCY_CODE": "DRX",
+  "ISSUER": "rEXAMPLE_ISSUER"
+}

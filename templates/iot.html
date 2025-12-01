@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <h1 class="text-3xl font-bold mb-6 text-white">IoT Vehicle Nodes</h1>
+    
+    <!-- Registration Section -->
+    <div class="bg-gray-800 rounded-lg shadow-xl p-6 mb-8 border border-gray-700">
+        <h2 class="text-xl font-semibold text-blue-400 mb-4">Register New Node</h2>
+        <p class="text-gray-300 mb-4">
+            Enter your Wallet Address and a Secret Key to generate a Telemetric Mining Kit. 
+            This kit includes the necessary software to turn a device into a Thronos IoT Node.
+        </p>
+        <form action="/register_node" method="POST" class="flex flex-col md:flex-row gap-4 items-end">
+            <div class="flex-1 w-full">
+                <label class="block text-gray-400 text-sm font-bold mb-2" for="address">
+                    Wallet Address (THR)
+                </label>
+                <input class="shadow appearance-none border border-gray-600 rounded w-full py-2 px-3 text-gray-100 bg-gray-700 leading-tight focus:outline-none focus:shadow-outline" 
+                       id="address" name="address" type="text" placeholder="THR..." required>
+            </div>
+            <div class="flex-1 w-full">
+                <label class="block text-gray-400 text-sm font-bold mb-2" for="secret">
+                    Node Secret / Password
+                </label>
+                <input class="shadow appearance-none border border-gray-600 rounded w-full py-2 px-3 text-gray-100 bg-gray-700 leading-tight focus:outline-none focus:shadow-outline" 
+                       id="secret" name="secret" type="password" placeholder="Secret for Auth" required>
+            </div>
+            <button class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded focus:outline-none focus:shadow-outline transition duration-150 ease-in-out w-full md:w-auto" type="submit">
+                Download Kit (.zip)
+            </button>
+        </form>
+    </div>
+
+    <!-- Dashboard Section -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" id="vehicle-grid">
+        <!-- Vehicles will be populated here by JS -->
+        <div class="bg-gray-800 rounded-lg p-6 animate-pulse">
+            <div class="h-4 bg-gray-700 rounded w-3/4 mb-4"></div>
+            <div class="h-4 bg-gray-700 rounded w-1/2 mb-4"></div>
+            <div class="h-32 bg-gray-700 rounded mb-4"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    function fetchIoTData() {
+        fetch('/api/iot/data')
+            .then(response => response.json())
+            .then(data => {
+                const grid = document.getElementById('vehicle-grid');
+                grid.innerHTML = ''; // Clear loading state
+                
+                if (data.length === 0) {
+                    grid.innerHTML = '<p class="text-gray-500 col-span-full text-center">No active vehicles found.</p>';
+                    return;
+                }
+
+                data.forEach(vehicle => {
+                    const card = document.createElement('div');
+                    card.className = 'bg-gray-800 rounded-lg shadow-lg p-6 border border-gray-700 hover:border-blue-500 transition';
+                    
+                    card.innerHTML = `
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-lg font-bold text-white">${vehicle.vehicle_id}</h3>
+                            <span class="px-2 py-1 bg-green-900 text-green-300 text-xs rounded-full">Active</span>
+                        </div>
+                        <div class="space-y-2 text-sm text-gray-300">
+                            <div class="flex justify-between">
+                                <span>Speed:</span>
+                                <span class="font-mono text-yellow-400">${vehicle.speed} km/h</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span>Fuel/Battery:</span>
+                                <span class="font-mono text-blue-400">${vehicle.fuel}%</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span>GPS:</span>
+                                <span class="font-mono text-gray-400">${vehicle.gps}</span>
+                            </div>
+                            <div class="mt-4 pt-4 border-t border-gray-700">
+                                <p class="text-xs text-gray-500 mb-1">Latest Stego-Image Hash:</p>
+                                <p class="font-mono text-xs text-gray-400 truncate" title="${vehicle.last_image_hash}">
+                                    ${vehicle.last_image_hash}
+                                </p>
+                            </div>
+                            <div class="text-right text-xs text-gray-500 mt-2">
+                                ${vehicle.timestamp}
+                            </div>
+                        </div>
+                    `;
+                    grid.appendChild(card);
+                });
+            })
+            .catch(err => console.error('Error fetching IoT data:', err));
+    }
+
+    // Fetch immediately and then every 5 seconds
+    fetchIoTData();
+    setInterval(fetchIoTData, 5000);
+</script>
+{% endblock %}

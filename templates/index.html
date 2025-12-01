@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+
+{% block title %}Thronos Network{% endblock %}
+
+{% block styles %}
+<style>
+    .stats {
+      background: #111;
+      padding: 10px;
+      margin-top: 20px;
+      border: 1px dashed #0f0;
+    }
+    .game-link {
+        margin-top: 20px;
+        padding: 10px;
+        border: 1px solid #f0f;
+        color: #f0f;
+        display: inline-block;
+        text-decoration: none;
+    }
+    .game-link:hover {
+        background: #200;
+    }
+    .beta-section {
+        background: #1a001a;
+        padding: 15px;
+        margin-top: 20px;
+        border: 1px dashed #f0f;
+        color: #f0f;
+    }
+    .beta-btn {
+        background: #300030;
+        color: #f0f;
+        border: 1px solid #f0f;
+        padding: 8px 16px;
+        text-decoration: none;
+        display: inline-block;
+        margin-top: 10px;
+        cursor: pointer;
+    }
+    .beta-btn:hover {
+        background: #500050;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1>🔥 <span class="lang-el">Καλώς ήρθατε στο Δίκτυο Thronos</span><span class="lang-en">Welcome to the Thronos Network</span></h1>
+<p>
+    <span class="lang-el">Ένα blockchain αντίστασης. Μια δέσμευση στο άκαυστο.</span>
+    <span class="lang-en">A blockchain of resistance. A pledge to the unburnable.</span>
+</p>
+
+<div class="stats">
+  <h2>📈 <span class="lang-el">Ζωντανά Στατιστικά Δικτύου</span><span class="lang-en">Live Network Stats</span></h2>
+  <pre id="chainInfo"><span class="lang-el">Φόρτωση δεδομένων αλυσίδας...</span><span class="lang-en">Loading chain data...</span></pre>
+</div>
+
+<div class="stats">
+  <h3>💰 <span class="lang-el">Ισοτιμία</span><span class="lang-en">Exchange Rate</span></h3>
+  <p>1 THR = <span class="highlight">0.0001 BTC</span> (Pegged)</p>
+</div>
+
+<!-- Crypto Hunters Beta Section -->
+<div class="beta-section">
+    <h3>🎮 <span class="lang-el">Crypto Hunters - Beta & Ψηφοφορία</span><span class="lang-en">Crypto Hunters - Beta & Voting</span></h3>
+    <p>
+        <span class="lang-el">Λάβετε μέρος στο κυνήγι! Βοηθήστε μας να δοκιμάσουμε το επερχόμενο παιχνίδι Crypto Hunters. Ψηφίστε για χαρακτηριστικά και κερδίστε ανταμοιβές.</span>
+        <span class="lang-en">Join the hunt! Help us test the upcoming Crypto Hunters game. Vote on features and earn rewards.</span>
+    </p>
+    <a href="#" class="beta-btn" onclick="alert('Coming Soon! / Σύντομα κοντά σας!')">
+        <span class="lang-el">🗳️ Ψηφίστε Τώρα (Σύντομα)</span><span class="lang-en">🗳️ Vote Now (Coming Soon)</span>
+    </a>
+</div>
+
+<a href="http://localhost:3000/panel" target="_blank" class="game-link">
+    👾 <span class="lang-el">Διαχείριση Crypto Hunters (Dev)</span><span class="lang-en">Crypto Hunters Admin (Dev)</span>
+</a>
+{% endblock %}
+
+{% block scripts %}
+<script>
+fetch("/chain")
+  .then(res => res.json())
+  .then(data => {
+    const blocks = data || [];
+    const last = blocks[blocks.length - 1] || {};
+    
+    const labels = {
+        el: {
+            total: "Σύνολο Blocks",
+            lastHash: "Hash Τελευταίου Block",
+            lastMiner: "Τελευταίος Miner",
+            timestamp: "Χρονική Σήμανση"
+        },
+        en: {
+            total: "Total Blocks",
+            lastHash: "Last Block Hash",
+            lastMiner: "Last Miner",
+            timestamp: "Timestamp"
+        }
+    };
+    
+    const renderStats = () => {
+        const lang = localStorage.getItem('lang') || 'el';
+        const l = labels[lang];
+        const html = `
+        ${l.total}: <span class="highlight">${blocks.length}</span>\n
+        ${l.lastHash}: ${last.block_hash || "N/A"}\n
+        ${l.lastMiner}: ${last.miner_btc_address || last.thr_address || "N/A"}\n
+        ${l.timestamp}: ${last.timestamp || "N/A"}`;
+        document.getElementById("chainInfo").innerHTML = html;
+    };
+
+    renderStats();
+    
+    // Listen for global language change event
+    window.addEventListener('langChanged', () => {
+        renderStats();
+    });
+  })
+  .catch(err => {
+    document.getElementById("chainInfo").innerText = "Failed to load chain data.";
+  });
+</script>
+{% endblock %}

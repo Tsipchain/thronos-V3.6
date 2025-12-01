@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+
+{% block title %}📜 Thronos Whitepaper{% endblock %}
+
+{% block styles %}
+<style>
+    .btn-download {
+        display: inline-block;
+        background: #0f0;
+        color: #000;
+        padding: 10px 20px;
+        margin-bottom: 20px;
+        font-weight: bold;
+        text-decoration: none;
+        border: 1px solid #000;
+    }
+    .btn-download:hover {
+        background: #0c0;
+    }
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 20px 0;
+        color: #0f0;
+    }
+    th, td {
+        border: 1px solid #0f0;
+        padding: 10px;
+        text-align: left;
+    }
+    th {
+        background-color: #111;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+  <div style="text-align:right;">
+    <a href="/static/Thronos_Whitepaper.pdf" class="btn-download" download>
+        ⬇️ <span class="lang-el">Λήψη PDF</span><span class="lang-en">Download PDF</span>
+    </a>
+  </div>
+
+  <h1><span class="lang-el">Λευκή Βίβλος Thronos Chain & THR</span><span class="lang-en">Thronos Chain & THR Token - Complete Whitepaper</span></h1>
+  
+  <h2>🔥 <span class="lang-el">Εισαγωγή</span><span class="lang-en">Introduction</span></h2>
+  <p>
+    <span class="lang-el">Το Thronos Chain είναι ένα καινοτόμο blockchain σχεδιασμένο για πλήρη ανθεκτικότητα, αποκέντρωση και επιβίωση. Συνδυάζει χαρακτηριστικά του Bitcoin (ασφάλεια SHA256), την ταχύτητα και χαμηλά τέλη του XRP, με μοναδικές δυνατότητες όπως offline nodes, μεταφορά μέσω ραδιοκυμάτων και steganography.</span>
+    <span class="lang-en">Thronos Chain is a next-generation, SHA256-based blockchain project focused on survivability, decentralization, and freedom. It merges the core values of Bitcoin with innovative data transport technologies and fully offline, censorship-resistant communication.</span>
+  </p>
+
+  <h2>⚙️ <span class="lang-el">Τεχνικά Χαρακτηριστικά</span><span class="lang-en">Technical Characteristics</span></h2>
+  <ul>
+    <li>
+        <span class="lang-el"><strong>Αλγόριθμος</strong>: SHA256</span>
+        <span class="lang-en"><strong>Algorithm</strong>: SHA256 (Bitcoin-compatible)</span>
+    </li>
+    <li>
+        <span class="lang-el"><strong>Συμβατότητα mining</strong>: Antminers & SHA256 miners</span>
+        <span class="lang-en"><strong>Compatibility</strong>: Works with existing ASIC miners (Antminers)</span>
+    </li>
+    <li>
+        <span class="lang-el"><strong>Ταχύτητα</strong>: Άμεση επιβεβαίωση συναλλαγών (XRP-style)</span>
+        <span class="lang-en"><strong>Transaction Speed</strong>: Instant finality through asynchronous node syncing</span>
+    </li>
+    <li>
+        <span class="lang-el"><strong>Χαμηλά fees</strong>: Κατάλληλο για μικροπληρωμές</span>
+        <span class="lang-en"><strong>Fees</strong>: Ultra-low fees comparable to XRP</span>
+    </li>
+    <li>
+        <span class="lang-el"><strong>Smart Signing</strong>: Οι συναλλαγές υπογράφονται και διανέμονται μέσω πολλαπλών μέσων (εικόνες, ήχος, QR, κ.λπ.)</span>
+        <span class="lang-en"><strong>Smart Signing</strong>: TXs are signed and distributed via multiple real-world mediums (images, audio, QR, etc.)</span>
+    </li>
+  </ul>
+
+  <h2>⚖️ <span class="lang-el">Διακυβέρνηση & Διαχείριση</span><span class="lang-en">Governance & Management</span></h2>
+  <p>
+      <span class="lang-el">Το Thronos Chain εισάγει ένα αποκεντρωμένο μοντέλο διακυβέρνησης όπου οι κάτοχοι THR μπορούν να ψηφίζουν για κρίσιμες παραμέτρους του δικτύου (π.χ. όρια τελών, αναβαθμίσεις πρωτοκόλλου). Η ψηφοφορία πραγματοποιείται μέσω υπογεγραμμένων μηνυμάτων (Signed Governance Messages) που καταγράφονται στο blockchain.</span>
+      <span class="lang-en">Thronos Chain introduces a decentralized governance model where THR holders can vote on critical network parameters (e.g., fee limits, protocol upgrades). Voting is conducted via Signed Governance Messages recorded on the blockchain.</span>
+  </p>
+
+  <h2>📈 <span class="lang-el">Αναλυτικά Tokenomics</span><span class="lang-en">Detailed Tokenomics</span></h2>
+  <ul>
+    <li><strong>Token</strong>: Thronos (THR)</li>
+    <li><strong>Max Supply</strong>: 21,000,001</li>
+    <li><strong>Mining</strong>: SHA256 (ASIC & CPU)</li>
+    <li>
+        <span class="lang-el"><strong>Διανομή</strong>: 80% Mining Rewards, 10% AI Treasury, 10% Burn Mechanism</span>
+        <span class="lang-en"><strong>Distribution</strong>: 80% Mining Rewards, 10% AI Treasury, 10% Burn Mechanism</span>
+    </li>
+    <li>
+        <span class="lang-el"><strong>Halving</strong>: Κάθε 4 χρόνια (παρόμοιο με BTC)</span>
+        <span class="lang-en"><strong>Halving</strong>: Every 4 years (similar to BTC)</span>
+    </li>
+    <li>
+        <span class="lang-el"><strong>Peg</strong>: 1 THR = 0.0001 BTC (Soft Peg μέσω Watcher Service)</span>
+        <span class="lang-en"><strong>Peg</strong>: 1 THR = 0.0001 BTC (Soft Peg via Watcher Service)</span>
+    </li>
+  </ul>
+
+  <h2>💡 <span class="lang-el">Χρήσεις (Use Cases)</span><span class="lang-en">Use Cases</span></h2>
+  <ul>
+      <li>
+          <span class="lang-el"><strong>Crypto Hunters Game</strong>: Play-to-Earn παιχνίδι όπου οι παίκτες κυνηγούν κρυμμένα "σεντούκια" (geo-location) για να κερδίσουν THR.</span>
+          <span class="lang-en"><strong>Crypto Hunters Game</strong>: Play-to-Earn game where players hunt hidden "chests" (geo-location) to earn THR.</span>
+      </li>
+      <li>
+          <span class="lang-el"><strong>Offline Payments</strong>: Πληρωμές μέσω QR και ήχου σε περιοχές χωρίς internet.</span>
+          <span class="lang-en"><strong>Offline Payments</strong>: QR and audio-based payments in areas without internet access.</span>
+      </li>
+      <li>
+          <span class="lang-el"><strong>IoT Vehicle Nodes</strong>: Οχήματα λειτουργούν ως κινούμενοι κόμβοι, συλλέγοντας δεδομένα και μεταδίδοντάς τα μέσω steganography.</span>
+          <span class="lang-en"><strong>IoT Vehicle Nodes</strong>: Vehicles act as mobile nodes, collecting data and transmitting it via steganography.</span>
+      </li>
+  </ul>
+
+  <h2>🌉 <span class="lang-el">Γέφυρα Bitcoin (Bridge)</span><span class="lang-en">Bitcoin Bridge</span></h2>
+  <p>
+      <span class="lang-el">Η σύνδεση με το Bitcoin επιτυγχάνεται μέσω του <strong>Watcher Service</strong> και των <strong>Atomic Swaps</strong>.</span>
+      <span class="lang-en">Connection to Bitcoin is achieved via the <strong>Watcher Service</strong> and <strong>Atomic Swaps</strong>.</span>
+  </p>
+  <ul>
+      <li>
+          <span class="lang-el"><strong>Watcher Service</strong>: Παρακολουθεί καταθέσεις BTC σε συγκεκριμένες διευθύνσεις και εκδίδει (mints) αυτόματα το αντίστοιχο THR.</span>
+          <span class="lang-en"><strong>Watcher Service</strong>: Monitors BTC deposits to specific addresses and automatically mints the equivalent THR.</span>
+      </li>
+      <li>
+          <span class="lang-el"><strong>Atomic Swaps</strong>: Επιτρέπουν την απευθείας ανταλλαγή BTC <-> THR χωρίς μεσάζοντες, χρησιμοποιώντας Hashed Time-Lock Contracts (HTLC).</span>
+          <span class="lang-en"><strong>Atomic Swaps</strong>: Allow direct BTC <-> THR exchange without intermediaries, using Hashed Time-Lock Contracts (HTLC).</span>
+      </li>
+  </ul>
+
+  <h2>🛡️ <span class="lang-el">Ασφάλεια & Συμβατότητα</span><span class="lang-en">Security & Compatibility</span></h2>
+  <ul>
+      <li>
+          <span class="lang-el"><strong>Audits</strong>: Ο κώδικας είναι ανοιχτός (Open Source) και υπόκειται σε συνεχή έλεγχο από την κοινότητα.</span>
+          <span class="lang-en"><strong>Audits</strong>: The code is Open Source and subject to continuous community review.</span>
+      </li>
+      <li>
+          <span class="lang-el"><strong>BTC Fork Compatibility</strong>: Το Thronos είναι συμβατό με τη δομή του Bitcoin, επιτρέποντας εύκολη ενσωμάτωση σε υπάρχοντα mining pools.</span>
+          <span class="lang-en"><strong>BTC Fork Compatibility</strong>: Thronos is compatible with Bitcoin's structure, allowing easy integration into existing mining pools.</span>
+      </li>
+  </ul>
+
+  <h2>💻 <span class="lang-el">Οδηγός Ανάπτυξης</span><span class="lang-en">Developer Guide</span></h2>
+  <p>
+      <span class="lang-el">Οι προγραμματιστές μπορούν να τρέξουν τον δικό τους κόμβο και να συνεισφέρουν στο δίκτυο.</span>
+      <span class="lang-en">Developers can run their own node and contribute to the network.</span>
+  </p>
+  <ul>
+      <li>
+          <span class="lang-el"><strong>GitHub Repo</strong>: <a href="https://github.com/Tsipchain/thronos-V2" target="_blank">Thronos V2 Repository</a></span>
+          <span class="lang-en"><strong>GitHub Repo</strong>: <a href="https://github.com/Tsipchain/thronos-V2" target="_blank">Thronos V2 Repository</a></span>
+      </li>
+      <li>
+          <span class="lang-el"><strong>API Docs</strong>: Διαθέσιμα στο <code>/docs</code> του server.</span>
+          <span class="lang-en"><strong>API Docs</strong>: Available at <code>/docs</code> on the server.</span>
+      </li>
+      <li>
+          <span class="lang-el"><strong>IoT Scripts</strong>: <code>iot_vehicle_node.py</code> για ενσωμάτωση σε οχήματα.</span>
+          <span class="lang-en"><strong>IoT Scripts</strong>: <code>iot_vehicle_node.py</code> for vehicle integration.</span>
+      </li>
+  </ul>
+
+  <h2>🧬 PhantomFace (Steganography Layer)</h2>
+  <p>
+    <span class="lang-el">Η τεχνολογία PhantomFace επιτρέπει την απόκρυψη signed συναλλαγών μέσα σε εικόνες (π.χ. selfies KYC) με LSB τεχνικές.</span>
+    <span class="lang-en">The PhantomFace module allows encoding of signed TX data into images (e.g., KYC selfies) using LSB-based steganography.</span>
+  </p>
+
+  <h2>🔊 WhisperNote & RadioNode</h2>
+  <p>
+    <span class="lang-el">Μεταφορά δεδομένων μέσω ήχου και ραδιοκυμάτων για πλήρη επιβίωση χωρίς internet.</span>
+    <span class="lang-en">Data transmission via audio and radio waves for complete survivability without internet.</span>
+  </p>
+
+  <h2>🗺️ <span class="lang-el">Οδικός Χάρτης (Roadmap)</span><span class="lang-en">Roadmap</span></h2>
+  <table>
+      <thead>
+          <tr>
+              <th><span class="lang-el">Φάση</span><span class="lang-en">Phase</span></th>
+              <th><span class="lang-el">Κατάσταση</span><span class="lang-en">Status</span></th>
+              <th><span class="lang-el">Περιγραφή</span><span class="lang-en">Description</span></th>
+          </tr>
+      </thead>
+      <tbody>
+          <tr>
+              <td>Core v2.0</td>
+              <td>✅ <span class="lang-el">Ολοκληρώθηκε</span><span class="lang-en">Completed</span></td>
+              <td>Stealth propagation, PDF Pledge, Bilingual UI</td>
+          </tr>
+          <tr>
+              <td>Miner Kit</td>
+              <td>✅ <span class="lang-el">Ολοκληρώθηκε</span><span class="lang-en">Completed</span></td>
+              <td>CPU/ASIC Mining Support</td>
+          </tr>
+          <tr>
+              <td>AI Agent</td>
+              <td>✅ <span class="lang-el">Ολοκληρώθηκε</span><span class="lang-en">Completed</span></td>
+              <td>Pythia Prototype, Stats Analysis</td>
+          </tr>
+          <tr>
+              <td>Bridge & Watcher</td>
+              <td>🔄 <span class="lang-el">Σε Εξέλιξη</span><span class="lang-en">In Progress</span></td>
+              <td>BTC-THR Bridge, Watcher Service</td>
+          </tr>
+          <tr>
+              <td>Crypto Hunters</td>
+              <td>🔄 <span class="lang-el">Σε Εξέλιξη</span><span class="lang-en">In Progress</span></td>
+              <td>Game Integration, Mobile App</td>
+          </tr>
+          <tr>
+              <td>IoT Nodes</td>
+              <td>🔜 <span class="lang-el">Επόμενα</span><span class="lang-en">Upcoming</span></td>
+              <td>Vehicle Nodes, ATM Agents</td>
+          </tr>
+      </tbody>
+  </table>
+
+  <h2>🎯 <span class="lang-el">Όραμα</span><span class="lang-en">Vision</span></h2>
+  <p>
+    <span class="lang-el">Το Thronos Chain φιλοδοξεί να είναι το πιο ανθεκτικό, αποκεντρωμένο και καθολικά διαθέσιμο blockchain. Ακόμη και σε συνθήκες καταστροφής, θα παραμείνει ενεργό μέσω ραδιοσυχνοτήτων, offline nodes και αναλογικών καναλιών.</span>
+    <span class="lang-en">To establish Thronos as the survival layer of the modern digital world. One that can be embedded in every image, heard in every wave, and hidden inside every voice. <strong>Thronos is not just a blockchain. It's memory against forgetting.</strong></span>
+  </p>
+
+  <h2>📎 <span class="lang-el">Παράρτημα</span><span class="lang-en">Appendix</span></h2>
+  <ul>
+    <li><code>phantom_encode.py</code>: Image steganography encoder</li>
+    <li><code>watchers_service.py</code>: BTC Bridge Watcher</li>
+    <li><code>iot_vehicle_node.py</code>: Vehicle Telemetry Node</li>
+    <li><code>radio_encode.py</code>: TX-to-audio encoder</li>
+  </ul>
+
+  <hr>
+  <p style="text-align:center; margin-top:50px; font-style:italic;">Thronos Chain – Forged in Fire, Secured by Code.</p>
+{% endblock %}

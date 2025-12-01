@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>{% block title %}Thronos Network{% endblock %}</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    /* Global Styles */
+    body {
+      background-color: #000;
+      color: #0f0;
+      font-family: "Courier New", monospace;
+      padding: 20px;
+      line-height: 1.6;
+      margin: 0;
+    }
+    a {
+      color: #0f0;
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+      background-color: #111;
+    }
+    h1, h2, h3 {
+      color: #0f0;
+      border-bottom: 1px solid #0f0;
+      padding-bottom: 10px;
+    }
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 0 20px;
+    }
+    
+    /* Navigation Bar */
+    .navbar {
+      background: #111;
+      border-bottom: 1px solid #0f0;
+      padding: 0;
+      margin-bottom: 30px;
+      display: flex;
+      justify-content: center;
+      position: relative;
+    }
+    
+    .nav-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+    }
+    
+    .nav-item {
+      position: relative;
+    }
+    
+    .nav-link {
+      display: block;
+      padding: 15px 20px;
+      color: #0f0;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    
+    .nav-link:hover {
+      background-color: #222;
+      text-decoration: none;
+    }
+    
+    /* Dropdown Menu */
+    .dropdown-content {
+      display: none;
+      position: absolute;
+      background-color: #111;
+      min-width: 160px;
+      box-shadow: 0px 8px 16px 0px rgba(0,255,0,0.2);
+      border: 1px solid #0f0;
+      z-index: 1;
+      top: 100%;
+      left: 0;
+    }
+    
+    .dropdown-content a {
+      color: #0f0;
+      padding: 12px 16px;
+      text-decoration: none;
+      display: block;
+      text-align: left;
+    }
+    
+    .dropdown-content a:hover {
+      background-color: #222;
+    }
+    
+    .nav-item:hover .dropdown-content {
+      display: block;
+    }
+    
+    /* Language Toggle */
+    .lang-toggle {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        background: #222;
+        color: #0f0;
+        border: 1px solid #0f0;
+        padding: 5px 10px;
+        cursor: pointer;
+        z-index: 100;
+    }
+    .lang-en { display: none; }
+    
+    /* Utility Classes */
+    .highlight { color: #ff0; }
+    .btn {
+        display: inline-block;
+        background: #0f0;
+        color: #000;
+        padding: 10px 20px;
+        font-weight: bold;
+        text-decoration: none;
+        border: 1px solid #000;
+        cursor: pointer;
+    }
+    .btn:hover { background: #0c0; }
+    
+    /* Page Specific Styles Block */
+    {% block styles %}{% endblock %}
+  </style>
+</head>
+<body>
+
+<button class="lang-toggle" onclick="toggleLanguage()">GR | EN</button>
+
+<div class="navbar">
+  <ul class="nav-list">
+    <!-- Home -->
+    <li class="nav-item">
+      <a href="/" class="nav-link">🏠 <span class="lang-el">Αρχική</span><span class="lang-en">Home</span></a>
+    </li>
+    
+    <!-- Apps Dropdown -->
+    <li class="nav-item">
+      <span class="nav-link">📱 <span class="lang-el">Εφαρμογές</span><span class="lang-en">Apps</span> ▼</span>
+      <div class="dropdown-content">
+        <a href="/wallet">👛 <span class="lang-el">Πορτοφόλι</span><span class="lang-en">Wallet</span></a>
+        <a href="/send">💸 <span class="lang-el">Αποστολή</span><span class="lang-en">Send</span></a>
+        <a href="/pledge">🔥 <span class="lang-el">Δέσμευση</span><span class="lang-en">Pledge</span></a>
+        <a href="/viewer">📦 <span class="lang-el">Εξερευνητής</span><span class="lang-en">Explorer</span></a>
+        <a href="/token_chart">📈 <span class="lang-el">Γράφημα Token</span><span class="lang-en">Token Chart</span></a>
+      </div>
+    </li>
+    
+    <!-- Docs Dropdown -->
+    <li class="nav-item">
+      <span class="nav-link">📚 <span class="lang-el">Έγγραφα</span><span class="lang-en">Docs</span> ▼</span>
+      <div class="dropdown-content">
+        <a href="/whitepaper">📄 <span class="lang-el">Whitepaper</span><span class="lang-en">Whitepaper</span></a>
+        <a href="/roadmap">🗺️ <span class="lang-el">Roadmap</span><span class="lang-en">Roadmap</span></a>
+        <a href="/tokenomics">📜 <span class="lang-el">Tokenomics</span><span class="lang-en">Tokenomics</span></a>
+      </div>
+    </li>
+    
+    <!-- Recovery -->
+    <li class="nav-item">
+      <a href="/recovery" class="nav-link">🛠️ <span class="lang-el">Ανάκτηση</span><span class="lang-en">Recovery</span></a>
+    </li>
+  </ul>
+</div>
+
+<div class="container">
+  {% block content %}{% endblock %}
+</div>
+
+<script>
+// Global Language Logic
+function toggleLanguage() {
+    const currentLang = localStorage.getItem('lang') || 'el';
+    const newLang = currentLang === 'el' ? 'en' : 'el';
+    setLanguage(newLang);
+}
+
+function setLanguage(lang) {
+    localStorage.setItem('lang', lang);
+    const elElements = document.querySelectorAll('.lang-el');
+    const enElements = document.querySelectorAll('.lang-en');
+    
+    if (lang === 'el') {
+        elElements.forEach(el => el.style.display = 'inline');
+        enElements.forEach(el => el.style.display = 'none');
+    } else {
+        elElements.forEach(el => el.style.display = 'none');
+        enElements.forEach(el => el.style.display = 'inline');
+    }
+    
+    // Trigger custom event for pages that need to re-render content
+    window.dispatchEvent(new CustomEvent('langChanged', { detail: { lang: lang } }));
+}
+
+// Initialize language on load
+document.addEventListener('DOMContentLoaded', () => {
+    const savedLang = localStorage.getItem('lang') || 'el';
+    setLanguage(savedLang);
+});
+</script>
+
+{% block scripts %}{% endblock %}
+
+</body>
+</html>

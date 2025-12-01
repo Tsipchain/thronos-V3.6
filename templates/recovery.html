@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+
+{% block title %}Thronos Chain - Recovery{% endblock %}
+
+{% block styles %}
+<style>
+    .container { max-width: 600px; margin: 0 auto; border: 1px solid #0f0; padding: 20px; }
+    .form-group { margin-bottom: 15px; }
+    label { display: block; margin-bottom: 5px; }
+    input[type="file"], input[type="password"] { width: 100%; padding: 10px; background: #222; border: 1px solid #0f0; color: #fff; box-sizing: border-box; }
+    button { width: 100%; padding: 10px; background: #0f0; color: #000; border: none; font-weight: bold; cursor: pointer; margin-top: 10px; }
+    button:hover { background: #0c0; }
+    #result { margin-top: 20px; padding: 10px; border: 1px dashed #0f0; display: none; word-wrap: break-word; }
+</style>
+{% endblock %}
+
+{% block content %}
+    <div class="container">
+        <h1><span class="lang-el">ΠΡΩΤΟΚΟΛΛΟ ΑΝΑΚΤΗΣΗΣ</span><span class="lang-en">RECOVERY PROTOCOL</span></h1>
+        <p>
+            <span class="lang-el">Ανεβάστε το Συμβόλαιο Thronos (PDF ή Εικόνα Stego) και εισάγετε τον μυστικό κωδικό σας για να ανακτήσετε τα διαπιστευτήριά σας.</span>
+            <span class="lang-en">Upload your Thronos Contract (PDF or Stego-Image) and enter your secret passphrase to recover your credentials.</span>
+        </p>
+        
+        <div class="form-group">
+            <label for="contractFile"><span class="lang-el">Επιλογή Αρχείου Συμβολαίου:</span><span class="lang-en">Select Contract File:</span></label>
+            <input type="file" id="contractFile" accept=".png,.jpg,.jpeg,.pdf">
+        </div>
+
+        <div class="form-group">
+            <label for="secretPass"><span class="lang-el">Μυστικός Κωδικός / Passphrase:</span><span class="lang-en">Secret / Passphrase:</span></label>
+            <input type="password" id="secretPass" placeholder="Enter your passphrase...">
+        </div>
+        
+        <button onclick="recover()"><span class="lang-el">ΕΚΚΙΝΗΣΗ ΑΝΑΚΤΗΣΗΣ</span><span class="lang-en">INITIATE RECOVERY</span></button>
+        
+        <div id="result"></div>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+    <script>
+        async function recover() {
+            const fileInput = document.getElementById('contractFile');
+            const secretInput = document.getElementById('secretPass');
+            const resultDiv = document.getElementById('result');
+            const lang = localStorage.getItem('lang') || 'el';
+            
+            const messages = {
+                el: {
+                    selectFile: "Παρακαλώ επιλέξτε ένα αρχείο πρώτα.",
+                    enterPass: "Παρακαλώ εισάγετε τον μυστικό κωδικό σας.",
+                    scanning: "Σάρωση στεγανoγραφικών επιπέδων & αποκρυπτογράφηση...",
+                    success: "Επιτυχής Ανάκτηση",
+                    seedFound: "ΒΡΕΘΗΚΕ SEED:",
+                    failed: "Αποτυχία Ανάκτησης",
+                    unknownError: "Άγνωστο σφάλμα",
+                    systemError: "Σφάλμα Συστήματος"
+                },
+                en: {
+                    selectFile: "Please select a file first.",
+                    enterPass: "Please enter your secret passphrase.",
+                    scanning: "Scanning steganographic layers & decrypting...",
+                    success: "Recovery Successful",
+                    seedFound: "SEED FOUND:",
+                    failed: "Recovery Failed",
+                    unknownError: "Unknown error",
+                    systemError: "System Error"
+                }
+            };
+
+            const msg = messages[lang];
+            
+            if (!fileInput.files[0]) {
+                alert(msg.selectFile);
+                return;
+            }
+            if (!secretInput.value) {
+                alert(msg.enterPass);
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            formData.append('passphrase', secretInput.value);
+
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = msg.scanning;
+
+            try {
+                const response = await fetch('/recover_submit', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    let html = `<h3>${msg.success}</h3>`;
+                    if (data.payload) {
+                        html += "<pre>" + JSON.stringify(data.payload, null, 2) + "</pre>";
+                        if (data.payload.send_seed) {
+                            html += `<p style='color:yellow'><strong>${msg.seedFound}</strong> ` + data.payload.send_seed + "</p>";
+                        }
+                    }
+                    resultDiv.innerHTML = html;
+                } else {
+                    resultDiv.innerHTML = `<h3 style='color:red'>${msg.failed}</h3><p>` + (data.error || msg.unknownError) + "</p>";
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<h3 style='color:red'>${msg.systemError}</h3><p>` + error.message + "</p>";
+            }
+        }
+    </script>
+{% endblock %}

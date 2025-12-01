@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+
+{% block title %}🔥 Thronos – Send THR{% endblock %}
+
+{% block styles %}
+<style>
+    label {
+      display: block;
+      margin-top: 12px;
+      margin-bottom: 4px;
+    }
+    input {
+      width: 100%;
+      padding: 6px 8px;
+      background: #000;
+      border: 1px solid #00ff66;
+      color: #00ff66;
+      font-family: inherit;
+      box-sizing: border-box;
+    }
+    button {
+      margin-top: 16px;
+      padding: 8px 16px;
+      background: #00ff66;
+      color: #000;
+      border: none;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    button:hover {
+      background: #00cc55;
+    }
+    .row {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .col {
+      flex: 1 1 260px;
+    }
+    pre {
+      background: #050505;
+      border: 1px solid #00ff66;
+      padding: 8px;
+      max-height: 260px;
+      overflow: auto;
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+    .small-note {
+      font-size: 11px;
+      color: #cccccc;
+    }
+    #chartSection {
+        margin-top: 30px;
+        border-top: 1px solid #00ff66;
+        padding-top: 20px;
+    }
+    iframe {
+        width: 100%;
+        height: 600px;
+        border: none;
+        background: #111;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+  <h1>📤 <span class="lang-el">Αποστολή THR</span><span class="lang-en">Send THR</span></h1>
+
+  <div class="row">
+    <div class="col">
+      <label for="from_thr"><span class="lang-el">Από Διεύθυνση THR</span><span class="lang-en">From THR Address</span></label>
+      <input id="from_thr" placeholder="π.χ. THR1764..." />
+
+      <label for="to_thr"><span class="lang-el">Προς Διεύθυνση THR</span><span class="lang-en">To THR Address</span></label>
+      <input id="to_thr" placeholder="Recipient THR address" />
+
+      <label for="amount"><span class="lang-el">Ποσό (THR)</span><span class="lang-en">Amount (THR)</span></label>
+      <input id="amount" type="number" step="0.000001" min="0" value="0.1" />
+
+      <label for="auth_secret">
+        <span class="lang-el">Μυστικό Αποστολής (auth_secret)</span><span class="lang-en">Send Secret (auth_secret)</span>
+      </label>
+      <input id="auth_secret"
+             placeholder="Μυστικό που πήρες με το Pledge (send_secret)" />
+
+      <div class="small-note">
+        <span class="lang-el">* Προμήθεια: 0.0015 THR καίγεται σε κάθε αποστολή.</span>
+        <span class="lang-en">* Fee: 0.0015 THR burned per transaction.</span>
+      </div>
+
+      <button onclick="doSend()"><span class="lang-el">Αποστολή THR</span><span class="lang-en">Send THR</span></button>
+      <button onclick="loadBalance()"><span class="lang-el">Φόρτωση Υπολοίπου</span><span class="lang-en">Load Balance</span></button>
+    </div>
+
+    <div class="col">
+      <label><span class="lang-el">Υπόλοιπο & Ιστορικό (JSON)</span><span class="lang-en">Balance & History (JSON)</span></label>
+      <pre id="walletBox">{}</pre>
+
+      <label><span class="lang-el">Αποτέλεσμα Αποστολής</span><span class="lang-en">Send Result</span></label>
+      <pre id="sendResult">{}</pre>
+    </div>
+  </div>
+  
+  <!-- Hidden Chart Section -->
+  <div id="chartSection" style="display: none;">
+      <h3>📊 <span class="lang-el">Στατιστικά Δικτύου & Ανάλυση</span><span class="lang-en">Network Stats & Analysis</span></h3>
+      <p class="small-note">
+          <span class="lang-el">Ενεργοποιήθηκε επειδή έχετε ενεργό ιστορικό συναλλαγών.</span>
+          <span class="lang-en">Activated because you have active transaction history.</span>
+      </p>
+      <iframe src="/token_chart" title="Token Chart"></iframe>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadBalance() {
+  const thr = document.getElementById('from_thr').value.trim();
+  const lang = localStorage.getItem('lang') || 'el';
+  
+  if (!thr) {
+    alert(lang === 'el' ? 'Βάλε THR address πρώτα' : 'Enter THR address first');
+    return;
+  }
+  try {
+    const res = await fetch(`/wallet_data/${encodeURIComponent(thr)}`);
+    const data = await res.json();
+    document.getElementById('walletBox').textContent =
+      JSON.stringify(data, null, 2);
+      
+    // Check for transactions to show chart
+    if (data.transactions && data.transactions.length > 0) {
+        document.getElementById('chartSection').style.display = 'block';
+    } else {
+        document.getElementById('chartSection').style.display = 'none';
+    }
+    
+  } catch (e) {
+    document.getElementById('walletBox').textContent =
+      (lang === 'el' ? 'Σφάλμα φόρτωσης πορτοφολιού: ' : 'Error loading wallet: ') + e;
+  }
+}
+
+async function doSend() {
+  const from_thr    = document.getElementById('from_thr').value.trim();
+  const to_thr      = document.getElementById('to_thr').value.trim();
+  const amount      = document.getElementById('amount').value;
+  const auth_secret = document.getElementById('auth_secret').value.trim();
+  const lang = localStorage.getItem('lang') || 'el';
+
+  const msg = {
+      el: {
+          missingAddr: 'Συμπλήρωσε FROM και TO THR address',
+          missingSecret: 'Χρειάζεται το send_secret που πήρες με το Pledge',
+          error: 'Σφάλμα αποστολής: '
+      },
+      en: {
+          missingAddr: 'Fill in FROM and TO THR address',
+          missingSecret: 'Send_secret from Pledge is required',
+          error: 'Error sending: '
+      }
+  };
+  const m = msg[lang];
+
+  if (!from_thr || !to_thr) {
+    alert(m.missingAddr);
+    return;
+  }
+  if (!auth_secret) {
+    alert(m.missingSecret);
+    return;
+  }
+
+  try {
+    const res = await fetch('/send_thr', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ from_thr, to_thr, amount, auth_secret })
+    });
+    const data = await res.json();
+    document.getElementById('sendResult').textContent =
+      JSON.stringify(data, null, 2);
+
+    // Refresh balance μετά το send
+    loadBalance();
+  } catch (e) {
+    document.getElementById('sendResult').textContent =
+      m.error + e;
+  }
+}
+</script>
+{% endblock %}

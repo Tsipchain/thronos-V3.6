@@ -1,0 +1,9 @@
+[
+  {
+    "btc_tx_hash": "07df02b7f3009eede77195706c20f394d27147fe7168fe9de10cbbc8f0d3c65f",
+    "timestamp": 1707808006,
+    "amount_btc": 0.00010023,
+    "amount_thr": 1.0023,
+    "status": "detected"
+  }
+]

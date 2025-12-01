@@ -1,0 +1,14 @@
+[
+  {"id":"E1","tier":"Easy","title":"Hello Hash","objective":"Compute simple hashes","reward_drx":100},
+  {"id":"E2","tier":"Easy","title":"Nonce Nudge","objective":"Find a nonce under small target","reward_drx":100},
+  {"id":"E3","tier":"Easy","title":"Block Anatomy","objective":"Assemble block fields correctly","reward_drx":100},
+  {"id":"N1","tier":"Normal","title":"Merkle Scout","objective":"Rebuild Merkle root from leaves","reward_drx":250},
+  {"id":"N2","tier":"Normal","title":"Auth Check","objective":"Implement HMAC verification","reward_drx":250},
+  {"id":"N3","tier":"Normal","title":"Replay Guard","objective":"Detect and block replay attempts","reward_drx":250},
+  {"id":"X1","tier":"Expert","title":"TX Validator","objective":"Simulate transaction validation rules","reward_drx":500},
+  {"id":"X2","tier":"Expert","title":"Protocol Patch","objective":"Patch a vulnerable routine","reward_drx":500},
+  {"id":"X3","tier":"Expert","title":"Rate-Limit Forge","objective":"Tune anti-bot rate limits","reward_drx":500},
+  {"id":"G1","tier":"Genius","title":"Anomaly Hunt","objective":"Detect threats in noisy telemetry","reward_drx":1000},
+  {"id":"G2","tier":"Genius","title":"Consensus Siege","objective":"Defend consensus under attack","reward_drx":1000},
+  {"id":"G3","tier":"Genius","title":"Zero-Day Drill","objective":"Respond to zero-day across shards","reward_drx":1000}
+]

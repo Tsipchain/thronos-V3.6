@@ -1,0 +1,7 @@
+{
+  "ADMIN_KEY": "thronos_admin_secret",
+  "XRPL_NETWORK": "wss://s.altnet.rippletest.net:51233",
+  "AUTH_WALLET_SEED": "sEd7r9n473928473928473928473928",
+  "CURRENCY_CODE": "DRX",
+  "ISSUER": "rThronosIssuerAddress"
+}

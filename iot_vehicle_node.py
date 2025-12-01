@@ -1,202 +1,166 @@
+#!/usr/bin/env python3
+"""
+IoT Vehicle Node for Thronos Chain - "Ultimate Driver" Edition.
+
+Responsibilities:
+1. Gather advanced telemetry (Lidar, Cruise Control, Battery).
+2. Encode data into "PIC OF THE /images/photo1764630608.jpg" using Steganography.
+3. Transmit the "Whisper" to the Server.
+4. Request AI Autonomous Driving by paying THR tokens.
+"""
+
 import os
-import time
 import json
+import time
 import random
-import hashlib
-import secrets
 import requests
-import glob
 from datetime import datetime
-from PIL import Image, ImageDraw
+from PIL import Image
 
 # Configuration
-SERVER_URL = "http://localhost:3333"  # Update this if deploying to a remote server
-VEHICLE_ID_FILE = "vehicle_id.json"
-SOURCE_IMAGE = "PIC OF THE /images/photo1764609981.jpg"
-OFFLINE_DIR = "offline_storage"
-UPLOAD_ENDPOINT = "/api/iot/submit"
-INTERVAL_SECONDS = 60
+SERVER_URL = "https://thrchain.up.railway.app"
+NODE_ID_FILE = "node_config.json"
+FIRE_IMAGE = "pic_of_the_fire.png" 
 
-def load_or_create_identity():
-    if os.path.exists(VEHICLE_ID_FILE):
-        with open(VEHICLE_ID_FILE, 'r') as f:
+# Autonomous Driving Cost (THR per minute/session)
+AUTONOMOUS_COST = 5.0 
+
+def load_config():
+    if os.path.exists(NODE_ID_FILE):
+        with open(NODE_ID_FILE, "r") as f:
             return json.load(f)
-    else:
-        identity = {
-            "vehicle_id": "THR-CAR-" + secrets.token_hex(4).upper(),
-            "private_key": secrets.token_hex(32),
-            "public_key": secrets.token_hex(32)
-        }
-        with open(VEHICLE_ID_FILE, 'w') as f:
-            json.dump(identity, f, indent=2)
-        return identity
+    return {"node_id": "unknown", "wallet_address": "unknown", "secret": "unknown"}
 
-def get_vehicle_telemetry(identity):
-    # Simulate reading from OBD-II / GPS sensors
+def get_advanced_telemetry(autopilot_active=False):
+    """Simulates advanced sensors for AI processing."""
+    base_speed = 80 if autopilot_active else random.uniform(0, 120)
+    
     return {
-        "vehicle_id": identity['vehicle_id'],
-        "timestamp": time.time(),
-        "gps_lat": 37.9838 + random.uniform(-0.01, 0.01),
-        "gps_lon": 23.7275 + random.uniform(-0.01, 0.01),
-        "speed_kmh": random.randint(0, 120),
-        "odometer": 12000 + random.randint(0, 100),
-        "battery_level": random.randint(20, 100),
-        "status": "active"
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "gps": {
+            "lat": round(random.uniform(37.9, 38.1), 6),
+            "lon": round(random.uniform(23.7, 23.8), 6)
+        },
+        "sensors": {
+            "lidar_front": round(random.uniform(10, 200), 1), # meters
+            "lane_deviation": round(random.uniform(-0.5, 0.5), 2), # meters
+            "cruise_control": "ACTIVE" if autopilot_active else "STANDBY",
+            "driver_alertness": "HIGH"
+        },
+        "status": {
+            "speed": round(base_speed + random.uniform(-2, 2), 1),
+            "battery": round(random.uniform(20, 100), 1),
+            "mode": "AI_AUTOPILOT" if autopilot_active else "MANUAL"
+        }
     }
 
-def create_dummy_image_if_needed(path):
-    if not os.path.exists(path):
-        print(f"⚠️ Source image {path} not found. Creating a placeholder.")
-        img = Image.new('RGB', (800, 600), color = (200, 100, 50))
-        d = ImageDraw.Draw(img)
-        d.text((50, 250), "PIC OF THE FIRE (Placeholder)", fill=(255, 255, 255))
-        img.save(path)
+def embed_data_lsb(image_path, data_str):
+    """Embeds string data + '###END###' into image LSB."""
+    if not os.path.exists(image_path):
+        print(f"Error: Base image {image_path} not found.")
+        return None
 
-def encode_steganography(image_path, data_dict, output_path):
-    """Encodes JSON data into the LSB of the image."""
-    create_dummy_image_if_needed(image_path)
+    img = Image.open(image_path).convert("RGB")
+    pixels = list(img.getdata())
     
-    img = Image.open(image_path)
-    encoded = img.copy()
-    width, height = img.size
-    pixels = encoded.load()
+    full_payload = data_str + "###END###"
+    binary_data = ''.join(format(ord(c), '08b') for c in full_payload)
     
-    # Prepare data: Length header (32-bit) + JSON string
-    data_str = json.dumps(data_dict)
-    binary_data = ''.join(format(ord(i), '08b') for i in data_str)
-    
-    # Add a delimiter or length header could be better, but for this MVP 
-    # we will just embed the raw binary. A real implementation needs a robust header.
-    # We'll prepend the length as a 32-bit binary string for the decoder to know when to stop.
-    length_bin = format(len(binary_data), '032b')
-    full_payload = length_bin + binary_data
-    
-    data_len = len(full_payload)
-    if data_len > width * height * 3:
-        raise ValueError("Data too large for image capacity")
+    if len(pixels) * 3 < len(binary_data):
+        print("Error: Image too small for payload.")
+        return None
         
-    idx = 0
-    for y in range(height):
-        for x in range(width):
-            if idx < data_len:
-                r, g, b = pixels[x, y]
-                
-                if idx < data_len:
-                    r = (r & ~1) | int(full_payload[idx])
-                    idx += 1
-                if idx < data_len:
-                    g = (g & ~1) | int(full_payload[idx])
-                    idx += 1
-                if idx < data_len:
-                    b = (b & ~1) | int(full_payload[idx])
-                    idx += 1
-                    
-                pixels[x, y] = (r, g, b)
-            else:
-                break
-        if idx >= data_len:
-            break
-            
-    encoded.save(output_path)
-    return True
+    new_pixels = []
+    data_idx = 0
+    
+    for pixel in pixels:
+        r, g, b = pixel
+        if data_idx < len(binary_data):
+            r = (r & ~1) | int(binary_data[data_idx]); data_idx += 1
+        if data_idx < len(binary_data):
+            g = (g & ~1) | int(binary_data[data_idx]); data_idx += 1
+        if data_idx < len(binary_data):
+            b = (b & ~1) | int(binary_data[data_idx]); data_idx += 1
+        new_pixels.append((r, g, b))
+        
+    new_img = Image.new(img.mode, img.size)
+    new_img.putdata(new_pixels)
+    
+    output_filename = f"whisper_{int(time.time())}.png"
+    new_img.save(output_filename)
+    return output_filename
 
-def save_offline(telemetry, identity):
-    if not os.path.exists(OFFLINE_DIR):
-        os.makedirs(OFFLINE_DIR)
+def request_autonomous_mode(config):
+    """
+    Sends a request to the server to activate AI Driver.
+    Simulates signing a transaction to pay THR.
+    """
+    print(f"\n🤖 Requesting AI Autonomous Driver for {config['wallet_address']}...")
+    print(f"💸 Authorizing payment of {AUTONOMOUS_COST} THR...")
     
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{OFFLINE_DIR}/images/Telemetry.jpg"
+    payload = {
+        "node_id": config['node_id'],
+        "wallet": config['wallet_address'],
+        "action": "ACTIVATE_AUTOPILOT",
+        "destination": "Syntagma Square, Athens", # Example destination
+        "amount": AUTONOMOUS_COST
+    }
     
-    # Sign the data
-    payload_str = json.dumps(telemetry)
-    signature = hashlib.sha256((payload_str + identity['private_key']).encode()).hexdigest()
-    final_payload = {"data": telemetry, "sig": signature}
+    # In a real scenario, we would sign this payload with config['secret']
     
     try:
-        encode_steganography(SOURCE_IMAGE, final_payload, filename)
-        print(f"💾 [Offline] Saved telemetry to {filename}")
-        return True
-    except Exception as e:
-        print(f"❌ [Offline] Error saving: {e}")
-        return False
-
-def upload_image(filepath):
-    try:
-        with open(filepath, 'rb') as f:
-            files = {'file': f}
-            # In a real scenario, we might send the wallet address as a form field too
-            response = requests.post(f"{SERVER_URL}{UPLOAD_ENDPOINT}", files=files, timeout=5)
-            
+        response = requests.post(f"{SERVER_URL}/api/iot/autonomous_request", json=payload)
         if response.status_code == 200:
-            print(f"✅ [Upload] Successfully uploaded {filepath}")
-            return True
+            data = response.json()
+            if data.get("status") == "granted":
+                print("✅ AI Driver Activated! Taking control...")
+                return True
+            else:
+                print(f"❌ Access Denied: {data.get('message')}")
         else:
-            print(f"⚠️ [Upload] Server returned {response.status_code}: {response.text}")
-            return False
-    except requests.exceptions.ConnectionError:
-        print("❌ [Upload] Connection failed. Server unreachable.")
-        return False
+            print(f"❌ Server Error: {response.text}")
     except Exception as e:
-        print(f"❌ [Upload] Error: {e}")
-        return False
+        print(f"❌ Connection Failed: {e}")
+        
+    return False
 
-def process_offline_queue():
-    if not os.path.exists(OFFLINE_DIR):
-        return
-
-    files = glob.glob(f"{OFFLINE_DIR}/*.png")
-    if not files:
-        return
-
-    print(f"🔄 [Queue] Found {len(files)} offline records. Attempting upload...")
-    
-    for filepath in files:
-        if upload_image(filepath):
-            # Delete after successful upload
-            os.remove(filepath)
-            print(f"🗑️ [Queue] Deleted local copy: {filepath}")
-        else:
-            print("⏹️ [Queue] Upload failed, stopping queue processing.")
-            break
+def send_whisper(image_path):
+    """Uploads the stego-image to the server."""
+    url = f"{SERVER_URL}/api/iot/submit"
+    try:
+        with open(image_path, 'rb') as img_file:
+            requests.post(url, files={'file': img_file})
+        os.remove(image_path)
+    except:
+        pass
 
 def main():
-    print("🚗 Thronos IoT Vehicle Node Started")
-    print("-----------------------------------")
-    identity = load_or_create_identity()
-    print(f"Vehicle ID: {identity['vehicle_id']}")
+    print("🚗 Thronos 'Ultimate Driver' Node Started")
+    config = load_config()
     
-    # Ensure source image exists
-    create_dummy_image_if_needed(SOURCE_IMAGE)
+    autopilot_active = False
+    
+    # Simulate user requesting autopilot after a few seconds
+    start_time = time.time()
     
     while True:
-        print("\n⏱️  Collecting Telemetry...")
-        telemetry = get_vehicle_telemetry(identity)
-        
-        # 1. Always create a temporary current state image
-        current_image = "/images/photo1764609981.jpg"
-        
-        # Sign data
-        payload_str = json.dumps(telemetry)
-        signature = hashlib.sha256((payload_str + identity['private_key']).encode()).hexdigest()
-        final_payload = {"data": telemetry, "sig": signature}
-        
-        encode_steganography(SOURCE_IMAGE, final_payload, current_image)
-        
-        # 2. Try to upload immediately
-        print("📡 Attempting connection to server...")
-        if upload_image(current_image):
-            # If successful, also check if we have offline data to sync
-            process_offline_queue()
-        else:
-            # If failed, save to offline storage
-            print("🔌 Server unreachable. Switching to Offline Mode.")
-            save_offline(telemetry, identity)
+        # Check if we should try to activate autopilot
+        if not autopilot_active and (time.time() - start_time > 10):
+            autopilot_active = request_autonomous_mode(config)
             
-        # Cleanup temp file
-        if os.path.exists(current_image):
-            os.remove(current_image)
-            
-        time.sleep(INTERVAL_SECONDS)
+        # 1. Get Telemetry
+        data = get_advanced_telemetry(autopilot_active)
+        data['vehicle_id'] = config.get('node_id')
+        
+        status_msg = "🤖 AI DRIVING" if autopilot_active else "👤 MANUAL"
+        print(f"[{status_msg}] Speed: {data['status']['speed']} km/h | Lidar: {data['sensors']['lidar_front']}m")
+        
+        # 2. Embed & Send
+        stego_path = embed_data_lsb(FIRE_IMAGE, json.dumps(data))
+        if stego_path:
+            send_whisper(stego_path)
+        
+        time.sleep(5) # Faster updates for driving
 
 if __name__ == "__main__":
     main()

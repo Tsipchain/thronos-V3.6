@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+
+{% block title %}🔥 Thronos Pledge to the Flame{% endblock %}
+
+{% block styles %}
+<style>
+    form { width:100%; max-width:650px; margin:20px auto; text-align:left; }
+    input,textarea{
+      width:100%; padding:8px; margin-top:5px;
+      background:#111; border:1px solid #0f0; color:#0f0;
+      font-family:monospace;
+      box-sizing: border-box;
+    }
+    label{ font-weight:bold; margin-top:15px; display:block; }
+    .info{ font-size:13px; color:#0f0; opacity:0.8; }
+
+    #result{ margin-top:25px; border:1px solid #0f0;
+      width:100%; max-width:650px; padding:15px; text-align:left; margin-left: auto; margin-right: auto; box-sizing: border-box;}
+    #result.error{ border-color:red; color:red; }
+    #result.success{ border-color:#0f0; }
+    .pdf-link{ color:#0f0; text-decoration:underline; }
+    
+    button[type="submit"] {
+      margin-top: 20px;
+      padding: 10px 20px;
+      background: #0f0;
+      color: #000;
+      border: 1px solid #000;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    button[type="submit"]:hover {
+      background: #0c0;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div style="text-align: center;">
+  <h1>🔥 <span class="lang-el">Δέσμευση στη Φλόγα</span><span class="lang-en">Pledge to the Flame</span></h1>
+
+  <form id="pledgeForm">
+
+    <label><span class="lang-el">Διεύθυνση BTC (KYC):</span><span class="lang-en">BTC Address (KYC):</span></label>
+    <input id="btc_address" placeholder="e.g. 1FQov4P8yz..." required>
+
+    <label><span class="lang-el">Η Δέσμευσή σας:</span><span class="lang-en">Your Pledge:</span></label>
+    <textarea id="pledge_text" rows="4">I hereby pledge allegiance to the Thronos Chain.</textarea>
+
+    <label><span class="lang-el">Μυστική Φράση (προαιρετικό):</span><span class="lang-en">Secret Passphrase (optional):</span></label>
+    <input id="user_passphrase" placeholder="Μόνο εσύ πρέπει να τη γνωρίζεις. / Only you must know this.">
+    <div class="info">
+      • <span class="lang-el">Αν προσθέσετε φράση, η αποστολή THR **απαιτεί και τα δύο**: (PDF-stego seed + αυτή τη φράση).</span><span class="lang-en">If you add a passphrase, THR sending **requires both**: (PDF-stego seed + this phrase).</span><br>
+      • <span class="lang-el">Αν χάσετε ΚΑΙ ΤΑ ΔΥΟ → καμία ανάκτηση δεν είναι δυνατή (όπως ένα πραγματικό blockchain).</span><span class="lang-en">If you lose BOTH → no recovery possible (like a real blockchain).</span>
+    </div>
+
+    <br><br>
+
+    <div style="border:1px dashed #0f0; padding:15px; text-align:center;">
+      <p><span class="lang-el">Στείλτε ελάχιστο BTC fee στο:</span><span class="lang-en">Send a minimum BTC fee to:</span></p>
+      <p><b>1QFeDPwEF8yEgPEfP79hpc8pHytXMz9oEQ</b></p>
+      <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=bitcoin:1QFeDPwEF8yEgPEfP79hpc8pHytXMz9oEQ"
+           id="qr" title="Click to copy address" style="cursor:pointer;">
+      <p style="font-size:12px"><span class="lang-el">(Κλικ στο QR για αντιγραφή BTC διεύθυνσης)</span><span class="lang-en">(Click QR to copy BTC address)</span></p>
+    </div>
+
+    <button type="submit"><span class="lang-el">Υποβολή Δέσμευσης</span><span class="lang-en">Submit Pledge</span></button>
+  </form>
+
+  <div id="result"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById("qr").onclick = () => {
+  navigator.clipboard.writeText("1QFeDPwEF8yEgPEfP79hpc8pHytXMz9oEQ");
+  const lang = localStorage.getItem('lang') || 'el';
+  alert(lang === 'el' ? "Η διεύθυνση BTC αντιγράφηκε!" : "BTC address copied!");
+};
+
+document.getElementById("pledgeForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const result = document.getElementById("result");
+  const lang = localStorage.getItem('lang') || 'el';
+  
+  result.className = "";
+  result.textContent = lang === 'el' ? "⏳ Επεξεργασία..." : "⏳ Processing...";
+
+  const payload = {
+    btc_address: document.getElementById("btc_address").value.trim(),
+    pledge_text: document.getElementById("pledge_text").value.trim(),
+    user_passphrase: document.getElementById("user_passphrase").value.trim(),
+  };
+
+  try {
+    const r = await fetch("/pledge_submit", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(payload)
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || data.message || "Unknown error");
+
+    result.classList.add("success");
+    
+    const msg = lang === 'el' ? {
+        accepted: "🔥 Η Δέσμευση Έγινε Δεκτή!",
+        addr: "Διεύθυνση THR",
+        hash: "Pledge Hash",
+        pdf: "Λήψη Συμβολαίου PDF",
+        wallet: "Μετάβαση στο Πορτοφόλι",
+        miner: "Λήψη Miner Kit"
+    } : {
+        accepted: "🔥 Pledge Accepted!",
+        addr: "THR Address",
+        hash: "Pledge Hash",
+        pdf: "Download Contract PDF",
+        wallet: "Go to Wallet",
+        miner: "Download Miner Kit"
+    };
+
+    result.innerHTML = `
+      <b>${msg.accepted}</b><br><br>
+      ${msg.addr}: <code>${data.thr_address}</code><br>
+      ${msg.hash}: <code>${data.pledge_hash}</code><br><br>
+      📄 <a class="pdf-link" href="/contracts/${data.pdf_filename}" target="_blank">${msg.pdf}</a><br>
+      ⛏️ <a class="pdf-link" href="/static/miner_kit.zip" download>${msg.miner}</a><br><br>
+      💼 <a href="/wallet/${data.thr_address}">${msg.wallet}</a>
+    `;
+  } catch (err) {
+    result.classList.add("error");
+    const errMsg = lang === 'el' ? "❌ Σφάλμα:" : "❌ Error:";
+    result.innerHTML = `<b>${errMsg}</b> ${err.message}`;
+  }
+};
+</script>
+{% endblock %}

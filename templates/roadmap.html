@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+
+{% block title %}🗺️ Thronos Roadmap{% endblock %}
+
+{% block styles %}
+<style>
+    .checked { color: #0f0; }
+    .unchecked { color: #666; }
+    .in-progress { color: #ff0; }
+    .btn-download {
+        display: inline-block;
+        background: #0f0;
+        color: #000;
+        padding: 10px 20px;
+        margin-bottom: 20px;
+        font-weight: bold;
+        text-decoration: none;
+        border: 1px solid #000;
+    }
+    .btn-download:hover {
+        background: #0c0;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+  <div style="text-align:right;">
+    <a href="/static/Thronos_Roadmap.pdf" class="btn-download" download>
+        ⬇️ <span class="lang-el">Λήψη PDF</span><span class="lang-en">Download PDF</span>
+    </a>
+  </div>
+
+  <h1><span class="lang-el">Χάρτης Πορείας Thronos Chain - Στάδιο 2</span><span class="lang-en">Thronos Chain - Stage 2 Roadmap: Expansion & Utility</span></h1>
+  <p>
+    <span class="lang-el">Αυτός ο χάρτης πορείας περιγράφει την επόμενη φάση ανάπτυξης για το Thronos Chain, εστιάζοντας στη χρησιμότητα, την ενσωμάτωση παιχνιδιών και τη σύνδεση με την πραγματική αξία.</span>
+    <span class="lang-en">This roadmap outlines the next phase of development for the Thronos Chain, focusing on utility, gaming integration, and real-world value connection.</span>
+  </p>
+
+  <h2>✅ <span class="lang-el">Ολοκληρωμένα</span><span class="lang-en">Completed</span></h2>
+  <ul>
+    <li class="checked">[x] <strong>Core Upgrade (v2.0)</strong>: <span class="lang-el">Υλοποίηση ασφαλών συμβολαίων PDF, ανάκτηση steganography και δίγλωσσο UI.</span><span class="lang-en">Implemented secure PDF contracts, steganography recovery, and bilingual UI.</span></li>
+    <li class="checked">[x] <strong>Miner Kit</strong>: <span class="lang-el">Κυκλοφορία CPU miner και Stratum proxy για υποστήριξη ASIC.</span><span class="lang-en">Released CPU miner and Stratum proxy for ASIC support.</span></li>
+    <li class="checked">[x] <strong>AI Agent Prototype</strong>: <span class="lang-el">Δημιουργία βάσης για τον αυτόνομο πράκτορα "Pythia".</span><span class="lang-en">Created the base for the autonomous agent "Pythia".</span></li>
+    <li class="checked">[x] <strong>Fee Logic Update</strong>: <span class="lang-el">Υλοποίηση διαχωρισμού αμοιβών: 80% Miner / 10% AI / 10% Burn.</span><span class="lang-en">Implemented 80% Miner / 10% AI / 10% Burn reward split.</span></li>
+    <li class="checked">[x] <strong>BTC Value Display</strong>: <span class="lang-el">Προσθήκη εμφάνισης ισοτιμίας BTC στο Πορτοφόλι και την Αρχική (Peg: 1 THR = 0.0001 BTC).</span><span class="lang-en">Added BTC exchange rate display in Wallet and Home (Peg: 1 THR = 0.0001 BTC).</span></li>
+    <li class="checked">[x] <strong>Token Chart</strong>: <span class="lang-el">Οπτικοποίηση στατιστικών δικτύου και ανάπτυξης Pledge.</span><span class="lang-en">Visualization of network stats and Pledge growth.</span></li>
+  </ul>
+
+  <h2>🚧 <span class="lang-el">Σε Εξέλιξη</span><span class="lang-en">In Progress</span></h2>
+  <ul>
+    <li class="in-progress">[~] <strong>Watcher Service (Prototype Ready)</strong>:
+        <ul>
+            <li><span class="lang-el">Αυτόματη ανίχνευση καταθέσεων BTC και υπολογισμός ισοτιμίας THR.</span><span class="lang-en">Automatic detection of BTC deposits and THR conversion calculation.</span></li>
+            <li><span class="lang-el">Καταγραφή σε ledger για μελλοντική έκδοση (minting).</span><span class="lang-en">Logging to ledger for future minting.</span></li>
+        </ul>
+    </li>
+    <li class="in-progress">[~] <strong>IoT Vehicle Nodes (Prototype Ready)</strong>:
+        <ul>
+            <li><span class="lang-el">Σενάριο Python για συλλογή τηλεμετρίας οχημάτων (GPS, Ταχύτητα).</span><span class="lang-en">Python script for vehicle telemetry collection (GPS, Speed).</span></li>
+            <li><span class="lang-el">Κρυπτογραφική υπογραφή και ενσωμάτωση σε εικόνες (Steganography).</span><span class="lang-en">Cryptographic signing and embedding into images (Steganography).</span></li>
+        </ul>
+    </li>
+    <li class="unchecked">[ ] <strong>Crypto Hunters Integration</strong>:
+        <ul>
+            <li><span class="lang-el">Εγκατάσταση backend (`drx.js`) στον κεντρικό server.</span><span class="lang-en">Deploy backend (`drx.js`) on the main server.</span></li>
+            <li><span class="lang-el">Σύνδεση οικονομίας παιχνιδιού με το Thronos Chain (Play-to-Earn).</span><span class="lang-en">Connect game economy to Thronos Chain (Play-to-Earn).</span></li>
+            <li><span class="lang-el">Κυκλοφορία Demo Εφαρμογής Κινητού (.apk).</span><span class="lang-en">Release Mobile App Demo (.apk).</span></li>
+        </ul>
+    </li>
+  </ul>
+
+  <h2>🔮 <span class="lang-el">BTC Fork & Ενσωμάτωση Off-Chain Μετρητών</span><span class="lang-en">BTC Fork & Off-Chain Cash Integration</span></h2>
+  <p>
+    <span class="lang-el">Το τελικό μας όραμα είναι να λειτουργήσουμε ως ένα εξειδικευμένο επίπεδο εκτέλεσης (ή "Fork") του Bitcoin, επιτρέποντας άμεση ρευστότητα και χρησιμότητα στον πραγματικό κόσμο.</span>
+    <span class="lang-en">Our ultimate vision is to function as a specialized execution layer (or "Fork") of Bitcoin, enabling instant liquidity and real-world utility.</span>
+  </p>
+
+  <h3>1. Atomic Swaps / Bridge (<span class="lang-el">Γέφυρα</span><span class="lang-en">Bridge</span>)</h3>
+  <p><em><span class="lang-el">Στόχος: Άμεση, χωρίς εμπιστοσύνη μετατροπή μεταξύ BTC και THR.</span><span class="lang-en">Objective: Instant, trustless conversion between BTC and THR.</span></em></p>
+  <ul>
+    <li><strong>Mechanism:</strong> <span class="lang-el">Θα εφαρμόσουμε Hashed TimeLock Contracts (HTLCs) ή ένα απλοποιημένο σύστημα "Vault".</span><span class="lang-en">We will implement Hashed TimeLock Contracts (HTLCs) or a simplified "Vault" system.</span></li>
+    <li><strong>Flow:</strong> <span class="lang-el">Οι χρήστες κλειδώνουν BTC σε μια καθορισμένη διεύθυνση Vault -> Το Thronos Chain δημιουργεί ισοδύναμα THR. Αντίστροφα, το κάψιμο THR απελευθερώνει BTC από το Vault.</span><span class="lang-en">Users lock BTC in a designated Vault address -> Thronos Chain mints equivalent THR. Conversely, burning THR releases BTC from the Vault.</span></li>
+  </ul>
+
+  <h3>2. The Watcher Role (<span class="lang-el">Ο Ρόλος του Παρατηρητή</span><span class="lang-en">The Watcher Role</span>)</h3>
+  <p><em><span class="lang-el">Στόχος: Η γέφυρα μεταξύ του on-chain Bitcoin και του Thronos Chain.</span><span class="lang-en">Objective: The bridge between on-chain Bitcoin and Thronos Chain.</span></em></p>
+  <ul>
+    <li><strong>Function:</strong> <span class="lang-el">Ο Παρατηρητής είναι μια αποκεντρωμένη υπηρεσία που παρακολουθεί το Bitcoin Mainnet.</span><span class="lang-en">The Watcher is a decentralized service that monitors the Bitcoin Mainnet.</span></li>
+    <li><strong>Verification:</strong> <span class="lang-el">Επαληθεύει πληρωμές στο Vault ή σε συγκεκριμένες διευθύνσεις "Burn" και ενεργοποιεί αυτόματα την απελευθέρωση πόρων THR ή αντικειμένων παιχνιδιού.</span><span class="lang-en">It verifies payments to the Vault or specific "Burn" addresses and automatically triggers the release of THR assets or game items.</span></li>
+  </ul>
+
+  <h3>3. Cash Out & Off-Chain Agents (<span class="lang-el">Εξαργύρωση & Πράκτορες</span><span class="lang-en">Cash Out & Agents</span>)</h3>
+  <p><em><span class="lang-el">Στόχος: Μετατροπή ψηφιακών περιουσιακών στοιχείων σε φυσική πραγματικότητα.</span><span class="lang-en">Objective: Turning digital assets into physical reality.</span></em></p>
+  <ul>
+    <li><strong>Off-Chain Agents:</strong> <span class="lang-el">Έμπιστοι κόμβοι (ATM ή ανθρώπινοι πράκτορες) που δέχονται μεταφορές THR και διανέμουν μετρητά.</span><span class="lang-en">Trusted nodes (ATMs or human agents) that accept THR transfers and dispense cash.</span></li>
+    <li><strong>Integration:</strong> <span class="lang-el">Ο Πράκτορας AI θα διαχειρίζεται δεξαμενές ρευστότητας για να διασφαλίσει ότι αυτοί οι πράκτορες χρηματοδοτούνται, δημιουργώντας ουσιαστικά ένα κατανεμημένο δίκτυο ATM για Bitcoin μέσω Thronos.</span><span class="lang-en">The AI Agent will manage liquidity pools to ensure these agents are funded, effectively creating a distributed ATM network for Bitcoin via Thronos.</span></li>
+  </ul>
+
+  <h2>📅 <span class="lang-el">Προσεχή Χαρακτηριστικά (Q1 2025)</span><span class="lang-en">Upcoming Features (Q1 2025)</span></h2>
+  
+  <h3>AI Agent Evolution ("Pythia")</h3>
+  <ul>
+    <li><strong>Autonomous Trading:</strong> <span class="lang-el">Να επιτρέπεται στο AI να διαχειρίζεται το δικό του ταμείο (10% των τελών) για αγορά/πώληση πόρων ή επιβράβευση συμπεριφορών δικτύου.</span><span class="lang-en">Allow the AI to manage its own 10% fee treasury to buy/sell assets or reward specific network behaviors.</span></li>
+    <li><strong>Oracle Services:</strong> <span class="lang-el">Το AI θα επαληθεύει δεδομένα πραγματικού κόσμου (π.χ. τιμή BTC, αποτελέσματα αγώνων) και θα τα δημοσιεύει στο Thronos Chain.</span><span class="lang-en">The AI will verify real-world data (e.g., BTC price, game results) and post it to the Thronos Chain.</span></li>
+  </ul>
+
+  <h3>Mobile Wallet App</h3>
+  <ul>
+    <li><span class="lang-el">Εγγενής εφαρμογή Android/iOS για διαχείριση THR, σάρωση QR και παιχνίδι Crypto Hunters.</span><span class="lang-en">Native Android/iOS app for managing THR, scanning QRs, and playing Crypto Hunters.</span></li>
+  </ul>
+
+  <h3>Decentralized Governance</h3>
+  <ul>
+    <li><span class="lang-el">Να επιτρέπεται στους κατόχους THR να ψηφίζουν για παραμέτρους δικτύου (ποσοστά τελών, ρυθμοί καύσης) χρησιμοποιώντας υπογεγραμμένα μηνύματα.</span><span class="lang-en">Allow THR holders to vote on network parameters (fee rates, burn rates) using signed messages.</span></li>
+  </ul>
+
+  <hr>
+  <p style="text-align:center; margin-top:50px; font-style:italic;">Thronos Chain: Resistance is not futile. It is profitable.</p>
+{% endblock %}

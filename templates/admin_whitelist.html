@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Thronos Whitelist Admin</title>
+  <style>
+    body {
+      background: #000;
+      color: #00ff66;
+      font-family: "Courier New", monospace;
+    }
+    .container {
+      max-width: 900px;
+      margin: 40px auto;
+      border: 1px solid #00ff66;
+      padding: 20px 30px;
+      box-shadow: 0 0 10px #00ff66;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 10px;
+    }
+    h2 {
+      margin-top: 30px;
+      margin-bottom: 10px;
+      border-bottom: 1px dashed #00ff66;
+      padding-bottom: 5px;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+    }
+    input[type="text"] {
+      width: 100%;
+      padding: 8px;
+      background: #000;
+      border: 1px solid #00ff66;
+      color: #00ff66;
+      font-family: inherit;
+    }
+    button {
+      margin-top: 10px;
+      padding: 8px 16px;
+      background: #00ff66;
+      border: none;
+      color: #000;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #00cc55;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid #00ff66;
+      padding: 6px 8px;
+      text-align: left;
+      word-break: break-all;
+    }
+    .status {
+      margin-top: 10px;
+      min-height: 20px;
+    }
+    .status.ok {
+      color: #00ff66;
+    }
+    .status.err {
+      color: #ff5555;
+    }
+    .nav {
+      margin-bottom: 15px;
+      font-size: 14px;
+    }
+    .nav a {
+      color: #00ff66;
+      text-decoration: none;
+      margin-right: 10px;
+    }
+    .nav a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="nav">
+      <a href="/">🏠 Home</a>
+      <a href="/pledge">🔥 Pledge</a>
+      <a href="/viewer">📜 Viewer</a>
+      <a href="/wallet">👛 Wallet</a>
+    </div>
+
+    <h1>Thronos Whitelist Admin</h1>
+
+    <p>
+      Admin secret loaded. Μην μοιραστείς αυτό το URL με κανέναν.
+    </p>
+
+    <!-- ADD SECTION -->
+    <h2>➕ Add BTC address to whitelist</h2>
+    <label for="btcInput">BTC Address (KYC):</label>
+    <input id="btcInput" type="text" placeholder="e.g. 1FQov4PByz..." />
+    <button id="addBtn">Add to whitelist</button>
+    <div id="addStatus" class="status"></div>
+
+    <!-- LIST SECTION -->
+    <h2>📋 Current whitelist</h2>
+    <div id="listStatus" class="status"></div>
+    <table id="wlTable">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>BTC Address</th>
+        </tr>
+      </thead>
+      <tbody id="wlBody">
+        <!-- filled by JS -->
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    // Το secret έρχεται από το server-side render
+    const ADMIN_SECRET = "{{ admin_secret }}";
+
+    const wlBody     = document.getElementById('wlBody');
+    const listStatus = document.getElementById('listStatus');
+    const addStatus  = document.getElementById('addStatus');
+    const btcInput   = document.getElementById('btcInput');
+    const addBtn     = document.getElementById('addBtn');
+
+    async function loadWhitelist() {
+      listStatus.textContent = "Loading whitelist...";
+      listStatus.className = "status";
+
+      try {
+        const res = await fetch(`/admin/whitelist/list?secret=${encodeURIComponent(ADMIN_SECRET)}`);
+        if (!res.ok) {
+          throw new Error("HTTP " + res.status);
+        }
+        const data = await res.json();
+        const list = data.whitelist || [];
+
+        wlBody.innerHTML = "";
+        list.forEach((addr, idx) => {
+          const tr = document.createElement('tr');
+          const tdIndex = document.createElement('td');
+          const tdAddr  = document.createElement('td');
+          tdIndex.textContent = idx + 1;
+          tdAddr.textContent  = addr;
+          tr.appendChild(tdIndex);
+          tr.appendChild(tdAddr);
+          wlBody.appendChild(tr);
+        });
+
+        if (list.length === 0) {
+          listStatus.textContent = "Whitelist is empty.";
+        } else {
+          listStatus.textContent = `Total entries: ${list.length}`;
+        }
+        listStatus.className = "status ok";
+      } catch (err) {
+        console.error(err);
+        listStatus.textContent = "Error loading whitelist: " + err;
+        listStatus.className = "status err";
+      }
+    }
+
+    async function addAddress() {
+      const btc = btcInput.value.trim();
+      if (!btc) {
+        addStatus.textContent = "Please enter a BTC address.";
+        addStatus.className = "status err";
+        return;
+      }
+
+      addStatus.textContent = "Adding address...";
+      addStatus.className = "status";
+
+      try {
+        const res = await fetch('/admin/whitelist/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            secret: ADMIN_SECRET,
+            btc_address: btc
+          })
+        });
+
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          throw new Error(data.error || ("HTTP " + res.status));
+        }
+
+        addStatus.textContent = "Address added to whitelist.";
+        addStatus.className = "status ok";
+        btcInput.value = "";
+        loadWhitelist();
+      } catch (err) {
+        console.error(err);
+        addStatus.textContent = "Error: " + err;
+        addStatus.className = "status err";
+      }
+    }
+
+    addBtn.addEventListener('click', addAddress);
+    btcInput.addEventListener('keyup', (e) => {
+      if (e.key === 'Enter') addAddress();
+    });
+
+    // On load
+    loadWhitelist();
+  </script>
+</body>
+</html>

@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <h1 class="text-3xl font-bold mb-6 text-white">Thronos Block Explorer</h1>
+    
+    <div class="overflow-x-auto bg-gray-800 rounded-lg shadow-xl">
+        <table class="min-w-full text-left text-gray-300">
+            <thead class="bg-gray-700 text-gray-100 uppercase font-semibold text-sm">
+                <tr>
+                    <th class="px-6 py-3">Height</th>
+                    <th class="px-6 py-3">Block Hash</th>
+                    <th class="px-6 py-3">Pool Fee (Burned)</th>
+                    <th class="px-6 py-3">Transactions</th>
+                    <th class="px-6 py-3">Nonce</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-600">
+                {% for block in blocks %}
+                <tr class="hover:bg-gray-700 transition-colors">
+                    <td class="px-6 py-4">{{ block.index }}</td>
+                    <td class="px-6 py-4">
+                        <div class="flex items-center gap-2">
+                            <span id="hash-{{ loop.index }}" class="font-mono text-xs break-all">{{ block.hash }}</span>
+                            <button onclick="copy_to_clipboard('hash-{{ loop.index }}')" class="text-blue-400 hover:text-blue-300 p-1 rounded transition" title="Copy Hash">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                </svg>
+                            </button>
+                        </div>
+                    </td>
+                    <td class="px-6 py-4 text-green-400">
+                        {{ block.fee_burned if block.fee_burned is defined else '0' }} THR
+                    </td>
+                    <td class="px-6 py-4">
+                        {% if block.transactions %}
+                            {% for tx in block.transactions %}
+                            <div class="flex items-center gap-2 mb-1">
+                                <span id="tx-{{ loop.index }}-{{ loop.parent.loop.index }}" class="font-mono text-xs truncate w-32">{{ tx.id }}</span>
+                                <button onclick="copy_to_clipboard('tx-{{ loop.index }}-{{ loop.parent.loop.index }}')" class="text-gray-500 hover:text-white" title="Copy TX ID">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                    </svg>
+                                </button>
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <span class="text-gray-500">No TXs</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-6 py-4 font-mono text-sm">{{ block.nonce }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+function copy_to_clipboard(elm_id) {
+    const text = document.getElementById(elm_id).textContent;
+    navigator.clipboard.writeText(text).then(() => {
+        // Optional: Visual feedback could be added here
+    }).catch(err => {
+        console.error('Failed to copy: ', err);
+    });
+}
+</script>
+{% endblock %}

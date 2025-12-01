@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Thronos Wallet</title>
+  <style>
+    body { font-family: monospace; background-color: #101010; color: #00ffcc; padding: 30px; }
+    input, button { padding: 6px; font-size: 1rem; }
+    .field { margin-bottom: 12px; }
+    .log { white-space: pre-wrap; background-color: #111; padding: 10px; border: 1px solid #00ffcc; margin-top: 15px; }
+  </style>
+</head>
+<body>
+
+<div style="background:#000;padding:10px;border-bottom:1px solid #0f0;text-align:center;">
+  <a href="/" style="color:#0f0;margin:10px;">🏠 Home</a>
+  <a href="/pledge" style="color:#0f0;margin:10px;">🔥 Pledge</a>
+  <a href="/viewer" style="color:#0f0;margin:10px;">📦 Viewer</a>
+  <a href="/send" style="color:#0f0;margin:10px;">💸 Send</a>
+  <a href="/wallet" style="color:#0f0;margin:10px;">👛 Wallet</a>
+  <a href="/docs" style="color:#0f0;margin:10px;">📚 Docs</a>
+</div>
+
+
+<h1>🔐 Thronos Wallet</h1>
+
+<div class="field">
+  <label>🔎 View Balance for Address:</label><br>
+  <input type="text" id="viewAddress" placeholder="Enter your THR address">
+  <button onclick="getBalance()">Check Balance</button>
+</div>
+
+<div class="field">
+  <label>📤 Send THR</label><br>
+  From: <input type="text" id="from"><br>
+  To: <input type="text" id="to"><br>
+  Amount: <input type="number" id="amount" step="0.001"><br>
+  <button onclick="sendTHR()">Send</button>
+</div>
+
+<div class="log" id="result">🪐 Output will appear here...</div>
+
+<script>
+  async function getBalance() {
+    const address = document.getElementById('viewAddress').value;
+    try {
+      const res = await fetch("/wallet_balance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ thr_address: address })
+      });
+      const json = await res.json();
+      if (json.error) {
+        document.getElementById('result').textContent = `❌ Error: ${json.error}`;
+      } else {
+        document.getElementById('result').textContent =
+          `✅ Balance: ${json.balance} THR\n📜 Transactions: ${JSON.stringify(json.transactions, null, 2)}`;
+      }
+    } catch (err) {
+      document.getElementById('result').textContent = `❌ Request failed: ${err}`;
+    }
+  }
+
+  async function sendTHR() {
+    const from = document.getElementById('from').value;
+    const to = document.getElementById('to').value;
+    const amount = document.getElementById('amount').value;
+    try {
+      const res = await fetch("/send_token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from, to, amount })
+      });
+      const json = await res.json();
+      if (json.error) {
+        document.getElementById('result').textContent = `❌ Error: ${json.error}`;
+      } else {
+        document.getElementById('result').textContent =
+          `✅ Sent ${amount} THR!\n📄 TX: ${JSON.stringify(json, null, 2)}`;
+      }
+    } catch (err) {
+      document.getElementById('result').textContent = `❌ Request failed: ${err}`;
+    }
+  }
+</script>
+
+</body>
+</html>

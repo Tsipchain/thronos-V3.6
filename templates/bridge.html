@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block title %}🌉 Bitcoin Bridge Watcher{% endblock %}
+
+{% block styles %}
+<style>
+    .status-box {
+        border: 1px solid #0f0;
+        padding: 15px;
+        margin-bottom: 20px;
+        text-align: center;
+        background: #050505;
+    }
+    .status-indicator {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background-color: #0f0;
+        margin-right: 8px;
+        box-shadow: 0 0 10px #0f0;
+    }
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 20px;
+    }
+    th, td {
+        border: 1px solid #0f0;
+        padding: 10px;
+        text-align: left;
+    }
+    th {
+        background-color: #111;
+    }
+    .tx-hash {
+        font-family: monospace;
+        font-size: 0.9em;
+        color: #88ff88;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+    <h1>🌉 <span class="lang-el">Γέφυρα Bitcoin (Watcher)</span><span class="lang-en">Bitcoin Bridge Watcher</span></h1>
+    
+    <div class="status-box">
+        <span class="status-indicator"></span>
+        <strong><span class="lang-el">Κατάσταση Υπηρεσίας: ΕΝΕΡΓΗ</span><span class="lang-en">Service Status: ACTIVE</span></strong>
+        <br>
+        <small><span class="lang-el">Παρακολούθηση Bitcoin Mainnet για καταθέσεις</span><span class="lang-en">Monitoring Bitcoin Mainnet for deposits</span></small>
+    </div>
+
+    <h2><span class="lang-el">Εντοπισμένες Καταθέσεις BTC</span><span class="lang-en">Detected BTC Deposits</span></h2>
+    <p>
+        <span class="lang-el">Αυτές οι συναλλαγές έχουν εντοπιστεί από το Watcher Service και έχουν πιστωθεί στο Thronos Chain.</span>
+        <span class="lang-en">These transactions have been detected by the Watcher Service and credited to Thronos Chain.</span>
+    </p>
+
+    <table id="depositsTable">
+        <thead>
+            <tr>
+                <th><span class="lang-el">Ημερομηνία</span><span class="lang-en">Date</span></th>
+                <th>BTC TX ID</th>
+                <th><span class="lang-el">Αποστολέας</span><span class="lang-en">Sender</span></th>
+                <th><span class="lang-el">Ποσό (BTC)</span><span class="lang-en">Amount (BTC)</span></th>
+                <th><span class="lang-el">Κατάσταση</span><span class="lang-en">Status</span></th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td colspan="5" style="text-align:center;">Loading data...</td>
+            </tr>
+        </tbody>
+    </table>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    async function loadBridgeData() {
+        try {
+            const response = await fetch('/api/bridge/data');
+            const data = await response.json();
+            const tbody = document.querySelector('#depositsTable tbody');
+            tbody.innerHTML = '';
+
+            if (data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No deposits detected yet.</td></tr>';
+                return;
+            }
+
+            data.forEach(item => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${item.timestamp || '-'}</td>
+                    <td class="tx-hash">${item.txid ? item.txid.substring(0, 20) + '...' : '-'}</td>
+                    <td>${item.sender || 'Unknown'}</td>
+                    <td>${item.amount || 0}</td>
+                    <td style="color:#0f0;">CONFIRMED</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        } catch (error) {
+            console.error('Error fetching bridge data:', error);
+            document.querySelector('#depositsTable tbody').innerHTML = 
+                '<tr><td colspan="5" style="text-align:center;color:red;">Error loading data</td></tr>';
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', loadBridgeData);
+</script>
+{% endblock %}

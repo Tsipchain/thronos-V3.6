@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}💼 THR Wallet Viewer{% endblock %}
+
+{% block styles %}
+<style>
+    input, button {
+      background: #111;
+      color: #0f0;
+      border: 1px solid #0f0;
+      padding: 8px;
+      margin: 10px 0;
+      font-family: monospace;
+    }
+    button { cursor: pointer; }
+    button:hover { background: #222; }
+    
+    .tx {
+      margin-top: 20px;
+      border-top: 1px dashed #0f0;
+      padding-top: 10px;
+    }
+    .btc-val {
+        color: #ff0;
+        font-size: 0.9em;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+  <h1>💼 <span class="lang-el">Προβολή Πορτοφολιού THR</span><span class="lang-en">THR Wallet Viewer</span></h1>
+  <p><span class="lang-el">Εισάγετε μια διεύθυνση THR για να δείτε το υπόλοιπο και το ιστορικό συναλλαγών:</span><span class="lang-en">Enter a THR address to view its balance and transaction history:</span></p>
+
+  <div>
+    <input type="text" id="thrAddress" placeholder="e.g. THR..." size="40" />
+    <button onclick="loadWallet()">🔍 <span class="lang-el">Προβολή</span><span class="lang-en">View Wallet</span></button>
+  </div>
+
+  <h2>
+      <span class="lang-el">Υπόλοιπο:</span><span class="lang-en">Balance:</span> 
+      <span id="balance">0</span> THR 
+      <span class="btc-val">(≈ <span id="btcValue">0.0000</span> BTC)</span>
+  </h2>
+  
+  <div id="txHistory"><span class="lang-el">Δεν βρέθηκαν συναλλαγές.</span><span class="lang-en">No transactions yet.</span></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    async function loadWallet() {
+      const addr = document.getElementById("thrAddress").value.trim();
+      if (!addr) {
+        alert("Please enter a THR address.");
+        return;
+      }
+      try {
+        const res = await fetch(`/wallet_data/${addr}`);
+        if (!res.ok) throw new Error("Server returned " + res.status);
+        const data = await res.json();
+        
+        const balance = parseFloat(data.balance);
+        document.getElementById("balance").textContent = balance + " THR";
+        
+        // Calculate BTC value (Fixed rate for now: 1 THR = 0.0001 BTC)
+        const btcVal = (balance * 0.0001).toFixed(8);
+        document.getElementById("btcValue").textContent = btcVal;
+
+        const div = document.getElementById("txHistory");
+        if (!data.transactions.length) {
+          div.textContent = "No transactions found.";
+        } else {
+          let html = "";
+          data.transactions.forEach(tx => {
+            html += `
+            <div class="tx">
+              <strong>${tx.timestamp}</strong><br>
+              ${tx.from ? `From: ${tx.from}<br>` : ""}
+              ${tx.to   ? `To: ${tx.to}<br>`     : ""}
+              Amount: ${tx.amount ?? tx.reward ?? 0} ${tx.amount ? "" : "THR"}<br>
+              ${tx.fee ? `Fee: ${tx.fee}` : ""}
+            </div>`;
+          });
+          div.innerHTML = html;
+        }
+      } catch (e) {
+        alert("Error loading wallet: " + e.message);
+      }
+    }
+    
+    // Check URL for address parameter if we want to support direct linking via JS (optional enhancement)
+    // But server handles /wallet/<addr> redirect to this page, so we might want to grab it from URL path if needed, 
+    // but currently server redirects to /wallet_data JSON or renders this template. 
+    // The server route /wallet/<thr_addr> redirects to /wallet_data/<thr_addr> which returns JSON, 
+    // so the user actually sees JSON if they go there directly. 
+    // The previous implementation had /wallet rendering wallet_viewer.html.
+    // Let's leave it as is.
+</script>
+{% endblock %}

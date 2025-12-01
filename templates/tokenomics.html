@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}📜 THRONOS Tokenomics{% endblock %}
+
+{% block styles %}
+<style>
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-top: 20px;
+      background-color: #111;
+    }
+    th, td {
+      border: 1px solid #0f0;
+      padding: 8px;
+      text-align: left;
+    }
+    th {
+      background-color: #222;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+  <h1>📜 <span class="lang-el">THRONOS Tokenomics - Χρονοδιάγραμμα Halving</span><span class="lang-en">THRONOS Tokenomics - Halving Schedule</span></h1>
+  <p><span class="lang-el">Συνολική Προμήθεια THR: ~420,000 (όπως το BTC + 1)</span><span class="lang-en">Total THR Supply: ~420,000 (like BTC + 1)</span></p>
+  
+  <p>
+    <span class="lang-el">Η δυσκολία και οι ανταμοιβές για τους miners είναι δυναμικές. Ελπίζουμε ότι καθώς περισσότερη ενέργεια εισέρχεται στο σύστημα, η διανομή θα γίνεται σοφά. Τα tokenomics και η ανταμοιβή βασίζονται στην επάρκεια των blocks, και η δυσκολία για τους miners αυξάνεται αυτόματα όταν υπάρχουν πολλοί ταυτόχρονοι συμμετέχοντες. Στο BTC, όλοι παίρνουν το ίδιο; Με ποια βάση; Η φιλοσοφία του PoW μας είναι αυτή:</span>
+    <span class="lang-en">The difficulty and rewards for miners are dynamic. We hope that as more energy enters the system, the distribution happens wisely. The tokenomics and rewards are based on block sufficiency, and the difficulty for miners increases automatically when there are many simultaneous participants. In BTC, everyone gets the same; on what basis is our PoW philosophy? This is it:</span>
+  </p>
+  
+  <table>
+    <tr>
+      <th><span class="lang-el">Εποχή</span><span class="lang-en">Epoch</span></th>
+      <th><span class="lang-el">Εύρος Block</span><span class="lang-en">Block Range</span></th>
+      <th><span class="lang-el">Ανταμοιβή/Block</span><span class="lang-en">Reward/Block</span></th>
+      <th><span class="lang-el">Σύνολο Έκδοσης</span><span class="lang-en">Total Issued</span></th>
+    </tr>
+    <tr><td>0</td><td>0 – 209,999</td><td>1.000000</td><td>210,000.000</td></tr>
+    <tr><td>1</td><td>210,000 – 419,999</td><td>0.500000</td><td>105,000.000</td></tr>
+    <tr><td>2</td><td>420,000 – 629,999</td><td>0.250000</td><td>52,500.000</td></tr>
+    <tr><td>3</td><td>630,000 – 839,999</td><td>0.125000</td><td>26,250.000</td></tr>
+    <tr><td>4</td><td>840,000 – 1,049,999</td><td>0.062500</td><td>13,125.000</td></tr>
+    <tr><td>5</td><td>1,050,000 – 1,259,999</td><td>0.031250</td><td>6,562.500</td></tr>
+    <tr><td>6</td><td>1,260,000 – 1,469,999</td><td>0.015625</td><td>3,281.250</td></tr>
+    <tr><td>7</td><td>1,470,000 – 1,679,999</td><td>0.007813</td><td>1,640.625</td></tr>
+    <tr><td>8</td><td>1,680,000 – 1,889,999</td><td>0.003906</td><td>820.313</td></tr>
+    <tr><td>9</td><td>1,890,000 – 2,099,999</td><td>0.001953</td><td>410.156</td></tr>
+    <tr><td>10+</td><td>2,100,000+</td><td>0.000000</td><td>—</td></tr>
+  </table>
+{% endblock %}

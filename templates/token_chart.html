@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+
+{% block title %}Thronos Network Stats{% endblock %}
+
+{% block styles %}
+<style>
+    .chart-container {
+        width: 100%;
+        max-width: 800px;
+        margin: 0 auto;
+    }
+    h2 {
+        text-align: center;
+        border-bottom: 1px solid #0f0;
+    }
+    .stats-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-bottom: 20px;
+        text-align: center;
+    }
+    .stat-box {
+        border: 1px solid #333;
+        padding: 10px;
+        background: #000;
+    }
+    .stat-value {
+        font-size: 1.5em;
+        font-weight: bold;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+    <h2><span class="lang-el">Στατιστικά Δικτύου</span><span class="lang-en">Network Intelligence</span></h2>
+    
+    <div class="stats-grid">
+        <div class="stat-box">
+            <div><span class="lang-el">Σύνολο Δεσμεύσεων</span><span class="lang-en">Total Pledges</span></div>
+            <div id="pledgeCount" class="stat-value">-</div>
+        </div>
+        <div class="stat-box">
+            <div><span class="lang-el">Σύνολο Συναλλαγών</span><span class="lang-en">Total Transactions</span></div>
+            <div id="txCount" class="stat-value">-</div>
+        </div>
+        <div class="stat-box">
+            <div><span class="lang-el">THR που Κάηκαν</span><span class="lang-en">THR Burned</span></div>
+            <div id="burned" class="stat-value">-</div>
+        </div>
+        <div class="stat-box">
+            <div><span class="lang-el">Ταμείο AI</span><span class="lang-en">AI Treasury</span></div>
+            <div id="aiBalance" class="stat-value">-</div>
+        </div>
+    </div>
+
+    <div class="chart-container">
+        <canvas id="pledgeChart"></canvas>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        async function init() {
+            try {
+                const response = await fetch('/api/network_stats');
+                const data = await response.json();
+                
+                document.getElementById('pledgeCount').innerText = data.pledge_count;
+                document.getElementById('txCount').innerText = data.tx_count;
+                document.getElementById('burned').innerText = data.burned;
+                document.getElementById('aiBalance').innerText = data.ai_balance;
+                
+                renderChart(data.pledge_growth);
+            } catch (e) {
+                console.error("Failed to fetch stats:", e);
+            }
+        }
+
+        function renderChart(growthData) {
+            const ctx = document.getElementById('pledgeChart').getContext('2d');
+            const labels = growthData.map(d => d.date);
+            const counts = growthData.map(d => d.count);
+            
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Pledge Growth',
+                        data: counts,
+                        borderColor: '#0f0',
+                        backgroundColor: 'rgba(0, 255, 0, 0.1)',
+                        borderWidth: 2,
+                        tension: 0.4,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            labels: { color: '#0f0' }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            grid: { color: '#333' },
+                            ticks: { color: '#0f0' }
+                        },
+                        x: {
+                            grid: { color: '#333' },
+                            ticks: { color: '#0f0' }
+                        }
+                    }
+                }
+            });
+        }
+        
+        init();
+    </script>
+{% endblock %}

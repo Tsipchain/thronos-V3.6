@@ -449,7 +449,7 @@ def network_stats():
         ts = p.get("timestamp", "").split(" ")[0] # Just date
         pledge_dates[ts] = pledge_dates.get(ts, 0) + 1
         
-    sorted_dates = sorted(pledge_dates.keys())\
+    sorted_dates = sorted(pledge_dates.keys())
     cumulative_pledges = []
     running_total = 0
     for d in sorted_dates:
@@ -866,8 +866,7 @@ def admin_migrate_seeds():
     changed = []
 
     for p in pledges:
-        if p.get("send_seed_hash") and p.get("send_auth_hash"):
-            continue
+        if p.get("send_seed_hash") and p.get("send_auth_hash"):\n            continue
 
         thr_addr    = p["thr_address"]
         btc_address = p["btc_address"]

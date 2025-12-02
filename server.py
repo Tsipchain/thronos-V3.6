@@ -224,24 +224,43 @@ def get_mining_target():
 def get_blocks_for_viewer():
     """
     Returns unified block list for thronos_block_viewer.html
-    with fields: index, hash, fee_burned, reward_to_miner,
-    reward_to_ai, transactions, nonce, timestamp, miner_address,
-    and stratum/legacy type.
+    with fields: index, hash, fee_burned, reward_to_miner, reward_to_ai,
+    is_stratum, transactions, nonce, thr_address
     """
     chain = load_json(CHAIN_FILE, [])
 
-    raw_blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    # Keep only entries that are blocks (have reward)
+    raw_blocks = [
+        b for b in chain
+        if isinstance(b, dict) and b.get("reward") is not None
+    ]
 
     blocks = []
     for b in raw_blocks:
-        height = b.get("height", len(blocks))
-        block_hash = b.get("block_hash", "")
-        fee_burned = float(b.get("pool_fee", 0.0))
-        reward_to_miner = float(b.get("reward_split", {}).get("miner", 0.0))
-        reward_to_ai = float(b.get("reward_split", {}).get("ai", 0.0))
-        is_stratum = b.get("is_stratum", False)
-        miner_address = b.get("thr_address", "-")
+        height = b.get("height")
+        if height is None:
+            height = len(blocks)
 
+        block_hash = b.get("block_hash", "")
+
+        # burned fee from pool_fee or reward_split["burn"]
+        fee_burned = 0.0
+        if "pool_fee" in b:
+            fee_burned = float(b.get("pool_fee", 0.0))
+        elif isinstance(b.get("reward_split"), dict):
+            fee_burned = float(b["reward_split"].get("burn", 0.0))
+
+        # stratum flag
+        is_stratum = b.get("is_stratum", False)
+        thr_address = b.get("thr_address", "")
+
+        # reward shares
+        reward_to_miner = float(b.get("reward_to_miner", b.get("reward_split", {}).get("miner", 0.0)))
+        reward_to_ai = float(b.get("reward_split", {}).get("ai", 0.0))
+
+        nonce = b.get("nonce", "-")
+
+        # grab TXs from chain at same height (transfers, coinbase, service_payment)
         transactions = [
             tx for tx in chain
             if tx.get("type") in ("transfer", "coinbase", "service_payment")
@@ -256,15 +275,13 @@ def get_blocks_for_viewer():
             "reward_to_ai": reward_to_ai,
             "is_stratum": is_stratum,
             "transactions": transactions,
-            "nonce": b.get("nonce", "-"),
-            "timestamp": b.get("timestamp", "-"),
-            "thr_address": miner_address
+            "nonce": nonce,
+            "thr_address": thr_address,
         })
 
+    # Sort from newest to oldest
     blocks.sort(key=lambda x: x["index"], reverse=True)
     return blocks
-
-
 
 def ensure_ai_wallet():
     """

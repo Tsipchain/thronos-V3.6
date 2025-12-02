@@ -1142,40 +1142,103 @@ def submit_block():
 # ─── BACKGROUND MINTER ─────────────────────────────
 def submit_mining_block_for_pledge(thr_addr):
     """
-    Auto-mint blocks for pledges.
+    Auto-mint REAL PoW blocks for pledges.
+
+    Χρησιμοποιεί τον ίδιο legacy κανόνα που βλέπει το /submit_block
+    όταν δεν υπάρχει merkle_root:
+        H( prev_hash + thr_address + nonce ) < target
+
+    Τα blocks:
+      - Μετράνε κανονικά σε halving & difficulty.
+      - Πιστώνουν πραγματικό reward στο ledger.
+      - Γράφουν και ένα coinbase tx για να φαίνονται στα Transfers.
     """
     chain = load_json(CHAIN_FILE, [])
-    height = len(chain)
-    r   = calculate_reward(height)
+
+    # Μόνο blocks που έχουν reward (ίδια λογική με get_mining_target)
+    pow_blocks = [
+        b for b in chain
+        if isinstance(b, dict) and b.get("reward") is not None
+    ]
+
+    if pow_blocks:
+        prev_hash = pow_blocks[-1].get("block_hash", "0" * 64)
+        height = len(pow_blocks)          # επόμενο block height
+    else:
+        prev_hash = "0" * 64              # genesis
+        height = 0
+
+    # Reward με βάση το height (halving)
+    total_reward = calculate_reward(height)
     fee = 0.005
-    to_miner = round(r - fee, 6)
-    
-    # Use current target to keep chain consistent, though we don't do PoW here
-    current_target = get_mining_target()
+    miner_amount = round(total_reward - fee, 6)
+    if miner_amount < 0:
+        miner_amount = 0.0
 
-    block = {
+    # Τρέχον target (dynamic difficulty)
+    target = get_mining_target()
+
+    # ── Πραγματικό PoW loop (legacy rule) ─────────────────────
+    nonce = random.randrange(0, 2**32)
+    while True:
+        data_bytes = (prev_hash + thr_addr).encode() + str(nonce).encode()
+        pow_hash = hashlib.sha256(data_bytes).hexdigest()
+        if int(pow_hash, 16) <= target:
+            break
+        nonce = (nonce + 1) % (2**32)
+
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+    # ── Block entry, ίδιο format με /submit_block ─────────────
+    new_block = {
         "thr_address": thr_addr,
-        "timestamp": time.strftime(
-            "%Y-%m-%d %H:%M:%S UTC",
-            time.gmtime(),
-        ),
-        "block_hash": f"THR-{height}",
-        "reward": r,
+        "timestamp": ts,
+        "block_hash": pow_hash,
+        "prev_hash": prev_hash,
+        "nonce": nonce,
+        "reward": total_reward,
+        "reward_split": {
+            "miner": miner_amount,
+            "ai": 0.0,
+            "burn": fee
+        },
         "pool_fee": fee,
-        "reward_to_miner": to_miner,
+        "reward_to_miner": miner_amount,
         "height": height,
-        "target": current_target
+        "type": "block",
+        "target": target,
+        "is_stratum": False
     }
+    chain.append(new_block)
 
-    chain.append(block)
+    # ── Coinbase TX για να φαίνεται στο Transfers viewer ─────
+    coinbase_tx = {
+        "type": "coinbase",
+        "height": height,
+        "timestamp": ts,
+        "from": "COINBASE",
+        "to": thr_addr,
+        "amount": miner_amount,
+        "fee_burned": fee,
+        "tx_id": f"COINBASE-{height}",
+        "thr_address": thr_addr,
+    }
+    chain.append(coinbase_tx)
+
     save_json(CHAIN_FILE, chain)
 
+    # ── Ledger update (miner + burn) ─────────────────────────
     ledger = load_json(LEDGER_FILE, {})
-    ledger[thr_addr] = round(ledger.get(thr_addr, 0.0) + to_miner, 6)
+    ledger[thr_addr] = round(ledger.get(thr_addr, 0.0) + miner_amount, 6)
+    ledger[BURN_ADDRESS] = round(ledger.get(BURN_ADDRESS, 0.0) + fee, 6)
     save_json(LEDGER_FILE, ledger)
 
-    update_last_block(block, is_block=True)
-    print(f"⛏️ Auto-mined block #{height} for {thr_addr}: +{to_miner} THR")
+    update_last_block(new_block, is_block=True)
+    print(
+        f"⛏️ [Pledge PoW] Mined block #{height} for {thr_addr}: "
+        f"hash={pow_hash[:16]}… nonce={nonce} reward={miner_amount} THR"
+    )
+
 
 
 def mint_first_blocks():

@@ -224,11 +224,19 @@ def get_mining_target():
 def get_blocks_for_viewer():
     """
     Returns unified block list for thronos_block_viewer.html
-    with fields: index, hash, fee_burned, transactions, nonce.
+    with fields:
+    - index
+    - hash
+    - fee_burned
+    - reward_to_miner
+    - reward_to_ai
+    - transactions (real txs per block)
+    - nonce
+    - timestamp
+    - thr_address (miner)
     """
     chain = load_json(CHAIN_FILE, [])
 
-    # Keep only entries that are blocks (have reward)
     raw_blocks = [
         b for b in chain
         if isinstance(b, dict) and b.get("reward") is not None
@@ -236,23 +244,19 @@ def get_blocks_for_viewer():
 
     blocks = []
     for b in raw_blocks:
-        height = b.get("height")
-        if height is None:
-            height = len(blocks)
+        height = b.get("height", len(blocks))
+        block_hash = b.get("block_hash", "-")
+        nonce = b.get("nonce", "-")
+        ts = b.get("timestamp", "-")
+        miner = b.get("thr_address", "-")
 
-        block_hash = b.get("block_hash", "")
+        # Extract shares
+        reward_split = b.get("reward_split", {})
+        fee_burned = float(reward_split.get("burn", 0.0))
+        reward_to_miner = float(reward_split.get("miner", 0.0))
+        reward_to_ai = float(reward_split.get("ai", 0.0))
 
-        # burned fee from pool_fee or reward_split["burn"]
-        fee_burned = 0.0
-        if "pool_fee" in b:
-            fee_burned = float(b.get("pool_fee", 0.0))
-        elif isinstance(b.get("reward_split"), dict):
-            fee_burned = float(b["reward_split"].get("burn", 0.0))
-
-        nonce = b.get("nonce")
-        if nonce is None:
-            nonce = "-"
-
+        # Get TXs for this block height
         transactions = [
             tx for tx in chain
             if tx.get("type") in ("transfer", "coinbase", "service_payment")
@@ -263,13 +267,17 @@ def get_blocks_for_viewer():
             "index": height,
             "hash": block_hash,
             "fee_burned": fee_burned,
+            "reward_to_miner": reward_to_miner,
+            "reward_to_ai": reward_to_ai,
             "transactions": transactions,
             "nonce": nonce,
+            "timestamp": ts,
+            "miner": miner
         })
 
-    # Sort from newest to oldest
     blocks.sort(key=lambda x: x["index"], reverse=True)
     return blocks
+
 
 def ensure_ai_wallet():
     """

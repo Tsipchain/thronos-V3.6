@@ -1,147 +1,214 @@
 {% extends "base.html" %}
 
+{% block title %}Thronos Block & TX Viewer{% endblock %}
+
+{% block styles %}
+<style>
+    :root { --g:#00ff66; --panel:#0b0b0b; }
+    
+    .wrap { padding:14px; max-width:1200px; margin:0 auto; }
+    .toolbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
+    .btn-tool {
+      background:var(--panel); border:1px solid var(--g); color:var(--g);
+      padding:8px 12px; cursor:pointer; font-weight:bold;
+    }
+    .btn-tool.active { background:var(--g); color:#000; }
+    .input {
+      background:#111; color:var(--g); border:1px solid var(--g);
+      padding:8px 10px; min-width:260px;
+    }
+    .panel { background:var(--panel); border:1px dashed var(--g); padding:10px; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { border:1px solid #0f0; padding:8px; font-size:13px; }
+    th { background:#061; text-align:left; }
+    tr:nth-child(odd) td { background:rgba(0,255,102,0.05); }
+    code { background:#111; padding:2px 4px; }
+    .muted { opacity:.85; }
+    .right { text-align:right; }
+    .copy { cursor:pointer; text-decoration:underline; }
+    .hidden { display:none; }
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="container mx-auto px-4 py-8">
-    <div class="flex justify-between items-center mb-6">
-        <h1 class="text-3xl font-bold text-white">Thronos Block Explorer</h1>
-        <div class="flex gap-2">
-            <button onclick="switchTab('blocks')" id="btn-blocks" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-500 transition">Blocks</button>
-            <button onclick="switchTab('txs')" id="btn-txs" class="px-4 py-2 bg-gray-700 text-gray-300 rounded hover:bg-gray-600 transition">Transactions</button>
-        </div>
+  <div class="wrap">
+    <h1>📦 <span class="lang-el">Εξερευνητής Thronos</span><span class="lang-en">Thronos Viewer</span></h1>
+
+    <div class="toolbar">
+      <button id="btnBlocks" class="btn-tool active"><span class="lang-el">Μπλοκ</span><span class="lang-en">Blocks</span></button>
+      <button id="btnTx" class="btn-tool"><span class="lang-el">Μεταφορές</span><span class="lang-en">Transfers</span></button>
+
+      <input id="search" class="input" placeholder="Search (address or tx id)" />
+      <button id="btnClear" class="btn-tool"><span class="lang-el">Καθαρισμός</span><span class="lang-en">Clear</span></button>
     </div>
 
-    <!-- Search Bar -->
-    <div class="mb-6">
-        <input type="text" id="searchInput" onkeyup="searchTable()" placeholder="Search by Hash, Address, or TX ID..." 
-               class="w-full px-4 py-3 bg-gray-800 text-white border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition">
+    <!-- Blocks table -->
+    <div id="blocksPanel" class="panel">
+      <table id="blocksTable">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Block Hash</th>
+            <th>Miner THR</th>
+            <th class="right"><span class="lang-el">Αμοιβή</span><span class="lang-en">Reward</span></th>
+            <th class="right"><span class="lang-el">Προμήθεια Pool</span><span class="lang-en">Pool Fee</span></th>
+            <th class="right"><span class="lang-el">Στον Miner</span><span class="lang-en">To Miner</span></th>
+            <th>Timestamp</th>
+          </tr>
+        </thead>
+        <tbody><!-- filled by JS --></tbody>
+      </table>
     </div>
 
-    <!-- Blocks Table -->
-    <div id="blocks-view" class="overflow-x-auto bg-gray-800 rounded-lg shadow-xl">
-        <table class="min-w-full text-left text-gray-300" id="blocksTable">
-            <thead class="bg-gray-700 text-gray-100 uppercase font-semibold text-sm">
-                <tr>
-                    <th class="px-6 py-3">Height</th>
-                    <th class="px-6 py-3">Block Hash</th>
-                    <th class="px-6 py-3">Pool Fee (Burned)</th>
-                    <th class="px-6 py-3">Transactions</th>
-                    <th class="px-6 py-3">Nonce</th>
-                </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-600">
-                {% for block in blocks %}
-                <tr class="hover:bg-gray-700 transition-colors">
-                    <td class="px-6 py-4">{{ block.index }}</td>
-                    <td class="px-6 py-4">
-                        <div class="flex items-center gap-2">
-                            <span id="hash-{{ loop.index }}" class="font-mono text-xs break-all">{{ block.hash }}</span>
-                            <button onclick="copy_to_clipboard('hash-{{ loop.index }}')" class="text-blue-400 hover:text-blue-300 p-1 rounded transition" title="Copy Hash">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                                </svg>
-                            </button>
-                        </div>
-                    </td>
-                    <td class="px-6 py-4 text-green-400">
-                        {{ block.fee_burned if block.fee_burned is defined else '0' }} THR
-                    </td>
-                    <td class="px-6 py-4">
-                        {% if block.transactions %}
-                            {% for tx in block.transactions %}
-                            <div class="flex items-center gap-2 mb-1">
-                                <span class="font-mono text-xs truncate w-32">{{ tx.id }}</span>
-                            </div>
-                            {% endfor %}
-                        {% else %}
-                            <span class="text-gray-500">No TXs</span>
-                        {% endif %}
-                    </td>
-                    <td class="px-6 py-4 font-mono text-sm">{{ block.nonce }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    <!-- TX table -->
+    <div id="txPanel" class="panel hidden">
+      <table id="txTable">
+        <thead>
+          <tr>
+            <th>TX ID</th>
+            <th>Height</th>
+            <th>From</th>
+            <th>To</th>
+            <th class="right"><span class="lang-el">Ποσό</span><span class="lang-en">Amount</span></th>
+            <th class="right"><span class="lang-el">Προμήθεια</span><span class="lang-en">Fee</span></th>
+            <th>Timestamp</th>
+            <th>Copy</th>
+          </tr>
+        </thead>
+        <tbody><!-- filled by JS --></tbody>
+      </table>
+      <p class="muted">
+          <span class="lang-el">Tip: κάνε κλικ σε διεύθυνση για άνοιγμα wallet viewer ή στην «Copy» για αντιγραφή TX/διεύθυνσης.</span>
+          <span class="lang-en">Tip: click an address to open wallet viewer or "Copy" to copy TX/address.</span>
+      </p>
     </div>
+  </div>
+{% endblock %}
 
-    <!-- Transactions Table -->
-    <div id="txs-view" class="hidden overflow-x-auto bg-gray-800 rounded-lg shadow-xl">
-        <table class="min-w-full text-left text-gray-300" id="txsTable">
-            <thead class="bg-gray-700 text-gray-100 uppercase font-semibold text-sm">
-                <tr>
-                    <th class="px-6 py-3">TX ID</th>
-                    <th class="px-6 py-3">From</th>
-                    <th class="px-6 py-3">To</th>
-                    <th class="px-6 py-3">Amount</th>
-                    <th class="px-6 py-3">Time</th>
-                </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-600">
-                {% for tx in transactions %}
-                <tr class="hover:bg-gray-700 transition-colors">
-                    <td class="px-6 py-4 font-mono text-xs">{{ tx.tx_id }}</td>
-                    <td class="px-6 py-4 font-mono text-xs">{{ tx.from }}</td>
-                    <td class="px-6 py-4 font-mono text-xs">{{ tx.to }}</td>
-                    <td class="px-6 py-4 text-yellow-400 font-bold">{{ tx.amount }} THR</td>
-                    <td class="px-6 py-4 text-sm text-gray-400">{{ tx.timestamp }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</div>
+{% block scripts %}
+  <script>
+    const el = (q) => document.querySelector(q);
+    const blocksPanel = el("#blocksPanel");
+    const txPanel     = el("#txPanel");
+    const btnBlocks   = el("#btnBlocks");
+    const btnTx       = el("#btnTx");
+    const searchBox   = el("#search");
+    const btnClear    = el("#btnClear");
 
-<script>
-function copy_to_clipboard(elm_id) {
-    const text = document.getElementById(elm_id).textContent;
-    navigator.clipboard.writeText(text).catch(err => {
-        console.error('Failed to copy: ', err);
+    let allBlocks = [];    // μόνο block entries
+    let allTxs    = [];    // μόνο transfers
+
+    function show(panel) {
+      if (panel === "blocks") {
+        blocksPanel.classList.remove("hidden");
+        txPanel.classList.add("hidden");
+        btnBlocks.classList.add("active");
+        btnTx.classList.remove("active");
+      } else {
+        txPanel.classList.remove("hidden");
+        blocksPanel.classList.add("hidden");
+        btnTx.classList.add("active");
+        btnBlocks.classList.remove("active");
+      }
+    }
+
+    btnBlocks.onclick = () => show("blocks");
+    btnTx.onclick     = () => show("tx");
+
+    btnClear.onclick = () => {
+      searchBox.value = "";
+      renderBlocks(allBlocks);
+      renderTxs(allTxs);
+    };
+
+    function copy(text) {
+      navigator.clipboard.writeText(text);
+      const lang = localStorage.getItem('lang') || 'el';
+      alert(lang === 'el' ? "Αντιγράφηκε:\n" + text : "Copied:\n" + text);
+    }
+
+    function linkAddr(addr) {
+      return `<a href="/wallet/${addr}" target="_blank" style="color:#0f0">${addr}</a>`;
+    }
+
+    function renderBlocks(rows) {
+      const q = searchBox.value.trim().toLowerCase();
+      const body = el("#blocksTable tbody");
+      body.innerHTML = "";
+
+      rows
+        .filter(b => !q ||
+          String(b.block_hash||"").toLowerCase().includes(q) ||
+          String(b.thr_address||"").toLowerCase().includes(q)
+        )
+        .forEach(b => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${(b.block_hash||"").startsWith("THR-") ? (b.block_hash||"").split("-")[1] : ""}</td>
+            <td><span class="copy" onclick='(${copy}).call(null, "${b.block_hash}")'>${b.block_hash}</span></td>
+            <td>${b.thr_address ? linkAddr(b.thr_address) : ""}</td>
+            <td class="right">${Number(b.reward||0).toFixed(3)}</td>
+            <td class="right">${Number(b.pool_fee||0).toFixed(3)}</td>
+            <td class="right">${Number(b.reward_to_miner||0).toFixed(3)}</td>
+            <td>${b.timestamp||""}</td>
+          `;
+          body.appendChild(tr);
+        });
+    }
+
+    function renderTxs(rows) {
+      const q = searchBox.value.trim().toLowerCase();
+      const body = el("#txTable tbody");
+      body.innerHTML = "";
+
+      rows
+        .filter(t => !q ||
+          String(t.tx_id||"").toLowerCase().includes(q) ||
+          String(t.from||"").toLowerCase().includes(q) ||
+          String(t.to||"").toLowerCase().includes(q)
+        )
+        .forEach(t => {
+          const tr = document.createElement("tr");
+          const copyTx = `(${copy}).call(null, "${t.tx_id}")`;
+          const copyFrom = `(${copy}).call(null, "${t.from}")`;
+          const copyTo   = `(${copy}).call(null, "${t.to}")`;
+
+          tr.innerHTML = `
+            <td><span class="copy" onclick='${copyTx}'>${t.tx_id}</span></td>
+            <td>${t.height ?? ""}</td>
+            <td>${t.from ? linkAddr(t.from) : ""}</td>
+            <td>${t.to ? linkAddr(t.to) : ""}</td>
+            <td class="right">${Number(t.amount||0).toFixed(6)}</td>
+            <td class="right">${Number(t.fee_burned||0).toFixed(4)}</td>
+            <td>${t.timestamp||""}</td>
+            <td>
+              <span class="copy" onclick='${copyTx}'>TX</span> |
+              <span class="copy" onclick='${copyFrom}'>From</span> |
+              <span class="copy" onclick='${copyTo}'>To</span>
+            </td>
+          `;
+          body.appendChild(tr);
+        });
+    }
+
+    async function loadData() {
+      // Φέρνουμε ΟΛΟ το chain και φιλτράρουμε blocks client-side
+      const chain = await fetch("/chain").then(r=>r.json());
+      allBlocks = chain.filter(x => typeof x === "object" && x && x.type !== "transfer");
+
+      // Φέρνουμε τα transfers
+      allTxs = chain.filter(x => typeof x === "object" && x && x.type === "transfer");
+
+      // RENDER
+      renderBlocks(allBlocks);
+      renderTxs(allTxs);
+    }
+
+    searchBox.addEventListener("input", () => {
+      renderBlocks(allBlocks);
+      renderTxs(allTxs);
     });
-}
 
-function switchTab(tab) {
-    const blocksView = document.getElementById('blocks-view');
-    const txsView = document.getElementById('txs-view');
-    const btnBlocks = document.getElementById('btn-blocks');
-    const btnTxs = document.getElementById('btn-txs');
-
-    if (tab === 'blocks') {
-        blocksView.classList.remove('hidden');
-        txsView.classList.add('hidden');
-        btnBlocks.classList.remove('bg-gray-700', 'text-gray-300');
-        btnBlocks.classList.add('bg-blue-600', 'text-white');
-        btnTxs.classList.remove('bg-blue-600', 'text-white');
-        btnTxs.classList.add('bg-gray-700', 'text-gray-300');
-    } else {
-        blocksView.classList.add('hidden');
-        txsView.classList.remove('hidden');
-        btnTxs.classList.remove('bg-gray-700', 'text-gray-300');
-        btnTxs.classList.add('bg-blue-600', 'text-white');
-        btnBlocks.classList.remove('bg-blue-600', 'text-white');
-        btnBlocks.classList.add('bg-gray-700', 'text-gray-300');
-    }
-}
-
-function searchTable() {
-    const input = document.getElementById('searchInput');
-    const filter = input.value.toUpperCase();
-    const activeTable = document.getElementById('blocks-view').classList.contains('hidden') ? 'txsTable' : 'blocksTable';
-    const table = document.getElementById(activeTable);
-    const tr = table.getElementsByTagName('tr');
-
-    for (let i = 1; i < tr.length; i++) {
-        let visible = false;
-        const tds = tr[i].getElementsByTagName('td');
-        for (let j = 0; j < tds.length; j++) {
-            if (tds[j]) {
-                const txtValue = tds[j].textContent || tds[j].innerText;
-                if (txtValue.toUpperCase().indexOf(filter) > -1) {
-                    visible = true;
-                    break;
-                }
-            }
-        }
-        tr[i].style.display = visible ? "" : "none";
-    }
-}
-</script>
+    loadData();
+  </script>
 {% endblock %}

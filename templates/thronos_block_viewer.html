@@ -1,278 +1,357 @@
-{% extends "base.html" %}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Thronos Block & TX Viewer</title>
+<style>
+  :root{
+    --bg:#050b06; --panel:#0b140d; --line:#0f2612; --glow:#16ff57; --muted:#6bfd9b;
+    --accent:#22ff77; --danger:#ff5577; --warn:#ffd166;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:#b8ffcc;font-family:var(--mono);letter-spacing:.2px}
+  .wrap{max-width:1200px;margin:24px auto;padding:0 16px}
+  .title{display:flex;align-items:center;gap:12px;font-size:28px;font-weight:800;color:var(--accent)}
+  .title .cube{width:18px;height:18px;background:var(--accent);box-shadow:0 0 10px var(--accent)}
+  .tabs{display:flex;gap:8px;margin:18px 0 12px}
+  .tab{padding:8px 12px;border:1px solid var(--line);background:var(--panel);cursor:pointer;
+       border-radius:8px;font-weight:700;color:#b8ffcc}
+  .tab.active{outline:1px solid var(--accent);box-shadow:0 0 8px #0f4}
+  .panel{border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:12px}
+  .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .grow{flex:1}
+  .badge{font-size:12px;padding:2px 6px;border:1px solid var(--line);border-radius:999px}
+  .b-stratum{color:#041;background:#16ff5730;border-color:#16ff57}
+  .b-legacy{color:#044;background:#8affc630;border-color:#8affc6}
+  .b-hot{color:#220;background:#ffd16666;border-color:#ffd166}
+  .muted{color:#82b98f}
+  .right{float:right}
 
-{% block content %}
-<div class="container mx-auto px-4 py-8">
-    <div class="flex justify-between items-center mb-6">
-        <h1 class="text-3xl font-bold text-white">Thronos Block Explorer</h1>
-        <div class="flex gap-2">
-            <button onclick="switchTab('blocks')" id="btn-blocks" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-500 transition">Blocks</button>
-            <button onclick="switchTab('txs')" id="btn-txs" class="px-4 py-2 bg-gray-700 text-gray-300 rounded hover:bg-gray-600 transition">Transactions</button>
-            <button onclick="switchTab('mempool')" id="btn-mempool" class="px-4 py-2 bg-gray-700 text-gray-300 rounded hover:bg-gray-600 transition">Mempool</button>
-        </div>
+  .search{display:flex;gap:8px;align-items:center}
+  .search input{flex:1;background:#07110a;color:#caffdd;border:1px solid var(--line);border-radius:8px;
+                padding:10px 12px;font-family:var(--mono)}
+  .btn{background:#0c1a10;color:#b8ffcc;border:1px solid var(--line);padding:8px 10px;border-radius:8px;
+       cursor:pointer}
+  .btn:hover{outline:1px solid var(--accent)}
+
+  table{width:100%;border-collapse:separate;border-spacing:0}
+  thead th{position:sticky;top:0;background:#07110a;border-bottom:1px solid var(--line);z-index:2;
+           padding:10px 8px;text-align:left}
+  tbody td{border-bottom:1px dashed #0b2; padding:8px 8px;font-size:13px;vertical-align:middle}
+  tr:nth-child(even) td{background:#08140d60}
+  .mono{font-family:var(--mono)}
+  .hash, .addr{color:#caffdd;text-decoration:none}
+  .hash:hover, .addr:hover{text-decoration:underline}
+  .copy{cursor:pointer;border:1px solid var(--line);border-radius:6px;padding:2px 6px;margin-left:6px}
+  .k{color:#7bffad}
+
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+  @media (max-width:900px){ .grid{grid-template-columns:1fr} }
+
+  .card{border:1px solid var(--line);border-radius:12px;background:#07110a;padding:12px}
+  .card h4{margin:0 0 8px;color:var(--muted)}
+  .big{font-size:20px;font-weight:800;color:#d6ffe6}
+  .small{font-size:12px}
+
+  .spark{width:100%;height:40px;display:block}
+  .hint{font-size:12px;color:#9fdfb4;margin:8px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="title"><div class="cube"></div> Thronos Viewer</div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <div class="tab active" data-tab="blocks">Blocks</div>
+    <div class="tab" data-tab="txs">Transfers</div>
+    <div class="tab" data-tab="mempool">Mempool</div>
+    <div class="tab" data-tab="live">Live Stats</div>
+    <div class="right muted" id="liveClock">—</div>
+  </div>
+
+  <!-- Controls -->
+  <div class="row panel">
+    <div class="search grow">
+      <input id="q" placeholder="Search (address, tx id, block hash)…" />
+      <button class="btn" id="clearBtn">Clear</button>
+      <button class="btn" id="refreshBtn" title="Refresh blocks from API">Refresh</button>
     </div>
+    <div class="badge b-hot" id="tipBadge" style="display:none">recent activity</div>
+  </div>
 
-    <!-- Network Intelligence (Live) -->
-    <section id="network" class="mb-8 bg-gray-800 p-4 rounded-lg shadow-lg border border-gray-700">
-        <h3 class="text-xl font-semibold text-blue-400 mb-3">Network Intelligence (Live)</h3>
-        <div id="net-stats" class="font-mono text-sm text-gray-300 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div>Loading stats...</div>
-        </div>
-    </section>
+  <!-- Blocks -->
+  <section id="view-blocks" class="panel" style="margin-top:12px">
+    <table id="tblBlocks">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Block Hash</th>
+          <th>Miner THR</th>
+          <th>Reward</th>
+          <th>Pool Burn</th>
+          <th>To Miner</th>
+          <th>AI</th>
+          <th>Type</th>
+          <th>Time</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div class="hint">Tip: κλικ στο hash/διεύθυνση για αντιγραφή.</div>
+  </section>
 
-    <!-- Search Bar -->
-    <div class="mb-6">
-        <input type="text" id="searchInput" onkeyup="searchTable()" placeholder="Search by Hash, Address, or TX ID..." 
-               class="w-full px-4 py-3 bg-gray-800 text-white border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition">
+  <!-- Transfers -->
+  <section id="view-txs" class="panel" style="display:none;margin-top:12px">
+    <table id="tblTxs">
+      <thead>
+        <tr>
+          <th>TX ID</th>
+          <th>Height</th>
+          <th>From</th>
+          <th>To</th>
+          <th>Amount</th>
+          <th>Fee</th>
+          <th>Timestamp</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <!-- Mempool -->
+  <section id="view-mempool" class="panel" style="display:none;margin-top:12px">
+    <div class="row">
+      <div class="badge">Pending:</div>
+      <div class="badge b-hot" id="mpCount">0</div>
+      <button class="btn" id="btnLoadMempool">Reload</button>
     </div>
+    <table id="tblMempool" style="margin-top:8px">
+      <thead>
+        <tr>
+          <th>TX ID</th><th>From</th><th>To</th><th>Amount</th><th>Fee</th><th>Status</th><th>Queued</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div class="hint">Οι μεταφορές γίνονται “confirmed” όταν κλείσει block. Ο watchdog κλείνει μόνος του αν αργήσει.</div>
+  </section>
 
-    <!-- Blocks Table -->
-    <div id="blocks-view" class="overflow-x-auto bg-gray-800 rounded-lg shadow-xl">
-        <table class="min-w-full text-left text-gray-300" id="blocksTable">
-            <thead class="bg-gray-700 text-gray-100 uppercase font-semibold text-sm">
-                <tr>
-                    <th class="px-6 py-3">Height</th>
-                    <th class="px-6 py-3">Block Hash</th>
-                    <th class="px-6 py-3">Miner THR</th>
-                    <th class="px-6 py-3">Reward (Miner)</th>
-                    <th class="px-6 py-3">Reward (AI)</th>
-                    <th class="px-6 py-3">Fee Burned</th>
-                    <th class="px-6 py-3">Type</th>
-                    <th class="px-6 py-3">Nonce</th>
-                    <th class="px-6 py-3">Timestamp</th>
-                </tr>
-            </thead>
-            <tbody id="blocks-body" class="divide-y divide-gray-600">
-                <!-- Initial Render via Jinja2 (SEO/Fast Load) -->
-                {% for block in blocks %}
-                <tr class="hover:bg-gray-700 transition-colors">
-                    <td class="px-6 py-4">{{ block.index }}</td>
-                    <td class="px-6 py-4">
-                        <div class="flex items-center gap-2">
-                            <span id="hash-{{ loop.index }}" class="font-mono text-xs break-all">{{ block.hash }}</span>
-                            <button onclick="copy_to_clipboard('hash-{{ loop.index }}')" class="text-blue-400 hover:text-blue-300 p-1 rounded transition" title="Copy Hash">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                                </svg>
-                            </button>
-                        </div>
-                    </td>
-                    <td class="px-6 py-4 font-mono text-xs">
-                        {% if block.transactions %}
-                           {% set coinbase = block.transactions | selectattr("type", "equalto", "coinbase") | first %}
-                           {{ coinbase.to if coinbase else '-' }}
-                        {% else %}
-                           -
-                        {% endif %}
-                    </td>
-                    <td class="px-6 py-4 text-green-400">{{ block.reward_to_miner }}</td>
-                    <td class="px-6 py-4 text-purple-400">{{ block.reward_to_ai }}</td>
-                    <td class="px-6 py-4 text-red-400">{{ block.fee_burned }}</td>
-                    <td class="px-6 py-4 text-xs uppercase">{{ 'Stratum' if block.is_stratum else 'Legacy' }}</td>
-                    <td class="px-6 py-4 font-mono text-sm">{{ block.nonce }}</td>
-                    <td class="px-6 py-4 text-xs text-gray-400">{{ block.timestamp }}</td>
-                </tr>
-                <!-- Transactions Sub-row -->
-                {% if block.transactions %}
-                <tr>
-                    <td colspan="9" class="px-6 py-2 bg-gray-750 text-xs text-gray-400">
-                        {% for tx in block.transactions %}
-                        <div class="mb-1 font-mono">
-                            <span class="text-blue-300">{{ tx.tx_id }}</span> — <b class="text-white">{{ tx.type }}</b> — from {{ tx.from }} to {{ tx.to }} : <b class="text-yellow-400">{{ tx.amount }}</b> (fee {{ tx.fee_burned }})
-                        </div>
-                        {% endfor %}
-                    </td>
-                </tr>
-                {% endif %}
-                {% endfor %}
-            </tbody>
-        </table>
+  <!-- Live -->
+  <section id="view-live" class="panel grid" style="display:none;margin-top:12px">
+    <div class="card">
+      <h4>Difficulty</h4>
+      <div class="big" id="liveDiff">—</div>
+      <div class="small muted">network target ratio</div>
     </div>
-
-    <!-- Transactions Table -->
-    <div id="txs-view" class="hidden overflow-x-auto bg-gray-800 rounded-lg shadow-xl">
-        <table class="min-w-full text-left text-gray-300" id="txsTable">
-            <thead class="bg-gray-700 text-gray-100 uppercase font-semibold text-sm">
-                <tr>
-                    <th class="px-6 py-3">TX ID</th>
-                    <th class="px-6 py-3">From</th>
-                    <th class="px-6 py-3">To</th>
-                    <th class="px-6 py-3">Amount</th>
-                    <th class="px-6 py-3">Time</th>
-                </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-600">
-                {% for tx in transactions %}
-                <tr class="hover:bg-gray-700 transition-colors">
-                    <td class="px-6 py-4 font-mono text-xs">{{ tx.tx_id }}</td>
-                    <td class="px-6 py-4 font-mono text-xs">{{ tx.from }}</td>
-                    <td class="px-6 py-4 font-mono text-xs">{{ tx.to }}</td>
-                    <td class="px-6 py-4 text-yellow-400 font-bold">{{ tx.amount }} THR</td>
-                    <td class="px-6 py-4 text-sm text-gray-400">{{ tx.timestamp }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    <div class="card">
+      <h4>Avg Block Time</h4>
+      <div class="big" id="liveABT">—</div>
+      <div class="small muted">last window</div>
     </div>
-
-    <!-- Mempool View -->
-    <div id="mempool-view" class="hidden bg-gray-800 rounded-lg shadow-xl p-6">
-        <h3 class="text-xl font-bold text-yellow-400 mb-4">Pending Transactions (Mempool)</h3>
-        <button onclick="showMempool()" class="mb-4 px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm text-white">Refresh Mempool</button>
-        <textarea id="mempoolBox" rows="12" class="w-full bg-gray-900 text-green-400 font-mono text-xs p-4 rounded border border-gray-700 focus:outline-none" readonly>Loading...</textarea>
+    <div class="card">
+      <h4>Estimated Hashrate</h4>
+      <div class="big" id="liveHR">—</div>
+      <canvas class="spark" id="sparkHR"></canvas>
     </div>
+    <div class="card">
+      <h4>Mempool size</h4>
+      <div class="big" id="liveMP">—</div>
+      <div class="small muted">pending TXs</div>
+    </div>
+  </section>
 </div>
 
 <script>
-function copy_to_clipboard(elm_id) {
-    const text = document.getElementById(elm_id).textContent;
-    navigator.clipboard.writeText(text).catch(err => {
-        console.error('Failed to copy: ', err);
+/* ===== Utilities ===== */
+const fmtN = (n) => (n==null?'—':Number(n).toLocaleString(undefined,{minimumFractionDigits:3,maximumFractionDigits:6}));
+const short = s => (s && s.length>20 ? s.slice(0,20)+'…' : (s||'—'));
+const rel = ts => {
+  if(!ts) return '—';
+  const t = new Date(ts.replace(' UTC','')+'Z').getTime();
+  const d = (Date.now()-t)/1000;
+  if (d<90) return 'just now';
+  if (d<3600) return Math.round(d/60)+'m ago';
+  if (d<86400) return Math.round(d/3600)+'h ago';
+  return new Date(t).toISOString().replace('T',' ').slice(0,19)+' UTC';
+};
+const copy = (txt)=>{ navigator.clipboard.writeText(txt||''); };
+const el = (sel)=>document.querySelector(sel);
+const tbody = (id)=>document.querySelector(id+' tbody');
+
+/* ===== Tabs ===== */
+document.querySelectorAll('.tab').forEach(t=>{
+  t.onclick=()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    const tab = t.dataset.tab;
+    ['blocks','txs','mempool','live'].forEach(name=>{
+      el('#view-'+name).style.display = (name===tab)?'block':'none';
     });
-}
+  };
+});
 
-function switchTab(tab) {
-    const blocksView = document.getElementById('blocks-view');
-    const txsView = document.getElementById('txs-view');
-    const mempoolView = document.getElementById('mempool-view');
-    
-    const btnBlocks = document.getElementById('btn-blocks');
-    const btnTxs = document.getElementById('btn-txs');
-    const btnMempool = document.getElementById('btn-mempool');
+/* ===== Data bootstrapped by server (Jinja) ===== */
+const BOOT_BLOCKS = {{ (blocks or [])|tojson }};
+const BOOT_TXS    = {{ (transactions or [])|tojson }};
 
-    // Reset all
-    blocksView.classList.add('hidden');
-    txsView.classList.add('hidden');
-    mempoolView.classList.add('hidden');
-    
-    btnBlocks.className = 'px-4 py-2 bg-gray-700 text-gray-300 rounded hover:bg-gray-600 transition';
-    btnTxs.className = 'px-4 py-2 bg-gray-700 text-gray-300 rounded hover:bg-gray-600 transition';
-    btnMempool.className = 'px-4 py-2 bg-gray-700 text-gray-300 rounded hover:bg-gray-600 transition';
-
-    // Activate selected
-    if (tab === 'blocks') {
-        blocksView.classList.remove('hidden');
-        btnBlocks.className = 'px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-500 transition';
-    } else if (tab === 'txs') {
-        txsView.classList.remove('hidden');
-        btnTxs.className = 'px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-500 transition';
-    } else if (tab === 'mempool') {
-        mempoolView.classList.remove('hidden');
-        btnMempool.className = 'px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-500 transition';
-        showMempool();
-    }
-}
-
-async function showMempool() {
-  const box = document.getElementById('mempoolBox');
-  box.value = "Loading mempool...";
-  try {
-      const res = await fetch('/api/mempool');
-      const data = await res.json();
-      if (data.length === 0) {
-          box.value = "Mempool is empty. All transactions confirmed.";
-      } else {
-          box.value = JSON.stringify(data, null, 2);
-      }
-  } catch(e) {
-      box.value = "Error loading mempool.";
-  }
-}
-
-function searchTable() {
-    const input = document.getElementById('searchInput');
-    const filter = input.value.toUpperCase();
-    const activeTable = document.getElementById('blocks-view').classList.contains('hidden') ? 'txsTable' : 'blocksTable';
-    const table = document.getElementById(activeTable);
-    const tr = table.getElementsByTagName('tr');
-
-    for (let i = 1; i < tr.length; i++) {
-        let visible = false;
-        const tds = tr[i].getElementsByTagName('td');
-        for (let j = 0; j < tds.length; j++) {
-            if (tds[j]) {
-                const txtValue = tds[j].textContent || tds[j].innerText;
-                if (txtValue.toUpperCase().indexOf(filter) > -1) {
-                    visible = true;
-                    break;
-                }
-            }
-        }
-        tr[i].style.display = visible ? "" : "none";
-    }
-}
-
-// Live Network Stats
-async function pollNet() {
-  try {
-    const r = await fetch('/api/network_live');
-    const j = await r.json();
-    const hs = j.est_hashrate_hs ? (j.est_hashrate_hs/1e9).toFixed(3) + ' GH/s' : 'n/a';
-    const t = `
-      <div>Difficulty: <b class="text-white">${j.difficulty}</b></div>
-      <div>Avg Block Time: <b class="text-white">${j.avg_block_time_sec ? j.avg_block_time_sec.toFixed(1) : 'n/a'} sec</b></div>
-      <div>Est. Hashrate: <b class="text-white">${hs}</b></div>
-      <div>Total TXs: <b class="text-white">${j.tx_count}</b></div>
-      <div>Mempool Size: <b class="text-yellow-400">${j.mempool}</b></div>
-    `;
-    document.getElementById('net-stats').innerHTML = t;
-  } catch(_) {}
-}
-
-// Live Block Updates (Client-Side Rendering)
-async function loadBlocks() {
-  const res = await fetch('/api/blocks');
-  const blocks = await res.json();
-
-  const tbody = document.getElementById('blocks-body');
-  tbody.innerHTML = '';
-
-  for (const b of blocks) {
-    const tr = document.createElement('tr');
-    tr.className = "hover:bg-gray-700 transition-colors";
-    const tType = b.is_stratum ? 'Stratum' : 'Legacy';
-    
-    // Find coinbase TX for Miner Address
-    let minerAddr = '-';
-    if (b.transactions) {
-        const cb = b.transactions.find(tx => tx.type === 'coinbase');
-        if (cb) minerAddr = cb.to;
-    }
+/* ===== Renderers ===== */
+function renderBlocks(list){
+  const q = el('#q').value.trim().toLowerCase();
+  const tb = tbody('#tblBlocks');
+  tb.innerHTML='';
+  let hot=false;
+  list.forEach(b=>{
+    const match = !q || JSON.stringify(b).toLowerCase().includes(q);
+    if(!match) return;
+    const tr=document.createElement('tr');
+    const typeBadge = b.is_stratum
+      ? '<span class="badge b-stratum">stratum</span>'
+      : '<span class="badge b-legacy">legacy</span>';
+    const timeStr = rel(b.timestamp);
+    if(timeStr==='just now' || timeStr.endsWith('m ago') && parseInt(timeStr) <= 5) hot=true;
 
     tr.innerHTML = `
-      <td class="px-6 py-4">${b.index}</td>
-      <td class="px-6 py-4">
-        <div class="flex items-center gap-2">
-            <span class="font-mono text-xs break-all">${b.hash}</span>
-        </div>
+      <td class="mono k">${b.index}</td>
+      <td class="mono">
+        <a class="hash" title="${b.hash}" onclick="copy('${b.hash}')">${short(b.hash)}</a>
+        <span class="copy" title="copy" onclick="copy('${b.hash}')">copy</span>
       </td>
-      <td class="px-6 py-4 font-mono text-xs">${minerAddr}</td>
-      <td class="px-6 py-4 text-green-400">${(b.reward_to_miner ?? 0).toFixed(6)}</td>
-      <td class="px-6 py-4 text-purple-400">${(b.reward_to_ai ?? 0).toFixed(6)}</td>
-      <td class="px-6 py-4 text-red-400">${(b.fee_burned ?? 0).toFixed(6)}</td>
-      <td class="px-6 py-4 text-xs uppercase">${tType}</td>
-      <td class="px-6 py-4 font-mono text-sm">${b.nonce}</td>
-      <td class="px-6 py-4 text-xs text-gray-400">${b.timestamp || ''}</td>
+      <td class="mono">
+        <a class="addr" title="${b.transactions?.[0]?.thr_address||b.thr_address}" onclick="copy('${b.transactions?.[0]?.thr_address||b.thr_address}')">
+          ${short(b.transactions?.[0]?.thr_address||b.thr_address||'—')}
+        </a>
+      </td>
+      <td>${fmtN(b.reward_to_miner + b.reward_to_ai + (b.fee_burned||0))}</td>
+      <td>${fmtN(b.fee_burned)}</td>
+      <td>${fmtN(b.reward_to_miner)}</td>
+      <td>${fmtN(b.reward_to_ai)}</td>
+      <td>${typeBadge}</td>
+      <td class="muted">${timeStr}</td>
     `;
-
-    tbody.appendChild(tr);
-
-    // TXs Sub-row
-    if (b.transactions && b.transactions.length) {
-      const trx = document.createElement('tr');
-      const txHtml = b.transactions.map(tx => {
-        return `<div class="mb-1 font-mono">
-          <span class="text-blue-300">${tx.tx_id}</span> — <b class="text-white">${tx.type}</b> — from ${tx.from || '-'} to ${tx.to || '-'} : <b class="text-yellow-400">${tx.amount ?? '-'}</b> (fee ${tx.fee_burned ?? 0})
-        </div>`;
-      }).join('');
-      trx.innerHTML = `<td colspan="9" class="px-6 py-2 bg-gray-750 text-xs text-gray-400">${txHtml}</td>`;
-      tbody.appendChild(trx);
-    }
-  }
+    tb.appendChild(tr);
+  });
+  el('#tipBadge').style.display = hot?'inline-block':'none';
 }
 
-// Start Polling
-pollNet();
-setInterval(pollNet, 5000);
-setInterval(loadBlocks, 6000);
+function renderTxs(list){
+  const q = el('#q').value.trim().toLowerCase();
+  const tb = tbody('#tblTxs');
+  tb.innerHTML='';
+  list.forEach(t=>{
+    const match = !q || JSON.stringify(t).toLowerCase().includes(q);
+    if(!match) return;
+    const tr=document.createElement('tr');
+    tr.innerHTML = `
+      <td class="mono">
+        <a class="hash" title="${t.tx_id}" onclick="copy('${t.tx_id}')">${short(t.tx_id)}</a>
+      </td>
+      <td class="mono k">${t.height ?? '—'}</td>
+      <td class="mono"><a class="addr" onclick="copy('${t.from}')">${short(t.from)}</a></td>
+      <td class="mono"><a class="addr" onclick="copy('${t.to}')">${short(t.to)}</a></td>
+      <td>${fmtN(t.amount)}</td>
+      <td>${fmtN(t.fee_burned)}</td>
+      <td class="muted">${rel(t.timestamp)}</td>
+    `;
+    tb.appendChild(tr);
+  });
+}
+
+function renderMempool(list){
+  el('#mpCount').textContent = list.length;
+  const tb = tbody('#tblMempool');
+  tb.innerHTML='';
+  list.forEach(t=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML = `
+      <td class="mono">
+        <a class="hash" title="${t.tx_id||''}" onclick="copy('${t.tx_id||''}')">${short(t.tx_id||'—')}</a>
+      </td>
+      <td class="mono"><a class="addr" onclick="copy('${t.from||''}')">${short(t.from||'—')}</a></td>
+      <td class="mono"><a class="addr" onclick="copy('${t.to||''}')">${short(t.to||'—')}</a></td>
+      <td>${fmtN(t.amount)}</td>
+      <td>${fmtN(t.fee_burned)}</td>
+      <td>${t.status||'pending'}</td>
+      <td class="muted">${rel(t.timestamp)}</td>
+    `;
+    tb.appendChild(tr);
+  });
+}
+
+/* ===== Live Stats ===== */
+const hrSeries = [];
+function pushSpark(val){
+  hrSeries.push(val||0);
+  while(hrSeries.length>60) hrSeries.shift(); // last 60 samples
+  const c = el('#sparkHR'); const ctx=c.getContext('2d');
+  const W=c.width = c.clientWidth, H=c.height = c.clientHeight;
+  ctx.clearRect(0,0,W,H);
+  const max = Math.max(...hrSeries, 1);
+  const step = W / Math.max(1, hrSeries.length-1);
+  ctx.beginPath();
+  hrSeries.forEach((v,i)=>{
+    const x = i*step;
+    const y = H - (v/max)*H;
+    if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  });
+  ctx.strokeStyle = '#22ff77'; ctx.lineWidth = 1.5; ctx.stroke();
+}
+
+async function loadLive(){
+  try{
+    const r = await fetch('/api/network_live'); const j = await r.json();
+    el('#liveDiff').textContent = j.difficulty?.toLocaleString() ?? '—';
+    el('#liveABT').textContent = j.avg_block_time_sec ? (j.avg_block_time_sec.toFixed(1)+'s') : '—';
+    el('#liveHR').textContent  = j.est_hashrate_hs ? (Intl.NumberFormat('en',{notation:'compact'}).format(j.est_hashrate_hs)+' H/s') : '—';
+    el('#liveMP').textContent  = j.mempool ?? '0';
+    pushSpark(j.est_hashrate_hs||0);
+  }catch{}
+}
+
+/* ===== Fetchers ===== */
+async function reloadBlocks(){
+  const r = await fetch('/api/blocks'); const j = await r.json();
+  CURRENT_BLOCKS = j;
+  renderBlocks(CURRENT_BLOCKS);
+}
+async function reloadMempool(){
+  const r = await fetch('/api/mempool'); const j = await r.json();
+  renderMempool(j);
+}
+
+/* ===== Wireup ===== */
+let CURRENT_BLOCKS = BOOT_BLOCKS || [];
+let CURRENT_TXS    = BOOT_TXS || [];
+
+renderBlocks(CURRENT_BLOCKS);
+renderTxs(CURRENT_TXS);
+
+el('#q').addEventListener('input', ()=>{
+  renderBlocks(CURRENT_BLOCKS);
+  renderTxs(CURRENT_TXS);
+});
+el('#clearBtn').onclick=()=>{ el('#q').value=''; renderBlocks(CURRENT_BLOCKS); renderTxs(CURRENT_TXS); };
+el('#refreshBtn').onclick=reloadBlocks;
+el('#btnLoadMempool')?.addEventListener('click', reloadMempool);
+
+// live refresh ticker
+setInterval(()=>{
+  loadLive();
+  el('#liveClock').textContent = new Date().toLocaleTimeString();
+}, 5000);
+
+// first live ping
+loadLive();
+reloadMempool();
+
+// highlight recent on first paint
+setTimeout(()=>renderBlocks(CURRENT_BLOCKS), 100);
+
+/* polite defaults for older servers with no data passed */
+if(!Array.isArray(CURRENT_BLOCKS)) CURRENT_BLOCKS=[];
+if(!Array.isArray(CURRENT_TXS)) CURRENT_TXS=[];
 </script>
-{% endblock %}
+</body>
+</html>

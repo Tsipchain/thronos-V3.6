@@ -5,7 +5,6 @@
 {% block styles %}
 <style>
     :root { --g:#00ff66; --panel:#0b0b0b; }
-    
     .wrap { padding:14px; max-width:1200px; margin:0 auto; }
     .toolbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
     .btn-tool {
@@ -95,8 +94,8 @@
     const searchBox   = el("#search");
     const btnClear    = el("#btnClear");
 
-    let allBlocks = [];    // μόνο block entries
-    let allTxs    = [];    // μόνο transfers
+    let allBlocks = [];
+    let allTxs    = [];
 
     function show(panel) {
       if (panel === "blocks") {
@@ -114,7 +113,6 @@
 
     btnBlocks.onclick = () => show("blocks");
     btnTx.onclick     = () => show("tx");
-
     btnClear.onclick = () => {
       searchBox.value = "";
       renderBlocks(allBlocks);
@@ -192,14 +190,10 @@
     }
 
     async function loadData() {
-      // Φέρνουμε ΟΛΟ το chain και φιλτράρουμε blocks client-side
       const chain = await fetch("/chain").then(r=>r.json());
-      allBlocks = chain.filter(x => typeof x === "object" && x && x.type !== "transfer");
+      allBlocks = chain.filter(x => typeof x === "object" && x && x.type === "block");
+      allTxs    = chain.filter(x => typeof x === "object" && x && x.type === "transfer");
 
-      // Φέρνουμε τα transfers
-      allTxs = chain.filter(x => typeof x === "object" && x && x.type === "transfer");
-
-      // RENDER
       renderBlocks(allBlocks);
       renderTxs(allTxs);
     }

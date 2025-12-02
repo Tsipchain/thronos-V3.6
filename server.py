@@ -253,11 +253,17 @@ def get_blocks_for_viewer():
         if nonce is None:
             nonce = "-"
 
+        transactions = [
+            tx for tx in chain
+            if tx.get("type") in ("transfer", "coinbase", "service_payment")
+            and tx.get("height") == height
+        ]
+
         blocks.append({
             "index": height,
             "hash": block_hash,
             "fee_burned": fee_burned,
-            "transactions": [],  # placeholder for future TX mapping
+            "transactions": transactions,
             "nonce": nonce,
         })
 

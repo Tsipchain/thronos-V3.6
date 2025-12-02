@@ -4,190 +4,213 @@
 
 {% block styles %}
 <style>
-    label {
-      display: block;
-      margin-top: 12px;
-      margin-bottom: 4px;
-    }
-    input {
-      width: 100%;
-      padding: 6px 8px;
-      background: #000;
-      border: 1px solid #00ff66;
-      color: #00ff66;
-      font-family: inherit;
-      box-sizing: border-box;
-    }
-    button {
-      margin-top: 16px;
-      padding: 8px 16px;
-      background: #00ff66;
-      color: #000;
-      border: none;
-      cursor: pointer;
-      font-weight: bold;
-    }
-    button:hover {
-      background: #00cc55;
-    }
-    .row {
-      display: flex;
-      gap: 16px;
-      flex-wrap: wrap;
-    }
-    .col {
-      flex: 1 1 260px;
-    }
-    pre {
-      background: #050505;
-      border: 1px solid #00ff66;
-      padding: 8px;
-      max-height: 260px;
-      overflow: auto;
-      font-size: 12px;
-      white-space: pre-wrap;
-    }
-    .small-note {
-      font-size: 11px;
-      color: #cccccc;
-    }
-    #chartSection {
-        margin-top: 30px;
-        border-top: 1px solid #00ff66;
-        padding-top: 20px;
-    }
-    iframe {
-        width: 100%;
-        height: 600px;
-        border: none;
-        background: #111;
-    }
+  :root{
+    --line:#00ff66; --bg:#000; --panel:#050505; --txt:#b8ffcc;
+  }
+  .topbar{
+    display:flex;justify-content:space-between;align-items:center;margin:6px 0 16px;
+  }
+  .nav a{color:var(--line);text-decoration:none;margin-right:12px;border:1px solid var(--line);padding:4px 8px}
+  .nav a:hover{background:#002d14}
+  label{display:block;margin-top:12px;margin-bottom:4px}
+  input{
+    width:100%;padding:8px;background:#000;border:1px solid var(--line);color:var(--line);font-family:inherit;box-sizing:border-box
+  }
+  button{margin-top:12px;padding:8px 14px;background:var(--line);color:#001a0c;border:none;cursor:pointer;font-weight:800}
+  button:hover{filter:brightness(0.9)}
+  .row{display:flex;gap:16px;flex-wrap:wrap}
+  .col{flex:1 1 320px}
+  pre{background:var(--panel);border:1px solid var(--line);padding:8px;max-height:280px;overflow:auto;font-size:12px;white-space:pre-wrap;color:var(--txt)}
+  .small-note{font-size:11px;color:#c9f9da}
+  .badge{display:inline-block;border:1px solid var(--line);padding:2px 8px;border-radius:12px;font-size:12px;margin-left:6px}
+  .b-pending{background:#173b22}
+  .b-ok{background:#163b28}
+  .b-warn{background:#3b2d16;border-color:#ffd166;color:#ffd166}
+  .kpi{display:flex;gap:12px;align-items:center;margin-top:8px}
+  .kpi div{border:1px solid var(--line);padding:6px 10px}
+  .muted{color:#8eeabf}
+  #chartSection{margin-top:26px;border-top:1px solid var(--line);padding-top:16px}
+  iframe{width:100%;height:560px;border:none;background:#111}
 </style>
 {% endblock %}
 
 {% block content %}
-  <h1>📤 <span class="lang-el">Αποστολή THR</span><span class="lang-en">Send THR</span></h1>
 
-  <div class="row">
-    <div class="col">
-      <label for="from_thr"><span class="lang-el">Από Διεύθυνση THR</span><span class="lang-en">From THR Address</span></label>
-      <input id="from_thr" placeholder="π.χ. THR1764..." />
+<div class="topbar">
+  <div class="nav">
+    <a href="/"  title="Home">🏠 Home</a>
+    <a href="/viewer" title="Viewer">🧱 Viewer</a>
+    <a href="/wallet" title="Wallet">👛 Wallet</a>
+  </div>
+  <div class="muted">Thronos Network</div>
+</div>
 
-      <label for="to_thr"><span class="lang-el">Προς Διεύθυνση THR</span><span class="lang-en">To THR Address</span></label>
-      <input id="to_thr" placeholder="Recipient THR address" />
+<h1>📤 <span class="lang-el">Αποστολή THR</span><span class="lang-en">Send THR</span></h1>
 
-      <label for="amount"><span class="lang-el">Ποσό (THR)</span><span class="lang-en">Amount (THR)</span></label>
-      <input id="amount" type="number" step="0.000001" min="0" value="0.1" />
+<div class="row">
+  <div class="col">
+    <label for="from_thr"><span class="lang-el">Από Διεύθυνση THR</span><span class="lang-en">From THR Address</span></label>
+    <input id="from_thr" placeholder="π.χ. THR1764..." />
 
-      <label for="auth_secret">
-        <span class="lang-el">Μυστικό Αποστολής (auth_secret)</span><span class="lang-en">Send Secret (auth_secret)</span>
-      </label>
-      <input id="auth_secret"
-             placeholder="Μυστικό που πήρες με το Pledge (send_secret)" />
+    <label for="to_thr"><span class="lang-el">Προς Διεύθυνση THR</span><span class="lang-en">To THR Address</span></label>
+    <input id="to_thr" placeholder="Recipient THR address" />
 
-      <div class="small-note">
-        <span class="lang-el">* Προμήθεια: 0.0015 THR καίγεται σε κάθε αποστολή.</span>
-        <span class="lang-en">* Fee: 0.0015 THR burned per transaction.</span>
-      </div>
+    <label for="amount"><span class="lang-el">Ποσό (THR)</span><span class="lang-en">Amount (THR)</span></label>
+    <input id="amount" type="number" step="0.000001" min="0" value="0.1" />
 
-      <button onclick="doSend()"><span class="lang-el">Αποστολή THR</span><span class="lang-en">Send THR</span></button>
-      <button onclick="loadBalance()"><span class="lang-el">Φόρτωση Υπολοίπου</span><span class="lang-en">Load Balance</span></button>
+    <label for="auth_secret">
+      <span class="lang-el">Μυστικό Αποστολής (auth_secret)</span><span class="lang-en">Send Secret (auth_secret)</span>
+    </label>
+    <input id="auth_secret" placeholder="Μυστικό που πήρες με το Pledge (send_secret)" />
+
+    <div class="small-note">
+      <span class="lang-el">* Προμήθεια: 0.0015 THR καίγεται σε κάθε αποστολή.</span>
+      <span class="lang-en">* Fee: 0.0015 THR burned per transaction.</span>
     </div>
 
-    <div class="col">
-      <label><span class="lang-el">Υπόλοιπο & Ιστορικό (JSON)</span><span class="lang-en">Balance & History (JSON)</span></label>
-      <pre id="walletBox">{}</pre>
-
-      <label><span class="lang-el">Αποτέλεσμα Αποστολής</span><span class="lang-en">Send Result</span></label>
-      <pre id="sendResult">{}</pre>
+    <div class="kpi">
+      <div>🧺 Mempool: <span id="mpCount">0</span></div>
+      <div>⛏️ Last block: <span id="lastBlockAgo">—</span></div>
+      <div id="pendingBadge" class="badge b-pending" style="display:none;">pending… waiting confirmation</div>
+      <div id="okBadge" class="badge b-ok" style="display:none;">confirmed ✅</div>
+      <div id="warnBadge" class="badge b-warn" style="display:none;">no miners? watchdog may help</div>
     </div>
+
+    <button onclick="doSend()"><span class="lang-el">Αποστολή THR</span><span class="lang-en">Send THR</span></button>
+    <button onclick="loadBalance()"><span class="lang-el">Φόρτωση Υπολοίπου</span><span class="lang-en">Load Balance</span></button>
   </div>
-  
-  <!-- Hidden Chart Section -->
-  <div id="chartSection" style="display: none;">
-      <h3>📊 <span class="lang-el">Στατιστικά Δικτύου & Ανάλυση</span><span class="lang-en">Network Stats & Analysis</span></h3>
-      <p class="small-note">
-          <span class="lang-el">Ενεργοποιήθηκε επειδή έχετε ενεργό ιστορικό συναλλαγών.</span>
-          <span class="lang-en">Activated because you have active transaction history.</span>
-      </p>
-      <iframe src="/token_chart" title="Token Chart"></iframe>
+
+  <div class="col">
+    <label><span class="lang-el">Υπόλοιπο & Ιστορικό (JSON)</span><span class="lang-en">Balance & History (JSON)</span></label>
+    <pre id="walletBox">{}</pre>
+
+    <label><span class="lang-el">Αποτέλεσμα Αποστολής</span><span class="lang-en">Send Result</span></label>
+    <pre id="sendResult">{}</pre>
   </div>
+</div>
+
+<div id="chartSection" style="display:none;">
+  <h3>📊 <span class="lang-el">Στατιστικά Δικτύου & Ανάλυση</span><span class="lang-en">Network Stats & Analysis</span></h3>
+  <p class="small-note">
+    <span class="lang-el">Ενεργοποιήθηκε επειδή έχετε ενεργό ιστορικό συναλλαγών.</span>
+    <span class="lang-en">Activated because you have active transaction history.</span>
+  </p>
+  <iframe src="/token_chart" title="Token Chart"></iframe>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
 <script>
-async function loadBalance() {
-  const thr = document.getElementById('from_thr').value.trim();
-  const lang = localStorage.getItem('lang') || 'el';
-  
-  if (!thr) {
-    alert(lang === 'el' ? 'Βάλε THR address πρώτα' : 'Enter THR address first');
-    return;
-  }
-  try {
-    const res = await fetch(`/wallet_data/${encodeURIComponent(thr)}`);
-    const data = await res.json();
-    document.getElementById('walletBox').textContent =
-      JSON.stringify(data, null, 2);
-      
-    // Check for transactions to show chart
-    if (data.transactions && data.transactions.length > 0) {
-        document.getElementById('chartSection').style.display = 'block';
-    } else {
-        document.getElementById('chartSection').style.display = 'none';
+const $ = (id)=>document.getElementById(id);
+const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
+
+async function pulseNetworkKpis(){
+  try{
+    const mp = await fetch('/api/mempool').then(r=>r.json());
+    $('mpCount').textContent = mp.length ?? 0;
+
+    const last = await fetch('/last_block').then(r=>r.json());
+    if(last.timestamp){
+      const t = new Date((last.timestamp||'').replace(' UTC','')+'Z').getTime();
+      const sec = Math.max(0, Math.floor((Date.now()-t)/1000));
+      $('lastBlockAgo').textContent = sec+'s ago';
+      $('warnBadge').style.display = (sec>90 && (mp.length||0)>0) ? 'inline-block':'none';
     }
-    
-  } catch (e) {
-    document.getElementById('walletBox').textContent =
-      (lang === 'el' ? 'Σφάλμα φόρτωσης πορτοφολιού: ' : 'Error loading wallet: ') + e;
+  }catch{}
+}
+setInterval(pulseNetworkKpis, 5000);
+pulseNetworkKpis();
+
+async function loadBalance() {
+  const thr = $('from_thr').value.trim();
+  const lang = localStorage.getItem('lang') || 'el';
+  if(!thr){ alert(lang==='el'?'Βάλε THR address πρώτα':'Enter THR address first'); return; }
+
+  try{
+    const data = await fetch(`/wallet_data/${encodeURIComponent(thr)}`).then(r=>r.json());
+    $('walletBox').textContent = JSON.stringify(data, null, 2);
+    $('chartSection').style.display = (data.transactions && data.transactions.length>0) ? 'block':'none';
+  }catch(e){
+    $('walletBox').textContent = (lang==='el'?'Σφάλμα φόρτωσης πορτοφολιού: ':'Error loading wallet: ')+e;
   }
 }
 
+/* State for pending follow-up */
+let lastSentTxId = null;
+let lastSentTo   = null;
+let lastSentAmt  = null;
+
+async function followUntilConfirmed(fromThr){
+  $('pendingBadge').style.display='inline-block';
+  $('okBadge').style.display='none';
+
+  for(let i=0;i<120;i++){ // έως 10 λεπτά (ανά 5s)
+    await sleep(5000);
+    pulseNetworkKpis();
+
+    // 1) Δες αν η TX βγήκε από το mempool
+    try{
+      const mp = await fetch('/api/mempool').then(r=>r.json());
+      const still = mp.find(t=>t.tx_id===lastSentTxId);
+      if(still){ continue; } // παραμένει pending
+
+      // 2) Αν δεν είναι στο mempool, δες ιστορικό πορτοφολιού παραλήπτη ή αποστολέα
+      const toData   = lastSentTo ? await fetch(`/wallet_data/${encodeURIComponent(lastSentTo)}`).then(r=>r.json()) : {transactions:[]};
+      const fromData = await fetch(`/wallet_data/${encodeURIComponent(fromThr)}`).then(r=>r.json());
+
+      const got = (toData.transactions||[]).some(t=>t.tx_id===lastSentTxId)
+               || (fromData.transactions||[]).some(t=>t.tx_id===lastSentTxId);
+
+      if(got){
+        $('pendingBadge').style.display='none';
+        $('okBadge').style.display='inline-block';
+        $('sendResult').textContent = JSON.stringify({status:'confirmed', tx_id:lastSentTxId}, null, 2);
+        loadBalance();
+        return;
+      }
+    }catch{}
+  }
+  // timeout προβολή
+  $('pendingBadge').style.display='none';
+  $('sendResult').textContent = JSON.stringify({status:'unknown', tx_id:lastSentTxId, note:'no confirmation observed in window'}, null, 2);
+}
+
 async function doSend() {
-  const from_thr    = document.getElementById('from_thr').value.trim();
-  const to_thr      = document.getElementById('to_thr').value.trim();
-  const amount      = document.getElementById('amount').value;
-  const auth_secret = document.getElementById('auth_secret').value.trim();
+  const from_thr    = $('from_thr').value.trim();
+  const to_thr      = $('to_thr').value.trim();
+  const amount      = $('amount').value;
+  const auth_secret = $('auth_secret').value.trim();
   const lang = localStorage.getItem('lang') || 'el';
 
   const msg = {
-      el: {
-          missingAddr: 'Συμπλήρωσε FROM και TO THR address',
-          missingSecret: 'Χρειάζεται το send_secret που πήρες με το Pledge',
-          error: 'Σφάλμα αποστολής: '
-      },
-      en: {
-          missingAddr: 'Fill in FROM and TO THR address',
-          missingSecret: 'Send_secret from Pledge is required',
-          error: 'Error sending: '
-      }
-  };
-  const m = msg[lang];
+    el:{missingAddr:'Συμπλήρωσε FROM και TO THR address', missingSecret:'Χρειάζεται το send_secret που πήρες με το Pledge', error:'Σφάλμα αποστολής: '},
+    en:{missingAddr:'Fill in FROM and TO THR address',     missingSecret:'Send_secret from Pledge is required',          error:'Error sending: '}
+  }[lang];
 
-  if (!from_thr || !to_thr) {
-    alert(m.missingAddr);
-    return;
-  }
-  if (!auth_secret) {
-    alert(m.missingSecret);
-    return;
-  }
+  if(!from_thr || !to_thr){ alert(msg.missingAddr); return; }
+  if(!auth_secret){ alert(msg.missingSecret); return; }
 
-  try {
+  try{
     const res = await fetch('/send_thr', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ from_thr, to_thr, amount, auth_secret })
     });
     const data = await res.json();
-    document.getElementById('sendResult').textContent =
-      JSON.stringify(data, null, 2);
+    $('sendResult').textContent = JSON.stringify(data, null, 2);
 
-    // Refresh balance μετά το send
+    // Αν είναι pending, ξεκίνα παρακολούθηση
+    if(data?.status === 'pending' && data?.tx){
+      lastSentTxId = data.tx.tx_id;
+      lastSentTo   = data.tx.to;
+      lastSentAmt  = data.tx.amount;
+      followUntilConfirmed(from_thr);
+    }
+    // ανανέωση υπολοίπου αμέσως (το fee κρατήθηκε)
     loadBalance();
-  } catch (e) {
-    document.getElementById('sendResult').textContent =
-      m.error + e;
+    pulseNetworkKpis();
+  }catch(e){
+    $('sendResult').textContent = msg.error + e;
   }
 }
 </script>

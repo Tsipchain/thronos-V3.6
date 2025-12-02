@@ -16,6 +16,7 @@
 # - Quantum-Secured AI Chat
 # - AI Autonomous Driving Service
 # - Mempool & 80/10/10 Reward Split (V3.6)
+# - Mempool Watchdog & API (V3.7)
 
 import os
 import json
@@ -625,6 +626,10 @@ def network_live():
         "mempool": mempool_len
     }), 200
 
+@app.route("/api/mempool")
+def api_mempool():
+    """Returns pending transactions waiting for block inclusion."""
+    return jsonify(load_mempool()), 200
 
 @app.route("/api/blocks")
 def api_blocks():
@@ -1357,9 +1362,36 @@ def mint_first_blocks():
             continue
         submit_mining_block_for_pledge(thr)
 
+def seconds_since_last_block() -> float:
+    chain = load_json(CHAIN_FILE, [])
+    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    if not blocks:
+        return 10**9
+    try:
+        t_fmt = "%Y-%m-%d %H:%M:%S UTC"
+        last_ts = datetime.strptime(blocks[-1]["timestamp"], t_fmt).timestamp()
+        return time.time() - last_ts
+    except Exception:
+        return 10**9
+
+def confirm_mempool_if_stuck(max_wait_sec: int = 180):
+    """
+    Safety Watchdog: If mempool has TXs and no block for > 3 mins,
+    force-mine a block (using AI Wallet or System) to include them.
+    """
+    pool = load_mempool()
+    if not pool:
+        return
+    if seconds_since_last_block() < max_wait_sec:
+        return
+    
+    print("⚠️ Watchdog: Mempool stuck > 3 mins. Auto-mining block to clear TXs.")
+    submit_mining_block_for_pledge(AI_WALLET_ADDRESS)
+
 
 scheduler = BackgroundScheduler(daemon=True)
 scheduler.add_job(mint_first_blocks, "interval", minutes=1)
+scheduler.add_job(confirm_mempool_if_stuck, "interval", seconds=45)
 scheduler.start()
 
 # Run AI Wallet Check on Startup

@@ -1,214 +1,98 @@
 {% extends "base.html" %}
 
-{% block title %}Thronos Block & TX Viewer{% endblock %}
+{% block title %}💼 THR Wallet Viewer{% endblock %}
 
 {% block styles %}
 <style>
-    :root { --g:#00ff66; --panel:#0b0b0b; }
+    input, button {
+      background: #111;
+      color: #0f0;
+      border: 1px solid #0f0;
+      padding: 8px;
+      margin: 10px 0;
+      font-family: monospace;
+    }
+    button { cursor: pointer; }
+    button:hover { background: #222; }
     
-    .wrap { padding:14px; max-width:1200px; margin:0 auto; }
-    .toolbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
-    .btn-tool {
-      background:var(--panel); border:1px solid var(--g); color:var(--g);
-      padding:8px 12px; cursor:pointer; font-weight:bold;
+    .tx {
+      margin-top: 20px;
+      border-top: 1px dashed #0f0;
+      padding-top: 10px;
     }
-    .btn-tool.active { background:var(--g); color:#000; }
-    .input {
-      background:#111; color:var(--g); border:1px solid var(--g);
-      padding:8px 10px; min-width:260px;
+    .btc-val {
+        color: #ff0;
+        font-size: 0.9em;
     }
-    .panel { background:var(--panel); border:1px dashed var(--g); padding:10px; }
-    table { width:100%; border-collapse:collapse; }
-    th, td { border:1px solid #0f0; padding:8px; font-size:13px; }
-    th { background:#061; text-align:left; }
-    tr:nth-child(odd) td { background:rgba(0,255,102,0.05); }
-    code { background:#111; padding:2px 4px; }
-    .muted { opacity:.85; }
-    .right { text-align:right; }
-    .copy { cursor:pointer; text-decoration:underline; }
-    .hidden { display:none; }
 </style>
 {% endblock %}
 
 {% block content %}
-  <div class="wrap">
-    <h1>📦 <span class="lang-el">Εξερευνητής Thronos</span><span class="lang-en">Thronos Viewer</span></h1>
+  <h1>💼 <span class="lang-el">Προβολή Πορτοφολιού THR</span><span class="lang-en">THR Wallet Viewer</span></h1>
+  <p><span class="lang-el">Εισάγετε μια διεύθυνση THR για να δείτε το υπόλοιπο και το ιστορικό συναλλαγών:</span><span class="lang-en">Enter a THR address to view its balance and transaction history:</span></p>
 
-    <div class="toolbar">
-      <button id="btnBlocks" class="btn-tool active"><span class="lang-el">Μπλοκ</span><span class="lang-en">Blocks</span></button>
-      <button id="btnTx" class="btn-tool"><span class="lang-el">Μεταφορές</span><span class="lang-en">Transfers</span></button>
-
-      <input id="search" class="input" placeholder="Search (address or tx id)" />
-      <button id="btnClear" class="btn-tool"><span class="lang-el">Καθαρισμός</span><span class="lang-en">Clear</span></button>
-    </div>
-
-    <!-- Blocks table -->
-    <div id="blocksPanel" class="panel">
-      <table id="blocksTable">
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>Block Hash</th>
-            <th>Miner THR</th>
-            <th class="right"><span class="lang-el">Αμοιβή</span><span class="lang-en">Reward</span></th>
-            <th class="right"><span class="lang-el">Προμήθεια Pool</span><span class="lang-en">Pool Fee</span></th>
-            <th class="right"><span class="lang-el">Στον Miner</span><span class="lang-en">To Miner</span></th>
-            <th>Timestamp</th>
-          </tr>
-        </thead>
-        <tbody><!-- filled by JS --></tbody>
-      </table>
-    </div>
-
-    <!-- TX table -->
-    <div id="txPanel" class="panel hidden">
-      <table id="txTable">
-        <thead>
-          <tr>
-            <th>TX ID</th>
-            <th>Height</th>
-            <th>From</th>
-            <th>To</th>
-            <th class="right"><span class="lang-el">Ποσό</span><span class="lang-en">Amount</span></th>
-            <th class="right"><span class="lang-el">Προμήθεια</span><span class="lang-en">Fee</span></th>
-            <th>Timestamp</th>
-            <th>Copy</th>
-          </tr>
-        </thead>
-        <tbody><!-- filled by JS --></tbody>
-      </table>
-      <p class="muted">
-          <span class="lang-el">Tip: κάνε κλικ σε διεύθυνση για άνοιγμα wallet viewer ή στην «Copy» για αντιγραφή TX/διεύθυνσης.</span>
-          <span class="lang-en">Tip: click an address to open wallet viewer or "Copy" to copy TX/address.</span>
-      </p>
-    </div>
+  <div>
+    <input type="text" id="thrAddress" placeholder="e.g. THR..." size="40" />
+    <button onclick="loadWallet()">🔍 <span class="lang-el">Προβολή</span><span class="lang-en">View Wallet</span></button>
   </div>
+
+  <h2>
+      <span class="lang-el">Υπόλοιπο:</span><span class="lang-en">Balance:</span> 
+      <span id="balance">0</span> THR 
+      <span class="btc-val">(≈ <span id="btcValue">0.0000</span> BTC)</span>
+  </h2>
+  
+  <div id="txHistory"><span class="lang-el">Δεν βρέθηκαν συναλλαγές.</span><span class="lang-en">No transactions yet.</span></div>
 {% endblock %}
 
 {% block scripts %}
-  <script>
-    const el = (q) => document.querySelector(q);
-    const blocksPanel = el("#blocksPanel");
-    const txPanel     = el("#txPanel");
-    const btnBlocks   = el("#btnBlocks");
-    const btnTx       = el("#btnTx");
-    const searchBox   = el("#search");
-    const btnClear    = el("#btnClear");
+<script>
+    async function loadWallet() {
+      const addr = document.getElementById("thrAddress").value.trim();
+      if (!addr) {
+        alert("Please enter a THR address.");
+        return;
+      }
+      try {
+        const res = await fetch(`/wallet_data/${addr}`);
+        if (!res.ok) throw new Error("Server returned " + res.status);
+        const data = await res.json();
+        
+        const balance = parseFloat(data.balance);
+        document.getElementById("balance").textContent = balance + " THR";
+        
+        // Calculate BTC value (Fixed rate for now: 1 THR = 0.0001 BTC)
+        const btcVal = (balance * 0.0001).toFixed(8);
+        document.getElementById("btcValue").textContent = btcVal;
 
-    let allBlocks = [];    // μόνο block entries
-    let allTxs    = [];    // μόνο transfers
-
-    function show(panel) {
-      if (panel === "blocks") {
-        blocksPanel.classList.remove("hidden");
-        txPanel.classList.add("hidden");
-        btnBlocks.classList.add("active");
-        btnTx.classList.remove("active");
-      } else {
-        txPanel.classList.remove("hidden");
-        blocksPanel.classList.add("hidden");
-        btnTx.classList.add("active");
-        btnBlocks.classList.remove("active");
+        const div = document.getElementById("txHistory");
+        if (!data.transactions.length) {
+          div.textContent = "No transactions found.";
+        } else {
+          let html = "";
+          data.transactions.forEach(tx => {
+            html += `
+            <div class="tx">
+              <strong>${tx.timestamp}</strong><br>
+              ${tx.from ? `From: ${tx.from}<br>` : ""}
+              ${tx.to   ? `To: ${tx.to}<br>`     : ""}
+              Amount: ${tx.amount ?? tx.reward ?? 0} ${tx.amount ? "" : "THR"}<br>
+              ${tx.fee ? `Fee: ${tx.fee}` : ""}
+            </div>`;
+          });
+          div.innerHTML = html;
+        }
+      } catch (e) {
+        alert("Error loading wallet: " + e.message);
       }
     }
-
-    btnBlocks.onclick = () => show("blocks");
-    btnTx.onclick     = () => show("tx");
-
-    btnClear.onclick = () => {
-      searchBox.value = "";
-      renderBlocks(allBlocks);
-      renderTxs(allTxs);
-    };
-
-    function copy(text) {
-      navigator.clipboard.writeText(text);
-      const lang = localStorage.getItem('lang') || 'el';
-      alert(lang === 'el' ? "Αντιγράφηκε:\n" + text : "Copied:\n" + text);
-    }
-
-    function linkAddr(addr) {
-      return `<a href="/wallet/${addr}" target="_blank" style="color:#0f0">${addr}</a>`;
-    }
-
-    function renderBlocks(rows) {
-      const q = searchBox.value.trim().toLowerCase();
-      const body = el("#blocksTable tbody");
-      body.innerHTML = "";
-
-      rows
-        .filter(b => !q ||
-          String(b.block_hash||"").toLowerCase().includes(q) ||
-          String(b.thr_address||"").toLowerCase().includes(q)
-        )
-        .forEach(b => {
-          const tr = document.createElement("tr");
-          tr.innerHTML = `
-            <td>${(b.block_hash||"").startsWith("THR-") ? (b.block_hash||"").split("-")[1] : ""}</td>
-            <td><span class="copy" onclick='(${copy}).call(null, "${b.block_hash}")'>${b.block_hash}</span></td>
-            <td>${b.thr_address ? linkAddr(b.thr_address) : ""}</td>
-            <td class="right">${Number(b.reward||0).toFixed(3)}</td>
-            <td class="right">${Number(b.pool_fee||0).toFixed(3)}</td>
-            <td class="right">${Number(b.reward_to_miner||0).toFixed(3)}</td>
-            <td>${b.timestamp||""}</td>
-          `;
-          body.appendChild(tr);
-        });
-    }
-
-    function renderTxs(rows) {
-      const q = searchBox.value.trim().toLowerCase();
-      const body = el("#txTable tbody");
-      body.innerHTML = "";
-
-      rows
-        .filter(t => !q ||
-          String(t.tx_id||"").toLowerCase().includes(q) ||
-          String(t.from||"").toLowerCase().includes(q) ||
-          String(t.to||"").toLowerCase().includes(q)
-        )
-        .forEach(t => {
-          const tr = document.createElement("tr");
-          const copyTx = `(${copy}).call(null, "${t.tx_id}")`;
-          const copyFrom = `(${copy}).call(null, "${t.from}")`;
-          const copyTo   = `(${copy}).call(null, "${t.to}")`;
-
-          tr.innerHTML = `
-            <td><span class="copy" onclick='${copyTx}'>${t.tx_id}</span></td>
-            <td>${t.height ?? ""}</td>
-            <td>${t.from ? linkAddr(t.from) : ""}</td>
-            <td>${t.to ? linkAddr(t.to) : ""}</td>
-            <td class="right">${Number(t.amount||0).toFixed(6)}</td>
-            <td class="right">${Number(t.fee_burned||0).toFixed(4)}</td>
-            <td>${t.timestamp||""}</td>
-            <td>
-              <span class="copy" onclick='${copyTx}'>TX</span> |
-              <span class="copy" onclick='${copyFrom}'>From</span> |
-              <span class="copy" onclick='${copyTo}'>To</span>
-            </td>
-          `;
-          body.appendChild(tr);
-        });
-    }
-
-    async function loadData() {
-      // Φέρνουμε ΟΛΟ το chain και φιλτράρουμε blocks client-side
-      const chain = await fetch("/chain").then(r=>r.json());
-      allBlocks = chain.filter(x => typeof x === "object" && x && x.type !== "transfer");
-
-      // Φέρνουμε τα transfers
-      allTxs = chain.filter(x => typeof x === "object" && x && x.type === "transfer");
-
-      // RENDER
-      renderBlocks(allBlocks);
-      renderTxs(allTxs);
-    }
-
-    searchBox.addEventListener("input", () => {
-      renderBlocks(allBlocks);
-      renderTxs(allTxs);
-    });
-
-    loadData();
-  </script>
+    
+    // Check URL for address parameter if we want to support direct linking via JS (optional enhancement)
+    // But server handles /wallet/<addr> redirect to this page, so we might want to grab it from URL path if needed, 
+    // but currently server redirects to /wallet_data JSON or renders this template. 
+    // The server route /wallet/<thr_addr> redirects to /wallet_data/<thr_addr> which returns JSON, 
+    // so the user actually sees JSON if they go there directly. 
+    // The previous implementation had /wallet rendering wallet_viewer.html.
+    // Let's leave it as is.
+</script>
 {% endblock %}

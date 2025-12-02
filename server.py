@@ -62,6 +62,7 @@ WHITELIST_FILE = os.path.join(DATA_DIR, "free_pledge_whitelist.json")
 AI_CREDS_FILE = os.path.join(DATA_DIR, "ai_agent_credentials.json")
 WATCHER_LEDGER_FILE = os.path.join(DATA_DIR, "watcher_ledger.json")
 IOT_DATA_FILE = os.path.join(DATA_DIR, "iot_data.json")
+MEMPOOL_FILE = os.path.join(DATA_DIR, "mempool.json")
 
 ADMIN_SECRET   = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
 
@@ -92,6 +93,12 @@ logger = logging.getLogger("pledge")
 ai_agent = ThronosAI()
 
 # ─── HELPERS ───────────────────────────────────────
+def load_mempool():
+    return load_json(MEMPOOL_FILE, [])
+
+def save_mempool(pool):
+    save_json(MEMPOOL_FILE, pool)
+
 def load_json(path, default):
     try:
         with open(path, "r") as f:

@@ -224,39 +224,24 @@ def get_mining_target():
 def get_blocks_for_viewer():
     """
     Returns unified block list for thronos_block_viewer.html
-    with fields:
-    - index
-    - hash
-    - fee_burned
-    - reward_to_miner
-    - reward_to_ai
-    - transactions (real txs per block)
-    - nonce
-    - timestamp
-    - thr_address (miner)
+    with fields: index, hash, fee_burned, reward_to_miner,
+    reward_to_ai, transactions, nonce, timestamp, miner_address,
+    and stratum/legacy type.
     """
     chain = load_json(CHAIN_FILE, [])
 
-    raw_blocks = [
-        b for b in chain
-        if isinstance(b, dict) and b.get("reward") is not None
-    ]
+    raw_blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
 
     blocks = []
     for b in raw_blocks:
         height = b.get("height", len(blocks))
-        block_hash = b.get("block_hash", "-")
-        nonce = b.get("nonce", "-")
-        ts = b.get("timestamp", "-")
-        miner = b.get("thr_address", "-")
+        block_hash = b.get("block_hash", "")
+        fee_burned = float(b.get("pool_fee", 0.0))
+        reward_to_miner = float(b.get("reward_split", {}).get("miner", 0.0))
+        reward_to_ai = float(b.get("reward_split", {}).get("ai", 0.0))
+        is_stratum = b.get("is_stratum", False)
+        miner_address = b.get("thr_address", "-")
 
-        # Extract shares
-        reward_split = b.get("reward_split", {})
-        fee_burned = float(reward_split.get("burn", 0.0))
-        reward_to_miner = float(reward_split.get("miner", 0.0))
-        reward_to_ai = float(reward_split.get("ai", 0.0))
-
-        # Get TXs for this block height
         transactions = [
             tx for tx in chain
             if tx.get("type") in ("transfer", "coinbase", "service_payment")
@@ -269,14 +254,16 @@ def get_blocks_for_viewer():
             "fee_burned": fee_burned,
             "reward_to_miner": reward_to_miner,
             "reward_to_ai": reward_to_ai,
+            "is_stratum": is_stratum,
             "transactions": transactions,
-            "nonce": nonce,
-            "timestamp": ts,
-            "miner": miner
+            "nonce": b.get("nonce", "-"),
+            "timestamp": b.get("timestamp", "-"),
+            "thr_address": miner_address
         })
 
     blocks.sort(key=lambda x: x["index"], reverse=True)
     return blocks
+
 
 
 def ensure_ai_wallet():

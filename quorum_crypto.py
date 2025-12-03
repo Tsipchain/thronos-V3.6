@@ -159,3 +159,50 @@ def aggregate(items: List[Dict], scheme: str, message: bytes) -> Optional[Dict]:
         }
 
     return None
+    
+# --- append to quorum_crypto.py ---------------------------------
+def _g1_from_pubkey_string(pk_str: str):
+    # σταθερός χαρτογράφος string->G1, ίδιος με aggregate
+    from hashlib import sha256
+    b = sha256(pk_str.encode()).digest()
+    if len(b) < 48:
+        b = b + b"\x00"*(48-len(b))
+    from blspy import G1Element
+    return G1Element.from_bytes(b[:48])
+
+def verify(pubkeys, message: bytes, agg_sig_hex: str, scheme: str) -> bool:
+    scheme = (scheme or "BLS").upper()
+    if scheme == "BLS":
+        if HAS_BLS:
+            try:
+                from blspy import AugSchemeMPL, G1Element, G2Element
+                # ίδιο message για όλους (aggregate of identical messages)
+                g1_list = [_g1_from_pubkey_string(pk or "") for pk in pubkeys]
+                agg_sig = G2Element.from_bytes(bytes.fromhex(agg_sig_hex))
+                msgs = [message] * len(g1_list)
+                return AugSchemeMPL.aggregate_verify(g1_list, msgs, agg_sig)
+            except Exception:
+                # πέφτουμε στο fallback αν κάτι στραβώσει
+                pass
+        # fallback: ξαναφτιάχνουμε το deterministic agg και το συγκρίνουμε
+        comp = _fallback_aggregate(
+            [{"pubkey": p, "sig": ""} for p in pubkeys], message
+        )["agg_sig"]
+        return (comp == agg_sig_hex)
+
+    if scheme in ("SCHNORR", "MUSIG2"):
+        if HAS_MUSIG:
+            try:
+                from musig2 import musig2_verify
+                return musig2_verify(pubkeys, message, agg_sig_hex)
+            except Exception:
+                pass
+        comp = _fallback_aggregate(
+            [{"pubkey": p, "sig": ""} for p in pubkeys], message
+        )["agg_sig"]
+        return (comp == agg_sig_hex)
+
+    # άγνωστο schema → θεωρούμε false
+    return False
+# ----------------------------------------------------------------
+

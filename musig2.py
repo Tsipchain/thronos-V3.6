@@ -29,3 +29,12 @@ def musig2_aggregate(items: List[Dict], message: bytes) -> Dict:
         "pubkeys": pubkeys,
         "signers": signers,
     }
+# --- append to musig2.py ----------------------------------------
+def musig2_verify(pubkeys, message: bytes, agg_sig_hex: str) -> bool:
+    # ίδιο deterministic hash με το aggregate stub
+    import hashlib
+    h = hashlib.sha256()
+    for pk in sorted(pubkeys):
+        h.update((pk or "").encode() + message)
+    return (h.hexdigest() == agg_sig_hex)
+# ----------------------------------------------------------------

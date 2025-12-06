@@ -16,8 +16,9 @@
 # - AI Autonomous Driving Service
 # - Mempool & 80/10/10 Reward Split (V3.7)
 # - Quorum Attestations (BLS/MuSig2 placeholder) + aggregator job (V2.9)
+# - AI File Generation + Offline Corpus Queue for Whisper/Training (V3.8)
 
-import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, io, struct, binascii
+import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, io, struct, binascii, re
 from datetime import datetime
 from PIL import Image
 
@@ -58,10 +59,10 @@ IOT_DATA_FILE       = os.path.join(DATA_DIR, "iot_data.json")
 MEMPOOL_FILE        = os.path.join(DATA_DIR, "mempool.json")
 ATTEST_STORE_FILE   = os.path.join(DATA_DIR, "attest_store.json")  # NEW
 
-AI_FILES_DIR        = os.path.join(DATA_DIR, "ai_files")
+# ΝΕΑ: AI αρχεία & offline corpus
+AI_FILES_DIR   = os.path.join(DATA_DIR, "ai_files")
 os.makedirs(AI_FILES_DIR, exist_ok=True)
-AI_FILE_TTL_SECONDS = 3600  # 1 hour
-AI_OFFLINE_QUEUE_FILE = os.path.join(DATA_DIR, "ai_offline_queue.json")
+AI_CORPUS_FILE = os.path.join(DATA_DIR, "ai_offline_corpus.jsonl")
 
 ADMIN_SECRET   = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
 
@@ -107,98 +108,13 @@ def load_mempool():
     return load_json(MEMPOOL_FILE, [])
 
 def save_mempool(pool):
-    save_json(MEMPOOL_FILE, pool)
+    save_json(MEMPPOOL_FILE, pool)
 
 def load_attest_store():
     return load_json(ATTEST_STORE_FILE, {})
 
 def save_attest_store(store):
     save_json(ATTEST_STORE_FILE, store)
-
-# --- AI File & Offline Learning Helpers (Quantum Chat) ---
-def write_ai_file(filename: str, content: str) -> str:
-    """
-    Αποθηκεύει περιεχόμενο σε προσωρινό αρχείο που θα διαγραφεί
-    αυτόματα μετά από AI_FILE_TTL_SECONDS.
-    """
-    safe = secure_filename(filename) or "thronos_ai_output.txt"
-    ts = int(time.time())
-    internal = f"{ts}_{uuid.uuid4().hex}_{safe}"
-    path = os.path.join(AI_FILES_DIR, internal)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content)
-    return internal
-
-
-def extract_ai_files_from_text(text: str):
-    """
-    Ψάχνει για blocks τύπου:
-
-    [[FILE:my_script.py]]
-    ...περιεχόμενο...
-    [[/FILE]]
-
-    και τα μετατρέπει σε πραγματικά αρχεία.
-    """
-    marker_start = "[[FILE:"
-    marker_end = "]]"
-    marker_close = "[[/FILE]]"
-
-    files = []
-    clean_parts = []
-    i = 0
-
-    while True:
-        start = text.find(marker_start, i)
-        if start == -1:
-            clean_parts.append(text[i:])
-            break
-
-        clean_parts.append(text[i:start])
-
-        end_header = text.find(marker_end, start)
-        if end_header == -1:
-            # Σπασμένο block, κρατάμε το υπόλοιπο όπως είναι
-            clean_parts.append(text[start:])
-            break
-
-        filename = text[start + len(marker_start): end_header].strip() or "thronos_ai_output.txt"
-
-        end_block = text.find(marker_close, end_header)
-        if end_block == -1:
-            content = text[end_header + len(marker_end):]
-            i = len(text)
-        else:
-            content = text[end_header + len(marker_end): end_block]
-            i = end_block + len(marker_close)
-
-        internal = write_ai_file(filename, content.strip("\n"))
-        files.append({
-            "filename": filename,
-            "url": f"/ai_files/{internal}",
-            "expires_in": AI_FILE_TTL_SECONDS,
-        })
-
-    clean_text = "".join(clean_parts).strip()
-    return clean_text, files
-
-
-def enqueue_offline_corpus(wallet: str, prompt: str, answer: str):
-    """
-    Πετάει prompt+answer σε ουρά για Whisper/learning node.
-    """
-    entry = {
-        "wallet": wallet,
-        "prompt": prompt,
-        "answer": answer,
-        "timestamp": int(time.time()),
-    }
-    queue = load_json(AI_OFFLINE_QUEUE_FILE, [])
-    queue.append(entry)
-    if len(queue) > 1000:
-        queue = queue[-1000:]
-    save_json(AI_OFFLINE_QUEUE_FILE, queue)
-
 
 def sha256d(data: bytes) -> bytes:
     return hashlib.sha256(hashlib.sha256(data).digest()).digest()
@@ -321,7 +237,7 @@ def ensure_ai_wallet():
     pledges = load_json(PLEDGE_CHAIN, [])
     ai_pledge = next((p for p in pledges if p.get("thr_address")==AI_WALLET_ADDRESS), None)
     if ai_pledge: 
-        print(f"🤖 AI Wallet {AI_WALLET_ADDRESS} ready."); 
+        print(f"🤖 AI Wallet {AI_WALLET_ADDRESS} ready.")
         return
     print(f"🤖 Initializing AI Agent Wallet: {AI_WALLET_ADDRESS}")
     send_seed      = secrets.token_hex(16)
@@ -338,59 +254,139 @@ def ensure_ai_wallet():
         "has_passphrase":False,
         "is_system":True
     }
-    pledges.append(new_pledge); save_json(PLEDGE_CHAIN, pledges)
-    creds = {"thr_address":AI_WALLET_ADDRESS,"auth_secret":send_seed,"note":"Put these in ai_agent/agent_config.json"}
+    pledges.append(new_pledge)
+    save_json(PLEDGE_CHAIN, pledges)
+    creds = {
+        "thr_address":AI_WALLET_ADDRESS,
+        "auth_secret":send_seed,
+        "note":"Put these in ai_agent/agent_config.json"
+    }
     save_json(AI_CREDS_FILE, creds)
     print(f"✅ AI Wallet Registered. Credentials saved to {AI_CREDS_FILE}")
 
 def decode_iot_steganography(image_path):
     try:
-        img = Image.open(image_path); width, height = img.size; pixels = img.load()
-        delimiter = "###END###"; chars=[]; cur=""
+        img = Image.open(image_path)
+        width, height = img.size
+        pixels = img.load()
+        delimiter = "###END###"
+        chars=[]
+        cur=""
         for y in range(height):
             for x in range(width):
                 r,g,b = pixels[x,y]
                 for val in (r,g,b):
                     cur += str(val & 1)
                     if len(cur)==8:
-                        chars.append(chr(int(cur,2))); cur=""
+                        chars.append(chr(int(cur,2)))
+                        cur=""
                         if len(chars)>=len(delimiter) and "".join(chars[-len(delimiter):])==delimiter:
                             json_str = "".join(chars[:-len(delimiter)])
                             return json.loads(json_str)
         return None
     except Exception as e:
-        print("Stego Decode Error:", e); return None
+        print("Stego Decode Error:", e)
+        return None
+
+# ─── AI FILE BLOCK + OFFLINE CORPUS HELPERS ────────────────────────────────
+
+FILE_BLOCK_RE = re.compile(
+    r"\[\[FILE:(.+?)\]\](.*?)\[\[/FILE\]\]",
+    re.DOTALL | re.IGNORECASE
+)
+
+def extract_ai_files_from_text(text: str):
+    """
+    Βρίσκει μπλοκ τύπου:
+      [[FILE:filename.py]]
+      ...περιεχόμενο...
+      [[/FILE]]
+
+    - Γράφει τα αρχεία σε AI_FILES_DIR με μοναδικό όνομα.
+    - Επιστρέφει:
+        files: list[ { filename, stored_name, url } ]
+        cleaned_text: το κείμενο ΧΩΡΙΣ τα FILE blocks
+    """
+    files = []
+    cleaned = text
+
+    for match in FILE_BLOCK_RE.finditer(text):
+        raw_name = match.group(1).strip()
+        content = match.group(2).lstrip("\n")
+
+        safe_name = secure_filename(raw_name) or "thronos_output.txt"
+        ts = int(time.time())
+        rand = secrets.token_hex(4)
+        stored_name = f"{ts}_{rand}_{safe_name}"
+
+        abs_path = os.path.join(AI_FILES_DIR, stored_name)
+        try:
+            with open(abs_path, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception as e:
+            print("AI file write error:", e)
+            continue
+
+        # Flask route για download
+        try:
+            url = url_for("download_ai_file", fname=stored_name, _external=False)
+        except RuntimeError:
+            # Αν δεν υπάρχει app context (σε κάποιο edge case), βάζουμε απλό relative path
+            url = f"/ai_files/{stored_name}"
+
+        files.append({
+            "filename": safe_name,
+            "stored_name": stored_name,
+            "url": url,
+        })
+
+        block_full = match.group(0)
+        cleaned = cleaned.replace(block_full, f"\n[Generated file: {safe_name}]\n")
+
+    return files, cleaned.strip()
+
+def enqueue_offline_corpus(wallet: str, prompt: str, full_response: str, files: list):
+    """
+    Γράφει μία γραμμή JSON στο AI_CORPUS_FILE (JSONL).
+    Εκεί μπορεί ο Whisper node / training daemon να διαβάζει:
+      - prompt
+      - full_response (μαζί με FILE tags αν θες)
+      - λίστα αρχείων (filename + stored_name)
+    """
+    entry = {
+        "ts": int(time.time()),
+        "wallet": wallet or None,
+        "prompt": prompt,
+        "response": full_response,
+        "files": [
+            {
+                "filename": f.get("filename"),
+                "stored_name": f.get("stored_name"),
+            } for f in (files or [])
+        ]
+    }
+    try:
+        with open(AI_CORPUS_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print("AI offline corpus write error:", e)
 
 # ─── BASIC PAGES ───────────────────────────────────
 @app.route("/")
-def home(): return render_template("index.html")
+def home():
+    return render_template("index.html")
 
 @app.route("/contracts/<path:filename>")
-def serve_contract(filename): return send_from_directory(CONTRACTS_DIR, filename)
+def serve_contract(filename):
+    return send_from_directory(CONTRACTS_DIR, filename)
 
+# ΝΕΟ: Download AI Generated Files
 @app.route("/ai_files/<path:fname>")
-def serve_ai_file(fname):
-    path = os.path.join(AI_FILES_DIR, fname)
-    if not os.path.isfile(path):
-        return "File not found or expired", 404
-
-    age = time.time() - os.path.getmtime(path)
-    if age > AI_FILE_TTL_SECONDS:
-        try:
-            os.remove(path)
-        except Exception:
-            pass
-        return "File expired", 410
-
-    parts = fname.split("_", 2)
-    download_name = parts[2] if len(parts) >= 3 else fname
-
-    return send_from_directory(
-        AI_FILES_DIR,
-        fname,
-        as_attachment=True,
-        download_name=download_name,
-    )
+def download_ai_file(fname):
+    """
+    Κατέβασμα προσωρινών AI αρχείων (κώδικας, scripts κ.λπ. που παρήγαγε ο agent).
+    """
+    return send_from_directory(AI_FILES_DIR, fname, as_attachment=True)
 
 @app.route("/viewer")
 def viewer():
@@ -399,61 +395,80 @@ def viewer():
                            transactions=get_transactions_for_viewer())
 
 @app.route("/wallet")
-def wallet_page(): return render_template("wallet_viewer.html")
+def wallet_page():
+    return render_template("wallet_viewer.html")
 
 @app.route("/send")
-def send_page(): return render_template("send.html")
+def send_page():
+    return render_template("send.html")
 
 @app.route("/tokenomics")
-def tokenomics_page(): return render_template("tokenomics.html")
+def tokenomics_page():
+    return render_template("tokenomics.html")
 
 @app.route("/whitepaper")
-def whitepaper_page(): return render_template("whitepaper.html")
+def whitepaper_page():
+    return render_template("whitepaper.html")
 
 @app.route("/roadmap")
-def roadmap_page(): return render_template("roadmap.html")
+def roadmap_page():
+    return render_template("roadmap.html")
 
 @app.route("/token_chart")
-def token_chart_page(): return render_template("token_chart.html")
+def token_chart_page():
+    return render_template("token_chart.html")
 
 # NEW service pages
 @app.route("/bridge")
-def bridge_page(): return render_template("bridge.html")
+def bridge_page():
+    return render_template("bridge.html")
 
 @app.route("/iot")
-def iot_page(): return render_template("iot.html")
+def iot_page():
+    return render_template("iot.html")
 
 @app.route("/chat")
-def chat_page(): return render_template("chat.html")
+def chat_page():
+    return render_template("chat.html")
 
 # ─── RECOVERY FLOW ─────────────────────────────────
 @app.route("/recovery")
-def recovery_page(): return render_template("recovery.html")
+def recovery_page():
+    return render_template("recovery.html")
 
 @app.route("/recover_submit", methods=["POST"])
 def recover_submit():
-    if "file" not in request.files: return jsonify(error="No file part"), 400
-    file = request.files["file"]; passphrase = request.form.get("passphrase","").strip()
-    if file.filename=="": return jsonify(error="No selected file"), 400
-    if not passphrase:    return jsonify(error="Passphrase is required"), 400
+    if "file" not in request.files:
+        return jsonify(error="No file part"), 400
+    file = request.files["file"]
+    passphrase = request.form.get("passphrase","").strip()
+    if file.filename=="":
+        return jsonify(error="No selected file"), 400
+    if not passphrase:
+        return jsonify(error="Passphrase is required"), 400
     filename = secure_filename(file.filename)
     temp_path = os.path.join(DATA_DIR, f"temp_{int(time.time())}_{filename}")
     try:
         file.save(temp_path)
         payload = decode_payload_from_image(temp_path, passphrase)
-        if os.path.exists(temp_path): os.remove(temp_path)
-        if payload: return jsonify(status="success", payload=payload), 200
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        if payload:
+            return jsonify(status="success", payload=payload), 200
         return jsonify(error="Failed to decode or decrypt."), 400
     except Exception as e:
-        if os.path.exists(temp_path): os.remove(temp_path)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
         return jsonify(error=f"Server error: {str(e)}"), 500
 
 # ─── STATUS APIs ───────────────────────────────────
 @app.route("/chain")
-def get_chain(): return jsonify(load_json(CHAIN_FILE, [])), 200
+def get_chain():
+    return jsonify(load_json(CHAIN_FILE, [])), 200
 
 @app.route("/last_block")
-def api_last_block(): return jsonify(load_json(LAST_BLOCK_FILE, {})), 200
+def api_last_block():
+    return jsonify(load_json(LAST_BLOCK_FILE, {})), 200
 
 @app.route("/last_block_hash")
 def last_block_hash():
@@ -466,10 +481,14 @@ def last_block_hash():
 
 @app.route("/mining_info")
 def mining_info():
-    target = get_mining_target(); nbits = target_to_bits(target)
-    chain = load_json(CHAIN_FILE, []); blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    target = get_mining_target()
+    nbits = target_to_bits(target)
+    chain = load_json(CHAIN_FILE, [])
+    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
     last_hash = blocks[-1].get("block_hash","") if blocks else "0"*64
-    height = len(chain); reward = calculate_reward(height); mempool_len = len(load_mempool())
+    height = len(chain)
+    reward = calculate_reward(height)
+    mempool_len = len(load_mempool())
     return jsonify({
         "target": hex(target),
         "nbits": hex(nbits),
@@ -482,22 +501,37 @@ def mining_info():
 
 @app.route("/api/network_stats")
 def network_stats():
-    pledges = load_json(PLEDGE_CHAIN, []); chain = load_json(CHAIN_FILE, []); ledger = load_json(LEDGER_FILE, {})
-    pledge_count = len(pledges); tx_count = len(chain)
-    burned = ledger.get(BURN_ADDRESS, 0); ai_balance = ledger.get(AI_WALLET_ADDRESS, 0)
+    pledges = load_json(PLEDGE_CHAIN, [])
+    chain = load_json(CHAIN_FILE, [])
+    ledger = load_json(LEDGER_FILE, {})
+    pledge_count = len(pledges)
+    tx_count = len(chain)
+    burned = ledger.get(BURN_ADDRESS, 0)
+    ai_balance = ledger.get(AI_WALLET_ADDRESS, 0)
     pledge_dates = {}
     for p in pledges:
         ts = p.get("timestamp","").split(" ")[0]
         pledge_dates[ts] = pledge_dates.get(ts,0)+1
-    sorted_dates = sorted(pledge_dates.keys()); cumulative=[]; run=0
+    sorted_dates = sorted(pledge_dates.keys())
+    cumulative=[]
+    run=0
     for d in sorted_dates:
-        run += pledge_dates[d]; cumulative.append({"date":d,"count":run})
-    return jsonify({"pledge_count":pledge_count,"tx_count":tx_count,"burned":burned,"ai_balance":ai_balance,"pledge_growth":cumulative})
+        run += pledge_dates[d]
+        cumulative.append({"date":d,"count":run})
+    return jsonify({
+        "pledge_count":pledge_count,
+        "tx_count":tx_count,
+        "burned":burned,
+        "ai_balance":ai_balance,
+        "pledge_growth":cumulative
+    })
 
 @app.route("/api/network_live")
 def network_live():
-    chain = load_json(CHAIN_FILE, []); blocks=[b for b in chain if isinstance(b,dict) and b.get("reward") is not None]
-    mempool_len=len(load_mempool()); window=20
+    chain = load_json(CHAIN_FILE, [])
+    blocks=[b for b in chain if isinstance(b,dict) and b.get("reward") is not None]
+    mempool_len=len(load_mempool())
+    window=20
     avg_time=None
     if len(blocks)>=2:
         tail=blocks[-min(window,len(blocks)):]
@@ -506,21 +540,33 @@ def network_live():
             t0=datetime.strptime(tail[0]["timestamp"],t_fmt).timestamp()
             t1=datetime.strptime(tail[-1]["timestamp"],t_fmt).timestamp()
             avg_time=(t1-t0)/max(1,(len(tail)-1))
-        except Exception: avg_time=None
-    target=get_mining_target(); difficulty=int(INITIAL_TARGET // target)
+        except Exception:
+            avg_time=None
+    target=get_mining_target()
+    difficulty=int(INITIAL_TARGET // target)
     hashrate=None
-    if avg_time and avg_time>0: hashrate=int(difficulty*(2**32)/avg_time)
-    return jsonify({"difficulty":difficulty,"avg_block_time_sec":avg_time,"est_hashrate_hs":hashrate,"tx_count":len(chain),"mempool":mempool_len})
+    if avg_time and avg_time>0:
+        hashrate=int(difficulty*(2**32)/avg_time)
+    return jsonify({
+        "difficulty":difficulty,
+        "avg_block_time_sec":avg_time,
+        "est_hashrate_hs":hashrate,
+        "tx_count":len(chain),
+        "mempool":mempool_len
+    })
 
 @app.route("/api/mempool")
-def api_mempool(): return jsonify(load_mempool()), 200
+def api_mempool():
+    return jsonify(load_mempool()), 200
 
 @app.route("/api/blocks")
-def api_blocks(): return jsonify(get_blocks_for_viewer()), 200
+def api_blocks():
+    return jsonify(get_blocks_for_viewer()), 200
 
 # ─── NEW SERVICES APIs ─────────────────────────────
 @app.route("/api/bridge/data")
-def bridge_data(): return jsonify(load_json(WATCHER_LEDGER_FILE, [])), 200
+def bridge_data():
+    return jsonify(load_json(WATCHER_LEDGER_FILE, [])), 200
 
 @app.route("/api/iot/data")
 def iot_data():
@@ -529,46 +575,77 @@ def iot_data():
 
 @app.route("/api/iot/submit", methods=["POST"])
 def iot_submit():
-    if "file" not in request.files: return jsonify(error="No file uploaded"), 400
+    if "file" not in request.files:
+        return jsonify(error="No file uploaded"), 400
     file = request.files["file"]
-    if file.filename=="": return jsonify(error="No file selected"), 400
+    if file.filename=="":
+        return jsonify(error="No file selected"), 400
     try:
         filename=secure_filename(file.filename)
         temp_path=os.path.join(UPLOADS_DIR,f"iot_temp_{int(time.time())}_{filename}")
         file.save(temp_path)
         data=decode_iot_steganography(temp_path)
-        if os.path.exists(temp_path): os.remove(temp_path)
-        if not data: return jsonify(error="Failed to decode steganography"),400
-        if "vehicle_id" not in data: return jsonify(error="Invalid data format"),400
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        if not data:
+            return jsonify(error="Failed to decode steganography"),400
+        if "vehicle_id" not in data:
+            return jsonify(error="Invalid data format"),400
         iot_list=load_json(IOT_DATA_FILE,[])
         iot_list=[v for v in iot_list if v.get("vehicle_id")!=data["vehicle_id"]]
         iot_list.append(data)
-        if len(iot_list)>100: iot_list=iot_list[-100:]
+        if len(iot_list)>100:
+            iot_list=iot_list[-100:]
         save_json(IOT_DATA_FILE,iot_list)
         print(f"🚗 IoT Update: {data['vehicle_id']} | Odo: {data.get('odometer')}")
         return jsonify(status="success", vehicle_id=data["vehicle_id"]),200
     except Exception as e:
-        print("IoT Submit Error:",e); return jsonify(error=str(e)),500
+        print("IoT Submit Error:",e)
+        return jsonify(error=str(e)),500
 
 @app.route("/api/iot/autonomous_request", methods=["POST"])
 def iot_autonomous_request():
     data = request.get_json() or {}
-    wallet = data.get("wallet"); amount = data.get("amount",0)
-    if not wallet or amount<=0: return jsonify(status="denied",message="Invalid request"),400
-    ledger=load_json(LEDGER_FILE,{}); balance=float(ledger.get(wallet,0.0))
-    if balance<amount: return jsonify(status="denied",message="Insufficient THR funds"),400
+    wallet = data.get("wallet")
+    amount = data.get("amount",0)
+    if not wallet or amount<=0:
+        return jsonify(status="denied",message="Invalid request"),400
+    ledger=load_json(LEDGER_FILE,{})
+    balance=float(ledger.get(wallet,0.0))
+    if balance<amount:
+        return jsonify(status="denied",message="Insufficient THR funds"),400
     ledger[wallet]=round(balance-amount,6)
     ledger[AI_WALLET_ADDRESS]=round(ledger.get(AI_WALLET_ADDRESS,0.0)+amount,6)
     save_json(LEDGER_FILE,ledger)
     chain=load_json(CHAIN_FILE,[])
-    tx={"type":"service_payment","service":"AI_AUTOPILOT","from":wallet,"to":AI_WALLET_ADDRESS,"amount":amount,
-        "timestamp":time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),"tx_id":f"SRV-{len(chain)}-{int(time.time())}"}
-    chain.append(tx); save_json(CHAIN_FILE,chain); update_last_block(tx,is_block=False)
+    tx={
+        "type":"service_payment",
+        "service":"AI_AUTOPILOT",
+        "from":wallet,
+        "to":AI_WALLET_ADDRESS,
+        "amount":amount,
+        "timestamp":time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "tx_id":f"SRV-{len(chain)}-{int(time.time())}"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE,chain)
+    update_last_block(tx,is_block=False)
     print(f"🤖 AI Autopilot Activated for {wallet}. Payment: {amount} THR")
     return jsonify(status="granted", message="AI Driver Activated"),200
 
+# ─── QUANTUM CHAT API (με αρχεία + offline corpus) ─────────────────────────
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
+    """
+    Unified AI chat endpoint:
+
+    - Χρησιμοποιεί ThronosAI (OpenAI / Google) για να φέρει την απάντηση.
+    - Αν η απάντηση περιέχει FILE blocks:
+         [[FILE:filename.ext]] ... [[/FILE]]
+      τα γράφει σε πραγματικά αρχεία στο data/ai_files.
+    - Κάθε κλήση καταγράφεται σε offline corpus (ai_offline_corpus.jsonl)
+      για Whisper / training / blockchain blocks.
+    """
     data = request.get_json() or {}
     msg = (data.get("message") or "").strip()
     wallet = (data.get("wallet") or "").strip()
@@ -576,32 +653,54 @@ def api_chat():
     if not msg:
         return jsonify(error="Message required"), 400
 
-    result = ai_agent.generate_response(msg)
-    if not isinstance(result, dict):
-        result = {"response": str(result)}
+    # 1. Παίρνουμε απάντηση από τον ThronosAI provider
+    raw = ai_agent.generate_response(msg)
 
-    raw_text = str(result.get("response", ""))
-    clean_text, files = extract_ai_files_from_text(raw_text)
+    if isinstance(raw, dict):
+        full_text = str(raw.get("response") or "")
+        quantum_key = raw.get("quantum_key") or ai_agent.generate_quantum_key()
+        status = raw.get("status", "secure")
+    else:
+        full_text = str(raw)
+        quantum_key = ai_agent.generate_quantum_key()
+        status = "secure"
 
-    result["response"] = clean_text
-    if files:
-        result["files"] = files
+    # 2. Extract FILE blocks -> γράψιμο αρχείων
+    try:
+        files, cleaned = extract_ai_files_from_text(full_text)
+    except Exception as e:
+        print("AI file extraction error:", e)
+        files = []
+        cleaned = full_text
 
-    if wallet:
-        enqueue_offline_corpus(wallet, msg, clean_text)
-        result["wallet"] = wallet
+    # 3. Offline corpus enqueue για Whisper / training / blockchain
+    try:
+        enqueue_offline_corpus(wallet, msg, full_text, files)
+    except Exception as e:
+        print("AI offline queue error:", e)
 
-    result.setdefault("status", "secure")
-
-    return jsonify(result), 200
+    # 4. Επιστροφή στο frontend
+    return jsonify({
+        "response": cleaned,
+        "quantum_key": quantum_key,
+        "status": status,
+        "wallet": wallet or None,
+        "files": files
+    }), 200
 
 @app.route("/register_node", methods=["POST"])
 def register_node():
     address = request.form.get("address","").strip()
     secret  = request.form.get("secret","").strip()
-    if not address or not secret: return "Address and Secret are required",400
+    if not address or not secret:
+        return "Address and Secret are required",400
     node_id=str(uuid.uuid4())
-    config={"node_id":node_id,"wallet_address":address,"secret":secret,"server_url":"https://thrchain.up.railway.app"}
+    config={
+        "node_id":node_id,
+        "wallet_address":address,
+        "secret":secret,
+        "server_url":"https://thrchain.up.railway.app"
+    }
     config_json=json.dumps(config,indent=4)
     start_script=f"""
 import os, sys, subprocess
@@ -621,7 +720,8 @@ except Exception as e:
     print(f"Error: {{e}}"); input("Press Enter to exit...")
 """
     try:
-        with open(os.path.join(BASE_DIR,"iot_vehicle_node.py"),"r") as f: node_script=f.read()
+        with open(os.path.join(BASE_DIR,"iot_vehicle_node.py"),"r") as f:
+            node_script=f.read()
     except FileNotFoundError:
         node_script="# iot_vehicle_node.py not found on server."
     memory_file=io.BytesIO()
@@ -630,16 +730,23 @@ except Exception as e:
         zf.writestr("start_iot.py",start_script)
         zf.writestr("iot_vehicle_node.py",node_script)
         pic_path=os.path.join(BASE_DIR,"pic_of_the_fire.png")
-        if os.path.exists(pic_path): zf.write(pic_path,"pic_of_the_fire.png")
-        else: zf.writestr("pic_of_the_fire.png","")
+        if os.path.exists(pic_path):
+            zf.write(pic_path,"pic_of_the_fire.png")
+        else:
+            zf.writestr("pic_of_the_fire.png","")
         zf.writestr("README.txt","1. Install Python 3.\n2. Run 'python start_iot.py' (auto-installs deps).")
     memory_file.seek(0)
-    return send_file(memory_file, mimetype="application/zip", as_attachment=True,
-                     download_name=f"iot_node_kit_{node_id[:8]}.zip")
+    return send_file(
+        memory_file,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"iot_node_kit_{node_id[:8]}.zip"
+    )
 
 # ─── PLEDGE FLOW ───────────────────────────────────
 @app.route("/pledge")
-def pledge_form(): return render_template("pledge_form.html")
+def pledge_form():
+    return render_template("pledge_form.html")
 
 @app.route("/pledge_submit", methods=["POST"])
 def pledge_submit():
@@ -647,122 +754,213 @@ def pledge_submit():
     btc_address=(data.get("btc_address") or "").strip()
     pledge_text=(data.get("pledge_text") or "").strip()
     passphrase=(data.get("passphrase") or "").strip()
-    if not btc_address: return jsonify(error="Missing BTC address"),400
+    if not btc_address:
+        return jsonify(error="Missing BTC address"),400
     pledges = load_json(PLEDGE_CHAIN, [])
     exists = next((p for p in pledges if p["btc_address"]==btc_address), None)
     if exists:
-        return jsonify(status="already_verified",thr_address=exists["thr_address"],
-                       pledge_hash=exists["pledge_hash"],
-                       pdf_filename=exists.get("pdf_filename",f"pledge_{exists['thr_address']}.pdf")),200
+        return jsonify(
+            status="already_verified",
+            thr_address=exists["thr_address"],
+            pledge_hash=exists["pledge_hash"],
+            pdf_filename=exists.get("pdf_filename",f"pledge_{exists['thr_address']}.pdf")
+        ),200
     free_list=load_json(WHITELIST_FILE,[])
     paid, txns = (True,[]) if btc_address in free_list else verify_btc_payment(btc_address)
     if not paid:
-        return jsonify(status="pending",message="Waiting for BTC payment",txns=txns),200
+        return jsonify(
+            status="pending",
+            message="Waiting for BTC payment",
+            txns=txns
+        ),200
     thr_addr=f"THR{int(time.time()*1000)}"
     phash = hashlib.sha256((btc_address+pledge_text).encode()).hexdigest()
-    send_seed=secrets.token_hex(16); send_seed_hash=hashlib.sha256(send_seed.encode()).hexdigest()
+    send_seed=secrets.token_hex(16)
+    send_seed_hash=hashlib.sha256(send_seed.encode()).hexdigest()
     auth_string=f"{send_seed}:{passphrase}:auth" if passphrase else f"{send_seed}:auth"
     send_auth_hash=hashlib.sha256(auth_string.encode()).hexdigest()
-    pledge_entry={"btc_address":btc_address,"pledge_text":pledge_text,
-                  "timestamp":time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-                  "pledge_hash":phash,"thr_address":thr_addr,"send_seed_hash":send_seed_hash,
-                  "send_auth_hash":send_auth_hash,"has_passphrase":bool(passphrase)}
-    chain=load_json(CHAIN_FILE,[]); height=len(chain)
-    pdf_name=create_secure_pdf_contract(btc_address, pledge_text, thr_addr, phash, height, send_seed, CONTRACTS_DIR, passphrase)
-    pledge_entry["pdf_filename"]=pdf_name; pledges.append(pledge_entry); save_json(PLEDGE_CHAIN, pledges)
-    return jsonify(status="verified",thr_address=thr_addr,pledge_hash=phash,pdf_filename=pdf_name,send_secret=send_seed),200
+    pledge_entry={
+        "btc_address":btc_address,
+        "pledge_text":pledge_text,
+        "timestamp":time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "pledge_hash":phash,
+        "thr_address":thr_addr,
+        "send_seed_hash":send_seed_hash,
+        "send_auth_hash":send_auth_hash,
+        "has_passphrase":bool(passphrase)
+    }
+    chain=load_json(CHAIN_FILE,[])
+    height=len(chain)
+    pdf_name=create_secure_pdf_contract(
+        btc_address,
+        pledge_text,
+        thr_addr,
+        phash,
+        height,
+        send_seed,
+        CONTRACTS_DIR,
+        passphrase
+    )
+    pledge_entry["pdf_filename"]=pdf_name
+    pledges.append(pledge_entry)
+    save_json(PLEDGE_CHAIN, pledges)
+    return jsonify(
+        status="verified",
+        thr_address=thr_addr,
+        pledge_hash=phash,
+        pdf_filename=pdf_name,
+        send_secret=send_seed
+    ),200
 
 @app.route("/wallet_data/<thr_addr>")
 def wallet_data(thr_addr):
-    ledger=load_json(LEDGER_FILE,{}); chain=load_json(CHAIN_FILE,[])
+    ledger=load_json(LEDGER_FILE,{})
+    chain=load_json(CHAIN_FILE,[])
     bal=round(float(ledger.get(thr_addr,0.0)),6)
     history=[tx for tx in chain if isinstance(tx,dict) and (tx.get("from")==thr_addr or tx.get("to")==thr_addr)]
     return jsonify(balance=bal, transactions=history),200
 
 @app.route("/wallet/<thr_addr>")
-def wallet_redirect(thr_addr): return redirect(url_for("wallet_data", thr_addr=thr_addr)),302
+def wallet_redirect(thr_addr):
+    return redirect(url_for("wallet_data", thr_addr=thr_addr)),302
 
 @app.route("/send_thr", methods=["POST"])
 def send_thr():
     data = request.get_json() or {}
-    from_thr=(data.get("from_thr") or "").strip(); to_thr=(data.get("to_thr") or "").strip()
-    amount_raw=data.get("amount",0); auth_secret=(data.get("auth_secret") or "").strip()
+    from_thr=(data.get("from_thr") or "").strip()
+    to_thr=(data.get("to_thr") or "").strip()
+    amount_raw=data.get("amount",0)
+    auth_secret=(data.get("auth_secret") or "").strip()
     passphrase=(data.get("passphrase") or "").strip()
-    try: amount=float(amount_raw)
-    except (TypeError,ValueError): return jsonify(error="invalid_amount"),400
-    if not from_thr or not to_thr: return jsonify(error="missing_from_or_to"),400
-    if amount<=0: return jsonify(error="amount_must_be_positive"),400
-    if not auth_secret: return jsonify(error="missing_auth_secret"),400
+    try:
+        amount=float(amount_raw)
+    except (TypeError,ValueError):
+        return jsonify(error="invalid_amount"),400
+    if not from_thr or not to_thr:
+        return jsonify(error="missing_from_or_to"),400
+    if amount<=0:
+        return jsonify(error="amount_must_be_positive"),400
+    if not auth_secret:
+        return jsonify(error="missing_auth_secret"),400
     pledges=load_json(PLEDGE_CHAIN,[])
     sender_pledge=next((p for p in pledges if p.get("thr_address")==from_thr),None)
-    if not sender_pledge: return jsonify(error="unknown_sender_thr"),404
+    if not sender_pledge:
+        return jsonify(error="unknown_sender_thr"),404
     stored_auth_hash=sender_pledge.get("send_auth_hash")
-    if not stored_auth_hash: return jsonify(error="send_not_enabled_for_this_thr"),400
+    if not stored_auth_hash:
+        return jsonify(error="send_not_enabled_for_this_thr"),400
     if sender_pledge.get("has_passphrase"):
-        if not passphrase: return jsonify(error="passphrase_required"),400
+        if not passphrase:
+            return jsonify(error="passphrase_required"),400
         auth_string=f"{auth_secret}:{passphrase}:auth"
     else:
         auth_string=f"{auth_secret}:auth"
     if hashlib.sha256(auth_string.encode()).hexdigest()!=stored_auth_hash:
         return jsonify(error="invalid_auth"),403
     ledger=load_json(LEDGER_FILE,{})
-    sender_balance=float(ledger.get(from_thr,0.0)); total_cost=amount+SEND_FEE
+    sender_balance=float(ledger.get(from_thr,0.0))
+    total_cost=amount+SEND_FEE
     if sender_balance<total_cost:
         return jsonify(error="insufficient_balance",balance=round(sender_balance,6)),400
-    ledger[from_thr]=round(sender_balance-total_cost,6); save_json(LEDGER_FILE,ledger)
+    ledger[from_thr]=round(sender_balance-total_cost,6)
+    save_json(LEDGER_FILE,ledger)
     chain=load_json(CHAIN_FILE,[])
-    tx={"type":"transfer","height":None,"timestamp":time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-        "from":from_thr,"to":to_thr,"amount":round(amount,6),"fee_burned":SEND_FEE,
-        "tx_id":f"TX-{len(chain)}-{int(time.time())}","thr_address":from_thr,"status":"pending",
-        # quorum policy (defaults)
-        "confirmation_policy": "FAST",  # or STRICT
+    tx={
+        "type":"transfer",
+        "height":None,
+        "timestamp":time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "from":from_thr,
+        "to":to_thr,
+        "amount":round(amount,6),
+        "fee_burned":SEND_FEE,
+        "tx_id":f"TX-{len(chain)}-{int(time.time())}",
+        "thr_address":from_thr,
+        "status":"pending",
+        "confirmation_policy": "FAST",
         "min_signers": 1,
     }
-    pool=load_mempool(); pool.append(tx); save_mempool(pool); update_last_block(tx,is_block=False)
-    return jsonify(status="pending", tx=tx, new_balance_from=ledger[from_thr]),200
+    pool=load_mempool()
+    pool.append(tx)
+    save_mempool(pool)
+    update_last_block(tx,is_block=False)
+    return jsonify(
+        status="pending",
+        tx=tx,
+        new_balance_from=ledger[from_thr]
+    ),200
 
 # ─── ADMIN WHITELIST + MIGRATION ───────────────────
 @app.route("/admin/whitelist", methods=["GET"])
 def admin_whitelist_page():
     secret=request.args.get("secret","")
-    if secret!=ADMIN_SECRET: return "Forbidden (wrong or missing secret)",403
+    if secret!=ADMIN_SECRET:
+        return "Forbidden (wrong or missing secret)",403
     return render_template("admin_whitelist.html", admin_secret=secret)
 
 @app.route("/admin/whitelist/add", methods=["POST"])
 def admin_whitelist_add():
     data=request.get_json() or {}
-    if data.get("secret")!=ADMIN_SECRET: return jsonify(error="forbidden"),403
+    if data.get("secret")!=ADMIN_SECRET:
+        return jsonify(error="forbidden"),403
     btc=(data.get("btc_address") or "").strip()
-    if not btc: return jsonify(error="missing_btc_address"),400
-    wl=load_json(WHITELIST_FILE,[]); 
-    if btc not in wl: wl.append(btc); save_json(WHITELIST_FILE, wl)
+    if not btc:
+        return jsonify(error="missing_btc_address"),400
+    wl=load_json(WHITELIST_FILE,[])
+    if btc not in wl:
+        wl.append(btc)
+        save_json(WHITELIST_FILE, wl)
     return jsonify(status="ok",whitelist=wl),200
 
 @app.route("/admin/whitelist/list", methods=["GET"])
 def admin_whitelist_list():
     secret=request.args.get("secret","")
-    if secret!=ADMIN_SECRET: return jsonify(error="forbidden"),403
+    if secret!=ADMIN_SECRET:
+        return jsonify(error="forbidden"),403
     return jsonify(whitelist=load_json(WHITELIST_FILE,[])),200
 
 @app.route("/admin/migrate_seeds", methods=["POST","GET"])
 def admin_migrate_seeds():
-    payload=request.get_json() or {}; secret=request.args.get("secret","") or payload.get("secret","")
-    if secret!=ADMIN_SECRET: return jsonify(error="forbidden"),403
-    pledges=load_json(PLEDGE_CHAIN,[]); changed=[]
+    payload=request.get_json() or {}
+    secret=request.args.get("secret","") or payload.get("secret","")
+    if secret!=ADMIN_SECRET:
+        return jsonify(error="forbidden"),403
+    pledges=load_json(PLEDGE_CHAIN,[])
+    changed=[]
     for p in pledges:
-        if p.get("send_seed_hash") and p.get("send_auth_hash"): continue
-        thr_addr=p["thr_address"]; btc_address=p["btc_address"]; pledge_text=p["pledge_text"]; pledge_hash=p["pledge_hash"]
-        send_seed=secrets.token_hex(16); send_seed_hash=hashlib.sha256(send_seed.encode()).hexdigest()
+        if p.get("send_seed_hash") and p.get("send_auth_hash"):
+            continue
+        thr_addr=p["thr_address"]
+        btc_address=p["btc_address"]
+        pledge_text=p["pledge_text"]
+        pledge_hash=p["pledge_hash"]
+        send_seed=secrets.token_hex(16)
+        send_seed_hash=hashlib.sha256(send_seed.encode()).hexdigest()
         send_auth_hash=hashlib.sha256(f"{send_seed}:auth".encode()).hexdigest()
-        p["send_seed_hash"]=send_seed_hash; p["send_auth_hash"]=send_auth_hash; p["has_passphrase"]=False
-        chain=load_json(CHAIN_FILE,[]); height=len(chain)
-        pdf_name=create_secure_pdf_contract(btc_address, pledge_text, thr_addr, pledge_hash, height, send_seed, CONTRACTS_DIR)
+        p["send_seed_hash"]=send_seed_hash
+        p["send_auth_hash"]=send_auth_hash
+        p["has_passphrase"]=False
+        chain=load_json(CHAIN_FILE,[])
+        height=len(chain)
+        pdf_name=create_secure_pdf_contract(
+            btc_address,
+            pledge_text,
+            thr_addr,
+            pledge_hash,
+            height,
+            send_seed,
+            CONTRACTS_DIR
+        )
         p["pdf_filename"]=pdf_name
-        changed.append({"thr_address":thr_addr,"btc_address":btc_address,"send_seed":send_seed,"pdf_filename":pdf_name})
+        changed.append({
+            "thr_address":thr_addr,
+            "btc_address":btc_address,
+            "send_seed":send_seed,
+            "pdf_filename":pdf_name
+        })
     save_json(PLEDGE_CHAIN, pledges)
     return jsonify(migrated=changed),200
 
-# ─── QUORUM LAYER – Real aggregation API surface (BLS placeholder) ───────────
+# ─── QUORUM LAYER – Real aggregation API surface (BLS placeholder) ─────────
 def _tx_message_bytes(tx: dict) -> bytes:
     material = f"{tx.get('from','')}|{tx.get('to','')}|{tx.get('amount',0)}|{tx.get('tx_id','')}"
     return hashlib.sha256(material.encode()).digest()
@@ -782,23 +980,37 @@ def api_attest():
     if not tx:
         chain=load_json(CHAIN_FILE,[])
         tx=next((t for t in chain if t.get("tx_id")==tx_id and t.get("status")!="confirmed"),None)
-    if not tx: return jsonify(error="unknown_tx"),404
+    if not tx:
+        return jsonify(error="unknown_tx"),404
     store=load_attest_store()
     bucket=store.get(tx_id, {"scheme":scheme, "items":[]})
     already={ (i.get("pubkey"), i.get("signer")) for i in bucket["items"] }
     if (pubkey, signer) not in already:
-        bucket["items"].append({"signer":signer,"sig":partial_sig,"pubkey":pubkey,"ts":int(time.time())})
-        store[tx_id]=bucket; save_attest_store(store)
-    if "signers" not in tx: tx["signers"]=[]
-    if tx.get("status") not in ("pending","confirmed"): tx["status"]="quoruming"
+        bucket["items"].append({
+            "signer":signer,
+            "sig":partial_sig,
+            "pubkey":pubkey,
+            "ts":int(time.time())
+        })
+        store[tx_id]=bucket
+        save_attest_store(store)
+    if "signers" not in tx:
+        tx["signers"]=[]
+    if tx.get("status") not in ("pending","confirmed"):
+        tx["status"]="quoruming"
     save_mempool([t if t.get("tx_id")!=tx_id else tx for t in pool])
-    return jsonify(status="accepted", collected=len(bucket["items"]), scheme=bucket["scheme"]),200
+    return jsonify(
+        status="accepted",
+        collected=len(bucket["items"]),
+        scheme=bucket["scheme"]
+    ),200
 
 @app.route("/api/tx/<tx_id>/verify", methods=["GET"])
 def api_verify_tx_sig(tx_id):
     pool=load_mempool()
     tx=next((t for t in pool if t.get("tx_id")==tx_id),None)
-    if not tx: return jsonify(error="unknown_tx"),404
+    if not tx:
+        return jsonify(error="unknown_tx"),404
     msg=_tx_message_bytes(tx)
     ok=False
     if tx.get("aggregate_sig") and tx.get("pubkeys"):
@@ -807,25 +1019,36 @@ def api_verify_tx_sig(tx_id):
 
 def aggregator_step():
     pool=load_mempool()
-    if not pool: return
-    store=load_attest_store(); changed=False
+    if not pool:
+        return
+    store=load_attest_store()
+    changed=False
     for tx in pool:
-        if tx.get("status")=="confirmed": continue
+        if tx.get("status")=="confirmed":
+            continue
         policy=(tx.get("confirmation_policy") or "FAST").upper()
         min_signers=int(tx.get("min_signers") or 1)
         bucket=store.get(tx["tx_id"], {"items":[], "scheme":"BLS"})
         items=bucket.get("items",[])
         normalized=[]
         for it in items:
-            if not it.get("sig"): it["sig"]=it.get("partial_sig")
+            if not it.get("sig"):
+                it["sig"]=it.get("partial_sig")
             if it.get("pubkey") and it.get("sig"):
-                normalized.append({"pubkey":it["pubkey"],"sig":it["sig"],"signer":it.get("signer", it.get("pubkey")[:12])})
+                normalized.append({
+                    "pubkey":it["pubkey"],
+                    "sig":it["sig"],
+                    "signer":it.get("signer", it.get("pubkey")[:12])
+                })
         if not normalized:
-            # no attests
             if policy=="FAST":
-                if tx.get("status")!="pending": tx["status"]="pending"; changed=True
+                if tx.get("status")!="pending":
+                    tx["status"]="pending"
+                    changed=True
             else:
-                if tx.get("status")!="quoruming": tx["status"]="quoruming"; changed=True
+                if tx.get("status")!="quoruming":
+                    tx["status"]="quoruming"
+                    changed=True
             continue
         if len(normalized) >= min_signers:
             msg=_tx_message_bytes(tx)
@@ -835,31 +1058,45 @@ def aggregator_step():
                 tx["signers"]=res.get("signers",[])
                 tx["pubkeys"]=res.get("pubkeys",[])
                 tx["att_scheme"]=res.get("scheme")
-                if tx.get("status")!="pending": tx["status"]="pending"
+                if tx.get("status")!="pending":
+                    tx["status"]="pending"
                 changed=True
         else:
             if policy=="FAST":
-                if tx.get("status")!="pending": tx["status"]="pending"; changed=True
+                if tx.get("status")!="pending":
+                    tx["status"]="pending"
+                    changed=True
             else:
-                if tx.get("status")!="quoruming": tx["status"]="quoruming"; changed=True
-    if changed: save_mempool(pool)
+                if tx.get("status")!="quoruming":
+                    tx["status"]="quoruming"
+                    changed=True
+    if changed:
+        save_mempool(pool)
 
 # ─── MINING ENDPOINT ───────────────────────────────
 @app.route("/submit_block", methods=["POST"])
 def submit_block():
     data = request.get_json() or {}
-    thr_address = data.get("thr_address"); nonce = data.get("nonce")
-    if not thr_address or nonce is None: return jsonify(error="Missing mining data"),400
+    thr_address = data.get("thr_address")
+    nonce = data.get("nonce")
+    if not thr_address or nonce is None:
+        return jsonify(error="Missing mining data"),400
     chain=load_json(CHAIN_FILE,[])
     blocks=[b for b in chain if isinstance(b,dict) and b.get("reward") is not None]
     server_last_hash = blocks[-1].get("block_hash","") if blocks else "0"*64
     is_stratum = "merkle_root" in data
-    pow_hash=""; prev_hash=""
+    pow_hash=""
+    prev_hash=""
     if is_stratum:
-        merkle_root=data.get("merkle_root"); prev_hash=data.get("prev_hash")
-        time_val=data.get("time"); nbits=data.get("nbits"); version=data.get("version",1)
-        if not all([merkle_root, prev_hash, time_val, nbits]): return jsonify(error="Missing Stratum fields"),400
-        if prev_hash!=server_last_hash: return jsonify(error="Stale block (prev_hash mismatch)"),400
+        merkle_root=data.get("merkle_root")
+        prev_hash=data.get("prev_hash")
+        time_val=data.get("time")
+        nbits=data.get("nbits")
+        version=data.get("version",1)
+        if not all([merkle_root, prev_hash, time_val, nbits]):
+            return jsonify(error="Missing Stratum fields"),400
+        if prev_hash!=server_last_hash:
+            return jsonify(error="Stale block (prev_hash mismatch)"),400
         try:
             header  = struct.pack("<I",version)
             header += bytes.fromhex(prev_hash)[::-1]
@@ -871,79 +1108,123 @@ def submit_block():
         except Exception as e:
             return jsonify(error=f"Header construction failed: {e}"),400
     else:
-        pow_hash=data.get("pow_hash"); prev_hash=data.get("prev_hash")
-        if prev_hash!=server_last_hash: return jsonify(error="Stale block (prev_hash mismatch)"),400
+        pow_hash=data.get("pow_hash")
+        prev_hash=data.get("prev_hash")
+        if prev_hash!=server_last_hash:
+            return jsonify(error="Stale block (prev_hash mismatch)"),400
         check=hashlib.sha256((prev_hash+thr_address).encode()+str(nonce).encode()).hexdigest()
-        if check!=pow_hash: return jsonify(error="Invalid hash calculation"),400
+        if check!=pow_hash:
+            return jsonify(error="Invalid hash calculation"),400
     current_target=get_mining_target()
     if int(pow_hash,16)>current_target:
         return jsonify(error=f"Insufficient difficulty. Target: {hex(current_target)}"),400
-
-    # Reward split
-    height=len(chain); total_reward=calculate_reward(height)
-    miner_share=round(total_reward*0.80,6); ai_share=round(total_reward*0.10,6); burn_share=round(total_reward*0.10,6)
+    height=len(chain)
+    total_reward=calculate_reward(height)
+    miner_share=round(total_reward*0.80,6)
+    ai_share=round(total_reward*0.10,6)
+    burn_share=round(total_reward*0.10,6)
     ts=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-    new_block={"thr_address":thr_address,"timestamp":ts,"block_hash":pow_hash,"prev_hash":prev_hash,"nonce":nonce,
-               "reward":total_reward,"reward_split":{"miner":miner_share,"ai":ai_share,"burn":burn_share},
-               "pool_fee":burn_share,"reward_to_miner":miner_share,"height":height,"type":"block",
-               "target":current_target,"is_stratum":is_stratum}
+    new_block={
+        "thr_address":thr_address,
+        "timestamp":ts,
+        "block_hash":pow_hash,
+        "prev_hash":prev_hash,
+        "nonce":nonce,
+        "reward":total_reward,
+        "reward_split":{
+            "miner":miner_share,
+            "ai":ai_share,
+            "burn":burn_share
+        },
+        "pool_fee":burn_share,
+        "reward_to_miner":miner_share,
+        "height":height,
+        "type":"block",
+        "target":current_target,
+        "is_stratum":is_stratum
+    }
     chain.append(new_block)
-
-    # include mempool TXs
-    pool=load_mempool(); included=[]
+    pool=load_mempool()
+    included=[]
     if pool:
         for tx in list(pool):
-            # OPTIONAL STRICT MODE:
-            # if (tx.get("min_signers",1)>1) and (not tx.get("aggregate_sig")):
-            #     continue
-            tx["height"]=height; tx["status"]="confirmed"; tx["timestamp"]=ts
-            chain.append(tx); included.append(tx)
+            tx["height"]=height
+            tx["status"]="confirmed"
+            tx["timestamp"]=ts
+            chain.append(tx)
+            included.append(tx)
         save_mempool([])
-
         ledger=load_json(LEDGER_FILE,{})
         for tx in included:
             if tx.get("type")=="transfer":
-                to_thr=tx["to"]; amt=float(tx["amount"]); fee=float(tx.get("fee_burned",0.0))
+                to_thr=tx["to"]
+                amt=float(tx["amount"])
+                fee=float(tx.get("fee_burned",0.0))
                 ledger[to_thr]=round(ledger.get(to_thr,0.0)+amt,6)
                 ledger[BURN_ADDRESS]=round(ledger.get(BURN_ADDRESS,0.0)+fee,6)
         save_json(LEDGER_FILE,ledger)
-
-    # reward to ledger
     ledger=load_json(LEDGER_FILE,{})
     ledger[thr_address]=round(ledger.get(thr_address,0.0)+miner_share,6)
     ledger[AI_WALLET_ADDRESS]=round(ledger.get(AI_WALLET_ADDRESS,0.0)+ai_share,6)
     ledger[BURN_ADDRESS]=round(ledger.get(BURN_ADDRESS,0.0)+burn_share,6)
     save_json(LEDGER_FILE,ledger)
-
-    save_json(CHAIN_FILE,chain); update_last_block(new_block,is_block=True)
+    save_json(CHAIN_FILE,chain)
+    update_last_block(new_block,is_block=True)
     print(f"⛏️ Miner {thr_address} found block #{height}! R={total_reward} (m/a/b: {miner_share}/{ai_share}/{burn_share}) | TXs: {len(included)} | Stratum={is_stratum}")
     return jsonify(status="accepted", height=height, reward=miner_share, tx_included=len(included)),200
 
 # ─── BACKGROUND MINTER / WATCHDOG ──────────────────
 def submit_mining_block_for_pledge(thr_addr):
-    chain=load_json(CHAIN_FILE,[]); pow_blocks=[b for b in chain if isinstance(b,dict) and b.get("reward") is not None]
+    chain=load_json(CHAIN_FILE,[])
+    pow_blocks=[b for b in chain if isinstance(b,dict) and b.get("reward") is not None]
     if pow_blocks:
-        prev_hash=pow_blocks[-1].get("block_hash","0"*64); height=len(pow_blocks)
+        prev_hash=pow_blocks[-1].get("block_hash","0"*64)
+        height=len(pow_blocks)
     else:
-        prev_hash="0"*64; height=0
+        prev_hash="0"*64
+        height=0
     total_reward=calculate_reward(height)
-    miner_share=round(total_reward*0.80,6); ai_share=round(total_reward*0.10,6); burn_share=round(total_reward*0.10,6)
-    target=get_mining_target(); nonce=random.randrange(0,2**32)
+    miner_share=round(total_reward*0.80,6)
+    ai_share=round(total_reward*0.10,6)
+    burn_share=round(total_reward*0.10,6)
+    target=get_mining_target()
+    nonce=random.randrange(0,2**32)
     while True:
         h=hashlib.sha256((prev_hash+thr_addr).encode()+str(nonce).encode()).hexdigest()
-        if int(h,16)<=target: pow_hash=h; break
+        if int(h,16)<=target:
+            pow_hash=h
+            break
         nonce=(nonce+1)%(2**32)
     ts=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-    new_block={"thr_address":thr_addr,"timestamp":ts,"block_hash":pow_hash,"prev_hash":prev_hash,"nonce":nonce,
-               "reward":total_reward,"reward_split":{"miner":miner_share,"ai":ai_share,"burn":burn_share},
-               "pool_fee":burn_share,"reward_to_miner":miner_share,"height":height,"type":"block",
-               "target":target,"is_stratum":False}
+    new_block={
+        "thr_address":thr_addr,
+        "timestamp":ts,
+        "block_hash":pow_hash,
+        "prev_hash":prev_hash,
+        "nonce":nonce,
+        "reward":total_reward,
+        "reward_split":{
+            "miner":miner_share,
+            "ai":ai_share,
+            "burn":burn_share
+        },
+        "pool_fee":burn_share,
+        "reward_to_miner":miner_share,
+        "height":height,
+        "type":"block",
+        "target":target,
+        "is_stratum":False
+    }
     chain.append(new_block)
-    pool=load_mempool(); included=[]
+    pool=load_mempool()
+    included=[]
     if pool:
         for tx in list(pool):
-            tx["height"]=height; tx["status"]="confirmed"; tx["timestamp"]=ts
-            chain.append(tx); included.append(tx)
+            tx["height"]=height
+            tx["status"]="confirmed"
+            tx["timestamp"]=ts
+            chain.append(tx)
+            included.append(tx)
         save_mempool([])
         ledger=load_json(LEDGER_FILE,{})
         for tx in included:
@@ -956,12 +1237,15 @@ def submit_mining_block_for_pledge(thr_addr):
     ledger[AI_WALLET_ADDRESS]=round(ledger.get(AI_WALLET_ADDRESS,0.0)+ai_share,6)
     ledger[BURN_ADDRESS]=round(ledger.get(BURN_ADDRESS,0.0)+burn_share,6)
     save_json(LEDGER_FILE,ledger)
-    save_json(CHAIN_FILE,chain); update_last_block(new_block,is_block=True)
+    save_json(CHAIN_FILE,chain)
+    update_last_block(new_block,is_block=True)
     print(f"⛏️ [Pledge PoW] block #{height} for {thr_addr} | TXs: {len(included)} | hash={pow_hash[:16]}…")
 
 def seconds_since_last_block()->float:
-    chain=load_json(CHAIN_FILE,[]); blocks=[b for b in chain if isinstance(b,dict) and b.get("reward") is not None]
-    if not blocks: return 10**9
+    chain=load_json(CHAIN_FILE,[])
+    blocks=[b for b in chain if isinstance(b,dict) and b.get("reward") is not None]
+    if not blocks:
+        return 10**9
     try:
         t_fmt="%Y-%m-%d %H:%M:%S UTC"
         last_ts=datetime.strptime(blocks[-1]["timestamp"],t_fmt).timestamp()
@@ -971,47 +1255,28 @@ def seconds_since_last_block()->float:
 
 def confirm_mempool_if_stuck(max_wait_sec:int=180):
     pool=load_mempool()
-    if not pool: return
-    if seconds_since_last_block()<max_wait_sec: return
+    if not pool:
+        return
+    if seconds_since_last_block()<max_wait_sec:
+        return
     print("⚠️ Watchdog: Mempool stuck > 3 mins. Auto-mining block to clear TXs.")
     submit_mining_block_for_pledge(AI_WALLET_ADDRESS)
 
 def mint_first_blocks():
-    pledges=load_json(PLEDGE_CHAIN,[]); chain=load_json(CHAIN_FILE,[])
+    pledges=load_json(PLEDGE_CHAIN,[])
+    chain=load_json(CHAIN_FILE,[])
     seen={ b.get("thr_address") for b in chain if isinstance(b,dict) and b.get("thr_address") }
     for p in pledges:
         thr=p["thr_address"]
-        if thr in seen: continue
+        if thr in seen:
+            continue
         submit_mining_block_for_pledge(thr)
-
-
-def purge_old_ai_files():
-    """Καθαρίζει παλιά προσωρινά αρχεία που έχουν λήξει."""
-    if not os.path.isdir(AI_FILES_DIR):
-        return
-    now = time.time()
-    try:
-        for name in os.listdir(AI_FILES_DIR):
-            path = os.path.join(AI_FILES_DIR, name)
-            if not os.path.isfile(path):
-                continue
-            age = now - os.path.getmtime(path)
-            if age > AI_FILE_TTL_SECONDS:
-                try:
-                    os.remove(path)
-                except Exception:
-                    pass
-    except Exception:
-        # Δεν θέλουμε να ρίξουμε τον κόμβο για ένα failed cleanup
-        return
-
 
 # ─── SCHEDULER ─────────────────────────────────────
 scheduler=BackgroundScheduler(daemon=True)
 scheduler.add_job(mint_first_blocks, "interval", minutes=1)
 scheduler.add_job(confirm_mempool_if_stuck, "interval", seconds=45)
 scheduler.add_job(aggregator_step, "interval", seconds=10)  # NEW: quorum aggregator
-scheduler.add_job(purge_old_ai_files, "interval", minutes=5)
 scheduler.start()
 
 # Run AI Wallet Check on Startup

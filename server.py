@@ -58,6 +58,11 @@ IOT_DATA_FILE       = os.path.join(DATA_DIR, "iot_data.json")
 MEMPOOL_FILE        = os.path.join(DATA_DIR, "mempool.json")
 ATTEST_STORE_FILE   = os.path.join(DATA_DIR, "attest_store.json")  # NEW
 
+AI_FILES_DIR        = os.path.join(DATA_DIR, "ai_files")
+os.makedirs(AI_FILES_DIR, exist_ok=True)
+AI_FILE_TTL_SECONDS = 3600  # 1 hour
+AI_OFFLINE_QUEUE_FILE = os.path.join(DATA_DIR, "ai_offline_queue.json")
+
 ADMIN_SECRET   = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
 
 BTC_RECEIVER  = "1QFeDPwEF8yEgPEfP79hpc8pHytXMz9oEQ"
@@ -109,6 +114,91 @@ def load_attest_store():
 
 def save_attest_store(store):
     save_json(ATTEST_STORE_FILE, store)
+
+# --- AI File & Offline Learning Helpers (Quantum Chat) ---
+def write_ai_file(filename: str, content: str) -> str:
+    """
+    Αποθηκεύει περιεχόμενο σε προσωρινό αρχείο που θα διαγραφεί
+    αυτόματα μετά από AI_FILE_TTL_SECONDS.
+    """
+    safe = secure_filename(filename) or "thronos_ai_output.txt"
+    ts = int(time.time())
+    internal = f"{ts}_{uuid.uuid4().hex}_{safe}"
+    path = os.path.join(AI_FILES_DIR, internal)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return internal
+
+
+def extract_ai_files_from_text(text: str):
+    """
+    Ψάχνει για blocks τύπου:
+
+    [[FILE:my_script.py]]
+    ...περιεχόμενο...
+    [[/FILE]]
+
+    και τα μετατρέπει σε πραγματικά αρχεία.
+    """
+    marker_start = "[[FILE:"
+    marker_end = "]]"
+    marker_close = "[[/FILE]]"
+
+    files = []
+    clean_parts = []
+    i = 0
+
+    while True:
+        start = text.find(marker_start, i)
+        if start == -1:
+            clean_parts.append(text[i:])
+            break
+
+        clean_parts.append(text[i:start])
+
+        end_header = text.find(marker_end, start)
+        if end_header == -1:
+            # Σπασμένο block, κρατάμε το υπόλοιπο όπως είναι
+            clean_parts.append(text[start:])
+            break
+
+        filename = text[start + len(marker_start): end_header].strip() or "thronos_ai_output.txt"
+
+        end_block = text.find(marker_close, end_header)
+        if end_block == -1:
+            content = text[end_header + len(marker_end):]
+            i = len(text)
+        else:
+            content = text[end_header + len(marker_end): end_block]
+            i = end_block + len(marker_close)
+
+        internal = write_ai_file(filename, content.strip("\n"))
+        files.append({
+            "filename": filename,
+            "url": f"/ai_files/{internal}",
+            "expires_in": AI_FILE_TTL_SECONDS,
+        })
+
+    clean_text = "".join(clean_parts).strip()
+    return clean_text, files
+
+
+def enqueue_offline_corpus(wallet: str, prompt: str, answer: str):
+    """
+    Πετάει prompt+answer σε ουρά για Whisper/learning node.
+    """
+    entry = {
+        "wallet": wallet,
+        "prompt": prompt,
+        "answer": answer,
+        "timestamp": int(time.time()),
+    }
+    queue = load_json(AI_OFFLINE_QUEUE_FILE, [])
+    queue.append(entry)
+    if len(queue) > 1000:
+        queue = queue[-1000:]
+    save_json(AI_OFFLINE_QUEUE_FILE, queue)
+
 
 def sha256d(data: bytes) -> bytes:
     return hashlib.sha256(hashlib.sha256(data).digest()).digest()
@@ -277,6 +367,30 @@ def home(): return render_template("index.html")
 
 @app.route("/contracts/<path:filename>")
 def serve_contract(filename): return send_from_directory(CONTRACTS_DIR, filename)
+
+@app.route("/ai_files/<path:fname>")
+def serve_ai_file(fname):
+    path = os.path.join(AI_FILES_DIR, fname)
+    if not os.path.isfile(path):
+        return "File not found or expired", 404
+
+    age = time.time() - os.path.getmtime(path)
+    if age > AI_FILE_TTL_SECONDS:
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+        return "File expired", 410
+
+    parts = fname.split("_", 2)
+    download_name = parts[2] if len(parts) >= 3 else fname
+
+    return send_from_directory(
+        AI_FILES_DIR,
+        fname,
+        as_attachment=True,
+        download_name=download_name,
+    )
 
 @app.route("/viewer")
 def viewer():
@@ -456,9 +570,30 @@ def iot_autonomous_request():
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
     data = request.get_json() or {}
-    msg = data.get("message","").strip()
-    if not msg: return jsonify(error="Message required"),400
-    return jsonify(ai_agent.generate_response(msg)),200
+    msg = (data.get("message") or "").strip()
+    wallet = (data.get("wallet") or "").strip()
+
+    if not msg:
+        return jsonify(error="Message required"), 400
+
+    result = ai_agent.generate_response(msg)
+    if not isinstance(result, dict):
+        result = {"response": str(result)}
+
+    raw_text = str(result.get("response", ""))
+    clean_text, files = extract_ai_files_from_text(raw_text)
+
+    result["response"] = clean_text
+    if files:
+        result["files"] = files
+
+    if wallet:
+        enqueue_offline_corpus(wallet, msg, clean_text)
+        result["wallet"] = wallet
+
+    result.setdefault("status", "secure")
+
+    return jsonify(result), 200
 
 @app.route("/register_node", methods=["POST"])
 def register_node():
@@ -849,11 +984,34 @@ def mint_first_blocks():
         if thr in seen: continue
         submit_mining_block_for_pledge(thr)
 
+
+def purge_old_ai_files():
+    """Καθαρίζει παλιά προσωρινά αρχεία που έχουν λήξει."""
+    if not os.path.isdir(AI_FILES_DIR):
+        return
+    now = time.time()
+    try:
+        for name in os.listdir(AI_FILES_DIR):
+            path = os.path.join(AI_FILES_DIR, name)
+            if not os.path.isfile(path):
+                continue
+            age = now - os.path.getmtime(path)
+            if age > AI_FILE_TTL_SECONDS:
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+    except Exception:
+        # Δεν θέλουμε να ρίξουμε τον κόμβο για ένα failed cleanup
+        return
+
+
 # ─── SCHEDULER ─────────────────────────────────────
 scheduler=BackgroundScheduler(daemon=True)
 scheduler.add_job(mint_first_blocks, "interval", minutes=1)
 scheduler.add_job(confirm_mempool_if_stuck, "interval", seconds=45)
 scheduler.add_job(aggregator_step, "interval", seconds=10)  # NEW: quorum aggregator
+scheduler.add_job(purge_old_ai_files, "interval", minutes=5)
 scheduler.start()
 
 # Run AI Wallet Check on Startup

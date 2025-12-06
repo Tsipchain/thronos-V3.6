@@ -147,6 +147,7 @@
             line-height: 1.4;
             font-size: 13px;
             white-space: pre-wrap;
+            position: relative;
         }
 
         .message-row.user .bubble {
@@ -168,6 +169,34 @@
 
         .meta-line span {
             margin-right: 10px;
+        }
+
+        .meta-tools {
+            margin-top: 6px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            font-size: 10px;
+        }
+
+        .btn-copy {
+            border-radius: 3px;
+            border: 1px solid rgba(0, 255, 102, 0.5);
+            background: transparent;
+            color: var(--accent);
+            padding: 2px 6px;
+            cursor: pointer;
+            font-size: 10px;
+        }
+
+        .btn-copy:hover {
+            background: rgba(0, 255, 102, 0.12);
+        }
+
+        .file-link {
+            text-decoration: none;
+            color: var(--accent);
+            border-bottom: 1px dotted rgba(0, 255, 102, 0.6);
         }
 
         .chat-footer {
@@ -209,17 +238,6 @@
             display: flex;
             align-items: center;
             gap: 4px;
-        }
-
-        .btn.secondary {
-            background: transparent;
-            color: var(--accent);
-        }
-
-        .btn.danger {
-            border-color: var(--danger);
-            color: var(--danger);
-            background: transparent;
         }
 
         .btn:disabled {
@@ -264,7 +282,7 @@
 <body>
 <div class="top-bar">
     <div class="logo">THRONOS <span>QUANTUM</span> ASSISTANT</div>
-    <div class="status-pill">Quantum Encryption Active · 256-bit Session Key</div>
+    <div class="status-pill" id="top-status-pill">Quantum Encryption Active · 256-bit Session Key</div>
 </div>
 
 <div id="root">
@@ -295,11 +313,11 @@
             </div>
             <div class="footer-info">
                 <div>
-                    Tip: αν βάλεις THR wallet, κάθε μήνυμα καίει 1 credit από τα AI packs σου.
+                    Tip: αν βάλεις THR wallet, το request συνδέεται με το address σου και μπαίνει στην offline βιβλιοθήκη.
                 </div>
                 <div>
-                    <a href="/ai_packs" class="link" target="_blank">AI Packs</a> ·
-                    <span id="status-line">Core: online</span>
+                    <span id="status-line">Core: online</span> ·
+                    <span id="key-line">Key: —</span>
                 </div>
             </div>
         </div>
@@ -307,48 +325,23 @@
 </div>
 
 <script>
-    const messagesEl = document.getElementById("messages");
-    const userInputEl = document.getElementById("user-input");
-    const sendBtn = document.getElementById("send-btn");
-    const walletInputEl = document.getElementById("wallet-input");
-    const creditsEl = document.getElementById("credits-count");
-    const statusLineEl = document.getElementById("status-line");
+    const messagesEl      = document.getElementById("messages");
+    const userInputEl     = document.getElementById("user-input");
+    const sendBtn         = document.getElementById("send-btn");
+    const walletInputEl   = document.getElementById("wallet-input");
+    const creditsEl       = document.getElementById("credits-count");
+    const statusLineEl    = document.getElementById("status-line");
+    const keyLineEl       = document.getElementById("key-line");
+    const topStatusPillEl = document.getElementById("top-status-pill");
 
     // --- helpers ---
 
     function saveWalletLocal(addr) {
-        try {
-            localStorage.setItem("thronos_wallet", addr || "");
-        } catch (_) {}
+        try { localStorage.setItem("thronos_wallet", addr || ""); } catch (_) {}
     }
 
     function loadWalletLocal() {
-        try {
-            return localStorage.getItem("thronos_wallet") || "";
-        } catch (_) {
-            return "";
-        }
-    }
-
-    function appendMessage(role, text, meta) {
-        const row = document.createElement("div");
-        row.className = "message-row " + role;
-
-        const bubble = document.createElement("div");
-        bubble.className = "bubble";
-        bubble.textContent = text;
-
-        row.appendChild(bubble);
-
-        if (meta) {
-            const metaDiv = document.createElement("div");
-            metaDiv.className = "meta-line";
-            metaDiv.innerHTML = meta;
-            bubble.appendChild(metaDiv);
-        }
-
-        messagesEl.appendChild(row);
-        messagesEl.scrollTop = messagesEl.scrollHeight;
+        try { return localStorage.getItem("thronos_wallet") || ""; } catch (_) { return ""; }
     }
 
     function setCreditsLabel(v) {
@@ -364,6 +357,72 @@
         statusLineEl.textContent = text;
     }
 
+    function setQuantumKey(key) {
+        if (!key) return;
+        const shortKey = String(key).slice(0, 16) + "…";
+        keyLineEl.textContent = "Key: " + shortKey;
+        topStatusPillEl.textContent = "Quantum Encryption Verified · " + shortKey;
+    }
+
+    function appendMessage(role, text, metaHtml, files) {
+        const row = document.createElement("div");
+        row.className = "message-row " + role;
+
+        const bubble = document.createElement("div");
+        bubble.className = "bubble";
+
+        const main = document.createElement("div");
+        main.textContent = text || "";
+        bubble.appendChild(main);
+
+        if (metaHtml) {
+            const metaDiv = document.createElement("div");
+            metaDiv.className = "meta-line";
+            metaDiv.innerHTML = metaHtml;
+            bubble.appendChild(metaDiv);
+        }
+
+        if (role === "ai") {
+            const tools = document.createElement("div");
+            tools.className = "meta-tools";
+
+            // copy button
+            const copyBtn = document.createElement("button");
+            copyBtn.className = "btn-copy";
+            copyBtn.type = "button";
+            copyBtn.textContent = "Copy";
+            copyBtn.addEventListener("click", () => {
+                if (navigator.clipboard) {
+                    navigator.clipboard.writeText(text || "").catch(() => {});
+                }
+            });
+            tools.appendChild(copyBtn);
+
+            // file links (if any)
+            if (Array.isArray(files) && files.length > 0) {
+                const minutes = Math.round((files[0].expires_in || 3600) / 60);
+                files.forEach(f => {
+                    const a = document.createElement("a");
+                    a.href = f.url;
+                    a.target = "_blank";
+                    a.rel = "noopener";
+                    a.className = "file-link";
+                    a.textContent = "Download " + (f.filename || "file");
+                    tools.appendChild(a);
+                });
+                const infoSpan = document.createElement("span");
+                infoSpan.textContent = " (auto-delete ~" + minutes + " min)";
+                tools.appendChild(infoSpan);
+            }
+
+            bubble.appendChild(tools);
+        }
+
+        row.appendChild(bubble);
+        messagesEl.appendChild(row);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
     async function sendMessage() {
         const text = userInputEl.value.trim();
         if (!text) return;
@@ -377,7 +436,7 @@
         sendBtn.disabled = true;
         setStatus("Core: thinking…");
 
-        // προσωρινό "typing" bubble
+        // typing bubble
         const thinkingRow = document.createElement("div");
         thinkingRow.className = "message-row ai";
         const thinkingBubble = document.createElement("div");
@@ -400,20 +459,6 @@
             messagesEl.removeChild(thinkingRow);
 
             if (!res.ok) {
-                // ειδική περίπτωση 402 = no credits
-                if (res.status === 402) {
-                    const data = await res.json().catch(() => ({}));
-                    appendMessage(
-                        "ai",
-                        data.error || "No AI credits available for this wallet.",
-                        `<span class="badge-warning">Credits depleted</span>
-                         <span>Wallet: ${data.wallet || "unknown"}</span>`
-                    );
-                    setStatus("Core: payment required (no credits)");
-                    setCreditsLabel(0);
-                    return;
-                }
-
                 appendMessage("ai", "Quantum Interference: HTTP " + res.status);
                 setStatus("Core: error");
                 return;
@@ -422,22 +467,27 @@
             const data = await res.json();
 
             const metaParts = [];
-            if (data.quantum_key) {
-                metaParts.push(`<span>Key: ${String(data.quantum_key).slice(0, 12)}…</span>`);
-            }
             if (data.wallet) {
                 metaParts.push(`<span>Wallet: ${data.wallet}</span>`);
             }
-            if (typeof data.remaining_credits === "number") {
-                metaParts.push(`<span>Credits: ${data.remaining_credits}</span>`);
-                setCreditsLabel(data.remaining_credits);
+            if (data.status) {
+                metaParts.push(`<span>Status: ${data.status}</span>`);
             }
 
-            appendMessage("ai", data.response || "[Empty response]", metaParts.join(" "));
+            appendMessage(
+                "ai",
+                data.response || "[Empty response]",
+                metaParts.join(" "),
+                data.files || []
+            );
+
+            if (data.quantum_key) {
+                setQuantumKey(data.quantum_key);
+            }
             setStatus("Core: " + (data.status || "online"));
         } catch (err) {
             messagesEl.removeChild(thinkingRow);
-            appendMessage("ai", "Quantum Interference Detected: " + err.message);
+            appendMessage("ai", "Quantum Interference Detected: " + (err.message || String(err)));
             setStatus("Core: network error");
         } finally {
             sendBtn.disabled = false;
@@ -455,24 +505,9 @@
     });
 
     walletInputEl.value = loadWalletLocal();
-    if (walletInputEl.value) {
-        // μπορούμε να ρωτήσουμε credits αργότερα με fetch /api/ai_credits_status
-        setCreditsLabel("…");
-        fetch("/api/ai_credits_status?wallet=" + encodeURIComponent(walletInputEl.value))
-            .then(r => r.ok ? r.json() : null)
-            .then(data => {
-                if (data && typeof data.credits === "number") {
-                    setCreditsLabel(data.credits);
-                } else {
-                    setCreditsLabel("infinite");
-                }
-            })
-            .catch(() => setCreditsLabel("infinite"));
-    } else {
-        setCreditsLabel("infinite");
-    }
+    setCreditsLabel("infinite");
 
-    // αρχικό μήνυμα καλωσορίσματος
+    // welcome message
     appendMessage(
         "ai",
         "Quantum Encryption Verified. Το κανάλι είναι ασφαλές. Γράψε την πρώτη σου εντολή ή ερώτηση."

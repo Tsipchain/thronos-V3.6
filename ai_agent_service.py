@@ -43,32 +43,36 @@ if not logger.handlers:
 
 
 class ThronosAI:
-    def __init__(self):
-        # Keys / models
-        self.gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
-        self.openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+    def __init__(self) -> None:
+        # Mode:
+        #   "gemini"  -> μόνο Gemini
+        #   "openai"  -> μόνο OpenAI
+        #   "auto"    -> προσπαθεί Gemini, μετά OpenAI, μετά local
+        #   "local"   -> καθόλου external, μόνο blockchain/local
+        self.mode = os.getenv("THRONOS_AI_MODE", "auto").lower()
 
-        # Μοντέλα με sensible defaults – μπορείς να τα αλλάξεις από env
-        self.gemini_model = os.getenv("THRONOS_GEMINI_MODEL", "gemini-2.5-pro")
-        self.openai_model = os.getenv("THRONOS_OPENAI_MODEL", "gpt-4.1-mini")
-
-        # Προτεραιότητα providers:
-        # 1. Gemini αν έχει κλειδί
-        # 2. OpenAI αν έχει κλειδί
-        # 3. Offline fallback
-        logger.info(
-            f"[ThronosAI] init | GEMINI={'yes' if self.gemini_key else 'no'} | "
-            f"OPENAI={'yes' if self.openai_key else 'no'}"
+        # 👉 Διάβασε ΚΑΙ τα δύο ονόματα env, με προτεραιότητα στο GEMINI_API_KEY
+        self.gemini_api_key = (
+            os.getenv("GEMINI_API_KEY", "").strip()
+            or os.getenv("GOOGLE_API_KEY", "").strip()
         )
+        self.openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
 
-        # OpenAI client (νέο SDK) αν γίνεται
-        self._openai_client = None
-        if self.openai_key and _OPENAI_AVAILABLE:
-            try:
-                self._openai_client = OpenAI(api_key=self.openai_key)
-            except Exception as e:
-                logger.error("Failed to init OpenAI client: %s", e)
-                self._openai_client = None
+        self.gemini_model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
+        self.openai_model_name = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.data_dir = os.getenv("DATA_DIR", os.path.join(base_dir, "data"))
+        os.makedirs(self.data_dir, exist_ok=True)
+
+        self.ai_history_file = os.path.join(self.data_dir, "ai_history.json")
+        self.ai_block_log_file = os.path.join(self.data_dir, "ai_block_log.json")
+
+        self.gemini_model = None
+        self.openai_client = None
+
+        self._init_gemini()
+        self._init_openai()
 
     # ------------------------------------------------------------------ #
     #  Βοηθητικά

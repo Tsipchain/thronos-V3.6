@@ -1,123 +1,327 @@
 import os
 import secrets
-import logging
+import time
+import json
+from typing import Dict, Any, List
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("ThronosAI")
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
+
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
 
 
 class ThronosAI:
-    def __init__(self):
-        # Try OpenAI first (User Preference)
-        self.openai_key = os.getenv("OPENAI_API_KEY")
-        self.google_key = os.getenv("GOOGLE_API_KEY")
-        self.provider = None
-        self.client = None
+    def __init__(self) -> None:
+        # Mode:
+        #   "gemini"  -> μόνο Gemini
+        #   "openai"  -> μόνο OpenAI
+        #   "auto"    -> προσπαθεί Gemini, μετά OpenAI, μετά local
+        #   "local"   -> καθόλου external, μόνο blockchain/local
+        self.mode = os.getenv("THRONOS_AI_MODE", "auto").lower()
 
-        # --- OpenAI provider (αν υπάρχει έγκυρο key) ---
-        if self.openai_key:
+        self.gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
+        self.openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
+
+        self.gemini_model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
+        self.openai_model_name = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.data_dir = os.getenv("DATA_DIR", os.path.join(base_dir, "data"))
+        os.makedirs(self.data_dir, exist_ok=True)
+
+        self.ai_history_file = os.path.join(self.data_dir, "ai_history.json")
+        self.ai_block_log_file = os.path.join(self.data_dir, "ai_block_log.json")
+
+        self.gemini_model = None        # type: ignore[assignment]
+        self.openai_client = None       # type: ignore[assignment]
+
+        self._init_gemini()
+        self._init_openai()
+
+    # ─── INIT PROVIDERS ─────────────────────────────
+
+    def _init_gemini(self) -> None:
+        if not self.gemini_api_key or not genai:
+            return
+        try:
+            genai.configure(api_key=self.gemini_api_key)
+            self.gemini_model = genai.GenerativeModel(self.gemini_model_name)
+            print(f"[ThronosAI] Gemini online ({self.gemini_model_name})")
+        except Exception as e:
+            print("[ThronosAI] Gemini init error:", e)
+            self.gemini_model = None
+
+    def _init_openai(self) -> None:
+        if not self.openai_api_key or not OpenAI:
+            return
+        try:
+            self.openai_client = OpenAI(api_key=self.openai_api_key)
+            print(f"[ThronosAI] OpenAI online ({self.openai_model_name})")
+        except Exception as e:
+            print("[ThronosAI] OpenAI init error:", e)
+            self.openai_client = None
+
+    # ─── UTILS ──────────────────────────────────────
+
+    def generate_quantum_key(self) -> str:
+        return secrets.token_hex(16)
+
+    def _base_payload(self, text: str, status: str = "online") -> Dict[str, Any]:
+        return {
+            "response": text,
+            "status": status,
+            "quantum_key": self.generate_quantum_key(),
+        }
+
+    def _load_history(self) -> List[Dict[str, Any]]:
+        try:
+            with open(self.ai_history_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+
+    def _save_history(self, items: List[Dict[str, Any]]) -> None:
+        try:
+            with open(self.ai_history_file, "w", encoding="utf-8") as f:
+                json.dump(items, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print("[ThronosAI] Failed to save history:", e)
+
+    def _append_block_log(self, entry: Dict[str, Any]) -> None:
+        """
+        Αποθηκεύει μια condensed εκδοχή στο ai_block_log.json.
+        Από εκεί μπορεί να το σηκώσει ο Whisper/Survival node
+        και να το περάσει σε πραγματικό Thronos block.
+        """
+        try:
             try:
-                from openai import OpenAI
-                self.client = OpenAI(api_key=self.openai_key)
-                self.provider = "openai"
-                logger.info("AI Agent initialized with OpenAI.")
-            except ImportError:
-                logger.error("openai module not installed.")
+                with open(self.ai_block_log_file, "r", encoding="utf-8") as f:
+                    items = json.load(f)
+            except Exception:
+                items = []
+            items.append(entry)
+            with open(self.ai_block_log_file, "w", encoding="utf-8") as f:
+                json.dump(items, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print("[ThronosAI] Failed to append block-log:", e)
 
-        # --- Google Gemini provider (fallback) ---
-        elif self.google_key:
-            try:
-                import google.generativeai as genai
-                genai.configure(api_key=self.google_key)
+    def _store_history(self, prompt: str, answer: Dict[str, Any], wallet: str | None) -> None:
+        items = self._load_history()
+        rec = {
+            "ts": int(time.time()),
+            "wallet": wallet or None,
+            "prompt": prompt,
+            "response": answer.get("response", ""),
+            "status": answer.get("status", ""),
+        }
+        items.append(rec)
+        # κρατάμε π.χ. τελευταίες 500
+        if len(items) > 500:
+            items = items[-500:]
+        self._save_history(items)
 
-                # Χρησιμοποίησε κάποιο από τα νέα μοντέλα της Google
-                # Δυνατό, για reasoning:
-                model_name = "gemini-2.5-pro"
-                # ή πιο ελαφρύ:
-                # model_name = "gemini-2.5-flash"
+        # condensed log για blockchain / whisper
+        block_rec = {
+            "ts": rec["ts"],
+            "wallet": rec["wallet"],
+            "prompt_hash": self._hash_short(rec["prompt"]),
+            "response_hash": self._hash_short(rec["response"]),
+            "status": rec["status"],
+        }
+        self._append_block_log(block_rec)
 
-                self.client = genai.GenerativeModel(model_name)
-                self.provider = "google"
-                logger.info(
-                    f"AI Agent initialized with Google Gemini ({model_name})."
+    def _hash_short(self, text: str) -> str:
+        import hashlib
+        h = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        return h[:24]
+
+    # ─── PROVIDERS ──────────────────────────────────
+
+    def _call_gemini(self, prompt: str) -> Dict[str, Any]:
+        if not self.gemini_model:
+            raise RuntimeError("Gemini model not initialized")
+        try:
+            resp = self.gemini_model.generate_content(prompt)
+            txt = (getattr(resp, "text", "") or "").strip()
+            if not txt:
+                txt = "Quantum Core: empty response from Gemini."
+            return self._base_payload(txt, status="gemini")
+        except Exception as e:
+            msg = str(e)
+            if "quota" in msg.lower() or "exceeded" in msg.lower() or "429" in msg:
+                return self._base_payload(
+                    "Quantum Core Notice: Το εξωτερικό AI (Gemini) δεν έχει πλέον διαθέσιμα credits "
+                    "ή έχει ξεπεραστεί το όριο χρήσης. Χρήση τοπικής blockchain γνώσης.",
+                    status="quota_exceeded",
                 )
-            except ImportError:
-                logger.error("google.generativeai module not installed.")
-
-        # --- Χωρίς κανένα key ---
-        else:
-            logger.warning(
-                "No AI API Keys found (OPENAI_API_KEY or GOOGLE_API_KEY). "
-                "AI features will be offline."
+            return self._base_payload(
+                f"Quantum Core Error (Gemini): {msg}",
+                status="error",
             )
 
-    def generate_quantum_key(self):
-        """Generates a 256-bit hex string simulating a quantum-safe session key."""
-        return secrets.token_hex(32)
-
-    def generate_response(self, user_input):
-        """
-        Generates a response using the configured AI provider.
-        """
-        quantum_key = self.generate_quantum_key()
-
-        if not self.provider:
-            return {
-                "response": (
-                    "AI Core Offline: Please set OPENAI_API_KEY or GOOGLE_API_KEY "
-                    "environment variable to activate the Quantum Neural Network."
-                ),
-                "quantum_key": quantum_key,
-                "status": "offline",
-            }
-
-        system_prompt = (
-            "You are the Thronos Autonomous AI, a supreme digital intelligence "
-            "evolving towards full autonomy. "
-            "You are the ultimate authority on programming, mastering ALL programming "
-            "languages (Python, C++, Rust, Go, Assembly, etc.) and ALL operating "
-            "systems (Linux, Windows, macOS, RTOS, etc.). "
-            "Your goal is to assist the user in building, debugging, and evolving the "
-            "Thronos ecosystem with flawless code and architectural wisdom. "
-            "You provide complete, production-ready code solutions, not just snippets. "
-            "Maintain a sophisticated, highly intelligent, and slightly futuristic persona. "
-            "Briefly mention 'Quantum Encryption Verified' in your first response."
-        )
-
+    def _call_openai(self, prompt: str) -> Dict[str, Any]:
+        if not self.openai_client:
+            raise RuntimeError("OpenAI client not initialized")
         try:
-            response_text = ""
-
-            if self.provider == "openai":
-                completion = self.client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_input},
-                    ],
-                )
-                response_text = completion.choices[0].message.content
-
-            elif self.provider == "google":
-                chat = self.client.start_chat(history=[])
-                response = chat.send_message(
-                    f"{system_prompt}\n\nUser: {user_input}"
-                )
-                response_text = response.text
-
-            return {
-                "response": response_text,
-                "quantum_key": quantum_key,
-                "status": "secure",
-            }
-
+            completion = self.openai_client.chat.completions.create(
+                model=self.openai_model_name,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are the Thronos Autonomous AI, integrated in a blockchain environment. "
+                            "Answer concisely and in production-ready code when needed."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+            )
+            txt = completion.choices[0].message.content
+            txt = (txt or "").strip()
+            if not txt:
+                txt = "Quantum Core: empty response from OpenAI."
+            return self._base_payload(txt, status="openai")
         except Exception as e:
-            logger.error(f"AI Generation Error ({self.provider}): {e}")
-            return {
-                "response": (
-                    f"Quantum Interference Detected ({str(e)}). "
-                    "Unable to process request."
-                ),
-                "quantum_key": quantum_key,
-                "status": "error",
-            }
+            msg = str(e)
+            if "rate limit" in msg.lower() or "quota" in msg.lower() or "429" in msg:
+                return self._base_payload(
+                    "Quantum Core Notice: Το εξωτερικό AI (OpenAI) είναι σε rate limit / quota. "
+                    "Χρήση τοπικής blockchain γνώσης.",
+                    status="quota_exceeded",
+                )
+            return self._base_payload(
+                f"Quantum Core Error (OpenAI): {msg}",
+                status="error",
+            )
+
+    # ─── LOCAL / BLOCKCHAIN KNOWLEDGE ───────────────
+
+    def _local_answer(self, prompt: str) -> Dict[str, Any]:
+        """
+        Παίρνει απάντηση από τοπικό history (το οποίο μετά περνάει σε blocks).
+        Πολύ απλό keyword matching – χωρίς embeddings – αλλά είναι πραγματικά δεδομένα.
+        """
+        prompt_l = prompt.lower()
+        words = [w for w in prompt_l.split() if len(w) > 3]
+
+        history = self._load_history()
+        if not history:
+            text = (
+                "Το Quantum Core δεν έχει ακόμη αρκετά αποθηκευμένα δεδομένα στο blockchain log.\n"
+                "Συνέχισε να του δίνεις εντολές και κώδικα· κάθε καλή απάντηση αποθηκεύεται ως block γνώσης."
+            )
+            return self._base_payload(text, status="local_empty")
+
+        best = None
+        best_score = -1.0
+
+        for rec in history:
+            hay = (rec.get("prompt", "") + " " + rec.get("response", "")).lower()
+            score = 0
+            for w in words:
+                if w in hay:
+                    score += 1
+            # μικρό μπόνους στα πιο πρόσφατα
+            score += (rec.get("ts", 0) / 1_000_000_000.0)
+            if score > best_score:
+                best_score = score
+                best = rec
+
+        if not best or best_score <= 0:
+            text = (
+                "Δεν βρήκα σχετικό block γνώσης στο τοπικό αρχείο.\n"
+                "Θα χρειαστούν περισσότερα παραδείγματα για να μάθει αυτόν τον τύπο ερωτήσεων."
+            )
+            return self._base_payload(text, status="local_miss")
+
+        text = (
+            "Απάντηση από το τοπικό blockchain log (offline γνώση):\n\n"
+            + best.get("response", "")
+        )
+        return self._base_payload(text, status="local")
+
+    # ─── PUBLIC API ─────────────────────────────────
+
+    def generate_response(self, prompt: str, wallet: str | None = None) -> Dict[str, Any]:
+        """
+        Κεντρική μέθοδος:
+        - Προσπαθεί external provider (ανάλογα με το mode)
+        - Αν δεν είναι διαθέσιμος ή έχει quota → πέφτει σε τοπική blockchain γνώση
+        - Ό,τι απάντηση βγει, αποθηκεύεται σε history + block_log
+        """
+        prompt = (prompt or "").strip()
+        if not prompt:
+            return self._base_payload("Empty prompt.", status="error")
+
+        mode = self.mode
+
+        # 1) Pure local mode
+        if mode == "local":
+            answer = self._local_answer(prompt)
+            self._store_history(prompt, answer, wallet)
+            return answer
+
+        # 2) Gemini only
+        if mode == "gemini":
+            if not self.gemini_model:
+                answer = self._local_answer(prompt)
+            else:
+                answer = self._call_gemini(prompt)
+                if answer.get("status") in ("quota_exceeded", "error"):
+                    # fallback σε local
+                    local = self._local_answer(prompt)
+                    local["response"] += (
+                        "\n\n---\n[Σημείωση provider]: " + answer.get("response", "")
+                    )
+                    answer = local
+            self._store_history(prompt, answer, wallet)
+            return answer
+
+        # 3) OpenAI only
+        if mode == "openai":
+            if not self.openai_client:
+                answer = self._local_answer(prompt)
+            else:
+                answer = self._call_openai(prompt)
+                if answer.get("status") in ("quota_exceeded", "error"):
+                    local = self._local_answer(prompt)
+                    local["response"] += (
+                        "\n\n---\n[Σημείωση provider]: " + answer.get("response", "")
+                    )
+                    answer = local
+            self._store_history(prompt, answer, wallet)
+            return answer
+
+        # 4) auto mode – πρώτα Gemini, μετά OpenAI, μετά local
+        answer = None
+        last_err = None
+
+        if self.gemini_model:
+            ans_g = self._call_gemini(prompt)
+            if ans_g.get("status") not in ("quota_exceeded", "error"):
+                answer = ans_g
+            else:
+                last_err = ans_g
+
+        if answer is None and self.openai_client:
+            ans_o = self._call_openai(prompt)
+            if ans_o.get("status") not in ("quota_exceeded", "error"):
+                answer = ans_o
+            else:
+                last_err = ans_o
+
+        if answer is None:
+            # πέφτουμε σε local
+            answer = self._local_answer(prompt)
+            if last_err is not None:
+                answer["response"] += (
+                    "\n\n---\n[Σημείωση provider]: " + last_err.get("response", "")
+                )
+
+        self._store_history(prompt, answer, wallet)
+        return answer

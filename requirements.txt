@@ -9,3 +9,5 @@ numpy
 matplotlib
 APScheduler
 pycryptodomex
+openai
+google-generativeai

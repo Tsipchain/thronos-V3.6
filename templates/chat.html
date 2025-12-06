@@ -1,144 +1,482 @@
-{% extends "base.html" %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Thronos Quantum Chat</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-{% block title %}Thronos AI - Quantum Chat{% endblock %}
+    <style>
+        :root {
+            --bg: #050608;
+            --panel: #0d1117;
+            --border: #00ff66;
+            --accent: #00ffcc;
+            --danger: #ff4d4d;
+            --text-main: #e0ffe8;
+            --text-muted: #7de6a0;
+        }
 
-{% block content %}
-<div class="row justify-content-center">
-    <div class="col-md-8">
-        <div class="card bg-dark text-light border-info shadow-lg">
-            <div class="card-header d-flex justify-content-between align-items-center border-info">
-                <h5 class="mb-0">
-                    <i class="fas fa-robot me-2"></i>Thronos Quantum Assistant
-                </h5>
-                <span class="badge bg-success pulse-animation">
-                    <i class="fas fa-shield-alt me-1"></i>Quantum Encryption Active
-                </span>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background: radial-gradient(circle at top, #04110a 0, #020204 40%, #000 100%);
+            color: var(--text-main);
+            font-family: "Fira Code", "Consolas", monospace;
+        }
+
+        .top-bar {
+            border-bottom: 1px solid var(--border);
+            padding: 8px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #020904;
+        }
+
+        .logo {
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--accent);
+        }
+
+        .logo span {
+            color: var(--border);
+        }
+
+        .status-pill {
+            font-size: 11px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            color: var(--accent);
+            background: rgba(0, 0, 0, 0.4);
+        }
+
+        #root {
+            max-width: 1100px;
+            margin: 16px auto;
+            padding: 0 12px;
+        }
+
+        .chat-shell {
+            border: 1px solid var(--border);
+            background: var(--panel);
+            box-shadow: 0 0 24px rgba(0, 255, 102, 0.1);
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 80px);
+            max-height: 800px;
+        }
+
+        .chat-header {
+            padding: 10px 14px;
+            border-bottom: 1px solid rgba(0, 255, 102, 0.3);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            font-size: 12px;
+        }
+
+        .chat-header-title {
+            font-weight: 600;
+            color: var(--accent);
+            margin-right: auto;
+        }
+
+        .field-inline {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .field-inline label {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .field-inline input {
+            background: #000;
+            border: 1px solid rgba(0, 255, 102, 0.4);
+            color: var(--accent);
+            padding: 3px 6px;
+            font-size: 11px;
+            border-radius: 4px;
+        }
+
+        .credits-label {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .credits-label span {
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        .chat-body {
+            flex: 1;
+            padding: 10px 12px;
+            overflow-y: auto;
+            background: radial-gradient(circle at top left, #042010 0, #050608 40%, #020204 100%);
+        }
+
+        .message-row {
+            margin-bottom: 10px;
+            display: flex;
+        }
+
+        .message-row.user {
+            justify-content: flex-end;
+        }
+
+        .message-row.ai {
+            justify-content: flex-start;
+        }
+
+        .bubble {
+            max-width: 80%;
+            padding: 8px 11px;
+            border-radius: 8px;
+            line-height: 1.4;
+            font-size: 13px;
+            white-space: pre-wrap;
+        }
+
+        .message-row.user .bubble {
+            background: var(--border);
+            color: #000;
+        }
+
+        .message-row.ai .bubble {
+            background: rgba(1, 5, 8, 0.9);
+            color: var(--text-main);
+            border: 1px solid rgba(0, 255, 102, 0.5);
+        }
+
+        .meta-line {
+            font-size: 10px;
+            margin-top: 3px;
+            opacity: 0.7;
+        }
+
+        .meta-line span {
+            margin-right: 10px;
+        }
+
+        .chat-footer {
+            border-top: 1px solid rgba(0, 255, 102, 0.3);
+            padding: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            background: #020904;
+        }
+
+        .input-row {
+            display: flex;
+            gap: 6px;
+        }
+
+        #user-input {
+            flex: 1;
+            resize: none;
+            min-height: 40px;
+            max-height: 120px;
+            background: #000;
+            border: 1px solid rgba(0, 255, 102, 0.4);
+            color: var(--text-main);
+            border-radius: 4px;
+            padding: 6px 8px;
+            font-family: inherit;
+            font-size: 13px;
+        }
+
+        .btn {
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            background: var(--border);
+            color: #000;
+            font-size: 13px;
+            padding: 0 14px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .btn.secondary {
+            background: transparent;
+            color: var(--accent);
+        }
+
+        .btn.danger {
+            border-color: var(--danger);
+            color: var(--danger);
+            background: transparent;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: default;
+        }
+
+        .footer-info {
+            font-size: 11px;
+            color: var(--text-muted);
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .link {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        .link:hover {
+            text-decoration: underline;
+        }
+
+        .badge-warning {
+            color: var(--danger);
+            font-weight: 600;
+        }
+
+        @media (max-width: 700px) {
+            .chat-shell {
+                height: calc(100vh - 64px);
+                max-height: none;
+            }
+            .bubble {
+                max-width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="top-bar">
+    <div class="logo">THRONOS <span>QUANTUM</span> ASSISTANT</div>
+    <div class="status-pill">Quantum Encryption Active · 256-bit Session Key</div>
+</div>
+
+<div id="root">
+    <div class="chat-shell">
+        <div class="chat-header">
+            <div class="chat-header-title">Channel: /chat · Node AI-CORE-01</div>
+
+            <div class="field-inline">
+                <label for="wallet-input">THR Wallet:</label>
+                <input id="wallet-input" type="text" placeholder="THRxxxxxxxx" autocomplete="off">
             </div>
-            <div class="card-body chat-container" id="chat-box" style="height: 400px; overflow-y: auto; background-color: #1a1a1a;">
-                <div class="text-center text-muted my-3">
-                    <small>Session secured with 256-bit Quantum-Resistant Key</small>
-                </div>
-                <!-- Messages will appear here -->
-                <div class="d-flex flex-row justify-content-start mb-3">
-                    <div class="p-3 rounded bg-secondary text-white" style="max-width: 75%;">
-                        Greetings. I am the Thronos Quantum Assistant. How may I assist you with the blockchain today?
-                    </div>
-                </div>
+
+            <div class="credits-label">
+                Credits: <span id="credits-count">∞ (demo)</span>
             </div>
-            <div class="card-footer border-info">
-                <div class="input-group">
-                    <input type="text" id="user-input" class="form-control bg-dark text-light border-secondary" placeholder="Type your message..." onkeypress="handleEnter(event)">
-                    <button class="btn btn-info" type="button" onclick="sendMessage()">
-                        <i class="fas fa-paper-plane"></i> Send
-                    </button>
+        </div>
+
+        <div id="messages" class="chat-body">
+            <!-- Messages will be injected here -->
+        </div>
+
+        <div class="chat-footer">
+            <div class="input-row">
+                <textarea id="user-input" rows="2" placeholder="Πληκτρολόγησε την εντολή σου προς τον Θρόνο..."></textarea>
+                <button id="send-btn" class="btn">
+                    ▶ Send
+                </button>
+            </div>
+            <div class="footer-info">
+                <div>
+                    Tip: αν βάλεις THR wallet, κάθε μήνυμα καίει 1 credit από τα AI packs σου.
                 </div>
-                <div class="mt-2 text-end">
-                    <small class="text-muted" id="quantum-key-display">Key: Initializing...</small>
+                <div>
+                    <a href="/ai_packs" class="link" target="_blank">AI Packs</a> ·
+                    <span id="status-line">Core: online</span>
                 </div>
             </div>
         </div>
     </div>
 </div>
 
-<style>
-    .pulse-animation {
-        animation: pulse 2s infinite;
-    }
-    @keyframes pulse {
-        0% { opacity: 1; box-shadow: 0 0 0 0 rgba(25, 135, 84, 0.7); }
-        70% { opacity: 0.8; box-shadow: 0 0 0 10px rgba(25, 135, 84, 0); }
-        100% { opacity: 1; box-shadow: 0 0 0 0 rgba(25, 135, 84, 0); }
-    }
-    /* Custom scrollbar */
-    #chat-box::-webkit-scrollbar {
-        width: 8px;
-    }
-    #chat-box::-webkit-scrollbar-track {
-        background: #1a1a1a;
-    }
-    #chat-box::-webkit-scrollbar-thumb {
-        background: #0dcaf0;
-        border-radius: 4px;
-    }
-</style>
-
 <script>
-    function handleEnter(e) {
-        if (e.key === 'Enter') {
-            sendMessage();
+    const messagesEl = document.getElementById("messages");
+    const userInputEl = document.getElementById("user-input");
+    const sendBtn = document.getElementById("send-btn");
+    const walletInputEl = document.getElementById("wallet-input");
+    const creditsEl = document.getElementById("credits-count");
+    const statusLineEl = document.getElementById("status-line");
+
+    // --- helpers ---
+
+    function saveWalletLocal(addr) {
+        try {
+            localStorage.setItem("thronos_wallet", addr || "");
+        } catch (_) {}
+    }
+
+    function loadWalletLocal() {
+        try {
+            return localStorage.getItem("thronos_wallet") || "";
+        } catch (_) {
+            return "";
         }
+    }
+
+    function appendMessage(role, text, meta) {
+        const row = document.createElement("div");
+        row.className = "message-row " + role;
+
+        const bubble = document.createElement("div");
+        bubble.className = "bubble";
+        bubble.textContent = text;
+
+        row.appendChild(bubble);
+
+        if (meta) {
+            const metaDiv = document.createElement("div");
+            metaDiv.className = "meta-line";
+            metaDiv.innerHTML = meta;
+            bubble.appendChild(metaDiv);
+        }
+
+        messagesEl.appendChild(row);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function setCreditsLabel(v) {
+        if (v === null || v === undefined) return;
+        if (v === "infinite") {
+            creditsEl.textContent = "∞ (demo)";
+        } else {
+            creditsEl.textContent = v;
+        }
+    }
+
+    function setStatus(text) {
+        statusLineEl.textContent = text;
     }
 
     async function sendMessage() {
-        const inputField = document.getElementById('user-input');
-        const message = inputField.value.trim();
-        const chatBox = document.getElementById('chat-box');
-        const keyDisplay = document.getElementById('quantum-key-display');
+        const text = userInputEl.value.trim();
+        if (!text) return;
 
-        if (!message) return;
+        const wallet = walletInputEl.value.trim();
+        saveWalletLocal(wallet);
 
-        // Add User Message
-        const userDiv = document.createElement('div');
-        userDiv.className = 'd-flex flex-row justify-content-end mb-3';
-        userDiv.innerHTML = `<div class="p-3 rounded bg-primary text-white" style="max-width: 75%;">${escapeHtml(message)}</div>`;
-        chatBox.appendChild(userDiv);
-        
-        inputField.value = '';
-        chatBox.scrollTop = chatBox.scrollHeight;
+        userInputEl.value = "";
+        appendMessage("user", text);
 
-        // Add Loading Indicator
-        const loadingDiv = document.createElement('div');
-        loadingDiv.id = 'loading-indicator';
-        loadingDiv.className = 'd-flex flex-row justify-content-start mb-3';
-        loadingDiv.innerHTML = `<div class="p-3 rounded bg-secondary text-white" style="max-width: 75%;"><i class="fas fa-circle-notch fa-spin"></i> Processing Quantum Logic...</div>`;
-        chatBox.appendChild(loadingDiv);
-        chatBox.scrollTop = chatBox.scrollHeight;
+        sendBtn.disabled = true;
+        setStatus("Core: thinking…");
+
+        // προσωρινό "typing" bubble
+        const thinkingRow = document.createElement("div");
+        thinkingRow.className = "message-row ai";
+        const thinkingBubble = document.createElement("div");
+        thinkingBubble.className = "bubble";
+        thinkingBubble.textContent = "…";
+        thinkingRow.appendChild(thinkingBubble);
+        messagesEl.appendChild(thinkingRow);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
 
         try {
-            const response = await fetch('/api/chat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: message })
+            const payload = { message: text };
+            if (wallet) payload.wallet = wallet;
+
+            const res = await fetch("/api/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
             });
-            
-            const data = await response.json();
-            
-            // Remove loading
-            loadingDiv.remove();
 
-            // Add AI Response
-            const aiDiv = document.createElement('div');
-            aiDiv.className = 'd-flex flex-row justify-content-start mb-3';
-            // Simple markdown parsing for bold/code could be added here
-            aiDiv.innerHTML = `<div class="p-3 rounded bg-secondary text-white" style="max-width: 75%;">${formatResponse(data.response)}</div>`;
-            chatBox.appendChild(aiDiv);
+            messagesEl.removeChild(thinkingRow);
 
-            // Update Key
-            if (data.quantum_key) {
-                keyDisplay.innerText = `Key: ${data.quantum_key.substring(0, 16)}... (Secured)`;
-                keyDisplay.classList.add('text-success');
+            if (!res.ok) {
+                // ειδική περίπτωση 402 = no credits
+                if (res.status === 402) {
+                    const data = await res.json().catch(() => ({}));
+                    appendMessage(
+                        "ai",
+                        data.error || "No AI credits available for this wallet.",
+                        `<span class="badge-warning">Credits depleted</span>
+                         <span>Wallet: ${data.wallet || "unknown"}</span>`
+                    );
+                    setStatus("Core: payment required (no credits)");
+                    setCreditsLabel(0);
+                    return;
+                }
+
+                appendMessage("ai", "Quantum Interference: HTTP " + res.status);
+                setStatus("Core: error");
+                return;
             }
 
-        } catch (error) {
-            loadingDiv.remove();
-            const errDiv = document.createElement('div');
-            errDiv.className = 'd-flex flex-row justify-content-start mb-3';
-            errDiv.innerHTML = `<div class="p-3 rounded bg-danger text-white" style="max-width: 75%;">Connection Error: ${error.message}</div>`;
-            chatBox.appendChild(errDiv);
+            const data = await res.json();
+
+            const metaParts = [];
+            if (data.quantum_key) {
+                metaParts.push(`<span>Key: ${String(data.quantum_key).slice(0, 12)}…</span>`);
+            }
+            if (data.wallet) {
+                metaParts.push(`<span>Wallet: ${data.wallet}</span>`);
+            }
+            if (typeof data.remaining_credits === "number") {
+                metaParts.push(`<span>Credits: ${data.remaining_credits}</span>`);
+                setCreditsLabel(data.remaining_credits);
+            }
+
+            appendMessage("ai", data.response || "[Empty response]", metaParts.join(" "));
+            setStatus("Core: " + (data.status || "online"));
+        } catch (err) {
+            messagesEl.removeChild(thinkingRow);
+            appendMessage("ai", "Quantum Interference Detected: " + err.message);
+            setStatus("Core: network error");
+        } finally {
+            sendBtn.disabled = false;
         }
-        
-        chatBox.scrollTop = chatBox.scrollHeight;
     }
 
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+    // --- events ---
+
+    sendBtn.addEventListener("click", sendMessage);
+    userInputEl.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" && !ev.shiftKey) {
+            ev.preventDefault();
+            sendMessage();
+        }
+    });
+
+    walletInputEl.value = loadWalletLocal();
+    if (walletInputEl.value) {
+        // μπορούμε να ρωτήσουμε credits αργότερα με fetch /api/ai_credits_status
+        setCreditsLabel("…");
+        fetch("/api/ai_credits_status?wallet=" + encodeURIComponent(walletInputEl.value))
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+                if (data && typeof data.credits === "number") {
+                    setCreditsLabel(data.credits);
+                } else {
+                    setCreditsLabel("infinite");
+                }
+            })
+            .catch(() => setCreditsLabel("infinite"));
+    } else {
+        setCreditsLabel("infinite");
     }
 
-    function formatResponse(text) {
-        // Basic formatting: convert newlines to <br>
-        return escapeHtml(text).replace(/\\n/g, '<br>');
-    }
+    // αρχικό μήνυμα καλωσορίσματος
+    appendMessage(
+        "ai",
+        "Quantum Encryption Verified. Το κανάλι είναι ασφαλές. Γράψε την πρώτη σου εντολή ή ερώτηση."
+    );
 </script>
-{% endblock %}
+</body>
+</html>

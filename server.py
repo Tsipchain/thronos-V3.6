@@ -16,9 +16,9 @@
 # - AI Autonomous Driving Service
 # - Mempool & 80/10/10 Reward Split (V3.7)
 # - Quorum Attestations (BLS/MuSig2 placeholder) + aggregator job (V2.9)
-# - AI File Generation + Offline Corpus Queue for Whisper/Training (V3.8)
+# - AI Knowledge Blocks: ai_block_log.json -> mempool -> ai_knowledge TXs (V4.0)
 
-import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, io, struct, binascii, re
+import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, io, struct, binascii
 from datetime import datetime
 from PIL import Image
 
@@ -27,17 +27,15 @@ from flask import Flask, request, jsonify, render_template, send_from_directory,
 from werkzeug.utils import secure_filename
 from apscheduler.schedulers.background import BackgroundScheduler
 
-# ── Local modules (υπάρχοντα)
+# ── Local modules
 from phantom_gateway_mainnet import get_btc_txns
 from secure_pledge_embed import create_secure_pdf_contract
 from phantom_decode import decode_payload_from_image
 from ai_agent_service import ThronosAI
 
 # ── Quorum modules (placeholders μέχρι να μπει real crypto)
-#   Βάλε τα δύο αρχεία δίπλα στον server:
-#   - quorum_crypto.py  (aggregate/verify dummy)
-#   - musig2.py         (dummy combiner)
 from quorum_crypto import aggregate as qc_aggregate, verify as qc_verify
+
 
 # ─── CONFIG ────────────────────────────────────────
 app = Flask(__name__)
@@ -54,15 +52,16 @@ PLEDGE_CHAIN        = os.path.join(DATA_DIR, "pledge_chain.json")
 LAST_BLOCK_FILE     = os.path.join(DATA_DIR, "last_block.json")
 WHITELIST_FILE      = os.path.join(DATA_DIR, "free_pledge_whitelist.json")
 AI_CREDS_FILE       = os.path.join(DATA_DIR, "ai_agent_credentials.json")
+AI_BLOCK_LOG_FILE   = os.path.join(DATA_DIR, "ai_block_log.json")   # NEW: AI events
 WATCHER_LEDGER_FILE = os.path.join(DATA_DIR, "watcher_ledger.json")
 IOT_DATA_FILE       = os.path.join(DATA_DIR, "iot_data.json")
 MEMPOOL_FILE        = os.path.join(DATA_DIR, "mempool.json")
-ATTEST_STORE_FILE   = os.path.join(DATA_DIR, "attest_store.json")  # NEW
+ATTEST_STORE_FILE   = os.path.join(DATA_DIR, "attest_store.json")
 
-# ΝΕΑ: AI αρχεία & offline corpus
+# AI extra storage
 AI_FILES_DIR   = os.path.join(DATA_DIR, "ai_files")
+AI_CORPUS_FILE = os.path.join(DATA_DIR, "ai_offline_corpus.json")
 os.makedirs(AI_FILES_DIR, exist_ok=True)
-AI_CORPUS_FILE = os.path.join(DATA_DIR, "ai_offline_corpus.jsonl")
 
 ADMIN_SECRET   = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
 
@@ -91,24 +90,25 @@ logger = logging.getLogger("thronos")
 # Initialize AI
 ai_agent = ThronosAI()
 
+
 # ─── HELPERS ───────────────────────────────────────
 def load_json(path, default):
     try:
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return default
 
 def save_json(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 def load_mempool():
     return load_json(MEMPOOL_FILE, [])
 
 def save_mempool(pool):
-    save_json(MEMPPOOL_FILE, pool)
+    save_json(MEMPOOL_FILE, pool)
 
 def load_attest_store():
     return load_json(ATTEST_STORE_FILE, {})
@@ -185,6 +185,85 @@ def get_mining_target():
         new_target = INITIAL_TARGET
     return new_target
 
+
+# ─── AI FILE / CORPUS HELPERS ──────────────────────
+def extract_ai_files_from_text(full_text: str):
+    """
+    Ψάχνει για blocks τύπου:
+      [[FILE:filename.ext]]
+      ...περιεχόμενο...
+      [[/FILE]]
+    Γράφει τα αρχεία στο AI_FILES_DIR και επιστρέφει:
+      files: list[ {filename, path, size} ]
+      cleaned_text: text χωρίς τα raw blocks.
+    """
+    files = []
+    cleaned_parts = []
+    i = 0
+    while True:
+        start = full_text.find("[[FILE:", i)
+        if start == -1:
+            cleaned_parts.append(full_text[i:])
+            break
+
+        # ό,τι υπάρχει πριν το block
+        cleaned_parts.append(full_text[i:start])
+
+        end_name = full_text.find("]]", start)
+        if end_name == -1:
+            # δεν κλείνει σωστά, κρατάμε όλο το υπόλοιπο
+            cleaned_parts.append(full_text[start:])
+            break
+
+        filename = full_text[start + len("[[FILE:"):end_name].strip()
+        end_block = full_text.find("[[/FILE]]", end_name)
+        if end_block == -1:
+            cleaned_parts.append(full_text[start:])
+            break
+
+        content = full_text[end_name + 2:end_block]
+
+        # ασφαλές όνομα αρχείου
+        safe_name = filename.replace("..", "_").replace("/", "_").replace("\\", "_")
+        file_path = os.path.join(AI_FILES_DIR, safe_name)
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(content.strip())
+            size = len(content.encode("utf-8"))
+            files.append({
+                "filename": safe_name,
+                "path": file_path,
+                "size": size,
+            })
+            cleaned_parts.append(f"\n[AI file generated: {safe_name}]\n")
+        except Exception as e:
+            print("AI file write error:", e)
+            cleaned_parts.append(f"\n[AI file error: {safe_name}]\n")
+
+        i = end_block + len("[[/FILE]]")
+
+    cleaned_text = "".join(cleaned_parts).strip()
+    return files, cleaned_text
+
+
+def enqueue_offline_corpus(wallet: str, prompt: str, response: str, files):
+    """
+    Ελαφρύ offline corpus για Whisper / training.
+    Δεν μπλέκει με ai_block_log.json (αυτό το χειρίζεται το ai_agent_service).
+    """
+    entry = {
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "wallet": wallet or "",
+        "prompt": prompt,
+        "response": response,
+        "files": [f.get("filename") for f in files] if files else [],
+    }
+    corpus = load_json(AI_CORPUS_FILE, [])
+    corpus.append(entry)
+    corpus = corpus[-1000:]
+    save_json(AI_CORPUS_FILE, corpus)
+
+
 # ─── VIEWER HELPERS ────────────────────────────────
 def get_blocks_for_viewer():
     chain = load_json(CHAIN_FILE, [])
@@ -196,7 +275,8 @@ def get_blocks_for_viewer():
             height = len(blocks)
         block_txs = [
             tx for tx in chain
-            if tx.get("type") in ("transfer", "coinbase", "service_payment") and tx.get("height") == height
+            if tx.get("type") in ("transfer", "coinbase", "service_payment", "ai_knowledge")
+            and tx.get("height") == height
         ]
         rsplit = b.get("reward_split") or {}
         reward_to_miner = float(rsplit.get("miner", b.get("reward_to_miner", 0.0)))
@@ -219,19 +299,29 @@ def get_blocks_for_viewer():
 
 def get_transactions_for_viewer():
     chain = load_json(CHAIN_FILE, [])
-    txs = [t for t in chain if isinstance(t, dict) and t.get("type") in ["transfer", "service_payment"]]
+    txs = [
+        t for t in chain
+        if isinstance(t, dict)
+        and t.get("type") in ["transfer", "service_payment", "ai_knowledge"]
+    ]
     out = []
     for t in txs:
+        preview = ""
+        if t.get("type") == "ai_knowledge":
+            payload = t.get("ai_payload") or ""
+            preview = payload[:96]
         out.append({
             "tx_id": t.get("tx_id","Unknown"),
             "from":  t.get("from","Unknown"),
             "to":    t.get("to","Unknown"),
             "amount": t.get("amount",0.0),
             "timestamp": t.get("timestamp",""),
-            "type": t.get("type","transfer")
+            "type": t.get("type","transfer"),
+            "note": preview,
         })
     out.sort(key=lambda x: x["timestamp"], reverse=True)
     return out
+
 
 def ensure_ai_wallet():
     pledges = load_json(PLEDGE_CHAIN, [])
@@ -264,6 +354,7 @@ def ensure_ai_wallet():
     save_json(AI_CREDS_FILE, creds)
     print(f"✅ AI Wallet Registered. Credentials saved to {AI_CREDS_FILE}")
 
+
 def decode_iot_steganography(image_path):
     try:
         img = Image.open(image_path)
@@ -288,88 +379,6 @@ def decode_iot_steganography(image_path):
         print("Stego Decode Error:", e)
         return None
 
-# ─── AI FILE BLOCK + OFFLINE CORPUS HELPERS ────────────────────────────────
-
-FILE_BLOCK_RE = re.compile(
-    r"\[\[FILE:(.+?)\]\](.*?)\[\[/FILE\]\]",
-    re.DOTALL | re.IGNORECASE
-)
-
-def extract_ai_files_from_text(text: str):
-    """
-    Βρίσκει μπλοκ τύπου:
-      [[FILE:filename.py]]
-      ...περιεχόμενο...
-      [[/FILE]]
-
-    - Γράφει τα αρχεία σε AI_FILES_DIR με μοναδικό όνομα.
-    - Επιστρέφει:
-        files: list[ { filename, stored_name, url } ]
-        cleaned_text: το κείμενο ΧΩΡΙΣ τα FILE blocks
-    """
-    files = []
-    cleaned = text
-
-    for match in FILE_BLOCK_RE.finditer(text):
-        raw_name = match.group(1).strip()
-        content = match.group(2).lstrip("\n")
-
-        safe_name = secure_filename(raw_name) or "thronos_output.txt"
-        ts = int(time.time())
-        rand = secrets.token_hex(4)
-        stored_name = f"{ts}_{rand}_{safe_name}"
-
-        abs_path = os.path.join(AI_FILES_DIR, stored_name)
-        try:
-            with open(abs_path, "w", encoding="utf-8") as f:
-                f.write(content)
-        except Exception as e:
-            print("AI file write error:", e)
-            continue
-
-        # Flask route για download
-        try:
-            url = url_for("download_ai_file", fname=stored_name, _external=False)
-        except RuntimeError:
-            # Αν δεν υπάρχει app context (σε κάποιο edge case), βάζουμε απλό relative path
-            url = f"/ai_files/{stored_name}"
-
-        files.append({
-            "filename": safe_name,
-            "stored_name": stored_name,
-            "url": url,
-        })
-
-        block_full = match.group(0)
-        cleaned = cleaned.replace(block_full, f"\n[Generated file: {safe_name}]\n")
-
-    return files, cleaned.strip()
-
-def enqueue_offline_corpus(wallet: str, prompt: str, full_response: str, files: list):
-    """
-    Γράφει μία γραμμή JSON στο AI_CORPUS_FILE (JSONL).
-    Εκεί μπορεί ο Whisper node / training daemon να διαβάζει:
-      - prompt
-      - full_response (μαζί με FILE tags αν θες)
-      - λίστα αρχείων (filename + stored_name)
-    """
-    entry = {
-        "ts": int(time.time()),
-        "wallet": wallet or None,
-        "prompt": prompt,
-        "response": full_response,
-        "files": [
-            {
-                "filename": f.get("filename"),
-                "stored_name": f.get("stored_name"),
-            } for f in (files or [])
-        ]
-    }
-    try:
-        with open(AI_CORPUS_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    except Exception as e:
-        print("AI offline corpus write error:", e)
 
 # ─── BASIC PAGES ───────────────────────────────────
 @app.route("/")
@@ -380,19 +389,13 @@ def home():
 def serve_contract(filename):
     return send_from_directory(CONTRACTS_DIR, filename)
 
-# ΝΕΟ: Download AI Generated Files
-@app.route("/ai_files/<path:fname>")
-def download_ai_file(fname):
-    """
-    Κατέβασμα προσωρινών AI αρχείων (κώδικας, scripts κ.λπ. που παρήγαγε ο agent).
-    """
-    return send_from_directory(AI_FILES_DIR, fname, as_attachment=True)
-
 @app.route("/viewer")
 def viewer():
-    return render_template("thronos_block_viewer.html",
-                           blocks=get_blocks_for_viewer(),
-                           transactions=get_transactions_for_viewer())
+    return render_template(
+        "thronos_block_viewer.html",
+        blocks=get_blocks_for_viewer(),
+        transactions=get_transactions_for_viewer(),
+    )
 
 @app.route("/wallet")
 def wallet_page():
@@ -431,6 +434,7 @@ def iot_page():
 def chat_page():
     return render_template("chat.html")
 
+
 # ─── RECOVERY FLOW ─────────────────────────────────
 @app.route("/recovery")
 def recovery_page():
@@ -461,6 +465,7 @@ def recover_submit():
             os.remove(temp_path)
         return jsonify(error=f"Server error: {str(e)}"), 500
 
+
 # ─── STATUS APIs ───────────────────────────────────
 @app.route("/chain")
 def get_chain():
@@ -476,7 +481,11 @@ def last_block_hash():
     blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
     if blocks:
         last = blocks[-1]
-        return jsonify(last_hash=last.get("block_hash",""), height=len(blocks)-1, timestamp=last.get("timestamp"))
+        return jsonify(
+            last_hash=last.get("block_hash",""),
+            height=len(blocks)-1,
+            timestamp=last.get("timestamp"),
+        )
     return jsonify(last_hash="0"*64, height=-1, timestamp=None)
 
 @app.route("/mining_info")
@@ -563,6 +572,7 @@ def api_mempool():
 def api_blocks():
     return jsonify(get_blocks_for_viewer()), 200
 
+
 # ─── NEW SERVICES APIs ─────────────────────────────
 @app.route("/api/bridge/data")
 def bridge_data():
@@ -633,18 +643,18 @@ def iot_autonomous_request():
     print(f"🤖 AI Autopilot Activated for {wallet}. Payment: {amount} THR")
     return jsonify(status="granted", message="AI Driver Activated"),200
 
-# ─── QUANTUM CHAT API (με αρχεία + offline corpus) ─────────────────────────
+
+# ─── QUANTUM CHAT API (ενιαίο AI + αρχεία + offline corpus) ─────────────────
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
     """
     Unified AI chat endpoint:
-
-    - Χρησιμοποιεί ThronosAI (OpenAI / Google) για να φέρει την απάντηση.
+    - Χρησιμοποιεί ThronosAI (OpenAI / Google / offline) για την απάντηση.
     - Αν η απάντηση περιέχει FILE blocks:
-         [[FILE:filename.ext]] ... [[/FILE]]
+        [[FILE:filename.ext]] ... [[/FILE]]
       τα γράφει σε πραγματικά αρχεία στο data/ai_files.
-    - Κάθε κλήση καταγράφεται σε offline corpus (ai_offline_corpus.jsonl)
-      για Whisper / training / blockchain blocks.
+    - Κάθε απάντηση καταγράφεται ούτως ή άλλως σε ai_block_log.json
+      (μέσα από το ai_agent_service) και επιπλέον σε ai_offline_corpus.json.
     """
     data = request.get_json() or {}
     msg = (data.get("message") or "").strip()
@@ -653,8 +663,8 @@ def api_chat():
     if not msg:
         return jsonify(error="Message required"), 400
 
-    # 1. Παίρνουμε απάντηση από τον ThronosAI provider
-    raw = ai_agent.generate_response(msg)
+    # 1. Απάντηση από τον ThronosAI provider (μαζί με wallet)
+    raw = ai_agent.generate_response(msg, wallet=wallet)
 
     if isinstance(raw, dict):
         full_text = str(raw.get("response") or "")
@@ -673,21 +683,24 @@ def api_chat():
         files = []
         cleaned = full_text
 
-    # 3. Offline corpus enqueue για Whisper / training / blockchain
+    # 3. Offline corpus enqueue για Whisper / training / chain
     try:
         enqueue_offline_corpus(wallet, msg, full_text, files)
     except Exception as e:
-        print("AI offline queue error:", e)
+        print("offline corpus enqueue error:", e)
 
-    # 4. Επιστροφή στο frontend
-    return jsonify({
+    # 4. JSON αποτέλεσμα για frontend
+    resp = {
         "response": cleaned,
         "quantum_key": quantum_key,
         "status": status,
-        "wallet": wallet or None,
-        "files": files
-    }), 200
+        "wallet": wallet,
+        "files": files,
+    }
+    return jsonify(resp), 200
 
+
+# ─── NODE REGISTRATION / IOT KIT ───────────────────
 @app.route("/register_node", methods=["POST"])
 def register_node():
     address = request.form.get("address","").strip()
@@ -720,7 +733,7 @@ except Exception as e:
     print(f"Error: {{e}}"); input("Press Enter to exit...")
 """
     try:
-        with open(os.path.join(BASE_DIR,"iot_vehicle_node.py"),"r") as f:
+        with open(os.path.join(BASE_DIR,"iot_vehicle_node.py"),"r",encoding="utf-8") as f:
             node_script=f.read()
     except FileNotFoundError:
         node_script="# iot_vehicle_node.py not found on server."
@@ -742,6 +755,7 @@ except Exception as e:
         as_attachment=True,
         download_name=f"iot_node_kit_{node_id[:8]}.zip"
     )
+
 
 # ─── PLEDGE FLOW ───────────────────────────────────
 @app.route("/pledge")
@@ -768,11 +782,7 @@ def pledge_submit():
     free_list=load_json(WHITELIST_FILE,[])
     paid, txns = (True,[]) if btc_address in free_list else verify_btc_payment(btc_address)
     if not paid:
-        return jsonify(
-            status="pending",
-            message="Waiting for BTC payment",
-            txns=txns
-        ),200
+        return jsonify(status="pending",message="Waiting for BTC payment",txns=txns),200
     thr_addr=f"THR{int(time.time()*1000)}"
     phash = hashlib.sha256((btc_address+pledge_text).encode()).hexdigest()
     send_seed=secrets.token_hex(16)
@@ -792,14 +802,7 @@ def pledge_submit():
     chain=load_json(CHAIN_FILE,[])
     height=len(chain)
     pdf_name=create_secure_pdf_contract(
-        btc_address,
-        pledge_text,
-        thr_addr,
-        phash,
-        height,
-        send_seed,
-        CONTRACTS_DIR,
-        passphrase
+        btc_address, pledge_text, thr_addr, phash, height, send_seed, CONTRACTS_DIR, passphrase
     )
     pledge_entry["pdf_filename"]=pdf_name
     pledges.append(pledge_entry)
@@ -812,17 +815,22 @@ def pledge_submit():
         send_secret=send_seed
     ),200
 
+
 @app.route("/wallet_data/<thr_addr>")
 def wallet_data(thr_addr):
     ledger=load_json(LEDGER_FILE,{})
     chain=load_json(CHAIN_FILE,[])
     bal=round(float(ledger.get(thr_addr,0.0)),6)
-    history=[tx for tx in chain if isinstance(tx,dict) and (tx.get("from")==thr_addr or tx.get("to")==thr_addr)]
+    history=[
+        tx for tx in chain
+        if isinstance(tx,dict) and (tx.get("from")==thr_addr or tx.get("to")==thr_addr)
+    ]
     return jsonify(balance=bal, transactions=history),200
 
 @app.route("/wallet/<thr_addr>")
 def wallet_redirect(thr_addr):
     return redirect(url_for("wallet_data", thr_addr=thr_addr)),302
+
 
 @app.route("/send_thr", methods=["POST"])
 def send_thr():
@@ -861,7 +869,10 @@ def send_thr():
     sender_balance=float(ledger.get(from_thr,0.0))
     total_cost=amount+SEND_FEE
     if sender_balance<total_cost:
-        return jsonify(error="insufficient_balance",balance=round(sender_balance,6)),400
+        return jsonify(
+            error="insufficient_balance",
+            balance=round(sender_balance,6)
+        ),400
     ledger[from_thr]=round(sender_balance-total_cost,6)
     save_json(LEDGER_FILE,ledger)
     chain=load_json(CHAIN_FILE,[])
@@ -883,11 +894,8 @@ def send_thr():
     pool.append(tx)
     save_mempool(pool)
     update_last_block(tx,is_block=False)
-    return jsonify(
-        status="pending",
-        tx=tx,
-        new_balance_from=ledger[from_thr]
-    ),200
+    return jsonify(status="pending", tx=tx, new_balance_from=ledger[from_thr]),200
+
 
 # ─── ADMIN WHITELIST + MIGRATION ───────────────────
 @app.route("/admin/whitelist", methods=["GET"])
@@ -942,13 +950,7 @@ def admin_migrate_seeds():
         chain=load_json(CHAIN_FILE,[])
         height=len(chain)
         pdf_name=create_secure_pdf_contract(
-            btc_address,
-            pledge_text,
-            thr_addr,
-            pledge_hash,
-            height,
-            send_seed,
-            CONTRACTS_DIR
+            btc_address, pledge_text, thr_addr, pledge_hash, height, send_seed, CONTRACTS_DIR
         )
         p["pdf_filename"]=pdf_name
         changed.append({
@@ -960,7 +962,8 @@ def admin_migrate_seeds():
     save_json(PLEDGE_CHAIN, pledges)
     return jsonify(migrated=changed),200
 
-# ─── QUORUM LAYER – Real aggregation API surface (BLS placeholder) ─────────
+
+# ─── QUORUM LAYER – aggregation API surface (BLS placeholder) ───────────────
 def _tx_message_bytes(tx: dict) -> bytes:
     material = f"{tx.get('from','')}|{tx.get('to','')}|{tx.get('amount',0)}|{tx.get('tx_id','')}"
     return hashlib.sha256(material.encode()).digest()
@@ -986,12 +989,7 @@ def api_attest():
     bucket=store.get(tx_id, {"scheme":scheme, "items":[]})
     already={ (i.get("pubkey"), i.get("signer")) for i in bucket["items"] }
     if (pubkey, signer) not in already:
-        bucket["items"].append({
-            "signer":signer,
-            "sig":partial_sig,
-            "pubkey":pubkey,
-            "ts":int(time.time())
-        })
+        bucket["items"].append({"signer":signer,"sig":partial_sig,"pubkey":pubkey,"ts":int(time.time())})
         store[tx_id]=bucket
         save_attest_store(store)
     if "signers" not in tx:
@@ -999,11 +997,7 @@ def api_attest():
     if tx.get("status") not in ("pending","confirmed"):
         tx["status"]="quoruming"
     save_mempool([t if t.get("tx_id")!=tx_id else tx for t in pool])
-    return jsonify(
-        status="accepted",
-        collected=len(bucket["items"]),
-        scheme=bucket["scheme"]
-    ),200
+    return jsonify(status="accepted", collected=len(bucket["items"]), scheme=bucket["scheme"]),200
 
 @app.route("/api/tx/<tx_id>/verify", methods=["GET"])
 def api_verify_tx_sig(tx_id):
@@ -1043,12 +1037,10 @@ def aggregator_step():
         if not normalized:
             if policy=="FAST":
                 if tx.get("status")!="pending":
-                    tx["status"]="pending"
-                    changed=True
+                    tx["status"]="pending"; changed=True
             else:
                 if tx.get("status")!="quoruming":
-                    tx["status"]="quoruming"
-                    changed=True
+                    tx["status"]="quoruming"; changed=True
             continue
         if len(normalized) >= min_signers:
             msg=_tx_message_bytes(tx)
@@ -1064,14 +1056,13 @@ def aggregator_step():
         else:
             if policy=="FAST":
                 if tx.get("status")!="pending":
-                    tx["status"]="pending"
-                    changed=True
+                    tx["status"]="pending"; changed=True
             else:
                 if tx.get("status")!="quoruming":
-                    tx["status"]="quoruming"
-                    changed=True
+                    tx["status"]="quoruming"; changed=True
     if changed:
         save_mempool(pool)
+
 
 # ─── MINING ENDPOINT ───────────────────────────────
 @app.route("/submit_block", methods=["POST"])
@@ -1118,6 +1109,8 @@ def submit_block():
     current_target=get_mining_target()
     if int(pow_hash,16)>current_target:
         return jsonify(error=f"Insufficient difficulty. Target: {hex(current_target)}"),400
+
+    # Reward split
     height=len(chain)
     total_reward=calculate_reward(height)
     miner_share=round(total_reward*0.80,6)
@@ -1131,11 +1124,7 @@ def submit_block():
         "prev_hash":prev_hash,
         "nonce":nonce,
         "reward":total_reward,
-        "reward_split":{
-            "miner":miner_share,
-            "ai":ai_share,
-            "burn":burn_share
-        },
+        "reward_split":{"miner":miner_share,"ai":ai_share,"burn":burn_share},
         "pool_fee":burn_share,
         "reward_to_miner":miner_share,
         "height":height,
@@ -1144,6 +1133,8 @@ def submit_block():
         "is_stratum":is_stratum
     }
     chain.append(new_block)
+
+    # include mempool TXs
     pool=load_mempool()
     included=[]
     if pool:
@@ -1154,6 +1145,7 @@ def submit_block():
             chain.append(tx)
             included.append(tx)
         save_mempool([])
+
         ledger=load_json(LEDGER_FILE,{})
         for tx in included:
             if tx.get("type")=="transfer":
@@ -1163,15 +1155,19 @@ def submit_block():
                 ledger[to_thr]=round(ledger.get(to_thr,0.0)+amt,6)
                 ledger[BURN_ADDRESS]=round(ledger.get(BURN_ADDRESS,0.0)+fee,6)
         save_json(LEDGER_FILE,ledger)
+
+    # reward to ledger
     ledger=load_json(LEDGER_FILE,{})
     ledger[thr_address]=round(ledger.get(thr_address,0.0)+miner_share,6)
     ledger[AI_WALLET_ADDRESS]=round(ledger.get(AI_WALLET_ADDRESS,0.0)+ai_share,6)
     ledger[BURN_ADDRESS]=round(ledger.get(BURN_ADDRESS,0.0)+burn_share,6)
     save_json(LEDGER_FILE,ledger)
+
     save_json(CHAIN_FILE,chain)
     update_last_block(new_block,is_block=True)
     print(f"⛏️ Miner {thr_address} found block #{height}! R={total_reward} (m/a/b: {miner_share}/{ai_share}/{burn_share}) | TXs: {len(included)} | Stratum={is_stratum}")
     return jsonify(status="accepted", height=height, reward=miner_share, tx_included=len(included)),200
+
 
 # ─── BACKGROUND MINTER / WATCHDOG ──────────────────
 def submit_mining_block_for_pledge(thr_addr):
@@ -1203,11 +1199,7 @@ def submit_mining_block_for_pledge(thr_addr):
         "prev_hash":prev_hash,
         "nonce":nonce,
         "reward":total_reward,
-        "reward_split":{
-            "miner":miner_share,
-            "ai":ai_share,
-            "burn":burn_share
-        },
+        "reward_split":{"miner":miner_share,"ai":ai_share,"burn":burn_share},
         "pool_fee":burn_share,
         "reward_to_miner":miner_share,
         "height":height,
@@ -1272,11 +1264,94 @@ def mint_first_blocks():
             continue
         submit_mining_block_for_pledge(thr)
 
+
+# ─── AI KNOWLEDGE WATCHER – log -> mempool -> block ─────────────────────────
+def ai_knowledge_watcher():
+    """
+    Διαβάζει το AI_BLOCK_LOG_FILE (ai_block_log.json) και για κάθε νέα
+    εγγραφή δημιουργεί mempool TX τύπου 'ai_knowledge'.
+    Τα TXs αυτά θα μπουν στο επόμενο block που θα γίνει mined.
+    """
+    try:
+        log_entries = load_json(AI_BLOCK_LOG_FILE, [])
+        if not log_entries:
+            return
+
+        pool = load_mempool()
+        chain = load_json(CHAIN_FILE, [])
+
+        seen_ids = set(
+            tx.get("ai_log_id") for tx in pool
+            if isinstance(tx, dict) and tx.get("type") == "ai_knowledge"
+        )
+        for tx in chain:
+            if isinstance(tx, dict) and tx.get("type") == "ai_knowledge":
+                if tx.get("ai_log_id"):
+                    seen_ids.add(tx["ai_log_id"])
+
+        changed = False
+
+        for entry in log_entries:
+            eid = entry.get("id")
+            if not eid or eid in seen_ids:
+                continue
+
+            if str(entry.get("status","")).lower() == "error":
+                continue
+
+            prompt = entry.get("prompt", "")
+            response = entry.get("response", "")
+            provider = entry.get("provider", "")
+            model = entry.get("model", "")
+            wallet = entry.get("wallet") or AI_WALLET_ADDRESS
+            ts = entry.get("timestamp") or time.strftime(
+                "%Y-%m-%d %H:%M:%S UTC", time.gmtime()
+            )
+
+            payload_obj = {
+                "prompt_tail": prompt[-512:],
+                "response_tail": response[-2048:],
+                "provider": provider,
+                "model": model,
+            }
+            payload_json = json.dumps(payload_obj, ensure_ascii=False)
+            ai_hash = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+
+            tx = {
+                "type": "ai_knowledge",
+                "height": None,
+                "timestamp": ts,
+                "from": wallet,
+                "to": AI_WALLET_ADDRESS,
+                "amount": 0.0,
+                "fee_burned": 0.0,
+                "tx_id": f"AI-{eid}",
+                "ai_log_id": eid,
+                "ai_hash": ai_hash,
+                "ai_payload": payload_json,
+                "status": "pending",
+                "confirmation_policy": "FAST",
+                "min_signers": 0,
+            }
+
+            pool.append(tx)
+            seen_ids.add(eid)
+            changed = True
+
+        if changed:
+            save_mempool(pool)
+            print("🤖 [AI-KNOWLEDGE] updated mempool with new AI entries.")
+
+    except Exception as e:
+        print("[AI-KNOWLEDGE WATCHER] error:", e)
+
+
 # ─── SCHEDULER ─────────────────────────────────────
 scheduler=BackgroundScheduler(daemon=True)
 scheduler.add_job(mint_first_blocks, "interval", minutes=1)
 scheduler.add_job(confirm_mempool_if_stuck, "interval", seconds=45)
-scheduler.add_job(aggregator_step, "interval", seconds=10)  # NEW: quorum aggregator
+scheduler.add_job(aggregator_step, "interval", seconds=10)
+scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30)  # NEW
 scheduler.start()
 
 # Run AI Wallet Check on Startup

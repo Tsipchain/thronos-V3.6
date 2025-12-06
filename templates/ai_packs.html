@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Thronos AI Packs</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #050608;
+            color: #e0ffe8;
+            font-family: "Fira Code", "Consolas", monospace;
+        }
+
+        .top-bar {
+            border-bottom: 1px solid #00ff66;
+            padding: 8px 16px;
+            background: #020904;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: #00ffcc;
+        }
+
+        .logo span { color: #00ff66; }
+
+        #root {
+            max-width: 900px;
+            margin: 18px auto;
+            padding: 0 12px 32px;
+        }
+
+        h1 {
+            font-size: 18px;
+            border-bottom: 1px solid #00ff66;
+            padding-bottom: 6px;
+            margin-bottom: 10px;
+        }
+
+        .wallet-row {
+            margin-bottom: 12px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            font-size: 13px;
+        }
+
+        .wallet-row input {
+            flex: 1;
+            background: #000;
+            border: 1px solid rgba(0, 255, 102, 0.4);
+            color: #00ffcc;
+            border-radius: 4px;
+            padding: 4px 6px;
+            font-family: inherit;
+            font-size: 12px;
+        }
+
+        .wallet-row button {
+            border-radius: 4px;
+            border: 1px solid #00ff66;
+            background: #00ff66;
+            color: #000;
+            font-size: 12px;
+            padding: 4px 10px;
+            cursor: pointer;
+        }
+
+        .packs-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 12px;
+            margin-top: 10px;
+        }
+
+        .pack-card {
+            border-radius: 6px;
+            border: 1px solid rgba(0, 255, 102, 0.5);
+            background: #0a1014;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .pack-title {
+            font-weight: 600;
+            color: #00ffcc;
+        }
+
+        .pack-code {
+            font-size: 11px;
+            color: #7de6a0;
+        }
+
+        .pack-desc {
+            font-size: 12px;
+            color: #c0ffd0;
+        }
+
+        .pack-meta {
+            font-size: 12px;
+        }
+
+        .pack-meta span {
+            margin-right: 12px;
+        }
+
+        .btn-buy {
+            margin-top: 6px;
+            border-radius: 4px;
+            border: 1px solid #00ff66;
+            background: #00ff66;
+            color: #000;
+            font-size: 12px;
+            padding: 4px 10px;
+            cursor: pointer;
+            align-self: flex-start;
+        }
+
+        .notice {
+            font-size: 11px;
+            color: #7de6a0;
+            margin-top: 6px;
+        }
+
+        .status-line {
+            font-size: 12px;
+            margin-top: 10px;
+            min-height: 16px;
+        }
+
+        .status-line.error { color: #ff4d4d; }
+        .status-line.ok    { color: #00ffcc; }
+    </style>
+</head>
+<body>
+<div class="top-bar">
+    <div class="logo">THRONOS <span>AI PACKS</span></div>
+    <div style="font-size:11px;color:#7de6a0;">
+        Pay in THR · Credits για το Quantum Chat
+    </div>
+</div>
+
+<div id="root">
+    <h1>AI Access Packs</h1>
+
+    <div class="wallet-row">
+        <span style="font-size:12px;">THR Wallet:</span>
+        <input id="wallet" type="text" placeholder="THRxxxxxxxx">
+        <button id="save-wallet">Save</button>
+    </div>
+
+    <div class="notice">
+        Με αυτό το wallet θα χρεώνεται η πληρωμή και θα πιστώνονται τα AI credits
+        που βλέπεις στο Quantum Chat.
+    </div>
+
+    <div id="status" class="status-line"></div>
+
+    <div id="packs" class="packs-grid">
+        <!-- packs will load here -->
+    </div>
+</div>
+
+<script>
+    const walletInput = document.getElementById("wallet");
+    const saveBtn = document.getElementById("save-wallet");
+    const packsDiv = document.getElementById("packs");
+    const statusDiv = document.getElementById("status");
+
+    function setStatus(text, cls) {
+        statusDiv.textContent = text || "";
+        statusDiv.className = "status-line " + (cls || "");
+    }
+
+    function loadWalletLocal() {
+        try {
+            return localStorage.getItem("thronos_wallet") || "";
+        } catch (_) {
+            return "";
+        }
+    }
+
+    function saveWalletLocal(addr) {
+        try {
+            localStorage.setItem("thronos_wallet", addr || "");
+        } catch (_) {}
+    }
+
+    walletInput.value = loadWalletLocal();
+
+    saveBtn.addEventListener("click", () => {
+        saveWalletLocal(walletInput.value.trim());
+        setStatus("Wallet saved locally. Χρησιμοποίησε το ίδιο στο Quantum Chat.", "ok");
+    });
+
+    async function loadPacks() {
+        try {
+            const res = await fetch("/api/ai_packs");
+            if (!res.ok) {
+                setStatus("Failed to load packs (" + res.status + ")", "error");
+                return;
+            }
+            const data = await res.json();
+            renderPacks(data.packs || []);
+        } catch (err) {
+            setStatus("Network error while loading packs: " + err.message, "error");
+        }
+    }
+
+    function renderPacks(packs) {
+        packsDiv.innerHTML = "";
+        if (!packs.length) {
+            packsDiv.textContent = "No packs available.";
+            return;
+        }
+
+        for (const p of packs) {
+            const card = document.createElement("div");
+            card.className = "pack-card";
+
+            const title = document.createElement("div");
+            title.className = "pack-title";
+            title.textContent = p.title || p.code;
+            card.appendChild(title);
+
+            const code = document.createElement("div");
+            code.className = "pack-code";
+            code.textContent = "Code: " + p.code;
+            card.appendChild(code);
+
+            const desc = document.createElement("div");
+            desc.className = "pack-desc";
+            desc.textContent = p.description || "";
+            card.appendChild(desc);
+
+            const meta = document.createElement("div");
+            meta.className = "pack-meta";
+            meta.innerHTML =
+                "<span>Credits: " + p.credits + "</span>" +
+                "<span>Price: " + p.price_thr + " THR</span>";
+            card.appendChild(meta);
+
+            const btn = document.createElement("button");
+            btn.className = "btn-buy";
+            btn.textContent = "Buy with THR";
+            btn.addEventListener("click", () => purchasePack(p.code));
+            card.appendChild(btn);
+
+            packsDiv.appendChild(card);
+        }
+    }
+
+    async function purchasePack(code) {
+        const wallet = walletInput.value.trim();
+        if (!wallet) {
+            setStatus("Βάλε πρώτα THR wallet.", "error");
+            return;
+        }
+
+        setStatus("Processing purchase for " + code + "…", "ok");
+
+        try {
+            const res = await fetch("/api/ai_purchase_pack", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ wallet, pack: code })
+            });
+
+            const data = await res.json();
+
+            if (!res.ok || data.status !== "granted") {
+                setStatus(
+                    data.message || "Purchase failed (" + res.status + ")",
+                    "error"
+                );
+                return;
+            }
+
+            setStatus(
+                "Purchased " + data.pack.title + ". Total credits: " + data.total_credits,
+                "ok"
+            );
+        } catch (err) {
+            setStatus("Network error during purchase: " + err.message, "error");
+        }
+    }
+
+    loadPacks();
+</script>
+</body>
+</html>

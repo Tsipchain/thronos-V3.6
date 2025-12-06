@@ -24,14 +24,22 @@ class ThronosAI:
                 logger.error("openai module not installed.")
         
         elif self.google_key:
-            try:
-                import google.generativeai as genai
-                genai.configure(api_key=self.google_key)
-                self.client = genai.GenerativeModel('gemini-pro')
-                self.provider = "google"
-                logger.info("AI Agent initialized with Google Gemini.")
-            except ImportError:
-                logger.error("google.generativeai module not installed.")
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=self.google_key)
+
+        # Χρησιμοποίησε ένα από τα νέα μοντέλα
+        # Γρήγορο & φθηνό:
+        # model_name = "gemini-1.5-flash"
+        # Πιο δυνατό:
+        model_name = "gemini-1.5-pro"
+
+        self.client = genai.GenerativeModel(model_name)
+        self.provider = "google"
+        logger.info(f"AI Agent initialized with Google Gemini ({model_name}).")
+    except ImportError:
+        logger.error("google.generativeai module not installed.")
+
         
         else:
             logger.warning("No AI API Keys found (OPENAI_API_KEY or GOOGLE_API_KEY). AI features will be offline.")

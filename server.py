@@ -58,6 +58,10 @@ IOT_DATA_FILE       = os.path.join(DATA_DIR, "iot_data.json")
 MEMPOOL_FILE        = os.path.join(DATA_DIR, "mempool.json")
 ATTEST_STORE_FILE   = os.path.join(DATA_DIR, "attest_store.json")
 
+# AI commerce
+AI_PACKS_FILE       = os.path.join(DATA_DIR, "ai_packs.json")
+AI_CREDITS_FILE     = os.path.join(DATA_DIR, "ai_credits.json")
+
 # AI extra storage
 AI_FILES_DIR   = os.path.join(DATA_DIR, "ai_files")
 AI_CORPUS_FILE = os.path.join(DATA_DIR, "ai_offline_corpus.json")
@@ -81,7 +85,7 @@ INITIAL_TARGET    = 2 ** 236         # 5 hex zeros (20 bits)
 TARGET_BLOCK_TIME = 60               # seconds
 RETARGET_INTERVAL = 10               # blocks
 
-AI_WALLET_ADDRESS = "THR_AI_AGENT_WALLET_V1"
+AI_WALLET_ADDRESS = os.getenv("THR_AI_AGENT_WALLET", "THR_AI_AGENT_WALLET_V1")
 BURN_ADDRESS      = "0x0"
 
 logging.basicConfig(level=logging.INFO)
@@ -116,6 +120,55 @@ def load_attest_store():
 def save_attest_store(store):
     save_json(ATTEST_STORE_FILE, store)
 
+# --- AI Packs & Credits helpers ------------------------------------------------
+
+AI_DEFAULT_PACKS = [
+    {
+        "code": "Q-100",
+        "title": "Quantum Explorer 100",
+        "description": "Για light χρήση, tests και μικρά prompts.",
+        "credits": 100,
+        "price_thr": 5.0,
+    },
+    {
+        "code": "Q-500",
+        "title": "Researcher 500",
+        "description": "Σταθερή καθημερινή χρήση του Quantum Chat.",
+        "credits": 500,
+        "price_thr": 20.0,
+    },
+    {
+        "code": "Q-2000",
+        "title": "Validator 2000",
+        "description": "Για power-users, devs και validators του Thronos.",
+        "credits": 2000,
+        "price_thr": 60.0,
+    },
+]
+
+
+def load_ai_packs():
+    """Διαβάζει τα διαθέσιμα packs από αρχείο, αλλιώς επιστρέφει τα default."""
+    data = load_json(AI_PACKS_FILE, None)
+    if isinstance(data, list) and data:
+        return data
+    return AI_DEFAULT_PACKS
+
+
+def save_ai_packs(packs):
+    """Αν θες κάποια στιγμή να αλλάζεις δυναμικά τα packs."""
+    save_json(AI_PACKS_FILE, packs)
+
+
+def load_ai_credits():
+    """wallet -> σύνολο credits"""
+    return load_json(AI_CREDITS_FILE, {})
+
+
+def save_ai_credits(credits):
+    save_json(AI_CREDITS_FILE, credits)
+
+
 def sha256d(data: bytes) -> bytes:
     return hashlib.sha256(hashlib.sha256(data).digest()).digest()
 
@@ -127,11 +180,11 @@ def target_to_bits(target: int) -> int:
         target_hex = "0" + target_hex
     target_bytes = bytes.fromhex(target_hex)
     if target_bytes[0] >= 0x80:
-        target_bytes = b"\x00" + target_bytes
+        target_bytes = b"\\x00" + target_bytes
     exponent = len(target_bytes)
     coefficient = target_bytes[:3]
     if len(coefficient) < 3:
-        coefficient = coefficient + b"\x00" * (3 - len(coefficient))
+        coefficient = coefficient + b"\\x00" * (3 - len(coefficient))
     return (exponent << 24) | int.from_bytes(coefficient, "big")
 
 def calculate_reward(height: int) -> float:
@@ -434,6 +487,13 @@ def iot_page():
 def chat_page():
     return render_template("chat.html")
 
+@app.route("/ai_packs")
+def ai_packs_page():
+    # Αν έχεις το ai_packs.html στο templates/
+    return render_template("ai_packs.html")
+    # Αν το βάλεις σε static/, τότε:
+    # return send_from_directory(STATIC_DIR, "ai_packs.html")
+
 
 # ─── RECOVERY FLOW ─────────────────────────────────
 @app.route("/recovery")
@@ -700,6 +760,107 @@ def api_chat():
     return jsonify(resp), 200
 
 
+# ─── AI PACKS API ──────────────────────────────────────────────────────────────
+
+@app.route("/api/ai_packs", methods=["GET"])
+def api_ai_packs():
+    """
+    Επιστρέφει τη λίστα των διαθέσιμων AI packs.
+    Αν υπάρχει ai_packs.json στο DATA_DIR, το διαβάζει από εκεί,
+    αλλιώς χρησιμοποιεί τα AI_DEFAULT_PACKS.
+    """
+    packs = load_ai_packs()
+    return jsonify({"packs": packs}), 200
+
+
+@app.route("/api/ai_purchase_pack", methods=["POST"])
+def api_ai_purchase_pack():
+    """
+    Πληρωμή AI pack με THR:
+
+    - Παίρνει { wallet, pack } από JSON
+    - Ελέγχει υπόλοιπο στο ledger
+    - Χρεώνει τον χρήστη, πιστώνει το AI_WALLET_ADDRESS
+    - Γράφει service_payment TX στο CHAIN_FILE
+    - Αυξάνει τα credits του wallet στο ai_credits.json
+    """
+    data = request.get_json() or {}
+    wallet = (data.get("wallet") or "").strip()
+    code   = (data.get("pack") or "").strip()
+
+    if not wallet or not code:
+        return jsonify(
+            status="denied",
+            message="Wallet και pack code είναι υποχρεωτικά."
+        ), 400
+
+    packs = load_ai_packs()
+    pack = next((p for p in packs if p.get("code") == code), None)
+    if not pack:
+        return jsonify(status="denied", message="Άγνωστο AI pack."), 400
+
+    try:
+        price = float(pack.get("price_thr", 0.0))
+    except Exception:
+        price = 0.0
+
+    if price <= 0:
+        return jsonify(status="denied", message="Μη έγκυρη τιμή πακέτου."), 400
+
+    # --- Ledger έλεγχος & μεταφορά THR ---
+    ledger = load_json(LEDGER_FILE, {})
+    balance = float(ledger.get(wallet, 0.0))
+
+    if balance < price:
+        return jsonify(
+            status="denied",
+            message=f"Insufficient THR funds (έχεις {balance}, χρειάζονται {price})."
+        ), 400
+
+    ledger[wallet] = round(balance - price, 6)
+    ledger[AI_WALLET_ADDRESS] = round(
+        float(ledger.get(AI_WALLET_ADDRESS, 0.0)) + price,
+        6,
+    )
+    save_json(LEDGER_FILE, ledger)
+
+    # --- Credits ledger ---
+    credits = load_ai_credits()
+    current_credits = int(credits.get(wallet, 0))
+    add_credits = int(pack.get("credits", 0))
+    total_credits = current_credits + add_credits
+    credits[wallet] = total_credits
+    save_ai_credits(credits)
+
+    # --- Chain TX (service_payment) ---
+    chain = load_json(CHAIN_FILE, [])
+    tx = {
+        "type": "service_payment",
+        "service": "AI_PACK",
+        "pack_code": pack.get("code"),
+        "pack_credits": add_credits,
+        "from": wallet,
+        "to": AI_WALLET_ADDRESS,
+        "amount": price,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "tx_id": f"AI-{int(time.time())}-{len(chain)}",
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+
+    print(
+        f"🤖 AI Pack purchased: {pack.get('code')} by {wallet} "
+        f"({add_credits} credits, total={total_credits})"
+    )
+
+    return jsonify(
+        status="granted",
+        pack=pack,
+        total_credits=total_credits,
+    ), 200
+
+
 # ─── NODE REGISTRATION / IOT KIT ───────────────────
 @app.route("/register_node", methods=["POST"])
 def register_node():
@@ -742,11 +903,11 @@ except Exception as e:
         zf.writestr("node_config.json",config_json)
         zf.writestr("start_iot.py",start_script)
         zf.writestr("iot_vehicle_node.py",node_script)
-        pic_path=os.path.join(BASE_DIR,"pic_of_the_fire.png")
+        pic_path=os.path.join(BASE_DIR,"/images/photo1765128369.jpg")
         if os.path.exists(pic_path):
-            zf.write(pic_path,"pic_of_the_fire.png")
+            zf.write(pic_path,"/images/photo1765128369.jpg")
         else:
-            zf.writestr("pic_of_the_fire.png","")
+            zf.writestr("/images/photo1765128369.jpg","")
         zf.writestr("README.txt","1. Install Python 3.\n2. Run 'python start_iot.py' (auto-installs deps).")
     memory_file.seek(0)
     return send_file(

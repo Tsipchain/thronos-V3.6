@@ -544,7 +544,8 @@
             const payload = { message: text };
             if (wallet) payload.wallet = wallet;
 
-            const res = await fetch("/api/chat", {\n                method: "POST",
+            const res = await fetch("/api/chat", {
+                method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload)
             });
@@ -616,7 +617,9 @@
           const data = await res.json();
           
           if (res.ok) {
-              appendMessage("ai", `Uploaded file ${data.filename} (hash: ${data.hash.slice(0,8)}…)`);
+              const fname = data.filename || (aiUploadInput.files[0] && aiUploadInput.files[0].name) || "file";
+              const msg   = data.message || "File uploaded to AI corpus";
+              appendMessage("ai", `Uploaded file ${fname} · ${msg}`);
               aiUploadInput.value = ""; // clear input
           } else {
               alert("Upload failed: " + (data.error || "Unknown error"));

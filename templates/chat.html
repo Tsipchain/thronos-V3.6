@@ -544,10 +544,11 @@
             const payload = { message: text };
             if (wallet) payload.wallet = wallet;
 
-            const res = await fetch("/api/chat", {\n                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            });
+        const res = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+});
 
             messagesEl.removeChild(thinkingRow);
 

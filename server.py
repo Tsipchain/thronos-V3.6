@@ -759,6 +759,39 @@ def api_chat():
     }
     return jsonify(resp), 200
 
+@app.route("/api/upload_training_data", methods=["POST"])
+def api_upload_training_data():
+    """
+    Επιτρέπει το upload αρχείων για 'εκπαίδευση' ή εμπλουτισμό του corpus.
+    """
+    if "file" not in request.files:
+        return jsonify(error="No file part"), 400
+    file = request.files["file"]
+    wallet = request.form.get("wallet", "").strip()
+
+    if file.filename == "":
+        return jsonify(error="No selected file"), 400
+
+    try:
+        filename = secure_filename(file.filename)
+        # Προσθήκη timestamp για μοναδικότητα
+        safe_name = f"{int(time.time())}_{filename}"
+        file_path = os.path.join(AI_FILES_DIR, safe_name)
+        
+        file.save(file_path)
+        
+        # Καταγραφή στο offline corpus
+        # Φτιάχνουμε μια δομή που να ταιριάζει με το enqueue_offline_corpus
+        file_obj = {"filename": safe_name}
+        enqueue_offline_corpus(wallet, "[System] Upload Training Data", f"File uploaded: {safe_name}", [file_obj])
+
+        print(f"📂 AI Training Data Uploaded: {safe_name} by {wallet}")
+        return jsonify(status="success", filename=safe_name, message="File uploaded to AI corpus"), 200
+
+    except Exception as e:
+        print("Upload Error:", e)
+        return jsonify(error=str(e)), 500
+
 
 # ─── AI PACKS API ──────────────────────────────────────────────────────────────
 
@@ -903,11 +936,11 @@ except Exception as e:
         zf.writestr("node_config.json",config_json)
         zf.writestr("start_iot.py",start_script)
         zf.writestr("iot_vehicle_node.py",node_script)
-        pic_path=os.path.join(BASE_DIR,"/images/photo1765128369.jpg")
+        pic_path=os.path.join(BASE_DIR,"/images/photo1765130702.jpg")
         if os.path.exists(pic_path):
-            zf.write(pic_path,"/images/photo1765128369.jpg")
+            zf.write(pic_path,"/images/photo1765130702.jpg")
         else:
-            zf.writestr("/images/photo1765128369.jpg","")
+            zf.writestr("/images/photo1765130702.jpg","")
         zf.writestr("README.txt","1. Install Python 3.\n2. Run 'python start_iot.py' (auto-installs deps).")
     memory_file.seek(0)
     return send_file(

@@ -749,7 +749,16 @@ def api_chat():
     except Exception as e:
         print("offline corpus enqueue error:", e)
 
-    # 4. JSON αποτέλεσμα για frontend
+    # 4. Optional credits lookup
+    credits_value = None
+    if wallet:
+        try:
+            credits_map = load_ai_credits()
+            credits_value = int(credits_map.get(wallet, 0))
+        except Exception:
+            credits_value = None
+
+    # 5. JSON αποτέλεσμα για frontend
     resp = {
         "response": cleaned,
         "quantum_key": quantum_key,
@@ -757,6 +766,9 @@ def api_chat():
         "wallet": wallet,
         "files": files,
     }
+    if credits_value is not None:
+        resp["credits"] = credits_value
+
     return jsonify(resp), 200
 
 @app.route("/api/upload_training_data", methods=["POST"])
@@ -793,7 +805,76 @@ def api_upload_training_data():
         return jsonify(error=str(e)), 500
 
 
+@app.route("/api/ai_upload", methods=["POST"])
+def api_ai_upload():
+    """
+    Alias για το upload που χρησιμοποιεί το chat frontend.
+    """
+    return api_upload_training_data()
+
+
 # ─── AI PACKS API ──────────────────────────────────────────────────────────────
+
+@app.route("/api/ai_credits", methods=["GET"])
+def api_ai_credits():
+    """
+    Επιστρέφει πόσα AI credits έχει ένα wallet.
+    Αν δεν δοθεί wallet, ο client απλά δείχνει ∞ (demo).
+    """
+    wallet = (request.args.get("wallet") or "").strip()
+    credits_map = load_ai_credits()
+
+    if not wallet:
+        # frontend ήδη το χειρίζεται σαν "∞ (demo)"
+        return jsonify({"credits": "infinite"}), 200
+
+    try:
+        value = int(credits_map.get(wallet, 0))
+    except Exception:
+        value = 0
+
+    return jsonify({"credits": value}), 200
+
+
+@app.route("/api/ai_history", methods=["GET"])
+def api_ai_history():
+    """
+    Διαβάζει το ai_offline_corpus.json και επιστρέφει ιστορικό
+    σε μορφή [ {role, content, ts}, ... ] για συγκεκριμένο wallet.
+    """
+    wallet = (request.args.get("wallet") or "").strip()
+    corpus = load_json(AI_CORPUS_FILE, [])
+
+    if wallet:
+        corpus = [
+            c for c in corpus
+            if (c.get("wallet") or "").strip() == wallet
+        ]
+
+    # Κρατάμε τα τελευταία 50 entries για να μην βαραίνει
+    corpus = corpus[-50:]
+
+    history = []
+    for entry in corpus:
+        ts = entry.get("timestamp") or ""
+        prompt = (entry.get("prompt") or "").strip()
+        response = (entry.get("response") or "").strip()
+
+        if prompt:
+            history.append({
+                "role": "user",
+                "content": prompt,
+                "ts": ts,
+            })
+        if response:
+            history.append({
+                "role": "assistant",
+                "content": response,
+                "ts": ts,
+            })
+
+    return jsonify({"history": history}), 200
+
 
 @app.route("/api/ai_packs", methods=["GET"])
 def api_ai_packs():
@@ -936,11 +1017,11 @@ except Exception as e:
         zf.writestr("node_config.json",config_json)
         zf.writestr("start_iot.py",start_script)
         zf.writestr("iot_vehicle_node.py",node_script)
-        pic_path=os.path.join(BASE_DIR,"/images/photo1765130702.jpg")
+        pic_path=os.path.join(BASE_DIR,"/images/Vehicle.jpg")
         if os.path.exists(pic_path):
-            zf.write(pic_path,"/images/photo1765130702.jpg")
+            zf.write(pic_path,"/images/Vehicle.jpg")
         else:
-            zf.writestr("/images/photo1765130702.jpg","")
+            zf.writestr("/images/Vehicle.jpg","")
         zf.writestr("README.txt","1. Install Python 3.\n2. Run 'python start_iot.py' (auto-installs deps).")
     memory_file.seek(0)
     return send_file(

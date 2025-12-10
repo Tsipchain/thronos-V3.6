@@ -1,388 +1,667 @@
-# ai_agent_service.py
-# ThronosAI – Unified AI core (Gemini / OpenAI / Local Blockchain Log)
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Thronos Quantum Chat</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-import os
-import time
-import json
-import secrets
-import hashlib
-from typing import Dict, Any, List, Optional
-
-# Optional providers
-try:
-    import google.generativeai as genai
-except ImportError:
-    genai = None
-
-try:
-    from openai import OpenAI
-except ImportError:
-    OpenAI = None
-
-
-class ThronosAI:
-    """
-    Ενιαίο AI layer για το Thronos:
-
-    - mode:
-        "gemini"  -> μόνο Gemini
-        "openai"  -> μόνο OpenAI
-        "local"   -> μόνο τοπικό ιστορικό / blockchain log
-        "auto"    -> Gemini -> OpenAI -> local
-
-    - Κάθε απάντηση:
-        * γράφεται σε ai_history.json (full prompt/response)
-        * γράφεται σε ai_block_log.json με πλήρη στοιχεία
-          (ώστε το ai_knowledge_watcher στο server.py
-           να τα μετατρέπει σε κανονικά TXs τύπου ai_knowledge)
-    """
-
-    def __init__(self) -> None:
-        # ---- Modes & keys ---------------------------------------------------
-        self.mode = os.getenv("THRONOS_AI_MODE", "auto").lower()
-
-        # Παίρνουμε key είτε από GEMINI_API_KEY είτε από GOOGLE_API_KEY
-        self.gemini_api_key = (
-            os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
-        ).strip()
-        self.openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
-
-        # Default models – μπορείς να τα αλλάξεις από env
-        self.gemini_model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
-        self.openai_model_name = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
-
-        # ---- Data dir -------------------------------------------------------
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        self.data_dir = os.getenv("DATA_DIR", os.path.join(base_dir, "data"))
-        os.makedirs(self.data_dir, exist_ok=True)
-
-        self.ai_history_file = os.path.join(self.data_dir, "ai_history.json")
-        self.ai_block_log_file = os.path.join(self.data_dir, "ai_block_log.json")
-
-        # ---- Provider clients ----------------------------------------------
-        self.gemini_model = None  # type: ignore[assignment]
-        self.openai_client = None  # type: ignore[assignment]
-
-        self._init_gemini()
-        self._init_openai()
-
-    # ─── Provider init ──────────────────────────────────────────────────────
-
-    def _init_gemini(self) -> None:
-        if not self.gemini_api_key or not genai:
-            print("[ThronosAI] Gemini not configured (missing key or library).")
-            return
-        try:
-            genai.configure(api_key=self.gemini_api_key)
-            self.gemini_model = genai.GenerativeModel(self.gemini_model_name)
-            print(f"[ThronosAI] Gemini online ({self.gemini_model_name})")
-        except Exception as e:
-            print("[ThronosAI] Gemini init error:", e)
-            self.gemini_model = None
-
-    def _init_openai(self) -> None:
-        if not self.openai_api_key or not OpenAI:
-            print("[ThronosAI] OpenAI not configured (missing key or library).")
-            return
-        try:
-            self.openai_client = OpenAI(api_key=self.openai_api_key)
-            print(f"[ThronosAI] OpenAI online ({self.openai_model_name})")
-        except Exception as e:
-            print("[ThronosAI] OpenAI init error:", e)
-            self.openai_client = None
-
-    # ─── Utils ──────────────────────────────────────────────────────────────
-
-    def generate_quantum_key(self) -> str:
-        return secrets.token_hex(16)
-
-    def _base_payload(self, text: str, status: str = "online") -> Dict[str, Any]:
-        return {
-            "response": text,
-            "status": status,
-            "quantum_key": self.generate_quantum_key(),
+    <style>
+        :root {
+            --bg: #050608;
+            --panel: #0d1117;
+            --border: #00ff66;
+            --accent: #00ffcc;
+            --danger: #ff4d4d;
+            --text-main: #e0ffe8;
+            --text-muted: #7de6a0;
         }
 
-    # ─── History storage ────────────────────────────────────────────────────
+        * {
+            box-sizing: border-box;
+        }
 
-    def _load_history(self) -> List[Dict[str, Any]]:
-        try:
-            with open(self.ai_history_file, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return []
+        body {
+            margin: 0;
+            padding: 0;
+            background: radial-gradient(circle at top, #04110a 0, #020204 40%, #000 100%);
+            color: var(--text-main);
+            font-family: "Fira Code", "Consolas", monospace;
+        }
 
-    def _save_history(self, items: List[Dict[str, Any]]) -> None:
-        try:
-            with open(self.ai_history_file, "w", encoding="utf-8") as f:
-                json.dump(items, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            print("[ThronosAI] Failed to save history:", e)
+        .top-bar {
+            border-bottom: 1px solid var(--border);
+            padding: 8px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #020904;
+        }
 
-    def _append_block_log(self, entry: Dict[str, Any]) -> None:
-        """
-        Γράφει πλήρες log στο ai_block_log.json.
-        Μορφή που περιμένει το ai_knowledge_watcher στο server.py:
-          {
-            "id": "...",
-            "timestamp": ...,
-            "wallet": "...",
-            "prompt": "...",
-            "response": "...",
-            "status": "gemini|openai|local|...",
-            "provider": "gemini|openai|local",
-            "model": "gemini-2.5-pro|gpt-4.1-mini|offline"
+        .logo {
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--accent);
+        }
+
+        .logo span {
+            color: var(--border);
+        }
+
+        .status-pill {
+            font-size: 11px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            color: var(--accent);
+            background: rgba(0, 0, 0, 0.4);
+        }
+
+        #root {
+            max-width: 1100px;
+            margin: 16px auto;
+            padding: 0 12px;
+        }
+
+        .chat-shell {
+            border: 1px solid var(--border);
+            background: var(--panel);
+            box-shadow: 0 0 24px rgba(0, 255, 102, 0.1);
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 80px);
+            max-height: 800px;
+        }
+
+        .chat-header {
+            padding: 10px 14px;
+            border-bottom: 1px solid rgba(0, 255, 102, 0.3);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            font-size: 12px;
+        }
+
+        .chat-header-title {
+            font-weight: 600;
+            color: var(--accent);
+            margin-right: auto;
+        }
+
+        .field-inline {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .field-inline label {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .field-inline input {
+            background: #000;
+            border: 1px solid rgba(0, 255, 102, 0.4);
+            color: var(--accent);
+            padding: 3px 6px;
+            font-size: 11px;
+            border-radius: 4px;
+        }
+
+        .credits-label {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .credits-label span {
+            color: var(--accent);
+            font-weight: 600;
+        }
+        
+        .qa-btn-small {
+            font-size: 10px;
+            padding: 2px 6px;
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            text-decoration: none;
+            border-radius: 4px;
+            margin-left: 4px;
+        }
+        
+        .qa-btn-small:hover {
+            background: rgba(0, 255, 204, 0.1);
+        }
+
+        .chat-body {
+            flex: 1;
+            padding: 10px 12px;
+            overflow-y: auto;
+            background: radial-gradient(circle at top left, #042010 0, #050608 40%, #020204 100%);
+        }
+
+        .message-row {
+            margin-bottom: 10px;
+            display: flex;
+        }
+
+        .message-row.user {
+            justify-content: flex-end;
+        }
+
+        .message-row.ai {
+            justify-content: flex-start;
+        }
+        
+        .message-row.assistant {
+            justify-content: flex-start;
+        }
+
+        .bubble {
+            max-width: 80%;
+            padding: 8px 11px;
+            border-radius: 8px;
+            line-height: 1.4;
+            font-size: 13px;
+            white-space: pre-wrap;
+            position: relative;
+        }
+
+        .message-row.user .bubble {
+            background: var(--border);
+            color: #000;
+        }
+
+        .message-row.ai .bubble, .message-row.assistant .bubble {
+            background: rgba(1, 5, 8, 0.9);
+            color: var(--text-main);
+            border: 1px solid rgba(0, 255, 102, 0.5);
+        }
+
+        .meta-line {
+            font-size: 10px;
+            margin-top: 3px;
+            opacity: 0.7;
+        }
+
+        .meta-line span {
+            margin-right: 10px;
+        }
+
+        .meta-tools {
+            margin-top: 6px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            font-size: 10px;
+        }
+
+        .btn-copy {
+            border-radius: 3px;
+            border: 1px solid rgba(0, 255, 102, 0.5);
+            background: transparent;
+            color: var(--accent);
+            padding: 2px 6px;
+            cursor: pointer;
+            font-size: 10px;
+        }
+
+        .btn-copy:hover {
+            background: rgba(0, 255, 102, 0.12);
+        }
+
+        .file-link {
+            text-decoration: none;
+            color: var(--accent);
+            border-bottom: 1px dotted rgba(0, 255, 102, 0.6);
+        }
+
+        .chat-footer {
+            border-top: 1px solid rgba(0, 255, 102, 0.3);
+            padding: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            background: #020904;
+        }
+
+        .input-row {
+            display: flex;
+            gap: 6px;
+        }
+
+        #user-input {
+            flex: 1;
+            resize: none;
+            min-height: 40px;
+            max-height: 120px;
+            background: #000;
+            border: 1px solid rgba(0, 255, 102, 0.4);
+            color: var(--text-main);
+            border-radius: 4px;
+            padding: 6px 8px;
+            font-family: inherit;
+            font-size: 13px;
+        }
+
+        .btn {
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            background: var(--border);
+            color: #000;
+            font-size: 13px;
+            padding: 0 14px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: default;
+        }
+
+        .footer-info {
+            font-size: 11px;
+            color: var(--text-muted);
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .qa-upload-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 4px;
+        }
+        
+        .qa-upload-bar input[type="file"] {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+        
+        #aiUploadBtn {
+            font-size: 11px;
+            padding: 2px 8px;
+            background: #0d1117;
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .link {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        .link:hover {
+            text-decoration: underline;
+        }
+
+        .badge-warning {
+            color: var(--danger);
+            font-weight: 600;
+        }
+
+        @media (max-width: 700px) {
+            .chat-shell {
+                height: calc(100vh - 64px);
+                max-height: none;
+            }
+            .bubble {
+                max-width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="top-bar">
+    <div class="logo">THRONOS <span>QUANTUM</span> ASSISTANT</div>
+    <div class="status-pill" id="top-status-pill">Quantum Encryption Active · 256-bit Session Key</div>
+</div>
+
+<div id="root">
+    <div class="chat-shell">
+        <div class="chat-header">
+            <div class="chat-header-title">Channel: /chat · Node AI-CORE-01</div>
+
+            <div class="field-inline">
+                <label for="wallet-input">THR Wallet:</label>
+                <input id="wallet-input" type="text" placeholder="THRxxxxxxxx" autocomplete="off">
+            </div>
+
+            <div class="credits-label">
+                Credits: <span id="credits-count">∞ (demo)</span>
+                <a href="/ai_packs" class="qa-btn-small">Get AI Packs</a>
+            </div>
+        </div>
+
+        <div id="messages" class="chat-body">
+            <!-- Messages will be injected here -->
+        </div>
+
+        <div class="chat-footer">
+            <div class="input-row">
+                <textarea id="user-input" rows="2" placeholder="Πληκτρολόγησε την εντολή σου προς τον Θρόνο..."></textarea>
+                <button id="send-btn" class="btn">
+                    ▶ Send
+                </button>
+            </div>
+            
+            <div class="qa-upload-bar">
+              <input type="file" id="aiUploadInput">
+              <button id="aiUploadBtn">Upload to Quantum Node</button>
+            </div>
+            
+            <div class="footer-info">
+                <div>
+                    Tip: αν βάλεις THR wallet, το request συνδέεται με το address σου και μπαίνει στην offline βιβλιοθήκη.
+                </div>
+                <div>
+                    <span id="status-line">Core: online</span> ·
+                    <span id="key-line">Key: —</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const messagesEl      = document.getElementById("messages");
+    const userInputEl     = document.getElementById("user-input");
+    const sendBtn         = document.getElementById("send-btn");
+    const walletInputEl   = document.getElementById("wallet-input");
+    const creditsEl       = document.getElementById("credits-count");
+    const statusLineEl    = document.getElementById("status-line");
+    const keyLineEl       = document.getElementById("key-line");
+    const topStatusPillEl = document.getElementById("top-status-pill");
+    const aiUploadInput   = document.getElementById("aiUploadInput");
+    const aiUploadBtn     = document.getElementById("aiUploadBtn");
+
+    // --- helpers ---
+
+    function saveWalletLocal(addr) {
+        try { localStorage.setItem("thronos_wallet", addr || ""); } catch (_) {}
+    }
+
+    function loadWalletLocal() {
+        try { return localStorage.getItem("thronos_wallet") || ""; } catch (_) { return ""; }
+    }
+
+    function setCreditsLabel(v) {
+        if (v === null || v === undefined) return;
+        if (v === "infinite") {
+            creditsEl.textContent = "∞ (demo)";
+        } else {
+            creditsEl.textContent = v;
+        }
+    }
+
+    function setStatus(text) {
+        statusLineEl.textContent = text;
+    }
+
+    function setQuantumKey(key) {
+        if (!key) return;
+        const shortKey = String(key).slice(0, 16) + "…";
+        keyLineEl.textContent = "Key: " + shortKey;
+        topStatusPillEl.textContent = "Quantum Encryption Verified · " + shortKey;
+    }
+
+    function appendMessage(role, text, metaHtml, files) {
+        const row = document.createElement("div");
+        row.className = "message-row " + role;
+
+        const bubble = document.createElement("div");
+        bubble.className = "bubble";
+
+        const main = document.createElement("div");
+        main.textContent = text || "";
+        bubble.appendChild(main);
+
+        if (metaHtml) {
+            const metaDiv = document.createElement("div");
+            metaDiv.className = "meta-line";
+            metaDiv.innerHTML = metaHtml;
+            bubble.appendChild(metaDiv);
+        }
+
+        if (role === "ai" || role === "assistant") {
+            const tools = document.createElement("div");
+            tools.className = "meta-tools";
+
+            // copy button
+            const copyBtn = document.createElement("button");
+            copyBtn.className = "btn-copy";
+            copyBtn.type = "button";
+            copyBtn.textContent = "Copy";
+            copyBtn.addEventListener("click", () => {
+                if (navigator.clipboard) {
+                    navigator.clipboard.writeText(text || "").catch(() => {});
+                }
+            });
+            tools.appendChild(copyBtn);
+
+            // file links (if any)
+            if (Array.isArray(files) && files.length > 0) {
+                const minutes = Math.round((files[0].expires_in || 3600) / 60);
+                files.forEach(f => {
+                    const a = document.createElement("a");
+                    a.href = f.url;
+                    a.target = "_blank";
+                    a.rel = "noopener";
+                    a.className = "file-link";
+                    a.textContent = "Download " + (f.filename || "file");
+                    tools.appendChild(a);
+                });
+                const infoSpan = document.createElement("span");
+                infoSpan.textContent = " (auto-delete ~" + minutes + " min)";
+                tools.appendChild(infoSpan);
+            }
+
+            bubble.appendChild(tools);
+        }
+
+        row.appendChild(bubble);
+        messagesEl.appendChild(row);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    async function refreshCredits() {
+        const wallet = walletInputEl.value.trim();
+        if (!wallet) {
+            setCreditsLabel("infinite");
+            return;
+        }
+        try {
+            const res = await fetch(`/api/ai_credits?wallet=${encodeURIComponent(wallet)}`);
+            const data = await res.json();
+            setCreditsLabel(data.credits);
+        } catch (e) {
+            console.error('credits fetch error', e);
+            setCreditsLabel("error");
+        }
+    }
+    
+    async function loadHistory() {
+        const wallet = walletInputEl.value.trim();
+        if (!wallet) return;
+        
+        try {
+            const res = await fetch(`/api/ai_history?wallet=${encodeURIComponent(wallet)}`);
+            const data = await res.json();
+            
+            // Clear current messages
+            messagesEl.innerHTML = "";
+            
+            // Append history
+            if (data.history && Array.isArray(data.history)) {
+                data.history.forEach(msg => {
+                   appendMessage(msg.role, msg.content, `<span style="opacity:0.5">${msg.ts}</span>`); 
+                });
+            }
+            
+            // Welcome message at the end
+            appendMessage(
+                "ai",
+                "Quantum Encryption Verified. Το κανάλι είναι ασφαλές. Γράψε την πρώτη σου εντολή ή ερώτηση."
+            );
+            
+        } catch (e) {
+            console.error('history fetch error', e);
+        }
+    }
+
+    async function sendMessage() {
+        const text = userInputEl.value.trim();
+        if (!text) return;
+
+        const wallet = walletInputEl.value.trim();
+        saveWalletLocal(wallet);
+
+        userInputEl.value = "";
+        appendMessage("user", text);
+
+        sendBtn.disabled = true;
+        setStatus("Core: thinking…");
+
+        // typing bubble
+        const thinkingRow = document.createElement("div");
+        thinkingRow.className = "message-row ai";
+        const thinkingBubble = document.createElement("div");
+        thinkingBubble.className = "bubble";
+        thinkingBubble.textContent = "…";
+        thinkingRow.appendChild(thinkingBubble);
+        messagesEl.appendChild(thinkingRow);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+
+        try {
+            const payload = { message: text };
+            if (wallet) payload.wallet = wallet;
+
+            const res = await fetch("/api/chat", {\n                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+
+            messagesEl.removeChild(thinkingRow);
+
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                appendMessage("ai", "Quantum Interference: " + (errData.message || "HTTP " + res.status));
+                setStatus("Core: error");
+                if (errData.credits !== undefined) setCreditsLabel(errData.credits);
+                return;
+            }
+
+            const data = await res.json();
+
+            const metaParts = [];
+            if (data.wallet) {
+                metaParts.push(`<span>Wallet: ${data.wallet}</span>`);
+            }
+            if (data.status) {
+                metaParts.push(`<span>Status: ${data.status}</span>`);
+            }
+
+            appendMessage(
+                "ai",
+                data.response || "[Empty response]",
+                metaParts.join(" "),
+                data.files || []
+            );
+
+            if (data.quantum_key) {
+                setQuantumKey(data.quantum_key);
+            }
+            if (data.credits !== undefined) {
+                setCreditsLabel(data.credits);
+            }
+            setStatus("Core: " + (data.status || "online"));
+        } catch (err) {
+            messagesEl.removeChild(thinkingRow);
+            appendMessage("ai", "Quantum Interference Detected: " + (err.message || String(err)));
+            setStatus("Core: network error");
+        } finally {
+            sendBtn.disabled = false;
+        }
+    }
+    
+    // --- Upload Logic ---
+    aiUploadBtn.addEventListener('click', async () => {
+      const wallet = walletInputEl.value.trim();
+      if (!wallet) {
+          alert("Please enter a THR Wallet address first.");
+          return;
+      }
+      if (!aiUploadInput.files.length) return;
+
+      const fd = new FormData();
+      fd.append('wallet', wallet);
+      fd.append('file', aiUploadInput.files[0]);
+      
+      setStatus("Core: uploading...");
+      aiUploadBtn.disabled = true;
+
+      try {
+          const res = await fetch('/api/ai_upload', {
+            method: 'POST',
+            body: fd
+          });
+          const data = await res.json();
+          
+          if (res.ok) {
+              appendMessage("ai", `Uploaded file ${data.filename} (hash: ${data.hash.slice(0,8)}…)`);
+              aiUploadInput.value = ""; // clear input
+          } else {
+              alert("Upload failed: " + (data.error || "Unknown error"));
           }
-        """
-        try:
-            try:
-                with open(self.ai_block_log_file, "r", encoding="utf-8") as f:
-                    items = json.load(f)
-            except Exception:
-                items = []
+      } catch (e) {
+          console.error(e);
+          alert("Upload network error");
+      } finally {
+          setStatus("Core: online");
+          aiUploadBtn.disabled = false;
+      }
+    });
 
-            items.append(entry)
+    // --- events ---
 
-            # προαιρετικό trimming
-            if len(items) > 2000:
-                items = items[-2000:]
-
-            with open(self.ai_block_log_file, "w", encoding="utf-8") as f:
-                json.dump(items, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            print("[ThronosAI] Failed to append block-log:", e)
-
-    def _hash_short(self, text: str) -> str:
-        h = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        return h[:24]
-
-    def _store_history(self, prompt: str, answer: Dict[str, Any], wallet: Optional[str]) -> None:
-        # --- Full history (για local knowledge) -----------------------------
-        items = self._load_history()
-
-        rec = {
-            "ts": int(time.time()),
-            "wallet": wallet or None,
-            "prompt": prompt,
-            "response": answer.get("response", ""),
-            "status": answer.get("status", ""),
+    sendBtn.addEventListener("click", sendMessage);
+    userInputEl.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" && !ev.shiftKey) {
+            ev.preventDefault();
+            sendMessage();
         }
-        items.append(rec)
-        if len(items) > 500:
-            items = items[-500:]
-        self._save_history(items)
+    });
+    
+    walletInputEl.addEventListener("change", () => {
+        const w = walletInputEl.value.trim();
+        saveWalletLocal(w);
+        refreshCredits();
+        loadHistory();
+    });
 
-        # --- Block-log entry (για ai_knowledge TXs) -------------------------
-        status = (answer.get("status") or "").lower()
-        if status.startswith("gemini"):
-            provider = "gemini"
-            model = self.gemini_model_name
-        elif status.startswith("openai"):
-            provider = "openai"
-            model = self.openai_model_name
-        elif status.startswith("local"):
-            provider = "local"
-            model = "offline_corpus"
-        else:
-            provider = status or "unknown"
-            model = "unknown"
+    const savedWallet = loadWalletLocal();
+    walletInputEl.value = savedWallet;
+    
+    if (savedWallet) {
+        refreshCredits();
+        loadHistory();
+    } else {
+        setCreditsLabel("infinite");
+        // welcome message
+        appendMessage(
+            "ai",
+            "Quantum Encryption Verified. Το κανάλι είναι ασφαλές. Γράψε την πρώτη σου εντολή ή ερώτηση."
+        );
+    }
 
-        block_entry = {
-            "id": f"{int(time.time()*1000)}-{secrets.token_hex(4)}",
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-            "wallet": wallet or None,
-            "prompt": prompt,
-            "response": answer.get("response", ""),
-            "status": answer.get("status", ""),
-            "provider": provider,
-            "model": model,
-            "prompt_hash": self._hash_short(prompt),
-            "response_hash": self._hash_short(answer.get("response", "")),
-        }
-        self._append_block_log(block_entry)
-
-    # ─── Provider calls ─────────────────────────────────────────────────────
-
-    def _call_gemini(self, prompt: str) -> Dict[str, Any]:
-        if not self.gemini_model:
-            raise RuntimeError("Gemini model not initialized")
-        try:
-            resp = self.gemini_model.generate_content(prompt)
-            txt = (getattr(resp, "text", "") or "").strip()
-            if not txt:
-                txt = "Quantum Core: empty response from Gemini."
-            payload = self._base_payload(txt, status="gemini")
-            return payload
-        except Exception as e:
-            msg = str(e)
-            if "quota" in msg.lower() or "exceeded" in msg.lower() or "429" in msg:
-                return self._base_payload(
-                    "Quantum Core Notice: Το εξωτερικό AI (Gemini) δεν έχει διαθέσιμα credits "
-                    "ή έχει ξεπεραστεί το όριο χρήσης. Χρήση τοπικής blockchain γνώσης.",
-                    status="gemini_quota",
-                )
-            return self._base_payload(
-                f"Quantum Core Error (Gemini): {msg}",
-                status="gemini_error",
-            )
-
-    def _call_openai(self, prompt: str) -> Dict[str, Any]:
-        if not self.openai_client:
-            raise RuntimeError("OpenAI client not initialized")
-        try:
-            completion = self.openai_client.chat.completions.create(
-                model=self.openai_model_name,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are the Thronos Autonomous AI, integrated in a blockchain environment. "
-                            "Answer concisely and in production-ready code when needed."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-            )
-            txt = completion.choices[0].message.content or ""
-            txt = txt.strip()
-            if not txt:
-                txt = "Quantum Core: empty response from OpenAI."
-            return self._base_payload(txt, status="openai")
-        except Exception as e:
-            msg = str(e)
-            if "rate limit" in msg.lower() or "quota" in msg.lower() or "429" in msg:
-                return self._base_payload(
-                    "Quantum Core Notice: Το εξωτερικό AI (OpenAI) είναι σε rate limit / quota. "
-                    "Χρήση τοπικής blockchain γνώσης.",
-                    status="openai_quota",
-                )
-            return self._base_payload(
-                f"Quantum Core Error (OpenAI): {msg}",
-                status="openai_error",
-            )
-
-    # ─── Local / blockchain knowledge ──────────────────────────────────────
-
-    def _local_answer(self, prompt: str) -> Dict[str, Any]:
-        """
-        Πολύ απλό keyword-based retrieval από το ai_history.json.
-        Δεν είναι embeddings, αλλά είναι *πραγματικά* δεδομένα από το δίκτυο.
-        """
-        prompt_l = prompt.lower()
-        words = [w for w in prompt_l.split() if len(w) > 3]
-
-        history = self._load_history()
-        if not history:
-            text = (
-                "Το Quantum Core δεν έχει ακόμη αρκετά αποθηκευμένα δεδομένα στο blockchain log.\n"
-                "Συνέχισε να του δίνεις εντολές και κώδικα· κάθε καλή απάντηση αποθηκεύεται ως block γνώσης."
-            )
-            return self._base_payload(text, status="local_empty")
-
-        best = None
-        best_score = -1.0
-
-        for rec in history:
-            hay = (rec.get("prompt", "") + " " + rec.get("response", "")).lower()
-            score = 0.0
-            for w in words:
-                if w in hay:
-                    score += 1.0
-            # μικρό weight για πιο πρόσφατα
-            score += (rec.get("ts", 0) / 1_000_000_000.0)
-            if score > best_score:
-                best_score = score
-                best = rec
-
-        if not best or best_score <= 0:
-            text = (
-                "Δεν βρήκα σχετικό block γνώσης στο τοπικό αρχείο.\n"
-                "Θα χρειαστούν περισσότερα παραδείγματα για να μάθει αυτόν τον τύπο ερωτήσεων."
-            )
-            return self._base_payload(text, status="local_miss")
-
-        text = (
-            "Απάντηση από το τοπικό blockchain log (offline γνώση):\n\n"
-            + best.get("response", "")
-        )
-        return self._base_payload(text, status="local")
-
-    # ─── Public API ─────────────────────────────────────────────────────────
-
-    def generate_response(self, prompt: str, wallet: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Κεντρική μέθοδος:
-        - Προσπαθεί provider(s) ανάλογα με mode
-        - Αν πέσουν σε quota/error -> πέφτει σε local
-        - Σε κάθε περίπτωση, γράφει ιστορικό + block_log
-        """
-        prompt = (prompt or "").strip()
-        if not prompt:
-            return self._base_payload("Empty prompt.", status="error")
-
-        mode = self.mode
-        answer: Dict[str, Any]
-
-        # 1) Καθαρά local
-        if mode == "local":
-            answer = self._local_answer(prompt)
-            self._store_history(prompt, answer, wallet)
-            return answer
-
-        # 2) Gemini only
-        if mode == "gemini":
-            if not self.gemini_model:
-                answer = self._local_answer(prompt)
-            else:
-                answer = self._call_gemini(prompt)
-                if answer.get("status") in ("gemini_quota", "gemini_error"):
-                    local = self._local_answer(prompt)
-                    local["response"] += (
-                        "\n\n---\n[Σημείωση provider]: " + answer.get("response", "")
-                    )
-                    answer = local
-            self._store_history(prompt, answer, wallet)
-            return answer
-
-        # 3) OpenAI only
-        if mode == "openai":
-            if not self.openai_client:
-                answer = self._local_answer(prompt)
-            else:
-                answer = self._call_openai(prompt)
-                if answer.get("status") in ("openai_quota", "openai_error"):
-                    local = self._local_answer(prompt)
-                    local["response"] += (
-                        "\n\n---\n[Σημείωση provider]: " + answer.get("response", "")
-                    )
-                    answer = local
-            self._store_history(prompt, answer, wallet)
-            return answer
-
-        # 4) auto mode – Gemini -> OpenAI -> Local
-        answer = None  # type: ignore[assignment]
-        last_err = None
-
-        if self.gemini_model:
-            ans_g = self._call_gemini(prompt)
-            if ans_g.get("status") not in ("gemini_quota", "gemini_error"):
-                answer = ans_g
-            else:
-                last_err = ans_g
-
-        if answer is None and self.openai_client:
-            ans_o = self._call_openai(prompt)
-            if ans_o.get("status") not in ("openai_quota", "openai_error"):
-                answer = ans_o
-            else:
-                last_err = ans_o
-
-        if answer is None:
-            answer = self._local_answer(prompt)
-            if last_err is not None:
-                answer["response"] += (
-                    "\n\n---\n[Σημείωση provider]: " + last_err.get("response", "")
-                )
-
-        self._store_history(prompt, answer, wallet)
-        return answer
+</script>
+</body>
+</html>

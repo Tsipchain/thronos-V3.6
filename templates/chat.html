@@ -119,6 +119,20 @@
             color: var(--accent);
             font-weight: 600;
         }
+        
+        .qa-btn-small {
+            font-size: 10px;
+            padding: 2px 6px;
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            text-decoration: none;
+            border-radius: 4px;
+            margin-left: 4px;
+        }
+        
+        .qa-btn-small:hover {
+            background: rgba(0, 255, 204, 0.1);
+        }
 
         .chat-body {
             flex: 1;
@@ -139,6 +153,10 @@
         .message-row.ai {
             justify-content: flex-start;
         }
+        
+        .message-row.assistant {
+            justify-content: flex-start;
+        }
 
         .bubble {
             max-width: 80%;
@@ -155,7 +173,7 @@
             color: #000;
         }
 
-        .message-row.ai .bubble {
+        .message-row.ai .bubble, .message-row.assistant .bubble {
             background: rgba(1, 5, 8, 0.9);
             color: var(--text-main);
             border: 1px solid rgba(0, 255, 102, 0.5);
@@ -253,6 +271,28 @@
             gap: 8px;
             flex-wrap: wrap;
         }
+        
+        .qa-upload-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 4px;
+        }
+        
+        .qa-upload-bar input[type="file"] {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+        
+        #aiUploadBtn {
+            font-size: 11px;
+            padding: 2px 8px;
+            background: #0d1117;
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            border-radius: 4px;
+            cursor: pointer;
+        }
 
         .link {
             color: var(--accent);
@@ -297,6 +337,7 @@
 
             <div class="credits-label">
                 Credits: <span id="credits-count">∞ (demo)</span>
+                <a href="/ai_packs" class="qa-btn-small">Get AI Packs</a>
             </div>
         </div>
 
@@ -311,6 +352,12 @@
                     ▶ Send
                 </button>
             </div>
+            
+            <div class="qa-upload-bar">
+              <input type="file" id="aiUploadInput">
+              <button id="aiUploadBtn">Upload to Quantum Node</button>
+            </div>
+            
             <div class="footer-info">
                 <div>
                     Tip: αν βάλεις THR wallet, το request συνδέεται με το address σου και μπαίνει στην offline βιβλιοθήκη.
@@ -333,6 +380,8 @@
     const statusLineEl    = document.getElementById("status-line");
     const keyLineEl       = document.getElementById("key-line");
     const topStatusPillEl = document.getElementById("top-status-pill");
+    const aiUploadInput   = document.getElementById("aiUploadInput");
+    const aiUploadBtn     = document.getElementById("aiUploadBtn");
 
     // --- helpers ---
 
@@ -382,7 +431,7 @@
             bubble.appendChild(metaDiv);
         }
 
-        if (role === "ai") {
+        if (role === "ai" || role === "assistant") {
             const tools = document.createElement("div");
             tools.className = "meta-tools";
 
@@ -423,6 +472,51 @@
         messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
+    async function refreshCredits() {
+        const wallet = walletInputEl.value.trim();
+        if (!wallet) {
+            setCreditsLabel("infinite");
+            return;
+        }
+        try {
+            const res = await fetch(`/api/ai_credits?wallet=${encodeURIComponent(wallet)}`);
+            const data = await res.json();
+            setCreditsLabel(data.credits);
+        } catch (e) {
+            console.error('credits fetch error', e);
+            setCreditsLabel("error");
+        }
+    }
+    
+    async function loadHistory() {
+        const wallet = walletInputEl.value.trim();
+        if (!wallet) return;
+        
+        try {
+            const res = await fetch(`/api/ai_history?wallet=${encodeURIComponent(wallet)}`);
+            const data = await res.json();
+            
+            // Clear current messages
+            messagesEl.innerHTML = "";
+            
+            // Append history
+            if (data.history && Array.isArray(data.history)) {
+                data.history.forEach(msg => {
+                   appendMessage(msg.role, msg.content, `<span style="opacity:0.5">${msg.ts}</span>`); 
+                });
+            }
+            
+            // Welcome message at the end
+            appendMessage(
+                "ai",
+                "Quantum Encryption Verified. Το κανάλι είναι ασφαλές. Γράψε την πρώτη σου εντολή ή ερώτηση."
+            );
+            
+        } catch (e) {
+            console.error('history fetch error', e);
+        }
+    }
+
     async function sendMessage() {
         const text = userInputEl.value.trim();
         if (!text) return;
@@ -450,8 +544,7 @@
             const payload = { message: text };
             if (wallet) payload.wallet = wallet;
 
-            const res = await fetch("/api/chat", {
-                method: "POST",
+            const res = await fetch("/api/chat", {\n                method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload)
             });
@@ -459,8 +552,10 @@
             messagesEl.removeChild(thinkingRow);
 
             if (!res.ok) {
-                appendMessage("ai", "Quantum Interference: HTTP " + res.status);
+                const errData = await res.json().catch(() => ({}));
+                appendMessage("ai", "Quantum Interference: " + (errData.message || "HTTP " + res.status));
                 setStatus("Core: error");
+                if (errData.credits !== undefined) setCreditsLabel(errData.credits);
                 return;
             }
 
@@ -484,6 +579,9 @@
             if (data.quantum_key) {
                 setQuantumKey(data.quantum_key);
             }
+            if (data.credits !== undefined) {
+                setCreditsLabel(data.credits);
+            }
             setStatus("Core: " + (data.status || "online"));
         } catch (err) {
             messagesEl.removeChild(thinkingRow);
@@ -493,6 +591,44 @@
             sendBtn.disabled = false;
         }
     }
+    
+    // --- Upload Logic ---
+    aiUploadBtn.addEventListener('click', async () => {
+      const wallet = walletInputEl.value.trim();
+      if (!wallet) {
+          alert("Please enter a THR Wallet address first.");
+          return;
+      }
+      if (!aiUploadInput.files.length) return;
+
+      const fd = new FormData();
+      fd.append('wallet', wallet);
+      fd.append('file', aiUploadInput.files[0]);
+      
+      setStatus("Core: uploading...");
+      aiUploadBtn.disabled = true;
+
+      try {
+          const res = await fetch('/api/ai_upload', {
+            method: 'POST',
+            body: fd
+          });
+          const data = await res.json();
+          
+          if (res.ok) {
+              appendMessage("ai", `Uploaded file ${data.filename} (hash: ${data.hash.slice(0,8)}…)`);
+              aiUploadInput.value = ""; // clear input
+          } else {
+              alert("Upload failed: " + (data.error || "Unknown error"));
+          }
+      } catch (e) {
+          console.error(e);
+          alert("Upload network error");
+      } finally {
+          setStatus("Core: online");
+          aiUploadBtn.disabled = false;
+      }
+    });
 
     // --- events ---
 
@@ -503,15 +639,29 @@
             sendMessage();
         }
     });
+    
+    walletInputEl.addEventListener("change", () => {
+        const w = walletInputEl.value.trim();
+        saveWalletLocal(w);
+        refreshCredits();
+        loadHistory();
+    });
 
-    walletInputEl.value = loadWalletLocal();
-    setCreditsLabel("infinite");
+    const savedWallet = loadWalletLocal();
+    walletInputEl.value = savedWallet;
+    
+    if (savedWallet) {
+        refreshCredits();
+        loadHistory();
+    } else {
+        setCreditsLabel("infinite");
+        // welcome message
+        appendMessage(
+            "ai",
+            "Quantum Encryption Verified. Το κανάλι είναι ασφαλές. Γράψε την πρώτη σου εντολή ή ερώτηση."
+        );
+    }
 
-    // welcome message
-    appendMessage(
-        "ai",
-        "Quantum Encryption Verified. Το κανάλι είναι ασφαλές. Γράψε την πρώτη σου εντολή ή ερώτηση."
-    );
 </script>
 </body>
 </html>

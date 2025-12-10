@@ -998,6 +998,33 @@ def api_ai_session_start():
 
     return jsonify(status="ok", session=session), 200
 
+@app.route("/api/ai_sessions/rename", methods=["POST"])
+def api_ai_session_rename():
+    """
+    Μετονομάζει μια session.
+    """
+    data = request.get_json() or {}
+    wallet = (data.get("wallet") or "").strip()
+    session_id = (data.get("session_id") or "").strip()
+    new_title = (data.get("title") or "").strip()
+
+    if not wallet or not session_id or not new_title:
+        return jsonify(error="Missing parameters"), 400
+
+    sessions = load_ai_sessions()
+    found = False
+    for s in sessions:
+        if s.get("wallet") == wallet and s.get("id") == session_id:
+            s["title"] = new_title[:80]
+            found = True
+            break
+    
+    if found:
+        save_ai_sessions(sessions)
+        return jsonify(status="ok", title=new_title), 200
+    else:
+        return jsonify(error="Session not found"), 404
+
 @app.route("/api/ai_session_history", methods=["GET"])
 def api_ai_session_history():
     """
@@ -1169,11 +1196,11 @@ except Exception as e:
         zf.writestr("node_config.json",config_json)
         zf.writestr("start_iot.py",start_script)
         zf.writestr("iot_vehicle_node.py",node_script)
-        pic_path=os.path.join(BASE_DIR,"/images/IoTVehicle.jpg")
+        pic_path=os.path.join(BASE_DIR,"/images/photo1765404308.jpg")
         if os.path.exists(pic_path):
-            zf.write(pic_path,"/images/IoTVehicle.jpg")
+            zf.write(pic_path,"/images/photo1765404308.jpg")
         else:
-            zf.writestr("/images/IoTVehicle.jpg","")
+            zf.writestr("/images/photo1765404308.jpg","")
         zf.writestr("README.txt","1. Install Python 3.\n2. Run 'python start_iot.py' (auto-installs deps).")
     memory_file.seek(0)
     return send_file(

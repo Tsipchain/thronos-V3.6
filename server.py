@@ -67,6 +67,9 @@ AI_FILES_DIR   = os.path.join(DATA_DIR, "ai_files")
 AI_CORPUS_FILE = os.path.join(DATA_DIR, "ai_offline_corpus.json")
 os.makedirs(AI_FILES_DIR, exist_ok=True)
 
+# NEW: αποθήκευση sessions (λίστα συνομιλιών)
+AI_SESSIONS_FILE = os.path.join(DATA_DIR, "ai_sessions.json")
+
 ADMIN_SECRET   = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
 
 BTC_RECEIVER  = "1QFeDPwEF8yEgPEfP79hpc8pHytXMz9oEQ"
@@ -146,6 +149,8 @@ AI_DEFAULT_PACKS = [
     },
 ]
 
+# Πόσα credits καίει κάθε AI μήνυμα
+AI_CREDIT_COST_PER_MSG = int(os.getenv("AI_CREDIT_COST_PER_MSG", "1"))
 
 def load_ai_packs():
     """Διαβάζει τα διαθέσιμα packs από αρχείο, αλλιώς επιστρέφει τα default."""
@@ -168,6 +173,11 @@ def load_ai_credits():
 def save_ai_credits(credits):
     save_json(AI_CREDITS_FILE, credits)
 
+def load_ai_sessions():
+    return load_json(AI_SESSIONS_FILE, [])
+
+def save_ai_sessions(sessions):
+    save_json(AI_SESSIONS_FILE, sessions)
 
 def sha256d(data: bytes) -> bytes:
     return hashlib.sha256(hashlib.sha256(data).digest()).digest()
@@ -299,22 +309,52 @@ def extract_ai_files_from_text(full_text: str):
     return files, cleaned_text
 
 
-def enqueue_offline_corpus(wallet: str, prompt: str, response: str, files):
+def enqueue_offline_corpus(wallet: str, prompt: str, response: str, files, session_id: str | None = None):
     """
-    Ελαφρύ offline corpus για Whisper / training.
-    Δεν μπλέκει με ai_block_log.json (αυτό το χειρίζεται το ai_agent_service).
+    Ελαφρύ offline corpus για Whisper / training + sessions.
+    Κρατάμε και session_id ώστε να χωρίζονται οι συνομιλίες τύπου ChatGPT.
     """
+    sid = session_id or "default"
+
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     entry = {
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "timestamp": ts,
         "wallet": wallet or "",
         "prompt": prompt,
         "response": response,
         "files": [f.get("filename") for f in files] if files else [],
+        "session_id": sid,
     }
+
     corpus = load_json(AI_CORPUS_FILE, [])
     corpus.append(entry)
     corpus = corpus[-1000:]
     save_json(AI_CORPUS_FILE, corpus)
+
+    # update / create session meta
+    if wallet:
+        sessions = load_ai_sessions()
+        found = None
+        for s in sessions:
+            if s.get("wallet") == wallet and s.get("id") == sid:
+                found = s
+                break
+
+        if not found:
+            title_src = prompt.strip() or "Νέα συνομιλία"
+            title = (title_src.replace("\n", " ")[:80]).strip()
+            found = {
+                "id": sid,
+                "wallet": wallet,
+                "title": title or "Νέα συνομιλία",
+                "created_at": ts,
+                "updated_at": ts,
+            }
+            sessions.append(found)
+        else:
+            found["updated_at"] = ts
+
+        save_ai_sessions(sessions)
 
 
 # ─── VIEWER HELPERS ────────────────────────────────
@@ -708,22 +748,46 @@ def iot_autonomous_request():
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
     """
-    Unified AI chat endpoint:
-    - Χρησιμοποιεί ThronosAI (OpenAI / Google / offline) για την απάντηση.
-    - Αν η απάντηση περιέχει FILE blocks:
-        [[FILE:filename.ext]] ... [[/FILE]]
-      τα γράφει σε πραγματικά αρχεία στο data/ai_files.
-    - Κάθε απάντηση καταγράφεται ούτως ή άλλως σε ai_block_log.json
-      (μέσα από το ai_agent_service) και επιπλέον σε ai_offline_corpus.json.
+    Unified AI chat endpoint με credits + sessions.
+
+    - Αν ο χρήστης έχει δηλώσει wallet, καίει AI credits από το ai_credits.json
+    - Αν δεν έχει wallet, δουλεύει ως demo (infinite)
+    - Αν έχει wallet αλλά 0 credits, δεν προχωρά σε κλήση AI
+    - Κάθε μήνυμα γράφεται στο ai_offline_corpus.json με session_id
     """
     data = request.get_json() or {}
     msg = (data.get("message") or "").strip()
     wallet = (data.get("wallet") or "").strip()
+    session_id = (data.get("session_id") or "").strip() or None
 
     if not msg:
         return jsonify(error="Message required"), 400
 
-    # 1. Απάντηση από τον ThronosAI provider (μαζί με wallet)
+    # --- Credits check (μόνο αν έχουμε wallet) ---
+    credits_value = None
+    if wallet:
+        credits_map = load_ai_credits()
+        try:
+            credits_value = int(credits_map.get(wallet, 0) or 0)
+        except (TypeError, ValueError):
+            credits_value = 0
+
+        if credits_value <= 0:
+            warning_text = (
+                "Δεν έχεις άλλα Quantum credits γι' αυτό το THR wallet.\n"
+                "Πήγαινε στη σελίδα AI Packs και αγόρασε πακέτο για να συνεχίσεις."
+            )
+            return jsonify(
+                response=warning_text,
+                quantum_key=ai_agent.generate_quantum_key(),
+                status="no_credits",
+                wallet=wallet,
+                credits=0,
+                files=[],
+                session_id=session_id,
+            ), 200
+
+    # --- Κλήση στον ThronosAI provider ---
     raw = ai_agent.generate_response(msg, wallet=wallet)
 
     if isinstance(raw, dict):
@@ -735,7 +799,7 @@ def api_chat():
         quantum_key = ai_agent.generate_quantum_key()
         status = "secure"
 
-    # 2. Extract FILE blocks -> γράψιμο αρχείων
+    # --- FILE blocks -> αρχεία ---
     try:
         files, cleaned = extract_ai_files_from_text(full_text)
     except Exception as e:
@@ -743,32 +807,35 @@ def api_chat():
         files = []
         cleaned = full_text
 
-    # 3. Offline corpus enqueue για Whisper / training / chain
+    # --- Offline corpus + sessions ---
     try:
-        enqueue_offline_corpus(wallet, msg, full_text, files)
+        enqueue_offline_corpus(wallet, msg, full_text, files, session_id=session_id)
     except Exception as e:
         print("offline corpus enqueue error:", e)
 
-    # 4. Optional credits lookup
-    credits_value = None
+    # --- Credit burn ---
     if wallet:
+        credits_map = load_ai_credits()
         try:
-            credits_map = load_ai_credits()
-            credits_value = int(credits_map.get(wallet, 0))
-        except Exception:
-            credits_value = None
+            before = int(credits_map.get(wallet, 0) or 0)
+        except (TypeError, ValueError):
+            before = 0
+        after = max(0, before - AI_CREDIT_COST_PER_MSG)
+        credits_map[wallet] = after
+        save_ai_credits(credits_map)
+        credits_for_frontend = after
+    else:
+        credits_for_frontend = "infinite"
 
-    # 5. JSON αποτέλεσμα για frontend
     resp = {
         "response": cleaned,
         "quantum_key": quantum_key,
         "status": status,
         "wallet": wallet,
         "files": files,
+        "credits": credits_for_frontend,
+        "session_id": session_id,
     }
-    if credits_value is not None:
-        resp["credits"] = credits_value
-
     return jsonify(resp), 200
 
 @app.route("/api/upload_training_data", methods=["POST"])
@@ -807,10 +874,36 @@ def api_upload_training_data():
 
 @app.route("/api/ai_upload", methods=["POST"])
 def api_ai_upload():
-    """
-    Alias για το upload που χρησιμοποιεί το chat frontend.
-    """
-    return api_upload_training_data()
+    if "file" not in request.files:
+        return jsonify(error="No file part"), 400
+    file = request.files["file"]
+    wallet = request.form.get("wallet", "").strip()
+    session_id = (request.form.get("session_id") or "").strip() or None
+
+    if file.filename == "":
+        return jsonify(error="No selected file"), 400
+
+    try:
+        filename = secure_filename(file.filename)
+        safe_name = f"{int(time.time())}_{filename}"
+        file_path = os.path.join(AI_FILES_DIR, safe_name)
+        file.save(file_path)
+
+        file_obj = {"filename": safe_name}
+        enqueue_offline_corpus(
+            wallet,
+            "[System] Upload Training Data",
+            f"File uploaded: {safe_name}",
+            [file_obj],
+            session_id=session_id,
+        )
+
+        print(f"📂 AI Training Data Uploaded: {safe_name} by {wallet}")
+        return jsonify(status="success", filename=safe_name, message="File uploaded to AI corpus"), 200
+
+    except Exception as e:
+        print("Upload Error:", e)
+        return jsonify(error=str(e)), 500
 
 
 # ─── AI PACKS API ──────────────────────────────────────────────────────────────
@@ -818,62 +911,121 @@ def api_ai_upload():
 @app.route("/api/ai_credits", methods=["GET"])
 def api_ai_credits():
     """
-    Επιστρέφει πόσα AI credits έχει ένα wallet.
-    Αν δεν δοθεί wallet, ο client απλά δείχνει ∞ (demo).
+    Επιστρέφει τα διαθέσιμα AI credits για ένα wallet.
+    Αν δεν δοθεί wallet, θεωρούμε demo / infinite.
     """
     wallet = (request.args.get("wallet") or "").strip()
-    credits_map = load_ai_credits()
-
     if not wallet:
-        # frontend ήδη το χειρίζεται σαν "∞ (demo)"
         return jsonify({"credits": "infinite"}), 200
 
+    credits_map = load_ai_credits()
     try:
-        value = int(credits_map.get(wallet, 0))
-    except Exception:
+        value = int(credits_map.get(wallet, 0) or 0)
+    except (TypeError, ValueError):
         value = 0
-
-    return jsonify({"credits": value}), 200
+    return jsonify({"wallet": wallet, "credits": value}), 200
 
 
 @app.route("/api/ai_history", methods=["GET"])
 def api_ai_history():
     """
-    Διαβάζει το ai_offline_corpus.json και επιστρέφει ιστορικό
-    σε μορφή [ {role, content, ts}, ... ] για συγκεκριμένο wallet.
+    Ιστορικό AI συνομιλιών για συγκεκριμένο THR wallet.
+    Βασίζεται στο ai_offline_corpus.json.
     """
     wallet = (request.args.get("wallet") or "").strip()
     corpus = load_json(AI_CORPUS_FILE, [])
 
-    if wallet:
-        corpus = [
-            c for c in corpus
-            if (c.get("wallet") or "").strip() == wallet
-        ]
-
-    # Κρατάμε τα τελευταία 50 entries για να μην βαραίνει
-    corpus = corpus[-50:]
-
     history = []
     for entry in corpus:
-        ts = entry.get("timestamp") or ""
-        prompt = (entry.get("prompt") or "").strip()
-        response = (entry.get("response") or "").strip()
+        if wallet and entry.get("wallet") != wallet:
+            continue
+        ts = entry.get("timestamp", "")
+        prompt = entry.get("prompt", "")
+        response = entry.get("response", "")
 
         if prompt:
-            history.append({
-                "role": "user",
-                "content": prompt,
-                "ts": ts,
-            })
+            history.append({"role": "user", "content": prompt, "ts": ts})
         if response:
-            history.append({
-                "role": "assistant",
-                "content": response,
-                "ts": ts,
-            })
+            history.append({"role": "assistant", "content": response, "ts": ts})
 
-    return jsonify({"history": history}), 200
+    history = history[-40:]  # τα τελευταία 40 μηνύματα για να μην φορτώνει άπειρα
+    return jsonify({"wallet": wallet, "history": history}), 200
+
+@app.route("/api/ai_sessions", methods=["GET"])
+def api_ai_sessions():
+    """
+    Επιστρέφει όλες τις AI sessions για συγκεκριμένο wallet.
+    """
+    wallet = (request.args.get("wallet") or "").strip()
+    sessions = load_ai_sessions()
+    if wallet:
+        sessions = [s for s in sessions if s.get("wallet") == wallet]
+
+    # ταξινόμηση με βάση updated_at (πιο πρόσφατη πρώτη)
+    def _key(s):
+        return s.get("updated_at", "")
+    sessions.sort(key=_key, reverse=True)
+
+    return jsonify({"wallet": wallet, "sessions": sessions}), 200
+
+@app.route("/api/ai_sessions/start", methods=["POST"])
+def api_ai_session_start():
+    """
+    Δημιουργεί νέα session για ένα wallet.
+    """
+    data = request.get_json() or {}
+    wallet = (data.get("wallet") or "").strip()
+    title = (data.get("title") or "").strip()
+
+    if not wallet:
+        return jsonify(error="Wallet required"), 400
+
+    sid = secrets.token_hex(8)
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    if not title:
+        title = "Νέα συνομιλία"
+
+    sessions = load_ai_sessions()
+    session = {
+        "id": sid,
+        "wallet": wallet,
+        "title": title[:80],
+        "created_at": ts,
+        "updated_at": ts,
+    }
+    sessions.append(session)
+    save_ai_sessions(sessions)
+
+    return jsonify(status="ok", session=session), 200
+
+@app.route("/api/ai_session_history", methods=["GET"])
+def api_ai_session_history():
+    """
+    Ιστορικό για συγκεκριμένη session (wallet + session_id).
+    """
+    wallet = (request.args.get("wallet") or "").strip()
+    session_id = (request.args.get("session_id") or "").strip() or "default"
+
+    corpus = load_json(AI_CORPUS_FILE, [])
+    history = []
+
+    for entry in corpus:
+        if wallet and entry.get("wallet") != wallet:
+            continue
+        if (entry.get("session_id") or "default") != session_id:
+            continue
+
+        ts = entry.get("timestamp", "")
+        prompt = entry.get("prompt", "")
+        response = entry.get("response", "")
+
+        if prompt:
+            history.append({"role": "user", "content": prompt, "ts": ts})
+        if response:
+            history.append({"role": "assistant", "content": response, "ts": ts})
+
+    history = history[-80:]
+    return jsonify({"wallet": wallet, "session_id": session_id, "history": history}), 200
 
 
 @app.route("/api/ai_packs", methods=["GET"])
@@ -1017,11 +1169,11 @@ except Exception as e:
         zf.writestr("node_config.json",config_json)
         zf.writestr("start_iot.py",start_script)
         zf.writestr("iot_vehicle_node.py",node_script)
-        pic_path=os.path.join(BASE_DIR,"/images/Vehicle.jpg")
+        pic_path=os.path.join(BASE_DIR,"/images/IoTVehicle.jpg")
         if os.path.exists(pic_path):
-            zf.write(pic_path,"/images/Vehicle.jpg")
+            zf.write(pic_path,"/images/IoTVehicle.jpg")
         else:
-            zf.writestr("/images/Vehicle.jpg","")
+            zf.writestr("/images/IoTVehicle.jpg","")
         zf.writestr("README.txt","1. Install Python 3.\n2. Run 'python start_iot.py' (auto-installs deps).")
     memory_file.seek(0)
     return send_file(

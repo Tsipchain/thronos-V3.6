@@ -14,9 +14,12 @@
             --danger: #ff4d4d;
             --text-main: #e0ffe8;
             --text-muted: #7de6a0;
+            --sidebar-bg: #020904;
         }
 
-        * { box-sizing: border-box; }
+        * {
+            box-sizing: border-box;
+        }
 
         body {
             margin: 0;
@@ -24,6 +27,9 @@
             background: radial-gradient(circle at top, #04110a 0, #020204 40%, #000 100%);
             color: var(--text-main);
             font-family: "Fira Code", "Consolas", monospace;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
         }
 
         .top-bar {
@@ -33,6 +39,8 @@
             justify-content: space-between;
             align-items: center;
             background: #020904;
+            height: 40px;
+            flex-shrink: 0;
         }
 
         .logo {
@@ -40,34 +48,98 @@
             letter-spacing: 0.12em;
             text-transform: uppercase;
             color: var(--accent);
+            font-size: 14px;
         }
 
-        .logo span { color: var(--border); }
+        .logo span {
+            color: var(--border);
+        }
 
         .status-pill {
-            font-size: 11px;
-            padding: 4px 10px;
+            font-size: 10px;
+            padding: 2px 8px;
             border-radius: 999px;
             border: 1px solid var(--border);
             color: var(--accent);
             background: rgba(0, 0, 0, 0.4);
         }
 
+        /* Layout Container */
         #root {
-            max-width: 1100px;
-            margin: 16px auto;
-            padding: 0 12px;
+            flex: 1;
+            display: flex;
+            overflow: hidden;
         }
 
-        .chat-shell {
-            border: 1px solid var(--border);
-            background: var(--panel);
-            box-shadow: 0 0 24px rgba(0, 255, 102, 0.1);
-            border-radius: 8px;
+        /* Sidebar Styles */
+        .sidebar {
+            width: 260px;
+            background: var(--sidebar-bg);
+            border-right: 1px solid var(--border);
             display: flex;
             flex-direction: column;
-            height: calc(100vh - 80px);
-            max-height: 800px;
+            padding: 10px;
+            flex-shrink: 0;
+        }
+
+        .new-chat-btn {
+            border: 1px solid var(--border);
+            background: rgba(0, 255, 102, 0.1);
+            color: var(--accent);
+            padding: 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            text-align: left;
+            margin-bottom: 10px;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: background 0.2s;
+        }
+
+        .new-chat-btn:hover {
+            background: rgba(0, 255, 102, 0.2);
+        }
+
+        .session-list {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .session-item {
+            padding: 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            color: var(--text-muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            transition: background 0.2s;
+        }
+
+        .session-item:hover {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-main);
+        }
+
+        .session-item.active {
+            background: rgba(0, 255, 102, 0.15);
+            color: var(--accent);
+            border-left: 2px solid var(--accent);
+        }
+
+        /* Main Chat Area */
+        .chat-main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: var(--panel);
+            position: relative;
         }
 
         .chat-header {
@@ -75,21 +147,16 @@
             border-bottom: 1px solid rgba(0, 255, 102, 0.3);
             display: flex;
             flex-wrap: wrap;
-            gap: 8px;
+            gap: 12px;
             align-items: center;
             font-size: 12px;
-        }
-
-        .chat-header-title {
-            font-weight: 600;
-            color: var(--accent);
-            margin-right: auto;
+            background: rgba(0,0,0,0.2);
         }
 
         .field-inline {
             display: flex;
             align-items: center;
-            gap: 4px;
+            gap: 6px;
         }
 
         .field-inline label {
@@ -101,21 +168,23 @@
             background: #000;
             border: 1px solid rgba(0, 255, 102, 0.4);
             color: var(--accent);
-            padding: 3px 6px;
-            font-size: 11px;
+            padding: 4px 8px;
+            font-size: 12px;
             border-radius: 4px;
+            width: 140px;
         }
 
         .credits-label {
             font-size: 11px;
             color: var(--text-muted);
+            margin-left: auto;
         }
 
         .credits-label span {
             color: var(--accent);
             font-weight: 600;
         }
-
+        
         .qa-btn-small {
             font-size: 10px;
             padding: 2px 6px;
@@ -123,128 +192,43 @@
             color: var(--accent);
             text-decoration: none;
             border-radius: 4px;
-            margin-left: 4px;
+            margin-left: 8px;
         }
-
+        
         .qa-btn-small:hover {
             background: rgba(0, 255, 204, 0.1);
         }
 
-        /* -------- MAIN LAYOUT: SIDEBAR + CHAT -------- */
-
-        .chat-main {
-            flex: 1;
-            display: flex;
-            min-height: 0;
-        }
-
-        .chat-sidebar {
-            width: 220px;
-            border-right: 1px solid rgba(0, 255, 102, 0.3);
-            background: #050b06;
-            padding: 8px;
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-
-        .sidebar-title {
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            color: var(--text-muted);
-            margin-bottom: 4px;
-        }
-
-        .sidebar-header-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 4px;
-        }
-
-        .btn-sidebar {
-            font-size: 11px;
-            padding: 2px 6px;
-            border-radius: 4px;
-            border: 1px solid var(--border);
-            background: transparent;
-            color: var(--accent);
-            cursor: pointer;
-        }
-
-        .btn-sidebar:hover {
-            background: rgba(0, 255, 102, 0.12);
-        }
-
-        .sessions-list {
-            flex: 1;
-            overflow-y: auto;
-            font-size: 11px;
-        }
-
-        .session-item {
-            padding: 5px 6px;
-            border-radius: 4px;
-            margin-bottom: 4px;
-            cursor: pointer;
-            border: 1px solid transparent;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .session-item:hover {
-            border-color: rgba(0, 255, 102, 0.4);
-            background: rgba(0, 0, 0, 0.6);
-        }
-
-        .session-item.active {
-            border-color: var(--border);
-            background: rgba(0, 255, 102, 0.1);
-            color: var(--accent);
-        }
-
-        .session-meta {
-            font-size: 9px;
-            opacity: 0.6;
-        }
-
-        .sidebar-empty {
-            font-size: 11px;
-            color: var(--text-muted);
-            padding: 4px 2px;
-        }
-
-        .chat-main-panel {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            min-width: 0;
-        }
-
         .chat-body {
             flex: 1;
-            padding: 10px 12px;
+            padding: 20px;
             overflow-y: auto;
             background: radial-gradient(circle at top left, #042010 0, #050608 40%, #020204 100%);
         }
 
         .message-row {
-            margin-bottom: 10px;
+            margin-bottom: 16px;
             display: flex;
         }
 
-        .message-row.user { justify-content: flex-end; }
-        .message-row.ai,
-        .message-row.assistant { justify-content: flex-start; }
+        .message-row.user {
+            justify-content: flex-end;
+        }
+
+        .message-row.ai {
+            justify-content: flex-start;
+        }
+        
+        .message-row.assistant {
+            justify-content: flex-start;
+        }
 
         .bubble {
             max-width: 80%;
-            padding: 8px 11px;
+            padding: 10px 14px;
             border-radius: 8px;
-            line-height: 1.4;
-            font-size: 13px;
+            line-height: 1.5;
+            font-size: 14px;
             white-space: pre-wrap;
             position: relative;
         }
@@ -252,29 +236,28 @@
         .message-row.user .bubble {
             background: var(--border);
             color: #000;
+            border-bottom-right-radius: 2px;
         }
 
-        .message-row.ai .bubble,
-        .message-row.assistant .bubble {
+        .message-row.ai .bubble, .message-row.assistant .bubble {
             background: rgba(1, 5, 8, 0.9);
             color: var(--text-main);
             border: 1px solid rgba(0, 255, 102, 0.5);
+            border-bottom-left-radius: 2px;
         }
 
         .meta-line {
             font-size: 10px;
-            margin-top: 3px;
+            margin-top: 4px;
             opacity: 0.7;
         }
 
-        .meta-line span { margin-right: 10px; }
-
         .meta-tools {
-            margin-top: 6px;
+            margin-top: 8px;
             display: flex;
             flex-wrap: wrap;
-            gap: 6px;
-            font-size: 10px;
+            gap: 8px;
+            font-size: 11px;
         }
 
         .btn-copy {
@@ -299,43 +282,55 @@
 
         .chat-footer {
             border-top: 1px solid rgba(0, 255, 102, 0.3);
-            padding: 8px;
+            padding: 12px;
             display: flex;
             flex-direction: column;
-            gap: 6px;
+            gap: 10px;
             background: #020904;
         }
 
         .input-row {
             display: flex;
-            gap: 6px;
+            gap: 10px;
         }
 
         #user-input {
             flex: 1;
             resize: none;
-            min-height: 40px;
-            max-height: 120px;
+            min-height: 44px;
+            max-height: 140px;
             background: #000;
             border: 1px solid rgba(0, 255, 102, 0.4);
             color: var(--text-main);
-            border-radius: 4px;
-            padding: 6px 8px;
+            border-radius: 6px;
+            padding: 10px;
             font-family: inherit;
-            font-size: 13px;
+            font-size: 14px;
+        }
+        
+        #user-input:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 8px rgba(0, 255, 204, 0.2);
         }
 
         .btn {
-            border-radius: 4px;
+            border-radius: 6px;
             border: 1px solid var(--border);
             background: var(--border);
             color: #000;
-            font-size: 13px;
-            padding: 0 14px;
+            font-size: 14px;
+            font-weight: 600;
+            padding: 0 20px;
             cursor: pointer;
             display: flex;
             align-items: center;
-            gap: 4px;
+            gap: 6px;
+            transition: filter 0.2s;
+        }
+        
+        .btn:hover {
+            filter: brightness(1.1);
         }
 
         .btn:disabled {
@@ -348,66 +343,42 @@
             color: var(--text-muted);
             display: flex;
             justify-content: space-between;
-            gap: 8px;
+            gap: 12px;
             flex-wrap: wrap;
+            margin-top: 4px;
         }
-
+        
         .qa-upload-bar {
             display: flex;
             align-items: center;
-            gap: 8px;
-            margin-top: 4px;
+            gap: 10px;
         }
-
+        
         .qa-upload-bar input[type="file"] {
             font-size: 11px;
             color: var(--text-muted);
         }
-
+        
         #aiUploadBtn {
             font-size: 11px;
-            padding: 2px 8px;
+            padding: 4px 10px;
             background: #0d1117;
             border: 1px solid var(--accent);
             color: var(--accent);
             border-radius: 4px;
             cursor: pointer;
         }
-
-        .link {
-            color: var(--accent);
-            text-decoration: none;
+        
+        #aiUploadBtn:hover {
+            background: rgba(0, 255, 204, 0.1);
         }
 
-        .link:hover { text-decoration: underline; }
-
-        .badge-warning {
-            color: var(--danger);
-            font-weight: 600;
-        }
-
-        @media (max-width: 700px) {
-            .chat-shell {
-                height: calc(100vh - 64px);
-                max-height: none;
+        @media (max-width: 768px) {
+            .sidebar {
+                display: none; /* Mobile hide sidebar for now or add toggle */
             }
             .chat-main {
-                flex-direction: column;
-            }
-            .chat-sidebar {
-                width: 100%;
-                border-right: none;
-                border-bottom: 1px solid rgba(0, 255, 102, 0.3);
-                flex-direction: row;
-                flex-wrap: wrap;
-                max-height: 120px;
-            }
-            .sessions-list {
-                flex: 1 1 100%;
-                max-height: 80px;
-            }
-            .bubble {
-                max-width: 100%;
+                height: 100%;
             }
         }
     </style>
@@ -419,10 +390,20 @@
 </div>
 
 <div id="root">
-    <div class="chat-shell">
-        <div class="chat-header">
-            <div class="chat-header-title">Channel: /chat · Node AI-CORE-01</div>
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <button id="new-chat-btn" class="new-chat-btn">
+            <span>+ New Chat</span>
+        </button>
+        <div id="session-list" class="session-list">
+            <!-- Sessions will be injected here -->
+            <div style="padding:10px; opacity:0.5; font-size:11px;">Enter Wallet to load sessions...</div>
+        </div>
+    </div>
 
+    <!-- Main Chat -->
+    <div class="chat-main">
+        <div class="chat-header">
             <div class="field-inline">
                 <label for="wallet-input">THR Wallet:</label>
                 <input id="wallet-input" type="text" placeholder="THRxxxxxxxx" autocomplete="off">
@@ -434,45 +415,34 @@
             </div>
         </div>
 
-        <div class="chat-main">
-            <!-- SIDEBAR -->
-            <div class="chat-sidebar">
-                <div class="sidebar-header-row">
-                    <div class="sidebar-title">Συνομιλίες</div>
-                    <button id="new-session-btn" class="btn-sidebar">+ New</button>
-                </div>
-                <div id="sessions-list" class="sessions-list">
-                    <div class="sidebar-empty">Σύνδεσε wallet για να δεις τα ιστορικά σου.</div>
+        <div id="messages" class="chat-body">
+            <!-- Messages will be injected here -->
+            <div style="text-align:center; margin-top:40px; opacity:0.5;">
+                <div>THRONOS QUANTUM CORE</div>
+                <div style="font-size:11px; margin-top:8px;">Select a session or start a new chat.</div>
+            </div>
+        </div>
+
+        <div class="chat-footer">
+            <div class="input-row">
+                <textarea id="user-input" rows="1" placeholder="Type a command to Thronos..."></textarea>
+                <button id="send-btn" class="btn">
+                    ▶ Send
+                </button>
+            </div>
+            
+            <div class="qa-upload-bar">
+              <input type="file" id="aiUploadInput">
+              <button id="aiUploadBtn">Upload to Quantum Node</button>
+            </div>
+            
+            <div class="footer-info">
+                <div>
+                    <span id="status-line">Core: online</span> ·
+                    <span id="key-line">Key: —</span>
                 </div>
             </div>
-
-            <!-- MAIN PANEL -->
-            <div class="chat-main-panel">
-                <div id="messages" class="chat-body"></div>
-
-                <div class="chat-footer">
-                    <div class="input-row">
-                        <textarea id="user-input" rows="2" placeholder="Πληκτρολόγησε την εντολή σου προς τον Θρόνο..."></textarea>
-                        <button id="send-btn" class="btn">▶ Send</button>
-                    </div>
-
-                    <div class="qa-upload-bar">
-                        <input type="file" id="aiUploadInput">
-                        <button id="aiUploadBtn">Upload to Quantum Node</button>
-                    </div>
-
-                    <div class="footer-info">
-                        <div>
-                            Tip: αν βάλεις THR wallet, το request συνδέεται με το address σου και μπαίνει στην offline βιβλιοθήκη.
-                        </div>
-                        <div>
-                            <span id="status-line">Core: online</span> ·
-                            <span id="key-line">Key: —</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div> <!-- /chat-main -->
+        </div>
     </div>
 </div>
 
@@ -487,9 +457,8 @@
     const topStatusPillEl = document.getElementById("top-status-pill");
     const aiUploadInput   = document.getElementById("aiUploadInput");
     const aiUploadBtn     = document.getElementById("aiUploadBtn");
-
-    const sessionsListEl  = document.getElementById("sessions-list");
-    const newSessionBtn   = document.getElementById("new-session-btn");
+    const sessionListEl   = document.getElementById("session-list");
+    const newChatBtn      = document.getElementById("new-chat-btn");
 
     let currentSessionId = null;
 
@@ -501,14 +470,6 @@
 
     function loadWalletLocal() {
         try { return localStorage.getItem("thronos_wallet") || ""; } catch (_) { return ""; }
-    }
-
-    function saveSessionLocal(sessionId) {
-        try { localStorage.setItem("thronos_session_id", sessionId || ""); } catch (_) {}
-    }
-
-    function loadSessionLocal() {
-        try { return localStorage.getItem("thronos_session_id") || ""; } catch (_) { return ""; }
     }
 
     function setCreditsLabel(v) {
@@ -553,6 +514,7 @@
             const tools = document.createElement("div");
             tools.className = "meta-tools";
 
+            // copy button
             const copyBtn = document.createElement("button");
             copyBtn.className = "btn-copy";
             copyBtn.type = "button";
@@ -564,6 +526,7 @@
             });
             tools.appendChild(copyBtn);
 
+            // file links (if any)
             if (Array.isArray(files) && files.length > 0) {
                 const minutes = Math.round((files[0].expires_in || 3600) / 60);
                 files.forEach(f => {
@@ -604,127 +567,90 @@
         }
     }
 
-    function clearMessagesWithWelcome() {
-        messagesEl.innerHTML = "";
-        appendMessage(
-            "ai",
-            "Quantum Encryption Verified. Το κανάλι είναι ασφαλές. Γράψε την πρώτη σου εντολή ή ερώτηση."
-        );
-    }
+    // --- Session Management ---
 
-    // --- Sessions logic ---
-
-    function renderSessions(list, activeId) {
-        sessionsListEl.innerHTML = "";
-        if (!list || !list.length) {
-            const div = document.createElement("div");
-            div.className = "sidebar-empty";
-            div.textContent = "Καμία συνομιλία ακόμη για αυτό το wallet.";
-            sessionsListEl.appendChild(div);
-            return;
-        }
-
-        list.forEach(sess => {
-            const item = document.createElement("div");
-            item.className = "session-item" + (sess.id === activeId ? " active" : "");
-            const title = document.createElement("div");
-            title.textContent = sess.title || "Untitled";
-            const meta = document.createElement("div");
-            meta.className = "session-meta";
-            meta.textContent = sess.updated_at || sess.created_at || "";
-            item.appendChild(title);
-            item.appendChild(meta);
-
-            item.addEventListener("click", () => {
-                if (currentSessionId === sess.id) return;
-                currentSessionId = sess.id;
-                saveSessionLocal(currentSessionId);
-                Array.from(sessionsListEl.querySelectorAll(".session-item")).forEach(el => {
-                    el.classList.toggle("active", el === item);
-                });
-                loadSessionHistory();
-            });
-
-            sessionsListEl.appendChild(item);
-        });
-    }
-
-    async function ensureSessionForWallet(wallet) {
-        // Αν δεν υπάρχει session, φτιάξε μία "default"
-        const res = await fetch(`/api/ai_sessions?wallet=${encodeURIComponent(wallet)}`);
-        const data = await res.json();
-        if (data.sessions && data.sessions.length) {
-            return data.sessions;
-        }
-        const createRes = await fetch("/api/ai_sessions/start", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ wallet })
-        });
-        const created = await createRes.json();
-        return [created.session];
-    }
-
-    async function refreshSessions() {
+    async function loadSessions() {
         const wallet = walletInputEl.value.trim();
         if (!wallet) {
-            sessionsListEl.innerHTML = '<div class="sidebar-empty">Σύνδεσε wallet για να δεις τα ιστορικά σου.</div>';
-            currentSessionId = null;
-            saveSessionLocal("");
+            sessionListEl.innerHTML = '<div style="padding:10px; opacity:0.5; font-size:11px;">Enter Wallet to load sessions...</div>';
             return;
         }
 
         try {
-            let res = await fetch(`/api/ai_sessions?wallet=${encodeURIComponent(wallet)}`);
-            let data = await res.json();
-            let sessions = data.sessions || [];
-
-            if (!sessions.length) {
-                sessions = await ensureSessionForWallet(wallet);
-            }
-
-            // Αν δεν έχουμε ενεργή session, πάρε την πρώτη
-            if (!currentSessionId) {
-                const saved = loadSessionLocal();
-                const found = sessions.find(s => s.id === saved);
-                currentSessionId = (found && found.id) || sessions[0].id;
-                saveSessionLocal(currentSessionId);
-            }
-
-            renderSessions(sessions, currentSessionId);
-            await loadSessionHistory();
-        } catch (e) {
-            console.error("sessions error", e);
-            sessionsListEl.innerHTML = '<div class="sidebar-empty">Σφάλμα φόρτωσης sessions.</div>';
-        }
-    }
-
-    async function loadSessionHistory() {
-        const wallet = walletInputEl.value.trim();
-        if (!wallet || !currentSessionId) {
-            clearMessagesWithWelcome();
-            return;
-        }
-        try {
-            const res = await fetch(
-                `/api/ai_session_history?wallet=${encodeURIComponent(wallet)}&session_id=${encodeURIComponent(currentSessionId)}`
-            );
+            const res = await fetch(`/api/ai_sessions?wallet=${encodeURIComponent(wallet)}`);
             const data = await res.json();
-            messagesEl.innerHTML = "";
-            if (data.history && Array.isArray(data.history) && data.history.length) {
-                data.history.forEach(msg => {
-                    appendMessage(msg.role === "user" ? "user" : "assistant", msg.content, `<span style="opacity:0.5">${msg.ts}</span>`);
+            
+            sessionListEl.innerHTML = "";
+            
+            if (data.sessions && data.sessions.length > 0) {
+                data.sessions.forEach(s => {
+                    const el = document.createElement("div");
+                    el.className = "session-item";
+                    if (s.id === currentSessionId) el.classList.add("active");
+                    el.textContent = s.title || "Untitled Chat";
+                    el.onclick = () => loadSessionHistory(s.id);
+                    sessionListEl.appendChild(el);
                 });
             } else {
-                clearMessagesWithWelcome();
+                sessionListEl.innerHTML = '<div style="padding:10px; opacity:0.5; font-size:11px;">No sessions found. Start a new chat!</div>';
             }
         } catch (e) {
-            console.error("history error", e);
-            clearMessagesWithWelcome();
+            console.error("Sessions load error:", e);
         }
     }
 
-    // --- Send message ---
+    async function loadSessionHistory(sid) {
+        const wallet = walletInputEl.value.trim();
+        if (!wallet) return;
+
+        currentSessionId = sid;
+        loadSessions(); // refresh active class
+
+        try {
+            const res = await fetch(`/api/ai_session_history?wallet=${encodeURIComponent(wallet)}&session_id=${encodeURIComponent(sid)}`);
+            const data = await res.json();
+
+            messagesEl.innerHTML = "";
+            
+            if (data.history && Array.isArray(data.history)) {
+                data.history.forEach(msg => {
+                   appendMessage(msg.role, msg.content, `<span style="opacity:0.5">${msg.ts}</span>`); 
+                });
+            } else {
+                appendMessage("ai", "Quantum Encryption Verified. New session started.");
+            }
+            
+        } catch (e) {
+            console.error("History load error:", e);
+        }
+    }
+
+    async function startNewSession() {
+        const wallet = walletInputEl.value.trim();
+        if (!wallet) {
+            alert("Please enter a wallet address first.");
+            return;
+        }
+
+        try {
+            const res = await fetch("/api/ai_sessions/start", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ wallet: wallet, title: "New Chat" })
+            });
+            const data = await res.json();
+            if (data.status === "ok") {
+                currentSessionId = data.session.id;
+                loadSessions();
+                messagesEl.innerHTML = "";
+                appendMessage("ai", "New secure session initialized.");
+            }
+        } catch (e) {
+            console.error("New session error:", e);
+        }
+    }
+
+    // --- Chat Logic ---
 
     async function sendMessage() {
         const text = userInputEl.value.trim();
@@ -733,9 +659,10 @@
         const wallet = walletInputEl.value.trim();
         saveWalletLocal(wallet);
 
-        if (wallet && !currentSessionId) {
-            await refreshSessions(); // θα δημιουργήσει default
-        }
+        // If no session selected but wallet exists, start one implicitly or warn?
+        // Let's just pass null session_id, backend will create default or handle it.
+        // But better UX: if no session and wallet present, create one first?
+        // For now, let's allow "default" session behavior if currentSessionId is null.
 
         userInputEl.value = "";
         appendMessage("user", text);
@@ -743,6 +670,7 @@
         sendBtn.disabled = true;
         setStatus("Core: thinking…");
 
+        // typing bubble
         const thinkingRow = document.createElement("div");
         thinkingRow.className = "message-row ai";
         const thinkingBubble = document.createElement("div");
@@ -768,6 +696,10 @@
             if (!res.ok) {
                 const errData = await res.json().catch(() => ({}));
                 appendMessage("ai", "Quantum Interference: " + (errData.message || "HTTP " + res.status));
+                if (errData.response) {
+                     // Special case for "no credits" warning which comes in response field
+                     appendMessage("ai", errData.response);
+                }
                 setStatus("Core: error");
                 if (errData.credits !== undefined) setCreditsLabel(errData.credits);
                 return;
@@ -775,10 +707,15 @@
 
             const data = await res.json();
 
-            const metaParts = [];
-            if (data.wallet) {
-                metaParts.push(`<span>Wallet: ${data.wallet}</span>`);
+            // If backend created a session or we sent one, update list to show updated time/title
+            if (data.session_id) {
+                if (currentSessionId !== data.session_id) {
+                    currentSessionId = data.session_id;
+                }
+                loadSessions(); // refresh list to show new title/timestamp
             }
+
+            const metaParts = [];
             if (data.status) {
                 metaParts.push(`<span>Status: ${data.status}</span>`);
             }
@@ -796,15 +733,7 @@
             if (data.credits !== undefined) {
                 setCreditsLabel(data.credits);
             }
-            if (data.session_id && !currentSessionId) {
-                currentSessionId = data.session_id;
-                saveSessionLocal(currentSessionId);
-            }
-
             setStatus("Core: " + (data.status || "online"));
-            if (wallet) {
-                refreshSessions(); // για να ανανεωθεί το "updated_at"
-            }
         } catch (err) {
             messagesEl.removeChild(thinkingRow);
             appendMessage("ai", "Quantum Interference Detected: " + (err.message || String(err)));
@@ -813,45 +742,48 @@
             sendBtn.disabled = false;
         }
     }
-
+    
     // --- Upload Logic ---
-
     aiUploadBtn.addEventListener('click', async () => {
-        const wallet = walletInputEl.value.trim();
-        if (!wallet) {
-            alert("Please enter a THR Wallet address first.");
-            return;
-        }
-        if (!aiUploadInput.files.length) return;
+      const wallet = walletInputEl.value.trim();
+      if (!wallet) {
+          alert("Please enter a THR Wallet address first.");
+          return;
+      }
+      if (!aiUploadInput.files.length) return;
 
-        const fd = new FormData();
-        fd.append('wallet', wallet);
-        if (currentSessionId) fd.append('session_id', currentSessionId);
-        fd.append('file', aiUploadInput.files[0]);
+      const fd = new FormData();
+      fd.append('wallet', wallet);
+      fd.append('file', aiUploadInput.files[0]);
+      if (currentSessionId) {
+          fd.append('session_id', currentSessionId);
+      }
+      
+      setStatus("Core: uploading...");
+      aiUploadBtn.disabled = true;
 
-        setStatus("Core: uploading...");
-        aiUploadBtn.disabled = true;
-
-        try {
-            const res = await fetch('/api/ai_upload', {
-                method: 'POST',
-                body: fd
-            });
-            const data = await res.json();
-
-            if (res.ok) {
-                appendMessage("ai", `Uploaded file ${data.filename}`);
-                aiUploadInput.value = "";
-            } else {
-                alert("Upload failed: " + (data.error || "Unknown error"));
-            }
-        } catch (e) {
-            console.error(e);
-            alert("Upload network error");
-        } finally {
-            setStatus("Core: online");
-            aiUploadBtn.disabled = false;
-        }
+      try {
+          const res = await fetch('/api/ai_upload', {
+            method: 'POST',
+            body: fd
+          });
+          const data = await res.json();
+          
+          if (res.ok) {
+              const fname = data.filename || (aiUploadInput.files[0] && aiUploadInput.files[0].name) || "file";
+              const msg   = data.message || "File uploaded to AI corpus";
+              appendMessage("ai", `Uploaded file ${fname} · ${msg}`);
+              aiUploadInput.value = ""; // clear input
+          } else {
+              alert("Upload failed: " + (data.error || "Unknown error"));
+          }
+      } catch (e) {
+          console.error(e);
+          alert("Upload network error");
+      } finally {
+          setStatus("Core: online");
+          aiUploadBtn.disabled = false;
+      }
     });
 
     // --- events ---
@@ -863,59 +795,29 @@
             sendMessage();
         }
     });
-
+    
     walletInputEl.addEventListener("change", () => {
         const w = walletInputEl.value.trim();
         saveWalletLocal(w);
         refreshCredits();
-        if (w) {
-            currentSessionId = null;
-            saveSessionLocal("");
-            refreshSessions();
-        } else {
-            sessionsListEl.innerHTML = '<div class="sidebar-empty">Σύνδεσε wallet για να δεις τα ιστορικά σου.</div>';
-            currentSessionId = null;
-            saveSessionLocal("");
-            clearMessagesWithWelcome();
-        }
+        loadSessions();
+        // Reset view
+        messagesEl.innerHTML = '<div style="text-align:center; margin-top:40px; opacity:0.5;"><div>THRONOS QUANTUM CORE</div><div style="font-size:11px; margin-top:8px;">Wallet loaded. Select a session.</div></div>';
+        currentSessionId = null;
     });
-
-    newSessionBtn.addEventListener("click", async () => {
-        const wallet = walletInputEl.value.trim();
-        if (!wallet) {
-            alert("Βάλε πρώτα THR wallet.");
-            return;
-        }
-        try {
-            const res = await fetch("/api/ai_sessions/start", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ wallet })
-            });
-            const data = await res.json();
-            if (res.ok && data.session) {
-                currentSessionId = data.session.id;
-                saveSessionLocal(currentSessionId);
-                await refreshSessions();
-            } else {
-                alert("Session create failed: " + (data.error || "Unknown error"));
-            }
-        } catch (e) {
-            console.error(e);
-            alert("Session create network error");
-        }
-    });
+    
+    newChatBtn.addEventListener("click", startNewSession);
 
     const savedWallet = loadWalletLocal();
     walletInputEl.value = savedWallet;
-
+    
     if (savedWallet) {
         refreshCredits();
-        refreshSessions();
+        loadSessions();
     } else {
         setCreditsLabel("infinite");
-        clearMessagesWithWelcome();
     }
+
 </script>
 </body>
 </html>

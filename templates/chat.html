@@ -120,17 +120,32 @@
             overflow: hidden;
             text-overflow: ellipsis;
             transition: background 0.2s;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
 
         .session-item:hover {
             background: rgba(255, 255, 255, 0.05);
             color: var(--text-main);
         }
+        
+        .session-item:hover .edit-icon {
+            opacity: 1;
+        }
 
         .session-item.active {
             background: rgba(0, 255, 102, 0.15);
             color: var(--accent);
             border-left: 2px solid var(--accent);
+        }
+        
+        .edit-icon {
+            opacity: 0;
+            font-size: 10px;
+            cursor: pointer;
+            color: var(--accent);
+            margin-left: 4px;
         }
 
         /* Main Chat Area */
@@ -587,7 +602,24 @@
                     const el = document.createElement("div");
                     el.className = "session-item";
                     if (s.id === currentSessionId) el.classList.add("active");
-                    el.textContent = s.title || "Untitled Chat";
+                    
+                    const titleSpan = document.createElement("span");
+                    titleSpan.textContent = s.title || "Untitled Chat";
+                    titleSpan.style.flex = "1";
+                    titleSpan.style.overflow = "hidden";
+                    titleSpan.style.textOverflow = "ellipsis";
+                    el.appendChild(titleSpan);
+
+                    const editIcon = document.createElement("span");
+                    editIcon.className = "edit-icon";
+                    editIcon.textContent = "✎";
+                    editIcon.title = "Rename";
+                    editIcon.onclick = (e) => {
+                        e.stopPropagation();
+                        renameSession(s.id, s.title);
+                    };
+                    el.appendChild(editIcon);
+
                     el.onclick = () => loadSessionHistory(s.id);
                     sessionListEl.appendChild(el);
                 });
@@ -647,6 +679,31 @@
             }
         } catch (e) {
             console.error("New session error:", e);
+        }
+    }
+
+    async function renameSession(sid, currentTitle) {
+        const wallet = walletInputEl.value.trim();
+        if (!wallet) return;
+
+        const newTitle = prompt("Rename chat:", currentTitle);
+        if (newTitle && newTitle.trim() !== "") {
+            try {
+                const res = await fetch("/api/ai_sessions/rename", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ 
+                        wallet: wallet, 
+                        session_id: sid, 
+                        title: newTitle.trim() 
+                    })
+                });
+                if (res.ok) {
+                    loadSessions();
+                }
+            } catch (e) {
+                console.error("Rename error:", e);
+            }
         }
     }
 

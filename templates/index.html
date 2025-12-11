@@ -80,47 +80,73 @@
 
 {% block scripts %}
 <script>
-fetch("/chain")
-  .then(res => res.json())
-  .then(data => {
-    const blocks = data || [];
-    const last = blocks[blocks.length - 1] || {};
-    
-    const labels = {
-        el: {
-            total: "Σύνολο Blocks",
-            lastHash: "Hash Τελευταίου Block",
-            lastMiner: "Τελευταίος Miner",
-            timestamp: "Χρονική Σήμανση"
-        },
-        en: {
-            total: "Total Blocks",
-            lastHash: "Last Block Hash",
-            lastMiner: "Last Miner",
-            timestamp: "Timestamp"
-        }
-    };
-    
-    const renderStats = () => {
-        const lang = localStorage.getItem('lang') || 'el';
-        const l = labels[lang];
-        const html = `
-        ${l.total}: <span class="highlight">${blocks.length}</span>\n
-        ${l.lastHash}: ${last.block_hash || "N/A"}\n
-        ${l.lastMiner}: ${last.miner_btc_address || last.thr_address || "N/A"}\n
-        ${l.timestamp}: ${last.timestamp || "N/A"}`;
-        document.getElementById("chainInfo").innerHTML = html;
-    };
+(function () {
+  const labels = {
+    el: {
+      totalBlocks: "Σύνολο Blocks",
+      lastHash:    "Hash Τελευταίου Block",
+      lastMiner:   "Τελευταίος Miner",
+      timestamp:   "Χρονική Σήμανση",
+      totalSupply: "Συνολική Προμήθεια THR"
+    },
+    en: {
+      totalBlocks: "Total Blocks",
+      lastHash:    "Last Block Hash",
+      lastMiner:   "Last Miner",
+      timestamp:   "Timestamp",
+      totalSupply: "Total THR Supply"
+    }
+  };
 
-    renderStats();
-    
-    // Listen for global language change event
-    window.addEventListener('langChanged', () => {
-        renderStats();
-    });
-  })
-  .catch(err => {
-    document.getElementById("chainInfo").innerText = "Failed to load chain data.";
+  function renderStats(lastBlock, netStats) {
+    const lang = localStorage.getItem("lang") || "el";
+    const l = labels[lang];
+
+    const blockCount  = (lastBlock && lastBlock.block_count) || (netStats && netStats.block_count) || 0;
+    const totalSupply = (lastBlock && lastBlock.total_supply) || (netStats && netStats.total_supply) || 0;
+    const lastHash    = (lastBlock && lastBlock.block_hash) || "N/A";
+    const lastMiner   = (lastBlock && lastBlock.thr_address) || "N/A";
+    const ts          = (lastBlock && lastBlock.timestamp) || "N/A";
+
+    const html = `
+${l.totalBlocks}: <span class="highlight">${blockCount}</span>\n
+${l.totalSupply}: <span class="highlight">${totalSupply.toFixed(6)}</span> / ~420,000 THR\n
+${l.lastHash}: ${lastHash}\n
+${l.lastMiner}: ${lastMiner}\n
+${l.timestamp}: ${ts}
+`;
+    document.getElementById("chainInfo").innerHTML = html;
+  }
+
+  function loadStats() {
+    Promise.all([
+      fetch("/last_block").then(r => r.json()).catch(() => ({})),
+      fetch("/api/network_stats").then(r => r.json()).catch(() => ({})),
+    ])
+      .then(([lastBlock, netStats]) => {
+        renderStats(lastBlock, netStats);
+        // Κρατάμε τα τελευταία στον window για debugging αν θες
+        window.__THR_LAST_BLOCK  = lastBlock;
+        window.__THR_NET_STATS   = netStats;
+      })
+      .catch(err => {
+        console.error(err);
+        document.getElementById("chainInfo").innerText =
+          "Failed to load network stats.";
+      });
+  }
+
+  // αρχικό load
+  loadStats();
+
+  // ξανακτίσιμο όταν αλλάζει η γλώσσα
+  window.addEventListener("langChanged", () => {
+    renderStats(window.__THR_LAST_BLOCK || {}, window.__THR_NET_STATS || {});
   });
+
+  // προαιρετικά: μικρό auto-refresh ανά 30s
+  setInterval(loadStats, 30000);
+})();
 </script>
+
 {% endblock %}

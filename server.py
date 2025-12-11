@@ -18,7 +18,7 @@
 # - Quorum Attestations (BLS/MuSig2 placeholder) + aggregator job (V2.9)
 # - AI Knowledge Blocks: ai_block_log.json -> mempool -> ai_knowledge TXs (V4.0)
 
-import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, io, struct, binascii
+import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, io, struct, binascii, shutil
 from datetime import datetime
 from PIL import Image
 
@@ -43,8 +43,51 @@ app = Flask(__name__)
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
-DATA_DIR   = os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data"))
+# --- DATA DIR με Railway volume + migration -----------------------------------
+DEFAULT_DATA_DIR = os.path.join(BASE_DIR, "data")
+RAILWAY_DATA_DIR = "/app/data"
+
+env_data_dir = os.getenv("DATA_DIR")
+
+if env_data_dir:
+    DATA_DIR = env_data_dir
+elif os.path.isdir(RAILWAY_DATA_DIR):
+    # Αν υπάρχει mounted volume στο /app/data, το χρησιμοποιούμε
+    DATA_DIR = RAILWAY_DATA_DIR
+else:
+    # Fallback: local data/ μέσα στο container
+    DATA_DIR = DEFAULT_DATA_DIR
+
 os.makedirs(DATA_DIR, exist_ok=True)
+
+# One-time migration: αν είχαμε παλιά αρχεία στο ./data και τώρα
+# δουλεύουμε με /app/data, τα αντιγράφουμε αν λείπουν.
+if DATA_DIR != DEFAULT_DATA_DIR and os.path.isdir(DEFAULT_DATA_DIR):
+    migrate_files = [
+        "ledger.json",
+        "phantom_tx_chain.json",
+        "pledge_chain.json",
+        "last_block.json",
+        "free_pledge_whitelist.json",
+        "ai_agent_credentials.json",
+        "ai_block_log.json",
+        "watcher_ledger.json",
+        "iot_data.json",
+        "mempool.json",
+        "attest_store.json",
+        "ai_packs.json",
+        "ai_credits.json",
+        "ai_offline_corpus.json",
+    ]
+    for fname in migrate_files:
+        src = os.path.join(DEFAULT_DATA_DIR, fname)
+        dst = os.path.join(DATA_DIR, fname)
+        try:
+            if os.path.exists(src) and not os.path.exists(dst):
+                shutil.copy2(src, dst)
+                print(f"[MIGRATION] copied {src} -> {dst}")
+        except Exception as e:
+            print(f"[MIGRATION] failed for {src}: {e}")
 
 LEDGER_FILE         = os.path.join(DATA_DIR, "ledger.json")
 CHAIN_FILE          = os.path.join(DATA_DIR, "phantom_tx_chain.json")
@@ -123,6 +166,24 @@ def load_attest_store():
 def save_attest_store(store):
     save_json(ATTEST_STORE_FILE, store)
 
+def count_blocks_and_txs():
+    """
+    Μετράει πόσα blocks & πόσες κανονικές συναλλαγές υπάρχουν στο CHAIN_FILE.
+    Blocks = dict με πεδίο 'reward'
+    TXs    = transfer / service_payment / ai_knowledge
+    """
+    chain = load_json(CHAIN_FILE, [])
+    blocks = [
+        b for b in chain
+        if isinstance(b, dict) and b.get("reward") is not None
+    ]
+    txs = [
+        t for t in chain
+        if isinstance(t, dict)
+        and t.get("type") in ("transfer", "service_payment", "ai_knowledge")
+    ]
+    return len(blocks), len(txs)
+
 # --- AI Packs & Credits helpers ------------------------------------------------
 
 AI_DEFAULT_PACKS = [
@@ -190,11 +251,11 @@ def target_to_bits(target: int) -> int:
         target_hex = "0" + target_hex
     target_bytes = bytes.fromhex(target_hex)
     if target_bytes[0] >= 0x80:
-        target_bytes = b"\\x00" + target_bytes
+        target_bytes = b"\x00" + target_bytes
     exponent = len(target_bytes)
     coefficient = target_bytes[:3]
     if len(coefficient) < 3:
-        coefficient = coefficient + b"\\x00" * (3 - len(coefficient))
+        coefficient = coefficient + b"\x00" * (3 - len(coefficient))
     return (exponent << 24) | int.from_bytes(coefficient, "big")
 
 def calculate_reward(height: int) -> float:
@@ -368,7 +429,8 @@ def get_blocks_for_viewer():
             height = len(blocks)
         block_txs = [
             tx for tx in chain
-            if tx.get("type") in ("transfer", "coinbase", "service_payment", "ai_knowledge")
+            if isinstance(tx, dict)
+            and tx.get("type") in ("transfer", "coinbase", "service_payment", "ai_knowledge")
             and tx.get("height") == height
         ]
         rsplit = b.get("reward_split") or {}
@@ -581,9 +643,10 @@ def last_block_hash():
     blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
     if blocks:
         last = blocks[-1]
+        height = last.get("height", len(blocks)-1)
         return jsonify(
             last_hash=last.get("block_hash",""),
-            height=len(blocks)-1,
+            height=height,
             timestamp=last.get("timestamp"),
         )
     return jsonify(last_hash="0"*64, height=-1, timestamp=None)
@@ -594,9 +657,14 @@ def mining_info():
     nbits = target_to_bits(target)
     chain = load_json(CHAIN_FILE, [])
     blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
-    last_hash = blocks[-1].get("block_hash","") if blocks else "0"*64
-    height = len(chain)
-    reward = calculate_reward(height)
+    if blocks:
+        last = blocks[-1]
+        last_hash = last.get("block_hash","")
+        height = last.get("height", len(blocks)-1)
+    else:
+        last_hash = "0"*64
+        height = -1
+    reward = calculate_reward(max(0, height))
     mempool_len = len(load_mempool())
     return jsonify({
         "target": hex(target),
@@ -611,16 +679,22 @@ def mining_info():
 @app.route("/api/network_stats")
 def network_stats():
     pledges = load_json(PLEDGE_CHAIN, [])
-    chain = load_json(CHAIN_FILE, [])
     ledger = load_json(LEDGER_FILE, {})
+
     pledge_count = len(pledges)
-    tx_count = len(chain)
+    block_count, tx_count = count_blocks_and_txs()
+
     burned = ledger.get(BURN_ADDRESS, 0)
     ai_balance = ledger.get(AI_WALLET_ADDRESS, 0)
+
     pledge_dates = {}
     for p in pledges:
-        ts = p.get("timestamp","").split(" ")[0]
-        pledge_dates[ts] = pledge_dates.get(ts,0)+1
+        ts_full = (p.get("timestamp","") or "")
+        day = ts_full.split(" ")[0]
+        if not day:
+            continue
+        pledge_dates[day] = pledge_dates.get(day,0)+1
+
     sorted_dates = sorted(pledge_dates.keys())
     cumulative=[]
     run=0
@@ -628,11 +702,12 @@ def network_stats():
         run += pledge_dates[d]
         cumulative.append({"date":d,"count":run})
     return jsonify({
-        "pledge_count":pledge_count,
-        "tx_count":tx_count,
-        "burned":burned,
-        "ai_balance":ai_balance,
-        "pledge_growth":cumulative
+        "pledge_count": pledge_count,
+        "block_count": block_count,
+        "tx_count": tx_count,
+        "burned": burned,
+        "ai_balance": ai_balance,
+        "pledge_growth": cumulative
     })
 
 @app.route("/api/network_live")
@@ -656,11 +731,12 @@ def network_live():
     hashrate=None
     if avg_time and avg_time>0:
         hashrate=int(difficulty*(2**32)/avg_time)
+    _, tx_count = count_blocks_and_txs()
     return jsonify({
         "difficulty":difficulty,
         "avg_block_time_sec":avg_time,
         "est_hashrate_hs":hashrate,
-        "tx_count":len(chain),
+        "tx_count":tx_count,
         "mempool":mempool_len
     })
 
@@ -1565,7 +1641,8 @@ def submit_block():
         return jsonify(error=f"Insufficient difficulty. Target: {hex(current_target)}"),400
 
     # Reward split
-    height=len(chain)
+    # block height = count of existing blocks (όχι len(chain))
+    height=len(blocks)
     total_reward=calculate_reward(height)
     miner_share=round(total_reward*0.80,6)
     ai_share=round(total_reward*0.10,6)

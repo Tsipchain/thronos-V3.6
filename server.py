@@ -18,7 +18,7 @@
 # - Quorum Attestations (BLS/MuSig2 placeholder) + aggregator job (V2.9)
 # - AI Knowledge Blocks: ai_block_log.json -> mempool -> ai_knowledge TXs (V4.0)
 
-import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, io, struct, binascii, shutil
+import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, io, struct, binascii
 from datetime import datetime
 from PIL import Image
 
@@ -43,51 +43,8 @@ app = Flask(__name__)
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
-# --- DATA DIR με Railway volume + migration -----------------------------------
-DEFAULT_DATA_DIR = os.path.join(BASE_DIR, "data")
-RAILWAY_DATA_DIR = "/app/data"
-
-env_data_dir = os.getenv("DATA_DIR")
-
-if env_data_dir:
-    DATA_DIR = env_data_dir
-elif os.path.isdir(RAILWAY_DATA_DIR):
-    # Αν υπάρχει mounted volume στο /app/data, το χρησιμοποιούμε
-    DATA_DIR = RAILWAY_DATA_DIR
-else:
-    # Fallback: local data/ μέσα στο container
-    DATA_DIR = DEFAULT_DATA_DIR
-
+DATA_DIR   = os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data"))
 os.makedirs(DATA_DIR, exist_ok=True)
-
-# One-time migration: αν είχαμε παλιά αρχεία στο ./data και τώρα
-# δουλεύουμε με /app/data, τα αντιγράφουμε αν λείπουν.
-if DATA_DIR != DEFAULT_DATA_DIR and os.path.isdir(DEFAULT_DATA_DIR):
-    migrate_files = [
-        "ledger.json",
-        "phantom_tx_chain.json",
-        "pledge_chain.json",
-        "last_block.json",
-        "free_pledge_whitelist.json",
-        "ai_agent_credentials.json",
-        "ai_block_log.json",
-        "watcher_ledger.json",
-        "iot_data.json",
-        "mempool.json",
-        "attest_store.json",
-        "ai_packs.json",
-        "ai_credits.json",
-        "ai_offline_corpus.json",
-    ]
-    for fname in migrate_files:
-        src = os.path.join(DEFAULT_DATA_DIR, fname)
-        dst = os.path.join(DATA_DIR, fname)
-        try:
-            if os.path.exists(src) and not os.path.exists(dst):
-                shutil.copy2(src, dst)
-                print(f"[MIGRATION] copied {src} -> {dst}")
-        except Exception as e:
-            print(f"[MIGRATION] failed for {src}: {e}")
 
 LEDGER_FILE         = os.path.join(DATA_DIR, "ledger.json")
 CHAIN_FILE          = os.path.join(DATA_DIR, "phantom_tx_chain.json")
@@ -134,6 +91,9 @@ RETARGET_INTERVAL = 10               # blocks
 AI_WALLET_ADDRESS = os.getenv("THR_AI_AGENT_WALLET", "THR_AI_AGENT_WALLET_V1")
 BURN_ADDRESS      = "0x0"
 
+# Πόσα blocks "έχουν ήδη γίνει" πριν ξεκινήσει το τρέχον chain αρχείο
+HEIGHT_OFFSET = 0
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("thronos")
 
@@ -165,24 +125,6 @@ def load_attest_store():
 
 def save_attest_store(store):
     save_json(ATTEST_STORE_FILE, store)
-
-def count_blocks_and_txs():
-    """
-    Μετράει πόσα blocks & πόσες κανονικές συναλλαγές υπάρχουν στο CHAIN_FILE.
-    Blocks = dict με πεδίο 'reward'
-    TXs    = transfer / service_payment / ai_knowledge
-    """
-    chain = load_json(CHAIN_FILE, [])
-    blocks = [
-        b for b in chain
-        if isinstance(b, dict) and b.get("reward") is not None
-    ]
-    txs = [
-        t for t in chain
-        if isinstance(t, dict)
-        and t.get("type") in ("transfer", "service_payment", "ai_knowledge")
-    ]
-    return len(blocks), len(txs)
 
 # --- AI Packs & Credits helpers ------------------------------------------------
 
@@ -251,11 +193,11 @@ def target_to_bits(target: int) -> int:
         target_hex = "0" + target_hex
     target_bytes = bytes.fromhex(target_hex)
     if target_bytes[0] >= 0x80:
-        target_bytes = b"\x00" + target_bytes
+        target_bytes = b"\\x00" + target_bytes
     exponent = len(target_bytes)
     coefficient = target_bytes[:3]
     if len(coefficient) < 3:
-        coefficient = coefficient + b"\x00" * (3 - len(coefficient))
+        coefficient = coefficient + b"\\x00" * (3 - len(coefficient))
     return (exponent << 24) | int.from_bytes(coefficient, "big")
 
 def calculate_reward(height: int) -> float:
@@ -264,13 +206,73 @@ def calculate_reward(height: int) -> float:
         return 0.0
     return round(1.0 / (2 ** halvings), 6)
 
+def recompute_height_offset_from_ledger():
+    """
+    Διαβάζει ledger + chain και βρίσκει πόσα THR έχουν εκδοθεί
+    ΠΡΙΝ αρχίσουν να γράφονται blocks στο phantom_tx_chain.json.
+
+    Το μεταφράζει σε ισοδύναμο αριθμό blocks σύμφωνα με
+    το halving schedule (1.0, 0.5, 0.25, …).
+    """
+    global HEIGHT_OFFSET
+
+    ledger = load_json(LEDGER_FILE, {})
+    chain  = load_json(CHAIN_FILE, [])
+
+    # Όσα blocks υπάρχουν ΗΔΗ στο chain
+    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    minted_from_blocks = sum(float(b.get("reward", 0.0)) for b in blocks)
+
+    # Συνολικό supply από ledger (άθροισμα όλων των διευθύνσεων)
+    total_ledger = sum(float(v) for v in ledger.values())
+
+    # Ό,τι περισσεύει το θεωρούμε "παλιό supply χωρίς blocks"
+    pre_mined = max(0.0, total_ledger - minted_from_blocks)
+
+    if pre_mined <= 0:
+        HEIGHT_OFFSET = 0
+        logger.info("No pre-mined supply detected. HEIGHT_OFFSET = 0")
+        return
+
+    remaining = pre_mined
+    h = 0
+    # Μέχρι max ~2.1M blocks, δεν μας νοιάζει απόδοση, είναι startup-only
+    while remaining > 0 and h < 2_100_000:
+        r = calculate_reward(h)
+        if r <= 0:
+            break
+        remaining -= r
+        h += 1
+
+    HEIGHT_OFFSET = h
+    logger.info(
+        f"[SUPPLY] Pre-mined ≈ {pre_mined:.6f} THR -> HEIGHT_OFFSET = {HEIGHT_OFFSET}"
+    )
+
+
 def update_last_block(entry, is_block=True):
+    """
+    Γράφει last_block.json αλλά πλέον κρατά και:
+    - block_count (με offset)
+    - total_supply (άθροισμα ledger)
+    ώστε η αρχική σελίδα να ξέρει ΠΟΣΑ block και ΠΟΣΟ supply έχουμε.
+    """
+    chain  = load_json(CHAIN_FILE, [])
+    ledger = load_json(LEDGER_FILE, {})
+
+    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    block_count = HEIGHT_OFFSET + len(blocks)
+
+    total_supply = round(sum(float(v) for v in ledger.values()), 6)
+
     summary = {
-        "height": entry.get("height"),
+        "height":     entry.get("height"),
         "block_hash": entry.get("block_hash") or entry.get("tx_id"),
-        "timestamp": entry.get("timestamp"),
+        "timestamp":  entry.get("timestamp"),
         "thr_address": entry.get("thr_address"),
         "type": "block" if is_block else entry.get("type", "transfer"),
+        "block_count": block_count,
+        "total_supply": total_supply,
     }
     save_json(LAST_BLOCK_FILE, summary)
 
@@ -429,8 +431,7 @@ def get_blocks_for_viewer():
             height = len(blocks)
         block_txs = [
             tx for tx in chain
-            if isinstance(tx, dict)
-            and tx.get("type") in ("transfer", "coinbase", "service_payment", "ai_knowledge")
+            if tx.get("type") in ("transfer", "coinbase", "service_payment", "ai_knowledge")
             and tx.get("height") == height
         ]
         rsplit = b.get("reward_split") or {}
@@ -454,26 +455,53 @@ def get_blocks_for_viewer():
 
 def get_transactions_for_viewer():
     chain = load_json(CHAIN_FILE, [])
-    txs = [
+    pool  = load_mempool()
+
+    # Confirmed txs από το chain
+    chain_txs = [
         t for t in chain
+        if isinstance(t, dict)
+        and t.get("type") in ["transfer", "service_payment", "ai_knowledge", "coinbase"]
+    ]
+
+    # Pending από mempool (χωρίς height)
+    pending_txs = [
+        t for t in pool
         if isinstance(t, dict)
         and t.get("type") in ["transfer", "service_payment", "ai_knowledge"]
     ]
+
+    all_txs = chain_txs + pending_txs
+
     out = []
-    for t in txs:
+    for t in all_txs:
         preview = ""
         if t.get("type") == "ai_knowledge":
             payload = t.get("ai_payload") or ""
             preview = payload[:96]
+
+        tx_type = t.get("type", "transfer")
+        tx_from = t.get("from", "Unknown")
+        tx_to   = t.get("to",   "Unknown")
+        height  = t.get("height")  # μπορεί να είναι None για pending
+        fee     = t.get("fee_burned", 0.0)
+
+        tx_id = t.get("tx_id")
+        if not tx_id and tx_type == "coinbase":
+            tx_id = f"COINBASE-{height}"
+
         out.append({
-            "tx_id": t.get("tx_id","Unknown"),
-            "from":  t.get("from","Unknown"),
-            "to":    t.get("to","Unknown"),
-            "amount": t.get("amount",0.0),
-            "timestamp": t.get("timestamp",""),
-            "type": t.get("type","transfer"),
-            "note": preview,
+            "tx_id":     tx_id or "N/A",
+            "height":    height,
+            "from":      tx_from,
+            "to":        tx_to,
+            "amount":    t.get("amount", 0.0),
+            "fee":       fee,
+            "timestamp": t.get("timestamp", ""),
+            "type":      tx_type,
+            "note":      preview,
         })
+
     out.sort(key=lambda x: x["timestamp"], reverse=True)
     return out
 
@@ -639,14 +667,14 @@ def api_last_block():
 
 @app.route("/last_block_hash")
 def last_block_hash():
-    chain = load_json(CHAIN_FILE, [])
+    chain  = load_json(CHAIN_FILE, [])
     blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
     if blocks:
         last = blocks[-1]
-        height = last.get("height", len(blocks)-1)
+        global_height = HEIGHT_OFFSET + len(blocks) - 1
         return jsonify(
-            last_hash=last.get("block_hash",""),
-            height=height,
+            last_hash=last.get("block_hash", ""),
+            height=global_height,
             timestamp=last.get("timestamp"),
         )
     return jsonify(last_hash="0"*64, height=-1, timestamp=None)
@@ -654,90 +682,108 @@ def last_block_hash():
 @app.route("/mining_info")
 def mining_info():
     target = get_mining_target()
-    nbits = target_to_bits(target)
-    chain = load_json(CHAIN_FILE, [])
+    nbits  = target_to_bits(target)
+
+    chain  = load_json(CHAIN_FILE, [])
     blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
-    if blocks:
-        last = blocks[-1]
-        last_hash = last.get("block_hash","")
-        height = last.get("height", len(blocks)-1)
-    else:
-        last_hash = "0"*64
-        height = -1
-    reward = calculate_reward(max(0, height))
+
+    last_hash = blocks[-1].get("block_hash", "") if blocks else "0" * 64
+
+    local_height   = len(blocks)               # πόσα blocks έχουμε στο αρχείο
+    global_height  = HEIGHT_OFFSET + local_height  # block height με το offset
+    reward         = calculate_reward(global_height)
+
     mempool_len = len(load_mempool())
+
     return jsonify({
-        "target": hex(target),
-        "nbits": hex(nbits),
+        "target":        hex(target),
+        "nbits":         hex(nbits),
         "difficulty_int": int(INITIAL_TARGET // target),
-        "reward": reward,
-        "height": height,
-        "last_hash": last_hash,
-        "mempool": mempool_len
+        "reward":        reward,
+        "height":        global_height,
+        "local_height":  local_height,
+        "last_hash":     last_hash,
+        "mempool":       mempool_len,
     }), 200
 
 @app.route("/api/network_stats")
 def network_stats():
     pledges = load_json(PLEDGE_CHAIN, [])
-    ledger = load_json(LEDGER_FILE, {})
+    chain   = load_json(CHAIN_FILE, [])
+    ledger  = load_json(LEDGER_FILE, {})
 
     pledge_count = len(pledges)
-    block_count, tx_count = count_blocks_and_txs()
 
-    burned = ledger.get(BURN_ADDRESS, 0)
-    ai_balance = ledger.get(AI_WALLET_ADDRESS, 0)
+    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    block_count = HEIGHT_OFFSET + len(blocks)
 
+    tx_count = len([
+        t for t in chain
+        if isinstance(t, dict) and t.get("type") in ("transfer", "service_payment", "ai_knowledge", "coinbase")
+    ])
+
+    burned     = float(ledger.get(BURN_ADDRESS, 0))
+    ai_balance = float(ledger.get(AI_WALLET_ADDRESS, 0))
+    total_supply = round(sum(float(v) for v in ledger.values()), 6)
+
+    # pledge growth όπως πριν
     pledge_dates = {}
     for p in pledges:
-        ts_full = (p.get("timestamp","") or "")
-        day = ts_full.split(" ")[0]
-        if not day:
+        ts = p.get("timestamp", "").split(" ")[0]
+        if not ts:
             continue
-        pledge_dates[day] = pledge_dates.get(day,0)+1
+        pledge_dates[ts] = pledge_dates.get(ts, 0) + 1
 
     sorted_dates = sorted(pledge_dates.keys())
-    cumulative=[]
-    run=0
+    cumulative   = []
+    run = 0
     for d in sorted_dates:
         run += pledge_dates[d]
-        cumulative.append({"date":d,"count":run})
+        cumulative.append({"date": d, "count": run})
+
     return jsonify({
         "pledge_count": pledge_count,
-        "block_count": block_count,
-        "tx_count": tx_count,
-        "burned": burned,
-        "ai_balance": ai_balance,
-        "pledge_growth": cumulative
+        "block_count":  block_count,
+        "tx_count":     tx_count,
+        "burned":       burned,
+        "ai_balance":   ai_balance,
+        "total_supply": total_supply,
+        "pledge_growth": cumulative,
     })
 
 @app.route("/api/network_live")
 def network_live():
-    chain = load_json(CHAIN_FILE, [])
-    blocks=[b for b in chain if isinstance(b,dict) and b.get("reward") is not None]
-    mempool_len=len(load_mempool())
-    window=20
-    avg_time=None
-    if len(blocks)>=2:
-        tail=blocks[-min(window,len(blocks)):]
+    chain  = load_json(CHAIN_FILE, [])
+    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    mempool_len = len(load_mempool())
+
+    window = 20
+    avg_time = None
+    if len(blocks) >= 2:
+        tail = blocks[-min(window, len(blocks)):]
         try:
-            t_fmt="%Y-%m-%d %H:%M:%S UTC"
-            t0=datetime.strptime(tail[0]["timestamp"],t_fmt).timestamp()
-            t1=datetime.strptime(tail[-1]["timestamp"],t_fmt).timestamp()
-            avg_time=(t1-t0)/max(1,(len(tail)-1))
+            t_fmt = "%Y-%m-%d %H:%M:%S UTC"
+            t0 = datetime.strptime(tail[0]["timestamp"], t_fmt).timestamp()
+            t1 = datetime.strptime(tail[-1]["timestamp"], t_fmt).timestamp()
+            avg_time = (t1 - t0) / max(1, (len(tail) - 1))
         except Exception:
-            avg_time=None
-    target=get_mining_target()
-    difficulty=int(INITIAL_TARGET // target)
-    hashrate=None
-    if avg_time and avg_time>0:
-        hashrate=int(difficulty*(2**32)/avg_time)
-    _, tx_count = count_blocks_and_txs()
+            avg_time = None
+
+    target     = get_mining_target()
+    difficulty = int(INITIAL_TARGET // target)
+    hashrate   = None
+    if avg_time and avg_time > 0:
+        hashrate = int(difficulty * (2**32) / avg_time)
+
+    block_count = HEIGHT_OFFSET + len(blocks)
+
     return jsonify({
-        "difficulty":difficulty,
-        "avg_block_time_sec":avg_time,
-        "est_hashrate_hs":hashrate,
-        "tx_count":tx_count,
-        "mempool":mempool_len
+        "difficulty":          difficulty,
+        "avg_block_time_sec":  avg_time,
+        "est_hashrate_hs":     hashrate,
+        "block_count":         block_count,
+        "tx_count":            len(chain),
+        "mempool":             mempool_len,
     })
 
 @app.route("/api/mempool")
@@ -1272,11 +1318,11 @@ except Exception as e:
         zf.writestr("node_config.json",config_json)
         zf.writestr("start_iot.py",start_script)
         zf.writestr("iot_vehicle_node.py",node_script)
-        pic_path=os.path.join(BASE_DIR,"/images/photo1765404308.jpg")
+        pic_path=os.path.join(BASE_DIR,"/images/photo1765475946.jpg")
         if os.path.exists(pic_path):
-            zf.write(pic_path,"/images/photo1765404308.jpg")
+            zf.write(pic_path,"/images/photo1765475946.jpg")
         else:
-            zf.writestr("/images/photo1765404308.jpg","")
+            zf.writestr("/images/photo1765475946.jpg","")
         zf.writestr("README.txt","1. Install Python 3.\n2. Run 'python start_iot.py' (auto-installs deps).")
     memory_file.seek(0)
     return send_file(
@@ -1603,8 +1649,14 @@ def submit_block():
     if not thr_address or nonce is None:
         return jsonify(error="Missing mining data"),400
     chain=load_json(CHAIN_FILE,[])
+    
+    server_last_hash = ""
     blocks=[b for b in chain if isinstance(b,dict) and b.get("reward") is not None]
-    server_last_hash = blocks[-1].get("block_hash","") if blocks else "0"*64
+    if blocks:
+        server_last_hash = blocks[-1].get("block_hash","")
+    else:
+        server_last_hash = "0"*64
+        
     is_stratum = "merkle_root" in data
     pow_hash=""
     prev_hash=""
@@ -1636,14 +1688,16 @@ def submit_block():
         check=hashlib.sha256((prev_hash+thr_address).encode()+str(nonce).encode()).hexdigest()
         if check!=pow_hash:
             return jsonify(error="Invalid hash calculation"),400
-    current_target=get_mining_target()
-    if int(pow_hash,16)>current_target:
-        return jsonify(error=f"Insufficient difficulty. Target: {hex(current_target)}"),400
+            
+    current_target = get_mining_target()
+    if int(pow_hash, 16) > current_target:
+        return jsonify(error=f"Insufficient difficulty. Target: {hex(current_target)}"), 400
 
-    # Reward split
-    # block height = count of existing blocks (όχι len(chain))
-    height=len(blocks)
-    total_reward=calculate_reward(height)
+    # Reward split με σωστό height (blocks + offset)
+    local_height  = len(blocks)
+    height        = HEIGHT_OFFSET + local_height
+    total_reward  = calculate_reward(height)
+    
     miner_share=round(total_reward*0.80,6)
     ai_share=round(total_reward*0.10,6)
     burn_share=round(total_reward*0.10,6)
@@ -1702,66 +1756,82 @@ def submit_block():
 
 # ─── BACKGROUND MINTER / WATCHDOG ──────────────────
 def submit_mining_block_for_pledge(thr_addr):
-    chain=load_json(CHAIN_FILE,[])
-    pow_blocks=[b for b in chain if isinstance(b,dict) and b.get("reward") is not None]
+    chain = load_json(CHAIN_FILE, [])
+
+    pow_blocks = [
+        b for b in chain
+        if isinstance(b, dict) and b.get("reward") is not None
+    ]
+
     if pow_blocks:
-        prev_hash=pow_blocks[-1].get("block_hash","0"*64)
-        height=len(pow_blocks)
+        prev_hash = pow_blocks[-1].get("block_hash", "0"*64)
+        local_height = len(pow_blocks)
     else:
-        prev_hash="0"*64
-        height=0
-    total_reward=calculate_reward(height)
-    miner_share=round(total_reward*0.80,6)
-    ai_share=round(total_reward*0.10,6)
-    burn_share=round(total_reward*0.10,6)
-    target=get_mining_target()
-    nonce=random.randrange(0,2**32)
+        prev_hash = "0"*64
+        local_height = 0
+
+    height       = HEIGHT_OFFSET + local_height
+    total_reward = calculate_reward(height)
+
+    miner_share = round(total_reward * 0.80, 6)
+    ai_share    = round(total_reward * 0.10, 6)
+    burn_share  = round(total_reward * 0.10, 6)
+
+    target = get_mining_target()
+
+    nonce = random.randrange(0, 2**32)
     while True:
-        h=hashlib.sha256((prev_hash+thr_addr).encode()+str(nonce).encode()).hexdigest()
-        if int(h,16)<=target:
-            pow_hash=h
+        h = hashlib.sha256((prev_hash + thr_addr).encode() + str(nonce).encode()).hexdigest()
+        if int(h, 16) <= target:
+            pow_hash = h
             break
-        nonce=(nonce+1)%(2**32)
-    ts=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-    new_block={
-        "thr_address":thr_addr,
-        "timestamp":ts,
-        "block_hash":pow_hash,
-        "prev_hash":prev_hash,
-        "nonce":nonce,
-        "reward":total_reward,
-        "reward_split":{"miner":miner_share,"ai":ai_share,"burn":burn_share},
-        "pool_fee":burn_share,
-        "reward_to_miner":miner_share,
-        "height":height,
-        "type":"block",
-        "target":target,
-        "is_stratum":False
+        nonce = (nonce + 1) % (2**32)
+
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+    new_block = {
+        "thr_address": thr_addr,
+        "timestamp": ts,
+        "block_hash": pow_hash,
+        "prev_hash": prev_hash,
+        "nonce": nonce,
+        "reward": total_reward,
+        "reward_split": {"miner": miner_share, "ai": ai_share, "burn": burn_share},
+        "pool_fee": burn_share,
+        "reward_to_miner": miner_share,
+        "height": height,
+        "type": "block",
+        "target": target,
+        "is_stratum": False,
     }
     chain.append(new_block)
-    pool=load_mempool()
-    included=[]
+
+    pool = load_mempool()
+    included = []
     if pool:
         for tx in list(pool):
-            tx["height"]=height
-            tx["status"]="confirmed"
-            tx["timestamp"]=ts
+            tx["height"] = height
+            tx["status"] = "confirmed"
+            tx["timestamp"] = ts
             chain.append(tx)
             included.append(tx)
         save_mempool([])
-        ledger=load_json(LEDGER_FILE,{})
+
+        ledger = load_json(LEDGER_FILE, {})
         for tx in included:
-            if tx.get("type")=="transfer":
-                ledger[tx["to"]]=round(ledger.get(tx["to"],0.0)+float(tx["amount"]),6)
-                ledger[BURN_ADDRESS]=round(ledger.get(BURN_ADDRESS,0.0)+float(tx.get("fee_burned",0.0)),6)
-        save_json(LEDGER_FILE,ledger)
-    ledger=load_json(LEDGER_FILE,{})
-    ledger[thr_addr]=round(ledger.get(thr_addr,0.0)+miner_share,6)
-    ledger[AI_WALLET_ADDRESS]=round(ledger.get(AI_WALLET_ADDRESS,0.0)+ai_share,6)
-    ledger[BURN_ADDRESS]=round(ledger.get(BURN_ADDRESS,0.0)+burn_share,6)
-    save_json(LEDGER_FILE,ledger)
-    save_json(CHAIN_FILE,chain)
-    update_last_block(new_block,is_block=True)
+            if tx.get("type") == "transfer":
+                ledger[tx["to"]] = round(ledger.get(tx["to"], 0.0) + float(tx["amount"]), 6)
+                ledger[BURN_ADDRESS] = round(ledger.get(BURN_ADDRESS, 0.0) + float(tx.get("fee_burned", 0.0)), 6)
+        save_json(LEDGER_FILE, ledger)
+
+    ledger = load_json(LEDGER_FILE, {})
+    ledger[thr_addr] = round(ledger.get(thr_addr, 0.0) + miner_share, 6)
+    ledger[AI_WALLET_ADDRESS] = round(ledger.get(AI_WALLET_ADDRESS, 0.0) + ai_share, 6)
+    ledger[BURN_ADDRESS] = round(ledger.get(BURN_ADDRESS, 0.0) + burn_share, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    save_json(CHAIN_FILE, chain)
+    update_last_block(new_block, is_block=True)
     print(f"⛏️ [Pledge PoW] block #{height} for {thr_addr} | TXs: {len(included)} | hash={pow_hash[:16]}…")
 
 def seconds_since_last_block()->float:
@@ -1887,6 +1957,7 @@ scheduler.start()
 
 # Run AI Wallet Check on Startup
 ensure_ai_wallet()
+recompute_height_offset_from_ledger()  # <-- Initialize offset
 
 if __name__=="__main__":
     port=int(os.getenv("PORT",3333))

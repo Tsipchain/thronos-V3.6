@@ -1,0 +1,269 @@
+{% extends "base.html" %}
+
+{% block title %}🎮 Crypto Hunters - Play to Earn{% endblock %}
+
+{% block styles %}
+<style>
+    .game-container {
+        max-width: 800px;
+        margin: 0 auto;
+        text-align: center;
+        border: 1px solid #0f0;
+        padding: 20px;
+        background: rgba(0, 20, 0, 0.8);
+        box-shadow: 0 0 15px #0f0;
+    }
+    .game-screen {
+        height: 300px;
+        background: #000;
+        border: 1px solid #333;
+        margin-bottom: 20px;
+        position: relative;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+    }
+    .target {
+        width: 50px;
+        height: 50px;
+        background: red;
+        border-radius: 50%;
+        position: absolute;
+        cursor: crosshair;
+        display: none;
+        box-shadow: 0 0 10px red;
+    }
+    .hud {
+        display: flex;
+        justify-content: space-between;
+        padding: 10px;
+        background: #111;
+        border-bottom: 1px solid #333;
+        margin-bottom: 10px;
+        font-family: monospace;
+        font-size: 1.2em;
+    }
+    .btn-hunt {
+        font-size: 1.5em;
+        padding: 15px 40px;
+        background: #0f0;
+        color: #000;
+        border: none;
+        cursor: pointer;
+        font-weight: bold;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+    }
+    .btn-hunt:hover {
+        background: #0c0;
+        box-shadow: 0 0 20px #0f0;
+    }
+    .btn-hunt:disabled {
+        background: #333;
+        color: #666;
+        cursor: not-allowed;
+        box-shadow: none;
+    }
+    .log-area {
+        height: 150px;
+        overflow-y: auto;
+        background: #000;
+        border: 1px solid #333;
+        text-align: left;
+        padding: 10px;
+        font-family: monospace;
+        font-size: 0.9em;
+        margin-top: 20px;
+    }
+    .log-entry { margin-bottom: 5px; }
+    .log-success { color: #0f0; }
+    .log-info { color: #0ff; }
+    .artifact {
+        font-size: 3em;
+        animation: float 2s infinite ease-in-out;
+    }
+    @keyframes float {
+        0% { transform: translateY(0px); }
+        50% { transform: translateY(-10px); }
+        100% { transform: translateY(0px); }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="game-container">
+    <h1>🏹 Crypto Hunters</h1>
+    <p>Deploy your drone, hunt for artifacts, and earn THR rewards.</p>
+
+    <div class="form-group">
+        <label>Wallet Address (to receive rewards):</label>
+        <input type="text" id="walletAddr" placeholder="Enter your THR address..." style="width: 60%; padding: 8px;">
+    </div>
+
+    <div class="hud">
+        <span>🔋 Energy: <span id="energy">100</span>%</span>
+        <span>🏆 Score: <span id="score">0</span></span>
+        <span>💰 Pending THR: <span id="pendingThr">0.000000</span></span>
+    </div>
+
+    <div class="game-screen" id="gameScreen">
+        <div id="idleMsg">Ready to Hunt?</div>
+        <div id="scanningMsg" style="display:none; color:#0ff;">📡 Scanning Sector 7G...</div>
+        <div id="foundMsg" style="display:none;">
+            <div class="artifact" id="artifactIcon">💎</div>
+            <h3 id="artifactName">Rare Gem</h3>
+            <p>Value: <span id="artifactValue">50</span> pts</p>
+        </div>
+    </div>
+
+    <button id="btnHunt" class="btn-hunt" onclick="startHunt()">DEPLOY DRONE</button>
+    <button id="btnClaim" class="btn-hunt" style="background:#f0f; display:none;" onclick="claimRewards()">CLAIM REWARDS</button>
+
+    <div class="log-area" id="gameLog">
+        <div class="log-entry">System initialized. Waiting for pilot...</div>
+    </div>
+</div>
+
+<script>
+    let energy = 100;
+    let score = 0;
+    let pendingThr = 0;
+    let isHunting = false;
+
+    const artifacts = [
+        { name: "Rusty Coin", value: 10, icon: "🪙", chance: 0.5 },
+        { name: "Data Fragment", value: 25, icon: "💾", chance: 0.3 },
+        { name: "Ancient Key", value: 50, icon: "🗝️", chance: 0.15 },
+        { name: "Quantum Core", value: 100, icon: "⚛️", chance: 0.05 }
+    ];
+
+    function log(msg, type="info") {
+        const div = document.createElement("div");
+        div.className = `log-entry log-${type}`;
+        div.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
+        const area = document.getElementById("gameLog");
+        area.insertBefore(div, area.firstChild);
+    }
+
+    function startHunt() {
+        const wallet = document.getElementById("walletAddr").value.trim();
+        if (!wallet) {
+            alert("Please enter a wallet address first!");
+            return;
+        }
+        if (energy < 10) {
+            log("⚠️ Not enough energy! Wait for recharge.", "info");
+            return;
+        }
+        if (isHunting) return;
+
+        isHunting = true;
+        energy -= 10;
+        updateHud();
+        document.getElementById("btnHunt").disabled = true;
+        document.getElementById("btnClaim").disabled = true;
+
+        document.getElementById("idleMsg").style.display = "none";
+        document.getElementById("foundMsg").style.display = "none";
+        document.getElementById("scanningMsg").style.display = "block";
+        
+        log("🚀 Drone deployed. Scanning...", "info");
+
+        // Simulate hunt delay
+        setTimeout(() => {
+            completeHunt();
+        }, 2000);
+    }
+
+    function completeHunt() {
+        isHunting = false;
+        document.getElementById("scanningMsg").style.display = "none";
+        document.getElementById("btnHunt").disabled = false;
+
+        // Determine loot
+        const rand = Math.random();
+        let cumulative = 0;
+        let loot = artifacts[0];
+        for (let art of artifacts) {
+            cumulative += art.chance;
+            if (rand <= cumulative) {
+                loot = art;
+                break;
+            }
+        }
+
+        // Show loot
+        document.getElementById("foundMsg").style.display = "block";
+        document.getElementById("artifactIcon").innerText = loot.icon;
+        document.getElementById("artifactName").innerText = loot.name;
+        document.getElementById("artifactValue").innerText = loot.value;
+
+        // Update stats
+        score += loot.value;
+        const reward = loot.value * 0.001; // 100 pts = 0.1 THR
+        pendingThr += reward;
+
+        updateHud();
+        log(`✅ Found: ${loot.name} (+${loot.value} pts)`, "success");
+
+        if (pendingThr > 0) {
+            document.getElementById("btnClaim").style.display = "inline-block";
+            document.getElementById("btnClaim").disabled = false;
+        }
+    }
+
+    function updateHud() {
+        document.getElementById("energy").innerText = energy;
+        document.getElementById("score").innerText = score;
+        document.getElementById("pendingThr").innerText = pendingThr.toFixed(6);
+    }
+
+    async function claimRewards() {
+        const wallet = document.getElementById("walletAddr").value.trim();
+        if (!wallet || pendingThr <= 0) return;
+
+        document.getElementById("btnClaim").disabled = true;
+        document.getElementById("btnClaim").innerText = "CLAIMING...";
+
+        try {
+            const res = await fetch("/api/game/submit_score", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({
+                    wallet: wallet,
+                    score: score,
+                    reward: pendingThr
+                })
+            });
+            const data = await res.json();
+            
+            if (data.status === "success") {
+                log(`💰 Claimed ${pendingThr.toFixed(6)} THR! TX: ${data.tx_id}`, "success");
+                score = 0;
+                pendingThr = 0;
+                updateHud();
+                document.getElementById("btnClaim").style.display = "none";
+                document.getElementById("btnClaim").innerText = "CLAIM REWARDS";
+            } else {
+                log(`❌ Error: ${data.message}`, "info");
+                document.getElementById("btnClaim").disabled = false;
+                document.getElementById("btnClaim").innerText = "CLAIM REWARDS";
+            }
+        } catch (e) {
+            log(`❌ Network Error: ${e}`, "info");
+            document.getElementById("btnClaim").disabled = false;
+            document.getElementById("btnClaim").innerText = "CLAIM REWARDS";
+        }
+    }
+
+    // Energy recharge
+    setInterval(() => {
+        if (energy < 100) {
+            energy += 1;
+            updateHud();
+        }
+    }, 1000);
+</script>
+{% endblock %}

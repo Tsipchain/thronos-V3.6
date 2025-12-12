@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}💳 Thronos Gateway{% endblock %}
-
+{% block title %}💳 Thronos Gateway{% endblock %}\n
 {% block styles %}
 <style>
     .gateway-container {
@@ -282,7 +281,7 @@ async function doBuy() {
     if (!fiatAmount || fiatAmount <= 0) return alert("Enter valid amount.");
     
     $('btnBuy').disabled = true;
-    $('btnBuy').textContent = "Processing...";
+    $('btnBuy').innerHTML = '<span class="spinner"></span> Processing...';
     $('buyStatus').style.display = 'none';
     
     try {
@@ -330,7 +329,7 @@ async function doSell() {
     if (!thrAmount || thrAmount <= 0) return alert("Enter valid amount.");
     
     $('btnSell').disabled = true;
-    $('btnSell').textContent = "Processing...";
+    $('btnSell').innerHTML = '<span class="spinner"></span> Processing...';
     $('sellStatus').style.display = 'none';
     
     try {

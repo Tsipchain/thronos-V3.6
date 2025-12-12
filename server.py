@@ -714,7 +714,9 @@ def api_architect_generate():
 
     # Call AI
     # Note: server.py uses 'ai_agent' global instance
-    raw = ai_agent.generate_response(prompt, wallet=wallet, model_key=model_key)
+    # Pass session_id to maintain context if needed (though architect usually is one-shot, 
+    # but user might refine in same session)
+    raw = ai_agent.generate_response(prompt, wallet=wallet, model_key=model_key, session_id=session_id)
 
     if isinstance(raw, dict):
         full_text   = str(raw.get("response") or "")
@@ -1040,8 +1042,8 @@ def api_chat():
             ), 200
 
     # --- Κλήση στον ThronosAI provider ---
-    # Pass model_key to generate_response
-    raw = ai_agent.generate_response(msg, wallet=wallet, model_key=model_key)
+    # Pass model_key AND session_id to generate_response
+    raw = ai_agent.generate_response(msg, wallet=wallet, model_key=model_key, session_id=session_id)
 
     if isinstance(raw, dict):
         full_text = str(raw.get("response") or "")

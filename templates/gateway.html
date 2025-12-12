@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 
-{% block title %}💳 Thronos Gateway{% endblock %}\n
+{% block title %}💳 Thronos Gateway{% endblock %}
+
 {% block styles %}
 <style>
     .gateway-container {
@@ -210,7 +211,31 @@
             </div>
         </div>
         
-        <button id="btnSell" class="action-btn btn-sell" onclick="doSell()">Withdraw to Bank 🏦</button>
+        <hr style="border-color:#333; margin:20px 0;">
+        <h4 style="color:#888; margin-bottom:15px;">Bank Details for Wire Transfer</h4>
+        
+        <div class="input-group">
+            <label class="input-label">Account Holder Name</label>
+            <div class="input-wrapper">
+                <input type="text" id="bankName" class="input-field" placeholder="John Doe" style="font-size:1em;">
+            </div>
+        </div>
+        
+        <div class="input-group">
+            <label class="input-label">IBAN / Account Number</label>
+            <div class="input-wrapper">
+                <input type="text" id="bankIban" class="input-field" placeholder="GR1234..." style="font-size:1em;">
+            </div>
+        </div>
+        
+        <div class="input-group">
+            <label class="input-label">BIC / SWIFT Code</label>
+            <div class="input-wrapper">
+                <input type="text" id="bankBic" class="input-field" placeholder="ABC..." style="font-size:1em;">
+            </div>
+        </div>
+        
+        <button id="btnSell" class="action-btn btn-sell" onclick="doSell()">Request Withdrawal 🏦</button>
         <div id="sellStatus" class="status-msg"></div>
     </div>
 </div>
@@ -218,10 +243,14 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="https://js.stripe.com/v3/"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const BUY_RATE = 10.0; // 1 THR = $10
 const SELL_RATE = 9.8; // 1 THR = $9.8
+
+// Initialize Stripe
+const stripe = Stripe('{{ stripe_key }}');
 
 let currentBalance = 0;
 
@@ -233,6 +262,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         $('btnSell').disabled = true;
     } else {
         await loadBalance(addr);
+    }
+    
+    // Check for success param from redirect
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('status') === 'success') {
+        $('buyStatus').className = 'status-msg status-success';
+        $('buyStatus').innerHTML = `✅ Payment Successful! Your THR is being minted.`;
+        $('buyStatus').style.display = 'block';
     }
 });
 
@@ -281,39 +318,30 @@ async function doBuy() {
     if (!fiatAmount || fiatAmount <= 0) return alert("Enter valid amount.");
     
     $('btnBuy').disabled = true;
-    $('btnBuy').innerHTML = '<span class="spinner"></span> Processing...';
+    $('btnBuy').innerHTML = '<span class="spinner"></span> Redirecting to Stripe...';
     $('buyStatus').style.display = 'none';
     
     try {
-        // Simulate network delay
-        await new Promise(r => setTimeout(r, 1500));
-        
-        const res = await fetch('/api/gateway/buy', {
+        const res = await fetch('/api/gateway/create-checkout-session', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 wallet: addr,
-                fiat_amount: fiatAmount,
-                currency: 'USD'
+                fiat_amount: fiatAmount
             })
         });
         const data = await res.json();
         
-        if (data.status === 'success') {
-            $('buyStatus').className = 'status-msg status-success';
-            $('buyStatus').innerHTML = `✅ Success! Bought ${data.thr_amount} THR.<br>TXID: ${data.tx_id}`;
-            $('buyStatus').style.display = 'block';
-            $('buyFiat').value = '';
-            $('buyThr').value = '';
-            loadBalance(addr);
+        if (data.id) {
+            // Redirect to Stripe
+            stripe.redirectToCheckout({ sessionId: data.id });
         } else {
-            throw new Error(data.message);
+            throw new Error(data.error || "Failed to create session");
         }
     } catch (e) {
         $('buyStatus').className = 'status-msg status-error';
         $('buyStatus').textContent = `❌ Error: ${e.message}`;
         $('buyStatus').style.display = 'block';
-    } finally {
         $('btnBuy').disabled = false;
         $('btnBuy').textContent = "Pay with Card 💳";
     }
@@ -321,15 +349,21 @@ async function doBuy() {
 
 async function doSell() {
     const addr = localStorage.getItem('thr_address');
-    const secret = localStorage.getItem('thr_secret'); // Needed for signing
+    const secret = localStorage.getItem('thr_secret');
     const thrAmount = parseFloat($('sellThr').value);
+    
+    const bankName = $('bankName').value;
+    const bankIban = $('bankIban').value;
+    const bankBic = $('bankBic').value;
     
     if (!addr) return alert("Connect wallet first.");
     if (!secret) return alert("Wallet secret needed for withdrawal.");
     if (!thrAmount || thrAmount <= 0) return alert("Enter valid amount.");
     
+    if (!bankName || !bankIban || !bankBic) return alert("Please fill in all bank details.");
+    
     $('btnSell').disabled = true;
-    $('btnSell').innerHTML = '<span class="spinner"></span> Processing...';
+    $('btnSell').innerHTML = '<span class="spinner"></span> Processing Withdrawal...';
     $('sellStatus').style.display = 'none';
     
     try {
@@ -340,14 +374,19 @@ async function doSell() {
                 wallet: addr,
                 secret: secret,
                 thr_amount: thrAmount,
-                currency: 'USD'
+                currency: 'USD',
+                bank_info: {
+                    name: bankName,
+                    iban: bankIban,
+                    bic: bankBic
+                }
             })
         });
         const data = await res.json();
         
         if (data.status === 'success') {
             $('sellStatus').className = 'status-msg status-success';
-            $('sellStatus').innerHTML = `✅ Success! Sold ${thrAmount} THR.<br>Received: $${data.fiat_amount} USD.<br>TXID: ${data.tx_id}`;
+            $('sellStatus').innerHTML = `✅ Request Submitted!<br>Burned ${thrAmount} THR.<br>Funds ($${data.fiat_amount}) will be sent to ${bankIban}.<br>Ref: ${data.tx_id}`;
             $('sellStatus').style.display = 'block';
             $('sellThr').value = '';
             $('sellFiat').value = '';
@@ -361,7 +400,7 @@ async function doSell() {
         $('sellStatus').style.display = 'block';
     } finally {
         $('btnSell').disabled = false;
-        $('btnSell').textContent = "Withdraw to Bank 🏦";
+        $('btnSell').textContent = "Request Withdrawal 🏦";
     }
 }
 </script>

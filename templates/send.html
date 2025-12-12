@@ -31,6 +31,27 @@
   .muted{color:#8eeabf}
   #chartSection{margin-top:26px;border-top:1px solid var(--line);padding-top:16px}
   iframe{width:100%;height:560px;border:none;background:#111}
+  
+  .wallet-warning {
+      background: #331100;
+      border: 1px solid #ff4400;
+      color: #ffaa88;
+      padding: 10px;
+      margin-bottom: 20px;
+      display: none;
+  }
+  
+  .fee-box {
+      border: 1px dashed #00ff66;
+      padding: 10px;
+      margin-top: 10px;
+      background: #001100;
+      font-size: 0.9em;
+  }
+  .fee-row {
+      display: flex;
+      justify-content: space-between;
+  }
 </style>
 {% endblock %}
 
@@ -47,6 +68,11 @@
 
 <h1>📤 <span class="lang-el">Αποστολή THR</span><span class="lang-en">Send THR</span></h1>
 
+<div id="walletWarning" class="wallet-warning">
+    ⚠️ <span class="lang-el">Δεν είστε συνδεδεμένοι.</span><span class="lang-en">You are not connected.</span> 
+    <a href="/wallet" style="color:#fff; text-decoration:underline;">Connect Wallet</a>
+</div>
+
 <div class="row">
   <div class="col">
     <label for="from_thr"><span class="lang-el">Από Διεύθυνση THR</span><span class="lang-en">From THR Address</span></label>
@@ -56,17 +82,23 @@
     <input id="to_thr" placeholder="Recipient THR address" />
 
     <label for="amount"><span class="lang-el">Ποσό (THR)</span><span class="lang-en">Amount (THR)</span></label>
-    <input id="amount" type="number" step="0.000001" min="0" value="0.1" />
+    <input id="amount" type="number" step="0.000001" min="0" value="0.1" oninput="updateFee()" />
+
+    <div class="fee-box">
+        <div class="fee-row">
+            <span><span class="lang-el">Προμήθεια (Burn)</span><span class="lang-en">Burn Fee (0.5%)</span>:</span>
+            <span id="feeDisplay">0.001000 THR</span>
+        </div>
+        <div class="fee-row" style="margin-top:5px; border-top:1px solid #333; padding-top:5px;">
+            <span><span class="lang-el">Σύνολο Χρέωσης</span><span class="lang-en">Total Cost</span>:</span>
+            <span id="totalCostDisplay" style="color:#fff; font-weight:bold;">0.101000 THR</span>
+        </div>
+    </div>
 
     <label for="auth_secret">
       <span class="lang-el">Μυστικό Αποστολής (auth_secret)</span><span class="lang-en">Send Secret (auth_secret)</span>
     </label>
-    <input id="auth_secret" placeholder="Μυστικό που πήρες με το Pledge (send_secret)" />
-
-    <div class="small-note">
-      <span class="lang-el">* Προμήθεια: 0.0015 THR καίγεται σε κάθε αποστολή.</span>
-      <span class="lang-en">* Fee: 0.0015 THR burned per transaction.</span>
-    </div>
+    <input id="auth_secret" type="password" placeholder="Μυστικό που πήρες με το Pledge (send_secret)" />
 
     <div class="kpi">
       <div>🧺 Mempool: <span id="mpCount">0</span></div>
@@ -105,6 +137,40 @@
 const $ = (id)=>document.getElementById(id);
 const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
 
+// --- Fee Logic ---
+const FEE_RATE = 0.005; // 0.5%
+const MIN_FEE = 0.001;
+
+function updateFee() {
+    let amount = parseFloat($('amount').value) || 0;
+    if (amount < 0) amount = 0;
+    
+    const fee = Math.max(MIN_FEE, amount * FEE_RATE);
+    const total = amount + fee;
+    
+    $('feeDisplay').textContent = fee.toFixed(6) + " THR";
+    $('totalCostDisplay').textContent = total.toFixed(6) + " THR";
+}
+
+// --- Auto-fill from localStorage ---
+document.addEventListener('DOMContentLoaded', () => {
+    const savedAddr = localStorage.getItem('thr_address');
+    const savedSecret = localStorage.getItem('thr_secret');
+    
+    if (savedAddr) {
+        $('from_thr').value = savedAddr;
+        loadBalance(); // Auto load balance
+    } else {
+        $('walletWarning').style.display = 'block';
+    }
+    
+    if (savedSecret) {
+        $('auth_secret').value = savedSecret;
+    }
+    
+    updateFee(); // Init fee display
+});
+
 async function pulseNetworkKpis(){
   try{
     const mp = await fetch('/api/mempool').then(r=>r.json());
@@ -125,7 +191,10 @@ pulseNetworkKpis();
 async function loadBalance() {
   const thr = $('from_thr').value.trim();
   const lang = localStorage.getItem('lang') || 'el';
-  if(!thr){ alert(lang==='el'?'Βάλε THR address πρώτα':'Enter THR address first'); return; }
+  if(!thr){ 
+      // Don't alert on auto-load, just return
+      return; 
+  }
 
   try{
     const data = await fetch(`/wallet_data/${encodeURIComponent(thr)}`).then(r=>r.json());

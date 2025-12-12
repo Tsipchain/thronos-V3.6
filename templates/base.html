@@ -145,6 +145,20 @@
     }
     .btn:hover { background: #0c0; }
     
+    /* Loading Spinner */
+    .spinner {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border: 2px solid rgba(0,0,0,0.3);
+        border-radius: 50%;
+        border-top-color: #000;
+        animation: spin 1s ease-in-out infinite;
+        margin-right: 8px;
+        vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
     /* Page Specific Styles Block */
     {% block styles %}{% endblock %}
   </style>
@@ -172,6 +186,7 @@
         <a href="/send">💸 <span class="lang-el">Αποστολή</span><span class="lang-en">Send</span></a>
         <a href="/swap">🔄 Swap</a>
         <a href="/gateway">💳 Gateway</a>
+        <a href="/game">🎮 <span class="lang-el">Παιχνίδι</span><span class="lang-en">Game</span></a>
         <a href="/pledge">🔥 <span class="lang-el">Δέσμευση</span><span class="lang-en">Pledge</span></a>
         <a href="/viewer">📦 <span class="lang-el">Εξερευνητής</span><span class="lang-en">Explorer</span></a>
         <a href="/token_chart">📈 <span class="lang-el">Γράφημα Token</span><span class="lang-en">Token Chart</span></a>

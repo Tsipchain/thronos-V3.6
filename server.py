@@ -21,7 +21,8 @@
 # - Dynamic Fees & Burning (V4.1)
 # - Swap / DeFi Interface (V4.2)
 # - IoT Parking State (V4.3)
-# - Crypto Hunters Game (V4.4)
+# - Crypto Hunters P2E (V4.4)
+# - Real Fiat Gateway (Stripe + Bank Withdrawals) (V5.0)
 
 import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, io, struct, binascii
 from datetime import datetime
@@ -52,6 +53,13 @@ except ImportError as e:
     qc_aggregate = lambda *args: None
     qc_verify = lambda *args: False
 
+# ── Stripe Import
+try:
+    import stripe
+except ImportError:
+    print("WARNING: 'stripe' package not found. Install with: pip install stripe")
+    stripe = None
+
 
 # ─── CONFIG ────────────────────────────────────────
 app = Flask(__name__)
@@ -75,6 +83,7 @@ IOT_DATA_FILE       = os.path.join(DATA_DIR, "iot_data.json")
 IOT_PARKING_FILE    = os.path.join(DATA_DIR, "iot_parking.json")
 MEMPOOL_FILE        = os.path.join(DATA_DIR, "mempool.json")
 ATTEST_STORE_FILE   = os.path.join(DATA_DIR, "attest_store.json")
+WITHDRAWALS_FILE    = os.path.join(DATA_DIR, "withdrawals.json") # NEW
 
 # AI commerce
 AI_PACKS_FILE       = os.path.join(DATA_DIR, "ai_packs.json")
@@ -111,6 +120,17 @@ RETARGET_INTERVAL = 10               # blocks
 AI_WALLET_ADDRESS = os.getenv("THR_AI_AGENT_WALLET", "THR_AI_AGENT_WALLET_V1")
 BURN_ADDRESS      = "0x0"
 SWAP_POOL_ADDRESS = "THR_SWAP_POOL_V1"
+GAME_POOL_ADDRESS = "THR_CRYPTO_HUNTERS_POOL"
+GATEWAY_ADDRESS   = "THR_FIAT_GATEWAY_V1"
+
+# --- Stripe Config ---
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+DOMAIN_URL = os.getenv("DOMAIN_URL", "http://localhost:3333")
+
+if stripe:
+    stripe.api_key = STRIPE_SECRET_KEY
 
 # Πόσα blocks "έχουν ήδη γίνει" πριν ξεκινήσει το τρέχον chain αρχείο
 HEIGHT_OFFSET = 0
@@ -493,14 +513,14 @@ def get_transactions_for_viewer():
     chain_txs = [
         t for t in chain
         if isinstance(t, dict)
-        and t.get("type") in ["transfer", "service_payment", "ai_knowledge", "coinbase", "game_reward"]
+        and t.get("type") in ["transfer", "service_payment", "ai_knowledge", "coinbase"]
     ]
 
     # Pending από mempool (χωρίς height)
     pending_txs = [
         t for t in pool
         if isinstance(t, dict)
-        and t.get("type") in ["transfer", "service_payment", "ai_knowledge", "game_reward"]
+        and t.get("type") in ["transfer", "service_payment", "ai_knowledge"]
     ]
 
     all_txs = chain_txs + pending_txs
@@ -655,15 +675,14 @@ def swap_page():
 
 @app.route("/gateway")
 def gateway_page():
-    return render_template("gateway.html")
+    return render_template("gateway.html", stripe_key=STRIPE_PUBLISHABLE_KEY)
 
 @app.route("/ai_packs")
 def ai_packs_page():
+    # Αν έχεις το ai_packs.html στο templates/
     return render_template("ai_packs.html")
-
-@app.route("/game")
-def game_page():
-    return render_template("game.html")
+    # Αν το βάλεις σε static/, τότε:
+    # return send_from_directory(STATIC_DIR, "ai_packs.html")
 
 # ─── AI ARCHITECT ROUTES (NEW) ──────────────────────────────────────────────
 
@@ -1514,78 +1533,6 @@ def api_ai_purchase_pack():
     ), 200
 
 
-# ─── CRYPTO HUNTERS GAME API ───────────────────────
-@app.route("/api/game/submit_score", methods=["POST"])
-def api_game_submit_score():
-    """
-    Handles score submission from the Crypto Hunters game.
-    Distributes THR rewards from AI Treasury or Mints new tokens.
-    """
-    try:
-        data = request.get_json() or {}
-        wallet = (data.get("wallet") or "").strip()
-        score = int(data.get("score", 0))
-        reward_claim = float(data.get("reward", 0.0))
-
-        if not wallet or score <= 0 or reward_claim <= 0:
-            return jsonify(status="error", message="Invalid game data"), 400
-
-        # Simple validation: Reward should be approx score * 0.001
-        expected_reward = score * 0.001
-        if abs(reward_claim - expected_reward) > 0.0001:
-             return jsonify(status="error", message="Reward mismatch"), 400
-
-        # Limit max reward per claim to prevent abuse (e.g., 10 THR max)
-        if reward_claim > 10.0:
-            return jsonify(status="error", message="Reward exceeds limit"), 400
-
-        ledger = load_json(LEDGER_FILE, {})
-        chain = load_json(CHAIN_FILE, [])
-        
-        # Check AI Treasury Balance
-        ai_balance = float(ledger.get(AI_WALLET_ADDRESS, 0.0))
-        
-        tx_type = "game_reward"
-        sender = AI_WALLET_ADDRESS
-        
-        if ai_balance >= reward_claim:
-            # Pay from Treasury
-            ledger[AI_WALLET_ADDRESS] = round(ai_balance - reward_claim, 6)
-        else:
-            # Treasury empty, Mint new tokens (Inflationary fallback)
-            sender = "COINBASE_GAME"
-            # No debit from AI wallet
-            
-        # Credit User
-        user_balance = float(ledger.get(wallet, 0.0))
-        ledger[wallet] = round(user_balance + reward_claim, 6)
-        
-        save_json(LEDGER_FILE, ledger)
-        
-        # Record Transaction
-        tx = {
-            "type": tx_type,
-            "from": sender,
-            "to": wallet,
-            "amount": reward_claim,
-            "score": score,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-            "tx_id": f"GAME-{int(time.time())}-{secrets.token_hex(4)}",
-            "status": "confirmed"
-        }
-        chain.append(tx)
-        save_json(CHAIN_FILE, chain)
-        update_last_block(tx, is_block=False)
-        
-        print(f"🎮 Game Reward: {reward_claim} THR to {wallet} (Score: {score})")
-        
-        return jsonify(status="success", tx_id=tx["tx_id"], new_balance=ledger[wallet]), 200
-
-    except Exception as e:
-        logger.error(f"Game Submit Error: {e}")
-        return jsonify(status="error", message=str(e)), 500
-
-
 # ─── NODE REGISTRATION / IOT KIT ───────────────────
 @app.route("/register_node", methods=["POST"])
 def register_node():
@@ -1896,60 +1843,121 @@ def api_swap():
     
     return jsonify(status="success", tx_id=tx_id), 200
 
-# ─── GATEWAY API ───────────────────────────────────
-@app.route("/api/gateway/buy", methods=["POST"])
-def api_gateway_buy():
+# ─── GATEWAY API (REAL STRIPE + WITHDRAWALS) ───────────────────────
+@app.route("/api/gateway/create-checkout-session", methods=["POST"])
+def create_checkout_session():
+    if not stripe:
+        return jsonify(error="Stripe not configured"), 503
+        
     data = request.get_json() or {}
     wallet = data.get("wallet")
-    try:
-        fiat_amount = float(data.get("fiat_amount", 0))
-    except (ValueError, TypeError):
-        return jsonify(status="error", message="Invalid amount"), 400
+    fiat_amount = data.get("fiat_amount")
+    
+    if not wallet or not fiat_amount:
+        return jsonify(error="Missing parameters"), 400
         
-    currency = data.get("currency", "USD")
-    
-    if not wallet or fiat_amount <= 0:
-        return jsonify(status="error", message="Invalid input"), 400
-    
-    # Rate: 1 THR = $10 (Simulated)
-    rate = 10.0
-    thr_amount = fiat_amount / rate
-    
-    ledger = load_json(LEDGER_FILE, {})
-    chain = load_json(CHAIN_FILE, [])
-    
-    # Credit user (Minting logic for simulation)
-    ledger[wallet] = round(float(ledger.get(wallet, 0.0)) + thr_amount, 6)
-    save_json(LEDGER_FILE, ledger)
-    
-    tx = {
-        "type": "fiat_buy",
-        "from": "FIAT_GATEWAY",
-        "to": wallet,
-        "amount": thr_amount,
-        "fiat_amount": fiat_amount,
-        "currency": currency,
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-        "tx_id": f"BUY-{int(time.time())}-{secrets.token_hex(4)}",
-        "status": "confirmed"
-    }
-    chain.append(tx)
-    save_json(CHAIN_FILE, chain)
-    update_last_block(tx, is_block=False)
-    
-    return jsonify(status="success", tx_id=tx["tx_id"], thr_amount=thr_amount), 200
+    try:
+        # Create Stripe Checkout Session
+        session = stripe.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=[{
+                'price_data': {
+                    'currency': 'usd',
+                    'product_data': {
+                        'name': 'Thronos (THR) Token',
+                        'description': f'Purchase THR for wallet {wallet}',
+                    },
+                    'unit_amount': int(float(fiat_amount) * 100), # Cents
+                },
+                'quantity': 1,
+            }],
+            mode='payment',
+            success_url=DOMAIN_URL + '/gateway?status=success',
+            cancel_url=DOMAIN_URL + '/gateway?status=cancel',
+            metadata={
+                'wallet': wallet,
+                'type': 'buy_thr'
+            }
+        )
+        return jsonify(id=session.id)
+    except Exception as e:
+        return jsonify(error=str(e)), 400
+
+@app.route("/api/gateway/webhook", methods=["POST"])
+def stripe_webhook():
+    if not stripe:
+        return jsonify(status="ignored"), 200
+        
+    payload = request.get_data(as_text=True)
+    sig_header = request.headers.get('Stripe-Signature')
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, STRIPE_WEBHOOK_SECRET
+        )
+    except ValueError as e:
+        return jsonify(error="Invalid payload"), 400
+    except stripe.error.SignatureVerificationError as e:
+        return jsonify(error="Invalid signature"), 400
+
+    # Handle the event
+    if event['type'] == 'checkout.session.completed':
+        session = event['data']['object']
+        metadata = session.get('metadata', {})
+        
+        if metadata.get('type') == 'buy_thr':
+            wallet = metadata.get('wallet')
+            amount_paid_cents = session.get('amount_total', 0)
+            fiat_amount = amount_paid_cents / 100.0
+            
+            # Rate: 1 THR = $10
+            thr_amount = fiat_amount / 10.0
+            
+            # Mint/Send THR
+            ledger = load_json(LEDGER_FILE, {})
+            ledger[wallet] = round(float(ledger.get(wallet, 0.0)) + thr_amount, 6)
+            save_json(LEDGER_FILE, ledger)
+            
+            chain = load_json(CHAIN_FILE, [])
+            tx = {
+                "type": "fiat_buy",
+                "from": "STRIPE_GATEWAY",
+                "to": wallet,
+                "amount": thr_amount,
+                "fiat_amount": fiat_amount,
+                "currency": "USD",
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+                "tx_id": f"BUY-{int(time.time())}-{secrets.token_hex(4)}",
+                "status": "confirmed",
+                "stripe_id": session.get('id')
+            }
+            chain.append(tx)
+            save_json(CHAIN_FILE, chain)
+            update_last_block(tx, is_block=False)
+            print(f"💰 Stripe Payment: {fiat_amount} USD -> {thr_amount} THR to {wallet}")
+
+    return jsonify(status="success"), 200
 
 @app.route("/api/gateway/sell", methods=["POST"])
 def api_gateway_sell():
+    """
+    Handles Withdrawal Requests.
+    1. Verifies balance & Auth.
+    2. Burns THR immediately.
+    3. Saves withdrawal request to withdrawals.json for Admin processing.
+    """
     data = request.get_json() or {}
     wallet = data.get("wallet")
     secret = data.get("secret")
+    
     try:
         thr_amount = float(data.get("thr_amount", 0))
     except (ValueError, TypeError):
         return jsonify(status="error", message="Invalid amount"), 400
         
-    currency = data.get("currency", "USD")
+    bank_info = data.get("bank_info", {})
+    if not bank_info.get("iban") or not bank_info.get("name"):
+        return jsonify(status="error", message="Missing bank details"), 400
     
     if not wallet or not secret or thr_amount <= 0:
         return jsonify(status="error", message="Invalid input"), 400
@@ -1971,31 +1979,47 @@ def api_gateway_sell():
     if balance < thr_amount:
         return jsonify(status="error", message="Insufficient THR"), 400
         
-    # Rate: 1 THR = $10
-    rate = 10.0
+    # Rate: 1 THR = $9.8 (Sell Rate)
+    rate = 9.8
     fiat_out = thr_amount * rate
     
-    # Deduct THR
+    # Burn THR
     ledger[wallet] = round(balance - thr_amount, 6)
+    ledger[BURN_ADDRESS] = round(float(ledger.get(BURN_ADDRESS, 0.0)) + thr_amount, 6)
     save_json(LEDGER_FILE, ledger)
     
+    # Record TX
     chain = load_json(CHAIN_FILE, [])
+    tx_id = f"SELL-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
-        "type": "fiat_sell",
+        "type": "fiat_sell_request",
         "from": wallet,
         "to": "FIAT_GATEWAY",
         "amount": thr_amount,
         "fiat_amount": fiat_out,
-        "currency": currency,
+        "currency": "USD",
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-        "tx_id": f"SELL-{int(time.time())}-{secrets.token_hex(4)}",
-        "status": "confirmed"
+        "tx_id": tx_id,
+        "status": "processing_withdrawal"
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
     update_last_block(tx, is_block=False)
     
-    return jsonify(status="success", tx_id=tx["tx_id"], fiat_amount=fiat_out), 200
+    # Save Withdrawal Request
+    withdrawals = load_json(WITHDRAWALS_FILE, [])
+    withdrawals.append({
+        "id": tx_id,
+        "wallet": wallet,
+        "thr_amount": thr_amount,
+        "fiat_amount": fiat_out,
+        "bank_info": bank_info,
+        "timestamp": tx["timestamp"],
+        "status": "pending_admin_action"
+    })
+    save_json(WITHDRAWALS_FILE, withdrawals)
+    
+    return jsonify(status="success", tx_id=tx_id, fiat_amount=fiat_out, message="Withdrawal request submitted. Funds will be wired within 24h."), 200
 
 
 # ─── ADMIN WHITELIST + MIGRATION ───────────────────
@@ -2471,6 +2495,46 @@ def ai_knowledge_watcher():
     except Exception as e:
         print("[AI-KNOWLEDGE WATCHER] error:", e)
 
+# ─── CRYPTO HUNTERS P2E API (NEW) ──────────────────
+@app.route("/game")
+def game_page():
+    return render_template("game.html")
+
+@app.route("/api/game/submit_score", methods=["POST"])
+def api_game_submit_score():
+    data = request.get_json() or {}
+    wallet = data.get("wallet")
+    score = int(data.get("score", 0))
+    
+    if not wallet or score <= 0:
+        return jsonify(status="error", message="Invalid input"), 400
+        
+    # Simple logic: Reward = Score * 0.001 THR (capped at 10 THR per claim)
+    reward = min(score * 0.001, 10.0)
+    
+    ledger = load_json(LEDGER_FILE, {})
+    chain = load_json(CHAIN_FILE, [])
+    
+    # Minting logic for Game Rewards (or transfer from pool if we had pre-mined)
+    # For now, we mint (inflationary P2E)
+    ledger[wallet] = round(float(ledger.get(wallet, 0.0)) + reward, 6)
+    save_json(LEDGER_FILE, ledger)
+    
+    tx = {
+        "type": "game_reward",
+        "from": GAME_POOL_ADDRESS,
+        "to": wallet,
+        "amount": reward,
+        "score": score,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "tx_id": f"GAME-{int(time.time())}-{secrets.token_hex(4)}",
+        "status": "confirmed"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+    
+    return jsonify(status="success", reward=reward, tx_id=tx["tx_id"]), 200
 
 # ─── SCHEDULER ─────────────────────────────────────
 scheduler=BackgroundScheduler(daemon=True)

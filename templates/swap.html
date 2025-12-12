@@ -1,0 +1,313 @@
+{% extends "base.html" %}
+
+{% block title %}🔄 Thronos Swap{% endblock %}
+
+{% block styles %}
+<style>
+    .swap-container {
+        max-width: 480px;
+        margin: 40px auto;
+        background: #111;
+        border: 1px solid #0f0;
+        border-radius: 16px;
+        padding: 20px;
+        box-shadow: 0 0 20px rgba(0, 255, 0, 0.1);
+    }
+    
+    .token-input-group {
+        background: #000;
+        border: 1px solid #333;
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 8px;
+    }
+    
+    .token-input-group:focus-within {
+        border-color: #0f0;
+    }
+    
+    .token-header {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 8px;
+        font-size: 0.9em;
+        color: #888;
+    }
+    
+    .token-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    
+    input.amount-input {
+        background: transparent;
+        border: none;
+        color: #fff;
+        font-size: 24px;
+        width: 60%;
+        font-family: monospace;
+        outline: none;
+    }
+    
+    .token-select {
+        background: #222;
+        color: #fff;
+        border: 1px solid #444;
+        padding: 6px 12px;
+        border-radius: 20px;
+        font-weight: bold;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    
+    .swap-arrow {
+        text-align: center;
+        margin: -10px 0;
+        position: relative;
+        z-index: 10;
+    }
+    
+    .swap-arrow button {
+        background: #111;
+        border: 1px solid #0f0;
+        border-radius: 50%;
+        width: 32px;
+        height: 32px;
+        cursor: pointer;
+        color: #0f0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    .swap-arrow button:hover {
+        background: #0f0;
+        color: #000;
+    }
+    
+    .swap-btn {
+        width: 100%;
+        background: #0f0;
+        color: #000;
+        border: none;
+        padding: 16px;
+        border-radius: 12px;
+        font-size: 18px;
+        font-weight: bold;
+        cursor: pointer;
+        margin-top: 16px;
+    }
+    
+    .swap-btn:hover {
+        background: #0c0;
+    }
+    
+    .swap-btn:disabled {
+        background: #333;
+        color: #666;
+        cursor: not-allowed;
+    }
+    
+    .rate-info {
+        margin-top: 16px;
+        padding: 12px;
+        background: #001100;
+        border-radius: 8px;
+        font-size: 0.9em;
+        display: flex;
+        justify-content: space-between;
+        color: #0f0;
+    }
+    
+    .hidden { display: none; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div class="swap-container">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+        <h2>🔄 Swap</h2>
+        <span style="font-size:0.8em; color:#666;">Slippage: Auto</span>
+    </div>
+    
+    <div id="walletWarning" style="color:#ffaa88; margin-bottom:15px; display:none; text-align:center;">
+        ⚠️ <a href="/wallet" style="color:#ffaa88; text-decoration:underline;">Connect Wallet</a> to swap
+    </div>
+
+    <!-- FROM -->
+    <div class="token-input-group">
+        <div class="token-header">
+            <span><span class="lang-el">Από</span><span class="lang-en">From</span></span>
+            <span>Balance: <span id="balanceFrom">0.00</span></span>
+        </div>
+        <div class="token-row">
+            <input type="number" id="amountFrom" class="amount-input" placeholder="0.0" oninput="calcTo()">
+            <div class="token-select">
+                <span id="symbolFrom">THR</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ARROW -->
+    <div class="swap-arrow">
+        <button onclick="flipTokens()">⬇️</button>
+    </div>
+
+    <!-- TO -->
+    <div class="token-input-group">
+        <div class="token-header">
+            <span><span class="lang-el">Προς</span><span class="lang-en">To</span></span>
+            <span>Balance: <span id="balanceTo">0.00</span></span>
+        </div>
+        <div class="token-row">
+            <input type="number" id="amountTo" class="amount-input" placeholder="0.0" readonly>
+            <div class="token-select">
+                <span id="symbolTo">wBTC</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="rate-info">
+        <span>Rate</span>
+        <span id="rateDisplay">1 THR = 0.0001 wBTC</span>
+    </div>
+
+    <button id="swapBtn" class="swap-btn" onclick="doSwap()">Swap</button>
+    
+    <div id="swapResult" style="margin-top:10px; text-align:center; font-family:monospace; white-space:pre-wrap;"></div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const $ = (id) => document.getElementById(id);
+
+let isThrToBtc = true;
+const RATE = 0.0001; // 1 THR = 0.0001 BTC
+
+let balanceTHR = 0;
+let balanceBTC = 0;
+
+document.addEventListener('DOMContentLoaded', async () => {
+    const addr = localStorage.getItem('thr_address');
+    if (!addr) {
+        $('walletWarning').style.display = 'block';
+        $('swapBtn').disabled = true;
+        $('swapBtn').textContent = "Connect Wallet";
+    } else {
+        await loadBalances(addr);
+    }
+});
+
+async function loadBalances(addr) {
+    try {
+        const res = await fetch(`/wallet_data/${addr}`);
+        const data = await res.json();
+        
+        balanceTHR = parseFloat(data.balance || 0);
+        balanceBTC = parseFloat(data.wbtc_balance || 0); // New field
+        
+        updateBalanceDisplays();
+    } catch (e) {
+        console.error("Load balance error:", e);
+    }
+}
+
+function updateBalanceDisplays() {
+    if (isThrToBtc) {
+        $('balanceFrom').textContent = balanceTHR.toFixed(6);
+        $('balanceTo').textContent = balanceBTC.toFixed(8);
+        $('symbolFrom').textContent = "THR";
+        $('symbolTo').textContent = "wBTC";
+        $('rateDisplay').textContent = "1 THR = 0.0001 wBTC";
+    } else {
+        $('balanceFrom').textContent = balanceBTC.toFixed(8);
+        $('balanceTo').textContent = balanceTHR.toFixed(6);
+        $('symbolFrom').textContent = "wBTC";
+        $('symbolTo').textContent = "THR";
+        $('rateDisplay').textContent = "1 wBTC = 10000 THR";
+    }
+}
+
+function flipTokens() {
+    isThrToBtc = !isThrToBtc;
+    
+    // Swap amounts visually
+    const fromVal = $('amountFrom').value;
+    $('amountFrom').value = $('amountTo').value;
+    // Recalculate 'To' based on new 'From'
+    calcTo();
+    
+    updateBalanceDisplays();
+}
+
+function calcTo() {
+    const fromVal = parseFloat($('amountFrom').value) || 0;
+    let toVal = 0;
+    
+    if (isThrToBtc) {
+        toVal = fromVal * RATE;
+    } else {
+        toVal = fromVal / RATE;
+    }
+    
+    $('amountTo').value = toVal > 0 ? (isThrToBtc ? toVal.toFixed(8) : toVal.toFixed(6)) : '';
+}
+
+async function doSwap() {
+    const addr = localStorage.getItem('thr_address');
+    const secret = localStorage.getItem('thr_secret');
+    const amount = parseFloat($('amountFrom').value);
+    
+    if (!addr || !secret) {
+        alert("Please connect wallet with secret key first.");
+        return;
+    }
+    
+    if (!amount || amount <= 0) {
+        alert("Enter a valid amount.");
+        return;
+    }
+    
+    $('swapBtn').disabled = true;
+    $('swapBtn').textContent = "Swapping...";
+    $('swapResult').textContent = "";
+    
+    try {
+        const res = await fetch('/api/swap', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                wallet: addr,
+                secret: secret,
+                amount: amount,
+                direction: isThrToBtc ? 'THR_TO_BTC' : 'BTC_TO_THR'
+            })
+        });
+        
+        const data = await res.json();
+        
+        if (data.status === 'success') {
+            $('swapResult').style.color = '#0f0';
+            $('swapResult').textContent = `✅ Swap Successful!\nTXID: ${data.tx_id}`;
+            await loadBalances(addr); // Refresh UI
+            $('amountFrom').value = '';
+            $('amountTo').value = '';
+        } else {
+            $('swapResult').style.color = '#f00';
+            $('swapResult').textContent = `❌ Error: ${data.message || 'Unknown error'}`;
+        }
+    } catch (e) {
+        $('swapResult').style.color = '#f00';
+        $('swapResult').textContent = `❌ Error: ${e.message}`;
+    } finally {
+        $('swapBtn').disabled = false;
+        $('swapBtn').textContent = "Swap";
+    }
+}
+</script>
+{% endblock %}

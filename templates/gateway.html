@@ -1,0 +1,369 @@
+{% extends "base.html" %}
+
+{% block title %}💳 Thronos Gateway{% endblock %}
+
+{% block styles %}
+<style>
+    .gateway-container {
+        max-width: 500px;
+        margin: 40px auto;
+        background: #111;
+        border: 1px solid #0f0;
+        border-radius: 16px;
+        padding: 0;
+        overflow: hidden;
+        box-shadow: 0 0 20px rgba(0, 255, 0, 0.15);
+    }
+    
+    .tabs {
+        display: flex;
+        background: #000;
+        border-bottom: 1px solid #333;
+    }
+    
+    .tab {
+        flex: 1;
+        padding: 20px;
+        text-align: center;
+        cursor: pointer;
+        font-weight: bold;
+        color: #666;
+        transition: all 0.3s;
+    }
+    
+    .tab.active {
+        background: #111;
+        color: #0f0;
+        border-bottom: 2px solid #0f0;
+    }
+    
+    .tab:hover:not(.active) {
+        background: #050505;
+        color: #aaa;
+    }
+    
+    .content-area {
+        padding: 30px;
+    }
+    
+    .input-group {
+        margin-bottom: 20px;
+    }
+    
+    .input-label {
+        display: block;
+        margin-bottom: 8px;
+        color: #888;
+        font-size: 0.9em;
+    }
+    
+    .input-wrapper {
+        display: flex;
+        align-items: center;
+        background: #000;
+        border: 1px solid #333;
+        border-radius: 8px;
+        padding: 12px;
+    }
+    
+    .input-wrapper:focus-within {
+        border-color: #0f0;
+    }
+    
+    .input-field {
+        background: transparent;
+        border: none;
+        color: #fff;
+        font-size: 1.2em;
+        flex: 1;
+        outline: none;
+        font-family: monospace;
+    }
+    
+    .currency-badge {
+        background: #222;
+        color: #fff;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 0.9em;
+        font-weight: bold;
+    }
+    
+    .action-btn {
+        width: 100%;
+        padding: 16px;
+        border: none;
+        border-radius: 8px;
+        font-size: 1.1em;
+        font-weight: bold;
+        cursor: pointer;
+        transition: filter 0.2s;
+    }
+    
+    .btn-buy {
+        background: #0f0;
+        color: #000;
+    }
+    
+    .btn-sell {
+        background: #ff4444;
+        color: #fff;
+    }
+    
+    .action-btn:hover {
+        filter: brightness(1.1);
+    }
+    
+    .action-btn:disabled {
+        background: #333;
+        color: #666;
+        cursor: not-allowed;
+    }
+    
+    .rate-display {
+        text-align: center;
+        margin-bottom: 20px;
+        color: #666;
+        font-size: 0.9em;
+    }
+    
+    .hidden { display: none; }
+    
+    .status-msg {
+        margin-top: 15px;
+        padding: 10px;
+        border-radius: 4px;
+        text-align: center;
+        font-size: 0.9em;
+        display: none;
+    }
+    
+    .status-success {
+        background: #002200;
+        color: #0f0;
+        border: 1px solid #004400;
+    }
+    
+    .status-error {
+        background: #220000;
+        color: #ff4444;
+        border: 1px solid #440000;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div class="gateway-container">
+    <div class="tabs">
+        <div class="tab active" onclick="switchTab('buy')">Buy Crypto</div>
+        <div class="tab" onclick="switchTab('sell')">Sell Crypto</div>
+    </div>
+    
+    <div id="walletWarning" style="background:#331100; color:#ffaa88; padding:10px; text-align:center; display:none;">
+        ⚠️ Please <a href="/wallet" style="color:#fff; text-decoration:underline;">Connect Wallet</a> first.
+    </div>
+
+    <!-- BUY FORM -->
+    <div id="buyForm" class="content-area">
+        <div class="rate-display">Current Rate: 1 THR ≈ $10.00 USD</div>
+        
+        <div class="input-group">
+            <label class="input-label">You Pay</label>
+            <div class="input-wrapper">
+                <input type="number" id="buyFiat" class="input-field" placeholder="0.00" oninput="calcBuy()">
+                <span class="currency-badge">USD</span>
+            </div>
+        </div>
+        
+        <div class="input-group">
+            <label class="input-label">You Receive (Estimated)</label>
+            <div class="input-wrapper">
+                <input type="number" id="buyThr" class="input-field" placeholder="0.00" readonly>
+                <span class="currency-badge">THR</span>
+            </div>
+        </div>
+        
+        <button id="btnBuy" class="action-btn btn-buy" onclick="doBuy()">Pay with Card 💳</button>
+        <div id="buyStatus" class="status-msg"></div>
+    </div>
+
+    <!-- SELL FORM -->
+    <div id="sellForm" class="content-area hidden">
+        <div class="rate-display">Current Rate: 1 THR ≈ $9.80 USD (incl. fees)</div>
+        
+        <div class="input-group">
+            <label class="input-label">You Sell</label>
+            <div class="input-wrapper">
+                <input type="number" id="sellThr" class="input-field" placeholder="0.00" oninput="calcSell()">
+                <span class="currency-badge">THR</span>
+            </div>
+            <div style="text-align:right; font-size:0.8em; color:#666; margin-top:4px;">
+                Balance: <span id="sellBalance">0.00</span> THR
+            </div>
+        </div>
+        
+        <div class="input-group">
+            <label class="input-label">You Receive (Fiat)</label>
+            <div class="input-wrapper">
+                <input type="number" id="sellFiat" class="input-field" placeholder="0.00" readonly>
+                <span class="currency-badge">USD</span>
+            </div>
+        </div>
+        
+        <button id="btnSell" class="action-btn btn-sell" onclick="doSell()">Withdraw to Bank 🏦</button>
+        <div id="sellStatus" class="status-msg"></div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const $ = (id) => document.getElementById(id);
+const BUY_RATE = 10.0; // 1 THR = $10
+const SELL_RATE = 9.8; // 1 THR = $9.8
+
+let currentBalance = 0;
+
+document.addEventListener('DOMContentLoaded', async () => {
+    const addr = localStorage.getItem('thr_address');
+    if (!addr) {
+        $('walletWarning').style.display = 'block';
+        $('btnBuy').disabled = true;
+        $('btnSell').disabled = true;
+    } else {
+        await loadBalance(addr);
+    }
+});
+
+async function loadBalance(addr) {
+    try {
+        const res = await fetch(`/wallet_data/${addr}`);
+        const data = await res.json();
+        currentBalance = parseFloat(data.balance || 0);
+        $('sellBalance').textContent = currentBalance.toFixed(6);
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+function switchTab(mode) {
+    if (mode === 'buy') {
+        $('buyForm').classList.remove('hidden');
+        $('sellForm').classList.add('hidden');
+        document.querySelectorAll('.tab')[0].classList.add('active');
+        document.querySelectorAll('.tab')[1].classList.remove('active');
+    } else {
+        $('buyForm').classList.add('hidden');
+        $('sellForm').classList.remove('hidden');
+        document.querySelectorAll('.tab')[0].classList.remove('active');
+        document.querySelectorAll('.tab')[1].classList.add('active');
+    }
+}
+
+function calcBuy() {
+    const fiat = parseFloat($('buyFiat').value) || 0;
+    const thr = fiat / BUY_RATE;
+    $('buyThr').value = thr > 0 ? thr.toFixed(6) : '';
+}
+
+function calcSell() {
+    const thr = parseFloat($('sellThr').value) || 0;
+    const fiat = thr * SELL_RATE;
+    $('sellFiat').value = fiat > 0 ? fiat.toFixed(2) : '';
+}
+
+async function doBuy() {
+    const addr = localStorage.getItem('thr_address');
+    const fiatAmount = parseFloat($('buyFiat').value);
+    
+    if (!addr) return alert("Connect wallet first.");
+    if (!fiatAmount || fiatAmount <= 0) return alert("Enter valid amount.");
+    
+    $('btnBuy').disabled = true;
+    $('btnBuy').textContent = "Processing...";
+    $('buyStatus').style.display = 'none';
+    
+    try {
+        // Simulate network delay
+        await new Promise(r => setTimeout(r, 1500));
+        
+        const res = await fetch('/api/gateway/buy', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                wallet: addr,
+                fiat_amount: fiatAmount,
+                currency: 'USD'
+            })
+        });
+        const data = await res.json();
+        
+        if (data.status === 'success') {
+            $('buyStatus').className = 'status-msg status-success';
+            $('buyStatus').innerHTML = `✅ Success! Bought ${data.thr_amount} THR.<br>TXID: ${data.tx_id}`;
+            $('buyStatus').style.display = 'block';
+            $('buyFiat').value = '';
+            $('buyThr').value = '';
+            loadBalance(addr);
+        } else {
+            throw new Error(data.message);
+        }
+    } catch (e) {
+        $('buyStatus').className = 'status-msg status-error';
+        $('buyStatus').textContent = `❌ Error: ${e.message}`;
+        $('buyStatus').style.display = 'block';
+    } finally {
+        $('btnBuy').disabled = false;
+        $('btnBuy').textContent = "Pay with Card 💳";
+    }
+}
+
+async function doSell() {
+    const addr = localStorage.getItem('thr_address');
+    const secret = localStorage.getItem('thr_secret'); // Needed for signing
+    const thrAmount = parseFloat($('sellThr').value);
+    
+    if (!addr) return alert("Connect wallet first.");
+    if (!secret) return alert("Wallet secret needed for withdrawal.");
+    if (!thrAmount || thrAmount <= 0) return alert("Enter valid amount.");
+    
+    $('btnSell').disabled = true;
+    $('btnSell').textContent = "Processing...";
+    $('sellStatus').style.display = 'none';
+    
+    try {
+        const res = await fetch('/api/gateway/sell', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                wallet: addr,
+                secret: secret,
+                thr_amount: thrAmount,
+                currency: 'USD'
+            })
+        });
+        const data = await res.json();
+        
+        if (data.status === 'success') {
+            $('sellStatus').className = 'status-msg status-success';
+            $('sellStatus').innerHTML = `✅ Success! Sold ${thrAmount} THR.<br>Received: $${data.fiat_amount} USD.<br>TXID: ${data.tx_id}`;
+            $('sellStatus').style.display = 'block';
+            $('sellThr').value = '';
+            $('sellFiat').value = '';
+            loadBalance(addr);
+        } else {
+            throw new Error(data.message);
+        }
+    } catch (e) {
+        $('sellStatus').className = 'status-msg status-error';
+        $('sellStatus').textContent = `❌ Error: ${e.message}`;
+        $('sellStatus').style.display = 'block';
+    } finally {
+        $('btnSell').disabled = false;
+        $('btnSell').textContent = "Withdraw to Bank 🏦";
+    }
+}
+</script>
+{% endblock %}

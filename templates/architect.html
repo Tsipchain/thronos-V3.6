@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Thronos AI Architect</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        :root {
+            --bg: #050608;
+            --panel: #0d1117;
+            --border: #00ff66;
+            --accent: #00ffcc;
+            --text-main: #e0ffe8;
+            --text-muted: #7de6a0;
+        }
+        body {
+            background: radial-gradient(circle at top, #04110a 0, #020204 40%, #000 100%);
+            color: var(--text-main);
+            font-family: "Fira Code", monospace;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            box-sizing: border-box;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+        .logo {
+            font-size: 18px;
+            font-weight: bold;
+            color: var(--accent);
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+            flex: 1;
+            overflow: hidden;
+        }
+        .sidebar {
+            width: 300px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            background: var(--panel);
+            padding: 15px;
+            border: 1px solid rgba(0, 255, 102, 0.3);
+            border-radius: 8px;
+        }
+        .main-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            background: var(--panel);
+            padding: 15px;
+            border: 1px solid rgba(0, 255, 102, 0.3);
+            border-radius: 8px;
+        }
+        label {
+            font-size: 12px;
+            color: var(--text-muted);
+            display: block;
+            margin-bottom: 5px;
+        }
+        select, input, textarea {
+            width: 100%;
+            background: #000;
+            border: 1px solid rgba(0, 255, 102, 0.4);
+            color: var(--text-main);
+            padding: 8px;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 13px;
+        }
+        select:focus, input:focus, textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+        button {
+            background: rgba(0, 255, 102, 0.1);
+            border: 1px solid var(--border);
+            color: var(--accent);
+            padding: 10px;
+            cursor: pointer;
+            font-weight: bold;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+        button:hover {
+            background: rgba(0, 255, 102, 0.2);
+        }
+        #output-log {
+            flex: 1;
+            background: #000;
+            border: 1px solid rgba(0, 255, 102, 0.2);
+            padding: 10px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            font-size: 12px;
+            color: #ccc;
+        }
+        .status-line {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: auto;
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div class="logo">THRONOS <span>ARCHITECT</span></div>
+    <div><a href="/" style="color: var(--accent); text-decoration: none; font-size: 12px;">[ Back to Home ]</a></div>
+</div>
+
+<div class="container">
+    <div class="sidebar">
+        <div>
+            <label>Select Blueprint</label>
+            <select id="blueprint-select">
+                <option value="">-- Select a Blueprint --</option>
+                <!-- Filled by JS -->
+            </select>
+        </div>
+        
+        <div>
+            <label>Project Name</label>
+            <input type="text" id="project-name" placeholder="MySaaSApp">
+        </div>
+
+        <div>
+            <label>Custom Specifications (Optional)</label>
+            <textarea id="specs-input" placeholder="Add specific requirements, tech stack preferences, or modifications to the blueprint..."></textarea>
+        </div>
+
+        <div>
+            <label>AI Model</label>
+            <select id="model-select">
+                <option value="gpt-4o">GPT-4o (OpenAI)</option>
+                <option value="claude-3-5-sonnet">Claude 3.5 Sonnet</option>
+                <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+            </select>
+        </div>
+
+        <button id="generate-btn">GENERATE ARCHITECTURE</button>
+        
+        <div class="status-line" id="status-display">Ready.</div>
+    </div>
+
+    <div class="main-area">
+        <label>Architect Output Log</label>
+        <div id="output-log">// Generation output will appear here...</div>
+    </div>
+</div>
+
+<script>
+    const blueprintSelect = document.getElementById('blueprint-select');
+    const generateBtn = document.getElementById('generate-btn');
+    const outputLog = document.getElementById('output-log');
+    const statusDisplay = document.getElementById('status-display');
+
+    // Load blueprints
+    async function loadBlueprints() {
+        try {
+            const res = await fetch('/api/ai_blueprints');
+            const data = await res.json();
+            if (data.blueprints) {
+                data.blueprints.forEach(bp => {
+                    const opt = document.createElement('option');
+                    opt.value = bp.filename;
+                    opt.textContent = bp.title || bp.filename;
+                    blueprintSelect.appendChild(opt);
+                });
+            }
+        } catch (e) {
+            console.error("Failed to load blueprints", e);
+        }
+    }
+
+    loadBlueprints();
+
+    generateBtn.addEventListener('click', async () => {
+        const blueprint = blueprintSelect.value;
+        const projectName = document.getElementById('project-name').value.trim();
+        const specs = document.getElementById('specs-input').value.trim();
+        const model = document.getElementById('model-select').value;
+
+        if (!blueprint) {
+            alert("Please select a blueprint.");
+            return;
+        }
+
+        generateBtn.disabled = true;
+        statusDisplay.textContent = "Architecting...";
+        outputLog.textContent = "// Initializing Quantum Architect...\n// Loading blueprint: " + blueprint + "\n...";
+
+        try {
+            const res = await fetch('/api/architect_generate', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    blueprint: blueprint,
+                    project_name: projectName,
+                    specs: specs,
+                    model: model
+                })
+            });
+
+            const data = await res.json();
+            
+            if (data.error) {
+                outputLog.textContent += "\n\n[ERROR]: " + data.error;
+                statusDisplay.textContent = "Error.";
+            } else {
+                outputLog.textContent = data.result;
+                statusDisplay.textContent = "Generation Complete.";
+            }
+
+        } catch (e) {
+            outputLog.textContent += "\n\n[NETWORK ERROR]: " + e;
+            statusDisplay.textContent = "Network Error.";
+        } finally {
+            generateBtn.disabled = false;
+        }
+    });
+</script>
+
+</body>
+</html>

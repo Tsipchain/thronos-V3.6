@@ -17,6 +17,7 @@
 # - Mempool & 80/10/10 Reward Split (V3.7)
 # - Quorum Attestations (BLS/MuSig2 placeholder) + aggregator job (V2.9)
 # - AI Knowledge Blocks: ai_block_log.json -> mempool -> ai_knowledge TXs (V4.0)
+# - AI Architect & Multi-Model Support (V3.6 Update)
 
 import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, io, struct, binascii
 from datetime import datetime
@@ -361,10 +362,10 @@ def extract_ai_files_from_text(full_text: str):
                 "path": file_path,
                 "size": size,
             })
-            cleaned_parts.append(f"\n[AI file generated: {safe_name}]\n")
+            cleaned_parts.append(f"\\n[AI file generated: {safe_name}]\\n")
         except Exception as e:
             print("AI file write error:", e)
-            cleaned_parts.append(f"\n[AI file error: {safe_name}]\n")
+            cleaned_parts.append(f"\\n[AI file error: {safe_name}]\\n")
 
         i = end_block + len("[[/FILE]]")
 
@@ -405,7 +406,7 @@ def enqueue_offline_corpus(wallet: str, prompt: str, response: str, files, sessi
 
         if not found:
             title_src = prompt.strip() or "Νέα συνομιλία"
-            title = (title_src.replace("\n", " ")[:80]).strip()
+            title = (title_src.replace("\\n", " ")[:80]).strip()
             found = {
                 "id": sid,
                 "wallet": wallet,
@@ -624,6 +625,89 @@ def ai_packs_page():
     # Αν το βάλεις σε static/, τότε:
     # return send_from_directory(STATIC_DIR, "ai_packs.html")
 
+# ─── AI ARCHITECT ROUTES (NEW) ──────────────────────────────────────────────
+
+@app.route("/architect")
+def architect_page():
+    return render_template("architect.html")
+
+@app.route("/api/ai_blueprints")
+def api_ai_blueprints():
+    """
+    Returns list of available blueprints from data/ai_blueprints/
+    """
+    bp_dir = os.path.join(DATA_DIR, "ai_blueprints")
+    if not os.path.exists(bp_dir):
+        os.makedirs(bp_dir, exist_ok=True)
+    
+    blueprints = []
+    try:
+        for f in os.listdir(bp_dir):
+            if f.endswith(".md") or f.endswith(".txt"):
+                blueprints.append({
+                    "filename": f,
+                    "title": f.replace("_", " ").replace(".md", "").title()
+                })
+    except Exception as e:
+        print("Error listing blueprints:", e)
+        
+    return jsonify({"blueprints": blueprints}), 200
+
+@app.route("/api/architect_generate", methods=["POST"])
+def api_architect_generate():
+    """
+    Generates a project architecture based on a blueprint + specs.
+    """
+    data = request.get_json() or {}
+    blueprint_file = data.get("blueprint")
+    project_name = data.get("project_name", "Untitled Project")
+    specs = data.get("specs", "")
+    model_key = data.get("model", "gpt-4o")
+    
+    if not blueprint_file:
+        return jsonify(error="Blueprint required"), 400
+
+    bp_path = os.path.join(DATA_DIR, "ai_blueprints", blueprint_file)
+    if not os.path.exists(bp_path):
+        return jsonify(error="Blueprint file not found"), 404
+        
+    try:
+        with open(bp_path, "r", encoding="utf-8") as f:
+            bp_content = f.read()
+    except Exception as e:
+        return jsonify(error=f"Read error: {str(e)}"), 500
+
+    # Construct the prompt
+    prompt = f"""
+    ROLE: You are an Expert Software Architect.
+    TASK: Generate a detailed implementation plan for a project.
+    
+    PROJECT NAME: {project_name}
+    
+    BLUEPRINT TEMPLATE:
+    {bp_content}
+    
+    CUSTOM SPECIFICATIONS:
+    {specs}
+    
+    INSTRUCTIONS:
+    1. Analyze the blueprint and custom specs.
+    2. Output a comprehensive technical design document.
+    3. Include file structure, key component descriptions, database schema (if applicable), and specific implementation steps.
+    4. Be practical and production-oriented.
+    """
+    
+    # Call AI Agent with specific model
+    response = ai_agent.generate_response(prompt, wallet="SYSTEM_ARCHITECT", model_key=model_key)
+    
+    if response.get("status") and "error" in response["status"]:
+        return jsonify(error=response.get("response", "AI Error")), 500
+
+    return jsonify({
+        "status": "success",
+        "result": response.get("response", ""),
+        "model_used": response.get("model", model_key)
+    }), 200
 
 # ─── RECOVERY FLOW ─────────────────────────────────
 @app.route("/recovery")
@@ -881,6 +965,7 @@ def api_chat():
     msg = (data.get("message") or "").strip()
     wallet = (data.get("wallet") or "").strip()
     session_id = (data.get("session_id") or "").strip() or None
+    model_key = (data.get("model_key") or "").strip() or None  # <--- NEW
 
     if not msg:
         return jsonify(error="Message required"), 400
@@ -910,16 +995,21 @@ def api_chat():
             ), 200
 
     # --- Κλήση στον ThronosAI provider ---
-    raw = ai_agent.generate_response(msg, wallet=wallet)
+    # Pass model_key to generate_response
+    raw = ai_agent.generate_response(msg, wallet=wallet, model_key=model_key)
 
     if isinstance(raw, dict):
         full_text = str(raw.get("response") or "")
         quantum_key = raw.get("quantum_key") or ai_agent.generate_quantum_key()
         status = raw.get("status", "secure")
+        provider = raw.get("provider", "unknown")
+        model = raw.get("model", "unknown")
     else:
         full_text = str(raw)
         quantum_key = ai_agent.generate_quantum_key()
         status = "secure"
+        provider = "unknown"
+        model = "unknown"
 
     # --- FILE blocks -> αρχεία ---
     try:
@@ -953,6 +1043,8 @@ def api_chat():
         "response": cleaned,
         "quantum_key": quantum_key,
         "status": status,
+        "provider": provider,
+        "model": model,
         "wallet": wallet,
         "files": files,
         "credits": credits_for_frontend,
@@ -1318,12 +1410,12 @@ except Exception as e:
         zf.writestr("node_config.json",config_json)
         zf.writestr("start_iot.py",start_script)
         zf.writestr("iot_vehicle_node.py",node_script)
-        pic_path=os.path.join(BASE_DIR,"/images/photo1765475946.jpg")
+        pic_path=os.path.join(BASE_DIR,"/images/Vehicle.jpg")
         if os.path.exists(pic_path):
-            zf.write(pic_path,"/images/photo1765475946.jpg")
+            zf.write(pic_path,"/images/Vehicle.jpg")
         else:
-            zf.writestr("/images/photo1765475946.jpg","")
-        zf.writestr("README.txt","1. Install Python 3.\n2. Run 'python start_iot.py' (auto-installs deps).")
+            zf.writestr("/images/Vehicle.jpg","")
+        zf.writestr("README.txt","1. Install Python 3.\\n2. Run 'python start_iot.py' (auto-installs deps).")
     memory_file.seek(0)
     return send_file(
         memory_file,

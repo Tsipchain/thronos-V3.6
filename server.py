@@ -21,6 +21,7 @@
 # - Dynamic Fees & Burning (V4.1)
 # - Swap / DeFi Interface (V4.2)
 # - IoT Parking State (V4.3)
+# - Crypto Hunters Game (V4.4)
 
 import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, io, struct, binascii
 from datetime import datetime
@@ -32,13 +33,24 @@ from werkzeug.utils import secure_filename
 from apscheduler.schedulers.background import BackgroundScheduler
 
 # ── Local modules
-from phantom_gateway_mainnet import get_btc_txns
-from secure_pledge_embed import create_secure_pdf_contract
-from phantom_decode import decode_payload_from_image
-from ai_agent_service import ThronosAI
-
-# ── Quorum modules (placeholders μέχρι να μπει real crypto)
-from quorum_crypto import aggregate as qc_aggregate, verify as qc_verify
+try:
+    from phantom_gateway_mainnet import get_btc_txns
+    from secure_pledge_embed import create_secure_pdf_contract
+    from phantom_decode import decode_payload_from_image
+    from ai_agent_service import ThronosAI
+    # ── Quorum modules (placeholders μέχρι να μπει real crypto)
+    from quorum_crypto import aggregate as qc_aggregate, verify as qc_verify
+except ImportError as e:
+    print(f"CRITICAL IMPORT ERROR: {e}")
+    # Fallback mocks to prevent 500 on start if files missing
+    get_btc_txns = lambda a,b: []
+    create_secure_pdf_contract = lambda *args: "error.pdf"
+    decode_payload_from_image = lambda *args: None
+    class ThronosAI:
+        def generate_response(self, *args, **kwargs): return {"response": "AI Service Unavailable", "status": "error"}
+        def generate_quantum_key(self): return "mock_key"
+    qc_aggregate = lambda *args: None
+    qc_verify = lambda *args: False
 
 
 # ─── CONFIG ────────────────────────────────────────
@@ -60,7 +72,7 @@ AI_CREDS_FILE       = os.path.join(DATA_DIR, "ai_agent_credentials.json")
 AI_BLOCK_LOG_FILE   = os.path.join(DATA_DIR, "ai_block_log.json")
 WATCHER_LEDGER_FILE = os.path.join(DATA_DIR, "watcher_ledger.json")
 IOT_DATA_FILE       = os.path.join(DATA_DIR, "iot_data.json")
-IOT_PARKING_FILE    = os.path.join(DATA_DIR, "iot_parking.json") # NEW
+IOT_PARKING_FILE    = os.path.join(DATA_DIR, "iot_parking.json")
 MEMPOOL_FILE        = os.path.join(DATA_DIR, "mempool.json")
 ATTEST_STORE_FILE   = os.path.join(DATA_DIR, "attest_store.json")
 
@@ -107,7 +119,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("thronos")
 
 # Initialize AI
-ai_agent = ThronosAI()
+try:
+    ai_agent = ThronosAI()
+except Exception as e:
+    print(f"AI Init Error: {e}")
+    ai_agent = None
 
 
 # ─── HELPERS ───────────────────────────────────────
@@ -477,14 +493,14 @@ def get_transactions_for_viewer():
     chain_txs = [
         t for t in chain
         if isinstance(t, dict)
-        and t.get("type") in ["transfer", "service_payment", "ai_knowledge", "coinbase"]
+        and t.get("type") in ["transfer", "service_payment", "ai_knowledge", "coinbase", "game_reward"]
     ]
 
     # Pending από mempool (χωρίς height)
     pending_txs = [
         t for t in pool
         if isinstance(t, dict)
-        and t.get("type") in ["transfer", "service_payment", "ai_knowledge"]
+        and t.get("type") in ["transfer", "service_payment", "ai_knowledge", "game_reward"]
     ]
 
     all_txs = chain_txs + pending_txs
@@ -643,10 +659,11 @@ def gateway_page():
 
 @app.route("/ai_packs")
 def ai_packs_page():
-    # Αν έχεις το ai_packs.html στο templates/
     return render_template("ai_packs.html")
-    # Αν το βάλεις σε static/, τότε:
-    # return send_from_directory(STATIC_DIR, "ai_packs.html")
+
+@app.route("/game")
+def game_page():
+    return render_template("game.html")
 
 # ─── AI ARCHITECT ROUTES (NEW) ──────────────────────────────────────────────
 
@@ -683,6 +700,9 @@ def api_architect_generate():
     - Returns [[FILE:...]] blocks.
     - Writes files to AI_FILES_DIR.
     """
+    if not ai_agent:
+        return jsonify(error="AI Agent not available"), 503
+
     data = request.get_json() or {}
     wallet      = (data.get("wallet") or "").strip()
     session_id  = (data.get("session_id") or "").strip() or None
@@ -1084,6 +1104,9 @@ def api_chat():
     - Αν έχει wallet αλλά 0 credits, δεν προχωρά σε κλήση AI
     - Κάθε μήνυμα γράφεται στο ai_offline_corpus.json με session_id
     """
+    if not ai_agent:
+        return jsonify(error="AI Agent not available"), 503
+
     data = request.get_json() or {}
     msg = (data.get("message") or "").strip()
     wallet = (data.get("wallet") or "").strip()
@@ -1491,6 +1514,78 @@ def api_ai_purchase_pack():
     ), 200
 
 
+# ─── CRYPTO HUNTERS GAME API ───────────────────────
+@app.route("/api/game/submit_score", methods=["POST"])
+def api_game_submit_score():
+    """
+    Handles score submission from the Crypto Hunters game.
+    Distributes THR rewards from AI Treasury or Mints new tokens.
+    """
+    try:
+        data = request.get_json() or {}
+        wallet = (data.get("wallet") or "").strip()
+        score = int(data.get("score", 0))
+        reward_claim = float(data.get("reward", 0.0))
+
+        if not wallet or score <= 0 or reward_claim <= 0:
+            return jsonify(status="error", message="Invalid game data"), 400
+
+        # Simple validation: Reward should be approx score * 0.001
+        expected_reward = score * 0.001
+        if abs(reward_claim - expected_reward) > 0.0001:
+             return jsonify(status="error", message="Reward mismatch"), 400
+
+        # Limit max reward per claim to prevent abuse (e.g., 10 THR max)
+        if reward_claim > 10.0:
+            return jsonify(status="error", message="Reward exceeds limit"), 400
+
+        ledger = load_json(LEDGER_FILE, {})
+        chain = load_json(CHAIN_FILE, [])
+        
+        # Check AI Treasury Balance
+        ai_balance = float(ledger.get(AI_WALLET_ADDRESS, 0.0))
+        
+        tx_type = "game_reward"
+        sender = AI_WALLET_ADDRESS
+        
+        if ai_balance >= reward_claim:
+            # Pay from Treasury
+            ledger[AI_WALLET_ADDRESS] = round(ai_balance - reward_claim, 6)
+        else:
+            # Treasury empty, Mint new tokens (Inflationary fallback)
+            sender = "COINBASE_GAME"
+            # No debit from AI wallet
+            
+        # Credit User
+        user_balance = float(ledger.get(wallet, 0.0))
+        ledger[wallet] = round(user_balance + reward_claim, 6)
+        
+        save_json(LEDGER_FILE, ledger)
+        
+        # Record Transaction
+        tx = {
+            "type": tx_type,
+            "from": sender,
+            "to": wallet,
+            "amount": reward_claim,
+            "score": score,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "tx_id": f"GAME-{int(time.time())}-{secrets.token_hex(4)}",
+            "status": "confirmed"
+        }
+        chain.append(tx)
+        save_json(CHAIN_FILE, chain)
+        update_last_block(tx, is_block=False)
+        
+        print(f"🎮 Game Reward: {reward_claim} THR to {wallet} (Score: {score})")
+        
+        return jsonify(status="success", tx_id=tx["tx_id"], new_balance=ledger[wallet]), 200
+
+    except Exception as e:
+        logger.error(f"Game Submit Error: {e}")
+        return jsonify(status="error", message=str(e)), 500
+
+
 # ─── NODE REGISTRATION / IOT KIT ───────────────────
 @app.route("/register_node", methods=["POST"])
 def register_node():
@@ -1533,11 +1628,11 @@ except Exception as e:
         zf.writestr("node_config.json",config_json)
         zf.writestr("start_iot.py",start_script)
         zf.writestr("iot_vehicle_node.py",node_script)
-        pic_path=os.path.join(BASE_DIR,"/images/Vehicle.jpg")
+        pic_path=os.path.join(BASE_DIR,"images/Vehicle.jpg") # FIX: Remove leading slash
         if os.path.exists(pic_path):
-            zf.write(pic_path,"/images/Vehicle.jpg")
+            zf.write(pic_path,"images/Vehicle.jpg")
         else:
-            zf.writestr("/images/Vehicle.jpg","")
+            zf.writestr("images/Vehicle.jpg","")
         zf.writestr("README.txt","1. Install Python 3.\\n2. Run 'python start_iot.py' (auto-installs deps).")
     memory_file.seek(0)
     return send_file(
@@ -1704,7 +1799,12 @@ def api_swap():
     data = request.get_json() or {}
     wallet = data.get("wallet")
     secret = data.get("secret")
-    amount = float(data.get("amount", 0))
+    
+    try:
+        amount = float(data.get("amount", 0))
+    except (ValueError, TypeError):
+        return jsonify(status="error", message="Invalid amount"), 400
+        
     direction = data.get("direction") # THR_TO_BTC or BTC_TO_THR
     
     if not wallet or not secret or amount <= 0:
@@ -1717,9 +1817,15 @@ def api_swap():
         return jsonify(status="error", message="Unknown wallet"), 404
     
     stored_auth_hash=sender_pledge.get("send_auth_hash")
-    auth_string=f"{secret}:auth" # Assuming no passphrase for MVP swap
+    
+    # Try both auth methods (with and without passphrase) if possible, 
+    # but here we only have 'secret'. 
+    # If user has passphrase, this simple swap UI might fail. 
+    # For now, we assume standard auth.
+    auth_string=f"{secret}:auth" 
+    
     if hashlib.sha256(auth_string.encode()).hexdigest()!=stored_auth_hash:
-        return jsonify(status="error", message="Invalid secret"), 403
+        return jsonify(status="error", message="Invalid secret (or passphrase required)"), 403
 
     ledger = load_json(LEDGER_FILE, {})
     wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
@@ -1795,7 +1901,11 @@ def api_swap():
 def api_gateway_buy():
     data = request.get_json() or {}
     wallet = data.get("wallet")
-    fiat_amount = float(data.get("fiat_amount", 0))
+    try:
+        fiat_amount = float(data.get("fiat_amount", 0))
+    except (ValueError, TypeError):
+        return jsonify(status="error", message="Invalid amount"), 400
+        
     currency = data.get("currency", "USD")
     
     if not wallet or fiat_amount <= 0:
@@ -1834,7 +1944,11 @@ def api_gateway_sell():
     data = request.get_json() or {}
     wallet = data.get("wallet")
     secret = data.get("secret")
-    thr_amount = float(data.get("thr_amount", 0))
+    try:
+        thr_amount = float(data.get("thr_amount", 0))
+    except (ValueError, TypeError):
+        return jsonify(status="error", message="Invalid amount"), 400
+        
     currency = data.get("currency", "USD")
     
     if not wallet or not secret or thr_amount <= 0:

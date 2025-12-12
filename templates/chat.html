@@ -179,13 +179,16 @@
             color: var(--text-muted);
         }
 
-        .field-inline input {
+        .field-inline input, .field-inline select {
             background: #000;
             border: 1px solid rgba(0, 255, 102, 0.4);
             color: var(--accent);
             padding: 4px 8px;
             font-size: 12px;
             border-radius: 4px;
+        }
+        
+        .field-inline input {
             width: 140px;
         }
 
@@ -414,6 +417,11 @@
             <!-- Sessions will be injected here -->
             <div style="padding:10px; opacity:0.5; font-size:11px;">Enter Wallet to load sessions...</div>
         </div>
+        <div style="margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px;">
+            <a href="/architect" style="color: var(--accent); font-size: 12px; text-decoration: none; display: block; padding: 5px;">
+                ➜ Switch to Architect Mode
+            </a>
+        </div>
     </div>
 
     <!-- Main Chat -->
@@ -422,6 +430,18 @@
             <div class="field-inline">
                 <label for="wallet-input">THR Wallet:</label>
                 <input id="wallet-input" type="text" placeholder="THRxxxxxxxx" autocomplete="off">
+            </div>
+
+            <div class="field-inline">
+                <label for="model-select">Model:</label>
+                <select id="model-select">
+                    <option value="auto">Auto (Smart)</option>
+                    <option value="gpt-4o">GPT-4o</option>
+                    <option value="gpt-4o-mini">GPT-4o Mini</option>
+                    <option value="claude-3-5-sonnet">Claude 3.5 Sonnet</option>
+                    <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+                    <option value="gemini-2.5-pro">Gemini 2.5 (Exp)</option>
+                </select>
             </div>
 
             <div class="credits-label">
@@ -474,6 +494,7 @@
     const aiUploadBtn     = document.getElementById("aiUploadBtn");
     const sessionListEl   = document.getElementById("session-list");
     const newChatBtn      = document.getElementById("new-chat-btn");
+    const modelSelect     = document.getElementById("model-select");
 
     let currentSessionId = null;
 
@@ -714,12 +735,8 @@
         if (!text) return;
 
         const wallet = walletInputEl.value.trim();
+        const model = modelSelect.value;
         saveWalletLocal(wallet);
-
-        // If no session selected but wallet exists, start one implicitly or warn?
-        // Let's just pass null session_id, backend will create default or handle it.
-        // But better UX: if no session and wallet present, create one first?
-        // For now, let's allow "default" session behavior if currentSessionId is null.
 
         userInputEl.value = "";
         appendMessage("user", text);
@@ -738,7 +755,10 @@
         messagesEl.scrollTop = messagesEl.scrollHeight;
 
         try {
-            const payload = { message: text };
+            const payload = { 
+                message: text,
+                model_key: model
+            };
             if (wallet) payload.wallet = wallet;
             if (currentSessionId) payload.session_id = currentSessionId;
 
@@ -776,11 +796,17 @@
             if (data.status) {
                 metaParts.push(`<span>Status: ${data.status}</span>`);
             }
+            if (data.provider) {
+                metaParts.push(`<span>Provider: ${data.provider}</span>`);
+            }
+            if (data.model) {
+                metaParts.push(`<span>Model: ${data.model}</span>`);
+            }
 
             appendMessage(
                 "ai",
                 data.response || "[Empty response]",
-                metaParts.join(" "),
+                metaParts.join(" · "),
                 data.files || []
             );
 
@@ -792,7 +818,7 @@
             }
             setStatus("Core: " + (data.status || "online"));
         } catch (err) {
-            messagesEl.removeChild(thinkingRow);
+            if (thinkingRow.parentNode) messagesEl.removeChild(thinkingRow);
             appendMessage("ai", "Quantum Interference Detected: " + (err.message || String(err)));
             setStatus("Core: network error");
         } finally {

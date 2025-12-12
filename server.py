@@ -18,6 +18,9 @@
 # - Quorum Attestations (BLS/MuSig2 placeholder) + aggregator job (V2.9)
 # - AI Knowledge Blocks: ai_block_log.json -> mempool -> ai_knowledge TXs (V4.0)
 # - AI Architect & Multi-Model Support (V3.6 Update)
+# - Dynamic Fees & Burning (V4.1)
+# - Swap / DeFi Interface (V4.2)
+# - IoT Parking State (V4.3)
 
 import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, io, struct, binascii
 from datetime import datetime
@@ -48,14 +51,16 @@ DATA_DIR   = os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data"))
 os.makedirs(DATA_DIR, exist_ok=True)
 
 LEDGER_FILE         = os.path.join(DATA_DIR, "ledger.json")
+WBTC_LEDGER_FILE    = os.path.join(DATA_DIR, "wbtc_ledger.json")
 CHAIN_FILE          = os.path.join(DATA_DIR, "phantom_tx_chain.json")
 PLEDGE_CHAIN        = os.path.join(DATA_DIR, "pledge_chain.json")
 LAST_BLOCK_FILE     = os.path.join(DATA_DIR, "last_block.json")
 WHITELIST_FILE      = os.path.join(DATA_DIR, "free_pledge_whitelist.json")
 AI_CREDS_FILE       = os.path.join(DATA_DIR, "ai_agent_credentials.json")
-AI_BLOCK_LOG_FILE   = os.path.join(DATA_DIR, "ai_block_log.json")   # NEW: AI events
+AI_BLOCK_LOG_FILE   = os.path.join(DATA_DIR, "ai_block_log.json")
 WATCHER_LEDGER_FILE = os.path.join(DATA_DIR, "watcher_ledger.json")
 IOT_DATA_FILE       = os.path.join(DATA_DIR, "iot_data.json")
+IOT_PARKING_FILE    = os.path.join(DATA_DIR, "iot_parking.json") # NEW
 MEMPOOL_FILE        = os.path.join(DATA_DIR, "mempool.json")
 ATTEST_STORE_FILE   = os.path.join(DATA_DIR, "attest_store.json")
 
@@ -82,7 +87,9 @@ os.makedirs(CONTRACTS_DIR, exist_ok=True)
 UPLOADS_DIR = os.path.join(DATA_DIR, "uploads")
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
-SEND_FEE = 0.0015
+# --- Dynamic Fee Config ---
+FEE_RATE = 0.005  # 0.5% burn rate
+MIN_FEE  = 0.001  # Minimum fee in THR
 
 # --- Mining Config ---
 INITIAL_TARGET    = 2 ** 236         # 5 hex zeros (20 bits)
@@ -91,6 +98,7 @@ RETARGET_INTERVAL = 10               # blocks
 
 AI_WALLET_ADDRESS = os.getenv("THR_AI_AGENT_WALLET", "THR_AI_AGENT_WALLET_V1")
 BURN_ADDRESS      = "0x0"
+SWAP_POOL_ADDRESS = "THR_SWAP_POOL_V1"
 
 # Πόσα blocks "έχουν ήδη γίνει" πριν ξεκινήσει το τρέχον chain αρχείο
 HEIGHT_OFFSET = 0
@@ -126,6 +134,13 @@ def load_attest_store():
 
 def save_attest_store(store):
     save_json(ATTEST_STORE_FILE, store)
+
+def calculate_dynamic_fee(amount: float) -> float:
+    """
+    Calculates the burn fee based on the amount.
+    Fee = Max(MIN_FEE, amount * FEE_RATE)
+    """
+    return round(max(MIN_FEE, amount * FEE_RATE), 6)
 
 # --- AI Packs & Credits helpers ------------------------------------------------
 
@@ -618,6 +633,14 @@ def iot_page():
 def chat_page():
     return render_template("chat.html")
 
+@app.route("/swap")
+def swap_page():
+    return render_template("swap.html")
+
+@app.route("/gateway")
+def gateway_page():
+    return render_template("gateway.html")
+
 @app.route("/ai_packs")
 def ai_packs_page():
     # Αν έχεις το ai_packs.html στο templates/
@@ -697,6 +720,7 @@ def api_architect_generate():
         "Χτίζεις ΠΛΗΡΗ software projects (όχι μόνο skeletons).\\n"
         "Για κάθε αρχείο που παράγεις, γράφεις όσο πιο ολοκληρωμένο, λειτουργικό κώδικα γίνεται.\\n"
         "- Π.χ. αν υπάρχει login page, υλοποίησε πλήρη φόρμα, validation και fake auth flow.\\n"
+        "- Αν υπάρχει API route, γράψε πλήρες handler με όλα τα πεδία.\\n"
         "- Αν υπάρχει API route, γράψε πλήρες handler με όλα τα πεδία.\\n"
         "- Αν υπάρχει database layer, βάλε πλήρη μοντέλα / helpers.\\n\\n"
         "ΠΡΟΤΥΠΟ ΕΞΟΔΟΥ:\\n"
@@ -995,6 +1019,58 @@ def iot_autonomous_request():
     update_last_block(tx,is_block=False)
     print(f"🤖 AI Autopilot Activated for {wallet}. Payment: {amount} THR")
     return jsonify(status="granted", message="AI Driver Activated"),200
+
+# ─── IOT PARKING API (NEW) ─────────────────────────
+@app.route("/api/iot/parking", methods=["GET"])
+def api_iot_parking():
+    """
+    Returns the current state of parking spots.
+    If file doesn't exist, init with random data.
+    """
+    if not os.path.exists(IOT_PARKING_FILE):
+        # Init random spots
+        spots = []
+        for i in range(12):
+            spots.append({
+                "id": f"P-{101+i}",
+                "status": "free" if random.random() > 0.3 else "occupied",
+                "reservedBy": None
+            })
+        save_json(IOT_PARKING_FILE, spots)
+    
+    return jsonify(load_json(IOT_PARKING_FILE, [])), 200
+
+@app.route("/api/iot/reserve", methods=["POST"])
+def api_iot_reserve():
+    """
+    Reserves a spot. Requires payment (handled via send_thr logic usually, 
+    but here we can just update state if payment verified or trust client for MVP simulation).
+    Ideally, client calls send_thr, then calls this with tx_id to prove payment.
+    For simplicity/simulation, we just update state.
+    """
+    data = request.get_json() or {}
+    spot_id = data.get("spot_id")
+    wallet = data.get("wallet")
+    
+    if not spot_id or not wallet:
+        return jsonify(error="Missing fields"), 400
+        
+    spots = load_json(IOT_PARKING_FILE, [])
+    found = False
+    for s in spots:
+        if s["id"] == spot_id:
+            if s["status"] != "free":
+                return jsonify(error="Spot not free"), 400
+            s["status"] = "reserved"
+            s["reservedBy"] = wallet
+            found = True
+            break
+            
+    if found:
+        save_json(IOT_PARKING_FILE, spots)
+        return jsonify(status="success"), 200
+    else:
+        return jsonify(error="Spot not found"), 404
 
 
 # ─── QUANTUM CHAT API (ενιαίο AI + αρχεία + offline corpus) ─────────────────
@@ -1534,13 +1610,17 @@ def pledge_submit():
 @app.route("/wallet_data/<thr_addr>")
 def wallet_data(thr_addr):
     ledger=load_json(LEDGER_FILE,{})
+    wbtc_ledger=load_json(WBTC_LEDGER_FILE,{}) # NEW
+    
     chain=load_json(CHAIN_FILE,[])
     bal=round(float(ledger.get(thr_addr,0.0)),6)
+    wbtc_bal=round(float(wbtc_ledger.get(thr_addr,0.0)),8) # NEW
+    
     history=[
         tx for tx in chain
         if isinstance(tx,dict) and (tx.get("from")==thr_addr or tx.get("to")==thr_addr)
     ]
-    return jsonify(balance=bal, transactions=history),200
+    return jsonify(balance=bal, wbtc_balance=wbtc_bal, transactions=history),200
 
 @app.route("/wallet/<thr_addr>")
 def wallet_redirect(thr_addr):
@@ -1580,13 +1660,20 @@ def send_thr():
         auth_string=f"{auth_secret}:auth"
     if hashlib.sha256(auth_string.encode()).hexdigest()!=stored_auth_hash:
         return jsonify(error="invalid_auth"),403
+
+    # --- Dynamic Fee Calculation ---
+    fee = calculate_dynamic_fee(amount)
+    total_cost = amount + fee
+
     ledger=load_json(LEDGER_FILE,{})
     sender_balance=float(ledger.get(from_thr,0.0))
-    total_cost=amount+SEND_FEE
+    
     if sender_balance<total_cost:
         return jsonify(
             error="insufficient_balance",
-            balance=round(sender_balance,6)
+            balance=round(sender_balance,6),
+            required=total_cost,
+            fee=fee
         ),400
     ledger[from_thr]=round(sender_balance-total_cost,6)
     save_json(LEDGER_FILE,ledger)
@@ -1598,7 +1685,7 @@ def send_thr():
         "from":from_thr,
         "to":to_thr,
         "amount":round(amount,6),
-        "fee_burned":SEND_FEE,
+        "fee_burned":fee,
         "tx_id":f"TX-{len(chain)}-{int(time.time())}",
         "thr_address":from_thr,
         "status":"pending",
@@ -1609,7 +1696,192 @@ def send_thr():
     pool.append(tx)
     save_mempool(pool)
     update_last_block(tx,is_block=False)
-    return jsonify(status="pending", tx=tx, new_balance_from=ledger[from_thr]),200
+    return jsonify(status="pending", tx=tx, new_balance_from=ledger[from_thr], fee_burned=fee),200
+
+# ─── SWAP API ──────────────────────────────────────
+@app.route("/api/swap", methods=["POST"])
+def api_swap():
+    data = request.get_json() or {}
+    wallet = data.get("wallet")
+    secret = data.get("secret")
+    amount = float(data.get("amount", 0))
+    direction = data.get("direction") # THR_TO_BTC or BTC_TO_THR
+    
+    if not wallet or not secret or amount <= 0:
+        return jsonify(status="error", message="Invalid input"), 400
+
+    # Verify Auth (Reusing logic from send_thr)
+    pledges=load_json(PLEDGE_CHAIN,[])
+    sender_pledge=next((p for p in pledges if p.get("thr_address")==wallet),None)
+    if not sender_pledge:
+        return jsonify(status="error", message="Unknown wallet"), 404
+    
+    stored_auth_hash=sender_pledge.get("send_auth_hash")
+    auth_string=f"{secret}:auth" # Assuming no passphrase for MVP swap
+    if hashlib.sha256(auth_string.encode()).hexdigest()!=stored_auth_hash:
+        return jsonify(status="error", message="Invalid secret"), 403
+
+    ledger = load_json(LEDGER_FILE, {})
+    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+    chain = load_json(CHAIN_FILE, [])
+    
+    RATE = 0.0001 # 1 THR = 0.0001 BTC
+    
+    tx_id = f"SWAP-{int(time.time())}-{secrets.token_hex(4)}"
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+    if direction == "THR_TO_BTC":
+        # Burn THR, Mint wBTC
+        thr_bal = float(ledger.get(wallet, 0.0))
+        if thr_bal < amount:
+            return jsonify(status="error", message="Insufficient THR"), 400
+            
+        btc_out = amount * RATE
+        
+        ledger[wallet] = round(thr_bal - amount, 6)
+        wbtc_ledger[wallet] = round(float(wbtc_ledger.get(wallet, 0.0)) + btc_out, 8)
+        
+        # Log TX
+        tx = {
+            "type": "swap",
+            "from": wallet,
+            "to": SWAP_POOL_ADDRESS,
+            "amount_in": amount,
+            "token_in": "THR",
+            "amount_out": btc_out,
+            "token_out": "wBTC",
+            "tx_id": tx_id,
+            "timestamp": ts,
+            "status": "confirmed" # Instant swap
+        }
+        
+    elif direction == "BTC_TO_THR":
+        # Burn wBTC, Mint THR
+        wbtc_bal = float(wbtc_ledger.get(wallet, 0.0))
+        if wbtc_bal < amount:
+            return jsonify(status="error", message="Insufficient wBTC"), 400
+            
+        thr_out = amount / RATE
+        
+        wbtc_ledger[wallet] = round(wbtc_bal - amount, 8)
+        ledger[wallet] = round(float(ledger.get(wallet, 0.0)) + thr_out, 6)
+        
+        tx = {
+            "type": "swap",
+            "from": wallet,
+            "to": SWAP_POOL_ADDRESS,
+            "amount_in": amount,
+            "token_in": "wBTC",
+            "amount_out": thr_out,
+            "token_out": "THR",
+            "tx_id": tx_id,
+            "timestamp": ts,
+            "status": "confirmed"
+        }
+    else:
+        return jsonify(status="error", message="Invalid direction"), 400
+
+    save_json(LEDGER_FILE, ledger)
+    save_json(WBTC_LEDGER_FILE, wbtc_ledger)
+    
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+    
+    return jsonify(status="success", tx_id=tx_id), 200
+
+# ─── GATEWAY API ───────────────────────────────────
+@app.route("/api/gateway/buy", methods=["POST"])
+def api_gateway_buy():
+    data = request.get_json() or {}
+    wallet = data.get("wallet")
+    fiat_amount = float(data.get("fiat_amount", 0))
+    currency = data.get("currency", "USD")
+    
+    if not wallet or fiat_amount <= 0:
+        return jsonify(status="error", message="Invalid input"), 400
+    
+    # Rate: 1 THR = $10 (Simulated)
+    rate = 10.0
+    thr_amount = fiat_amount / rate
+    
+    ledger = load_json(LEDGER_FILE, {})
+    chain = load_json(CHAIN_FILE, [])
+    
+    # Credit user (Minting logic for simulation)
+    ledger[wallet] = round(float(ledger.get(wallet, 0.0)) + thr_amount, 6)
+    save_json(LEDGER_FILE, ledger)
+    
+    tx = {
+        "type": "fiat_buy",
+        "from": "FIAT_GATEWAY",
+        "to": wallet,
+        "amount": thr_amount,
+        "fiat_amount": fiat_amount,
+        "currency": currency,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "tx_id": f"BUY-{int(time.time())}-{secrets.token_hex(4)}",
+        "status": "confirmed"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+    
+    return jsonify(status="success", tx_id=tx["tx_id"], thr_amount=thr_amount), 200
+
+@app.route("/api/gateway/sell", methods=["POST"])
+def api_gateway_sell():
+    data = request.get_json() or {}
+    wallet = data.get("wallet")
+    secret = data.get("secret")
+    thr_amount = float(data.get("thr_amount", 0))
+    currency = data.get("currency", "USD")
+    
+    if not wallet or not secret or thr_amount <= 0:
+        return jsonify(status="error", message="Invalid input"), 400
+
+    # Verify Auth
+    pledges=load_json(PLEDGE_CHAIN,[])
+    sender_pledge=next((p for p in pledges if p.get("thr_address")==wallet),None)
+    if not sender_pledge:
+        return jsonify(status="error", message="Unknown wallet"), 404
+    
+    stored_auth_hash=sender_pledge.get("send_auth_hash")
+    auth_string=f"{secret}:auth"
+    if hashlib.sha256(auth_string.encode()).hexdigest()!=stored_auth_hash:
+        return jsonify(status="error", message="Invalid secret"), 403
+        
+    ledger = load_json(LEDGER_FILE, {})
+    balance = float(ledger.get(wallet, 0.0))
+    
+    if balance < thr_amount:
+        return jsonify(status="error", message="Insufficient THR"), 400
+        
+    # Rate: 1 THR = $10
+    rate = 10.0
+    fiat_out = thr_amount * rate
+    
+    # Deduct THR
+    ledger[wallet] = round(balance - thr_amount, 6)
+    save_json(LEDGER_FILE, ledger)
+    
+    chain = load_json(CHAIN_FILE, [])
+    tx = {
+        "type": "fiat_sell",
+        "from": wallet,
+        "to": "FIAT_GATEWAY",
+        "amount": thr_amount,
+        "fiat_amount": fiat_out,
+        "currency": currency,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "tx_id": f"SELL-{int(time.time())}-{secrets.token_hex(4)}",
+        "status": "confirmed"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+    
+    return jsonify(status="success", tx_id=tx["tx_id"], fiat_amount=fiat_out), 200
 
 
 # ─── ADMIN WHITELIST + MIGRATION ───────────────────

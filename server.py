@@ -644,69 +644,114 @@ def api_ai_blueprints():
     try:
         for f in os.listdir(bp_dir):
             if f.endswith(".md") or f.endswith(".txt"):
-                blueprints.append({
-                    "filename": f,
-                    "title": f.replace("_", " ").replace(".md", "").title()
-                })
+                blueprints.append(f)
     except Exception as e:
         print("Error listing blueprints:", e)
         
+    # Sort for consistency
+    blueprints.sort()
     return jsonify({"blueprints": blueprints}), 200
 
 @app.route("/api/architect_generate", methods=["POST"])
 def api_architect_generate():
     """
-    Generates a project architecture based on a blueprint + specs.
+    Thronos AI Architect:
+    - Generates full project implementation based on blueprint + specs.
+    - Returns [[FILE:...]] blocks.
+    - Writes files to AI_FILES_DIR.
     """
     data = request.get_json() or {}
-    blueprint_file = data.get("blueprint")
-    project_name = data.get("project_name", "Untitled Project")
-    specs = data.get("specs", "")
-    model_key = data.get("model", "gpt-4o")
-    
-    if not blueprint_file:
-        return jsonify(error="Blueprint required"), 400
+    wallet      = (data.get("wallet") or "").strip()
+    session_id  = (data.get("session_id") or "").strip() or None
+    blueprint   = (data.get("blueprint") or "").strip()
+    project_spec = (data.get("spec") or data.get("specs") or "").strip() # Handle both keys just in case
+    model_key   = (data.get("model") or data.get("model_key") or "gpt-4o").strip()
 
-    bp_path = os.path.join(DATA_DIR, "ai_blueprints", blueprint_file)
+    if not blueprint or not project_spec:
+        return jsonify(error="Missing blueprint or spec"), 400
+
+    # Load blueprint
+    bp_path = os.path.join(DATA_DIR, "ai_blueprints", blueprint)
     if not os.path.exists(bp_path):
-        return jsonify(error="Blueprint file not found"), 404
-        
+        # Fallback: try to find it in the list if passed as name only
+        bp_dir = os.path.join(DATA_DIR, "ai_blueprints")
+        found = False
+        if os.path.exists(bp_dir):
+            for f in os.listdir(bp_dir):
+                if f == blueprint:
+                    bp_path = os.path.join(bp_dir, f)
+                    found = True
+                    break
+        if not found:
+             return jsonify(error="Blueprint not found"), 404
+
     try:
         with open(bp_path, "r", encoding="utf-8") as f:
-            bp_content = f.read()
+            bp_text = f.read()
     except Exception as e:
-        return jsonify(error=f"Read error: {str(e)}"), 500
+        return jsonify(error=f"Cannot read blueprint: {e}"), 500
 
-    # Construct the prompt
-    prompt = f"""
-    ROLE: You are an Expert Software Architect.
-    TASK: Generate a detailed implementation plan for a project.
-    
-    PROJECT NAME: {project_name}
-    
-    BLUEPRINT TEMPLATE:
-    {bp_content}
-    
-    CUSTOM SPECIFICATIONS:
-    {specs}
-    
-    INSTRUCTIONS:
-    1. Analyze the blueprint and custom specs.
-    2. Output a comprehensive technical design document.
-    3. Include file structure, key component descriptions, database schema (if applicable), and specific implementation steps.
-    4. Be practical and production-oriented.
-    """
-    
-    # Call AI Agent with specific model
-    response = ai_agent.generate_response(prompt, wallet="SYSTEM_ARCHITECT", model_key=model_key)
-    
-    if response.get("status") and "error" in response["status"]:
-        return jsonify(error=response.get("response", "AI Error")), 500
+    # New FULL IMPLEMENTATION prompt
+    prompt = (
+        "Είσαι ο Κύριος Αρχιτέκτονας του Thronos.\\n"
+        "Χτίζεις ΠΛΗΡΗ software projects (όχι μόνο skeletons).\\n"
+        "Για κάθε αρχείο που παράγεις, γράφεις όσο πιο ολοκληρωμένο, λειτουργικό κώδικα γίνεται.\\n"
+        "- Π.χ. αν υπάρχει login page, υλοποίησε πλήρη φόρμα, validation και fake auth flow.\\n"
+        "- Αν υπάρχει API route, γράψε πλήρες handler με όλα τα πεδία.\\n"
+        "- Αν υπάρχει database layer, βάλε πλήρη μοντέλα / helpers.\\n\\n"
+        "ΠΡΟΤΥΠΟ ΕΞΟΔΟΥ:\\n"
+        "Πρέπει να απαντάς ΜΟΝΟ με blocks της μορφής:\\n"
+        "[[FILE:path/filename.ext]]\\n"
+        "...περιεχόμενο αρχείου...\\n"
+        "[[/FILE]]\\n\\n"
+        "Μην εξηγήσεις, μην προσθέσεις κείμενο εκτός αρχείων.\\n\\n"
+        "BLUEPRINT:\\n"
+        f"{bp_text}\\n\\n"
+        "PROJECT SPEC (τι θέλει ο χρήστης):\\n"
+        f"{project_spec}\\n\\n"
+        "Χτίσε ΟΛΑ τα βασικά αρχεία του project με ΠΛΗΡΗ υλοποίηση, όχι απλό σκελετό."
+    )
+
+    # Call AI
+    # Note: server.py uses 'ai_agent' global instance
+    raw = ai_agent.generate_response(prompt, wallet=wallet, model_key=model_key)
+
+    if isinstance(raw, dict):
+        full_text   = str(raw.get("response") or "")
+        quantum_key = raw.get("quantum_key") or ai_agent.generate_quantum_key()
+        status      = raw.get("status", "architect")
+    else:
+        full_text   = str(raw)
+        quantum_key = ai_agent.generate_quantum_key()
+        status      = "architect"
+
+    # Extract files
+    try:
+        files, cleaned = extract_ai_files_from_text(full_text)
+    except Exception as e:
+        print("Architect file extraction error:", e)
+        files = []
+        cleaned = full_text
+
+    # Log to corpus
+    try:
+        title = f"[ARCHITECT:{blueprint}] {project_spec[:80]}"
+        enqueue_offline_corpus(wallet, title, full_text, files, session_id=session_id)
+    except Exception as e:
+        print("architect corpus error:", e)
 
     return jsonify({
-        "status": "success",
-        "result": response.get("response", ""),
-        "model_used": response.get("model", model_key)
+        "status": status,
+        "quantum_key": quantum_key,
+        "blueprint": blueprint,
+        "response": cleaned,
+        "files": [
+            {
+                "filename": f.get("filename"),
+                "size": f.get("size")
+            } for f in (files or [])
+        ],
+        "session_id": session_id,
     }), 200
 
 # ─── RECOVERY FLOW ─────────────────────────────────
@@ -981,7 +1026,7 @@ def api_chat():
 
         if credits_value <= 0:
             warning_text = (
-                "Δεν έχεις άλλα Quantum credits γι' αυτό το THR wallet.\n"
+                "Δεν έχεις άλλα Quantum credits γι' αυτό το THR wallet.\\n"
                 "Πήγαινε στη σελίδα AI Packs και αγόρασε πακέτο για να συνεχίσεις."
             )
             return jsonify(

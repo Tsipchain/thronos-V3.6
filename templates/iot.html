@@ -1,102 +1,321 @@
 {% extends "base.html" %}
 
-{% block content %}
-<div class="container mx-auto px-4 py-8">
-    <h1 class="text-3xl font-bold mb-6 text-white">IoT Vehicle Nodes</h1>
+{% block title %}📡 Thronos IoT & Smart City{% endblock %}
+
+{% block styles %}
+<style>
+    .iot-container {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 20px;
+    }
+    @media (min-width: 768px) {
+        .iot-container { grid-template-columns: 1fr 1fr; }
+    }
     
-    <!-- Registration Section -->
-    <div class="bg-gray-800 rounded-lg shadow-xl p-6 mb-8 border border-gray-700">
-        <h2 class="text-xl font-semibold text-blue-400 mb-4">Register New Node</h2>
-        <p class="text-gray-300 mb-4">
-            Enter your Wallet Address and a Secret Key to generate a Telemetric Mining Kit. 
-            This kit includes the necessary software to turn a device into a Thronos IoT Node.
-        </p>
-        <form action="/register_node" method="POST" class="flex flex-col md:flex-row gap-4 items-end">
-            <div class="flex-1 w-full">
-                <label class="block text-gray-400 text-sm font-bold mb-2" for="address">
-                    Wallet Address (THR)
-                </label>
-                <input class="shadow appearance-none border border-gray-600 rounded w-full py-2 px-3 text-gray-100 bg-gray-700 leading-tight focus:outline-none focus:shadow-outline" 
-                       id="address" name="address" type="text" placeholder="THR..." required>
-            </div>
-            <div class="flex-1 w-full">
-                <label class="block text-gray-400 text-sm font-bold mb-2" for="secret">
-                    Node Secret / Password
-                </label>
-                <input class="shadow appearance-none border border-gray-600 rounded w-full py-2 px-3 text-gray-100 bg-gray-700 leading-tight focus:outline-none focus:shadow-outline" 
-                       id="secret" name="secret" type="password" placeholder="Secret for Auth" required>
-            </div>
-            <button class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded focus:outline-none focus:shadow-outline transition duration-150 ease-in-out w-full md:w-auto" type="submit">
-                Download Kit (.zip)
-            </button>
-        </form>
+    .panel {
+        background: #111;
+        border: 1px solid #0f0;
+        border-radius: 8px;
+        padding: 20px;
+    }
+    
+    .parking-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+        gap: 10px;
+        margin-top: 15px;
+    }
+    
+    .spot {
+        border: 2px solid #333;
+        border-radius: 8px;
+        padding: 10px;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.2s;
+        position: relative;
+    }
+    
+    .spot.free { border-color: #0f0; background: #001100; }
+    .spot.occupied { border-color: #f00; background: #110000; opacity: 0.7; cursor: not-allowed; }
+    .spot.reserved { border-color: #ff0; background: #111100; }
+    
+    .spot-id { font-weight: bold; font-size: 1.1em; }
+    .spot-status { font-size: 0.8em; margin-top: 5px; }
+    
+    .sensor-val { font-family: monospace; color: #0ff; }
+    
+    .modal {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; width: 100%; height: 100%;
+        background: rgba(0,0,0,0.8);
+        z-index: 1000;
+        justify-content: center;
+        align-items: center;
+    }
+    .modal-content {
+        background: #111;
+        border: 1px solid #0f0;
+        padding: 20px;
+        border-radius: 8px;
+        max-width: 400px;
+        width: 90%;
+        text-align: center;
+    }
+    
+    button.action-btn {
+        background: #0f0; color: #000; border: none;
+        padding: 8px 16px; font-weight: bold; cursor: pointer;
+        margin-top: 10px; width: 100%;
+    }
+    button.action-btn:disabled { background: #333; color: #666; }
+    
+    .water-level {
+        height: 20px;
+        background: #333;
+        border-radius: 10px;
+        overflow: hidden;
+        margin-top: 5px;
+    }
+    .water-fill {
+        height: 100%;
+        background: #00f;
+        width: 0%;
+        transition: width 1s;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<h1>📡 <span class="lang-el">IoT & Έξυπνη Πόλη</span><span class="lang-en">IoT & Smart City</span></h1>
+
+<div id="walletWarning" style="color:#ffaa88; margin-bottom:15px; display:none; text-align:center;">
+    ⚠️ <a href="/wallet" style="color:#ffaa88; text-decoration:underline;">Connect Wallet</a> to interact with Smart City services.
+</div>
+
+<div class="iot-container">
+    
+    <!-- SMART PARKING SECTION -->
+    <div class="panel">
+        <h2>🅿️ <span class="lang-el">Έξυπνο Πάρκινγκ</span><span class="lang-en">Smart Parking</span></h2>
+        <p class="lang-el">Κράτηση θέσης σε πραγματικό χρόνο με THR.</p>
+        <p class="lang-en">Real-time spot reservation with THR.</p>
+        
+        <div style="margin:10px 0; font-size:0.9em;">
+            <span style="color:#0f0">■ Free</span> &nbsp; 
+            <span style="color:#f00">■ Occupied</span> &nbsp; 
+            <span style="color:#ff0">■ Reserved</span>
+        </div>
+
+        <div class="parking-grid" id="parkingGrid">
+            <!-- Spots generated by JS -->
+        </div>
     </div>
 
-    <!-- Dashboard Section -->
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" id="vehicle-grid">
-        <!-- Vehicles will be populated here by JS -->
-        <div class="bg-gray-800 rounded-lg p-6 animate-pulse">
-            <div class="h-4 bg-gray-700 rounded w-3/4 mb-4"></div>
-            <div class="h-4 bg-gray-700 rounded w-1/2 mb-4"></div>
-            <div class="h-32 bg-gray-700 rounded mb-4"></div>
+    <!-- SMART WATER / ENV SENSORS -->
+    <div class="panel">
+        <h2>💧 <span class="lang-el">Διαχείριση Υδάτων</span><span class="lang-en">Water Management</span></h2>
+        
+        <div style="margin-bottom:20px;">
+            <h3>Reservoir A (Main)</h3>
+            <div class="water-level"><div id="waterA" class="water-fill" style="width:75%"></div></div>
+            <div style="display:flex; justify-content:space-between; font-size:0.8em; margin-top:5px;">
+                <span>Level: <span id="lvlA" class="sensor-val">75%</span></span>
+                <span>Quality: <span class="sensor-val">Good (pH 7.2)</span></span>
+            </div>
+        </div>
+
+        <div style="margin-bottom:20px;">
+            <h3>Reservoir B (Reserve)</h3>
+            <div class="water-level"><div id="waterB" class="water-fill" style="width:40%"></div></div>
+            <div style="display:flex; justify-content:space-between; font-size:0.8em; margin-top:5px;">
+                <span>Level: <span id="lvlB" class="sensor-val">40%</span></span>
+                <span>Quality: <span class="sensor-val">Excellent (pH 7.0)</span></span>
+            </div>
+        </div>
+        
+        <hr style="border-color:#333; margin:15px 0;">
+        
+        <h3>🚗 Active Vehicle Nodes</h3>
+        <div id="vehicleList" style="max-height:200px; overflow-y:auto; font-size:0.8em;">
+            <div style="color:#666; font-style:italic;">Scanning for nodes...</div>
         </div>
     </div>
 </div>
 
+<!-- REGISTER NODE SECTION -->
+<div class="panel" style="margin-top:20px;">
+    <h2>🔧 <span class="lang-el">Εγγραφή Κόμβου</span><span class="lang-en">Register Node</span></h2>
+    <form action="/register_node" method="POST" style="display:flex; gap:10px; flex-wrap:wrap;">
+        <input name="address" placeholder="Wallet Address (THR)" style="flex:1; padding:8px; background:#000; border:1px solid #0f0; color:#fff;">
+        <input name="secret" type="password" placeholder="Node Secret" style="flex:1; padding:8px; background:#000; border:1px solid #0f0; color:#fff;">
+        <button type="submit" class="action-btn" style="width:auto;">Download Kit (.zip)</button>
+    </form>
+</div>
+
+<!-- RESERVATION MODAL -->
+<div id="reserveModal" class="modal">
+    <div class="modal-content">
+        <h3>Reserve Spot <span id="modalSpotId"></span></h3>
+        <p>Cost: <strong>5 THR</strong> / hour</p>
+        <p style="font-size:0.8em; color:#888;">Funds will be deducted from your connected wallet.</p>
+        <div id="modalMsg" style="margin:10px 0; min-height:20px;"></div>
+        <div style="display:flex; gap:10px;">
+            <button class="action-btn" onclick="confirmReservation()">Confirm & Pay</button>
+            <button class="action-btn" style="background:#333; color:#fff;" onclick="closeModal()">Cancel</button>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
 <script>
-    function fetchIoTData() {
-        fetch('/api/iot/data')
-            .then(response => response.json())
-            .then(data => {
-                const grid = document.getElementById('vehicle-grid');
-                grid.innerHTML = ''; // Clear loading state
-                
-                if (data.length === 0) {
-                    grid.innerHTML = '<p class="text-gray-500 col-span-full text-center">No active vehicles found.</p>';
-                    return;
-                }
+const $ = (id) => document.getElementById(id);
 
-                data.forEach(vehicle => {
-                    const card = document.createElement('div');
-                    card.className = 'bg-gray-800 rounded-lg shadow-lg p-6 border border-gray-700 hover:border-blue-500 transition';
-                    
-                    card.innerHTML = `
-                        <div class="flex justify-between items-center mb-4">
-                            <h3 class="text-lg font-bold text-white">${vehicle.vehicle_id}</h3>
-                            <span class="px-2 py-1 bg-green-900 text-green-300 text-xs rounded-full">Active</span>
-                        </div>
-                        <div class="space-y-2 text-sm text-gray-300">
-                            <div class="flex justify-between">
-                                <span>Speed:</span>
-                                <span class="font-mono text-yellow-400">${vehicle.speed} km/h</span>
-                            </div>
-                            <div class="flex justify-between">
-                                <span>Fuel/Battery:</span>
-                                <span class="font-mono text-blue-400">${vehicle.fuel}%</span>
-                            </div>
-                            <div class="flex justify-between">
-                                <span>GPS:</span>
-                                <span class="font-mono text-gray-400">${vehicle.gps}</span>
-                            </div>
-                            <div class="mt-4 pt-4 border-t border-gray-700">
-                                <p class="text-xs text-gray-500 mb-1">Latest Stego-Image Hash:</p>
-                                <p class="font-mono text-xs text-gray-400 truncate" title="${vehicle.last_image_hash}">
-                                    ${vehicle.last_image_hash}
-                                </p>
-                            </div>
-                            <div class="text-right text-xs text-gray-500 mt-2">
-                                ${vehicle.timestamp}
-                            </div>
-                        </div>
-                    `;
-                    grid.appendChild(card);
-                });
-            })
-            .catch(err => console.error('Error fetching IoT data:', err));
+// --- Mock Data for Parking ---
+// In a real app, this would come from /api/iot/parking
+const SPOTS = Array.from({length: 12}, (_, i) => ({
+    id: `P-${101+i}`,
+    status: Math.random() > 0.7 ? 'occupied' : 'free', // Random init
+    reservedBy: null
+}));
+
+let selectedSpot = null;
+
+function renderParking() {
+    const grid = $('parkingGrid');
+    grid.innerHTML = '';
+    
+    SPOTS.forEach(spot => {
+        const div = document.createElement('div');
+        div.className = `spot ${spot.status}`;
+        div.innerHTML = `
+            <div class="spot-id">${spot.id}</div>
+            <div class="spot-status">${spot.status.toUpperCase()}</div>
+        `;
+        
+        if (spot.status === 'free') {
+            div.onclick = () => openReserveModal(spot);
+        }
+        
+        grid.appendChild(div);
+    });
+}
+
+function openReserveModal(spot) {
+    const wallet = localStorage.getItem('thr_address');
+    if (!wallet) {
+        alert("Please connect your wallet first!");
+        return;
     }
+    selectedSpot = spot;
+    $('modalSpotId').textContent = spot.id;
+    $('modalMsg').textContent = '';
+    $('reserveModal').style.display = 'flex';
+}
 
-    // Fetch immediately and then every 5 seconds
+function closeModal() {
+    $('reserveModal').style.display = 'none';
+    selectedSpot = null;
+}
+
+async function confirmReservation() {
+    const wallet = localStorage.getItem('thr_address');
+    const secret = localStorage.getItem('thr_secret'); // Needed for signing
+    
+    if (!wallet || !secret) {
+        $('modalMsg').textContent = "❌ Wallet auth missing.";
+        return;
+    }
+    
+    $('modalMsg').style.color = '#ff0';
+    $('modalMsg').textContent = "Processing payment...";
+    
+    // Simulate API call to pay and reserve
+    // In real implementation: POST /api/iot/reserve { spot, wallet, secret }
+    // Here we simulate via send_thr to a "PARKING_SERVICE" address
+    
+    try {
+        const res = await fetch('/send_thr', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                from_thr: wallet,
+                to_thr: "THR_PARKING_SERVICE", // Virtual service address
+                amount: 5,
+                auth_secret: secret
+            })
+        });
+        
+        const data = await res.json();
+        
+        if (data.status === 'pending' || data.status === 'confirmed') {
+            // Success
+            $('modalMsg').style.color = '#0f0';
+            $('modalMsg').textContent = "✅ Reserved!";
+            
+            // Update local state
+            const spotIdx = SPOTS.findIndex(s => s.id === selectedSpot.id);
+            if (spotIdx >= 0) {
+                SPOTS[spotIdx].status = 'reserved';
+                SPOTS[spotIdx].reservedBy = wallet;
+            }
+            renderParking();
+            
+            setTimeout(closeModal, 1500);
+        } else {
+            throw new Error(data.error || "Payment failed");
+        }
+    } catch (e) {
+        $('modalMsg').style.color = '#f00';
+        $('modalMsg').textContent = "❌ Error: " + e.message;
+    }
+}
+
+// --- IoT Data Polling ---
+async function fetchIoTData() {
+    try {
+        const res = await fetch('/api/iot/data');
+        const data = await res.json();
+        
+        const list = $('vehicleList');
+        if (data.length === 0) {
+            list.innerHTML = '<div style="color:#666;">No active vehicles.</div>';
+        } else {
+            list.innerHTML = data.map(v => `
+                <div style="border-bottom:1px solid #333; padding:5px 0;">
+                    <strong>${v.vehicle_id}</strong> 
+                    <span style="color:#0f0; font-size:0.9em;">${v.speed} km/h</span><br>
+                    <span style="color:#888; font-size:0.8em;">${v.timestamp}</span>
+                </div>
+            `).join('');
+        }
+        
+        // Simulate Water Sensor fluctuation
+        const lvlA = 70 + Math.random() * 10;
+        const lvlB = 35 + Math.random() * 10;
+        $('waterA').style.width = lvlA + '%';
+        $('lvlA').textContent = Math.round(lvlA) + '%';
+        $('waterB').style.width = lvlB + '%';
+        $('lvlB').textContent = Math.round(lvlB) + '%';
+        
+    } catch (e) {
+        console.error("IoT poll error", e);
+    }
+}
+
+// Init
+document.addEventListener('DOMContentLoaded', () => {
+    const wallet = localStorage.getItem('thr_address');
+    if (!wallet) $('walletWarning').style.display = 'block';
+    
+    renderParking();
     fetchIoTData();
     setInterval(fetchIoTData, 5000);
+});
 </script>
 {% endblock %}

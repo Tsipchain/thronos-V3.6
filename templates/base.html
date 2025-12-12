@@ -114,6 +114,23 @@
     }
     .lang-en { display: none; }
     
+    /* Wallet Status Indicator (NEW) */
+    .wallet-status {
+        position: absolute;
+        top: 10px;
+        right: 100px; /* Left of lang toggle */
+        background: #002200;
+        color: #0f0;
+        border: 1px solid #004400;
+        padding: 5px 10px;
+        font-size: 0.8em;
+        cursor: pointer;
+        display: none; /* Hidden by default */
+    }
+    .wallet-status:hover {
+        background: #004400;
+    }
+
     /* Utility Classes */
     .highlight { color: #ff0; }
     .btn {
@@ -134,6 +151,10 @@
 </head>
 <body>
 
+<div id="walletStatus" class="wallet-status" onclick="window.location.href='/wallet'">
+    💼 <span id="walletAddrShort"></span>
+</div>
+
 <button class="lang-toggle" onclick="toggleLanguage()">GR | EN</button>
 
 <div class="navbar">
@@ -149,6 +170,8 @@
       <div class="dropdown-content">
         <a href="/wallet">👛 <span class="lang-el">Πορτοφόλι</span><span class="lang-en">Wallet</span></a>
         <a href="/send">💸 <span class="lang-el">Αποστολή</span><span class="lang-en">Send</span></a>
+        <a href="/swap">🔄 Swap</a>
+        <a href="/gateway">💳 Gateway</a>
         <a href="/pledge">🔥 <span class="lang-el">Δέσμευση</span><span class="lang-en">Pledge</span></a>
         <a href="/viewer">📦 <span class="lang-el">Εξερευνητής</span><span class="lang-en">Explorer</span></a>
         <a href="/token_chart">📈 <span class="lang-el">Γράφημα Token</span><span class="lang-en">Token Chart</span></a>
@@ -162,6 +185,7 @@
         <a href="/bridge">🌉 <span class="lang-el">Γέφυρα BTC</span><span class="lang-en">BTC Bridge</span></a>
         <a href="/iot">🚗 <span class="lang-el">IoT Κόμβοι</span><span class="lang-en">IoT Nodes</span></a>
         <a href="/chat">🤖 <span class="lang-el">AI Chat</span><span class="lang-en">AI Chat</span></a>
+        <a href="/architect">🏗️ <span class="lang-el">AI Architect</span><span class="lang-en">AI Architect</span></a>
       </div>
     </li>
     
@@ -211,10 +235,21 @@ function setLanguage(lang) {
     window.dispatchEvent(new CustomEvent('langChanged', { detail: { lang: lang } }));
 }
 
-// Initialize language on load
+// Initialize language and wallet status on load
 document.addEventListener('DOMContentLoaded', () => {
     const savedLang = localStorage.getItem('lang') || 'el';
     setLanguage(savedLang);
+
+    // Check wallet status
+    const wallet = localStorage.getItem('thr_address');
+    if (wallet) {
+        const short = wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4);
+        const el = document.getElementById('walletStatus');
+        if(el) {
+            document.getElementById('walletAddrShort').textContent = short;
+            el.style.display = 'block';
+        }
+    }
 });
 </script>
 

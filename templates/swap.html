@@ -274,7 +274,7 @@ async function doSwap() {
     }
     
     $('swapBtn').disabled = true;
-    $('swapBtn').textContent = "Swapping...";
+    $('swapBtn').innerHTML = '<span class="spinner"></span> Swapping...';
     $('swapResult').textContent = "";
     
     try {

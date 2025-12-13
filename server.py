@@ -23,6 +23,7 @@
 # - IoT Parking State (V4.3)
 # - Crypto Hunters P2E (V4.4)
 # - Real Fiat Gateway (Stripe + Bank Withdrawals) (V5.0)
+# - Admin Withdrawal Panel (V5.1)
 
 import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, io, struct, binascii
 from datetime import datetime
@@ -124,9 +125,10 @@ GAME_POOL_ADDRESS = "THR_CRYPTO_HUNTERS_POOL"
 GATEWAY_ADDRESS   = "THR_FIAT_GATEWAY_V1"
 
 # --- Stripe Config ---
-STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
-STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
-STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+# PLEASE UPDATE THESE WITH YOUR REAL KEYS
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "sk_live_...Tuhr") 
+STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "pk_live_n7kIflBg8OTy2FJLsp80DY0M")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "whsec_PLACEHOLDER")
 DOMAIN_URL = os.getenv("DOMAIN_URL", "http://localhost:3333")
 
 if stripe:
@@ -683,6 +685,75 @@ def ai_packs_page():
     return render_template("ai_packs.html")
     # Αν το βάλεις σε static/, τότε:
     # return send_from_directory(STATIC_DIR, "ai_packs.html")
+
+# ─── ADMIN ROUTES (NEW) ────────────────────────────
+@app.route("/admin/withdrawals")
+def admin_withdrawals_page():
+    secret = request.args.get("secret", "")
+    if secret != ADMIN_SECRET:
+        return "Forbidden", 403
+    return render_template("admin_withdrawals.html", admin_secret=secret)
+
+@app.route("/api/admin/withdrawals/list")
+def api_admin_withdrawals_list():
+    secret = request.args.get("secret", "")
+    if secret != ADMIN_SECRET:
+        return jsonify(error="Forbidden"), 403
+    return jsonify(load_json(WITHDRAWALS_FILE, [])), 200
+
+@app.route("/api/admin/withdrawals/action", methods=["POST"])
+def api_admin_withdrawals_action():
+    data = request.get_json() or {}
+    secret = data.get("secret")
+    req_id = data.get("id")
+    action = data.get("action") # 'paid' or 'rejected'
+    
+    if secret != ADMIN_SECRET:
+        return jsonify(status="error", message="Forbidden"), 403
+        
+    withdrawals = load_json(WITHDRAWALS_FILE, [])
+    found = False
+    for w in withdrawals:
+        if w["id"] == req_id:
+            if w["status"] != "pending_admin_review":
+                return jsonify(status="error", message="Already processed"), 400
+            
+            if action == "paid":
+                w["status"] = "paid"
+                w["processed_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+            elif action == "rejected":
+                w["status"] = "rejected"
+                # Refund logic: Credit back the THR
+                ledger = load_json(LEDGER_FILE, {})
+                ledger[w["wallet"]] = round(float(ledger.get(w["wallet"], 0.0)) + float(w["thr_amount"]), 6)
+                # Deduct from burn address (reverse the burn)
+                ledger[BURN_ADDRESS] = round(max(0, float(ledger.get(BURN_ADDRESS, 0.0)) - float(w["thr_amount"])), 6)
+                save_json(LEDGER_FILE, ledger)
+                
+                # Log Refund TX
+                chain = load_json(CHAIN_FILE, [])
+                tx = {
+                    "type": "refund",
+                    "from": "FIAT_GATEWAY",
+                    "to": w["wallet"],
+                    "amount": w["thr_amount"],
+                    "reason": "Withdrawal Rejected",
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+                    "tx_id": f"REFUND-{req_id}",
+                    "status": "confirmed"
+                }
+                chain.append(tx)
+                save_json(CHAIN_FILE, chain)
+                update_last_block(tx, is_block=False)
+            
+            found = True
+            break
+            
+    if found:
+        save_json(WITHDRAWALS_FILE, withdrawals)
+        return jsonify(status="success"), 200
+    else:
+        return jsonify(status="error", message="Request not found"), 404
 
 # ─── AI ARCHITECT ROUTES (NEW) ──────────────────────────────────────────────
 
@@ -2013,9 +2084,15 @@ def api_gateway_sell():
         "wallet": wallet,
         "thr_amount": thr_amount,
         "fiat_amount": fiat_out,
-        "bank_info": bank_info,
+        "bank_details": { # Normalized key name to match admin panel
+            "holder": bank_info.get("name"),
+            "iban": bank_info.get("iban"),
+            "bic": bank_info.get("bic")
+        },
+        "bank_info": bank_info, # Keep original for compatibility
         "timestamp": tx["timestamp"],
-        "status": "pending_admin_action"
+        "status": "pending_admin_review", # Normalized status
+        "fiat_estimated": fiat_out
     })
     save_json(WITHDRAWALS_FILE, withdrawals)
     

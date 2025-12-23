@@ -52,6 +52,25 @@
       display: flex;
       justify-content: space-between;
   }
+
+  /* New table styling for transaction history */
+  table.tx-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 12px;
+  }
+  table.tx-table th, table.tx-table td {
+      border: 1px solid var(--line);
+      padding: 4px 6px;
+  }
+  table.tx-table th {
+      background: #010a05;
+      color: var(--line);
+  }
+  table.tx-table tbody tr:nth-child(odd) {
+      background: #001509;
+  }
 </style>
 {% endblock %}
 
@@ -113,22 +132,35 @@
   </div>
 
   <div class="col">
-    <label><span class="lang-el">Υπόλοιπο & Ιστορικό (JSON)</span><span class="lang-en">Balance & History (JSON)</span></label>
-    <pre id="walletBox">{}</pre>
+    <label><span class="lang-el">Υπόλοιπο</span><span class="lang-en">Balance</span></label>
+    <div id="balanceDisplay" class="balance-box" style="border:1px solid var(--line);padding:8px;font-size:12px;"></div>
 
-    <label><span class="lang-el">Αποτέλεσμα Αποστολής</span><span class="lang-en">Send Result</span></label>
+    <label style="margin-top:16px;"><span class="lang-el">Ιστορικό Συναλλαγών</span><span class="lang-en">Transaction History</span></label>
+    <table class="tx-table" id="txTable">
+      <thead>
+        <tr>
+          <th><span class="lang-el">Τύπος</span><span class="lang-en">Type</span></th>
+          <th>From</th>
+          <th>To</th>
+          <th><span class="lang-el">Ποσό</span><span class="lang-en">Amount</span></th>
+          <th><span class="lang-el">Χρέωση</span><span class="lang-en">Fee</span></th>
+          <th><span class="lang-el">Ώρα</span><span class="lang-en">Time</span></th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <button id="toggleJsonBtn" onclick="toggleRawJson()" style="margin-top:10px;">
+      <span class="lang-el">Εμφάνιση JSON</span><span class="lang-en">Show JSON</span>
+    </button>
+    <pre id="walletBox" style="display:none; margin-top:10px;">{}</pre>
+
+    <label style="margin-top:16px;"><span class="lang-el">Αποτέλεσμα Αποστολής</span><span class="lang-en">Send Result</span></label>
     <pre id="sendResult">{}</pre>
   </div>
 </div>
 
-<div id="chartSection" style="display:none;">
-  <h3>📊 <span class="lang-el">Στατιστικά Δικτύου & Ανάλυση</span><span class="lang-en">Network Stats & Analysis</span></h3>
-  <p class="small-note">
-    <span class="lang-el">Ενεργοποιήθηκε επειδή έχετε ενεργό ιστορικό συναλλαγών.</span>
-    <span class="lang-en">Activated because you have active transaction history.</span>
-  </p>
-  <iframe src="/token_chart" title="Token Chart"></iframe>
-</div>
+<!-- Removed chartSection for cleaner UI -->
 
 {% endblock %}
 
@@ -171,6 +203,20 @@ document.addEventListener('DOMContentLoaded', () => {
     updateFee(); // Init fee display
 });
 
+function toggleRawJson() {
+    const box = $('walletBox');
+    const btn = $('toggleJsonBtn');
+    const lang = localStorage.getItem('lang') || 'el';
+    // Toggle visibility
+    if (box.style.display === 'none' || box.style.display === '') {
+        box.style.display = 'block';
+        btn.innerHTML = (lang === 'el' ? 'Απόκρυψη JSON' : 'Hide JSON');
+    } else {
+        box.style.display = 'none';
+        btn.innerHTML = (lang === 'el' ? 'Εμφάνιση JSON' : 'Show JSON');
+    }
+}
+
 async function pulseNetworkKpis(){
   try{
     const mp = await fetch('/api/mempool').then(r=>r.json());
@@ -198,8 +244,66 @@ async function loadBalance() {
 
   try{
     const data = await fetch(`/wallet_data/${encodeURIComponent(thr)}`).then(r=>r.json());
+    // Populate raw JSON content (hidden by default)
     $('walletBox').textContent = JSON.stringify(data, null, 2);
-    $('chartSection').style.display = (data.transactions && data.transactions.length>0) ? 'block':'none';
+
+    // Build balance summary
+    const balLines = [];
+    // THR balance
+    balLines.push(`THR: ${parseFloat(data.balance || 0).toFixed(6)}`);
+    // L2E token balance
+    if (typeof data.l2e_balance !== 'undefined') {
+        balLines.push(`L2E: ${parseFloat(data.l2e_balance || 0).toFixed(6)}`);
+    }
+    // wBTC balance
+    if (typeof data.wbtc_balance !== 'undefined') {
+        balLines.push(`wBTC: ${parseFloat(data.wbtc_balance || 0).toFixed(8)}`);
+    }
+    $('balanceDisplay').textContent = balLines.join('\n');
+
+    // Render transaction history table
+    const tbody = $('txTable').querySelector('tbody');
+    tbody.innerHTML = '';
+    const txs = (data.transactions || []).filter(tx => {
+        const ttype = (tx.type || '').toString();
+        const amt = parseFloat(tx.amount || 0);
+        // Exclude AI logs and service payments and zero-amount entries
+        if (ttype.startsWith('ai_')) return false;
+        if (ttype === 'service_payment') return false;
+        if (!amt || amt === 0) return false;
+        return true;
+    });
+    txs.forEach(tx => {
+        const tr = document.createElement('tr');
+        // Type
+        const tdType = document.createElement('td');
+        tdType.textContent = tx.type || '';
+        tr.appendChild(tdType);
+        // From
+        const tdFrom = document.createElement('td');
+        const f = tx.from || '';
+        tdFrom.textContent = f.length > 12 ? f.substring(0,8)+'...' : f;
+        tr.appendChild(tdFrom);
+        // To
+        const tdTo = document.createElement('td');
+        const t = tx.to || '';
+        tdTo.textContent = t.length > 12 ? t.substring(0,8)+'...' : t;
+        tr.appendChild(tdTo);
+        // Amount
+        const tdAmt = document.createElement('td');
+        tdAmt.textContent = parseFloat(tx.amount || 0).toFixed(6);
+        tr.appendChild(tdAmt);
+        // Fee
+        const tdFee = document.createElement('td');
+        const feeVal = tx.fee_burned !== undefined ? parseFloat(tx.fee_burned) : (tx.fee !== undefined ? parseFloat(tx.fee) : 0);
+        tdFee.textContent = feeVal ? feeVal.toFixed(6) : '0.000000';
+        tr.appendChild(tdFee);
+        // Timestamp
+        const tdTime = document.createElement('td');
+        tdTime.textContent = tx.timestamp || '';
+        tr.appendChild(tdTime);
+        tbody.appendChild(tr);
+    });
   }catch(e){
     $('walletBox').textContent = (lang==='el'?'Σφάλμα φόρτωσης πορτοφολιού: ':'Error loading wallet: ')+e;
   }

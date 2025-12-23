@@ -33,6 +33,7 @@ import requests
 from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, url_for, send_file
 from werkzeug.utils import secure_filename
 from apscheduler.schedulers.background import BackgroundScheduler
+from evm_api import register_evm_routes
 
 # ── Local modules
 try:
@@ -64,6 +65,11 @@ except ImportError:
 
 # ─── CONFIG ────────────────────────────────────────
 app = Flask(__name__)
+
+# ─── EVM INTEGRATION ────────────────────────────────────────────────────
+register_evm_routes(app, DATA_DIR, LEDGER_FILE, CHAIN_FILE, PLEDGE_CHAIN)
+print("[SERVER] EVM routes registered")
+
 
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -821,6 +827,12 @@ def gateway_page():
 
 # Learn‑to‑Earn courses page
 @app.route("/courses")
+
+@app.route("/evm")
+def evm_page():
+    """Render the EVM smart contracts interface."""
+    return render_template("evm.html")
+
 def courses_page():
     """
     Render the Learn‑to‑Earn courses interface.  This page allows users to

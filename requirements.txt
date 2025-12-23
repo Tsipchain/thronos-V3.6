@@ -10,5 +10,5 @@ matplotlib
 APScheduler
 pycryptodomex
 openai
-google-generativeai
+google.genai
 stripe

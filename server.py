@@ -139,10 +139,6 @@ L2E_LEDGER_FILE = os.path.join(DATA_DIR, "l2e_ledger.json")
 # Courses registry for Learn‑to‑Earn
 COURSES_FILE = os.path.join(DATA_DIR, "courses.json")
 
-# Music registry and licenses for the decentralized record label
-MUSIC_TRACKS_FILE   = os.path.join(DATA_DIR, "music_tracks.json")
-MUSIC_LICENSES_FILE = os.path.join(DATA_DIR, "music_licenses.json")
-
 # --- P2P Networking Config ---
 #
 # A simple peer registry is stored in ``peers.json`` under ``DATA_DIR``.  Each entry
@@ -153,6 +149,21 @@ MUSIC_LICENSES_FILE = os.path.join(DATA_DIR, "music_licenses.json")
 # introducing additional dependencies.
 
 PEERS_FILE = os.path.join(DATA_DIR, "peers.json")
+
+# --- Tokens & DeFi Config (New for V3.8) ---
+#
+# To support community‑issued meme coins and basic automated market maker (AMM)
+# pools, we maintain registries for tokens and liquidity pools.  Each token
+# has an entry in ``tokens.json`` with its symbol, name, total supply,
+# decimals and owner.  Balances for each token are stored in
+# ``token_balances.json`` keyed by token symbol and address.  Pools are
+# recorded in ``pools.json``, storing reserves and provider shares for each
+# pair.  These data structures are intentionally simple and serve as a
+# proof‑of‑concept for a more sophisticated DeFi layer in future releases.
+
+TOKENS_FILE         = os.path.join(DATA_DIR, "tokens.json")
+TOKEN_BALANCES_FILE = os.path.join(DATA_DIR, "token_balances.json")
+POOLS_FILE          = os.path.join(DATA_DIR, "pools.json")
 
 # --- Stripe Config ---
 # PLEASE UPDATE THESE WITH YOUR REAL KEYS
@@ -197,6 +208,30 @@ def load_mempool():
 def save_mempool(pool):
     save_json(MEMPOOL_FILE, pool)
 
+# ─── Token & Pool Helpers ────────────────────────────────────────────
+
+def load_tokens():
+    """Load the list of issued tokens from ``TOKENS_FILE``."""
+    return load_json(TOKENS_FILE, [])
+
+def save_tokens(tokens):
+    """Persist the list of tokens to ``TOKENS_FILE``."""
+    save_json(TOKENS_FILE, tokens)
+
+def load_token_balances():
+    """Load token balances per address per symbol."""
+    return load_json(TOKEN_BALANCES_FILE, {})
+
+def save_token_balances(balances):
+    save_json(TOKEN_BALANCES_FILE, balances)
+
+def load_pools():
+    """Load all liquidity pools from ``POOLS_FILE``."""
+    return load_json(POOLS_FILE, [])
+
+def save_pools(pools):
+    save_json(POOLS_FILE, pools)
+
 def load_attest_store():
     return load_json(ATTEST_STORE_FILE, {})
 
@@ -230,37 +265,6 @@ def load_courses():
 
 def save_courses(courses):
     save_json(COURSES_FILE, courses)
-
-# -------------------------------------------------------------------------
-# Music registry helpers for the decentralized record label
-#
-# Tracks are stored as a list of dictionaries in ``MUSIC_TRACKS_FILE``.
-# Each entry contains:
-#   id: unique UUID string
-#   title: track title
-#   creator: THR address of the original creator/uploader
-#   audio_hash: SHA-256 or other hash identifying the audio file (off‑chain)
-#   cover_hash: hash of cover art image (optional)
-#   price_thr: THR price to purchase a license (float)
-#   splits: list of {address, percent} dicts summing to 100
-#   registered_at: timestamp of registration
-#   royalties_collected: total THR collected from purchases (float)
-#
-# Licenses are persisted separately in ``MUSIC_LICENSES_FILE`` as a list of
-# dictionaries, each recording a single purchase/license event with buyer,
-# amount, track_id, splits and timestamp.
-
-def load_music_tracks():
-    return load_json(MUSIC_TRACKS_FILE, [])
-
-def save_music_tracks(tracks):
-    save_json(MUSIC_TRACKS_FILE, tracks)
-
-def load_music_licenses():
-    return load_json(MUSIC_LICENSES_FILE, [])
-
-def save_music_licenses(licenses):
-    save_json(MUSIC_LICENSES_FILE, licenses)
 
 # -------------------------------------------------------------------------
 # Peer registry and broadcast helpers
@@ -814,6 +818,41 @@ def swap_page():
 @app.route("/gateway")
 def gateway_page():
     return render_template("gateway.html", stripe_key=STRIPE_PUBLISHABLE_KEY)
+
+# Learn‑to‑Earn courses page
+@app.route("/courses")
+def courses_page():
+    """
+    Render the Learn‑to‑Earn courses interface.  This page allows users to
+    browse available courses, enroll by paying in THR, complete courses
+    (rewarding L2E tokens), and create new courses if they are
+    authenticated teachers.  The client‑side logic uses the
+    ``/api/v1/courses`` endpoints for data operations.
+    """
+    return render_template("courses.html")
+
+# Token listing & creation UI
+@app.route("/tokens")
+def tokens_page():
+    """
+    Render the custom token interface.  Users can view all issued
+    tokens, see their own balances and mint new meme coins if
+    authenticated.  Client-side code uses ``/api/v1/tokens`` and
+    ``/api/v1/token_balances`` endpoints for data operations.
+    """
+    return render_template("tokens.html")
+
+# Liquidity pools UI
+@app.route("/pools")
+def pools_page():
+    """
+    Render the liquidity pools interface.  Users can view all existing
+    pools and create new ones by depositing pairs of tokens.  More
+    advanced operations (adding/removing liquidity, swaps) may be
+    integrated in future releases.  Client-side code uses
+    ``/api/v1/pools`` along with the token registry for data.
+    """
+    return render_template("pools.html")
 
 @app.route("/ai_packs")
 def ai_packs_page():
@@ -2058,6 +2097,37 @@ def api_swap():
     update_last_block(tx, is_block=False)
     
     return jsonify(status="success", tx_id=tx_id), 200
+
+# ─── Token Balances API (NEW) ─────────────────────────────────────
+#
+# This endpoint returns all balances for custom tokens held by the
+# specified THR address.  The response is a dictionary keyed by token
+# symbol with the raw float balance.  If the address holds no balance
+# for a given token, that token will simply be absent from the result.
+@app.route("/api/v1/token_balances/<thr_addr>", methods=["GET"])
+def api_v1_token_balances(thr_addr: str):
+    """
+    Return balances for all issued tokens for the given THR address.
+
+    Example response:
+    {
+        "THR": 123.456,
+        "DOGE": 7890.0
+    }
+
+    Decimals are not applied on the backend; the frontend can use the
+    decimals from the token registry for display purposes.
+    """
+    balances = load_token_balances()
+    result = {}
+    for sym, addr_balances in balances.items():
+        try:
+            bal = float(addr_balances.get(thr_addr, 0.0))
+        except Exception:
+            bal = 0.0
+        if bal > 0:
+            result[sym] = bal
+    return jsonify(address=thr_addr, token_balances=result), 200
 
 # ─── GATEWAY API (REAL STRIPE + WITHDRAWALS) ───────────────────────
 @app.route("/api/gateway/create-checkout-session", methods=["POST"])
@@ -3403,67 +3473,70 @@ def api_v1_complete_course(course_id: str):
     save_courses(courses)
     return jsonify(status="success", tx=tx), 200
 
-# ─── Music API ──────────────────────────────────────────────────────────
+
+# ─── Tokens & Pools API ───────────────────────────────────────────────
 #
-# The music API provides a simple decentralized registry and marketplace
-# for audio tracks.  Artists can register their works along with a set
-# of royalty splits.  Buyers can purchase a license by paying THR,
-# which is distributed automatically among the split addresses.
+# These endpoints implement a minimal DeFi layer for community‑issued
+# tokens and liquidity pools.  They are experimental and subject to
+# change in future releases.
 
-@app.route("/api/v1/music/tracks", methods=["GET"])
-def api_v1_get_music_tracks():
-    """Return all registered music tracks."""
-    tracks = load_music_tracks()
-    return jsonify(tracks=tracks), 200
-
-
-@app.route("/api/v1/music/register", methods=["POST"])
-def api_v1_register_music():
+@app.route("/api/v1/tokens", methods=["GET"])
+def api_v1_get_tokens():
     """
-    Register a new music track.  The payload must include:
-        - title: the track title (string)
-        - creator: THR address of the creator/uploader
-        - audio_hash: SHA-256 or other hash of the audio file
-        - cover_hash: optional hash of the cover image
-        - price_thr: purchase price in THR (float >= 0)
-        - splits: list of dicts {"address": THR address, "percent": float}
-        - auth_secret (and optionally passphrase): authentication for the creator
+    List all issued tokens.  Each token entry includes its symbol,
+    name, total supply, decimals and owner.
+    """
+    tokens = load_tokens()
+    return jsonify(tokens=tokens), 200
 
-    The splits must sum to 100 percent.  The creator must have pledged
-    and have send rights, validated via the provided auth secret.
+
+@app.route("/api/v1/tokens", methods=["POST"])
+def api_v1_create_token():
+    """
+    Create a new fungible token (meme coin).  Payload must include:
+      - name: human‑readable token name
+      - symbol: uppercase symbol (1‑8 chars), unique among tokens and distinct from THR
+      - total_supply: positive number of units to mint
+      - decimals: number of decimal places (0‑18)
+      - creator_thr: THR address of the token issuer
+      - auth_secret & optional passphrase: for authenticating the creator
+
+    On success, the token is recorded in ``tokens.json`` and the entire
+    supply is assigned to the creator in ``token_balances.json``.  A
+    ``token_create`` transaction is appended to the chain for auditability.
     """
     data = request.get_json() or {}
-    title = (data.get("title") or "").strip()
-    creator = (data.get("creator") or "").strip()
-    audio_hash = (data.get("audio_hash") or "").strip()
-    cover_hash = (data.get("cover_hash") or "").strip()
-    price_raw = data.get("price_thr", 0)
-    splits = data.get("splits") or []
+    name = (data.get("name") or "").strip()
+    symbol = (data.get("symbol") or "").strip().upper()
+    total_raw = data.get("total_supply", 0)
+    decimals = data.get("decimals", 0)
+    creator = (data.get("creator_thr") or "").strip()
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
-    # Basic validation
+    # Validate inputs
     try:
-        price = float(price_raw)
+        total_supply = float(total_raw)
     except (TypeError, ValueError):
-        return jsonify(status="error", message="Invalid price"), 400
-    if not title or not creator or not audio_hash or price < 0 or not splits:
-        return jsonify(status="error", message="Missing required fields"), 400
-    # Validate splits: each entry must have address and percent; sum == 100
-    total_percent = 0.0
-    normalized_splits = []
-    for s in splits:
-        addr = (s.get("address") or "").strip()
-        try:
-            pct = float(s.get("percent", 0))
-        except (TypeError, ValueError):
-            return jsonify(status="error", message="Invalid split percent"), 400
-        if not addr or pct <= 0:
-            return jsonify(status="error", message="Invalid split entry"), 400
-        total_percent += pct
-        normalized_splits.append({"address": addr, "percent": pct})
-    if abs(total_percent - 100.0) > 0.001:
-        return jsonify(status="error", message="Splits must sum to 100"), 400
-    # Authenticate creator using pledge send secret
+        return jsonify(status="error", message="Invalid total_supply"), 400
+    if not name or not symbol or total_supply <= 0:
+        return jsonify(status="error", message="Missing or invalid fields"), 400
+    if not creator or not auth_secret:
+        return jsonify(status="error", message="Missing creator or auth_secret"), 400
+    if len(symbol) > 8 or not symbol.isalnum():
+        return jsonify(status="error", message="Symbol must be 1‑8 alphanumeric chars"), 400
+    if symbol in ("THR", "WBTC"):
+        return jsonify(status="error", message="Symbol reserved"), 400
+    try:
+        decimals_int = int(decimals)
+    except (TypeError, ValueError):
+        return jsonify(status="error", message="Invalid decimals"), 400
+    if decimals_int < 0 or decimals_int > 18:
+        return jsonify(status="error", message="Decimals out of range (0‑18)"), 400
+    # Check uniqueness
+    tokens = load_tokens()
+    if any(t.get("symbol") == symbol for t in tokens):
+        return jsonify(status="error", message="Token symbol already exists"), 400
+    # Authenticate creator via pledge send auth
     pledges = load_json(PLEDGE_CHAIN, [])
     creator_pledge = next((p for p in pledges if p.get("thr_address") == creator), None)
     if not creator_pledge:
@@ -3479,150 +3552,89 @@ def api_v1_register_music():
         auth_string = f"{auth_secret}:auth"
     if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
         return jsonify(status="error", message="Invalid auth"), 403
-    # Create track entry
-    tracks = load_music_tracks()
-    track_id = str(uuid.uuid4())
-    new_track = {
-        "id": track_id,
-        "title": title,
-        "creator": creator,
-        "audio_hash": audio_hash,
-        "cover_hash": cover_hash,
-        "price_thr": round(price, 6),
-        "splits": normalized_splits,
-        "registered_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-        "royalties_collected": 0.0
+    # Create token
+    token_id = str(uuid.uuid4())
+    new_token = {
+        "id": token_id,
+        "name": name,
+        "symbol": symbol,
+        "total_supply": round(total_supply, decimals_int),
+        "decimals": decimals_int,
+        "owner": creator
     }
-    tracks.append(new_track)
-    save_music_tracks(tracks)
-    return jsonify(status="success", track=new_track), 201
-
-
-@app.route("/api/v1/music/<string:track_id>", methods=["GET"])
-def api_v1_get_music_track(track_id: str):
-    """Return details of a specific music track."""
-    tracks = load_music_tracks()
-    track = next((t for t in tracks if t.get("id") == track_id), None)
-    if not track:
-        return jsonify(error="track_not_found", track_id=track_id), 404
-    return jsonify(track=track), 200
-
-
-@app.route("/api/v1/music/purchase", methods=["POST"])
-def api_v1_purchase_music():
-    """
-    Purchase a license for a music track.  The payload must include:
-        - track_id: ID of the track to purchase
-        - buyer: THR address of the buyer
-        - auth_secret & optional passphrase: authentication for the buyer
-
-    The purchase price is taken from the track record.  The buyer's THR
-    balance is debited by price plus the burn fee.  Each split address
-    receives their pro‑rata share of the price.  A ``music_payment``
-    transaction is appended to the mempool and the purchase is recorded
-    in the licenses file.
-    """
-    data = request.get_json() or {}
-    track_id = (data.get("track_id") or "").strip()
-    buyer = (data.get("buyer") or "").strip()
-    auth_secret = (data.get("auth_secret") or "").strip()
-    passphrase = (data.get("passphrase") or "").strip()
-    if not track_id or not buyer or not auth_secret:
-        return jsonify(status="error", message="Missing required fields"), 400
-    tracks = load_music_tracks()
-    track = next((t for t in tracks if t.get("id") == track_id), None)
-    if not track:
-        return jsonify(status="error", message="Track not found"), 404
-    price = float(track.get("price_thr", 0.0))
-    # Validate buyer pledge and auth
-    pledges = load_json(PLEDGE_CHAIN, [])
-    buyer_pledge = next((p for p in pledges if p.get("thr_address") == buyer), None)
-    if not buyer_pledge:
-        return jsonify(status="error", message="Buyer has not pledged"), 404
-    stored_auth_hash = buyer_pledge.get("send_auth_hash")
-    if not stored_auth_hash:
-        return jsonify(status="error", message="Buyer send not enabled"), 400
-    if buyer_pledge.get("has_passphrase"):
-        if not passphrase:
-            return jsonify(status="error", message="Passphrase required"), 400
-        auth_string = f"{auth_secret}:{passphrase}:auth"
-    else:
-        auth_string = f"{auth_secret}:auth"
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify(status="error", message="Invalid auth"), 403
-    # Determine total cost and fee
-    fee = calculate_dynamic_fee(price)
-    total_cost = price + fee
-    # Load ledger and check buyer balance
-    ledger = load_json(LEDGER_FILE, {})
-    buyer_balance = float(ledger.get(buyer, 0.0))
-    if buyer_balance < total_cost:
-        return jsonify(
-            status="error",
-            message="Insufficient balance",
-            balance=round(buyer_balance, 6),
-            required=round(total_cost, 6)
-        ), 400
-    # Deduct from buyer and distribute to splits
-    ledger[buyer] = round(buyer_balance - total_cost, 6)
-    # Burn the fee (deducted from buyer; not credited)
-    # Credit each split
-    for split in track.get("splits", []):
-        addr = split.get("address")
-        pct = float(split.get("percent", 0))
-        share = (price * pct) / 100.0
-        ledger[addr] = round(float(ledger.get(addr, 0.0)) + share, 6)
-    save_json(LEDGER_FILE, ledger)
-    # Update track royalties
-    track["royalties_collected"] = round(float(track.get("royalties_collected", 0.0)) + price, 6)
-    save_music_tracks(tracks)
-    # Record transaction in chain/mempool
+    tokens.append(new_token)
+    save_tokens(tokens)
+    # Update token balances
+    balances = load_token_balances()
+    if symbol not in balances:
+        balances[symbol] = {}
+    balances[symbol][creator] = round(total_supply, decimals_int)
+    save_token_balances(balances)
+    # Record transaction in chain
     chain = load_json(CHAIN_FILE, [])
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-    tx_id = f"MUSIC-PAY-{len(chain)}-{int(time.time())}-{secrets.token_hex(4)}"
+    tx_id = f"TOKEN-CREATE-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
-        "type": "music_payment",
-        "from": buyer,
-        "to": "splits",
-        "thr_address": buyer,
-        "amount": round(price, 6),
-        "fee_burned": fee,
-        "track_id": track_id,
-        "splits": track.get("splits"),
+        "type": "token_create",
+        "symbol": symbol,
+        "name": name,
+        "decimals": decimals_int,
+        "owner": creator,
+        "total_supply": round(total_supply, decimals_int),
         "timestamp": ts,
         "tx_id": tx_id,
-        "status": "pending",
-        "confirmation_policy": "FAST",
-        "min_signers": 1,
+        "status": "confirmed"
     }
-    pool = load_mempool()
-    pool.append(tx)
-    save_mempool(pool)
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
     update_last_block(tx, is_block=False)
     try:
         broadcast_tx(tx)
     except Exception:
         pass
-    # Append license record
-    licenses = load_music_licenses()
-    license_id = f"LICENSE-{int(time.time())}-{secrets.token_hex(4)}"
-    license_entry = {
-        "license_id": license_id,
-        "track_id": track_id,
-        "buyer": buyer,
-        "amount": round(price, 6),
-        "splits": track.get("splits"),
-        "timestamp": ts
-    }
-    licenses.append(license_entry)
-    save_music_licenses(licenses)
-    return jsonify(status="success", tx=tx, license=license_entry, new_balance=ledger[buyer]), 200
+    return jsonify(status="success", token=new_token), 201
 
 
-# Run AI Wallet Check on Startup
-ensure_ai_wallet()
-recompute_height_offset_from_ledger()  # <-- Initialize offset
+@app.route("/api/v1/pools", methods=["GET"])
+def api_v1_get_pools():
+    """Return the list of all liquidity pools."""
+    pools = load_pools()
+    return jsonify(pools=pools), 200
 
-if __name__=="__main__":
-    port=int(os.getenv("PORT",3333))
-    app.run(host="0.0.0.0", port=port)
+
+@app.route("/api/v1/pools", methods=["POST"])
+def api_v1_create_pool():
+    """
+    Create a new liquidity pool for a pair of tokens.  Payload must include:
+      - token_a: symbol of first token (e.g. THR, WBTC or custom token)
+      - token_b: symbol of second token (must differ from token_a)
+      - amount_a: amount of token_a to deposit
+      - amount_b: amount of token_b to deposit
+      - provider_thr: THR address providing liquidity
+      - auth_secret & optional passphrase: authentication for provider
+
+    The provider must have sufficient balances for both tokens.  Native
+    tokens THR and WBTC are debited from their respective ledgers; custom
+    tokens are debited from ``token_balances.json``.  A new pool entry is
+    created with reserves and a simple share model (shares equal to the
+    geometric mean of the deposits).  No trading fee logic is applied
+    yet.
+    """
+    data = request.get_json() or {}
+    token_a = (data.get("token_a") or "").upper().strip()
+    token_b = (data.get("token_b") or "").upper().strip()
+    amt_a_raw = data.get("amount_a", 0)
+    amt_b_raw = data.get("amount_b", 0)
+    provider = (data.get("provider_thr") or "").strip()
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+    # Basic validation
+    try:
+        amt_a = float(amt_a_raw)
+        amt_b = float(amt_b_raw)
+    except (TypeError, ValueError):
+        return jsonify(status="error", message="Invalid amounts"), 400
+    if not token_a or not token_b or token_a == token_b:
+        return jsonify(status="error", message="Token symbols must be distinct"), 400
+    if amt_a <= 0 or amt_b <= 0:
+        return

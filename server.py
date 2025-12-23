@@ -124,6 +124,17 @@ SWAP_POOL_ADDRESS = "THR_SWAP_POOL_V1"
 GAME_POOL_ADDRESS = "THR_CRYPTO_HUNTERS_POOL"
 GATEWAY_ADDRESS   = "THR_FIAT_GATEWAY_V1"
 
+# --- P2P Networking Config ---
+#
+# A simple peer registry is stored in ``peers.json`` under ``DATA_DIR``.  Each entry
+# is expected to be the base URL of a Thronos node (e.g. ``http://ip:port``).
+# These peers are used for broadcasting new transactions and blocks.  Peers can
+# be added via the ``/api/v1/peers`` POST endpoint.  Keeping the list in a
+# JSON file allows nodes to persist known peers across restarts without
+# introducing additional dependencies.
+
+PEERS_FILE = os.path.join(DATA_DIR, "peers.json")
+
 # --- Stripe Config ---
 # PLEASE UPDATE THESE WITH YOUR REAL KEYS
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "sk_live_...Tuhr") 
@@ -179,6 +190,60 @@ def calculate_dynamic_fee(amount: float) -> float:
     Fee = Max(MIN_FEE, amount * FEE_RATE)
     """
     return round(max(MIN_FEE, amount * FEE_RATE), 6)
+
+# -------------------------------------------------------------------------
+# Peer registry and broadcast helpers
+#
+# Thronos v3.7 introduces a rudimentary peer‑to‑peer network.  Each node
+# maintains a list of known peers in ``peers.json``.  These helpers load and
+# persist the peer list and provide simple broadcast functions for
+# transactions and blocks.  Networking here is best‑effort: failed HTTP
+# requests are silently ignored.  In future versions, failure handling and
+# peer pruning could be added.
+
+def load_peers() -> list:
+    """Load the list of known peer URLs from ``PEERS_FILE``.  Returns an
+    empty list if the file does not exist or is invalid."""
+    return load_json(PEERS_FILE, [])
+
+
+def save_peers(peers: list) -> None:
+    """Persist the peer list to ``PEERS_FILE``."""
+    # ensure unique entries while preserving order
+    seen = set()
+    unique = []
+    for p in peers:
+        if p and p not in seen:
+            seen.add(p)
+            unique.append(p)
+    save_json(PEERS_FILE, unique)
+
+
+def broadcast_tx(tx: dict) -> None:
+    """Broadcast a single transaction to all known peers.  Uses a POST
+    request to the peer's ``/api/v1/receive_tx`` endpoint.  Errors during
+    broadcast are ignored."""
+    peers = load_peers()
+    for peer in peers:
+        try:
+            # ensure trailing slash is not duplicated
+            url = peer.rstrip("/") + "/api/v1/receive_tx"
+            requests.post(url, json=tx, timeout=3)
+        except Exception:
+            pass
+
+
+def broadcast_block(block: dict) -> None:
+    """Broadcast a mined block to all known peers.  Uses a POST
+    request to the peer's ``/api/v1/receive_block`` endpoint.  Errors during
+    broadcast are ignored."""
+    peers = load_peers()
+    for peer in peers:
+        try:
+            url = peer.rstrip("/") + "/api/v1/receive_block"
+            requests.post(url, json=block, timeout=3)
+        except Exception:
+            pass
 
 # --- AI Packs & Credits helpers ------------------------------------------------
 
@@ -1808,8 +1873,14 @@ def send_thr():
     pool=load_mempool()
     pool.append(tx)
     save_mempool(pool)
-    update_last_block(tx,is_block=False)
-    return jsonify(status="pending", tx=tx, new_balance_from=ledger[from_thr], fee_burned=fee),200
+    update_last_block(tx, is_block=False)
+    # Broadcast the new pending transaction to peers.  Best effort –
+    # failures are ignored.
+    try:
+        broadcast_tx(tx)
+    except Exception:
+        pass
+    return jsonify(status="pending", tx=tx, new_balance_from=ledger[from_thr], fee_burned=fee), 200
 
 # ─── SWAP API ──────────────────────────────────────
 @app.route("/api/swap", methods=["POST"])
@@ -2374,10 +2445,17 @@ def submit_block():
     ledger[BURN_ADDRESS]=round(ledger.get(BURN_ADDRESS,0.0)+burn_share,6)
     save_json(LEDGER_FILE,ledger)
 
-    save_json(CHAIN_FILE,chain)
-    update_last_block(new_block,is_block=True)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(new_block, is_block=True)
+    # Broadcast the newly mined block to peers.  This is best‑effort
+    # and failures are ignored.  It allows other nodes to update
+    # their chains without polling.
+    try:
+        broadcast_block(new_block)
+    except Exception:
+        pass
     print(f"⛏️ Miner {thr_address} found block #{height}! R={total_reward} (m/a/b: {miner_share}/{ai_share}/{burn_share}) | TXs: {len(included)} | Stratum={is_stratum}")
-    return jsonify(status="accepted", height=height, reward=miner_share, tx_included=len(included)),200
+    return jsonify(status="accepted", height=height, reward=miner_share, tx_included=len(included)), 200
 
 
 # ─── BACKGROUND MINTER / WATCHDOG ──────────────────
@@ -2612,6 +2690,161 @@ def api_game_submit_score():
     update_last_block(tx, is_block=False)
     
     return jsonify(status="success", reward=reward, tx_id=tx["tx_id"]), 200
+
+# ─── API v1 ENDPOINTS (NEW in v3.7) ──────────────────────────────────────
+#
+# These endpoints expose a stable programmatic interface for external
+# applications (wallets, explorers, integrations) to interact with the
+# Thronos chain.  All endpoints under ``/api/v1`` return JSON responses.
+
+@app.route("/api/v1/balance/<thr_addr>", methods=["GET"])
+def api_v1_balance(thr_addr: str):
+    """Return the current THR balance for the given address."""
+    ledger = load_json(LEDGER_FILE, {})
+    try:
+        bal = round(float(ledger.get(thr_addr, 0.0)), 6)
+    except Exception:
+        bal = 0.0
+    return jsonify(address=thr_addr, balance=bal), 200
+
+
+@app.route("/api/v1/address/<thr_addr>/history", methods=["GET"])
+def api_v1_address_history(thr_addr: str):
+    """Return the on‑chain transaction history for the specified address."""
+    chain = load_json(CHAIN_FILE, [])
+    history = [
+        tx for tx in chain
+        if isinstance(tx, dict) and (tx.get("from") == thr_addr or tx.get("to") == thr_addr)
+    ]
+    return jsonify(address=thr_addr, transactions=history), 200
+
+
+@app.route("/api/v1/block/<int:height>", methods=["GET"])
+def api_v1_block_by_height(height: int):
+    """Fetch a block by its height (1‑based, includes HEIGHT_OFFSET).  If
+    ``height`` is outside the current chain range, respond with a 404."""
+    chain = load_json(CHAIN_FILE, [])
+    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    idx = height - HEIGHT_OFFSET
+    if idx < 0 or idx >= len(blocks):
+        return jsonify(error="block_not_found", height=height), 404
+    block = blocks[idx]
+    return jsonify(block=block, height=height), 200
+
+
+@app.route("/api/v1/blockhash/<string:block_hash>", methods=["GET"])
+def api_v1_block_by_hash(block_hash: str):
+    """Fetch a block by its hash.  Returns 404 if no matching block is
+    found."""
+    chain = load_json(CHAIN_FILE, [])
+    block = next(
+        (b for b in chain if isinstance(b, dict) and b.get("reward") is not None and b.get("block_hash") == block_hash),
+        None,
+    )
+    if not block:
+        return jsonify(error="block_not_found", block_hash=block_hash), 404
+    # Derive height for reference
+    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    height_calc = HEIGHT_OFFSET + blocks.index(block)
+    return jsonify(block=block, height=height_calc), 200
+
+
+@app.route("/api/v1/status", methods=["GET"])
+def api_v1_status():
+    """Return high‑level network status: current tip, block count, mempool
+    size and total supply."""
+    last_summary = load_json(LAST_BLOCK_FILE, {})
+    chain = load_json(CHAIN_FILE, [])
+    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    block_count = HEIGHT_OFFSET + len(blocks)
+    mempool_len = len(load_mempool())
+    total_supply = round(sum(float(v) for v in load_json(LEDGER_FILE, {}).values()), 6)
+    return jsonify(
+        height=last_summary.get("height"),
+        block_hash=last_summary.get("block_hash"),
+        timestamp=last_summary.get("timestamp"),
+        thr_address=last_summary.get("thr_address"),
+        block_count=block_count,
+        mempool=mempool_len,
+        total_supply=total_supply,
+    ), 200
+
+
+@app.route("/api/v1/submit", methods=["POST"])
+def api_v1_submit_transaction():
+    """Submit a signed transaction to the node.  Currently supports only
+    basic THR transfers.  The expected JSON payload mirrors the fields
+    accepted by ``/send_thr``: ``from_thr``, ``to_thr``, ``amount``,
+    ``auth_secret``, and optionally ``passphrase``.  Additional keys are
+    ignored.  A successful call returns the pending transaction and the
+    updated balance of the sender."""
+    # We delegate to the ``send_thr`` function which validates and queues
+    # transactions in the mempool.  ``send_thr`` uses the global
+    # ``request`` context, so we simply return its response.
+    return send_thr()
+
+
+@app.route("/api/v1/peers", methods=["GET"])
+def api_v1_get_peers():
+    """Return the list of known peer URLs."""
+    return jsonify(peers=load_peers()), 200
+
+
+@app.route("/api/v1/peers", methods=["POST"])
+def api_v1_add_peer():
+    """Add a new peer URL to the local registry.  Expects a JSON body
+    containing a ``url`` field.  Duplicate entries are ignored.  Returns the
+    updated list of peers."""
+    data = request.get_json() or {}
+    url = (data.get("url") or "").strip()
+    if not url:
+        return jsonify(error="missing_url"), 400
+    peers = load_peers()
+    if url not in peers:
+        peers.append(url)
+        save_peers(peers)
+    return jsonify(peers=peers), 200
+
+
+@app.route("/api/v1/receive_tx", methods=["POST"])
+def api_v1_receive_tx():
+    """Endpoint for peer nodes to push transactions to this node.  The
+    incoming transaction should be a JSON object conforming to the Thronos
+    transaction schema.  The transaction is appended to the mempool if it
+    does not already exist."""
+    tx = request.get_json() or {}
+    if not isinstance(tx, dict) or not tx.get("tx_id"):
+        return jsonify(error="invalid_tx"), 400
+    pool = load_mempool()
+    if all(t.get("tx_id") != tx.get("tx_id") for t in pool):
+        pool.append(tx)
+        save_mempool(pool)
+    return jsonify(status="accepted"), 200
+
+
+@app.route("/api/v1/receive_block", methods=["POST"])
+def api_v1_receive_block():
+    """Endpoint for peer nodes to push newly mined blocks to this node.
+    This simple implementation verifies that the incoming object has a
+    ``block_hash`` and ``reward`` field before appending it to the chain.  A
+    more complete implementation would perform full validation and fork
+    resolution."""
+    block = request.get_json() or {}
+    if not isinstance(block, dict) or not block.get("block_hash") or block.get("reward") is None:
+        return jsonify(error="invalid_block"), 400
+    chain = load_json(CHAIN_FILE, [])
+    if any(b.get("block_hash") == block.get("block_hash") for b in chain if isinstance(b, dict)):
+        return jsonify(status="duplicate"), 200
+    chain.append(block)
+    save_json(CHAIN_FILE, chain)
+    thr_addr = block.get("thr_address")
+    reward = float(block.get("reward", 0.0))
+    if thr_addr:
+        ledger = load_json(LEDGER_FILE, {})
+        ledger[thr_addr] = round(float(ledger.get(thr_addr, 0.0)) + reward, 6)
+        save_json(LEDGER_FILE, ledger)
+    update_last_block(block, is_block=True)
+    return jsonify(status="added"), 201
 
 # ─── SCHEDULER ─────────────────────────────────────
 scheduler=BackgroundScheduler(daemon=True)

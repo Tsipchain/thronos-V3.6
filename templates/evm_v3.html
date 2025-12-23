@@ -1,0 +1,370 @@
+{% extends "base.html" %}
+
+{% block title %}Thronos EVM - Smart Contracts{% endblock %}
+
+{% block styles %}
+<style>
+    .evm-container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+    }
+    .evm-section {
+        background: #111;
+        border: 1px solid #0f0;
+        padding: 20px;
+        margin-bottom: 20px;
+    }
+    .evm-section h2 {
+        color: #0f0;
+        margin-top: 0;
+    }
+    .form-group {
+        margin-bottom: 15px;
+    }
+    .form-group label {
+        display: block;
+        color: #0f0;
+        margin-bottom: 5px;
+    }
+    .form-group input,
+    .form-group textarea {
+        width: 100%;
+        background: #000;
+        color: #0f0;
+        border: 1px solid #0f0;
+        padding: 8px;
+        font-family: "Courier New", monospace;
+    }
+    .form-group textarea {
+        min-height: 100px;
+        font-size: 12px;
+    }
+    .btn-evm {
+        background: #0f0;
+        color: #000;
+        border: none;
+        padding: 10px 20px;
+        cursor: pointer;
+        font-weight: bold;
+        margin-right: 10px;
+    }
+    .btn-evm:hover {
+        background: #0c0;
+    }
+    .result-box {
+        background: #000;
+        border: 1px dashed #0f0;
+        padding: 15px;
+        margin-top: 15px;
+        font-family: "Courier New", monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        word-break: break-all;
+    }
+    .contract-list {
+        list-style: none;
+        padding: 0;
+    }
+    .contract-item {
+        background: #000;
+        border: 1px solid #0f0;
+        padding: 10px;
+        margin-bottom: 10px;
+    }
+    .contract-item:hover {
+        background: #111;
+    }
+    .tab-buttons {
+        margin-bottom: 20px;
+    }
+    .tab-btn {
+        background: #222;
+        color: #0f0;
+        border: 1px solid #0f0;
+        padding: 10px 20px;
+        cursor: pointer;
+        margin-right: 5px;
+    }
+    .tab-btn.active {
+        background: #0f0;
+        color: #000;
+    }
+    .tab-content {
+        display: none;
+    }
+    .tab-content.active {
+        display: block;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="evm-container">
+    <h1>🔧 <span class="lang-el">Thronos EVM - Έξυπνα Συμβόλαια</span><span class="lang-en">Thronos EVM - Smart Contracts</span></h1>
+    
+    <p>
+        <span class="lang-el">Αναπτύξτε και εκτελέστε έξυπνα συμβόλαια στο δίκτυο Thronos.</span>
+        <span class="lang-en">Deploy and execute smart contracts on the Thronos network.</span>
+    </p>
+
+    <div class="tab-buttons">
+        <button class="tab-btn active" onclick="showTab('deploy')">
+            <span class="lang-el">Ανάπτυξη</span><span class="lang-en">Deploy</span>
+        </button>
+        <button class="tab-btn" onclick="showTab('call')">
+            <span class="lang-el">Κλήση</span><span class="lang-en">Call</span>
+        </button>
+        <button class="tab-btn" onclick="showTab('contracts')">
+            <span class="lang-el">Συμβόλαια</span><span class="lang-en">Contracts</span>
+        </button>
+    </div>
+
+    <!-- Deploy Tab -->
+    <div id="deploy-tab" class="tab-content active">
+        <div class="evm-section">
+            <h2><span class="lang-el">Ανάπτυξη Νέου Συμβολαίου</span><span class="lang-en">Deploy New Contract</span></h2>
+            
+            <div class="form-group">
+                <label><span class="lang-el">THR Διεύθυνση</span><span class="lang-en">THR Address</span>:</label>
+                <input type="text" id="deploy-address" placeholder="THR...">
+            </div>
+            
+            <div class="form-group">
+                <label><span class="lang-el">Auth Secret</span><span class="lang-en">Auth Secret</span>:</label>
+                <input type="password" id="deploy-secret" placeholder="Your auth secret">
+            </div>
+            
+            <div class="form-group">
+                <label><span class="lang-el">Passphrase (προαιρετικό)</span><span class="lang-en">Passphrase (optional)</span>:</label>
+                <input type="password" id="deploy-passphrase" placeholder="Optional passphrase">
+            </div>
+            
+            <div class="form-group">
+                <label><span class="lang-el">Bytecode (hex)</span><span class="lang-en">Bytecode (hex)</span>:</label>
+                <textarea id="deploy-bytecode" placeholder="0x6080604052..."></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label><span class="lang-el">Αξία (THR)</span><span class="lang-en">Value (THR)</span>:</label>
+                <input type="number" id="deploy-value" value="0" step="0.000001">
+            </div>
+            
+            <div class="form-group">
+                <label><span class="lang-el">Gas Limit</span><span class="lang-en">Gas Limit</span>:</label>
+                <input type="number" id="deploy-gas" value="1000000">
+            </div>
+            
+            <button class="btn-evm" onclick="deployContract()">
+                <span class="lang-el">🚀 Ανάπτυξη</span><span class="lang-en">🚀 Deploy</span>
+            </button>
+            
+            <div id="deploy-result" class="result-box" style="display:none;"></div>
+        </div>
+    </div>
+
+    <!-- Call Tab -->
+    <div id="call-tab" class="tab-content">
+        <div class="evm-section">
+            <h2><span class="lang-el">Κλήση Συμβολαίου</span><span class="lang-en">Call Contract</span></h2>
+            
+            <div class="form-group">
+                <label><span class="lang-el">THR Διεύθυνση</span><span class="lang-en">THR Address</span>:</label>
+                <input type="text" id="call-address" placeholder="THR...">
+            </div>
+            
+            <div class="form-group">
+                <label><span class="lang-el">Auth Secret</span><span class="lang-en">Auth Secret</span>:</label>
+                <input type="password" id="call-secret" placeholder="Your auth secret">
+            </div>
+            
+            <div class="form-group">
+                <label><span class="lang-el">Passphrase (προαιρετικό)</span><span class="lang-en">Passphrase (optional)</span>:</label>
+                <input type="password" id="call-passphrase" placeholder="Optional passphrase">
+            </div>
+            
+            <div class="form-group">
+                <label><span class="lang-el">Διεύθυνση Συμβολαίου</span><span class="lang-en">Contract Address</span>:</label>
+                <input type="text" id="call-contract" placeholder="CONTRACT_...">
+            </div>
+            
+            <div class="form-group">
+                <label><span class="lang-el">Call Data (hex)</span><span class="lang-en">Call Data (hex)</span>:</label>
+                <textarea id="call-data" placeholder="0x..."></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label><span class="lang-el">Αξία (THR)</span><span class="lang-en">Value (THR)</span>:</label>
+                <input type="number" id="call-value" value="0" step="0.000001">
+            </div>
+            
+            <div class="form-group">
+                <label><span class="lang-el">Gas Limit</span><span class="lang-en">Gas Limit</span>:</label>
+                <input type="number" id="call-gas" value="100000">
+            </div>
+            
+            <button class="btn-evm" onclick="callContract()">
+                <span class="lang-el">📞 Κλήση</span><span class="lang-en">📞 Call</span>
+            </button>
+            
+            <div id="call-result" class="result-box" style="display:none;"></div>
+        </div>
+    </div>
+
+    <!-- Contracts Tab -->
+    <div id="contracts-tab" class="tab-content">
+        <div class="evm-section">
+            <h2><span class="lang-el">Αναπτυγμένα Συμβόλαια</span><span class="lang-en">Deployed Contracts</span></h2>
+            
+            <button class="btn-evm" onclick="loadContracts()">
+                <span class="lang-el">🔄 Ανανέωση</span><span class="lang-en">🔄 Refresh</span>
+            </button>
+            
+            <ul id="contracts-list" class="contract-list"></ul>
+        </div>
+    </div>
+</div>
+
+<script>
+function showTab(tabName) {
+    // Hide all tabs
+    document.querySelectorAll('.tab-content').forEach(tab => {
+        tab.classList.remove('active');
+    });
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    
+    // Show selected tab
+    document.getElementById(tabName + '-tab').classList.add('active');
+    event.target.classList.add('active');
+}
+
+async function deployContract() {
+    const address = document.getElementById('deploy-address').value.trim();
+    const secret = document.getElementById('deploy-secret').value.trim();
+    const passphrase = document.getElementById('deploy-passphrase').value.trim();
+    const bytecode = document.getElementById('deploy-bytecode').value.trim();
+    const value = parseFloat(document.getElementById('deploy-value').value);
+    const gas_limit = parseInt(document.getElementById('deploy-gas').value);
+    
+    if (!address || !secret || !bytecode) {
+        alert('Please fill in all required fields');
+        return;
+    }
+    
+    const resultBox = document.getElementById('deploy-result');
+    resultBox.style.display = 'block';
+    resultBox.textContent = 'Deploying contract...';
+    
+    try {
+        const response = await fetch('/api/evm/deploy', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                deployer: address,
+                auth_secret: secret,
+                passphrase: passphrase,
+                bytecode: bytecode,
+                value: value,
+                gas_limit: gas_limit
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            resultBox.textContent = `✅ Success!\n\nContract Address: ${data.contract_address}\nTX ID: ${data.tx_id}\nGas Used: ${data.gas_used}\n\n${data.message}`;
+        } else {
+            resultBox.textContent = `❌ Error: ${data.error}`;
+        }
+    } catch (error) {
+        resultBox.textContent = `❌ Error: ${error.message}`;
+    }
+}
+
+async function callContract() {
+    const address = document.getElementById('call-address').value.trim();
+    const secret = document.getElementById('call-secret').value.trim();
+    const passphrase = document.getElementById('call-passphrase').value.trim();
+    const contract = document.getElementById('call-contract').value.trim();
+    const data = document.getElementById('call-data').value.trim();
+    const value = parseFloat(document.getElementById('call-value').value);
+    const gas_limit = parseInt(document.getElementById('call-gas').value);
+    
+    if (!address || !secret || !contract) {
+        alert('Please fill in all required fields');
+        return;
+    }
+    
+    const resultBox = document.getElementById('call-result');
+    resultBox.style.display = 'block';
+    resultBox.textContent = 'Calling contract...';
+    
+    try {
+        const response = await fetch('/api/evm/call', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                caller: address,
+                auth_secret: secret,
+                passphrase: passphrase,
+                contract_address: contract,
+                data: data,
+                value: value,
+                gas_limit: gas_limit
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            resultBox.textContent = `✅ Success!\n\nReturn Data: ${result.return_data}\nGas Used: ${result.gas_used}\nTX ID: ${result.tx_id}`;
+        } else {
+            resultBox.textContent = `❌ Error: ${result.error}\nGas Used: ${result.gas_used}`;
+        }
+    } catch (error) {
+        resultBox.textContent = `❌ Error: ${error.message}`;
+    }
+}
+
+async function loadContracts() {
+    const list = document.getElementById('contracts-list');
+    list.innerHTML = '<li>Loading...</li>';
+    
+    try {
+        const response = await fetch('/api/evm/contracts');
+        const data = await response.json();
+        
+        if (data.contracts && data.contracts.length > 0) {
+            list.innerHTML = '';
+            data.contracts.forEach(contract => {
+                const li = document.createElement('li');
+                li.className = 'contract-item';
+                li.innerHTML = `
+                    <strong>Address:</strong> ${contract.address}<br>
+                    <strong>Deployer:</strong> ${contract.deployer}<br>
+                    <strong>Created:</strong> ${contract.created_at}<br>
+                    <strong>Balance:</strong> ${contract.balance} THR<br>
+                    <button class="btn-evm" onclick="viewContract('${contract.address}')">View Details</button>
+                `;
+                list.appendChild(li);
+            });
+        } else {
+            list.innerHTML = '<li>No contracts deployed yet.</li>';
+        }
+    } catch (error) {
+        list.innerHTML = `<li>Error loading contracts: ${error.message}</li>`;
+    }
+}
+
+function viewContract(address) {
+    document.getElementById('call-contract').value = address;
+    showTab('call');
+    document.querySelectorAll('.tab-btn')[1].classList.add('active');
+}
+
+// Load contracts on page load
+document.addEventListener('DOMContentLoaded', loadContracts);
+</script>
+{% endblock %}

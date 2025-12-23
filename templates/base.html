@@ -100,36 +100,53 @@
       display: block;
     }
     
-    /* Language Toggle */
-    .lang-toggle {
+    /* Top Bar Controls */
+    .top-controls {
         position: absolute;
         top: 10px;
         right: 10px;
-        background: #222;
-        color: #0f0;
-        border: 1px solid #0f0;
-        padding: 5px 10px;
-        cursor: pointer;
+        display: flex;
+        gap: 10px;
         z-index: 100;
     }
-    .lang-en { display: none; }
     
-    /* Wallet Status Indicator (NEW) */
+    /* Wallet Status Indicator */
     .wallet-status {
-        position: absolute;
-        top: 10px;
-        right: 100px; /* Left of lang toggle */
         background: #002200;
         color: #0f0;
         border: 1px solid #004400;
         padding: 5px 10px;
         font-size: 0.8em;
         cursor: pointer;
-        display: none; /* Hidden by default */
+        display: none;
     }
     .wallet-status:hover {
         background: #004400;
     }
+    
+    /* Disconnect Button */
+    .disconnect-btn {
+        background: #220000;
+        color: #f00;
+        border: 1px solid #440000;
+        padding: 5px 10px;
+        font-size: 0.8em;
+        cursor: pointer;
+        display: none;
+    }
+    .disconnect-btn:hover {
+        background: #440000;
+    }
+    
+    /* Language Toggle */
+    .lang-toggle {
+        background: #222;
+        color: #0f0;
+        border: 1px solid #0f0;
+        padding: 5px 10px;
+        cursor: pointer;
+    }
+    .lang-en { display: none; }
 
     /* Utility Classes */
     .highlight { color: #ff0; }
@@ -165,11 +182,15 @@
 </head>
 <body>
 
-<div id="walletStatus" class="wallet-status" onclick="window.location.href='/wallet'">
-    💼 <span id="walletAddrShort"></span>
+<div class="top-controls">
+    <div id="walletStatus" class="wallet-status" onclick="window.location.href='/wallet'">
+        💼 <span id="walletAddrShort"></span>
+    </div>
+    <button id="disconnectBtn" class="disconnect-btn" onclick="disconnectWallet()">
+        ✖ <span class="lang-el">Αποσύνδεση</span><span class="lang-en">Disconnect</span>
+    </button>
+    <button class="lang-toggle" onclick="toggleLanguage()">GR | EN</button>
 </div>
-
-<button class="lang-toggle" onclick="toggleLanguage()">GR | EN</button>
 
 <div class="navbar">
   <ul class="nav-list">
@@ -186,6 +207,7 @@
         <a href="/send">💸 <span class="lang-el">Αποστολή</span><span class="lang-en">Send</span></a>
         <a href="/swap">🔄 Swap</a>
         <a href="/gateway">💳 Gateway</a>
+        <a href="/evm">⚡ <span class="lang-el">Smart Contracts</span><span class="lang-en">Smart Contracts</span></a>
         <a href="/game">🎮 <span class="lang-el">Παιχνίδι</span><span class="lang-en">Game</span></a>
         <a href="/pledge">🔥 <span class="lang-el">Δέσμευση</span><span class="lang-en">Pledge</span></a>
         <a href="/viewer">📦 <span class="lang-el">Εξερευνητής</span><span class="lang-en">Explorer</span></a>
@@ -193,13 +215,14 @@
       </div>
     </li>
 
-    <!-- Services Dropdown (NEW) -->
+    <!-- Services Dropdown -->
     <li class="nav-item">
       <span class="nav-link">🌐 <span class="lang-el">Υπηρεσίες</span><span class="lang-en">Services</span> ▼</span>
       <div class="dropdown-content">
         <a href="/bridge">🌉 <span class="lang-el">Γέφυρα BTC</span><span class="lang-en">BTC Bridge</span></a>
         <a href="/iot">🚗 <span class="lang-el">IoT Κόμβοι</span><span class="lang-en">IoT Nodes</span></a>
         <a href="/chat">🤖 <span class="lang-el">AI Chat</span><span class="lang-en">AI Chat</span></a>
+        <a href="/ai_packs">💎 <span class="lang-el">AI Credits</span><span class="lang-en">AI Credits</span></a>
         <a href="/architect">🏗️ <span class="lang-el">AI Architect</span><span class="lang-en">AI Architect</span></a>
       </div>
     </li>
@@ -250,6 +273,17 @@ function setLanguage(lang) {
     window.dispatchEvent(new CustomEvent('langChanged', { detail: { lang: lang } }));
 }
 
+// Disconnect Wallet Function
+function disconnectWallet() {
+    if (confirm('Are you sure you want to disconnect your wallet?')) {
+        localStorage.removeItem('thr_address');
+        localStorage.removeItem('thr_secret');
+        document.getElementById('walletStatus').style.display = 'none';
+        document.getElementById('disconnectBtn').style.display = 'none';
+        window.location.href = '/';
+    }
+}
+
 // Initialize language and wallet status on load
 document.addEventListener('DOMContentLoaded', () => {
     const savedLang = localStorage.getItem('lang') || 'el';
@@ -259,10 +293,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const wallet = localStorage.getItem('thr_address');
     if (wallet) {
         const short = wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4);
-        const el = document.getElementById('walletStatus');
-        if(el) {
+        const statusEl = document.getElementById('walletStatus');
+        const disconnectEl = document.getElementById('disconnectBtn');
+        
+        if(statusEl) {
             document.getElementById('walletAddrShort').textContent = short;
-            el.style.display = 'block';
+            statusEl.style.display = 'block';
+        }
+        if(disconnectEl) {
+            disconnectEl.style.display = 'block';
         }
     }
 });

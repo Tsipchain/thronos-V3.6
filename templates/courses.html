@@ -1,0 +1,287 @@
+{% extends "base.html" %}
+
+{% block title %}🎓 Learn‑to‑Earn{% endblock %}
+
+{% block styles %}
+<style>
+  .courses-container {
+    max-width: 900px;
+    margin: 0 auto;
+    background: #111;
+    border: 1px solid #0f0;
+    border-radius: 16px;
+    padding: 20px;
+    box-shadow: 0 0 20px rgba(0, 255, 0, 0.1);
+  }
+  .courses-container h2 {
+    margin-top: 0;
+  }
+  .courses-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px;
+  }
+  .courses-table th, .courses-table td {
+    border: 1px solid #0f0;
+    padding: 8px;
+    text-align: left;
+    font-size: 0.9em;
+  }
+  .courses-table th {
+    background: #002200;
+  }
+  .courses-table tr:nth-child(even) {
+    background: #010801;
+  }
+  .courses-table tr:nth-child(odd) {
+    background: #000;
+  }
+  .btn-small {
+    display: inline-block;
+    background: #0f0;
+    color: #000;
+    padding: 6px 12px;
+    font-size: 0.8em;
+    font-weight: bold;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-left: 4px;
+  }
+  .btn-small:hover { background: #0c0; }
+  .form-group {
+    margin-bottom: 10px;
+  }
+  .form-group label {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 0.9em;
+  }
+  .form-group input {
+    width: 100%;
+    padding: 6px;
+    border: 1px solid #333;
+    border-radius: 4px;
+    background: #000;
+    color: #0f0;
+    font-family: monospace;
+  }
+  .form-group input:focus {
+    outline: none;
+    border-color: #0f0;
+  }
+  .section-divider {
+    margin: 30px 0;
+    border-top: 1px dashed #0f0;
+  }
+  #courseMsg {
+    margin-top: 10px;
+    white-space: pre-wrap;
+    font-family: monospace;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="courses-container">
+  <h2>🎓 <span class="lang-el">Μαθήματα (Learn‑to‑Earn)</span><span class="lang-en">Courses</span></h2>
+  <div id="coursesSection">
+    <div id="coursesLoading">Loading courses…</div>
+    <table class="courses-table" id="coursesTable" style="display:none;">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th><span class="lang-el">Τίτλος</span><span class="lang-en">Title</span></th>
+          <th><span class="lang-el">Διδάσκων</span><span class="lang-en">Teacher</span></th>
+          <th><span class="lang-el">Τιμή (THR)</span><span class="lang-en">Price (THR)</span></th>
+          <th><span class="lang-el">Ανταμοιβή (L2E)</span><span class="lang-en">Reward (L2E)</span></th>
+          <th><span class="lang-el">Ενέργειες</span><span class="lang-en">Actions</span></th>
+        </tr>
+      </thead>
+      <tbody id="coursesBody">
+      </tbody>
+    </table>
+  </div>
+  <div class="section-divider"></div>
+  <h3><span class="lang-el">Δημιουργία Μαθήματος</span><span class="lang-en">Create Course</span></h3>
+  <form id="createCourseForm" onsubmit="return submitCourse(event);">
+    <div class="form-group">
+      <label for="courseTitle"><span class="lang-el">Τίτλος</span><span class="lang-en">Title</span></label>
+      <input type="text" id="courseTitle" required>
+    </div>
+    <div class="form-group">
+      <label for="coursePrice"><span class="lang-el">Τιμή σε THR</span><span class="lang-en">Price in THR</span></label>
+      <input type="number" step="0.000001" id="coursePrice" required>
+    </div>
+    <div class="form-group">
+      <label for="courseReward"><span class="lang-el">Ανταμοιβή σε L2E</span><span class="lang-en">Reward in L2E</span></label>
+      <input type="number" step="0.000001" id="courseReward" required>
+    </div>
+    <div class="form-group">
+      <label for="courseAuth"><span class="lang-el">Μυστικό Καθηγητή (auth_secret)</span><span class="lang-en">Teacher Auth Secret</span></label>
+      <input type="password" id="courseAuth" required>
+    </div>
+    <div class="form-group">
+      <label for="coursePassphrase"><span class="lang-el">Passphrase (αν υπάρχει)</span><span class="lang-en">Passphrase (if any)</span></label>
+      <input type="password" id="coursePassphrase">
+    </div>
+    <button type="submit" class="btn">➕ <span class="lang-el">Δημιουργία</span><span class="lang-en">Create</span></button>
+  </form>
+  <div id="courseMsg"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Helper to shorten THR addresses
+function shortAddr(addr) {
+    return addr ? addr.substring(0, 6) + '...' + addr.substring(addr.length - 4) : '';
+}
+
+async function loadCourses() {
+    const table = document.getElementById('coursesTable');
+    const tbody = document.getElementById('coursesBody');
+    const loading = document.getElementById('coursesLoading');
+    try {
+        const res = await fetch('/api/v1/courses');
+        const data = await res.json();
+        const courses = data.courses || [];
+        tbody.innerHTML = '';
+        if (courses.length === 0) {
+            loading.textContent = 'No courses available yet.';
+            table.style.display = 'none';
+        } else {
+            loading.style.display = 'none';
+            table.style.display = '';
+            courses.forEach(course => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${course.id}</td>
+                    <td>${course.title}</td>
+                    <td>${shortAddr(course.teacher)}</td>
+                    <td>${course.price_thr}</td>
+                    <td>${course.reward_l2e}</td>
+                    <td>
+                      <button class="btn-small" onclick="enrollCourse('${course.id}')">Enroll</button>
+                      <button class="btn-small" onclick="completeCourse('${course.id}')">Complete</button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+    } catch (err) {
+        loading.textContent = 'Error loading courses.';
+        console.error(err);
+    }
+}
+
+async function submitCourse(event) {
+    event.preventDefault();
+    const title = document.getElementById('courseTitle').value.trim();
+    const price = parseFloat(document.getElementById('coursePrice').value) || 0;
+    const reward = parseFloat(document.getElementById('courseReward').value) || 0;
+    const auth = document.getElementById('courseAuth').value.trim();
+    const passphrase = document.getElementById('coursePassphrase').value.trim();
+    const teacher = localStorage.getItem('thr_address') || '';
+    const msgEl = document.getElementById('courseMsg');
+    if (!teacher) {
+        msgEl.textContent = '⚠️ Connect your THR wallet first.';
+        return false;
+    }
+    msgEl.textContent = 'Creating course...';
+    try {
+        const res = await fetch('/api/v1/courses', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                title: title,
+                teacher: teacher,
+                price_thr: price,
+                reward_l2e: reward,
+                auth_secret: auth,
+                passphrase: passphrase
+            })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+            msgEl.textContent = '✅ Course created successfully.';
+            document.getElementById('courseTitle').value = '';
+            document.getElementById('coursePrice').value = '';
+            document.getElementById('courseReward').value = '';
+            document.getElementById('courseAuth').value = '';
+            document.getElementById('coursePassphrase').value = '';
+            loadCourses();
+        } else {
+            msgEl.textContent = '❌ ' + (data.message || 'Error creating course');
+        }
+    } catch (err) {
+        console.error(err);
+        msgEl.textContent = '❌ Error creating course.';
+    }
+    return false;
+}
+
+async function enrollCourse(courseId) {
+    const student = localStorage.getItem('thr_address') || '';
+    const auth = prompt('Enter your auth_secret');
+    const passphrase = prompt('Enter passphrase (leave blank if none)');
+    if (!student || !auth) {
+        alert('Missing wallet or auth_secret');
+        return;
+    }
+    try {
+        const res = await fetch(`/api/v1/courses/${courseId}/enroll`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                student_thr: student,
+                auth_secret: auth,
+                passphrase: passphrase || ''
+            })
+        });
+        const data = await res.json();
+        if (data.status === 'success' || data.message === 'Already enrolled') {
+            alert('Enrolled successfully');
+        } else {
+            alert('Error enrolling: ' + (data.message || data.error));
+        }
+    } catch (err) {
+        console.error(err);
+        alert('Error enrolling');
+    }
+}
+
+async function completeCourse(courseId) {
+    const student = localStorage.getItem('thr_address') || '';
+    const auth = prompt('Enter teacher auth_secret to confirm completion');
+    const passphrase = prompt('Enter passphrase (leave blank if none)');
+    if (!auth) {
+        alert('Missing auth_secret');
+        return;
+    }
+    try {
+        const res = await fetch(`/api/v1/courses/${courseId}/complete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                student_thr: student,
+                auth_secret: auth,
+                passphrase: passphrase || ''
+            })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+            alert('Course completed. L2E reward minted!');
+        } else {
+            alert('Error completing: ' + (data.message || data.error));
+        }
+    } catch (err) {
+        console.error(err);
+        alert('Error completing course');
+    }
+}
+
+// Initialize courses on page load
+document.addEventListener('DOMContentLoaded', loadCourses);
+</script>
+{% endblock %}

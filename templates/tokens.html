@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+
+{% block title %}🪙 Tokens{% endblock %}
+
+{% block styles %}
+<style>
+  .tokens-container {
+    max-width: 900px;
+    margin: 0 auto;
+    background: #111;
+    border: 1px solid #0f0;
+    border-radius: 16px;
+    padding: 20px;
+    box-shadow: 0 0 20px rgba(0, 255, 0, 0.1);
+  }
+  .tokens-container h2 {
+    margin-top: 0;
+  }
+  .tokens-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px;
+  }
+  .tokens-table th, .tokens-table td {
+    border: 1px solid #0f0;
+    padding: 8px;
+    text-align: left;
+    font-size: 0.9em;
+  }
+  .tokens-table th {
+    background: #002200;
+  }
+  .tokens-table tr:nth-child(even) {
+    background: #010801;
+  }
+  .tokens-table tr:nth-child(odd) {
+    background: #000;
+  }
+  .btn-small {
+    display: inline-block;
+    background: #0f0;
+    color: #000;
+    padding: 6px 12px;
+    font-size: 0.8em;
+    font-weight: bold;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-left: 4px;
+  }
+  .btn-small:hover { background: #0c0; }
+  .form-group {
+    margin-bottom: 10px;
+  }
+  .form-group label {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 0.9em;
+  }
+  .form-group input {
+    width: 100%;
+    padding: 6px;
+    border: 1px solid #333;
+    border-radius: 4px;
+    background: #000;
+    color: #0f0;
+    font-family: monospace;
+  }
+  .form-group input:focus {
+    outline: none;
+    border-color: #0f0;
+  }
+  .section-divider {
+    margin: 30px 0;
+    border-top: 1px dashed #0f0;
+  }
+  #tokenMsg {
+    margin-top: 10px;
+    white-space: pre-wrap;
+    font-family: monospace;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="tokens-container">
+  <h2>🪙 <span class="lang-el">Meme Tokens</span><span class="lang-en">Meme Tokens</span></h2>
+  <div id="tokensSection">
+    <div id="tokensLoading">Loading tokens…</div>
+    <table class="tokens-table" id="tokensTable" style="display:none;">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th><span class="lang-el">Όνομα</span><span class="lang-en">Name</span></th>
+          <th><span class="lang-el">Σύμβολο</span><span class="lang-en">Symbol</span></th>
+          <th><span class="lang-el">Προσφορά</span><span class="lang-en">Supply</span></th>
+          <th><span class="lang-el">Δεκαδικά</span><span class="lang-en">Decimals</span></th>
+          <th><span class="lang-el">Ιδιοκτήτης</span><span class="lang-en">Owner</span></th>
+        </tr>
+      </thead>
+      <tbody id="tokensBody">
+      </tbody>
+    </table>
+  </div>
+  <div class="section-divider"></div>
+  <h3><span class="lang-el">Δημιουργία Token</span><span class="lang-en">Create Token</span></h3>
+  <form id="createTokenForm" onsubmit="return submitToken(event);">
+    <div class="form-group">
+      <label for="tokenName"><span class="lang-el">Όνομα</span><span class="lang-en">Name</span></label>
+      <input type="text" id="tokenName" required>
+    </div>
+    <div class="form-group">
+      <label for="tokenSymbol"><span class="lang-el">Σύμβολο</span><span class="lang-en">Symbol</span></label>
+      <input type="text" id="tokenSymbol" maxlength="8" required>
+    </div>
+    <div class="form-group">
+      <label for="tokenSupply"><span class="lang-el">Συνολική Προσφορά</span><span class="lang-en">Total Supply</span></label>
+      <input type="number" step="0.000001" id="tokenSupply" required>
+    </div>
+    <div class="form-group">
+      <label for="tokenDecimals"><span class="lang-el">Δεκαδικά</span><span class="lang-en">Decimals</span></label>
+      <input type="number" step="1" id="tokenDecimals" min="0" max="18" value="6" required>
+    </div>
+    <button type="submit" class="btn-small"><span class="lang-el">Δημιουργία</span><span class="lang-en">Create</span></button>
+  </form>
+  <div id="tokenMsg"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadTokens() {
+  try {
+    const res = await fetch('/api/v1/tokens');
+    const data = await res.json();
+    const table = document.getElementById('tokensTable');
+    const tbody = document.getElementById('tokensBody');
+    tbody.innerHTML = '';
+    if (data.tokens && data.tokens.length > 0) {
+      data.tokens.forEach(tok => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${tok.id}</td><td>${tok.name}</td><td>${tok.symbol}</td><td>${tok.total_supply}</td><td>${tok.decimals}</td><td>${tok.owner}</td>`;
+        tbody.appendChild(tr);
+      });
+      table.style.display = '';
+      document.getElementById('tokensLoading').style.display = 'none';
+    } else {
+      document.getElementById('tokensLoading').textContent = 'No tokens issued yet.';
+    }
+  } catch (e) {
+    document.getElementById('tokensLoading').textContent = 'Error loading tokens.';
+  }
+}
+
+async function submitToken(evt) {
+  evt.preventDefault();
+  const name = document.getElementById('tokenName').value.trim();
+  const symbol = document.getElementById('tokenSymbol').value.trim();
+  const supply = parseFloat(document.getElementById('tokenSupply').value);
+  const decimals = parseInt(document.getElementById('tokenDecimals').value);
+  const creator = localStorage.getItem('thr_address');
+  const secret  = localStorage.getItem('thr_secret');
+  if (!creator || !secret) {
+    alert('Please connect your wallet first (address & secret).');
+    return false;
+  }
+  const payload = {
+    name: name,
+    symbol: symbol,
+    total_supply: supply,
+    decimals: decimals,
+    creator_thr: creator,
+    auth_secret: secret
+  };
+  document.getElementById('tokenMsg').textContent = 'Submitting…';
+  try {
+    const res = await fetch('/api/v1/tokens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (res.status === 201) {
+      document.getElementById('tokenMsg').style.color = '#0f0';
+      document.getElementById('tokenMsg').textContent = '✅ Token created successfully.';
+      await loadTokens();
+      // Reset form
+      document.getElementById('createTokenForm').reset();
+    } else {
+      document.getElementById('tokenMsg').style.color = '#f00';
+      document.getElementById('tokenMsg').textContent = `❌ Error: ${data.message || data.error || 'Unknown error'}`;
+    }
+  } catch (e) {
+    document.getElementById('tokenMsg').style.color = '#f00';
+    document.getElementById('tokenMsg').textContent = '❌ Network error.';
+  }
+  return false;
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadTokens();
+});
+</script>
+{% endblock %}

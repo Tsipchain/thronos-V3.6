@@ -3637,4 +3637,109 @@ def api_v1_create_pool():
     if not token_a or not token_b or token_a == token_b:
         return jsonify(status="error", message="Token symbols must be distinct"), 400
     if amt_a <= 0 or amt_b <= 0:
-        return
+        return jsonify(status="error", message="Amounts must be positive"), 400
+    if not provider or not auth_secret:
+        return jsonify(status="error", message="Missing provider or auth_secret"), 400
+    # Validate provider send rights
+    pledges = load_json(PLEDGE_CHAIN, [])
+    provider_pledge = next((p for p in pledges if p.get("thr_address") == provider), None)
+    if not provider_pledge:
+        return jsonify(status="error", message="Provider has not pledged"), 404
+    stored_auth_hash = provider_pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return jsonify(status="error", message="Provider send not enabled"), 400
+    if provider_pledge.get("has_passphrase"):
+        if not passphrase:
+            return jsonify(status="error", message="Passphrase required"), 400
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify(status="error", message="Invalid auth"), 403
+    # Check provider balances for token_a and token_b
+    # For THR and WBTC, use existing ledgers.  For custom tokens, use token_balances.
+    # Load ledgers
+    thr_ledger = load_json(LEDGER_FILE, {})
+    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+    token_balances = load_token_balances()
+    def check_balance(sym, amt):
+        if sym == "THR":
+            return float(thr_ledger.get(provider, 0.0)) >= amt
+        elif sym == "WBTC":
+            return float(wbtc_ledger.get(provider, 0.0)) >= amt
+        else:
+            return float(token_balances.get(sym, {}).get(provider, 0.0)) >= amt
+    if not check_balance(token_a, amt_a) or not check_balance(token_b, amt_b):
+        return jsonify(status="error", message="Insufficient balance for one of the tokens"), 400
+    # Deduct balances
+    def deduct(sym, amt):
+        if sym == "THR":
+            thr_ledger[provider] = round(float(thr_ledger.get(provider, 0.0)) - amt, 6)
+        elif sym == "WBTC":
+            wbtc_ledger[provider] = round(float(wbtc_ledger.get(provider, 0.0)) - amt, 6)
+        else:
+            token_balances.setdefault(sym, {})
+            token_balances[sym][provider] = round(float(token_balances[sym].get(provider, 0.0)) - amt, 6)
+    deduct(token_a, amt_a)
+    deduct(token_b, amt_b)
+    save_json(LEDGER_FILE, thr_ledger)
+    save_json(WBTC_LEDGER_FILE, wbtc_ledger)
+    save_token_balances(token_balances)
+    # Create pool
+    pools = load_pools()
+    # Ensure pool doesn't already exist
+    for p in pools:
+        if (p.get("token_a") == token_a and p.get("token_b") == token_b) or (p.get("token_a") == token_b and p.get("token_b") == token_a):
+            return jsonify(status="error", message="Pool already exists"), 400
+    pool_id = str(uuid.uuid4())
+    # Compute shares as geometric mean (simplified constant product)
+    try:
+        shares = (amt_a * amt_b) ** 0.5
+    except Exception:
+        shares = min(amt_a, amt_b)
+    new_pool = {
+        "id": pool_id,
+        "token_a": token_a,
+        "token_b": token_b,
+        "reserves_a": round(amt_a, 6),
+        "reserves_b": round(amt_b, 6),
+        "total_shares": round(shares, 6),
+        "providers": {
+            provider: round(shares, 6)
+        }
+    }
+    pools.append(new_pool)
+    save_pools(pools)
+    # Record transaction
+    chain = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx_id = f"POOL-CREATE-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "pool_create",
+        "pool_id": pool_id,
+        "token_a": token_a,
+        "token_b": token_b,
+        "deposited_a": amt_a,
+        "deposited_b": amt_b,
+        "provider": provider,
+        "timestamp": ts,
+        "tx_id": tx_id,
+        "status": "confirmed"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+    try:
+        broadcast_tx(tx)
+    except Exception:
+        pass
+    return jsonify(status="success", pool=new_pool), 201
+
+
+# Run AI Wallet Check on Startup
+ensure_ai_wallet()
+recompute_height_offset_from_ledger()  # <-- Initialize offset
+
+if __name__=="__main__":
+    port=int(os.getenv("PORT",3333))
+    app.run(host="0.0.0.0", port=port)

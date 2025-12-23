@@ -124,6 +124,25 @@ SWAP_POOL_ADDRESS = "THR_SWAP_POOL_V1"
 GAME_POOL_ADDRESS = "THR_CRYPTO_HUNTERS_POOL"
 GATEWAY_ADDRESS   = "THR_FIAT_GATEWAY_V1"
 
+# --- Learn‑to‑Earn Token Config ---
+#
+# A separate ledger is maintained for the Learn‑to‑Earn (L2E) token.  This
+# token is minted as a reward for students who complete coursework and can
+# be freely transferred between addresses.  A dedicated admin endpoint is
+# provided to mint L2E tokens, analogous to the THR mint endpoint used by
+# the BTC bridge.  The L2E ledger is persisted in ``l2e_ledger.json``
+# under ``DATA_DIR``.  Initial balances are empty unless minted or
+# transferred.
+
+L2E_LEDGER_FILE = os.path.join(DATA_DIR, "l2e_ledger.json")
+
+# Courses registry for Learn‑to‑Earn
+COURSES_FILE = os.path.join(DATA_DIR, "courses.json")
+
+# Music registry and licenses for the decentralized record label
+MUSIC_TRACKS_FILE   = os.path.join(DATA_DIR, "music_tracks.json")
+MUSIC_LICENSES_FILE = os.path.join(DATA_DIR, "music_licenses.json")
+
 # --- P2P Networking Config ---
 #
 # A simple peer registry is stored in ``peers.json`` under ``DATA_DIR``.  Each entry
@@ -190,6 +209,58 @@ def calculate_dynamic_fee(amount: float) -> float:
     Fee = Max(MIN_FEE, amount * FEE_RATE)
     """
     return round(max(MIN_FEE, amount * FEE_RATE), 6)
+
+# -------------------------------------------------------------------------
+# Course registry helpers for Learn‑to‑Earn
+#
+# Courses are persisted in a simple JSON file under ``COURSES_FILE``.
+# Each course is represented as a dictionary with the following keys:
+#   id: unique identifier (UUID string)
+#   title: human‑readable name
+#   teacher: THR address of the instructor
+#   price_thr: cost in THR tokens to enroll (float)
+#   reward_l2e: L2E token reward for completion (float)
+#   students: list of THR addresses currently enrolled
+#   completed: list of THR addresses who have completed the course
+#
+# These helpers load and save the course list.
+
+def load_courses():
+    return load_json(COURSES_FILE, [])
+
+def save_courses(courses):
+    save_json(COURSES_FILE, courses)
+
+# -------------------------------------------------------------------------
+# Music registry helpers for the decentralized record label
+#
+# Tracks are stored as a list of dictionaries in ``MUSIC_TRACKS_FILE``.
+# Each entry contains:
+#   id: unique UUID string
+#   title: track title
+#   creator: THR address of the original creator/uploader
+#   audio_hash: SHA-256 or other hash identifying the audio file (off‑chain)
+#   cover_hash: hash of cover art image (optional)
+#   price_thr: THR price to purchase a license (float)
+#   splits: list of {address, percent} dicts summing to 100
+#   registered_at: timestamp of registration
+#   royalties_collected: total THR collected from purchases (float)
+#
+# Licenses are persisted separately in ``MUSIC_LICENSES_FILE`` as a list of
+# dictionaries, each recording a single purchase/license event with buyer,
+# amount, track_id, splits and timestamp.
+
+def load_music_tracks():
+    return load_json(MUSIC_TRACKS_FILE, [])
+
+def save_music_tracks(tracks):
+    save_json(MUSIC_TRACKS_FILE, tracks)
+
+def load_music_licenses():
+    return load_json(MUSIC_LICENSES_FILE, [])
+
+def save_music_licenses(licenses):
+    save_json(MUSIC_LICENSES_FILE, licenses)
 
 # -------------------------------------------------------------------------
 # Peer registry and broadcast helpers
@@ -1787,18 +1858,21 @@ def pledge_submit():
 
 @app.route("/wallet_data/<thr_addr>")
 def wallet_data(thr_addr):
-    ledger=load_json(LEDGER_FILE,{})
-    wbtc_ledger=load_json(WBTC_LEDGER_FILE,{}) # NEW
-    
-    chain=load_json(CHAIN_FILE,[])
-    bal=round(float(ledger.get(thr_addr,0.0)),6)
-    wbtc_bal=round(float(wbtc_ledger.get(thr_addr,0.0)),8) # NEW
-    
-    history=[
+    ledger = load_json(LEDGER_FILE, {})
+    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})  # NEW
+    # Load L2E balances from the separate ledger
+    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
+
+    chain = load_json(CHAIN_FILE, [])
+    bal = round(float(ledger.get(thr_addr, 0.0)), 6)
+    wbtc_bal = round(float(wbtc_ledger.get(thr_addr, 0.0)), 8)  # NEW
+    l2e_bal = round(float(l2e_ledger.get(thr_addr, 0.0)), 6)
+
+    history = [
         tx for tx in chain
-        if isinstance(tx,dict) and (tx.get("from")==thr_addr or tx.get("to")==thr_addr)
+        if isinstance(tx, dict) and (tx.get("from") == thr_addr or tx.get("to") == thr_addr)
     ]
-    return jsonify(balance=bal, wbtc_balance=wbtc_bal, transactions=history),200
+    return jsonify(balance=bal, wbtc_balance=wbtc_bal, l2e_balance=l2e_bal, transactions=history), 200
 
 @app.route("/wallet/<thr_addr>")
 def wallet_redirect(thr_addr):
@@ -2853,6 +2927,697 @@ scheduler.add_job(confirm_mempool_if_stuck, "interval", seconds=45)
 scheduler.add_job(aggregator_step, "interval", seconds=10)
 scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30)  # NEW
 scheduler.start()
+
+# ─── ADMIN MINT ENDPOINT (NEW) ───────────────────────────────────────
+#
+# The BTC → THR bridge requires a privileged endpoint to mint new THR
+# tokens when a valid deposit is detected on the Bitcoin network.  The
+# watcher service calls this endpoint with the appropriate secret and
+# target address.  Minted amounts are credited to the specified
+# address and recorded on the chain as a 'mint' transaction.  Only
+# callers providing the correct ``secret`` (matching ``ADMIN_SECRET``)
+# will succeed.
+
+@app.route("/admin/mint", methods=["POST"])
+def admin_mint():
+    data = request.get_json() or {}
+    secret = data.get("secret")
+    thr_addr = data.get("thr_address") or data.get("address")
+    amount_raw = data.get("amount", 0)
+    try:
+        amount = float(amount_raw)
+    except (TypeError, ValueError):
+        return jsonify(status="error", message="Invalid amount"), 400
+    if secret != ADMIN_SECRET:
+        return jsonify(status="error", message="Unauthorized"), 403
+    if not thr_addr or amount <= 0:
+        return jsonify(status="error", message="Missing address or amount"), 400
+
+    # Update ledger
+    ledger = load_json(LEDGER_FILE, {})
+    ledger[thr_addr] = round(float(ledger.get(thr_addr, 0.0)) + amount, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    # Record mint transaction in the chain
+    chain = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx_id = f"MINT-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "mint",
+        "from": "mint",
+        "to": thr_addr,
+        "thr_address": thr_addr,
+        "amount": round(amount, 6),
+        "timestamp": ts,
+        "tx_id": tx_id,
+        "status": "confirmed"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    # Update last_block summary (treat as a non-block update)
+    update_last_block(tx, is_block=False)
+    # Optionally broadcast to peers that a mint occurred
+    try:
+        broadcast_tx(tx)
+    except Exception:
+        pass
+    return jsonify(status="success", tx_id=tx_id, thr_address=thr_addr, new_balance=ledger[thr_addr]), 201
+
+
+# ─── L2E API ────────────────────────────────────────────────────────
+#
+# The Learn‑to‑Earn (L2E) token introduces a second ledger alongside the
+# THR ledger.  Students earn L2E tokens for completing courses, and
+# teachers or authorized administrators may mint L2E tokens on demand.
+# These endpoints mirror the existing THR helper endpoints but operate
+# solely on the L2E ledger.  Transfers of L2E are validated for
+# sufficient balance and recorded on chain as transactions of type
+# ``l2e_transfer``.  Minting is restricted to callers that provide the
+# correct ``ADMIN_SECRET``.
+
+@app.route("/api/v1/l2e/balance/<thr_addr>", methods=["GET"])
+def api_v1_l2e_balance(thr_addr: str):
+    """Return the current L2E balance for the given address."""
+    ledger = load_json(L2E_LEDGER_FILE, {})
+    try:
+        bal = round(float(ledger.get(thr_addr, 0.0)), 6)
+    except Exception:
+        bal = 0.0
+    return jsonify(address=thr_addr, l2e_balance=bal), 200
+
+
+@app.route("/admin/mint_l2e", methods=["POST"])
+def admin_mint_l2e():
+    """
+    Mint new L2E tokens and credit them to the specified address.  The
+    caller must supply the correct ``secret`` (matching ``ADMIN_SECRET``).
+    The payload should include ``thr_address`` (or ``address``) and
+    ``amount``.  A mint transaction of type ``l2e_mint`` is appended to
+    the chain, and the L2E ledger is updated.
+    """
+    data = request.get_json() or {}
+    secret = data.get("secret")
+    thr_addr = data.get("thr_address") or data.get("address")
+    amount_raw = data.get("amount", 0)
+    try:
+        amount = float(amount_raw)
+    except (TypeError, ValueError):
+        return jsonify(status="error", message="Invalid amount"), 400
+    if secret != ADMIN_SECRET:
+        return jsonify(status="error", message="Unauthorized"), 403
+    if not thr_addr or amount <= 0:
+        return jsonify(status="error", message="Missing address or amount"), 400
+    # Update L2E ledger
+    ledger = load_json(L2E_LEDGER_FILE, {})
+    ledger[thr_addr] = round(float(ledger.get(thr_addr, 0.0)) + amount, 6)
+    save_json(L2E_LEDGER_FILE, ledger)
+    # Record mint transaction in chain
+    chain = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx_id = f"L2E-MINT-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "l2e_mint",
+        "from": "mint",
+        "to": thr_addr,
+        "thr_address": thr_addr,
+        "amount": round(amount, 6),
+        "timestamp": ts,
+        "tx_id": tx_id,
+        "status": "confirmed"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+    try:
+        broadcast_tx(tx)
+    except Exception:
+        pass
+    return jsonify(status="success", tx_id=tx_id, thr_address=thr_addr, new_balance=ledger[thr_addr]), 201
+
+
+@app.route("/send_l2e", methods=["POST"])
+def send_l2e():
+    """
+    Transfer L2E tokens from one address to another.  The payload
+    requires ``from_thr``, ``to_thr``, ``amount`` and an ``auth_secret``.
+    The sender must have previously created a THR pledge with a send
+    secret, which is reused here for L2E transfers.  This simple scheme
+    reuses the THR authentication mechanism to authorize L2E spends.
+    """
+    data = request.get_json() or {}
+    from_thr = (data.get("from_thr") or "").strip()
+    to_thr = (data.get("to_thr") or "").strip()
+    amount_raw = data.get("amount", 0)
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+    try:
+        amount = float(amount_raw)
+    except (TypeError, ValueError):
+        return jsonify(error="invalid_amount"), 400
+    if not from_thr or not to_thr:
+        return jsonify(error="missing_from_or_to"), 400
+    if amount <= 0:
+        return jsonify(error="amount_must_be_positive"), 400
+    if not auth_secret:
+        return jsonify(error="missing_auth_secret"), 400
+    # Validate the sender's pledge and auth hash from the THR pledge registry
+    pledges = load_json(PLEDGE_CHAIN, [])
+    sender_pledge = next((p for p in pledges if p.get("thr_address") == from_thr), None)
+    if not sender_pledge:
+        return jsonify(error="unknown_sender_thr"), 404
+    stored_auth_hash = sender_pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return jsonify(error="send_not_enabled_for_this_thr"), 400
+    if sender_pledge.get("has_passphrase"):
+        if not passphrase:
+            return jsonify(error="passphrase_required"), 400
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify(error="invalid_auth"), 403
+    # Update L2E ledger balances
+    ledger = load_json(L2E_LEDGER_FILE, {})
+    sender_balance = float(ledger.get(from_thr, 0.0))
+    if sender_balance < amount:
+        return jsonify(
+            error="insufficient_balance",
+            balance=round(sender_balance, 6),
+            required=amount
+        ), 400
+    ledger[from_thr] = round(sender_balance - amount, 6)
+    ledger[to_thr] = round(float(ledger.get(to_thr, 0.0)) + amount, 6)
+    save_json(L2E_LEDGER_FILE, ledger)
+    # Record transaction in chain and mempool
+    chain = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx_id = f"L2E-TX-{len(chain)}-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "l2e_transfer",
+        "from": from_thr,
+        "to": to_thr,
+        "thr_address": from_thr,
+        "amount": round(amount, 6),
+        "timestamp": ts,
+        "tx_id": tx_id,
+        "status": "pending",
+        "confirmation_policy": "FAST",
+        "min_signers": 1,
+    }
+    pool = load_mempool()
+    pool.append(tx)
+    save_mempool(pool)
+    update_last_block(tx, is_block=False)
+    try:
+        broadcast_tx(tx)
+    except Exception:
+        pass
+    return jsonify(status="pending", tx=tx, new_balance_from=ledger[from_thr]), 200
+
+# ─── Courses API ───────────────────────────────────────────────────────
+#
+# These endpoints manage course creation, enrollment and completion for
+# the Learn‑to‑Earn program.  Courses define a THR price and an L2E
+# reward.  Students enroll by paying the THR cost (plus dynamic fee) to
+# the instructor.  Upon completion, the instructor (or an admin)
+# acknowledges the student's achievement and mints the L2E reward.
+
+@app.route("/api/v1/courses", methods=["GET"])
+def api_v1_get_courses():
+    """Return the list of all courses."""
+    courses = load_courses()
+    return jsonify(courses=courses), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>", methods=["GET"])
+def api_v1_get_course(course_id: str):
+    """Return details of a specific course."""
+    courses = load_courses()
+    course = next((c for c in courses if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(error="course_not_found", course_id=course_id), 404
+    return jsonify(course=course), 200
+
+
+@app.route("/api/v1/courses", methods=["POST"])
+def api_v1_create_course():
+    """
+    Create a new course.  The payload must include:
+        - title: name of the course
+        - teacher: THR address of the instructor
+        - price_thr: cost in THR tokens to enroll
+        - reward_l2e: number of L2E tokens to award upon completion
+        - auth_secret & (optional) passphrase: authentication for teacher
+
+    The teacher must be an existing pledged address with send rights (i.e.
+    they must have previously called pledge).  We verify the ``auth_secret``
+    against the teacher's stored hash.  A new UUID is generated for the
+    course ID.  Initially no students are enrolled.
+    """
+    data = request.get_json() or {}
+    title = (data.get("title") or "").strip()
+    teacher = (data.get("teacher") or "").strip()
+    price_thr_raw = data.get("price_thr", 0)
+    reward_raw = data.get("reward_l2e", 0)
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+    # Validate basic fields
+    try:
+        price_thr = float(price_thr_raw)
+        reward_l2e = float(reward_raw)
+    except (TypeError, ValueError):
+        return jsonify(status="error", message="Invalid price or reward"), 400
+    if not title or not teacher or price_thr < 0 or reward_l2e <= 0:
+        return jsonify(status="error", message="Missing or invalid fields"), 400
+    # Authenticate teacher
+    pledges = load_json(PLEDGE_CHAIN, [])
+    teacher_pledge = next((p for p in pledges if p.get("thr_address") == teacher), None)
+    if not teacher_pledge:
+        return jsonify(status="error", message="Teacher not found or has not pledged"), 404
+    stored_auth_hash = teacher_pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return jsonify(status="error", message="Teacher send not enabled"), 400
+    if teacher_pledge.get("has_passphrase"):
+        if not passphrase:
+            return jsonify(status="error", message="Passphrase required"), 400
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify(status="error", message="Invalid auth"), 403
+    # Create the course
+    courses = load_courses()
+    course_id = str(uuid.uuid4())
+    new_course = {
+        "id": course_id,
+        "title": title,
+        "teacher": teacher,
+        "price_thr": round(price_thr, 6),
+        "reward_l2e": round(reward_l2e, 6),
+        "students": [],
+        "completed": []
+    }
+    courses.append(new_course)
+    save_courses(courses)
+    return jsonify(status="success", course=new_course), 201
+
+
+@app.route("/api/v1/courses/<string:course_id>/enroll", methods=["POST"])
+def api_v1_enroll_course(course_id: str):
+    """
+    Enroll a student in a course.  The payload must include:
+        - student_thr: the enrolling student's THR address
+        - auth_secret & optional passphrase: authentication for student
+
+    The student's THR balance is debited by the course price plus burn fee,
+    and the teacher's balance is credited by the price minus fee.  A
+    ``course_payment`` transaction is added to the mempool.  The student
+    is added to the course's ``students`` list.  Duplicate enrollments
+    return a no‑op success.
+    """
+    data = request.get_json() or {}
+    student = (data.get("student_thr") or "").strip()
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+    if not student or not auth_secret:
+        return jsonify(status="error", message="Missing student or auth_secret"), 400
+    # Fetch the course
+    courses = load_courses()
+    course = next((c for c in courses if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    if student in course.get("students", []):
+        return jsonify(status="success", message="Already enrolled"), 200
+    # Validate student's pledge and auth
+    pledges = load_json(PLEDGE_CHAIN, [])
+    student_pledge = next((p for p in pledges if p.get("thr_address") == student), None)
+    if not student_pledge:
+        return jsonify(status="error", message="Student has not pledged"), 404
+    stored_auth_hash = student_pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return jsonify(status="error", message="Student send not enabled"), 400
+    if student_pledge.get("has_passphrase"):
+        if not passphrase:
+            return jsonify(status="error", message="Passphrase required"), 400
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify(status="error", message="Invalid auth"), 403
+    # Determine cost and fee
+    price = float(course.get("price_thr", 0.0))
+    fee = calculate_dynamic_fee(price)
+    total_cost = price + fee
+    # Load THR ledger
+    ledger = load_json(LEDGER_FILE, {})
+    student_balance = float(ledger.get(student, 0.0))
+    if student_balance < total_cost:
+        return jsonify(
+            status="error",
+            message="Insufficient balance",
+            balance=round(student_balance, 6),
+            required=round(total_cost, 6)
+        ), 400
+    # Deduct from student and credit teacher
+    ledger[student] = round(student_balance - total_cost, 6)
+    teacher = course.get("teacher")
+    ledger[teacher] = round(float(ledger.get(teacher, 0.0)) + price, 6)
+    save_json(LEDGER_FILE, ledger)
+    # Record transaction
+    chain = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx_id = f"COURSE-PAY-{len(chain)}-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "course_payment",
+        "from": student,
+        "to": teacher,
+        "thr_address": student,
+        "amount": round(price, 6),
+        "fee_burned": fee,
+        "course_id": course_id,
+        "timestamp": ts,
+        "tx_id": tx_id,
+        "status": "pending",
+        "confirmation_policy": "FAST",
+        "min_signers": 1,
+    }
+    # Burn the fee by sending to the burn address (deducted in ledger)
+    # Note: We do not credit the fee anywhere; it is effectively removed.
+    pool = load_mempool()
+    pool.append(tx)
+    save_mempool(pool)
+    update_last_block(tx, is_block=False)
+    try:
+        broadcast_tx(tx)
+    except Exception:
+        pass
+    # Enroll student
+    course.setdefault("students", []).append(student)
+    save_courses(courses)
+    return jsonify(status="success", tx=tx, new_balance_from=ledger[student]), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/complete", methods=["POST"])
+def api_v1_complete_course(course_id: str):
+    """
+    Mark a student's course as completed and award their L2E reward.  The
+    payload must include:
+        - student_thr: THR address of the student
+        - teacher_thr: THR address of the instructor
+        - auth_secret & optional passphrase: authentication for the teacher
+
+    The function verifies the teacher is indeed the course creator and
+    authenticates them.  The student must be enrolled and not already
+    completed.  Upon success, the student's L2E balance is credited via
+    internal minting (similar to /admin/mint_l2e) and a transaction of
+    type ``l2e_reward`` is recorded.  The student is added to the
+    ``completed`` list of the course.
+    """
+    data = request.get_json() or {}
+    student = (data.get("student_thr") or "").strip()
+    teacher = (data.get("teacher_thr") or "").strip()
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+    if not student or not teacher or not auth_secret:
+        return jsonify(status="error", message="Missing required fields"), 400
+    # Fetch course
+    courses = load_courses()
+    course = next((c for c in courses if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    if course.get("teacher") != teacher:
+        return jsonify(status="error", message="Teacher mismatch"), 403
+    # Authenticate teacher
+    pledges = load_json(PLEDGE_CHAIN, [])
+    teacher_pledge = next((p for p in pledges if p.get("thr_address") == teacher), None)
+    if not teacher_pledge:
+        return jsonify(status="error", message="Teacher has not pledged"), 404
+    stored_auth_hash = teacher_pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return jsonify(status="error", message="Teacher send not enabled"), 400
+    if teacher_pledge.get("has_passphrase"):
+        if not passphrase:
+            return jsonify(status="error", message="Passphrase required"), 400
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify(status="error", message="Invalid auth"), 403
+    # Check enrollment and completion status
+    if student not in course.get("students", []):
+        return jsonify(status="error", message="Student not enrolled"), 400
+    if student in course.get("completed", []):
+        return jsonify(status="success", message="Already completed"), 200
+    # Determine reward
+    reward = float(course.get("reward_l2e", 0.0))
+    if reward <= 0:
+        return jsonify(status="error", message="Invalid reward"), 500
+    # Update L2E ledger
+    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
+    l2e_ledger[student] = round(float(l2e_ledger.get(student, 0.0)) + reward, 6)
+    save_json(L2E_LEDGER_FILE, l2e_ledger)
+    # Record reward transaction
+    chain = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx_id = f"L2E-REWARD-{len(chain)}-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "l2e_reward",
+        "from": "course",
+        "to": student,
+        "thr_address": teacher,
+        "amount": round(reward, 6),
+        "course_id": course_id,
+        "timestamp": ts,
+        "tx_id": tx_id,
+        "status": "confirmed"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+    try:
+        broadcast_tx(tx)
+    except Exception:
+        pass
+    # Mark as completed
+    course.setdefault("completed", []).append(student)
+    save_courses(courses)
+    return jsonify(status="success", tx=tx), 200
+
+# ─── Music API ──────────────────────────────────────────────────────────
+#
+# The music API provides a simple decentralized registry and marketplace
+# for audio tracks.  Artists can register their works along with a set
+# of royalty splits.  Buyers can purchase a license by paying THR,
+# which is distributed automatically among the split addresses.
+
+@app.route("/api/v1/music/tracks", methods=["GET"])
+def api_v1_get_music_tracks():
+    """Return all registered music tracks."""
+    tracks = load_music_tracks()
+    return jsonify(tracks=tracks), 200
+
+
+@app.route("/api/v1/music/register", methods=["POST"])
+def api_v1_register_music():
+    """
+    Register a new music track.  The payload must include:
+        - title: the track title (string)
+        - creator: THR address of the creator/uploader
+        - audio_hash: SHA-256 or other hash of the audio file
+        - cover_hash: optional hash of the cover image
+        - price_thr: purchase price in THR (float >= 0)
+        - splits: list of dicts {"address": THR address, "percent": float}
+        - auth_secret (and optionally passphrase): authentication for the creator
+
+    The splits must sum to 100 percent.  The creator must have pledged
+    and have send rights, validated via the provided auth secret.
+    """
+    data = request.get_json() or {}
+    title = (data.get("title") or "").strip()
+    creator = (data.get("creator") or "").strip()
+    audio_hash = (data.get("audio_hash") or "").strip()
+    cover_hash = (data.get("cover_hash") or "").strip()
+    price_raw = data.get("price_thr", 0)
+    splits = data.get("splits") or []
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+    # Basic validation
+    try:
+        price = float(price_raw)
+    except (TypeError, ValueError):
+        return jsonify(status="error", message="Invalid price"), 400
+    if not title or not creator or not audio_hash or price < 0 or not splits:
+        return jsonify(status="error", message="Missing required fields"), 400
+    # Validate splits: each entry must have address and percent; sum == 100
+    total_percent = 0.0
+    normalized_splits = []
+    for s in splits:
+        addr = (s.get("address") or "").strip()
+        try:
+            pct = float(s.get("percent", 0))
+        except (TypeError, ValueError):
+            return jsonify(status="error", message="Invalid split percent"), 400
+        if not addr or pct <= 0:
+            return jsonify(status="error", message="Invalid split entry"), 400
+        total_percent += pct
+        normalized_splits.append({"address": addr, "percent": pct})
+    if abs(total_percent - 100.0) > 0.001:
+        return jsonify(status="error", message="Splits must sum to 100"), 400
+    # Authenticate creator using pledge send secret
+    pledges = load_json(PLEDGE_CHAIN, [])
+    creator_pledge = next((p for p in pledges if p.get("thr_address") == creator), None)
+    if not creator_pledge:
+        return jsonify(status="error", message="Creator has not pledged"), 404
+    stored_auth_hash = creator_pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return jsonify(status="error", message="Creator send not enabled"), 400
+    if creator_pledge.get("has_passphrase"):
+        if not passphrase:
+            return jsonify(status="error", message="Passphrase required"), 400
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify(status="error", message="Invalid auth"), 403
+    # Create track entry
+    tracks = load_music_tracks()
+    track_id = str(uuid.uuid4())
+    new_track = {
+        "id": track_id,
+        "title": title,
+        "creator": creator,
+        "audio_hash": audio_hash,
+        "cover_hash": cover_hash,
+        "price_thr": round(price, 6),
+        "splits": normalized_splits,
+        "registered_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "royalties_collected": 0.0
+    }
+    tracks.append(new_track)
+    save_music_tracks(tracks)
+    return jsonify(status="success", track=new_track), 201
+
+
+@app.route("/api/v1/music/<string:track_id>", methods=["GET"])
+def api_v1_get_music_track(track_id: str):
+    """Return details of a specific music track."""
+    tracks = load_music_tracks()
+    track = next((t for t in tracks if t.get("id") == track_id), None)
+    if not track:
+        return jsonify(error="track_not_found", track_id=track_id), 404
+    return jsonify(track=track), 200
+
+
+@app.route("/api/v1/music/purchase", methods=["POST"])
+def api_v1_purchase_music():
+    """
+    Purchase a license for a music track.  The payload must include:
+        - track_id: ID of the track to purchase
+        - buyer: THR address of the buyer
+        - auth_secret & optional passphrase: authentication for the buyer
+
+    The purchase price is taken from the track record.  The buyer's THR
+    balance is debited by price plus the burn fee.  Each split address
+    receives their pro‑rata share of the price.  A ``music_payment``
+    transaction is appended to the mempool and the purchase is recorded
+    in the licenses file.
+    """
+    data = request.get_json() or {}
+    track_id = (data.get("track_id") or "").strip()
+    buyer = (data.get("buyer") or "").strip()
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+    if not track_id or not buyer or not auth_secret:
+        return jsonify(status="error", message="Missing required fields"), 400
+    tracks = load_music_tracks()
+    track = next((t for t in tracks if t.get("id") == track_id), None)
+    if not track:
+        return jsonify(status="error", message="Track not found"), 404
+    price = float(track.get("price_thr", 0.0))
+    # Validate buyer pledge and auth
+    pledges = load_json(PLEDGE_CHAIN, [])
+    buyer_pledge = next((p for p in pledges if p.get("thr_address") == buyer), None)
+    if not buyer_pledge:
+        return jsonify(status="error", message="Buyer has not pledged"), 404
+    stored_auth_hash = buyer_pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return jsonify(status="error", message="Buyer send not enabled"), 400
+    if buyer_pledge.get("has_passphrase"):
+        if not passphrase:
+            return jsonify(status="error", message="Passphrase required"), 400
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify(status="error", message="Invalid auth"), 403
+    # Determine total cost and fee
+    fee = calculate_dynamic_fee(price)
+    total_cost = price + fee
+    # Load ledger and check buyer balance
+    ledger = load_json(LEDGER_FILE, {})
+    buyer_balance = float(ledger.get(buyer, 0.0))
+    if buyer_balance < total_cost:
+        return jsonify(
+            status="error",
+            message="Insufficient balance",
+            balance=round(buyer_balance, 6),
+            required=round(total_cost, 6)
+        ), 400
+    # Deduct from buyer and distribute to splits
+    ledger[buyer] = round(buyer_balance - total_cost, 6)
+    # Burn the fee (deducted from buyer; not credited)
+    # Credit each split
+    for split in track.get("splits", []):
+        addr = split.get("address")
+        pct = float(split.get("percent", 0))
+        share = (price * pct) / 100.0
+        ledger[addr] = round(float(ledger.get(addr, 0.0)) + share, 6)
+    save_json(LEDGER_FILE, ledger)
+    # Update track royalties
+    track["royalties_collected"] = round(float(track.get("royalties_collected", 0.0)) + price, 6)
+    save_music_tracks(tracks)
+    # Record transaction in chain/mempool
+    chain = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx_id = f"MUSIC-PAY-{len(chain)}-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "music_payment",
+        "from": buyer,
+        "to": "splits",
+        "thr_address": buyer,
+        "amount": round(price, 6),
+        "fee_burned": fee,
+        "track_id": track_id,
+        "splits": track.get("splits"),
+        "timestamp": ts,
+        "tx_id": tx_id,
+        "status": "pending",
+        "confirmation_policy": "FAST",
+        "min_signers": 1,
+    }
+    pool = load_mempool()
+    pool.append(tx)
+    save_mempool(pool)
+    update_last_block(tx, is_block=False)
+    try:
+        broadcast_tx(tx)
+    except Exception:
+        pass
+    # Append license record
+    licenses = load_music_licenses()
+    license_id = f"LICENSE-{int(time.time())}-{secrets.token_hex(4)}"
+    license_entry = {
+        "license_id": license_id,
+        "track_id": track_id,
+        "buyer": buyer,
+        "amount": round(price, 6),
+        "splits": track.get("splits"),
+        "timestamp": ts
+    }
+    licenses.append(license_entry)
+    save_music_licenses(licenses)
+    return jsonify(status="success", tx=tx, license=license_entry, new_balance=ledger[buyer]), 200
+
 
 # Run AI Wallet Check on Startup
 ensure_ai_wallet()

@@ -433,7 +433,7 @@
         </button>
         <div id="session-list" class="session-list">
             <!-- Sessions will be injected here -->
-            <div style="padding:10px; opacity:0.5; font-size:11px;">Enter Wallet to load sessions...</div>
+            <div style="padding:10px; opacity:0.7; font-size:11px;">Enter wallet to load sessions...</div>
         </div>
         <div style="margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px;">
             <a href="/architect" style="color: var(--accent); font-size: 12px; text-decoration: none; display: block; padding: 5px;">
@@ -473,7 +473,7 @@
 
         <div id="messages" class="chat-body">
             <!-- Messages will be injected here -->
-            <div style="text-align:center; margin-top:40px; opacity:0.5;">
+            <div style="text-align:center; margin-top:40px; opacitpadding:10px;">
                 <div>THRONOS QUANTUM CORE</div>
                 <div style="font-size:11px; margin-top:8px;">Select a session or start a new chat.</div>
             </div>
@@ -630,7 +630,7 @@
     async function loadSessions() {
         const wallet = walletInputEl.value.trim();
         if (!wallet) {
-            sessionListEl.innerHTML = '<div style="padding:10px; opacity:0.5; font-size:11px;">Enter Wallet to load sessions...</div>';
+            sessionListEl.innerHTML = '<div style="padding:10px; opacity:0.7; font-size:11px;">Enter wallet to load sessions...</div>';
             return;
         }
 
@@ -679,7 +679,7 @@
                     sessionListEl.appendChild(el);
                 });
             } else {
-                sessionListEl.innerHTML = '<div style="padding:10px; opacity:0.5; font-size:11px;">No sessions found. Start a new chat!</div>';
+                sessionListEl.innerHTML = '<div style="padding:10px; opacitpadding:10px; font-size:11px;">No sessions found. Start a new chat!</div>';
             }
         } catch (e) {
             console.error("Sessions load error:", e);
@@ -702,7 +702,7 @@
             
             if (data.history && Array.isArray(data.history)) {
                 data.history.forEach(msg => {
-                   appendMessage(msg.role, msg.content, `<span style="opacity:0.5">${msg.ts}</span>`); 
+                   appendMessage(msg.role, msg.content, `<span style="opacitpadding:10px">${msg.ts}</span>`); 
                 });
             } else {
                 appendMessage("ai", "Quantum Encryption Verified. New session started.");
@@ -784,7 +784,7 @@
                 // If we were viewing this session, reset the view
                 if (currentSessionId === sid) {
                     currentSessionId = null;
-                    messagesEl.innerHTML = '<div style="text-align:center; margin-top:40px; opacity:0.5;"><div>THRONOS QUANTUM CORE</div><div style="font-size:11px; margin-top:8px;">Session deleted.</div></div>';
+                    messagesEl.innerHTML = '<div style="text-align:center; margin-top:40px; opacitpadding:10px;"><div>THRONOS QUANTUM CORE</div><div style="font-size:11px; margin-top:8px;">Session deleted.</div></div>';
                 }
                 loadSessions();
   setupDragDrop();
@@ -1037,7 +1037,7 @@ async function sendMessage() {
         loadSessions();
   setupDragDrop();
         // Reset view
-        messagesEl.innerHTML = '<div style="text-align:center; margin-top:40px; opacity:0.5;"><div>THRONOS QUANTUM CORE</div><div style="font-size:11px; margin-top:8px;">Wallet loaded. Select a session.</div></div>';
+        messagesEl.innerHTML = '<div style="text-align:center; margin-top:40px; opacitpadding:10px;"><div>THRONOS QUANTUM CORE</div><div style="font-size:11px; margin-top:8px;">Wallet loaded. Select a session.</div></div>';
         currentSessionId = null;
     });
     
@@ -1050,8 +1050,8 @@ async function sendMessage() {
             saveWalletLocal("");
             walletInputEl.value = "";
             setCreditsLabel("infinite");
-            sessionListEl.innerHTML = '<div style="padding:10px; opacity:0.5; font-size:11px;">Enter Wallet to load sessions...</div>';
-            messagesEl.innerHTML = '<div style="text-align:center; margin-top:40px; opacity:0.5;"><div>THRONOS QUANTUM CORE</div><div style="font-size:11px; margin-top:8px;">Wallet disconnected.</div></div>';
+            sessionListEl.innerHTML = '<div style="padding:10px; opacity:0.7; font-size:11px;">Enter wallet to load sessions...</div>';
+            messagesEl.innerHTML = '<div style="text-align:center; margin-top:40px; opacitpadding:10px;"><div>THRONOS QUANTUM CORE</div><div style="font-size:11px; margin-top:8px;">Wallet disconnected.</div></div>';
             currentSessionId = null;
         });
     }

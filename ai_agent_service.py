@@ -2,12 +2,11 @@
 # ThronosAI – Unified AI core (Gemini / OpenAI / Local Blockchain Log)
 #
 # Fixes:
-# - Removed duplicate ThronosAI class definitions
-# - Fixed invalid import/except syntax
-# - Added robust model routing via model_key (gemini-* / gpt-*)
-# - Preserves existing history + block-log behavior
-#
-# NOTE: This file does NOT implement Claude. If UI sends "claude-*" it will be ignored.
+# - Single ThronosAI class (no duplicates)
+# - Correct try/except imports
+# - model_key routing: gemini-* / gpt-* / o* ; "auto" treated as no override
+# - Always returns provider/model/status and includes debug block
+# - Preserves ai_history.json + ai_block_log.json logging
 
 import os
 import time
@@ -30,21 +29,6 @@ except Exception:
 
 
 class ThronosAI:
-    """
-    Ενιαίο AI layer για το Thronos.
-
-    Modes (env THRONOS_AI_MODE):
-        "gemini" -> μόνο Gemini
-        "openai" -> μόνο OpenAI
-        "local"  -> μόνο τοπικό ιστορικό / blockchain log
-        "auto"   -> Gemini -> OpenAI -> local
-
-    Routing by model_key (request parameter):
-        - if model_key starts with "gemini-" -> try Gemini with that model
-        - if model_key starts with "gpt-" or "o" -> try OpenAI with that model
-        - anything else (e.g. "claude-*") is ignored and we use env defaults per mode
-    """
-
     def __init__(self) -> None:
         self.mode = os.getenv("THRONOS_AI_MODE", "auto").lower()
 
@@ -68,22 +52,15 @@ class ThronosAI:
         self.gemini_enabled = bool(self.gemini_api_key and genai)
         self.openai_enabled = bool(self.openai_api_key and OpenAI)
 
-        self.gemini_model = None
         self.openai_client = None
-
-        self._init_gemini()
         self._init_openai()
 
-    # ─── Provider init ──────────────────────────────────────────────────────
-
-    def _init_gemini(self) -> None:
-        if not self.gemini_enabled:
-            return
-        try:
-            genai.configure(api_key=self.gemini_api_key)
-            self.gemini_model = genai.GenerativeModel(self.gemini_model_name)
-        except Exception:
-            self.gemini_model = None
+        # Configure Gemini once (models are created per-request to support overrides cleanly)
+        if self.gemini_enabled:
+            try:
+                genai.configure(api_key=self.gemini_api_key)
+            except Exception:
+                self.gemini_enabled = False
 
     def _init_openai(self) -> None:
         if not self.openai_enabled:
@@ -99,13 +76,26 @@ class ThronosAI:
         return secrets.token_hex(16)
 
     def _base_payload(self, text: str, status: str, provider: str, model: str) -> Dict[str, Any]:
-        return {
+        payload = {
             "response": text,
             "status": status,
             "provider": provider,
             "model": model,
             "quantum_key": self.generate_quantum_key(),
         }
+        return payload
+
+    def _attach_debug(self, ans: Dict[str, Any], requested_model: Optional[str]) -> Dict[str, Any]:
+        try:
+            ans["debug"] = {
+                "requested_model": requested_model,
+                "mode": self.mode,
+                "used_provider": ans.get("provider"),
+                "used_model": ans.get("model"),
+            }
+        except Exception:
+            pass
+        return ans
 
     # ─── History storage ────────────────────────────────────────────────────
 
@@ -175,7 +165,7 @@ class ThronosAI:
     # ─── Provider calls ─────────────────────────────────────────────────────
 
     def _call_gemini(self, prompt: str, model_name: str) -> Dict[str, Any]:
-        if not self.gemini_enabled:
+        if not self.gemini_enabled or not genai:
             raise RuntimeError("Gemini not available (missing key or library)")
         try:
             model = genai.GenerativeModel(model_name)
@@ -255,9 +245,13 @@ class ThronosAI:
     def generate_response(self, prompt: str, wallet: Optional[str] = None, model_key: Optional[str] = None, session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         prompt = (prompt or "").strip()
         if not prompt:
-            return self._base_payload("Empty prompt.", "error", "local", "offline")
+            return self._attach_debug(self._base_payload("Empty prompt.", "error", "local", "offline"), model_key)
 
         mk = (model_key or "").strip().lower()
+        # UI may send "auto" as a dropdown value. Treat as "no override".
+        if mk == "auto":
+            mk = ""
+
         gemini_override = mk if mk.startswith("gemini-") else None
         openai_override = mk if (mk.startswith("gpt-") or mk.startswith("o")) else None
 
@@ -265,7 +259,7 @@ class ThronosAI:
         if self.mode == "local":
             ans = self._local_answer(prompt)
             self._store_history(prompt, ans, wallet)
-            return ans
+            return self._attach_debug(ans, model_key)
 
         # GEMINI ONLY
         if self.mode == "gemini":
@@ -279,7 +273,7 @@ class ThronosAI:
                 ans = self._local_answer(prompt)
                 ans["response"] += "\n\n---\n[Σημείωση provider]: Gemini unavailable: " + str(e)
             self._store_history(prompt, ans, wallet)
-            return ans
+            return self._attach_debug(ans, model_key)
 
         # OPENAI ONLY
         if self.mode == "openai":
@@ -293,7 +287,7 @@ class ThronosAI:
                 ans = self._local_answer(prompt)
                 ans["response"] += "\n\n---\n[Σημείωση provider]: OpenAI unavailable: " + str(e)
             self._store_history(prompt, ans, wallet)
-            return ans
+            return self._attach_debug(ans, model_key)
 
         # AUTO: (model_key asks OpenAI) -> Gemini -> OpenAI -> Local
         last_err = None
@@ -302,25 +296,25 @@ class ThronosAI:
             a = self._call_openai(prompt, openai_override)
             if a["status"] not in ("openai_quota", "openai_error"):
                 self._store_history(prompt, a, wallet)
-                return a
+                return self._attach_debug(a, model_key)
             last_err = a
 
         if self.gemini_enabled:
             a = self._call_gemini(prompt, gemini_override or self.gemini_model_name)
             if a["status"] not in ("gemini_quota", "gemini_error"):
                 self._store_history(prompt, a, wallet)
-                return a
+                return self._attach_debug(a, model_key)
             last_err = a
 
         if self.openai_client:
             a = self._call_openai(prompt, openai_override or self.openai_model_name)
             if a["status"] not in ("openai_quota", "openai_error"):
                 self._store_history(prompt, a, wallet)
-                return a
+                return self._attach_debug(a, model_key)
             last_err = a
 
         local = self._local_answer(prompt)
         if last_err:
             local["response"] += "\n\n---\n[Σημείωση provider]: " + last_err.get("response", "")
         self._store_history(prompt, local, wallet)
-        return local
+        return self._attach_debug(local, model_key)

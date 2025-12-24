@@ -26,7 +26,6 @@
 # - Admin Withdrawal Panel (V5.1)
 
 import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, io, struct, binascii
-import re
 from datetime import datetime
 from PIL import Image
 
@@ -253,6 +252,7 @@ os.makedirs(AI_FILES_DIR, exist_ok=True)
 
 # NEW: αποθήκευση sessions (λίστα συνομιλιών)
 AI_SESSIONS_FILE = os.path.join(DATA_DIR, "ai_sessions.json")
+AI_FILES_INDEX = os.path.join(DATA_DIR, "ai_files_index.json")
 
 ADMIN_SECRET   = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
 
@@ -547,9 +547,54 @@ def save_ai_free_usage(counters):
     save_json(AI_FREE_USAGE_FILE, counters)
 
 def load_ai_sessions():
-    return load_json(AI_SESSIONS_FILE, [])
+
+    """Load AI sessions list (robust to legacy formats)."""
+    def _now():
+        return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+    data = load_json(AI_SESSIONS_FILE, default=[])
+    if isinstance(data, dict):
+        if isinstance(data.get("sessions"), list):
+            data = data["sessions"]
+        else:
+            merged = []
+            for w, lst in data.items():
+                if isinstance(lst, list):
+                    for s in lst:
+                        if isinstance(s, dict) and "wallet" not in s:
+                            s = {**s, "wallet": w}
+                        merged.append(s)
+            data = merged
+
+    if not isinstance(data, list):
+        data = []
+
+    out = []
+    for s in data:
+        if not isinstance(s, dict):
+            continue
+        sid = s.get("id") or s.get("session_id") or str(uuid.uuid4())
+        wallet = (s.get("wallet") or s.get("thr_wallet") or "").strip()
+        created = s.get("created_at") or s.get("created") or _now()
+        updated = s.get("updated_at") or s.get("updated") or created
+        out.append({
+            "id": sid,
+            "wallet": wallet,
+            "title": s.get("title") or s.get("name") or "New Chat",
+            "created_at": created,
+            "updated_at": updated,
+            "archived": bool(s.get("archived", False)),
+            "model": s.get("model") or s.get("ai_model") or None,
+            "message_count": int(s.get("message_count") or s.get("messages_count") or 0),
+            "meta": s.get("meta") if isinstance(s.get("meta"), dict) else {},
+        })
+    return out
 
 def save_ai_sessions(sessions):
+
+    # persist as a plain list for simplicity
+    if not isinstance(sessions, list):
+        sessions = []
     save_json(AI_SESSIONS_FILE, sessions)
 
 def sha256d(data: bytes) -> bytes:
@@ -1822,68 +1867,109 @@ def api_ai_credits():
 
 @app.route("/api/ai/files/upload", methods=["POST"])
 def api_ai_files_upload():
-    """
-    Upload a file from chat UI.
 
-    Expected multipart/form-data:
-      - file: File
-      - wallet: str (optional but recommended)
-      - session_id: str (optional)
-      - purpose: str (optional) e.g. "training" | "context" | "attachment"
-    """
-    wallet = (request.form.get("wallet") or "").strip()
-    session_id = (request.form.get("session_id") or "").strip()
-    purpose = (request.form.get("purpose") or "attachment").strip()
-
-    if "file" not in request.files:
-        return jsonify({"ok": False, "error": "No file provided"}), 400
-
-    f = request.files["file"]
-    if not f or not f.filename:
-        return jsonify({"ok": False, "error": "Empty filename"}), 400
-
-    safe_name = secure_filename(f.filename)
-    os.makedirs(AI_UPLOADS_DIR, exist_ok=True)
-
-    # Key format: <ts>_<wallet>_<session>_<filename>
-    ts = int(time.time())
-    key_parts = [str(ts)]
-    if wallet:
-        key_parts.append(wallet)
-    if session_id:
-        key_parts.append(session_id)
-    key_parts.append(safe_name)
-    key = "_".join(key_parts)
-
-    save_path = os.path.join(AI_UPLOADS_DIR, key)
-    f.save(save_path)
-    size = os.path.getsize(save_path)
-
-    # Persist metadata (small JSON db) if helper exists
+    # Multipart upload: file + wallet + session_id
     try:
+        wallet = (request.form.get("wallet") or "").strip()
+        session_id = (request.form.get("session_id") or request.form.get("sid") or "").strip()
+
+        if "file" not in request.files:
+            return jsonify({"ok": False, "error": "missing file field"}), 400
+
+        f = request.files["file"]
+        if not f or not f.filename:
+            return jsonify({"ok": False, "error": "empty filename"}), 400
+
+        # If wallet/session not provided, accept but store under 'anon'
+        if not wallet:
+            wallet = "anon"
+        if not session_id:
+            session_id = "unsorted"
+
+        os.makedirs(AI_UPLOADS_DIR, exist_ok=True)
+        safe_wallet = re.sub(r"[^A-Za-z0-9_-]+", "_", wallet)[:128]
+        safe_sid = re.sub(r"[^A-Za-z0-9_-]+", "_", session_id)[:128]
+        base_dir = os.path.join(AI_UPLOADS_DIR, safe_wallet, safe_sid)
+        os.makedirs(base_dir, exist_ok=True)
+
+        ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        orig_name = os.path.basename(f.filename)
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", orig_name)[:180]
+        file_id = f"{ts}_{uuid.uuid4().hex}"
+        save_name = f"{file_id}__{safe_name}"
+        save_path = os.path.join(base_dir, save_name)
+        f.save(save_path)
+
+        size = os.path.getsize(save_path)
+        ctype = f.mimetype or mimetypes.guess_type(orig_name)[0] or "application/octet-stream"
+
         meta = {
-            "key": key,
-            "filename": safe_name,
-            "size": size,
+            "id": file_id,
             "wallet": wallet,
             "session_id": session_id,
-            "purpose": purpose,
-            "uploaded_at": ts,
+            "filename": orig_name,
+            "stored_as": save_name,
+            "path": save_path,
+            "size": size,
+            "content_type": ctype,
+            "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
         }
-        register_ai_upload(meta)
-    except Exception:
-        pass
 
-    return jsonify({"ok": True, "key": key, "filename": safe_name, "size": size, "file": {"key": key, "filename": safe_name, "size": size}}), 200
+        # persist meta index
+        files_index = load_json(AI_FILES_INDEX, default={})
+        if not isinstance(files_index, dict):
+            files_index = {}
+        files_index[file_id] = {k: meta[k] for k in ["id","wallet","session_id","filename","stored_as","size","content_type","created_at"]}
+        save_json(AI_FILES_INDEX, files_index)
+
+        return jsonify({"ok": True, "file": files_index[file_id]})
+    except Exception as e:
+        app.logger.exception("upload failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+    file = request.files["file"]
+    if not file or not file.filename:
+        return jsonify({"error": "Empty file"}), 400
+
+    # Optional: enforce guest limits (same as messages)
+    if not wallet and guest_remaining_free_messages(gid) <= 0:
+        return jsonify({"error": "Free limit reached. Connect wallet to upload files."}), 402
+
+    meta = store_uploaded_file(file, owner_wallet=wallet or None, session_id=session_id, owner_guest=gid)
+    resp = jsonify({"ok": True, "file": {k: meta[k] for k in ["file_id","filename","size","content_type","session_id","created_at"]}})
+    if gid:
+        resp.set_cookie(GUEST_COOKIE_NAME, gid, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+    return resp, 200
 
 @app.route("/api/ai/files/<file_id>", methods=["GET"])
 def api_ai_files_get(file_id):
-    idx = load_upload_index()
-    meta = idx.get(file_id)
-    if not meta:
-        return jsonify({"error": "Not found"}), 404
-    wallet = (request.args.get("wallet") or "").strip()
-    gid = request.cookies.get(GUEST_COOKIE_NAME)
+
+    try:
+        files_index = load_json(AI_FILES_INDEX, default={})
+        if not isinstance(files_index, dict) or file_id not in files_index:
+            return jsonify({"ok": False, "error": "file not found"}), 404
+
+        meta = files_index[file_id]
+        wallet = re.sub(r"[^A-Za-z0-9_-]+", "_", (meta.get("wallet") or "anon"))[:128]
+        sid = re.sub(r"[^A-Za-z0-9_-]+", "_", (meta.get("session_id") or "unsorted"))[:128]
+        stored_as = meta.get("stored_as") or ""
+        # rebuild path
+        file_path = os.path.join(AI_UPLOADS_DIR, wallet, sid, stored_as)
+        if not os.path.exists(file_path):
+            return jsonify({"ok": False, "error": "file missing on disk"}), 404
+
+        return send_file(
+            file_path,
+            as_attachment=True,
+            download_name=meta.get("filename") or stored_as,
+            mimetype=meta.get("content_type") or "application/octet-stream",
+            conditional=True,
+        )
+    except Exception as e:
+        app.logger.exception("file get failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
 
     # Ownership check
     if meta.get("wallet"):
@@ -1923,24 +2009,60 @@ def api_ai_history():
 @app.route("/api/ai_sessions", methods=["GET"])
 @app.route("/api/ai/sessions", methods=["GET"])
 def api_ai_sessions():
-    # Return AI chat sessions for a specific wallet.
-    # IMPORTANT: Never return global sessions when wallet is missing.
+
     wallet = (request.args.get("wallet") or "").strip()
     if not wallet:
-        return jsonify({"wallet": "", "sessions": []}), 200
+        return jsonify({"ok": True, "sessions": []})
 
-    sessions = list_ai_sessions(wallet=wallet)
+    try:
+        sessions = load_ai_sessions()
+        sessions = [s for s in sessions if s.get("wallet") == wallet and not s.get("archived")]
+        # newest first
+        def _key(s):
+            return s.get("updated_at") or s.get("created_at") or ""
+        sessions.sort(key=_key, reverse=True)
+        return jsonify({"ok": True, "wallet": wallet, "sessions": sessions})
+    except Exception as e:
+        app.logger.exception("ai_sessions list failed")
+        return jsonify({"ok": False, "error": str(e), "sessions": []}), 500
+
+    # ταξινόμηση με βάση updated_at (πιο πρόσφατη πρώτη)
+    def _key(s):
+        return s.get("updated_at", "")
+    sessions.sort(key=_key, reverse=True)
+
     return jsonify({"wallet": wallet, "sessions": sessions}), 200
 
 @app.route("/api/ai_sessions/start", methods=["POST"])
 @app.route("/api/ai/sessions/start", methods=["POST"])
 def api_ai_session_start():
-    """
-    Δημιουργεί νέα session για ένα wallet.
-    """
-    data = request.get_json() or {}
+
+    data = request.get_json(silent=True) or {}
     wallet = (data.get("wallet") or "").strip()
-    title = (data.get("title") or "").strip()
+    title = (data.get("title") or "").strip() or "New Chat"
+    model = (data.get("model") or "").strip() or None
+
+    if not wallet:
+        return jsonify({"ok": False, "error": "wallet required"}), 400
+
+    sid = secrets.token_hex(8)
+    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    session = {
+        "id": sid,
+        "wallet": wallet,
+        "title": title,
+        "created_at": now,
+        "updated_at": now,
+        "archived": False,
+        "model": model,
+        "message_count": 0,
+        "meta": {},
+    }
+
+    sessions = load_ai_sessions()
+    sessions.append(session)
+    save_ai_sessions(sessions)
+    return jsonify({"ok": True, "session": session})
 
     if not wallet:
         return jsonify(error="Wallet required"), 400
@@ -1965,14 +2087,25 @@ def api_ai_session_start():
 
 @app.route("/api/ai_sessions/rename", methods=["POST"])
 def api_ai_session_rename():
-    """
-    Μετονομάζει μια session.
-    """
-    data = request.get_json() or {}
-    wallet = (data.get("wallet") or "").strip()
-    session_id = (data.get("session_id") or "").strip()
 
-    mode = (data.get("mode") or "archive").strip().lower()  # "archive" (default) or "delete" (purge)
+    data = request.get_json(silent=True) or {}
+    wallet = (data.get("wallet") or "").strip()
+    session_id = (data.get("session_id") or data.get("id") or "").strip()
+    title = (data.get("title") or "").strip()
+
+    if not wallet or not session_id or not title:
+        return jsonify({"ok": False, "error": "wallet, session_id, title required"}), 400
+
+    sessions = load_ai_sessions()
+    for s in sessions:
+        if s.get("id")==session_id and s.get("wallet")==wallet:
+            s["title"]=title
+            s["updated_at"]=datetime.utcnow().isoformat(timespec="seconds")+"Z"
+            save_ai_sessions(sessions)
+            return jsonify({"ok": True, "session": s})
+    return jsonify({"ok": False, "error": "session not found"}), 404
+
+    mode = (data.get("mode") or "delete").strip().lower()
     # mode: "archive" keeps messages for training but hides from UI.
     new_title = (data.get("title") or "").strip()
 
@@ -2009,10 +2142,30 @@ def api_ai_session_rename():
 @app.route("/api/ai_sessions/delete", methods=["POST"])
 @app.route("/api/ai/sessions/delete", methods=["POST"])
 def api_ai_session_delete():
-    data = request.get_json() or {}
-    wallet = (data.get("wallet") or "").strip()
-    session_id = (data.get("session_id") or "").strip()
-    mode = (data.get("mode") or "archive").strip().lower()  # "archive" (default) or "delete" (purge)
+
+    data = request.get_json(silent=True) or {}
+    wallet = (data.get("wallet") or request.args.get("wallet") or "").strip()
+    session_id = (data.get("session_id") or data.get("id") or request.args.get("session_id") or "").strip()
+    if not wallet or not session_id:
+        return jsonify({"ok": False, "error": "wallet and session_id required"}), 400
+
+    try:
+        sessions = load_ai_sessions()
+        changed = False
+        for s in sessions:
+            if s.get("id") == session_id and s.get("wallet") == wallet:
+                # soft-delete: keep for training, hide from UI
+                s["archived"] = True
+                s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                changed = True
+                break
+        if changed:
+            save_ai_sessions(sessions)
+            return jsonify({"ok": True, "archived": True, "session_id": session_id})
+        return jsonify({"ok": False, "error": "session not found"}), 404
+    except Exception as e:
+        app.logger.exception("ai_session delete failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
 
     if not wallet or not session_id:
         return jsonify(error="Missing parameters"), 400

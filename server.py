@@ -979,9 +979,12 @@ def api_architect_generate():
     session_id  = (data.get("session_id") or "").strip() or None
     blueprint   = (data.get("blueprint") or "").strip()
     project_spec = (data.get("spec") or data.get("specs") or "").strip() # Handle both keys just in case
-    model_key   = (data.get("model") or data.get("model_key") or "gpt-4o").strip()
+    model_key   = (data.get("model") or data.get("model_key") or "gemini-2.5-pro").strip()
 
-    if not blueprint or not project_spec:
+    
+    if (model_key or "").strip().lower() == "auto":
+        model_key = ""
+if not blueprint or not project_spec:
         return jsonify(error="Missing blueprint or spec"), 400
 
     # Load blueprint

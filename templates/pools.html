@@ -139,7 +139,7 @@ async function loadPools() {
     if (data.pools && data.pools.length > 0) {
       data.pools.forEach(pool => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${pool.id || ''}</td><td>${pool.token_a}</td><td>${pool.token_b}</td><td>${pool.reserve_a}</td><td>${pool.reserve_b}</td><td>${pool.total_shares || 0}</td>`;
+        tr.innerHTML = `<td>${pool.id || ''}</td><td>${pool.token_a}</td><td>${pool.token_b}</td><td>${(pool.reserves_a ?? pool.reserve_a ?? '')}</td><td>${(pool.reserves_b ?? pool.reserve_b ?? '')}</td><td>${pool.total_shares || 0}</td>`;
         tbody.appendChild(tr);
       });
       table.style.display = '';

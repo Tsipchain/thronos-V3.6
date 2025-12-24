@@ -26,6 +26,7 @@
 # - Admin Withdrawal Panel (V5.1)
 
 import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, io, struct, binascii
+import re
 from datetime import datetime
 from PIL import Image
 
@@ -1821,25 +1822,59 @@ def api_ai_credits():
 
 @app.route("/api/ai/files/upload", methods=["POST"])
 def api_ai_files_upload():
-    wallet = (request.form.get("wallet") or request.args.get("wallet") or "").strip()
-    session_id = (request.form.get("session_id") or "").strip() or None
-    gid = get_or_set_guest_id() if not wallet else None
+    """
+    Upload a file from chat UI.
+
+    Expected multipart/form-data:
+      - file: File
+      - wallet: str (optional but recommended)
+      - session_id: str (optional)
+      - purpose: str (optional) e.g. "training" | "context" | "attachment"
+    """
+    wallet = (request.form.get("wallet") or "").strip()
+    session_id = (request.form.get("session_id") or "").strip()
+    purpose = (request.form.get("purpose") or "attachment").strip()
 
     if "file" not in request.files:
-        return jsonify({"error": "No file provided"}), 400
-    file = request.files["file"]
-    if not file or not file.filename:
-        return jsonify({"error": "Empty file"}), 400
+        return jsonify({"ok": False, "error": "No file provided"}), 400
 
-    # Optional: enforce guest limits (same as messages)
-    if not wallet and guest_remaining_free_messages(gid) <= 0:
-        return jsonify({"error": "Free limit reached. Connect wallet to upload files."}), 402
+    f = request.files["file"]
+    if not f or not f.filename:
+        return jsonify({"ok": False, "error": "Empty filename"}), 400
 
-    meta = store_uploaded_file(file, owner_wallet=wallet or None, session_id=session_id, owner_guest=gid)
-    resp = jsonify({"ok": True, "file": {k: meta[k] for k in ["file_id","filename","size","content_type","session_id","created_at"]}})
-    if gid:
-        resp.set_cookie(GUEST_COOKIE_NAME, gid, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
-    return resp, 200
+    safe_name = secure_filename(f.filename)
+    os.makedirs(AI_UPLOADS_DIR, exist_ok=True)
+
+    # Key format: <ts>_<wallet>_<session>_<filename>
+    ts = int(time.time())
+    key_parts = [str(ts)]
+    if wallet:
+        key_parts.append(wallet)
+    if session_id:
+        key_parts.append(session_id)
+    key_parts.append(safe_name)
+    key = "_".join(key_parts)
+
+    save_path = os.path.join(AI_UPLOADS_DIR, key)
+    f.save(save_path)
+    size = os.path.getsize(save_path)
+
+    # Persist metadata (small JSON db) if helper exists
+    try:
+        meta = {
+            "key": key,
+            "filename": safe_name,
+            "size": size,
+            "wallet": wallet,
+            "session_id": session_id,
+            "purpose": purpose,
+            "uploaded_at": ts,
+        }
+        register_ai_upload(meta)
+    except Exception:
+        pass
+
+    return jsonify({"ok": True, "key": key, "filename": safe_name, "size": size, "file": {"key": key, "filename": safe_name, "size": size}}), 200
 
 @app.route("/api/ai/files/<file_id>", methods=["GET"])
 def api_ai_files_get(file_id):
@@ -1888,22 +1923,13 @@ def api_ai_history():
 @app.route("/api/ai_sessions", methods=["GET"])
 @app.route("/api/ai/sessions", methods=["GET"])
 def api_ai_sessions():
-    """
-    Επιστρέφει όλες τις AI sessions για συγκεκριμένο wallet.
-    """
+    # Return AI chat sessions for a specific wallet.
+    # IMPORTANT: Never return global sessions when wallet is missing.
     wallet = (request.args.get("wallet") or "").strip()
-    sessions = load_ai_sessions()
-    include_deleted = (request.args.get("include_deleted") or "").strip() in ("1","true","yes")
-    if wallet:
-        sessions = [s for s in sessions if s.get("wallet") == wallet]
-    if not include_deleted:
-        sessions = [s for s in sessions if not s.get("deleted")]
+    if not wallet:
+        return jsonify({"wallet": "", "sessions": []}), 200
 
-    # ταξινόμηση με βάση updated_at (πιο πρόσφατη πρώτη)
-    def _key(s):
-        return s.get("updated_at", "")
-    sessions.sort(key=_key, reverse=True)
-
+    sessions = list_ai_sessions(wallet=wallet)
     return jsonify({"wallet": wallet, "sessions": sessions}), 200
 
 @app.route("/api/ai_sessions/start", methods=["POST"])
@@ -1946,7 +1972,7 @@ def api_ai_session_rename():
     wallet = (data.get("wallet") or "").strip()
     session_id = (data.get("session_id") or "").strip()
 
-    mode = (data.get("mode") or "delete").strip().lower()
+    mode = (data.get("mode") or "archive").strip().lower()  # "archive" (default) or "delete" (purge)
     # mode: "archive" keeps messages for training but hides from UI.
     new_title = (data.get("title") or "").strip()
 
@@ -1986,7 +2012,7 @@ def api_ai_session_delete():
     data = request.get_json() or {}
     wallet = (data.get("wallet") or "").strip()
     session_id = (data.get("session_id") or "").strip()
-    mode = (data.get("mode") or "delete").strip().lower()  # "archive" or "delete"
+    mode = (data.get("mode") or "archive").strip().lower()  # "archive" (default) or "delete" (purge)
 
     if not wallet or not session_id:
         return jsonify(error="Missing parameters"), 400

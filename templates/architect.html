@@ -147,10 +147,10 @@
         <div>
             <label>AI Model</label>
             <select id="model-select">
-                <option value="gpt-4o">GPT-4o (OpenAI)</option>
-                <option value="claude-3-5-sonnet">Claude 3.5 Sonnet</option>
-                <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
-            </select>
+<option value="auto">Auto (Smart)</option>
+<option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+<option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+</select>
         </div>
 
         <button id="generate-btn">GENERATE ARCHITECTURE</button>
@@ -170,7 +170,17 @@
     const outputLog = document.getElementById('output-log');
     const statusDisplay = document.getElementById('status-display');
 
-    // Load blueprints
+    
+// Persist a session id for architect iterations
+let sessionId = localStorage.getItem('thronos_architect_session_id');
+if (!sessionId) {
+    sessionId = (crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now().toString(16) + Math.random().toString(16).slice(2));
+    localStorage.setItem('thronos_architect_session_id', sessionId);
+}
+
+// Wallet (optional): reuse whatever the wallet page stores, else empty
+const wallet = localStorage.getItem('thr_wallet') || localStorage.getItem('THR_WALLET') || '';
+// Load blueprints
     async function loadBlueprints() {
         try {
             const res = await fetch('/api/ai_blueprints');
@@ -178,10 +188,8 @@
             if (data.blueprints) {
                 data.blueprints.forEach(bp => {
                     const opt = document.createElement('option');
-                    const filename = (typeof bp === 'string') ? bp : (bp.filename || '');
-                    const title = (typeof bp === 'string') ? bp : (bp.title || bp.filename || filename);
-                    opt.value = filename;
-                    opt.textContent = title;
+                    opt.value = bp.filename;
+                    opt.textContent = bp.title || bp.filename;
                     blueprintSelect.appendChild(opt);
                 });
             }
@@ -211,7 +219,9 @@
             const res = await fetch('/api/architect_generate', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
+                body: JSON.stringify({session_id: sessionId,
+wallet: wallet,
+
                     blueprint: blueprint,
                     project_name: projectName,
                     specs: specs,
@@ -225,8 +235,26 @@
                 outputLog.textContent += "\n\n[ERROR]: " + data.error;
                 statusDisplay.textContent = "Error.";
             } else {
-                outputLog.textContent = data.result;
+                outputLog.textContent = (data.response || data.result || '');
                 statusDisplay.textContent = "Generation Complete.";
+
+// Optional: show generated file list (if provided)
+if (data.files && Array.isArray(data.files) && data.files.length) {
+    outputLog.textContent += "
+
+---
+Files:
+" + data.files.map(f => `- ${f.filename} (${f.size} bytes)`).join("
+");
+}
+
+// Optional: show quantum key + session id
+if (data.quantum_key || data.session_id) {
+    outputLog.textContent += `
+
+---
+Session: ${data.session_id || ''}  Quantum: ${data.quantum_key || ''}`;
+}
             }
 
         } catch (e) {

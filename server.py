@@ -54,6 +54,20 @@ except ImportError as e:
     qc_aggregate = lambda *args: None
     qc_verify = lambda *args: False
 
+# Try to load optional EVM API registration.  In some deployments the evm
+# endpoints are provided via an external module (e.g. `evm_api` or
+# `evm_api_v3`).  If present, it exports a `register_evm_routes(app)`
+# function which will attach additional Flask routes to handle smart
+# contract deployment and invocation.  We attempt to import it here,
+# falling back gracefully if the module is absent.
+try:
+    from evm_api import register_evm_routes
+except Exception:
+    try:
+        from evm_api_v3 import register_evm_routes
+    except Exception:
+        register_evm_routes = None
+
 # ── Stripe Import
 try:
     import stripe
@@ -64,6 +78,19 @@ except ImportError:
 
 # ─── CONFIG ────────────────────────────────────────
 app = Flask(__name__)
+
+# If an EVM API module is available, register its routes now.  This
+# allows the Thronos server to expose smart contract endpoints without
+# requiring the main codebase to import them unconditionally.  The
+# `register_evm_routes` function should accept the Flask app and
+# internally add its own URL rules.  If no EVM API is installed
+# (register_evm_routes is None), nothing happens.
+if 'register_evm_routes' in globals() and register_evm_routes:
+    try:
+        register_evm_routes(app)
+        logger.info("EVM routes registered successfully.")
+    except Exception as _e:
+        logger.error(f"Failed to register EVM routes: {_e}")
 
 # ─── EVM INTEGRATION ────────────────────────────────────────────────────
 
@@ -93,78 +120,24 @@ WITHDRAWALS_FILE    = os.path.join(DATA_DIR, "withdrawals.json") # NEW
 AI_PACKS_FILE       = os.path.join(DATA_DIR, "ai_packs.json")
 AI_CREDITS_FILE     = os.path.join(DATA_DIR, "ai_credits.json")
 
+# File to track how many free demo messages have been used per session_id (or
+# per wallet-less chat).  When a user chats without providing a THR wallet,
+# the server will allow a limited number of free messages.  After the free
+# limit is reached, the AI service will no longer process queries until a
+# wallet is provided.  See `AI_FREE_MESSAGES_LIMIT` below.
+AI_FREE_USAGE_FILE  = os.path.join(DATA_DIR, "ai_free_usage.json")
+
+# How many free demo messages a user can send without a wallet attached.  If a
+# chat request does not include a wallet, the server will look up (or
+# initialize) a counter keyed by the session_id and decrement the remaining
+# allowances.  When the counter reaches zero, chat requests will be denied
+# until a wallet is provided.
+AI_FREE_MESSAGES_LIMIT = int(os.getenv("AI_FREE_MESSAGES_LIMIT", "3"))
+
 # AI extra storage
 AI_FILES_DIR   = os.path.join(DATA_DIR, "ai_files")
 AI_CORPUS_FILE = os.path.join(DATA_DIR, "ai_offline_corpus.json")
 os.makedirs(AI_FILES_DIR, exist_ok=True)
-
-# ─── AI BLUEPRINT SEEDING ─────────────────────────────
-DEFAULT_BLUEPRINTS = {
-    "MySaaSApp.md": """# MySaaSApp Blueprint
-Στόχος: Next.js SaaS εφαρμογή με auth, dashboard, billing (THR), και admin panel.
-
-## Must-have
-- Next.js App Router
-- Tailwind UI (dark neon Thronos)
-- Auth (email/password demo + wallet attach)
-- Pages: Landing, Pricing, Dashboard, Settings, Admin
-- API routes για: sessions, billing, usage
-- Storage: local JSON (για MVP) + καθαρά interfaces για μελλοντικό DB
-
-## Output
-Παράγεις πλήρες project με package.json, next.config, components, pages, api routes.
-""",
-    "python_flask_microservice_blueprint.md": """# Python Flask Microservice Blueprint
-Στόχος: Flask service με REST API, auth, rate limiting, logging, tests και Docker.
-
-## Must-have
-- Flask + blueprints
-- /health, /version, /api/v1/*
-- Token auth (header) + simple admin secret
-- Structured logging
-- pytest tests
-- Dockerfile + docker-compose
-
-## Output
-Πλήρης υλοποίηση με λειτουργικά endpoints και tests.
-""",
-    "crypto_hunters_p2e_game_blueprint.md": """# Crypto Hunters P2E Blueprint
-Στόχος: Mini web game + P2E rewards.
-
-## Must-have
-- Simple canvas/DOM game loop
-- Submit score -> /api/game/submit_score
-- Leaderboard (local JSON)
-- Wallet connect (THR address input)
-
-## Output
-Πλήρης UI (templates/static) και backend integration.
-""",
-    "nextjs_saas_blueprint.md": """# Next.js SaaS Blueprint (Generic)
-- App Router
-- Auth
-- Billing integration points
-- Dashboard with charts
-""",
-}
-
-def seed_blueprints_if_missing():
-    """On first run, if DATA_DIR/ai_blueprints is empty, seed it with default blueprints.
-    This is SAFE: doesn't touch chain/ledger, only writes blueprint markdown files."""
-    bp_dir = os.path.join(DATA_DIR, "ai_blueprints")
-    os.makedirs(bp_dir, exist_ok=True)
-    try:
-        existing = [f for f in os.listdir(bp_dir) if f.endswith((".md", ".txt"))]
-    except Exception:
-        existing = []
-    if existing:
-        return
-    for name, content in DEFAULT_BLUEPRINTS.items():
-        try:
-            with open(os.path.join(bp_dir, name), "w", encoding="utf-8") as f:
-                f.write(content.strip() + "\n")
-        except Exception as e:
-            print("Blueprint seed error:", e)
 
 # NEW: αποθήκευση sessions (λίστα συνομιλιών)
 AI_SESSIONS_FILE = os.path.join(DATA_DIR, "ai_sessions.json")
@@ -238,7 +211,7 @@ POOLS_FILE          = os.path.join(DATA_DIR, "pools.json")
 
 # --- Stripe Config ---
 # PLEASE UPDATE THESE WITH YOUR REAL KEYS
-STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "sk_live_...Tuhr")
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "sk_live_...Tuhr") 
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "pk_live_n7kIflBg8OTy2FJLsp80DY0M")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "whsec_PLACEHOLDER")
 DOMAIN_URL = os.getenv("DOMAIN_URL", "http://localhost:3333")
@@ -447,6 +420,23 @@ def load_ai_sessions():
 def save_ai_sessions(sessions):
     save_json(AI_SESSIONS_FILE, sessions)
 
+def load_ai_free_usage():
+    """
+    Load the free usage counters from file.  The returned object is a
+    dictionary mapping session identifiers to the number of free messages
+    already consumed.  If the file does not exist, an empty dict is
+    returned.
+    """
+    return load_json(AI_FREE_USAGE_FILE, {})
+
+
+def save_ai_free_usage(counters):
+    """
+    Persist the free usage counters to disk.  Accepts a dict mapping
+    session_id strings to integers.
+    """
+    save_json(AI_FREE_USAGE_FILE, counters)
+
 def sha256d(data: bytes) -> bytes:
     return hashlib.sha256(hashlib.sha256(data).digest()).digest()
 
@@ -517,25 +507,49 @@ def recompute_height_offset_from_ledger():
 
 def update_last_block(entry, is_block=True):
     """
-    Γράφει last_block.json αλλά πλέον κρατά και:
-    - block_count (με offset)
-    - total_supply (άθροισμα ledger)
-    ώστε η αρχική σελίδα να ξέρει ΠΟΣΑ block και ΠΟΣΟ supply έχουμε.
+    Update the summary of the last block in ``last_block.json``.
+
+    This function writes a summary containing the latest height, block hash,
+    timestamp, and THR address, along with the global block count and total
+    supply.  When called for a confirmed block (``is_block=True``) the
+    summary fields are taken directly from the new block.  For non‑block
+    updates (e.g. pending TX summaries) the function preserves the
+    existing height, block_hash, timestamp and thr_address from the
+    current last_block.json so that the viewer does not mistakenly
+    consider a transfer or other transaction as the last mined block.
     """
-    chain  = load_json(CHAIN_FILE, [])
+    chain = load_json(CHAIN_FILE, [])
     ledger = load_json(LEDGER_FILE, {})
 
+    # Calculate block_count based on existing blocks + height offset
     blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
     block_count = HEIGHT_OFFSET + len(blocks)
-
     total_supply = round(sum(float(v) for v in ledger.values()), 6)
 
+    # Default summary values from the new entry (for block events)
+    height = entry.get("height")
+    block_hash = entry.get("block_hash") or entry.get("tx_id")
+    ts = entry.get("timestamp")
+    thr_addr = entry.get("thr_address")
+    entry_type = "block" if is_block else entry.get("type", "transfer")
+
+    # If this is not a block, preserve the previously stored summary fields
+    if not is_block:
+        try:
+            last_summary = load_json(LAST_BLOCK_FILE, {})
+            height = last_summary.get("height", height)
+            block_hash = last_summary.get("block_hash", block_hash)
+            ts = last_summary.get("timestamp", ts)
+            thr_addr = last_summary.get("thr_address", thr_addr)
+        except Exception:
+            pass
+
     summary = {
-        "height":     entry.get("height"),
-        "block_hash": entry.get("block_hash") or entry.get("tx_id"),
-        "timestamp":  entry.get("timestamp"),
-        "thr_address": entry.get("thr_address"),
-        "type": "block" if is_block else entry.get("type", "transfer"),
+        "height": height,
+        "block_hash": block_hash,
+        "timestamp": ts,
+        "thr_address": thr_addr,
+        "type": entry_type,
         "block_count": block_count,
         "total_supply": total_supply,
     }
@@ -774,7 +788,7 @@ def get_transactions_for_viewer():
 def ensure_ai_wallet():
     pledges = load_json(PLEDGE_CHAIN, [])
     ai_pledge = next((p for p in pledges if p.get("thr_address")==AI_WALLET_ADDRESS), None)
-    if ai_pledge:
+    if ai_pledge: 
         print(f"🤖 AI Wallet {AI_WALLET_ADDRESS} ready.")
         return
     print(f"🤖 Initializing AI Agent Wallet: {AI_WALLET_ADDRESS}")
@@ -902,7 +916,10 @@ def courses_page():
     """
     return render_template("courses.html")
 
-
+# Smart Contract (EVM) UI page.  This route serves the EVM interface where
+# developers can deploy and invoke smart contracts on the Thronos EVM
+# network.  It is separated from the courses page to avoid accidentally
+# attaching multiple routes to the same view function.
 @app.route("/evm")
 def evm_page():
     return render_template("evm.html")
@@ -958,17 +975,17 @@ def api_admin_withdrawals_action():
     secret = data.get("secret")
     req_id = data.get("id")
     action = data.get("action") # 'paid' or 'rejected'
-
+    
     if secret != ADMIN_SECRET:
         return jsonify(status="error", message="Forbidden"), 403
-
+        
     withdrawals = load_json(WITHDRAWALS_FILE, [])
     found = False
     for w in withdrawals:
         if w["id"] == req_id:
             if w["status"] != "pending_admin_review":
                 return jsonify(status="error", message="Already processed"), 400
-
+            
             if action == "paid":
                 w["status"] = "paid"
                 w["processed_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
@@ -980,7 +997,7 @@ def api_admin_withdrawals_action():
                 # Deduct from burn address (reverse the burn)
                 ledger[BURN_ADDRESS] = round(max(0, float(ledger.get(BURN_ADDRESS, 0.0)) - float(w["thr_amount"])), 6)
                 save_json(LEDGER_FILE, ledger)
-
+                
                 # Log Refund TX
                 chain = load_json(CHAIN_FILE, [])
                 tx = {
@@ -996,10 +1013,10 @@ def api_admin_withdrawals_action():
                 chain.append(tx)
                 save_json(CHAIN_FILE, chain)
                 update_last_block(tx, is_block=False)
-
+            
             found = True
             break
-
+            
     if found:
         save_json(WITHDRAWALS_FILE, withdrawals)
         return jsonify(status="success"), 200
@@ -1020,7 +1037,7 @@ def api_ai_blueprints():
     bp_dir = os.path.join(DATA_DIR, "ai_blueprints")
     if not os.path.exists(bp_dir):
         os.makedirs(bp_dir, exist_ok=True)
-
+    
     blueprints = []
     try:
         for f in os.listdir(bp_dir):
@@ -1028,7 +1045,7 @@ def api_ai_blueprints():
                 blueprints.append(f)
     except Exception as e:
         print("Error listing blueprints:", e)
-
+        
     # Sort for consistency
     blueprints.sort()
     return jsonify({"blueprints": blueprints}), 200
@@ -1145,7 +1162,7 @@ def api_architect_generate():
 
     # Call AI
     # Note: server.py uses 'ai_agent' global instance
-    # Pass session_id to maintain context if needed (though architect usually is one-shot,
+    # Pass session_id to maintain context if needed (though architect usually is one-shot, 
     # but user might refine in same session)
     raw = ai_agent.generate_response(prompt, wallet=wallet, model_key=model_key, session_id=session_id)
 
@@ -1444,13 +1461,13 @@ def api_iot_parking():
                 "reservedBy": None
             })
         save_json(IOT_PARKING_FILE, spots)
-
+    
     return jsonify(load_json(IOT_PARKING_FILE, [])), 200
 
 @app.route("/api/iot/reserve", methods=["POST"])
 def api_iot_reserve():
     """
-    Reserves a spot. Requires payment (handled via send_thr logic usually,
+    Reserves a spot. Requires payment (handled via send_thr logic usually, 
     but here we can just update state if payment verified or trust client for MVP simulation).
     Ideally, client calls send_thr, then calls this with tx_id to prove payment.
     For simplicity/simulation, we just update state.
@@ -1458,10 +1475,10 @@ def api_iot_reserve():
     data = request.get_json() or {}
     spot_id = data.get("spot_id")
     wallet = data.get("wallet")
-
+    
     if not spot_id or not wallet:
         return jsonify(error="Missing fields"), 400
-
+        
     spots = load_json(IOT_PARKING_FILE, [])
     found = False
     for s in spots:
@@ -1472,7 +1489,7 @@ def api_iot_reserve():
             s["reservedBy"] = wallet
             found = True
             break
-
+            
     if found:
         save_json(IOT_PARKING_FILE, spots)
         return jsonify(status="success"), 200
@@ -1526,6 +1543,31 @@ def api_chat():
                 files=[],
                 session_id=session_id,
             ), 200
+
+    else:
+        # No wallet provided: enforce free usage limit
+        # Use session_id as the key for tracking demo usage.  If no
+        # session_id is provided, treat it as 'default'.
+        demo_key = session_id or "default"
+        counters = load_ai_free_usage()
+        used = int(counters.get(demo_key, 0))
+        if used >= AI_FREE_MESSAGES_LIMIT:
+            warning_text = (
+                "Έχεις εξαντλήσει το όριο των δωρεάν μηνυμάτων χωρίς THR wallet.\n"
+                "Σύνδεσε ένα πορτοφόλι THR για να συνεχίσεις ή αγόρασε AI pack."
+            )
+            return jsonify(
+                response=warning_text,
+                quantum_key=ai_agent.generate_quantum_key(),
+                status="no_credits",
+                wallet="",
+                credits=0,
+                files=[],
+                session_id=session_id,
+            ), 200
+        # Increment and save demo usage counter
+        counters[demo_key] = used + 1
+        save_ai_free_usage(counters)
 
     # --- Κλήση στον ThronosAI provider ---
     # Pass model_key AND session_id to generate_response
@@ -1603,9 +1645,9 @@ def api_upload_training_data():
         # Προσθήκη timestamp για μοναδικότητα
         safe_name = f"{int(time.time())}_{filename}"
         file_path = os.path.join(AI_FILES_DIR, safe_name)
-
+        
         file.save(file_path)
-
+        
         # Καταγραφή στο offline corpus
         # Φτιάχνουμε μια δομή που να ταιριάζει με το enqueue_offline_corpus
         file_obj = {"filename": safe_name}
@@ -1765,7 +1807,7 @@ def api_ai_session_rename():
             s["title"] = new_title[:80]
             found = True
             break
-
+    
     if found:
         save_ai_sessions(sessions)
         return jsonify(status="ok", title=new_title), 200
@@ -2080,7 +2122,7 @@ def send_thr():
 
     ledger=load_json(LEDGER_FILE,{})
     sender_balance=float(ledger.get(from_thr,0.0))
-
+    
     if sender_balance<total_cost:
         return jsonify(
             error="insufficient_balance",
@@ -2123,14 +2165,14 @@ def api_swap():
     data = request.get_json() or {}
     wallet = data.get("wallet")
     secret = data.get("secret")
-
+    
     try:
         amount = float(data.get("amount", 0))
     except (ValueError, TypeError):
         return jsonify(status="error", message="Invalid amount"), 400
-
+        
     direction = data.get("direction") # THR_TO_BTC or BTC_TO_THR
-
+    
     if not wallet or not secret or amount <= 0:
         return jsonify(status="error", message="Invalid input"), 400
 
@@ -2139,24 +2181,24 @@ def api_swap():
     sender_pledge=next((p for p in pledges if p.get("thr_address")==wallet),None)
     if not sender_pledge:
         return jsonify(status="error", message="Unknown wallet"), 404
-
+    
     stored_auth_hash=sender_pledge.get("send_auth_hash")
-
-    # Try both auth methods (with and without passphrase) if possible,
-    # but here we only have 'secret'.
-    # If user has passphrase, this simple swap UI might fail.
+    
+    # Try both auth methods (with and without passphrase) if possible, 
+    # but here we only have 'secret'. 
+    # If user has passphrase, this simple swap UI might fail. 
     # For now, we assume standard auth.
-    auth_string=f"{secret}:auth"
-
+    auth_string=f"{secret}:auth" 
+    
     if hashlib.sha256(auth_string.encode()).hexdigest()!=stored_auth_hash:
         return jsonify(status="error", message="Invalid secret (or passphrase required)"), 403
 
     ledger = load_json(LEDGER_FILE, {})
     wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
     chain = load_json(CHAIN_FILE, [])
-
+    
     RATE = 0.0001 # 1 THR = 0.0001 BTC
-
+    
     tx_id = f"SWAP-{int(time.time())}-{secrets.token_hex(4)}"
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
 
@@ -2165,12 +2207,12 @@ def api_swap():
         thr_bal = float(ledger.get(wallet, 0.0))
         if thr_bal < amount:
             return jsonify(status="error", message="Insufficient THR"), 400
-
+            
         btc_out = amount * RATE
-
+        
         ledger[wallet] = round(thr_bal - amount, 6)
         wbtc_ledger[wallet] = round(float(wbtc_ledger.get(wallet, 0.0)) + btc_out, 8)
-
+        
         # Log TX
         tx = {
             "type": "swap",
@@ -2184,18 +2226,18 @@ def api_swap():
             "timestamp": ts,
             "status": "confirmed" # Instant swap
         }
-
+        
     elif direction == "BTC_TO_THR":
         # Burn wBTC, Mint THR
         wbtc_bal = float(wbtc_ledger.get(wallet, 0.0))
         if wbtc_bal < amount:
             return jsonify(status="error", message="Insufficient wBTC"), 400
-
+            
         thr_out = amount / RATE
-
+        
         wbtc_ledger[wallet] = round(wbtc_bal - amount, 8)
         ledger[wallet] = round(float(ledger.get(wallet, 0.0)) + thr_out, 6)
-
+        
         tx = {
             "type": "swap",
             "from": wallet,
@@ -2213,11 +2255,11 @@ def api_swap():
 
     save_json(LEDGER_FILE, ledger)
     save_json(WBTC_LEDGER_FILE, wbtc_ledger)
-
+    
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
     update_last_block(tx, is_block=False)
-
+    
     return jsonify(status="success", tx_id=tx_id), 200
 
 # ─── Token Balances API (NEW) ─────────────────────────────────────
@@ -2256,14 +2298,14 @@ def api_v1_token_balances(thr_addr: str):
 def create_checkout_session():
     if not stripe:
         return jsonify(error="Stripe not configured"), 503
-
+        
     data = request.get_json() or {}
     wallet = data.get("wallet")
     fiat_amount = data.get("fiat_amount")
-
+    
     if not wallet or not fiat_amount:
         return jsonify(error="Missing parameters"), 400
-
+        
     try:
         # Create Stripe Checkout Session
         session = stripe.checkout.Session.create(
@@ -2295,7 +2337,7 @@ def create_checkout_session():
 def stripe_webhook():
     if not stripe:
         return jsonify(status="ignored"), 200
-
+        
     payload = request.get_data(as_text=True)
     sig_header = request.headers.get('Stripe-Signature')
 
@@ -2312,20 +2354,20 @@ def stripe_webhook():
     if event['type'] == 'checkout.session.completed':
         session = event['data']['object']
         metadata = session.get('metadata', {})
-
+        
         if metadata.get('type') == 'buy_thr':
             wallet = metadata.get('wallet')
             amount_paid_cents = session.get('amount_total', 0)
             fiat_amount = amount_paid_cents / 100.0
-
+            
             # Rate: 1 THR = $10
             thr_amount = fiat_amount / 10.0
-
+            
             # Mint/Send THR
             ledger = load_json(LEDGER_FILE, {})
             ledger[wallet] = round(float(ledger.get(wallet, 0.0)) + thr_amount, 6)
             save_json(LEDGER_FILE, ledger)
-
+            
             chain = load_json(CHAIN_FILE, [])
             tx = {
                 "type": "fiat_buy",
@@ -2357,16 +2399,16 @@ def api_gateway_sell():
     data = request.get_json() or {}
     wallet = data.get("wallet")
     secret = data.get("secret")
-
+    
     try:
         thr_amount = float(data.get("thr_amount", 0))
     except (ValueError, TypeError):
         return jsonify(status="error", message="Invalid amount"), 400
-
+        
     bank_info = data.get("bank_info", {})
     if not bank_info.get("iban") or not bank_info.get("name"):
         return jsonify(status="error", message="Missing bank details"), 400
-
+    
     if not wallet or not secret or thr_amount <= 0:
         return jsonify(status="error", message="Invalid input"), 400
 
@@ -2375,27 +2417,27 @@ def api_gateway_sell():
     sender_pledge=next((p for p in pledges if p.get("thr_address")==wallet),None)
     if not sender_pledge:
         return jsonify(status="error", message="Unknown wallet"), 404
-
+    
     stored_auth_hash=sender_pledge.get("send_auth_hash")
     auth_string=f"{secret}:auth"
     if hashlib.sha256(auth_string.encode()).hexdigest()!=stored_auth_hash:
         return jsonify(status="error", message="Invalid secret"), 403
-
+        
     ledger = load_json(LEDGER_FILE, {})
     balance = float(ledger.get(wallet, 0.0))
-
+    
     if balance < thr_amount:
         return jsonify(status="error", message="Insufficient THR"), 400
-
+        
     # Rate: 1 THR = $9.8 (Sell Rate)
     rate = 9.8
     fiat_out = thr_amount * rate
-
+    
     # Burn THR
     ledger[wallet] = round(balance - thr_amount, 6)
     ledger[BURN_ADDRESS] = round(float(ledger.get(BURN_ADDRESS, 0.0)) + thr_amount, 6)
     save_json(LEDGER_FILE, ledger)
-
+    
     # Record TX
     chain = load_json(CHAIN_FILE, [])
     tx_id = f"SELL-{int(time.time())}-{secrets.token_hex(4)}"
@@ -2413,7 +2455,7 @@ def api_gateway_sell():
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
     update_last_block(tx, is_block=False)
-
+    
     # Save Withdrawal Request
     withdrawals = load_json(WITHDRAWALS_FILE, [])
     withdrawals.append({
@@ -2432,7 +2474,7 @@ def api_gateway_sell():
         "fiat_estimated": fiat_out
     })
     save_json(WITHDRAWALS_FILE, withdrawals)
-
+    
     return jsonify(status="success", tx_id=tx_id, fiat_amount=fiat_out, message="Withdrawal request submitted. Funds will be wired within 24h."), 200
 
 
@@ -2612,14 +2654,14 @@ def submit_block():
     if not thr_address or nonce is None:
         return jsonify(error="Missing mining data"),400
     chain=load_json(CHAIN_FILE,[])
-
+    
     server_last_hash = ""
     blocks=[b for b in chain if isinstance(b,dict) and b.get("reward") is not None]
     if blocks:
         server_last_hash = blocks[-1].get("block_hash","")
     else:
         server_last_hash = "0"*64
-
+        
     is_stratum = "merkle_root" in data
     pow_hash=""
     prev_hash=""
@@ -2651,7 +2693,7 @@ def submit_block():
         check=hashlib.sha256((prev_hash+thr_address).encode()+str(nonce).encode()).hexdigest()
         if check!=pow_hash:
             return jsonify(error="Invalid hash calculation"),400
-
+            
     current_target = get_mining_target()
     if int(pow_hash, 16) > current_target:
         return jsonify(error=f"Insufficient difficulty. Target: {hex(current_target)}"), 400
@@ -2660,7 +2702,7 @@ def submit_block():
     local_height  = len(blocks)
     height        = HEIGHT_OFFSET + local_height
     total_reward  = calculate_reward(height)
-
+    
     miner_share=round(total_reward*0.80,6)
     ai_share=round(total_reward*0.10,6)
     burn_share=round(total_reward*0.10,6)
@@ -2926,21 +2968,21 @@ def api_game_submit_score():
     data = request.get_json() or {}
     wallet = data.get("wallet")
     score = int(data.get("score", 0))
-
+    
     if not wallet or score <= 0:
         return jsonify(status="error", message="Invalid input"), 400
-
+        
     # Simple logic: Reward = Score * 0.001 THR (capped at 10 THR per claim)
     reward = min(score * 0.001, 10.0)
-
+    
     ledger = load_json(LEDGER_FILE, {})
     chain = load_json(CHAIN_FILE, [])
-
+    
     # Minting logic for Game Rewards (or transfer from pool if we had pre-mined)
     # For now, we mint (inflationary P2E)
     ledger[wallet] = round(float(ledger.get(wallet, 0.0)) + reward, 6)
     save_json(LEDGER_FILE, ledger)
-
+    
     tx = {
         "type": "game_reward",
         "from": GAME_POOL_ADDRESS,
@@ -2954,7 +2996,7 @@ def api_game_submit_score():
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
     update_last_block(tx, is_block=False)
-
+    
     return jsonify(status="success", reward=reward, tx_id=tx["tx_id"]), 200
 
 # ─── API v1 ENDPOINTS (NEW in v3.7) ──────────────────────────────────────
@@ -3857,9 +3899,6 @@ def api_v1_create_pool():
         pass
     return jsonify(status="success", pool=new_pool), 201
 
-
-# Seed blueprints on first boot (safe)
-seed_blueprints_if_missing()
 
 # Run AI Wallet Check on Startup
 ensure_ai_wallet()

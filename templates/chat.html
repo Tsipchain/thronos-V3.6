@@ -1,1072 +1,284 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Thronos Quantum Chat</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <style>
-        :root {
-            --bg: #050608;
-            --panel: #0d1117;
-            --border: #00ff66;
-            --accent: #00ffcc;
-            --danger: #ff4d4d;
-            --text-main: #e0ffe8;
-            --text-muted: #7de6a0;
-            --sidebar-bg: #020904;
-        }
-
-        * {
-            box-sizing: border-box;
-        }
-
-        body {
-            margin: 0;
-            padding: 0;
-            background: radial-gradient(circle at top, #04110a 0, #020204 40%, #000 100%);
-            color: var(--text-main);
-            font-family: "Fira Code", "Consolas", monospace;
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
-        }
-
-        .top-bar {
-            border-bottom: 1px solid var(--border);
-            padding: 8px 16px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            background: #020904;
-            height: 40px;
-            flex-shrink: 0;
-        }
-
-        .logo {
-            font-weight: 700;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-            color: var(--accent);
-            font-size: 14px;
-        }
-
-        .logo span {
-            color: var(--border);
-        }
-
-        .status-pill {
-            font-size: 10px;
-            padding: 2px 8px;
-            border-radius: 999px;
-            border: 1px solid var(--border);
-            color: var(--accent);
-            background: rgba(0, 0, 0, 0.4);
-        }
-
-        /* Layout Container */
-        #root {
-            flex: 1;
-            display: flex;
-            overflow: hidden;
-        }
-
-        /* Sidebar Styles */
-        .sidebar {
-            width: 260px;
-            background: var(--sidebar-bg);
-            border-right: 1px solid var(--border);
-            display: flex;
-            flex-direction: column;
-            padding: 10px;
-            flex-shrink: 0;
-        }
-
-        .new-chat-btn {
-            border: 1px solid var(--border);
-            background: rgba(0, 255, 102, 0.1);
-            color: var(--accent);
-            padding: 8px;
-            border-radius: 4px;
-            cursor: pointer;
-            text-align: left;
-            margin-bottom: 10px;
-            font-size: 13px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            transition: background 0.2s;
-        }
-
-        .new-chat-btn:hover {
-            background: rgba(0, 255, 102, 0.2);
-        }
-
-        .session-list {
-            flex: 1;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-
-        .session-item {
-            padding: 8px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-            color: var(--text-muted);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            transition: background 0.2s;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        /* Icon to delete a session. Hidden until hover */
-        .delete-icon {
-            opacity: 0;
-            font-size: 10px;
-            cursor: pointer;
-            color: var(--danger);
-            margin-left: 4px;
-        }
-
-        .session-item:hover .delete-icon {
-            opacity: 1;
-        }
-
-        .session-item:hover {
-            background: rgba(255, 255, 255, 0.05);
-            color: var(--text-main);
-        }
-        
-        .session-item:hover .edit-icon {
-            opacity: 1;
-        }
-
-        .session-item.active {
-            background: rgba(0, 255, 102, 0.15);
-            color: var(--accent);
-            border-left: 2px solid var(--accent);
-        }
-        
-        .edit-icon {
-            opacity: 0;
-            font-size: 10px;
-            cursor: pointer;
-            color: var(--accent);
-            margin-left: 4px;
-        }
-
-        /* Main Chat Area */
-        .chat-main {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            background: var(--panel);
-            position: relative;
-        }
-
-        .chat-header {
-            padding: 10px 14px;
-            border-bottom: 1px solid rgba(0, 255, 102, 0.3);
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px;
-            align-items: center;
-            font-size: 12px;
-            background: rgba(0,0,0,0.2);
-        }
-
-        .field-inline {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .field-inline label {
-            font-size: 11px;
-            color: var(--text-muted);
-        }
-
-        .field-inline input, .field-inline select {
-            background: #000;
-            border: 1px solid rgba(0, 255, 102, 0.4);
-            color: var(--accent);
-            padding: 4px 8px;
-            font-size: 12px;
-            border-radius: 4px;
-        }
-        
-        .field-inline input {
-            width: 140px;
-        }
-
-        .credits-label {
-            font-size: 11px;
-            color: var(--text-muted);
-            margin-left: auto;
-        }
-
-        .credits-label span {
-            color: var(--accent);
-            font-weight: 600;
-        }
-        
-        .qa-btn-small {
-            font-size: 10px;
-            padding: 2px 6px;
-            border: 1px solid var(--accent);
-            color: var(--accent);
-            text-decoration: none;
-            border-radius: 4px;
-            margin-left: 8px;
-        }
-        
-        .qa-btn-small:hover {
-            background: rgba(0, 255, 204, 0.1);
-        }
-
-        .chat-body {
-            flex: 1;
-            padding: 20px;
-            overflow-y: auto;
-            background: radial-gradient(circle at top left, #042010 0, #050608 40%, #020204 100%);
-        }
-
-        .message-row {
-            margin-bottom: 16px;
-            display: flex;
-        }
-
-        .message-row.user {
-            justify-content: flex-end;
-        }
-
-        .message-row.ai {
-            justify-content: flex-start;
-        }
-        
-        .message-row.assistant {
-            justify-content: flex-start;
-        }
-
-        .bubble {
-            max-width: 80%;
-            padding: 10px 14px;
-            border-radius: 8px;
-            line-height: 1.5;
-            font-size: 14px;
-            white-space: pre-wrap;
-            position: relative;
-        }
-
-        .message-row.user .bubble {
-            background: var(--border);
-            color: #000;
-            border-bottom-right-radius: 2px;
-        }
-
-        .message-row.ai .bubble, .message-row.assistant .bubble {
-            background: rgba(1, 5, 8, 0.9);
-            color: var(--text-main);
-            border: 1px solid rgba(0, 255, 102, 0.5);
-            border-bottom-left-radius: 2px;
-        }
-
-        .meta-line {
-            font-size: 10px;
-            margin-top: 4px;
-            opacity: 0.7;
-        }
-
-        .meta-tools {
-            margin-top: 8px;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            font-size: 11px;
-        }
-
-        .btn-copy {
-            border-radius: 3px;
-            border: 1px solid rgba(0, 255, 102, 0.5);
-            background: transparent;
-            color: var(--accent);
-            padding: 2px 6px;
-            cursor: pointer;
-            font-size: 10px;
-        }
-
-        .btn-copy:hover {
-            background: rgba(0, 255, 102, 0.12);
-        }
-
-        .file-link {
-            text-decoration: none;
-            color: var(--accent);
-            border-bottom: 1px dotted rgba(0, 255, 102, 0.6);
-        }
-
-        .chat-footer {
-            border-top: 1px solid rgba(0, 255, 102, 0.3);
-            padding: 12px;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            background: #020904;
-        }
-
-        .input-row {
-            display: flex;
-            gap: 10px;
-        }
-
-        #user-input {
-            flex: 1;
-            resize: none;
-            min-height: 44px;
-            max-height: 140px;
-            background: #000;
-            border: 1px solid rgba(0, 255, 102, 0.4);
-            color: var(--text-main);
-            border-radius: 6px;
-            padding: 10px;
-            font-family: inherit;
-            font-size: 14px;
-        }
-        
-        #user-input:focus {
-            outline: none;
-            border-color: var(--accent);
-            box-shadow: 0 0 8px rgba(0, 255, 204, 0.2);
-        }
-
-        .btn {
-            border-radius: 6px;
-            border: 1px solid var(--border);
-            background: var(--border);
-            color: #000;
-            font-size: 14px;
-            font-weight: 600;
-            padding: 0 20px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            transition: filter 0.2s;
-        }
-        
-        .btn:hover {
-            filter: brightness(1.1);
-        }
-
-        .btn:disabled {
-            opacity: 0.5;
-            cursor: default;
-        }
-
-        .footer-info {
-            font-size: 11px;
-            color: var(--text-muted);
-            display: flex;
-            justify-content: space-between;
-            gap: 12px;
-            flex-wrap: wrap;
-            margin-top: 4px;
-        }
-        
-        .qa-upload-bar {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        
-        .qa-upload-bar input[type="file"] {
-            font-size: 11px;
-            color: var(--text-muted);
-        }
-        
-        #aiUploadBtn {
-            font-size: 11px;
-            padding: 4px 10px;
-            background: #0d1117;
-            border: 1px solid var(--accent);
-            color: var(--accent);
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        
-        #aiUploadBtn:hover {
-            background: rgba(0, 255, 204, 0.1);
-        }
-
-        @media (max-width: 768px) {
-            .sidebar {
-                display: none; /* Mobile hide sidebar for now or add toggle */
-            }
-            .chat-main {
-                height: 100%;
-            }
-        }
-    
-  .attachments { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
-  .chip { padding:4px 10px; border:1px solid #00ff6a; border-radius:999px; cursor:pointer; font-size:12px; user-select:none; }
-  #user-input.dragover { outline:2px dashed #00ff6a; outline-offset:4px; }
-
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Thronos Quantum Chat</title>
+  <style>
+    :root{--bg:#050a08;--panel:#07110d;--fg:#dfffe9;--muted:#6fe7b0;--border:#0ee07f;--accent:#00ff88;}
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
+    .topbar{display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid rgba(14,224,127,.35);background:linear-gradient(180deg,rgba(0,255,136,.08),transparent);}
+    .badge{padding:4px 10px;border:1px solid rgba(14,224,127,.6);border-radius:999px;color:var(--muted);font-size:12px}
+    .wrap{display:grid;grid-template-columns:280px 1fr; height:calc(100% - 50px);}
+    .sidebar{border-right:1px solid rgba(14,224,127,.25);padding:10px;background:rgba(7,17,13,.7)}
+    .main{display:flex;flex-direction:column;}
+    .btn{cursor:pointer;padding:10px 12px;border:1px solid rgba(14,224,127,.7);border-radius:10px;background:rgba(0,0,0,.25);color:var(--fg)}
+    .btn:hover{border-color:var(--accent);box-shadow:0 0 0 2px rgba(0,255,136,.12) inset}
+    .input,select{width:100%;padding:10px 12px;border:1px solid rgba(14,224,127,.35);border-radius:10px;background:rgba(0,0,0,.25);color:var(--fg);outline:none}
+    .input:focus,select:focus{border-color:var(--accent)}
+    .sessions{margin-top:10px;display:flex;flex-direction:column;gap:8px;max-height:calc(100vh - 220px);overflow:auto}
+    .sess{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px;border:1px solid rgba(14,224,127,.2);border-radius:12px;background:rgba(0,0,0,.18)}
+    .sess.active{border-color:rgba(0,255,136,.75)}
+    .sess small{color:rgba(223,255,233,.7)}
+    .sess .x{padding:4px 8px;border-radius:8px;border:1px solid rgba(255,70,70,.55);background:rgba(255,0,0,.08);color:#ff9b9b}
+    .center{flex:1;overflow:auto;padding:16px}
+    .bubble{max-width:860px;margin:10px 0;padding:14px;border:1px solid rgba(14,224,127,.25);border-radius:14px;background:rgba(0,0,0,.22)}
+    .me{margin-left:auto;border-color:rgba(0,255,136,.55);background:rgba(0,255,136,.08)}
+    .meta{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:rgba(223,255,233,.65)}
+    .composer{display:flex;gap:10px;align-items:center;padding:12px;border-top:1px solid rgba(14,224,127,.25);background:rgba(7,17,13,.7)}
+    .drop{flex:1;border:1px dashed rgba(14,224,127,.35);border-radius:12px;padding:10px;background:rgba(0,0,0,.18)}
+    .row{display:flex;gap:8px;align-items:center}
+    .files{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+    .chip{border:1px solid rgba(14,224,127,.25);border-radius:999px;padding:4px 10px;font-size:12px;color:rgba(223,255,233,.85)}
+    .err{color:#ffb3b3;font-size:12px;margin-top:8px}
+  </style>
 </head>
 <body>
-<div class="top-bar">
-    <div class="logo">THRONOS <span>QUANTUM</span> ASSISTANT</div>
-    <div class="status-pill" id="top-status-pill">Quantum Encryption Active · 256-bit Session Key</div>
-</div>
-
-<div id="root">
-    <!-- Sidebar -->
-    <div class="sidebar">
-        <button id="new-chat-btn" class="new-chat-btn">
-            <span>+ New Chat</span>
-        </button>
-        <div id="session-list" class="session-list">
-            <!-- Sessions will be injected here -->
-            <div style="padding:10px; opacity:0.7; font-size:11px;">Enter wallet to load sessions...</div>
-        </div>
-        <div style="margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px;">
-            <a href="/architect" style="color: var(--accent); font-size: 12px; text-decoration: none; display: block; padding: 5px;">
-                ➜ Switch to Architect Mode
-            </a>
-        </div>
+  <div class="topbar">
+    <div style="font-weight:700;letter-spacing:.12em">THRONOS QUANTUM ASSISTANT</div>
+    <div class="badge" id="qbadge">Quantum Encryption Active</div>
+    <div style="flex:1"></div>
+    <div class="row" style="gap:8px;min-width:420px">
+      <label style="min-width:80px;color:rgba(223,255,233,.7)">THR wallet:</label>
+      <input class="input" id="wallet" placeholder="THR..." />
+      <select id="model" class="input" style="max-width:190px">
+        <option value="auto">Auto (Smart)</option>
+        <option value="gpt-4o">GPT‑4o</option>
+        <option value="gpt-4.1-mini">GPT‑4.1‑mini</option>
+        <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+      </select>
+      <button class="btn" id="loadBtn">Load</button>
     </div>
+  </div>
 
-    <!-- Main Chat -->
-    <div class="chat-main">
-        <div class="chat-header">
-            <div class="field-inline">
-                <label for="wallet-input">THR Wallet:</label>
-                <input id="wallet-input" type="text" placeholder="THRxxxxxxxx" autocomplete="off">
-                <!-- Disconnect button clears the saved wallet and hides sessions -->
-                <button id="disconnect-wallet-btn" type="button" title="Disconnect wallet" style="margin-left:6px; font-size:10px; padding:4px 6px; border:1px solid var(--border); border-radius:4px; background:rgba(255,0,0,0.1); color:var(--danger); cursor:pointer;">×</button>
-            </div>
+  <div class="wrap">
+    <aside class="sidebar">
+      <button class="btn" id="newBtn" style="width:100%">+ New Chat</button>
+      <div class="err" id="sideErr" style="display:none"></div>
+      <div class="sessions" id="sessions"></div>
+    </aside>
 
-            <div class="field-inline">
-                <label for="model-select">Model:</label>
-                <select id="model-select">
-                  <option value="auto">Auto (Smart)</option>
-                  <option value="gpt-4o">GPT-4o</option>
-                  <option value="gpt-4o-mini">GPT-4o-mini</option>
-                  <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-                  <option value="gemini-2.0-pro">Gemini 2.0 Pro</option>
-                  <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
-                  <option value="claude-3-5-sonnet">Claude 3.5 Sonnet</option>
-                </select>
-            </div>
+    <main class="main">
+      <div class="center" id="chat"></div>
 
-            <div class="credits-label">
-                Credits: <span id="credits-count">∞ (demo)</span>
-                <a href="/ai_packs" class="qa-btn-small">Get AI Packs</a>
+      <div class="composer">
+        <div class="drop" id="drop">
+          <div class="row" style="justify-content:space-between">
+            <div style="opacity:.8">Drop files here or choose</div>
+            <div class="row">
+              <input type="file" id="file" multiple />
+              <button class="btn" id="uploadBtn">Upload</button>
             </div>
+          </div>
+          <div class="files" id="pending"></div>
+          <div class="err" id="upErr" style="display:none"></div>
         </div>
-
-        <div id="messages" class="chat-body">
-            <!-- Messages will be injected here -->
-            <div style="text-align:center; margin-top:40px; opacitpadding:10px;">
-                <div>THRONOS QUANTUM CORE</div>
-                <div style="font-size:11px; margin-top:8px;">Select a session or start a new chat.</div>
-            </div>
-        </div>
-
-        <div class="chat-footer">
-            <div class="input-row">
-                <textarea id="user-input" rows="1" placeholder="Type a command to Thronos..."></textarea>
-      <div id="attachmentsContainer" class="attachments"></div>
-                <button id="send-btn" class="btn">
-                    ▶ Send
-                </button>
-            </div>
-            
-            <div class="qa-upload-bar">
-              <input type="file" id="aiUploadInput">
-              <button id="aiUploadBtn">Upload to Quantum Node</button>
-            </div>
-            
-            <div class="footer-info">
-                <div>
-                    <span id="status-line">Core: online</span> ·
-                    <span id="key-line">Key: —</span>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
+        <input class="input" id="msg" placeholder="Type a command to Thronos..." />
+        <button class="btn" id="sendBtn">Send</button>
+      </div>
+    </main>
+  </div>
 
 <script>
-    const messagesEl      = document.getElementById("messages");
-    const userInputEl     = document.getElementById("user-input");
-    const sendBtn         = document.getElementById("send-btn");
-    const walletInputEl   = document.getElementById("wallet-input");
-    const creditsEl       = document.getElementById("credits-count");
-    const statusLineEl    = document.getElementById("status-line");
-    const keyLineEl       = document.getElementById("key-line");
-    const topStatusPillEl = document.getElementById("top-status-pill");
-    const aiUploadInput   = document.getElementById("aiUploadInput");
-    const aiUploadBtn     = document.getElementById("aiUploadBtn");
-    const sessionListEl   = document.getElementById("session-list");
-    const newChatBtn      = document.getElementById("new-chat-btn");
-    const modelSelect     = document.getElementById("model-select");
+const $ = (id)=>document.getElementById(id);
+let currentSession = null;
+let sessions = [];
+let pendingFiles = []; // {id,filename,size,content_type}
 
-    let currentSessionId = null;
-
-    // --- helpers ---
-
-    function saveWalletLocal(addr) {
-        try { localStorage.setItem("thronos_wallet", addr || ""); } catch (_) {}
-    }
-
-    function loadWalletLocal() {
-        try { return localStorage.getItem("thronos_wallet") || ""; } catch (_) { return ""; }
-    }
-
-    function setCreditsLabel(v) {
-        if (v === null || v === undefined) return;
-        if (v === "infinite") {
-            creditsEl.textContent = "∞ (demo)";
-        } else {
-            creditsEl.textContent = v;
-        }
-    }
-
-    function setStatus(text) {
-        statusLineEl.textContent = text;
-    }
-
-    function setQuantumKey(key) {
-        if (!key) return;
-        const shortKey = String(key).slice(0, 16) + "…";
-        keyLineEl.textContent = "Key: " + shortKey;
-        topStatusPillEl.textContent = "Quantum Encryption Verified · " + shortKey;
-    }
-
-    function appendMessage(role, text, metaHtml, files) {
-        const row = document.createElement("div");
-        row.className = "message-row " + role;
-
-        const bubble = document.createElement("div");
-        bubble.className = "bubble";
-
-        const main = document.createElement("div");
-        main.textContent = text || "";
-        bubble.appendChild(main);
-
-        if (metaHtml) {
-            const metaDiv = document.createElement("div");
-            metaDiv.className = "meta-line";
-            metaDiv.innerHTML = metaHtml;
-            bubble.appendChild(metaDiv);
-        }
-
-        if (role === "ai" || role === "assistant") {
-            const tools = document.createElement("div");
-            tools.className = "meta-tools";
-
-            // copy button
-            const copyBtn = document.createElement("button");
-            copyBtn.className = "btn-copy";
-            copyBtn.type = "button";
-            copyBtn.textContent = "Copy";
-            copyBtn.addEventListener("click", () => {
-                if (navigator.clipboard) {
-                    navigator.clipboard.writeText(text || "").catch(() => {});
-                }
-            });
-            tools.appendChild(copyBtn);
-
-            // file links (if any)
-            if (Array.isArray(files) && files.length > 0) {
-                const minutes = Math.round((files[0].expires_in || 3600) / 60);
-                files.forEach(f => {
-                    const a = document.createElement("a");
-                    a.href = f.url;
-                    a.target = "_blank";
-                    a.rel = "noopener";
-                    a.className = "file-link";
-                    a.textContent = "Download " + (f.filename || "file");
-                    tools.appendChild(a);
-                });
-                const infoSpan = document.createElement("span");
-                infoSpan.textContent = " (auto-delete ~" + minutes + " min)";
-                tools.appendChild(infoSpan);
-            }
-
-            bubble.appendChild(tools);
-        }
-
-        row.appendChild(bubble);
-        messagesEl.appendChild(row);
-        messagesEl.scrollTop = messagesEl.scrollHeight;
-    }
-
-    async function refreshCredits() {
-        const wallet = walletInputEl.value.trim();
-        if (!wallet) {
-            setCreditsLabel("infinite");
-            return;
-        }
-        try {
-            const res = await fetch(`/api/ai_credits?wallet=${encodeURIComponent(wallet)}`);
-            const data = await res.json();
-            setCreditsLabel(data.credits);
-        } catch (e) {
-            console.error('credits fetch error', e);
-            setCreditsLabel("error");
-        }
-    }
-
-    // --- Session Management ---
-
-    async function loadSessions() {
-        const wallet = walletInputEl.value.trim();
-        if (!wallet) {
-            sessionListEl.innerHTML = '<div style="padding:10px; opacity:0.7; font-size:11px;">Enter wallet to load sessions...</div>';
-            return;
-        }
-
-        try {
-            const res = await fetch(`/api/ai_sessions?wallet=${encodeURIComponent(wallet)}`);
-            const data = await res.json();
-            
-            sessionListEl.innerHTML = "";
-            
-            if (data.sessions && data.sessions.length > 0) {
-                data.sessions.forEach(s => {
-                    const el = document.createElement("div");
-                    el.className = "session-item";
-                    if (s.id === currentSessionId) el.classList.add("active");
-                    
-                    const titleSpan = document.createElement("span");
-                    titleSpan.textContent = s.title || "Untitled Chat";
-                    titleSpan.style.flex = "1";
-                    titleSpan.style.overflow = "hidden";
-                    titleSpan.style.textOverflow = "ellipsis";
-                    el.appendChild(titleSpan);
-
-
-                    const editIcon = document.createElement("span");
-                    editIcon.className = "edit-icon";
-                    editIcon.textContent = "✎";
-                    editIcon.title = "Rename";
-                    editIcon.onclick = (e) => {
-                        e.stopPropagation();
-                        renameSession(s.id, s.title);
-                    };
-                    el.appendChild(editIcon);
-
-                    // Delete icon: click to remove this session
-                    const deleteIcon = document.createElement("span");
-                    deleteIcon.className = "delete-icon";
-                    deleteIcon.textContent = "✖";
-                    deleteIcon.title = "Delete";
-                    deleteIcon.onclick = (e) => {
-                        e.stopPropagation();
-                        deleteSession(s.id);
-                    };
-                    el.appendChild(deleteIcon);
-
-                    el.onclick = () => loadSessionHistory(s.id);
-                    sessionListEl.appendChild(el);
-                });
-            } else {
-                sessionListEl.innerHTML = '<div style="padding:10px; opacitpadding:10px; font-size:11px;">No sessions found. Start a new chat!</div>';
-            }
-        } catch (e) {
-            console.error("Sessions load error:", e);
-        }
-    }
-
-    async function loadSessionHistory(sid) {
-        const wallet = walletInputEl.value.trim();
-        if (!wallet) return;
-
-        currentSessionId = sid;
-        loadSessions();
-  setupDragDrop(); // refresh active class
-
-        try {
-            const res = await fetch(`/api/ai_session_history?wallet=${encodeURIComponent(wallet)}&session_id=${encodeURIComponent(sid)}`);
-            const data = await res.json();
-
-            messagesEl.innerHTML = "";
-            
-            if (data.history && Array.isArray(data.history)) {
-                data.history.forEach(msg => {
-                   appendMessage(msg.role, msg.content, `<span style="opacitpadding:10px">${msg.ts}</span>`); 
-                });
-            } else {
-                appendMessage("ai", "Quantum Encryption Verified. New session started.");
-            }
-            
-        } catch (e) {
-            console.error("History load error:", e);
-        }
-    }
-
-    async function startNewSession() {
-        const wallet = walletInputEl.value.trim();
-        if (!wallet) {
-            alert("Please enter a wallet address first.");
-            return;
-        }
-
-        try {
-            const res = await fetch("/api/ai_sessions/start", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ wallet: wallet, title: "New Chat" })
-            });
-            const data = await res.json();
-            if (data.status === "ok") {
-                currentSessionId = data.session.id;
-                loadSessions();
-  setupDragDrop();
-                messagesEl.innerHTML = "";
-                appendMessage("ai", "New secure session initialized.");
-            }
-        } catch (e) {
-            console.error("New session error:", e);
-        }
-    }
-
-    async function renameSession(sid, currentTitle) {
-        const wallet = walletInputEl.value.trim();
-        if (!wallet) return;
-
-        const newTitle = prompt("Rename chat:", currentTitle);
-        if (newTitle && newTitle.trim() !== "") {
-            try {
-                const res = await fetch("/api/ai_sessions/rename", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ 
-                        wallet: wallet, 
-                        session_id: sid, 
-                        title: newTitle.trim() 
-                    })
-                });
-                if (res.ok) {
-                    loadSessions();
-  setupDragDrop();
-                }
-            } catch (e) {
-                console.error("Rename error:", e);
-            }
-        }
-    }
-
-    // Delete a session permanently. Requires wallet to be set. Removes session from list
-    async function deleteSession(sid) {
-        const wallet = walletInputEl.value.trim();
-        if (!wallet) return;
-        // Confirm deletion
-        if (!confirm("Delete this session? This action cannot be undone.")) {
-            return;
-        }
-        try {
-            const res = await fetch("/api/ai_sessions/delete", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ wallet: wallet, session_id: sid })
-            });
-            const data = await res.json();
-            if (data.status === "ok") {
-                // If we were viewing this session, reset the view
-                if (currentSessionId === sid) {
-                    currentSessionId = null;
-                    messagesEl.innerHTML = '<div style="text-align:center; margin-top:40px; opacitpadding:10px;"><div>THRONOS QUANTUM CORE</div><div style="font-size:11px; margin-top:8px;">Session deleted.</div></div>';
-                }
-                loadSessions();
-  setupDragDrop();
-            } else {
-                alert(data.error || "Delete failed");
-            }
-        } catch (e) {
-            console.error("Delete error:", e);
-        }
-    }
-
-    // --- Chat Logic ---
-
-      // --- Attachments (drag & drop) ---
-  let pendingAttachments = [];
-
-  function renderAttachments() {
-    const container = document.getElementById("attachmentsContainer");
-    if (!container) return;
-    container.innerHTML = "";
-    pendingAttachments.forEach(a => {
-      const chip = document.createElement("span");
-      chip.className = "chip";
-      chip.textContent = a.filename + " ✕";
-      chip.title = "Remove attachment";
-      chip.onclick = () => {
-        pendingAttachments = pendingAttachments.filter(x => x.file_id !== a.file_id);
-        renderAttachments();
-      };
-      container.appendChild(chip);
-    });
+function showErr(el, msg){
+  el.style.display = msg ? "block":"none";
+  el.textContent = msg || "";
+}
+function fmtTime(iso){
+  if(!iso) return "";
+  try{ return new Date(iso).toLocaleString(); }catch(e){ return iso; }
+}
+function renderSessions(){
+  const box = $("sessions");
+  box.innerHTML = "";
+  const w = $("wallet").value.trim();
+  if(!w){
+    box.innerHTML = `<div style="opacity:.6;padding:10px">Enter wallet to load sessions…</div>`;
+    return;
   }
-
-  async function uploadAttachment(file) {
-    const wallet = (document.getElementById("wallet-input").value || "").trim();
-    const form = new FormData();
-    form.append("file", file);
-    if (wallet) form.append("wallet", wallet);
-    if (currentSessionId) form.append("session_id", currentSessionId);
-
-    const res = await fetch("/api/ai/files/upload", { method: "POST", body: form });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data.ok) {
-      throw new Error(data.error || "Upload failed");
-    }
-    pendingAttachments.push(data.file);
-    renderAttachments();
-    return data.file;
+  sessions.forEach(s=>{
+    const div=document.createElement("div");
+    div.className="sess"+(currentSession && currentSession.id===s.id?" active":"");
+    div.innerHTML = `
+      <div style="min-width:0;flex:1;cursor:pointer">
+        <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(s.title||"New Chat")}</div>
+        <small>${escapeHtml(fmtTime(s.updated_at||s.created_at))}</small>
+      </div>
+      <button class="x" title="Hide session (kept for training)">✕</button>
+    `;
+    div.children[0].onclick = ()=>{ currentSession=s; localStorage.setItem("thr_session", s.id); renderSessions(); renderChat(); };
+    div.querySelector(".x").onclick = async (ev)=>{
+      ev.stopPropagation();
+      await archiveSession(s.id);
+    };
+    box.appendChild(div);
+  });
+}
+function renderChat(){
+  const box=$("chat");
+  box.innerHTML="";
+  if(!currentSession){
+    box.innerHTML = `<div style="opacity:.6">wallet loaded. select a session.</div>`;
+    return;
   }
+  // Minimal: show session header only. Messages are still handled by your existing /api/chat pipeline.
+  const head=document.createElement("div");
+  head.className="bubble";
+  head.innerHTML = `<div class="meta"><div>Session: <b>${escapeHtml(currentSession.title)}</b></div><div>${escapeHtml(currentSession.id)}</div></div>`;
+  box.appendChild(head);
+  box.scrollTop=box.scrollHeight;
+}
+function renderPending(){
+  const p=$("pending");
+  p.innerHTML="";
+  pendingFiles.forEach(f=>{
+    const c=document.createElement("div");
+    c.className="chip";
+    c.textContent = `${f.filename} (${Math.round((f.size||0)/1024)} KB)`;
+    p.appendChild(c);
+  });
+}
 
-  function setupDragDrop() {
-    const input = document.getElementById("user-input");
-    if (!input) return;
-    input.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      input.classList.add("dragover");
-    });
-    input.addEventListener("dragleave", () => input.classList.remove("dragover"));
-    input.addEventListener("drop", async (e) => {
-      e.preventDefault();
-      input.classList.remove("dragover");
-      const files = Array.from(e.dataTransfer.files || []);
-      if (!files.length) return;
-      try {
-        setStatus("Uploading " + files.length + " file(s)...");
-        for (const f of files) {
-          await uploadAttachment(f);
-        }
-        setStatus("Files attached. Send your message when ready.");
-      } catch (err) {
-        console.error(err);
-        setStatus("Upload error: " + (err.message || err));
-      }
-    });
-
-    // Also wire the existing file picker
-    const picker = document.getElementById("aiUploadInput");
-    if (picker) {
-      picker.addEventListener("change", async () => {
-        const files = Array.from(picker.files || []);
-        if (!files.length) return;
-        try {
-          setStatus("Uploading " + files.length + " file(s)...");
-          for (const f of files) await uploadAttachment(f);
-          picker.value = "";
-          setStatus("Files attached. Send your message when ready.");
-        } catch (err) {
-          console.error(err);
-          setStatus("Upload error: " + (err.message || err));
-        }
-      });
-    }
+async function loadSessions(){
+  const wallet=$("wallet").value.trim();
+  if(!wallet){ showErr($("sideErr"), "Wallet required."); return; }
+  showErr($("sideErr"), "");
+  try{
+    const r=await fetch(`/api/ai_sessions?wallet=${encodeURIComponent(wallet)}`);
+    const t=await r.text();
+    let j=null;
+    try{ j=JSON.parse(t); }catch(e){ throw new Error("Non‑JSON response from server"); }
+    if(!j.ok) throw new Error(j.error||"failed");
+    sessions=j.sessions||[];
+    // restore last session if exists
+    const last = localStorage.getItem("thr_session");
+    currentSession = sessions.find(s=>s.id===last) || sessions[0] || null;
+    renderSessions(); renderChat();
+  }catch(e){
+    showErr($("sideErr"), "Sessions load error: "+e.message);
   }
+}
 
-async function sendMessage() {
-        const text = userInputEl.value.trim();
-        if (!text) return;
-
-        const wallet = walletInputEl.value.trim();
-        const model = modelSelect.value;
-        saveWalletLocal(wallet);
-
-        userInputEl.value = "";
-        appendMessage("user", text);
-
-        sendBtn.disabled = true;
-        setStatus("Core: thinking…");
-
-        // typing bubble
-        const thinkingRow = document.createElement("div");
-        thinkingRow.className = "message-row ai";
-        const thinkingBubble = document.createElement("div");
-        thinkingBubble.className = "bubble";
-        thinkingBubble.textContent = "…";
-        thinkingRow.appendChild(thinkingBubble);
-        messagesEl.appendChild(thinkingRow);
-        messagesEl.scrollTop = messagesEl.scrollHeight;
-
-        try {
-            const payload = { 
-                message: text,
-                model_key: model
-            };
-            if (wallet) payload.wallet = wallet;
-            if (currentSessionId) payload.session_id = currentSessionId;
-            if (pendingAttachments.length) payload.attachments = pendingAttachments.map(a => a.file_id);
-
-            const res = await fetch("/api/chat", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            });
-
-            messagesEl.removeChild(thinkingRow);
-
-            if (!res.ok) {
-                const errData = await res.json().catch(() => ({}));
-                appendMessage("ai", "Quantum Interference: " + (errData.message || "HTTP " + res.status));
-                if (errData.response) {
-                     // Special case for "no credits" warning which comes in response field
-                     appendMessage("ai", errData.response);
-                }
-                setStatus("Core: error");
-                if (errData.credits !== undefined) setCreditsLabel(errData.credits);
-                return;
-            }
-
-            const data = await res.json();
-
-            // If backend created a session or we sent one, update list to show updated time/title
-            if (data.session_id) {
-                if (currentSessionId !== data.session_id) {
-                    currentSessionId = data.session_id;
-                }
-                loadSessions();
-  setupDragDrop(); // refresh list to show new title/timestamp
-            }
-
-            const metaParts = [];
-            if (data.status) {
-                metaParts.push(`<span>Status: ${data.status}</span>`);
-            }
-            if (data.provider) {
-                metaParts.push(`<span>Provider: ${data.provider}</span>`);
-            }
-            if (data.model) {
-                metaParts.push(`<span>Model: ${data.model}</span>`);
-            }
-
-            appendMessage(
-                "ai",
-                data.response || "[Empty response]",
-                metaParts.join(" · "),
-                data.files || []
-            );
-
-            if (data.quantum_key) {
-                setQuantumKey(data.quantum_key);
-            }
-            if (data.credits !== undefined) {
-                setCreditsLabel(data.credits);
-            }
-            setStatus("Core: " + (data.status || "online"));
-        } catch (err) {
-            if (thinkingRow.parentNode) messagesEl.removeChild(thinkingRow);
-            appendMessage("ai", "Quantum Interference Detected: " + (err.message || String(err)));
-            setStatus("Core: network error");
-        } finally {
-            sendBtn.disabled = false;
-        }
-    }
-    
-    // --- Upload Logic ---
-    aiUploadBtn.addEventListener('click', async () => {
-      const wallet = walletInputEl.value.trim();
-      if (!wallet) {
-          alert("Please enter a THR Wallet address first.");
-          return;
-      }
-      if (!aiUploadInput.files.length) return;
-
-      const fd = new FormData();
-      fd.append('wallet', wallet);
-      fd.append('file', aiUploadInput.files[0]);
-      if (currentSessionId) {
-          fd.append('session_id', currentSessionId);
-      }
-      
-      setStatus("Core: uploading...");
-      aiUploadBtn.disabled = true;
-
-      try {
-          const res = await fetch('/api/ai_upload', {
-            method: 'POST',
-            body: fd
-          });
-          const data = await res.json();
-          
-          if (res.ok) {
-              const fname = data.filename || (aiUploadInput.files[0] && aiUploadInput.files[0].name) || "file";
-              const msg   = data.message || "File uploaded to AI corpus";
-              appendMessage("ai", `Uploaded file ${fname} · ${msg}`);
-              aiUploadInput.value = ""; // clear input
-          } else {
-              alert("Upload failed: " + (data.error || "Unknown error"));
-          }
-      } catch (e) {
-          console.error(e);
-          alert("Upload network error");
-      } finally {
-          setStatus("Core: online");
-          aiUploadBtn.disabled = false;
-      }
+async function newSession(){
+  const wallet=$("wallet").value.trim();
+  if(!wallet){ showErr($("sideErr"), "Wallet required."); return; }
+  const model=$("model").value;
+  try{
+    const r=await fetch(`/api/ai_sessions/start`,{
+      method:"POST",
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet,title:"New Chat",model})
     });
+    const j=await r.json();
+    if(!j.ok) throw new Error(j.error||"failed");
+    sessions.unshift(j.session);
+    currentSession=j.session;
+    localStorage.setItem("thr_session", j.session.id);
+    renderSessions(); renderChat();
+  }catch(e){
+    showErr($("sideErr"), "New session error: "+e.message);
+  }
+}
 
-    // --- events ---
-
-    sendBtn.addEventListener("click", sendMessage);
-    userInputEl.addEventListener("keydown", (ev) => {
-        if (ev.key === "Enter" && !ev.shiftKey) {
-            ev.preventDefault();
-            sendMessage();
-        }
+async function archiveSession(id){
+  const wallet=$("wallet").value.trim();
+  try{
+    const r=await fetch(`/api/ai_sessions/delete`,{
+      method:"POST",
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet,session_id:id})
     });
-    
-    walletInputEl.addEventListener("change", () => {
-        const w = walletInputEl.value.trim();
-        saveWalletLocal(w);
-        refreshCredits();
-        loadSessions();
-  setupDragDrop();
-        // Reset view
-        messagesEl.innerHTML = '<div style="text-align:center; margin-top:40px; opacitpadding:10px;"><div>THRONOS QUANTUM CORE</div><div style="font-size:11px; margin-top:8px;">Wallet loaded. Select a session.</div></div>';
-        currentSessionId = null;
+    const j=await r.json().catch(()=>({ok:false,error:"bad json"}));
+    if(!j.ok && r.status!==404) throw new Error(j.error||"failed");
+    sessions = sessions.filter(s=>s.id!==id);
+    if(currentSession && currentSession.id===id) currentSession = sessions[0]||null;
+    renderSessions(); renderChat();
+  }catch(e){
+    showErr($("sideErr"), "Delete error: "+e.message);
+  }
+}
+
+async function uploadSelected(files){
+  const wallet=$("wallet").value.trim();
+  const sid = currentSession ? currentSession.id : "";
+  if(!files || !files.length){ return; }
+  showErr($("upErr"), "");
+  for(const file of files){
+    const fd=new FormData();
+    fd.append("wallet", wallet);
+    fd.append("session_id", sid);
+    fd.append("file", file);
+    const r=await fetch("/api/ai/files/upload",{method:"POST", body:fd});
+    const t=await r.text();
+    let j=null;
+    try{ j=JSON.parse(t);}catch(e){ throw new Error("Upload returned non‑JSON"); }
+    if(!j.ok) throw new Error(j.error||"upload failed");
+    pendingFiles.push(j.file);
+    renderPending();
+  }
+}
+
+async function sendMessage(){
+  const wallet=$("wallet").value.trim();
+  const model=$("model").value;
+  const sid=currentSession ? currentSession.id : "";
+  const msg=$("msg").value.trim();
+  if(!msg) return;
+
+  const payload = { wallet, session_id:sid, model, message:msg, attachments: pendingFiles };
+  $("msg").value="";
+  // optimistic bubble
+  const box=$("chat");
+  const b=document.createElement("div");
+  b.className="bubble me";
+  b.innerHTML = `<div>${escapeHtml(msg)}</div><div class="meta"><div>You</div><div>${escapeHtml(new Date().toLocaleString())}</div></div>`;
+  box.appendChild(b); box.scrollTop=box.scrollHeight;
+
+  try{
+    const r=await fetch("/api/chat",{
+      method:"POST",
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload)
     });
-    
-    newChatBtn.addEventListener("click", startNewSession);
+    const t=await r.text();
+    let j=null;
+    try{ j=JSON.parse(t);}catch(e){ throw new Error("Chat returned non‑JSON"); }
+    if(!j.ok) throw new Error(j.error||"chat failed");
+    const ans=document.createElement("div");
+    ans.className="bubble";
+    ans.innerHTML = `<div>${escapeHtml(j.reply||"")}</div>
+      ${Array.isArray(j.files)?`<div class="files">${j.files.map(f=>`<a class="chip" href="/api/ai/files/${encodeURIComponent(f.id)}" target="_blank">${escapeHtml(f.filename)}</a>`).join("")}</div>`:""}
+      <div class="meta"><div>Thronos</div><div>${escapeHtml(fmtTime(j.ts))}</div></div>`;
+    box.appendChild(ans); box.scrollTop=box.scrollHeight;
+    pendingFiles=[]; renderPending();
+    await loadSessions(); // refresh updated_at
+  }catch(e){
+    showErr($("upErr"), e.message);
+  }
+}
 
-    // Disconnect button clears wallet and resets state
-    const disconnectBtn = document.getElementById("disconnect-wallet-btn");
-    if (disconnectBtn) {
-        disconnectBtn.addEventListener("click", () => {
-            saveWalletLocal("");
-            walletInputEl.value = "";
-            setCreditsLabel("infinite");
-            sessionListEl.innerHTML = '<div style="padding:10px; opacity:0.7; font-size:11px;">Enter wallet to load sessions...</div>';
-            messagesEl.innerHTML = '<div style="text-align:center; margin-top:40px; opacitpadding:10px;"><div>THRONOS QUANTUM CORE</div><div style="font-size:11px; margin-top:8px;">Wallet disconnected.</div></div>';
-            currentSessionId = null;
-        });
-    }
+function escapeHtml(s){
+  return (s??"").toString().replace(/[&<>"']/g, (c)=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;" }[c]));
+}
 
-    const savedWallet = loadWalletLocal();
-    walletInputEl.value = savedWallet;
+$("loadBtn").onclick = loadSessions;
+$("newBtn").onclick = newSession;
+$("sendBtn").onclick = sendMessage;
+$("uploadBtn").onclick = async()=>{ await uploadSelected($("file").files); $("file").value=""; };
+$("msg").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ sendMessage(); } });
 
-    if (savedWallet) {
-        // When a wallet is saved, refresh credits but do not automatically load sessions.
-        // The user can choose to refresh or start a new chat. Sessions will only load after manual interaction.
-        refreshCredits();
-    } else {
-        setCreditsLabel("infinite");
-    }
-
+$("drop").addEventListener("dragover",(e)=>{ e.preventDefault(); $("drop").style.borderColor="rgba(0,255,136,.75)"; });
+$("drop").addEventListener("dragleave",()=>{ $("drop").style.borderColor="rgba(14,224,127,.35)"; });
+$("drop").addEventListener("drop", async (e)=>{
+  e.preventDefault(); $("drop").style.borderColor="rgba(14,224,127,.35)";
+  const files=[...e.dataTransfer.files];
+  await uploadSelected(files);
+});
 </script>
 </body>
 </html>

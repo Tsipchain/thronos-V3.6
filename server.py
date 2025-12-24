@@ -965,48 +965,91 @@ def api_ai_blueprints():
 
 @app.route("/api/architect_generate", methods=["POST"])
 def api_architect_generate():
-    """
-    Thronos AI Architect:
-    - Generates full project implementation based on blueprint + specs.
-    - Returns [[FILE:...]] blocks.
-    - Writes files to AI_FILES_DIR.
-    """
     if not ai_agent:
         return jsonify(error="AI Agent not available"), 503
 
     data = request.get_json() or {}
-    wallet      = (data.get("wallet") or "").strip()
-    session_id  = (data.get("session_id") or "").strip() or None
-    blueprint   = (data.get("blueprint") or "").strip()
-    project_spec = (data.get("spec") or data.get("specs") or "").strip() # Handle both keys just in case
-    model_key   = (data.get("model") or data.get("model_key") or "gemini-2.5-pro").strip()
 
-    
-    if (model_key or "").strip().lower() == "auto":
-        model_key = ""
-if not blueprint or not project_spec:
+    wallet = (data.get("wallet") or "").strip()
+    session_id = (data.get("session_id") or "").strip() or None
+    blueprint = (data.get("blueprint") or "").strip()
+    project_spec = (data.get("spec") or data.get("specs") or "").strip()
+    model_key = (data.get("model") or data.get("model_key") or "auto").strip()
+
+    if not blueprint or not project_spec:
         return jsonify(error="Missing blueprint or spec"), 400
 
-    # Load blueprint
-    bp_path = os.path.join(DATA_DIR, "ai_blueprints", blueprint)
+    # ── Ensure blueprint directory exists (FIRST RUN SAFE)
+    bp_dir = os.path.join(DATA_DIR, "ai_blueprints")
+    os.makedirs(bp_dir, exist_ok=True)
+
+    bp_path = os.path.join(bp_dir, blueprint)
+
+    # ── Auto-create blueprint if missing (first run bootstrap)
     if not os.path.exists(bp_path):
-        # Fallback: try to find it in the list if passed as name only
-        bp_dir = os.path.join(DATA_DIR, "ai_blueprints")
-        found = False
-        if os.path.exists(bp_dir):
-            for f in os.listdir(bp_dir):
-                if f == blueprint:
-                    bp_path = os.path.join(bp_dir, f)
-                    found = True
-                    break
-        if not found:
-             return jsonify(error="Blueprint not found"), 404
+        default_blueprint = (
+            "# Thronos Default Blueprint\n\n"
+            "This blueprint was auto-generated on first run.\n"
+            "It defines a full-stack AI-enabled blockchain service.\n\n"
+            "Required components:\n"
+            "- Flask backend\n"
+            "- AI Agent integration\n"
+            "- Persistent DATA_DIR usage\n"
+            "- No destructive migrations\n"
+        )
+        with open(bp_path, "w", encoding="utf-8") as f:
+            f.write(default_blueprint)
 
     try:
         with open(bp_path, "r", encoding="utf-8") as f:
             bp_text = f.read()
     except Exception as e:
         return jsonify(error=f"Cannot read blueprint: {e}"), 500
+
+    prompt = (
+        "Είσαι ο Αρχιτέκτονας του Thronos.\n"
+        "Παράγεις ΠΛΗΡΗ, λειτουργικά projects.\n"
+        "Απαντάς ΜΟΝΟ με blocks [[FILE:...]].\n\n"
+        "BLUEPRINT:\n"
+        f"{bp_text}\n\n"
+        "PROJECT SPEC:\n"
+        f"{project_spec}\n"
+    )
+
+    raw = ai_agent.generate_response(
+        prompt,
+        wallet=wallet,
+        model_key=model_key,
+        session_id=session_id,
+    )
+
+    if isinstance(raw, dict):
+        full_text = str(raw.get("response") or "")
+        quantum_key = raw.get("quantum_key") or ai_agent.generate_quantum_key()
+        status = raw.get("status", "architect")
+    else:
+        full_text = str(raw)
+        quantum_key = ai_agent.generate_quantum_key()
+        status = "architect"
+
+    files, cleaned = extract_ai_files_from_text(full_text)
+
+    enqueue_offline_corpus(
+        wallet,
+        f"[ARCHITECT:{blueprint}]",
+        full_text,
+        files,
+        session_id=session_id,
+    )
+
+    return jsonify(
+        status=status,
+        quantum_key=quantum_key,
+        blueprint=blueprint,
+        response=cleaned,
+        files=[{"filename": f["filename"], "size": f["size"]} for f in files],
+        session_id=session_id,
+    ), 200
 
     # New FULL IMPLEMENTATION prompt
     prompt = (

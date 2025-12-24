@@ -125,6 +125,119 @@ AI_CREDITS_FILE     = os.path.join(DATA_DIR, "ai_credits.json")
 # have been consumed per session.  Once the free limit is reached, further
 # requests are denied until a wallet is supplied.  The counters are stored
 # in ``AI_FREE_USAGE_FILE`` and keyed by the session ID supplied by the
+# --- Guest access (no wallet) ---
+GUEST_MAX_FREE_MESSAGES = int(os.getenv("GUEST_MAX_FREE_MESSAGES", "3"))
+GUEST_MAX_FREE_SESSIONS = int(os.getenv("GUEST_MAX_FREE_SESSIONS", "1"))  # keep it simple
+GUEST_COOKIE_NAME = "thr_guest_id"
+GUEST_TTL_SECONDS = int(os.getenv("GUEST_TTL_SECONDS", str(7*24*3600)))  # 7 days
+
+GUEST_STATE_FILE = os.path.join(DATA_DIR, "guest_state.json")
+
+def _now_ts() -> int:
+    return int(time.time())
+
+def get_or_set_guest_id():
+    gid = request.cookies.get(GUEST_COOKIE_NAME)
+    if not gid:
+        gid = f"GST{uuid.uuid4().hex[:16]}"
+    return gid
+
+def load_guest_state():
+    try:
+        with open(GUEST_STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_guest_state(state: dict):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(GUEST_STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+
+def guest_state_get(gid: str) -> dict:
+    state = load_guest_state()
+    g = state.get(gid, {})
+    # expire
+    if g.get("expires_at") and g["expires_at"] < _now_ts():
+        state.pop(gid, None)
+        save_guest_state(state)
+        return {}
+    return g
+
+def guest_state_set(gid: str, g: dict):
+    state = load_guest_state()
+    g["expires_at"] = _now_ts() + GUEST_TTL_SECONDS
+    state[gid] = g
+    save_guest_state(state)
+
+def guest_decrement_free_messages(gid: str) -> int:
+    g = guest_state_get(gid)
+    used = int(g.get("used_messages", 0))
+    used += 1
+    g["used_messages"] = used
+    guest_state_set(gid, g)
+    remaining = max(0, GUEST_MAX_FREE_MESSAGES - used)
+    return remaining
+
+def guest_remaining_free_messages(gid: str) -> int:
+    g = guest_state_get(gid)
+    used = int(g.get("used_messages", 0))
+    return max(0, GUEST_MAX_FREE_MESSAGES - used)
+
+# --- Chat file uploads ---
+AI_UPLOADS_DIR = os.path.join(DATA_DIR, "ai_uploads")
+AI_UPLOADS_INDEX = os.path.join(AI_UPLOADS_DIR, "index.json")
+
+def _safe_filename(name: str) -> str:
+    name = os.path.basename(name or "file")
+    name = re.sub(r"[^a-zA-Z0-9._-]+", "_", name)
+    return name[:128] or "file"
+
+def load_upload_index():
+    try:
+        with open(AI_UPLOADS_INDEX, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_upload_index(index: dict):
+    os.makedirs(AI_UPLOADS_DIR, exist_ok=True)
+    with open(AI_UPLOADS_INDEX, "w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False, indent=2)
+
+def store_uploaded_file(file_storage, owner_wallet: str | None, session_id: str | None, owner_guest: str | None):
+    os.makedirs(AI_UPLOADS_DIR, exist_ok=True)
+    file_id = f"F{uuid.uuid4().hex}"
+    fname = _safe_filename(file_storage.filename)
+    path = os.path.join(AI_UPLOADS_DIR, f"{file_id}__{fname}")
+    file_storage.save(path)
+    meta = {
+        "file_id": file_id,
+        "filename": fname,
+        "path": path,
+        "size": os.path.getsize(path),
+        "content_type": file_storage.mimetype,
+        "wallet": owner_wallet,
+        "guest_id": owner_guest,
+        "session_id": session_id,
+        "created_at": _now_ts()
+    }
+    idx = load_upload_index()
+    idx[file_id] = meta
+    save_upload_index(idx)
+    return meta
+
+def read_text_file_for_prompt(path: str, max_bytes: int = 200_000) -> str:
+    # best-effort: only include small text-like files
+    try:
+        with open(path, "rb") as f:
+            data = f.read(max_bytes + 1)
+        if len(data) > max_bytes:
+            return "[File too large to inline in prompt]"
+        # attempt utf-8
+        return data.decode("utf-8", errors="replace")
+    except Exception:
+        return "[Unable to read file]"
 # client.  If no session_id is provided, the counter falls back to the key
 # 'default'.  Set ``AI_FREE_MESSAGES_LIMIT`` via an environment variable to
 # control how many free messages are allowed.
@@ -1462,6 +1575,27 @@ def api_chat():
 
     data = request.get_json() or {}
     msg = (data.get("message") or "").strip()
+    attachments = data.get("attachments") or []
+    # Attachments are file_ids previously uploaded via /api/ai/files/upload
+    if attachments:
+        idx = load_upload_index()
+        parts = []
+        for fid in attachments:
+            meta = idx.get(fid)
+            if not meta:
+                continue
+            # basic ownership check: if wallet exists, enforce wallet match; else enforce guest id
+            if wallet and meta.get("wallet") and meta.get("wallet") != wallet:
+                continue
+            if (not wallet) and meta.get("guest_id") and meta.get("guest_id") != get_or_set_guest_id():
+                continue
+            text = read_text_file_for_prompt(meta.get("path",""))
+            parts.append(f"
+
+[Attachment {meta.get('filename')} | {fid}]
+{text}")
+        if parts:
+            msg = msg + "".join(parts)
     wallet = (data.get("wallet") or "").strip()
     session_id = (data.get("session_id") or "").strip() or None
     model_key = (data.get("model_key") or "").strip() or None  # <--- NEW
@@ -1667,7 +1801,18 @@ def api_ai_credits():
     """
     wallet = (request.args.get("wallet") or "").strip()
     if not wallet:
-        return jsonify({"credits": "infinite"}), 200
+        # no wallet => do not expose server-side sessions
+        gid = get_or_set_guest_id()
+        resp = jsonify({"sessions": [], "mode": "guest"})
+        resp.set_cookie(GUEST_COOKIE_NAME, gid, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+        return resp, 200
+    if not wallet:
+        gid = get_or_set_guest_id()
+        remaining = guest_remaining_free_messages(gid)
+        resp = jsonify({"mode": "guest", "credits": remaining, "max_free_messages": GUEST_MAX_FREE_MESSAGES})
+        # set cookie so we can track remaining free questions
+        resp.set_cookie(GUEST_COOKIE_NAME, gid, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+        return resp, 200
 
     credits_map = load_ai_credits()
     try:
@@ -1676,6 +1821,47 @@ def api_ai_credits():
         value = 0
     return jsonify({"wallet": wallet, "credits": value}), 200
 
+
+@app.route("/api/ai/files/upload", methods=["POST"])
+def api_ai_files_upload():
+    wallet = (request.form.get("wallet") or request.args.get("wallet") or "").strip()
+    session_id = (request.form.get("session_id") or "").strip() or None
+    gid = get_or_set_guest_id() if not wallet else None
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+    file = request.files["file"]
+    if not file or not file.filename:
+        return jsonify({"error": "Empty file"}), 400
+
+    # Optional: enforce guest limits (same as messages)
+    if not wallet and guest_remaining_free_messages(gid) <= 0:
+        return jsonify({"error": "Free limit reached. Connect wallet to upload files."}), 402
+
+    meta = store_uploaded_file(file, owner_wallet=wallet or None, session_id=session_id, owner_guest=gid)
+    resp = jsonify({"ok": True, "file": {k: meta[k] for k in ["file_id","filename","size","content_type","session_id","created_at"]}})
+    if gid:
+        resp.set_cookie(GUEST_COOKIE_NAME, gid, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+    return resp, 200
+
+@app.route("/api/ai/files/<file_id>", methods=["GET"])
+def api_ai_files_get(file_id):
+    idx = load_upload_index()
+    meta = idx.get(file_id)
+    if not meta:
+        return jsonify({"error": "Not found"}), 404
+    wallet = (request.args.get("wallet") or "").strip()
+    gid = request.cookies.get(GUEST_COOKIE_NAME)
+
+    # Ownership check
+    if meta.get("wallet"):
+        if not wallet or wallet != meta.get("wallet"):
+            return jsonify({"error": "Forbidden"}), 403
+    elif meta.get("guest_id"):
+        if not gid or gid != meta.get("guest_id"):
+            return jsonify({"error": "Forbidden"}), 403
+
+    return send_file(meta["path"], as_attachment=True, download_name=meta.get("filename") or "file")
 
 @app.route("/api/ai_history", methods=["GET"])
 def api_ai_history():
@@ -1703,6 +1889,7 @@ def api_ai_history():
     return jsonify({"wallet": wallet, "history": history}), 200
 
 @app.route("/api/ai_sessions", methods=["GET"])
+@app.route("/api/ai/sessions", methods=["GET"])
 def api_ai_sessions():
     """
     Επιστρέφει όλες τις AI sessions για συγκεκριμένο wallet.
@@ -1723,6 +1910,7 @@ def api_ai_sessions():
     return jsonify({"wallet": wallet, "sessions": sessions}), 200
 
 @app.route("/api/ai_sessions/start", methods=["POST"])
+@app.route("/api/ai/sessions/start", methods=["POST"])
 def api_ai_session_start():
     """
     Δημιουργεί νέα session για ένα wallet.
@@ -1796,6 +1984,7 @@ def api_ai_session_rename():
 # session cannot be found, it returns a 404 with an error message.
 # -----------------------------------------------------------------------------
 @app.route("/api/ai_sessions/delete", methods=["POST"])
+@app.route("/api/ai/sessions/delete", methods=["POST"])
 def api_ai_session_delete():
     data = request.get_json() or {}
     wallet = (data.get("wallet") or "").strip()

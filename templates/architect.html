@@ -178,8 +178,10 @@
             if (data.blueprints) {
                 data.blueprints.forEach(bp => {
                     const opt = document.createElement('option');
-                    opt.value = bp.filename;
-                    opt.textContent = bp.title || bp.filename;
+                    const filename = (typeof bp === 'string') ? bp : (bp.filename || '');
+                    const title = (typeof bp === 'string') ? bp : (bp.title || bp.filename || filename);
+                    opt.value = filename;
+                    opt.textContent = title;
                     blueprintSelect.appendChild(opt);
                 });
             }

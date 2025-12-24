@@ -309,7 +309,7 @@ class ThronosAI:
 
     # ─── Public API ─────────────────────────────────────────────────────────
 
-    def generate_response(self, prompt: str, wallet: Optional[str] = None) -> Dict[str, Any]:
+    def generate_response(self, prompt: str, wallet: Optional[str] = None, model_key: Optional[str] = None, session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         """
         Κεντρική μέθοδος:
         - Προσπαθεί provider(s) ανάλογα με mode

@@ -9,10 +9,40 @@ import hashlib
 from typing import Dict, Any, List, Optional
 
 # Optional providers
-try:
-    import google.generativeai as genai
+import google.generativeai as genai
 except ImportError:
     genai = None
+
+class ThronosAI:
+    def __init__(self):
+        self.gemini_api_key = (os.getenv("GEMINI_API_KEY","") or os.getenv("GOOGLE_API_KEY","")).strip()
+        self.default_model = os.getenv("GEMINI_MODEL","gemini-2.5-pro")
+        if self.gemini_api_key and genai:
+            genai.configure(api_key=self.gemini_api_key)
+
+    def generate_response(self, prompt, wallet=None, model_key=None, session_id=None, **kwargs):
+        model = model_key if model_key and model_key.startswith("gemini-") else self.default_model
+        try:
+            if not genai or not self.gemini_api_key:
+                raise RuntimeError("Gemini not available")
+            m = genai.GenerativeModel(model)
+            r = m.generate_content(prompt)
+            return {
+                "response": (getattr(r,"text","") or "").strip(),
+                "provider": "gemini",
+                "model": model,
+                "status": "online",
+                "quantum_key": secrets.token_hex(16)
+            }
+        except Exception:
+            return {
+                "response": "Απάντηση από το τοπικό blockchain log (offline γνώση).",
+                "provider": "local",
+                "model": "offline",
+                "status": "offline",
+                "quantum_key": secrets.token_hex(16)
+            }
+
 
 try:
     from openai import OpenAI

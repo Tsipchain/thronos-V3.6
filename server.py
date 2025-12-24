@@ -54,20 +54,6 @@ except ImportError as e:
     qc_aggregate = lambda *args: None
     qc_verify = lambda *args: False
 
-# Try to load optional EVM API registration.  In some deployments the evm
-# endpoints are provided via an external module (e.g. `evm_api` or
-# `evm_api_v3`).  If present, it exports a `register_evm_routes(app)`
-# function which will attach additional Flask routes to handle smart
-# contract deployment and invocation.  We attempt to import it here,
-# falling back gracefully if the module is absent.
-try:
-    from evm_api import register_evm_routes
-except Exception:
-    try:
-        from evm_api_v3 import register_evm_routes
-    except Exception:
-        register_evm_routes = None
-
 # ── Stripe Import
 try:
     import stripe
@@ -75,22 +61,32 @@ except ImportError:
     print("WARNING: 'stripe' package not found. Install with: pip install stripe")
     stripe = None
 
+# ── EVM Integration Import
+try:
+    # Attempt to import the EVM route registration helper.  In development
+    # environments this may live under evm_api_v3 rather than evm_api.
+    from evm_api import register_evm_routes  # type: ignore
+except Exception:
+    try:
+        from evm_api_v3 import register_evm_routes  # type: ignore
+    except Exception:
+        register_evm_routes = None
+
 
 # ─── CONFIG ────────────────────────────────────────
 app = Flask(__name__)
 
-# If an EVM API module is available, register its routes now.  This
-# allows the Thronos server to expose smart contract endpoints without
-# requiring the main codebase to import them unconditionally.  The
-# `register_evm_routes` function should accept the Flask app and
-# internally add its own URL rules.  If no EVM API is installed
-# (register_evm_routes is None), nothing happens.
+# Immediately after creating the Flask app, register the EVM API routes
+# if the helper has been successfully imported.  This integrates the
+# smart contract endpoints and associated functionality into the main
+# server.  When running on environments without the EVM package, this
+# will be silently skipped.
 if 'register_evm_routes' in globals() and register_evm_routes:
     try:
-        register_evm_routes(app)
-        logger.info("EVM routes registered successfully.")
-    except Exception as _e:
-        logger.error(f"Failed to register EVM routes: {_e}")
+        register_evm_routes(app, DATA_DIR, LEDGER_FILE, CHAIN_FILE, PLEDGE_CHAIN)
+        logger.info("[SERVER] EVM routes registered")
+    except Exception as e:
+        logger.error(f"EVM route registration failed: {e}")
 
 # ─── EVM INTEGRATION ────────────────────────────────────────────────────
 
@@ -120,18 +116,20 @@ WITHDRAWALS_FILE    = os.path.join(DATA_DIR, "withdrawals.json") # NEW
 AI_PACKS_FILE       = os.path.join(DATA_DIR, "ai_packs.json")
 AI_CREDITS_FILE     = os.path.join(DATA_DIR, "ai_credits.json")
 
-# File to track how many free demo messages have been used per session_id (or
-# per wallet-less chat).  When a user chats without providing a THR wallet,
-# the server will allow a limited number of free messages.  After the free
-# limit is reached, the AI service will no longer process queries until a
-# wallet is provided.  See `AI_FREE_MESSAGES_LIMIT` below.
-AI_FREE_USAGE_FILE  = os.path.join(DATA_DIR, "ai_free_usage.json")
+# --------------------------------------------------------------------------
+# AI demo usage tracking
+#
+# When a user chats with the AI without providing a THR wallet address, the
+# system treats the conversation as a free demo.  In order to prevent abuse
+# and runaway resource consumption, the server tracks how many free messages
+# have been consumed per session.  Once the free limit is reached, further
+# requests are denied until a wallet is supplied.  The counters are stored
+# in ``AI_FREE_USAGE_FILE`` and keyed by the session ID supplied by the
+# client.  If no session_id is provided, the counter falls back to the key
+# 'default'.  Set ``AI_FREE_MESSAGES_LIMIT`` via an environment variable to
+# control how many free messages are allowed.
 
-# How many free demo messages a user can send without a wallet attached.  If a
-# chat request does not include a wallet, the server will look up (or
-# initialize) a counter keyed by the session_id and decrement the remaining
-# allowances.  When the counter reaches zero, chat requests will be denied
-# until a wallet is provided.
+AI_FREE_USAGE_FILE  = os.path.join(DATA_DIR, "ai_free_usage.json")
 AI_FREE_MESSAGES_LIMIT = int(os.getenv("AI_FREE_MESSAGES_LIMIT", "3"))
 
 # AI extra storage
@@ -414,17 +412,14 @@ def load_ai_credits():
 def save_ai_credits(credits):
     save_json(AI_CREDITS_FILE, credits)
 
-def load_ai_sessions():
-    return load_json(AI_SESSIONS_FILE, [])
-
-def save_ai_sessions(sessions):
-    save_json(AI_SESSIONS_FILE, sessions)
-
+# ---------------------------------------------------------------------------
+# Free usage counters
+# ---------------------------------------------------------------------------
 def load_ai_free_usage():
     """
-    Load the free usage counters from file.  The returned object is a
-    dictionary mapping session identifiers to the number of free messages
-    already consumed.  If the file does not exist, an empty dict is
+    Load the free usage counters from disk.  The returned value is a
+    dictionary mapping session identifiers to the number of demo messages
+    already consumed.  If the file does not exist, an empty dictionary is
     returned.
     """
     return load_json(AI_FREE_USAGE_FILE, {})
@@ -432,10 +427,16 @@ def load_ai_free_usage():
 
 def save_ai_free_usage(counters):
     """
-    Persist the free usage counters to disk.  Accepts a dict mapping
-    session_id strings to integers.
+    Persist the free usage counters back to disk.  Accepts a dict mapping
+    session_id strings to integers.  The file is stored in JSON format.
     """
     save_json(AI_FREE_USAGE_FILE, counters)
+
+def load_ai_sessions():
+    return load_json(AI_SESSIONS_FILE, [])
+
+def save_ai_sessions(sessions):
+    save_json(AI_SESSIONS_FILE, sessions)
 
 def sha256d(data: bytes) -> bytes:
     return hashlib.sha256(hashlib.sha256(data).digest()).digest()
@@ -507,52 +508,43 @@ def recompute_height_offset_from_ledger():
 
 def update_last_block(entry, is_block=True):
     """
-    Update the summary of the last block in ``last_block.json``.
-
-    This function writes a summary containing the latest height, block hash,
-    timestamp, and THR address, along with the global block count and total
-    supply.  When called for a confirmed block (``is_block=True``) the
-    summary fields are taken directly from the new block.  For non‑block
-    updates (e.g. pending TX summaries) the function preserves the
-    existing height, block_hash, timestamp and thr_address from the
-    current last_block.json so that the viewer does not mistakenly
-    consider a transfer or other transaction as the last mined block.
+    Γράφει last_block.json αλλά πλέον κρατά και:
+    - block_count (με offset)
+    - total_supply (άθροισμα ledger)
+    ώστε η αρχική σελίδα να ξέρει ΠΟΣΑ block και ΠΟΣΟ supply έχουμε.
     """
-    chain = load_json(CHAIN_FILE, [])
+    chain  = load_json(CHAIN_FILE, [])
     ledger = load_json(LEDGER_FILE, {})
 
-    # Calculate block_count based on existing blocks + height offset
     blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
     block_count = HEIGHT_OFFSET + len(blocks)
+
     total_supply = round(sum(float(v) for v in ledger.values()), 6)
 
-    # Default summary values from the new entry (for block events)
-    height = entry.get("height")
-    block_hash = entry.get("block_hash") or entry.get("tx_id")
-    ts = entry.get("timestamp")
-    thr_addr = entry.get("thr_address")
-    entry_type = "block" if is_block else entry.get("type", "transfer")
-
-    # If this is not a block, preserve the previously stored summary fields
-    if not is_block:
-        try:
-            last_summary = load_json(LAST_BLOCK_FILE, {})
-            height = last_summary.get("height", height)
-            block_hash = last_summary.get("block_hash", block_hash)
-            ts = last_summary.get("timestamp", ts)
-            thr_addr = last_summary.get("thr_address", thr_addr)
-        except Exception:
-            pass
-
+    # Build the summary for the last block or transaction.  When
+    # ``is_block`` is False (e.g. for a transaction update), we want to
+    # preserve the existing block height and hash in last_block.json.  This
+    # prevents the viewer/home page from incorrectly showing the last
+    # transaction as the latest block.  Only ``block_count`` and
+    # ``total_supply`` should be updated in that case.
     summary = {
-        "height": height,
-        "block_hash": block_hash,
-        "timestamp": ts,
-        "thr_address": thr_addr,
-        "type": entry_type,
+        "height":     entry.get("height"),
+        "block_hash": entry.get("block_hash") or entry.get("tx_id"),
+        "timestamp":  entry.get("timestamp"),
+        "thr_address": entry.get("thr_address"),
+        "type": "block" if is_block else entry.get("type", "transfer"),
         "block_count": block_count,
         "total_supply": total_supply,
     }
+    if not is_block:
+        # Preserve the latest block information when updating due to
+        # transactions or other non-block events.
+        existing = load_json(LAST_BLOCK_FILE, {})
+        if existing:
+            summary["height"] = existing.get("height")
+            summary["block_hash"] = existing.get("block_hash")
+            summary["timestamp"] = existing.get("timestamp")
+            summary["thr_address"] = existing.get("thr_address")
     save_json(LAST_BLOCK_FILE, summary)
 
 def verify_btc_payment(btc_address, min_amount=MIN_AMOUNT):
@@ -916,10 +908,13 @@ def courses_page():
     """
     return render_template("courses.html")
 
-# Smart Contract (EVM) UI page.  This route serves the EVM interface where
-# developers can deploy and invoke smart contracts on the Thronos EVM
-# network.  It is separated from the courses page to avoid accidentally
-# attaching multiple routes to the same view function.
+# ---------------------------------------------------------------------------
+# EVM page
+#
+# Expose a simple UI for deploying and interacting with smart contracts via
+# the Thronos EVM.  The actual EVM JSON-RPC endpoints are registered
+# above via ``register_evm_routes``.  This route only renders the
+# front-end interface (evm.html).
 @app.route("/evm")
 def evm_page():
     return render_template("evm.html")
@@ -1052,91 +1047,45 @@ def api_ai_blueprints():
 
 @app.route("/api/architect_generate", methods=["POST"])
 def api_architect_generate():
+    """
+    Thronos AI Architect:
+    - Generates full project implementation based on blueprint + specs.
+    - Returns [[FILE:...]] blocks.
+    - Writes files to AI_FILES_DIR.
+    """
     if not ai_agent:
         return jsonify(error="AI Agent not available"), 503
 
     data = request.get_json() or {}
-
-    wallet = (data.get("wallet") or "").strip()
-    session_id = (data.get("session_id") or "").strip() or None
-    blueprint = (data.get("blueprint") or "").strip()
-    project_spec = (data.get("spec") or data.get("specs") or "").strip()
-    model_key = (data.get("model") or data.get("model_key") or "auto").strip()
+    wallet      = (data.get("wallet") or "").strip()
+    session_id  = (data.get("session_id") or "").strip() or None
+    blueprint   = (data.get("blueprint") or "").strip()
+    project_spec = (data.get("spec") or data.get("specs") or "").strip() # Handle both keys just in case
+    model_key   = (data.get("model") or data.get("model_key") or "gpt-4o").strip()
 
     if not blueprint or not project_spec:
         return jsonify(error="Missing blueprint or spec"), 400
 
-    # ── Ensure blueprint directory exists (FIRST RUN SAFE)
-    bp_dir = os.path.join(DATA_DIR, "ai_blueprints")
-    os.makedirs(bp_dir, exist_ok=True)
-
-    bp_path = os.path.join(bp_dir, blueprint)
-
-    # ── Auto-create blueprint if missing (first run bootstrap)
+    # Load blueprint
+    bp_path = os.path.join(DATA_DIR, "ai_blueprints", blueprint)
     if not os.path.exists(bp_path):
-        default_blueprint = (
-            "# Thronos Default Blueprint\n\n"
-            "This blueprint was auto-generated on first run.\n"
-            "It defines a full-stack AI-enabled blockchain service.\n\n"
-            "Required components:\n"
-            "- Flask backend\n"
-            "- AI Agent integration\n"
-            "- Persistent DATA_DIR usage\n"
-            "- No destructive migrations\n"
-        )
-        with open(bp_path, "w", encoding="utf-8") as f:
-            f.write(default_blueprint)
+        # Fallback: try to find it in the list if passed as name only
+        bp_dir = os.path.join(DATA_DIR, "ai_blueprints")
+        found = False
+        if os.path.exists(bp_dir):
+            for f in os.listdir(bp_dir):
+                if f == blueprint:
+                    bp_path = os.path.join(bp_dir, f)
+                    found = True
+                    break
+        if not found:
+             return jsonify(error="Blueprint not found"), 404
 
     try:
         with open(bp_path, "r", encoding="utf-8") as f:
             bp_text = f.read()
     except Exception as e:
         return jsonify(error=f"Cannot read blueprint: {e}"), 500
-
-    prompt = (
-        "Είσαι ο Αρχιτέκτονας του Thronos.\n"
-        "Παράγεις ΠΛΗΡΗ, λειτουργικά projects.\n"
-        "Απαντάς ΜΟΝΟ με blocks [[FILE:...]].\n\n"
-        "BLUEPRINT:\n"
-        f"{bp_text}\n\n"
-        "PROJECT SPEC:\n"
-        f"{project_spec}\n"
-    )
-
-    raw = ai_agent.generate_response(
-        prompt,
-        wallet=wallet,
-        model_key=model_key,
-        session_id=session_id,
-    )
-
-    if isinstance(raw, dict):
-        full_text = str(raw.get("response") or "")
-        quantum_key = raw.get("quantum_key") or ai_agent.generate_quantum_key()
-        status = raw.get("status", "architect")
-    else:
-        full_text = str(raw)
-        quantum_key = ai_agent.generate_quantum_key()
-        status = "architect"
-
-    files, cleaned = extract_ai_files_from_text(full_text)
-
-    enqueue_offline_corpus(
-        wallet,
-        f"[ARCHITECT:{blueprint}]",
-        full_text,
-        files,
-        session_id=session_id,
-    )
-
-    return jsonify(
-        status=status,
-        quantum_key=quantum_key,
-        blueprint=blueprint,
-        response=cleaned,
-        files=[{"filename": f["filename"], "size": f["size"]} for f in files],
-        session_id=session_id,
-    ), 200
 
     # New FULL IMPLEMENTATION prompt
     prompt = (
@@ -1520,9 +1469,11 @@ def api_chat():
     if not msg:
         return jsonify(error="Message required"), 400
 
-    # --- Credits check (μόνο αν έχουμε wallet) ---
+    # --- Credits & free usage check ---
     credits_value = None
     if wallet:
+        # If a wallet is provided, enforce the paid credits model.  Each
+        # message costs one credit and balances are tracked in ai_credits.json.
         credits_map = load_ai_credits()
         try:
             credits_value = int(credits_map.get(wallet, 0) or 0)
@@ -1543,17 +1494,17 @@ def api_chat():
                 files=[],
                 session_id=session_id,
             ), 200
-
     else:
-        # No wallet provided: enforce free usage limit
-        # Use session_id as the key for tracking demo usage.  If no
-        # session_id is provided, treat it as 'default'.
+        # No wallet supplied: treat this as a free demo chat.  Look up how
+        # many messages have already been consumed for this session.  Once
+        # the limit is reached, deny further requests until the user
+        # supplies a wallet address.
         demo_key = session_id or "default"
         counters = load_ai_free_usage()
         used = int(counters.get(demo_key, 0))
         if used >= AI_FREE_MESSAGES_LIMIT:
             warning_text = (
-                "Έχεις εξαντλήσει το όριο των δωρεάν μηνυμάτων χωρίς THR wallet.\n"
+                "Έχεις εξαντλήσει το όριο των δωρεάν μηνυμάτων χωρίς THR wallet.\\n"
                 "Σύνδεσε ένα πορτοφόλι THR για να συνεχίσεις ή αγόρασε AI pack."
             )
             return jsonify(
@@ -1565,7 +1516,8 @@ def api_chat():
                 files=[],
                 session_id=session_id,
             ), 200
-        # Increment and save demo usage counter
+        # Increment the counter and persist.  This ensures each demo call
+        # counts towards the free limit.
         counters[demo_key] = used + 1
         save_ai_free_usage(counters)
 
@@ -1612,7 +1564,17 @@ def api_chat():
         save_ai_credits(credits_map)
         credits_for_frontend = after
     else:
-        credits_for_frontend = "infinite"
+        # For demo sessions, report remaining free messages.  This
+        # communicates to the user how many additional messages they may
+        # send before needing to attach a wallet.  Note: the counter was
+        # incremented above, so we subtract from the limit.
+        try:
+            counters = load_ai_free_usage()
+            demo_key = session_id or "default"
+            used_now = int(counters.get(demo_key, 0))
+            credits_for_frontend = max(0, AI_FREE_MESSAGES_LIMIT - used_now)
+        except Exception:
+            credits_for_frontend = "infinite"
 
     resp = {
         "response": cleaned,
@@ -1747,8 +1709,11 @@ def api_ai_sessions():
     """
     wallet = (request.args.get("wallet") or "").strip()
     sessions = load_ai_sessions()
+    include_deleted = (request.args.get("include_deleted") or "").strip() in ("1","true","yes")
     if wallet:
         sessions = [s for s in sessions if s.get("wallet") == wallet]
+    if not include_deleted:
+        sessions = [s for s in sessions if not s.get("deleted")]
 
     # ταξινόμηση με βάση updated_at (πιο πρόσφατη πρώτη)
     def _key(s):
@@ -1795,6 +1760,9 @@ def api_ai_session_rename():
     data = request.get_json() or {}
     wallet = (data.get("wallet") or "").strip()
     session_id = (data.get("session_id") or "").strip()
+
+    mode = (data.get("mode") or "delete").strip().lower()
+    # mode: "archive" keeps messages for training but hides from UI.
     new_title = (data.get("title") or "").strip()
 
     if not wallet or not session_id or not new_title:
@@ -1813,6 +1781,69 @@ def api_ai_session_rename():
         return jsonify(status="ok", title=new_title), 200
     else:
         return jsonify(error="Session not found"), 404
+
+# -----------------------------------------------------------------------------
+# AI Session Deletion
+#
+# Provides an endpoint to permanently delete a session and its associated
+# history for a given wallet.  Accepts JSON payload with "wallet" and
+# "session_id" fields.  If the session exists, it is removed from
+# ``ai_sessions.json``, the corresponding entries are removed from the
+# ``ai_offline_corpus.json``, and any free usage counters keyed by the
+# session identifier are cleared.
+#
+# The endpoint responds with {"status":"ok"} on success.  If the
+# session cannot be found, it returns a 404 with an error message.
+# -----------------------------------------------------------------------------
+@app.route("/api/ai_sessions/delete", methods=["POST"])
+def api_ai_session_delete():
+    data = request.get_json() or {}
+    wallet = (data.get("wallet") or "").strip()
+    session_id = (data.get("session_id") or "").strip()
+    mode = (data.get("mode") or "delete").strip().lower()  # "archive" or "delete"
+
+    if not wallet or not session_id:
+        return jsonify(error="Missing parameters"), 400
+
+    sessions = load_ai_sessions()
+
+    # Find target session
+    target = None
+    for s in sessions:
+        if (s.get("wallet") == wallet) and (s.get("id") == session_id):
+            target = s
+            break
+
+    if not target:
+        return jsonify(error="Session not found"), 404
+
+    if mode == "archive":
+        # Soft delete: keep data for training but hide from UI
+        target["deleted"] = True
+        save_ai_sessions(sessions)
+        return jsonify(ok=True, mode="archive")
+
+    # Hard delete: remove from sessions + corpus
+    sessions = [s for s in sessions if not (s.get("wallet") == wallet and s.get("id") == session_id)]
+    save_ai_sessions(sessions)
+
+    # Remove entries from offline corpus for this session
+    try:
+        corpus = load_json(AI_CORPUS_FILE, [])
+        new_corpus = [
+            entry
+            for entry in corpus
+            if not (
+                (entry.get("wallet") or "").strip() == wallet
+                and (entry.get("session_id") or "").strip() == session_id
+            )
+        ]
+        if len(new_corpus) != len(corpus):
+            save_json(AI_CORPUS_FILE, new_corpus)
+    except Exception as e:
+        print("Corpus delete error", e)
+
+    return jsonify(ok=True, mode="delete")
 
 @app.route("/api/ai_session_history", methods=["GET"])
 def api_ai_session_history():

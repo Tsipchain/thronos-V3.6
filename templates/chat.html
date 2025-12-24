@@ -412,7 +412,12 @@
                 height: 100%;
             }
         }
-    </style>
+    
+  .attachments { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  .chip { padding:4px 10px; border:1px solid #00ff6a; border-radius:999px; cursor:pointer; font-size:12px; user-select:none; }
+  #user-input.dragover { outline:2px dashed #00ff6a; outline-offset:4px; }
+
+</style>
 </head>
 <body>
 <div class="top-bar">
@@ -476,6 +481,7 @@
         <div class="chat-footer">
             <div class="input-row">
                 <textarea id="user-input" rows="1" placeholder="Type a command to Thronos..."></textarea>
+      <div id="attachmentsContainer" class="attachments"></div>
                 <button id="send-btn" class="btn">
                     ▶ Send
                 </button>
@@ -684,7 +690,8 @@
         if (!wallet) return;
 
         currentSessionId = sid;
-        loadSessions(); // refresh active class
+        loadSessions();
+  setupDragDrop(); // refresh active class
 
         try {
             const res = await fetch(`/api/ai_session_history?wallet=${encodeURIComponent(wallet)}&session_id=${encodeURIComponent(sid)}`);
@@ -722,6 +729,7 @@
             if (data.status === "ok") {
                 currentSessionId = data.session.id;
                 loadSessions();
+  setupDragDrop();
                 messagesEl.innerHTML = "";
                 appendMessage("ai", "New secure session initialized.");
             }
@@ -748,6 +756,7 @@
                 });
                 if (res.ok) {
                     loadSessions();
+  setupDragDrop();
                 }
             } catch (e) {
                 console.error("Rename error:", e);
@@ -777,6 +786,7 @@
                     messagesEl.innerHTML = '<div style="text-align:center; margin-top:40px; opacity:0.5;"><div>THRONOS QUANTUM CORE</div><div style="font-size:11px; margin-top:8px;">Session deleted.</div></div>';
                 }
                 loadSessions();
+  setupDragDrop();
             } else {
                 alert(data.error || "Delete failed");
             }
@@ -787,7 +797,88 @@
 
     // --- Chat Logic ---
 
-    async function sendMessage() {
+      // --- Attachments (drag & drop) ---
+  let pendingAttachments = [];
+
+  function renderAttachments() {
+    const container = document.getElementById("attachmentsContainer");
+    if (!container) return;
+    container.innerHTML = "";
+    pendingAttachments.forEach(a => {
+      const chip = document.createElement("span");
+      chip.className = "chip";
+      chip.textContent = a.filename + " ✕";
+      chip.title = "Remove attachment";
+      chip.onclick = () => {
+        pendingAttachments = pendingAttachments.filter(x => x.file_id !== a.file_id);
+        renderAttachments();
+      };
+      container.appendChild(chip);
+    });
+  }
+
+  async function uploadAttachment(file) {
+    const wallet = (document.getElementById("wallet-input").value || "").trim();
+    const form = new FormData();
+    form.append("file", file);
+    if (wallet) form.append("wallet", wallet);
+    if (currentSessionId) form.append("session_id", currentSessionId);
+
+    const res = await fetch("/api/ai/files/upload", { method: "POST", body: form });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      throw new Error(data.error || "Upload failed");
+    }
+    pendingAttachments.push(data.file);
+    renderAttachments();
+    return data.file;
+  }
+
+  function setupDragDrop() {
+    const input = document.getElementById("user-input");
+    if (!input) return;
+    input.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      input.classList.add("dragover");
+    });
+    input.addEventListener("dragleave", () => input.classList.remove("dragover"));
+    input.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      input.classList.remove("dragover");
+      const files = Array.from(e.dataTransfer.files || []);
+      if (!files.length) return;
+      try {
+        setStatus("Uploading " + files.length + " file(s)...");
+        for (const f of files) {
+          await uploadAttachment(f);
+        }
+        setStatus("Files attached. Send your message when ready.");
+      } catch (err) {
+        console.error(err);
+        setStatus("Upload error: " + (err.message || err));
+      }
+    });
+
+    // Also wire the existing file picker
+    const picker = document.getElementById("aiUploadInput");
+    if (picker) {
+      picker.addEventListener("change", async () => {
+        const files = Array.from(picker.files || []);
+        if (!files.length) return;
+        try {
+          setStatus("Uploading " + files.length + " file(s)...");
+          for (const f of files) await uploadAttachment(f);
+          picker.value = "";
+          setStatus("Files attached. Send your message when ready.");
+        } catch (err) {
+          console.error(err);
+          setStatus("Upload error: " + (err.message || err));
+        }
+      });
+    }
+  }
+
+async function sendMessage() {
         const text = userInputEl.value.trim();
         if (!text) return;
 
@@ -818,6 +909,7 @@
             };
             if (wallet) payload.wallet = wallet;
             if (currentSessionId) payload.session_id = currentSessionId;
+            if (pendingAttachments.length) payload.attachments = pendingAttachments.map(a => a.file_id);
 
             const res = await fetch("/api/chat", {
                 method: "POST",
@@ -846,7 +938,8 @@
                 if (currentSessionId !== data.session_id) {
                     currentSessionId = data.session_id;
                 }
-                loadSessions(); // refresh list to show new title/timestamp
+                loadSessions();
+  setupDragDrop(); // refresh list to show new title/timestamp
             }
 
             const metaParts = [];
@@ -941,6 +1034,7 @@
         saveWalletLocal(w);
         refreshCredits();
         loadSessions();
+  setupDragDrop();
         // Reset view
         messagesEl.innerHTML = '<div style="text-align:center; margin-top:40px; opacity:0.5;"><div>THRONOS QUANTUM CORE</div><div style="font-size:11px; margin-top:8px;">Wallet loaded. Select a session.</div></div>';
         currentSessionId = null;

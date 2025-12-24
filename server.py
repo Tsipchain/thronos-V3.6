@@ -1590,10 +1590,7 @@ def api_chat():
             if (not wallet) and meta.get("guest_id") and meta.get("guest_id") != get_or_set_guest_id():
                 continue
             text = read_text_file_for_prompt(meta.get("path",""))
-            parts.append(f"
-
-[Attachment {meta.get('filename')} | {fid}]
-{text}")
+            parts.append(f"\n\n[Attachment {meta.get('filename')} | {fid}]\n{text}")
         if parts:
             msg = msg + "".join(parts)
     wallet = (data.get("wallet") or "").strip()

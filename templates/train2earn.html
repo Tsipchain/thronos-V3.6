@@ -1,0 +1,671 @@
+{% extends "base.html" %}
+{% block title %}🏋️ Thronos Train‑to‑Earn{% endblock %}
+
+{% block styles %}
+<style>
+    .t2e-container {
+        max-width: 1200px;
+        margin: 30px auto;
+        color: #d7ffe6;
+    }
+    .t2e-header {
+        text-align: center;
+        margin-bottom: 40px;
+        padding: 30px;
+        background: linear-gradient(135deg, #0a0f1f 0%, #141a2e 100%);
+        border: 1px solid #2a4a7f;
+        border-radius: 16px;
+    }
+    .t2e-header h1 {
+        color: #5C9FFF;
+        letter-spacing: 3px;
+        font-size: 2.5em;
+        margin: 0 0 10px 0;
+        text-shadow: 0 0 20px rgba(92, 159, 255, 0.3);
+    }
+    .t2e-header p {
+        opacity: 0.9;
+        font-size: 1.1em;
+        margin: 10px 0;
+    }
+    .t2e-stats {
+        display: flex;
+        gap: 20px;
+        justify-content: center;
+        margin-top: 20px;
+    }
+    .stat-box {
+        background: rgba(0, 0, 0, 0.3);
+        padding: 15px 25px;
+        border-radius: 10px;
+        border: 1px solid #2a4a7f;
+    }
+    .stat-box .label {
+        font-size: 0.9em;
+        opacity: 0.7;
+        margin-bottom: 5px;
+    }
+    .stat-box .value {
+        font-size: 1.8em;
+        font-weight: bold;
+        color: #5C9FFF;
+    }
+    .t2e-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+        margin-bottom: 30px;
+    }
+    @media (max-width: 768px) {
+        .t2e-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+    .panel {
+        background: #0a0f1f;
+        border: 1px solid #2a4a7f;
+        border-radius: 14px;
+        padding: 20px;
+    }
+    .panel h3 {
+        margin-top: 0;
+        color: #5C9FFF;
+        border-bottom: 1px solid #2a4a7f;
+        padding-bottom: 10px;
+    }
+    .input-group {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+    }
+    .input-field {
+        flex: 1;
+        min-width: 200px;
+        padding: 12px;
+        border-radius: 10px;
+        border: 1px solid #2a4a7f;
+        background: #050a15;
+        color: #d7ffe6;
+        font-family: monospace;
+    }
+    .input-field:focus {
+        outline: none;
+        border-color: #5C9FFF;
+        box-shadow: 0 0 0 2px rgba(92, 159, 255, 0.1);
+    }
+    .textarea-field {
+        width: 100%;
+        min-height: 120px;
+        padding: 12px;
+        border-radius: 10px;
+        border: 1px solid #2a4a7f;
+        background: #050a15;
+        color: #d7ffe6;
+        font-family: monospace;
+        resize: vertical;
+    }
+    .textarea-field:focus {
+        outline: none;
+        border-color: #5C9FFF;
+        box-shadow: 0 0 0 2px rgba(92, 159, 255, 0.1);
+    }
+    .btn-primary {
+        padding: 12px 20px;
+        border-radius: 10px;
+        border: 1px solid #5C9FFF;
+        background: #0a1428;
+        color: #5C9FFF;
+        cursor: pointer;
+        font-weight: bold;
+        transition: all 0.3s;
+    }
+    .btn-primary:hover {
+        background: #5C9FFF;
+        color: #000;
+        box-shadow: 0 0 15px rgba(92, 159, 255, 0.4);
+    }
+    .btn-secondary {
+        padding: 10px 16px;
+        border-radius: 8px;
+        border: 1px solid #2a4a7f;
+        background: #0a1428;
+        color: #d7ffe6;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+    .btn-secondary:hover {
+        border-color: #5C9FFF;
+        background: rgba(92, 159, 255, 0.1);
+    }
+    .contribution-card {
+        border: 1px solid #1a3a5f;
+        border-radius: 12px;
+        padding: 16px;
+        background: #050a15;
+        margin-bottom: 12px;
+        transition: all 0.3s;
+    }
+    .contribution-card:hover {
+        border-color: #5C9FFF;
+        box-shadow: 0 0 20px rgba(92, 159, 255, 0.15);
+        transform: translateY(-2px);
+    }
+    .contribution-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+    }
+    .contribution-type {
+        font-weight: 700;
+        color: #5C9FFF;
+        font-size: 1.1em;
+    }
+    .contribution-reward {
+        background: rgba(92, 159, 255, 0.2);
+        padding: 6px 12px;
+        border-radius: 8px;
+        font-weight: bold;
+        color: #5C9FFF;
+    }
+    .contribution-meta {
+        opacity: 0.85;
+        font-size: 13px;
+        margin: 4px 0;
+    }
+    .contribution-meta code {
+        background: rgba(92, 159, 255, 0.1);
+        padding: 2px 6px;
+        border-radius: 4px;
+        color: #5C9FFF;
+    }
+    .log-box {
+        white-space: pre-wrap;
+        margin-top: 12px;
+        background: #050a15;
+        border: 1px solid #1a3a5f;
+        border-radius: 12px;
+        padding: 12px;
+        min-height: 140px;
+        font-family: monospace;
+        font-size: 12px;
+        max-height: 300px;
+        overflow-y: auto;
+    }
+    .empty-state {
+        text-align: center;
+        padding: 40px;
+        opacity: 0.6;
+    }
+    .loading {
+        text-align: center;
+        padding: 20px;
+        color: #5C9FFF;
+    }
+    .error {
+        color: #ff6b6b;
+        background: rgba(255, 107, 107, 0.1);
+        padding: 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 107, 107, 0.3);
+        margin-top: 10px;
+    }
+    .upload-zone {
+        border: 2px dashed #2a4a7f;
+        border-radius: 12px;
+        padding: 30px;
+        text-align: center;
+        background: #050a15;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+    .upload-zone:hover {
+        border-color: #5C9FFF;
+        background: rgba(92, 159, 255, 0.05);
+    }
+    .upload-zone.dragover {
+        border-color: #5C9FFF;
+        background: rgba(92, 159, 255, 0.1);
+    }
+    .file-list {
+        margin-top: 15px;
+    }
+    .file-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px;
+        background: rgba(92, 159, 255, 0.05);
+        border: 1px solid #2a4a7f;
+        border-radius: 8px;
+        margin-bottom: 8px;
+    }
+    .file-item .remove {
+        color: #ff6b6b;
+        cursor: pointer;
+        padding: 4px 8px;
+        border-radius: 4px;
+    }
+    .file-item .remove:hover {
+        background: rgba(255, 107, 107, 0.2);
+    }
+    .reward-tier {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px;
+        background: rgba(92, 159, 255, 0.05);
+        border: 1px solid #2a4a7f;
+        border-radius: 8px;
+        margin-bottom: 10px;
+    }
+    .reward-tier:hover {
+        background: rgba(92, 159, 255, 0.1);
+        border-color: #5C9FFF;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="t2e-container">
+    <!-- Header Section -->
+    <div class="t2e-header">
+        <h1>🏋️ TRAIN‑TO‑EARN</h1>
+        <p>Συνεισφέρε δεδομένα εκπαίδευσης AI, βελτίωσε το σύστημα, κέρδισε T2E tokens</p>
+        <div class="t2e-stats">
+            <div class="stat-box">
+                <div class="label">Total Contributions</div>
+                <div class="value" id="totalContributions">0</div>
+            </div>
+            <div class="stat-box">
+                <div class="label">Active Contributors</div>
+                <div class="value" id="totalContributors">0</div>
+            </div>
+            <div class="stat-box">
+                <div class="label">T2E Distributed</div>
+                <div class="value" id="totalT2E">0</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Wallet Connection -->
+    <div class="panel" style="margin-bottom: 20px;">
+        <h3>🔐 Wallet Connection</h3>
+        <div class="input-group">
+            <input id="wallet" class="input-field" placeholder="THR wallet address" />
+            <input id="secret" class="input-field" type="password" placeholder="auth_secret" />
+            <input id="passphrase" class="input-field" type="password" placeholder="passphrase (optional)" />
+            <button id="connectBtn" class="btn-primary">Connect</button>
+        </div>
+        <div id="walletStatus" style="margin-top: 10px; display: none;">
+            <span style="color: #5C9FFF;">✓ Connected:</span> <code id="connectedWallet"></code>
+            <span style="margin-left: 15px;">T2E Balance: <strong id="t2eBalance">0</strong></span>
+        </div>
+    </div>
+
+    <!-- Main Grid -->
+    <div class="t2e-grid">
+        <!-- Contribute Data -->
+        <div class="panel">
+            <h3>📤 Contribute Training Data</h3>
+            
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 8px; font-weight: bold;">Contribution Type:</label>
+                <select id="contributionType" class="input-field" style="width: 100%;">
+                    <option value="conversation">💬 AI Conversation Pair</option>
+                    <option value="code">💻 Code Sample</option>
+                    <option value="document">📄 Document/Article</option>
+                    <option value="qa">❓ Q&A Pair</option>
+                    <option value="dataset">📊 Dataset (JSON/CSV)</option>
+                </select>
+            </div>
+
+            <div id="conversationForm" style="display: block;">
+                <textarea id="userInput" class="textarea-field" placeholder="User Input / Question"></textarea>
+                <textarea id="aiResponse" class="textarea-field" placeholder="Expected AI Response" style="margin-top: 10px;"></textarea>
+            </div>
+
+            <div id="fileUploadForm" style="display: none;">
+                <div class="upload-zone" id="uploadZone">
+                    <div style="font-size: 3em; margin-bottom: 10px;">📁</div>
+                    <div style="font-size: 1.2em; margin-bottom: 10px;">Drop files here or click to upload</div>
+                    <div style="opacity: 0.7; font-size: 0.9em;">Supported: .txt, .json, .csv, .md, .py, .js</div>
+                    <input type="file" id="fileInput" multiple style="display: none;" />
+                </div>
+                <div class="file-list" id="fileList"></div>
+            </div>
+
+            <div style="margin-top: 15px;">
+                <label style="display: block; margin-bottom: 8px;">Tags (comma-separated):</label>
+                <input id="tags" class="input-field" placeholder="e.g., python, machine-learning, tutorial" style="width: 100%;" />
+            </div>
+
+            <button id="submitBtn" class="btn-primary" style="width: 100%; margin-top: 15px;">Submit Contribution</button>
+            <div class="log-box" id="log">Ready to accept contributions...</div>
+        </div>
+
+        <!-- Reward Tiers & History -->
+        <div class="panel">
+            <h3>💰 Reward Tiers</h3>
+            <div class="reward-tier">
+                <div>
+                    <div style="font-weight: bold;">💬 Conversation Pair</div>
+                    <div style="font-size: 0.9em; opacity: 0.8;">High-quality Q&A dialogue</div>
+                </div>
+                <div class="contribution-reward">5 T2E</div>
+            </div>
+            <div class="reward-tier">
+                <div>
+                    <div style="font-weight: bold;">💻 Code Sample</div>
+                    <div style="font-size: 0.9em; opacity: 0.8;">Working code with comments</div>
+                </div>
+                <div class="contribution-reward">10 T2E</div>
+            </div>
+            <div class="reward-tier">
+                <div>
+                    <div style="font-weight: bold;">📄 Document/Article</div>
+                    <div style="font-size: 0.9em; opacity: 0.8;">Educational content</div>
+                </div>
+                <div class="contribution-reward">15 T2E</div>
+            </div>
+            <div class="reward-tier">
+                <div>
+                    <div style="font-weight: bold;">❓ Q&A Pair</div>
+                    <div style="font-size: 0.9em; opacity: 0.8;">Question with detailed answer</div>
+                </div>
+                <div class="contribution-reward">8 T2E</div>
+            </div>
+            <div class="reward-tier">
+                <div>
+                    <div style="font-weight: bold;">📊 Dataset</div>
+                    <div style="font-size: 0.9em; opacity: 0.8;">Structured data file</div>
+                </div>
+                <div class="contribution-reward">20 T2E</div>
+            </div>
+
+            <h3 style="margin-top: 30px;">📜 Your Contributions</h3>
+            <button id="refreshHistory" class="btn-secondary" style="width: 100%; margin-bottom: 15px;">🔄 Refresh History</button>
+            <div id="contributionHistory"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let connectedWallet = null;
+let connectedSecret = null;
+let connectedPassphrase = null;
+let uploadedFiles = [];
+
+// Reward mapping
+const REWARD_MAP = {
+    'conversation': 5,
+    'code': 10,
+    'document': 15,
+    'qa': 8,
+    'dataset': 20
+};
+
+// API Helpers
+async function apiGet(url) {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return await r.json();
+}
+
+async function apiPost(url, body) {
+    const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return await r.json();
+}
+
+// Logging
+function log(message, isError = false) {
+    const logBox = $("log");
+    const timestamp = new Date().toLocaleTimeString();
+    const prefix = isError ? "❌ ERROR" : "✓";
+    logBox.textContent = `[${timestamp}] ${prefix} ${message}\n\n${logBox.textContent}`;
+    logBox.style.color = isError ? "#ff6b6b" : "#d7ffe6";
+}
+
+// Connect Wallet
+$("connectBtn").onclick = async () => {
+    const wallet = $("wallet").value.trim();
+    const secret = $("secret").value.trim();
+    const passphrase = $("passphrase").value.trim();
+    
+    if (!wallet) {
+        log("Please enter a wallet address", true);
+        return;
+    }
+    
+    connectedWallet = wallet;
+    connectedSecret = secret;
+    connectedPassphrase = passphrase;
+    
+    $("walletStatus").style.display = "block";
+    $("connectedWallet").textContent = wallet;
+    
+    // Load T2E balance (placeholder - implement backend endpoint)
+    $("t2eBalance").textContent = "0";
+    
+    log(`Connected wallet: ${wallet}`);
+    await loadHistory();
+};
+
+// Contribution Type Change
+$("contributionType").onchange = () => {
+    const type = $("contributionType").value;
+    if (type === 'dataset' || type === 'document' || type === 'code') {
+        $("conversationForm").style.display = "none";
+        $("fileUploadForm").style.display = "block";
+    } else {
+        $("conversationForm").style.display = "block";
+        $("fileUploadForm").style.display = "none";
+    }
+};
+
+// File Upload
+const uploadZone = $("uploadZone");
+const fileInput = $("fileInput");
+
+uploadZone.onclick = () => fileInput.click();
+
+uploadZone.ondragover = (e) => {
+    e.preventDefault();
+    uploadZone.classList.add("dragover");
+};
+
+uploadZone.ondragleave = () => {
+    uploadZone.classList.remove("dragover");
+};
+
+uploadZone.ondrop = (e) => {
+    e.preventDefault();
+    uploadZone.classList.remove("dragover");
+    handleFiles(e.dataTransfer.files);
+};
+
+fileInput.onchange = (e) => {
+    handleFiles(e.target.files);
+};
+
+function handleFiles(files) {
+    uploadedFiles = [...files];
+    renderFileList();
+}
+
+function renderFileList() {
+    const list = $("fileList");
+    list.innerHTML = "";
+    
+    uploadedFiles.forEach((file, idx) => {
+        const item = document.createElement("div");
+        item.className = "file-item";
+        item.innerHTML = `
+            <span>📄 ${file.name} (${(file.size / 1024).toFixed(2)} KB)</span>
+            <span class="remove" data-idx="${idx}">✕</span>
+        `;
+        item.querySelector(".remove").onclick = () => {
+            uploadedFiles.splice(idx, 1);
+            renderFileList();
+        };
+        list.appendChild(item);
+    });
+}
+
+// Submit Contribution
+$("submitBtn").onclick = async () => {
+    if (!connectedWallet || !connectedSecret) {
+        log("Please connect wallet first", true);
+        return;
+    }
+    
+    const type = $("contributionType").value;
+    const tags = $("tags").value.trim().split(",").map(t => t.trim()).filter(t => t);
+    
+    let content = {};
+    
+    if (type === 'conversation' || type === 'qa') {
+        const userInput = $("userInput").value.trim();
+        const aiResponse = $("aiResponse").value.trim();
+        
+        if (!userInput || !aiResponse) {
+            log("Please fill in both user input and AI response", true);
+            return;
+        }
+        
+        content = { user: userInput, assistant: aiResponse };
+    } else {
+        if (uploadedFiles.length === 0) {
+            log("Please upload at least one file", true);
+            return;
+        }
+        
+        // Read file contents
+        const fileContents = await Promise.all(
+            uploadedFiles.map(file => {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => resolve({ name: file.name, content: e.target.result });
+                    reader.onerror = reject;
+                    reader.readAsText(file);
+                });
+            })
+        );
+        
+        content = { files: fileContents };
+    }
+    
+    const reward = REWARD_MAP[type] || 5;
+    
+    try {
+        log(`Submitting ${type} contribution...`);
+        
+        const payload = {
+            contributor: connectedWallet,
+            type: type,
+            content: content,
+            tags: tags,
+            reward_t2e: reward,
+            auth_secret: connectedSecret,
+            passphrase: connectedPassphrase
+        };
+        
+        const result = await apiPost("/api/v1/train2earn/contribute", payload);
+        
+        if (result.status === "success") {
+            log(`Contribution accepted! Earned ${reward} T2E. TX: ${result.tx_id || 'pending'}`);
+            
+            // Clear form
+            $("userInput").value = "";
+            $("aiResponse").value = "";
+            $("tags").value = "";
+            uploadedFiles = [];
+            renderFileList();
+            
+            await loadHistory();
+        } else {
+            log(`Contribution failed: ${result.message || 'Unknown error'}`, true);
+        }
+    } catch (e) {
+        log(`Submission error: ${e.message}`, true);
+    }
+};
+
+// Load Contribution History
+async function loadHistory() {
+    if (!connectedWallet) return;
+    
+    const box = $("contributionHistory");
+    box.innerHTML = '<div class="loading">Loading history...</div>';
+    
+    try {
+        const data = await apiGet(`/api/v1/train2earn/contributions/${connectedWallet}`);
+        const contributions = data.contributions || [];
+        
+        box.innerHTML = "";
+        
+        if (contributions.length === 0) {
+            box.innerHTML = '<div class="empty-state">No contributions yet.<br>Start contributing to earn T2E!</div>';
+        } else {
+            contributions.forEach(c => {
+                const card = document.createElement("div");
+                card.className = "contribution-card";
+                card.innerHTML = `
+                    <div class="contribution-header">
+                        <div class="contribution-type">${getTypeIcon(c.type)} ${c.type}</div>
+                        <div class="contribution-reward">+${c.reward_t2e} T2E</div>
+                    </div>
+                    <div class="contribution-meta">
+                        📅 ${new Date(c.timestamp).toLocaleString()}
+                    </div>
+                    <div class="contribution-meta">
+                        🏷️ ${(c.tags || []).join(", ") || "No tags"}
+                    </div>
+                `;
+                box.appendChild(card);
+            });
+        }
+        
+        // Update stats
+        $("totalContributions").textContent = contributions.length;
+        const totalT2E = contributions.reduce((sum, c) => sum + (c.reward_t2e || 0), 0);
+        $("totalT2E").textContent = totalT2E.toFixed(2);
+        
+    } catch (e) {
+        box.innerHTML = `<div class="error">Failed to load history: ${e.message}</div>`;
+    }
+}
+
+function getTypeIcon(type) {
+    const icons = {
+        'conversation': '💬',
+        'code': '💻',
+        'document': '📄',
+        'qa': '❓',
+        'dataset': '📊'
+    };
+    return icons[type] || '📝';
+}
+
+// Refresh History
+$("refreshHistory").onclick = loadHistory;
+
+// Auto-load wallet from localStorage
+const savedWallet = localStorage.getItem('thr_address');
+if (savedWallet) {
+    $("wallet").value = savedWallet;
+}
+
+// Initialize stats (placeholder)
+$("totalContributions").textContent = "0";
+$("totalContributors").textContent = "0";
+$("totalT2E").textContent = "0";
+</script>
+{% endblock %}

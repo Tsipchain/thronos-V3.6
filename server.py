@@ -4635,21 +4635,31 @@ def chat_page_v2():
 
 # ... ΤΕΛΟΣ όλων των routes / helpers ...
 
-# === AI Session API Fixes (append to end of server.py) ===========================
+# --- AI Session API Fixes (append to end of server.py) ----------------------
 from flask import make_response
 
 def _current_actor_id(wallet: str | None) -> tuple[str, str | None]:
-    ...
-# ΟΛΟ το block v2 εδώ
-...
+    """
+    Επιστρέφει (actor_id, wallet_for_ai)
+    - Αν ο χρήστης έχει THR wallet, actor_id == wallet
+    - Αλλιώς χρησιμοποιούμε το GUEST_COOKIE_NAME για σταθερό guest id
+    """
+    if wallet:
+        # Logged in: πορτοφόλι παντού
+        return wallet, wallet
 
-print("✅ AI Session fixes loaded - supports guest mode and file uploads")
+    guest_id = request.cookies.get(GUEST_COOKIE_NAME)
+    if not guest_id:
+        guest_id = secrets.token_hex(16)
 
+    return guest_id, None
+
+print("✓ AI Session fixes loaded - supports guest mode and file uploads")
 # --- Startup hooks ---
 ensure_ai_wallet()
 recompute_height_offset_from_ledger()
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 3333))
-    app.run(host="0.0.0.0", port=port)
-
+    port = int(os.getenv("PORT", 13311))
+    host = os.getenv("HOST", "0.0.0.0")
+    app.run(host=host, port=port)

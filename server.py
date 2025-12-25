@@ -317,6 +317,15 @@ STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "pk_live_n7kIflBg8O
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "whsec_PLACEHOLDER")
 DOMAIN_URL = os.getenv("DOMAIN_URL", "http://localhost:3333")
 
+
+# Optional Stripe dependency (server may run without it)
+stripe = None
+try:
+    import stripe as _stripe  # type: ignore
+    stripe = _stripe
+except Exception:
+    stripe = None
+
 if stripe:
     stripe.api_key = STRIPE_SECRET_KEY
 

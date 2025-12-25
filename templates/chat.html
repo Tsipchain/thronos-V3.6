@@ -149,7 +149,7 @@ async function loadSessions(){
   if(!wallet){ showErr($("sideErr"), "Wallet required."); return; }
   showErr($("sideErr"), "");
   try{
-    const r=await fetch(`/api/ai_sessions?wallet=${encodeURIComponent(wallet)}`);
+    const r=await fetch(`/api/ai/sessions?wallet=${encodeURIComponent(wallet)}`);
     const t=await r.text();
     let j=null;
     try{ j=JSON.parse(t); }catch(e){ throw new Error("Non‑JSON response from server"); }
@@ -169,7 +169,7 @@ async function newSession(){
   if(!wallet){ showErr($("sideErr"), "Wallet required."); return; }
   const model=$("model").value;
   try{
-    const r=await fetch(`/api/ai_sessions/start`,{
+    const r=await fetch(`/api/ai/sessions/start`,{
       method:"POST",
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({wallet,title:"New Chat",model})
@@ -188,7 +188,7 @@ async function newSession(){
 async function archiveSession(id){
   const wallet=$("wallet").value.trim();
   try{
-    const r=await fetch(`/api/ai_sessions/delete`,{
+    const r=await fetch(`/api/ai/sessions/delete`,{
       method:"POST",
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({wallet,session_id:id})
@@ -213,12 +213,15 @@ async function uploadSelected(files){
     fd.append("wallet", wallet);
     fd.append("session_id", sid);
     fd.append("file", file);
+    if (thrWallet) fd.append("wallet", thrWallet);
+    if (currentSessionId) fd.append("session_id", currentSessionId);
+    fd.append("purpose","chat");
     const r=await fetch("/api/ai/files/upload",{method:"POST", body:fd});
     const t=await r.text();
     let j=null;
     try{ j=JSON.parse(t);}catch(e){ throw new Error("Upload returned non‑JSON"); }
     if(!j.ok) throw new Error(j.error||"upload failed");
-    pendingFiles.push(j.file);
+    if (Array.isArray(j.files)) { pendingFiles.push(...j.files); } else if (j.file) { pendingFiles.push(j.file); }
     renderPending();
   }
 }
@@ -230,7 +233,8 @@ async function sendMessage(){
   const msg=$("msg").value.trim();
   if(!msg) return;
 
-  const payload = { wallet, session_id:sid, model, message:msg, attachments: pendingFiles };
+  const payload = { wallet, session_id:sid, model, message:msg, wallet: thrWallet,
+      attachments: pendingFiles };
   $("msg").value="";
   // optimistic bubble
   const box=$("chat");

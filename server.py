@@ -30,7 +30,8 @@ from datetime import datetime
 from PIL import Image
 
 import re
-import mimetypesquests
+import mimetypes
+import requests
 from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, url_for, send_file
 from werkzeug.utils import secure_filename
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -55,41 +56,26 @@ except ImportError as e:
     qc_aggregate = lambda *args: None
     qc_verify = lambda *args: False
 
-# ── Stripe Import
+# ── Optional EVM routes (block explorer / tx viewer endpoints)
 try:
-    import stripe
-except ImportError:
-    print("WARNING: 'stripe' package not found. Install with: pip install stripe")
-    stripe = None
-
-# ── EVM Integration Import
-try:
-    # Attempt to import the EVM route registration helper.  In development
-    # environments this may live under evm_api_v3 rather than evm_api.
-    from evm_api import re
-import mimetypesgister_evm_routes  # type: ignore
+    from evm_api import register_evm_routes  # type: ignore
 except Exception:
     try:
-        from evm_api_v3 import re
-import mimetypesgister_evm_routes  # type: ignore
+        from evm_api_v3 import register_evm_routes  # type: ignore
     except Exception:
-        register_evm_routes = None
-
+        register_evm_routes = None  # type: ignore
 
 # ─── CONFIG ────────────────────────────────────────
 app = Flask(__name__)
 
-# Immediately after creating the Flask app, register the EVM API routes
-# if the helper has been successfully imported.  This integrates the
-# smart contract endpoints and associated functionality into the main
-# server.  When running on environments without the EVM package, this
-# will be silently skipped.
-if 'register_evm_routes' in globals() and register_evm_routes:
+# Register optional EVM routes (if module exists)
+if register_evm_routes is not None:
     try:
-        register_evm_routes(app, DATA_DIR, LEDGER_FILE, CHAIN_FILE, PLEDGE_CHAIN)
-        logger.info("[SERVER] EVM routes registered")
-    except Exception as e:
-        logger.error(f"EVM route registration failed: {e}")
+        register_evm_routes(app)  # type: ignore
+        print('[EVM] routes registered')
+    except Exception as _e:
+        print(f'[EVM] routes not registered: {_e}')
+
 
 # ─── EVM INTEGRATION ────────────────────────────────────────────────────
 

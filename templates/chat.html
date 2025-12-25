@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Thronos Quantum Chat</title>
+  <link rel="icon" type="image/png" href="/static/img/favicon.png">
   <style>
     :root{--bg:#050a08;--panel:#07110d;--fg:#dfffe9;--muted:#6fe7b0;--border:#0ee07f;--accent:#00ff88;}
     html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
@@ -29,8 +30,12 @@
     .drop{flex:1;border:1px dashed rgba(14,224,127,.35);border-radius:12px;padding:10px;background:rgba(0,0,0,.18)}
     .row{display:flex;gap:8px;align-items:center}
     .files{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
-    .chip{border:1px solid rgba(14,224,127,.25);border-radius:999px;padding:4px 10px;font-size:12px;color:rgba(223,255,233,.85)}
+    .chip{border:1px solid rgba(14,224,127,.25);border-radius:999px;padding:4px 10px;font-size:12px;color:rgba(223,255,233,.85);text-decoration:none;display:inline-block}
+    .chip:hover{background:rgba(0,255,136,.12);border-color:var(--accent)}
     .err{color:#ffb3b3;font-size:12px;margin-top:8px}
+    .file-item{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid rgba(14,224,127,.25);border-radius:8px;background:rgba(0,0,0,.15)}
+    .file-item .remove{cursor:pointer;color:#ff6b6b;font-weight:bold;padding:2px 6px}
+    .file-item .remove:hover{background:rgba(255,0,0,.15);border-radius:4px}
   </style>
 </head>
 <body>
@@ -44,8 +49,8 @@
       <select id="model" class="input" style="max-width:190px">
         <option value="auto">Auto (Smart)</option>
         <option value="gpt-4o">GPT‑4o</option>
-        <option value="gpt-4.1-mini">GPT‑4.1‑mini</option>
-        <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+        <option value="gpt-4o-mini">GPT‑4o‑mini</option>
+        <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash</option>
       </select>
       <button class="btn" id="loadBtn">Load</button>
     </div>
@@ -83,7 +88,7 @@
 const $ = (id)=>document.getElementById(id);
 let currentSession = null;
 let sessions = [];
-let pendingFiles = []; // {id,filename,size,content_type}
+let pendingFiles = []; // {id,name,size,mimetype}
 
 function showErr(el, msg){
   el.style.display = msg ? "block":"none";
@@ -109,7 +114,7 @@ function renderSessions(){
         <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(s.title||"New Chat")}</div>
         <small>${escapeHtml(fmtTime(s.updated_at||s.created_at))}</small>
       </div>
-      <button class="x" title="Hide session (kept for training)">✕</button>
+      <button class="x" title="Archive session (kept for training)">✕</button>
     `;
     div.children[0].onclick = ()=>{ currentSession=s; localStorage.setItem("thr_session", s.id); renderSessions(); renderChat(); };
     div.querySelector(".x").onclick = async (ev)=>{
@@ -123,10 +128,9 @@ function renderChat(){
   const box=$("chat");
   box.innerHTML="";
   if(!currentSession){
-    box.innerHTML = `<div style="opacity:.6">wallet loaded. select a session.</div>`;
+    box.innerHTML = `<div style="opacity:.6">Wallet loaded. Select a session or create new.</div>`;
     return;
   }
-  // Minimal: show session header only. Messages are still handled by your existing /api/chat pipeline.
   const head=document.createElement("div");
   head.className="bubble";
   head.innerHTML = `<div class="meta"><div>Session: <b>${escapeHtml(currentSession.title)}</b></div><div>${escapeHtml(currentSession.id)}</div></div>`;
@@ -136,10 +140,14 @@ function renderChat(){
 function renderPending(){
   const p=$("pending");
   p.innerHTML="";
-  pendingFiles.forEach(f=>{
+  pendingFiles.forEach((f,idx)=>{
     const c=document.createElement("div");
-    c.className="chip";
-    c.textContent = `${f.filename} (${Math.round((f.size||0)/1024)} KB)`;
+    c.className="file-item";
+    c.innerHTML = `
+      <span>${escapeHtml(f.name)} (${Math.round((f.size||0)/1024)} KB)</span>
+      <span class="remove" data-idx="${idx}">✕</span>
+    `;
+    c.querySelector(".remove").onclick = ()=>{ pendingFiles.splice(idx,1); renderPending(); };
     p.appendChild(c);
   });
 }
@@ -155,7 +163,6 @@ async function loadSessions(){
     try{ j=JSON.parse(t); }catch(e){ throw new Error("Non‑JSON response from server"); }
     if(!j.ok) throw new Error(j.error||"failed");
     sessions=j.sessions||[];
-    // restore last session if exists
     const last = localStorage.getItem("thr_session");
     currentSession = sessions.find(s=>s.id===last) || sessions[0] || null;
     renderSessions(); renderChat();
@@ -199,7 +206,7 @@ async function archiveSession(id){
     if(currentSession && currentSession.id===id) currentSession = sessions[0]||null;
     renderSessions(); renderChat();
   }catch(e){
-    showErr($("sideErr"), "Delete error: "+e.message);
+    showErr($("sideErr"), "Archive error: "+e.message);
   }
 }
 
@@ -208,21 +215,29 @@ async function uploadSelected(files){
   const sid = currentSession ? currentSession.id : "";
   if(!files || !files.length){ return; }
   showErr($("upErr"), "");
+  
+  const fd=new FormData();
+  if(wallet) fd.append("wallet", wallet);
+  if(sid) fd.append("session_id", sid);
+  fd.append("purpose","chat");
+  
   for(const file of files){
-    const fd=new FormData();
-    fd.append("wallet", wallet);
-    fd.append("session_id", sid);
-    fd.append("file", file);
-    if (wallet) fd.append("wallet", wallet);
-    if (currentSessionId) fd.append("session_id", currentSessionId);
-    fd.append("purpose","chat");
+    fd.append("files", file);
+  }
+  
+  try{
     const r=await fetch("/api/ai/files/upload",{method:"POST", body:fd});
     const t=await r.text();
     let j=null;
     try{ j=JSON.parse(t);}catch(e){ throw new Error("Upload returned non‑JSON"); }
     if(!j.ok) throw new Error(j.error||"upload failed");
-    if (Array.isArray(j.files)) { pendingFiles.push(...j.files); } else if (j.file) { pendingFiles.push(j.file); }
+    
+    if(Array.isArray(j.files)){
+      pendingFiles.push(...j.files);
+    }
     renderPending();
+  }catch(e){
+    showErr($("upErr"), "Upload error: "+e.message);
   }
 }
 
@@ -233,10 +248,16 @@ async function sendMessage(){
   const msg=$("msg").value.trim();
   if(!msg) return;
 
-  const payload = { wallet, session_id:sid, model, message:msg,
-      attachments: pendingFiles };
+  const payload = { 
+    wallet, 
+    session_id:sid, 
+    model_key:model, 
+    message:msg,
+    attachments: pendingFiles.map(f=>f.id)
+  };
   $("msg").value="";
-  // optimistic bubble
+  
+  // Optimistic user bubble
   const box=$("chat");
   const b=document.createElement("div");
   b.className="bubble me";
@@ -252,29 +273,36 @@ async function sendMessage(){
     const t=await r.text();
     let j=null;
     try{ j=JSON.parse(t);}catch(e){ throw new Error("Chat returned non‑JSON"); }
-    if(!j.ok) throw new Error(j.error||"chat failed");
+    
     const ans=document.createElement("div");
     ans.className="bubble";
-    ans.innerHTML = `<div>${escapeHtml(j.reply||"")}</div>
-      ${Array.isArray(j.files)?`<div class="files">${j.files.map(f=>`<a class="chip" href="/api/ai/files/${encodeURIComponent(f.id)}" target="_blank">${escapeHtml(f.filename)}</a>`).join("")}</div>`:""}
-      <div class="meta"><div>Thronos</div><div>${escapeHtml(fmtTime(j.ts))}</div></div>`;
+    
+    let filesHtml = "";
+    if(Array.isArray(j.files) && j.files.length>0){
+      filesHtml = `<div class="files">${j.files.map(f=>`<a class="chip" href="/api/ai/files/${encapeURIComponent(f.id)}" download="${escapeHtml(f.filename)}" target="_blank">📎 ${escapeHtml(f.filename)}</a>`).join("")}</div>`;
+    }
+    
+    ans.innerHTML = `<div style="white-space:pre-wrap">${escapeHtml(j.response||"")}</div>
+      ${filesHtml}
+      <div class="meta"><div>Thronos (${escapeHtml(j.provider||"")}-${escapeHtml(j.model||"")})</div><div>${escapeHtml(new Date().toLocaleString())}</div></div>`;
     box.appendChild(ans); box.scrollTop=box.scrollHeight;
+    
     pendingFiles=[]; renderPending();
-    await loadSessions(); // refresh updated_at
+    await loadSessions(); // refresh
   }catch(e){
-    showErr($("upErr"), e.message);
+    showErr($("upErr"), "Send error: "+e.message);
   }
 }
 
 function escapeHtml(s){
-  return (s??"").toString().replace(/[&<>"']/g, (c)=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;" }[c]));
+  return (s??"").toString().replace(/[&<>"']/g, (c)=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[c]));
 }
 
 $("loadBtn").onclick = loadSessions;
 $("newBtn").onclick = newSession;
 $("sendBtn").onclick = sendMessage;
 $("uploadBtn").onclick = async()=>{ await uploadSelected($("file").files); $("file").value=""; };
-$("msg").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ sendMessage(); } });
+$("msg").addEventListener("keydown",(e)=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendMessage(); } });
 
 $("drop").addEventListener("dragover",(e)=>{ e.preventDefault(); $("drop").style.borderColor="rgba(0,255,136,.75)"; });
 $("drop").addEventListener("dragleave",()=>{ $("drop").style.borderColor="rgba(14,224,127,.35)"; });
@@ -282,6 +310,12 @@ $("drop").addEventListener("drop", async (e)=>{
   e.preventDefault(); $("drop").style.borderColor="rgba(14,224,127,.35)";
   const files=[...e.dataTransfer.files];
   await uploadSelected(files);
+});
+
+// Auto-load wallet from localStorage
+document.addEventListener("DOMContentLoaded", ()=>{
+  const saved = localStorage.getItem("thr_address");
+  if(saved){ $("wallet").value = saved; }
 });
 </script>
 </body>

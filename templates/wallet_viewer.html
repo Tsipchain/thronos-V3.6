@@ -51,6 +51,19 @@
         font-size: 2em;
         font-weight: bold;
         margin: 10px 0;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    .fire-icon-wallet {
+        width: 32px;
+        height: 32px;
+        filter: drop-shadow(0 0 8px #ff6600);
+        animation: glow 2s ease-in-out infinite;
+    }
+    @keyframes glow {
+        0%, 100% { filter: drop-shadow(0 0 8px #ff6600); }
+        50% { filter: drop-shadow(0 0 16px #ff9900) drop-shadow(0 0 24px #ff6600); }
     }
 </style>
 {% endblock %}
@@ -80,7 +93,10 @@
   <div id="dashboardSection" class="hidden">
       <div class="wallet-card">
           <div style="display:flex; justify-content:space-between; align-items:center;">
-              <strong><span id="displayAddress">THR...</span></strong>
+              <div style="display:flex; align-items:center; gap:10px;">
+                  <img src="{{ url_for('static', filename='img/fire-logo.png') }}" alt="🔥" class="fire-icon-wallet" />
+                  <strong><span id="displayAddress">THR...</span></strong>
+              </div>
               <button class="secondary" style="width:auto; padding:5px 10px;" onclick="disconnectWallet()">❌ <span class="lang-el">Αποσύνδεση</span><span class="lang-en">Disconnect</span></button>
           </div>
           
@@ -169,7 +185,6 @@
           div.innerHTML = '<p style="color:#666;">No transactions found.</p>';
         } else {
           let html = "";
-          // Sort by timestamp desc if possible, or reverse
           const txs = data.transactions.reverse(); 
           
           txs.forEach(tx => {

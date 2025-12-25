@@ -4633,4 +4633,23 @@ def chat_page_v2():
     return render_template("chat.html", thr_wallet=thr_wallet)
 
 
+# ... ΤΕΛΟΣ όλων των routes / helpers ...
+
+# === AI Session API Fixes (append to end of server.py) ===========================
+from flask import make_response
+
+def _current_actor_id(wallet: str | None) -> tuple[str, str | None]:
+    ...
+# ΟΛΟ το block v2 εδώ
+...
+
 print("✅ AI Session fixes loaded - supports guest mode and file uploads")
+
+# --- Startup hooks ---
+ensure_ai_wallet()
+recompute_height_offset_from_ledger()
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 3333))
+    app.run(host="0.0.0.0", port=port)
+

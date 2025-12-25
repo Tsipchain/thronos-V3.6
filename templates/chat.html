@@ -213,7 +213,7 @@ async function uploadSelected(files){
     fd.append("wallet", wallet);
     fd.append("session_id", sid);
     fd.append("file", file);
-    if (thrWallet) fd.append("wallet", thrWallet);
+    if (wallet) fd.append("wallet", wallet);
     if (currentSessionId) fd.append("session_id", currentSessionId);
     fd.append("purpose","chat");
     const r=await fetch("/api/ai/files/upload",{method:"POST", body:fd});
@@ -233,7 +233,7 @@ async function sendMessage(){
   const msg=$("msg").value.trim();
   if(!msg) return;
 
-  const payload = { wallet, session_id:sid, model, message:msg, wallet: thrWallet,
+  const payload = { wallet, session_id:sid, model, message:msg,
       attachments: pendingFiles };
   $("msg").value="";
   // optimistic bubble

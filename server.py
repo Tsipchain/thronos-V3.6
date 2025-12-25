@@ -4430,3 +4430,207 @@ recompute_height_offset_from_ledger()  # <-- Initialize offset
 if __name__=="__main__":
     port=int(os.getenv("PORT",3333))
     app.run(host="0.0.0.0", port=port)
+# === AI Session API Fixes (append to end of server.py) ===========================
+# This block fixes the 400/404 errors in chat by:
+# 1. Supporting guest sessions (no wallet required)
+# 2. Adding /api/ai/files/upload endpoint
+# 3. Adding /api/ai/chat alias
+# 4. Ensuring all /api/ai/sessions/* routes work correctly
+
+from flask import make_response
+
+def _current_actor_id(wallet: str | None) -> tuple[str, str | None]:
+    """
+    Returns (identity_key, guest_id or None).
+    If no wallet provided, uses guest id for anonymous usage.
+    """
+    wallet = (wallet or "").strip()
+    guest_id = None
+    if not wallet:
+        guest_id = get_or_set_guest_id()
+        wallet = f"GUEST:{guest_id}"
+    return wallet, guest_id
+
+
+# Override existing /api/ai/sessions routes with v2 versions that support guests
+@app.route("/api/ai/sessions", methods=["GET"])
+def api_ai_sessions_v2():
+    """List sessions for current user (wallet or guest)"""
+    wallet = request.args.get("wallet") or None
+    identity, guest_id = _current_actor_id(wallet)
+
+    sessions = load_ai_sessions()
+    user_sessions = [s for s in sessions if s.get("wallet") == identity and not s.get("archived")]
+    
+    # Sort by updated_at (newest first)
+    user_sessions.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
+
+    resp = make_response(jsonify({"ok": True, "sessions": user_sessions}))
+    if guest_id:
+        resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+    return resp
+
+
+@app.route("/api/ai/sessions/start", methods=["POST"])
+def api_ai_session_start_v2():
+    """Start new session (supports both wallet and guest mode)"""
+    data = request.get_json(silent=True) or {}
+    wallet_in = data.get("wallet")
+    identity, guest_id = _current_actor_id(wallet_in)
+
+    title = (data.get("title") or "New Chat").strip()[:120]
+    model = (data.get("model") or "auto").strip()
+
+    sessions = load_ai_sessions()
+    session_id = f"sess_{secrets.token_hex(8)}"
+    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+    session = {
+        "id": session_id,
+        "wallet": identity,
+        "title": title,
+        "model": model,
+        "created_at": now,
+        "updated_at": now,
+        "message_count": 0,
+        "archived": False,
+        "meta": {},
+    }
+    sessions.append(session)
+    save_ai_sessions(sessions)
+
+    resp = make_response(jsonify({"ok": True, "session": session}))
+    if guest_id:
+        resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+    return resp
+
+
+@app.route("/api/ai/sessions/rename", methods=["POST"])
+def api_ai_session_rename_v2():
+    """Rename a session"""
+    data = request.get_json(silent=True) or {}
+    session_id = data.get("id") or data.get("session_id")
+    new_title = (data.get("title") or "").strip()
+    wallet = data.get("wallet")
+
+    if not session_id or not new_title:
+        return jsonify({"ok": False, "error": "Missing id or title"}), 400
+
+    sessions = load_ai_sessions()
+    found = False
+    for s in sessions:
+        if s.get("id") == session_id:
+            # Optional: verify ownership if wallet provided
+            if wallet and s.get("wallet") != wallet and not s.get("wallet", "").startswith("GUEST:"):
+                return jsonify({"ok": False, "error": "Not authorized"}), 403
+            
+            s["title"] = new_title[:120]
+            s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            found = True
+            break
+    
+    if not found:
+        return jsonify({"ok": False, "error": "Session not found"}), 404
+    
+    save_ai_sessions(sessions)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/ai/sessions/delete", methods=["POST"])
+def api_ai_session_delete_v2():
+    """Delete/archive a session"""
+    data = request.get_json(silent=True) or {}
+    session_id = data.get("id") or data.get("session_id")
+    wallet = data.get("wallet")
+
+    if not session_id:
+        return jsonify({"ok": False, "error": "Missing id"}), 400
+
+    sessions = load_ai_sessions()
+    found = False
+    for s in sessions:
+        if s.get("id") == session_id:
+            # Optional: verify ownership
+            if wallet and s.get("wallet") != wallet and not s.get("wallet", "").startswith("GUEST:"):
+                return jsonify({"ok": False, "error": "Not authorized"}), 403
+            
+            s["archived"] = True
+            s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            found = True
+            break
+    
+    if not found:
+        return jsonify({"ok": False, "error": "Session not found"}), 404
+    
+    save_ai_sessions(sessions)
+    return jsonify({"ok": True})
+
+
+# Add file upload endpoint
+@app.route("/api/ai/files/upload", methods=["POST"])
+def api_ai_files_upload_v2():
+    """
+    Upload files for chat attachments.
+    Accepts multipart form with 'file' or 'files' field.
+    """
+    wallet = request.form.get("wallet") or ""
+    session_id = request.form.get("session_id") or ""
+    purpose = request.form.get("purpose") or "chat"
+    
+    # Get files from request
+    files = request.files.getlist("files") or request.files.getlist("file")
+    if not files or not any(f.filename for f in files):
+        return jsonify({"ok": False, "error": "No files provided"}), 400
+
+    identity, guest_id = _current_actor_id(wallet or None)
+    
+    uploaded = []
+    try:
+        for file in files:
+            if not file.filename:
+                continue
+            
+            # Store file
+            meta = store_uploaded_file(
+                file, 
+                owner_wallet=wallet if wallet else None,
+                session_id=session_id,
+                owner_guest=guest_id
+            )
+            
+            uploaded.append({
+                "id": meta.get("file_id"),
+                "name": meta.get("filename"),
+                "size": meta.get("size"),
+                "mimetype": meta.get("content_type"),
+            })
+        
+        if not uploaded:
+            return jsonify({"ok": False, "error": "No valid files uploaded"}), 400
+        
+        resp = make_response(jsonify({"ok": True, "files": uploaded}))
+        if guest_id:
+            resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+        return resp
+        
+    except Exception as e:
+        app.logger.exception("File upload error")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# Add /api/ai/chat as alias to /api/chat (for backward compatibility)
+@app.route("/api/ai/chat", methods=["POST"])
+def api_ai_chat_alias():
+    """Alias for /api/chat endpoint"""
+    return api_chat()
+
+
+# Update /chat route to pass wallet to template
+@app.route("/chat")
+def chat_page_v2():
+    """Render chat interface with wallet from cookie"""
+    thr_wallet = request.cookies.get("thr_address") or ""
+    return render_template("chat.html", thr_wallet=thr_wallet)
+
+
+print("✅ AI Session fixes loaded - supports guest mode and file uploads")

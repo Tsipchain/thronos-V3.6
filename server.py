@@ -29,7 +29,8 @@ import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, io, str
 from datetime import datetime
 from PIL import Image
 
-import requests
+import re
+import mimetypesquests
 from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, url_for, send_file
 from werkzeug.utils import secure_filename
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -65,10 +66,12 @@ except ImportError:
 try:
     # Attempt to import the EVM route registration helper.  In development
     # environments this may live under evm_api_v3 rather than evm_api.
-    from evm_api import register_evm_routes  # type: ignore
+    from evm_api import re
+import mimetypesgister_evm_routes  # type: ignore
 except Exception:
     try:
-        from evm_api_v3 import register_evm_routes  # type: ignore
+        from evm_api_v3 import re
+import mimetypesgister_evm_routes  # type: ignore
     except Exception:
         register_evm_routes = None
 
@@ -596,6 +599,24 @@ def save_ai_sessions(sessions):
     if not isinstance(sessions, list):
         sessions = []
     save_json(AI_SESSIONS_FILE, sessions)
+
+
+def attach_uploaded_files_to_session(session_id: str, wallet: str, files: list):
+    """
+    Link uploaded file metadata to a session, so the agent can see them.
+    This only stores references (ids + names), not content.
+    """
+    sessions = load_ai_sessions()
+    for s in sessions:
+        if s.get("id") == session_id and (not wallet or s.get("wallet") == wallet):
+            s.setdefault("uploaded_files", [])
+            # de-dup by id
+            existing = {f.get("id") for f in s.get("uploaded_files", []) if isinstance(f, dict)}
+            for fmeta in files:
+                if fmeta.get("id") not in existing:
+                    s["uploaded_files"].append(fmeta)
+            save_ai_sessions(sessions)
+            return
 
 def sha256d(data: bytes) -> bytes:
     return hashlib.sha256(hashlib.sha256(data).digest()).digest()
@@ -1867,81 +1888,92 @@ def api_ai_credits():
 
 @app.route("/api/ai/files/upload", methods=["POST"])
 def api_ai_files_upload():
-
-    # Multipart upload: file + wallet + session_id
+    """
+    Multipart upload endpoint used by /chat:
+      - field: files (one or many)
+      - form: wallet (optional), session_id (optional), purpose (optional)
+    Returns:
+      { ok: true, files: [{id, name, size, mimetype, sha256}] }
+    """
     try:
+        # accept either files[] or files
+        files = (request.files.getlist("files") or request.files.getlist("files[]") or request.files.getlist("file"))
+        if not files:
+            return jsonify(ok=False, error="No files uploaded. Use multipart field 'files'."), 400
+
         wallet = (request.form.get("wallet") or "").strip()
-        session_id = (request.form.get("session_id") or request.form.get("sid") or "").strip()
-
-        if "file" not in request.files:
-            return jsonify({"ok": False, "error": "missing file field"}), 400
-
-        f = request.files["file"]
-        if not f or not f.filename:
-            return jsonify({"ok": False, "error": "empty filename"}), 400
-
-        # If wallet/session not provided, accept but store under 'anon'
-        if not wallet:
-            wallet = "anon"
-        if not session_id:
-            session_id = "unsorted"
+        session_id = (request.form.get("session_id") or "").strip()
+        purpose = (request.form.get("purpose") or "chat").strip()
 
         os.makedirs(AI_UPLOADS_DIR, exist_ok=True)
-        safe_wallet = re.sub(r"[^A-Za-z0-9_-]+", "_", wallet)[:128]
-        safe_sid = re.sub(r"[^A-Za-z0-9_-]+", "_", session_id)[:128]
-        base_dir = os.path.join(AI_UPLOADS_DIR, safe_wallet, safe_sid)
-        os.makedirs(base_dir, exist_ok=True)
 
-        ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-        orig_name = os.path.basename(f.filename)
-        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", orig_name)[:180]
-        file_id = f"{ts}_{uuid.uuid4().hex}"
-        save_name = f"{file_id}__{safe_name}"
-        save_path = os.path.join(base_dir, save_name)
-        f.save(save_path)
+        uploaded = []
+        for fs in files:
+            if not fs or not getattr(fs, "filename", ""):
+                continue
 
-        size = os.path.getsize(save_path)
-        ctype = f.mimetype or mimetypes.guess_type(orig_name)[0] or "application/octet-stream"
+            original_name = secure_filename(fs.filename)
+            # keep original extension when possible
+            ext = os.path.splitext(original_name)[1][:16]
+            ext = re.sub(r"[^a-zA-Z0-9.]", "", ext)
 
-        meta = {
-            "id": file_id,
-            "wallet": wallet,
-            "session_id": session_id,
-            "filename": orig_name,
-            "stored_as": save_name,
-            "path": save_path,
-            "size": size,
-            "content_type": ctype,
-            "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
-        }
+            blob = fs.read()
+            if not blob:
+                continue
 
-        # persist meta index
-        files_index = load_json(AI_FILES_INDEX, default={})
-        if not isinstance(files_index, dict):
-            files_index = {}
-        files_index[file_id] = {k: meta[k] for k in ["id","wallet","session_id","filename","stored_as","size","content_type","created_at"]}
-        save_json(AI_FILES_INDEX, files_index)
+            sha = hashlib.sha256(blob).hexdigest()
+            file_id = f"f_{int(time.time())}_{sha[:16]}"
+            saved_name = f"{file_id}{ext}"
+            save_path = os.path.join(AI_UPLOADS_DIR, saved_name)
 
-        return jsonify({"ok": True, "file": files_index[file_id]})
+            # if same content already exists, don't rewrite
+            if not os.path.exists(save_path):
+                with open(save_path, "wb") as f:
+                    f.write(blob)
+
+            mimetype = fs.mimetype or mimetypes.guess_type(original_name)[0] or "application/octet-stream"
+
+            meta = {
+                "id": file_id,
+                "saved_name": saved_name,
+                "original_name": original_name,
+                "size": len(blob),
+                "mimetype": mimetype,
+                "sha256": sha,
+                "wallet": wallet,
+                "session_id": session_id,
+                "purpose": purpose,
+                "created_at": int(time.time()),
+            }
+            meta_path = os.path.join(AI_UPLOADS_DIR, f"{file_id}.json")
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+
+            uploaded.append({
+                "id": file_id,
+                "name": original_name,
+                "size": len(blob),
+                "mimetype": mimetype,
+                "sha256": sha
+            })
+
+        if not uploaded:
+            return jsonify(ok=False, error="No valid files received."), 400
+
+        # Optionally link uploads to a session's memory (so the model can use them later)
+        # We store only metadata references, not the raw bytes in the session json.
+        if session_id:
+            try:
+                attach_uploaded_files_to_session(session_id=session_id, wallet=wallet, files=uploaded)
+            except Exception as e:
+                # don't fail upload if session linking fails
+                app.logger.exception("attach_uploaded_files_to_session failed: %s", e)
+
+        return jsonify(ok=True, files=uploaded)
     except Exception as e:
-        app.logger.exception("upload failed")
-        return jsonify({"ok": False, "error": str(e)}), 500
+        app.logger.exception("Upload failed: %s", e)
+        return jsonify(ok=False, error=str(e)), 500
 
-    if "file" not in request.files:
-        return jsonify({"error": "No file provided"}), 400
-    file = request.files["file"]
-    if not file or not file.filename:
-        return jsonify({"error": "Empty file"}), 400
-
-    # Optional: enforce guest limits (same as messages)
-    if not wallet and guest_remaining_free_messages(gid) <= 0:
-        return jsonify({"error": "Free limit reached. Connect wallet to upload files."}), 402
-
-    meta = store_uploaded_file(file, owner_wallet=wallet or None, session_id=session_id, owner_guest=gid)
-    resp = jsonify({"ok": True, "file": {k: meta[k] for k in ["file_id","filename","size","content_type","session_id","created_at"]}})
-    if gid:
-        resp.set_cookie(GUEST_COOKIE_NAME, gid, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
-    return resp, 200
 
 @app.route("/api/ai/files/<file_id>", methods=["GET"])
 def api_ai_files_get(file_id):
@@ -2008,6 +2040,7 @@ def api_ai_history():
 
 @app.route("/api/ai_sessions", methods=["GET"])
 @app.route("/api/ai/sessions", methods=["GET"])
+@app.route("/api/ai_sessions", methods=["GET"])  # backward compat
 def api_ai_sessions():
 
     wallet = (request.args.get("wallet") or "").strip()

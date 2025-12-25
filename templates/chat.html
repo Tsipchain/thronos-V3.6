@@ -1,901 +1,357 @@
 <!doctype html>
 <html lang="en">
 <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-    <title>Thronos Quantum Chat</title>
-    <link rel="icon" type="image/png" href="/img/thronos-token.png" />
-    <style>
-        :root {
-            --bg: #050b0b;
-            --panel: #071810;
-            --fg: #e6ffe5;
-            --muted: #56ff9a;
-            --accent: #0aff55;
-            --accent-soft: rgba(10, 255, 85, 0.08);
-            --border: #1a3b2e;
-            --danger: #ff4d4d;
-            --danger-soft: rgba(255, 77, 77, 0.15);
-            --badge-bg: #0a1f14;
-            --badge-border: #1f5b3f;
-            --chip-bg: rgba(24, 61, 38, 0.9);
-            --chip-border: #2d744f;
-        }
-
-        * { box-sizing: border-box; }
-
-        html, body {
-            margin: 0;
-            padding: 0;
-            background: var(--bg);
-            color: var(--fg);
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
-        }
-
-        body {
-            display: flex;
-            flex-direction: column;
-            min-height: 100vh;
-        }
-
-        a { color: var(--accent); }
-
-        .topbar {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 10px 16px;
-            border-bottom: 1px solid var(--border);
-            background: radial-gradient(circle at top, #0f2218 0, #050b0b 55%, #000 100%);
-            position: sticky;
-            top: 0;
-            z-index: 20;
-        }
-
-        .topbar-left {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .logo-img {
-            width: 32px;
-            height: 32px;
-            animation: pulse-glow 2s ease-in-out infinite;
-        }
-
-        @keyframes pulse-glow {
-            0%, 100% { filter: drop-shadow(0 0 8px rgba(10, 255, 85, 0.6)); }
-            50% { filter: drop-shadow(0 0 16px rgba(10, 255, 85, 0.9)); }
-        }
-
-        .badge {
-            border: 1px solid var(--badge-border);
-            background: var(--badge-bg);
-            border-radius: 999px;
-            padding: 2px 10px;
-            font-size: 11px;
-            letter-spacing: 0.16em;
-            text-transform: uppercase;
-            color: var(--muted);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .badge-dot {
-            width: 6px;
-            height: 6px;
-            border-radius: 999px;
-            background: var(--accent);
-            box-shadow: 0 0 10px rgba(10, 255, 85, 0.6);
-        }
-
-        .wallet-chip {
-            border-radius: 999px;
-            border: 1px solid var(--border);
-            padding: 4px 10px;
-            font-size: 11px;
-            background: rgba(5, 14, 10, 0.9);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .wallet-chip span {
-            font-family: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            font-size: 11px;
-        }
-
-        .wallet-chip.badge-danger {
-            border-color: var(--danger);
-            color: var(--danger);
-            background: var(--danger-soft);
-        }
-
-        .wallet-chip .dot-red {
-            width: 6px;
-            height: 6px;
-            border-radius: 999px;
-            background: var(--danger);
-            box-shadow: 0 0 10px rgba(255, 77, 77, 0.6);
-        }
-
-        .main {
-            display: flex;
-            flex: 1;
-            min-height: 0;
-        }
-
-        .sidebar {
-            width: 260px;
-            border-right: 1px solid var(--border);
-            background: radial-gradient(circle at top left, #0f2218 0, #050b0b 55%, #000 100%);
-            display: flex;
-            flex-direction: column;
-        }
-
-        .sidebar-header {
-            padding: 10px 10px 6px;
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.14em;
-            color: var(--muted);
-            opacity: 0.8;
-        }
-
-        .btn {
-            border-radius: 999px;
-            border: 1px solid var(--border);
-            background: #050f0a;
-            color: var(--fg);
-            font-size: 13px;
-            padding: 6px 11px;
-            cursor: pointer;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-            transition: background 0.15s ease, border-color 0.15s ease, transform 0.05s ease;
-        }
-
-        .btn:hover {
-            background: #071810;
-            border-color: var(--accent);
-            transform: translateY(-0.5px);
-        }
-
-        .btn-primary {
-            background: linear-gradient(135deg, #0aff55 0, #27e98b 50%, #0affb1 100%);
-            color: #021008;
-            border-color: #39ff98;
-            box-shadow: 0 0 25px rgba(22, 255, 119, 0.4);
-        }
-
-        .btn-primary:hover {
-            box-shadow: 0 0 30px rgba(22, 255, 119, 0.6);
-            filter: brightness(1.04);
-        }
-
-        .btn-block { width: 100%; }
-
-        .sessions-list {
-            padding: 8px 8px 12px;
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-            flex: 1;
-            overflow-y: auto;
-        }
-
-        .session-item {
-            border-radius: 10px;
-            border: 1px solid var(--border);
-            padding: 7px 9px;
-            font-size: 12px;
-            background: #050d0a;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 8px;
-            transition: background 0.12s ease, border-color 0.12s ease, transform 0.05s ease;
-        }
-
-        .session-item.active {
-            border-color: var(--accent);
-            background: radial-gradient(circle at top left, rgba(10, 255, 85, 0.16), #050d08 60%);
-            transform: translateY(-0.5px);
-        }
-
-        .session-item-main {
-            flex: 1;
-            min-width: 0;
-            cursor: pointer;
-        }
-
-        .session-item-title {
-            font-weight: 500;
-            color: var(--fg);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .session-item-sub {
-            font-size: 11px;
-            color: #8bb9a0;
-            display: flex;
-            justify-content: space-between;
-        }
-
-        .session-actions {
-            display: flex;
-            gap: 4px;
-        }
-
-        .rename-btn {
-            padding: 4px 8px;
-            border-radius: 8px;
-            border: 1px solid rgba(14, 224, 127, 0.55);
-            background: rgba(0, 255, 136, 0.08);
-            color: #0ee07f;
-            cursor: pointer;
-            font-size: 12px;
-        }
-
-        .rename-btn:hover {
-            background: rgba(0, 255, 136, 0.15);
-        }
-
-        .delete-btn {
-            padding: 4px 8px;
-            border-radius: 8px;
-            border: 1px solid rgba(255, 70, 70, 0.55);
-            background: rgba(255, 0, 0, 0.08);
-            color: #ff9b9b;
-            cursor: pointer;
-            font-size: 12px;
-        }
-
-        .delete-btn:hover {
-            background: rgba(255, 0, 0, 0.15);
-        }
-
-        .sidebar-footer {
-            padding: 8px;
-            border-top: 1px solid var(--border);
-            font-size: 11px;
-            color: #7da491;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .content {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            min-width: 0;
-        }
-
-        .chat-area {
-            flex: 1;
-            padding: 12px 14px 10px;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .bubble {
-            max-width: 860px;
-            margin-bottom: 4px;
-            padding: 10px 12px;
-            border-radius: 16px;
-            border: 1px solid rgba(40, 151, 92, 0.6);
-            background: rgba(7, 24, 16, 0.9);
-            box-shadow: 0 0 15px rgba(6, 231, 112, 0.16);
-            font-size: 13px;
-            line-height: 1.55;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-        }
-
-        .bubble.user {
-            margin-left: auto;
-            background: radial-gradient(circle at top right, rgba(10, 255, 85, 0.18), #05150d 60%);
-            border-color: rgba(68, 255, 159, 0.8);
-        }
-
-        .bubble-meta {
-            margin-top: 6px;
-            font-size: 11px;
-            color: #88b9a0;
-            display: flex;
-            gap: 14px;
-            flex-wrap: wrap;
-        }
-
-        .bubble-warning {
-            border-color: var(--danger);
-            background: var(--danger-soft);
-        }
-
-        .composer {
-            border-top: 1px solid var(--border);
-            padding: 10px 12px;
-            background: radial-gradient(circle at bottom, #071810 0, #050b0b 60%, #000 100%);
-        }
-
-        .row {
-            display: flex;
-            gap: 8px;
-            margin-bottom: 8px;
-        }
-
-        .label {
-            font-size: 11px;
-            color: #9fd0b2;
-            margin-bottom: 4px;
-        }
-
-        .input {
-            background: #050c09;
-            border-radius: 10px;
-            border: 1px solid var(--border);
-            color: var(--fg);
-            font-size: 12px;
-            padding: 7px 9px;
-            width: 100%;
-            outline: none;
-        }
-
-        .input:focus {
-            border-color: var(--accent);
-            box-shadow: 0 0 0 1px rgba(10, 255, 85, 0.25);
-        }
-
-        select.input { padding-right: 28px; }
-
-        textarea.input {
-            resize: vertical;
-            min-height: 80px;
-        }
-
-        .drop-zone {
-            border: 1px dashed var(--border);
-            border-radius: 10px;
-            padding: 6px 8px;
-            font-size: 11px;
-            background: rgba(5, 14, 9, 0.9);
-            color: #9fd0b2;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 6px;
-        }
-
-        .drop-zone.dragover {
-            border-color: var(--accent);
-            background: rgba(10, 255, 85, 0.06);
-        }
-
-        .files {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 5px;
-            margin-top: 6px;
-        }
-
-        .chip {
-            border: 1px solid rgba(40, 151, 92, 0.7);
-            background: var(--chip-bg);
-            border-radius: 999px;
-            padding: 2px 8px 2px 7px;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 11px;
-            color: #c7f6dd;
-        }
-
-        .chip small {
-            font-size: 10px;
-            opacity: 0.8;
-        }
-
-        .chip-remove {
-            cursor: pointer;
-            opacity: 0.8;
-        }
-
-        .chip-remove:hover { opacity: 1; }
-
-        .file-error {
-            border-color: var(--danger);
-            background: var(--danger-soft);
-        }
-
-        .status-bar {
-            font-size: 11px;
-            color: #8bb9a0;
-            display: flex;
-            justify-content: space-between;
-            margin-top: 6px;
-        }
-
-        .status-bar span { opacity: 0.9; }
-        .status-bar .error { color: var(--danger); }
-
-        .btn-send { min-width: 100px; }
-
-        .mono {
-            font-family: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-        }
-
-        @media (max-width: 900px) {
-            .sidebar { display: none; }
-        }
-    </style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Thronos Quantum Chat</title>
+  <link rel="icon" type="image/png" href="/static/img/thronos-token.png">
+  <style>
+    :root{--bg:#050a08;--panel:#07110d;--fg:#dfffe9;--muted:#6fe7b0;--border:#0ee07f;--accent:#00ff88;}
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
+    .topbar{display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid rgba(14,224,127,.35);background:linear-gradient(180deg,rgba(0,255,136,.08),transparent);}
+    .logo-fire{width:28px;height:28px;animation:pulse-glow 2s ease-in-out infinite;}
+    @keyframes pulse-glow{0%,100%{filter:drop-shadow(0 0 6px rgba(10,255,85,.6));}50%{filter:drop-shadow(0 0 12px rgba(10,255,85,.9));}}
+    .badge{padding:4px 10px;border:1px solid rgba(14,224,127,.6);border-radius:999px;color:var(--muted);font-size:12px}
+    .wrap{display:grid;grid-template-columns:280px 1fr; height:calc(100% - 50px);}
+    .sidebar{border-right:1px solid rgba(14,224,127,.25);padding:10px;background:rgba(7,17,13,.7)}
+    .main{display:flex;flex-direction:column;}
+    .btn{cursor:pointer;padding:10px 12px;border:1px solid rgba(14,224,127,.7);border-radius:10px;background:rgba(0,0,0,.25);color:var(--fg)}
+    .btn:hover{border-color:var(--accent);box-shadow:0 0 0 2px rgba(0,255,136,.12) inset}
+    .input,select{width:100%;padding:10px 12px;border:1px solid rgba(14,224,127,.35);border-radius:10px;background:rgba(0,0,0,.25);color:var(--fg);outline:none}
+    .input:focus,select:focus{border-color:var(--accent)}
+    .sessions{margin-top:10px;display:flex;flex-direction:column;gap:8px;max-height:calc(100vh - 220px);overflow:auto}
+    .sess{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px;border:1px solid rgba(14,224,127,.2);border-radius:12px;background:rgba(0,0,0,.18)}
+    .sess.active{border-color:rgba(0,255,136,.75)}
+    .sess small{color:rgba(223,255,233,.7)}
+    .sess .rename-btn{padding:4px 8px;border-radius:8px;border:1px solid rgba(14,224,127,.55);background:rgba(0,255,136,.08);color:#0ee07f;cursor:pointer;font-size:12px;}
+    .sess .rename-btn:hover{background:rgba(0,255,136,.15);}
+    .sess .x{padding:4px 8px;border-radius:8px;border:1px solid rgba(255,70,70,.55);background:rgba(255,0,0,.08);color:#ff9b9b;cursor:pointer;font-size:12px;}
+    .sess .x:hover{background:rgba(255,0,0,.15);}
+    .center{flex:1;overflow:auto;padding:16px}
+    .bubble{max-width:860px;margin:10px 0;padding:14px;border:1px solid rgba(14,224,127,.25);border-radius:14px;background:rgba(0,0,0,.22)}
+    .me{margin-left:auto;border-color:rgba(0,255,136,.55);background:rgba(0,255,136,.08)}
+    .meta{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:rgba(223,255,233,.65)}
+    .composer{display:flex;gap:10px;align-items:center;padding:12px;border-top:1px solid rgba(14,224,127,.25);background:rgba(7,17,13,.7)}
+    .drop{flex:1;border:1px dashed rgba(14,224,127,.35);border-radius:12px;padding:10px;background:rgba(0,0,0,.18)}
+    .row{display:flex;gap:8px;align-items:center}
+    .files{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+    .chip{border:1px solid rgba(14,224,127,.25);border-radius:999px;padding:4px 10px;font-size:12px;color:rgba(223,255,233,.85);text-decoration:none;display:inline-block}
+    .chip:hover{background:rgba(0,255,136,.12);border-color:var(--accent)}
+    .err{color:#ffb3b3;font-size:12px;margin-top:8px}
+    .file-item{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid rgba(14,224,127,.25);border-radius:8px;background:rgba(0,0,0,.15)}
+    .file-item .remove{cursor:pointer;color:#ff6b6b;font-weight:bold;padding:2px 6px}
+    .file-item .remove:hover{background:rgba(255,0,0,.15);border-radius:4px}
+  </style>
 </head>
 <body>
-<div class="topbar">
-    <div class="topbar-left">
-        <img src="/static/img/fire-logo.png" alt="FIRE" class="logo-img" />
-        <span style="font-weight: 700; letter-spacing: 0.17em;">THRONOS QUANTUM</span>
-        <span class="badge">
-            <span class="badge-dot"></span>
-            Quantum Encryption Active
-        </span>
+  <div class="topbar">
+    <img src="/static/img/thronos-token.png" alt="FIRE" class="logo-fire" onerror="this.style.display='none'" />
+    <div style="font-weight:700;letter-spacing:.12em">THRONOS QUANTUM ASSISTANT</div>
+    <div class="badge" id="qbadge">Quantum Encryption Active</div>
+    <div style="flex:1"></div>
+    <div class="row" style="gap:8px;min-width:420px">
+      <label style="min-width:80px;color:rgba(223,255,233,.7)">THR wallet:</label>
+      <input class="input" id="wallet" placeholder="THR..." />
+      <select id="model" class="input" style="max-width:190px">
+        <option value="auto">Auto (Smart)</option>
+        <option value="gpt-4o">GPT‑4o</option>
+        <option value="gpt-4o-mini">GPT‑4o‑mini</option>
+        <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash</option>
+      </select>
+      <button class="btn" id="loadBtn">Load</button>
     </div>
-    <div id="walletBadge" class="wallet-chip badge-danger">
-        <span class="dot-red"></span>
-        <span>No wallet loaded</span>
-    </div>
-</div>
+  </div>
 
-<div class="main">
+  <div class="wrap">
     <aside class="sidebar">
-        <div class="sidebar-header">Sessions</div>
-        <div style="padding: 0 8px 6px;">
-            <button id="newChatBtn" class="btn btn-primary btn-block">+ New Chat</button>
-        </div>
-        <div id="sessionsList" class="sessions-list"></div>
-        <div class="sidebar-footer">
-            <span id="coreStatus">Core: openai</span>
-            <span id="modelStatus">Key: —</span>
-        </div>
+      <button class="btn" id="newBtn" style="width:100%">+ New Chat</button>
+      <div class="err" id="sideErr" style="display:none"></div>
+      <div class="sessions" id="sessions"></div>
     </aside>
 
-    <main class="content">
-        <div id="chatArea" class="chat-area">
-            <div class="bubble bubble-warning">
-                Welcome to <b>Thronos Quantum Assistant</b>.<br/>
-                Load your THR wallet address to bind this chat to your on-chain identity and mining rewards.
-            </div>
-        </div>
+    <main class="main">
+      <div class="center" id="chat"></div>
 
-        <div class="composer">
+      <div class="composer">
+        <div class="drop" id="drop">
+          <div class="row" style="justify-content:space-between">
+            <div style="opacity:.8">Drop files here or choose</div>
             <div class="row">
-                <div style="flex: 1; max-width: 420px;">
-                    <div class="label">THR wallet</div>
-                    <input id="walletInput" class="input mono" placeholder="THR..." />
-                </div>
-                <div style="width: 220px;">
-                    <div class="label">Model</div>
-                    <select id="modelSelect" class="input">
-                        <option value="auto">Auto / Smart</option>
-                        <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
-                        <option value="gpt-4.1">GPT-4.1</option>
-                        <option value="gpt-o3-mini">o3-mini (coding)</option>
-                        <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash (exp)</option>
-                        <option value="claude-3.5-sonnet">Claude 3.5 Sonnet</option>
-                    </select>
-                </div>
-                <div style="width: 120px;">
-                    <div class="label">Session</div>
-                    <button id="loadBtn" class="btn btn-block" style="height: 34px;">Load</button>
-                </div>
+              <input type="file" id="file" multiple />
+              <button class="btn" id="uploadBtn">Upload</button>
             </div>
-
-            <div class="row">
-                <div style="flex: 1;">
-                    <div class="label">Message</div>
-                    <textarea id="messageInput" class="input" placeholder="Type a command to Thronos..."></textarea>
-                </div>
-            </div>
-
-            <div class="row" style="align-items: center;">
-                <div style="flex: 1;">
-                    <div class="label">Attach files (for code/docs fix)</div>
-                    <div id="dropZone" class="drop-zone">
-                        <span>Drop files here or click "Choose"</span>
-                        <input id="fileInput" type="file" multiple style="display:none;" />
-                        <button id="fileChooseBtn" class="btn" type="button" style="font-size: 11px; padding: 4px 9px;">
-                            Choose
-                        </button>
-                    </div>
-                    <div id="filesContainer" class="files"></div>
-                    <div class="status-bar">
-                        <span id="creditsInfo">Credits: —</span>
-                        <span id="uploadStatus"></span>
-                    </div>
-                </div>
-                <div style="width: 120px; text-align: right;">
-                    <button id="sendBtn" class="btn btn-primary btn-send">Send</button>
-                </div>
-            </div>
+          </div>
+          <div class="files" id="pending"></div>
+          <div class="err" id="upErr" style="display:none"></div>
         </div>
+        <input class="input" id="msg" placeholder="Type a command to Thronos..." />
+        <button class="btn" id="sendBtn">Send</button>
+      </div>
     </main>
-</div>
+  </div>
 
 <script>
-    const $ = (id) => document.getElementById(id);
-    let currentSession = null;
-    let sessions = [];
-    let pendingFiles = [];
-    let wallet = "";
+const $ = (id)=>document.getElementById(id);
+let currentSession = null;
+let sessions = [];
+let pendingFiles = [];
 
-    function escapeHtml(str) {
-        if (!str && str !== 0) return "";
-        return String(str)
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;");
-    }
+function showErr(el, msg){
+  el.style.display = msg ? "block":"none";
+  el.textContent = msg || "";
+}
+function fmtTime(iso){
+  if(!iso) return "";
+  try{ return new Date(iso).toLocaleString(); }catch(e){ return iso; }
+}
+function renderSessions(){
+  const box = $("sessions");
+  box.innerHTML = "";
+  const w = $("wallet").value.trim();
+  if(!w){
+    box.innerHTML = `<div style="opacity:.6;padding:10px">Enter wallet to load sessions…</div>`;
+    return;
+  }
+  sessions.forEach(s=>{
+    const div=document.createElement("div");
+    div.className="sess"+(currentSession && currentSession.id===s.id?" active":"");
+    div.innerHTML = `
+      <div style="min-width:0;flex:1;cursor:pointer">
+        <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(s.title||"New Chat")}</div>
+        <small>${escapeHtml(fmtTime(s.updated_at||s.created_at))}</small>
+      </div>
+      <div style="display:flex;gap:4px">
+        <button class="rename-btn" title="Rename session">✎</button>
+        <button class="x" title="Delete session">✕</button>
+      </div>
+    `;
+    div.children[0].onclick = ()=>{ currentSession=s; localStorage.setItem("thr_session", s.id); renderSessions(); renderChat(); };
+    div.querySelector(".rename-btn").onclick = async (ev)=>{
+      ev.stopPropagation();
+      await renameSession(s.id);
+    };
+    div.querySelector(".x").onclick = async (ev)=>{
+      ev.stopPropagation();
+      if(confirm("Delete this session? This cannot be undone.")) {
+        await archiveSession(s.id);
+      }
+    };
+    box.appendChild(div);
+  });
+}
+function renderChat(){
+  const box=$("chat");
+  box.innerHTML="";
+  if(!currentSession){
+    box.innerHTML = `<div style="opacity:.6">Wallet loaded. Select a session or create new.</div>`;
+    return;
+  }
+  const head=document.createElement("div");
+  head.className="bubble";
+  head.innerHTML = `<div class="meta"><div>Session: <b>${escapeHtml(currentSession.title)}</b></div><div>${escapeHtml(currentSession.id)}</div></div>`;
+  box.appendChild(head);
+  box.scrollTop=box.scrollHeight;
+}
+function renderPending(){
+  const p=$("pending");
+  p.innerHTML="";
+  pendingFiles.forEach((f,idx)=>{
+    const c=document.createElement("div");
+    c.className="file-item";
+    c.innerHTML = `
+      <span>${escapeHtml(f.name)} (${Math.round((f.size||0)/1024)} KB)</span>
+      <span class="remove" data-idx="${idx}">✕</span>
+    `;
+    c.querySelector(".remove").onclick = ()=>{ pendingFiles.splice(idx,1); renderPending(); };
+    p.appendChild(c);
+  });
+}
 
-    function renderWalletBadge() {
-        const badge = $("walletBadge");
-        if (!badge) return;
-        if (wallet) {
-            badge.classList.remove("badge-danger");
-            badge.innerHTML = '<span class="badge-dot"></span><span class="mono">' +
-                escapeHtml(wallet.slice(0, 8) + "..." + wallet.slice(-4)) + "</span>";
-        } else {
-            badge.classList.add("badge-danger");
-            badge.innerHTML = '<span class="dot-red"></span><span>No wallet loaded</span>';
-        }
-    }
+async function loadSessions(){
+  const wallet=$("wallet").value.trim();
+  if(!wallet){ showErr($("sideErr"), "Wallet required."); return; }
+  showErr($("sideErr"), "");
+  try{
+    const r=await fetch(`/api/ai/sessions?wallet=${encodeURIComponent(wallet)}`);
+    const t=await r.text();
+    let j=null;
+    try{ j=JSON.parse(t); }catch(e){ throw new Error("Non‑JSON response from server"); }
+    if(!j.ok) throw new Error(j.error||"failed");
+    sessions=j.sessions||[];
+    const last = localStorage.getItem("thr_session");
+    currentSession = sessions.find(s=>s.id===last) || sessions[0] || null;
+    renderSessions(); renderChat();
+  }catch(e){
+    showErr($("sideErr"), "Sessions load error: "+e.message);
+  }
+}
 
-    function renderPending() {
-        const container = $("filesContainer");
-        if (!container) return;
-        container.innerHTML = "";
-        pendingFiles.forEach((f, idx) => {
-            const div = document.createElement("div");
-            div.className = "chip";
-            div.innerHTML =
-                '<span class="mono">' + escapeHtml(f.name) + "</span>" +
-                '<small>(' + Math.round(f.size / 1024) + " KB)</small>" +
-                '<span class="chip-remove" data-idx="' + idx + '">×</span>';
-            container.appendChild(div);
-        });
-    }
-
-    function renderSessions() {
-        const list = $("sessionsList");
-        list.innerHTML = "";
-        sessions.forEach(sess => {
-            const item = document.createElement("div");
-            item.className = "session-item" +
-                (currentSession && currentSession.id === sess.id ? " active" : "");
-
-            const main = document.createElement("div");
-            main.className = "session-item-main";
-            main.onclick = () => {
-                currentSession = sess;
-                localStorage.setItem("thr_session", sess.id);
-                renderSessions();
-            };
-
-            const title = document.createElement("div");
-            title.className = "session-item-title";
-            title.textContent = sess.title || "New Chat";
-
-            const sub = document.createElement("div");
-            sub.className = "session-item-sub";
-            sub.innerHTML =
-                '<span>' + escapeHtml(sess.model || "auto") + "</span>" +
-                '<span>' + escapeHtml(sess.updated_at || "") + "</span>";
-
-            main.appendChild(title);
-            main.appendChild(sub);
-
-            const actions = document.createElement("div");
-            actions.className = "session-actions";
-
-            const renameBtn = document.createElement("button");
-            renameBtn.className = "rename-btn";
-            renameBtn.textContent = "✎";
-            renameBtn.title = "Rename session";
-            renameBtn.onclick = async (e) => {
-                e.stopPropagation();
-                await renameSession(sess.id);
-            };
-
-            const deleteBtn = document.createElement("button");
-            deleteBtn.className = "delete-btn";
-            deleteBtn.textContent = "✕";
-            deleteBtn.title = "Delete session";
-            deleteBtn.onclick = async (e) => {
-                e.stopPropagation();
-                if (confirm("Delete this session? This cannot be undone.")) {
-                    await deleteSession(sess.id);
-                }
-            };
-
-            actions.appendChild(renameBtn);
-            actions.appendChild(deleteBtn);
-
-            item.appendChild(main);
-            item.appendChild(actions);
-            list.appendChild(item);
-        });
-    }
-
-    function addBubble(role, text, meta = "") {
-        const area = $("chatArea");
-        const div = document.createElement("div");
-        div.className = "bubble" + (role === "user" ? " user" : "");
-        div.textContent = text;
-        if (meta) {
-            const metaDiv = document.createElement("div");
-            metaDiv.className = "bubble-meta";
-            metaDiv.innerHTML = meta;
-            div.appendChild(metaDiv);
-        }
-        area.appendChild(div);
-        area.scrollTop = area.scrollHeight;
-    }
-
-    async function loadSessions() {
-        try {
-            const res = await fetch("/api/ai/sessions?wallet=" + encodeURIComponent(wallet || ""));
-            if (!res.ok) return;
-            const j = await res.json();
-            if (!j.ok) return;
-            sessions = j.sessions || [];
-            const lastId = localStorage.getItem("thr_session");
-            currentSession = sessions.find(s => s.id === lastId) || sessions[0] || null;
-            renderSessions();
-        } catch (err) {
-            console.warn("loadSessions error", err);
-        }
-    }
-
-    async function startSession() {
-        const model = $("modelSelect").value || "auto";
-        const res = await fetch("/api/ai/sessions/start", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ wallet, model, title: "New Chat" })
-        });
-        if (!res.ok) throw new Error("Failed to start session");
-        const j = await res.json();
-        if (!j.ok) throw new Error(j.error || "Failed to start session");
-        currentSession = j.session;
-        localStorage.setItem("thr_session", j.session.id);
-        await loadSessions();
-    }
-
-    async function renameSession(id) {
-        const newTitle = prompt("Enter new session name:");
-        if (!newTitle || !newTitle.trim()) return;
-
-        try {
-            const res = await fetch("/api/ai/sessions/rename", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ wallet, session_id: id, id, title: newTitle.trim() })
-            });
-            const j = await res.json();
-            if (!j.ok) throw new Error(j.error || "Rename failed");
-
-            const sess = sessions.find(s => s.id === id);
-            if (sess) sess.title = newTitle.trim();
-            renderSessions();
-        } catch (e) {
-            alert("Rename error: " + e.message);
-        }
-    }
-
-    async function deleteSession(id) {
-        try {
-            const res = await fetch("/api/ai/sessions/delete", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ wallet, session_id: id, id })
-            });
-            const j = await res.json();
-            if (!j.ok) throw new Error(j.error || "Delete failed");
-
-            sessions = sessions.filter(s => s.id !== id);
-            if (currentSession && currentSession.id === id) {
-                currentSession = sessions[0] || null;
-            }
-            renderSessions();
-        } catch (e) {
-            alert("Delete error: " + e.message);
-        }
-    }
-
-    async function uploadSelected() {
-        const status = $("uploadStatus");
-        const input = $("fileInput");
-        if (!input.files || !input.files.length) return;
-        const files = Array.from(input.files);
-        const fd = new FormData();
-        files.forEach(f => fd.append("files", f));
-        fd.append("wallet", wallet || "");
-        if (currentSession && currentSession.id) fd.append("session_id", currentSession.id);
-        status.textContent = "Uploading...";
-        try {
-            const res = await fetch("/api/ai/files/upload", {
-                method: "POST",
-                body: fd
-            });
-            if (!res.ok) {
-                status.textContent = "Upload failed (server " + res.status + ")";
-                return;
-            }
-            const j = await res.json();
-            if (!j.ok) {
-                status.textContent = j.error || "Upload failed";
-                return;
-            }
-            pendingFiles = (j.files || []).map(f => ({
-                id: f.id,
-                name: f.name || f.filename,
-                size: f.size
-            }));
-            renderPending();
-            status.textContent = "Uploaded " + pendingFiles.length + " file(s).";
-        } catch (e) {
-            console.error(e);
-            status.textContent = "Upload error: " + e.message;
-        } finally {
-            input.value = "";
-        }
-    }
-
-    async function sendMessage() {
-        const msgEl = $("messageInput");
-        const msg = msgEl.value.trim();
-        if (!msg) return;
-        if (!currentSession) {
-            await startSession();
-        }
-        addBubble("user", msg);
-        msgEl.value = "";
-        const credits = $("creditsInfo");
-        credits.textContent = "Sending...";
-        const filesForApi = pendingFiles.map(f => f.id);
-
-        try {
-            const res = await fetch("/api/ai/chat", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    session_id: currentSession.id,
-                    wallet,
-                    message: msg,
-                    model_key: $("modelSelect").value || "auto",
-                    attachments: filesForApi
-                })
-            });
-            if (!res.ok) {
-                addBubble("assistant", "Chat failed — server " + res.status, '<span class="error">Error</span>');
-                credits.textContent = "Chat failed (" + res.status + ")";
-                return;
-            }
-            const j = await res.json();
-            const resp = j.response || "";
-            const provider = j.provider || "openai";
-            const modelUsed = j.model || "auto";
-            const usedCredits = j.credits_used || 0;
-            const remaining = j.credits_remaining;
-            const filesHtml = (j.files || []).map(f =>
-                `<a href="/api/ai/files/${encodeURIComponent(f.id)}" target="_blank">${escapeHtml(f.filename)}</a>`
-            ).join(" • ");
-            const metaPieces = [];
-            metaPieces.push(`Model: <span class="mono">${escapeHtml(modelUsed)}</span>`);
-            metaPieces.push(`Core: <span class="mono">${escapeHtml(provider)}</span>`);
-            if (filesHtml) metaPieces.push(`Files: ${filesHtml}`);
-            if (usedCredits) metaPieces.push(`Credits: -${usedCredits}`);
-            if (remaining !== undefined && remaining !== null) {
-                metaPieces.push(`Remaining: ${remaining}`);
-            }
-            metaPieces.push(escapeHtml(new Date().toLocaleString()));
-            addBubble("assistant", resp, metaPieces.join(" • "));
-            pendingFiles = [];
-            renderPending();
-            if (remaining !== undefined && remaining !== null) {
-                credits.textContent = "Credits: " + remaining;
-            } else {
-                credits.textContent = "Credits: updated";
-            }
-        } catch (e) {
-            console.error(e);
-            addBubble("assistant", "Chat failed: " + e.message, '<span class="error">Error</span>');
-            credits.textContent = "Chat failed";
-        }
-    }
-
-    // Events
-    $("walletInput").addEventListener("change", (e) => {
-        wallet = (e.target.value || "").trim();
-        renderWalletBadge();
-        loadSessions();
+async function newSession(){
+  const wallet=$("wallet").value.trim();
+  if(!wallet){ showErr($("sideErr"), "Wallet required."); return; }
+  const model=$("model").value;
+  try{
+    const r=await fetch(`/api/ai/sessions/start`,{
+      method:"POST",
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet,title:"New Chat",model})
     });
+    const j=await r.json();
+    if(!j.ok) throw new Error(j.error||"failed");
+    sessions.unshift(j.session);
+    currentSession=j.session;
+    localStorage.setItem("thr_session", j.session.id);
+    renderSessions(); renderChat();
+  }catch(e){
+    showErr($("sideErr"), "New session error: "+e.message);
+  }
+}
 
-    $("loadBtn").addEventListener("click", () => {
-        if (!wallet) return;
-        loadSessions();
+async function renameSession(id){
+  const wallet=$("wallet").value.trim();
+  const newTitle = prompt("Enter new session name:");
+  if(!newTitle || !newTitle.trim()) return;
+  
+  try{
+    const r=await fetch(`/api/ai/sessions/rename`,{
+      method:"POST",
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet, session_id:id, title:newTitle.trim()})
     });
+    const j=await r.json().catch(()=>({ok:false,error:"bad json"}));
+    if(!j.ok) throw new Error(j.error||"Rename failed");
+    
+    const sess = sessions.find(s=>s.id===id);
+    if(sess) sess.title = newTitle.trim();
+    renderSessions(); renderChat();
+  }catch(e){
+    showErr($("sideErr"), "Rename error: "+e.message);
+  }
+}
 
-    $("newChatBtn").addEventListener("click", async () => {
-        await startSession();
-        $("chatArea").innerHTML = "";
+async function archiveSession(id){
+  const wallet=$("wallet").value.trim();
+  try{
+    const r=await fetch(`/api/ai/sessions/delete`,{
+      method:"POST",
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet,session_id:id})
     });
+    const j=await r.json().catch(()=>({ok:false,error:"bad json"}));
+    if(!j.ok && r.status!==404) throw new Error(j.error||"failed");
+    sessions = sessions.filter(s=>s.id!==id);
+    if(currentSession && currentSession.id===id) currentSession = sessions[0]||null;
+    renderSessions(); renderChat();
+  }catch(e){
+    showErr($("sideErr"), "Archive error: "+e.message);
+  }
+}
 
-    $("sendBtn").addEventListener("click", () => {
-        sendMessage();
+async function uploadSelected(files){
+  const wallet=$("wallet").value.trim();
+  const sid = currentSession ? currentSession.id : "";
+  if(!files || !files.length){ return; }
+  showErr($("upErr"), "");
+  
+  const fd=new FormData();
+  if(wallet) fd.append("wallet", wallet);
+  if(sid) fd.append("session_id", sid);
+  fd.append("purpose","chat");
+  
+  for(const file of files){
+    fd.append("files", file);
+  }
+  
+  try{
+    const r=await fetch("/api/ai/files/upload",{method:"POST", body:fd});
+    const t=await r.text();
+    let j=null;
+    try{ j=JSON.parse(t);}catch(e){ throw new Error("Upload returned non‑JSON"); }
+    if(!j.ok) throw new Error(j.error||"upload failed");
+    
+    if(Array.isArray(j.files)){
+      pendingFiles.push(...j.files);
+    }
+    renderPending();
+  }catch(e){
+    showErr($("upErr"), "Upload error: "+e.message);
+  }
+}
+
+async function sendMessage(){
+  const wallet=$("wallet").value.trim();
+  const model=$("model").value;
+  const sid=currentSession ? currentSession.id : "";
+  const msg=$("msg").value.trim();
+  if(!msg) return;
+
+  const payload = { 
+    wallet, 
+    session_id:sid, 
+    model_key:model, 
+    message:msg,
+    attachments: pendingFiles.map(f=>f.id)
+  };
+  $("msg").value="";
+  
+  const box=$("chat");
+  const b=document.createElement("div");
+  b.className="bubble me";
+  b.innerHTML = `<div>${escapeHtml(msg)}</div><div class="meta"><div>You</div><div>${escapeHtml(new Date().toLocaleString())}</div></div>`;
+  box.appendChild(b); box.scrollTop=box.scrollHeight;
+
+  try{
+    const r=await fetch("/api/ai/chat",{
+      method:"POST",
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload)
     });
+    const t=await r.text();
+    let j=null;
+    try{ j=JSON.parse(t);}catch(e){ throw new Error("Chat returned non‑JSON"); }
+    
+    const ans=document.createElement("div");
+    ans.className="bubble";
+    
+    let filesHtml = "";
+    if(Array.isArray(j.files) && j.files.length>0){
+      filesHtml = `<div class="files">${j.files.map(f=>`<a class="chip" href="/api/ai/files/${encodeURIComponent(f.id)}" download="${escapeHtml(f.filename)}" target="_blank">📎 ${escapeHtml(f.filename)}</a>`).join("")}</div>`;
+    }
+    
+    ans.innerHTML = `<div style="white-space:pre-wrap">${escapeHtml(j.response||"")}</div>
+      ${filesHtml}
+      <div class="meta"><div>Thronos (${escapeHtml(j.provider||"")}-${escapeHtml(j.model||"")})</div><div>${escapeHtml(new Date().toLocaleString())}</div></div>`;
+    box.appendChild(ans); box.scrollTop=box.scrollHeight;
+    
+    pendingFiles=[]; renderPending();
+    await loadSessions();
+  }catch(e){
+    showErr($("upErr"), "Send error: "+e.message);
+  }
+}
 
-    $("messageInput").addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            sendMessage();
-        }
-    });
+function escapeHtml(s){
+  return (s??"").toString().replace(/[&<>"']/g, (c)=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[c]));
+}
 
-    const dropZone = $("dropZone");
-    const fileInput = $("fileInput");
-    const chooseBtn = $("fileChooseBtn");
+$("loadBtn").onclick = loadSessions;
+$("newBtn").onclick = newSession;
+$("sendBtn").onclick = sendMessage;
+$("uploadBtn").onclick = async()=>{ await uploadSelected($("file").files); $("file").value=""; };
+$("msg").addEventListener("keydown",(e)=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendMessage(); } });
 
-    ["dragenter", "dragover"].forEach(evt => {
-        dropZone.addEventListener(evt, (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            dropZone.classList.add("dragover");
-        });
-    });
+$("drop").addEventListener("dragover",(e)=>{ e.preventDefault(); $("drop").style.borderColor="rgba(0,255,136,.75)"; });
+$("drop").addEventListener("dragleave",()=>{ $("drop").style.borderColor="rgba(14,224,127,.35)"; });
+$("drop").addEventListener("drop", async (e)=>{
+  e.preventDefault(); $("drop").style.borderColor="rgba(14,224,127,.35)";
+  const files=[...e.dataTransfer.files];
+  await uploadSelected(files);
+});
 
-    ["dragleave", "drop"].forEach(evt => {
-        dropZone.addEventListener(evt, (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            dropZone.classList.remove("dragover");
-        });
-    });
-
-    dropZone.addEventListener("drop", (e) => {
-        const dt = e.dataTransfer;
-        if (!dt || !dt.files) return;
-        fileInput.files = dt.files;
-        uploadSelected();
-    });
-
-    chooseBtn.addEventListener("click", () => fileInput.click());
-    fileInput.addEventListener("change", uploadSelected);
-
-    $("filesContainer").addEventListener("click", (e) => {
-        const idx = e.target.dataset.idx;
-        if (idx !== undefined) {
-            pendingFiles.splice(Number(idx), 1);
-            renderPending();
-        }
-    });
-
-    // Init
-    (function init() {
-        wallet = ($("walletInput").value || "").trim();
-        renderWalletBadge();
-        if (wallet) {
-            loadSessions();
-        }
-    })();
+document.addEventListener("DOMContentLoaded", ()=>{
+  const saved = localStorage.getItem("thr_address");
+  if(saved){ $("wallet").value = saved; }
+});
 </script>
 </body>
 </html>

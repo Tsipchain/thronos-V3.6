@@ -601,10 +601,11 @@
             item.appendChild(sub);
             item.appendChild(actions);
 
-            title.addEventListener("click", () => {
+            title.addEventListener("click", async () => {
                 currentSession = sess;
                 localStorage.setItem("thr_session", sess.id);
                 renderSessions();
+                await loadHistory(sess.id);
             });
 
             actions.querySelector(".rename-btn").addEventListener("click", async (e) => {
@@ -654,6 +655,12 @@
             const lastId = localStorage.getItem("thr_session");
             currentSession = sessions.find(s => s.id === lastId) || sessions[0] || null;
             renderSessions();
+
+            // Load history for current session
+            if (currentSession) {
+                await loadHistory(currentSession.id);
+            }
+
             document.getElementById("coreStatus").textContent = "Core: loaded";
             document.getElementById("modelStatus").textContent = "Model: " + (document.getElementById("modelSelect").value || "auto");
         } catch (err) {
@@ -689,7 +696,7 @@
             const res = await fetch("/api/ai/sessions/rename", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ wallet, session_id: id, title: newTitle.trim() })
+                body: JSON.stringify({ wallet, id: id, title: newTitle.trim() })
             });
             const j = await res.json().catch(() => ({ ok: false, error: "Invalid JSON" }));
             if (!j.ok) throw new Error(j.error || "Rename failed");
@@ -713,10 +720,40 @@
             sessions = sessions.filter(s => s.id !== id);
             if (currentSession && currentSession.id === id) {
                 currentSession = sessions[0] || null;
+                if (currentSession) {
+                    await loadHistory(currentSession.id);
+                } else {
+                    document.getElementById("chatArea").innerHTML = "";
+                }
             }
             renderSessions();
         } catch (e) {
             alert("Delete error: " + e.message);
+        }
+    }
+
+    async function loadHistory(sessionId) {
+        const area = document.getElementById("chatArea");
+        area.innerHTML = "";
+
+        if (!sessionId) return;
+
+        try {
+            const res = await fetch(`/api/ai_session_history?wallet=${encodeURIComponent(wallet || "")}&session_id=${encodeURIComponent(sessionId)}`);
+            if (!res.ok) {
+                console.warn("Failed to load history:", res.status);
+                return;
+            }
+            const j = await res.json();
+            const history = j.history || [];
+
+            history.forEach(entry => {
+                if (entry.content) {
+                    addBubble(entry.role, entry.content, entry.ts ? `<span class="mono">${escapeHtml(entry.ts)}</span>` : "");
+                }
+            });
+        } catch (e) {
+            console.error("Load history error:", e);
         }
     }
 

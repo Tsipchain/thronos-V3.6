@@ -1249,10 +1249,6 @@ def bridge_page():
 def iot_page():
     return render_template("iot.html")
 
-@app.route("/chat")
-def chat_page():
-    return render_template("chat.html")
-
 @app.route("/swap")
 def swap_page():
     return render_template("swap.html")

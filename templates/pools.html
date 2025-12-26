@@ -697,7 +697,11 @@ function renderMyPools() {
         return;
     }
 
-    const myPools = allPools.filter(pool => pool.provider_thr === wallet || pool.providers?.includes(wallet));
+    const myPools = allPools.filter(pool => {
+        if (pool.provider_thr === wallet) return true;
+        if (Array.isArray(pool.providers) && pool.providers.includes(wallet)) return true;
+        return false;
+    });
 
     if (myPools.length > 0) {
         document.getElementById('myPoolsEmpty').style.display = 'none';

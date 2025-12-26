@@ -12,19 +12,26 @@
         <div class="wallet-header">
             <div class="wallet-logo">
                 <img src="icons/icon48.png" alt="Thronos" onerror="this.style.display='none'">
-                <span class="wallet-title">Thronos Wallet</span>
+                <div class="wallet-branding">
+                    <span class="wallet-title">THRONOS</span>
+                    <span class="wallet-tagline">Pledge to the unburnable</span>
+                </div>
             </div>
             <button id="settingsBtn" class="icon-btn" title="Settings">⚙️</button>
         </div>
 
         <!-- Wallet Not Connected -->
         <div id="notConnected" class="not-connected">
-            <div class="welcome-message">
-                <h2>Welcome to Thronos</h2>
-                <p>Connect your wallet to get started</p>
+            <div class="welcome-logo">
+                <img src="icons/icon128.png" alt="Thronos Network" style="width: 120px; height: 120px; filter: drop-shadow(0 0 30px rgba(0, 255, 102, 0.5));">
             </div>
-            <button id="createWalletBtn" class="btn btn-primary">Create New Wallet</button>
-            <button id="importWalletBtn" class="btn btn-secondary">Import Wallet</button>
+            <div class="welcome-message">
+                <h2>Welcome to Thronos Network</h2>
+                <p class="tagline">Strength in every link • Light in every Block</p>
+                <p class="subtitle">Connect your wallet to get started</p>
+            </div>
+            <button id="createWalletBtn" class="btn btn-primary">🔥 Create New Wallet</button>
+            <button id="importWalletBtn" class="btn btn-secondary">📥 Import Wallet</button>
         </div>
 
         <!-- Wallet Connected -->

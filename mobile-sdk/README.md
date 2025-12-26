@@ -1,4 +1,6 @@
-# Thronos Mobile SDK
+# Thronos Network - Mobile SDK
+
+*Pledge to the unburnable • Strength in every link, light in every Block*
 
 The official mobile SDK for Thronos Network, supporting React Native, iOS (Swift), and Android (Kotlin).
 

@@ -1,6 +1,8 @@
-# Thronos Wallet Chrome Extension
+# Thronos Network - Chrome Extension
 
-A Chrome browser extension for managing your Thronos Network wallet and interacting with dApps.
+*Pledge to the unburnable • Strength in every link, light in every Block*
+
+A premium Chrome browser extension for managing your Thronos Network wallet and interacting with dApps.
 
 ## Features
 

@@ -1,991 +1,1999 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="utf-8" />
-    <meta name="viewport"
-          content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-    <title>Thronos Quantum Chat</title>
-    <!-- Favicon: ίδιο logo με το υπόλοιπο site -->
-    <link rel="icon" type="image/png" href="/static/img/thronos-token.png" />
-    <style>
-        :root {
-            --bg: #050b0b;
-            --panel: #071810;
-            --fg: #e6ffe5;
-            --muted: #56ff9a;
-            --accent: #0aff55;
-            --accent-soft: rgba(10, 255, 85, 0.08);
-            --border: #1a3b2e;
-            --danger: #ff4d4d;
-            --danger-soft: rgba(255, 77, 77, 0.15);
-            --badge-bg: #0a1f14;
-            --badge-border: #1f5b3f;
-            --chip-bg: rgba(24, 61, 38, 0.9);
-            --chip-border: #2d744f;
-        }
+  <meta charset="UTF-8" />
+  <title>Thronos Quantum Chat</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    :root {
+      --bg: #02040a;
+      --panel: #050912;
+      --panel-alt: #071018;
+      --accent: #00ff88;
+      --accent-soft: rgba(0, 255, 136, 0.1);
+      --accent-strong: rgba(0, 255, 136, 0.25);
+      --text-main: #e6ffe9;
+      --text-muted: #6fd1a4;
+      --border-subtle: #103322;
+      --danger: #ff4b4b;
+      --danger-soft: rgba(255, 75, 75, 0.1);
+      --warning: #ffc857;
+      --warning-soft: rgba(255, 200, 87, 0.12);
+      --info-soft: rgba(0, 152, 255, 0.08);
+      --scrollbar: #0f3624;
+      --shadow-soft: 0 0 40px rgba(0, 0, 0, 0.68);
+      --shadow-inner: 0 0 0 1px rgba(0, 255, 136, 0.05),
+        0 0 30px rgba(0, 0, 0, 0.9);
+      --radius-lg: 18px;
+      --radius-md: 12px;
+      --radius-pill: 999px;
+    }
 
-        * {
-            box-sizing: border-box;
-        }
+    * {
+      box-sizing: border-box;
+    }
 
-        html, body {
-            margin: 0;
-            padding: 0;
-            background: var(--bg);
-            color: var(--fg);
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
-        }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        sans-serif;
+      background: radial-gradient(circle at 0 0, #04151f 0, #02040a 45%, #000 100%);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+    }
 
-        body {
-            display: flex;
-            flex-direction: column;
-            min-height: 100vh;
-        }
+    .page {
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      padding: 20px;
+    }
 
-        a {
-            color: var(--accent);
-        }
+    .chat-shell {
+      width: 100%;
+      max-width: 1320px;
+      display: grid;
+      grid-template-columns: minmax(0, 260px) minmax(0, 1fr) minmax(0, 260px);
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      gap: 16px;
+      background: radial-gradient(circle at top, #04151f 0, #02040a 46%, #000 100%);
+      border-radius: 24px;
+      padding: 18px;
+      border: 1px solid rgba(0, 255, 136, 0.12);
+      box-shadow: var(--shadow-soft);
+      position: relative;
+      overflow: hidden;
+    }
 
-        .topbar {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 10px 16px;
-            border-bottom: 1px solid var(--border);
-            background: radial-gradient(circle at top, #0f2218 0, #050b0b 55%, #000 100%);
-            position: sticky;
-            top: 0;
-            z-index: 20;
-        }
+    .chat-shell::before {
+      content: "";
+      position: absolute;
+      inset: -120px;
+      background:
+        radial-gradient(circle at 0 0, rgba(0, 255, 136, 0.04), transparent 60%),
+        radial-gradient(circle at 100% 0, rgba(0, 153, 255, 0.04), transparent 55%),
+        radial-gradient(circle at 50% 100%, rgba(0, 255, 187, 0.04), transparent 55%);
+      opacity: 0.75;
+      pointer-events: none;
+    }
 
-        .topbar-left {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
+    .chat-shell > * {
+      position: relative;
+      z-index: 1;
+    }
 
-        .badge {
-            border: 1px solid var(--badge-border);
-            background: var(--badge-bg);
-            border-radius: 999px;
-            padding: 2px 10px;
-            font-size: 11px;
-            letter-spacing: 0.16em;
-            text-transform: uppercase;
-            color: var(--muted);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
+    .header {
+      grid-column: 1 / 4;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 12px 4px;
+    }
 
-        .badge-dot {
-            width: 6px;
-            height: 6px;
-            border-radius: 999px;
-            background: var(--accent);
-            box-shadow: 0 0 10px rgba(10, 255, 85, 0.6);
-        }
+    .logo-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
 
-        .wallet-chip {
-            border-radius: 999px;
-            border: 1px solid var(--border);
-            padding: 4px 10px;
-            font-size: 11px;
-            background: rgba(5, 14, 10, 0.9);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
+    .logo-orb {
+      width: 32px;
+      height: 32px;
+      border-radius: 999px;
+      background: radial-gradient(circle at 30% 20%, #00ffb7, #00995a);
+      box-shadow: 0 0 24px rgba(0, 255, 136, 0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+    }
 
-        .wallet-chip span {
-            font-family: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            font-size: 11px;
-        }
+    .logo-orb::after {
+      content: "";
+      position: absolute;
+      inset: 1px;
+      border-radius: inherit;
+      border: 1px solid rgba(0, 0, 0, 0.45);
+      box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.65);
+    }
 
-        .wallet-chip.badge-danger {
-            border-color: var(--danger);
-            color: var(--danger);
-            background: var(--danger-soft);
-        }
+    .logo-orb span {
+      font-size: 16px;
+      font-weight: 700;
+      color: #02040a;
+      text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+    }
 
-        .wallet-chip .dot-red {
-            width: 6px;
-            height: 6px;
-            border-radius: 999px;
-            background: var(--danger);
-            box-shadow: 0 0 10px rgba(255, 77, 77, 0.6);
-        }
+    .title-block {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
 
-        .main {
-            display: flex;
-            flex: 1;
-            min-height: 0;
-        }
+    .title-main {
+      font-size: 15px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
 
-        .sidebar {
-            width: 240px;
-            border-right: 1px solid var(--border);
-            background: radial-gradient(circle at top left, #0f2218 0, #050b0b 55%, #000 100%);
-            display: flex;
-            flex-direction: column;
-        }
+    .title-main::before {
+      content: "▐▌";
+      font-size: 11px;
+      opacity: 0.7;
+    }
 
-        .sidebar-header {
-            padding: 10px 10px 6px;
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.14em;
-            color: var(--muted);
-            opacity: 0.8;
-        }
+    .title-sub {
+      font-size: 11px;
+      color: var(--text-muted);
+      opacity: 0.9;
+    }
 
-        .btn {
-            border-radius: 999px;
-            border: 1px solid var(--border);
-            background: #050f0a;
-            color: var(--fg);
-            font-size: 13px;
-            padding: 6px 11px;
-            cursor: pointer;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-            transition: background 0.15s ease, border-color 0.15s ease, transform 0.05s ease;
-        }
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
 
-        .btn:hover {
-            background: #071810;
-            border-color: var(--accent);
-            transform: translateY(-0.5px);
-        }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: var(--radius-pill);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      border: 1px solid rgba(0, 255, 136, 0.3);
+      background: radial-gradient(circle at 0 0, rgba(0, 255, 136, 0.12), transparent 70%);
+    }
 
-        .btn-primary {
-            background: linear-gradient(135deg, #0aff55 0, #27e98b 50%, #0affb1 100%);
-            color: #021008;
-            border-color: #39ff98;
-            box-shadow: 0 0 25px rgba(22, 255, 119, 0.4);
-        }
+    .pill-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: #00ff88;
+      box-shadow: 0 0 10px rgba(0, 255, 136, 0.7);
+    }
 
-        .btn-primary:hover {
-            box-shadow: 0 0 30px rgba(22, 255, 119, 0.6);
-            filter: brightness(1.04);
-        }
+    .pill-label {
+      opacity: 0.9;
+    }
 
-        .btn-block {
-            width: 100%;
-        }
+    .wallet-pill {
+      font-size: 10px;
+      padding: 4px 10px;
+      border-radius: var(--radius-pill);
+      border: 1px solid rgba(0, 255, 136, 0.25);
+      background: linear-gradient(90deg, rgba(0, 255, 136, 0.12), transparent);
+      max-width: 270px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text-main);
+    }
 
-        .sessions-list {
-            padding: 8px 8px 12px;
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-            flex: 1;
-            overflow-y: auto;
-        }
+    .wallet-pill span {
+      opacity: 0.75;
+      margin-right: 4px;
+    }
 
-        .session-item {
-            border-radius: 10px;
-            border: 1px solid var(--border);
-            padding: 7px 9px;
-            font-size: 12px;
-            cursor: pointer;
-            background: #050d0a;
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            transition: background 0.12s ease, border-color 0.12s ease, transform 0.05s ease;
-            position: relative;
-        }
+    .wallet-pill code {
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+        Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 10px;
+    }
 
-        .session-item.active {
-            border-color: var(--accent);
-            background: radial-gradient(circle at top left, rgba(10, 255, 85, 0.16), #050d08 60%);
-            transform: translateY(-0.5px);
-        }
+    .session-badge {
+      font-size: 10px;
+      padding: 4px 10px;
+      border-radius: var(--radius-pill);
+      border: 1px solid rgba(0, 153, 255, 0.3);
+      background: radial-gradient(circle at 0 0, rgba(0, 153, 255, 0.18), transparent 75%);
+      color: #a6d9ff;
+    }
 
-        .session-item-title {
-            font-weight: 500;
-            color: var(--fg);
-            padding-right: 50px;
-        }
+    .sidebar {
+      grid-row: 2 / 4;
+      grid-column: 1 / 2;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 8px 4px 4px;
+    }
 
-        .session-item-sub {
-            font-size: 11px;
-            color: #8bb9a0;
-            display: flex;
-            justify-content: space-between;
-        }
+    .sidebar-section {
+      background: radial-gradient(circle at 0 0, rgba(0, 255, 136, 0.09), transparent 65%),
+        linear-gradient(to bottom right, #050912, #040814);
+      border-radius: var(--radius-lg);
+      border: 1px solid rgba(0, 255, 136, 0.22);
+      box-shadow: var(--shadow-inner);
+      padding: 10px 10px 8px;
+      position: relative;
+      overflow: hidden;
+    }
 
-        .session-actions {
-            position: absolute;
-            top: 7px;
-            right: 7px;
-            display: flex;
-            gap: 4px;
-        }
+    .sidebar-section::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        135deg,
+        rgba(0, 255, 136, 0.12),
+        transparent 40%,
+        transparent 60%,
+        rgba(0, 255, 187, 0.08)
+      );
+      opacity: 0.25;
+      pointer-events: none;
+      mix-blend-mode: screen;
+    }
 
-        .session-btn {
-            width: 20px;
-            height: 20px;
-            border-radius: 4px;
-            border: 1px solid var(--border);
-            background: rgba(5, 14, 10, 0.9);
-            color: var(--muted);
-            font-size: 11px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: all 0.12s ease;
-        }
+    .sidebar-section > * {
+      position: relative;
+      z-index: 1;
+    }
 
-        .session-btn:hover {
-            background: var(--accent-soft);
-            border-color: var(--accent);
-        }
+    .sidebar-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: var(--accent);
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
 
-        .session-btn.danger:hover {
-            background: var(--danger-soft);
-            border-color: var(--danger);
-            color: var(--danger);
-        }
+    .sidebar-title span.dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: var(--accent);
+      box-shadow: 0 0 10px rgba(0, 255, 136, 0.7);
+    }
 
-        .sidebar-footer {
-            padding: 8px;
-            border-top: 1px solid var(--border);
-            font-size: 11px;
-            color: #7da491;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
+    .session-list {
+      max-height: 230px;
+      overflow-y: auto;
+      padding-right: 4px;
+      margin-bottom: 2px;
+    }
 
-        .content {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            min-width: 0;
-        }
+    .session-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 7px;
+      border-radius: 10px;
+      margin-bottom: 4px;
+      font-size: 11px;
+      cursor: pointer;
+      border: 1px solid transparent;
+      color: var(--text-muted);
+      background: rgba(3, 12, 12, 0.75);
+      transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease,
+        transform 0.08s ease;
+    }
 
-        .chat-area {
-            flex: 1;
-            padding: 12px 14px 10px;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
+    .session-item:hover {
+      background: rgba(0, 255, 136, 0.07);
+      border-color: rgba(0, 255, 136, 0.4);
+      color: var(--text-main);
+      transform: translateY(-1px);
+    }
 
-        .bubble {
-            max-width: 860px;
-            margin-bottom: 4px;
-            padding: 10px 12px;
-            border-radius: 16px;
-            border: 1px solid rgba(40, 151, 92, 0.6);
-            background: rgba(7, 24, 16, 0.9);
-            box-shadow: 0 0 15px rgba(6, 231, 112, 0.16);
-            font-size: 13px;
-            line-height: 1.55;
-            white-space: pre-wrap;
-        }
+    .session-item.active {
+      background: radial-gradient(circle at 0 0, rgba(0, 255, 136, 0.25), transparent 75%);
+      border-color: rgba(0, 255, 136, 0.7);
+      color: var(--text-main);
+      box-shadow: 0 0 18px rgba(0, 255, 136, 0.28);
+    }
 
-        .bubble.user {
-            margin-left: auto;
-            background: radial-gradient(circle at top right, rgba(10, 255, 85, 0.18), #05150d 60%);
-            border-color: rgba(68, 255, 159, 0.8);
-        }
+    .session-item .avatar-badge {
+      min-width: 20px;
+      height: 20px;
+      border-radius: 999px;
+      background: radial-gradient(circle at 30% 20%, #00ffb7, #00804b);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 600;
+      color: #02130a;
+      box-shadow: 0 0 12px rgba(0, 255, 136, 0.7);
+      border: 1px solid rgba(0, 0, 0, 0.6);
+    }
 
-        .bubble-meta {
-            margin-top: 6px;
-            font-size: 11px;
-            color: #88b9a0;
-            display: flex;
-            gap: 14px;
-            flex-wrap: wrap;
-        }
+    .session-item .session-name {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
 
-        .bubble-warning {
-            border-color: var(--danger);
-            background: var(--danger-soft);
-        }
+    .session-item .session-meta {
+      font-size: 9px;
+      opacity: 0.65;
+    }
 
-        .composer {
-            border-top: 1px solid var(--border);
-            padding: 10px 12px;
-            background: radial-gradient(circle at bottom, #071810 0, #050b0b 60%, #000 100%);
-        }
+    .session-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 4px;
+    }
 
-        .row {
-            display: flex;
-            gap: 8px;
-            margin-bottom: 8px;
-        }
+    .btn {
+      border-radius: 999px;
+      border: 1px solid rgba(0, 255, 136, 0.6);
+      background: radial-gradient(circle at 0 0, rgba(0, 255, 136, 0.24), transparent 70%);
+      color: var(--text-main);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 6px 10px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: background 0.12s ease, border-color 0.12s ease,
+        transform 0.08s ease, box-shadow 0.12s ease;
+    }
 
-        .label {
-            font-size: 11px;
-            color: #9fd0b2;
-            margin-bottom: 4px;
-        }
+    .btn:hover {
+      background: radial-gradient(circle at 0 0, rgba(0, 255, 136, 0.36), transparent 75%);
+      box-shadow: 0 0 18px rgba(0, 255, 136, 0.3);
+      transform: translateY(-0.5px);
+    }
 
-        .input {
-            background: #050c09;
-            border-radius: 10px;
-            border: 1px solid var(--border);
-            color: var(--fg);
-            font-size: 12px;
-            padding: 7px 9px;
-            width: 100%;
-            outline: none;
-        }
+    .btn:active {
+      transform: translateY(1px);
+      box-shadow: none;
+    }
 
-        .input:focus {
-            border-color: var(--accent);
-            box-shadow: 0 0 0 1px rgba(10, 255, 85, 0.25);
-        }
+    .btn-ghost {
+      border-color: rgba(0, 255, 136, 0.28);
+      background: rgba(1, 10, 10, 0.8);
+    }
 
-        select.input {
-            padding-right: 28px;
-        }
+    .btn-ghost:hover {
+      border-color: rgba(0, 255, 136, 0.6);
+      background: radial-gradient(circle at 0 0, rgba(0, 255, 136, 0.26), transparent 70%);
+    }
 
-        textarea.input {
-            resize: vertical;
-            min-height: 80px;
-        }
+    .btn-icon {
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      font-size: 13px;
+    }
 
-        .drop-zone {
-            border: 1px dashed var(--border);
-            border-radius: 10px;
-            padding: 6px 8px;
-            font-size: 11px;
-            background: rgba(5, 14, 9, 0.9);
-            color: #9fd0b2;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 6px;
-        }
+    .btn-danger {
+      border-color: rgba(255, 75, 75, 0.8);
+      background: radial-gradient(circle at 0 0, rgba(255, 75, 75, 0.25), transparent 75%);
+      color: #ffd2d2;
+    }
 
-        .drop-zone.dragover {
-            border-color: var(--accent);
-            background: rgba(10, 255, 85, 0.06);
-        }
+    .btn-danger:hover {
+      box-shadow: 0 0 18px rgba(255, 75, 75, 0.35);
+    }
 
-        .files {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 5px;
-            margin-top: 6px;
-        }
+    .small-note {
+      font-size: 10px;
+      color: var(--text-muted);
+      opacity: 0.8;
+      margin-top: 4px;
+    }
 
-        .chip {
-            border: 1px solid rgba(40, 151, 92, 0.7);
-            background: var(--chip-bg);
-            border-radius: 999px;
-            padding: 2px 8px 2px 7px;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 11px;
-            color: #c7f6dd;
-        }
+    .small-note strong {
+      color: var(--accent);
+      font-weight: 600;
+    }
 
-        .chip small {
-            font-size: 10px;
-            opacity: 0.8;
-        }
+    .rightbar {
+      grid-row: 2 / 4;
+      grid-column: 3 / 4;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 8px 4px 4px;
+    }
 
-        .chip-remove {
-            cursor: pointer;
-            opacity: 0.8;
-        }
+    .stat-card {
+      background: radial-gradient(circle at 100% 0, rgba(0, 153, 255, 0.15), transparent 70%),
+        linear-gradient(to bottom left, #050912, #030710);
+      border-radius: var(--radius-lg);
+      border: 1px solid rgba(0, 153, 255, 0.35);
+      box-shadow: var(--shadow-inner);
+      padding: 10px 10px 8px;
+      position: relative;
+      overflow: hidden;
+    }
 
-        .chip-remove:hover {
-            opacity: 1;
-        }
+    .stat-card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        135deg,
+        rgba(0, 153, 255, 0.12),
+        transparent 45%,
+        transparent 60%,
+        rgba(0, 255, 187, 0.1)
+      );
+      opacity: 0.3;
+      mix-blend-mode: screen;
+      pointer-events: none;
+    }
 
-        .file-error {
-            border-color: var(--danger);
-            background: var(--danger-soft);
-        }
+    .stat-card > * {
+      position: relative;
+      z-index: 1;
+    }
 
-        .status-bar {
-            font-size: 11px;
-            color: #8bb9a0;
-            display: flex;
-            justify-content: space-between;
-            margin-top: 6px;
-        }
+    .stat-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: #6dc2ff;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
 
-        .status-bar span {
-            opacity: 0.9;
-        }
+    .stat-title span.dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: #6dc2ff;
+      box-shadow: 0 0 10px rgba(109, 194, 255, 0.7);
+    }
 
-        .status-bar .error {
-            color: var(--danger);
-        }
+    .stat-body {
+      font-size: 11px;
+      color: #c4e2ff;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px 10px;
+      margin-bottom: 4px;
+    }
 
-        .btn-send {
-            min-width: 100px;
-        }
+    .stat-label {
+      opacity: 0.7;
+    }
 
-        .mono {
-            font-family: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-        }
+    .stat-value {
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+        Consolas, "Liberation Mono", "Courier New", monospace;
+      text-align: right;
+    }
 
-        @media (max-width: 900px) {
-            .sidebar {
-                display: none;
-            }
-        }
-    </style>
+    .stat-footer {
+      font-size: 10px;
+      color: #9fd7ff;
+      opacity: 0.85;
+      border-top: 1px solid rgba(109, 194, 255, 0.3);
+      padding-top: 4px;
+      margin-top: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .stat-footer small {
+      opacity: 0.9;
+    }
+
+    .stat-chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 4px;
+    }
+
+    .stat-chip {
+      font-size: 9px;
+      padding: 3px 7px;
+      border-radius: 999px;
+      border: 1px solid rgba(0, 153, 255, 0.4);
+      background: rgba(0, 153, 255, 0.1);
+      color: #a6d9ff;
+    }
+
+    .assistant-card {
+      background: linear-gradient(135deg, rgba(0, 255, 136, 0.13), rgba(0, 153, 255, 0.12));
+      border-radius: var(--radius-lg);
+      border: 1px solid rgba(0, 255, 136, 0.32);
+      box-shadow: var(--shadow-inner);
+      padding: 10px 10px 8px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .assistant-card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image: linear-gradient(
+          115deg,
+          rgba(0, 255, 136, 0.28),
+          transparent 55%,
+          rgba(0, 153, 255, 0.28)
+        ),
+        radial-gradient(circle at 0 0, rgba(0, 255, 136, 0.18), transparent 60%);
+      opacity: 0.45;
+      mix-blend-mode: screen;
+      pointer-events: none;
+    }
+
+    .assistant-card > * {
+      position: relative;
+      z-index: 1;
+    }
+
+    .assistant-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    .assistant-avatar {
+      width: 26px;
+      height: 26px;
+      border-radius: 999px;
+      background: radial-gradient(circle at 30% 20%, #00ffb7, #007a40);
+      box-shadow: 0 0 18px rgba(0, 255, 136, 0.75);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      color: #021208;
+      border: 1px solid rgba(0, 0, 0, 0.6);
+    }
+
+    .assistant-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .assistant-name {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .assistant-desc {
+      font-size: 10px;
+      color: var(--text-main);
+      opacity: 0.85;
+    }
+
+    .assistant-body {
+      font-size: 11px;
+      color: var(--text-main);
+      opacity: 0.9;
+      margin-bottom: 6px;
+    }
+
+    .assistant-body ul {
+      margin: 4px 0 0;
+      padding-left: 18px;
+    }
+
+    .assistant-body li {
+      margin-bottom: 2px;
+    }
+
+    .assistant-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      font-size: 10px;
+      color: var(--text-main);
+      opacity: 0.9;
+    }
+
+    .assistant-footer span.label {
+      opacity: 0.85;
+    }
+
+    .assistant-footer span.model {
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+        Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 10px;
+    }
+
+    .assistant-flags {
+      display: inline-flex;
+      gap: 4px;
+    }
+
+    .assistant-flag {
+      font-size: 9px;
+      padding: 3px 6px;
+      border-radius: 999px;
+      border: 1px solid rgba(0, 0, 0, 0.5);
+      background: rgba(0, 0, 0, 0.45);
+      box-shadow: 0 0 12px rgba(0, 0, 0, 0.6);
+    }
+
+    .assistant-flag.green {
+      border-color: rgba(0, 255, 136, 0.7);
+      color: var(--accent);
+    }
+
+    .assistant-flag.blue {
+      border-color: rgba(0, 153, 255, 0.7);
+      color: #6dc2ff;
+    }
+
+    .main-panel {
+      grid-row: 2 / 3;
+      grid-column: 2 / 3;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 4px 6px 2px;
+    }
+
+    .conversation-panel {
+      flex: 1;
+      min-height: 240px;
+      max-height: calc(100vh - 260px);
+      display: flex;
+      flex-direction: column;
+      border-radius: var(--radius-lg);
+      background: radial-gradient(circle at 0 0, rgba(0, 255, 136, 0.15), transparent 70%),
+        linear-gradient(to bottom right, #050912, #02040a);
+      border: 1px solid rgba(0, 255, 136, 0.35);
+      box-shadow: var(--shadow-inner);
+      overflow: hidden;
+    }
+
+    .conversation-header {
+      padding: 6px 12px 4px;
+      border-bottom: 1px solid rgba(0, 255, 136, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .conversation-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+
+    .conversation-title span.badge {
+      font-size: 10px;
+      padding: 3px 6px;
+      border-radius: 999px;
+      border: 1px solid rgba(0, 255, 136, 0.45);
+      background: rgba(0, 255, 136, 0.12);
+      color: var(--text-main);
+    }
+
+    .conversation-meta {
+      font-size: 10px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .conversation-meta span {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .conversation-meta span::before {
+      content: "◦";
+      opacity: 0.6;
+    }
+
+    .message-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 12px 8px;
+      scroll-behavior: smooth;
+    }
+
+    .message {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin-bottom: 8px;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .message.user .bubble {
+      background: linear-gradient(135deg, rgba(0, 255, 136, 0.25), rgba(0, 153, 255, 0.2));
+      border-color: rgba(0, 255, 136, 0.7);
+      margin-left: auto;
+    }
+
+    .message.user {
+      justify-content: flex-end;
+    }
+
+    .message.assistant .bubble {
+      background: rgba(4, 12, 10, 0.9);
+      border-color: rgba(0, 255, 136, 0.3);
+    }
+
+    .message.assistant .avatar {
+      background: radial-gradient(circle at 30% 20%, #00ffb7, #007a40);
+      box-shadow: 0 0 16px rgba(0, 255, 136, 0.7);
+      color: #021208;
+    }
+
+    .message.system .bubble {
+      background: rgba(0, 0, 0, 0.65);
+      border-style: dashed;
+      border-color: rgba(0, 255, 187, 0.5);
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+
+    .message.system .avatar {
+      background: linear-gradient(135deg, #666, #111);
+      color: #f0f0f0;
+    }
+
+    .avatar {
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      background: radial-gradient(circle at 30% 20%, #444, #000);
+      border: 1px solid rgba(0, 0, 0, 0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      flex-shrink: 0;
+    }
+
+    .bubble {
+      max-width: 100%;
+      border-radius: 14px;
+      border: 1px solid rgba(0, 255, 136, 0.35);
+      padding: 7px 9px;
+      background: rgba(2, 8, 10, 0.9);
+      box-shadow: 0 0 12px rgba(0, 0, 0, 0.7);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .bubble-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      margin-bottom: 2px;
+    }
+
+    .bubble-role {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      opacity: 0.75;
+    }
+
+    .bubble-meta {
+      font-size: 9px;
+      opacity: 0.65;
+    }
+
+    .bubble-content {
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+
+    .bubble-files {
+      margin-top: 6px;
+      border-top: 1px solid rgba(0, 255, 136, 0.2);
+      padding-top: 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .bubble-file {
+      font-size: 11px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 6px;
+      border-radius: 10px;
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid rgba(0, 255, 136, 0.25);
+    }
+
+    .bubble-file a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .bubble-file a:hover {
+      text-decoration: underline;
+    }
+
+    .bubble-file span.badge {
+      font-size: 9px;
+      padding: 2px 5px;
+      border-radius: 999px;
+      border: 1px solid rgba(0, 255, 136, 0.55);
+      background: rgba(0, 255, 136, 0.16);
+    }
+
+    .typing-indicator {
+      font-size: 11px;
+      color: var(--text-muted);
+      padding: 0 12px 6px;
+      opacity: 0.85;
+    }
+
+    .typing-indicator span {
+      opacity: 0.6;
+    }
+
+    .input-panel {
+      grid-row: 3 / 4;
+      grid-column: 2 / 3;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 2px 6px 4px;
+    }
+
+    .input-row {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+    }
+
+    .input-main {
+      flex: 1;
+      background: radial-gradient(circle at 0 0, rgba(0, 255, 136, 0.18), transparent 70%),
+        linear-gradient(to bottom right, #050912, #02040a);
+      border-radius: var(--radius-lg);
+      border: 1px solid rgba(0, 255, 136, 0.4);
+      box-shadow: var(--shadow-inner);
+      padding: 6px 8px 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .input-textarea {
+      width: 100%;
+      min-height: 44px;
+      max-height: 92px;
+      resize: none;
+      border: none;
+      outline: none;
+      background: transparent;
+      color: var(--text-main);
+      font-size: 13px;
+      line-height: 1.5;
+      font-family: inherit;
+    }
+
+    .input-textarea::placeholder {
+      color: rgba(187, 255, 214, 0.6);
+    }
+
+    .input-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+
+    .input-footer-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .input-footer-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .file-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 7px;
+      border-radius: 999px;
+      border: 1px solid rgba(0, 255, 136, 0.5);
+      background: rgba(0, 255, 136, 0.1);
+      font-size: 10px;
+      max-width: 180px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .file-pill button {
+      border: none;
+      background: transparent;
+      color: var(--accent);
+      cursor: pointer;
+      font-size: 10px;
+      padding: 0;
+    }
+
+    .info-chip {
+      padding: 2px 6px;
+      border-radius: 999px;
+      border: 1px solid rgba(0, 255, 136, 0.4);
+      background: rgba(0, 0, 0, 0.6);
+    }
+
+    .model-select {
+      border-radius: 999px;
+      border: 1px solid rgba(0, 255, 136, 0.45);
+      background: rgba(0, 0, 0, 0.6);
+      color: var(--text-main);
+      font-size: 11px;
+      padding: 3px 18px 3px 8px;
+      outline: none;
+    }
+
+    .send-button {
+      min-width: 70px;
+      border-radius: 999px;
+      border: 1px solid rgba(0, 255, 136, 0.8);
+      background: radial-gradient(circle at 0 0, rgba(0, 255, 136, 0.4), transparent 70%);
+      color: var(--bg);
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      padding: 8px 10px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-weight: 600;
+      box-shadow: 0 0 18px rgba(0, 255, 136, 0.5);
+    }
+
+    .send-button:hover {
+      background: radial-gradient(circle at 0 0, rgba(0, 255, 136, 0.55), transparent 70%);
+    }
+
+    .send-button:active {
+      transform: translateY(1px);
+      box-shadow: none;
+    }
+
+    .send-button[disabled] {
+      opacity: 0.5;
+      cursor: default;
+      box-shadow: none;
+    }
+
+    .file-input {
+      display: none;
+    }
+
+    .upload-button {
+      border-radius: 999px;
+      border: 1px dashed rgba(0, 255, 136, 0.45);
+      background: rgba(0, 0, 0, 0.6);
+      color: var(--text-main);
+      font-size: 11px;
+      padding: 4px 8px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .upload-button span.icon {
+      font-size: 13px;
+      opacity: 0.9;
+    }
+
+    .upload-button:hover {
+      background: rgba(0, 255, 136, 0.12);
+    }
+
+    .footer-note {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-align: right;
+      padding-right: 6px;
+    }
+
+    .footer-note span {
+      color: var(--accent);
+    }
+
+    .file-list {
+      max-height: 130px;
+      overflow-y: auto;
+      padding-right: 2px;
+      margin-top: 2px;
+      font-size: 11px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .file-entry {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      padding: 4px 6px;
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.6);
+      border: 1px solid rgba(0, 255, 136, 0.25);
+    }
+
+    .file-entry-main {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .file-entry-name {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .file-entry-kind {
+      font-size: 10px;
+      opacity: 0.8;
+      border-radius: 999px;
+      padding: 2px 6px;
+      border: 1px solid rgba(0, 255, 136, 0.4);
+      background: rgba(0, 255, 136, 0.1);
+    }
+
+    .file-entry-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .file-entry-actions button {
+      border-radius: 999px;
+      border: 1px solid rgba(0, 255, 136, 0.4);
+      background: rgba(0, 0, 0, 0.8);
+      color: var(--accent);
+      font-size: 10px;
+      padding: 2px 5px;
+      cursor: pointer;
+    }
+
+    .file-entry-actions button:hover {
+      background: rgba(0, 255, 136, 0.15);
+    }
+
+    .file-entry-download {
+      text-decoration: none;
+      color: var(--accent);
+      font-size: 10px;
+      padding: 2px 5px;
+      border-radius: 999px;
+      border: 1px solid rgba(0, 255, 136, 0.4);
+      background: rgba(0, 0, 0, 0.8);
+    }
+
+    .file-entry-download:hover {
+      background: rgba(0, 255, 136, 0.15);
+      text-decoration: underline;
+    }
+
+    .alert {
+      border-radius: 10px;
+      padding: 6px 8px;
+      font-size: 10px;
+      border: 1px solid transparent;
+      margin-bottom: 4px;
+    }
+
+    .alert-warning {
+      background: var(--warning-soft);
+      border-color: rgba(255, 200, 87, 0.6);
+      color: #ffe6a3;
+    }
+
+    .alert-danger {
+      background: var(--danger-soft);
+      border-color: rgba(255, 75, 75, 0.7);
+      color: #ffd7d7;
+    }
+
+    .alert-info {
+      background: var(--info-soft);
+      border-color: rgba(0, 152, 255, 0.6);
+      color: #c6e1ff;
+    }
+
+    .badge-mini {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 2px 6px;
+      font-size: 9px;
+      border: 1px solid rgba(0, 255, 136, 0.4);
+      background: rgba(0, 0, 0, 0.6);
+      margin-left: 4px;
+    }
+
+    .badge-mini span.dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 999px;
+      background: var(--accent);
+      margin-right: 4px;
+    }
+
+    .scrollable {
+      scrollbar-width: thin;
+      scrollbar-color: var(--scrollbar) transparent;
+    }
+
+    .scrollable::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .scrollable::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .scrollable::-webkit-scrollbar-thumb {
+      background-color: var(--scrollbar);
+      border-radius: 999px;
+    }
+
+    @media (max-width: 1100px) {
+      .chat-shell {
+        grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.9fr);
+        grid-template-rows: auto minmax(0, 1fr) auto auto;
+      }
+
+      .sidebar {
+        grid-column: 1 / 2;
+        grid-row: 2 / 4;
+      }
+
+      .main-panel {
+        grid-column: 2 / 3;
+      }
+
+      .rightbar {
+        grid-column: 1 / 3;
+        grid-row: 4 / 5;
+        flex-direction: row;
+      }
+
+      .assistant-card {
+        flex: 1.2;
+      }
+
+      .stat-card {
+        flex: 1;
+      }
+    }
+
+    @media (max-width: 880px) {
+      .chat-shell {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+      }
+
+      .header {
+        grid-column: 1 / 2;
+        flex-wrap: wrap;
+      }
+
+      .sidebar {
+        grid-column: 1 / 2;
+        grid-row: 2 / 3;
+        display: none;
+      }
+
+      .main-panel {
+        grid-column: 1 / 2;
+        grid-row: 2 / 4;
+      }
+
+      .rightbar {
+        grid-column: 1 / 2;
+        grid-row: 4 / 6;
+        flex-direction: column;
+      }
+
+      .wallet-pill {
+        max-width: 200px;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .chat-shell {
+        padding: 12px;
+        border-radius: 18px;
+      }
+
+      .conversation-panel {
+        max-height: calc(100vh - 260px);
+      }
+
+      .header-right {
+        width: 100%;
+        justify-content: space-between;
+      }
+
+      .session-badge {
+        display: none;
+      }
+    }
+
+    code {
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+        Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+    }
+
+    pre {
+      margin: 4px 0;
+      padding: 6px 8px;
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.65);
+      overflow-x: auto;
+      font-size: 12px;
+    }
+
+    .code-copy-btn {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      font-size: 9px;
+      padding: 2px 6px;
+      border-radius: 999px;
+      border: 1px solid rgba(0, 255, 136, 0.4);
+      background: rgba(0, 0, 0, 0.7);
+      color: var(--accent);
+      cursor: pointer;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+  </style>
 </head>
 <body>
-<div class="topbar">
-    <div class="topbar-left">
-        <span style="font-weight: 700; letter-spacing: 0.17em;">THRONOS QUANTUM</span>
-        <span class="badge">
-            <span class="badge-dot"></span>
-            Quantum Encryption Active
-        </span>
+  <div class="page">
+    <div class="chat-shell">
+      <header class="header">
+        <div class="logo-group">
+          <div class="logo-orb">
+            <span>TH</span>
+          </div>
+          <div class="title-block">
+            <div class="title-main">
+              THRONOS QUANTUM
+              <span class="badge-mini">
+                <span class="dot"></span>
+                ENCRYPTION ACTIVE
+              </span>
+            </div>
+            <div class="title-sub">
+              Peer-to-peer encrypted AI console · Blockchain-bound knowledge mesh
+            </div>
+          </div>
+        </div>
+        <div class="header-right">
+          <div class="wallet-pill" id="wallet-pill">
+            <span>THR wallet:</span>
+            <code id="thr-wallet-label">unknown</code>
+          </div>
+          <div class="session-badge">
+            Session: <span id="session-label">Loading...</span>
+          </div>
+          <div class="pill">
+            <span class="pill-dot"></span>
+            <span class="pill-label">Quantum Channel</span>
+          </div>
+        </div>
+      </header>
+
+      <aside class="sidebar">
+        <section class="sidebar-section">
+          <div class="sidebar-title">
+            <span class="dot"></span> Sessions
+          </div>
+          <div id="session-error" class="alert alert-danger hidden">
+            Failed to load sessions. Check your connection or refresh.
+          </div>
+          <div id="session-list" class="session-list scrollable"></div>
+          <div class="session-actions">
+            <button id="new-session-btn" class="btn btn-ghost" type="button">
+              + New Session
+            </button>
+            <button id="rename-session-btn" class="btn btn-ghost" type="button">
+              ✎ Rename
+            </button>
+            <button id="delete-session-btn" class="btn btn-danger btn-icon" type="button">
+              ✕
+            </button>
+          </div>
+          <div class="small-note">
+            Sessions are stored on-chain-adjacent storage with
+            <strong>quorum receipts</strong> for future AI mining.
+          </div>
+        </section>
+      </aside>
+
+      <main class="main-panel">
+        <section class="conversation-panel">
+          <div class="conversation-header">
+            <div class="conversation-title">
+              DIALOG
+              <span class="badge">Encrypted Mesh</span>
+            </div>
+            <div class="conversation-meta">
+              <span id="model-indicator">Model: auto</span>
+              <span id="latency-indicator">Latency: - ms</span>
+            </div>
+          </div>
+          <div id="message-list" class="message-list scrollable"></div>
+          <div id="typing-indicator" class="typing-indicator hidden">
+            <span>THRONOS AI is thinking…</span>
+          </div>
+        </section>
+      </main>
+
+      <footer class="input-panel">
+        <div id="upload-warning" class="alert alert-warning hidden">
+          The file is still uploading. Please wait until it finishes before sending.
+        </div>
+        <div class="input-row">
+          <div class="input-main">
+            <textarea
+              id="message-input"
+              class="input-textarea"
+              placeholder="Type a command to Thronos…"
+            ></textarea>
+            <div class="input-footer">
+              <div class="input-footer-left">
+                <label class="upload-button" for="file-input">
+                  <span class="icon">📎</span>
+                  Attach file
+                </label>
+                <input
+                  id="file-input"
+                  class="file-input"
+                  type="file"
+                  multiple
+                />
+                <div id="pending-files-pill" class="info-chip hidden">
+                  Pending files attached
+                </div>
+              </div>
+              <div class="input-footer-right">
+                <select id="model-select" class="model-select">
+                  <option value="auto">Auto (Thronos chooses)</option>
+                  <option value="gpt-5.1-mini">GPT-5.1 mini</option>
+                  <option value="gpt-4.1-mini">GPT-4.1 mini</option>
+                  <option value="deep-research-pro-preview">Deep Research (pro)</option>
+                  <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+                  <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+                </select>
+                <button id="send-button" class="send-button" type="button">
+                  <span>Send</span> ⮞
+                </button>
+              </div>
+            </div>
+            <div id="file-list" class="file-list scrollable hidden"></div>
+          </div>
+        </div>
+        <div class="footer-note">
+          Offline corpus:
+          <span>best blocks will be promoted to AI training dataset</span>.
+        </div>
+      </footer>
+
+      <aside class="rightbar">
+        <section class="assistant-card">
+          <div class="assistant-header">
+            <div class="assistant-avatar">Q</div>
+            <div class="assistant-meta">
+              <div class="assistant-name">QUORUM ORACLE</div>
+              <div class="assistant-desc">
+                Multi-model quantum AI orchestrator bound to Thronos chain.
+              </div>
+            </div>
+          </div>
+          <div class="assistant-body">
+            Trained to:
+            <ul>
+              <li>Understand Thronos chain, miners and pledge mechanics.</li>
+              <li>Route your request to the best available AI model.</li>
+              <li>Attach your uploads to encrypted sessions and mine knowledge blocks.</li>
+            </ul>
+          </div>
+          <div class="assistant-footer">
+            <span class="label">
+              Active models:
+              <span class="assistant-flags">
+                <span class="assistant-flag green">GPT</span>
+                <span class="assistant-flag blue">Gemini</span>
+                <span class="assistant-flag">Local</span>
+              </span>
+            </span>
+            <span class="model">
+              Mesh: dynamic / quorum-based
+            </span>
+          </div>
+        </section>
+
+        <section class="stat-card">
+          <div class="stat-title">
+            <span class="dot"></span> Node Telemetry
+          </div>
+          <div class="stat-body">
+            <div>
+              <div class="stat-label">Hashrate (local)</div>
+              <div id="stat-hashrate" class="stat-value">0 H/s</div>
+            </div>
+            <div>
+              <div class="stat-label">Pending TXs</div>
+              <div id="stat-txs" class="stat-value">0</div>
+            </div>
+            <div>
+              <div class="stat-label">Difficulty</div>
+              <div id="stat-diff" class="stat-value">–</div>
+            </div>
+            <div>
+              <div class="stat-label">AI Credits</div>
+              <div id="stat-credits" class="stat-value">–</div>
+            </div>
+          </div>
+          <div class="stat-footer">
+            <small>
+              Stats are approximate and pulled from Thronos HTTP node.
+            </small>
+            <div class="stat-chip-row">
+              <span class="stat-chip">Mesh v3.8</span>
+              <span class="stat-chip">Quorum-Secured</span>
+            </div>
+          </div>
+        </section>
+      </aside>
     </div>
-    <div id="walletBadge" class="wallet-chip badge-danger">
-        <span class="dot-red"></span>
-        <span>No wallet loaded</span>
-    </div>
-</div>
+  </div>
 
-<div class="main">
-    <aside class="sidebar">
-        <div class="sidebar-header">Sessions</div>
-        <div style="padding: 0 8px 6px;">
-            <button id="newChatBtn" class="btn btn-primary btn-block">+ New Chat</button>
-        </div>
-        <div id="sessionsList" class="sessions-list"></div>
-        <div class="sidebar-footer">
-            <span id="coreStatus">Core: —</span>
-            <span id="modelStatus">Model: —</span>
-        </div>
-    </aside>
+  <script>
+    const walletLabelEl = document.getElementById("thr-wallet-label");
+    const sessionLabelEl = document.getElementById("session-label");
+    const messageListEl = document.getElementById("message-list");
+    const typingIndicatorEl = document.getElementById("typing-indicator");
+    const messageInputEl = document.getElementById("message-input");
+    const modelSelectEl = document.getElementById("model-select");
+    const sendButtonEl = document.getElementById("send-button");
+    const fileInputEl = document.getElementById("file-input");
+    const fileListEl = document.getElementById("file-list");
+    const pendingFilesPillEl = document.getElementById("pending-files-pill");
+    const uploadWarningEl = document.getElementById("upload-warning");
+    const sessionListEl = document.getElementById("session-list");
+    const sessionErrorEl = document.getElementById("session-error");
 
-    <main class="content">
-        <!-- History controls: allow the user to choose how many past messages to fetch or fetch the full conversation -->
-        <div class="history-controls" style="display:flex; align-items:center; gap:8px; margin:4px 0 6px 0;">
-            <label for="historySelect" style="font-size:12px; color: var(--muted);">History:</label>
-            <select id="historySelect" class="input" style="height:28px; font-size:12px; padding:2px 6px;">
-                <option value="50">Last 50</option>
-                <option value="100">Last 100</option>
-                <option value="all">Full</option>
-            </select>
-        </div>
-        <div id="chatArea" class="chat-area">
-            <div class="bubble bubble-warning">
-                Welcome to <b>Thronos Quantum Assistant</b>.<br/>
-                Load your THR wallet address to bind this chat to your on-chain identity and mining rewards.
-            </div>
-        </div>
+    const newSessionBtn = document.getElementById("new-session-btn");
+    const renameSessionBtn = document.getElementById("rename-session-btn");
+    const deleteSessionBtn = document.getElementById("delete-session-btn");
+    const latencyIndicatorEl = document.getElementById("latency-indicator");
+    const modelIndicatorEl = document.getElementById("model-indicator");
 
-        <div class="composer">
-            <div class="row">
-                <div style="flex: 1; max-width: 420px;">
-                    <div class="label">THR wallet</div>
-                    <input id="walletInput" class="input mono" placeholder="THR..." />
-                </div>
-                <div style="width: 220px;">
-                    <div class="label">Model</div>
-                    <select id="modelSelect" class="input">
-                        <option value="auto">Auto (Smart)</option>
-                        <option value="gpt-4o">GPT-4o</option>
-                        <option value="gpt-4o-mini">GPT-4o-mini</option>
-                        <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash</option>
-                        <option value="claude-3.5-sonnet">Claude 3.5 Sonnet</option>
-                    </select>
-                </div>
-                <div style="width: 120px;">
-                    <div class="label">Session</div>
-                    <button id="loadBtn" class="btn btn-block" style="height: 34px;">Load</button>
-                </div>
-            </div>
-
-            <div class="row">
-                <div style="flex: 1;">
-                    <div class="label">Message</div>
-                    <textarea id="messageInput" class="input" placeholder="Type a command to Thronos..."></textarea>
-                </div>
-            </div>
-
-            <div class="row" style="align-items: center;">
-                <div style="flex: 1;">
-                    <div class="label">Attach files (for code/docs fix)</div>
-                    <div id="dropZone" class="drop-zone">
-                        <span>Drop files here or click "Choose"</span>
-                        <input id="fileInput" type="file" multiple style="display:none;" />
-                        <button id="fileChooseBtn" class="btn" type="button" style="font-size: 11px; padding: 4px 9px;">
-                            Choose
-                        </button>
-                    </div>
-                    <div id="filesContainer" class="files"></div>
-                    <div class="status-bar">
-                        <span id="creditsInfo">Credits: —</span>
-                        <span id="uploadStatus"></span>
-                    </div>
-                </div>
-                <div style="width: 120px; text-align: right;">
-                    <button id="sendBtn" class="btn btn-primary btn-send">Send</button>
-                </div>
-            </div>
-        </div>
-    </main>
-</div>
-
-<script>
-    let currentSession = null;
+    let currentSessionId = null;
     let sessions = [];
+    let messages = [];
+
     let pendingFiles = [];
-    let wallet = "";
+    let receivedFiles = [];
+    let isUploading = false;
 
-    function escapeHtml(str) {
-        if (!str && str !== 0) return "";
-        return String(str)
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;");
+    function el(tag, className, text) {
+      const e = document.createElement(tag);
+      if (className) e.className = className;
+      if (text) e.textContent = text;
+      return e;
     }
 
-    function renderWalletBadge() {
-        const badge = document.getElementById("walletBadge");
-        if (!badge) return;
-        if (wallet) {
-            badge.classList.remove("badge-danger");
-            badge.innerHTML = '<span class="badge-dot"></span><span class="mono">' +
-                escapeHtml(wallet.slice(0, 8) + "..." + wallet.slice(-4)) + "</span>";
-        } else {
-            badge.classList.add("badge-danger");
-            badge.innerHTML = '<span class="dot-red"></span><span>No wallet loaded</span>';
+    async function fetchCurrentWallet() {
+      try {
+        const res = await fetch("/api/wallet/current");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        const addr = data.wallet_address || "unknown";
+        walletLabelEl.textContent = addr;
+      } catch (err) {
+        console.error("Failed to fetch wallet", err);
+        walletLabelEl.textContent = "unknown";
+      }
+    }
+
+    async function fetchSessions() {
+      try {
+        sessionErrorEl.classList.add("hidden");
+        const res = await fetch("/api/ai/sessions");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        sessions = data.sessions || [];
+        renderSessionList();
+        if (!currentSessionId && sessions.length > 0) {
+          currentSessionId = sessions[0].id;
+          sessionLabelEl.textContent = sessions[0].name || sessions[0].id.slice(0, 8);
+          await fetchMessages(currentSessionId);
         }
+      } catch (err) {
+        console.error("Failed to fetch sessions", err);
+        sessionErrorEl.classList.remove("hidden");
+      }
     }
 
-    function renderPending() {
-        const container = document.getElementById("filesContainer");
-        if (!container) return;
-        container.innerHTML = "";
-        pendingFiles.forEach((f, idx) => {
-            const div = document.createElement("div");
-            div.className = "chip";
-            div.innerHTML =
-                '<span class="mono">' + escapeHtml(f.name) + "</span>" +
-                '<small>(' + Math.round(f.size / 1024) + " KB)</small>" +
-                '<span class="chip-remove" data-idx="' + idx + '">×</span>';
-            container.appendChild(div);
+    function renderSessionList() {
+      sessionListEl.innerHTML = "";
+      sessions.forEach((s) => {
+        const item = el("div", "session-item" + (s.id === currentSessionId ? " active" : ""));
+        const avatar = el("div", "avatar-badge", "Q");
+        const name = el("div", "session-name", s.name || "Session " + s.id.slice(0, 8));
+        const meta = el("div", "session-meta", s.model || "auto");
+
+        item.appendChild(avatar);
+        item.appendChild(name);
+        item.appendChild(meta);
+
+        item.addEventListener("click", async () => {
+          if (s.id === currentSessionId) return;
+          currentSessionId = s.id;
+          sessionLabelEl.textContent = s.name || s.id.slice(0, 8);
+          renderSessionList();
+          await fetchMessages(s.id);
         });
+
+        sessionListEl.appendChild(item);
+      });
     }
 
-    function renderSessions() {
-        const list = document.getElementById("sessionsList");
-        list.innerHTML = "";
-        sessions.forEach(sess => {
-            const item = document.createElement("div");
-            item.className = "session-item" +
-                (currentSession && currentSession.id === sess.id ? " active" : "");
-            item.dataset.id = sess.id;
-
-            const title = document.createElement("div");
-            title.className = "session-item-title";
-            title.textContent = sess.title || "New Chat";
-
-            const sub = document.createElement("div");
-            sub.className = "session-item-sub";
-            sub.innerHTML =
-                '<span>' + escapeHtml(sess.model || "auto") + "</span>" +
-                '<span>' + escapeHtml((sess.updated_at || "").slice(0, 16)) + "</span>";
-
-            const actions = document.createElement("div");
-            actions.className = "session-actions";
-            actions.innerHTML = '<button class="session-btn rename-btn" title="Rename">✎</button>' +
-                '<button class="session-btn danger delete-btn" title="Delete">✕</button>';
-
-            item.appendChild(title);
-            item.appendChild(sub);
-            item.appendChild(actions);
-
-            title.addEventListener("click", async () => {
-                currentSession = sess;
-                localStorage.setItem("thr_session", sess.id);
-                renderSessions();
-                await loadHistory(sess.id);
-            });
-
-            actions.querySelector(".rename-btn").addEventListener("click", async (e) => {
-                e.stopPropagation();
-                await renameSession(sess.id);
-            });
-
-            actions.querySelector(".delete-btn").addEventListener("click", async (e) => {
-                e.stopPropagation();
-                if (confirm("Delete this session? This cannot be undone.")) {
-                    await deleteSession(sess.id);
-                }
-            });
-
-            list.appendChild(item);
-        });
-    }
-
-    function addBubble(role, text, meta = "") {
-        const area = document.getElementById("chatArea");
-        const div = document.createElement("div");
-        div.className = "bubble" + (role === "user" ? " user" : "");
-        div.textContent = text;
-        if (meta) {
-            const metaDiv = document.createElement("div");
-            metaDiv.className = "bubble-meta";
-            metaDiv.innerHTML = meta;
-            div.appendChild(metaDiv);
+    async function fetchMessages(sessionId) {
+      try {
+        messageListEl.innerHTML = "";
+        const res = await fetch(`/api/ai/sessions/${encodeURIComponent(sessionId)}/messages`);
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        messages = data.messages || [];
+        receivedFiles = data.files || [];
+        for (const msg of messages) {
+          appendMessage(msg);
         }
-        area.appendChild(div);
-        area.scrollTop = area.scrollHeight;
+        renderFileList();
+        scrollMessagesToBottom();
+      } catch (err) {
+        console.error("Failed to fetch messages", err);
+      }
     }
 
-    async function loadSessions() {
+    function appendMessage(msg) {
+      const role = msg.role || "assistant";
+      const content = msg.content || "";
+      const files = msg.files || [];
+
+      const msgEl = el("div", "message " + role);
+      const avatarEl = el("div", "avatar");
+      avatarEl.textContent = role === "user" ? "U" : role === "assistant" ? "Q" : "S";
+
+      const bubbleEl = el("div", "bubble");
+      const headerEl = el("div", "bubble-header");
+      const roleEl = el("div", "bubble-role", role.toUpperCase());
+      const metaEl = el("div", "bubble-meta");
+      if (msg.model) {
+        metaEl.textContent = msg.model;
+      }
+
+      headerEl.appendChild(roleEl);
+      headerEl.appendChild(metaEl);
+
+      const contentEl = el("div", "bubble-content");
+      contentEl.textContent = content;
+
+      bubbleEl.appendChild(headerEl);
+      bubbleEl.appendChild(contentEl);
+
+      if (files && files.length > 0) {
+        const filesEl = el("div", "bubble-files");
+        for (const f of files) {
+          const fileEl = el("div", "bubble-file");
+          const nameSpan = el("span", null, f.name || "file");
+          const badgeSpan = el("span", "badge", f.kind || "file");
+          fileEl.appendChild(nameSpan);
+          fileEl.appendChild(badgeSpan);
+          if (f.file_id) {
+            const link = el("a", null, "download");
+            link.href = `/api/ai/files/${encodeURIComponent(f.file_id)}`;
+            link.target = "_blank";
+            fileEl.appendChild(link);
+          }
+          filesEl.appendChild(fileEl);
+        }
+        bubbleEl.appendChild(filesEl);
+      }
+
+      msgEl.appendChild(avatarEl);
+      msgEl.appendChild(bubbleEl);
+      messageListEl.appendChild(msgEl);
+    }
+
+    function scrollMessagesToBottom() {
+      requestAnimationFrame(() => {
+        messageListEl.scrollTop = messageListEl.scrollHeight;
+      });
+    }
+
+    function renderFileList() {
+      const allFiles = [
+        ...pendingFiles.map((f) => ({ ...f, source: "pending" })),
+        ...receivedFiles.map((f) => ({ ...f, source: "ai" })),
+      ];
+
+      if (allFiles.length === 0) {
+        fileListEl.classList.add("hidden");
+        return;
+      }
+
+      fileListEl.classList.remove("hidden");
+      fileListEl.innerHTML = "";
+
+      for (const f of allFiles) {
+        const entryEl = el("div", "file-entry");
+        const mainEl = el("div", "file-entry-main");
+        const nameEl = el("div", "file-entry-name", f.name || "file");
+        const kindEl = el("div", "file-entry-kind", f.kind || (f.source === "ai" ? "ai" : "user"));
+
+        mainEl.appendChild(nameEl);
+        mainEl.appendChild(kindEl);
+        entryEl.appendChild(mainEl);
+
+        const actionsEl = el("div", "file-entry-actions");
+
+        if (f.source === "pending") {
+          const removeBtn = el("button", null, "remove");
+          removeBtn.addEventListener("click", () => {
+            pendingFiles = pendingFiles.filter((pf) => pf.local_id !== f.local_id);
+            if (pendingFiles.length === 0) {
+              pendingFilesPillEl.classList.add("hidden");
+            }
+            renderFileList();
+          });
+          actionsEl.appendChild(removeBtn);
+        }
+
+        if (f.file_id) {
+          const link = document.createElement("a");
+          link.className = "file-entry-download";
+          link.textContent = "download";
+          link.href = `/api/ai/files/${encodeURIComponent(f.file_id)}`;
+          link.target = "_blank";
+          actionsEl.appendChild(link);
+        }
+
+        entryEl.appendChild(actionsEl);
+        fileListEl.appendChild(entryEl);
+      }
+    }
+
+    let localFileIdCounter = 0;
+
+    fileInputEl.addEventListener("change", () => {
+      const files = Array.from(fileInputEl.files || []);
+      if (files.length === 0) return;
+
+      for (const f of files) {
+        pendingFiles.push({
+          local_id: "local_" + localFileIdCounter++,
+          name: f.name,
+          size: f.size,
+          raw: f,
+          kind: "user",
+        });
+      }
+
+      fileInputEl.value = "";
+      pendingFilesPillEl.classList.remove("hidden");
+      renderFileList();
+    });
+
+    async function uploadPendingFiles() {
+      if (pendingFiles.length === 0) return [];
+
+      isUploading = true;
+      uploadWarningEl.classList.add("hidden");
+
+      const uploaded = [];
+      for (const f of pendingFiles) {
         try {
-            const res = await fetch("/api/ai/sessions?wallet=" + encodeURIComponent(wallet || ""));
-            if (!res.ok) {
-                document.getElementById("coreStatus").textContent = "Core: error";
-                return;
-            }
-            const j = await res.json();
-            if (!j.ok) {
-                document.getElementById("coreStatus").textContent = "Core: " + (j.error || "failed");
-                return;
-            }
-            sessions = j.sessions || [];
-            const lastId = localStorage.getItem("thr_session");
-            currentSession = sessions.find(s => s.id === lastId) || sessions[0] || null;
-            renderSessions();
-
-            // Load history for current session, respecting user-selected history length
-            if (currentSession) {
-                const histSel = document.getElementById("historySelect");
-                const limitVal = histSel ? histSel.value : null;
-                await loadHistory(currentSession.id, limitVal);
-            }
-
-            document.getElementById("coreStatus").textContent = "Core: loaded";
-            document.getElementById("modelStatus").textContent = "Model: " + (document.getElementById("modelSelect").value || "auto");
+          const form = new FormData();
+          form.append("file", f.raw, f.name);
+          const res = await fetch("/api/ai/upload", { method: "POST", body: form });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const data = await res.json();
+          if (data.file_id) {
+            uploaded.push({
+              file_id: data.file_id,
+              name: f.name,
+              kind: "user",
+            });
+          }
         } catch (err) {
-            console.warn("loadSessions error", err);
-            document.getElementById("coreStatus").textContent = "Core: " + err.message;
+          console.error("Failed to upload file", f.name, err);
         }
-    }
+      }
 
-    async function startSession() {
-        const model = document.getElementById("modelSelect").value || "auto";
-        try {
-            const res = await fetch("/api/ai/sessions/start", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ wallet, model, title: "New Chat" })
-            });
-            if (!res.ok) throw new Error("Failed to start session (HTTP " + res.status + ")");
-            const j = await res.json();
-            if (!j.ok) throw new Error(j.error || "Start session failed");
-            currentSession = j.session;
-            sessions.unshift(j.session);
-            localStorage.setItem("thr_session", j.session.id);
-            renderSessions();
-        } catch (e) {
-            alert("Start session error: " + e.message);
-        }
-    }
+      isUploading = false;
+      pendingFiles = [];
+      pendingFilesPillEl.classList.add("hidden");
+      renderFileList();
 
-    async function renameSession(id) {
-        const newTitle = prompt("Enter new session name:");
-        if (!newTitle || !newTitle.trim()) return;
-        try {
-            const res = await fetch("/api/ai/sessions/rename", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ wallet, id: id, title: newTitle.trim() })
-            });
-            const j = await res.json().catch(() => ({ ok: false, error: "Invalid JSON" }));
-            if (!j.ok) throw new Error(j.error || "Rename failed");
-            const sess = sessions.find(s => s.id === id);
-            if (sess) sess.title = newTitle.trim();
-            renderSessions();
-        } catch (e) {
-            alert("Rename error: " + e.message);
-        }
-    }
-
-    async function deleteSession(id) {
-        try {
-            const res = await fetch("/api/ai/sessions/delete", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ wallet, session_id: id })
-            });
-            const j = await res.json().catch(() => ({ ok: false, error: "Invalid JSON" }));
-            if (!j.ok && res.status !== 404) throw new Error(j.error || "Delete failed");
-            sessions = sessions.filter(s => s.id !== id);
-            if (currentSession && currentSession.id === id) {
-                currentSession = sessions[0] || null;
-                if (currentSession) {
-                    const histSel = document.getElementById("historySelect");
-                    const limitVal = histSel ? histSel.value : null;
-                    await loadHistory(currentSession.id, limitVal);
-                } else {
-                    document.getElementById("chatArea").innerHTML = "";
-                }
-            }
-            renderSessions();
-        } catch (e) {
-            alert("Delete error: " + e.message);
-        }
-    }
-
-    async function loadHistory(sessionId, limit) {
-        const area = document.getElementById("chatArea");
-        area.innerHTML = "";
-
-        if (!sessionId) return;
-
-        try {
-            // Build the URL with optional limit/all parameters
-            let url = `/api/ai_session_history?wallet=${encodeURIComponent(wallet || "")}&session_id=${encodeURIComponent(sessionId)}`;
-            if (limit) {
-                if (limit === "all") {
-                    url += `&all=1`;
-                } else {
-                    url += `&limit=${encodeURIComponent(limit)}`;
-                }
-            }
-            const res = await fetch(url);
-            if (!res.ok) {
-                console.warn("Failed to load history:", res.status);
-                return;
-            }
-            const j = await res.json();
-            const history = j.history || [];
-
-            history.forEach(entry => {
-                if (entry.content) {
-                    addBubble(entry.role, entry.content, entry.ts ? `<span class="mono">${escapeHtml(entry.ts)}</span>` : "");
-                }
-            });
-        } catch (e) {
-            console.error("Load history error:", e);
-        }
-    }
-
-    async function uploadSelected() {
-        const status = document.getElementById("uploadStatus");
-        const input = document.getElementById("fileInput");
-        if (!input.files || !input.files.length) return;
-        const files = Array.from(input.files);
-        const fd = new FormData();
-        files.forEach(f => fd.append("files", f));
-        fd.append("wallet", wallet || "");
-        if (currentSession && currentSession.id) fd.append("session_id", currentSession.id);
-        status.textContent = "Uploading...";
-        try {
-            const res = await fetch("/api/ai/files/upload", {
-                method: "POST",
-                body: fd
-            });
-            if (!res.ok) {
-                status.textContent = "Upload failed (HTTP " + res.status + ")";
-                return;
-            }
-            let j;
-            try {
-                j = await res.json();
-            } catch {
-                status.textContent = "Upload failed (invalid JSON)";
-                return;
-            }
-            if (!j.ok) {
-                status.textContent = j.error || "Upload failed";
-                return;
-            }
-            pendingFiles = (j.files || []).map(f => ({
-                id: f.id,
-                name: f.name,
-                size: f.size
-            }));
-            renderPending();
-            status.textContent = "Uploaded " + pendingFiles.length + " file(s).";
-        } catch (e) {
-            console.error(e);
-            status.textContent = "Upload error: " + e.message;
-        } finally {
-            input.value = "";
-        }
+      return uploaded;
     }
 
     async function sendMessage() {
-        const msgEl = document.getElementById("messageInput");
-        const msg = msgEl.value.trim();
-        if (!msg) return;
-        if (!currentSession) {
-            await startSession();
-        }
-        addBubble("user", msg);
-        msgEl.value = "";
-        const credits = document.getElementById("creditsInfo");
-        credits.textContent = "Sending...";
-        const filesForApi = pendingFiles.map(f => f.id);
+      const text = messageInputEl.value.trim();
+      if (!text && pendingFiles.length === 0) return;
+      if (isUploading) {
+        uploadWarningEl.classList.remove("hidden");
+        return;
+      }
+      if (!currentSessionId) {
+        await createNewSession();
+        if (!currentSessionId) return;
+      }
 
-        try {
-            const res = await fetch("/api/chat", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    session_id: currentSession ? currentSession.id : null,
-                    wallet,
-                    message: msg,
-                    model_key: document.getElementById("modelSelect").value || "auto",
-                    attachments: filesForApi
-                })
+      sendButtonEl.disabled = true;
+      typingIndicatorEl.classList.remove("hidden");
+      const model = modelSelectEl.value;
+      const t0 = performance.now();
+
+      let uploadedFiles = [];
+      try {
+        uploadedFiles = await uploadPendingFiles();
+      } catch (e) {}
+
+      const userMsg = {
+        role: "user",
+        content: text || (uploadedFiles.length ? "[File-only message]" : ""),
+        files: uploadedFiles,
+      };
+      messages.push(userMsg);
+      appendMessage(userMsg);
+      scrollMessagesToBottom();
+      messageInputEl.value = "";
+
+      try {
+        const res = await fetch("/api/ai/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: currentSessionId,
+            message: text,
+            model,
+            files: uploadedFiles,
+          }),
+        });
+        const latency = Math.round(performance.now() - t0);
+        latencyIndicatorEl.textContent = `Latency: ${latency} ms`;
+
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        modelIndicatorEl.textContent = "Model: " + (data.model || model || "auto");
+
+        if (Array.isArray(data.messages)) {
+          const last = data.messages[data.messages.length - 1];
+          if (last) {
+            messages.push(last);
+            appendMessage(last);
+          }
+        } else if (data.message) {
+          messages.push(data.message);
+          appendMessage(data.message);
+        }
+
+        if (Array.isArray(data.files) && data.files.length > 0) {
+          for (const f of data.files) {
+            receivedFiles.push({
+              file_id: f.file_id,
+              name: f.name,
+              kind: f.kind || "ai",
             });
-            if (!res.ok) {
-                addBubble("assistant", "Chat failed — server " + res.status, '<span class="error">Error</span>');
-                credits.textContent = "Chat failed (" + res.status + ")";
-                return;
-            }
-            const j = await res.json();
-            const resp = j.response || "";
-            const provider = j.provider || "unknown";
-            const modelUsed = j.model || "auto";
-            const remaining = j.credits;
-            const filesHtml = (j.files || []).map(f =>
-                `<a href="/api/ai/files/${encodeURIComponent(f.id)}" target="_blank">${escapeHtml(f.filename)}</a>`
-            ).join(" • ");
-            const metaPieces = [];
-            metaPieces.push(`Model: <span class="mono">${escapeHtml(modelUsed)}</span>`);
-            metaPieces.push(`Provider: <span class="mono">${escapeHtml(provider)}</span>`);
-            if (filesHtml) metaPieces.push(`Files: ${filesHtml}`);
-            if (remaining !== undefined && remaining !== null && remaining !== "infinite") {
-                metaPieces.push(`Credits: ${remaining}`);
-            }
-            metaPieces.push(escapeHtml(new Date().toLocaleString()));
-            addBubble("assistant", resp, metaPieces.join(" • "));
-            pendingFiles = [];
-            renderPending();
-            if (remaining !== undefined && remaining !== null) {
-                credits.textContent = "Credits: " + remaining;
-            } else {
-                credits.textContent = "Credits: updated";
-            }
-        } catch (e) {
-            console.error(e);
-            addBubble("assistant", "Chat failed: " + e.message, '<span class="error">Error</span>');
-            credits.textContent = "Chat failed";
+          }
+          renderFileList();
         }
+
+        scrollMessagesToBottom();
+      } catch (err) {
+        console.error("Failed to send message", err);
+        const errorMsg = {
+          role: "system",
+          content: "Error: " + (err.message || "failed to contact AI backend."),
+        };
+        messages.push(errorMsg);
+        appendMessage(errorMsg);
+        scrollMessagesToBottom();
+      } finally {
+        typingIndicatorEl.classList.add("hidden");
+        sendButtonEl.disabled = false;
+      }
     }
 
-    // ---------- events & init ----------
+    async function createNewSession() {
+      try {
+        const res = await fetch("/api/ai/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        const s = data.session;
+        if (!s) return;
+        currentSessionId = s.id;
+        sessions.unshift(s);
+        sessionLabelEl.textContent = s.name || s.id.slice(0, 8);
+        renderSessionList();
+        messages = [];
+        messageListEl.innerHTML = "";
+      } catch (err) {
+        console.error("Failed to create session", err);
+      }
+    }
 
-    document.getElementById("walletInput").addEventListener("change", (e) => {
-        wallet = (e.target.value || "").trim();
-        localStorage.setItem("thr_address", wallet);
-        renderWalletBadge();
-        if (wallet) loadSessions();
-    });
+    async function renameCurrentSession() {
+      if (!currentSessionId) return;
+      const s = sessions.find((x) => x.id === currentSessionId);
+      const currentName = s?.name || "";
+      const newName = prompt("New session name:", currentName);
+      if (!newName || newName === currentName) return;
 
-    document.getElementById("modelSelect").addEventListener("change", () => {
-        if (wallet) loadSessions();
-    });
-
-    document.getElementById("loadBtn").addEventListener("click", () => {
-        if (!wallet) {
-            alert("Please enter a THR wallet address first.");
-            return;
+      try {
+        const res = await fetch("/api/ai/sessions/rename", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: currentSessionId, name: newName }),
+        });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        if (data.ok) {
+          if (s) s.name = newName;
+          sessionLabelEl.textContent = newName;
+          renderSessionList();
         }
-        loadSessions();
-    });
+      } catch (err) {
+        console.error("Failed to rename session", err);
+        alert("Failed to rename session.");
+      }
+    }
 
-    document.getElementById("newChatBtn").addEventListener("click", async () => {
-        if (!wallet) {
-            alert("Please enter a THR wallet address first.");
-            return;
+    async function deleteCurrentSession() {
+      if (!currentSessionId) return;
+      const s = sessions.find((x) => x.id === currentSessionId);
+      const name = s?.name || currentSessionId.slice(0, 8);
+      if (
+        !confirm(
+          `Delete session "${name}"? This will remove all messages linked to it (but not on-chain blocks).`
+        )
+      ) {
+        return;
+      }
+
+      try {
+        const res = await fetch("/api/ai/sessions/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: currentSessionId }),
+        });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        if (data.ok) {
+          sessions = sessions.filter((x) => x.id !== currentSessionId);
+          currentSessionId = sessions[0]?.id || null;
+          if (currentSessionId) {
+            sessionLabelEl.textContent =
+              sessions[0].name || sessions[0].id.slice(0, 8);
+            await fetchMessages(currentSessionId);
+          } else {
+            sessionLabelEl.textContent = "None";
+            messages = [];
+            messageListEl.innerHTML = "";
+          }
+          renderSessionList();
         }
-        await startSession();
-        document.getElementById("chatArea").innerHTML = "";
-    });
+      } catch (err) {
+        console.error("Failed to delete session", err);
+        alert("Failed to delete session.");
+      }
+    }
 
-    document.getElementById("sendBtn").addEventListener("click", () => {
+    messageInputEl.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" && !ev.shiftKey) {
+        ev.preventDefault();
         sendMessage();
+      }
     });
 
-    document.getElementById("messageInput").addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            sendMessage();
-        }
+    sendButtonEl.addEventListener("click", () => {
+      sendMessage();
     });
 
-    const dropZone = document.getElementById("dropZone");
-    const fileInput = document.getElementById("fileInput");
-    const chooseBtn = document.getElementById("fileChooseBtn");
-
-    ["dragenter", "dragover"].forEach(evt => {
-        dropZone.addEventListener(evt, (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            dropZone.classList.add("dragover");
-        });
+    newSessionBtn.addEventListener("click", () => {
+      createNewSession();
     });
 
-    ["dragleave", "drop"].forEach(evt => {
-        dropZone.addEventListener(evt, (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            dropZone.classList.remove("dragover");
-        });
+    renameSessionBtn.addEventListener("click", () => {
+      renameCurrentSession();
     });
 
-    dropZone.addEventListener("drop", (e) => {
-        const dt = e.dataTransfer;
-        if (!dt || !dt.files) return;
-        fileInput.files = dt.files;
-        uploadSelected();
+    deleteSessionBtn.addEventListener("click", () => {
+      deleteCurrentSession();
     });
 
-    chooseBtn.addEventListener("click", () => fileInput.click());
-    fileInput.addEventListener("change", uploadSelected);
-
-    document.getElementById("filesContainer").addEventListener("click", (e) => {
-        const idx = e.target.dataset.idx;
-        if (idx !== undefined) {
-            pendingFiles.splice(Number(idx), 1);
-            renderPending();
-        }
-    });
-
-    // Reload history when the user changes the history limit selector.  This
-    // triggers a new API call with the selected limit or all conversation.
-    const histSelect = document.getElementById("historySelect");
-    if (histSelect) {
-        histSelect.addEventListener("change", () => {
-            if (currentSession && currentSession.id) {
-                const val = histSelect.value;
-                loadHistory(currentSession.id, val);
-            }
-        });
-    }
-
-    // αρχικό state
-    (function init() {
-        const saved = localStorage.getItem("thr_address");
-        if (saved) {
-            document.getElementById("walletInput").value = saved;
-            wallet = saved;
-            renderWalletBadge();
-            loadSessions();
-        }
-    })();
-</script>
+    fetchCurrentWallet();
+    fetchSessions();
+  </script>
 </body>
 </html>

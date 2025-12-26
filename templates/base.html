@@ -296,6 +296,181 @@
         animation: spin 1s linear infinite;
         margin: 0 auto 10px;
     }
+    .wallet-popup-actions {
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid #1a3b2e;
+        display: flex;
+        gap: 8px;
+    }
+    .wallet-popup-btn {
+        flex: 1;
+        padding: 8px 12px;
+        background: linear-gradient(135deg, rgba(0, 255, 102, 0.1) 0%, rgba(0, 255, 102, 0.2) 100%);
+        border: 1px solid #00ff66;
+        color: #00ff66;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 600;
+        transition: all 0.3s;
+        border-radius: 6px;
+        font-family: "Courier New", monospace;
+    }
+    .wallet-popup-btn:hover {
+        background: linear-gradient(135deg, rgba(0, 255, 102, 0.2) 0%, rgba(0, 255, 102, 0.3) 100%);
+        box-shadow: 0 0 15px rgba(0, 255, 102, 0.3);
+        transform: translateY(-1px);
+    }
+
+    /* Send Modal */
+    .send-modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.9);
+        z-index: 10000;
+        align-items: center;
+        justify-content: center;
+    }
+    .send-modal.active {
+        display: flex;
+    }
+    .send-modal-content {
+        background: linear-gradient(135deg, #000000 0%, #071810 50%, #000000 100%);
+        border: 2px solid;
+        border-image: linear-gradient(135deg, #d4af37 0%, #00ff66 50%, #ffd700 100%) 1;
+        border-radius: 12px;
+        padding: 20px;
+        max-width: 400px;
+        width: 90%;
+        box-shadow: 0 0 40px rgba(0, 255, 102, 0.4);
+    }
+    .send-modal-header {
+        font-size: 16px;
+        font-weight: 700;
+        background: linear-gradient(135deg, #ffd700 0%, #00ff66 50%, #ffed4e 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        margin-bottom: 15px;
+        padding-bottom: 10px;
+        border-bottom: 2px solid;
+        border-image: linear-gradient(90deg, transparent, #00ff66, transparent) 1;
+        text-align: center;
+    }
+    .send-form-group {
+        margin-bottom: 12px;
+    }
+    .send-form-label {
+        display: block;
+        font-size: 11px;
+        color: #56ff9a;
+        margin-bottom: 5px;
+        font-weight: 600;
+    }
+    .send-form-input {
+        width: 100%;
+        padding: 10px;
+        background: rgba(0, 0, 0, 0.5);
+        border: 1px solid #1a3b2e;
+        color: #e6ffe5;
+        font-family: "Courier New", monospace;
+        font-size: 12px;
+        border-radius: 6px;
+        transition: border-color 0.3s;
+    }
+    .send-form-input:focus {
+        outline: none;
+        border-color: #00ff66;
+        box-shadow: 0 0 10px rgba(0, 255, 102, 0.2);
+    }
+    .send-speed-options {
+        display: flex;
+        gap: 10px;
+        margin-top: 8px;
+    }
+    .send-speed-option {
+        flex: 1;
+        padding: 10px;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid #1a3b2e;
+        cursor: pointer;
+        border-radius: 6px;
+        text-align: center;
+        transition: all 0.3s;
+    }
+    .send-speed-option:hover {
+        border-color: #00ff66;
+    }
+    .send-speed-option.selected {
+        background: linear-gradient(135deg, rgba(0, 255, 102, 0.2) 0%, rgba(0, 255, 102, 0.1) 100%);
+        border-color: #00ff66;
+        box-shadow: 0 0 15px rgba(0, 255, 102, 0.2);
+    }
+    .send-speed-label {
+        font-size: 11px;
+        font-weight: 600;
+        color: #00ff66;
+        margin-bottom: 3px;
+    }
+    .send-speed-fee {
+        font-size: 9px;
+        color: #56ff9a;
+    }
+    .send-modal-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 15px;
+    }
+    .send-modal-btn {
+        flex: 1;
+        padding: 10px;
+        border: 1px solid;
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 12px;
+        border-radius: 6px;
+        font-family: "Courier New", monospace;
+        transition: all 0.3s;
+    }
+    .send-modal-btn-primary {
+        background: linear-gradient(135deg, #00ff00 0%, #00ff66 100%);
+        color: #000;
+        border-color: #00ff66;
+    }
+    .send-modal-btn-primary:hover {
+        box-shadow: 0 0 20px rgba(0, 255, 102, 0.4);
+        transform: translateY(-1px);
+    }
+    .send-modal-btn-secondary {
+        background: transparent;
+        color: #00ff66;
+        border-color: #1a3b2e;
+    }
+    .send-modal-btn-secondary:hover {
+        border-color: #00ff66;
+        background: rgba(0, 255, 102, 0.1);
+    }
+    .send-result {
+        margin-top: 10px;
+        padding: 10px;
+        border-radius: 6px;
+        font-size: 11px;
+        display: none;
+    }
+    .send-result.success {
+        background: rgba(0, 255, 102, 0.1);
+        border: 1px solid #00ff66;
+        color: #00ff66;
+    }
+    .send-result.error {
+        background: rgba(255, 0, 0, 0.1);
+        border: 1px solid #ff0000;
+        color: #ff6666;
+    }
     
     /* Disconnect Button */
     .disconnect-btn {
@@ -372,6 +547,48 @@
         ✖ <span class="lang-el">Αποσύνδεση</span><span class="lang-en">Disconnect</span>
     </button>
     <button class="lang-toggle" onclick="toggleLanguage()">GR | EN</button>
+</div>
+
+<!-- Send Modal -->
+<div class="send-modal" id="sendModal" onclick="closeSendModal(event)">
+    <div class="send-modal-content" onclick="event.stopPropagation()">
+        <div class="send-modal-header">💸 <span class="lang-el">Αποστολή THR</span><span class="lang-en">Send THR</span></div>
+
+        <div class="send-form-group">
+            <label class="send-form-label"><span class="lang-el">Παραλήπτης</span><span class="lang-en">Recipient Address</span></label>
+            <input type="text" id="sendTo" class="send-form-input" placeholder="THR_..." />
+        </div>
+
+        <div class="send-form-group">
+            <label class="send-form-label"><span class="lang-el">Ποσό (THR)</span><span class="lang-en">Amount (THR)</span></label>
+            <input type="number" id="sendAmount" class="send-form-input" placeholder="0.000000" step="0.000001" />
+        </div>
+
+        <div class="send-form-group">
+            <label class="send-form-label"><span class="lang-el">Ταχύτητα Συναλλαγής</span><span class="lang-en">Transaction Speed</span></label>
+            <div class="send-speed-options">
+                <div class="send-speed-option" data-speed="slow" onclick="selectSpeed('slow')">
+                    <div class="send-speed-label">🐢 <span class="lang-el">Αργή</span><span class="lang-en">Slow</span></div>
+                    <div class="send-speed-fee">0.09% fee</div>
+                </div>
+                <div class="send-speed-option selected" data-speed="fast" onclick="selectSpeed('fast')">
+                    <div class="send-speed-label">⚡ <span class="lang-el">Γρήγορη</span><span class="lang-en">Fast</span></div>
+                    <div class="send-speed-fee">0.5% fee</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="send-result" id="sendResult"></div>
+
+        <div class="send-modal-actions">
+            <button class="send-modal-btn send-modal-btn-secondary" onclick="closeSendModal()">
+                <span class="lang-el">Ακύρωση</span><span class="lang-en">Cancel</span>
+            </button>
+            <button class="send-modal-btn send-modal-btn-primary" onclick="submitSend()">
+                <span class="lang-el">Αποστολή</span><span class="lang-en">Send</span>
+            </button>
+        </div>
+    </div>
 </div>
 
 <div class="navbar">
@@ -521,7 +738,7 @@ function renderWalletBalances(data) {
         html += `
             <div class="wallet-popup-token">
                 <div class="wallet-popup-logo" style="border-color: ${token.color};">
-                    ${token.logo ? `<img src="${token.logo}" alt="${token.symbol}" onerror="this.style.display='none';">` : `<span style="color: ${token.color};">${token.symbol[0]}</span>`}
+                    ${token.logo ? `<img src="${token.logo}" alt="${token.symbol}" onerror="this.style.display='none'; this.parentElement.innerHTML='<span style=\\'color:${token.color}\\'>${token.symbol[0]}</span>';">` : `<span style="color: ${token.color};">${token.symbol[0]}</span>`}
                 </div>
                 <div class="wallet-popup-info">
                     <div class="wallet-popup-symbol">${token.symbol}</div>
@@ -539,9 +756,112 @@ function renderWalletBalances(data) {
             Total Portfolio
             <div class="wallet-popup-total-amount">${totalTHR.toFixed(2)} THR</div>
         </div>
+        <div class="wallet-popup-actions">
+            <button class="wallet-popup-btn" onclick="openSendModal(); event.stopPropagation();">
+                💸 <span class="lang-el">Αποστολή</span><span class="lang-en">Send</span>
+            </button>
+        </div>
     `;
 
     popup.innerHTML = html;
+
+    // Re-apply language settings
+    const savedLang = localStorage.getItem('lang') || 'el';
+    setLanguage(savedLang);
+}
+
+// Send Modal Functions
+let selectedSpeed = 'fast';
+
+function openSendModal() {
+    document.getElementById('sendModal').classList.add('active');
+    document.getElementById('sendResult').style.display = 'none';
+    document.getElementById('sendTo').value = '';
+    document.getElementById('sendAmount').value = '';
+}
+
+function closeSendModal(event) {
+    if (!event || event.target.id === 'sendModal') {
+        document.getElementById('sendModal').classList.remove('active');
+    }
+}
+
+function selectSpeed(speed) {
+    selectedSpeed = speed;
+    document.querySelectorAll('.send-speed-option').forEach(opt => {
+        opt.classList.remove('selected');
+    });
+    document.querySelector(`[data-speed="${speed}"]`).classList.add('selected');
+}
+
+async function submitSend() {
+    const to = document.getElementById('sendTo').value.trim();
+    const amount = parseFloat(document.getElementById('sendAmount').value);
+    const from = localStorage.getItem('thr_address');
+    const secret = localStorage.getItem('thr_secret');
+    const resultDiv = document.getElementById('sendResult');
+
+    if (!to || !amount || amount <= 0) {
+        resultDiv.className = 'send-result error';
+        resultDiv.textContent = 'Please enter valid recipient and amount';
+        resultDiv.style.display = 'block';
+        return;
+    }
+
+    if (!from || !secret) {
+        resultDiv.className = 'send-result error';
+        resultDiv.textContent = 'Wallet not connected';
+        resultDiv.style.display = 'block';
+        return;
+    }
+
+    try {
+        // Calculate fee based on selected speed
+        let fee = 0;
+        if (selectedSpeed === 'slow') {
+            fee = amount * 0.0009; // 0.09%
+        } else {
+            fee = amount * 0.005; // 0.5%
+        }
+
+        const payload = {
+            from_thr: from,
+            to_thr: to,
+            amount: amount,
+            auth_secret: secret,
+            speed: selectedSpeed
+        };
+
+        const response = await fetch('/api/v1/submit_transaction', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+
+        if (data.error) {
+            resultDiv.className = 'send-result error';
+            resultDiv.textContent = `Error: ${data.error || data.message || 'Transaction failed'}`;
+            resultDiv.style.display = 'block';
+        } else {
+            resultDiv.className = 'send-result success';
+            resultDiv.textContent = `✓ Transaction sent! Fee: ${fee.toFixed(6)} THR`;
+            resultDiv.style.display = 'block';
+
+            // Reset wallet balances to reload
+            walletBalancesLoaded = false;
+
+            // Close modal after 2 seconds
+            setTimeout(() => {
+                closeSendModal();
+            }, 2000);
+        }
+    } catch (error) {
+        resultDiv.className = 'send-result error';
+        resultDiv.textContent = `Error: ${error.message}`;
+        resultDiv.style.display = 'block';
+    }
 }
 
 // Initialize language and wallet status on load

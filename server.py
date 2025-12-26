@@ -1416,6 +1416,14 @@ def api_train2earn_contributions(thr_addr: str):
 def evm_page():
     return render_template("evm.html")
 
+@app.route("/playground")
+def playground_page():
+    """
+    Render the DApp Playground interface for smart contract development.
+    Users can write, compile, deploy, and test smart contracts.
+    """
+    return render_template("playground.html")
+
 # Token listing & creation UI
 @app.route("/tokens")
 def tokens_page():
@@ -3260,6 +3268,30 @@ def api_wallet_tokens(thr_addr):
         }
     ]
 
+    # Add custom experimental tokens
+    custom_tokens = load_custom_tokens()
+    for symbol, token_data in custom_tokens.items():
+        token_id = token_data.get("id")
+        if token_id:
+            # Load the token's ledger to get this wallet's balance
+            token_ledger = load_custom_token_ledger(token_id)
+            token_balance = round(float(token_ledger.get(thr_addr, 0.0)), token_data.get("decimals", 6))
+
+            # Only show if balance > 0 or show_zero is true
+            if token_balance > 0 or request.args.get("show_zero", "true").lower() == "true":
+                tokens.append({
+                    "symbol": symbol,
+                    "name": token_data.get("name", symbol),
+                    "balance": token_balance,
+                    "decimals": token_data.get("decimals", 6),
+                    "logo": token_data.get("logo", None),
+                    "color": token_data.get("color", "#00ff66"),
+                    "chain": "Thronos",
+                    "type": "experimental",
+                    "token_id": token_id,
+                    "creator": token_data.get("creator", "")
+                })
+
     # Filter out zero balances (optional - can be toggled)
     show_zero = request.args.get("show_zero", "true").lower() == "true"
     if not show_zero:
@@ -3352,6 +3384,46 @@ def api_create_token():
     if symbol in tokens:
         return jsonify({"ok": False, "error": f"Token {symbol} already exists"}), 400
 
+    # --- DEDUCT 100 THR FEE FROM CREATOR ---
+    CREATION_FEE = 100.0
+    ledger = load_json(LEDGER_FILE, {})
+    creator_balance = float(ledger.get(creator, 0.0))
+
+    if creator_balance < CREATION_FEE:
+        return jsonify({
+            "ok": False,
+            "error": f"Insufficient balance. You need {CREATION_FEE} THR to create a token.",
+            "balance": round(creator_balance, 6),
+            "required": CREATION_FEE
+        }), 400
+
+    # Deduct fee from creator
+    ledger[creator] = round(creator_balance - CREATION_FEE, 6)
+
+    # Add fee to AI wallet
+    ai_balance = float(ledger.get(AI_WALLET_ADDRESS, 0.0))
+    ledger[AI_WALLET_ADDRESS] = round(ai_balance + CREATION_FEE, 6)
+
+    save_json(LEDGER_FILE, ledger)
+
+    # Record the fee transaction in the chain
+    chain = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    fee_tx_id = f"TOKEN_FEE-{int(time.time())}-{secrets.token_hex(4)}"
+    fee_tx = {
+        "type": "token_creation_fee",
+        "from": creator,
+        "to": AI_WALLET_ADDRESS,
+        "amount": CREATION_FEE,
+        "token_symbol": symbol,
+        "timestamp": ts,
+        "tx_id": fee_tx_id,
+        "status": "confirmed"
+    }
+    chain.append(fee_tx)
+    save_json(CHAIN_FILE, chain)
+
+    # Create the token
     token_id = f"TOKEN_{secrets.token_hex(8)}"
     token = {
         "id": token_id,
@@ -3367,18 +3439,26 @@ def api_create_token():
         "description": description,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
         "type": "experimental",
-        "chain": "Thronos"
+        "chain": "Thronos",
+        "creation_fee_paid": CREATION_FEE,
+        "creation_fee_tx": fee_tx_id
     }
 
     tokens[symbol] = token
     save_custom_tokens(tokens)
 
     if initial_supply > 0:
-        ledger = {creator: initial_supply}
-        save_custom_token_ledger(token_id, ledger)
+        token_ledger = {creator: initial_supply}
+        save_custom_token_ledger(token_id, token_ledger)
 
-    logger.info(f"Created experimental token {symbol} by {creator}")
-    return jsonify({"ok": True, "token": token}), 200
+    logger.info(f"Created experimental token {symbol} by {creator} (fee: {CREATION_FEE} THR)")
+    return jsonify({
+        "ok": True,
+        "token": token,
+        "creator_new_balance": ledger[creator],
+        "fee_paid": CREATION_FEE,
+        "fee_tx_id": fee_tx_id
+    }), 200
 
 @app.route("/api/tokens/upload_logo/<symbol>", methods=["POST"])
 def api_upload_token_logo(symbol):
@@ -3442,6 +3522,7 @@ def send_thr():
     amount_raw=data.get("amount",0)
     auth_secret=(data.get("auth_secret") or "").strip()
     passphrase=(data.get("passphrase") or "").strip()
+    speed=(data.get("speed") or "fast").strip().lower()  # New: slow or fast
 
     # Validate THR addresses
     if not validate_thr_address(from_thr):
@@ -3476,13 +3557,21 @@ def send_thr():
     if hashlib.sha256(auth_string.encode()).hexdigest()!=stored_auth_hash:
         return jsonify(error="invalid_auth"),403
 
-    # --- Dynamic Fee Calculation ---
-    fee = calculate_dynamic_fee(amount)
+    # --- Fee Calculation Based on Speed ---
+    if speed == "slow":
+        # Slow transactions: 0.09% fee
+        fee = round(amount * 0.0009, 6)
+        confirmation_policy = "SLOW"
+    else:
+        # Fast transactions: Use dynamic fee calculation
+        fee = calculate_dynamic_fee(amount)
+        confirmation_policy = "FAST"
+
     total_cost = amount + fee
 
     ledger=load_json(LEDGER_FILE,{})
     sender_balance=float(ledger.get(from_thr,0.0))
-    
+
     if sender_balance<total_cost:
         return jsonify(
             error="insufficient_balance",
@@ -3504,8 +3593,9 @@ def send_thr():
         "tx_id":f"TX-{len(chain)}-{int(time.time())}",
         "thr_address":from_thr,
         "status":"pending",
-        "confirmation_policy": "FAST",
+        "confirmation_policy": confirmation_policy,
         "min_signers": 1,
+        "speed": speed
     }
     pool=load_mempool()
     pool.append(tx)

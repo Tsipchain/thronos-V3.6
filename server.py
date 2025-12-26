@@ -477,10 +477,26 @@ def initialize_voting():
 
 def calculate_dynamic_fee(amount: float) -> float:
     """
-    Calculates the burn fee based on the amount.
-    Fee = Max(MIN_FEE, amount * FEE_RATE)
+    Calculates dynamic burn fee based on transaction amount.
+    Higher amounts = Lower fee percentage (incentivizes larger transactions)
+
+    Fee Tiers:
+    - 0-10 THR:     0.5% (0.005)
+    - 10-100 THR:   0.3% (0.003)
+    - 100-1000 THR: 0.15% (0.0015)
+    - 1000+ THR:    0.05% (0.0005)
     """
-    return round(max(MIN_FEE, amount * FEE_RATE), 6)
+    if amount >= 1000:
+        fee_rate = 0.0005  # 0.05%
+    elif amount >= 100:
+        fee_rate = 0.0015  # 0.15%
+    elif amount >= 10:
+        fee_rate = 0.003   # 0.3%
+    else:
+        fee_rate = 0.005   # 0.5%
+
+    fee = amount * fee_rate
+    return round(max(MIN_FEE, fee), 6)
 
 # ─── Input Validation Helpers ───────────────────────────────────────────
 
@@ -2206,27 +2222,54 @@ def api_chat():
 
     data = request.get_json() or {}
     msg = (data.get("message") or "").strip()
+    wallet = (data.get("wallet") or "").strip()  # MOVED HERE - must be before attachments!
+    session_id = (data.get("session_id") or "").strip() or None
+    model_key = (data.get("model_key") or "").strip() or None
     attachments = data.get("attachments") or []
+
     # Attachments are file_ids previously uploaded via /api/ai/files/upload
     if attachments:
         idx = load_upload_index()
         parts = []
+        files_processed = []
+        files_skipped = []
+
         for fid in attachments:
             meta = idx.get(fid)
             if not meta:
+                files_skipped.append(f"{fid} (not found in index)")
+                logger.warning(f"File {fid} not found in upload index")
                 continue
+
             # basic ownership check: if wallet exists, enforce wallet match; else enforce guest id
             if wallet and meta.get("wallet") and meta.get("wallet") != wallet:
+                files_skipped.append(f"{fid} (ownership mismatch)")
+                logger.warning(f"File {fid} ownership mismatch: {meta.get('wallet')} != {wallet}")
                 continue
             if (not wallet) and meta.get("guest_id") and meta.get("guest_id") != get_or_set_guest_id():
+                files_skipped.append(f"{fid} (guest mismatch)")
+                logger.warning(f"File {fid} guest mismatch")
                 continue
-            text = read_text_file_for_prompt(meta.get("path",""))
-            parts.append(f"\n\n[Attachment {meta.get('filename')} | {fid}]\n{text}")
+
+            # Read file content
+            file_path = meta.get("path", "")
+            if not file_path or not os.path.exists(file_path):
+                files_skipped.append(f"{fid} (file not found on disk)")
+                logger.error(f"File {fid} path not found: {file_path}")
+                continue
+
+            text = read_text_file_for_prompt(file_path)
+            filename = meta.get("filename", "unknown")
+            parts.append(f"\n\n[📎 Attachment: {filename} | ID: {fid}]\n{text}")
+            files_processed.append(filename)
+            logger.info(f"Successfully attached file {filename} ({fid}) to chat message")
+
         if parts:
             msg = msg + "".join(parts)
-    wallet = (data.get("wallet") or "").strip()
-    session_id = (data.get("session_id") or "").strip() or None
-    model_key = (data.get("model_key") or "").strip() or None  # <--- NEW
+            logger.info(f"Processed {len(files_processed)} attachments: {', '.join(files_processed)}")
+
+        if files_skipped:
+            logger.warning(f"Skipped {len(files_skipped)} attachments: {', '.join(files_skipped)}")
 
     if not msg:
         return jsonify(error="Message required"), 400
@@ -3073,9 +3116,230 @@ def wallet_data(thr_addr):
     ]
     return jsonify(balance=bal, wbtc_balance=wbtc_bal, l2e_balance=l2e_bal, transactions=history), 200
 
+@app.route("/api/wallet/tokens/<thr_addr>")
+def api_wallet_tokens(thr_addr):
+    """
+    Returns all token balances for a wallet with metadata (logos, names, etc.)
+    Perfect for wallet widgets and balance displays
+    """
+    ledger = load_json(LEDGER_FILE, {})
+    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
+
+    thr_balance = round(float(ledger.get(thr_addr, 0.0)), 6)
+    wbtc_balance = round(float(wbtc_ledger.get(thr_addr, 0.0)), 8)
+    l2e_balance = round(float(l2e_ledger.get(thr_addr, 0.0)), 6)
+
+    tokens = [
+        {
+            "symbol": "THR",
+            "name": "Thronos",
+            "balance": thr_balance,
+            "decimals": 6,
+            "logo": "/static/img/thronos-token.png",
+            "color": "#00ff66",
+            "chain": "Thronos",
+            "type": "native"
+        },
+        {
+            "symbol": "WBTC",
+            "name": "Wrapped Bitcoin",
+            "balance": wbtc_balance,
+            "decimals": 8,
+            "logo": "/static/img/wbtc-logo.png",
+            "color": "#f7931a",
+            "chain": "Thronos",
+            "type": "wrapped"
+        },
+        {
+            "symbol": "L2E",
+            "name": "Learn-to-Earn",
+            "balance": l2e_balance,
+            "decimals": 6,
+            "logo": "/static/img/l2e-logo.png",
+            "color": "#00ccff",
+            "chain": "Thronos",
+            "type": "reward"
+        }
+    ]
+
+    # Filter out zero balances (optional - can be toggled)
+    show_zero = request.args.get("show_zero", "true").lower() == "true"
+    if not show_zero:
+        tokens = [t for t in tokens if t["balance"] > 0]
+
+    total_value_usd = 0  # Placeholder for future price oracle integration
+
+    return jsonify({
+        "address": thr_addr,
+        "tokens": tokens,
+        "total_tokens": len(tokens),
+        "total_value_usd": total_value_usd,
+        "last_updated": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    }), 200
+
 @app.route("/wallet/<thr_addr>")
 def wallet_redirect(thr_addr):
     return redirect(url_for("wallet_data", thr_addr=thr_addr)),302
+
+@app.route("/widget/wallet")
+def wallet_widget():
+    """
+    Embeddable wallet widget showing all token balances with logos
+
+    URL Parameters:
+    - address: THR wallet address (required or uses default)
+    - compact: true/false - compact mode for smaller displays
+    - show_zero: true/false - show tokens with zero balance
+    - refresh: auto-refresh interval in seconds (0 = disabled)
+
+    Example: /widget/wallet?address=THR123...&compact=true&refresh=30
+    """
+    return render_template("wallet_widget.html")
+
+
+# ─── EXPERIMENTAL TOKENS SYSTEM ─────────────────────────────────────────────
+
+CUSTOM_TOKENS_FILE = os.path.join(DATA_DIR, "custom_tokens.json")
+CUSTOM_TOKENS_LEDGER_DIR = os.path.join(DATA_DIR, "custom_ledgers")
+TOKEN_LOGOS_DIR = os.path.join("static", "token_logos")
+
+os.makedirs(CUSTOM_TOKENS_LEDGER_DIR, exist_ok=True)
+os.makedirs(TOKEN_LOGOS_DIR, exist_ok=True)
+
+def load_custom_tokens():
+    """Load custom tokens registry"""
+    return load_json(CUSTOM_TOKENS_FILE, {})
+
+def save_custom_tokens(tokens):
+    """Save custom tokens registry"""
+    save_json(CUSTOM_TOKENS_FILE, tokens)
+
+def load_custom_token_ledger(token_id):
+    """Load ledger for a specific custom token"""
+    ledger_file = os.path.join(CUSTOM_TOKENS_LEDGER_DIR, f"{token_id}.json")
+    return load_json(ledger_file, {})
+
+def save_custom_token_ledger(token_id, ledger):
+    """Save ledger for a specific custom token"""
+    ledger_file = os.path.join(CUSTOM_TOKENS_LEDGER_DIR, f"{token_id}.json")
+    save_json(ledger_file, ledger)
+
+@app.route("/tokens")
+def tokens_page():
+    """Experimental tokens creation page"""
+    return render_template("tokens.html")
+
+@app.route("/api/tokens/create", methods=["POST"])
+def api_create_token():
+    """Create a custom experimental token"""
+    data = request.get_json() or {}
+    creator = (data.get("creator_address") or "").strip()
+    symbol = (data.get("symbol") or "").strip().upper()
+    name = (data.get("name") or "").strip()
+    decimals = int(data.get("decimals", 6))
+    initial_supply = float(data.get("initial_supply", 0))
+    max_supply = float(data.get("max_supply", 0))
+    color = (data.get("color") or "#00ff66").strip()
+    description = (data.get("description") or "").strip()
+
+    if not creator or not validate_thr_address(creator):
+        return jsonify({"ok": False, "error": "Invalid creator address"}), 400
+    if not symbol or len(symbol) < 3 or len(symbol) > 10:
+        return jsonify({"ok": False, "error": "Symbol must be 3-10 characters"}), 400
+    if not name or len(name) < 3:
+        return jsonify({"ok": False, "error": "Name must be at least 3 characters"}), 400
+    if decimals < 0 or decimals > 18:
+        return jsonify({"ok": False, "error": "Decimals must be between 0 and 18"}), 400
+    if initial_supply < 0:
+        return jsonify({"ok": False, "error": "Initial supply cannot be negative"}), 400
+    if max_supply > 0 and initial_supply > max_supply:
+        return jsonify({"ok": False, "error": "Initial supply cannot exceed max supply"}), 400
+
+    tokens = load_custom_tokens()
+    if symbol in tokens:
+        return jsonify({"ok": False, "error": f"Token {symbol} already exists"}), 400
+
+    token_id = f"TOKEN_{secrets.token_hex(8)}"
+    token = {
+        "id": token_id,
+        "symbol": symbol,
+        "name": name,
+        "decimals": decimals,
+        "initial_supply": initial_supply,
+        "max_supply": max_supply,
+        "current_supply": initial_supply,
+        "creator": creator,
+        "logo": None,
+        "color": color,
+        "description": description,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "type": "experimental",
+        "chain": "Thronos"
+    }
+
+    tokens[symbol] = token
+    save_custom_tokens(tokens)
+
+    if initial_supply > 0:
+        ledger = {creator: initial_supply}
+        save_custom_token_ledger(token_id, ledger)
+
+    logger.info(f"Created experimental token {symbol} by {creator}")
+    return jsonify({"ok": True, "token": token}), 200
+
+@app.route("/api/tokens/upload_logo/<symbol>", methods=["POST"])
+def api_upload_token_logo(symbol):
+    """Upload logo for a custom token"""
+    if "file" not in request.files:
+        return jsonify({"ok": False, "error": "No file provided"}), 400
+
+    file = request.files["file"]
+    creator = request.form.get("creator_address", "").strip()
+
+    if not file.filename:
+        return jsonify({"ok": False, "error": "Empty filename"}), 400
+
+    tokens = load_custom_tokens()
+    token = tokens.get(symbol.upper())
+
+    if not token:
+        return jsonify({"ok": False, "error": "Token not found"}), 404
+
+    if token["creator"] != creator:
+        return jsonify({"ok": False, "error": "Not authorized"}), 403
+
+    # Save logo
+    ext = os.path.splitext(secure_filename(file.filename))[1] or ".png"
+    logo_filename = f"{token['id']}{ext}"
+    logo_path = os.path.join(TOKEN_LOGOS_DIR, logo_filename)
+    file.save(logo_path)
+
+    # Update token
+    token["logo"] = f"/static/token_logos/{logo_filename}"
+    tokens[symbol.upper()] = token
+    save_custom_tokens(tokens)
+
+    return jsonify({"ok": True, "logo": token["logo"]}), 200
+
+@app.route("/api/tokens/list")
+def api_list_tokens():
+    """List all custom tokens"""
+    tokens = load_custom_tokens()
+    token_list = list(tokens.values())
+    token_list.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+    return jsonify({"ok": True, "tokens": token_list}), 200
+
+@app.route("/api/tokens/<symbol>/balance/<address>")
+def api_token_balance(symbol, address):
+    """Get balance for a specific custom token"""
+    tokens = load_custom_tokens()
+    token = tokens.get(symbol.upper())
+    if not token:
+        return jsonify({"ok": False, "error": "Token not found"}), 404
+    ledger = load_custom_token_ledger(token["id"])
+    balance = float(ledger.get(address, 0))
+    return jsonify({"ok": True, "symbol": symbol.upper(), "address": address, "balance": balance, "token": token}), 200
 
 
 @app.route("/send_thr", methods=["POST"])

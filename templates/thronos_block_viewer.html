@@ -307,7 +307,9 @@ async function loadLive(){
     el('#liveHR').textContent  = j.est_hashrate_hs ? (Intl.NumberFormat('en',{notation:'compact'}).format(j.est_hashrate_hs)+' H/s') : '—';
     el('#liveMP').textContent  = j.mempool ?? '0';
     pushSpark(j.est_hashrate_hs||0);
-  }catch{}
+  }catch(e){
+    console.error('Live network stats update failed:', e);
+  }
 }
 
 /* ===== Fetchers ===== */

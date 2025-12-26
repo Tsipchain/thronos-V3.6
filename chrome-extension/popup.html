@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Thronos Wallet</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="wallet-container">
+        <!-- Header -->
+        <div class="wallet-header">
+            <div class="wallet-logo">
+                <img src="icons/icon48.png" alt="Thronos" onerror="this.style.display='none'">
+                <span class="wallet-title">Thronos Wallet</span>
+            </div>
+            <button id="settingsBtn" class="icon-btn" title="Settings">⚙️</button>
+        </div>
+
+        <!-- Wallet Not Connected -->
+        <div id="notConnected" class="not-connected">
+            <div class="welcome-message">
+                <h2>Welcome to Thronos</h2>
+                <p>Connect your wallet to get started</p>
+            </div>
+            <button id="createWalletBtn" class="btn btn-primary">Create New Wallet</button>
+            <button id="importWalletBtn" class="btn btn-secondary">Import Wallet</button>
+        </div>
+
+        <!-- Wallet Connected -->
+        <div id="walletConnected" class="wallet-connected" style="display: none;">
+            <!-- Account Info -->
+            <div class="account-info">
+                <div class="account-address" id="accountAddress">
+                    Loading...
+                </div>
+                <button id="copyAddressBtn" class="copy-btn" title="Copy Address">📋</button>
+            </div>
+
+            <!-- Total Balance -->
+            <div class="total-balance">
+                <div class="balance-label">Total Balance</div>
+                <div class="balance-amount" id="totalBalance">
+                    <div class="spinner"></div>
+                </div>
+            </div>
+
+            <!-- Tabs -->
+            <div class="tabs">
+                <button class="tab active" data-tab="tokens">Tokens</button>
+                <button class="tab" data-tab="activity">Activity</button>
+                <button class="tab" data-tab="send">Send</button>
+            </div>
+
+            <!-- Tokens Tab -->
+            <div class="tab-content active" id="tokensTab">
+                <div class="tokens-list" id="tokensList">
+                    <div class="loading-message">
+                        <div class="spinner"></div>
+                        <p>Loading tokens...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Activity Tab -->
+            <div class="tab-content" id="activityTab">
+                <div class="activity-list">
+                    <p class="empty-message">No recent activity</p>
+                </div>
+            </div>
+
+            <!-- Send Tab -->
+            <div class="tab-content" id="sendTab">
+                <div class="send-form">
+                    <div class="form-group">
+                        <label>Token</label>
+                        <select id="sendToken" class="form-input">
+                            <option value="">Select token...</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Recipient Address</label>
+                        <input type="text" id="sendTo" class="form-input" placeholder="THR...">
+                    </div>
+                    <div class="form-group">
+                        <label>Amount</label>
+                        <input type="number" id="sendAmount" class="form-input" placeholder="0.00" step="0.01">
+                    </div>
+                    <button id="sendBtn" class="btn btn-primary btn-full">Send</button>
+                </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="wallet-actions">
+                <button id="refreshBtn" class="action-btn">
+                    🔄 Refresh
+                </button>
+                <button id="viewOnExplorerBtn" class="action-btn">
+                    🔍 Explorer
+                </button>
+                <button id="disconnectBtn" class="action-btn disconnect">
+                    ✖️ Disconnect
+                </button>
+            </div>
+        </div>
+
+        <!-- Import Wallet Modal -->
+        <div id="importModal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <h3>Import Wallet</h3>
+                <div class="form-group">
+                    <label>Wallet Address</label>
+                    <input type="text" id="importAddress" class="form-input" placeholder="THR...">
+                </div>
+                <div class="form-group">
+                    <label>Secret Key</label>
+                    <input type="password" id="importSecret" class="form-input" placeholder="Enter secret key">
+                </div>
+                <div class="modal-actions">
+                    <button id="cancelImportBtn" class="btn btn-secondary">Cancel</button>
+                    <button id="confirmImportBtn" class="btn btn-primary">Import</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Create Wallet Modal -->
+        <div id="createModal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <h3>Create New Wallet</h3>
+                <p class="warning-message">⚠️ Please save your secret key securely!</p>
+                <div class="wallet-details" id="newWalletDetails">
+                    <div class="spinner"></div>
+                    <p>Generating wallet...</p>
+                </div>
+                <div class="modal-actions">
+                    <button id="cancelCreateBtn" class="btn btn-secondary">Cancel</button>
+                    <button id="confirmCreateBtn" class="btn btn-primary" style="display: none;">I've Saved It</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

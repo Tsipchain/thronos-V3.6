@@ -137,15 +137,120 @@
         display: none;
         align-items: center;
         gap: 6px;
+        position: relative;
     }
     .wallet-status:hover {
         background: #004400;
+    }
+    .wallet-status:hover .wallet-balance-popup {
+        display: block;
     }
     .wallet-fire-icon {
         width: 16px;
         height: 16px;
         vertical-align: middle;
         filter: drop-shadow(0 0 4px #ff6600);
+    }
+
+    /* Wallet Balance Popup Widget */
+    .wallet-balance-popup {
+        display: none;
+        position: absolute;
+        top: 100%;
+        right: 0;
+        margin-top: 5px;
+        background: #071810;
+        border: 1px solid #1a3b2e;
+        border-radius: 12px;
+        padding: 15px;
+        min-width: 280px;
+        max-width: 350px;
+        box-shadow: 0 0 20px rgba(0, 255, 102, 0.2);
+        z-index: 1000;
+        color: #e6ffe5;
+    }
+    .wallet-popup-header {
+        font-size: 12px;
+        font-weight: 600;
+        color: #00ff66;
+        margin-bottom: 10px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid #1a3b2e;
+    }
+    .wallet-popup-tokens {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        max-height: 300px;
+        overflow-y: auto;
+    }
+    .wallet-popup-token {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px;
+        background: rgba(0, 255, 102, 0.05);
+        border-radius: 8px;
+        border: 1px solid rgba(0, 255, 102, 0.1);
+    }
+    .wallet-popup-logo {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 10px;
+        font-weight: bold;
+        border: 1px solid;
+    }
+    .wallet-popup-logo img {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+    }
+    .wallet-popup-info {
+        flex: 1;
+        font-size: 11px;
+    }
+    .wallet-popup-symbol {
+        font-weight: 600;
+        color: #e6ffe5;
+    }
+    .wallet-popup-balance {
+        text-align: right;
+        font-size: 12px;
+        font-weight: 600;
+        font-family: monospace;
+    }
+    .wallet-popup-total {
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px solid #1a3b2e;
+        text-align: center;
+        font-size: 11px;
+        color: #56ff9a;
+    }
+    .wallet-popup-total-amount {
+        font-size: 16px;
+        font-weight: 700;
+        color: #00ff66;
+        margin-top: 4px;
+    }
+    .wallet-popup-loading {
+        text-align: center;
+        padding: 20px;
+        color: #56ff9a;
+        font-size: 11px;
+    }
+    .wallet-popup-spinner {
+        border: 2px solid rgba(0, 255, 102, 0.2);
+        border-top: 2px solid #00ff66;
+        border-radius: 50%;
+        width: 20px;
+        height: 20px;
+        animation: spin 1s linear infinite;
+        margin: 0 auto 10px;
     }
     
     /* Disconnect Button */
@@ -207,9 +312,17 @@
 <body>
 
 <div class="top-controls">
-    <div id="walletStatus" class="wallet-status" onclick="window.location.href='/wallet'">
+    <div id="walletStatus" class="wallet-status">
         <img src="{{ url_for('static', filename='img/thronos-token.png') }}" alt="🔥" class="wallet-fire-icon" />
         <span id="walletAddrShort"></span>
+
+        <!-- Wallet Balance Popup Widget -->
+        <div class="wallet-balance-popup" id="walletBalancePopup" onclick="event.stopPropagation();">
+            <div class="wallet-popup-loading">
+                <div class="wallet-popup-spinner"></div>
+                Loading balances...
+            </div>
+        </div>
     </div>
     <button id="disconnectBtn" class="disconnect-btn" onclick="disconnectWallet()">
         ✖ <span class="lang-el">Αποσύνδεση</span><span class="lang-en">Disconnect</span>
@@ -315,6 +428,78 @@ function disconnectWallet() {
     }
 }
 
+// Wallet Balance Widget Functions
+let walletBalancesLoaded = false;
+
+async function loadWalletBalances() {
+    if (walletBalancesLoaded) return; // Only load once
+
+    const wallet = localStorage.getItem('thr_address');
+    if (!wallet) return;
+
+    const popup = document.getElementById('walletBalancePopup');
+
+    try {
+        const response = await fetch(`/api/wallet/tokens/${wallet}?show_zero=false`);
+        if (!response.ok) throw new Error('Failed to load wallet data');
+
+        const data = await response.json();
+        renderWalletBalances(data);
+        walletBalancesLoaded = true;
+    } catch (error) {
+        popup.innerHTML = `
+            <div class="wallet-popup-header">💎 Wallet Balance</div>
+            <div style="text-align: center; color: #ff4d4d; font-size: 11px; padding: 10px;">
+                Failed to load balances
+            </div>
+        `;
+    }
+}
+
+function renderWalletBalances(data) {
+    const popup = document.getElementById('walletBalancePopup');
+    const tokens = data.tokens || [];
+
+    // Calculate total balance
+    const totalTHR = tokens.reduce((sum, t) => {
+        if (t.symbol === 'THR') return sum + t.balance;
+        if (t.symbol === 'WBTC') return sum + (t.balance * 50000);
+        if (t.symbol === 'L2E') return sum + t.balance;
+        return sum;
+    }, 0);
+
+    let html = `
+        <div class="wallet-popup-header">💎 Wallet Balance</div>
+        <div class="wallet-popup-tokens">
+    `;
+
+    tokens.forEach(token => {
+        html += `
+            <div class="wallet-popup-token">
+                <div class="wallet-popup-logo" style="border-color: ${token.color};">
+                    ${token.logo ? `<img src="${token.logo}" alt="${token.symbol}" onerror="this.style.display='none';">` : `<span style="color: ${token.color};">${token.symbol[0]}</span>`}
+                </div>
+                <div class="wallet-popup-info">
+                    <div class="wallet-popup-symbol">${token.symbol}</div>
+                </div>
+                <div class="wallet-popup-balance" style="color: ${token.color};">
+                    ${token.balance.toFixed(token.decimals)}
+                </div>
+            </div>
+        `;
+    });
+
+    html += `
+        </div>
+        <div class="wallet-popup-total">
+            Total Portfolio
+            <div class="wallet-popup-total-amount">${totalTHR.toFixed(2)} THR</div>
+        </div>
+    `;
+
+    popup.innerHTML = html;
+}
+
 // Initialize language and wallet status on load
 document.addEventListener('DOMContentLoaded', () => {
     const savedLang = localStorage.getItem('lang') || 'el';
@@ -326,10 +511,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const short = wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4);
         const statusEl = document.getElementById('walletStatus');
         const disconnectEl = document.getElementById('disconnectBtn');
-        
+
         if(statusEl) {
             document.getElementById('walletAddrShort').textContent = short;
             statusEl.style.display = 'flex';
+
+            // Load wallet balances on hover
+            statusEl.addEventListener('mouseenter', loadWalletBalances);
         }
         if(disconnectEl) {
             disconnectEl.style.display = 'block';

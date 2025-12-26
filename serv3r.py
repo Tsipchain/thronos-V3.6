@@ -192,7 +192,7 @@ def send_token():
     to_  = data.get("to","").strip()
     try:
         amt = round(float(data.get("amount",0)),6)
-    except:
+    except (ValueError, TypeError):
         return jsonify(error="Invalid amount"), 400
     if not frm or not to_ or amt<=0:
         return jsonify(error="Invalid input"), 400
@@ -237,7 +237,8 @@ def mint_first_blocks():
             "reward_to_miner": to_miner
         }
         try:
-            requests.post(f"http://localhost:{os.getenv('PORT',8000)}/submit_block", json=block, timeout=5).raise_for_status()
+            server_url = os.getenv("THRONOS_SERVER", f"http://localhost:{os.getenv('PORT',8000)}")
+            requests.post(f"{server_url}/submit_block", json=block, timeout=5).raise_for_status()
             chain = load_json(CHAIN_FILE, [])
             height = len(chain)
             seen.add(thr)
@@ -251,4 +252,5 @@ scheduler.start()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 3333))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    debug = os.getenv("DEBUG", "False").lower() == "true"
+    app.run(host="0.0.0.0", port=port, debug=debug)

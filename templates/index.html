@@ -68,13 +68,13 @@
         <span class="lang-el">Λάβετε μέρος στο κυνήγι! Βοηθήστε μας να δοκιμάσουμε το επερχόμενο παιχνίδι Crypto Hunters. Ψηφίστε για χαρακτηριστικά και κερδίστε ανταμοιβές.</span>
         <span class="lang-en">Join the hunt! Help us test the upcoming Crypto Hunters game. Vote on features and earn rewards.</span>
     </p>
-    <a href="#" class="beta-btn" onclick="alert('Coming Soon! / Σύντομα κοντά σας!')">
-        <span class="lang-el">🗳️ Ψηφίστε Τώρα (Σύντομα)</span><span class="lang-en">🗳️ Vote Now (Coming Soon)</span>
-    </a>
+    <div id="votingPolls">
+        <p><span class="lang-el">Φόρτωση ψηφοφοριών...</span><span class="lang-en">Loading polls...</span></p>
+    </div>
 </div>
 
-<a href="http://localhost:3000/panel" target="_blank" class="game-link">
-    👾 <span class="lang-el">Διαχείριση Crypto Hunters (Dev)</span><span class="lang-en">Crypto Hunters Admin (Dev)</span>
+<a href="{{ game_panel_url }}" target="_blank" class="game-link">
+    👾 <span class="lang-el">Διαχείριση Crypto Hunters</span><span class="lang-en">Crypto Hunters Admin</span>
 </a>
 {% endblock %}
 
@@ -146,6 +146,109 @@ ${l.timestamp}: ${ts}
 
   // προαιρετικά: μικρό auto-refresh ανά 30s
   setInterval(loadStats, 30000);
+})();
+
+// ─── Voting System ───────────────────────────────────────────
+(function() {
+  let currentWallet = null;
+
+  // Get wallet from localStorage if connected
+  function getWallet() {
+    return localStorage.getItem("thr_wallet") || null;
+  }
+
+  function loadVotingPolls() {
+    fetch("/api/voting/polls")
+      .then(r => r.json())
+      .then(polls => {
+        renderPolls(polls);
+      })
+      .catch(err => {
+        console.error("Failed to load polls:", err);
+        document.getElementById("votingPolls").innerHTML =
+          '<p style="color: #f00;">Failed to load polls</p>';
+      });
+  }
+
+  function renderPolls(polls) {
+    const lang = localStorage.getItem("lang") || "el";
+    const container = document.getElementById("votingPolls");
+
+    if (!polls || polls.length === 0) {
+      container.innerHTML = `
+        <p><span class="lang-el">Δεν υπάρχουν ενεργές ψηφοφορίες</span>
+        <span class="lang-en">No active polls</span></p>
+      `;
+      return;
+    }
+
+    let html = '<div style="margin-top: 10px;">';
+    polls.forEach(poll => {
+      const title = poll.title[lang] || poll.title["en"];
+      const desc = poll.description[lang] || poll.description["en"];
+      const votes = poll.votes || 0;
+
+      html += `
+        <div style="margin-bottom: 15px; padding: 10px; border: 1px solid #f0f; background: #200020;">
+          <h4 style="margin: 0 0 5px 0; color: #f0f;">${title}</h4>
+          <p style="margin: 0 0 8px 0; font-size: 0.9em; color: #ccc;">${desc}</p>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="color: #0f0;">👍 ${votes} ${lang === 'el' ? 'ψήφοι' : 'votes'}</span>
+            <button onclick="vote('${poll.id}')" class="beta-btn" style="margin: 0; padding: 5px 10px; font-size: 0.9em;">
+              <span class="lang-el">Ψηφίστε</span><span class="lang-en">Vote</span>
+            </button>
+          </div>
+        </div>
+      `;
+    });
+    html += '</div>';
+
+    container.innerHTML = html;
+  }
+
+  window.vote = function(pollId) {
+    const lang = localStorage.getItem("lang") || "el";
+    const wallet = getWallet();
+
+    fetch("/api/voting/vote", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ poll_id: pollId, wallet: wallet })
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.status === "success") {
+          alert(lang === "el" ?
+            "✅ Η ψήφος σας καταγράφηκε! Ευχαριστούμε!" :
+            "✅ Your vote has been recorded! Thank you!"
+          );
+          loadVotingPolls(); // Refresh to show updated count
+        } else if (data.status === "duplicate") {
+          alert(lang === "el" ?
+            "⚠️ Έχετε ήδη ψηφίσει σε αυτή την ψηφοφορία!" :
+            "⚠️ You have already voted in this poll!"
+          );
+        } else {
+          alert(lang === "el" ?
+            "❌ Σφάλμα: " + (data.error || "Άγνωστο σφάλμα") :
+            "❌ Error: " + (data.error || "Unknown error")
+          );
+        }
+      })
+      .catch(err => {
+        console.error("Vote error:", err);
+        alert(lang === "el" ?
+          "❌ Αποτυχία αποστολής ψήφου" :
+          "❌ Failed to submit vote"
+        );
+      });
+  };
+
+  // Initial load
+  loadVotingPolls();
+
+  // Reload when language changes
+  window.addEventListener("langChanged", loadVotingPolls);
 })();
 </script>
 

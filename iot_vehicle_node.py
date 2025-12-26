@@ -129,10 +129,13 @@ def send_whisper(image_path):
     url = f"{SERVER_URL}/api/iot/submit"
     try:
         with open(image_path, 'rb') as img_file:
-            requests.post(url, files={'file': img_file})
+            response = requests.post(url, files={'file': img_file}, timeout=10)
+            response.raise_for_status()
         os.remove(image_path)
-    except:
-        pass
+    except requests.RequestException as e:
+        print(f"⚠️  Failed to upload vehicle data: {e}")
+    except OSError as e:
+        print(f"⚠️  Failed to remove temporary file {image_path}: {e}")
 
 def main():
     print("🚗 Thronos 'Ultimate Driver' Node Started")

@@ -139,6 +139,23 @@
         { name: "Quantum Core", value: 100, icon: "⚛️", chance: 0.05 }
     ];
 
+    // Simple puzzle before each hunt to add RPG flavor.  The player must
+    // correctly answer an arithmetic question to deploy the drone.  This
+    // increases engagement and prevents automated farming.  The function
+    // returns true if the answer is correct, false otherwise.  Feel free to
+    // enhance this with more complex riddles or puzzles.
+    function askPuzzle() {
+        const a = Math.floor(Math.random() * 9) + 1;
+        const b = Math.floor(Math.random() * 9) + 1;
+        // Randomly choose addition or subtraction
+        const op = Math.random() < 0.5 ? '+' : '-';
+        const correct = op === '+' ? a + b : a - b;
+        const response = prompt(`Solve this to deploy your drone: ${a} ${op} ${b} = ?`);
+        if (response === null) return false;
+        const answer = parseInt(response.trim(), 10);
+        return answer === correct;
+    }
+
     function log(msg, type="info") {
         const div = document.createElement("div");
         div.className = `log-entry log-${type}`;
@@ -158,6 +175,13 @@
             return;
         }
         if (isHunting) return;
+
+        // Ask the puzzle before allowing the hunt to proceed.  If the
+        // user answers incorrectly, cancel the hunt and log a message.
+        if (!askPuzzle()) {
+            log("❌ Wrong answer! The drone cannot be deployed.", "info");
+            return;
+        }
 
         isHunting = true;
         energy -= 10;

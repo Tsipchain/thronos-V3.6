@@ -4349,6 +4349,7 @@ def api_v1_status():
 
 
 @app.route("/api/v1/submit", methods=["POST"])
+@app.route("/api/v1/submit_transaction", methods=["POST"])
 def api_v1_submit_transaction():
     """Submit a signed transaction to the node.  Currently supports only
     basic THR transfers.  The expected JSON payload mirrors the fields

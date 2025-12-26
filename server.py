@@ -177,22 +177,39 @@ def guest_remaining_free_messages(gid: str) -> int:
 
 # --- Chat file uploads ---
 AI_UPLOADS_DIR = os.path.join(DATA_DIR, "ai_uploads")
-AI_UPLOADS_INDEX = os.path.join(AI_UPLOADS_DIR, "index.json")
+# Use a single index file for all AI uploads.  Both upload and download
+# endpoints read/write this index.  This avoids having separate
+# ai_uploads/index.json and ai_files_index.json that get out of sync.  The
+# index stores metadata keyed by file_id and includes the absolute path of
+# the stored file.  See store_uploaded_file() for details.
+AI_UPLOADS_INDEX = os.path.join(DATA_DIR, "ai_files_index.json")
 
 def _safe_filename(name: str) -> str:
     name = os.path.basename(name or "file")
     name = re.sub(r"[^a-zA-Z0-9._-]+", "_", name)
     return name[:128] or "file"
 
-def load_upload_index():
+def load_upload_index() -> dict:
+    """
+    Load the unified AI upload index.  The index is stored in
+    ``AI_UPLOADS_INDEX`` (data/ai_files_index.json) and contains
+    metadata for each uploaded file keyed by file_id.  If the index
+    does not exist or is corrupt, return an empty dict.
+    """
     try:
         with open(AI_UPLOADS_INDEX, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
     except Exception:
         return {}
 
-def save_upload_index(index: dict):
-    os.makedirs(AI_UPLOADS_DIR, exist_ok=True)
+def save_upload_index(index: dict) -> None:
+    """
+    Persist the unified AI upload index to ``AI_UPLOADS_INDEX``.  The
+    index directory is created if it does not exist.  This helper is
+    used by ``store_uploaded_file`` to record new uploads.
+    """
+    os.makedirs(os.path.dirname(AI_UPLOADS_INDEX), exist_ok=True)
     with open(AI_UPLOADS_INDEX, "w", encoding="utf-8") as f:
         json.dump(index, f, ensure_ascii=False, indent=2)
 
@@ -2650,41 +2667,34 @@ def api_ai_files_upload():
 
 @app.route("/api/ai/files/<file_id>", methods=["GET"])
 def api_ai_files_get(file_id):
-
+    """
+    Retrieve a previously uploaded file by its file_id.  We look up
+    the metadata in the unified AI upload index (AI_UPLOADS_INDEX),
+    then stream the file from disk.  If the meta entry or file is
+    missing, return 404.  Any other error yields a 500 and logs an
+    exception.  Ownership checks are intentionally omitted to allow
+    public access to attachments referenced in AI chat responses.
+    """
     try:
-        files_index = load_json(AI_FILES_INDEX, default={})
-        if not isinstance(files_index, dict) or file_id not in files_index:
+        idx = load_upload_index()
+        meta = idx.get(file_id)
+        if not meta:
             return jsonify({"ok": False, "error": "file not found"}), 404
 
-        meta = files_index[file_id]
-        wallet = re.sub(r"[^A-Za-z0-9_-]+", "_", (meta.get("wallet") or "anon"))[:128]
-        sid = re.sub(r"[^A-Za-z0-9_-]+", "_", (meta.get("session_id") or "unsorted"))[:128]
-        stored_as = meta.get("stored_as") or ""
-        # rebuild path
-        file_path = os.path.join(AI_UPLOADS_DIR, wallet, sid, stored_as)
-        if not os.path.exists(file_path):
+        file_path = meta.get("path")
+        if not file_path or not os.path.exists(file_path):
             return jsonify({"ok": False, "error": "file missing on disk"}), 404
 
         return send_file(
             file_path,
             as_attachment=True,
-            download_name=meta.get("filename") or stored_as,
+            download_name=meta.get("filename") or os.path.basename(file_path),
             mimetype=meta.get("content_type") or "application/octet-stream",
             conditional=True,
         )
     except Exception as e:
         app.logger.exception("file get failed")
         return jsonify({"ok": False, "error": str(e)}), 500
-
-    # Ownership check
-    if meta.get("wallet"):
-        if not wallet or wallet != meta.get("wallet"):
-            return jsonify({"error": "Forbidden"}), 403
-    elif meta.get("guest_id"):
-        if not gid or gid != meta.get("guest_id"):
-            return jsonify({"error": "Forbidden"}), 403
-
-    return send_file(meta["path"], as_attachment=True, download_name=meta.get("filename") or "file")
 
 @app.route("/api/ai_history", methods=["GET"])
 def api_ai_history():

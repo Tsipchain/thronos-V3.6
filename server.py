@@ -3198,6 +3198,150 @@ def wallet_widget():
     return render_template("wallet_widget.html")
 
 
+# ─── EXPERIMENTAL TOKENS SYSTEM ─────────────────────────────────────────────
+
+CUSTOM_TOKENS_FILE = os.path.join(DATA_DIR, "custom_tokens.json")
+CUSTOM_TOKENS_LEDGER_DIR = os.path.join(DATA_DIR, "custom_ledgers")
+TOKEN_LOGOS_DIR = os.path.join("static", "token_logos")
+
+os.makedirs(CUSTOM_TOKENS_LEDGER_DIR, exist_ok=True)
+os.makedirs(TOKEN_LOGOS_DIR, exist_ok=True)
+
+def load_custom_tokens():
+    """Load custom tokens registry"""
+    return load_json(CUSTOM_TOKENS_FILE, {})
+
+def save_custom_tokens(tokens):
+    """Save custom tokens registry"""
+    save_json(CUSTOM_TOKENS_FILE, tokens)
+
+def load_custom_token_ledger(token_id):
+    """Load ledger for a specific custom token"""
+    ledger_file = os.path.join(CUSTOM_TOKENS_LEDGER_DIR, f"{token_id}.json")
+    return load_json(ledger_file, {})
+
+def save_custom_token_ledger(token_id, ledger):
+    """Save ledger for a specific custom token"""
+    ledger_file = os.path.join(CUSTOM_TOKENS_LEDGER_DIR, f"{token_id}.json")
+    save_json(ledger_file, ledger)
+
+@app.route("/tokens")
+def tokens_page():
+    """Experimental tokens creation page"""
+    return render_template("tokens.html")
+
+@app.route("/api/tokens/create", methods=["POST"])
+def api_create_token():
+    """Create a custom experimental token"""
+    data = request.get_json() or {}
+    creator = (data.get("creator_address") or "").strip()
+    symbol = (data.get("symbol") or "").strip().upper()
+    name = (data.get("name") or "").strip()
+    decimals = int(data.get("decimals", 6))
+    initial_supply = float(data.get("initial_supply", 0))
+    max_supply = float(data.get("max_supply", 0))
+    color = (data.get("color") or "#00ff66").strip()
+    description = (data.get("description") or "").strip()
+
+    if not creator or not validate_thr_address(creator):
+        return jsonify({"ok": False, "error": "Invalid creator address"}), 400
+    if not symbol or len(symbol) < 3 or len(symbol) > 10:
+        return jsonify({"ok": False, "error": "Symbol must be 3-10 characters"}), 400
+    if not name or len(name) < 3:
+        return jsonify({"ok": False, "error": "Name must be at least 3 characters"}), 400
+    if decimals < 0 or decimals > 18:
+        return jsonify({"ok": False, "error": "Decimals must be between 0 and 18"}), 400
+    if initial_supply < 0:
+        return jsonify({"ok": False, "error": "Initial supply cannot be negative"}), 400
+    if max_supply > 0 and initial_supply > max_supply:
+        return jsonify({"ok": False, "error": "Initial supply cannot exceed max supply"}), 400
+
+    tokens = load_custom_tokens()
+    if symbol in tokens:
+        return jsonify({"ok": False, "error": f"Token {symbol} already exists"}), 400
+
+    token_id = f"TOKEN_{secrets.token_hex(8)}"
+    token = {
+        "id": token_id,
+        "symbol": symbol,
+        "name": name,
+        "decimals": decimals,
+        "initial_supply": initial_supply,
+        "max_supply": max_supply,
+        "current_supply": initial_supply,
+        "creator": creator,
+        "logo": None,
+        "color": color,
+        "description": description,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "type": "experimental",
+        "chain": "Thronos"
+    }
+
+    tokens[symbol] = token
+    save_custom_tokens(tokens)
+
+    if initial_supply > 0:
+        ledger = {creator: initial_supply}
+        save_custom_token_ledger(token_id, ledger)
+
+    logger.info(f"Created experimental token {symbol} by {creator}")
+    return jsonify({"ok": True, "token": token}), 200
+
+@app.route("/api/tokens/upload_logo/<symbol>", methods=["POST"])
+def api_upload_token_logo(symbol):
+    """Upload logo for a custom token"""
+    if "file" not in request.files:
+        return jsonify({"ok": False, "error": "No file provided"}), 400
+
+    file = request.files["file"]
+    creator = request.form.get("creator_address", "").strip()
+
+    if not file.filename:
+        return jsonify({"ok": False, "error": "Empty filename"}), 400
+
+    tokens = load_custom_tokens()
+    token = tokens.get(symbol.upper())
+
+    if not token:
+        return jsonify({"ok": False, "error": "Token not found"}), 404
+
+    if token["creator"] != creator:
+        return jsonify({"ok": False, "error": "Not authorized"}), 403
+
+    # Save logo
+    ext = os.path.splitext(secure_filename(file.filename))[1] or ".png"
+    logo_filename = f"{token['id']}{ext}"
+    logo_path = os.path.join(TOKEN_LOGOS_DIR, logo_filename)
+    file.save(logo_path)
+
+    # Update token
+    token["logo"] = f"/static/token_logos/{logo_filename}"
+    tokens[symbol.upper()] = token
+    save_custom_tokens(tokens)
+
+    return jsonify({"ok": True, "logo": token["logo"]}), 200
+
+@app.route("/api/tokens/list")
+def api_list_tokens():
+    """List all custom tokens"""
+    tokens = load_custom_tokens()
+    token_list = list(tokens.values())
+    token_list.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+    return jsonify({"ok": True, "tokens": token_list}), 200
+
+@app.route("/api/tokens/<symbol>/balance/<address>")
+def api_token_balance(symbol, address):
+    """Get balance for a specific custom token"""
+    tokens = load_custom_tokens()
+    token = tokens.get(symbol.upper())
+    if not token:
+        return jsonify({"ok": False, "error": "Token not found"}), 404
+    ledger = load_custom_token_ledger(token["id"])
+    balance = float(ledger.get(address, 0))
+    return jsonify({"ok": True, "symbol": symbol.upper(), "address": address, "balance": balance, "token": token}), 200
+
+
 @app.route("/send_thr", methods=["POST"])
 def send_thr():
     data = request.get_json() or {}

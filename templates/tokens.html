@@ -131,21 +131,22 @@
 <script>
 async function loadTokens() {
   try {
-    const res = await fetch('/api/v1/tokens');
+    const res = await fetch('/api/tokens/list');
     const data = await res.json();
     const table = document.getElementById('tokensTable');
     const tbody = document.getElementById('tokensBody');
     tbody.innerHTML = '';
-    if (data.tokens && data.tokens.length > 0) {
+    if (data.ok && data.tokens && data.tokens.length > 0) {
       data.tokens.forEach(tok => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${tok.id}</td><td>${tok.name}</td><td>${tok.symbol}</td><td>${tok.total_supply}</td><td>${tok.decimals}</td><td>${tok.owner}</td>`;
+        const logoHtml = tok.logo ? `<img src="${tok.logo}" style="width: 20px; height: 20px; vertical-align: middle; border-radius: 50%; margin-right: 5px;">` : '';
+        tr.innerHTML = `<td>${tok.id}</td><td>${logoHtml}${tok.name}</td><td style="color: ${tok.color};">${tok.symbol}</td><td>${tok.current_supply}</td><td>${tok.decimals}</td><td>${tok.creator.slice(0, 12)}...</td>`;
         tbody.appendChild(tr);
       });
       table.style.display = '';
       document.getElementById('tokensLoading').style.display = 'none';
     } else {
-      document.getElementById('tokensLoading').textContent = 'No tokens issued yet.';
+      document.getElementById('tokensLoading').textContent = 'No experimental tokens yet.';
     }
   } catch (e) {
     document.getElementById('tokensLoading').textContent = 'Error loading tokens.';
@@ -159,40 +160,40 @@ async function submitToken(evt) {
   const supply = parseFloat(document.getElementById('tokenSupply').value);
   const decimals = parseInt(document.getElementById('tokenDecimals').value);
   const creator = localStorage.getItem('thr_address');
-  const secret  = localStorage.getItem('thr_secret');
-  if (!creator || !secret) {
-    alert('Please connect your wallet first (address & secret).');
+  if (!creator) {
+    alert('Please connect your wallet first (THR address required).');
     return false;
   }
   const payload = {
+    creator_address: creator,
     name: name,
     symbol: symbol,
-    total_supply: supply,
+    initial_supply: supply,
+    max_supply: 0,
     decimals: decimals,
-    creator_thr: creator,
-    auth_secret: secret
+    color: '#00ff66',
+    description: 'Experimental token created on Thronos'
   };
-  document.getElementById('tokenMsg').textContent = 'Submitting…';
+  document.getElementById('tokenMsg').textContent = 'Creating token…';
   try {
-    const res = await fetch('/api/v1/tokens', {
+    const res = await fetch('/api/tokens/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
     const data = await res.json();
-    if (res.status === 201) {
+    if (data.ok) {
       document.getElementById('tokenMsg').style.color = '#0f0';
-      document.getElementById('tokenMsg').textContent = '✅ Token created successfully.';
+      document.getElementById('tokenMsg').textContent = `✅ Token ${data.token.symbol} created successfully!`;
       await loadTokens();
-      // Reset form
       document.getElementById('createTokenForm').reset();
     } else {
       document.getElementById('tokenMsg').style.color = '#f00';
-      document.getElementById('tokenMsg').textContent = `❌ Error: ${data.message || data.error || 'Unknown error'}`;
+      document.getElementById('tokenMsg').textContent = `❌ Error: ${data.error || 'Unknown error'}`;
     }
   } catch (e) {
     document.getElementById('tokenMsg').style.color = '#f00';
-    document.getElementById('tokenMsg').textContent = '❌ Network error.';
+    document.getElementById('tokenMsg').textContent = '❌ Network error: ' + e.message;
   }
   return false;
 }

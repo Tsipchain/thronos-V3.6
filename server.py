@@ -2726,6 +2726,7 @@ def api_ai_session_start():
     return jsonify(status="ok", session=session), 200
 
 @app.route("/api/ai_sessions/rename", methods=["POST"])
+@app.route("/api/ai/sessions/rename", methods=["POST"])  # Add slash version!
 def api_ai_session_rename():
 
     data = request.get_json(silent=True) or {}

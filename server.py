@@ -2342,9 +2342,59 @@ def api_chat():
         counters[demo_key] = used + 1
         save_ai_free_usage(counters)
 
+    # --- Build context for conversation memory ---
+    # To provide better continuity between messages, construct a short context
+    # by loading the last few exchanges from the offline corpus for this
+    # session.  Each entry in the corpus stores the original user prompt
+    # and the AI response.  We interleave these into a list of
+    # user/assistant messages and then take the N most recent.  The
+    # context is flattened into a single string with role prefixes so
+    # downstream providers receive a coherent history.  Limiting to 10
+    # messages prevents excessively long prompts that could exhaust API
+    # quotas.
+    try:
+        history_limit = 10
+        # Collect past messages as simple dicts of {role, content}
+        context_messages = []
+        corpus = load_json(AI_CORPUS_FILE, []) or []
+        # Determine the session identifier used in the corpus ("default" when empty)
+        sid = session_id or "default"
+        for entry in corpus:
+            # Filter by wallet if provided
+            if wallet and (entry.get("wallet") != wallet):
+                continue
+            # Filter by session id
+            if (entry.get("session_id") or "default") != sid:
+                continue
+            # Append user prompt and assistant response in the order they were stored
+            prompt_txt = entry.get("prompt", "")
+            if prompt_txt:
+                context_messages.append({"role": "user", "content": prompt_txt})
+            resp_txt = entry.get("response", "")
+            if resp_txt:
+                context_messages.append({"role": "assistant", "content": resp_txt})
+        # Only keep the most recent N messages
+        context_messages = context_messages[-history_limit:]
+        # Flatten into a string with role tags
+        context_str_parts = []
+        for m in context_messages:
+            role = m.get("role", "user")
+            content = m.get("content", "")
+            # Prepend role for clarity (capitalize the first letter)
+            context_str_parts.append(f"{role.capitalize()}: {content}\n\n")
+        context_str = "".join(context_str_parts)
+    except Exception:
+        # Fallback to no context on errors
+        context_str = ""
+    # Prepend the context to the current message.  The role for the
+    # current user is explicitly labelled as "User" to distinguish it
+    # from previous messages.  Any attachments have already been
+    # appended to ``msg`` above.
+    full_prompt = f"{context_str}User: {msg}" if context_str else msg
+
     # --- Κλήση στον ThronosAI provider ---
     # Pass model_key AND session_id to generate_response
-    raw = ai_agent.generate_response(msg, wallet=wallet, model_key=model_key, session_id=session_id)
+    raw = ai_agent.generate_response(full_prompt, wallet=wallet, model_key=model_key, session_id=session_id)
 
     if isinstance(raw, dict):
         full_text = str(raw.get("response") or "")

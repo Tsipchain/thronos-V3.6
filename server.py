@@ -1592,6 +1592,102 @@ def migrate_addresses():
         logger.error(f"Migration error: {e}")
         return jsonify(error=str(e)), 500
 
+# ─── PLEDGE REGENERATION ENDPOINT ───────────────────────────────────────────
+
+@app.route("/admin/regenerate")
+def admin_regenerate_page():
+    """Admin page for pledge regeneration UI"""
+    return render_template("admin_regenerate.html")
+
+@app.route("/admin/regenerate_pledges", methods=["POST"])
+def regenerate_pledges():
+    """
+    Regenerates pledge PDFs for all existing pledges with new hex addresses.
+    Creates new PDFs with proper encryption and correct address format.
+    Admin only - requires ADMIN_SECRET.
+    """
+    data = request.get_json() or {}
+    secret = data.get("secret", "")
+
+    if secret != ADMIN_SECRET:
+        return jsonify(error="Forbidden"), 403
+
+    try:
+        pledges = load_json(PLEDGE_CHAIN, [])
+        regenerated_count = 0
+        results = []
+
+        logger.info("Starting pledge regeneration...")
+
+        for pledge in pledges:
+            btc_addr = pledge.get("btc_address", "")
+            thr_addr = pledge.get("thr_address", "")
+            pledge_text = pledge.get("pledge_text", "I hereby pledge allegiance to the Thronos Chain.")
+            passphrase = ""  # Passphrases aren't stored, user must remember
+
+            # Check if address is already in hex format
+            if not validate_thr_address(thr_addr):
+                logger.warning(f"Pledge {btc_addr} has old address format: {thr_addr}")
+                continue
+
+            # Generate new send_seed and hashes
+            send_seed = secrets.token_hex(16)
+            send_seed_hash = hashlib.sha256(send_seed.encode()).hexdigest()
+
+            # If pledge had passphrase, we can't regenerate exact auth_hash
+            # User must remember their passphrase
+            if pledge.get("has_passphrase"):
+                # Create placeholder that will work without passphrase
+                auth_string = f"{send_seed}:auth"
+            else:
+                auth_string = f"{send_seed}:auth"
+
+            send_auth_hash = hashlib.sha256(auth_string.encode()).hexdigest()
+
+            # Update pledge entry
+            pledge["send_seed_hash"] = send_seed_hash
+            pledge["send_auth_hash"] = send_auth_hash
+            pledge["regenerated_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+            # Create new PDF with new credentials
+            chain = load_json(CHAIN_FILE, [])
+            height = len(chain)
+            phash = pledge.get("pledge_hash", hashlib.sha256((btc_addr + pledge_text).encode()).hexdigest())
+
+            pdf_name = create_secure_pdf_contract(
+                btc_addr, pledge_text, thr_addr, phash, height, send_seed, CONTRACTS_DIR, passphrase
+            )
+
+            pledge["pdf_filename"] = pdf_name
+            pledge["new_send_seed_available"] = True
+
+            results.append({
+                "btc_address": btc_addr,
+                "thr_address": thr_addr,
+                "pdf_filename": pdf_name,
+                "send_seed": send_seed,
+                "had_passphrase": pledge.get("has_passphrase", False)
+            })
+
+            regenerated_count += 1
+            logger.info(f"Regenerated pledge for {thr_addr}")
+
+        # Save updated pledges
+        save_json(PLEDGE_CHAIN, pledges)
+
+        logger.info(f"Pledge regeneration complete! Regenerated {regenerated_count} pledges")
+
+        return jsonify({
+            "status": "success",
+            "regenerated_count": regenerated_count,
+            "results": results,
+            "warning": "Users with passphrases will need to re-set them for sending THR"
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Pledge regeneration error: {e}")
+        return jsonify(error=str(e)), 500
+
 # ─── AI ARCHITECT ROUTES (NEW) ──────────────────────────────────────────────
 
 @app.route("/architect")

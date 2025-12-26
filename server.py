@@ -100,6 +100,7 @@ IOT_PARKING_FILE    = os.path.join(DATA_DIR, "iot_parking.json")
 MEMPOOL_FILE        = os.path.join(DATA_DIR, "mempool.json")
 ATTEST_STORE_FILE   = os.path.join(DATA_DIR, "attest_store.json")
 WITHDRAWALS_FILE    = os.path.join(DATA_DIR, "withdrawals.json") # NEW
+VOTING_FILE         = os.path.join(DATA_DIR, "voting.json") # Feature voting for Crypto Hunters
 
 # AI commerce
 AI_PACKS_FILE       = os.path.join(DATA_DIR, "ai_packs.json")
@@ -267,6 +268,7 @@ AI_WALLET_ADDRESS = os.getenv("THR_AI_AGENT_WALLET", "THR_AI_AGENT_WALLET_V1")
 BURN_ADDRESS      = "0x0"
 SWAP_POOL_ADDRESS = "THR_SWAP_POOL_V1"
 GAME_POOL_ADDRESS = "THR_CRYPTO_HUNTERS_POOL"
+GAME_PANEL_URL    = os.getenv("GAME_PANEL_URL", "/game")  # Crypto Hunters admin panel URL
 GATEWAY_ADDRESS   = "THR_FIAT_GATEWAY_V1"
 
 # --- Learn‑to‑Earn Token Config ---
@@ -335,6 +337,12 @@ HEIGHT_OFFSET = 0
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("thronos")
 
+# Security warnings for production deployments
+if ADMIN_SECRET == "CHANGE_ME_NOW":
+    logger.warning("⚠️  WARNING: Using default ADMIN_SECRET. Set ADMIN_SECRET environment variable for production!")
+if "PLACEHOLDER" in STRIPE_WEBHOOK_SECRET or "Tuhr" in STRIPE_SECRET_KEY:
+    logger.warning("⚠️  WARNING: Using placeholder Stripe keys. Update STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET for production!")
+
 # Initialize AI
 try:
     ai_agent = ThronosAI()
@@ -392,12 +400,161 @@ def load_attest_store():
 def save_attest_store(store):
     save_json(ATTEST_STORE_FILE, store)
 
+# ─── Voting Helpers ─────────────────────────────────────────────────────
+
+def load_voting():
+    """Load voting data with default structure if file doesn't exist."""
+    default = {
+        "polls": [],
+        "votes": {}
+    }
+    return load_json(VOTING_FILE, default)
+
+def save_voting(voting_data):
+    """Persist voting data to VOTING_FILE."""
+    save_json(VOTING_FILE, voting_data)
+
+def initialize_voting():
+    """Initialize default voting polls for Crypto Hunters features."""
+    voting_data = load_voting()
+
+    # Only initialize if no polls exist
+    if not voting_data.get("polls"):
+        voting_data["polls"] = [
+            {
+                "id": "feature_pvp",
+                "title": {
+                    "en": "PvP Battle Arena",
+                    "el": "Αρένα Μάχης PvP"
+                },
+                "description": {
+                    "en": "Add player vs player combat zones",
+                    "el": "Προσθήκη ζωνών μάχης παίκτη εναντίον παίκτη"
+                },
+                "votes": 0
+            },
+            {
+                "id": "feature_guilds",
+                "title": {
+                    "en": "Guild System",
+                    "el": "Σύστημα Συντεχνιών"
+                },
+                "description": {
+                    "en": "Form teams and compete together",
+                    "el": "Δημιουργήστε ομάδες και ανταγωνιστείτε μαζί"
+                },
+                "votes": 0
+            },
+            {
+                "id": "feature_nft",
+                "title": {
+                    "en": "NFT Collectibles",
+                    "el": "Συλλεκτικά NFT"
+                },
+                "description": {
+                    "en": "Earn unique NFT rewards",
+                    "el": "Κερδίστε μοναδικές ανταμοιβές NFT"
+                },
+                "votes": 0
+            },
+            {
+                "id": "feature_staking",
+                "title": {
+                    "en": "THR Staking Rewards",
+                    "el": "Ανταμοιβές Staking THR"
+                },
+                "description": {
+                    "en": "Stake THR to earn passive rewards",
+                    "el": "Κάντε stake THR για παθητικές ανταμοιβές"
+                },
+                "votes": 0
+            }
+        ]
+        voting_data["votes"] = {}
+        save_voting(voting_data)
+
+    return voting_data
+
 def calculate_dynamic_fee(amount: float) -> float:
     """
     Calculates the burn fee based on the amount.
     Fee = Max(MIN_FEE, amount * FEE_RATE)
     """
     return round(max(MIN_FEE, amount * FEE_RATE), 6)
+
+# ─── Input Validation Helpers ───────────────────────────────────────────
+
+def validate_thr_address(address: str) -> bool:
+    """
+    Validate THR address format.
+    Expected format: Starts with 'THR' followed by 40 hex characters.
+    Example: THR1234567890abcdef1234567890abcdef12345678
+    """
+    if not address or not isinstance(address, str):
+        return False
+
+    # Remove whitespace
+    address = address.strip()
+
+    # Check format: THR + 40 hex chars
+    if not address.startswith("THR"):
+        return False
+
+    hex_part = address[3:]
+    if len(hex_part) != 40:
+        return False
+
+    # Check if hex_part contains only valid hex characters
+    try:
+        int(hex_part, 16)
+        return True
+    except ValueError:
+        return False
+
+def validate_amount(amount, min_amount=0.000001, max_amount=21000001) -> tuple[bool, str]:
+    """
+    Validate transaction amount.
+    Returns: (is_valid, error_message)
+    """
+    try:
+        amt = float(amount)
+    except (ValueError, TypeError):
+        return False, "Invalid amount format"
+
+    if amt <= 0:
+        return False, "Amount must be positive"
+
+    if amt < min_amount:
+        return False, f"Amount must be at least {min_amount} THR"
+
+    if amt > max_amount:
+        return False, f"Amount exceeds maximum ({max_amount} THR)"
+
+    return True, ""
+
+def validate_btc_address(address: str) -> bool:
+    """
+    Basic BTC address validation.
+    Checks common formats: Legacy (1...), P2SH (3...), Bech32 (bc1...)
+    """
+    if not address or not isinstance(address, str):
+        return False
+
+    address = address.strip()
+
+    # Legacy P2PKH (starts with 1)
+    if address.startswith("1") and 26 <= len(address) <= 35:
+        return True
+
+    # P2SH (starts with 3)
+    if address.startswith("3") and 26 <= len(address) <= 35:
+        return True
+
+    # Bech32 (starts with bc1)
+    if address.startswith("bc1") and 42 <= len(address) <= 62:
+        return True
+
+    return False
 
 # -------------------------------------------------------------------------
 # Course registry helpers for Learn‑to‑Earn
@@ -1012,7 +1169,7 @@ def decode_iot_steganography(image_path):
 # ─── BASIC PAGES ───────────────────────────────────
 @app.route("/")
 def home():
-    return render_template("index.html")
+    return render_template("index.html", game_panel_url=GAME_PANEL_URL)
 
 @app.route("/contracts/<path:filename>")
 def serve_contract(filename):
@@ -1718,6 +1875,80 @@ def api_iot_reserve():
         return jsonify(status="success"), 200
     else:
         return jsonify(error="Spot not found"), 404
+
+
+# ─── VOTING API (Crypto Hunters Feature Voting) ─────────────────────────────
+@app.route("/api/voting/polls", methods=["GET"])
+def api_voting_polls():
+    """Get all active voting polls."""
+    voting_data = load_voting()
+    return jsonify(voting_data.get("polls", [])), 200
+
+@app.route("/api/voting/vote", methods=["POST"])
+def api_voting_vote():
+    """
+    Submit a vote for a feature.
+    Expected JSON: {"poll_id": "feature_pvp", "wallet": "THR..."}
+    """
+    data = request.get_json() or {}
+    poll_id = data.get("poll_id")
+    wallet = data.get("wallet")
+
+    if not poll_id:
+        return jsonify(error="poll_id required"), 400
+
+    # Guest voting is allowed, but wallet voting prevents duplicate votes
+    voting_data = load_voting()
+
+    # Check if wallet already voted for this poll
+    vote_key = f"{poll_id}:{wallet}" if wallet else f"{poll_id}:guest_{secrets.token_hex(8)}"
+
+    if wallet and vote_key in voting_data.get("votes", {}):
+        return jsonify(error="Already voted", status="duplicate"), 400
+
+    # Find and increment the poll
+    poll_found = False
+    for poll in voting_data.get("polls", []):
+        if poll["id"] == poll_id:
+            poll["votes"] = poll.get("votes", 0) + 1
+            poll_found = True
+            break
+
+    if not poll_found:
+        return jsonify(error="Poll not found"), 404
+
+    # Record the vote
+    if "votes" not in voting_data:
+        voting_data["votes"] = {}
+
+    voting_data["votes"][vote_key] = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "wallet": wallet or "guest"
+    }
+
+    save_voting(voting_data)
+
+    return jsonify(status="success", message="Vote recorded"), 200
+
+@app.route("/api/voting/results", methods=["GET"])
+def api_voting_results():
+    """Get voting results with total counts."""
+    voting_data = load_voting()
+    polls = voting_data.get("polls", [])
+
+    results = []
+    for poll in polls:
+        results.append({
+            "id": poll["id"],
+            "title": poll["title"],
+            "description": poll["description"],
+            "votes": poll.get("votes", 0)
+        })
+
+    # Sort by votes descending
+    results.sort(key=lambda x: x["votes"], reverse=True)
+
+    return jsonify(results), 200
 
 
 # ─── QUANTUM CHAT API (ενιαίο AI + αρχεία + offline corpus) ─────────────────
@@ -2613,14 +2844,22 @@ def send_thr():
     amount_raw=data.get("amount",0)
     auth_secret=(data.get("auth_secret") or "").strip()
     passphrase=(data.get("passphrase") or "").strip()
+
+    # Validate THR addresses
+    if not validate_thr_address(from_thr):
+        return jsonify(error="invalid_from_address", message="Invalid THR address format"),400
+    if not validate_thr_address(to_thr):
+        return jsonify(error="invalid_to_address", message="Invalid THR address format"),400
+
+    # Validate amount
+    valid, error_msg = validate_amount(amount_raw)
+    if not valid:
+        return jsonify(error="invalid_amount", message=error_msg),400
+
     try:
         amount=float(amount_raw)
     except (TypeError,ValueError):
         return jsonify(error="invalid_amount"),400
-    if not from_thr or not to_thr:
-        return jsonify(error="missing_from_or_to"),400
-    if amount<=0:
-        return jsonify(error="amount_must_be_positive"),400
     if not auth_secret:
         return jsonify(error="missing_auth_secret"),400
     pledges=load_json(PLEDGE_CHAIN,[])
@@ -4658,6 +4897,7 @@ print("✓ AI Session fixes loaded - supports guest mode and file uploads")
 # --- Startup hooks ---
 ensure_ai_wallet()
 recompute_height_offset_from_ledger()
+initialize_voting()  # Initialize voting polls
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 13311))

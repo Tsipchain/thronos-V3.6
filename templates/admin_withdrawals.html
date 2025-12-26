@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Thronos Withdrawals Admin</title>
+  <style>
+    body {
+      background: #000;
+      color: #00ff66;
+      font-family: "Courier New", monospace;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 40px auto;
+      border: 1px solid #00ff66;
+      padding: 20px 30px;
+      box-shadow: 0 0 10px #00ff66;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 10px;
+    }
+    h2 {
+      margin-top: 30px;
+      margin-bottom: 10px;
+      border-bottom: 1px dashed #00ff66;
+      padding-bottom: 5px;
+    }
+    button {
+      margin: 5px;
+      padding: 8px 16px;
+      background: #00ff66;
+      border: none;
+      color: #000;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #00cc55;
+    }
+    button.danger {
+      background: #ff5555;
+      color: #fff;
+    }
+    button.danger:hover {
+      background: #cc3333;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid #00ff66;
+      padding: 6px 8px;
+      text-align: left;
+      word-break: break-all;
+    }
+    .status {
+      margin-top: 10px;
+      min-height: 20px;
+    }
+    .status.ok {
+      color: #00ff66;
+    }
+    .status.err {
+      color: #ff5555;
+    }
+    .nav {
+      margin-bottom: 15px;
+      font-size: 14px;
+    }
+    .nav a {
+      color: #00ff66;
+      text-decoration: none;
+      margin-right: 10px;
+    }
+    .nav a:hover {
+      text-decoration: underline;
+    }
+    .pending {
+      color: #ffaa00;
+    }
+    .approved {
+      color: #00ff66;
+    }
+    .rejected {
+      color: #ff5555;
+    }
+    .completed {
+      color: #00ccff;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="nav">
+      <a href="/">🏠 Home</a>
+      <a href="/pledge">🔥 Pledge</a>
+      <a href="/viewer">📜 Viewer</a>
+      <a href="/wallet">👛 Wallet</a>
+      <a href="/admin/whitelist">⚡ Whitelist Admin</a>
+    </div>
+
+    <h1>Thronos Withdrawals Admin</h1>
+
+    <p>
+      Admin panel for managing fiat gateway withdrawal requests.
+      Μην μοιραστείς αυτό το URL με κανέναν.
+    </p>
+
+    <!-- STATISTICS -->
+    <h2>📊 Statistics</h2>
+    <div id="stats" class="status">Loading...</div>
+
+    <!-- PENDING WITHDRAWALS -->
+    <h2>⏳ Pending Withdrawal Requests</h2>
+    <div id="pendingStatus" class="status"></div>
+    <table id="pendingTable">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Timestamp</th>
+          <th>THR Address</th>
+          <th>Amount (THR)</th>
+          <th>Currency</th>
+          <th>Destination</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="pendingBody">
+        <!-- filled by JS -->
+      </tbody>
+    </table>
+
+    <!-- APPROVED WITHDRAWALS -->
+    <h2>✅ Approved Withdrawals</h2>
+    <div id="approvedStatus" class="status"></div>
+    <table id="approvedTable">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Timestamp</th>
+          <th>THR Address</th>
+          <th>Amount (THR)</th>
+          <th>Currency</th>
+          <th>Destination</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="approvedBody">
+        <!-- filled by JS -->
+      </tbody>
+    </table>
+
+    <!-- REJECTED/COMPLETED -->
+    <h2>📋 All Withdrawal History</h2>
+    <div id="historyStatus" class="status"></div>
+    <table id="historyTable">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Status</th>
+          <th>Timestamp</th>
+          <th>THR Address</th>
+          <th>Amount</th>
+          <th>Currency</th>
+          <th>Destination</th>
+        </tr>
+      </thead>
+      <tbody id="historyBody">
+        <!-- filled by JS -->
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    // The admin secret comes from server-side render
+    const ADMIN_SECRET = "{{ admin_secret }}";
+
+    const stats = document.getElementById('stats');
+    const pendingStatus = document.getElementById('pendingStatus');
+    const pendingBody = document.getElementById('pendingBody');
+    const approvedStatus = document.getElementById('approvedStatus');
+    const approvedBody = document.getElementById('approvedBody');
+    const historyStatus = document.getElementById('historyStatus');
+    const historyBody = document.getElementById('historyBody');
+
+    async function loadWithdrawals() {
+      try {
+        const res = await fetch(`/api/admin/withdrawals/list?secret=${encodeURIComponent(ADMIN_SECRET)}`);
+        if (!res.ok) {
+          throw new Error("HTTP " + res.status);
+        }
+        const data = await res.json();
+        const withdrawals = data.withdrawals || [];
+
+        // Filter by status
+        const pending = withdrawals.filter(w => w.status === 'pending');
+        const approved = withdrawals.filter(w => w.status === 'approved');
+        const all = withdrawals;
+
+        // Update stats
+        stats.innerHTML = `
+          Total Requests: ${all.length} |
+          <span class="pending">Pending: ${pending.length}</span> |
+          <span class="approved">Approved: ${approved.length}</span> |
+          <span class="rejected">Rejected: ${withdrawals.filter(w => w.status === 'rejected').length}</span> |
+          <span class="completed">Completed: ${withdrawals.filter(w => w.status === 'completed').length}</span>
+        `;
+
+        // Render pending
+        renderTable(pending, pendingBody, true);
+        pendingStatus.textContent = pending.length > 0 ? `${pending.length} pending withdrawal(s)` : "No pending withdrawals";
+        pendingStatus.className = "status ok";
+
+        // Render approved
+        renderTable(approved, approvedBody, false, true);
+        approvedStatus.textContent = approved.length > 0 ? `${approved.length} approved withdrawal(s)` : "No approved withdrawals";
+        approvedStatus.className = "status ok";
+
+        // Render history
+        renderTable(all, historyBody, false, false, true);
+        historyStatus.textContent = `Total: ${all.length} withdrawal(s)`;
+        historyStatus.className = "status ok";
+
+      } catch (err) {
+        console.error(err);
+        pendingStatus.textContent = "Error loading withdrawals: " + err;
+        pendingStatus.className = "status err";
+      }
+    }
+
+    function renderTable(items, tbody, showActions = false, showComplete = false, showStatus = false) {
+      tbody.innerHTML = "";
+      if (items.length === 0) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = showStatus ? 7 : 7;
+        td.textContent = "No records";
+        td.style.textAlign = "center";
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+      }
+
+      items.forEach(item => {
+        const tr = document.createElement('tr');
+
+        if (showStatus) {
+          const tdStatus = document.createElement('td');
+          tdStatus.textContent = item.status || 'unknown';
+          tdStatus.className = item.status || '';
+          tr.appendChild(tdStatus);
+        }
+
+        const tdId = document.createElement('td');
+        tdId.textContent = item.id || 'N/A';
+        tr.appendChild(tdId);
+
+        const tdTime = document.createElement('td');
+        tdTime.textContent = item.timestamp || 'N/A';
+        tr.appendChild(tdTime);
+
+        const tdAddr = document.createElement('td');
+        tdAddr.textContent = item.thr_address || 'N/A';
+        tr.appendChild(tdAddr);
+
+        const tdAmount = document.createElement('td');
+        tdAmount.textContent = item.amount || '0';
+        tr.appendChild(tdAmount);
+
+        const tdCurrency = document.createElement('td');
+        tdCurrency.textContent = item.currency || 'USD';
+        tr.appendChild(tdCurrency);
+
+        const tdDest = document.createElement('td');
+        tdDest.textContent = item.destination || 'N/A';
+        tr.appendChild(tdDest);
+
+        if (showActions || showComplete) {
+          const tdActions = document.createElement('td');
+
+          if (showActions) {
+            const approveBtn = document.createElement('button');
+            approveBtn.textContent = "✓ Approve";
+            approveBtn.onclick = () => handleAction(item.id, 'approve');
+            tdActions.appendChild(approveBtn);
+
+            const rejectBtn = document.createElement('button');
+            rejectBtn.textContent = "✗ Reject";
+            rejectBtn.className = "danger";
+            rejectBtn.onclick = () => handleAction(item.id, 'reject');
+            tdActions.appendChild(rejectBtn);
+          }
+
+          if (showComplete) {
+            const completeBtn = document.createElement('button');
+            completeBtn.textContent = "✓ Mark Complete";
+            completeBtn.onclick = () => handleAction(item.id, 'complete');
+            tdActions.appendChild(completeBtn);
+          }
+
+          tr.appendChild(tdActions);
+        }
+
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function handleAction(id, action) {
+      if (!confirm(`Are you sure you want to ${action} withdrawal ${id}?`)) {
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/admin/withdrawals/action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            secret: ADMIN_SECRET,
+            withdrawal_id: id,
+            action: action
+          })
+        });
+
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          throw new Error(data.error || ("HTTP " + res.status));
+        }
+
+        alert(`Withdrawal ${action}d successfully`);
+        loadWithdrawals();
+      } catch (err) {
+        console.error(err);
+        alert("Error: " + err);
+      }
+    }
+
+    // On load
+    loadWithdrawals();
+
+    // Refresh every 30 seconds
+    setInterval(loadWithdrawals, 30000);
+  </script>
+</body>
+</html>

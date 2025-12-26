@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, Button, TextInput, StyleSheet, ScrollView } from 'react-native';
 
 // Adjust this constant if your backend runs on another host or port
-const API = 'http://localhost:3000';
+// For production, replace with your actual server URL (e.g., 'https://thrchain.up.railway.app')
+// Or use a config file / environment-specific builds
+const API = __DEV__ ? 'http://localhost:3000' : 'https://thrchain.up.railway.app';
 
 const Row = ({ children }) => <View style={styles.row}>{children}</View>;
 

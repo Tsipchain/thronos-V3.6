@@ -6,10 +6,11 @@ import requests
 import struct
 import binascii
 import hashlib
+import os
 
 # Configuration
-THRONOS_SERVER = "http://localhost:3333"
-STRATUM_PORT = 3334
+THRONOS_SERVER = os.getenv("THRONOS_SERVER", "http://localhost:3333")
+STRATUM_PORT = int(os.getenv("STRATUM_PORT", "3334"))
 POLL_INTERVAL = 1.0
 
 # Global State

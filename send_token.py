@@ -10,7 +10,8 @@ def load_ledger():
     try:
         with open(LEDGER_FILE, "r") as f:
             return json.load(f)
-    except:
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"⚠️  Ledger file error: {e}")
         return {}
 
 def save_ledger(ledger):
@@ -51,7 +52,8 @@ def handle_token_send():
     try:
         with open(CHAIN_FILE, "r") as f:
             chain = json.load(f)
-    except:
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"⚠️  Chain file error: {e}")
         chain = []
 
     chain.append(tx)

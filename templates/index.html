@@ -73,6 +73,34 @@
     </div>
 </div>
 
+<!-- Wallet Widget Section -->
+<div class="beta-section" style="border-color: #0f0; background: #001a00;">
+    <h3>💎 <span class="lang-el">Πορτοφόλι - Balance Widget</span><span class="lang-en">Wallet - Balance Widget</span></h3>
+    <p style="color: #0f0;">
+        <span class="lang-el">Δείτε το υπόλοιπο όλων των tokens με ένα κλικ!</span>
+        <span class="lang-en">See all your token balances at a glance!</span>
+    </p>
+    <div style="margin-top: 15px;">
+        <iframe id="walletWidgetFrame"
+                src=""
+                style="width: 100%; height: 600px; border: 1px solid #0f0; border-radius: 8px; background: #000;"
+                frameborder="0">
+        </iframe>
+    </div>
+    <script>
+        // Auto-load wallet widget with connected address
+        (function() {
+            const addr = localStorage.getItem('thr_address');
+            const iframe = document.getElementById('walletWidgetFrame');
+            if (addr) {
+                iframe.src = `/widget/wallet?address=${addr}&show_zero=true`;
+            } else {
+                iframe.src = `/widget/wallet?address=THR79ca94a7eb70a6aa99d12d7fdb01446ef246301a&show_zero=true`;
+            }
+        })();
+    </script>
+</div>
+
 <a href="{{ game_panel_url }}" target="_blank" class="game-link">
     👾 <span class="lang-el">Διαχείριση Crypto Hunters</span><span class="lang-en">Crypto Hunters Admin</span>
 </a>

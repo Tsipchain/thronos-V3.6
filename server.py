@@ -484,6 +484,23 @@ def calculate_dynamic_fee(amount: float) -> float:
 
 # ─── Input Validation Helpers ───────────────────────────────────────────
 
+def generate_thr_address(btc_address: str, timestamp: str = None) -> str:
+    """
+    Generate a deterministic THR address from BTC address.
+    Format: THR + 40 hex characters
+    """
+    if timestamp is None:
+        timestamp = str(int(time.time() * 1000))
+
+    # Combine BTC address with timestamp for deterministic generation
+    seed = f"{btc_address}:{timestamp}:thronos"
+    # Double SHA256 for security
+    hash1 = hashlib.sha256(seed.encode()).digest()
+    hash2 = hashlib.sha256(hash1).hexdigest()
+
+    # Take first 40 characters of the hex hash
+    return f"THR{hash2[:40]}"
+
 def validate_thr_address(address: str) -> bool:
     """
     Validate THR address format.
@@ -1448,6 +1465,132 @@ def api_admin_withdrawals_action():
         return jsonify(status="success"), 200
     else:
         return jsonify(status="error", message="Request not found"), 404
+
+# ─── ADDRESS MIGRATION ENDPOINT ─────────────────────────────────────────────
+
+@app.route("/admin/migrate")
+def admin_migrate_page():
+    """Admin page for address migration UI"""
+    return render_template("admin_migrate.html")
+
+@app.route("/admin/migrate_addresses", methods=["POST"])
+def migrate_addresses():
+    """
+    Migrates old timestamp-based THR addresses to new hex format.
+    Preserves all balances, transactions, and pledge data.
+    Admin only - requires ADMIN_SECRET.
+    """
+    data = request.get_json() or {}
+    secret = data.get("secret", "")
+
+    if secret != ADMIN_SECRET:
+        return jsonify(error="Forbidden"), 403
+
+    try:
+        # Load all data
+        pledges = load_json(PLEDGE_CHAIN, [])
+        ledger = load_json(LEDGER_FILE, {})
+        wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+        l2e_ledger = load_json(L2E_LEDGER_FILE, {})
+        chain = load_json(CHAIN_FILE, [])
+
+        # Create address mapping: old -> new
+        address_mapping = {}
+        migrated_pledges = []
+
+        logger.info("Starting address migration...")
+
+        # Step 1: Generate new addresses for all pledges
+        for pledge in pledges:
+            old_addr = pledge.get("thr_address", "")
+            btc_addr = pledge.get("btc_address", "")
+
+            # Skip if already in correct format
+            if validate_thr_address(old_addr):
+                migrated_pledges.append(pledge)
+                continue
+
+            # Extract timestamp from old address (THR1764439758289 -> 1764439758289)
+            if old_addr.startswith("THR"):
+                timestamp_part = old_addr[3:]
+            else:
+                # Fallback: use current time
+                timestamp_part = str(int(time.time() * 1000))
+
+            # Generate new hex address
+            new_addr = generate_thr_address(btc_addr, timestamp_part)
+            address_mapping[old_addr] = new_addr
+
+            # Update pledge entry
+            pledge["thr_address"] = new_addr
+            pledge["old_address"] = old_addr  # Keep for reference
+            pledge["migrated_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+            migrated_pledges.append(pledge)
+
+            logger.info(f"Migrated {old_addr} -> {new_addr}")
+
+        # Step 2: Update ledger balances
+        new_ledger = {}
+        for old_addr, balance in ledger.items():
+            new_addr = address_mapping.get(old_addr, old_addr)
+            new_ledger[new_addr] = balance
+
+        # Step 3: Update WBTC ledger
+        new_wbtc_ledger = {}
+        for old_addr, balance in wbtc_ledger.items():
+            new_addr = address_mapping.get(old_addr, old_addr)
+            new_wbtc_ledger[new_addr] = balance
+
+        # Step 4: Update L2E ledger
+        new_l2e_ledger = {}
+        for old_addr, balance in l2e_ledger.items():
+            new_addr = address_mapping.get(old_addr, old_addr)
+            new_l2e_ledger[new_addr] = balance
+
+        # Step 5: Update blockchain transactions
+        migrated_chain = []
+        for entry in chain:
+            if isinstance(entry, dict):
+                # Update 'from' address
+                if 'from' in entry and entry['from'] in address_mapping:
+                    entry['from'] = address_mapping[entry['from']]
+
+                # Update 'to' address
+                if 'to' in entry and entry['to'] in address_mapping:
+                    entry['to'] = address_mapping[entry['to']]
+
+                # Update 'thr_address' (for blocks)
+                if 'thr_address' in entry and entry['thr_address'] in address_mapping:
+                    entry['thr_address'] = address_mapping[entry['thr_address']]
+
+            migrated_chain.append(entry)
+
+        # Step 6: Save all updated data
+        save_json(PLEDGE_CHAIN, migrated_pledges)
+        save_json(LEDGER_FILE, new_ledger)
+        save_json(WBTC_LEDGER_FILE, new_wbtc_ledger)
+        save_json(L2E_LEDGER_FILE, new_l2e_ledger)
+        save_json(CHAIN_FILE, migrated_chain)
+
+        # Update last_block.json if it exists
+        last_block = load_json(LAST_BLOCK_FILE, {})
+        if last_block:
+            if last_block.get('thr_address') in address_mapping:
+                last_block['thr_address'] = address_mapping[last_block['thr_address']]
+            save_json(LAST_BLOCK_FILE, last_block)
+
+        logger.info(f"Migration complete! Migrated {len(address_mapping)} addresses")
+
+        return jsonify({
+            "status": "success",
+            "migrated_count": len(address_mapping),
+            "address_mapping": address_mapping
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Migration error: {e}")
+        return jsonify(error=str(e)), 500
 
 # ─── AI ARCHITECT ROUTES (NEW) ──────────────────────────────────────────────
 
@@ -2780,7 +2923,10 @@ def pledge_submit():
     paid, txns = (True,[]) if btc_address in free_list else verify_btc_payment(btc_address)
     if not paid:
         return jsonify(status="pending",message="Waiting for BTC payment",txns=txns),200
-    thr_addr=f"THR{int(time.time()*1000)}"
+
+    # Generate proper THR address (THR + 40 hex chars)
+    timestamp = str(int(time.time() * 1000))
+    thr_addr = generate_thr_address(btc_address, timestamp)
     phash = hashlib.sha256((btc_address+pledge_text).encode()).hexdigest()
     send_seed=secrets.token_hex(16)
     send_seed_hash=hashlib.sha256(send_seed.encode()).hexdigest()

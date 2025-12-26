@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Address Migration - Thronos Admin</title>
+  <style>
+    body {
+      background: #000;
+      color: #00ff66;
+      font-family: "Courier New", monospace;
+      padding: 2em;
+    }
+    .container {
+      max-width: 900px;
+      margin: 40px auto;
+      border: 1px solid #00ff66;
+      padding: 20px 30px;
+      box-shadow: 0 0 10px #00ff66;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 10px;
+      color: #ff6600;
+    }
+    .warning {
+      background: #331100;
+      border: 2px solid #ff6600;
+      padding: 15px;
+      margin: 20px 0;
+      color: #ff6600;
+    }
+    button {
+      margin-top: 10px;
+      padding: 12px 20px;
+      background: #00ff66;
+      border: none;
+      color: #000;
+      font-weight: bold;
+      cursor: pointer;
+      font-size: 14px;
+      width: 100%;
+    }
+    button:hover {
+      background: #00cc55;
+    }
+    button:disabled {
+      background: #666;
+      cursor: not-allowed;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      margin-top: 15px;
+    }
+    input[type="password"] {
+      width: 100%;
+      padding: 8px;
+      background: #000;
+      border: 1px solid #00ff66;
+      color: #00ff66;
+      font-family: inherit;
+    }
+    #output {
+      margin-top: 20px;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      background: #000;
+      padding: 1em;
+      border: 1px dashed #00ff66;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    .success {
+      color: #00ff66;
+    }
+    .error {
+      color: #ff5555;
+    }
+    .nav {
+      margin-bottom: 15px;
+      font-size: 14px;
+    }
+    .nav a {
+      color: #00ff66;
+      text-decoration: none;
+      margin-right: 10px;
+    }
+    .nav a:hover {
+      text-decoration: underline;
+    }
+    .info-box {
+      background: #001a00;
+      border: 1px solid #00ff66;
+      padding: 15px;
+      margin: 15px 0;
+    }
+    .info-box h3 {
+      margin-top: 0;
+      color: #00ff66;
+    }
+    .info-box ul {
+      margin: 10px 0;
+      padding-left: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="nav">
+      <a href="/">🏠 Home</a>
+      <a href="/pledge">🔥 Pledge</a>
+      <a href="/viewer">📜 Viewer</a>
+      <a href="/wallet">👛 Wallet</a>
+    </div>
+
+    <h1>⚡ THR Address Migration Tool</h1>
+
+    <div class="warning">
+      <h3>⚠️ ΠΡΟΕΙΔΟΠΟΙΗΣΗ / WARNING ⚠️</h3>
+      <p>
+        <strong>ΕΛ:</strong> Αυτό το εργαλείο θα μετατρέψει ΟΛΕΣ τις παλιές διευθύνσεις THR σε νέα μορφή hex.
+        Τα υπόλοιπα και οι συναλλαγές θα διατηρηθούν. Αυτή η ενέργεια ΔΕΝ μπορεί να αναιρεθεί!<br><br>
+        <strong>EN:</strong> This tool will migrate ALL old THR addresses to the new hex format.
+        Balances and transactions will be preserved. This action CANNOT be undone!
+      </p>
+    </div>
+
+    <div class="info-box">
+      <h3>📋 What This Migration Does:</h3>
+      <ul>
+        <li>✅ Converts old timestamp-based addresses (THR1764439758289) to hex format (THR + 40 hex chars)</li>
+        <li>✅ Preserves all wallet balances (THR, WBTC, L2E)</li>
+        <li>✅ Updates all blockchain transactions</li>
+        <li>✅ Maintains pledge chain integrity</li>
+        <li>✅ Updates whitelist entries</li>
+        <li>✅ Creates mapping for address lookup</li>
+      </ul>
+    </div>
+
+    <div class="info-box">
+      <h3>🔧 Migration Process:</h3>
+      <ol>
+        <li>Extracts timestamp from old address</li>
+        <li>Generates deterministic hex address using BTC address + timestamp</li>
+        <li>Creates old→new address mapping</li>
+        <li>Updates all ledgers (THR, WBTC, L2E)</li>
+        <li>Updates all blockchain transactions (from/to fields)</li>
+        <li>Updates all mining blocks (thr_address field)</li>
+        <li>Preserves all balances and transaction history</li>
+      </ol>
+    </div>
+
+    <label for="adminSecret">Admin Secret:</label>
+    <input type="password" id="adminSecret" placeholder="Enter ADMIN_SECRET..." required />
+
+    <button id="migrateBtn" onclick="runMigration()">
+      🚀 Run Address Migration
+    </button>
+
+    <div id="output"></div>
+  </div>
+
+  <script>
+    async function runMigration() {
+      const output = document.getElementById('output');
+      const btn = document.getElementById('migrateBtn');
+      const secret = document.getElementById('adminSecret').value.trim();
+
+      if (!secret) {
+        output.className = 'error';
+        output.textContent = '❌ Please enter the admin secret!';
+        return;
+      }
+
+      if (!confirm('Are you sure you want to migrate ALL addresses? This cannot be undone!')) {
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = '⏳ Migrating... Please wait...';
+      output.textContent = '⏳ Starting migration process...\n\n';
+      output.className = '';
+
+      try {
+        const response = await fetch('/admin/migrate_addresses', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ secret })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || 'Migration failed');
+        }
+
+        output.className = 'success';
+        output.textContent = `✅ MIGRATION SUCCESSFUL!\n\n`;
+        output.textContent += `📊 Migrated ${data.migrated_count} addresses\n\n`;
+        output.textContent += `📋 Address Mapping:\n`;
+        output.textContent += `${'='.repeat(80)}\n`;
+
+        for (const [oldAddr, newAddr] of Object.entries(data.address_mapping)) {
+          output.textContent += `${oldAddr} → ${newAddr}\n`;
+        }
+
+        output.textContent += `\n${'='.repeat(80)}\n`;
+        output.textContent += `\n✅ All balances, transactions, and data preserved!\n`;
+        output.textContent += `✅ You can now use the new addresses for all operations.\n`;
+        output.textContent += `✅ Old addresses are stored in pledge data for reference.\n`;
+
+        btn.textContent = '✅ Migration Complete!';
+
+      } catch (err) {
+        output.className = 'error';
+        output.textContent = `❌ Migration Error:\n\n${err.message}\n\n`;
+        output.textContent += `Please check the server logs for more details.`;
+
+        btn.disabled = false;
+        btn.textContent = '🚀 Run Address Migration';
+      }
+    }
+
+    document.getElementById('adminSecret').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        runMigration();
+      }
+    });
+  </script>
+</body>
+</html>

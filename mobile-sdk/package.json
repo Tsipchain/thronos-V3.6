@@ -1,0 +1,43 @@
+{
+  "name": "thronos-mobile-sdk",
+  "version": "1.0.0",
+  "description": "Thronos Network Mobile SDK for React Native, iOS, and Android",
+  "main": "src/index.js",
+  "types": "src/types.d.ts",
+  "keywords": [
+    "thronos",
+    "blockchain",
+    "wallet",
+    "crypto",
+    "react-native",
+    "ios",
+    "android"
+  ],
+  "author": "Thronos Network",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Tsipchain/thronos-V3.6.git"
+  },
+  "scripts": {
+    "test": "jest",
+    "lint": "eslint src/"
+  },
+  "peerDependencies": {
+    "react-native": ">=0.60.0"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "^1.19.0",
+    "react-native-crypto-js": "^1.0.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.0.0",
+    "jest": "^29.0.0"
+  },
+  "files": [
+    "src/",
+    "ios/",
+    "android/",
+    "README.md"
+  ]
+}

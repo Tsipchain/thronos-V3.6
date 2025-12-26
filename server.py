@@ -2222,27 +2222,54 @@ def api_chat():
 
     data = request.get_json() or {}
     msg = (data.get("message") or "").strip()
+    wallet = (data.get("wallet") or "").strip()  # MOVED HERE - must be before attachments!
+    session_id = (data.get("session_id") or "").strip() or None
+    model_key = (data.get("model_key") or "").strip() or None
     attachments = data.get("attachments") or []
+
     # Attachments are file_ids previously uploaded via /api/ai/files/upload
     if attachments:
         idx = load_upload_index()
         parts = []
+        files_processed = []
+        files_skipped = []
+
         for fid in attachments:
             meta = idx.get(fid)
             if not meta:
+                files_skipped.append(f"{fid} (not found in index)")
+                logger.warning(f"File {fid} not found in upload index")
                 continue
+
             # basic ownership check: if wallet exists, enforce wallet match; else enforce guest id
             if wallet and meta.get("wallet") and meta.get("wallet") != wallet:
+                files_skipped.append(f"{fid} (ownership mismatch)")
+                logger.warning(f"File {fid} ownership mismatch: {meta.get('wallet')} != {wallet}")
                 continue
             if (not wallet) and meta.get("guest_id") and meta.get("guest_id") != get_or_set_guest_id():
+                files_skipped.append(f"{fid} (guest mismatch)")
+                logger.warning(f"File {fid} guest mismatch")
                 continue
-            text = read_text_file_for_prompt(meta.get("path",""))
-            parts.append(f"\n\n[Attachment {meta.get('filename')} | {fid}]\n{text}")
+
+            # Read file content
+            file_path = meta.get("path", "")
+            if not file_path or not os.path.exists(file_path):
+                files_skipped.append(f"{fid} (file not found on disk)")
+                logger.error(f"File {fid} path not found: {file_path}")
+                continue
+
+            text = read_text_file_for_prompt(file_path)
+            filename = meta.get("filename", "unknown")
+            parts.append(f"\n\n[📎 Attachment: {filename} | ID: {fid}]\n{text}")
+            files_processed.append(filename)
+            logger.info(f"Successfully attached file {filename} ({fid}) to chat message")
+
         if parts:
             msg = msg + "".join(parts)
-    wallet = (data.get("wallet") or "").strip()
-    session_id = (data.get("session_id") or "").strip() or None
-    model_key = (data.get("model_key") or "").strip() or None  # <--- NEW
+            logger.info(f"Processed {len(files_processed)} attachments: {', '.join(files_processed)}")
+
+        if files_skipped:
+            logger.warning(f"Skipped {len(files_skipped)} attachments: {', '.join(files_skipped)}")
 
     if not msg:
         return jsonify(error="Message required"), 400

@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Pledge Regeneration - Thronos Admin</title>
+  <style>
+    body {
+      background: #000;
+      color: #00ff66;
+      font-family: "Courier New", monospace;
+      padding: 2em;
+    }
+    .container {
+      max-width: 900px;
+      margin: 40px auto;
+      border: 1px solid #00ff66;
+      padding: 20px 30px;
+      box-shadow: 0 0 10px #00ff66;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 10px;
+      color: #ff6600;
+    }
+    .warning {
+      background: #331100;
+      border: 2px solid #ff6600;
+      padding: 15px;
+      margin: 20px 0;
+      color: #ff6600;
+    }
+    button {
+      margin-top: 10px;
+      padding: 12px 20px;
+      background: #00ff66;
+      border: none;
+      color: #000;
+      font-weight: bold;
+      cursor: pointer;
+      font-size: 14px;
+      width: 100%;
+    }
+    button:hover {
+      background: #00cc55;
+    }
+    button:disabled {
+      background: #666;
+      cursor: not-allowed;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      margin-top: 15px;
+    }
+    input[type="password"] {
+      width: 100%;
+      padding: 8px;
+      background: #000;
+      border: 1px solid #00ff66;
+      color: #00ff66;
+      font-family: inherit;
+    }
+    #output {
+      margin-top: 20px;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      background: #000;
+      padding: 1em;
+      border: 1px dashed #00ff66;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    .success {
+      color: #00ff66;
+    }
+    .error {
+      color: #ff5555;
+    }
+    .nav {
+      margin-bottom: 15px;
+      font-size: 14px;
+    }
+    .nav a {
+      color: #00ff66;
+      text-decoration: none;
+      margin-right: 10px;
+    }
+    .nav a:hover {
+      text-decoration: underline;
+    }
+    .info-box {
+      background: #001a00;
+      border: 1px solid #00ff66;
+      padding: 15px;
+      margin: 15px 0;
+    }
+    .info-box h3 {
+      margin-top: 0;
+      color: #00ff66;
+    }
+    .info-box ul {
+      margin: 10px 0;
+      padding-left: 20px;
+    }
+    .seed-display {
+      background: #1a1a00;
+      border: 1px solid #ffff00;
+      padding: 10px;
+      margin: 5px 0;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    .seed-value {
+      color: #ffff00;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="nav">
+      <a href="/">🏠 Home</a>
+      <a href="/pledge">🔥 Pledge</a>
+      <a href="/viewer">📜 Viewer</a>
+      <a href="/wallet">👛 Wallet</a>
+      <a href="/admin/migrate">🔄 Migration</a>
+    </div>
+
+    <h1>📄 Pledge Regeneration Tool</h1>
+
+    <div class="warning">
+      <h3>⚠️ ΠΡΟΕΙΔΟΠΟΙΗΣΗ / WARNING ⚠️</h3>
+      <p>
+        <strong>ΕΛ:</strong> Αυτό το εργαλείο θα δημιουργήσει ΝΕΕΣ pledge PDFs με νέα send_seeds.
+        Τα παλιά PDFs θα γίνουν ΜΗ ΕΓΚΥΡΑ. Οι χρήστες θα χρειαστούν τα ΝΕΑ PDFs για να ανακτήσουν τα send_seeds!<br><br>
+        <strong>EN:</strong> This tool will generate NEW pledge PDFs with new send_seeds.
+        Old PDFs will become INVALID. Users will need the NEW PDFs to recover their send_seeds!
+      </p>
+    </div>
+
+    <div class="info-box">
+      <h3>📋 What This Regeneration Does:</h3>
+      <ul>
+        <li>✅ Creates new send_seeds for all pledges</li>
+        <li>✅ Generates new encrypted PDFs with proper hex addresses</li>
+        <li>✅ Updates pledge_chain.json with new credentials</li>
+        <li>✅ Makes PDFs compatible with recovery system (/recovery)</li>
+        <li>✅ Preserves all pledge data (BTC address, THR address, text)</li>
+        <li>⚠️ Invalidates old PDFs - users must download new ones!</li>
+      </ul>
+    </div>
+
+    <div class="info-box">
+      <h3>🔧 Regeneration Process:</h3>
+      <ol>
+        <li>Generates new random send_seed for each pledge (32 hex chars)</li>
+        <li>Creates new send_seed_hash and send_auth_hash</li>
+        <li>Generates new encrypted PDF with steganographic embedding</li>
+        <li>Updates pledge_chain.json with new credentials</li>
+        <li>Stores timestamp of regeneration for tracking</li>
+        <li>Returns list of new send_seeds for admin backup</li>
+      </ol>
+    </div>
+
+    <div class="info-box">
+      <h3>📌 Important Notes:</h3>
+      <ul>
+        <li><strong>Passphrases:</strong> Users with custom passphrases will need to remember them separately</li>
+        <li><strong>Recovery:</strong> New PDFs can be used at /recovery to extract send_seeds</li>
+        <li><strong>Backup:</strong> Save the results showing new send_seeds securely</li>
+        <li><strong>Distribution:</strong> Users must download their new PDFs from /contracts/</li>
+      </ul>
+    </div>
+
+    <label for="adminSecret">Admin Secret:</label>
+    <input type="password" id="adminSecret" placeholder="Enter ADMIN_SECRET..." required />
+
+    <button id="regenerateBtn" onclick="runRegeneration()">
+      🔄 Regenerate All Pledge PDFs
+    </button>
+
+    <div id="output"></div>
+  </div>
+
+  <script>
+    async function runRegeneration() {
+      const output = document.getElementById('output');
+      const btn = document.getElementById('regenerateBtn');
+      const secret = document.getElementById('adminSecret').value.trim();
+
+      if (!secret) {
+        output.className = 'error';
+        output.textContent = '❌ Please enter the admin secret!';
+        return;
+      }
+
+      if (!confirm('Are you sure you want to regenerate ALL pledge PDFs? Old PDFs will become invalid!')) {
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = '⏳ Regenerating... Please wait...';
+      output.textContent = '⏳ Starting pledge regeneration process...\n\n';
+      output.className = '';
+
+      try {
+        const response = await fetch('/admin/regenerate_pledges', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ secret })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || 'Regeneration failed');
+        }
+
+        output.className = 'success';
+        output.textContent = `✅ REGENERATION SUCCESSFUL!\n\n`;
+        output.textContent += `📊 Regenerated ${data.regenerated_count} pledge PDFs\n\n`;
+
+        if (data.warning) {
+          output.textContent += `⚠️  ${data.warning}\n\n`;
+        }
+
+        output.textContent += `📋 New Send Seeds (BACKUP THIS INFORMATION!):\n`;
+        output.textContent += `${'='.repeat(80)}\n\n`;
+
+        for (const result of data.results) {
+          output.innerHTML += `<div class="seed-display">`;
+          output.innerHTML += `<strong>BTC:</strong> ${result.btc_address}<br>`;
+          output.innerHTML += `<strong>THR:</strong> ${result.thr_address}<br>`;
+          output.innerHTML += `<strong>PDF:</strong> ${result.pdf_filename}<br>`;
+          output.innerHTML += `<strong>Send Seed:</strong> <span class="seed-value">${result.send_seed}</span><br>`;
+          if (result.had_passphrase) {
+            output.innerHTML += `<strong style="color: #ff6600;">⚠️ User had passphrase - must remember it!</strong><br>`;
+          }
+          output.innerHTML += `</div>`;
+        }
+
+        output.innerHTML += `\n${'='.repeat(80)}\n`;
+        output.innerHTML += `\n✅ All pledge PDFs regenerated with new encryption!<br>`;
+        output.innerHTML += `✅ Users can now recover send_seeds from new PDFs at /recovery<br>`;
+        output.innerHTML += `✅ New PDFs available at /contracts/[filename]<br>`;
+        output.innerHTML += `⚠️  Old PDFs are now INVALID - users must use new ones!<br>`;
+
+        btn.textContent = '✅ Regeneration Complete!';
+
+      } catch (err) {
+        output.className = 'error';
+        output.textContent = `❌ Regeneration Error:\n\n${err.message}\n\n`;
+        output.textContent += `Please check the server logs for more details.`;
+
+        btn.disabled = false;
+        btn.textContent = '🔄 Regenerate All Pledge PDFs';
+      }
+    }
+
+    document.getElementById('adminSecret').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        runRegeneration();
+      }
+    });
+  </script>
+</body>
+</html>

@@ -3225,11 +3225,6 @@ def save_custom_token_ledger(token_id, ledger):
     ledger_file = os.path.join(CUSTOM_TOKENS_LEDGER_DIR, f"{token_id}.json")
     save_json(ledger_file, ledger)
 
-@app.route("/tokens")
-def tokens_page():
-    """Experimental tokens creation page"""
-    return render_template("tokens.html")
-
 @app.route("/api/tokens/create", methods=["POST"])
 def api_create_token():
     """Create a custom experimental token"""

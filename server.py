@@ -477,10 +477,26 @@ def initialize_voting():
 
 def calculate_dynamic_fee(amount: float) -> float:
     """
-    Calculates the burn fee based on the amount.
-    Fee = Max(MIN_FEE, amount * FEE_RATE)
+    Calculates dynamic burn fee based on transaction amount.
+    Higher amounts = Lower fee percentage (incentivizes larger transactions)
+
+    Fee Tiers:
+    - 0-10 THR:     0.5% (0.005)
+    - 10-100 THR:   0.3% (0.003)
+    - 100-1000 THR: 0.15% (0.0015)
+    - 1000+ THR:    0.05% (0.0005)
     """
-    return round(max(MIN_FEE, amount * FEE_RATE), 6)
+    if amount >= 1000:
+        fee_rate = 0.0005  # 0.05%
+    elif amount >= 100:
+        fee_rate = 0.0015  # 0.15%
+    elif amount >= 10:
+        fee_rate = 0.003   # 0.3%
+    else:
+        fee_rate = 0.005   # 0.5%
+
+    fee = amount * fee_rate
+    return round(max(MIN_FEE, fee), 6)
 
 # ─── Input Validation Helpers ───────────────────────────────────────────
 
@@ -3073,9 +3089,86 @@ def wallet_data(thr_addr):
     ]
     return jsonify(balance=bal, wbtc_balance=wbtc_bal, l2e_balance=l2e_bal, transactions=history), 200
 
+@app.route("/api/wallet/tokens/<thr_addr>")
+def api_wallet_tokens(thr_addr):
+    """
+    Returns all token balances for a wallet with metadata (logos, names, etc.)
+    Perfect for wallet widgets and balance displays
+    """
+    ledger = load_json(LEDGER_FILE, {})
+    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
+
+    thr_balance = round(float(ledger.get(thr_addr, 0.0)), 6)
+    wbtc_balance = round(float(wbtc_ledger.get(thr_addr, 0.0)), 8)
+    l2e_balance = round(float(l2e_ledger.get(thr_addr, 0.0)), 6)
+
+    tokens = [
+        {
+            "symbol": "THR",
+            "name": "Thronos",
+            "balance": thr_balance,
+            "decimals": 6,
+            "logo": "/static/img/thronos-token.png",
+            "color": "#00ff66",
+            "chain": "Thronos",
+            "type": "native"
+        },
+        {
+            "symbol": "WBTC",
+            "name": "Wrapped Bitcoin",
+            "balance": wbtc_balance,
+            "decimals": 8,
+            "logo": "/static/img/wbtc-logo.png",
+            "color": "#f7931a",
+            "chain": "Thronos",
+            "type": "wrapped"
+        },
+        {
+            "symbol": "L2E",
+            "name": "Learn-to-Earn",
+            "balance": l2e_balance,
+            "decimals": 6,
+            "logo": "/static/img/l2e-logo.png",
+            "color": "#00ccff",
+            "chain": "Thronos",
+            "type": "reward"
+        }
+    ]
+
+    # Filter out zero balances (optional - can be toggled)
+    show_zero = request.args.get("show_zero", "true").lower() == "true"
+    if not show_zero:
+        tokens = [t for t in tokens if t["balance"] > 0]
+
+    total_value_usd = 0  # Placeholder for future price oracle integration
+
+    return jsonify({
+        "address": thr_addr,
+        "tokens": tokens,
+        "total_tokens": len(tokens),
+        "total_value_usd": total_value_usd,
+        "last_updated": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    }), 200
+
 @app.route("/wallet/<thr_addr>")
 def wallet_redirect(thr_addr):
     return redirect(url_for("wallet_data", thr_addr=thr_addr)),302
+
+@app.route("/widget/wallet")
+def wallet_widget():
+    """
+    Embeddable wallet widget showing all token balances with logos
+
+    URL Parameters:
+    - address: THR wallet address (required or uses default)
+    - compact: true/false - compact mode for smaller displays
+    - show_zero: true/false - show tokens with zero balance
+    - refresh: auto-refresh interval in seconds (0 = disabled)
+
+    Example: /widget/wallet?address=THR123...&compact=true&refresh=30
+    """
+    return render_template("wallet_widget.html")
 
 
 @app.route("/send_thr", methods=["POST"])

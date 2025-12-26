@@ -2670,65 +2670,6 @@ def api_ai_sessions():
         app.logger.exception("ai_sessions list failed")
         return jsonify({"ok": False, "error": str(e), "sessions": []}), 500
 
-    # ταξινόμηση με βάση updated_at (πιο πρόσφατη πρώτη)
-    def _key(s):
-        return s.get("updated_at", "")
-    sessions.sort(key=_key, reverse=True)
-
-    return jsonify({"wallet": wallet, "sessions": sessions}), 200
-
-@app.route("/api/ai_sessions/start", methods=["POST"])
-@app.route("/api/ai/sessions/start", methods=["POST"])
-def api_ai_session_start():
-
-    data = request.get_json(silent=True) or {}
-    wallet = (data.get("wallet") or "").strip()
-    title = (data.get("title") or "").strip() or "New Chat"
-    model = (data.get("model") or "").strip() or None
-
-    if not wallet:
-        return jsonify({"ok": False, "error": "wallet required"}), 400
-
-    sid = secrets.token_hex(8)
-    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-    session = {
-        "id": sid,
-        "wallet": wallet,
-        "title": title,
-        "created_at": now,
-        "updated_at": now,
-        "archived": False,
-        "model": model,
-        "message_count": 0,
-        "meta": {},
-    }
-
-    sessions = load_ai_sessions()
-    sessions.append(session)
-    save_ai_sessions(sessions)
-    return jsonify({"ok": True, "session": session})
-
-    if not wallet:
-        return jsonify(error="Wallet required"), 400
-
-    sid = secrets.token_hex(8)
-    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-    if not title:
-        title = "Νέα συνομιλία"
-
-    sessions = load_ai_sessions()
-    session = {
-        "id": sid,
-        "wallet": wallet,
-        "title": title[:80],
-        "created_at": ts,
-        "updated_at": ts,
-    }
-    sessions.append(session)
-    save_ai_sessions(sessions)
-
-    return jsonify(status="ok", session=session), 200
-
 @app.route("/api/ai_sessions/rename", methods=["POST"])
 @app.route("/api/ai/sessions/rename", methods=["POST"])  # Add slash version!
 def api_ai_session_rename():
@@ -2749,27 +2690,6 @@ def api_ai_session_rename():
             save_ai_sessions(sessions)
             return jsonify({"ok": True, "session": s})
     return jsonify({"ok": False, "error": "session not found"}), 404
-
-    mode = (data.get("mode") or "delete").strip().lower()
-    # mode: "archive" keeps messages for training but hides from UI.
-    new_title = (data.get("title") or "").strip()
-
-    if not wallet or not session_id or not new_title:
-        return jsonify(error="Missing parameters"), 400
-
-    sessions = load_ai_sessions()
-    found = False
-    for s in sessions:
-        if s.get("wallet") == wallet and s.get("id") == session_id:
-            s["title"] = new_title[:80]
-            found = True
-            break
-    
-    if found:
-        save_ai_sessions(sessions)
-        return jsonify(status="ok", title=new_title), 200
-    else:
-        return jsonify(error="Session not found"), 404
 
 # -----------------------------------------------------------------------------
 # AI Session Deletion

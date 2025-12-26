@@ -1383,6 +1383,14 @@ def api_train2earn_contributions(thr_addr: str):
 def evm_page():
     return render_template("evm.html")
 
+@app.route("/playground")
+def playground_page():
+    """
+    Render the DApp Playground interface for smart contract development.
+    Users can write, compile, deploy, and test smart contracts.
+    """
+    return render_template("playground.html")
+
 # Token listing & creation UI
 @app.route("/tokens")
 def tokens_page():

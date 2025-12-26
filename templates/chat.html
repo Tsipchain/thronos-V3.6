@@ -470,6 +470,15 @@
     </aside>
 
     <main class="content">
+        <!-- History controls: allow the user to choose how many past messages to fetch or fetch the full conversation -->
+        <div class="history-controls" style="display:flex; align-items:center; gap:8px; margin:4px 0 6px 0;">
+            <label for="historySelect" style="font-size:12px; color: var(--muted);">History:</label>
+            <select id="historySelect" class="input" style="height:28px; font-size:12px; padding:2px 6px;">
+                <option value="50">Last 50</option>
+                <option value="100">Last 100</option>
+                <option value="all">Full</option>
+            </select>
+        </div>
         <div id="chatArea" class="chat-area">
             <div class="bubble bubble-warning">
                 Welcome to <b>Thronos Quantum Assistant</b>.<br/>
@@ -656,9 +665,11 @@
             currentSession = sessions.find(s => s.id === lastId) || sessions[0] || null;
             renderSessions();
 
-            // Load history for current session
+            // Load history for current session, respecting user-selected history length
             if (currentSession) {
-                await loadHistory(currentSession.id);
+                const histSel = document.getElementById("historySelect");
+                const limitVal = histSel ? histSel.value : null;
+                await loadHistory(currentSession.id, limitVal);
             }
 
             document.getElementById("coreStatus").textContent = "Core: loaded";
@@ -721,7 +732,9 @@
             if (currentSession && currentSession.id === id) {
                 currentSession = sessions[0] || null;
                 if (currentSession) {
-                    await loadHistory(currentSession.id);
+                    const histSel = document.getElementById("historySelect");
+                    const limitVal = histSel ? histSel.value : null;
+                    await loadHistory(currentSession.id, limitVal);
                 } else {
                     document.getElementById("chatArea").innerHTML = "";
                 }
@@ -732,14 +745,23 @@
         }
     }
 
-    async function loadHistory(sessionId) {
+    async function loadHistory(sessionId, limit) {
         const area = document.getElementById("chatArea");
         area.innerHTML = "";
 
         if (!sessionId) return;
 
         try {
-            const res = await fetch(`/api/ai_session_history?wallet=${encodeURIComponent(wallet || "")}&session_id=${encodeURIComponent(sessionId)}`);
+            // Build the URL with optional limit/all parameters
+            let url = `/api/ai_session_history?wallet=${encodeURIComponent(wallet || "")}&session_id=${encodeURIComponent(sessionId)}`;
+            if (limit) {
+                if (limit === "all") {
+                    url += `&all=1`;
+                } else {
+                    url += `&limit=${encodeURIComponent(limit)}`;
+                }
+            }
+            const res = await fetch(url);
             if (!res.ok) {
                 console.warn("Failed to load history:", res.status);
                 return;
@@ -941,6 +963,18 @@
             renderPending();
         }
     });
+
+    // Reload history when the user changes the history limit selector.  This
+    // triggers a new API call with the selected limit or all conversation.
+    const histSelect = document.getElementById("historySelect");
+    if (histSelect) {
+        histSelect.addEventListener("change", () => {
+            if (currentSession && currentSession.id) {
+                const val = histSelect.value;
+                loadHistory(currentSession.id, val);
+            }
+        });
+    }
 
     // αρχικό state
     (function init() {

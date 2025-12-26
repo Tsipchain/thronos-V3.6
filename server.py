@@ -468,6 +468,22 @@ def initialize_voting():
                     "el": "Κάντε stake THR για παθητικές ανταμοιβές"
                 },
                 "votes": 0
+            },
+            # New poll: allow the community to vote on deploying a second peer node for the
+            # Crypto Hunters network.  A secondary peer improves redundancy and network
+            # reliability.  This was requested so that users can participate in a more
+            # decentralised manner.
+            {
+                "id": "feature_second_peer",
+                "title": {
+                    "en": "Second Peer Node",
+                    "el": "Δεύτερος Κόμβος Peer"
+                },
+                "description": {
+                    "en": "Deploy a second peer node to improve redundancy and reliability in the Crypto Hunters game network.",
+                    "el": "Εγκατάσταση δεύτερου κόμβου peer για βελτίωση της αξιοπιστίας και ανθεκτικότητας του δικτύου του παιχνιδιού Crypto Hunters."
+                },
+                "votes": 0
             }
         ]
         voting_data["votes"] = {}
@@ -2859,10 +2875,20 @@ def api_ai_session_history():
     wallet = (request.args.get("wallet") or "").strip()
     session_id = (request.args.get("session_id") or "").strip() or "default"
 
+    # Optional query parameters to control returned history length.  If ``all``
+    # is truthy (1/true/yes/all), then the entire history is returned.
+    # Otherwise ``limit`` specifies how many messages from the end to return.
+    # If limit is not provided or invalid, a default of 50 messages is used.
+    # This allows clients to request the full conversation or a bounded number
+    # of past messages without modifying the stored corpus.
+    limit_param = request.args.get("limit")
+    all_flag = str(request.args.get("all", "")).lower() in ("1", "true", "yes", "all")
+
     corpus = load_json(AI_CORPUS_FILE, [])
-    history = []
+    history: list[dict] = []
 
     for entry in corpus:
+        # Filter by wallet when provided
         if wallet and entry.get("wallet") != wallet:
             continue
         if (entry.get("session_id") or "default") != session_id:
@@ -2877,7 +2903,17 @@ def api_ai_session_history():
         if response:
             history.append({"role": "assistant", "content": response, "ts": ts})
 
-    history = history[-80:]
+    # Apply limit unless the caller explicitly requests the full conversation
+    if not all_flag:
+        try:
+            # If limit is provided use it, otherwise default to 50
+            limit = int(limit_param) if limit_param else 50
+        except (TypeError, ValueError):
+            limit = 50
+        # Only slice history if limit is positive
+        if limit > 0:
+            history = history[-limit:]
+
     return jsonify({"wallet": wallet, "session_id": session_id, "history": history}), 200
 
 

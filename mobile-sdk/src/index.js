@@ -94,9 +94,10 @@ export default class ThronosSDK {
      * @param {string} to - Recipient address
      * @param {number} amount - Amount to send
      * @param {string} token - Token symbol (default: 'THR')
+     * @param {object} options - Optional: { speed: 'slow'|'fast', passphrase: string }
      * @returns {Promise<{success: boolean, transaction: object}>}
      */
-    async sendTransaction(to, amount, token = 'THR') {
+    async sendTransaction(to, amount, token = 'THR', options = {}) {
         const wallet = await this.wallet.get();
         if (!wallet) throw new Error('No wallet connected');
 
@@ -105,8 +106,50 @@ export default class ThronosSDK {
             to,
             amount,
             token,
-            secret: wallet.secret
+            secret: wallet.secret,
+            speed: options.speed || 'fast',
+            passphrase: options.passphrase
         });
+    }
+
+    /**
+     * Send multiple tokens in a single batch
+     * @param {Array<{to: string, amount: number, token: string}>} transfers - Array of transfers
+     * @param {object} options - Optional: { speed: 'slow'|'fast', passphrase: string }
+     * @returns {Promise<{success: boolean, results: Array}>}
+     */
+    async sendMultipleTokens(transfers, options = {}) {
+        const wallet = await this.wallet.get();
+        if (!wallet) throw new Error('No wallet connected');
+
+        if (!Array.isArray(transfers) || transfers.length === 0) {
+            throw new Error('Transfers must be a non-empty array');
+        }
+
+        return await this.api.sendMultipleTokens({
+            from: wallet.address,
+            transfers,
+            secret: wallet.secret,
+            speed: options.speed || 'fast',
+            passphrase: options.passphrase
+        });
+    }
+
+    /**
+     * Get all available tokens on the chain
+     * @returns {Promise<{tokens: Array}>}
+     */
+    async getChainTokens() {
+        return await this.api.getChainTokens();
+    }
+
+    /**
+     * Get token info by symbol
+     * @param {string} symbol - Token symbol
+     * @returns {Promise<object>}
+     */
+    async getTokenInfo(symbol) {
+        return await this.api.getTokenInfo(symbol);
     }
 
     /**

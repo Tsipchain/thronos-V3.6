@@ -171,6 +171,100 @@
         color: #e6ffe5;
         backdrop-filter: blur(10px);
     }
+
+    /* Chain Tokens Widget (Footer) */
+    .chain-tokens-widget {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: linear-gradient(180deg, transparent 0%, rgba(0, 20, 10, 0.95) 20%, rgba(0, 30, 15, 0.98) 100%);
+        border-top: 2px solid;
+        border-image: linear-gradient(90deg, transparent, #00ff66, #ffd700, #00ff66, transparent) 1;
+        padding: 10px 20px;
+        z-index: 999;
+        backdrop-filter: blur(10px);
+    }
+    .chain-tokens-inner {
+        max-width: 1200px;
+        margin: 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 15px;
+    }
+    .chain-supply-box {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    .chain-supply-label {
+        font-size: 10px;
+        color: #56ff9a;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+    .chain-supply-amount {
+        font-size: 16px;
+        font-weight: 700;
+        background: linear-gradient(135deg, #ffd700 0%, #00ff66 50%, #ffed4e 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        filter: drop-shadow(0 0 5px rgba(0, 255, 102, 0.4));
+    }
+    .chain-tokens-scroll {
+        display: flex;
+        gap: 12px;
+        overflow-x: auto;
+        flex: 1;
+        padding: 5px 0;
+        max-width: 70%;
+    }
+    .chain-token-pill {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        background: linear-gradient(135deg, rgba(0, 255, 102, 0.1) 0%, rgba(0, 40, 20, 0.3) 100%);
+        border: 1px solid rgba(0, 255, 102, 0.3);
+        border-radius: 20px;
+        white-space: nowrap;
+        transition: all 0.3s;
+        cursor: default;
+    }
+    .chain-token-pill:hover {
+        border-color: #00ff66;
+        background: linear-gradient(135deg, rgba(0, 255, 102, 0.2) 0%, rgba(0, 40, 20, 0.4) 100%);
+        box-shadow: 0 0 10px rgba(0, 255, 102, 0.2);
+    }
+    .chain-token-logo {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 8px;
+        font-weight: bold;
+        border: 1px solid;
+    }
+    .chain-token-logo img {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+    }
+    .chain-token-symbol {
+        font-size: 11px;
+        font-weight: 600;
+        color: #e6ffe5;
+    }
+    .chain-token-supply {
+        font-size: 10px;
+        color: #56ff9a;
+        font-family: monospace;
+    }
     .wallet-popup-header {
         font-size: 13px;
         font-weight: 700;
@@ -471,6 +565,85 @@
         border: 1px solid #ff0000;
         color: #ff6666;
     }
+
+    /* Network Selection */
+    .send-network-options {
+        display: flex;
+        gap: 10px;
+    }
+    .send-network-option {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid #1a3b2e;
+        cursor: pointer;
+        border-radius: 6px;
+        transition: all 0.3s;
+        position: relative;
+    }
+    .send-network-option:hover {
+        border-color: #00ff66;
+    }
+    .send-network-option.selected {
+        background: linear-gradient(135deg, rgba(0, 255, 102, 0.2) 0%, rgba(0, 255, 102, 0.1) 100%);
+        border-color: #00ff66;
+        box-shadow: 0 0 15px rgba(0, 255, 102, 0.2);
+    }
+    .send-network-option.disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+    .coming-soon-badge {
+        position: absolute;
+        top: -8px;
+        right: -8px;
+        background: linear-gradient(135deg, #f7931a 0%, #ffb347 100%);
+        color: #000;
+        font-size: 8px;
+        font-weight: bold;
+        padding: 2px 6px;
+        border-radius: 10px;
+        text-transform: uppercase;
+    }
+
+    /* Token Select */
+    .send-token-select {
+        cursor: pointer;
+    }
+    .token-balance-info {
+        margin-top: 6px;
+        font-size: 10px;
+        color: #56ff9a;
+    }
+    #availableBalance {
+        font-family: monospace;
+        color: #00ff66;
+        font-weight: 600;
+    }
+
+    /* Max Amount Button */
+    .max-amount-btn {
+        position: absolute;
+        right: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: linear-gradient(135deg, #00ff66 0%, #00cc52 100%);
+        color: #000;
+        border: none;
+        padding: 4px 10px;
+        font-size: 10px;
+        font-weight: bold;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    .max-amount-btn:hover {
+        box-shadow: 0 0 10px rgba(0, 255, 102, 0.4);
+        transform: translateY(-50%) scale(1.05);
+    }
     
     /* Disconnect Button */
     .disconnect-btn {
@@ -552,16 +725,49 @@
 <!-- Send Modal -->
 <div class="send-modal" id="sendModal" onclick="closeSendModal(event)">
     <div class="send-modal-content" onclick="event.stopPropagation()">
-        <div class="send-modal-header">💸 <span class="lang-el">Αποστολή THR</span><span class="lang-en">Send THR</span></div>
+        <div class="send-modal-header">💸 <span class="lang-el">Αποστολή Tokens</span><span class="lang-en">Send Tokens</span></div>
 
+        <!-- Network Selection -->
         <div class="send-form-group">
-            <label class="send-form-label"><span class="lang-el">Παραλήπτης</span><span class="lang-en">Recipient Address</span></label>
-            <input type="text" id="sendTo" class="send-form-input" placeholder="THR_..." />
+            <label class="send-form-label"><span class="lang-el">Δίκτυο</span><span class="lang-en">Network</span></label>
+            <div class="send-network-options">
+                <div class="send-network-option selected" data-network="thronos" onclick="selectNetwork('thronos')">
+                    <img src="{{ url_for('static', filename='img/thronos-token.png') }}" alt="THR" style="width: 20px; height: 20px; border-radius: 50%;">
+                    <span>Thronos Chain</span>
+                </div>
+                <div class="send-network-option" data-network="bitcoin" onclick="selectNetwork('bitcoin')">
+                    <span style="font-size: 18px;">₿</span>
+                    <span>Bitcoin (Bridge)</span>
+                    <span class="coming-soon-badge"><span class="lang-el">Σύντομα</span><span class="lang-en">Soon</span></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Token Selection -->
+        <div class="send-form-group">
+            <label class="send-form-label"><span class="lang-el">Token</span><span class="lang-en">Token</span></label>
+            <select id="sendToken" class="send-form-input send-token-select" onchange="updateTokenInfo()">
+                <option value="THR" data-color="#ff6600">THR - Thronos</option>
+                <option value="WBTC" data-color="#f7931a">WBTC - Wrapped Bitcoin</option>
+                <option value="L2E" data-color="#00bfff">L2E - Learn-to-Earn</option>
+            </select>
+            <div id="tokenBalanceInfo" class="token-balance-info">
+                <span class="lang-el">Διαθέσιμο:</span><span class="lang-en">Available:</span>
+                <span id="availableBalance">0.000000</span>
+            </div>
         </div>
 
         <div class="send-form-group">
-            <label class="send-form-label"><span class="lang-el">Ποσό (THR)</span><span class="lang-en">Amount (THR)</span></label>
-            <input type="number" id="sendAmount" class="send-form-input" placeholder="0.000000" step="0.000001" />
+            <label class="send-form-label"><span class="lang-el">Παραλήπτης</span><span class="lang-en">Recipient Address</span></label>
+            <input type="text" id="sendTo" class="send-form-input" placeholder="THR..." />
+        </div>
+
+        <div class="send-form-group">
+            <label class="send-form-label"><span class="lang-el">Ποσό</span><span class="lang-en">Amount</span></label>
+            <div style="position: relative;">
+                <input type="number" id="sendAmount" class="send-form-input" placeholder="0.000000" step="0.000001" />
+                <button type="button" onclick="setMaxAmount()" class="max-amount-btn">MAX</button>
+            </div>
         </div>
 
         <div class="send-form-group">
@@ -772,12 +978,17 @@ function renderWalletBalances(data) {
 
 // Send Modal Functions
 let selectedSpeed = 'fast';
+let selectedNetwork = 'thronos';
+let selectedToken = 'THR';
+let tokenBalances = {};
 
 function openSendModal() {
     document.getElementById('sendModal').classList.add('active');
     document.getElementById('sendResult').style.display = 'none';
     document.getElementById('sendTo').value = '';
     document.getElementById('sendAmount').value = '';
+    loadTokenBalances();
+    loadCustomTokens();
 }
 
 function closeSendModal(event) {
@@ -794,9 +1005,90 @@ function selectSpeed(speed) {
     document.querySelector(`[data-speed="${speed}"]`).classList.add('selected');
 }
 
+function selectNetwork(network) {
+    if (network === 'bitcoin') {
+        // Bitcoin bridge coming soon
+        const lang = localStorage.getItem('lang') || 'el';
+        alert(lang === 'el' ?
+            '🚧 Η γέφυρα Bitcoin έρχεται σύντομα! Δείτε το Roadmap για περισσότερες πληροφορίες.' :
+            '🚧 Bitcoin Bridge coming soon! Check the Roadmap for more info.'
+        );
+        return;
+    }
+    selectedNetwork = network;
+    document.querySelectorAll('.send-network-option').forEach(opt => {
+        opt.classList.remove('selected');
+    });
+    document.querySelector(`[data-network="${network}"]`).classList.add('selected');
+
+    // Update recipient placeholder based on network
+    const toInput = document.getElementById('sendTo');
+    if (network === 'thronos') {
+        toInput.placeholder = 'THR...';
+    } else {
+        toInput.placeholder = 'bc1... or 1... or 3...';
+    }
+}
+
+async function loadTokenBalances() {
+    const wallet = localStorage.getItem('thr_address');
+    if (!wallet) return;
+
+    try {
+        const response = await fetch(`/api/wallet/tokens/${wallet}?show_zero=true`);
+        const data = await response.json();
+        if (data.tokens) {
+            data.tokens.forEach(t => {
+                tokenBalances[t.symbol] = t.balance;
+            });
+            updateTokenInfo();
+        }
+    } catch (e) {
+        console.error('Failed to load token balances:', e);
+    }
+}
+
+async function loadCustomTokens() {
+    try {
+        const response = await fetch('/api/tokens/list');
+        const data = await response.json();
+        if (data.ok && data.tokens) {
+            const select = document.getElementById('sendToken');
+            // Add custom tokens to select
+            data.tokens.forEach(token => {
+                if (!select.querySelector(`option[value="${token.symbol}"]`)) {
+                    const option = document.createElement('option');
+                    option.value = token.symbol;
+                    option.dataset.color = token.color || '#00ff66';
+                    option.textContent = `${token.symbol} - ${token.name}`;
+                    select.appendChild(option);
+                }
+            });
+        }
+    } catch (e) {
+        console.log('No custom tokens available');
+    }
+}
+
+function updateTokenInfo() {
+    const select = document.getElementById('sendToken');
+    selectedToken = select.value;
+    const balance = tokenBalances[selectedToken] || 0;
+    document.getElementById('availableBalance').textContent = balance.toFixed(6) + ' ' + selectedToken;
+}
+
+function setMaxAmount() {
+    const balance = tokenBalances[selectedToken] || 0;
+    // Reserve a small amount for fees
+    const feeReserve = selectedSpeed === 'slow' ? balance * 0.001 : balance * 0.006;
+    const maxAmount = Math.max(0, balance - feeReserve);
+    document.getElementById('sendAmount').value = maxAmount.toFixed(6);
+}
+
 async function submitSend() {
     const to = document.getElementById('sendTo').value.trim();
     const amount = parseFloat(document.getElementById('sendAmount').value);
+    const token = document.getElementById('sendToken').value;
     const from = localStorage.getItem('thr_address');
     const secret = localStorage.getItem('thr_secret');
     const resultDiv = document.getElementById('sendResult');
@@ -815,6 +1107,15 @@ async function submitSend() {
         return;
     }
 
+    // Validate balance
+    const balance = tokenBalances[token] || 0;
+    if (amount > balance) {
+        resultDiv.className = 'send-result error';
+        resultDiv.textContent = `Insufficient ${token} balance`;
+        resultDiv.style.display = 'block';
+        return;
+    }
+
     try {
         // Calculate fee based on selected speed
         let fee = 0;
@@ -824,33 +1125,57 @@ async function submitSend() {
             fee = amount * 0.005; // 0.5%
         }
 
-        const payload = {
-            from_thr: from,
-            to_thr: to,
-            amount: amount,
-            auth_secret: secret,
-            speed: selectedSpeed
-        };
+        let response;
 
-        const response = await fetch('/send_thr', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
+        if (token === 'THR') {
+            // Native THR send
+            const payload = {
+                from_thr: from,
+                to_thr: to,
+                amount: amount,
+                auth_secret: secret,
+                speed: selectedSpeed
+            };
+            response = await fetch('/send_thr', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+        } else {
+            // Custom token transfer
+            const payload = {
+                symbol: token,
+                from_thr: from,
+                to_thr: to,
+                amount: amount,
+                auth_secret: secret
+            };
+            response = await fetch('/api/tokens/transfer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+        }
 
         const data = await response.json();
 
-        if (data.error) {
+        if (data.error || data.ok === false) {
             resultDiv.className = 'send-result error';
             resultDiv.textContent = `Error: ${data.error || data.message || 'Transaction failed'}`;
             resultDiv.style.display = 'block';
         } else {
             resultDiv.className = 'send-result success';
-            resultDiv.textContent = `✓ Transaction sent! Fee: ${fee.toFixed(6)} THR`;
+            resultDiv.textContent = `✓ ${amount} ${token} sent! Fee: ${fee.toFixed(6)} THR`;
             resultDiv.style.display = 'block';
 
             // Reset wallet balances to reload
             walletBalancesLoaded = false;
+            tokenBalances = {};
+
+            // Reload balances
+            setTimeout(() => {
+                loadTokenBalances();
+            }, 1000);
 
             // Close modal after 2 seconds
             setTimeout(() => {
@@ -888,6 +1213,113 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 });
+</script>
+
+<!-- Chain Tokens Widget (Footer) -->
+<div class="chain-tokens-widget" id="chainTokensWidget">
+    <div class="chain-tokens-inner">
+        <div class="chain-supply-box">
+            <div>
+                <div class="chain-supply-label">
+                    <span class="lang-el">Συνολική Προμήθεια THR</span>
+                    <span class="lang-en">Total THR Supply</span>
+                </div>
+                <div class="chain-supply-amount" id="chainTotalSupply">Loading...</div>
+            </div>
+        </div>
+        <div class="chain-tokens-scroll" id="chainTokensScroll">
+            <div class="chain-token-pill">
+                <span style="color: #56ff9a; font-size: 11px;">
+                    <span class="lang-el">Φόρτωση tokens...</span>
+                    <span class="lang-en">Loading tokens...</span>
+                </span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Chain Tokens Widget - Load all tokens on chain
+(function() {
+    // Built-in core tokens
+    const coreTokens = [
+        { symbol: 'THR', name: 'Thronos', color: '#ff6600', logo: '/static/img/thronos-token.png' },
+        { symbol: 'WBTC', name: 'Wrapped Bitcoin', color: '#f7931a', logo: null },
+        { symbol: 'L2E', name: 'Learn-to-Earn', color: '#00bfff', logo: null }
+    ];
+
+    async function loadChainTokensWidget() {
+        try {
+            // Fetch total supply
+            const statsResp = await fetch('/api/network_stats');
+            const stats = await statsResp.json();
+            const supplyEl = document.getElementById('chainTotalSupply');
+            if (supplyEl && stats.total_supply !== undefined) {
+                supplyEl.textContent = Number(stats.total_supply).toLocaleString('en-US', {maximumFractionDigits: 2}) + ' THR';
+            }
+
+            // Fetch custom tokens
+            let customTokens = [];
+            try {
+                const tokensResp = await fetch('/api/tokens/list');
+                const tokensData = await tokensResp.json();
+                if (tokensData.ok && tokensData.tokens) {
+                    customTokens = tokensData.tokens;
+                }
+            } catch(e) {
+                console.log('No custom tokens or API not available');
+            }
+
+            // Combine core + custom tokens
+            const allTokens = [...coreTokens];
+            customTokens.forEach(t => {
+                // Avoid duplicates
+                if (!allTokens.find(ct => ct.symbol === t.symbol)) {
+                    allTokens.push({
+                        symbol: t.symbol,
+                        name: t.name,
+                        color: t.color || '#00ff66',
+                        logo: t.logo || null,
+                        total_supply: t.total_supply
+                    });
+                }
+            });
+
+            // Render tokens
+            const scrollEl = document.getElementById('chainTokensScroll');
+            if (!scrollEl) return;
+
+            let html = '';
+            allTokens.forEach(token => {
+                const logoHtml = token.logo
+                    ? `<img src="${token.logo}" alt="${token.symbol}" onerror="this.style.display='none'; this.parentElement.innerHTML='<span style=\\'color:${token.color}\\'>${token.symbol[0]}</span>';">`
+                    : `<span style="color: ${token.color};">${token.symbol[0]}</span>`;
+
+                const supplyText = token.total_supply
+                    ? Number(token.total_supply).toLocaleString('en-US', {maximumFractionDigits: 0})
+                    : '';
+
+                html += `
+                    <div class="chain-token-pill" title="${token.name}">
+                        <div class="chain-token-logo" style="border-color: ${token.color};">${logoHtml}</div>
+                        <span class="chain-token-symbol">${token.symbol}</span>
+                        ${supplyText ? `<span class="chain-token-supply">${supplyText}</span>` : ''}
+                    </div>
+                `;
+            });
+            scrollEl.innerHTML = html;
+
+        } catch(err) {
+            console.error('Chain tokens widget error:', err);
+        }
+    }
+
+    // Load on DOM ready
+    document.addEventListener('DOMContentLoaded', loadChainTokensWidget);
+
+    // Refresh every 60 seconds
+    setInterval(loadChainTokensWidget, 60000);
+})();
 </script>
 
 {% block scripts %}{% endblock %}

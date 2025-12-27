@@ -56,10 +56,86 @@ export default class ThronosAPI {
      * @returns {Promise<{success: boolean, transaction: object}>}
      */
     async sendTransaction(transaction) {
-        return await this.request('/api/wallet/send', {
-            method: 'POST',
-            body: JSON.stringify(transaction)
-        });
+        // Route based on token type
+        const token = (transaction.token || 'THR').toUpperCase();
+
+        if (token === 'THR') {
+            // Native THR send
+            return await this.request('/send_thr', {
+                method: 'POST',
+                body: JSON.stringify({
+                    from_thr: transaction.from,
+                    to_thr: transaction.to,
+                    amount: transaction.amount,
+                    auth_secret: transaction.secret,
+                    speed: transaction.speed || 'fast',
+                    passphrase: transaction.passphrase
+                })
+            });
+        } else {
+            // Custom token transfer
+            return await this.request('/api/tokens/transfer', {
+                method: 'POST',
+                body: JSON.stringify({
+                    symbol: token,
+                    from_thr: transaction.from,
+                    to_thr: transaction.to,
+                    amount: transaction.amount,
+                    auth_secret: transaction.secret,
+                    passphrase: transaction.passphrase
+                })
+            });
+        }
+    }
+
+    /**
+     * Send multiple tokens in batch
+     * @param {object} batchDetails - Batch transfer details
+     * @returns {Promise<{success: boolean, results: Array}>}
+     */
+    async sendMultipleTokens(batchDetails) {
+        const results = [];
+        const { from, transfers, secret, speed, passphrase } = batchDetails;
+
+        for (const transfer of transfers) {
+            try {
+                const result = await this.sendTransaction({
+                    from,
+                    to: transfer.to,
+                    amount: transfer.amount,
+                    token: transfer.token || 'THR',
+                    secret,
+                    speed,
+                    passphrase
+                });
+                results.push({ ...transfer, success: true, result });
+            } catch (error) {
+                results.push({ ...transfer, success: false, error: error.message });
+            }
+        }
+
+        const allSuccess = results.every(r => r.success);
+        return { success: allSuccess, results };
+    }
+
+    /**
+     * Get all chain tokens
+     * @returns {Promise<{tokens: Array}>}
+     */
+    async getChainTokens() {
+        return await this.request('/api/tokens/list');
+    }
+
+    /**
+     * Get token info by symbol
+     * @param {string} symbol - Token symbol
+     * @returns {Promise<object>}
+     */
+    async getTokenInfo(symbol) {
+        const tokens = await this.getChainTokens();
+        const token = tokens.tokens?.find(t => t.symbol.toUpperCase() === symbol.toUpperCase());
+        if (!token) throw new Error(`Token ${symbol} not found`);
+        return token;
     }
 
     /**

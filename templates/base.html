@@ -171,6 +171,100 @@
         color: #e6ffe5;
         backdrop-filter: blur(10px);
     }
+
+    /* Chain Tokens Widget (Footer) */
+    .chain-tokens-widget {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: linear-gradient(180deg, transparent 0%, rgba(0, 20, 10, 0.95) 20%, rgba(0, 30, 15, 0.98) 100%);
+        border-top: 2px solid;
+        border-image: linear-gradient(90deg, transparent, #00ff66, #ffd700, #00ff66, transparent) 1;
+        padding: 10px 20px;
+        z-index: 999;
+        backdrop-filter: blur(10px);
+    }
+    .chain-tokens-inner {
+        max-width: 1200px;
+        margin: 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 15px;
+    }
+    .chain-supply-box {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    .chain-supply-label {
+        font-size: 10px;
+        color: #56ff9a;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+    .chain-supply-amount {
+        font-size: 16px;
+        font-weight: 700;
+        background: linear-gradient(135deg, #ffd700 0%, #00ff66 50%, #ffed4e 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        filter: drop-shadow(0 0 5px rgba(0, 255, 102, 0.4));
+    }
+    .chain-tokens-scroll {
+        display: flex;
+        gap: 12px;
+        overflow-x: auto;
+        flex: 1;
+        padding: 5px 0;
+        max-width: 70%;
+    }
+    .chain-token-pill {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        background: linear-gradient(135deg, rgba(0, 255, 102, 0.1) 0%, rgba(0, 40, 20, 0.3) 100%);
+        border: 1px solid rgba(0, 255, 102, 0.3);
+        border-radius: 20px;
+        white-space: nowrap;
+        transition: all 0.3s;
+        cursor: default;
+    }
+    .chain-token-pill:hover {
+        border-color: #00ff66;
+        background: linear-gradient(135deg, rgba(0, 255, 102, 0.2) 0%, rgba(0, 40, 20, 0.4) 100%);
+        box-shadow: 0 0 10px rgba(0, 255, 102, 0.2);
+    }
+    .chain-token-logo {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 8px;
+        font-weight: bold;
+        border: 1px solid;
+    }
+    .chain-token-logo img {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+    }
+    .chain-token-symbol {
+        font-size: 11px;
+        font-weight: 600;
+        color: #e6ffe5;
+    }
+    .chain-token-supply {
+        font-size: 10px;
+        color: #56ff9a;
+        font-family: monospace;
+    }
     .wallet-popup-header {
         font-size: 13px;
         font-weight: 700;
@@ -888,6 +982,113 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 });
+</script>
+
+<!-- Chain Tokens Widget (Footer) -->
+<div class="chain-tokens-widget" id="chainTokensWidget">
+    <div class="chain-tokens-inner">
+        <div class="chain-supply-box">
+            <div>
+                <div class="chain-supply-label">
+                    <span class="lang-el">Συνολική Προμήθεια THR</span>
+                    <span class="lang-en">Total THR Supply</span>
+                </div>
+                <div class="chain-supply-amount" id="chainTotalSupply">Loading...</div>
+            </div>
+        </div>
+        <div class="chain-tokens-scroll" id="chainTokensScroll">
+            <div class="chain-token-pill">
+                <span style="color: #56ff9a; font-size: 11px;">
+                    <span class="lang-el">Φόρτωση tokens...</span>
+                    <span class="lang-en">Loading tokens...</span>
+                </span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Chain Tokens Widget - Load all tokens on chain
+(function() {
+    // Built-in core tokens
+    const coreTokens = [
+        { symbol: 'THR', name: 'Thronos', color: '#ff6600', logo: '/static/img/thronos-token.png' },
+        { symbol: 'WBTC', name: 'Wrapped Bitcoin', color: '#f7931a', logo: null },
+        { symbol: 'L2E', name: 'Learn-to-Earn', color: '#00bfff', logo: null }
+    ];
+
+    async function loadChainTokensWidget() {
+        try {
+            // Fetch total supply
+            const statsResp = await fetch('/api/network_stats');
+            const stats = await statsResp.json();
+            const supplyEl = document.getElementById('chainTotalSupply');
+            if (supplyEl && stats.total_supply !== undefined) {
+                supplyEl.textContent = Number(stats.total_supply).toLocaleString('en-US', {maximumFractionDigits: 2}) + ' THR';
+            }
+
+            // Fetch custom tokens
+            let customTokens = [];
+            try {
+                const tokensResp = await fetch('/api/tokens/list');
+                const tokensData = await tokensResp.json();
+                if (tokensData.ok && tokensData.tokens) {
+                    customTokens = tokensData.tokens;
+                }
+            } catch(e) {
+                console.log('No custom tokens or API not available');
+            }
+
+            // Combine core + custom tokens
+            const allTokens = [...coreTokens];
+            customTokens.forEach(t => {
+                // Avoid duplicates
+                if (!allTokens.find(ct => ct.symbol === t.symbol)) {
+                    allTokens.push({
+                        symbol: t.symbol,
+                        name: t.name,
+                        color: t.color || '#00ff66',
+                        logo: t.logo || null,
+                        total_supply: t.total_supply
+                    });
+                }
+            });
+
+            // Render tokens
+            const scrollEl = document.getElementById('chainTokensScroll');
+            if (!scrollEl) return;
+
+            let html = '';
+            allTokens.forEach(token => {
+                const logoHtml = token.logo
+                    ? `<img src="${token.logo}" alt="${token.symbol}" onerror="this.style.display='none'; this.parentElement.innerHTML='<span style=\\'color:${token.color}\\'>${token.symbol[0]}</span>';">`
+                    : `<span style="color: ${token.color};">${token.symbol[0]}</span>`;
+
+                const supplyText = token.total_supply
+                    ? Number(token.total_supply).toLocaleString('en-US', {maximumFractionDigits: 0})
+                    : '';
+
+                html += `
+                    <div class="chain-token-pill" title="${token.name}">
+                        <div class="chain-token-logo" style="border-color: ${token.color};">${logoHtml}</div>
+                        <span class="chain-token-symbol">${token.symbol}</span>
+                        ${supplyText ? `<span class="chain-token-supply">${supplyText}</span>` : ''}
+                    </div>
+                `;
+            });
+            scrollEl.innerHTML = html;
+
+        } catch(err) {
+            console.error('Chain tokens widget error:', err);
+        }
+    }
+
+    // Load on DOM ready
+    document.addEventListener('DOMContentLoaded', loadChainTokensWidget);
+
+    // Refresh every 60 seconds
+    setInterval(loadChainTokensWidget, 60000);
+})();
 </script>
 
 {% block scripts %}{% endblock %}

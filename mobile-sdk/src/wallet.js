@@ -1,13 +1,56 @@
 /**
  * Thronos Wallet Module
  * Handles wallet creation, storage, and cryptographic operations
+ * Compatible with iOS, Android, and Web platforms
+ *
+ * @version 2.0.0
+ * @platform iOS | Android | Web | APK
  */
 
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import CryptoJS from 'react-native-crypto-js';
+// Platform-agnostic storage (falls back to localStorage for web/APK)
+let AsyncStorage;
+let CryptoJS;
+
+// Dynamic imports for platform compatibility
+try {
+    AsyncStorage = require('@react-native-async-storage/async-storage').default;
+} catch (e) {
+    // Fallback for web/APK builds
+    AsyncStorage = {
+        multiSet: async (pairs) => {
+            pairs.forEach(([key, value]) => {
+                if (typeof localStorage !== 'undefined') {
+                    localStorage.setItem(key, value);
+                }
+            });
+        },
+        multiGet: async (keys) => {
+            return keys.map(key => {
+                const value = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
+                return [key, value];
+            });
+        },
+        multiRemove: async (keys) => {
+            keys.forEach(key => {
+                if (typeof localStorage !== 'undefined') {
+                    localStorage.removeItem(key);
+                }
+            });
+        }
+    };
+}
+
+try {
+    CryptoJS = require('react-native-crypto-js');
+} catch (e) {
+    // Fallback for web/APK builds
+    CryptoJS = require('crypto-js');
+}
 
 const STORAGE_KEY_ADDRESS = '@thronos_wallet_address';
 const STORAGE_KEY_SECRET = '@thronos_wallet_secret';
+const STORAGE_KEY_TOKENS_CACHE = '@thronos_wallet_tokens_cache';
+const STORAGE_KEY_LAST_SYNC = '@thronos_wallet_last_sync';
 
 export default class ThronosWallet {
     constructor(config) {
@@ -226,5 +269,160 @@ export default class ThronosWallet {
             throw new Error('No wallet connected');
         }
         return wallet.address;
+    }
+
+    /**
+     * Get all token balances for the wallet
+     * @param {boolean} forceRefresh - Force fetch from server even if cached
+     * @returns {Promise<{tokens: Array, fromCache: boolean}>}
+     */
+    async getAllTokenBalances(forceRefresh = false) {
+        const wallet = await this.get();
+        if (!wallet) {
+            throw new Error('No wallet connected');
+        }
+
+        // Check cache first
+        if (!forceRefresh) {
+            const cached = await this.getCachedTokens();
+            if (cached && Date.now() - cached.timestamp < 60000) { // 1 minute cache
+                return { tokens: cached.tokens, fromCache: true };
+            }
+        }
+
+        // Fetch from server
+        try {
+            const response = await fetch(`${this.apiUrl}/api/wallet/tokens/${wallet.address}?show_zero=true`);
+            if (!response.ok) throw new Error('Failed to fetch tokens');
+
+            const data = await response.json();
+
+            // Cache the result
+            await this.cacheTokens(data.tokens);
+
+            return { tokens: data.tokens, fromCache: false };
+        } catch (error) {
+            // Return cached data if available on error
+            const cached = await this.getCachedTokens();
+            if (cached) {
+                return { tokens: cached.tokens, fromCache: true, error: error.message };
+            }
+            throw error;
+        }
+    }
+
+    /**
+     * Cache tokens for offline access
+     * @param {Array} tokens - Token balances to cache
+     * @private
+     */
+    async cacheTokens(tokens) {
+        try {
+            const cacheData = JSON.stringify({
+                tokens,
+                timestamp: Date.now()
+            });
+            await AsyncStorage.multiSet([[STORAGE_KEY_TOKENS_CACHE, cacheData]]);
+        } catch (e) {
+            console.warn('Failed to cache tokens:', e);
+        }
+    }
+
+    /**
+     * Get cached tokens
+     * @returns {Promise<{tokens: Array, timestamp: number}|null>}
+     * @private
+     */
+    async getCachedTokens() {
+        try {
+            const [[, cached]] = await AsyncStorage.multiGet([STORAGE_KEY_TOKENS_CACHE]);
+            return cached ? JSON.parse(cached) : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    /**
+     * Get balance for a specific token
+     * @param {string} symbol - Token symbol (e.g., 'THR', 'WBTC', 'L2E')
+     * @returns {Promise<number>}
+     */
+    async getTokenBalance(symbol) {
+        const { tokens } = await this.getAllTokenBalances();
+        const token = tokens.find(t => t.symbol.toUpperCase() === symbol.toUpperCase());
+        return token ? token.balance : 0;
+    }
+
+    /**
+     * Check if device is online
+     * @returns {boolean}
+     */
+    isOnline() {
+        if (typeof navigator !== 'undefined' && navigator.onLine !== undefined) {
+            return navigator.onLine;
+        }
+        return true; // Assume online if we can't detect
+    }
+
+    /**
+     * Generate receive address with optional amount (for QR codes)
+     * @param {number} amount - Optional amount to request
+     * @param {string} token - Token symbol (default: 'THR')
+     * @returns {Promise<string>}
+     */
+    async generatePaymentRequest(amount = null, token = 'THR') {
+        const wallet = await this.get();
+        if (!wallet) throw new Error('No wallet connected');
+
+        let request = `thronos:${wallet.address}`;
+        if (amount) {
+            request += `?amount=${amount}&token=${token}`;
+        }
+        return request;
+    }
+
+    /**
+     * Parse a payment request string
+     * @param {string} request - Payment request (e.g., "thronos:THRxxx?amount=10&token=THR")
+     * @returns {{address: string, amount: number|null, token: string}}
+     */
+    parsePaymentRequest(request) {
+        if (!request.startsWith('thronos:')) {
+            // Try to parse as plain address
+            if (request.startsWith('THR')) {
+                return { address: request, amount: null, token: 'THR' };
+            }
+            throw new Error('Invalid payment request format');
+        }
+
+        const [addressPart, queryString] = request.replace('thronos:', '').split('?');
+        const result = { address: addressPart, amount: null, token: 'THR' };
+
+        if (queryString) {
+            const params = new URLSearchParams(queryString);
+            if (params.get('amount')) {
+                result.amount = parseFloat(params.get('amount'));
+            }
+            if (params.get('token')) {
+                result.token = params.get('token').toUpperCase();
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Get wallet info for display (masked secret)
+     * @returns {Promise<{address: string, shortAddress: string, hasSecret: boolean}>}
+     */
+    async getWalletInfo() {
+        const wallet = await this.get();
+        if (!wallet) return null;
+
+        return {
+            address: wallet.address,
+            shortAddress: `${wallet.address.slice(0, 8)}...${wallet.address.slice(-6)}`,
+            hasSecret: !!wallet.secret
+        };
     }
 }

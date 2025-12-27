@@ -5822,14 +5822,35 @@ def api_ai_session_messages(session_id):
     if not session:
         return jsonify({"ok": False, "error": "Session not found"}), 404
 
-    # Load messages for this session
-    messages = load_ai_messages()
-    session_messages = [m for m in messages if m.get("session_id") == session_id]
+    # Load messages from corpus for this session
+    corpus = load_json(AI_CORPUS_FILE, []) or []
+
+    # Build messages list from corpus entries
+    messages = []
+    for entry in corpus:
+        if entry.get("session_id") == session_id:
+            # Add user message
+            if entry.get("prompt"):
+                messages.append({
+                    "role": "user",
+                    "content": entry.get("prompt"),
+                    "timestamp": entry.get("timestamp"),
+                    "session_id": session_id
+                })
+            # Add assistant message
+            if entry.get("response"):
+                messages.append({
+                    "role": "assistant",
+                    "content": entry.get("response"),
+                    "timestamp": entry.get("timestamp"),
+                    "session_id": session_id,
+                    "files": entry.get("files", [])
+                })
 
     # Sort by timestamp
-    session_messages.sort(key=lambda m: m.get("timestamp", ""))
+    messages.sort(key=lambda m: m.get("timestamp", ""))
 
-    return jsonify({"ok": True, "messages": session_messages})
+    return jsonify({"ok": True, "messages": messages})
 
 
 @app.route("/api/ai/sessions/<session_id>", methods=["PATCH"])

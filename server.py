@@ -4001,6 +4001,143 @@ def send_thr():
         pass
     return jsonify(status="pending", tx=tx, new_balance_from=ledger[from_thr], fee_burned=fee), 200
 
+# ─── SEND CUSTOM TOKENS API ────────────────────────────────────
+@app.route("/api/send_token", methods=["POST"])
+def send_token():
+    """
+    Send custom tokens (like JAM, DOGE, etc.) with fee.
+
+    Request body:
+    {
+        "token_symbol": "JAM",
+        "from_thr": "THR...",
+        "to_thr": "THR...",
+        "amount": 100.0,
+        "auth_secret": "...",
+        "passphrase": "...",  // optional
+        "speed": "fast"  // or "slow"
+    }
+    """
+    data = request.get_json() or {}
+    token_symbol = (data.get("token_symbol") or "").upper().strip()
+    from_thr = (data.get("from_thr") or "").strip()
+    to_thr = (data.get("to_thr") or "").strip()
+    amount_raw = data.get("amount", 0)
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+    speed = (data.get("speed") or "fast").strip().lower()
+
+    # Validate inputs
+    if not token_symbol:
+        return jsonify(error="missing_token_symbol"), 400
+    if not validate_thr_address(from_thr):
+        return jsonify(error="invalid_from_address"), 400
+    if not validate_thr_address(to_thr):
+        return jsonify(error="invalid_to_address"), 400
+
+    valid, error_msg = validate_amount(amount_raw)
+    if not valid:
+        return jsonify(error="invalid_amount", message=error_msg), 400
+
+    try:
+        amount = float(amount_raw)
+    except (TypeError, ValueError):
+        return jsonify(error="invalid_amount"), 400
+
+    if not auth_secret:
+        return jsonify(error="missing_auth_secret"), 400
+
+    # Authenticate sender
+    pledges = load_json(PLEDGE_CHAIN, [])
+    sender_pledge = next((p for p in pledges if p.get("thr_address") == from_thr), None)
+    if not sender_pledge:
+        return jsonify(error="unknown_sender_thr"), 404
+
+    stored_auth_hash = sender_pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return jsonify(error="send_not_enabled_for_this_thr"), 400
+
+    if sender_pledge.get("has_passphrase"):
+        if not passphrase:
+            return jsonify(error="passphrase_required"), 400
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify(error="invalid_auth"), 403
+
+    # Calculate fee (same as THR transfers)
+    if speed == "slow":
+        fee = round(amount * 0.0009, 6)  # 0.09% fee
+        confirmation_policy = "SLOW"
+    else:
+        fee = calculate_dynamic_fee(amount)
+        confirmation_policy = "FAST"
+
+    total_cost = amount + fee
+
+    # Load token balances
+    token_balances = load_token_balances()
+
+    # Check if token exists
+    if token_symbol not in token_balances:
+        return jsonify(error="token_not_found", message=f"Token {token_symbol} does not exist"), 404
+
+    sender_balance = float(token_balances[token_symbol].get(from_thr, 0.0))
+
+    if sender_balance < total_cost:
+        return jsonify(
+            error="insufficient_balance",
+            balance=round(sender_balance, 6),
+            required=total_cost,
+            fee=fee
+        ), 400
+
+    # Deduct from sender (including fee)
+    token_balances[token_symbol][from_thr] = round(sender_balance - total_cost, 6)
+
+    # Credit receiver (without fee - fee is burned)
+    token_balances[token_symbol][to_thr] = round(float(token_balances[token_symbol].get(to_thr, 0.0)) + amount, 6)
+
+    save_token_balances(token_balances)
+
+    # Record transaction in chain
+    chain = load_json(CHAIN_FILE, [])
+    tx = {
+        "type": "token_transfer",
+        "token_symbol": token_symbol,
+        "height": None,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "from": from_thr,
+        "to": to_thr,
+        "amount": round(amount, 6),
+        "fee_burned": fee,
+        "tx_id": f"TOKEN-TX-{len(chain)}-{int(time.time())}",
+        "thr_address": from_thr,
+        "status": "pending",
+        "confirmation_policy": confirmation_policy,
+        "min_signers": 1,
+        "speed": speed
+    }
+
+    pool = load_mempool()
+    pool.append(tx)
+    save_mempool(pool)
+    update_last_block(tx, is_block=False)
+
+    try:
+        broadcast_tx(tx)
+    except Exception:
+        pass
+
+    return jsonify(
+        status="pending",
+        tx=tx,
+        new_balance_from=token_balances[token_symbol][from_thr],
+        fee_burned=fee
+    ), 200
+
 # ─── SWAP API ──────────────────────────────────────
 @app.route("/api/swap", methods=["POST"])
 def api_swap():
@@ -4038,9 +4175,10 @@ def api_swap():
     ledger = load_json(LEDGER_FILE, {})
     wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
     chain = load_json(CHAIN_FILE, [])
-    
+
     RATE = 0.0001 # 1 THR = 0.0001 BTC
-    
+    SWAP_FEE_PERCENT = 0.003 # 0.3% fee (like Uniswap)
+
     tx_id = f"SWAP-{int(time.time())}-{secrets.token_hex(4)}"
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
 
@@ -4049,11 +4187,14 @@ def api_swap():
         thr_bal = float(ledger.get(wallet, 0.0))
         if thr_bal < amount:
             return jsonify(status="error", message="Insufficient THR"), 400
-            
+
         btc_out = amount * RATE
-        
+        # Apply 0.3% fee
+        fee_amount = btc_out * SWAP_FEE_PERCENT
+        btc_out_after_fee = btc_out - fee_amount
+
         ledger[wallet] = round(thr_bal - amount, 6)
-        wbtc_ledger[wallet] = round(float(wbtc_ledger.get(wallet, 0.0)) + btc_out, 8)
+        wbtc_ledger[wallet] = round(float(wbtc_ledger.get(wallet, 0.0)) + btc_out_after_fee, 8)
         
         # Log TX
         tx = {
@@ -4062,31 +4203,38 @@ def api_swap():
             "to": SWAP_POOL_ADDRESS,
             "amount_in": amount,
             "token_in": "THR",
-            "amount_out": btc_out,
+            "amount_out": btc_out_after_fee,
+            "fee": fee_amount,
+            "fee_percent": SWAP_FEE_PERCENT,
             "token_out": "wBTC",
             "tx_id": tx_id,
             "timestamp": ts,
             "status": "confirmed" # Instant swap
         }
-        
+
     elif direction == "BTC_TO_THR":
         # Burn wBTC, Mint THR
         wbtc_bal = float(wbtc_ledger.get(wallet, 0.0))
         if wbtc_bal < amount:
             return jsonify(status="error", message="Insufficient wBTC"), 400
-            
+
         thr_out = amount / RATE
-        
+        # Apply 0.3% fee
+        fee_amount = thr_out * SWAP_FEE_PERCENT
+        thr_out_after_fee = thr_out - fee_amount
+
         wbtc_ledger[wallet] = round(wbtc_bal - amount, 8)
-        ledger[wallet] = round(float(ledger.get(wallet, 0.0)) + thr_out, 6)
-        
+        ledger[wallet] = round(float(ledger.get(wallet, 0.0)) + thr_out_after_fee, 6)
+
         tx = {
             "type": "swap",
             "from": wallet,
             "to": SWAP_POOL_ADDRESS,
             "amount_in": amount,
             "token_in": "wBTC",
-            "amount_out": thr_out,
+            "amount_out": thr_out_after_fee,
+            "fee": fee_amount,
+            "fee_percent": SWAP_FEE_PERCENT,
             "token_out": "THR",
             "tx_id": tx_id,
             "timestamp": ts,

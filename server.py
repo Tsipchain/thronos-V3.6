@@ -78,6 +78,10 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 DATA_DIR   = os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data"))
 os.makedirs(DATA_DIR, exist_ok=True)
 
+# Node role: "master" or "replica"
+NODE_ROLE = os.getenv("NODE_ROLE", "master").lower()
+MASTER_INTERNAL_URL = os.getenv("MASTER_INTERNAL_URL", "http://localhost:5000")
+
 LEDGER_FILE         = os.path.join(DATA_DIR, "ledger.json")
 WBTC_LEDGER_FILE    = os.path.join(DATA_DIR, "wbtc_ledger.json")
 CHAIN_FILE          = os.path.join(DATA_DIR, "phantom_tx_chain.json")
@@ -93,6 +97,11 @@ MEMPOOL_FILE        = os.path.join(DATA_DIR, "mempool.json")
 ATTEST_STORE_FILE   = os.path.join(DATA_DIR, "attest_store.json")
 WITHDRAWALS_FILE    = os.path.join(DATA_DIR, "withdrawals.json") # NEW
 VOTING_FILE         = os.path.join(DATA_DIR, "voting.json") # Feature voting for Crypto Hunters
+PEERS_FILE          = os.path.join(DATA_DIR, "active_peers.json") # Heartbeat tracking
+
+# Active peers tracking (for replicas heartbeating to master)
+PEER_TTL_SECONDS = 60  # Peers expire after 60 seconds without heartbeat
+active_peers = {}  # {peer_id: {"last_seen": timestamp, "url": replica_url}}
 
 # AI commerce
 AI_PACKS_FILE       = os.path.join(DATA_DIR, "ai_packs.json")
@@ -1232,6 +1241,27 @@ def decode_iot_steganography(image_path):
         return None
 
 
+# ─── WRITE PROTECTION FOR REPLICA NODES ───────────────────────────────────
+@app.before_request
+def block_writes_on_replica():
+    """
+    Replica nodes are read-only. Block all write operations (POST, PUT, DELETE)
+    except for heartbeat endpoint.
+    """
+    if NODE_ROLE == "replica":
+        # Allow heartbeat from replica to master
+        if request.path == "/api/peers/heartbeat":
+            return None
+        # Block all write operations
+        if request.method in ["POST", "PUT", "DELETE", "PATCH"]:
+            return jsonify({
+                "error": "Write operations not allowed on replica node",
+                "node_role": "replica",
+                "hint": "Direct writes to master node"
+            }), 403
+    return None
+
+
 # ─── BASIC PAGES ───────────────────────────────────
 @app.route("/")
 def home():
@@ -2006,6 +2036,50 @@ def network_stats():
         "pledge_growth": cumulative,
     })
 
+# ─── PEERS & HEARTBEAT ─────────────────────────────────────────────────────
+
+def cleanup_expired_peers():
+    """Remove peers that haven't sent heartbeat in PEER_TTL_SECONDS"""
+    global active_peers
+    now = _now_ts()
+    expired = [peer_id for peer_id, data in active_peers.items()
+               if now - data.get("last_seen", 0) > PEER_TTL_SECONDS]
+    for peer_id in expired:
+        del active_peers[peer_id]
+    return len(expired)
+
+@app.route("/api/peers/heartbeat", methods=["POST"])
+def peers_heartbeat():
+    """
+    Replica nodes send heartbeat to master with their peer_id and URL.
+    Master tracks active replicas with TTL of 60 seconds.
+    """
+    if NODE_ROLE != "master":
+        return jsonify({"error": "Heartbeats only accepted on master node"}), 403
+
+    data = request.get_json() or {}
+    peer_id = data.get("peer_id")
+    peer_url = data.get("url")
+
+    if not peer_id:
+        return jsonify({"error": "peer_id required"}), 400
+
+    # Update peer tracking
+    active_peers[peer_id] = {
+        "last_seen": _now_ts(),
+        "url": peer_url or "unknown",
+        "node_role": "replica"
+    }
+
+    cleanup_expired_peers()
+
+    return jsonify({
+        "status": "ok",
+        "peer_id": peer_id,
+        "active_peers": len(active_peers),
+        "ttl_seconds": PEER_TTL_SECONDS
+    }), 200
+
 @app.route("/api/network_live")
 def network_live():
     chain  = load_json(CHAIN_FILE, [])
@@ -2042,9 +2116,9 @@ def network_live():
             unique_miners.add(miner_addr)
     active_miners = len(unique_miners)
 
-    # Active peers - for now, estimate based on recent block diversity
-    # In a real P2P system, this would come from connected peer list
-    active_peers = max(1, active_miners)  # Simplified: assume 1 peer per miner
+    # Active peers - use real heartbeat tracking from replicas
+    cleanup_expired_peers()  # Remove stale peers
+    active_peers_count = len(active_peers)
 
     return jsonify({
         "difficulty":          difficulty,
@@ -2054,7 +2128,7 @@ def network_live():
         "tx_count":            len(chain),
         "mempool":             mempool_len,
         "active_miners":       active_miners,
-        "active_peers":        active_peers,
+        "active_peers":        active_peers_count,
     })
 
 @app.route("/api/mempool")
@@ -5193,12 +5267,55 @@ def api_v1_receive_block():
     return jsonify(status="added"), 201
 
 # ─── SCHEDULER ─────────────────────────────────────
-scheduler=BackgroundScheduler(daemon=True)
-scheduler.add_job(mint_first_blocks, "interval", minutes=1)
-scheduler.add_job(confirm_mempool_if_stuck, "interval", seconds=45)
-scheduler.add_job(aggregator_step, "interval", seconds=10)
-scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30)  # NEW
-scheduler.start()
+# Only start scheduler on MASTER nodes (replicas are read-only)
+if NODE_ROLE == "master":
+    print(f"[SCHEDULER] Starting as MASTER node")
+    scheduler=BackgroundScheduler(daemon=True)
+    scheduler.add_job(mint_first_blocks, "interval", minutes=1)
+    scheduler.add_job(confirm_mempool_if_stuck, "interval", seconds=45)
+    scheduler.add_job(aggregator_step, "interval", seconds=10)
+    scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30)  # NEW
+    scheduler.start()
+    print(f"[SCHEDULER] All jobs started")
+else:
+    print(f"[SCHEDULER] Running as REPLICA - scheduler disabled")
+    scheduler = None
+
+    # Start heartbeat sender for replica nodes
+    import threading
+    import socket
+
+    def send_heartbeat_to_master():
+        """Send periodic heartbeat from replica to master"""
+        # Generate unique peer_id based on hostname and port
+        hostname = socket.gethostname()
+        port = os.getenv("PORT", "5000")
+        peer_id = f"replica-{hostname}-{port}"
+        replica_url = f"http://{hostname}:{port}"
+
+        while True:
+            try:
+                response = requests.post(
+                    f"{MASTER_INTERNAL_URL}/api/peers/heartbeat",
+                    json={
+                        "peer_id": peer_id,
+                        "url": replica_url
+                    },
+                    timeout=5
+                )
+                if response.status_code == 200:
+                    print(f"[HEARTBEAT] Sent to master: {response.json()}")
+                else:
+                    print(f"[HEARTBEAT] Failed: {response.status_code} - {response.text}")
+            except Exception as e:
+                print(f"[HEARTBEAT] Error sending to master: {e}")
+
+            # Send heartbeat every 30 seconds (TTL is 60s)
+            time.sleep(30)
+
+    heartbeat_thread = threading.Thread(target=send_heartbeat_to_master, daemon=True)
+    heartbeat_thread.start()
+    print(f"[HEARTBEAT] Replica heartbeat sender started -> {MASTER_INTERNAL_URL}")
 
 # ─── ADMIN MINT ENDPOINT (NEW) ───────────────────────────────────────
 #

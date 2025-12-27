@@ -2619,6 +2619,9 @@ def api_ai_files_upload():
         session_id = (request.form.get("session_id") or "").strip()
         purpose = (request.form.get("purpose") or "chat").strip()
 
+        # Get guest_id for non-wallet users (ownership tracking)
+        guest_id = get_or_set_guest_id() if not wallet else None
+
         os.makedirs(AI_UPLOADS_DIR, exist_ok=True)
 
         uploaded = []
@@ -2651,11 +2654,13 @@ def api_ai_files_upload():
                 "id": file_id,
                 "saved_name": saved_name,
                 "original_name": original_name,
-                "path": save_path,  # ADDED - needed for AI chat to read file
+                "filename": original_name,  # For consistency with chat endpoint
+                "path": save_path,  # Needed for AI chat to read file
                 "size": len(blob),
                 "mimetype": mimetype,
                 "sha256": sha,
                 "wallet": wallet,
+                "guest_id": guest_id,  # ADDED - for ownership tracking when no wallet
                 "session_id": session_id,
                 "purpose": purpose,
                 "created_at": int(time.time()),

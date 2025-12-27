@@ -1442,6 +1442,14 @@
       for (const f of files) {
         form.append("files", f, f.name);
       }
+      // CRITICAL: Include wallet and session_id for ownership tracking
+      const wallet = walletInputEl.value.trim();
+      if (wallet) {
+        form.append("wallet", wallet);
+      }
+      if (currentSessionId) {
+        form.append("session_id", currentSessionId);
+      }
       setUploadStatus("Uploading files…");
       try {
         const res = await fetch(API_FILES, {

@@ -57,13 +57,24 @@ except ImportError as e:
     qc_verify = lambda *args: False
 
 # ── Optional EVM routes (block explorer / tx viewer endpoints)
+# Be noisy on import failures so Railway logs show the real reason.
+import traceback as _traceback  # local alias to avoid clashes
+
+register_evm_routes = None  # type: ignore
 try:
-    from evm_api import register_evm_routes  # type: ignore
-except Exception:
+    from evm_api import register_evm_routes as _register_evm_routes  # type: ignore
+    register_evm_routes = _register_evm_routes  # type: ignore
+    print("[EVM] evm_api loaded")
+except Exception as _e1:
+    print(f"[EVM] evm_api import failed: {_e1}")
+    _traceback.print_exc()
     try:
-        from evm_api_v3 import register_evm_routes  # type: ignore
-    except Exception:
-        register_evm_routes = None  # type: ignore
+        from evm_api_v3 import register_evm_routes as _register_evm_routes  # type: ignore
+        register_evm_routes = _register_evm_routes  # type: ignore
+        print("[EVM] evm_api_v3 loaded")
+    except Exception as _e2:
+        print(f"[EVM] evm_api_v3 import failed: {_e2}")
+        _traceback.print_exc()
 
 # ─── CONFIG ────────────────────────────────────────
 app = Flask(__name__)
@@ -5735,10 +5746,7 @@ def api_v1_create_pool():
 ensure_ai_wallet()
 recompute_height_offset_from_ledger()  # <-- Initialize offset
 
-if __name__=="__main__":
-    port=int(os.getenv("PORT",3333))
-    app.run(host="0.0.0.0", port=port)
-# === AI Session API Fixes (append to end of server.py) ===========================
+
 # This block fixes the 400/404 errors in chat by:
 # 1. Supporting guest sessions (no wallet required)
 # 2. Adding /api/ai/files/upload endpoint
@@ -6137,3 +6145,8 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 13311))
     host = os.getenv("HOST", "0.0.0.0")
     app.run(host=host, port=port)
+
+if __name__ == "__main__":
+    port=int(os.getenv("PORT",3333))
+    app.run(host="0.0.0.0", port=port)
+# === AI Session API Fixes (append to end of server.py) ===========================

@@ -1318,15 +1318,13 @@
 
     async function loadWallet() {
       try {
-        const res = await fetch(API_WALLET);
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        const data = await res.json();
-        const w = data.wallet || "";
+        // Read wallet from localStorage (same as other pages)
+        const w = localStorage.getItem('thr_address') || "";
         walletInputEl.value = w;
 
         // Update wallet label with connection status
         const walletPill = walletLabelEl.parentElement;
-        if (data.connected && w) {
+        if (w) {
           walletLabelEl.textContent = w.slice(0, 6) + "…" + w.slice(-4);
           walletPill.classList.remove('pill-danger');
           walletPill.classList.add('pill-success');
@@ -1336,7 +1334,7 @@
           walletPill.classList.add('pill-danger');
         }
       } catch (e) {
-        console.warn("Wallet fetch failed", e);
+        console.warn("Wallet load failed", e);
         walletLabelEl.textContent = "error";
       }
     }

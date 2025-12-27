@@ -5769,7 +5769,7 @@ def api_ai_sessions_v2():
 
     sessions = load_ai_sessions()
     user_sessions = [s for s in sessions if s.get("wallet") == identity and not s.get("archived")]
-    
+
     # Sort by updated_at (newest first)
     user_sessions.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
 
@@ -5777,6 +5777,103 @@ def api_ai_sessions_v2():
     if guest_id:
         resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
     return resp
+
+
+@app.route("/api/ai/sessions", methods=["POST"])
+def api_ai_sessions_create():
+    """Create new session (RESTful endpoint - POST to /api/ai/sessions)"""
+    data = request.get_json(silent=True) or {}
+    wallet_in = data.get("wallet")
+    identity, guest_id = _current_actor_id(wallet_in)
+
+    title = (data.get("title") or "New Chat").strip()[:120]
+    model = (data.get("model") or "auto").strip()
+
+    sessions = load_ai_sessions()
+    session_id = f"sess_{secrets.token_hex(8)}"
+    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+    session = {
+        "id": session_id,
+        "wallet": identity,
+        "title": title,
+        "model": model,
+        "created_at": now,
+        "updated_at": now,
+        "message_count": 0,
+        "archived": False,
+        "meta": {},
+    }
+    sessions.append(session)
+    save_ai_sessions(sessions)
+
+    resp = make_response(jsonify({"ok": True, "id": session_id, "session": session}))
+    if guest_id:
+        resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+    return resp
+
+
+@app.route("/api/ai/sessions/<session_id>/messages", methods=["GET"])
+def api_ai_session_messages(session_id):
+    """Get messages for a specific session"""
+    sessions = load_ai_sessions()
+    session = next((s for s in sessions if s.get("id") == session_id), None)
+
+    if not session:
+        return jsonify({"ok": False, "error": "Session not found"}), 404
+
+    # Load messages for this session
+    messages = load_ai_messages()
+    session_messages = [m for m in messages if m.get("session_id") == session_id]
+
+    # Sort by timestamp
+    session_messages.sort(key=lambda m: m.get("timestamp", ""))
+
+    return jsonify({"ok": True, "messages": session_messages})
+
+
+@app.route("/api/ai/sessions/<session_id>", methods=["PATCH"])
+def api_ai_session_update(session_id):
+    """Update session (e.g., rename)"""
+    data = request.get_json(silent=True) or {}
+    new_title = (data.get("title") or "").strip()
+
+    if not new_title:
+        return jsonify({"ok": False, "error": "Missing title"}), 400
+
+    sessions = load_ai_sessions()
+    found = False
+    for s in sessions:
+        if s.get("id") == session_id:
+            s["title"] = new_title[:120]
+            s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            found = True
+            break
+
+    if not found:
+        return jsonify({"ok": False, "error": "Session not found"}), 404
+
+    save_ai_sessions(sessions)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/ai/sessions/<session_id>", methods=["DELETE"])
+def api_ai_session_delete(session_id):
+    """Delete/archive a session"""
+    sessions = load_ai_sessions()
+    found = False
+    for s in sessions:
+        if s.get("id") == session_id:
+            s["archived"] = True
+            s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            found = True
+            break
+
+    if not found:
+        return jsonify({"ok": False, "error": "Session not found"}), 404
+
+    save_ai_sessions(sessions)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/ai/sessions/start", methods=["POST"])

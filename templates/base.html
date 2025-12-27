@@ -265,6 +265,14 @@
         color: #56ff9a;
         font-family: monospace;
     }
+    .chain-token-holders {
+        font-size: 9px;
+        color: #ffd700;
+        font-family: monospace;
+        padding: 2px 4px;
+        background: rgba(255, 215, 0, 0.1);
+        border-radius: 4px;
+    }
     .wallet-popup-header {
         font-size: 13px;
         font-weight: 700;
@@ -1239,15 +1247,8 @@ document.addEventListener('DOMContentLoaded', () => {
 </div>
 
 <script>
-// Chain Tokens Widget - Load all tokens on chain
+// Chain Tokens Widget - Load all tokens on chain with holders count
 (function() {
-    // Built-in core tokens
-    const coreTokens = [
-        { symbol: 'THR', name: 'Thronos', color: '#ff6600', logo: '/static/img/thronos-token.png' },
-        { symbol: 'WBTC', name: 'Wrapped Bitcoin', color: '#f7931a', logo: null },
-        { symbol: 'L2E', name: 'Learn-to-Earn', color: '#00bfff', logo: null }
-    ];
-
     async function loadChainTokensWidget() {
         try {
             // Fetch total supply
@@ -1258,51 +1259,48 @@ document.addEventListener('DOMContentLoaded', () => {
                 supplyEl.textContent = Number(stats.total_supply).toLocaleString('en-US', {maximumFractionDigits: 2}) + ' THR';
             }
 
-            // Fetch custom tokens
-            let customTokens = [];
+            // Fetch all tokens with stats (including holders count)
+            let tokensWithStats = [];
             try {
-                const tokensResp = await fetch('/api/tokens/list');
-                const tokensData = await tokensResp.json();
-                if (tokensData.ok && tokensData.tokens) {
-                    customTokens = tokensData.tokens;
+                const tokensStatsResp = await fetch('/api/tokens/stats');
+                const tokensStatsData = await tokensStatsResp.json();
+                if (tokensStatsData.ok && tokensStatsData.tokens) {
+                    tokensWithStats = tokensStatsData.tokens;
                 }
             } catch(e) {
-                console.log('No custom tokens or API not available');
+                console.log('Tokens stats API not available, using fallback');
+                // Fallback to basic token list
+                tokensWithStats = [
+                    { symbol: 'THR', name: 'Thronos', color: '#ff6600', holders_count: 0 },
+                    { symbol: 'WBTC', name: 'Wrapped Bitcoin', color: '#f7931a', holders_count: 0 },
+                    { symbol: 'L2E', name: 'Learn-to-Earn', color: '#00bfff', holders_count: 0 }
+                ];
             }
-
-            // Combine core + custom tokens
-            const allTokens = [...coreTokens];
-            customTokens.forEach(t => {
-                // Avoid duplicates
-                if (!allTokens.find(ct => ct.symbol === t.symbol)) {
-                    allTokens.push({
-                        symbol: t.symbol,
-                        name: t.name,
-                        color: t.color || '#00ff66',
-                        logo: t.logo || null,
-                        total_supply: t.total_supply
-                    });
-                }
-            });
 
             // Render tokens
             const scrollEl = document.getElementById('chainTokensScroll');
             if (!scrollEl) return;
 
             let html = '';
-            allTokens.forEach(token => {
-                const logoHtml = token.logo
-                    ? `<img src="${token.logo}" alt="${token.symbol}" onerror="this.style.display='none'; this.parentElement.innerHTML='<span style=\\'color:${token.color}\\'>${token.symbol[0]}</span>';">`
+            tokensWithStats.forEach(token => {
+                const logoSrc = token.logo || (token.symbol === 'THR' ? '/static/img/thronos-token.png' : null);
+                const logoHtml = logoSrc
+                    ? `<img src="${logoSrc}" alt="${token.symbol}" onerror="this.style.display='none'; this.parentElement.innerHTML='<span style=\\'color:${token.color}\\'>${token.symbol[0]}</span>';">`
                     : `<span style="color: ${token.color};">${token.symbol[0]}</span>`;
+
+                const holdersText = token.holders_count !== undefined
+                    ? `${token.holders_count} 👥`
+                    : '';
 
                 const supplyText = token.total_supply
                     ? Number(token.total_supply).toLocaleString('en-US', {maximumFractionDigits: 0})
                     : '';
 
                 html += `
-                    <div class="chain-token-pill" title="${token.name}">
+                    <div class="chain-token-pill" title="${token.name} - ${holdersText || '0'} holders">
                         <div class="chain-token-logo" style="border-color: ${token.color};">${logoHtml}</div>
                         <span class="chain-token-symbol">${token.symbol}</span>
+                        ${holdersText ? `<span class="chain-token-holders">${holdersText}</span>` : ''}
                         ${supplyText ? `<span class="chain-token-supply">${supplyText}</span>` : ''}
                     </div>
                 `;

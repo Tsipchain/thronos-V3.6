@@ -2745,33 +2745,33 @@ def api_ai_history():
     history = history[-40:]  # τα τελευταία 40 μηνύματα για να μην φορτώνει άπειρα
     return jsonify({"wallet": wallet, "history": history}), 200
 
-@app.route("/api/ai_sessions", methods=["GET"])
-@app.route("/api/ai/sessions", methods=["GET"])
-@app.route("/api/ai_sessions", methods=["GET"])  # backward compat
-def api_ai_sessions():
-
-    wallet = (request.args.get("wallet") or "").strip()
-    if not wallet:
-        return jsonify({"ok": True, "sessions": []})
-
-    try:
-        sessions = load_ai_sessions()
-        sessions = [s for s in sessions if s.get("wallet") == wallet and not s.get("archived")]
-        # newest first
-        def _key(s):
-            return s.get("updated_at") or s.get("created_at") or ""
-        sessions.sort(key=_key, reverse=True)
-        return jsonify({"ok": True, "wallet": wallet, "sessions": sessions})
-    except Exception as e:
-        app.logger.exception("ai_sessions list failed")
-        return jsonify({"ok": False, "error": str(e), "sessions": []}), 500
-
-    # ταξινόμηση με βάση updated_at (πιο πρόσφατη πρώτη)
-    def _key(s):
-        return s.get("updated_at", "")
-    sessions.sort(key=_key, reverse=True)
-
-    return jsonify({"wallet": wallet, "sessions": sessions}), 200
+# OLD VERSION - Replaced by api_ai_sessions_combined() which supports both GET/POST and guest mode
+# @app.route("/api/ai/sessions", methods=["GET"])
+# @app.route("/api/ai_sessions", methods=["GET"])  # backward compat
+# def api_ai_sessions():
+#
+#     wallet = (request.args.get("wallet") or "").strip()
+#     if not wallet:
+#         return jsonify({"ok": True, "sessions": []})
+#
+#     try:
+#         sessions = load_ai_sessions()
+#         sessions = [s for s in sessions if s.get("wallet") == wallet and not s.get("archived")]
+#         # newest first
+#         def _key(s):
+#             return s.get("updated_at") or s.get("created_at") or ""
+#         sessions.sort(key=_key, reverse=True)
+#         return jsonify({"ok": True, "wallet": wallet, "sessions": sessions})
+#     except Exception as e:
+#         app.logger.exception("ai_sessions list failed")
+#         return jsonify({"ok": False, "error": str(e), "sessions": []}), 500
+#
+#     # ταξινόμηση με βάση updated_at (πιο πρόσφατη πρώτη)
+#     def _key(s):
+#         return s.get("updated_at", "")
+#     sessions.sort(key=_key, reverse=True)
+#
+#     return jsonify({"wallet": wallet, "sessions": sessions}), 200
 
 @app.route("/api/ai_sessions/start", methods=["POST"])
 @app.route("/api/ai/sessions/start", methods=["POST"])
@@ -5761,56 +5761,56 @@ def _current_actor_id(wallet: str | None) -> tuple[str, str | None]:
 
 
 # Override existing /api/ai/sessions routes with v2 versions that support guests
-@app.route("/api/ai/sessions", methods=["GET"])
-def api_ai_sessions_v2():
-    """List sessions for current user (wallet or guest)"""
-    wallet = request.args.get("wallet") or None
-    identity, guest_id = _current_actor_id(wallet)
+@app.route("/api/ai/sessions", methods=["GET", "POST"])
+def api_ai_sessions_combined():
+    """Handle both GET (list) and POST (create) for sessions"""
+    if request.method == "GET":
+        # List sessions for current user (wallet or guest)
+        wallet = request.args.get("wallet") or None
+        identity, guest_id = _current_actor_id(wallet)
 
-    sessions = load_ai_sessions()
-    user_sessions = [s for s in sessions if s.get("wallet") == identity and not s.get("archived")]
+        sessions = load_ai_sessions()
+        user_sessions = [s for s in sessions if s.get("wallet") == identity and not s.get("archived")]
 
-    # Sort by updated_at (newest first)
-    user_sessions.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
+        # Sort by updated_at (newest first)
+        user_sessions.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
 
-    resp = make_response(jsonify({"ok": True, "sessions": user_sessions}))
-    if guest_id:
-        resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
-    return resp
+        resp = make_response(jsonify({"ok": True, "sessions": user_sessions}))
+        if guest_id:
+            resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+        return resp
 
+    elif request.method == "POST":
+        # Create new session
+        data = request.get_json(silent=True) or {}
+        wallet_in = data.get("wallet")
+        identity, guest_id = _current_actor_id(wallet_in)
 
-@app.route("/api/ai/sessions", methods=["POST"])
-def api_ai_sessions_create():
-    """Create new session (RESTful endpoint - POST to /api/ai/sessions)"""
-    data = request.get_json(silent=True) or {}
-    wallet_in = data.get("wallet")
-    identity, guest_id = _current_actor_id(wallet_in)
+        title = (data.get("title") or "New Chat").strip()[:120]
+        model = (data.get("model") or "auto").strip()
 
-    title = (data.get("title") or "New Chat").strip()[:120]
-    model = (data.get("model") or "auto").strip()
+        sessions = load_ai_sessions()
+        session_id = f"sess_{secrets.token_hex(8)}"
+        now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
-    sessions = load_ai_sessions()
-    session_id = f"sess_{secrets.token_hex(8)}"
-    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        session = {
+            "id": session_id,
+            "wallet": identity,
+            "title": title,
+            "model": model,
+            "created_at": now,
+            "updated_at": now,
+            "message_count": 0,
+            "archived": False,
+            "meta": {},
+        }
+        sessions.append(session)
+        save_ai_sessions(sessions)
 
-    session = {
-        "id": session_id,
-        "wallet": identity,
-        "title": title,
-        "model": model,
-        "created_at": now,
-        "updated_at": now,
-        "message_count": 0,
-        "archived": False,
-        "meta": {},
-    }
-    sessions.append(session)
-    save_ai_sessions(sessions)
-
-    resp = make_response(jsonify({"ok": True, "id": session_id, "session": session}))
-    if guest_id:
-        resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
-    return resp
+        resp = make_response(jsonify({"ok": True, "id": session_id, "session": session}))
+        if guest_id:
+            resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+        return resp
 
 
 @app.route("/api/ai/sessions/<session_id>/messages", methods=["GET"])

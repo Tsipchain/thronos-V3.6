@@ -652,12 +652,18 @@ async function submitToken(evt) {
     // Upload logo if provided
     if (uploadedLogo) {
       const formData = new FormData();
-      formData.append('logo', uploadedLogo);
+      formData.append('file', uploadedLogo);
+      formData.append('creator_address', creator);
 
-      await fetch(`/api/tokens/upload_logo/${symbol}`, {
+      const logoRes = await fetch(`/api/tokens/upload_logo/${symbol}`, {
         method: 'POST',
         body: formData
       });
+
+      if (!logoRes.ok) {
+        const logoData = await logoRes.json();
+        console.warn('Logo upload failed:', logoData.error);
+      }
     }
 
     showMessage(`✅ Token ${symbol} created successfully! Fee: 100 THR deducted.`, 'success');

@@ -293,12 +293,10 @@
             const widget = document.getElementById('walletWidget');
             const tokens = data.tokens || [];
 
-            // Calculate total balance (sum of all THR-equivalent values)
+            // Calculate total balance using dynamic prices from pools
             const totalTHR = tokens.reduce((sum, t) => {
-                if (t.symbol === 'THR') return sum + t.balance;
-                if (t.symbol === 'WBTC') return sum + (t.balance * 50000); // Placeholder conversion
-                if (t.symbol === 'L2E') return sum + t.balance;
-                return sum;
+                // Use value_in_thr from API (calculated from pool reserves)
+                return sum + (t.value_in_thr || 0);
             }, 0);
 
             let html = `

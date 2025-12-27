@@ -368,7 +368,8 @@
       z-index: 1;
       display: flex;
       flex-direction: column;
-      height: 100%;
+      flex: 1;
+      min-height: 0;
       gap: 8px;
     }
 
@@ -1086,11 +1087,17 @@
     }
 
     function scrollMessagesToBottom() {
+      // Double requestAnimationFrame for smooth scrolling
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           messagesEl.scrollTop = messagesEl.scrollHeight;
         });
       });
+
+      // Fallback timeout to ensure scroll happens even if rAF doesn't work
+      setTimeout(() => {
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }, 50);
     }
 
     function escapeHtml(text) {

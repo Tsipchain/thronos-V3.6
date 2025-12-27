@@ -260,7 +260,7 @@ async function deployContract() {
         gas: gasLimit
     };
     try {
-        const res = await fetch('/api/v1/evm/deploy', {
+        const res = await fetch('/api/evm/deploy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -295,7 +295,7 @@ async function callContract() {
         value
     };
     try {
-        const res = await fetch('/api/v1/evm/call', {
+        const res = await fetch('/api/evm/call', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -312,7 +312,7 @@ async function callContract() {
 // Load recent contracts
 async function loadContracts() {
     try {
-        const res = await fetch('/api/v1/evm/contracts');
+        const res = await fetch('/api/evm/contracts');
         const data = await res.json();
         const list = document.getElementById('contract-list');
         list.innerHTML = '';

@@ -5890,6 +5890,532 @@ def api_v1_create_pool():
     return jsonify(status="success", pool=new_pool), 201
 
 
+# ─── ADD LIQUIDITY TO EXISTING POOL ────────────────────────────────────
+@app.route("/api/v1/pools/add_liquidity", methods=["POST"])
+def api_v1_add_liquidity():
+    """
+    Add liquidity to an existing pool. Shares are minted proportionally.
+
+    Request body:
+    {
+        "pool_id": "uuid...",
+        "amount_a": 100.0,
+        "amount_b": 0.01,
+        "provider_thr": "THR...",
+        "auth_secret": "...",
+        "passphrase": "..."
+    }
+    """
+    data = request.get_json() or {}
+    pool_id = (data.get("pool_id") or "").strip()
+    amt_a_raw = data.get("amount_a", 0)
+    amt_b_raw = data.get("amount_b", 0)
+    provider = (data.get("provider_thr") or "").strip()
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+
+    # Validate inputs
+    try:
+        amt_a = float(amt_a_raw)
+        amt_b = float(amt_b_raw)
+    except (TypeError, ValueError):
+        return jsonify(status="error", message="Invalid amounts"), 400
+
+    if not pool_id or amt_a <= 0 or amt_b <= 0:
+        return jsonify(status="error", message="Invalid input"), 400
+
+    if not provider or not auth_secret:
+        return jsonify(status="error", message="Missing provider or auth_secret"), 400
+
+    # Authenticate
+    pledges = load_json(PLEDGE_CHAIN, [])
+    provider_pledge = next((p for p in pledges if p.get("thr_address") == provider), None)
+    if not provider_pledge:
+        return jsonify(status="error", message="Provider has not pledged"), 404
+
+    stored_auth_hash = provider_pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return jsonify(status="error", message="Provider send not enabled"), 400
+
+    if provider_pledge.get("has_passphrase"):
+        if not passphrase:
+            return jsonify(status="error", message="Passphrase required"), 400
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify(status="error", message="Invalid auth"), 403
+
+    # Load pool
+    pools = load_pools()
+    pool = next((p for p in pools if p.get("id") == pool_id), None)
+    if not pool:
+        return jsonify(status="error", message="Pool not found"), 404
+
+    token_a = pool["token_a"]
+    token_b = pool["token_b"]
+    reserves_a = float(pool["reserves_a"])
+    reserves_b = float(pool["reserves_b"])
+    total_shares = float(pool["total_shares"])
+
+    # Check if amounts maintain the ratio (allow small slippage)
+    expected_ratio = reserves_a / reserves_b if reserves_b > 0 else 0
+    provided_ratio = amt_a / amt_b if amt_b > 0 else 0
+
+    if abs(expected_ratio - provided_ratio) / max(expected_ratio, 0.0001) > 0.02:  # 2% slippage tolerance
+        return jsonify(
+            status="error",
+            message="Amounts don't match pool ratio",
+            expected_ratio=expected_ratio,
+            provided_ratio=provided_ratio
+        ), 400
+
+    # Check balances
+    thr_ledger = load_json(LEDGER_FILE, {})
+    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+    token_balances = load_token_balances()
+
+    def check_balance(sym, amt):
+        if sym == "THR":
+            return float(thr_ledger.get(provider, 0.0)) >= amt
+        elif sym == "WBTC":
+            return float(wbtc_ledger.get(provider, 0.0)) >= amt
+        else:
+            return float(token_balances.get(sym, {}).get(provider, 0.0)) >= amt
+
+    if not check_balance(token_a, amt_a) or not check_balance(token_b, amt_b):
+        return jsonify(status="error", message="Insufficient balance"), 400
+
+    # Deduct balances
+    def deduct(sym, amt):
+        if sym == "THR":
+            thr_ledger[provider] = round(float(thr_ledger.get(provider, 0.0)) - amt, 6)
+        elif sym == "WBTC":
+            wbtc_ledger[provider] = round(float(wbtc_ledger.get(provider, 0.0)) - amt, 6)
+        else:
+            token_balances.setdefault(sym, {})
+            token_balances[sym][provider] = round(float(token_balances[sym].get(provider, 0.0)) - amt, 6)
+
+    deduct(token_a, amt_a)
+    deduct(token_b, amt_b)
+
+    save_json(LEDGER_FILE, thr_ledger)
+    save_json(WBTC_LEDGER_FILE, wbtc_ledger)
+    save_token_balances(token_balances)
+
+    # Mint shares proportional to liquidity added
+    # shares_minted = min(amt_a / reserves_a, amt_b / reserves_b) * total_shares
+    shares_minted = (amt_a / reserves_a) * total_shares if reserves_a > 0 else (amt_a * amt_b) ** 0.5
+
+    # Update pool
+    pool["reserves_a"] = round(reserves_a + amt_a, 6)
+    pool["reserves_b"] = round(reserves_b + amt_b, 6)
+    pool["total_shares"] = round(total_shares + shares_minted, 6)
+
+    if "providers" not in pool:
+        pool["providers"] = {}
+    pool["providers"][provider] = round(float(pool["providers"].get(provider, 0.0)) + shares_minted, 6)
+
+    save_pools(pools)
+
+    # Record transaction
+    chain = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx_id = f"POOL-ADD-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "pool_add_liquidity",
+        "pool_id": pool_id,
+        "token_a": token_a,
+        "token_b": token_b,
+        "added_a": amt_a,
+        "added_b": amt_b,
+        "shares_minted": shares_minted,
+        "provider": provider,
+        "timestamp": ts,
+        "tx_id": tx_id,
+        "status": "confirmed"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+
+    try:
+        broadcast_tx(tx)
+    except Exception:
+        pass
+
+    return jsonify(
+        status="success",
+        shares_minted=shares_minted,
+        total_shares=pool["total_shares"],
+        provider_shares=pool["providers"][provider]
+    ), 200
+
+
+# ─── REMOVE LIQUIDITY FROM POOL ────────────────────────────────────
+@app.route("/api/v1/pools/remove_liquidity", methods=["POST"])
+def api_v1_remove_liquidity():
+    """
+    Remove liquidity from a pool by burning shares.
+
+    Request body:
+    {
+        "pool_id": "uuid...",
+        "shares": 10.0,
+        "provider_thr": "THR...",
+        "auth_secret": "...",
+        "passphrase": "..."
+    }
+    """
+    data = request.get_json() or {}
+    pool_id = (data.get("pool_id") or "").strip()
+    shares_raw = data.get("shares", 0)
+    provider = (data.get("provider_thr") or "").strip()
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+
+    try:
+        shares = float(shares_raw)
+    except (TypeError, ValueError):
+        return jsonify(status="error", message="Invalid shares amount"), 400
+
+    if not pool_id or shares <= 0:
+        return jsonify(status="error", message="Invalid input"), 400
+
+    if not provider or not auth_secret:
+        return jsonify(status="error", message="Missing provider or auth_secret"), 400
+
+    # Authenticate
+    pledges = load_json(PLEDGE_CHAIN, [])
+    provider_pledge = next((p for p in pledges if p.get("thr_address") == provider), None)
+    if not provider_pledge:
+        return jsonify(status="error", message="Provider has not pledged"), 404
+
+    stored_auth_hash = provider_pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return jsonify(status="error", message="Provider send not enabled"), 400
+
+    if provider_pledge.get("has_passphrase"):
+        if not passphrase:
+            return jsonify(status="error", message="Passphrase required"), 400
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify(status="error", message="Invalid auth"), 403
+
+    # Load pool
+    pools = load_pools()
+    pool = next((p for p in pools if p.get("id") == pool_id), None)
+    if not pool:
+        return jsonify(status="error", message="Pool not found"), 404
+
+    # Check provider has enough shares
+    provider_shares = float(pool.get("providers", {}).get(provider, 0.0))
+    if provider_shares < shares:
+        return jsonify(
+            status="error",
+            message="Insufficient shares",
+            your_shares=provider_shares,
+            requested=shares
+        ), 400
+
+    token_a = pool["token_a"]
+    token_b = pool["token_b"]
+    reserves_a = float(pool["reserves_a"])
+    reserves_b = float(pool["reserves_b"])
+    total_shares = float(pool["total_shares"])
+
+    # Calculate tokens to return
+    share_fraction = shares / total_shares
+    amt_a_return = reserves_a * share_fraction
+    amt_b_return = reserves_b * share_fraction
+
+    # Update pool
+    pool["reserves_a"] = round(reserves_a - amt_a_return, 6)
+    pool["reserves_b"] = round(reserves_b - amt_b_return, 6)
+    pool["total_shares"] = round(total_shares - shares, 6)
+    pool["providers"][provider] = round(provider_shares - shares, 6)
+
+    # Remove provider if shares = 0
+    if pool["providers"][provider] <= 0:
+        del pool["providers"][provider]
+
+    save_pools(pools)
+
+    # Credit tokens back to provider
+    thr_ledger = load_json(LEDGER_FILE, {})
+    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+    token_balances = load_token_balances()
+
+    def credit(sym, amt):
+        if sym == "THR":
+            thr_ledger[provider] = round(float(thr_ledger.get(provider, 0.0)) + amt, 6)
+        elif sym == "WBTC":
+            wbtc_ledger[provider] = round(float(wbtc_ledger.get(provider, 0.0)) + amt, 6)
+        else:
+            token_balances.setdefault(sym, {})
+            token_balances[sym][provider] = round(float(token_balances[sym].get(provider, 0.0)) + amt, 6)
+
+    credit(token_a, amt_a_return)
+    credit(token_b, amt_b_return)
+
+    save_json(LEDGER_FILE, thr_ledger)
+    save_json(WBTC_LEDGER_FILE, wbtc_ledger)
+    save_token_balances(token_balances)
+
+    # Record transaction
+    chain = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx_id = f"POOL-REMOVE-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "pool_remove_liquidity",
+        "pool_id": pool_id,
+        "token_a": token_a,
+        "token_b": token_b,
+        "withdrawn_a": amt_a_return,
+        "withdrawn_b": amt_b_return,
+        "shares_burned": shares,
+        "provider": provider,
+        "timestamp": ts,
+        "tx_id": tx_id,
+        "status": "confirmed"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+
+    try:
+        broadcast_tx(tx)
+    except Exception:
+        pass
+
+    return jsonify(
+        status="success",
+        withdrawn_a=amt_a_return,
+        withdrawn_b=amt_b_return,
+        shares_burned=shares,
+        remaining_shares=pool["providers"].get(provider, 0.0)
+    ), 200
+
+
+# ─── SWAP THROUGH POOL (AMM - AUTOMATED MARKET MAKER) ────────────────
+@app.route("/api/v1/pools/swap", methods=["POST"])
+def api_v1_pool_swap():
+    """
+    Swap tokens through a liquidity pool using constant product formula (x * y = k).
+    Liquidity providers earn 0.3% fee on each swap.
+
+    Request body:
+    {
+        "pool_id": "uuid...",
+        "token_in": "THR",
+        "token_out": "WBTC",
+        "amount_in": 100.0,
+        "min_amount_out": 0.0095,  // Slippage protection
+        "trader_thr": "THR...",
+        "auth_secret": "...",
+        "passphrase": "..."
+    }
+    """
+    data = request.get_json() or {}
+    pool_id = (data.get("pool_id") or "").strip()
+    token_in = (data.get("token_in") or "").upper().strip()
+    token_out = (data.get("token_out") or "").upper().strip()
+    amount_in_raw = data.get("amount_in", 0)
+    min_amount_out_raw = data.get("min_amount_out", 0)
+    trader = (data.get("trader_thr") or "").strip()
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+
+    # Validate inputs
+    try:
+        amount_in = float(amount_in_raw)
+        min_amount_out = float(min_amount_out_raw)
+    except (TypeError, ValueError):
+        return jsonify(status="error", message="Invalid amounts"), 400
+
+    if not pool_id or not token_in or not token_out or amount_in <= 0:
+        return jsonify(status="error", message="Invalid input"), 400
+
+    if token_in == token_out:
+        return jsonify(status="error", message="Cannot swap same token"), 400
+
+    if not trader or not auth_secret:
+        return jsonify(status="error", message="Missing trader or auth_secret"), 400
+
+    # Authenticate
+    pledges = load_json(PLEDGE_CHAIN, [])
+    trader_pledge = next((p for p in pledges if p.get("thr_address") == trader), None)
+    if not trader_pledge:
+        return jsonify(status="error", message="Trader has not pledged"), 404
+
+    stored_auth_hash = trader_pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return jsonify(status="error", message="Trader send not enabled"), 400
+
+    if trader_pledge.get("has_passphrase"):
+        if not passphrase:
+            return jsonify(status="error", message="Passphrase required"), 400
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify(status="error", message="Invalid auth"), 403
+
+    # Load pool
+    pools = load_pools()
+    pool = next((p for p in pools if p.get("id") == pool_id), None)
+    if not pool:
+        return jsonify(status="error", message="Pool not found"), 404
+
+    token_a = pool["token_a"]
+    token_b = pool["token_b"]
+    reserves_a = float(pool["reserves_a"])
+    reserves_b = float(pool["reserves_b"])
+
+    # Determine which token is which
+    if token_in == token_a and token_out == token_b:
+        reserve_in = reserves_a
+        reserve_out = reserves_b
+        is_a_to_b = True
+    elif token_in == token_b and token_out == token_a:
+        reserve_in = reserves_b
+        reserve_out = reserves_a
+        is_a_to_b = False
+    else:
+        return jsonify(
+            status="error",
+            message=f"Pool does not support {token_in}/{token_out} pair",
+            pool_tokens=f"{token_a}/{token_b}"
+        ), 400
+
+    # Calculate swap using constant product formula with 0.3% fee
+    # Formula: amount_out = (reserve_out * amount_in * 0.997) / (reserve_in + amount_in * 0.997)
+    # 0.3% fee goes to liquidity providers
+    FEE = 0.997  # 1 - 0.003 (0.3% fee)
+
+    amount_in_with_fee = amount_in * FEE
+    amount_out = (reserve_out * amount_in_with_fee) / (reserve_in + amount_in_with_fee)
+
+    # Slippage protection
+    if amount_out < min_amount_out:
+        return jsonify(
+            status="error",
+            message="Slippage too high",
+            expected_minimum=min_amount_out,
+            actual_output=amount_out,
+            price_impact=f"{((1 - amount_out/min_amount_out) * 100):.2f}%" if min_amount_out > 0 else "N/A"
+        ), 400
+
+    # Check trader has enough balance
+    thr_ledger = load_json(LEDGER_FILE, {})
+    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+    token_balances = load_token_balances()
+
+    def get_balance(sym):
+        if sym == "THR":
+            return float(thr_ledger.get(trader, 0.0))
+        elif sym == "WBTC":
+            return float(wbtc_ledger.get(trader, 0.0))
+        else:
+            return float(token_balances.get(sym, {}).get(trader, 0.0))
+
+    if get_balance(token_in) < amount_in:
+        return jsonify(
+            status="error",
+            message=f"Insufficient {token_in} balance",
+            your_balance=get_balance(token_in),
+            required=amount_in
+        ), 400
+
+    # Execute swap - deduct input token, credit output token
+    def deduct(sym, amt):
+        if sym == "THR":
+            thr_ledger[trader] = round(float(thr_ledger.get(trader, 0.0)) - amt, 6)
+        elif sym == "WBTC":
+            wbtc_ledger[trader] = round(float(wbtc_ledger.get(trader, 0.0)) - amt, 6)
+        else:
+            token_balances.setdefault(sym, {})
+            token_balances[sym][trader] = round(float(token_balances[sym].get(trader, 0.0)) - amt, 6)
+
+    def credit(sym, amt):
+        if sym == "THR":
+            thr_ledger[trader] = round(float(thr_ledger.get(trader, 0.0)) + amt, 6)
+        elif sym == "WBTC":
+            wbtc_ledger[trader] = round(float(wbtc_ledger.get(trader, 0.0)) + amt, 6)
+        else:
+            token_balances.setdefault(sym, {})
+            token_balances[sym][trader] = round(float(token_balances[sym].get(trader, 0.0)) + amt, 6)
+
+    deduct(token_in, amount_in)
+    credit(token_out, amount_out)
+
+    save_json(LEDGER_FILE, thr_ledger)
+    save_json(WBTC_LEDGER_FILE, wbtc_ledger)
+    save_token_balances(token_balances)
+
+    # Update pool reserves (the fee stays in the pool, increasing value for LPs)
+    if is_a_to_b:
+        pool["reserves_a"] = round(reserves_a + amount_in, 6)
+        pool["reserves_b"] = round(reserves_b - amount_out, 6)
+    else:
+        pool["reserves_b"] = round(reserves_b + amount_in, 6)
+        pool["reserves_a"] = round(reserves_a - amount_out, 6)
+
+    save_pools(pools)
+
+    # Calculate fee earned by LPs (stays in pool)
+    fee_amount = amount_in * (1 - FEE)  # 0.3% of input
+
+    # Calculate price impact
+    price_before = reserve_out / reserve_in if reserve_in > 0 else 0
+    price_after = float(pool["reserves_b"] if is_a_to_b else pool["reserves_a"]) / float(pool["reserves_a"] if is_a_to_b else pool["reserves_b"])
+    price_impact = abs(price_after - price_before) / price_before * 100 if price_before > 0 else 0
+
+    # Record transaction
+    chain = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx_id = f"POOL-SWAP-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "pool_swap",
+        "pool_id": pool_id,
+        "token_in": token_in,
+        "token_out": token_out,
+        "amount_in": amount_in,
+        "amount_out": amount_out,
+        "fee": fee_amount,
+        "fee_percent": 0.003,
+        "price_impact": round(price_impact, 4),
+        "trader": trader,
+        "timestamp": ts,
+        "tx_id": tx_id,
+        "status": "confirmed"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+
+    try:
+        broadcast_tx(tx)
+    except Exception:
+        pass
+
+    return jsonify(
+        status="success",
+        amount_in=amount_in,
+        amount_out=amount_out,
+        fee=fee_amount,
+        price_impact=f"{price_impact:.2f}%",
+        new_balance_in=get_balance(token_in),
+        new_balance_out=get_balance(token_out),
+        tx_id=tx_id
+    ), 200
+
+
 # Run AI Wallet Check on Startup
 ensure_ai_wallet()
 recompute_height_offset_from_ledger()  # <-- Initialize offset

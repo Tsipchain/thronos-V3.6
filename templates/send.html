@@ -229,7 +229,9 @@ async function pulseNetworkKpis(){
       $('lastBlockAgo').textContent = sec+'s ago';
       $('warnBadge').style.display = (sec>90 && (mp.length||0)>0) ? 'inline-block':'none';
     }
-  }catch{}
+  }catch(e){
+    console.error('Network KPIs update failed:', e);
+  }
 }
 setInterval(pulseNetworkKpis, 5000);
 pulseNetworkKpis();
@@ -342,7 +344,9 @@ async function followUntilConfirmed(fromThr){
         loadBalance();
         return;
       }
-    }catch{}
+    }catch(e){
+      console.error('Transaction confirmation check failed:', e);
+    }
   }
   // timeout προβολή
   $('pendingBadge').style.display='none';

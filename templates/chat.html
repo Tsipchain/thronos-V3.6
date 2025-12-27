@@ -1314,11 +1314,21 @@
         const data = await res.json();
         const w = data.wallet || "";
         walletInputEl.value = w;
-        walletLabelEl.textContent = w
-          ? w.slice(0, 6) + "…" + w.slice(-4)
-          : "unknown";
+
+        // Update wallet label with connection status
+        const walletPill = walletLabelEl.parentElement;
+        if (data.connected && w) {
+          walletLabelEl.textContent = w.slice(0, 6) + "…" + w.slice(-4);
+          walletPill.classList.remove('pill-danger');
+          walletPill.classList.add('pill-success');
+        } else {
+          walletLabelEl.textContent = "not connected";
+          walletPill.classList.remove('pill-success');
+          walletPill.classList.add('pill-danger');
+        }
       } catch (e) {
         console.warn("Wallet fetch failed", e);
+        walletLabelEl.textContent = "error";
       }
     }
 

@@ -638,7 +638,7 @@ async function deployContract() {
         outputDiv.className = 'result-panel result-info';
         outputDiv.textContent = 'Deploying contract...';
 
-        const response = await fetch('/api/v1/evm/deploy', {
+        const response = await fetch('/api/evm/deploy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -698,7 +698,7 @@ async function callContractFunction() {
         outputDiv.className = 'result-panel result-info';
         outputDiv.textContent = 'Calling contract...';
 
-        const response = await fetch('/api/v1/evm/call', {
+        const response = await fetch('/api/evm/call', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)

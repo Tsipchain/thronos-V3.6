@@ -161,6 +161,16 @@
       <div class="big" id="liveMP">—</div>
       <div class="small muted">pending TXs</div>
     </div>
+    <div class="card">
+      <h4>Active Miners</h4>
+      <div class="big" id="liveMiners">—</div>
+      <div class="small muted">last 100 blocks</div>
+    </div>
+    <div class="card">
+      <h4>Active Peers</h4>
+      <div class="big" id="livePeers">—</div>
+      <div class="small muted">network nodes</div>
+    </div>
   </section>
 </div>
 
@@ -306,8 +316,12 @@ async function loadLive(){
     el('#liveABT').textContent = j.avg_block_time_sec ? (j.avg_block_time_sec.toFixed(1)+'s') : '—';
     el('#liveHR').textContent  = j.est_hashrate_hs ? (Intl.NumberFormat('en',{notation:'compact'}).format(j.est_hashrate_hs)+' H/s') : '—';
     el('#liveMP').textContent  = j.mempool ?? '0';
+    el('#liveMiners').textContent = j.active_miners ?? '—';
+    el('#livePeers').textContent = j.active_peers ?? '—';
     pushSpark(j.est_hashrate_hs||0);
-  }catch{}
+  }catch(e){
+    console.error('Live network stats update failed:', e);
+  }
 }
 
 /* ===== Fetchers ===== */

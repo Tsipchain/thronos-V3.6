@@ -629,6 +629,17 @@ async function loadPools() {
     }
 }
 
+// Get token logo
+function getTokenLogo(symbol) {
+    const logos = {
+        'THR': '/static/img/logo.png',
+        'WBTC': '/static/img/wbtc.png',
+        'L2E': '/static/img/l2e.png',
+        'JAM': '/static/img/jam.png'
+    };
+    return logos[symbol] || null;
+}
+
 // Render pools
 function renderPools(pools, containerId) {
     const container = document.getElementById(containerId);
@@ -639,17 +650,21 @@ function renderPools(pools, containerId) {
         const tvlBTC = pool.tvl_btc || 0;
         const feeTier = calculateFeeTier(tvlUSD, tvlBTC);
 
+        // Get logos
+        const logoA = getTokenLogo(pool.token_a);
+        const logoB = getTokenLogo(pool.token_b);
+
         const card = document.createElement('div');
         card.className = 'pool-card';
         card.innerHTML = `
             <div class="pool-fee-badge">${feeTier.tier} • ${feeTier.rate} fee</div>
             <div class="pool-pair">
                 <div class="pool-token-logo" style="border-color: #00ff66;">
-                    <span style="color: #00ff66;">${pool.token_a[0]}</span>
+                    ${logoA ? `<img src="${logoA}" alt="${pool.token_a}" style="width: 100%; height: 100%; object-fit: contain; border-radius: 50%;">` : `<span style="color: #00ff66;">${pool.token_a[0]}</span>`}
                 </div>
                 <span class="pool-pair-arrow">⟷</span>
                 <div class="pool-token-logo" style="border-color: #ffd700;">
-                    <span style="color: #ffd700;">${pool.token_b[0]}</span>
+                    ${logoB ? `<img src="${logoB}" alt="${pool.token_b}" style="width: 100%; height: 100%; object-fit: contain; border-radius: 50%;">` : `<span style="color: #ffd700;">${pool.token_b[0]}</span>`}
                 </div>
                 <div class="pool-pair-name">${pool.token_a}/${pool.token_b}</div>
             </div>
@@ -847,13 +862,113 @@ async function submitCreatePool(event) {
 }
 
 // Add liquidity (placeholder)
-function addLiquidity(poolId) {
-    alert('Add liquidity feature coming soon!');
+// Add liquidity to existing pool
+async function addLiquidity(poolId) {
+    const pool = allPools.find(p => p.id === poolId);
+    if (!pool) {
+        alert('Pool not found!');
+        return;
+    }
+
+    const wallet = localStorage.getItem('thr_address');
+    if (!wallet) {
+        alert('Please connect your wallet first!');
+        return;
+    }
+
+    // Prompt for amounts
+    const amountA = prompt(`Enter amount of ${pool.token_a} to add:`);
+    if (!amountA || isNaN(amountA) || parseFloat(amountA) <= 0) return;
+
+    const amountB = prompt(`Enter amount of ${pool.token_b} to add:`);
+    if (!amountB || isNaN(amountB) || parseFloat(amountB) <= 0) return;
+
+    const authSecret = prompt('Enter your auth secret:');
+    if (!authSecret) return;
+
+    try {
+        const response = await fetch('/api/v1/pools/add_liquidity', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                pool_id: poolId,
+                amount_a: parseFloat(amountA),
+                amount_b: parseFloat(amountB),
+                provider_thr: wallet,
+                auth_secret: authSecret,
+                passphrase: ''
+            })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            alert(`✅ Liquidity added successfully!\n\nShares minted: ${data.shares_minted}\nYour total shares: ${data.provider_shares}`);
+            loadPools(); // Reload pools
+        } else {
+            alert(`❌ Error: ${data.message || 'Failed to add liquidity'}`);
+        }
+    } catch (error) {
+        alert(`❌ Error: ${error.message}`);
+    }
 }
 
-// Remove liquidity (placeholder)
-function removeLiquidity(poolId) {
-    alert('Remove liquidity feature coming soon!');
+// Remove liquidity from pool
+async function removeLiquidity(poolId) {
+    const pool = allPools.find(p => p.id === poolId);
+    if (!pool) {
+        alert('Pool not found!');
+        return;
+    }
+
+    const wallet = localStorage.getItem('thr_address');
+    if (!wallet) {
+        alert('Please connect your wallet first!');
+        return;
+    }
+
+    // Get user's shares
+    const userShares = pool.providers && pool.providers[wallet] ? pool.providers[wallet] : 0;
+    if (userShares <= 0) {
+        alert('You have no shares in this pool!');
+        return;
+    }
+
+    const shares = prompt(`Enter shares to burn (You have ${userShares} shares):`);
+    if (!shares || isNaN(shares) || parseFloat(shares) <= 0) return;
+
+    if (parseFloat(shares) > userShares) {
+        alert(`You only have ${userShares} shares!`);
+        return;
+    }
+
+    const authSecret = prompt('Enter your auth secret:');
+    if (!authSecret) return;
+
+    try {
+        const response = await fetch('/api/v1/pools/remove_liquidity', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                pool_id: poolId,
+                shares: parseFloat(shares),
+                provider_thr: wallet,
+                auth_secret: authSecret,
+                passphrase: ''
+            })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            alert(`✅ Liquidity removed successfully!\n\n${pool.token_a} withdrawn: ${data.withdrawn_a}\n${pool.token_b} withdrawn: ${data.withdrawn_b}\nShares burned: ${data.shares_burned}`);
+            loadPools(); // Reload pools
+        } else {
+            alert(`❌ Error: ${data.message || 'Failed to remove liquidity'}`);
+        }
+    } catch (error) {
+        alert(`❌ Error: ${error.message}`);
+    }
 }
 
 // Initialize

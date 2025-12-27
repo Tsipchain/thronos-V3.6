@@ -3248,6 +3248,39 @@ def wallet_data(thr_addr):
     ]
     return jsonify(balance=bal, wbtc_balance=wbtc_bal, l2e_balance=l2e_bal, transactions=history), 200
 
+def get_token_price_in_thr(symbol):
+    """
+    Calculate token price in THR from liquidity pool reserves.
+    Returns price as THR per 1 unit of token, or 1.0 if no pool exists.
+    """
+    if symbol == "THR":
+        return 1.0
+
+    pools = load_pools()
+
+    # Find pool with THR and the token
+    for pool in pools:
+        token_a = pool.get("token_a", "")
+        token_b = pool.get("token_b", "")
+        reserves_a = float(pool.get("reserves_a", 0))
+        reserves_b = float(pool.get("reserves_b", 0))
+
+        if reserves_a <= 0 or reserves_b <= 0:
+            continue
+
+        # Pool is THR/TOKEN
+        if token_a == "THR" and token_b == symbol:
+            # Price of TOKEN in THR = reserves_a / reserves_b
+            return reserves_a / reserves_b
+
+        # Pool is TOKEN/THR
+        if token_a == symbol and token_b == "THR":
+            # Price of TOKEN in THR = reserves_b / reserves_a
+            return reserves_b / reserves_a
+
+    # No pool found, return 1.0 as fallback
+    return 1.0
+
 @app.route("/api/wallet/tokens/<thr_addr>")
 def api_wallet_tokens(thr_addr):
     """
@@ -3262,6 +3295,10 @@ def api_wallet_tokens(thr_addr):
     wbtc_balance = round(float(wbtc_ledger.get(thr_addr, 0.0)), 8)
     l2e_balance = round(float(l2e_ledger.get(thr_addr, 0.0)), 6)
 
+    # Get dynamic prices from pools
+    wbtc_price = get_token_price_in_thr("WBTC")
+    l2e_price = get_token_price_in_thr("L2E")
+
     tokens = [
         {
             "symbol": "THR",
@@ -3271,7 +3308,9 @@ def api_wallet_tokens(thr_addr):
             "logo": "/static/img/thronos-token.png",
             "color": "#00ff66",
             "chain": "Thronos",
-            "type": "native"
+            "type": "native",
+            "price_in_thr": 1.0,
+            "value_in_thr": thr_balance
         },
         {
             "symbol": "WBTC",
@@ -3281,7 +3320,9 @@ def api_wallet_tokens(thr_addr):
             "logo": "/static/img/wbtc-logo.png",
             "color": "#f7931a",
             "chain": "Thronos",
-            "type": "wrapped"
+            "type": "wrapped",
+            "price_in_thr": wbtc_price,
+            "value_in_thr": round(wbtc_balance * wbtc_price, 6)
         },
         {
             "symbol": "L2E",
@@ -3291,7 +3332,9 @@ def api_wallet_tokens(thr_addr):
             "logo": "/static/img/l2e-logo.png",
             "color": "#00ccff",
             "chain": "Thronos",
-            "type": "reward"
+            "type": "reward",
+            "price_in_thr": l2e_price,
+            "value_in_thr": round(l2e_balance * l2e_price, 6)
         }
     ]
 
@@ -3306,6 +3349,9 @@ def api_wallet_tokens(thr_addr):
 
             # Only show if balance > 0 or show_zero is true
             if token_balance > 0 or request.args.get("show_zero", "true").lower() == "true":
+                # Get dynamic price from pool if available
+                token_price = get_token_price_in_thr(symbol)
+
                 tokens.append({
                     "symbol": symbol,
                     "name": token_data.get("name", symbol),
@@ -3316,7 +3362,9 @@ def api_wallet_tokens(thr_addr):
                     "chain": "Thronos",
                     "type": "experimental",
                     "token_id": token_id,
-                    "creator": token_data.get("creator", "")
+                    "creator": token_data.get("creator", ""),
+                    "price_in_thr": token_price,
+                    "value_in_thr": round(token_balance * token_price, 6)
                 })
 
     # Filter out zero balances (optional - can be toggled)

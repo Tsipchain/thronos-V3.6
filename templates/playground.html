@@ -461,6 +461,66 @@
 let compiledBytecode = '';
 let deployedContractsList = [];
 
+        // --- Persistence (localStorage) ---
+        const STORAGE_PREFIX = "thr_playground_contracts_";
+
+        function _storageKey() {
+            const addrEl = document.getElementById('deployAddress');
+            const addr = addrEl ? (addrEl.value || '').trim() : '';
+            return STORAGE_PREFIX + (addr || 'global');
+        }
+
+        function loadLocalContracts() {
+            try {
+                const raw = localStorage.getItem(_storageKey());
+                if (!raw) return;
+                const arr = JSON.parse(raw);
+                if (Array.isArray(arr)) {
+                    deployedContractsList = arr;
+                }
+            } catch (e) {
+                console.warn('Failed to load local contracts', e);
+            }
+        }
+
+        function saveLocalContracts() {
+            try {
+                localStorage.setItem(_storageKey(), JSON.stringify(deployedContractsList || []));
+            } catch (e) {
+                console.warn('Failed to save local contracts', e);
+            }
+        }
+
+        async function mergeServerContracts() {
+            try {
+                const addr = (document.getElementById('deployAddress').value || '').trim();
+                const url = addr ? `/api/evm/contracts?deployer=${encodeURIComponent(addr)}` : '/api/evm/contracts';
+                const res = await fetch(url);
+                if (!res.ok) return;
+                const payload = await res.json();
+                const list = payload.contracts || [];
+
+                const byAddr = new Map((deployedContractsList || []).map(c => [c.contract_address, c]));
+                for (const c of list) {
+                    if (c && c.contract_address && !byAddr.has(c.contract_address)) {
+                        byAddr.set(c.contract_address, {
+                            contract_address: c.contract_address,
+                            tx_id: c.tx_id || '',
+                            deployed_at: c.deployed_at || '',
+                            bytecode_hash: c.bytecode_hash || ''
+                        });
+                    }
+                }
+                deployedContractsList = Array.from(byAddr.values());
+                saveLocalContracts();
+                renderContractsList();
+            } catch (e) {
+                // Non-fatal
+                console.warn('Server contracts merge failed', e);
+            }
+        }
+
+
 // Contract Examples
 const examples = {
     'simple-storage': `// SPDX-License-Identifier: MIT
@@ -744,6 +804,14 @@ function renderDeployedContracts() {
 
 // Auto-populate wallet if logged in
 document.addEventListener('DOMContentLoaded', () => {
+            loadLocalContracts();
+            renderContractsList();
+            // Pull in server-side deployed contracts (if any)
+            mergeServerContracts();
+            const addr = document.getElementById('deployAddress');
+            if (addr) {
+                addr.addEventListener('change', () => { loadLocalContracts(); mergeServerContracts(); });
+            }
     const wallet = localStorage.getItem('thr_address');
     const secret = localStorage.getItem('thr_secret');
 
@@ -754,5 +822,15 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('deploySecret').value = secret;
     }
 });
+
+        // Reload contracts when address changes
+        document.addEventListener('input', (e) => {
+            if (e && e.target && e.target.id === 'deployAddress') {
+                loadLocalContracts();
+                renderContractsList();
+                mergeServerContracts();
+            }
+        });
+
 </script>
 {% endblock %}

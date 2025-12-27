@@ -2662,6 +2662,7 @@ def api_ai_files_upload():
                 "id": file_id,
                 "saved_name": saved_name,
                 "original_name": original_name,
+                "path": save_path,  # ADDED - needed for AI chat to read file
                 "size": len(blob),
                 "mimetype": mimetype,
                 "sha256": sha,
@@ -2673,6 +2674,11 @@ def api_ai_files_upload():
             meta_path = os.path.join(AI_UPLOADS_DIR, f"{file_id}.json")
             with open(meta_path, "w", encoding="utf-8") as f:
                 json.dump(meta, f, ensure_ascii=False, indent=2)
+
+            # Update the unified upload index so chat endpoint can find this file
+            idx = load_upload_index()
+            idx[file_id] = meta
+            save_upload_index(idx)
 
             uploaded.append({
                 "id": file_id,

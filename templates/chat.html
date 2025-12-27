@@ -345,7 +345,8 @@
       background: radial-gradient(circle at top, #07182e 0, #040b17 55%);
       padding: 8px 10px;
       position: relative;
-      overflow: hidden;
+      overflow: visible;
+      min-height: 0;
     }
 
     .chat-panel::before {
@@ -420,11 +421,14 @@
     #messages {
       flex: 1;
       overflow-y: auto;
+      overflow-x: hidden;
+      min-height: 0;
       padding: 6px 4px 8px 4px;
       border-radius: var(--radius-md);
       border: 1px solid rgba(12, 30, 51, 0.9);
       background: radial-gradient(circle at top, #050f1f 0, #040a16 55%);
       font-size: 13px;
+      scroll-behavior: smooth;
     }
 
     .msg-row {
@@ -1082,7 +1086,11 @@
     }
 
     function scrollMessagesToBottom() {
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        });
+      });
     }
 
     function escapeHtml(text) {

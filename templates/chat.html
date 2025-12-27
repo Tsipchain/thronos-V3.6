@@ -1497,41 +1497,51 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
 
-        // AI reply
-        if (data.reply) {
+        // Handle no credits case
+        if (data.status === "no_credits") {
           appendMessage({
-            role: "ai",
-            content: data.reply.content || data.reply.text || "",
-            model: data.reply.model || model,
-            files: (data.reply.files || []).map((f) => ({
-              file_id: f.id,
-              name: f.name,
+            role: "assistant",
+            content: data.response || "No AI credits available. Please purchase an AI pack to continue.",
+            model: "system",
+          });
+          setSessionStatus("Ready");
+          setSending(true);
+          return;
+        }
+
+        // AI reply - handle actual server response format
+        if (data.response) {
+          appendMessage({
+            role: "assistant",
+            content: data.response,
+            model: data.model || model,
+            files: (data.files || []).map((f) => ({
+              file_id: f.id || f.file_id,
+              name: f.name || f.filename,
             })),
           });
         }
 
-        // usage
-        if (data.usage) {
-          const u = data.usage;
-          usageStatusEl.textContent =
-            "Tokens: " +
-            u.total_tokens +
-            " (prompt " +
-            u.prompt_tokens +
-            ", completion " +
-            u.completion_tokens +
-            ")";
+        // Update credits display if available
+        if (data.credits !== undefined) {
+          usageStatusEl.textContent = `AI Credits: ${data.credits}`;
         }
 
+        // Update wallet if returned
         if (data.wallet) {
           walletInputEl.value = data.wallet;
-          walletLabelEl.textContent =
-            data.wallet.slice(0, 6) + "…" + data.wallet.slice(-4);
+          const w = data.wallet;
+          walletLabelEl.textContent = w.slice(0, 6) + "…" + w.slice(-4);
         }
 
         setSessionStatus("Ready");
       } catch (e) {
         console.error("sendMessage error", e);
+        appendMessage({
+          role: "assistant",
+          content: "Error: " + e.message,
+          model: "system",
+        });
         setSessionStatus("Error sending message");
       } finally {
         setSending(true);

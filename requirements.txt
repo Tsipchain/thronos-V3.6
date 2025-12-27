@@ -12,3 +12,4 @@ pycryptodomex
 openai
 google-generativeai>=0.8.0
 stripe
+PyMuPDF

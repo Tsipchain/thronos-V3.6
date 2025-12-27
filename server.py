@@ -68,14 +68,6 @@ except Exception:
 # ─── CONFIG ────────────────────────────────────────
 app = Flask(__name__)
 
-# Register optional EVM routes (if module exists)
-if register_evm_routes is not None:
-    try:
-        register_evm_routes(app)  # type: ignore
-        print('[EVM] routes registered')
-    except Exception as _e:
-        print(f'[EVM] routes not registered: {_e}')
-
 
 # ─── EVM INTEGRATION ────────────────────────────────────────────────────
 
@@ -105,6 +97,14 @@ VOTING_FILE         = os.path.join(DATA_DIR, "voting.json") # Feature voting for
 # AI commerce
 AI_PACKS_FILE       = os.path.join(DATA_DIR, "ai_packs.json")
 AI_CREDITS_FILE     = os.path.join(DATA_DIR, "ai_credits.json")
+
+# Register optional EVM routes (if module exists)
+if register_evm_routes is not None:
+    try:
+        register_evm_routes(app, DATA_DIR, LEDGER_FILE, CHAIN_FILE, PLEDGE_CHAIN)  # type: ignore
+        print('[EVM] routes registered')
+    except Exception as _e:
+        print(f'[EVM] routes not registered: {_e}')
 
 # --------------------------------------------------------------------------
 # AI demo usage tracking
@@ -3372,8 +3372,13 @@ def save_custom_token_ledger(token_id, ledger):
 
 @app.route("/api/tokens/create", methods=["POST"])
 def api_create_token():
-    """Create a custom experimental token"""
-    data = request.get_json() or {}
+    """Create a custom experimental token with optional logo upload"""
+    # Support both JSON and form-data (for file upload)
+    if request.is_json:
+        data = request.get_json() or {}
+    else:
+        data = request.form.to_dict()
+
     creator = (data.get("creator_address") or "").strip()
     symbol = (data.get("symbol") or "").strip().upper()
     name = (data.get("name") or "").strip()
@@ -3382,6 +3387,9 @@ def api_create_token():
     max_supply = float(data.get("max_supply", 0))
     color = (data.get("color") or "#00ff66").strip()
     description = (data.get("description") or "").strip()
+
+    # Check for logo file upload (optional, FREE!)
+    logo_file = request.files.get("logo") if request.files else None
 
     if not creator or not validate_thr_address(creator):
         return jsonify({"ok": False, "error": "Invalid creator address"}), 400
@@ -3462,6 +3470,21 @@ def api_create_token():
 
     tokens[symbol] = token
     save_custom_tokens(tokens)
+
+    # Handle logo upload if provided (FREE - no extra charge!)
+    if logo_file and logo_file.filename:
+        try:
+            ext = os.path.splitext(secure_filename(logo_file.filename))[1] or ".png"
+            logo_filename = f"{token_id}{ext}"
+            logo_path = os.path.join(TOKEN_LOGOS_DIR, logo_filename)
+            logo_file.save(logo_path)
+
+            # Update token with logo path
+            token["logo"] = f"/static/token_logos/{logo_filename}"
+            tokens[symbol] = token
+            save_custom_tokens(tokens)
+        except Exception as e:
+            logger.warning(f"Failed to save logo for token {symbol}: {e}")
 
     if initial_supply > 0:
         token_ledger = {creator: initial_supply}

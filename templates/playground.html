@@ -626,11 +626,11 @@ async function deployContract() {
     }
 
     const payload = {
-        from: address,
-        secret: secret,
+        deployer: address,
+        auth_secret: secret,
         bytecode: compiledBytecode,
         value: value,
-        gas: gas
+        gas_limit: gas
     };
 
     try {
@@ -686,11 +686,12 @@ async function callContractFunction() {
     }
 
     const payload = {
-        from: address,
-        secret: secret,
-        contract: contractAddr,
+        caller: address,
+        auth_secret: secret,
+        contract_address: contractAddr,
         data: callData,
-        value: 0
+        value: 0,
+        gas_limit: 100000
     };
 
     try {

@@ -8,7 +8,7 @@ import hashlib
 from flask import request, jsonify
 from typing import Dict, Any
 
-from evm_core import ThronosEVM, estimate_gas, compile_solidity_stub
+from evm_core_v3 import ThronosEVM, estimate_gas, compile_solidity_stub
 
 
 def register_evm_routes(app, data_dir: str, ledger_file: str, chain_file: str, pledge_chain: str):

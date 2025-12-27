@@ -1341,7 +1341,9 @@
 
     async function loadSessions() {
       try {
-        const res = await fetch(API_SESSIONS);
+        const wallet = walletInputEl.value.trim();
+        const url = wallet ? `${API_SESSIONS}?wallet=${encodeURIComponent(wallet)}` : API_SESSIONS;
+        const res = await fetch(url);
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
         sessions = data.sessions || [];
@@ -1378,10 +1380,14 @@
 
     async function createSession() {
       try {
+        const wallet = walletInputEl.value.trim();
         const res = await fetch(API_SESSIONS, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: "New mesh session" }),
+          body: JSON.stringify({
+            title: "New mesh session",
+            wallet: wallet || null
+          }),
         });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
@@ -1389,6 +1395,7 @@
         await loadSessions();
       } catch (e) {
         console.error("createSession error", e);
+        alert("Failed to create session. Check console for details.");
       }
     }
 

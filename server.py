@@ -68,14 +68,6 @@ except Exception:
 # ─── CONFIG ────────────────────────────────────────
 app = Flask(__name__)
 
-# Register optional EVM routes (if module exists)
-if register_evm_routes is not None:
-    try:
-        register_evm_routes(app)  # type: ignore
-        print('[EVM] routes registered')
-    except Exception as _e:
-        print(f'[EVM] routes not registered: {_e}')
-
 
 # ─── EVM INTEGRATION ────────────────────────────────────────────────────
 
@@ -105,6 +97,14 @@ VOTING_FILE         = os.path.join(DATA_DIR, "voting.json") # Feature voting for
 # AI commerce
 AI_PACKS_FILE       = os.path.join(DATA_DIR, "ai_packs.json")
 AI_CREDITS_FILE     = os.path.join(DATA_DIR, "ai_credits.json")
+
+# Register optional EVM routes (if module exists)
+if register_evm_routes is not None:
+    try:
+        register_evm_routes(app, DATA_DIR, LEDGER_FILE, CHAIN_FILE, PLEDGE_CHAIN)  # type: ignore
+        print('[EVM] routes registered')
+    except Exception as _e:
+        print(f'[EVM] routes not registered: {_e}')
 
 # --------------------------------------------------------------------------
 # AI demo usage tracking

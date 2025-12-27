@@ -2032,6 +2032,20 @@ def network_live():
 
     block_count = HEIGHT_OFFSET + len(blocks)
 
+    # Calculate active miners (unique miners in last 100 blocks)
+    active_miners_window = 100
+    recent_blocks = blocks[-min(active_miners_window, len(blocks)):]
+    unique_miners = set()
+    for block in recent_blocks:
+        miner_addr = block.get("thr_address") or block.get("miner_address")
+        if miner_addr:
+            unique_miners.add(miner_addr)
+    active_miners = len(unique_miners)
+
+    # Active peers - for now, estimate based on recent block diversity
+    # In a real P2P system, this would come from connected peer list
+    active_peers = max(1, active_miners)  # Simplified: assume 1 peer per miner
+
     return jsonify({
         "difficulty":          difficulty,
         "avg_block_time_sec":  avg_time,
@@ -2039,6 +2053,8 @@ def network_live():
         "block_count":         block_count,
         "tx_count":            len(chain),
         "mempool":             mempool_len,
+        "active_miners":       active_miners,
+        "active_peers":        active_peers,
     })
 
 @app.route("/api/mempool")
@@ -5550,6 +5566,79 @@ def api_ai_files_upload_v2():
 def api_ai_chat_alias():
     """Alias for /api/chat endpoint"""
     return api_chat()
+
+
+# AI Wallet endpoint - returns current connected wallet info
+@app.route("/api/ai/wallet", methods=["GET"])
+def api_ai_wallet():
+    """Return wallet information for AI chat interface"""
+    thr_wallet = request.cookies.get("thr_address") or ""
+
+    if not thr_wallet:
+        return jsonify({
+            "connected": False,
+            "wallet": None,
+            "balance": 0,
+            "message": "No wallet connected"
+        })
+
+    # Get wallet balance from ledger
+    ledger = load_json(LEDGER_FILE, {})
+    balance = float(ledger.get(thr_wallet, 0.0))
+
+    # Get pledge info if available
+    pledges = load_json(PLEDGE_CHAIN, [])
+    pledge = next((p for p in pledges if p.get("thr_address") == thr_wallet), None)
+
+    return jsonify({
+        "connected": True,
+        "wallet": thr_wallet,
+        "balance": round(balance, 6),
+        "has_pledge": pledge is not None,
+        "pledge_date": pledge.get("timestamp") if pledge else None
+    })
+
+
+# AI Telemetry endpoint - returns network statistics for AI interface
+@app.route("/api/ai/telemetry", methods=["GET"])
+def api_ai_telemetry():
+    """Return network telemetry for AI chat interface"""
+    try:
+        # Get network stats
+        chain = load_json(CHAIN_FILE, [])
+        mempool_data = load_json(MEMPOOL_FILE, [])
+        ledger = load_json(LEDGER_FILE, {})
+
+        # Calculate basic stats
+        total_blocks = len(chain)
+        pending_txs = len(mempool_data)
+        total_wallets = len(ledger)
+        total_supply = sum(float(bal) for bal in ledger.values())
+
+        # Get AI wallet balance
+        ai_balance = float(ledger.get(AI_WALLET_ADDRESS, 0.0))
+
+        # Get latest block info
+        latest_block = chain[-1] if chain else None
+        last_block_time = latest_block.get("timestamp") if latest_block else None
+
+        return jsonify({
+            "network": {
+                "total_blocks": total_blocks,
+                "pending_txs": pending_txs,
+                "total_wallets": total_wallets,
+                "total_supply": round(total_supply, 6),
+                "last_block_time": last_block_time
+            },
+            "ai": {
+                "wallet": AI_WALLET_ADDRESS,
+                "balance": round(ai_balance, 6),
+                "status": "active"
+            },
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # Update /chat route to pass wallet to template

@@ -1,5 +1,12 @@
-// Configuration
-const API_BASE = 'http://localhost:5000'; // Can be changed to production URL
+// Configuration - Auto-detect API base from storage or use production
+let API_BASE = 'https://thrchain.up.railway.app'; // Production URL
+
+// Initialize API base from storage
+chrome.storage.local.get(['api_base'], (result) => {
+    if (result.api_base) {
+        API_BASE = result.api_base;
+    }
+});
 
 // State
 let currentWallet = null;

@@ -4039,6 +4039,277 @@ def api_token_mint():
     }), 200
 
 
+# ─── UNIFIED WALLET SEND ENDPOINT ─────────────────────────────
+@app.route("/api/wallet/send", methods=["POST"])
+def api_wallet_send():
+    """
+    Unified send endpoint for wallet extensions (Chrome, Firefox, Brave).
+    Routes to the appropriate handler based on token type.
+    """
+    data = request.get_json() or {}
+    token = (data.get("token") or "THR").upper()
+    from_addr = (data.get("from") or data.get("from_thr") or "").strip()
+    to_addr = (data.get("to") or data.get("to_thr") or "").strip()
+    amount = data.get("amount", 0)
+    secret = (data.get("secret") or data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+    speed = (data.get("speed") or "fast").lower()
+
+    if token == "THR":
+        # Native THR send
+        from flask import g
+        g.internal_call = True
+        return send_thr_internal(from_addr, to_addr, amount, secret, passphrase, speed)
+    else:
+        # Custom token transfer
+        return transfer_custom_token(token, from_addr, to_addr, amount, secret, passphrase)
+
+
+def send_thr_internal(from_thr, to_thr, amount_raw, auth_secret, passphrase="", speed="fast"):
+    """Internal THR send function for unified API."""
+    if not validate_thr_address(from_thr):
+        return jsonify(error="invalid_from_address", message="Invalid THR address format"), 400
+    if not validate_thr_address(to_thr):
+        return jsonify(error="invalid_to_address", message="Invalid THR address format"), 400
+
+    valid, error_msg = validate_amount(amount_raw)
+    if not valid:
+        return jsonify(error="invalid_amount", message=error_msg), 400
+
+    try:
+        amount = float(amount_raw)
+    except (TypeError, ValueError):
+        return jsonify(error="invalid_amount"), 400
+
+    if not auth_secret:
+        return jsonify(error="missing_auth_secret"), 400
+
+    pledges = load_json(PLEDGE_CHAIN, [])
+    sender_pledge = next((p for p in pledges if p.get("thr_address") == from_thr), None)
+    if not sender_pledge:
+        return jsonify(error="unknown_sender_thr"), 404
+
+    stored_auth_hash = sender_pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return jsonify(error="send_not_enabled_for_this_thr"), 400
+
+    if sender_pledge.get("has_passphrase"):
+        if not passphrase:
+            return jsonify(error="passphrase_required"), 400
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify(error="invalid_auth"), 403
+
+    if speed == "slow":
+        fee = round(amount * 0.0009, 6)
+    else:
+        fee = calculate_dynamic_fee(amount)
+
+    total_cost = amount + fee
+    ledger = load_json(LEDGER_FILE, {})
+    sender_balance = float(ledger.get(from_thr, 0.0))
+
+    if sender_balance < total_cost:
+        return jsonify(
+            error="insufficient_balance",
+            balance=round(sender_balance, 6),
+            required=total_cost,
+            fee=fee
+        ), 400
+
+    ledger[from_thr] = round(sender_balance - total_cost, 6)
+    ledger[to_thr] = round(float(ledger.get(to_thr, 0.0)) + amount, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx = {
+        "type": "transfer",
+        "timestamp": ts,
+        "from": from_thr,
+        "to": to_thr,
+        "amount": round(amount, 6),
+        "fee_burned": fee,
+        "speed": speed
+    }
+    chain = load_json(CHAIN_FILE, [])
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+
+    return jsonify({
+        "ok": True,
+        "status": "confirmed",
+        "tx": tx,
+        "new_balance": ledger[from_thr],
+        "fee": fee
+    }), 200
+
+
+def transfer_custom_token(symbol, from_thr, to_thr, amount_raw, auth_secret, passphrase=""):
+    """Internal custom token transfer for unified API."""
+    try:
+        amount = float(amount_raw)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Invalid amount"}), 400
+
+    if not symbol:
+        return jsonify({"ok": False, "error": "Symbol is required"}), 400
+    if not from_thr or not to_thr:
+        return jsonify({"ok": False, "error": "From and to addresses required"}), 400
+    if amount <= 0:
+        return jsonify({"ok": False, "error": "Amount must be positive"}), 400
+    if not auth_secret:
+        return jsonify({"ok": False, "error": "Authentication secret required"}), 400
+
+    tokens = load_custom_tokens()
+    token = tokens.get(symbol)
+    if not token:
+        return jsonify({"ok": False, "error": f"Token {symbol} not found"}), 404
+
+    if not token.get("transferable", True):
+        return jsonify({"ok": False, "error": "This token is not transferable"}), 403
+
+    pledges = load_json(PLEDGE_CHAIN, [])
+    sender_pledge = next((p for p in pledges if p.get("thr_address") == from_thr), None)
+    if not sender_pledge:
+        return jsonify({"ok": False, "error": "Sender address not found"}), 404
+
+    stored_auth_hash = sender_pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return jsonify({"ok": False, "error": "Send not enabled for this address"}), 400
+
+    if sender_pledge.get("has_passphrase"):
+        if not passphrase:
+            return jsonify({"ok": False, "error": "Passphrase required"}), 400
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify({"ok": False, "error": "Invalid authentication"}), 403
+
+    ledger = load_custom_token_ledger(token["id"])
+    sender_balance = float(ledger.get(from_thr, 0.0))
+
+    if sender_balance < amount:
+        return jsonify({
+            "ok": False,
+            "error": "Insufficient balance",
+            "balance": round(sender_balance, token["decimals"]),
+            "required": amount
+        }), 400
+
+    ledger[from_thr] = round(sender_balance - amount, token["decimals"])
+    ledger[to_thr] = round(float(ledger.get(to_thr, 0.0)) + amount, token["decimals"])
+    save_custom_token_ledger(token["id"], ledger)
+
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx_id = f"TOKEN_TRANSFER-{symbol}-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "token_transfer",
+        "token_symbol": symbol,
+        "token_id": token["id"],
+        "from": from_thr,
+        "to": to_thr,
+        "amount": round(amount, token["decimals"]),
+        "timestamp": ts,
+        "tx_id": tx_id,
+        "status": "confirmed"
+    }
+    chain = load_json(CHAIN_FILE, [])
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+
+    return jsonify({
+        "ok": True,
+        "status": "confirmed",
+        "tx": tx,
+        "new_balance": ledger[from_thr]
+    }), 200
+
+
+# ─── TOKEN HOLDERS API ─────────────────────────────
+@app.route("/api/tokens/<symbol>/holders")
+def api_token_holders(symbol):
+    """Get list of token holders and count."""
+    symbol = symbol.upper()
+
+    # Handle core tokens
+    if symbol == "THR":
+        ledger = load_json(LEDGER_FILE, {})
+        holders = []
+        for addr, balance in ledger.items():
+            if float(balance) > 0:
+                holders.append({"address": addr, "balance": float(balance)})
+        holders.sort(key=lambda x: x["balance"], reverse=True)
+        total_supply = sum(h["balance"] for h in holders)
+        return jsonify({
+            "ok": True,
+            "symbol": "THR",
+            "holders_count": len(holders),
+            "total_supply": round(total_supply, 6),
+            "holders": holders[:100]  # Top 100 holders
+        }), 200
+
+    # Handle custom tokens
+    tokens = load_custom_tokens()
+    token = tokens.get(symbol)
+    if not token:
+        return jsonify({"ok": False, "error": f"Token {symbol} not found"}), 404
+
+    ledger = load_custom_token_ledger(token["id"])
+    holders = []
+    for addr, balance in ledger.items():
+        if float(balance) > 0:
+            holders.append({"address": addr, "balance": float(balance)})
+    holders.sort(key=lambda x: x["balance"], reverse=True)
+
+    return jsonify({
+        "ok": True,
+        "symbol": symbol,
+        "name": token["name"],
+        "holders_count": len(holders),
+        "total_supply": token.get("total_supply", 0),
+        "holders": holders[:100]  # Top 100 holders
+    }), 200
+
+
+@app.route("/api/tokens/stats")
+def api_tokens_stats():
+    """Get stats for all tokens including holder counts."""
+    stats = []
+
+    # THR stats
+    thr_ledger = load_json(LEDGER_FILE, {})
+    thr_holders = sum(1 for b in thr_ledger.values() if float(b) > 0)
+    thr_supply = sum(float(b) for b in thr_ledger.values())
+    stats.append({
+        "symbol": "THR",
+        "name": "Thronos",
+        "holders_count": thr_holders,
+        "total_supply": round(thr_supply, 6),
+        "color": "#ff6600"
+    })
+
+    # Custom tokens stats
+    tokens = load_custom_tokens()
+    for symbol, token in tokens.items():
+        ledger = load_custom_token_ledger(token["id"])
+        holders = sum(1 for b in ledger.values() if float(b) > 0)
+        stats.append({
+            "symbol": symbol,
+            "name": token["name"],
+            "holders_count": holders,
+            "total_supply": token.get("total_supply", 0),
+            "color": token.get("color", "#00ff66"),
+            "logo": token.get("logo")
+        })
+
+    return jsonify({"ok": True, "tokens": stats}), 200
+
+
 @app.route("/send_thr", methods=["POST"])
 def send_thr():
     data = request.get_json() or {}

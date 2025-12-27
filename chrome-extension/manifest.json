@@ -28,7 +28,8 @@
   ],
   "host_permissions": [
     "http://localhost:5000/*",
-    "https://*.thronos.network/*"
+    "https://*.thronos.network/*",
+    "https://*.railway.app/*"
   ],
   "content_scripts": [
     {

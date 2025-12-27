@@ -252,12 +252,12 @@ async function deployContract() {
         return;
     }
     const payload = {
-        from: address,
-        secret,
+        deployer: address,
+        auth_secret: secret,
         passphrase,
         bytecode,
         value,
-        gas: gasLimit
+        gas_limit: gasLimit
     };
     try {
         const res = await fetch('/api/evm/deploy', {
@@ -287,12 +287,13 @@ async function callContract() {
         return;
     }
     const payload = {
-        from: address,
-        secret,
+        caller: address,
+        auth_secret: secret,
         passphrase,
-        contract,
+        contract_address: contract,
         data: dataHex,
-        value
+        value,
+        gas_limit: 100000
     };
     try {
         const res = await fetch('/api/evm/call', {

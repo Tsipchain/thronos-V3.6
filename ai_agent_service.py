@@ -178,7 +178,26 @@ class ThronosAI:
         if not self.gemini_enabled:
             raise RuntimeError("Gemini not available (missing key or library)")
         try:
-            model = genai.GenerativeModel(model_name)
+            system_instruction = """You are Thronos Autonomous AI. Answer concisely and in production-ready code when needed.
+
+**FILE GENERATION CAPABILITY:**
+When users ask you to create, edit, or generate files, use this format:
+
+[[FILE:filename.ext]]
+file content here
+[[/FILE]]
+
+Examples:
+- Python script: [[FILE:miner.py]] code here [[/FILE]]
+- Edited document: [[FILE:edited.txt]] content [[/FILE]]
+- Configuration: [[FILE:config.json]] {...} [[/FILE]]
+
+Multiple files can be created in one response. Always describe what you're creating before the file block."""
+
+            model = genai.GenerativeModel(
+                model_name,
+                system_instruction=system_instruction
+            )
             resp = model.generate_content(prompt)
             txt = (getattr(resp, "text", "") or "").strip()
             if not txt:
@@ -194,10 +213,32 @@ class ThronosAI:
         if not self.openai_client:
             raise RuntimeError("OpenAI client not initialized")
         try:
+            system_prompt = """You are Thronos Autonomous AI. Answer concisely and in production-ready code when needed.
+
+**FILE GENERATION CAPABILITY:**
+When users ask you to create, edit, or generate files, use this format:
+
+[[FILE:filename.ext]]
+file content here
+[[/FILE]]
+
+Examples:
+- To create Python script: [[FILE:script.py]] code here [[/FILE]]
+- To create edited image data: [[FILE:edited_image.png]] base64 data [[/FILE]]
+- To create text document: [[FILE:document.txt]] text here [[/FILE]]
+
+Multiple files can be created in one response. Files are automatically saved and download links are provided to the user.
+
+**IMPORTANT:**
+- Always use [[FILE:name]] format for file generation
+- Include proper file extensions
+- For binary files (images/PDFs), use base64 encoding
+- Describe what you're creating before the file block"""
+
             completion = self.openai_client.chat.completions.create(
                 model=model_name,
                 messages=[
-                    {"role": "system", "content": "You are Thronos Autonomous AI. Answer concisely and in production-ready code when needed."},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt},
                 ],
             )

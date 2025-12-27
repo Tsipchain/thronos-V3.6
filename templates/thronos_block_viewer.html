@@ -69,6 +69,10 @@
     <div class="tab" data-tab="txs">Transfers</div>
     <div class="tab" data-tab="mempool">Mempool</div>
     <div class="tab" data-tab="live">Live Stats</div>
+    <div class="tab" data-tab="tokens">Tokens</div>
+    <div class="tab" data-tab="pools">Pools</div>
+    <div class="tab" data-tab="l2e">L2E</div>
+    <div class="tab" data-tab="music">Music</div>
     <div class="right muted" id="liveClock">—</div>
   </div>
 
@@ -172,6 +176,115 @@
       <div class="small muted">network nodes</div>
     </div>
   </section>
+
+  <!-- Tokens -->
+  <section id="view-tokens" class="panel" style="display:none;margin-top:12px">
+    <table id="tblTokens">
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>Name</th>
+          <th>Total Supply</th>
+          <th>Decimals</th>
+          <th>Creator</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody id="tokensBody">
+        <tr><td colspan="6" style="text-align:center">Loading tokens...</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- Pools -->
+  <section id="view-pools" class="panel" style="display:none;margin-top:12px">
+    <table id="tblPools">
+      <thead>
+        <tr>
+          <th>Pair</th>
+          <th>Reserve A</th>
+          <th>Reserve B</th>
+          <th>Total Shares</th>
+          <th>Fee Tier</th>
+          <th>TVL (est)</th>
+        </tr>
+      </thead>
+      <tbody id="poolsBody">
+        <tr><td colspan="6" style="text-align:center">Loading pools...</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- L2E (Learn-to-Earn) -->
+  <section id="view-l2e" class="panel" style="display:none;margin-top:12px">
+    <div class="grid">
+      <div class="card">
+        <h4>Total L2E Distributed</h4>
+        <div class="big" id="l2eTotalDistributed">—</div>
+        <div class="small muted">Learn-to-Earn tokens</div>
+      </div>
+      <div class="card">
+        <h4>Active Courses</h4>
+        <div class="big" id="l2eActiveCourses">—</div>
+        <div class="small muted">available courses</div>
+      </div>
+      <div class="card">
+        <h4>Total Enrollments</h4>
+        <div class="big" id="l2eTotalEnrollments">—</div>
+        <div class="small muted">student enrollments</div>
+      </div>
+      <div class="card">
+        <h4>Completions</h4>
+        <div class="big" id="l2eCompletions">—</div>
+        <div class="small muted">courses completed</div>
+      </div>
+    </div>
+    <table id="tblL2E" style="margin-top:12px">
+      <thead>
+        <tr>
+          <th>Course</th>
+          <th>Teacher</th>
+          <th>Price (THR)</th>
+          <th>Reward (L2E)</th>
+          <th>Enrollments</th>
+          <th>Completions</th>
+        </tr>
+      </thead>
+      <tbody id="l2eBody">
+        <tr><td colspan="6" style="text-align:center">Loading courses...</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- Music -->
+  <section id="view-music" class="panel" style="display:none;margin-top:12px">
+    <div class="grid">
+      <div class="card">
+        <h4>Total Artists</h4>
+        <div class="big" id="musicTotalArtists">0</div>
+        <div class="small muted">registered artists</div>
+      </div>
+      <div class="card">
+        <h4>Total Tracks</h4>
+        <div class="big" id="musicTotalTracks">0</div>
+        <div class="small muted">uploaded tracks</div>
+      </div>
+      <div class="card">
+        <h4>Royalties Paid</h4>
+        <div class="big" id="musicRoyaltiesPaid">0 THR</div>
+        <div class="small muted">total distributed</div>
+      </div>
+      <div class="card">
+        <h4>Platform Status</h4>
+        <div class="big" id="musicStatus">Coming Soon</div>
+        <div class="small muted">implementation pending</div>
+      </div>
+    </div>
+    <div style="text-align:center;padding:40px;color:#9fdfb4">
+      <p style="font-size:16px">🎵 Music Platform Coming Soon</p>
+      <p style="font-size:12px;opacity:0.7">The decentralized music streaming and royalty distribution platform is currently under development.</p>
+    </div>
+  </section>
 </div>
 
 <script>
@@ -197,9 +310,13 @@ document.querySelectorAll('.tab').forEach(t=>{
     document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
     t.classList.add('active');
     const tab = t.dataset.tab;
-    ['blocks','txs','mempool','live'].forEach(name=>{
+    ['blocks','txs','mempool','live','tokens','pools','l2e','music'].forEach(name=>{
       el('#view-'+name).style.display = (name===tab)?'block':'none';
     });
+    // Load data for the selected tab
+    if(tab==='tokens') loadTokens();
+    if(tab==='pools') loadPools();
+    if(tab==='l2e') loadL2E();
   };
 });
 
@@ -366,6 +483,125 @@ setTimeout(()=>renderBlocks(CURRENT_BLOCKS), 100);
 /* polite defaults for older servers with no data passed */
 if(!Array.isArray(CURRENT_BLOCKS)) CURRENT_BLOCKS=[];
 if(!Array.isArray(CURRENT_TXS)) CURRENT_TXS=[];
+
+/* ===== New Tab Data Loaders ===== */
+async function loadTokens(){
+  try{
+    const r = await fetch('/api/tokens/list');
+    const j = await r.json();
+    const tb = document.getElementById('tokensBody');
+    tb.innerHTML = '';
+
+    const tokens = j.tokens || {};
+    const tokensList = Object.values(tokens);
+
+    if(tokensList.length === 0) {
+      tb.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#9fdfb4">No custom tokens created yet</td></tr>';
+      return;
+    }
+
+    tokensList.forEach(t=>{
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="mono k">${t.symbol}</td>
+        <td>${t.name}</td>
+        <td class="mono">${fmtN(t.supply||0)}</td>
+        <td>${t.decimals||6}</td>
+        <td class="mono"><a class="addr" onclick="copy('${t.creator||'—'}')">${short(t.creator||'—')}</a></td>
+        <td class="muted">${rel(t.created_at||'')}</td>
+      `;
+      tb.appendChild(tr);
+    });
+  }catch(e){
+    document.getElementById('tokensBody').innerHTML = '<tr><td colspan="6" style="text-align:center;color:#ff5577">Error loading tokens</td></tr>';
+  }
+}
+
+async function loadPools(){
+  try{
+    const r = await fetch('/api/v1/pools');
+    const j = await r.json();
+    const tb = document.getElementById('poolsBody');
+    tb.innerHTML = '';
+
+    const pools = j.pools || [];
+
+    if(pools.length === 0) {
+      tb.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#9fdfb4">No liquidity pools created yet</td></tr>';
+      return;
+    }
+
+    pools.forEach(p=>{
+      const tvl = p.tvl_usd || 0;
+      let feeTier = '🌱 0.09%';
+      if(tvl >= 100000 || (p.tvl_btc||0) >= 1.0) feeTier = '💎 0.0009%';
+      else if(tvl >= 10000 || (p.tvl_btc||0) >= 0.1) feeTier = '🚀 0.009%';
+
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="mono k">${p.token_a}/${p.token_b}</td>
+        <td class="mono">${fmtN(p.reserves_a||p.reserve_a||0)}</td>
+        <td class="mono">${fmtN(p.reserves_b||p.reserve_b||0)}</td>
+        <td class="mono">${fmtN(p.total_shares||0)}</td>
+        <td>${feeTier}</td>
+        <td>$${tvl.toFixed(2)}</td>
+      `;
+      tb.appendChild(tr);
+    });
+  }catch(e){
+    document.getElementById('poolsBody').innerHTML = '<tr><td colspan="6" style="text-align:center;color:#ff5577">Error loading pools</td></tr>';
+  }
+}
+
+async function loadL2E(){
+  try{
+    const r = await fetch('/api/v1/courses');
+    const j = await r.json();
+    const courses = j.courses || [];
+
+    // Update stats
+    el('#l2eActiveCourses').textContent = courses.length;
+
+    let totalEnroll = 0;
+    let totalComplete = 0;
+    let totalDistributed = 0;
+
+    courses.forEach(c => {
+      totalEnroll += (c.enrollments||[]).length;
+      totalComplete += (c.completions||[]).length;
+      totalDistributed += (c.completions||[]).length * (c.reward||0);
+    });
+
+    el('#l2eTotalEnrollments').textContent = totalEnroll;
+    el('#l2eCompletions').textContent = totalComplete;
+    el('#l2eTotalDistributed').textContent = fmtN(totalDistributed) + ' L2E';
+
+    // Render table
+    const tb = document.getElementById('l2eBody');
+    tb.innerHTML = '';
+
+    if(courses.length === 0) {
+      tb.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#9fdfb4">No courses available yet</td></tr>';
+      return;
+    }
+
+    courses.forEach(c=>{
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${c.title||'Untitled'}</td>
+        <td class="mono"><a class="addr" onclick="copy('${c.teacher||''}')">${short(c.teacher||'—')}</a></td>
+        <td>${fmtN(c.price||0)}</td>
+        <td class="k">${fmtN(c.reward||0)}</td>
+        <td>${(c.enrollments||[]).length}</td>
+        <td>${(c.completions||[]).length}</td>
+      `;
+      tb.appendChild(tr);
+    });
+  }catch(e){
+    console.error('L2E load error:', e);
+    document.getElementById('l2eBody').innerHTML = '<tr><td colspan="6" style="text-align:center;color:#ff5577">Error loading courses</td></tr>';
+  }
+}
 </script>
 </body>
 </html>

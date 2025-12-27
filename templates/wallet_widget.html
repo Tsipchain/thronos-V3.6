@@ -246,6 +246,160 @@
         .wallet-widget.compact .balance-amount {
             font-size: 14px;
         }
+
+        /* Token Selector */
+        .token-selector {
+            margin-bottom: 15px;
+        }
+
+        .token-selector-label {
+            font-size: 11px;
+            color: var(--widget-muted);
+            margin-bottom: 6px;
+            display: block;
+        }
+
+        .token-selector-dropdown {
+            width: 100%;
+            padding: 10px 12px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid var(--widget-border);
+            color: var(--widget-fg);
+            font-family: monospace;
+            font-size: 13px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .token-selector-dropdown:hover,
+        .token-selector-dropdown:focus {
+            border-color: var(--widget-accent);
+            box-shadow: 0 0 10px rgba(0, 255, 102, 0.2);
+            outline: none;
+        }
+
+        /* Token Info Modal */
+        .token-info-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .token-info-modal.active {
+            display: flex;
+        }
+
+        .token-info-content {
+            background: var(--widget-panel);
+            border: 2px solid var(--widget-accent);
+            border-radius: 16px;
+            padding: 30px;
+            max-width: 500px;
+            width: 90%;
+            box-shadow: 0 0 40px rgba(0, 255, 102, 0.3);
+            position: relative;
+        }
+
+        .token-info-close {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background: none;
+            border: none;
+            color: var(--widget-muted);
+            font-size: 24px;
+            cursor: pointer;
+            transition: color 0.3s;
+        }
+
+        .token-info-close:hover {
+            color: var(--widget-accent);
+        }
+
+        .token-info-header {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid var(--widget-border);
+        }
+
+        .token-info-logo-large {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            border: 3px solid;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        .token-info-logo-large img {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+        }
+
+        .token-info-title {
+            flex: 1;
+        }
+
+        .token-info-symbol {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--widget-accent);
+        }
+
+        .token-info-name {
+            font-size: 13px;
+            color: var(--widget-muted);
+        }
+
+        .token-info-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .token-info-stat {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid rgba(0, 255, 102, 0.1);
+        }
+
+        .token-info-stat-label {
+            font-size: 11px;
+            color: var(--widget-muted);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+        }
+
+        .token-info-stat-value {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--widget-fg);
+            font-family: monospace;
+        }
+
+        .token-item {
+            cursor: pointer;
+        }
+
+        .token-item:active {
+            transform: scale(0.98);
+        }
     </style>
 </head>
 <body>
@@ -253,6 +407,40 @@
         <div class="loading">
             <div class="spinner"></div>
             <p style="margin-top: 15px;">Loading wallet...</p>
+        </div>
+    </div>
+
+    <!-- Token Info Modal -->
+    <div class="token-info-modal" id="tokenInfoModal">
+        <div class="token-info-content">
+            <button class="token-info-close" onclick="closeTokenInfo()">×</button>
+            <div class="token-info-header">
+                <div class="token-info-logo-large" id="modalTokenLogo"></div>
+                <div class="token-info-title">
+                    <div class="token-info-symbol" id="modalTokenSymbol"></div>
+                    <div class="token-info-name" id="modalTokenName"></div>
+                </div>
+            </div>
+            <div class="token-info-stats">
+                <div class="token-info-stat">
+                    <div class="token-info-stat-label">Your Balance</div>
+                    <div class="token-info-stat-value" id="modalTokenBalance"></div>
+                </div>
+                <div class="token-info-stat">
+                    <div class="token-info-stat-label">Decimals</div>
+                    <div class="token-info-stat-value" id="modalTokenDecimals"></div>
+                </div>
+                <div class="token-info-stat">
+                    <div class="token-info-stat-label">Value in THR</div>
+                    <div class="token-info-stat-value" id="modalTokenValueTHR"></div>
+                </div>
+                <div class="token-info-stat">
+                    <div class="token-info-stat-label">Token Color</div>
+                    <div class="token-info-stat-value" id="modalTokenColor">
+                        <span id="modalTokenColorBox" style="display: inline-block; width: 20px; height: 20px; border-radius: 4px; vertical-align: middle; margin-left: 5px;"></span>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -289,12 +477,16 @@
             }
         }
 
+        // Store all tokens globally for filtering
+        let allTokens = [];
+        let selectedTokenFilter = 'all';
+
         function renderWallet(data) {
             const widget = document.getElementById('walletWidget');
-            const tokens = data.tokens || [];
+            allTokens = data.tokens || [];
 
             // Calculate total balance using dynamic prices from pools
-            const totalTHR = tokens.reduce((sum, t) => {
+            const totalTHR = allTokens.reduce((sum, t) => {
                 // Use value_in_thr from API (calculated from pool reserves)
                 return sum + (t.value_in_thr || 0);
             }, 0);
@@ -315,33 +507,22 @@
                 </div>
                 ` : ''}
 
-                <div class="tokens-list">
+                ${!compactMode ? `
+                <div class="token-selector">
+                    <label class="token-selector-label">Filter by Token</label>
+                    <select class="token-selector-dropdown" id="tokenFilter" onchange="filterTokens()">
+                        <option value="all">All Tokens</option>
+                        ${allTokens.map(t => `<option value="${t.symbol}">${t.symbol} - ${t.name}</option>`).join('')}
+                    </select>
+                </div>
+                ` : ''}
+
+                <div class="tokens-list" id="tokensList">
             `;
 
-            tokens.forEach(token => {
-                html += `
-                    <div class="token-item">
-                        <div class="token-logo" style="border-color: ${token.color};">
-                            ${token.logo ? `<img src="${token.logo}" alt="${token.symbol}" onerror="this.style.display='none'; this.nextSibling.style.display='block';">` : ''}
-                            <span style="display: ${token.logo ? 'none' : 'block'}; color: ${token.color};">${token.symbol[0]}</span>
-                        </div>
-                        <div class="token-info">
-                            <div class="token-symbol">${token.symbol}</div>
-                            <div class="token-name">${token.name}</div>
-                        </div>
-                        <div class="token-balance">
-                            <div class="balance-amount" style="color: ${token.color};">
-                                ${token.balance.toFixed(token.decimals)}
-                            </div>
-                            ${!compactMode ? '<div class="balance-usd">~$0.00</div>' : ''}
-                        </div>
-                    </div>
-                `;
-            });
+            html += `</div>`;
 
             html += `
-                </div>
-
                 <div class="widget-footer">
                     <div class="last-updated">Last updated: ${data.last_updated}</div>
                     <button class="refresh-btn" onclick="loadWalletData()">🔄 Refresh</button>
@@ -349,7 +530,86 @@
             `;
 
             widget.innerHTML = html;
+
+            // Render tokens after setting up the container
+            renderTokensList();
         }
+
+        function renderTokensList() {
+            const container = document.getElementById('tokensList');
+            if (!container) return;
+
+            const tokensToShow = selectedTokenFilter === 'all'
+                ? allTokens
+                : allTokens.filter(t => t.symbol === selectedTokenFilter);
+
+            container.innerHTML = '';
+
+            tokensToShow.forEach(token => {
+                const tokenDiv = document.createElement('div');
+                tokenDiv.className = 'token-item';
+                tokenDiv.onclick = () => showTokenInfo(token);
+                tokenDiv.innerHTML = `
+                    <div class="token-logo" style="border-color: ${token.color};">
+                        ${token.logo ? `<img src="${token.logo}" alt="${token.symbol}" onerror="this.style.display='none'; this.nextSibling.style.display='block';">` : ''}
+                        <span style="display: ${token.logo ? 'none' : 'block'}; color: ${token.color};">${token.symbol[0]}</span>
+                    </div>
+                    <div class="token-info">
+                        <div class="token-symbol">${token.symbol}</div>
+                        <div class="token-name">${token.name}</div>
+                    </div>
+                    <div class="token-balance">
+                        <div class="balance-amount" style="color: ${token.color};">
+                            ${token.balance.toFixed(token.decimals)}
+                        </div>
+                        ${!compactMode ? '<div class="balance-usd">~$0.00</div>' : ''}
+                    </div>
+                `;
+                container.appendChild(tokenDiv);
+            });
+        }
+
+        function filterTokens() {
+            const select = document.getElementById('tokenFilter');
+            selectedTokenFilter = select.value;
+            renderTokensList();
+        }
+
+        function showTokenInfo(token) {
+            const modal = document.getElementById('tokenInfoModal');
+            const logoDiv = document.getElementById('modalTokenLogo');
+
+            // Set logo
+            logoDiv.style.borderColor = token.color;
+            if (token.logo) {
+                logoDiv.innerHTML = `<img src="${token.logo}" alt="${token.symbol}">`;
+            } else {
+                logoDiv.innerHTML = `<span style="color: ${token.color};">${token.symbol[0]}</span>`;
+            }
+
+            // Set details
+            document.getElementById('modalTokenSymbol').textContent = token.symbol;
+            document.getElementById('modalTokenName').textContent = token.name;
+            document.getElementById('modalTokenBalance').textContent = token.balance.toFixed(token.decimals);
+            document.getElementById('modalTokenDecimals').textContent = token.decimals;
+            document.getElementById('modalTokenValueTHR').textContent = (token.value_in_thr || 0).toFixed(6) + ' THR';
+            document.getElementById('modalTokenColorBox').style.backgroundColor = token.color;
+
+            modal.classList.add('active');
+        }
+
+        function closeTokenInfo() {
+            const modal = document.getElementById('tokenInfoModal');
+            modal.classList.remove('active');
+        }
+
+        // Close modal on background click
+        document.addEventListener('click', (e) => {
+            const modal = document.getElementById('tokenInfoModal');
+            if (e.target === modal) {
+                closeTokenInfo();
+            }
+        });
 
         // Initial load
         loadWalletData();

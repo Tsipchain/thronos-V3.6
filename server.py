@@ -5993,57 +5993,6 @@ def api_ai_session_delete_v2():
 
 
 # Add file upload endpoint
-@app.route("/api/ai/files/upload", methods=["POST"])
-def api_ai_files_upload_v2():
-    """
-    Upload files for chat attachments.
-    Accepts multipart form with 'file' or 'files' field.
-    """
-    wallet = request.form.get("wallet") or ""
-    session_id = request.form.get("session_id") or ""
-    purpose = request.form.get("purpose") or "chat"
-    
-    # Get files from request
-    files = request.files.getlist("files") or request.files.getlist("file")
-    if not files or not any(f.filename for f in files):
-        return jsonify({"ok": False, "error": "No files provided"}), 400
-
-    identity, guest_id = _current_actor_id(wallet or None)
-    
-    uploaded = []
-    try:
-        for file in files:
-            if not file.filename:
-                continue
-            
-            # Store file
-            meta = store_uploaded_file(
-                file, 
-                owner_wallet=wallet if wallet else None,
-                session_id=session_id,
-                owner_guest=guest_id
-            )
-            
-            uploaded.append({
-                "id": meta.get("file_id"),
-                "name": meta.get("filename"),
-                "size": meta.get("size"),
-                "mimetype": meta.get("content_type"),
-            })
-        
-        if not uploaded:
-            return jsonify({"ok": False, "error": "No valid files uploaded"}), 400
-        
-        resp = make_response(jsonify({"ok": True, "files": uploaded}))
-        if guest_id:
-            resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
-        return resp
-        
-    except Exception as e:
-        app.logger.exception("File upload error")
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
 # Add /api/ai/chat as alias to /api/chat (for backward compatibility)
 @app.route("/api/ai/chat", methods=["POST"])
 def api_ai_chat_alias():
@@ -6087,41 +6036,85 @@ def api_ai_wallet():
 def api_ai_telemetry():
     """Return network telemetry for AI chat interface"""
     try:
+        # Get wallet from cookie to check AI credits
+        thr_wallet = request.cookies.get("thr_address") or ""
+        ai_credits = 0
+        if thr_wallet:
+            credits_map = load_ai_credits()
+            try:
+                ai_credits = int(credits_map.get(thr_wallet, 0) or 0)
+            except (TypeError, ValueError):
+                ai_credits = 0
+
         # Get network stats
         chain = load_json(CHAIN_FILE, [])
         mempool_data = load_json(MEMPOOL_FILE, [])
-        ledger = load_json(LEDGER_FILE, {})
-
-        # Calculate basic stats
-        total_blocks = len(chain)
         pending_txs = len(mempool_data)
-        total_wallets = len(ledger)
-        total_supply = sum(float(bal) for bal in ledger.values())
 
-        # Get AI wallet balance
-        ai_balance = float(ledger.get(AI_WALLET_ADDRESS, 0.0))
+        # Calculate difficulty and hashrate (same logic as /api/network_live)
+        blocks = chain
+        target = get_mining_target()
+        difficulty = int(INITIAL_TARGET // target)
+        hashrate = 0
 
-        # Get latest block info
-        latest_block = chain[-1] if chain else None
-        last_block_time = latest_block.get("timestamp") if latest_block else None
+        # Calculate hashrate from recent blocks
+        if len(blocks) >= 10:
+            tail = blocks[-10:]
+            try:
+                from datetime import datetime
+                t_fmt = "%Y-%m-%d %H:%M:%S UTC"
+                t0 = datetime.strptime(tail[0]["timestamp"], t_fmt).timestamp()
+                t1 = datetime.strptime(tail[-1]["timestamp"], t_fmt).timestamp()
+                avg_time = (t1 - t0) / max(1, (len(tail) - 1))
+                if avg_time and avg_time > 0:
+                    hashrate = int(difficulty * (2**32) / avg_time)
+            except Exception:
+                hashrate = 0
 
         return jsonify({
-            "network": {
-                "total_blocks": total_blocks,
-                "pending_txs": pending_txs,
-                "total_wallets": total_wallets,
-                "total_supply": round(total_supply, 6),
-                "last_block_time": last_block_time
-            },
-            "ai": {
-                "wallet": AI_WALLET_ADDRESS,
-                "balance": round(ai_balance, 6),
-                "status": "active"
-            },
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+            "hashrate": hashrate,
+            "pending_txs": pending_txs,
+            "difficulty": difficulty,
+            "ai_credits": ai_credits
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# AI Feedback endpoint - records user feedback on AI responses
+@app.route("/api/ai/feedback", methods=["POST"])
+def api_ai_feedback():
+    """Record user feedback (thumbs up/down) on AI responses"""
+    try:
+        data = request.get_json() or {}
+        session_id = data.get("session_id", "")
+        message_text = data.get("message_text", "")
+        thumbs_up = data.get("thumbs_up", False)
+
+        # Get wallet if available
+        thr_wallet = request.cookies.get("thr_address") or ""
+
+        # Create feedback entry
+        feedback_entry = {
+            "session_id": session_id,
+            "wallet": thr_wallet,
+            "message_text": message_text[:500],  # Truncate long messages
+            "thumbs_up": thumbs_up,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        }
+
+        # Load existing feedback
+        feedback_file = os.path.join(DATA_DIR, "ai_feedback.json")
+        feedback_list = load_json(feedback_file, [])
+        feedback_list.append(feedback_entry)
+
+        # Save feedback
+        save_json(feedback_file, feedback_list)
+
+        return jsonify({"ok": True, "message": "Feedback recorded"})
+    except Exception as e:
+        app.logger.exception("Feedback error")
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 # Update /chat route to pass wallet to template
@@ -6133,25 +6126,6 @@ def chat_page_v2():
 
 
 # ... ΤΕΛΟΣ όλων των routes / helpers ...
-
-# --- AI Session API Fixes (append to end of server.py) ----------------------
-from flask import make_response
-
-def _current_actor_id(wallet: str | None) -> tuple[str, str | None]:
-    """
-    Επιστρέφει (actor_id, wallet_for_ai)
-    - Αν ο χρήστης έχει THR wallet, actor_id == wallet
-    - Αλλιώς χρησιμοποιούμε το GUEST_COOKIE_NAME για σταθερό guest id
-    """
-    if wallet:
-        # Logged in: πορτοφόλι παντού
-        return wallet, wallet
-
-    guest_id = request.cookies.get(GUEST_COOKIE_NAME)
-    if not guest_id:
-        guest_id = secrets.token_hex(16)
-
-    return guest_id, None
 
 print("✓ AI Session fixes loaded - supports guest mode and file uploads")
 # --- Startup hooks ---

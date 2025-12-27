@@ -1000,7 +1000,7 @@
     const API_SESSIONS = "/api/ai/sessions";
     const API_SESSION_MESSAGES = (id) => `/api/ai/sessions/${id}/messages`;
     const API_CHAT = "/api/ai/chat";
-    const API_FILES = "/api/ai/files";
+    const API_FILES = "/api/ai/files/upload";
     const API_TELEMETRY = "/api/ai/telemetry";
     const API_FEEDBACK = "/api/ai/feedback";
 
@@ -1477,8 +1477,8 @@
         session_id: currentSessionId,
         wallet: wallet || null,
         message: text,
-        files: pendingFiles.map((f) => f.id),
-        model,
+        attachments: pendingFiles.map((f) => f.id),
+        model_key: model,
       };
 
       // optimistic render user message

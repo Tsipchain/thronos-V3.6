@@ -2880,9 +2880,9 @@ def api_ai_session_rename():
 # The endpoint responds with {"status":"ok"} on success.  If the
 # session cannot be found, it returns a 404 with an error message.
 # -----------------------------------------------------------------------------
+# Legacy route with underscore - kept for backward compatibility
 @app.route("/api/ai_sessions/delete", methods=["POST"])
-@app.route("/api/ai/sessions/delete", methods=["POST"])
-def api_ai_session_delete():
+def api_ai_session_delete_legacy():
 
     data = request.get_json(silent=True) or {}
     wallet = (data.get("wallet") or request.args.get("wallet") or "").strip()
@@ -5879,8 +5879,8 @@ def api_ai_session_update(session_id):
 
 
 @app.route("/api/ai/sessions/<session_id>", methods=["DELETE"])
-def api_ai_session_delete(session_id):
-    """Delete/archive a session"""
+def api_ai_session_delete_by_id(session_id):
+    """Delete/archive a session by ID using DELETE method"""
     sessions = load_ai_sessions()
     found = False
     for s in sessions:

@@ -3388,6 +3388,11 @@ def api_create_token():
     color = (data.get("color") or "#00ff66").strip()
     description = (data.get("description") or "").strip()
 
+    # Token permissions (creator-controlled)
+    transferable = data.get("transferable", True)  # Default: tokens can be sent
+    burnable = data.get("burnable", False)  # Default: tokens cannot be burned
+    mintable = data.get("mintable", False)  # Default: cannot mint new tokens
+
     # Check for logo file upload (optional, FREE!)
     logo_file = request.files.get("logo") if request.files else None
 
@@ -3465,7 +3470,11 @@ def api_create_token():
         "type": "experimental",
         "chain": "Thronos",
         "creation_fee_paid": CREATION_FEE,
-        "creation_fee_tx": fee_tx_id
+        "creation_fee_tx": fee_tx_id,
+        # Token permissions
+        "transferable": transferable,
+        "burnable": burnable,
+        "mintable": mintable
     }
 
     tokens[symbol] = token
@@ -3551,6 +3560,339 @@ def api_token_balance(symbol, address):
     ledger = load_custom_token_ledger(token["id"])
     balance = float(ledger.get(address, 0))
     return jsonify({"ok": True, "symbol": symbol.upper(), "address": address, "balance": balance, "token": token}), 200
+
+@app.route("/api/tokens/transfer", methods=["POST"])
+def api_token_transfer():
+    """
+    Transfer custom tokens from one address to another.
+    Requires transferable permission to be enabled on the token.
+    """
+    data = request.get_json() or {}
+    symbol = (data.get("symbol") or "").strip().upper()
+    from_thr = (data.get("from_thr") or "").strip()
+    to_thr = (data.get("to_thr") or "").strip()
+    amount_raw = data.get("amount", 0)
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+
+    try:
+        amount = float(amount_raw)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Invalid amount"}), 400
+
+    if not symbol:
+        return jsonify({"ok": False, "error": "Symbol is required"}), 400
+    if not from_thr or not to_thr:
+        return jsonify({"ok": False, "error": "From and to addresses required"}), 400
+    if amount <= 0:
+        return jsonify({"ok": False, "error": "Amount must be positive"}), 400
+    if not auth_secret:
+        return jsonify({"ok": False, "error": "Authentication secret required"}), 400
+
+    # Get token and check if it exists
+    tokens = load_custom_tokens()
+    token = tokens.get(symbol)
+    if not token:
+        return jsonify({"ok": False, "error": f"Token {symbol} not found"}), 404
+
+    # Check if token is transferable
+    if not token.get("transferable", True):
+        return jsonify({
+            "ok": False,
+            "error": "This token is not transferable",
+            "reason": "The token creator has disabled transfers for this token"
+        }), 403
+
+    # Validate sender's pledge and auth
+    pledges = load_json(PLEDGE_CHAIN, [])
+    sender_pledge = next((p for p in pledges if p.get("thr_address") == from_thr), None)
+    if not sender_pledge:
+        return jsonify({"ok": False, "error": "Sender address not found in pledge registry"}), 404
+
+    stored_auth_hash = sender_pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return jsonify({"ok": False, "error": "Send not enabled for this address"}), 400
+
+    if sender_pledge.get("has_passphrase"):
+        if not passphrase:
+            return jsonify({"ok": False, "error": "Passphrase required"}), 400
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify({"ok": False, "error": "Invalid authentication"}), 403
+
+    # Update token ledger balances
+    ledger = load_custom_token_ledger(token["id"])
+    sender_balance = float(ledger.get(from_thr, 0.0))
+
+    if sender_balance < amount:
+        return jsonify({
+            "ok": False,
+            "error": "Insufficient balance",
+            "balance": round(sender_balance, token["decimals"]),
+            "required": amount
+        }), 400
+
+    ledger[from_thr] = round(sender_balance - amount, token["decimals"])
+    ledger[to_thr] = round(float(ledger.get(to_thr, 0.0)) + amount, token["decimals"])
+    save_custom_token_ledger(token["id"], ledger)
+
+    # Record transaction in chain
+    chain = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx_id = f"TOKEN_TRANSFER-{symbol}-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "token_transfer",
+        "token_symbol": symbol,
+        "token_id": token["id"],
+        "from": from_thr,
+        "to": to_thr,
+        "amount": round(amount, token["decimals"]),
+        "timestamp": ts,
+        "tx_id": tx_id,
+        "status": "confirmed"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+
+    logger.info(f"Token transfer: {amount} {symbol} from {from_thr} to {to_thr}")
+    return jsonify({
+        "ok": True,
+        "status": "confirmed",
+        "tx": tx,
+        "new_balance": ledger[from_thr]
+    }), 200
+
+@app.route("/api/tokens/burn", methods=["POST"])
+def api_token_burn():
+    """
+    Burn (destroy) custom tokens, reducing total supply.
+    Requires burnable permission to be enabled on the token.
+    """
+    data = request.get_json() or {}
+    symbol = (data.get("symbol") or "").strip().upper()
+    from_thr = (data.get("from_thr") or "").strip()
+    amount_raw = data.get("amount", 0)
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+
+    try:
+        amount = float(amount_raw)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Invalid amount"}), 400
+
+    if not symbol:
+        return jsonify({"ok": False, "error": "Symbol is required"}), 400
+    if not from_thr:
+        return jsonify({"ok": False, "error": "Address required"}), 400
+    if amount <= 0:
+        return jsonify({"ok": False, "error": "Amount must be positive"}), 400
+    if not auth_secret:
+        return jsonify({"ok": False, "error": "Authentication secret required"}), 400
+
+    # Get token and check if it exists
+    tokens = load_custom_tokens()
+    token = tokens.get(symbol)
+    if not token:
+        return jsonify({"ok": False, "error": f"Token {symbol} not found"}), 404
+
+    # Check if token is burnable
+    if not token.get("burnable", False):
+        return jsonify({
+            "ok": False,
+            "error": "This token is not burnable",
+            "reason": "The token creator has not enabled burning for this token"
+        }), 403
+
+    # Validate sender's pledge and auth
+    pledges = load_json(PLEDGE_CHAIN, [])
+    sender_pledge = next((p for p in pledges if p.get("thr_address") == from_thr), None)
+    if not sender_pledge:
+        return jsonify({"ok": False, "error": "Address not found in pledge registry"}), 404
+
+    stored_auth_hash = sender_pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return jsonify({"ok": False, "error": "Send not enabled for this address"}), 400
+
+    if sender_pledge.get("has_passphrase"):
+        if not passphrase:
+            return jsonify({"ok": False, "error": "Passphrase required"}), 400
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify({"ok": False, "error": "Invalid authentication"}), 403
+
+    # Update token ledger - burn tokens
+    ledger = load_custom_token_ledger(token["id"])
+    sender_balance = float(ledger.get(from_thr, 0.0))
+
+    if sender_balance < amount:
+        return jsonify({
+            "ok": False,
+            "error": "Insufficient balance",
+            "balance": round(sender_balance, token["decimals"]),
+            "required": amount
+        }), 400
+
+    ledger[from_thr] = round(sender_balance - amount, token["decimals"])
+    save_custom_token_ledger(token["id"], ledger)
+
+    # Update token supply
+    token["current_supply"] = round(token["current_supply"] - amount, token["decimals"])
+    tokens[symbol] = token
+    save_custom_tokens(tokens)
+
+    # Record transaction in chain
+    chain = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx_id = f"TOKEN_BURN-{symbol}-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "token_burn",
+        "token_symbol": symbol,
+        "token_id": token["id"],
+        "from": from_thr,
+        "amount": round(amount, token["decimals"]),
+        "new_supply": token["current_supply"],
+        "timestamp": ts,
+        "tx_id": tx_id,
+        "status": "confirmed"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+
+    logger.info(f"Token burn: {amount} {symbol} burned by {from_thr}, new supply: {token['current_supply']}")
+    return jsonify({
+        "ok": True,
+        "status": "confirmed",
+        "tx": tx,
+        "new_balance": ledger[from_thr],
+        "new_supply": token["current_supply"]
+    }), 200
+
+@app.route("/api/tokens/mint", methods=["POST"])
+def api_token_mint():
+    """
+    Mint (create) new custom tokens, increasing total supply.
+    Requires mintable permission to be enabled on the token.
+    Only the token creator can mint new tokens.
+    """
+    data = request.get_json() or {}
+    symbol = (data.get("symbol") or "").strip().upper()
+    creator = (data.get("creator") or "").strip()
+    to_thr = (data.get("to_thr") or "").strip()
+    amount_raw = data.get("amount", 0)
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+
+    try:
+        amount = float(amount_raw)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Invalid amount"}), 400
+
+    if not symbol:
+        return jsonify({"ok": False, "error": "Symbol is required"}), 400
+    if not creator or not to_thr:
+        return jsonify({"ok": False, "error": "Creator and recipient addresses required"}), 400
+    if amount <= 0:
+        return jsonify({"ok": False, "error": "Amount must be positive"}), 400
+    if not auth_secret:
+        return jsonify({"ok": False, "error": "Authentication secret required"}), 400
+
+    # Get token and check if it exists
+    tokens = load_custom_tokens()
+    token = tokens.get(symbol)
+    if not token:
+        return jsonify({"ok": False, "error": f"Token {symbol} not found"}), 404
+
+    # Check if requester is the token creator
+    if token["creator"] != creator:
+        return jsonify({
+            "ok": False,
+            "error": "Only the token creator can mint new tokens",
+            "creator": token["creator"]
+        }), 403
+
+    # Check if token is mintable
+    if not token.get("mintable", False):
+        return jsonify({
+            "ok": False,
+            "error": "This token is not mintable",
+            "reason": "The token creator has not enabled minting for this token"
+        }), 403
+
+    # Check max supply constraint
+    if token.get("max_supply", 0) > 0:
+        new_supply = token["current_supply"] + amount
+        if new_supply > token["max_supply"]:
+            return jsonify({
+                "ok": False,
+                "error": "Minting would exceed max supply",
+                "current_supply": token["current_supply"],
+                "max_supply": token["max_supply"],
+                "requested_mint": amount
+            }), 400
+
+    # Validate creator's pledge and auth
+    pledges = load_json(PLEDGE_CHAIN, [])
+    creator_pledge = next((p for p in pledges if p.get("thr_address") == creator), None)
+    if not creator_pledge:
+        return jsonify({"ok": False, "error": "Creator address not found in pledge registry"}), 404
+
+    stored_auth_hash = creator_pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return jsonify({"ok": False, "error": "Send not enabled for creator address"}), 400
+
+    if creator_pledge.get("has_passphrase"):
+        if not passphrase:
+            return jsonify({"ok": False, "error": "Passphrase required"}), 400
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify({"ok": False, "error": "Invalid authentication"}), 403
+
+    # Mint tokens - add to recipient balance
+    ledger = load_custom_token_ledger(token["id"])
+    ledger[to_thr] = round(float(ledger.get(to_thr, 0.0)) + amount, token["decimals"])
+    save_custom_token_ledger(token["id"], ledger)
+
+    # Update token supply
+    token["current_supply"] = round(token["current_supply"] + amount, token["decimals"])
+    tokens[symbol] = token
+    save_custom_tokens(tokens)
+
+    # Record transaction in chain
+    chain = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx_id = f"TOKEN_MINT-{symbol}-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "token_mint",
+        "token_symbol": symbol,
+        "token_id": token["id"],
+        "minted_by": creator,
+        "to": to_thr,
+        "amount": round(amount, token["decimals"]),
+        "new_supply": token["current_supply"],
+        "timestamp": ts,
+        "tx_id": tx_id,
+        "status": "confirmed"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+
+    logger.info(f"Token mint: {amount} {symbol} minted by {creator} to {to_thr}, new supply: {token['current_supply']}")
+    return jsonify({
+        "ok": True,
+        "status": "confirmed",
+        "tx": tx,
+        "new_balance": ledger[to_thr],
+        "new_supply": token["current_supply"]
+    }), 200
 
 
 @app.route("/send_thr", methods=["POST"])

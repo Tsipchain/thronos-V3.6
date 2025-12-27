@@ -312,6 +312,27 @@
     .session-name {
       font-size: 12px;
       font-weight: 500;
+      flex: 1;
+    }
+
+    .session-delete-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0 4px;
+      opacity: 0;
+      transition: opacity 0.2s, color 0.2s;
+    }
+
+    .session-item:hover .session-delete-btn {
+      opacity: 1;
+    }
+
+    .session-delete-btn:hover {
+      color: #ff4444;
     }
 
     .session-meta {
@@ -1143,6 +1164,39 @@
         nameSpan.className = "session-name";
         nameSpan.textContent = s.title || "Untitled session";
 
+        // Add delete button
+        const deleteBtn = document.createElement("button");
+        deleteBtn.className = "session-delete-btn";
+        deleteBtn.innerHTML = "×";
+        deleteBtn.title = "Delete session";
+        deleteBtn.addEventListener("click", async (e) => {
+          e.stopPropagation(); // Don't trigger session switch
+          if (!confirm(`Delete "${s.title || 'Untitled session'}"?`)) return;
+
+          try {
+            const res = await fetch(`/api/ai/sessions/${s.id}`, {
+              method: "DELETE",
+            });
+            if (res.ok) {
+              // Remove from local array
+              sessions = sessions.filter(sess => sess.id !== s.id);
+              // If deleted current session, switch to first available
+              if (s.id === currentSessionId && sessions.length > 0) {
+                currentSessionId = sessions[0].id;
+                loadSessionMessages(currentSessionId);
+                sessionTitleEl.textContent = sessions[0].title || "Mesh session";
+              } else if (sessions.length === 0) {
+                // No sessions left, create new one
+                await createNewSession();
+              }
+              renderSessions();
+            }
+          } catch (e) {
+            console.error("Delete session error:", e);
+            alert("Failed to delete session");
+          }
+        });
+
         const statusPill = document.createElement("div");
         statusPill.className = "session-status-pill";
         statusPill.innerHTML = `<span>${(s.model || "auto").toUpperCase()}</span> · ${
@@ -1150,6 +1204,7 @@
         }`;
 
         nameRow.appendChild(nameSpan);
+        nameRow.appendChild(deleteBtn);
 
         const metaRow = document.createElement("div");
         metaRow.className = "session-meta";

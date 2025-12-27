@@ -832,7 +832,7 @@ async function submitSend() {
             speed: selectedSpeed
         };
 
-        const response = await fetch('/api/v1/submit_transaction', {
+        const response = await fetch('/send_thr', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)

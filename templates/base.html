@@ -911,6 +911,221 @@
     .wallet-mini-btn.active{background:rgba(0,255,102,.12);}
     .wallet-lock-hint{margin-top:8px;font-size:11px;opacity:.7;}
 
+    /* Token Info Modal */
+    .token-info-modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.92);
+        z-index: 10001;
+        align-items: center;
+        justify-content: center;
+        backdrop-filter: blur(5px);
+    }
+    .token-info-modal.active {
+        display: flex;
+    }
+    .token-info-content {
+        background: linear-gradient(135deg, #000000 0%, #071810 50%, #000000 100%);
+        border: 2px solid;
+        border-image: linear-gradient(135deg, #d4af37 0%, #00ff66 50%, #ffd700 100%) 1;
+        border-radius: 16px;
+        padding: 25px;
+        max-width: 450px;
+        width: 90%;
+        box-shadow: 0 0 50px rgba(0, 255, 102, 0.4), 0 0 100px rgba(255, 215, 0, 0.2);
+        position: relative;
+        max-height: 85vh;
+        overflow-y: auto;
+    }
+    .token-info-close {
+        position: absolute;
+        top: 15px;
+        right: 15px;
+        background: transparent;
+        border: 1px solid rgba(255, 100, 100, 0.3);
+        color: #ff6666;
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        cursor: pointer;
+        font-size: 16px;
+        transition: all 0.3s;
+    }
+    .token-info-close:hover {
+        background: rgba(255, 100, 100, 0.2);
+        border-color: #ff6666;
+    }
+    .token-info-header {
+        display: flex;
+        align-items: center;
+        gap: 15px;
+        margin-bottom: 20px;
+        padding-bottom: 15px;
+        border-bottom: 1px solid rgba(0, 255, 102, 0.2);
+    }
+    .token-info-logo {
+        width: 60px;
+        height: 60px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 24px;
+        font-weight: bold;
+        border: 3px solid;
+        box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+    }
+    .token-info-logo img {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        object-fit: cover;
+    }
+    .token-info-title {
+        flex: 1;
+    }
+    .token-info-name {
+        font-size: 20px;
+        font-weight: 700;
+        background: linear-gradient(135deg, #ffd700 0%, #00ff66 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    .token-info-symbol {
+        font-size: 14px;
+        color: #56ff9a;
+        margin-top: 2px;
+    }
+    .token-info-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+        margin-bottom: 20px;
+    }
+    .token-info-stat {
+        background: linear-gradient(135deg, rgba(0, 40, 20, 0.5) 0%, rgba(0, 60, 30, 0.3) 100%);
+        border: 1px solid rgba(0, 255, 102, 0.15);
+        border-radius: 10px;
+        padding: 12px;
+        text-align: center;
+    }
+    .token-info-stat-label {
+        font-size: 10px;
+        color: #56ff9a;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 5px;
+    }
+    .token-info-stat-value {
+        font-size: 16px;
+        font-weight: 600;
+        color: #e6ffe5;
+        font-family: monospace;
+    }
+    .token-info-description {
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(0, 255, 102, 0.1);
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 15px;
+        font-size: 12px;
+        color: #a0d8b0;
+        line-height: 1.5;
+    }
+    .token-info-properties {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 15px;
+    }
+    .token-info-badge {
+        padding: 5px 12px;
+        border-radius: 20px;
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .token-info-badge.transferable {
+        background: linear-gradient(135deg, rgba(0, 255, 102, 0.2) 0%, rgba(0, 255, 102, 0.1) 100%);
+        border: 1px solid #00ff66;
+        color: #00ff66;
+    }
+    .token-info-badge.not-transferable {
+        background: linear-gradient(135deg, rgba(255, 100, 100, 0.2) 0%, rgba(255, 100, 100, 0.1) 100%);
+        border: 1px solid #ff6666;
+        color: #ff6666;
+    }
+    .token-info-badge.burnable {
+        background: linear-gradient(135deg, rgba(255, 150, 0, 0.2) 0%, rgba(255, 150, 0, 0.1) 100%);
+        border: 1px solid #ff9600;
+        color: #ff9600;
+    }
+    .token-info-badge.mintable {
+        background: linear-gradient(135deg, rgba(0, 191, 255, 0.2) 0%, rgba(0, 191, 255, 0.1) 100%);
+        border: 1px solid #00bfff;
+        color: #00bfff;
+    }
+    .token-info-actions {
+        display: flex;
+        gap: 10px;
+    }
+    .token-info-btn {
+        flex: 1;
+        padding: 12px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.3s;
+        font-family: "Courier New", monospace;
+        text-align: center;
+        text-decoration: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+    }
+    .token-info-btn-send {
+        background: linear-gradient(135deg, #00ff00 0%, #00ff66 100%);
+        color: #000;
+        border: 1px solid #00ff66;
+    }
+    .token-info-btn-send:hover {
+        box-shadow: 0 0 20px rgba(0, 255, 102, 0.4);
+        transform: translateY(-2px);
+    }
+    .token-info-btn-send.disabled {
+        background: rgba(100, 100, 100, 0.3);
+        border-color: #666;
+        color: #888;
+        cursor: not-allowed;
+    }
+    .token-info-btn-secondary {
+        background: transparent;
+        color: #00ff66;
+        border: 1px solid rgba(0, 255, 102, 0.3);
+    }
+    .token-info-btn-secondary:hover {
+        border-color: #00ff66;
+        background: rgba(0, 255, 102, 0.1);
+    }
+    .token-info-creator {
+        font-size: 11px;
+        color: #666;
+        margin-top: 15px;
+        padding-top: 10px;
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .token-info-creator a {
+        color: #56ff9a;
+    }
+
     /* Page Specific Styles Block */
     {% block styles %}{% endblock %}
 
@@ -1100,6 +1315,20 @@
                 <span class="lang-es">Cerrar</span>
                 <span class="lang-ru">Закрыть</span>
             </button>
+        </div>
+    </div>
+</div>
+
+<!-- Token Info Modal -->
+<div class="token-info-modal" id="tokenInfoModal" onclick="closeTokenInfoModal(event)">
+    <div class="token-info-content" onclick="event.stopPropagation()">
+        <button class="token-info-close" onclick="closeTokenInfoModal()">✕</button>
+        <div id="tokenInfoBody">
+            <div class="wallet-popup-loading">
+                <div class="wallet-popup-spinner"></div>
+                <span class="lang-el">Φόρτωση πληροφοριών...</span>
+                <span class="lang-en">Loading token info...</span>
+            </div>
         </div>
     </div>
 </div>
@@ -1394,7 +1623,7 @@ function renderWalletBalances(data) {
             : `<span style="color:${tokenInfo.color}; font-weight:bold;">${symbol[0]}</span>`;
 
         return `
-            <div class="wallet-token-item">
+            <div class="wallet-token-item" onclick="openTokenInfoModal('${symbol}')" style="cursor: pointer;" title="Click for token details">
                 <div class="wallet-token-logo" style="border-color: ${tokenInfo.color}; background: linear-gradient(135deg, ${tokenInfo.color}22 0%, ${tokenInfo.color}11 100%);">
                     ${logoHtml}
                 </div>
@@ -1757,11 +1986,17 @@ async function submitSend() {
 
         if (data.error || data.ok === false) {
             resultDiv.className = 'send-result error';
-            resultDiv.textContent = `Error: ${data.error || data.message || 'Transaction failed'}`;
+            // Check for specific error about THR balance for fees
+            let errorMsg = data.error || data.message || 'Transaction failed';
+            if (data.thr_balance !== undefined && data.fee_required !== undefined) {
+                errorMsg = `${errorMsg}. THR balance: ${data.thr_balance}, Fee required: ${data.fee_required} THR`;
+            }
+            resultDiv.textContent = `Error: ${errorMsg}`;
             resultDiv.style.display = 'block';
         } else {
             resultDiv.className = 'send-result success';
-            resultDiv.textContent = `✓ ${amount} ${token} sent! Fee: ${fee.toFixed(6)} THR`;
+            const actualFee = data.fee_burned || data.fee || fee;
+            resultDiv.textContent = `✓ ${amount} ${token} sent! Fee: ${actualFee.toFixed(6)} THR`;
             resultDiv.style.display = 'block';
 
             // Reset wallet balances to reload
@@ -1945,6 +2180,255 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 });
+
+// ─── TOKEN INFO MODAL FUNCTIONS ───────────────────────────
+let tokenInfoCache = {};
+
+async function openTokenInfoModal(symbol) {
+    const modal = document.getElementById('tokenInfoModal');
+    const body = document.getElementById('tokenInfoBody');
+    modal.classList.add('active');
+
+    // Show loading state
+    body.innerHTML = `
+        <div class="wallet-popup-loading">
+            <div class="wallet-popup-spinner"></div>
+            <span class="lang-el">Φόρτωση πληροφοριών...</span>
+            <span class="lang-en">Loading token info...</span>
+        </div>
+    `;
+    const lang = getCurrentLang();
+    setLanguage(lang);
+
+    try {
+        // Fetch token info from API
+        let tokenData = null;
+
+        // Check if it's a core token
+        if (symbol === 'THR') {
+            const statsResp = await fetch('/api/network_stats');
+            const stats = await statsResp.json();
+            const holdersResp = await fetch('/api/tokens/THR/holders');
+            const holdersData = await holdersResp.json();
+
+            tokenData = {
+                symbol: 'THR',
+                name: 'Thronos',
+                description: 'The native token of the Thronos blockchain network. Used for transactions, fees, pledging, and governance.',
+                color: '#ff6600',
+                logo: '/static/img/thronos-token.png',
+                total_supply: stats.total_supply || 0,
+                max_supply: 21000000,
+                holders_count: holdersData.holders_count || 0,
+                decimals: 6,
+                transferable: true,
+                burnable: true,
+                mintable: false,
+                chain: 'Thronos',
+                type: 'native'
+            };
+        } else if (symbol === 'WBTC') {
+            const holdersResp = await fetch('/api/tokens/WBTC/holders');
+            const holdersData = await holdersResp.json();
+
+            tokenData = {
+                symbol: 'WBTC',
+                name: 'Wrapped Bitcoin',
+                description: 'Bitcoin bridged to the Thronos network. 1 WBTC = 0.0001 BTC equivalent.',
+                color: '#f7931a',
+                logo: '/static/img/wbtc-logo.png',
+                total_supply: holdersData.total_supply || 0,
+                max_supply: 21000000,
+                holders_count: holdersData.holders_count || 0,
+                decimals: 8,
+                transferable: true,
+                burnable: false,
+                mintable: true,
+                chain: 'Thronos',
+                type: 'wrapped'
+            };
+        } else if (symbol === 'L2E') {
+            const holdersResp = await fetch('/api/tokens/L2E/holders');
+            const holdersData = await holdersResp.json();
+
+            tokenData = {
+                symbol: 'L2E',
+                name: 'Learn-to-Earn',
+                description: 'Reward token for educational achievements and learning milestones on the Thronos platform.',
+                color: '#00bfff',
+                logo: '/static/img/l2e-logo.png',
+                total_supply: holdersData.total_supply || 0,
+                max_supply: 100000000,
+                holders_count: holdersData.holders_count || 0,
+                decimals: 6,
+                transferable: true,
+                burnable: true,
+                mintable: true,
+                chain: 'Thronos',
+                type: 'utility'
+            };
+        } else {
+            // Custom token - fetch from API
+            const response = await fetch(`/api/tokens/list`);
+            const data = await response.json();
+            if (data.ok && data.tokens) {
+                tokenData = data.tokens.find(t => t.symbol === symbol);
+            }
+
+            // Get holders count
+            if (tokenData) {
+                try {
+                    const holdersResp = await fetch(`/api/tokens/${symbol}/holders`);
+                    const holdersData = await holdersResp.json();
+                    if (holdersData.ok) {
+                        tokenData.holders_count = holdersData.holders_count;
+                    }
+                } catch(e) {}
+            }
+        }
+
+        if (!tokenData) {
+            body.innerHTML = `
+                <div style="text-align: center; padding: 30px; color: #ff6666;">
+                    <div style="font-size: 40px; margin-bottom: 15px;">⚠️</div>
+                    <span class="lang-el">Token δεν βρέθηκε</span>
+                    <span class="lang-en">Token not found</span>
+                </div>
+            `;
+            setLanguage(lang);
+            return;
+        }
+
+        renderTokenInfo(tokenData);
+
+    } catch (error) {
+        console.error('Token info error:', error);
+        body.innerHTML = `
+            <div style="text-align: center; padding: 30px; color: #ff6666;">
+                <div style="font-size: 40px; margin-bottom: 15px;">❌</div>
+                <span class="lang-el">Σφάλμα φόρτωσης</span>
+                <span class="lang-en">Failed to load token info</span>
+            </div>
+        `;
+        setLanguage(lang);
+    }
+}
+
+function renderTokenInfo(token) {
+    const body = document.getElementById('tokenInfoBody');
+    const lang = getCurrentLang();
+    const isGreek = isGreekLang(lang);
+
+    const logoHtml = token.logo
+        ? `<img src="${token.logo}" alt="${token.symbol}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+           <span style="display:none; color:${token.color}; font-weight:bold; font-size:24px;">${token.symbol[0]}</span>`
+        : `<span style="color:${token.color}; font-weight:bold; font-size:24px;">${token.symbol[0]}</span>`;
+
+    // Labels
+    const labels = {
+        totalSupply: isGreek ? 'Συνολική Προσφορά' : 'Total Supply',
+        maxSupply: isGreek ? 'Μέγιστη Προσφορά' : 'Max Supply',
+        holders: isGreek ? 'Κάτοχοι' : 'Holders',
+        decimals: isGreek ? 'Δεκαδικά' : 'Decimals',
+        chain: isGreek ? 'Δίκτυο' : 'Chain',
+        type: isGreek ? 'Τύπος' : 'Type',
+        send: isGreek ? 'Αποστολή' : 'Send',
+        viewHolders: isGreek ? 'Κάτοχοι' : 'Holders',
+        explorer: isGreek ? 'Εξερεύνηση' : 'Explorer',
+        createdBy: isGreek ? 'Δημιουργήθηκε από' : 'Created by',
+        transferable: isGreek ? 'Μεταβιβάσιμο' : 'Transferable',
+        notTransferable: isGreek ? 'Μη Μεταβιβάσιμο' : 'Not Transferable',
+        burnable: isGreek ? 'Καύσιμο' : 'Burnable',
+        mintable: isGreek ? 'Εκδόσιμο' : 'Mintable'
+    };
+
+    // Badges
+    let badgesHtml = '';
+    if (token.transferable !== false) {
+        badgesHtml += `<span class="token-info-badge transferable">✓ ${labels.transferable}</span>`;
+    } else {
+        badgesHtml += `<span class="token-info-badge not-transferable">✕ ${labels.notTransferable}</span>`;
+    }
+    if (token.burnable) {
+        badgesHtml += `<span class="token-info-badge burnable">🔥 ${labels.burnable}</span>`;
+    }
+    if (token.mintable) {
+        badgesHtml += `<span class="token-info-badge mintable">✨ ${labels.mintable}</span>`;
+    }
+
+    // Format supplies
+    const formatSupply = (num) => {
+        if (!num) return '∞';
+        if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
+        if (num >= 1000) return (num / 1000).toFixed(2) + 'K';
+        return Number(num).toLocaleString();
+    };
+
+    // Send button - disabled if not transferable
+    const canSend = token.transferable !== false;
+    const sendBtnClass = canSend ? 'token-info-btn token-info-btn-send' : 'token-info-btn token-info-btn-send disabled';
+    const sendOnClick = canSend ? `closeTokenInfoModal(); setTimeout(() => { openSendModal(); document.getElementById('sendToken').value = '${token.symbol}'; updateTokenInfo(); }, 300);` : '';
+
+    body.innerHTML = `
+        <div class="token-info-header">
+            <div class="token-info-logo" style="border-color: ${token.color}; background: linear-gradient(135deg, ${token.color}22 0%, ${token.color}11 100%);">
+                ${logoHtml}
+            </div>
+            <div class="token-info-title">
+                <div class="token-info-name">${escapeHtml(token.name)}</div>
+                <div class="token-info-symbol">${escapeHtml(token.symbol)} • ${token.chain || 'Thronos'}</div>
+            </div>
+        </div>
+
+        <div class="token-info-properties">
+            ${badgesHtml}
+        </div>
+
+        ${token.description ? `<div class="token-info-description">${escapeHtml(token.description)}</div>` : ''}
+
+        <div class="token-info-grid">
+            <div class="token-info-stat">
+                <div class="token-info-stat-label">${labels.totalSupply}</div>
+                <div class="token-info-stat-value">${formatSupply(token.total_supply || token.current_supply)}</div>
+            </div>
+            <div class="token-info-stat">
+                <div class="token-info-stat-label">${labels.maxSupply}</div>
+                <div class="token-info-stat-value">${token.max_supply ? formatSupply(token.max_supply) : '∞'}</div>
+            </div>
+            <div class="token-info-stat">
+                <div class="token-info-stat-label">${labels.holders}</div>
+                <div class="token-info-stat-value">${token.holders_count !== undefined ? token.holders_count.toLocaleString() : '-'} 👥</div>
+            </div>
+            <div class="token-info-stat">
+                <div class="token-info-stat-label">${labels.decimals}</div>
+                <div class="token-info-stat-value">${token.decimals !== undefined ? token.decimals : 6}</div>
+            </div>
+        </div>
+
+        <div class="token-info-actions">
+            <button class="${sendBtnClass}" onclick="${sendOnClick}" ${canSend ? '' : 'disabled'}>
+                💸 ${labels.send}
+            </button>
+            <a href="/viewer?token=${token.symbol}" class="token-info-btn token-info-btn-secondary">
+                📊 ${labels.explorer}
+            </a>
+        </div>
+
+        ${token.creator ? `
+        <div class="token-info-creator">
+            ${labels.createdBy}: <a href="/viewer?address=${token.creator}">${token.creator.slice(0, 10)}...${token.creator.slice(-6)}</a>
+        </div>
+        ` : ''}
+    `;
+
+    setLanguage(lang);
+}
+
+function closeTokenInfoModal(event) {
+    if (!event || event.target.id === 'tokenInfoModal') {
+        document.getElementById('tokenInfoModal').classList.remove('active');
+    }
+}
 </script>
 
 <!-- Chain Tokens Widget (Footer) -->
@@ -2046,7 +2530,7 @@ function downloadCGMinerKit() {
                     : '';
 
                 html += `
-                    <div class="chain-token-pill" title="${token.name} - ${holdersText || '0'} holders">
+                    <div class="chain-token-pill" title="${token.name} - ${holdersText || '0'} holders" onclick="openTokenInfoModal('${token.symbol}')" style="cursor: pointer;">
                         <div class="chain-token-logo" style="border-color: ${token.color};">${logoHtml}</div>
                         <span class="chain-token-symbol">${token.symbol}</span>
                         ${holdersText ? `<span class="chain-token-holders">${holdersText}</span>` : ''}

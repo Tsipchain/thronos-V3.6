@@ -34,3 +34,6 @@ numpy>=1.26
 # pygame>=2.5
 # androguard>=4.1.3
 # antlr4-tools>=0.2.2
+
+# crypto (required by quorum_crypto / recovery)
+pycryptodomex>=3.20

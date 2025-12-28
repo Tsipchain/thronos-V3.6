@@ -25,7 +25,7 @@ biplist
 capstone
 pygments
 ply
-antlr4
+antlr4-python3-runtime>=4.13.2
 robotframework
 selenium
 pyautogui
@@ -35,3 +35,4 @@ opencv-python
 scikit-learn
 tensorflow
 pytorch
+antlr4-tools>=0.2.2

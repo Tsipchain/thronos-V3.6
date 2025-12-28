@@ -3855,7 +3855,7 @@ def api_token_transfer():
     if amount <= 0:
         return jsonify({"ok": False, "error": "Amount must be > 0"}), 400
 
-    if not is_valid_address(from_thr) or not is_valid_address(to_thr):
+    if not validate_thr_address(from_thr) or not validate_thr_address(to_thr):
         return jsonify({"ok": False, "error": "Invalid address format"}), 400
 
     # First try custom_tokens.json (dict-based, newer format)

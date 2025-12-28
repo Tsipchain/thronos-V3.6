@@ -3820,20 +3820,37 @@ def api_token_transfer():
     except Exception:
         return jsonify({"ok": False, "error": "Invalid JSON"}), 400
 
-    from_thr = str(data.get("from", "")).strip()
-    to_thr = str(data.get("to", "")).strip()
-    symbol = str(data.get("symbol", "")).strip().upper()
+    # Accept both naming conventions
+    symbol = data.get("symbol") or data.get("token") or data.get("ticker")
+    amount = data.get("amount")
+
+    from_addr = data.get("from") or data.get("from_thr") or data.get("from_address")
+    to_addr = data.get("to") or data.get("to_thr") or data.get("to_address")
+
+    missing = []
+    if not from_addr:
+        missing.append("from")
+    if not to_addr:
+        missing.append("to")
+    if not symbol:
+        missing.append("symbol")
+    if amount is None:
+        missing.append("amount")
+
+    if missing:
+        return jsonify({"ok": False, "error": f"Missing required fields: {', '.join(missing)}"}), 400
+
+    from_thr = str(from_addr).strip()
+    to_thr = str(to_addr).strip()
+    symbol = str(symbol).strip().upper()
     auth_secret = str(data.get("auth_secret", "")).strip()
     passphrase = str(data.get("passphrase", "")).strip() if data.get("passphrase") else None
 
     # speed is optional (UI may send it). We store it in tx for UI/viewer, but do not change economics here.
     speed = str(data.get("speed", "")).strip().lower() or "slow"
 
-    if not from_thr or not to_thr or not symbol:
-        return jsonify({"ok": False, "error": "Missing required fields: from, to, symbol, amount"}), 400
-
     try:
-        amount = float(data.get("amount", 0))
+        amount = float(amount)
     except Exception:
         return jsonify({"ok": False, "error": "Invalid amount"}), 400
 

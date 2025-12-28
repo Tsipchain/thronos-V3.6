@@ -1737,13 +1737,14 @@ async function submitSend() {
                 body: JSON.stringify(payload)
             });
         } else {
-            // Custom token transfer - use correct API parameter names
+            // Custom token transfer - backend expects: from, to, symbol, amount
             const payload = {
                 symbol: token,
-                from_thr: from,
-                to_thr: to,
+                from: from,
+                to: to,
                 amount: amount,
-                auth_secret: secret
+                auth_secret: secret,
+                speed: selectedSpeed // optional fee tier hint
             };
             response = await fetch('/api/tokens/transfer', {
                 method: 'POST',

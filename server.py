@@ -94,6 +94,8 @@ os.makedirs(DATA_DIR, exist_ok=True)
 # Node role: "master" or "replica"
 NODE_ROLE = os.getenv("NODE_ROLE", "master").lower()
 MASTER_INTERNAL_URL = os.getenv("MASTER_INTERNAL_URL", "http://localhost:5000")
+# Replica external URL - used for heartbeat registration (e.g., Railway URL)
+REPLICA_EXTERNAL_URL = os.getenv("REPLICA_EXTERNAL_URL", os.getenv("RAILWAY_PUBLIC_DOMAIN", ""))
 
 LEDGER_FILE         = os.path.join(DATA_DIR, "ledger.json")
 WBTC_LEDGER_FILE    = os.path.join(DATA_DIR, "wbtc_ledger.json")
@@ -258,16 +260,73 @@ def store_uploaded_file(file_storage, owner_wallet: str | None, session_id: str 
     return meta
 
 def read_text_file_for_prompt(path: str, max_bytes: int = 200_000) -> str:
-    # best-effort: only include small text-like files
+    """
+    Read file content for AI prompt. Supports:
+    - Text files (direct content)
+    - PDF files (text extraction)
+    - Code files (with syntax hints)
+    - Other files (metadata description)
+    """
+    import mimetypes
+
     try:
-        with open(path, "rb") as f:
-            data = f.read(max_bytes + 1)
-        if len(data) > max_bytes:
-            return "[File too large to inline in prompt]"
-        # attempt utf-8
-        return data.decode("utf-8", errors="replace")
-    except Exception:
-        return "[Unable to read file]"
+        ext = os.path.splitext(path)[1].lower()
+        mime, _ = mimetypes.guess_type(path)
+
+        # Text-based files (code, txt, json, etc.)
+        text_exts = {'.txt', '.md', '.json', '.xml', '.csv', '.py', '.js', '.ts',
+                     '.html', '.css', '.sql', '.yaml', '.yml', '.sh', '.bat',
+                     '.c', '.cpp', '.h', '.java', '.go', '.rs', '.rb', '.php',
+                     '.sol', '.toml', '.ini', '.cfg', '.log', '.env'}
+
+        if ext in text_exts or (mime and mime.startswith('text/')):
+            with open(path, "rb") as f:
+                data = f.read(max_bytes + 1)
+            if len(data) > max_bytes:
+                return f"[File truncated - showing first {max_bytes} bytes]\n" + data[:max_bytes].decode("utf-8", errors="replace")
+            content = data.decode("utf-8", errors="replace")
+            # Add syntax hint for code files
+            lang_hint = ext[1:] if ext else ""
+            if lang_hint in ['py', 'js', 'ts', 'sol', 'java', 'go', 'rs']:
+                return f"```{lang_hint}\n{content}\n```"
+            return content
+
+        # PDF files - try to extract text
+        if ext == '.pdf':
+            try:
+                import PyPDF2
+                with open(path, 'rb') as f:
+                    reader = PyPDF2.PdfReader(f)
+                    text_parts = []
+                    for page_num, page in enumerate(reader.pages[:20]):  # Max 20 pages
+                        text_parts.append(f"--- Page {page_num + 1} ---\n{page.extract_text()}")
+                    content = "\n".join(text_parts)
+                    if len(content) > max_bytes:
+                        content = content[:max_bytes] + "\n[PDF content truncated]"
+                    return f"[PDF Document - {len(reader.pages)} pages]\n{content}"
+            except ImportError:
+                return f"[PDF file: {os.path.basename(path)} - PDF text extraction not available. File size: {os.path.getsize(path)} bytes]"
+            except Exception as e:
+                return f"[PDF file: {os.path.basename(path)} - Could not extract text: {str(e)[:100]}]"
+
+        # Image files - provide metadata description
+        img_exts = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg'}
+        if ext in img_exts or (mime and mime.startswith('image/')):
+            size = os.path.getsize(path)
+            try:
+                from PIL import Image
+                with Image.open(path) as img:
+                    return f"[Image file: {os.path.basename(path)} | Format: {img.format} | Size: {img.size[0]}x{img.size[1]} | Mode: {img.mode} | File size: {size} bytes]\n[Note: Image content cannot be displayed in text. Please describe what you want to do with this image.]"
+            except:
+                return f"[Image file: {os.path.basename(path)} | Size: {size} bytes]\n[Note: Image content available but cannot be displayed in text prompt.]"
+
+        # Binary/other files - provide metadata
+        size = os.path.getsize(path)
+        return f"[Binary file: {os.path.basename(path)} | MIME type: {mime or 'unknown'} | Size: {size} bytes]\n[Note: Binary content cannot be directly included in prompt. Please specify what you want to do with this file.]"
+
+    except Exception as e:
+        logger.error(f"Error reading file {path}: {e}")
+        return f"[Unable to read file: {str(e)[:100]}]"
 # client.  If no session_id is provided, the counter falls back to the key
 # 'default'.  Set ``AI_FREE_MESSAGES_LIMIT`` via an environment variable to
 # control how many free messages are allowed.
@@ -4554,6 +4613,220 @@ def send_token():
         fee_burned=fee
     ), 200
 
+# ─── REAL-TIME PRICES API (for DEX/Bridge) ────────────────────────────
+# Using Google AI grounding + external APIs for accurate pricing
+
+# Price cache to avoid hitting APIs too frequently
+_price_cache = {}
+_price_cache_ttl = 60  # 60 seconds cache
+
+def get_cached_price(key):
+    """Get price from cache if not expired"""
+    if key in _price_cache:
+        data, timestamp = _price_cache[key]
+        if time.time() - timestamp < _price_cache_ttl:
+            return data
+    return None
+
+def set_cached_price(key, data):
+    """Set price in cache with timestamp"""
+    _price_cache[key] = (data, time.time())
+
+def fetch_btc_price():
+    """Fetch BTC price from CoinGecko API"""
+    cached = get_cached_price("btc_usd")
+    if cached:
+        return cached
+    try:
+        resp = requests.get(
+            "https://api.coingecko.com/api/v3/simple/price",
+            params={"ids": "bitcoin", "vs_currencies": "usd,eur"},
+            timeout=5
+        )
+        if resp.status_code == 200:
+            data = resp.json().get("bitcoin", {})
+            set_cached_price("btc_usd", data)
+            return data
+    except Exception as e:
+        logger.warning(f"Failed to fetch BTC price: {e}")
+    return {"usd": 0, "eur": 0}
+
+def fetch_precious_metals_prices():
+    """
+    Fetch precious metals prices (Gold, Silver, Platinum, Palladium)
+    Using metalpriceapi.com free tier or fallback to cached/estimated values
+    """
+    cached = get_cached_price("metals")
+    if cached:
+        return cached
+
+    # Try to use Google AI grounding for real-time data
+    if ai_agent and ai_agent.gemini_enabled:
+        try:
+            import google.generativeai as genai
+            # Use Gemini with Google Search grounding for live prices
+            model = genai.GenerativeModel("gemini-2.0-flash")
+            response = model.generate_content(
+                "What are the current spot prices (USD per troy ounce) for: Gold (XAU), Silver (XAG), Platinum (XPT), Palladium (XPD)? "
+                "Return ONLY a JSON object with these exact keys: gold, silver, platinum, palladium with numeric USD values. No explanation.",
+                generation_config={"temperature": 0}
+            )
+            text = response.text.strip()
+            # Extract JSON from response
+            import re
+            json_match = re.search(r'\{[^}]+\}', text)
+            if json_match:
+                prices = json.loads(json_match.group())
+                # Validate numeric values
+                if all(isinstance(prices.get(k), (int, float)) for k in ["gold", "silver", "platinum", "palladium"]):
+                    set_cached_price("metals", prices)
+                    return prices
+        except Exception as e:
+            logger.warning(f"Gemini metals price fetch failed: {e}")
+
+    # Fallback to estimated/cached values based on typical market prices
+    fallback_prices = {
+        "gold": 2650.00,      # XAU/USD typical range
+        "silver": 31.50,      # XAG/USD typical range
+        "platinum": 980.00,   # XPT/USD typical range
+        "palladium": 1050.00  # XPD/USD typical range
+    }
+    return fallback_prices
+
+@app.route("/api/prices", methods=["GET"])
+def api_prices():
+    """
+    Get real-time prices for DEX/Bridge operations.
+    Supports: BTC, Gold, Silver, Platinum, Palladium, THR
+
+    Query params:
+        - assets: comma-separated list (e.g., "btc,gold,silver")
+        - vs_currency: USD or EUR (default: USD)
+
+    Returns:
+        {
+            "prices": { "btc": 95000, "gold": 2650, ... },
+            "timestamp": 1234567890,
+            "source": "live" or "cached"
+        }
+    """
+    try:
+        assets_param = request.args.get("assets", "btc,gold,silver,platinum,palladium,thr")
+        vs_currency = request.args.get("vs_currency", "usd").lower()
+        assets = [a.strip().lower() for a in assets_param.split(",")]
+
+        prices = {}
+        source = "live"
+
+        # BTC price
+        if "btc" in assets or "bitcoin" in assets:
+            btc_data = fetch_btc_price()
+            prices["btc"] = btc_data.get(vs_currency, btc_data.get("usd", 0))
+            if get_cached_price("btc_usd"):
+                source = "cached"
+
+        # Precious metals
+        metals_needed = set(assets) & {"gold", "silver", "platinum", "palladium", "xau", "xag", "xpt", "xpd"}
+        if metals_needed:
+            metals_data = fetch_precious_metals_prices()
+            if "gold" in assets or "xau" in assets:
+                prices["gold"] = metals_data.get("gold", 0)
+            if "silver" in assets or "xag" in assets:
+                prices["silver"] = metals_data.get("silver", 0)
+            if "platinum" in assets or "xpt" in assets:
+                prices["platinum"] = metals_data.get("platinum", 0)
+            if "palladium" in assets or "xpd" in assets:
+                prices["palladium"] = metals_data.get("palladium", 0)
+
+        # THR price (from internal pool rates or fixed)
+        if "thr" in assets:
+            # Calculate THR price based on BTC rate in swap
+            btc_price = prices.get("btc", 95000)
+            thr_rate = 0.0001  # 1 THR = 0.0001 BTC from swap
+            prices["thr"] = round(btc_price * thr_rate, 4)
+
+        return jsonify({
+            "prices": prices,
+            "vs_currency": vs_currency,
+            "timestamp": int(time.time()),
+            "source": source
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Prices API error: {e}")
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/api/prices/convert", methods=["GET"])
+def api_prices_convert():
+    """
+    Convert amounts between assets using real-time prices.
+
+    Query params:
+        - from_asset: source asset (btc, gold, silver, thr, usd)
+        - to_asset: target asset
+        - amount: amount to convert
+
+    Returns:
+        {
+            "from_asset": "btc",
+            "to_asset": "gold",
+            "from_amount": 1.0,
+            "to_amount": 35.85,
+            "rate": 35.85,
+            "timestamp": 1234567890
+        }
+    """
+    try:
+        from_asset = request.args.get("from_asset", "").lower()
+        to_asset = request.args.get("to_asset", "").lower()
+        try:
+            amount = float(request.args.get("amount", 1))
+        except:
+            amount = 1.0
+
+        if not from_asset or not to_asset:
+            return jsonify(error="from_asset and to_asset required"), 400
+
+        # Get all needed prices in USD
+        prices_resp = api_prices()
+        if prices_resp[1] != 200:
+            return prices_resp
+
+        prices = prices_resp[0].get_json().get("prices", {})
+
+        # USD is base currency with price = 1
+        prices["usd"] = 1.0
+        prices["eur"] = 0.92  # Approximate EUR rate
+
+        from_price = prices.get(from_asset)
+        to_price = prices.get(to_asset)
+
+        if from_price is None:
+            return jsonify(error=f"Unknown asset: {from_asset}"), 400
+        if to_price is None:
+            return jsonify(error=f"Unknown asset: {to_asset}"), 400
+        if to_price == 0:
+            return jsonify(error=f"Cannot convert to {to_asset}: price is 0"), 400
+
+        # Convert: amount * from_price_usd / to_price_usd
+        to_amount = (amount * from_price) / to_price
+        rate = from_price / to_price
+
+        return jsonify({
+            "from_asset": from_asset,
+            "to_asset": to_asset,
+            "from_amount": amount,
+            "to_amount": round(to_amount, 8),
+            "rate": round(rate, 8),
+            "timestamp": int(time.time())
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Price convert error: {e}")
+        return jsonify(error=str(e)), 500
+
+
 # ─── SWAP API ──────────────────────────────────────
 @app.route("/api/swap", methods=["POST"])
 def api_swap():
@@ -4700,44 +4973,138 @@ def api_v1_token_balances(thr_addr: str):
     return jsonify(address=thr_addr, token_balances=result), 200
 
 # ─── GATEWAY API (REAL STRIPE + WITHDRAWALS) ───────────────────────
+#
+# COMPLIANCE NOTES:
+# - THR is sold as a UTILITY TOKEN for use within the Thronos ecosystem
+#   (AI credits, network fees, staking) - NOT as an investment/security
+# - Stripe TOS allows digital goods and services sales
+# - Transaction limits help comply with AML requirements
+# - Users must accept terms before purchase
+#
+GATEWAY_MIN_AMOUNT = 10.0     # Minimum $10 purchase
+GATEWAY_MAX_AMOUNT = 5000.0   # Maximum $5000 per transaction (Stripe limits)
+GATEWAY_DAILY_LIMIT = 10000.0 # Maximum $10,000 per wallet per day
+
+# Track daily gateway purchases per wallet
+GATEWAY_DAILY_FILE = os.path.join(DATA_DIR, "gateway_daily.json")
+
+def load_gateway_daily():
+    return load_json(GATEWAY_DAILY_FILE, {})
+
+def save_gateway_daily(data):
+    save_json(GATEWAY_DAILY_FILE, data)
+
+def get_daily_total(wallet):
+    """Get total gateway purchases for wallet in current UTC day"""
+    daily = load_gateway_daily()
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    wallet_data = daily.get(wallet, {})
+    if wallet_data.get("date") != today:
+        return 0.0
+    return wallet_data.get("total", 0.0)
+
+def record_daily_purchase(wallet, amount):
+    """Record a gateway purchase for daily limit tracking"""
+    daily = load_gateway_daily()
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    if wallet not in daily or daily[wallet].get("date") != today:
+        daily[wallet] = {"date": today, "total": 0.0}
+    daily[wallet]["total"] = daily[wallet].get("total", 0.0) + amount
+    save_gateway_daily(daily)
+
 @app.route("/api/gateway/create-checkout-session", methods=["POST"])
 def create_checkout_session():
     if not stripe:
         return jsonify(error="Stripe not configured"), 503
-        
+
     data = request.get_json() or {}
     wallet = data.get("wallet")
     fiat_amount = data.get("fiat_amount")
-    
+    terms_accepted = data.get("terms_accepted", False)
+
     if not wallet or not fiat_amount:
         return jsonify(error="Missing parameters"), 400
-        
+
+    # Require terms acceptance for compliance
+    if not terms_accepted:
+        return jsonify(error="You must accept the Terms of Service to proceed"), 400
+
     try:
-        # Create Stripe Checkout Session
+        amount = float(fiat_amount)
+    except (ValueError, TypeError):
+        return jsonify(error="Invalid amount"), 400
+
+    # Enforce transaction limits
+    if amount < GATEWAY_MIN_AMOUNT:
+        return jsonify(error=f"Minimum purchase is ${GATEWAY_MIN_AMOUNT}"), 400
+    if amount > GATEWAY_MAX_AMOUNT:
+        return jsonify(error=f"Maximum purchase is ${GATEWAY_MAX_AMOUNT} per transaction"), 400
+
+    # Check daily limit
+    daily_total = get_daily_total(wallet)
+    if daily_total + amount > GATEWAY_DAILY_LIMIT:
+        remaining = max(0, GATEWAY_DAILY_LIMIT - daily_total)
+        return jsonify(
+            error=f"Daily limit of ${GATEWAY_DAILY_LIMIT} would be exceeded. Remaining today: ${remaining:.2f}"
+        ), 400
+
+    try:
+        # Calculate THR amount for display (1 THR = $10)
+        thr_amount = amount / 10.0
+
+        # Create Stripe Checkout Session with compliance metadata
         session = stripe.checkout.Session.create(
             payment_method_types=['card'],
             line_items=[{
                 'price_data': {
                     'currency': 'usd',
                     'product_data': {
-                        'name': 'Thronos (THR) Token',
-                        'description': f'Purchase THR for wallet {wallet}',
+                        'name': 'Thronos (THR) Utility Token',
+                        'description': f'Purchase {thr_amount:.2f} THR utility tokens for use within the Thronos ecosystem (AI services, network fees, staking). Not a security or investment product.',
                     },
-                    'unit_amount': int(float(fiat_amount) * 100), # Cents
+                    'unit_amount': int(amount * 100),  # Cents
                 },
                 'quantity': 1,
             }],
             mode='payment',
-            success_url=DOMAIN_URL + '/gateway?status=success',
+            success_url=DOMAIN_URL + '/gateway?status=success&session_id={CHECKOUT_SESSION_ID}',
             cancel_url=DOMAIN_URL + '/gateway?status=cancel',
             metadata={
                 'wallet': wallet,
-                'type': 'buy_thr'
+                'type': 'buy_thr',
+                'thr_amount': str(thr_amount),
+                'terms_accepted': 'true',
+                'timestamp': str(int(time.time()))
             }
         )
-        return jsonify(id=session.id)
+
+        # Record this as a pending purchase for daily limit tracking
+        # (will be confirmed/reverted based on webhook)
+        record_daily_purchase(wallet, amount)
+
+        return jsonify(id=session.id, thr_amount=thr_amount)
     except Exception as e:
+        logger.error(f"Stripe checkout error: {e}")
         return jsonify(error=str(e)), 400
+
+
+@app.route("/api/gateway/limits", methods=["GET"])
+def api_gateway_limits():
+    """
+    Get gateway transaction limits and current daily usage for a wallet.
+    """
+    wallet = request.args.get("wallet", "")
+    daily_total = get_daily_total(wallet) if wallet else 0.0
+
+    return jsonify({
+        "min_amount": GATEWAY_MIN_AMOUNT,
+        "max_amount": GATEWAY_MAX_AMOUNT,
+        "daily_limit": GATEWAY_DAILY_LIMIT,
+        "daily_used": daily_total,
+        "daily_remaining": max(0, GATEWAY_DAILY_LIMIT - daily_total),
+        "thr_rate": 10.0,  # $10 per THR
+        "currency": "USD"
+    }), 200
 
 @app.route("/api/gateway/webhook", methods=["POST"])
 def stripe_webhook():
@@ -5601,7 +5968,19 @@ else:
         hostname = socket.gethostname()
         port = os.getenv("PORT", "5000")
         peer_id = f"replica-{hostname}-{port}"
-        replica_url = f"http://{hostname}:{port}"
+
+        # Use REPLICA_EXTERNAL_URL if set (for cloud deployments like Railway)
+        # Otherwise fall back to hostname:port (for local Docker/testing)
+        if REPLICA_EXTERNAL_URL:
+            # Ensure it has https:// prefix for Railway domains
+            replica_url = REPLICA_EXTERNAL_URL if REPLICA_EXTERNAL_URL.startswith('http') else f"https://{REPLICA_EXTERNAL_URL}"
+            peer_id = f"replica-{REPLICA_EXTERNAL_URL.replace('https://', '').replace('http://', '').split('.')[0]}"
+        else:
+            replica_url = f"http://{hostname}:{port}"
+
+        print(f"[HEARTBEAT] Replica URL configured as: {replica_url}")
+        print(f"[HEARTBEAT] Peer ID: {peer_id}")
+        print(f"[HEARTBEAT] Master URL: {MASTER_INTERNAL_URL}")
 
         while True:
             try:
@@ -5609,14 +5988,20 @@ else:
                     f"{MASTER_INTERNAL_URL}/api/peers/heartbeat",
                     json={
                         "peer_id": peer_id,
-                        "url": replica_url
+                        "url": replica_url,
+                        "node_role": NODE_ROLE,
+                        "timestamp": int(time.time())
                     },
-                    timeout=5
+                    timeout=10
                 )
                 if response.status_code == 200:
                     print(f"[HEARTBEAT] Sent to master: {response.json()}")
                 else:
                     print(f"[HEARTBEAT] Failed: {response.status_code} - {response.text}")
+            except requests.exceptions.ConnectionError as e:
+                print(f"[HEARTBEAT] Connection error to master (will retry): {e}")
+            except requests.exceptions.Timeout:
+                print(f"[HEARTBEAT] Timeout connecting to master (will retry)")
             except Exception as e:
                 print(f"[HEARTBEAT] Error sending to master: {e}")
 

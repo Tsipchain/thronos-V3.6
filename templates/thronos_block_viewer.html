@@ -116,7 +116,7 @@
           <th>Height</th>
           <th>From</th>
           <th>To</th>
-          <th>Amount</th>
+          <th>Asset</th><th>Amount</th>
           <th>Fee</th>
           <th>Timestamp</th>
         </tr>
@@ -135,7 +135,7 @@
     <table id="tblMempool" style="margin-top:8px">
       <thead>
         <tr>
-          <th>TX ID</th><th>From</th><th>To</th><th>Amount</th><th>Fee</th><th>Status</th><th>Queued</th>
+          <th>TX ID</th><th>From</th><th>To</th><th>Asset</th><th>Amount</th><th>Fee</th><th>Status</th><th>Queued</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -368,6 +368,7 @@ function renderTxs(list){
   const tb = tbody('#tblTxs');
   tb.innerHTML='';
   list.forEach(t=>{
+    const asset = (t && t.token_symbol) ? String(t.token_symbol) : 'THR';
     const match = !q || JSON.stringify(t).toLowerCase().includes(q);
     if(!match) return;
     const tr=document.createElement('tr');
@@ -378,7 +379,7 @@ function renderTxs(list){
       <td class="mono k">${t.height ?? '—'}</td>
       <td class="mono"><a class="addr" onclick="copy('${t.from}')">${short(t.from)}</a></td>
       <td class="mono"><a class="addr" onclick="copy('${t.to}')">${short(t.to)}</a></td>
-      <td>${fmtN(t.amount)}</td>
+      <td>${short(asset)}</td><td>${fmtN(t.amount)}</td>
       <td>${fmtN(t.fee_burned)}</td>
       <td class="muted">${rel(t.timestamp)}</td>
     `;
@@ -391,6 +392,7 @@ function renderMempool(list){
   const tb = tbody('#tblMempool');
   tb.innerHTML='';
   list.forEach(t=>{
+    const asset = (t && t.token_symbol) ? String(t.token_symbol) : 'THR';
     const tr=document.createElement('tr');
     tr.innerHTML = `
       <td class="mono">
@@ -398,7 +400,7 @@ function renderMempool(list){
       </td>
       <td class="mono"><a class="addr" onclick="copy('${t.from||''}')">${short(t.from||'—')}</a></td>
       <td class="mono"><a class="addr" onclick="copy('${t.to||''}')">${short(t.to||'—')}</a></td>
-      <td>${fmtN(t.amount)}</td>
+      <td>${short(asset)}</td><td>${fmtN(t.amount)}</td>
       <td>${fmtN(t.fee_burned)}</td>
       <td>${t.status||'pending'}</td>
       <td class="muted">${rel(t.timestamp)}</td>

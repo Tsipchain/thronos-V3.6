@@ -675,8 +675,15 @@ async function loadTokens(){
       const holdersCount = (t.holders_count !== undefined) ? t.holders_count : '—';
       const transfersCount = (t.transfers_count !== undefined) ? t.transfers_count : '—';
 
+      // Prepare logo HTML
+      const color = t.color || '#00ff66';
+      const logoSrc = t.logo || (t.symbol === 'THR' ? '/static/img/thronos-token.png' : null);
+      const logoHtml = logoSrc
+        ? `<img src="${logoSrc}" alt="${t.symbol}" style="width:20px;height:20px;border-radius:50%;vertical-align:middle;margin-right:6px;" onerror="this.style.display='none';">`
+        : `<span style="display:inline-block;width:20px;height:20px;border-radius:50%;background:${color};color:#000;font-weight:bold;font-size:10px;text-align:center;line-height:20px;margin-right:6px;vertical-align:middle;">${(t.symbol || '?')[0]}</span>`;
+
       tr.innerHTML = `
-        <td class="mono k">${t.symbol || '—'}</td>
+        <td class="mono k">${logoHtml}${t.symbol || '—'}</td>
         <td>${t.name || '—'}</td>
         <td class="mono">${fmtN(t.total_supply || t.supply || 0)}</td>
         <td class="mono k">${typeof holdersCount === 'number' ? holdersCount.toLocaleString() : holdersCount}</td>

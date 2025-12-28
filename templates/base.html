@@ -4,7 +4,8 @@
   <title>{% block title %}Thronos Network{% endblock %}</title>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/thronos-token.png') }}">
+  <meta name="cgminer-kit-url" content="{{ CGMINER_KIT_URL if CGMINER_KIT_URL is defined else \'\' }}">
+<link rel="icon" type="image/png" href="{{ url_for('static', filename='img/thronos-token.png') }}">
   <link rel="shortcut icon" type="image/png" href="{{ url_for('static', filename='img/thronos-token.png') }}">
   <style>
     /* Global Styles */
@@ -707,7 +708,16 @@
 
     /* Page Specific Styles Block */
     {% block styles %}{% endblock %}
-  </style>
+  
+.wallet-popup-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;}
+.wallet-popup-title{font-size:12px;opacity:.85;}
+.wallet-popup-actions{display:flex;gap:6px;}
+.wallet-mini-btn{background:transparent;border:1px solid rgba(0,255,102,.25);color:#00ff66;border-radius:8px;padding:4px 8px;font-size:12px;cursor:pointer;}
+.wallet-mini-btn:hover{border-color:rgba(0,255,102,.55);}
+.wallet-mini-btn.active{background:rgba(0,255,102,.12);}
+.wallet-lock-hint{margin-top:8px;font-size:11px;opacity:.7;}
+
+</style>
 </head>
 <body>
 
@@ -718,7 +728,15 @@
 
         <!-- Wallet Balance Popup Widget -->
         <div class="wallet-balance-popup" id="walletBalancePopup" onclick="event.stopPropagation();">
-            <div class="wallet-popup-loading">
+            
+<div class="wallet-popup-topbar">
+    <div class="wallet-popup-title">Wallet</div>
+    <div class="wallet-popup-actions">
+        <button id="walletPinBtn" class="wallet-mini-btn" title="Pin">Pin</button>
+        <button id="walletLockBtn" class="wallet-mini-btn" title="Lock">Lock</button>
+    </div>
+</div>
+<div class="wallet-popup-loading">
                 <div class="wallet-popup-spinner"></div>
                 Loading balances...
             </div>
@@ -933,55 +951,68 @@ async function loadWalletBalances() {
 
 function renderWalletBalances(data) {
     const popup = document.getElementById('walletBalancePopup');
-    const tokens = data.tokens || [];
+    const wallet = localStorage.getItem('thr_address') || '';
+    const lang = localStorage.getItem('lang') || 'el';
 
-    // Calculate total balance
-    const totalTHR = tokens.reduce((sum, t) => {
-        if (t.symbol === 'THR') return sum + t.balance;
-        if (t.symbol === 'WBTC') return sum + (t.balance * 50000);
-        if (t.symbol === 'L2E') return sum + t.balance;
-        return sum;
-    }, 0);
+    const tokensArr = Array.isArray(data?.tokens)
+        ? data.tokens
+        : (data?.balances ? Object.entries(data.balances).map(([symbol, balance]) => ({ symbol, balance })) : []);
 
-    let html = `
-        <div class="wallet-popup-header">💎 Wallet Balance</div>
-        <div class="wallet-popup-tokens">
-    `;
-
-    tokens.forEach(token => {
-        html += `
-            <div class="wallet-popup-token">
-                <div class="wallet-popup-logo" style="border-color: ${token.color};">
-                    ${token.logo ? `<img src="${token.logo}" alt="${token.symbol}" onerror="this.style.display='none'; this.parentElement.innerHTML='<span style=\\'color:${token.color}\\'>${token.symbol[0]}</span>';">` : `<span style="color: ${token.color};">${token.symbol[0]}</span>`}
-                </div>
-                <div class="wallet-popup-info">
-                    <div class="wallet-popup-symbol">${token.symbol}</div>
-                </div>
-                <div class="wallet-popup-balance" style="color: ${token.color};">
-                    ${token.balance.toFixed(token.decimals)}
-                </div>
-            </div>
-        `;
+    // Sort: THR first, then non-zero, then alphabetically
+    const tokens = [...tokensArr].sort((a, b) => {
+        const az = String(a.symbol || '');
+        const bz = String(b.symbol || '');
+        if (az === 'THR') return -1;
+        if (bz === 'THR') return 1;
+        const an = (Number(a.balance) || 0) > 0 ? 0 : 1;
+        const bn = (Number(b.balance) || 0) > 0 ? 0 : 1;
+        if (an !== bn) return an - bn;
+        return az.localeCompare(bz);
     });
 
-    html += `
+    const title = (lang === 'el') ? 'Wallet' : 'Wallet';
+    const sendLabel = (lang === 'el') ? 'Αποστολή' : 'Send';
+    const kitLabel  = (lang === 'el') ? '⛏️ CGMiner Kit' : '⛏️ CGMiner Kit';
+    const openLabel = (lang === 'el') ? 'Άνοιγμα' : 'Open';
+    const copyLabel = (lang === 'el') ? 'Copy' : 'Copy';
+    const balancesLabel = (lang === 'el') ? 'Υπόλοιπα' : 'Balances';
+
+    const rows = tokens.map(t => {
+        const bal = Number(t.balance) || 0;
+        return `<div class="wallet-balance-item">
+            <div class="wallet-balance-token">${escapeHtml(t.symbol)}</div>
+            <div class="wallet-balance-amount">${bal.toFixed(6)}</div>
+        </div>`;
+    }).join('');
+
+    const hasWallet = !!wallet;
+
+    const html = `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px">
+            <div style="font-weight:700;color:#d7ffe9">${title}</div>
+            <button class="wallet-popup-close" onclick="closeWalletPopup()">×</button>
         </div>
-        <div class="wallet-popup-total">
-            Total Portfolio
-            <div class="wallet-popup-total-amount">${totalTHR.toFixed(2)} THR</div>
+
+        <div class="wallet-popup-addrline">
+            <span class="mono">${escapeHtml(wallet)}</span>
+            <button class="btn-mini" onclick="copyToClipboard('${wallet}')">${copyLabel}</button>
         </div>
+
         <div class="wallet-popup-actions">
-            <button class="wallet-popup-btn" onclick="openSendModal(); event.stopPropagation();">
-                💸 <span class="lang-el">Αποστολή</span><span class="lang-en">Send</span>
-            </button>
+            <button class="btn-mini primary" onclick="openSendModal()" ${hasWallet ? '' : 'disabled'}>${sendLabel}</button>
+            <button class="btn-mini" onclick="downloadCGMinerKit()" ${hasWallet ? '' : 'disabled'}>${kitLabel}</button>
+            <a class="btn-mini" href="/wallet?address=${encodeURIComponent(wallet)}" ${hasWallet ? '' : 'style="pointer-events:none;opacity:.45"'}>${openLabel}</a>
+        </div>
+
+        <div class="wallet-popup-section">
+            <div class="wallet-popup-title">${balancesLabel}</div>
+            <div class="wallet-balance-list">
+                ${rows || `<div style="opacity:.75">${lang === 'el' ? 'Δεν βρέθηκαν υπόλοιπα.' : 'No balances found.'}</div>`}
+            </div>
         </div>
     `;
 
     popup.innerHTML = html;
-
-    // Re-apply language settings
-    const savedLang = localStorage.getItem('lang') || 'el';
-    setLanguage(savedLang);
 }
 
 // Send Modal Functions
@@ -1046,16 +1077,38 @@ async function loadTokenBalances() {
         const response = await fetch(`/api/wallet/tokens/${wallet}?show_zero=true`);
         const data = await response.json();
         if (data.tokens) {
+            // Update balances map
             data.tokens.forEach(t => {
                 tokenBalances[t.symbol] = t.balance;
             });
+
+            // Ensure token selector has *all* tokens that appear in balances (not only registry tokens)
+            const select = document.getElementById('sendToken');
+            const existing = new Set(Array.from(select.options).map(o => o.value));
+
+            // Prefer THR first, then rest alphabetically
+            const sorted = [...data.tokens].sort((a, b) => {
+                if (a.symbol === 'THR') return -1;
+                if (b.symbol === 'THR') return 1;
+                return String(a.symbol).localeCompare(String(b.symbol));
+            });
+
+            sorted.forEach(t => {
+                if (!existing.has(t.symbol)) {
+                    const option = document.createElement('option');
+                    option.value = t.symbol;
+                    option.textContent = t.symbol;
+                    select.appendChild(option);
+                    existing.add(t.symbol);
+                }
+            });
+
             updateTokenInfo();
         }
     } catch (e) {
         console.error('Failed to load token balances:', e);
     }
 }
-
 async function loadCustomTokens() {
     try {
         const response = await fetch('/api/tokens/list');
@@ -1197,6 +1250,124 @@ async function submitSend() {
     }
 }
 
+
+
+// --- Wallet UI lock/pin (prevents "vanishing" on hover and adds optional PIN unlock) ---
+const WALLET_UI_PINNED_KEY = 'thr_wallet_ui_pinned';
+const WALLET_PIN_HASH_KEY  = 'thr_wallet_pin_hash';
+const WALLET_LAST_ACTIVE_KEY = 'thr_wallet_last_active';
+const WALLET_IDLE_LOCK_MS = 20 * 60 * 1000; // 20 minutes
+
+function _nowMs(){ return Date.now(); }
+
+async function sha256Hex(str){
+    try {
+        const enc = new TextEncoder();
+        const buf = await crypto.subtle.digest('SHA-256', enc.encode(str));
+        return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+    } catch(e) {
+        // Fallback (no crypto.subtle) - not ideal, but better than breaking UX
+        return 'plain:' + String(str);
+    }
+}
+
+function getWalletUiPinned(){
+    return localStorage.getItem(WALLET_UI_PINNED_KEY) === '1';
+}
+function setWalletUiPinned(v){
+    localStorage.setItem(WALLET_UI_PINNED_KEY, v ? '1' : '0');
+}
+
+function markWalletActive(){
+    localStorage.setItem(WALLET_LAST_ACTIVE_KEY, String(_nowMs()));
+}
+function isWalletStale(){
+    const last = parseInt(localStorage.getItem(WALLET_LAST_ACTIVE_KEY) || '0', 10);
+    return !last || (_nowMs() - last) > WALLET_IDLE_LOCK_MS;
+}
+
+async function ensureWalletPinSet(){
+    const existing = localStorage.getItem(WALLET_PIN_HASH_KEY);
+    if(existing) return true;
+    const pin1 = prompt('Set a wallet PIN (4-8 digits). Keep it safe.');
+    if(!pin1) return false;
+    if(!/^\d{4,8}$/.test(pin1)) { alert('PIN must be 4-8 digits.'); return false; }
+    const pin2 = prompt('Confirm PIN');
+    if(pin1 !== pin2){ alert('PINs do not match.'); return false; }
+    const h = await sha256Hex(pin1);
+    localStorage.setItem(WALLET_PIN_HASH_KEY, h);
+    markWalletActive();
+    return true;
+}
+
+async function ensureWalletUnlocked(){
+    // If idle too long, require PIN (if set)
+    const hash = localStorage.getItem(WALLET_PIN_HASH_KEY);
+    if(!hash) return true; // no pin set
+    if(!isWalletStale()) return true;
+    const pin = prompt('Wallet locked (idle). Enter PIN to continue.');
+    if(!pin) return false;
+    const h = await sha256Hex(pin);
+    if(h !== hash){ alert('Wrong PIN.'); return false; }
+    markWalletActive();
+    return true;
+}
+
+function setWalletOpen(open){
+    const statusEl = document.getElementById('walletStatus');
+    if(!statusEl) return;
+    if(open) statusEl.classList.add('open');
+    else statusEl.classList.remove('open');
+}
+
+function isWalletOpen(){
+    const statusEl = document.getElementById('walletStatus');
+    return !!statusEl && statusEl.classList.contains('open');
+}
+
+function initWalletUiControls(){
+    const statusEl = document.getElementById('walletStatus');
+    const pinBtn = document.getElementById('walletPinBtn');
+    const lockBtn = document.getElementById('walletLockBtn');
+    if(!statusEl) return;
+
+    // Reflect pinned state
+    if(pinBtn){
+        if(getWalletUiPinned()) pinBtn.classList.add('active');
+        pinBtn.addEventListener('click', (ev)=>{
+            ev.stopPropagation();
+            const next = !getWalletUiPinned();
+            setWalletUiPinned(next);
+            pinBtn.classList.toggle('active', next);
+        });
+    }
+
+    if(lockBtn){
+        lockBtn.addEventListener('click', async (ev)=>{
+            ev.stopPropagation();
+            const ok = await ensureWalletPinSet();
+            if(ok) alert('PIN set. Wallet will auto-lock after inactivity.');
+        });
+    }
+
+    // Click-to-toggle wallet popup (no more twitchy hover)
+    statusEl.addEventListener('click', async (ev)=>{
+        ev.stopPropagation();
+        const ok = await ensureWalletUnlocked();
+        if(!ok) return;
+        const nextOpen = !isWalletOpen();
+        setWalletOpen(nextOpen);
+        if(nextOpen) await loadWalletBalances();
+        markWalletActive();
+    });
+
+    // Close on outside click, unless pinned
+    document.addEventListener('click', ()=>{
+        if(getWalletUiPinned()) return;
+        setWalletOpen(false);
+    });
+}
+
 // Initialize language and wallet status on load
 document.addEventListener('DOMContentLoaded', () => {
     const savedLang = localStorage.getItem('lang') || 'el';
@@ -1213,8 +1384,8 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('walletAddrShort').textContent = short;
             statusEl.style.display = 'flex';
 
-            // Load wallet balances on hover
-            statusEl.addEventListener('mouseenter', loadWalletBalances);
+            // Wallet popup now opens on click (not hover)
+            initWalletUiControls();
         }
         if(disconnectEl) {
             disconnectEl.style.display = 'block';
@@ -1247,6 +1418,30 @@ document.addEventListener('DOMContentLoaded', () => {
 </div>
 
 <script>
+
+function escapeHtml(str) {
+    return String(str || '').replace(/[&<>"']/g, (m) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[m]));
+}
+
+async function copyToClipboard(text) {
+    try {
+        await navigator.clipboard.writeText(text);
+        const lang = localStorage.getItem('lang') || 'el';
+        showToast(lang === 'el' ? 'Αντιγράφηκε' : 'Copied');
+    } catch (e) {
+        console.warn('Clipboard failed', e);
+    }
+}
+
+function downloadCGMinerKit() {
+    const meta = document.querySelector('meta[name="cgminer-kit-url"]');
+    const url = (meta && meta.content ? meta.content.trim() : '') || '/static/cgminer_kit.zip';
+    window.open(url, '_blank', 'noopener');
+}
+
+
 // Chain Tokens Widget - Load all tokens on chain with holders count
 (function() {
     async function loadChainTokensWidget() {

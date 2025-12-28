@@ -97,7 +97,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 # Node role: "master" or "replica"
 NODE_ROLE = os.getenv("NODE_ROLE", "master").lower()
-MASTER_INTERNAL_URL = os.getenv("MASTER_INTERNAL_URL", "http://localhost:5000")
+MASTER_INTERNAL_URL = os.getenv("MASTER_NODE_URL", "http://localhost:5000")
 # Replica external URL - used for heartbeat registration (e.g., Railway URL)
 REPLICA_EXTERNAL_URL = os.getenv("REPLICA_EXTERNAL_URL", os.getenv("RAILWAY_PUBLIC_DOMAIN", ""))
 

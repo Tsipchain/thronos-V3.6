@@ -108,11 +108,31 @@ MEMPOOL_FILE        = os.path.join(DATA_DIR, "mempool.json")
 ATTEST_STORE_FILE   = os.path.join(DATA_DIR, "attest_store.json")
 WITHDRAWALS_FILE    = os.path.join(DATA_DIR, "withdrawals.json") # NEW
 VOTING_FILE         = os.path.join(DATA_DIR, "voting.json") # Feature voting for Crypto Hunters
-PEERS_FILE          = os.path.join(DATA_DIR, "active_peers.json") # Heartbeat tracking
+ACTIVE_PEERS_FILE   = os.path.join(DATA_DIR, "active_peers.json")  # Heartbeat tracking (replicas -> master)
+PEERS_FILE          = os.path.join(DATA_DIR, "peers.json")         # P2P peer list (gossip/broadcast)
 
 # Active peers tracking (for replicas heartbeating to master)
 PEER_TTL_SECONDS = 60  # Peers expire after 60 seconds without heartbeat
-active_peers = {}  # {peer_id: {"last_seen": timestamp, "url": replica_url}}
+
+def persist_active_peers() -> None:
+    """Best-effort persistence so a master restart doesn't forget live replicas."""
+    try:
+        with open(ACTIVE_PEERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(active_peers, f, indent=2, sort_keys=True)
+    except Exception:
+        pass
+
+def load_persisted_active_peers() -> Dict[str, Any]:
+    try:
+        if os.path.exists(ACTIVE_PEERS_FILE):
+            with open(ACTIVE_PEERS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+active_peers: Dict[str, Any] = load_persisted_active_peers()  # {peer_id: {"last_seen": ts, "url": url}}
 
 # AI commerce
 AI_PACKS_FILE       = os.path.join(DATA_DIR, "ai_packs.json")
@@ -331,9 +351,6 @@ COURSES_FILE = os.path.join(DATA_DIR, "courses.json")
 # be added via the ``/api/v1/peers`` POST endpoint.  Keeping the list in a
 # JSON file allows nodes to persist known peers across restarts without
 # introducing additional dependencies.
-
-PEERS_FILE = os.path.join(DATA_DIR, "peers.json")
-
 # --- Tokens & DeFi Config (New for V3.8) ---
 #
 # To support community‑issued meme coins and basic automated market maker (AMM)
@@ -351,9 +368,9 @@ POOLS_FILE          = os.path.join(DATA_DIR, "pools.json")
 
 # --- Stripe Config ---
 # PLEASE UPDATE THESE WITH YOUR REAL KEYS
-STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "sk_live_...Tuhr") 
-STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "pk_live_n7kIflBg8OTy2FJLsp80DY0M")
-STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "whsec_PLACEHOLDER")
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 DOMAIN_URL = os.getenv("DOMAIN_URL", "http://localhost:3333")
 
 
@@ -365,7 +382,7 @@ try:
 except Exception:
     stripe = None
 
-if stripe:
+if stripe and STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
 
 # Πόσα blocks "έχουν ήδη γίνει" πριν ξεκινήσει το τρέχον chain αρχείο
@@ -377,7 +394,7 @@ logger = logging.getLogger("thronos")
 # Security warnings for production deployments
 if ADMIN_SECRET == "CHANGE_ME_NOW":
     logger.warning("⚠️  WARNING: Using default ADMIN_SECRET. Set ADMIN_SECRET environment variable for production!")
-if "PLACEHOLDER" in STRIPE_WEBHOOK_SECRET or "Tuhr" in STRIPE_SECRET_KEY:
+if not STRIPE_SECRET_KEY or not STRIPE_WEBHOOK_SECRET:
     logger.warning("⚠️  WARNING: Using placeholder Stripe keys. Update STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET for production!")
 
 # Initialize AI
@@ -2057,6 +2074,8 @@ def cleanup_expired_peers():
                if now - data.get("last_seen", 0) > PEER_TTL_SECONDS]
     for peer_id in expired:
         del active_peers[peer_id]
+    if expired:
+        persist_active_peers()
     return len(expired)
 
 @app.route("/api/peers/heartbeat", methods=["POST"])

@@ -6776,6 +6776,119 @@ def api_v1_get_pools():
     return jsonify(pools=pools), 200
 
 
+@app.route("/api/v1/pools/positions/<address>")
+def api_v1_user_positions(address):
+    """
+    Get user's liquidity positions with calculated values.
+    Returns share amounts, token amounts, and estimated values.
+    """
+    if not address or not validate_thr_address(address):
+        return jsonify(status="error", message="Invalid address"), 400
+
+    pools = load_pools()
+    user_positions = []
+
+    # Get THR price for value calculations
+    thr_price = 0.0042  # Default, could be from external source
+
+    for pool in pools:
+        providers = pool.get("providers", {})
+        user_shares = float(providers.get(address, 0))
+
+        if user_shares > 0:
+            total_shares = float(pool.get("total_shares", 0))
+            reserves_a = float(pool.get("reserves_a", 0))
+            reserves_b = float(pool.get("reserves_b", 0))
+
+            # Calculate user's portion of each token
+            share_ratio = user_shares / total_shares if total_shares > 0 else 0
+            token_a_amount = round(reserves_a * share_ratio, 6)
+            token_b_amount = round(reserves_b * share_ratio, 6)
+
+            # Estimate value in THR
+            token_a = pool.get("token_a", "")
+            token_b = pool.get("token_b", "")
+
+            # Simple value estimation (in THR)
+            value_thr = 0
+            if token_a == "THR":
+                value_thr += token_a_amount
+            elif token_a == "WBTC":
+                value_thr += token_a_amount * 8000000  # ~8M THR per WBTC estimate
+            else:
+                value_thr += token_a_amount * 0.01  # Custom tokens rough estimate
+
+            if token_b == "THR":
+                value_thr += token_b_amount
+            elif token_b == "WBTC":
+                value_thr += token_b_amount * 8000000
+            else:
+                value_thr += token_b_amount * 0.01
+
+            position = {
+                "pool_id": pool.get("id"),
+                "token_a": token_a,
+                "token_b": token_b,
+                "user_shares": round(user_shares, 6),
+                "total_shares": round(total_shares, 6),
+                "share_percent": round(share_ratio * 100, 4),
+                "token_a_amount": token_a_amount,
+                "token_b_amount": token_b_amount,
+                "value_thr": round(value_thr, 6),
+                "value_usd": round(value_thr * thr_price, 2),
+                "reserves_a": reserves_a,
+                "reserves_b": reserves_b
+            }
+
+            # Add referral info if available
+            referrals = pool.get("referrals", {})
+            user_referrals = [addr for addr, ref in referrals.items() if ref == address]
+            if user_referrals:
+                position["referral_count"] = len(user_referrals)
+                position["referral_bonus_earned"] = round(len(user_referrals) * 0.001, 6)  # 0.1% bonus per referral
+
+            user_positions.append(position)
+
+    # Calculate totals
+    total_value_thr = sum(p["value_thr"] for p in user_positions)
+    total_value_usd = sum(p["value_usd"] for p in user_positions)
+
+    return jsonify({
+        "status": "success",
+        "address": address,
+        "positions": user_positions,
+        "total_pools": len(user_positions),
+        "total_value_thr": round(total_value_thr, 6),
+        "total_value_usd": round(total_value_usd, 2)
+    }), 200
+
+
+@app.route("/api/v1/pools/referral/<pool_id>")
+def api_v1_pool_referral_stats(pool_id):
+    """Get referral statistics for a pool."""
+    pools = load_pools()
+    pool = next((p for p in pools if p.get("id") == pool_id), None)
+
+    if not pool:
+        return jsonify(status="error", message="Pool not found"), 404
+
+    referrals = pool.get("referrals", {})
+
+    # Group referrals by referrer
+    referrer_stats = {}
+    for referred, referrer in referrals.items():
+        if referrer not in referrer_stats:
+            referrer_stats[referrer] = []
+        referrer_stats[referrer].append(referred)
+
+    return jsonify({
+        "status": "success",
+        "pool_id": pool_id,
+        "total_referrals": len(referrals),
+        "referrer_stats": {k: len(v) for k, v in referrer_stats.items()}
+    }), 200
+
+
 @app.route("/api/v1/pools", methods=["POST"])
 def api_v1_create_pool():
     """
@@ -6933,6 +7046,7 @@ def api_v1_add_liquidity():
     provider = (data.get("provider_thr") or "").strip()
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
+    referrer = (data.get("referrer") or "").strip()  # Optional referral address
 
     # Validate inputs
     try:
@@ -7037,6 +7151,20 @@ def api_v1_add_liquidity():
         pool["providers"] = {}
     pool["providers"][provider] = round(float(pool["providers"].get(provider, 0.0)) + shares_minted, 6)
 
+    # Track referral if provided and valid
+    referral_bonus = 0
+    if referrer and validate_thr_address(referrer) and referrer != provider:
+        if "referrals" not in pool:
+            pool["referrals"] = {}
+        # Only track if this is first time adding liquidity (new provider)
+        if provider not in pool["referrals"]:
+            pool["referrals"][provider] = referrer
+            # Give referrer bonus shares (0.5% of new shares)
+            referral_bonus = round(shares_minted * 0.005, 6)
+            pool["providers"][referrer] = round(float(pool["providers"].get(referrer, 0.0)) + referral_bonus, 6)
+            pool["total_shares"] = round(float(pool["total_shares"]) + referral_bonus, 6)
+            logger.info(f"Referral bonus: {referral_bonus} shares to {referrer} for referring {provider}")
+
     save_pools(pools)
 
     # Record transaction
@@ -7065,12 +7193,18 @@ def api_v1_add_liquidity():
     except Exception:
         pass
 
-    return jsonify(
-        status="success",
-        shares_minted=shares_minted,
-        total_shares=pool["total_shares"],
-        provider_shares=pool["providers"][provider]
-    ), 200
+    response = {
+        "status": "success",
+        "shares_minted": shares_minted,
+        "total_shares": pool["total_shares"],
+        "provider_shares": pool["providers"][provider]
+    }
+
+    if referral_bonus > 0:
+        response["referral_bonus"] = referral_bonus
+        response["referrer"] = referrer
+
+    return jsonify(response), 200
 
 
 # ─── REMOVE LIQUIDITY FROM POOL ────────────────────────────────────

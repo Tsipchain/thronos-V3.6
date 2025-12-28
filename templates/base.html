@@ -873,7 +873,7 @@
         padding: 5px 10px;
         cursor: pointer;
     }
-    .lang-en { display: none; }
+    .lang-en, .lang-ja, .lang-es, .lang-ru { display: none; }
 
     /* Utility Classes */
     .highlight { color: #ff0; }
@@ -903,18 +903,18 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    .wallet-popup-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;}
+    .wallet-popup-title{font-size:12px;opacity:.85;}
+    .wallet-popup-actions{display:flex;gap:6px;}
+    .wallet-mini-btn{background:transparent;border:1px solid rgba(0,255,102,.25);color:#00ff66;border-radius:8px;padding:4px 8px;font-size:12px;cursor:pointer;}
+    .wallet-mini-btn:hover{border-color:rgba(0,255,102,.55);}
+    .wallet-mini-btn.active{background:rgba(0,255,102,.12);}
+    .wallet-lock-hint{margin-top:8px;font-size:11px;opacity:.7;}
+
     /* Page Specific Styles Block */
     {% block styles %}{% endblock %}
-  
-.wallet-popup-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;}
-.wallet-popup-title{font-size:12px;opacity:.85;}
-.wallet-popup-actions{display:flex;gap:6px;}
-.wallet-mini-btn{background:transparent;border:1px solid rgba(0,255,102,.25);color:#00ff66;border-radius:8px;padding:4px 8px;font-size:12px;cursor:pointer;}
-.wallet-mini-btn:hover{border-color:rgba(0,255,102,.55);}
-.wallet-mini-btn.active{background:rgba(0,255,102,.12);}
-.wallet-lock-hint{margin-top:8px;font-size:11px;opacity:.7;}
 
-</style>
+ </style>
 </head>
 <body>
 
@@ -942,7 +942,7 @@
     <button id="disconnectBtn" class="disconnect-btn" onclick="disconnectWallet()">
         ✖ <span class="lang-el">Αποσύνδεση</span><span class="lang-en">Disconnect</span>
     </button>
-    <button class="lang-toggle" onclick="toggleLanguage()">GR | EN</button>
+    <button class="lang-toggle" onclick="toggleLanguage()">GR</button>
 </div>
 
 <!-- Send Modal -->
@@ -1084,27 +1084,67 @@
 
 <script>
 // Global Language Logic
+const LANG_SEQUENCE = ['gr', 'en', 'ja', 'es', 'ru'];
+const LANGUAGE_CLASS_MAP = {
+    gr: 'lang-el',
+    en: 'lang-en',
+    ja: 'lang-ja',
+    es: 'lang-es',
+    ru: 'lang-ru'
+};
+const DEFAULT_LANG = 'gr';
+
+function normalizeLang(lang) {
+    if (!lang) return DEFAULT_LANG;
+    if (lang === 'el') return 'gr';
+    return LANG_SEQUENCE.includes(lang) ? lang : 'en';
+}
+
+function getCurrentLang() {
+    return normalizeLang(localStorage.getItem('lang') || DEFAULT_LANG);
+}
+
+function isGreekLang(lang) {
+    return normalizeLang(lang) === 'gr';
+}
+
 function toggleLanguage() {
-    const currentLang = localStorage.getItem('lang') || 'el';
-    const newLang = currentLang === 'el' ? 'en' : 'el';
-    setLanguage(newLang);
+    const currentLang = getCurrentLang();
+    const currentIndex = LANG_SEQUENCE.indexOf(currentLang);
+    const nextIndex = (currentIndex + 1) % LANG_SEQUENCE.length;
+    setLanguage(LANG_SEQUENCE[nextIndex]);
 }
 
 function setLanguage(lang) {
-    localStorage.setItem('lang', lang);
-    const elElements = document.querySelectorAll('.lang-el');
-    const enElements = document.querySelectorAll('.lang-en');
-    
-    if (lang === 'el') {
-        elElements.forEach(el => el.style.display = 'inline');
-        enElements.forEach(el => el.style.display = 'none');
-    } else {
-        elElements.forEach(el => el.style.display = 'none');
-        enElements.forEach(el => el.style.display = 'inline');
+    const normalizedLang = normalizeLang(lang);
+    localStorage.setItem('lang', normalizedLang);
+
+    const allClasses = Object.values(LANGUAGE_CLASS_MAP);
+    allClasses.forEach(cls => {
+        document.querySelectorAll(`.${cls}`).forEach(el => el.style.display = 'none');
+    });
+
+    const activeClass = LANGUAGE_CLASS_MAP[normalizedLang] || LANGUAGE_CLASS_MAP.en;
+    document.querySelectorAll(`.${activeClass}`).forEach(el => el.style.display = 'inline');
+
+    // Fallback to English where no translation exists in the same container
+    if (normalizedLang !== 'en') {
+        document.querySelectorAll('.lang-en').forEach(el => {
+            const parent = el.parentElement;
+            const hasSibling = parent ? parent.querySelector(`.${activeClass}`) : null;
+            if (!hasSibling) {
+                el.style.display = 'inline';
+            }
+        });
     }
-    
+
+    const toggleBtn = document.querySelector('.lang-toggle');
+    if (toggleBtn) {
+        toggleBtn.textContent = normalizedLang.toUpperCase();
+    }
+
     // Trigger custom event for pages that need to re-render content
-    window.dispatchEvent(new CustomEvent('langChanged', { detail: { lang: lang } }));
+    window.dispatchEvent(new CustomEvent('langChanged', { detail: { lang: normalizedLang } }));
 }
 
 // Disconnect Wallet Function
@@ -1188,7 +1228,8 @@ async function updateTokenPrices() {
 function renderWalletBalances(data) {
     const popup = document.getElementById('walletBalancePopup');
     const wallet = localStorage.getItem('thr_address') || '';
-    const lang = localStorage.getItem('lang') || 'el';
+    const lang = getCurrentLang();
+    const isGreek = isGreekLang(lang);
 
     const tokensArr = Array.isArray(data?.tokens)
         ? data.tokens
@@ -1229,15 +1270,15 @@ function renderWalletBalances(data) {
     const totalBTC = btcPrice > 0 ? totalUSD / btcPrice : 0;
 
     // Labels
-    const portfolioLabel = lang === 'el' ? 'Συνολική Αξία' : 'Portfolio Value';
-    const assetsLabel = lang === 'el' ? 'Περιουσιακά Στοιχεία' : 'Assets';
-    const sendLabel = lang === 'el' ? 'Αποστολή' : 'Send';
-    const receiveLabel = lang === 'el' ? 'Λήψη' : 'Receive';
-    const swapLabel = lang === 'el' ? 'Swap' : 'Swap';
-    const bridgeLabel = lang === 'el' ? 'Bridge' : 'Bridge';
-    const pledgeLabel = lang === 'el' ? 'Pledge' : 'Pledge';
-    const historyLabel = lang === 'el' ? 'Ιστορικό' : 'History';
-    const noTokensLabel = lang === 'el' ? 'Δεν βρέθηκαν tokens' : 'No tokens found';
+    const portfolioLabel = isGreek ? 'Συνολική Αξία' : 'Portfolio Value';
+    const assetsLabel = isGreek ? 'Περιουσιακά Στοιχεία' : 'Assets';
+    const sendLabel = isGreek ? 'Αποστολή' : 'Send';
+    const receiveLabel = isGreek ? 'Λήψη' : 'Receive';
+    const swapLabel = 'Swap';
+    const bridgeLabel = 'Bridge';
+    const pledgeLabel = 'Pledge';
+    const historyLabel = isGreek ? 'Ιστορικό' : 'History';
+    const noTokensLabel = isGreek ? 'Δεν βρέθηκαν tokens' : 'No tokens found';
 
     // Render token rows with logos and values
     const tokenRows = tokens.filter(t => Number(t.balance) > 0).map(t => {
@@ -1339,7 +1380,7 @@ function renderWalletBalances(data) {
     popup.innerHTML = html;
 
     // Apply language after render
-    const savedLang = localStorage.getItem('lang') || 'el';
+    const savedLang = getCurrentLang();
     setLanguage(savedLang);
 }
 
@@ -1382,11 +1423,12 @@ function selectSpeed(speed) {
 function selectNetwork(network) {
     if (network === 'bitcoin') {
         // Bitcoin bridge coming soon
-        const lang = localStorage.getItem('lang') || 'el';
-        alert(lang === 'el' ?
-            '🚧 Η γέφυρα Bitcoin έρχεται σύντομα! Δείτε το Roadmap για περισσότερες πληροφορίες.' :
-            '🚧 Bitcoin Bridge coming soon! Check the Roadmap for more info.'
-        );
+    const lang = getCurrentLang();
+    const isGreek = isGreekLang(lang);
+    alert(isGreek ?
+        '🚧 Η γέφυρα Bitcoin έρχεται σύντομα! Δείτε το Roadmap για περισσότερες πληροφορίες.' :
+        '🚧 Bitcoin Bridge coming soon! Check the Roadmap for more info.'
+    );
         return;
     }
     selectedNetwork = network;
@@ -1711,7 +1753,7 @@ function initWalletUiControls(){
 
 // Initialize language and wallet status on load
 document.addEventListener('DOMContentLoaded', () => {
-    const savedLang = localStorage.getItem('lang') || 'el';
+    const savedLang = getCurrentLang();
     setLanguage(savedLang);
 
     // Check wallet status
@@ -1780,8 +1822,9 @@ function escapeHtml(str) {
 async function copyToClipboard(text) {
     try {
         await navigator.clipboard.writeText(text);
-        const lang = localStorage.getItem('lang') || 'el';
-        showToast(lang === 'el' ? 'Αντιγράφηκε' : 'Copied');
+        const lang = getCurrentLang();
+        const isGreek = isGreekLang(lang);
+        showToast(isGreek ? 'Αντιγράφηκε' : 'Copied');
     } catch (e) {
         console.warn('Clipboard failed', e);
     }

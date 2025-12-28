@@ -3810,10 +3810,10 @@ def api_token_balance(symbol, address):
 def api_token_transfer():
     """Back-compat token transfer endpoint used by older frontends.
 
-    Notes:
-    - Uses the same token registry/ledger format as /api/wallet/send (TOKENS_FILE + per-token ledger).
-    - Records a chain entry immediately (status=confirmed), consistent with /api/wallet/send for custom tokens.
-    - Always returns JSON (no HTML error pages), to keep the frontend stable.
+    Routes to the unified transfer_custom_token function which handles:
+    - Both token stores (TOKENS_FILE and CUSTOM_TOKENS_FILE)
+    - Fee payment in THR
+    - Speed options (slow/fast)
     """
     try:
         data = request.get_json(force=True, silent=False) or {}
@@ -3844,10 +3844,8 @@ def api_token_transfer():
     to_thr = str(to_addr).strip()
     symbol = str(symbol).strip().upper()
     auth_secret = str(data.get("auth_secret", "")).strip()
-    passphrase = str(data.get("passphrase", "")).strip() if data.get("passphrase") else None
-
-    # speed is optional (UI may send it). We store it in tx for UI/viewer, but do not change economics here.
-    speed = str(data.get("speed", "")).strip().lower() or "slow"
+    passphrase = str(data.get("passphrase", "")).strip() if data.get("passphrase") else ""
+    speed = str(data.get("speed", "fast")).strip().lower()
 
     try:
         amount = float(amount)
@@ -3860,11 +3858,20 @@ def api_token_transfer():
     if not is_valid_address(from_thr) or not is_valid_address(to_thr):
         return jsonify({"ok": False, "error": "Invalid address format"}), 400
 
-    # Load token definition (list-based store)
+    # First try custom_tokens.json (dict-based, newer format)
+    custom_tokens = load_custom_tokens()
+    if symbol in custom_tokens:
+        return transfer_custom_token(symbol, from_thr, to_thr, amount, auth_secret, passphrase, speed)
+
+    # Fallback to tokens.json (list-based, older format)
     tokens = load_json(TOKENS_FILE, [])
     token = next((t for t in tokens if str(t.get("symbol", "")).upper() == symbol), None)
     if not token:
         return jsonify({"ok": False, "error": f"Token {symbol} not found"}), 404
+
+    # Check if token is transferable
+    if not token.get("transferable", True):
+        return jsonify({"ok": False, "error": "This token is not transferable"}), 403
 
     # Auth: same logic as /api/wallet/send for custom tokens
     pledges = load_json(PLEDGE_CHAIN, [])
@@ -3890,22 +3897,47 @@ def api_token_transfer():
     token_id = token.get("id") or token.get("token_id") or symbol
     decimals = int(token.get("decimals", 6))
 
-    ledger = load_custom_token_ledger(token_id)
-    sender_balance = float(ledger.get(from_thr, 0.0))
+    # Check token balance
+    token_ledger = load_custom_token_ledger(token_id)
+    sender_token_balance = float(token_ledger.get(from_thr, 0.0))
 
-    if sender_balance < amount:
+    if sender_token_balance < amount:
         return jsonify({
             "ok": False,
-            "error": "Insufficient balance",
-            "balance": round(sender_balance, decimals),
+            "error": f"Insufficient {symbol} balance",
+            "balance": round(sender_token_balance, decimals),
             "required": amount
         }), 400
 
-    ledger[from_thr] = round(sender_balance - amount, decimals)
-    ledger[to_thr] = round(float(ledger.get(to_thr, 0.0)) + amount, decimals)
-    save_custom_token_ledger(token_id, ledger)
+    # Calculate fee in THR
+    if speed == "slow":
+        thr_fee = round(max(0.001, amount * 0.0009), 6)
+    else:
+        thr_fee = round(max(0.001, calculate_dynamic_fee(amount)), 6)
 
-    # Chain record (confirmed) — keeps viewer in sync
+    # Check THR balance for fee
+    thr_ledger = load_json(LEDGER_FILE, {})
+    sender_thr_balance = float(thr_ledger.get(from_thr, 0.0))
+
+    if sender_thr_balance < thr_fee:
+        return jsonify({
+            "ok": False,
+            "error": "Insufficient THR balance for transaction fee",
+            "thr_balance": round(sender_thr_balance, 6),
+            "fee_required": thr_fee,
+            "token_balance": round(sender_token_balance, decimals)
+        }), 400
+
+    # Deduct THR fee (burn it)
+    thr_ledger[from_thr] = round(sender_thr_balance - thr_fee, 6)
+    save_json(LEDGER_FILE, thr_ledger)
+
+    # Transfer the token
+    token_ledger[from_thr] = round(sender_token_balance - amount, decimals)
+    token_ledger[to_thr] = round(float(token_ledger.get(to_thr, 0.0)) + amount, decimals)
+    save_custom_token_ledger(token_id, token_ledger)
+
+    # Chain record (confirmed)
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     tx_id = f"TOKEN_TRANSFER-{symbol}-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
@@ -3915,25 +3947,26 @@ def api_token_transfer():
         "from": from_thr,
         "to": to_thr,
         "amount": round(amount, decimals),
+        "fee_burned_thr": thr_fee,
+        "speed": speed,
         "timestamp": ts,
         "tx_id": tx_id,
-        "status": "confirmed",
-        "speed": speed,
-        "fee_burned": 0.0,
-        "reward_to_miner": 0.0,
-        "reward_to_ai": 0.0,
-        "source": "api_tokens_transfer"
+        "status": "confirmed"
     }
 
     chain = load_json(CHAIN_FILE, [])
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
 
+    logger.info(f"Token transfer: {amount} {symbol} from {from_thr[:10]}... to {to_thr[:10]}... (fee: {thr_fee} THR)")
+
     return jsonify({
         "ok": True,
         "status": "confirmed",
         "tx": tx,
-        "new_balance": ledger[from_thr]
+        "new_balance": token_ledger[from_thr],
+        "new_thr_balance": thr_ledger[from_thr],
+        "fee_burned": thr_fee
     }), 200
 
 @app.route("/api/tokens/burn", methods=["POST"])

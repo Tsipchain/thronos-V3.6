@@ -90,6 +90,13 @@
       timestamp:   "Χρονική Σήμανση",
       totalSupply: "Συνολική Προμήθεια THR"
     },
+    gr: {
+      totalBlocks: "Σύνολο Blocks",
+      lastHash:    "Hash Τελευταίου Block",
+      lastMiner:   "Τελευταίος Miner",
+      timestamp:   "Χρονική Σήμανση",
+      totalSupply: "Συνολική Προμήθεια THR"
+    },
     en: {
       totalBlocks: "Total Blocks",
       lastHash:    "Last Block Hash",
@@ -101,7 +108,7 @@
 
   function renderStats(lastBlock, netStats) {
     const lang = localStorage.getItem("lang") || "el";
-    const l = labels[lang];
+    const l = labels[lang] || labels["en"]; // Fallback to English if language not found
 
     const blockCount  = (lastBlock && lastBlock.block_count) || (netStats && netStats.block_count) || 0;
     const totalSupply = (lastBlock && lastBlock.total_supply) || (netStats && netStats.total_supply) || 0;

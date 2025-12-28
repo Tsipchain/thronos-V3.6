@@ -10,13 +10,14 @@ export default class ThronosAPI {
     }
 
     /**
-     * Make an API request
+     * Make an API request with retry logic
      * @param {string} endpoint - API endpoint
      * @param {object} options - Fetch options
+     * @param {number} retries - Number of retry attempts
      * @returns {Promise<any>}
      * @private
      */
-    async request(endpoint, options = {}) {
+    async request(endpoint, options = {}, retries = 3) {
         const url = `${this.apiUrl}${endpoint}`;
 
         const defaultOptions = {
@@ -26,18 +27,29 @@ export default class ThronosAPI {
             }
         };
 
-        try {
-            const response = await fetch(url, { ...defaultOptions, ...options });
+        let lastError;
+        for (let attempt = 0; attempt <= retries; attempt++) {
+            try {
+                const response = await fetch(url, { ...defaultOptions, ...options });
 
-            if (!response.ok) {
-                const error = await response.json().catch(() => ({ error: 'Request failed' }));
-                throw new Error(error.error || `Request failed with status ${response.status}`);
+                if (!response.ok) {
+                    const error = await response.json().catch(() => ({ error: 'Request failed' }));
+                    throw new Error(error.error || `Request failed with status ${response.status}`);
+                }
+
+                return await response.json();
+            } catch (error) {
+                lastError = error;
+                // Only retry on network errors, not on API errors
+                if (attempt < retries && error.message.includes('fetch')) {
+                    // Exponential backoff: 1s, 2s, 4s
+                    await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+                    continue;
+                }
+                break;
             }
-
-            return await response.json();
-        } catch (error) {
-            throw new Error(`API request failed: ${error.message}`);
         }
+        throw new Error(`API request failed: ${lastError.message}`);
     }
 
     /**

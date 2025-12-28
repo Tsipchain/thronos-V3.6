@@ -180,9 +180,18 @@
     (document.head || document.documentElement).appendChild(script);
     script.remove();
 
+    // Get API base from storage or use production default
+    let API_BASE = 'https://thrchain.up.railway.app';
+    chrome.storage.local.get(['api_base'], (result) => {
+        if (result.api_base) {
+            API_BASE = result.api_base;
+        }
+    });
+
     // Listen for messages from page
     window.addEventListener('message', async (event) => {
-        if (event.source !== window || !event.data.source === 'thronos-page') {
+        // FIXED: Logic error - was !event.data.source === 'thronos-page' (wrong operator precedence)
+        if (event.source !== window || event.data.source !== 'thronos-page') {
             return;
         }
 
@@ -223,7 +232,7 @@
                 }
 
                 try {
-                    const response = await fetch('http://localhost:5000/api/wallet/send', {
+                    const response = await fetch(`${API_BASE}/api/wallet/send`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -267,7 +276,7 @@
                 }
 
                 try {
-                    const response = await fetch(`http://localhost:5000/api/wallet/tokens/${wallet.address}?show_zero=false`);
+                    const response = await fetch(`${API_BASE}/api/wallet/tokens/${wallet.address}?show_zero=false`);
                     if (!response.ok) throw new Error('Failed to get balance');
 
                     const data = await response.json();

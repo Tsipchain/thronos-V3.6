@@ -425,6 +425,203 @@
         transform: translateY(-1px);
     }
 
+    /* Enhanced Wallet Widget Styles */
+    .wallet-popup-address {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: rgba(0, 0, 0, 0.4);
+        padding: 8px 12px;
+        border-radius: 8px;
+        margin-bottom: 12px;
+        border: 1px solid rgba(0, 255, 102, 0.15);
+    }
+    .wallet-popup-address-text {
+        flex: 1;
+        font-family: monospace;
+        font-size: 11px;
+        color: #56ff9a;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .wallet-popup-copy-btn {
+        background: rgba(0, 255, 102, 0.15);
+        border: 1px solid rgba(0, 255, 102, 0.3);
+        color: #00ff66;
+        padding: 4px 8px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 10px;
+        transition: all 0.2s;
+    }
+    .wallet-popup-copy-btn:hover {
+        background: rgba(0, 255, 102, 0.25);
+        border-color: #00ff66;
+    }
+
+    /* Portfolio Summary */
+    .wallet-portfolio-summary {
+        background: linear-gradient(135deg, rgba(0, 40, 20, 0.6) 0%, rgba(0, 60, 30, 0.4) 100%);
+        border: 1px solid rgba(255, 215, 0, 0.3);
+        border-radius: 10px;
+        padding: 12px;
+        margin-bottom: 12px;
+    }
+    .wallet-portfolio-label {
+        font-size: 10px;
+        color: #56ff9a;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 4px;
+    }
+    .wallet-portfolio-value {
+        font-size: 22px;
+        font-weight: 700;
+        background: linear-gradient(135deg, #ffd700 0%, #00ff66 50%, #ffed4e 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        filter: drop-shadow(0 0 8px rgba(255, 215, 0, 0.4));
+    }
+    .wallet-portfolio-usd {
+        font-size: 12px;
+        color: #a0a0a0;
+        margin-top: 2px;
+    }
+    .wallet-portfolio-btc {
+        font-size: 11px;
+        color: #f7931a;
+        margin-top: 4px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    /* Token List Enhanced */
+    .wallet-token-list {
+        max-height: 250px;
+        overflow-y: auto;
+        padding-right: 4px;
+    }
+    .wallet-token-list::-webkit-scrollbar {
+        width: 4px;
+    }
+    .wallet-token-list::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.3);
+        border-radius: 2px;
+    }
+    .wallet-token-list::-webkit-scrollbar-thumb {
+        background: rgba(0, 255, 102, 0.3);
+        border-radius: 2px;
+    }
+    .wallet-token-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px;
+        background: linear-gradient(135deg, rgba(26, 59, 46, 0.15) 0%, rgba(0, 255, 102, 0.03) 100%);
+        border-radius: 8px;
+        border: 1px solid rgba(0, 255, 102, 0.1);
+        margin-bottom: 6px;
+        transition: all 0.2s;
+    }
+    .wallet-token-item:hover {
+        background: linear-gradient(135deg, rgba(26, 59, 46, 0.3) 0%, rgba(0, 255, 102, 0.08) 100%);
+        border-color: rgba(0, 255, 102, 0.25);
+        transform: translateX(-2px);
+    }
+    .wallet-token-logo {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        font-size: 12px;
+        border: 2px solid;
+        box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
+        overflow: hidden;
+    }
+    .wallet-token-logo img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+    .wallet-token-info {
+        flex: 1;
+        min-width: 0;
+    }
+    .wallet-token-name {
+        font-size: 12px;
+        font-weight: 600;
+        color: #e6ffe5;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .wallet-token-symbol {
+        font-size: 10px;
+        color: #56ff9a;
+        opacity: 0.8;
+    }
+    .wallet-token-values {
+        text-align: right;
+    }
+    .wallet-token-balance {
+        font-size: 13px;
+        font-weight: 600;
+        color: #e6ffe5;
+        font-family: monospace;
+    }
+    .wallet-token-usd {
+        font-size: 10px;
+        color: #a0a0a0;
+    }
+    .wallet-token-thr-value {
+        font-size: 10px;
+        color: #ff9900;
+        font-family: monospace;
+    }
+
+    /* Quick Actions */
+    .wallet-quick-actions {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px solid rgba(0, 255, 102, 0.15);
+    }
+    .wallet-quick-btn {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        padding: 10px 8px;
+        background: linear-gradient(135deg, rgba(0, 255, 102, 0.08) 0%, rgba(0, 255, 102, 0.15) 100%);
+        border: 1px solid rgba(0, 255, 102, 0.25);
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.2s;
+        text-decoration: none;
+    }
+    .wallet-quick-btn:hover {
+        background: linear-gradient(135deg, rgba(0, 255, 102, 0.15) 0%, rgba(0, 255, 102, 0.25) 100%);
+        border-color: #00ff66;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 15px rgba(0, 255, 102, 0.2);
+    }
+    .wallet-quick-btn-icon {
+        font-size: 18px;
+    }
+    .wallet-quick-btn-label {
+        font-size: 9px;
+        color: #56ff9a;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
     /* Send Modal */
     .send-modal {
         display: none;
@@ -949,6 +1146,45 @@ async function loadWalletBalances() {
     }
 }
 
+// Token logos and prices registry
+const TOKEN_REGISTRY = {
+    'THR': {
+        name: 'Thronos',
+        color: '#ff6600',
+        logo: '/static/img/thronos-token.png',
+        priceUSD: 0.0042  // Default price, updated from API
+    },
+    'WBTC': {
+        name: 'Wrapped Bitcoin',
+        color: '#f7931a',
+        logo: '/static/img/wbtc-logo.png',
+        priceUSD: 98500  // Approximate BTC price
+    },
+    'L2E': {
+        name: 'Learn-to-Earn',
+        color: '#00bfff',
+        logo: '/static/img/l2e-logo.png',
+        priceUSD: 0.001
+    }
+};
+
+// Fetch real-time prices (will be called periodically)
+async function updateTokenPrices() {
+    try {
+        const response = await fetch('/api/token/prices');
+        const data = await response.json();
+        if (data.prices) {
+            Object.keys(data.prices).forEach(symbol => {
+                if (TOKEN_REGISTRY[symbol]) {
+                    TOKEN_REGISTRY[symbol].priceUSD = data.prices[symbol];
+                }
+            });
+        }
+    } catch (e) {
+        console.log('Using default token prices');
+    }
+}
+
 function renderWalletBalances(data) {
     const popup = document.getElementById('walletBalancePopup');
     const wallet = localStorage.getItem('thr_address') || '';
@@ -958,7 +1194,7 @@ function renderWalletBalances(data) {
         ? data.tokens
         : (data?.balances ? Object.entries(data.balances).map(([symbol, balance]) => ({ symbol, balance })) : []);
 
-    // Sort: THR first, then non-zero, then alphabetically
+    // Sort: THR first, then non-zero by value, then alphabetically
     const tokens = [...tokensArr].sort((a, b) => {
         const az = String(a.symbol || '');
         const bz = String(b.symbol || '');
@@ -970,49 +1206,148 @@ function renderWalletBalances(data) {
         return az.localeCompare(bz);
     });
 
-    const title = (lang === 'el') ? 'Wallet' : 'Wallet';
-    const sendLabel = (lang === 'el') ? 'Αποστολή' : 'Send';
-    const kitLabel  = (lang === 'el') ? '⛏️ CGMiner Kit' : '⛏️ CGMiner Kit';
-    const openLabel = (lang === 'el') ? 'Άνοιγμα' : 'Open';
-    const copyLabel = (lang === 'el') ? 'Copy' : 'Copy';
-    const balancesLabel = (lang === 'el') ? 'Υπόλοιπα' : 'Balances';
+    // Calculate portfolio totals
+    const thrPrice = TOKEN_REGISTRY['THR']?.priceUSD || 0.0042;
+    const btcPrice = TOKEN_REGISTRY['WBTC']?.priceUSD || 98500;
+    let totalUSD = 0;
+    let totalTHR = 0;
 
-    const rows = tokens.map(t => {
-        const bal = Number(t.balance) || 0;
-        return `<div class="wallet-balance-item">
-            <div class="wallet-balance-token">${escapeHtml(t.symbol)}</div>
-            <div class="wallet-balance-amount">${bal.toFixed(6)}</div>
-        </div>`;
+    tokens.forEach(t => {
+        const balance = Number(t.balance) || 0;
+        const tokenInfo = TOKEN_REGISTRY[t.symbol] || { priceUSD: 0 };
+        const valueUSD = balance * tokenInfo.priceUSD;
+        totalUSD += valueUSD;
+
+        // Convert to THR value
+        if (t.symbol === 'THR') {
+            totalTHR += balance;
+        } else if (thrPrice > 0) {
+            totalTHR += valueUSD / thrPrice;
+        }
+    });
+
+    const totalBTC = btcPrice > 0 ? totalUSD / btcPrice : 0;
+
+    // Labels
+    const portfolioLabel = lang === 'el' ? 'Συνολική Αξία' : 'Portfolio Value';
+    const assetsLabel = lang === 'el' ? 'Περιουσιακά Στοιχεία' : 'Assets';
+    const sendLabel = lang === 'el' ? 'Αποστολή' : 'Send';
+    const receiveLabel = lang === 'el' ? 'Λήψη' : 'Receive';
+    const swapLabel = lang === 'el' ? 'Swap' : 'Swap';
+    const bridgeLabel = lang === 'el' ? 'Bridge' : 'Bridge';
+    const pledgeLabel = lang === 'el' ? 'Pledge' : 'Pledge';
+    const historyLabel = lang === 'el' ? 'Ιστορικό' : 'History';
+    const noTokensLabel = lang === 'el' ? 'Δεν βρέθηκαν tokens' : 'No tokens found';
+
+    // Render token rows with logos and values
+    const tokenRows = tokens.filter(t => Number(t.balance) > 0).map(t => {
+        const balance = Number(t.balance) || 0;
+        const symbol = t.symbol;
+        const tokenInfo = TOKEN_REGISTRY[symbol] || {
+            name: symbol,
+            color: '#00ff66',
+            logo: null,
+            priceUSD: 0
+        };
+        const valueUSD = balance * tokenInfo.priceUSD;
+        const valueTHR = symbol === 'THR' ? balance : (thrPrice > 0 ? valueUSD / thrPrice : 0);
+
+        const logoHtml = tokenInfo.logo
+            ? `<img src="${tokenInfo.logo}" alt="${symbol}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+               <span style="display:none; color:${tokenInfo.color}; font-weight:bold;">${symbol[0]}</span>`
+            : `<span style="color:${tokenInfo.color}; font-weight:bold;">${symbol[0]}</span>`;
+
+        return `
+            <div class="wallet-token-item">
+                <div class="wallet-token-logo" style="border-color: ${tokenInfo.color}; background: linear-gradient(135deg, ${tokenInfo.color}22 0%, ${tokenInfo.color}11 100%);">
+                    ${logoHtml}
+                </div>
+                <div class="wallet-token-info">
+                    <div class="wallet-token-name">
+                        ${escapeHtml(tokenInfo.name || symbol)}
+                        <span class="wallet-token-symbol">${escapeHtml(symbol)}</span>
+                    </div>
+                    ${symbol !== 'THR' ? `<div class="wallet-token-thr-value">≈ ${valueTHR.toFixed(2)} THR</div>` : ''}
+                </div>
+                <div class="wallet-token-values">
+                    <div class="wallet-token-balance">${formatBalance(balance)} ${symbol}</div>
+                    <div class="wallet-token-usd">≈ $${valueUSD.toFixed(2)}</div>
+                </div>
+            </div>
+        `;
     }).join('');
 
-    const hasWallet = !!wallet;
+    const shortAddr = wallet ? `${wallet.slice(0, 8)}...${wallet.slice(-6)}` : '';
 
     const html = `
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px">
-            <div style="font-weight:700;color:#d7ffe9">${title}</div>
-            <button class="wallet-popup-close" onclick="closeWalletPopup()">×</button>
+        <div class="wallet-popup-header">
+            <span class="lang-el">Thronos Wallet</span>
+            <span class="lang-en">Thronos Wallet</span>
         </div>
 
-        <div class="wallet-popup-addrline">
-            <span class="mono">${escapeHtml(wallet)}</span>
-            <button class="btn-mini" onclick="copyToClipboard('${wallet}')">${copyLabel}</button>
+        <!-- Address Section -->
+        <div class="wallet-popup-address">
+            <div class="wallet-popup-address-text" title="${escapeHtml(wallet)}">${escapeHtml(shortAddr)}</div>
+            <button class="wallet-popup-copy-btn" onclick="copyToClipboard('${escapeHtml(wallet)}'); this.textContent='✓'; setTimeout(()=>this.textContent='Copy', 1500);">Copy</button>
         </div>
 
-        <div class="wallet-popup-actions">
-            <button class="btn-mini primary" onclick="openSendModal()" ${hasWallet ? '' : 'disabled'}>${sendLabel}</button>
-            <button class="btn-mini" onclick="downloadCGMinerKit()" ${hasWallet ? '' : 'disabled'}>${kitLabel}</button>
-            <a class="btn-mini" href="/wallet?address=${encodeURIComponent(wallet)}" ${hasWallet ? '' : 'style="pointer-events:none;opacity:.45"'}>${openLabel}</a>
-        </div>
-
-        <div class="wallet-popup-section">
-            <div class="wallet-popup-title">${balancesLabel}</div>
-            <div class="wallet-balance-list">
-                ${rows || `<div style="opacity:.75">${lang === 'el' ? 'Δεν βρέθηκαν υπόλοιπα.' : 'No balances found.'}</div>`}
+        <!-- Portfolio Summary -->
+        <div class="wallet-portfolio-summary">
+            <div class="wallet-portfolio-label">${portfolioLabel}</div>
+            <div class="wallet-portfolio-value">${formatBalance(totalTHR)} THR</div>
+            <div class="wallet-portfolio-usd">≈ $${totalUSD.toFixed(2)} USD</div>
+            <div class="wallet-portfolio-btc">
+                <span style="font-size: 14px;">₿</span> ${totalBTC.toFixed(8)} BTC
             </div>
+        </div>
+
+        <!-- Token List -->
+        <div style="font-size: 11px; color: #56ff9a; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">${assetsLabel}</div>
+        <div class="wallet-token-list">
+            ${tokenRows || `<div style="text-align: center; opacity: 0.6; padding: 20px;">${noTokensLabel}</div>`}
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="wallet-quick-actions">
+            <a href="javascript:void(0)" class="wallet-quick-btn" onclick="openSendModal()">
+                <span class="wallet-quick-btn-icon">💸</span>
+                <span class="wallet-quick-btn-label">${sendLabel}</span>
+            </a>
+            <a href="/wallet?address=${encodeURIComponent(wallet)}" class="wallet-quick-btn">
+                <span class="wallet-quick-btn-icon">📥</span>
+                <span class="wallet-quick-btn-label">${receiveLabel}</span>
+            </a>
+            <a href="/swap" class="wallet-quick-btn">
+                <span class="wallet-quick-btn-icon">🔄</span>
+                <span class="wallet-quick-btn-label">${swapLabel}</span>
+            </a>
+            <a href="/bridge" class="wallet-quick-btn">
+                <span class="wallet-quick-btn-icon">🌉</span>
+                <span class="wallet-quick-btn-label">${bridgeLabel}</span>
+            </a>
+            <a href="/pledge" class="wallet-quick-btn">
+                <span class="wallet-quick-btn-icon">🔥</span>
+                <span class="wallet-quick-btn-label">${pledgeLabel}</span>
+            </a>
+            <a href="/viewer" class="wallet-quick-btn">
+                <span class="wallet-quick-btn-icon">📜</span>
+                <span class="wallet-quick-btn-label">${historyLabel}</span>
+            </a>
         </div>
     `;
 
     popup.innerHTML = html;
+
+    // Apply language after render
+    const savedLang = localStorage.getItem('lang') || 'el';
+    setLanguage(savedLang);
+}
+
+function formatBalance(num) {
+    if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(2) + 'K';
+    if (num >= 1) return num.toFixed(4);
+    return num.toFixed(6);
 }
 
 // Send Modal Functions
@@ -1203,11 +1538,11 @@ async function submitSend() {
                 body: JSON.stringify(payload)
             });
         } else {
-            // Custom token transfer
+            // Custom token transfer - use correct API parameter names
             const payload = {
                 symbol: token,
-                from: from,
-                to: to,
+                from_thr: from,
+                to_thr: to,
                 amount: amount,
                 auth_secret: secret
             };

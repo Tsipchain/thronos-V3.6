@@ -4,12 +4,12 @@
 chrome.runtime.onInstalled.addListener(() => {
     console.log('Thronos Wallet Extension installed');
 
-    // Set default settings
+    // Set default settings - use production URL
     chrome.storage.local.get(['settings'], (result) => {
         if (!result.settings) {
             chrome.storage.local.set({
                 settings: {
-                    apiBase: 'http://localhost:5000',
+                    apiBase: 'https://thrchain.up.railway.app',
                     autoRefresh: true,
                     refreshInterval: 30000, // 30 seconds
                     notifications: true

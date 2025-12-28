@@ -4277,13 +4277,39 @@ def api_game_submit_score():
 
 @app.route("/api/v1/balance/<thr_addr>", methods=["GET"])
 def api_v1_balance(thr_addr: str):
-    """Return the current THR balance for the given address."""
+    """Return the current THR balance and all token balances for the given address."""
     ledger = load_json(LEDGER_FILE, {})
+    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+    token_balances = load_token_balances()
+
     try:
-        bal = round(float(ledger.get(thr_addr, 0.0)), 6)
+        thr_bal = round(float(ledger.get(thr_addr, 0.0)), 6)
     except Exception:
-        bal = 0.0
-    return jsonify(address=thr_addr, balance=bal), 200
+        thr_bal = 0.0
+
+    try:
+        wbtc_bal = round(float(wbtc_ledger.get(thr_addr, 0.0)), 6)
+    except Exception:
+        wbtc_bal = 0.0
+
+    # Get all custom token balances for this address
+    tokens = {}
+    for token_symbol, holders in token_balances.items():
+        if thr_addr in holders:
+            try:
+                tokens[token_symbol] = round(float(holders[thr_addr]), 6)
+            except Exception:
+                tokens[token_symbol] = 0.0
+
+    return jsonify(
+        address=thr_addr,
+        balance=thr_bal,  # Keep for backward compatibility
+        balances={
+            "THR": thr_bal,
+            "WBTC": wbtc_bal,
+            **tokens
+        }
+    ), 200
 
 
 @app.route("/api/v1/address/<thr_addr>/history", methods=["GET"])

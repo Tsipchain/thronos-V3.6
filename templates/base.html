@@ -143,7 +143,7 @@
     .wallet-status:hover {
         background: #004400;
     }
-    .wallet-status:hover .wallet-balance-popup {
+    .wallet-status.open .wallet-balance-popup {
         display: block;
     }
     .wallet-fire-icon {
@@ -1350,7 +1350,7 @@ function initWalletUiControls(){
         });
     }
 
-    // Click-to-toggle wallet popup (no more twitchy hover)
+    // Click-to-toggle wallet popup (stays open until closed)
     statusEl.addEventListener('click', async (ev)=>{
         ev.stopPropagation();
         const ok = await ensureWalletUnlocked();
@@ -1361,11 +1361,17 @@ function initWalletUiControls(){
         markWalletActive();
     });
 
-    // Close on outside click, unless pinned
-    document.addEventListener('click', ()=>{
-        if(getWalletUiPinned()) return;
-        setWalletOpen(false);
-    });
+    // Close on outside click, unless pinned (with delay to prevent immediate close)
+    setTimeout(() => {
+        document.addEventListener('click', (e)=>{
+            if(getWalletUiPinned()) return;
+            const popup = document.getElementById('walletBalancePopup');
+            if(!popup || !statusEl) return;
+            // Don't close if clicking inside the popup or status element
+            if(statusEl.contains(e.target) || popup.contains(e.target)) return;
+            setWalletOpen(false);
+        });
+    }, 100);
 }
 
 // Initialize language and wallet status on load
@@ -1386,6 +1392,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Wallet popup now opens on click (not hover)
             initWalletUiControls();
+
+            // Auto-open wallet on page load if pinned or first time
+            const isPinned = getWalletUiPinned();
+            const hasOpenedBefore = sessionStorage.getItem('wallet_opened_once');
+            if (isPinned || !hasOpenedBefore) {
+                setTimeout(() => {
+                    setWalletOpen(true);
+                    loadWalletBalances();
+                    sessionStorage.setItem('wallet_opened_once', '1');
+                }, 500);
+            }
         }
         if(disconnectEl) {
             disconnectEl.style.display = 'block';

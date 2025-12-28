@@ -1020,6 +1020,90 @@
     </div>
 </div>
 
+<!-- Receive Modal -->
+<div class="send-modal" id="receiveModal" onclick="closeReceiveModal(event)">
+    <div class="send-modal-content" onclick="event.stopPropagation()">
+        <div class="send-modal-header">
+            📥
+            <span class="lang-el">Λήψη Tokens</span>
+            <span class="lang-en">Receive Tokens</span>
+            <span class="lang-ja">トークン受け取り</span>
+            <span class="lang-es">Recibir Tokens</span>
+            <span class="lang-ru">Получить токены</span>
+        </div>
+
+        <div id="receiveContent">
+            <div class="send-form-group">
+                <label class="send-form-label">
+                    <span class="lang-el">Διεύθυνση Πορτοφολιού</span>
+                    <span class="lang-en">Wallet Address</span>
+                    <span class="lang-ja">ウォレットアドレス</span>
+                    <span class="lang-es">Dirección de cartera</span>
+                    <span class="lang-ru">Адрес кошелька</span>
+                </label>
+                <div style="display:flex;align-items:center;gap:8px;word-break:break-all;">
+                    <code id="receiveAddress" style="font-size:13px;">—</code>
+                    <button class="send-modal-btn" style="padding:6px 10px;" onclick="copyReceiveAddress()">📋
+                        <span class="lang-el">Αντιγραφή</span>
+                        <span class="lang-en">Copy</span>
+                        <span class="lang-ja">コピー</span>
+                        <span class="lang-es">Copiar</span>
+                        <span class="lang-ru">Копировать</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="send-form-group" style="text-align:center;">
+                <img id="receiveQr" src="" alt="QR" style="max-width:200px;border:1px solid #0f0;border-radius:10px;display:none;" loading="lazy">
+                <div id="receiveQrHint" style="font-size:12px;color:#9fdfb4;margin-top:8px;">
+                    <span class="lang-el">Σκάναρε το QR για να λάβεις THR.</span>
+                    <span class="lang-en">Scan this QR to receive THR.</span>
+                    <span class="lang-ja">このQRをスキャンしてTHRを受け取る。</span>
+                    <span class="lang-es">Escanea este QR para recibir THR.</span>
+                    <span class="lang-ru">Сканируйте QR, чтобы получить THR.</span>
+                </div>
+            </div>
+
+            <div class="send-form-group" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
+                <audio id="receiveAudio" src=""></audio>
+                <button class="send-speed-option selected" style="flex:0;" onclick="playReceiveAudio()">🔊
+                    <span class="lang-el">Αναπαραγωγή Ήχου</span>
+                    <span class="lang-en">Play Audio</span>
+                    <span class="lang-ja">再生</span>
+                    <span class="lang-es">Reproducir</span>
+                    <span class="lang-ru">Воспроизвести</span>
+                </button>
+                <a id="receiveDownload" class="send-speed-option" style="text-decoration:none;display:inline-flex;align-items:center;gap:6px;" download="ThronosAddress.wav">
+                    ⬇️
+                    <span class="lang-el">Λήψη Ήχου</span>
+                    <span class="lang-en">Download WAV</span>
+                    <span class="lang-ja">ダウンロード</span>
+                    <span class="lang-es">Descargar</span>
+                    <span class="lang-ru">Скачать</span>
+                </a>
+            </div>
+
+            <div id="receiveEmpty" class="send-result error" style="display:none;">
+                <span class="lang-el">Συνδέστε πορτοφόλι για να εμφανιστεί η διεύθυνση.</span>
+                <span class="lang-en">Connect a wallet to view your address.</span>
+                <span class="lang-ja">ウォレットを接続してアドレスを表示してください。</span>
+                <span class="lang-es">Conecta una cartera para ver tu dirección.</span>
+                <span class="lang-ru">Подключите кошелек, чтобы увидеть адрес.</span>
+            </div>
+        </div>
+
+        <div style="margin-top:10px;text-align:right;">
+            <button class="send-modal-btn" onclick="closeReceiveModal()">
+                <span class="lang-el">Κλείσιμο</span>
+                <span class="lang-en">Close</span>
+                <span class="lang-ja">閉じる</span>
+                <span class="lang-es">Cerrar</span>
+                <span class="lang-ru">Закрыть</span>
+            </button>
+        </div>
+    </div>
+</div>
+
 <div class="navbar">
   <ul class="nav-list">
     <li class="nav-item brand">
@@ -1161,13 +1245,24 @@ function disconnectWallet() {
 // Wallet Balance Widget Functions
 let walletBalancesLoaded = false;
 
-async function loadWalletBalances() {
-    if (walletBalancesLoaded) return; // Only load once
+async function loadWalletBalances(force = false) {
+    if (walletBalancesLoaded && !force) return; // Only load once
 
     const wallet = localStorage.getItem('thr_address');
     if (!wallet) return;
 
     const popup = document.getElementById('walletBalancePopup');
+    if (!popup) return;
+
+    if (force) {
+        popup.innerHTML = `
+            <div class="wallet-popup-header">💎 Wallet Balance</div>
+            <div class="wallet-popup-loading">
+                <div class="wallet-popup-spinner"></div>
+                Loading balances...
+            </div>
+        `;
+    }
 
     try {
         const response = await fetch(`/api/wallet/tokens/${wallet}?show_zero=false`);
@@ -1354,7 +1449,7 @@ function renderWalletBalances(data) {
                 <span class="wallet-quick-btn-icon">💸</span>
                 <span class="wallet-quick-btn-label">${sendLabel}</span>
             </a>
-            <a href="/wallet?address=${encodeURIComponent(wallet)}" class="wallet-quick-btn">
+            <a href="javascript:void(0)" class="wallet-quick-btn" onclick="openReceiveModal()">
                 <span class="wallet-quick-btn-icon">📥</span>
                 <span class="wallet-quick-btn-label">${receiveLabel}</span>
             </a>
@@ -1409,6 +1504,68 @@ function openSendModal() {
 function closeSendModal(event) {
     if (!event || event.target.id === 'sendModal') {
         document.getElementById('sendModal').classList.remove('active');
+    }
+}
+
+function openReceiveModal() {
+    updateReceiveModal();
+    document.getElementById('receiveModal').classList.add('active');
+    const savedLang = getCurrentLang();
+    setLanguage(savedLang);
+}
+
+function closeReceiveModal(event) {
+    if (!event || event.target.id === 'receiveModal') {
+        document.getElementById('receiveModal').classList.remove('active');
+    }
+}
+
+function updateReceiveModal() {
+    const addr = localStorage.getItem('thr_address') || '';
+    const addrEl = document.getElementById('receiveAddress');
+    const qrEl = document.getElementById('receiveQr');
+    const audioEl = document.getElementById('receiveAudio');
+    const dlEl = document.getElementById('receiveDownload');
+    const emptyEl = document.getElementById('receiveEmpty');
+    const hintEl = document.getElementById('receiveQrHint');
+
+    if (!addr) {
+        if (addrEl) addrEl.textContent = '—';
+        if (qrEl) qrEl.style.display = 'none';
+        if (audioEl) audioEl.removeAttribute('src');
+        if (dlEl) dlEl.removeAttribute('href');
+        if (emptyEl) emptyEl.style.display = 'block';
+        if (hintEl) hintEl.style.display = 'none';
+        return;
+    }
+
+    const qrUrl = `/api/wallet/qr/${encodeURIComponent(addr)}`;
+    const audioUrl = `/api/wallet/audio/${encodeURIComponent(addr)}`;
+
+    if (addrEl) addrEl.textContent = addr;
+    if (qrEl) {
+        qrEl.src = qrUrl;
+        qrEl.style.display = 'inline';
+    }
+    if (audioEl) {
+        audioEl.src = audioUrl;
+        audioEl.load();
+    }
+    if (dlEl) dlEl.href = audioUrl;
+    if (emptyEl) emptyEl.style.display = 'none';
+    if (hintEl) hintEl.style.display = 'block';
+}
+
+function copyReceiveAddress() {
+    const addr = localStorage.getItem('thr_address');
+    if (!addr) return;
+    copyToClipboard(addr);
+}
+
+function playReceiveAudio() {
+    const audioEl = document.getElementById('receiveAudio');
+    if (audioEl && audioEl.src) {
+        audioEl.play();
     }
 }
 
@@ -1613,6 +1770,7 @@ async function submitSend() {
             // Reload balances
             setTimeout(() => {
                 loadTokenBalances();
+                loadWalletBalances(true);
             }, 1000);
 
             // Close modal after 2 seconds

@@ -7961,9 +7961,409 @@ def chat_page_v2():
     return render_template("chat.html", thr_wallet=thr_wallet)
 
 
+# ─── DECENT MUSIC PLATFORM ────────────────────────────────────────────
+# Decentralized music platform where artists can upload tracks and receive
+# THR royalties from plays and tips from listeners.
+
+MUSIC_FILE = os.path.join(DATA_DIR, "music_registry.json")
+MUSIC_UPLOADS_DIR = os.path.join("static", "music_uploads")
+os.makedirs(MUSIC_UPLOADS_DIR, exist_ok=True)
+
+
+def load_music_registry():
+    """Load music registry from file"""
+    return load_json(MUSIC_FILE, {"tracks": [], "artists": {}, "plays": {}})
+
+
+def save_music_registry(registry):
+    """Save music registry to file"""
+    save_json(MUSIC_FILE, registry)
+
+
+@app.route("/music")
+def music_page():
+    """Render the Decent Music platform"""
+    return render_template("music.html")
+
+
+@app.route("/api/v1/music/tracks")
+def api_v1_music_tracks():
+    """Get all published tracks"""
+    registry = load_music_registry()
+    tracks = [t for t in registry["tracks"] if t.get("published", True)]
+    # Add play counts
+    for track in tracks:
+        track["play_count"] = len(registry["plays"].get(track["id"], []))
+    # Sort by newest first
+    tracks.sort(key=lambda t: t.get("uploaded_at", ""), reverse=True)
+    return jsonify({"status": "success", "tracks": tracks}), 200
+
+
+@app.route("/api/v1/music/tracks/trending")
+def api_v1_music_trending():
+    """Get trending tracks (most plays in last 7 days)"""
+    registry = load_music_registry()
+    tracks = [t for t in registry["tracks"] if t.get("published", True)]
+
+    # Calculate recent play counts
+    week_ago = time.time() - (7 * 24 * 60 * 60)
+    for track in tracks:
+        recent_plays = [p for p in registry["plays"].get(track["id"], [])
+                       if float(p.get("timestamp", 0)) > week_ago]
+        track["recent_plays"] = len(recent_plays)
+        track["play_count"] = len(registry["plays"].get(track["id"], []))
+
+    # Sort by recent plays
+    tracks.sort(key=lambda t: t.get("recent_plays", 0), reverse=True)
+    return jsonify({"status": "success", "tracks": tracks[:20]}), 200
+
+
+@app.route("/api/v1/music/artist/<artist_address>")
+def api_v1_music_artist(artist_address):
+    """Get artist profile and tracks"""
+    if not validate_thr_address(artist_address):
+        return jsonify({"status": "error", "message": "Invalid address"}), 400
+
+    registry = load_music_registry()
+    artist = registry["artists"].get(artist_address, {})
+    tracks = [t for t in registry["tracks"] if t.get("artist_address") == artist_address]
+
+    # Calculate stats
+    total_plays = sum(len(registry["plays"].get(t["id"], [])) for t in tracks)
+    total_earnings = float(artist.get("total_earnings", 0))
+
+    return jsonify({
+        "status": "success",
+        "artist": artist,
+        "tracks": tracks,
+        "stats": {
+            "total_tracks": len(tracks),
+            "total_plays": total_plays,
+            "total_earnings_thr": total_earnings
+        }
+    }), 200
+
+
+@app.route("/api/v1/music/register_artist", methods=["POST"])
+def api_v1_music_register_artist():
+    """Register as an artist on the platform"""
+    data = request.get_json() or {}
+    address = (data.get("address") or "").strip()
+    artist_name = (data.get("name") or "").strip()
+    bio = (data.get("bio") or "").strip()
+
+    if not address or not validate_thr_address(address):
+        return jsonify({"status": "error", "message": "Invalid THR address"}), 400
+
+    if not artist_name or len(artist_name) < 2:
+        return jsonify({"status": "error", "message": "Artist name required (min 2 chars)"}), 400
+
+    registry = load_music_registry()
+
+    # Check if already registered
+    if address in registry["artists"]:
+        # Update profile
+        registry["artists"][address]["name"] = artist_name
+        registry["artists"][address]["bio"] = bio
+    else:
+        # New registration
+        registry["artists"][address] = {
+            "address": address,
+            "name": artist_name,
+            "bio": bio,
+            "registered_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "total_earnings": 0,
+            "verified": False
+        }
+
+    save_music_registry(registry)
+    logger.info(f"Artist registered/updated: {artist_name} ({address})")
+
+    return jsonify({
+        "status": "success",
+        "artist": registry["artists"][address]
+    }), 200
+
+
+@app.route("/api/v1/music/upload", methods=["POST"])
+def api_v1_music_upload():
+    """Upload a new track"""
+    # Handle form data
+    artist_address = (request.form.get("artist_address") or "").strip()
+    title = (request.form.get("title") or "").strip()
+    genre = (request.form.get("genre") or "Other").strip()
+    description = (request.form.get("description") or "").strip()
+
+    if not artist_address or not validate_thr_address(artist_address):
+        return jsonify({"status": "error", "message": "Invalid artist address"}), 400
+
+    if not title or len(title) < 2:
+        return jsonify({"status": "error", "message": "Track title required"}), 400
+
+    registry = load_music_registry()
+
+    # Check if artist is registered
+    if artist_address not in registry["artists"]:
+        return jsonify({"status": "error", "message": "Please register as an artist first"}), 400
+
+    # Handle audio file
+    if "audio" not in request.files:
+        return jsonify({"status": "error", "message": "Audio file required"}), 400
+
+    audio_file = request.files["audio"]
+    if not audio_file.filename:
+        return jsonify({"status": "error", "message": "Empty filename"}), 400
+
+    # Validate file type
+    allowed_extensions = {'.mp3', '.wav', '.ogg', '.flac', '.m4a'}
+    ext = os.path.splitext(secure_filename(audio_file.filename))[1].lower()
+    if ext not in allowed_extensions:
+        return jsonify({"status": "error", "message": f"Invalid file type. Allowed: {', '.join(allowed_extensions)}"}), 400
+
+    try:
+        # Generate track ID
+        track_id = f"TRACK-{int(time.time())}-{secrets.token_hex(4)}"
+
+        # Save audio file
+        audio_filename = f"{track_id}{ext}"
+        audio_path = os.path.join(MUSIC_UPLOADS_DIR, audio_filename)
+        audio_file.save(audio_path)
+
+        # Handle cover art if provided
+        cover_path = None
+        if "cover" in request.files:
+            cover_file = request.files["cover"]
+            if cover_file.filename:
+                cover_ext = os.path.splitext(secure_filename(cover_file.filename))[1] or ".jpg"
+                cover_filename = f"{track_id}_cover{cover_ext}"
+                cover_path = os.path.join(MUSIC_UPLOADS_DIR, cover_filename)
+                cover_file.save(cover_path)
+
+        # Create track entry
+        track = {
+            "id": track_id,
+            "title": title,
+            "artist_address": artist_address,
+            "artist_name": registry["artists"][artist_address]["name"],
+            "genre": genre,
+            "description": description,
+            "audio_url": f"/static/music_uploads/{audio_filename}",
+            "cover_url": f"/static/music_uploads/{cover_filename}" if cover_path else None,
+            "uploaded_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "published": True,
+            "tips_total": 0
+        }
+
+        registry["tracks"].append(track)
+        registry["plays"][track_id] = []
+        save_music_registry(registry)
+
+        logger.info(f"Track uploaded: {title} by {registry['artists'][artist_address]['name']}")
+
+        return jsonify({
+            "status": "success",
+            "track": track
+        }), 201
+
+    except Exception as e:
+        logger.error(f"Track upload error: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": f"Upload failed: {str(e)}"}), 500
+
+
+@app.route("/api/v1/music/play/<track_id>", methods=["POST"])
+def api_v1_music_play(track_id):
+    """Record a track play and pay royalty to artist"""
+    data = request.get_json() or {}
+    listener_address = (data.get("listener_address") or "").strip()
+
+    registry = load_music_registry()
+    track = next((t for t in registry["tracks"] if t["id"] == track_id), None)
+
+    if not track:
+        return jsonify({"status": "error", "message": "Track not found"}), 404
+
+    # Record play
+    play = {
+        "listener": listener_address or "anonymous",
+        "timestamp": time.time(),
+        "datetime": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    }
+
+    if track_id not in registry["plays"]:
+        registry["plays"][track_id] = []
+    registry["plays"][track_id].append(play)
+
+    # Pay royalty (0.0001 THR per play from platform fund)
+    PLAY_ROYALTY = 0.0001
+    artist_address = track["artist_address"]
+
+    try:
+        ledger = load_json(LEDGER_FILE, {})
+        ai_balance = float(ledger.get(AI_WALLET_ADDRESS, 0))
+
+        if ai_balance >= PLAY_ROYALTY:
+            # Pay artist from AI wallet
+            ledger[AI_WALLET_ADDRESS] = round(ai_balance - PLAY_ROYALTY, 6)
+            ledger[artist_address] = round(float(ledger.get(artist_address, 0)) + PLAY_ROYALTY, 6)
+            save_json(LEDGER_FILE, ledger)
+
+            # Update artist earnings
+            if artist_address in registry["artists"]:
+                registry["artists"][artist_address]["total_earnings"] = \
+                    float(registry["artists"][artist_address].get("total_earnings", 0)) + PLAY_ROYALTY
+
+            play["royalty_paid"] = PLAY_ROYALTY
+    except Exception as e:
+        logger.warning(f"Royalty payment failed: {e}")
+
+    save_music_registry(registry)
+
+    return jsonify({
+        "status": "success",
+        "play_count": len(registry["plays"].get(track_id, [])),
+        "royalty_paid": play.get("royalty_paid", 0)
+    }), 200
+
+
+@app.route("/api/v1/music/tip", methods=["POST"])
+def api_v1_music_tip():
+    """Tip an artist for a track"""
+    data = request.get_json() or {}
+    track_id = (data.get("track_id") or "").strip()
+    from_address = (data.get("from_address") or "").strip()
+    amount = float(data.get("amount", 0))
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+
+    if not track_id or not from_address or amount <= 0:
+        return jsonify({"status": "error", "message": "Invalid tip parameters"}), 400
+
+    registry = load_music_registry()
+    track = next((t for t in registry["tracks"] if t["id"] == track_id), None)
+
+    if not track:
+        return jsonify({"status": "error", "message": "Track not found"}), 404
+
+    artist_address = track["artist_address"]
+
+    # Verify auth
+    pledges = load_json(PLEDGE_CHAIN, [])
+    sender_pledge = next((p for p in pledges if p.get("thr_address") == from_address), None)
+
+    if not sender_pledge:
+        return jsonify({"status": "error", "message": "Sender has not pledged"}), 400
+
+    stored_auth_hash = sender_pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return jsonify({"status": "error", "message": "Send not enabled"}), 400
+
+    if sender_pledge.get("has_passphrase"):
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify({"status": "error", "message": "Invalid auth"}), 403
+
+    # Transfer THR
+    ledger = load_json(LEDGER_FILE, {})
+    sender_balance = float(ledger.get(from_address, 0))
+
+    if sender_balance < amount:
+        return jsonify({"status": "error", "message": "Insufficient balance"}), 400
+
+    ledger[from_address] = round(sender_balance - amount, 6)
+    ledger[artist_address] = round(float(ledger.get(artist_address, 0)) + amount, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    # Update track tips
+    for t in registry["tracks"]:
+        if t["id"] == track_id:
+            t["tips_total"] = float(t.get("tips_total", 0)) + amount
+            break
+
+    # Update artist earnings
+    if artist_address in registry["artists"]:
+        registry["artists"][artist_address]["total_earnings"] = \
+            float(registry["artists"][artist_address].get("total_earnings", 0)) + amount
+
+    save_music_registry(registry)
+
+    # Record transaction
+    chain = load_json(CHAIN_FILE, [])
+    tx_id = f"MUSIC-TIP-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "music_tip",
+        "track_id": track_id,
+        "track_title": track["title"],
+        "from": from_address,
+        "to": artist_address,
+        "amount": amount,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "tx_id": tx_id,
+        "status": "confirmed"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+
+    logger.info(f"Music tip: {amount} THR from {from_address} to {artist_address} for track {track_id}")
+
+    return jsonify({
+        "status": "success",
+        "tx_id": tx_id,
+        "amount": amount,
+        "new_balance": ledger[from_address]
+    }), 200
+
+
+@app.route("/api/v1/music/search")
+def api_v1_music_search():
+    """Search tracks by title, artist, or genre"""
+    query = (request.args.get("q") or "").strip().lower()
+    genre = (request.args.get("genre") or "").strip()
+
+    if not query and not genre:
+        return jsonify({"status": "error", "message": "Search query or genre required"}), 400
+
+    registry = load_music_registry()
+    tracks = registry["tracks"]
+
+    results = []
+    for track in tracks:
+        if not track.get("published", True):
+            continue
+
+        match = False
+        if query:
+            if query in track.get("title", "").lower():
+                match = True
+            elif query in track.get("artist_name", "").lower():
+                match = True
+            elif query in track.get("genre", "").lower():
+                match = True
+            elif query in track.get("description", "").lower():
+                match = True
+
+        if genre and not match:
+            if track.get("genre", "").lower() == genre.lower():
+                match = True
+
+        if match or (genre and track.get("genre", "").lower() == genre.lower()):
+            track["play_count"] = len(registry["plays"].get(track["id"], []))
+            results.append(track)
+
+    return jsonify({
+        "status": "success",
+        "query": query,
+        "genre": genre,
+        "results": results
+    }), 200
+
+
 # ... ΤΕΛΟΣ όλων των routes / helpers ...
 
 print("✓ AI Session fixes loaded - supports guest mode and file uploads")
+print("✓ Decent Music Platform loaded - artist registration, uploads, and royalties")
 # --- Startup hooks ---
 ensure_ai_wallet()
 recompute_height_offset_from_ledger()

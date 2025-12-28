@@ -553,18 +553,37 @@ async function loadLive(){
     pushSpark(j.est_hashrate_hs||0);
   }catch(e){
     console.error('Live network stats update failed:', e);
+    el('#liveDiff').textContent = '—';
+    el('#liveABT').textContent = '—';
+    el('#liveHR').textContent = '—';
+    el('#liveMP').textContent = '0';
+    el('#liveMiners').textContent = '—';
+    el('#livePeers').textContent = '—';
   }
 }
 
 /* ===== Fetchers ===== */
 async function reloadBlocks(){
-  const r = await fetch('/api/blocks'); const j = await r.json();
-  CURRENT_BLOCKS = j;
+  try {
+    const r = await fetch('/api/blocks');
+    if (!r.ok) throw new Error(`blocks ${r.status}`);
+    const j = await r.json();
+    CURRENT_BLOCKS = Array.isArray(j) ? j : [];
+  } catch (e) {
+    console.error('Failed to reload blocks:', e);
+    if (!Array.isArray(CURRENT_BLOCKS)) CURRENT_BLOCKS = [];
+  }
   renderBlocks(CURRENT_BLOCKS);
 }
 async function reloadMempool(){
-  const r = await fetch('/api/mempool'); const j = await r.json();
-  renderMempool(j);
+  try {
+    const r = await fetch('/api/mempool');
+    if (!r.ok) throw new Error(`mempool ${r.status}`);
+    const j = await r.json();
+    renderMempool(Array.isArray(j) ? j : []);
+  } catch (e) {
+    console.error('Failed to reload mempool:', e);
+  }
 }
 
 /* ===== Wireup ===== */

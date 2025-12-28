@@ -25,7 +25,11 @@
 # - Real Fiat Gateway (Stripe + Bank Withdrawals) (V5.0)
 # - Admin Withdrawal Panel (V5.1)
 
-import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, io, struct, binascii
+import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii
+import qrcode
+import io
+import numpy as np
+import wave
 from datetime import datetime
 from PIL import Image
 
@@ -1353,7 +1357,42 @@ def viewer():
 
 @app.route("/wallet")
 def wallet_page():
-    return render_template("wallet_viewer.html")
+    thr_addr = request.args.get("address")
+    return render_template("wallet_viewer.html", thr_address=thr_addr)
+
+
+@app.route("/api/wallet/qr/<thr_addr>")
+def wallet_qr_code(thr_addr):
+    """Generate QR code image for the given THR address."""
+    img = qrcode.make(thr_addr)
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    buf.seek(0)
+    return send_file(buf, mimetype="image/png")
+
+
+@app.route("/api/wallet/audio/<thr_addr>")
+def wallet_audio(thr_addr):
+    """Generate WAV audio encoding the THR address."""
+    binary_data = ''.join(format(ord(c), '08b') for c in thr_addr) + '00000000'
+    framerate = 44100
+    tone_duration = 0.1
+    pause_duration = 0.05
+    t_bit = np.linspace(0, tone_duration, int(framerate * tone_duration), endpoint=False)
+    waveform = np.array([], dtype=np.int16)
+    for bit in binary_data:
+        freq = 880 if bit == '1' else 440
+        tone = (32767 * np.sin(2 * np.pi * freq * t_bit)).astype(np.int16)
+        silence = np.zeros(int(framerate * pause_duration), dtype=np.int16)
+        waveform = np.concatenate((waveform, tone, silence))
+    buf = io.BytesIO()
+    with wave.open(buf, 'wb') as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(framerate)
+        wf.writeframes(waveform.tobytes())
+    buf.seek(0)
+    return send_file(buf, mimetype="audio/wav", download_name="ThronosAddress.wav")
 
 @app.route("/send")
 def send_page():
@@ -3781,20 +3820,37 @@ def api_token_transfer():
     except Exception:
         return jsonify({"ok": False, "error": "Invalid JSON"}), 400
 
-    from_thr = str(data.get("from", "")).strip()
-    to_thr = str(data.get("to", "")).strip()
-    symbol = str(data.get("symbol", "")).strip().upper()
+    # Accept both naming conventions
+    symbol = data.get("symbol") or data.get("token") or data.get("ticker")
+    amount = data.get("amount")
+
+    from_addr = data.get("from") or data.get("from_thr") or data.get("from_address")
+    to_addr = data.get("to") or data.get("to_thr") or data.get("to_address")
+
+    missing = []
+    if not from_addr:
+        missing.append("from")
+    if not to_addr:
+        missing.append("to")
+    if not symbol:
+        missing.append("symbol")
+    if amount is None:
+        missing.append("amount")
+
+    if missing:
+        return jsonify({"ok": False, "error": f"Missing required fields: {', '.join(missing)}"}), 400
+
+    from_thr = str(from_addr).strip()
+    to_thr = str(to_addr).strip()
+    symbol = str(symbol).strip().upper()
     auth_secret = str(data.get("auth_secret", "")).strip()
     passphrase = str(data.get("passphrase", "")).strip() if data.get("passphrase") else None
 
     # speed is optional (UI may send it). We store it in tx for UI/viewer, but do not change economics here.
     speed = str(data.get("speed", "")).strip().lower() or "slow"
 
-    if not from_thr or not to_thr or not symbol:
-        return jsonify({"ok": False, "error": "Missing required fields: from, to, symbol, amount"}), 400
-
     try:
-        amount = float(data.get("amount", 0))
+        amount = float(amount)
     except Exception:
         return jsonify({"ok": False, "error": "Invalid amount"}), 400
 
@@ -6008,9 +6064,12 @@ else:
             # Send heartbeat every 30 seconds (TTL is 60s)
             time.sleep(30)
 
-    heartbeat_thread = threading.Thread(target=send_heartbeat_to_master, daemon=True)
-    heartbeat_thread.start()
-    print(f"[HEARTBEAT] Replica heartbeat sender started -> {MASTER_INTERNAL_URL}")
+    if MASTER_INTERNAL_URL.startswith("http://localhost"):
+        print("[HEARTBEAT] MASTER_INTERNAL_URL not set; heartbeat disabled.")
+    else:
+        heartbeat_thread = threading.Thread(target=send_heartbeat_to_master, daemon=True)
+        heartbeat_thread.start()
+        print(f"[HEARTBEAT] Replica heartbeat sender started -> {MASTER_INTERNAL_URL}")
 
 # ─── ADMIN MINT ENDPOINT (NEW) ───────────────────────────────────────
 #

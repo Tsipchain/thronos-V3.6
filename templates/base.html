@@ -873,7 +873,7 @@
         padding: 5px 10px;
         cursor: pointer;
     }
-    .lang-en { display: none; }
+    .lang-en, .lang-ja, .lang-es, .lang-ru { display: none; }
 
     /* Utility Classes */
     .highlight { color: #ff0; }
@@ -903,18 +903,18 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    .wallet-popup-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;}
+    .wallet-popup-title{font-size:12px;opacity:.85;}
+    .wallet-popup-actions{display:flex;gap:6px;}
+    .wallet-mini-btn{background:transparent;border:1px solid rgba(0,255,102,.25);color:#00ff66;border-radius:8px;padding:4px 8px;font-size:12px;cursor:pointer;}
+    .wallet-mini-btn:hover{border-color:rgba(0,255,102,.55);}
+    .wallet-mini-btn.active{background:rgba(0,255,102,.12);}
+    .wallet-lock-hint{margin-top:8px;font-size:11px;opacity:.7;}
+
     /* Page Specific Styles Block */
     {% block styles %}{% endblock %}
-  
-.wallet-popup-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;}
-.wallet-popup-title{font-size:12px;opacity:.85;}
-.wallet-popup-actions{display:flex;gap:6px;}
-.wallet-mini-btn{background:transparent;border:1px solid rgba(0,255,102,.25);color:#00ff66;border-radius:8px;padding:4px 8px;font-size:12px;cursor:pointer;}
-.wallet-mini-btn:hover{border-color:rgba(0,255,102,.55);}
-.wallet-mini-btn.active{background:rgba(0,255,102,.12);}
-.wallet-lock-hint{margin-top:8px;font-size:11px;opacity:.7;}
 
-</style>
+ </style>
 </head>
 <body>
 
@@ -942,7 +942,7 @@
     <button id="disconnectBtn" class="disconnect-btn" onclick="disconnectWallet()">
         ✖ <span class="lang-el">Αποσύνδεση</span><span class="lang-en">Disconnect</span>
     </button>
-    <button class="lang-toggle" onclick="toggleLanguage()">GR | EN</button>
+    <button class="lang-toggle" onclick="toggleLanguage()">GR</button>
 </div>
 
 <!-- Send Modal -->
@@ -1020,6 +1020,90 @@
     </div>
 </div>
 
+<!-- Receive Modal -->
+<div class="send-modal" id="receiveModal" onclick="closeReceiveModal(event)">
+    <div class="send-modal-content" onclick="event.stopPropagation()">
+        <div class="send-modal-header">
+            📥
+            <span class="lang-el">Λήψη Tokens</span>
+            <span class="lang-en">Receive Tokens</span>
+            <span class="lang-ja">トークン受け取り</span>
+            <span class="lang-es">Recibir Tokens</span>
+            <span class="lang-ru">Получить токены</span>
+        </div>
+
+        <div id="receiveContent">
+            <div class="send-form-group">
+                <label class="send-form-label">
+                    <span class="lang-el">Διεύθυνση Πορτοφολιού</span>
+                    <span class="lang-en">Wallet Address</span>
+                    <span class="lang-ja">ウォレットアドレス</span>
+                    <span class="lang-es">Dirección de cartera</span>
+                    <span class="lang-ru">Адрес кошелька</span>
+                </label>
+                <div style="display:flex;align-items:center;gap:8px;word-break:break-all;">
+                    <code id="receiveAddress" style="font-size:13px;">—</code>
+                    <button class="send-modal-btn" style="padding:6px 10px;" onclick="copyReceiveAddress()">📋
+                        <span class="lang-el">Αντιγραφή</span>
+                        <span class="lang-en">Copy</span>
+                        <span class="lang-ja">コピー</span>
+                        <span class="lang-es">Copiar</span>
+                        <span class="lang-ru">Копировать</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="send-form-group" style="text-align:center;">
+                <img id="receiveQr" src="" alt="QR" style="max-width:200px;border:1px solid #0f0;border-radius:10px;display:none;" loading="lazy">
+                <div id="receiveQrHint" style="font-size:12px;color:#9fdfb4;margin-top:8px;">
+                    <span class="lang-el">Σκάναρε το QR για να λάβεις THR.</span>
+                    <span class="lang-en">Scan this QR to receive THR.</span>
+                    <span class="lang-ja">このQRをスキャンしてTHRを受け取る。</span>
+                    <span class="lang-es">Escanea este QR para recibir THR.</span>
+                    <span class="lang-ru">Сканируйте QR, чтобы получить THR.</span>
+                </div>
+            </div>
+
+            <div class="send-form-group" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
+                <audio id="receiveAudio" src=""></audio>
+                <button class="send-speed-option selected" style="flex:0;" onclick="playReceiveAudio()">🔊
+                    <span class="lang-el">Αναπαραγωγή Ήχου</span>
+                    <span class="lang-en">Play Audio</span>
+                    <span class="lang-ja">再生</span>
+                    <span class="lang-es">Reproducir</span>
+                    <span class="lang-ru">Воспроизвести</span>
+                </button>
+                <a id="receiveDownload" class="send-speed-option" style="text-decoration:none;display:inline-flex;align-items:center;gap:6px;" download="ThronosAddress.wav">
+                    ⬇️
+                    <span class="lang-el">Λήψη Ήχου</span>
+                    <span class="lang-en">Download WAV</span>
+                    <span class="lang-ja">ダウンロード</span>
+                    <span class="lang-es">Descargar</span>
+                    <span class="lang-ru">Скачать</span>
+                </a>
+            </div>
+
+            <div id="receiveEmpty" class="send-result error" style="display:none;">
+                <span class="lang-el">Συνδέστε πορτοφόλι για να εμφανιστεί η διεύθυνση.</span>
+                <span class="lang-en">Connect a wallet to view your address.</span>
+                <span class="lang-ja">ウォレットを接続してアドレスを表示してください。</span>
+                <span class="lang-es">Conecta una cartera para ver tu dirección.</span>
+                <span class="lang-ru">Подключите кошелек, чтобы увидеть адрес.</span>
+            </div>
+        </div>
+
+        <div style="margin-top:10px;text-align:right;">
+            <button class="send-modal-btn" onclick="closeReceiveModal()">
+                <span class="lang-el">Κλείσιμο</span>
+                <span class="lang-en">Close</span>
+                <span class="lang-ja">閉じる</span>
+                <span class="lang-es">Cerrar</span>
+                <span class="lang-ru">Закрыть</span>
+            </button>
+        </div>
+    </div>
+</div>
+
 <div class="navbar">
   <ul class="nav-list">
     <li class="nav-item brand">
@@ -1084,27 +1168,67 @@
 
 <script>
 // Global Language Logic
+const LANG_SEQUENCE = ['gr', 'en', 'ja', 'es', 'ru'];
+const LANGUAGE_CLASS_MAP = {
+    gr: 'lang-el',
+    en: 'lang-en',
+    ja: 'lang-ja',
+    es: 'lang-es',
+    ru: 'lang-ru'
+};
+const DEFAULT_LANG = 'gr';
+
+function normalizeLang(lang) {
+    if (!lang) return DEFAULT_LANG;
+    if (lang === 'el') return 'gr';
+    return LANG_SEQUENCE.includes(lang) ? lang : 'en';
+}
+
+function getCurrentLang() {
+    return normalizeLang(localStorage.getItem('lang') || DEFAULT_LANG);
+}
+
+function isGreekLang(lang) {
+    return normalizeLang(lang) === 'gr';
+}
+
 function toggleLanguage() {
-    const currentLang = localStorage.getItem('lang') || 'el';
-    const newLang = currentLang === 'el' ? 'en' : 'el';
-    setLanguage(newLang);
+    const currentLang = getCurrentLang();
+    const currentIndex = LANG_SEQUENCE.indexOf(currentLang);
+    const nextIndex = (currentIndex + 1) % LANG_SEQUENCE.length;
+    setLanguage(LANG_SEQUENCE[nextIndex]);
 }
 
 function setLanguage(lang) {
-    localStorage.setItem('lang', lang);
-    const elElements = document.querySelectorAll('.lang-el');
-    const enElements = document.querySelectorAll('.lang-en');
-    
-    if (lang === 'el') {
-        elElements.forEach(el => el.style.display = 'inline');
-        enElements.forEach(el => el.style.display = 'none');
-    } else {
-        elElements.forEach(el => el.style.display = 'none');
-        enElements.forEach(el => el.style.display = 'inline');
+    const normalizedLang = normalizeLang(lang);
+    localStorage.setItem('lang', normalizedLang);
+
+    const allClasses = Object.values(LANGUAGE_CLASS_MAP);
+    allClasses.forEach(cls => {
+        document.querySelectorAll(`.${cls}`).forEach(el => el.style.display = 'none');
+    });
+
+    const activeClass = LANGUAGE_CLASS_MAP[normalizedLang] || LANGUAGE_CLASS_MAP.en;
+    document.querySelectorAll(`.${activeClass}`).forEach(el => el.style.display = 'inline');
+
+    // Fallback to English where no translation exists in the same container
+    if (normalizedLang !== 'en') {
+        document.querySelectorAll('.lang-en').forEach(el => {
+            const parent = el.parentElement;
+            const hasSibling = parent ? parent.querySelector(`.${activeClass}`) : null;
+            if (!hasSibling) {
+                el.style.display = 'inline';
+            }
+        });
     }
-    
+
+    const toggleBtn = document.querySelector('.lang-toggle');
+    if (toggleBtn) {
+        toggleBtn.textContent = normalizedLang.toUpperCase();
+    }
+
     // Trigger custom event for pages that need to re-render content
-    window.dispatchEvent(new CustomEvent('langChanged', { detail: { lang: lang } }));
+    window.dispatchEvent(new CustomEvent('langChanged', { detail: { lang: normalizedLang } }));
 }
 
 // Disconnect Wallet Function
@@ -1121,13 +1245,24 @@ function disconnectWallet() {
 // Wallet Balance Widget Functions
 let walletBalancesLoaded = false;
 
-async function loadWalletBalances() {
-    if (walletBalancesLoaded) return; // Only load once
+async function loadWalletBalances(force = false) {
+    if (walletBalancesLoaded && !force) return; // Only load once
 
     const wallet = localStorage.getItem('thr_address');
     if (!wallet) return;
 
     const popup = document.getElementById('walletBalancePopup');
+    if (!popup) return;
+
+    if (force) {
+        popup.innerHTML = `
+            <div class="wallet-popup-header">💎 Wallet Balance</div>
+            <div class="wallet-popup-loading">
+                <div class="wallet-popup-spinner"></div>
+                Loading balances...
+            </div>
+        `;
+    }
 
     try {
         const response = await fetch(`/api/wallet/tokens/${wallet}?show_zero=false`);
@@ -1188,7 +1323,8 @@ async function updateTokenPrices() {
 function renderWalletBalances(data) {
     const popup = document.getElementById('walletBalancePopup');
     const wallet = localStorage.getItem('thr_address') || '';
-    const lang = localStorage.getItem('lang') || 'el';
+    const lang = getCurrentLang();
+    const isGreek = isGreekLang(lang);
 
     const tokensArr = Array.isArray(data?.tokens)
         ? data.tokens
@@ -1229,15 +1365,15 @@ function renderWalletBalances(data) {
     const totalBTC = btcPrice > 0 ? totalUSD / btcPrice : 0;
 
     // Labels
-    const portfolioLabel = lang === 'el' ? 'Συνολική Αξία' : 'Portfolio Value';
-    const assetsLabel = lang === 'el' ? 'Περιουσιακά Στοιχεία' : 'Assets';
-    const sendLabel = lang === 'el' ? 'Αποστολή' : 'Send';
-    const receiveLabel = lang === 'el' ? 'Λήψη' : 'Receive';
-    const swapLabel = lang === 'el' ? 'Swap' : 'Swap';
-    const bridgeLabel = lang === 'el' ? 'Bridge' : 'Bridge';
-    const pledgeLabel = lang === 'el' ? 'Pledge' : 'Pledge';
-    const historyLabel = lang === 'el' ? 'Ιστορικό' : 'History';
-    const noTokensLabel = lang === 'el' ? 'Δεν βρέθηκαν tokens' : 'No tokens found';
+    const portfolioLabel = isGreek ? 'Συνολική Αξία' : 'Portfolio Value';
+    const assetsLabel = isGreek ? 'Περιουσιακά Στοιχεία' : 'Assets';
+    const sendLabel = isGreek ? 'Αποστολή' : 'Send';
+    const receiveLabel = isGreek ? 'Λήψη' : 'Receive';
+    const swapLabel = 'Swap';
+    const bridgeLabel = 'Bridge';
+    const pledgeLabel = 'Pledge';
+    const historyLabel = isGreek ? 'Ιστορικό' : 'History';
+    const noTokensLabel = isGreek ? 'Δεν βρέθηκαν tokens' : 'No tokens found';
 
     // Render token rows with logos and values
     const tokenRows = tokens.filter(t => Number(t.balance) > 0).map(t => {
@@ -1313,7 +1449,7 @@ function renderWalletBalances(data) {
                 <span class="wallet-quick-btn-icon">💸</span>
                 <span class="wallet-quick-btn-label">${sendLabel}</span>
             </a>
-            <a href="/wallet?address=${encodeURIComponent(wallet)}" class="wallet-quick-btn">
+            <a href="javascript:void(0)" class="wallet-quick-btn" onclick="openReceiveModal()">
                 <span class="wallet-quick-btn-icon">📥</span>
                 <span class="wallet-quick-btn-label">${receiveLabel}</span>
             </a>
@@ -1339,7 +1475,7 @@ function renderWalletBalances(data) {
     popup.innerHTML = html;
 
     // Apply language after render
-    const savedLang = localStorage.getItem('lang') || 'el';
+    const savedLang = getCurrentLang();
     setLanguage(savedLang);
 }
 
@@ -1371,6 +1507,68 @@ function closeSendModal(event) {
     }
 }
 
+function openReceiveModal() {
+    updateReceiveModal();
+    document.getElementById('receiveModal').classList.add('active');
+    const savedLang = getCurrentLang();
+    setLanguage(savedLang);
+}
+
+function closeReceiveModal(event) {
+    if (!event || event.target.id === 'receiveModal') {
+        document.getElementById('receiveModal').classList.remove('active');
+    }
+}
+
+function updateReceiveModal() {
+    const addr = localStorage.getItem('thr_address') || '';
+    const addrEl = document.getElementById('receiveAddress');
+    const qrEl = document.getElementById('receiveQr');
+    const audioEl = document.getElementById('receiveAudio');
+    const dlEl = document.getElementById('receiveDownload');
+    const emptyEl = document.getElementById('receiveEmpty');
+    const hintEl = document.getElementById('receiveQrHint');
+
+    if (!addr) {
+        if (addrEl) addrEl.textContent = '—';
+        if (qrEl) qrEl.style.display = 'none';
+        if (audioEl) audioEl.removeAttribute('src');
+        if (dlEl) dlEl.removeAttribute('href');
+        if (emptyEl) emptyEl.style.display = 'block';
+        if (hintEl) hintEl.style.display = 'none';
+        return;
+    }
+
+    const qrUrl = `/api/wallet/qr/${encodeURIComponent(addr)}`;
+    const audioUrl = `/api/wallet/audio/${encodeURIComponent(addr)}`;
+
+    if (addrEl) addrEl.textContent = addr;
+    if (qrEl) {
+        qrEl.src = qrUrl;
+        qrEl.style.display = 'inline';
+    }
+    if (audioEl) {
+        audioEl.src = audioUrl;
+        audioEl.load();
+    }
+    if (dlEl) dlEl.href = audioUrl;
+    if (emptyEl) emptyEl.style.display = 'none';
+    if (hintEl) hintEl.style.display = 'block';
+}
+
+function copyReceiveAddress() {
+    const addr = localStorage.getItem('thr_address');
+    if (!addr) return;
+    copyToClipboard(addr);
+}
+
+function playReceiveAudio() {
+    const audioEl = document.getElementById('receiveAudio');
+    if (audioEl && audioEl.src) {
+        audioEl.play();
+    }
+}
+
 function selectSpeed(speed) {
     selectedSpeed = speed;
     document.querySelectorAll('.send-speed-option').forEach(opt => {
@@ -1382,11 +1580,12 @@ function selectSpeed(speed) {
 function selectNetwork(network) {
     if (network === 'bitcoin') {
         // Bitcoin bridge coming soon
-        const lang = localStorage.getItem('lang') || 'el';
-        alert(lang === 'el' ?
-            '🚧 Η γέφυρα Bitcoin έρχεται σύντομα! Δείτε το Roadmap για περισσότερες πληροφορίες.' :
-            '🚧 Bitcoin Bridge coming soon! Check the Roadmap for more info.'
-        );
+    const lang = getCurrentLang();
+    const isGreek = isGreekLang(lang);
+    alert(isGreek ?
+        '🚧 Η γέφυρα Bitcoin έρχεται σύντομα! Δείτε το Roadmap για περισσότερες πληροφορίες.' :
+        '🚧 Bitcoin Bridge coming soon! Check the Roadmap for more info.'
+    );
         return;
     }
     selectedNetwork = network;
@@ -1538,13 +1737,14 @@ async function submitSend() {
                 body: JSON.stringify(payload)
             });
         } else {
-            // Custom token transfer - use correct API parameter names
+            // Custom token transfer - backend expects: from, to, symbol, amount
             const payload = {
                 symbol: token,
-                from_thr: from,
-                to_thr: to,
+                from: from,
+                to: to,
                 amount: amount,
-                auth_secret: secret
+                auth_secret: secret,
+                speed: selectedSpeed // optional fee tier hint
             };
             response = await fetch('/api/tokens/transfer', {
                 method: 'POST',
@@ -1571,6 +1771,7 @@ async function submitSend() {
             // Reload balances
             setTimeout(() => {
                 loadTokenBalances();
+                loadWalletBalances(true);
             }, 1000);
 
             // Close modal after 2 seconds
@@ -1711,7 +1912,7 @@ function initWalletUiControls(){
 
 // Initialize language and wallet status on load
 document.addEventListener('DOMContentLoaded', () => {
-    const savedLang = localStorage.getItem('lang') || 'el';
+    const savedLang = getCurrentLang();
     setLanguage(savedLang);
 
     // Check wallet status
@@ -1780,8 +1981,9 @@ function escapeHtml(str) {
 async function copyToClipboard(text) {
     try {
         await navigator.clipboard.writeText(text);
-        const lang = localStorage.getItem('lang') || 'el';
-        showToast(lang === 'el' ? 'Αντιγράφηκε' : 'Copied');
+        const lang = getCurrentLang();
+        const isGreek = isGreekLang(lang);
+        showToast(isGreek ? 'Αντιγράφηκε' : 'Copied');
     } catch (e) {
         console.warn('Clipboard failed', e);
     }

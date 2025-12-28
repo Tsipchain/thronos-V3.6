@@ -88,6 +88,28 @@
 
   <!-- Blocks -->
   <section id="view-blocks" class="panel" style="margin-top:12px">
+    <div class="grid" style="margin-bottom:12px">
+      <div class="card">
+        <h4>Total Blocks Mined</h4>
+        <div class="big" id="blocksTotalCount">—</div>
+        <div class="small muted">blockchain height</div>
+      </div>
+      <div class="card">
+        <h4>Total Rewards Distributed</h4>
+        <div class="big" id="blocksTotalRewards">—</div>
+        <div class="small muted">to miners & AI agents</div>
+      </div>
+      <div class="card">
+        <h4>Total Fees Burned</h4>
+        <div class="big" id="blocksTotalBurned">—</div>
+        <div class="small muted">deflationary mechanism</div>
+      </div>
+      <div class="card">
+        <h4>Avg Block Reward</h4>
+        <div class="big" id="blocksAvgReward">—</div>
+        <div class="small muted">per block</div>
+      </div>
+    </div>
     <table id="tblBlocks">
       <thead>
         <tr>
@@ -104,11 +126,33 @@
       </thead>
       <tbody></tbody>
     </table>
-    <div class="hint">Tip: κλικ στο hash/διεύθυνση για αντιγραφή.</div>
+    <div class="hint">Tip: κλικ στο hash/διεύθυνση για αντιγραφή. | Mining stats updated with each block.</div>
   </section>
 
   <!-- Transfers -->
   <section id="view-txs" class="panel" style="display:none;margin-top:12px">
+    <div class="grid" style="margin-bottom:12px">
+      <div class="card">
+        <h4>Total Transfers</h4>
+        <div class="big" id="txsTotalCount">—</div>
+        <div class="small muted">all token transfers</div>
+      </div>
+      <div class="card">
+        <h4>Total Volume</h4>
+        <div class="big" id="txsTotalVolume">—</div>
+        <div class="small muted">THR transferred</div>
+      </div>
+      <div class="card">
+        <h4>Unique Addresses</h4>
+        <div class="big" id="txsUniqueAddresses">—</div>
+        <div class="small muted">active participants</div>
+      </div>
+      <div class="card">
+        <h4>Avg Transfer Size</h4>
+        <div class="big" id="txsAvgSize">—</div>
+        <div class="small muted">per transaction</div>
+      </div>
+    </div>
     <table id="tblTxs">
       <thead>
         <tr>
@@ -179,19 +223,43 @@
 
   <!-- Tokens -->
   <section id="view-tokens" class="panel" style="display:none;margin-top:12px">
+    <div class="grid" style="margin-bottom:12px">
+      <div class="card">
+        <h4>Total Tokens</h4>
+        <div class="big" id="tokensTotalCount">—</div>
+        <div class="small muted">unique tokens on chain</div>
+      </div>
+      <div class="card">
+        <h4>Total Holders</h4>
+        <div class="big" id="tokensTotalHolders">—</div>
+        <div class="small muted">unique addresses holding tokens</div>
+      </div>
+      <div class="card">
+        <h4>Total Transfers</h4>
+        <div class="big" id="tokensTotalTransfers">—</div>
+        <div class="small muted">token transactions</div>
+      </div>
+      <div class="card">
+        <h4>Active Tokens (24h)</h4>
+        <div class="big" id="tokensActive24h">—</div>
+        <div class="small muted">tokens with recent activity</div>
+      </div>
+    </div>
     <table id="tblTokens">
       <thead>
         <tr>
           <th>Symbol</th>
           <th>Name</th>
           <th>Total Supply</th>
+          <th>Holders</th>
+          <th>Transfers</th>
           <th>Decimals</th>
           <th>Creator</th>
           <th>Created</th>
         </tr>
       </thead>
       <tbody id="tokensBody">
-        <tr><td colspan="6" style="text-align:center">Loading tokens...</td></tr>
+        <tr><td colspan="8" style="text-align:center">Loading tokens...</td></tr>
       </tbody>
     </table>
   </section>
@@ -330,6 +398,29 @@ function renderBlocks(list){
   const tb = tbody('#tblBlocks');
   tb.innerHTML='';
   let hot=false;
+
+  // Calculate mining statistics
+  let totalRewards = 0;
+  let totalBurned = 0;
+  let maxHeight = 0;
+  let validBlocks = 0;
+
+  list.forEach(b => {
+    if(b.index !== undefined && b.index > maxHeight) maxHeight = b.index;
+    const reward = (b.reward_to_miner || 0) + (b.reward_to_ai || 0);
+    const burned = b.fee_burned || 0;
+    if(reward > 0 || burned > 0) validBlocks++;
+    totalRewards += reward;
+    totalBurned += burned;
+  });
+
+  // Update stats cards
+  el('#blocksTotalCount').textContent = maxHeight.toLocaleString();
+  el('#blocksTotalRewards').textContent = fmtN(totalRewards) + ' THR';
+  el('#blocksTotalBurned').textContent = fmtN(totalBurned) + ' THR';
+  el('#blocksAvgReward').textContent = validBlocks > 0 ? fmtN(totalRewards / validBlocks) + ' THR' : '—';
+
+  // Render blocks table
   list.forEach(b=>{
     const match = !q || JSON.stringify(b).toLowerCase().includes(q);
     if(!match) return;
@@ -367,6 +458,28 @@ function renderTxs(list){
   const q = el('#q').value.trim().toLowerCase();
   const tb = tbody('#tblTxs');
   tb.innerHTML='';
+
+  // Calculate transfer statistics
+  let totalVolume = 0;
+  let uniqueAddresses = new Set();
+
+  list.forEach(t => {
+    const asset = (t && t.token_symbol) ? String(t.token_symbol) : 'THR';
+    // Only count THR for volume (to avoid mixing token types)
+    if(asset === 'THR') {
+      totalVolume += (t.amount || 0);
+    }
+    if(t.from) uniqueAddresses.add(t.from);
+    if(t.to) uniqueAddresses.add(t.to);
+  });
+
+  // Update stats cards
+  el('#txsTotalCount').textContent = list.length.toLocaleString();
+  el('#txsTotalVolume').textContent = fmtN(totalVolume) + ' THR';
+  el('#txsUniqueAddresses').textContent = uniqueAddresses.size.toLocaleString();
+  el('#txsAvgSize').textContent = list.length > 0 ? fmtN(totalVolume / list.length) + ' THR' : '—';
+
+  // Render transfers table
   list.forEach(t=>{
     const asset = (t && t.token_symbol) ? String(t.token_symbol) : 'THR';
     const match = !q || JSON.stringify(t).toLowerCase().includes(q);
@@ -489,33 +602,94 @@ if(!Array.isArray(CURRENT_TXS)) CURRENT_TXS=[];
 /* ===== New Tab Data Loaders ===== */
 async function loadTokens(){
   try{
-    const r = await fetch('/api/tokens/list');
-    const j = await r.json();
+    // Try to fetch comprehensive token stats first
+    let tokensData = [];
+    let totalHolders = 0;
+    let totalTransfers = 0;
+    let active24h = 0;
+
+    try {
+      const statsR = await fetch('/api/tokens/stats');
+      const statsJ = await statsR.json();
+      if(statsJ.ok && statsJ.tokens) {
+        tokensData = statsJ.tokens;
+        // Calculate aggregated stats
+        totalHolders = tokensData.reduce((sum, t) => sum + (t.holders_count || 0), 0);
+        totalTransfers = tokensData.reduce((sum, t) => sum + (t.transfers_count || 0), 0);
+        const day24ago = Date.now() - 24*3600*1000;
+        active24h = tokensData.filter(t => {
+          if(!t.last_transfer) return false;
+          try {
+            const ts = new Date(t.last_transfer.replace(' UTC','')+'Z').getTime();
+            return ts > day24ago;
+          } catch { return false; }
+        }).length;
+      }
+    } catch(e) {
+      console.log('Stats API not available, falling back to basic list');
+    }
+
+    // Fallback to basic token list if stats not available
+    if(tokensData.length === 0) {
+      const r = await fetch('/api/tokens/list');
+      const j = await r.json();
+      const tokens = j.tokens || {};
+      tokensData = Object.values(tokens).map(t => ({
+        symbol: t.symbol,
+        name: t.name,
+        total_supply: t.supply,
+        decimals: t.decimals,
+        creator: t.creator,
+        created_at: t.created_at,
+        holders_count: 0,
+        transfers_count: 0
+      }));
+    }
+
+    // Update stats cards
+    el('#tokensTotalCount').textContent = tokensData.length;
+    el('#tokensTotalHolders').textContent = totalHolders.toLocaleString();
+    el('#tokensTotalTransfers').textContent = totalTransfers.toLocaleString();
+    el('#tokensActive24h').textContent = active24h;
+
+    // Render tokens table
     const tb = document.getElementById('tokensBody');
     tb.innerHTML = '';
 
-    const tokens = j.tokens || {};
-    const tokensList = Object.values(tokens);
-
-    if(tokensList.length === 0) {
-      tb.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#9fdfb4">No custom tokens created yet</td></tr>';
+    if(tokensData.length === 0) {
+      tb.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#9fdfb4">No tokens found on chain</td></tr>';
       return;
     }
 
-    tokensList.forEach(t=>{
+    // Sort: THR first, then by holders count, then alphabetically
+    tokensData.sort((a, b) => {
+      if(a.symbol === 'THR') return -1;
+      if(b.symbol === 'THR') return 1;
+      const hDiff = (b.holders_count || 0) - (a.holders_count || 0);
+      if(hDiff !== 0) return hDiff;
+      return (a.symbol || '').localeCompare(b.symbol || '');
+    });
+
+    tokensData.forEach(t=>{
       const tr = document.createElement('tr');
+      const holdersCount = (t.holders_count !== undefined) ? t.holders_count : '—';
+      const transfersCount = (t.transfers_count !== undefined) ? t.transfers_count : '—';
+
       tr.innerHTML = `
-        <td class="mono k">${t.symbol}</td>
-        <td>${t.name}</td>
-        <td class="mono">${fmtN(t.supply||0)}</td>
-        <td>${t.decimals||6}</td>
+        <td class="mono k">${t.symbol || '—'}</td>
+        <td>${t.name || '—'}</td>
+        <td class="mono">${fmtN(t.total_supply || t.supply || 0)}</td>
+        <td class="mono k">${typeof holdersCount === 'number' ? holdersCount.toLocaleString() : holdersCount}</td>
+        <td class="mono">${typeof transfersCount === 'number' ? transfersCount.toLocaleString() : transfersCount}</td>
+        <td>${t.decimals || 6}</td>
         <td class="mono"><a class="addr" onclick="copy('${t.creator||'—'}')">${short(t.creator||'—')}</a></td>
         <td class="muted">${rel(t.created_at||'')}</td>
       `;
       tb.appendChild(tr);
     });
   }catch(e){
-    document.getElementById('tokensBody').innerHTML = '<tr><td colspan="6" style="text-align:center;color:#ff5577">Error loading tokens</td></tr>';
+    console.error('Token load error:', e);
+    document.getElementById('tokensBody').innerHTML = '<tr><td colspan="8" style="text-align:center;color:#ff5577">Error loading tokens</td></tr>';
   }
 }
 

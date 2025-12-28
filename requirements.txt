@@ -1,5 +1,6 @@
 Flask>=2.2
 gunicorn>=21.2
+APScheduler>=3.10
 requests>=2.31
 beautifulsoup4>=4.12
 lxml>=4.9

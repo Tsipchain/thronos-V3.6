@@ -4188,8 +4188,8 @@ def api_wallet_send():
         g.internal_call = True
         return send_thr_internal(from_addr, to_addr, amount, secret, passphrase, speed)
     else:
-        # Custom token transfer
-        return transfer_custom_token(token, from_addr, to_addr, amount, secret, passphrase)
+        # Custom token transfer (fee paid in THR)
+        return transfer_custom_token(token, from_addr, to_addr, amount, secret, passphrase, speed)
 
 
 def send_thr_internal(from_thr, to_thr, amount_raw, auth_secret, passphrase="", speed="fast"):
@@ -4274,8 +4274,12 @@ def send_thr_internal(from_thr, to_thr, amount_raw, auth_secret, passphrase="", 
     }), 200
 
 
-def transfer_custom_token(symbol, from_thr, to_thr, amount_raw, auth_secret, passphrase=""):
-    """Internal custom token transfer for unified API."""
+def transfer_custom_token(symbol, from_thr, to_thr, amount_raw, auth_secret, passphrase="", speed="fast"):
+    """Internal custom token transfer for unified API.
+
+    Fee is paid in THR (not the custom token) using the same fee structure as THR transfers.
+    This ensures all token transfers contribute to the network economy.
+    """
     try:
         amount = float(amount_raw)
     except (TypeError, ValueError):
@@ -4317,20 +4321,47 @@ def transfer_custom_token(symbol, from_thr, to_thr, amount_raw, auth_secret, pas
     if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
         return jsonify({"ok": False, "error": "Invalid authentication"}), 403
 
-    ledger = load_custom_token_ledger(token["id"])
-    sender_balance = float(ledger.get(from_thr, 0.0))
+    # Check custom token balance
+    token_ledger = load_custom_token_ledger(token["id"])
+    sender_token_balance = float(token_ledger.get(from_thr, 0.0))
 
-    if sender_balance < amount:
+    if sender_token_balance < amount:
         return jsonify({
             "ok": False,
-            "error": "Insufficient balance",
-            "balance": round(sender_balance, token["decimals"]),
+            "error": f"Insufficient {symbol} balance",
+            "balance": round(sender_token_balance, token["decimals"]),
             "required": amount
         }), 400
 
-    ledger[from_thr] = round(sender_balance - amount, token["decimals"])
-    ledger[to_thr] = round(float(ledger.get(to_thr, 0.0)) + amount, token["decimals"])
-    save_custom_token_ledger(token["id"], ledger)
+    # Calculate fee in THR based on the token amount
+    # We use a base fee calculation - tokens are treated equivalently to THR for fee purposes
+    # This ensures all tokens use the same fee structure
+    if speed == "slow":
+        thr_fee = round(max(0.001, amount * 0.0009), 6)  # 0.09% minimum 0.001 THR
+    else:
+        thr_fee = round(max(0.001, calculate_dynamic_fee(amount)), 6)  # Dynamic fee, minimum 0.001 THR
+
+    # Check THR balance for fee
+    thr_ledger = load_json(LEDGER_FILE, {})
+    sender_thr_balance = float(thr_ledger.get(from_thr, 0.0))
+
+    if sender_thr_balance < thr_fee:
+        return jsonify({
+            "ok": False,
+            "error": "Insufficient THR balance for transaction fee",
+            "thr_balance": round(sender_thr_balance, 6),
+            "fee_required": thr_fee,
+            "token_balance": round(sender_token_balance, token["decimals"])
+        }), 400
+
+    # Deduct THR fee from sender (burn it)
+    thr_ledger[from_thr] = round(sender_thr_balance - thr_fee, 6)
+    save_json(LEDGER_FILE, thr_ledger)
+
+    # Transfer the custom token
+    token_ledger[from_thr] = round(sender_token_balance - amount, token["decimals"])
+    token_ledger[to_thr] = round(float(token_ledger.get(to_thr, 0.0)) + amount, token["decimals"])
+    save_custom_token_ledger(token["id"], token_ledger)
 
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     tx_id = f"TOKEN_TRANSFER-{symbol}-{int(time.time())}-{secrets.token_hex(4)}"
@@ -4341,6 +4372,8 @@ def transfer_custom_token(symbol, from_thr, to_thr, amount_raw, auth_secret, pas
         "from": from_thr,
         "to": to_thr,
         "amount": round(amount, token["decimals"]),
+        "fee_burned_thr": thr_fee,
+        "speed": speed,
         "timestamp": ts,
         "tx_id": tx_id,
         "status": "confirmed"
@@ -4349,11 +4382,15 @@ def transfer_custom_token(symbol, from_thr, to_thr, amount_raw, auth_secret, pas
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
 
+    logger.info(f"Token transfer: {amount} {symbol} from {from_thr[:10]}... to {to_thr[:10]}... (fee: {thr_fee} THR)")
+
     return jsonify({
         "ok": True,
         "status": "confirmed",
         "tx": tx,
-        "new_balance": ledger[from_thr]
+        "new_balance": token_ledger[from_thr],
+        "new_thr_balance": thr_ledger[from_thr],
+        "fee_burned": thr_fee
     }), 200
 
 

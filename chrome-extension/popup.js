@@ -313,6 +313,8 @@ async function sendTransaction() {
     const tokenSymbol = document.getElementById('sendToken').value;
     const to = document.getElementById('sendTo').value.trim();
     const amount = parseFloat(document.getElementById('sendAmount').value);
+    // Get speed from settings or default to 'fast'
+    const speed = document.getElementById('sendSpeed')?.value || 'fast';
 
     if (!tokenSymbol || !to || !amount) {
         showToast('Please fill all fields', 'error');
@@ -349,15 +351,27 @@ async function sendTransaction() {
                 to: to,
                 amount: amount,
                 token: tokenSymbol,
-                secret: currentWallet.secret
+                secret: currentWallet.secret,
+                speed: speed
             })
         });
 
-        if (!response.ok) throw new Error('Transaction failed');
-
         const result = await response.json();
 
-        showToast('Transaction sent successfully!', 'success');
+        // Handle errors properly
+        if (!response.ok || result.error || result.ok === false) {
+            let errorMsg = result.error || result.message || 'Transaction failed';
+            // Handle specific error for THR fees on custom tokens
+            if (result.thr_balance !== undefined && result.fee_required !== undefined) {
+                errorMsg = `Insufficient THR for fee. Need ${result.fee_required} THR, have ${result.thr_balance} THR`;
+            }
+            showToast(errorMsg, 'error');
+            return;
+        }
+
+        // Success - show fee info if available
+        const feeInfo = result.fee_burned || result.fee ? ` (Fee: ${(result.fee_burned || result.fee).toFixed(6)} THR)` : '';
+        showToast(`${amount} ${tokenSymbol} sent successfully!${feeInfo}`, 'success');
 
         // Clear form
         document.getElementById('sendToken').value = '';

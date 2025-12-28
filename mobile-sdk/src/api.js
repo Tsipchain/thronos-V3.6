@@ -85,7 +85,7 @@ export default class ThronosAPI {
                 })
             });
         } else {
-            // Custom token transfer
+            // Custom token transfer (fee paid in THR)
             return await this.request('/api/tokens/transfer', {
                 method: 'POST',
                 body: JSON.stringify({
@@ -94,6 +94,7 @@ export default class ThronosAPI {
                     to_thr: transaction.to,
                     amount: transaction.amount,
                     auth_secret: transaction.secret,
+                    speed: transaction.speed || 'fast',
                     passphrase: transaction.passphrase
                 })
             });

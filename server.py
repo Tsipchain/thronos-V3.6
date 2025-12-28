@@ -3633,9 +3633,17 @@ def api_create_token():
     description = (data.get("description") or "").strip()
 
     # Token permissions (creator-controlled)
-    transferable = data.get("transferable", True)  # Default: tokens can be sent
-    burnable = data.get("burnable", False)  # Default: tokens cannot be burned
-    mintable = data.get("mintable", False)  # Default: cannot mint new tokens
+    # Handle both JSON booleans and FormData strings ("true"/"false")
+    def parse_bool(val, default=False):
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, str):
+            return val.lower() in ('true', '1', 'yes', 'on')
+        return default
+
+    transferable = parse_bool(data.get("transferable"), True)  # Default: tokens can be sent
+    burnable = parse_bool(data.get("burnable"), False)  # Default: tokens cannot be burned
+    mintable = parse_bool(data.get("mintable"), False)  # Default: cannot mint new tokens
 
     # Check for logo file upload (optional, FREE!)
     logo_file = request.files.get("logo") if request.files else None
@@ -3727,17 +3735,26 @@ def api_create_token():
     # Handle logo upload if provided (FREE - no extra charge!)
     if logo_file and logo_file.filename:
         try:
+            # Ensure logo directory exists
+            os.makedirs(TOKEN_LOGOS_DIR, exist_ok=True)
+
             ext = os.path.splitext(secure_filename(logo_file.filename))[1] or ".png"
             logo_filename = f"{token_id}{ext}"
             logo_path = os.path.join(TOKEN_LOGOS_DIR, logo_filename)
+
+            logger.info(f"Saving logo for {symbol} to: {logo_path}")
             logo_file.save(logo_path)
 
-            # Update token with logo path
-            token["logo"] = f"/static/token_logos/{logo_filename}"
-            tokens[symbol] = token
-            save_custom_tokens(tokens)
+            # Verify file was saved
+            if os.path.exists(logo_path):
+                token["logo"] = f"/static/token_logos/{logo_filename}"
+                tokens[symbol] = token
+                save_custom_tokens(tokens)
+                logger.info(f"Logo saved successfully for token {symbol}: {token['logo']}")
+            else:
+                logger.warning(f"Logo file not found after save for token {symbol}")
         except Exception as e:
-            logger.warning(f"Failed to save logo for token {symbol}: {e}")
+            logger.error(f"Failed to save logo for token {symbol}: {e}", exc_info=True)
 
     if initial_supply > 0:
         token_ledger = {creator: initial_supply}
@@ -3771,19 +3788,33 @@ def api_upload_token_logo(symbol):
         return jsonify({"ok": False, "error": "Token not found"}), 404
 
     if token["creator"] != creator:
+        logger.warning(f"Logo upload unauthorized for {symbol}: {creator} != {token['creator']}")
         return jsonify({"ok": False, "error": "Not authorized"}), 403
 
-    # Save logo
-    ext = os.path.splitext(secure_filename(file.filename))[1] or ".png"
-    logo_filename = f"{token['id']}{ext}"
-    logo_path = os.path.join(TOKEN_LOGOS_DIR, logo_filename)
-    file.save(logo_path)
+    try:
+        # Ensure logo directory exists
+        os.makedirs(TOKEN_LOGOS_DIR, exist_ok=True)
+
+        # Save logo
+        ext = os.path.splitext(secure_filename(file.filename))[1] or ".png"
+        logo_filename = f"{token['id']}{ext}"
+        logo_path = os.path.join(TOKEN_LOGOS_DIR, logo_filename)
+
+        logger.info(f"Uploading logo for {symbol} to: {logo_path}")
+        file.save(logo_path)
+
+        if not os.path.exists(logo_path):
+            return jsonify({"ok": False, "error": "Failed to save logo file"}), 500
+    except Exception as e:
+        logger.error(f"Error saving logo for {symbol}: {e}", exc_info=True)
+        return jsonify({"ok": False, "error": f"Failed to save logo: {str(e)}"}), 500
 
     # Update token
     token["logo"] = f"/static/token_logos/{logo_filename}"
     tokens[symbol.upper()] = token
     save_custom_tokens(tokens)
 
+    logger.info(f"Logo uploaded successfully for {symbol}: {token['logo']}")
     return jsonify({"ok": True, "logo": token["logo"]}), 200
 
 @app.route("/api/tokens/list")

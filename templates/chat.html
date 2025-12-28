@@ -200,6 +200,33 @@
       min-height: 0;  /* ADDED - allows grid to shrink properly */
     }
 
+    .error-banner {
+      display: none;
+      background: rgba(255, 75, 129, 0.1);
+      border: 1px solid rgba(255, 75, 129, 0.4);
+      color: #ffc2d6;
+      padding: 10px 12px;
+      border-radius: var(--radius-md);
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .error-banner strong {
+      color: #ff4b81;
+    }
+
+    .error-banner button {
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      color: #fff;
+      padding: 6px 10px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+    }
+
     /* Left column (sessions) */
 
     .panel {
@@ -753,10 +780,26 @@
       border: 1px solid rgba(70, 110, 126, 0.9);
       background: rgba(4, 14, 24, 0.96);
       font-size: 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
 
     .pending-file-chip span {
       color: var(--accent);
+    }
+
+    .pending-file-chip .remove-file-btn {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 11px;
+      padding: 0 4px;
+    }
+
+    .pending-file-chip .remove-file-btn:hover {
+      color: var(--danger);
     }
 
     .remove-link {
@@ -864,8 +907,8 @@
       <div class="q-header-left">
         <div class="th-chip">TH</div>
         <div class="q-title-block">
-          <div class="q-title">Thronos Quantum</div>
-          <div class="q-subtitle">
+          <div class="q-title" id="titleText">Thronos Quantum</div>
+          <div class="q-subtitle" id="subtitleText">
             Peer-to-peer encrypted AI console • Bound to Thronos chain
           </div>
         </div>
@@ -898,7 +941,7 @@
       <!-- Sessions -->
       <section class="panel sessions">
         <div class="panel-header">
-          <div class="panel-title">Sessions</div>
+          <div class="panel-title" id="sessionsTitleLabel">Sessions</div>
           <div class="panel-actions">
             <button class="btn-ghost" id="newSessionBtn">
               ◦ New
@@ -914,6 +957,10 @@
       <!-- Chat -->
       <section class="chat-panel">
         <div class="chat-panel-inner">
+          <div id="sessionErrorBanner" class="error-banner">
+            <span id="sessionErrorText"><strong>Session error</strong>: Unable to load chat session.</span>
+            <button id="retrySessionBtn">Retry</button>
+          </div>
           <div class="chat-header-row">
             <div class="chat-title-block">
               <div id="sessionTitle">Mesh session</div>
@@ -921,11 +968,11 @@
             </div>
             <div class="chat-badges-row">
               <div class="badge">
-                Model:
+                <span id="modelLabelText">Model:</span>
                 <strong id="modelStatus">auto</strong>
               </div>
               <div class="badge">
-                AI Credits:
+                <span id="creditsLabelText">AI Credits:</span>
                 <strong id="usageStatus">–</strong>
               </div>
             </div>
@@ -935,7 +982,7 @@
 
           <div class="chat-input-block">
             <div class="wallet-row">
-              <span class="wallet-label">Bound wallet:</span>
+              <span class="wallet-label" id="walletLabelText">Bound wallet:</span>
               <input
                 id="walletInput"
                 placeholder="THR address"
@@ -957,13 +1004,10 @@
                   <input id="fileInput" type="file" multiple />
                   <select id="modelSelect" class="model-select">
                     <option value="auto">🔀 Auto (Thronos chooses)</option>
-                    <option value="gpt-4o">🤖 GPT-4o (OpenAI)</option>
-                    <option value="gpt-4o-mini">🤖 GPT-4o Mini (OpenAI)</option>
-                    <option value="claude-sonnet-4">🧠 Claude Sonnet 4 (Anthropic)</option>
-                    <option value="gemini-2.0-flash">⚡ Gemini 2.0 Flash</option>
-                    <option value="gemini-2.0-flash-exp">⚡ Gemini 2.0 Flash Exp</option>
-                    <option value="gemini-2.5-flash">🚀 Gemini 2.5 Flash</option>
                     <option value="gemini-2.5-pro">💎 Gemini 2.5 Pro</option>
+                    <option value="gpt-4.1-mini">🤖 GPT-4.1 Mini (OpenAI)</option>
+                    <option value="claude-3-sonnet">🧠 Claude 3 Sonnet</option>
+                    <option value="custom-default">🛰️ Custom Quantum Agent</option>
                   </select>
                 </div>
                 <button id="sendBtn" class="send-btn">
@@ -995,27 +1039,27 @@
       <!-- Telemetry -->
       <section class="panel telemetry">
         <div class="panel-header">
-          <div class="panel-title">Node Telemetry</div>
+          <div class="panel-title" id="telemetryTitleLabel">Node Telemetry</div>
         </div>
         <div class="telemetry-kv">
           <div class="telemetry-row">
-            <span>Hashrate (local)</span>
+            <span id="telemetryHashrateLabel">Hashrate (local)</span>
             <strong id="hashrateLabel">0 H/s</strong>
           </div>
           <div class="telemetry-row">
-            <span>Pending TXs</span>
+            <span id="telemetryPendingLabel">Pending TXs</span>
             <strong id="pendingTxsLabel">0</strong>
           </div>
           <div class="telemetry-row">
-            <span>Difficulty</span>
+            <span id="telemetryDifficultyLabel">Difficulty</span>
             <strong id="difficultyLabel">–</strong>
           </div>
           <div class="telemetry-row">
-            <span>AI Credits</span>
+            <span id="telemetryCreditsLabel">AI Credits</span>
             <strong id="creditsLabel">–</strong>
           </div>
         </div>
-        <div class="telemetry-note">
+        <div class="telemetry-note" id="telemetryNote">
           Offline corpus: best blocks from conversations will be promoted to the
           AI training dataset automatically.
         </div>
@@ -1026,12 +1070,161 @@
   <script>
     // --- Endpoint constants ---
     const API_WALLET = "/api/ai/wallet";
-    const API_SESSIONS = "/api/ai/sessions";
-    const API_SESSION_MESSAGES = (id) => `/api/ai/sessions/${id}/messages`;
-    const API_CHAT = "/api/ai/chat";
+    const API_CHAT = "/api/chat";
+    const API_SESSION_NEW = "/api/chat/session/new";
+    const API_SESSION = (id) => `/api/chat/session/${id}`;
+    const API_SESSIONS = "/api/chat/sessions";
+    const API_SESSION_MESSAGES = (id) => `/api/chat/session/${id}/messages`;
     const API_FILES = "/api/ai/files/upload";
     const API_TELEMETRY = "/api/ai/telemetry";
     const API_FEEDBACK = "/api/ai/feedback";
+
+    const I18N = {
+      en: {
+        page_title: "Thronos Quantum Chat",
+        brand_title: "Thronos Quantum",
+        brand_subtitle: "Peer-to-peer encrypted AI console • Bound to Thronos chain",
+        sessions_title: "Sessions",
+        new_session: "New",
+        rename_session: "Rename",
+        session_loading: "Session: loading…",
+        status_loading: "Loading…",
+        status_ready: "Ready",
+        status_error: "Error",
+        status_sending: "Sending…",
+        status_no_sessions: "No sessions yet. Create a new one.",
+        status_failed_sessions: "Failed to load sessions",
+        status_failed_messages: "Failed to load messages",
+        session_error_banner: "Unable to load chat session.",
+        retry: "Retry",
+        model_label: "Model:",
+        credits_label: "AI Credits:",
+        wallet_label: "Bound wallet:",
+        wallet_placeholder: "THR address",
+        message_placeholder: "Type a command to Thronos…",
+        attach_file: "📎 Attach file",
+        send: "Send",
+        telemetry_title: "Node Telemetry",
+        telemetry_hashrate: "Hashrate (local)",
+        telemetry_pending: "Pending TXs",
+        telemetry_difficulty: "Difficulty",
+        telemetry_credits: "AI Credits",
+        telemetry_note:
+          "Offline corpus: best blocks from conversations will be promoted to the AI training dataset automatically.",
+        session_not_ready: "Session not ready",
+        no_active_session: "No active session. Create one first.",
+        upload_failed: "Upload failed",
+        upload_success: "Files uploaded",
+      },
+      el: {
+        page_title: "Thronos Quantum Chat",
+        brand_title: "Thronos Quantum",
+        brand_subtitle: "Κονσόλα AI με κρυπτογράφηση P2P • Δεμένη με το Thronos chain",
+        sessions_title: "Συνεδρίες",
+        new_session: "Νέα",
+        rename_session: "Μετονομασία",
+        session_loading: "Συνεδρία: φόρτωση…",
+        status_loading: "Φόρτωση…",
+        status_ready: "Έτοιμο",
+        status_error: "Σφάλμα",
+        status_sending: "Αποστολή…",
+        status_no_sessions: "Δεν υπάρχουν συνεδρίες. Δημιουργήστε μία νέα.",
+        status_failed_sessions: "Αποτυχία φόρτωσης συνεδριών",
+        status_failed_messages: "Αποτυχία φόρτωσης μηνυμάτων",
+        session_error_banner: "Αδυναμία φόρτωσης συνεδρίας.",
+        retry: "Ξαναδοκιμή",
+        model_label: "Μοντέλο:",
+        credits_label: "AI Credits:",
+        wallet_label: "Συνδεδεμένο πορτοφόλι:",
+        wallet_placeholder: "Διεύθυνση THR",
+        message_placeholder: "Πληκτρολόγησε εντολή προς το Thronos…",
+        attach_file: "📎 Επισύναψη αρχείου",
+        send: "Αποστολή",
+        telemetry_title: "Τηλεμετρία Κόμβου",
+        telemetry_hashrate: "Hashrate (τοπικό)",
+        telemetry_pending: "Εκκρεμείς συναλλαγές",
+        telemetry_difficulty: "Δυσκολία",
+        telemetry_credits: "AI Credits",
+        telemetry_note:
+          "Offline corpus: τα καλύτερα blocks από συζητήσεις προωθούνται αυτόματα στο dataset εκπαίδευσης.",
+        session_not_ready: "Η συνεδρία δεν είναι έτοιμη",
+        no_active_session: "Δεν υπάρχει ενεργή συνεδρία. Δημιουργήστε πρώτα.",
+        upload_failed: "Αποτυχία μεταφόρτωσης",
+        upload_success: "Τα αρχεία ανέβηκαν",
+      },
+      es: {
+        page_title: "Thronos Quantum Chat",
+        brand_title: "Thronos Quantum",
+        brand_subtitle: "Consola de IA cifrada P2P • Vinculada a Thronos",
+        sessions_title: "Sesiones",
+        new_session: "Nueva",
+        rename_session: "Renombrar",
+        session_loading: "Sesión: cargando…",
+        status_loading: "Cargando…",
+        status_ready: "Listo",
+        status_error: "Error",
+        status_sending: "Enviando…",
+        status_no_sessions: "Sin sesiones. Crea una nueva.",
+        status_failed_sessions: "Error al cargar sesiones",
+        status_failed_messages: "Error al cargar mensajes",
+        session_error_banner: "No se pudo cargar la sesión.",
+        retry: "Reintentar",
+        model_label: "Modelo:",
+        credits_label: "Créditos de IA:",
+        wallet_label: "Billetera vinculada:",
+        wallet_placeholder: "Dirección THR",
+        message_placeholder: "Escribe un comando para Thronos…",
+        attach_file: "📎 Adjuntar archivo",
+        send: "Enviar",
+        telemetry_title: "Telemetría del nodo",
+        telemetry_hashrate: "Hashrate (local)",
+        telemetry_pending: "TX pendientes",
+        telemetry_difficulty: "Dificultad",
+        telemetry_credits: "Créditos de IA",
+        telemetry_note:
+          "Corpus sin conexión: los mejores bloques de conversaciones se promoverán automáticamente al dataset de entrenamiento.",
+        session_not_ready: "Sesión no lista",
+        no_active_session: "No hay sesión activa. Crea una primero.",
+        upload_failed: "Subida fallida",
+        upload_success: "Archivos subidos",
+      },
+      ja: {
+        page_title: "Thronos Quantum Chat",
+        brand_title: "Thronos Quantum",
+        brand_subtitle: "P2P暗号化AIコンソール • Thronosチェーンに連携",
+        sessions_title: "セッション",
+        new_session: "新規",
+        rename_session: "名前変更",
+        session_loading: "セッション: 読み込み中…",
+        status_loading: "読み込み中…",
+        status_ready: "準備完了",
+        status_error: "エラー",
+        status_sending: "送信中…",
+        status_no_sessions: "セッションがありません。新規作成してください。",
+        status_failed_sessions: "セッションの取得に失敗しました",
+        status_failed_messages: "メッセージの取得に失敗しました",
+        session_error_banner: "セッションを読み込めませんでした。",
+        retry: "再試行",
+        model_label: "モデル:",
+        credits_label: "AIクレジット:",
+        wallet_label: "紐付けウォレット:",
+        wallet_placeholder: "THRアドレス",
+        message_placeholder: "Thronosへのコマンドを入力…",
+        attach_file: "📎 ファイルを添付",
+        send: "送信",
+        telemetry_title: "ノードテレメトリ",
+        telemetry_hashrate: "ハッシュレート (ローカル)",
+        telemetry_pending: "保留TX",
+        telemetry_difficulty: "難易度",
+        telemetry_credits: "AIクレジット",
+        telemetry_note:
+          "オフラインコーパス: 会話のベストブロックが自動で学習データセットに昇格します。",
+        session_not_ready: "セッションが準備できていません",
+        no_active_session: "アクティブなセッションがありません。先に作成してください。",
+        upload_failed: "アップロード失敗",
+        upload_success: "アップロード完了",
+      },
+    };
 
     // --- DOM refs ---
     let sessionsListEl,
@@ -1051,6 +1244,9 @@
       coreStatusEl,
       sessionTitleEl,
       sessionStatusTagEl,
+      sessionErrorBannerEl,
+      sessionErrorTextEl,
+      retrySessionBtnEl,
       hashrateLabelEl,
       pendingTxsLabelEl,
       difficultyLabelEl,
@@ -1074,6 +1270,9 @@
       coreStatusEl = document.getElementById("coreStatus");
       sessionTitleEl = document.getElementById("sessionTitle");
       sessionStatusTagEl = document.getElementById("sessionStatusTag");
+      sessionErrorBannerEl = document.getElementById("sessionErrorBanner");
+      sessionErrorTextEl = document.getElementById("sessionErrorText");
+      retrySessionBtnEl = document.getElementById("retrySessionBtn");
       hashrateLabelEl = document.getElementById("hashrateLabel");
       pendingTxsLabelEl = document.getElementById("pendingTxsLabel");
       difficultyLabelEl = document.getElementById("difficultyLabel");
@@ -1081,10 +1280,16 @@
     }
 
     // --- State ---
+    const SESSION_STORAGE_KEY = "thronos_session_id";
+    const MODEL_STORAGE_KEY = "thronos_model_key";
+    const LANG_STORAGE_KEY = "thronos_lang";
     let currentSessionId = null;
     let sessions = [];
     let pendingFiles = []; // { id, name, size }
     let receivedFiles = []; // for any AI-generated [[FILE:...]] blocks
+    let sessionState = "idle"; // idle | loading | ready | error
+    let sessionError = "";
+    let currentLang = "en";
 
     // --- Utilities ---
     function setUploadStatus(text, mode = "") {
@@ -1097,8 +1302,91 @@
       sessionStatusTagEl.textContent = text;
     }
 
+    function setSessionState(state, message = "") {
+      sessionState = state;
+      sessionError = state === "error" ? message : "";
+      const bannerVisible = state === "error";
+      sessionErrorBannerEl.style.display = bannerVisible ? "flex" : "none";
+      if (bannerVisible) {
+        const text = message || "Session unavailable. Please retry.";
+        sessionErrorTextEl.textContent = text;
+      }
+
+      if (state === "loading") {
+        setSessionStatus(t("status_loading"));
+        setSending(false);
+      } else if (state === "ready") {
+        setSessionStatus(t("status_ready"));
+        setSending(true);
+      } else if (state === "error") {
+        setSessionStatus(t("status_error"));
+        setSending(false);
+      } else {
+        setSending(true);
+      }
+    }
+
     function setSending(enabled) {
       sendBtnEl.disabled = !enabled;
+    }
+
+    function initModelSelector() {
+      const saved = localStorage.getItem(MODEL_STORAGE_KEY) || "auto";
+      modelSelectEl.value = saved;
+      modelStatusEl.textContent = saved;
+    }
+
+    function handleModelChange() {
+      const value = modelSelectEl.value || "auto";
+      localStorage.setItem(MODEL_STORAGE_KEY, value);
+      modelStatusEl.textContent = value;
+    }
+
+    function t(key) {
+      const dict = I18N[currentLang] || I18N.en;
+      return dict[key] || I18N.en[key] || key;
+    }
+
+    function applyTranslations() {
+      document.title = t("page_title");
+      const map = [
+        ["titleText", "brand_title"],
+        ["subtitleText", "brand_subtitle"],
+        ["sessionsTitleLabel", "sessions_title"],
+        ["newSessionBtn", "new_session"],
+        ["renameSessionBtn", "rename_session"],
+        ["sessionStatusTag", "session_loading"],
+        ["modelLabelText", "model_label"],
+        ["creditsLabelText", "credits_label"],
+        ["walletLabelText", "wallet_label"],
+        ["attachLabel", "attach_file"],
+        ["sendBtn", "send"],
+        ["telemetryTitleLabel", "telemetry_title"],
+        ["telemetryHashrateLabel", "telemetry_hashrate"],
+        ["telemetryPendingLabel", "telemetry_pending"],
+        ["telemetryDifficultyLabel", "telemetry_difficulty"],
+        ["telemetryCreditsLabel", "telemetry_credits"],
+        ["telemetryNote", "telemetry_note"],
+        ["retrySessionBtn", "retry"],
+        ["sessionErrorText", "session_error_banner"],
+      ];
+
+      map.forEach(([id, key]) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = t(key);
+      });
+
+      if (walletInputEl) walletInputEl.placeholder = t("wallet_placeholder");
+      if (messageInputEl) messageInputEl.placeholder = t("message_placeholder");
+      if (sessionStatusTagEl) sessionStatusTagEl.textContent = t("status_loading");
+    }
+
+    function initI18n() {
+      const browserLang = (navigator.language || "").toLowerCase();
+      const defaultLang = browserLang.startsWith("el") ? "el" : "en";
+      currentLang = localStorage.getItem(LANG_STORAGE_KEY) || defaultLang;
+      if (!I18N[currentLang]) currentLang = "en";
+      applyTranslations();
     }
 
     function formatSize(bytes) {
@@ -1174,7 +1462,7 @@
           if (!confirm(`Delete "${s.title || 'Untitled session'}"?`)) return;
 
           try {
-            const res = await fetch(`/api/ai/sessions/${s.id}`, {
+            const res = await fetch(API_SESSION(s.id), {
               method: "DELETE",
             });
             if (res.ok) {
@@ -1240,7 +1528,20 @@
       pendingFiles.forEach((f) => {
         const chip = document.createElement("div");
         chip.className = "pending-file-chip";
-        chip.innerHTML = `<span>${f.name}</span> (${formatSize(f.size)})`;
+
+        const label = document.createElement("span");
+        label.textContent = `${f.name} (${formatSize(f.size)})`;
+
+        const removeBtn = document.createElement("button");
+        removeBtn.className = "remove-file-btn";
+        removeBtn.textContent = "×";
+        removeBtn.addEventListener("click", () => {
+          pendingFiles = pendingFiles.filter((x) => x.id !== f.id);
+          renderPendingFiles();
+        });
+
+        chip.appendChild(label);
+        chip.appendChild(removeBtn);
         pendingFilesListEl.appendChild(chip);
       });
     }
@@ -1349,7 +1650,14 @@
         const filesDiv = document.createElement("div");
         filesDiv.className = "msg-files";
         allFiles.forEach((f) => {
-          if (f.file_id) {
+          if (f.url) {
+            const a = document.createElement("a");
+            a.className = "msg-file-link";
+            a.href = f.url;
+            a.target = "_blank";
+            a.textContent = f.name || "file";
+            filesDiv.appendChild(a);
+          } else if (f.file_id) {
             const a = document.createElement("a");
             a.className = "msg-file-link";
             a.href = `/api/ai/files/${encodeURIComponent(f.file_id)}`;
@@ -1414,62 +1722,97 @@
 
     async function loadSessions() {
       try {
-        const wallet = walletInputEl.value.trim();
-        const url = wallet ? `${API_SESSIONS}?wallet=${encodeURIComponent(wallet)}` : API_SESSIONS;
-        const res = await fetch(url);
+        const res = await fetch(API_SESSIONS);
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
         sessions = data.sessions || [];
+        renderSessions();
+
         if (!currentSessionId && sessions.length) {
           currentSessionId = sessions[0].id;
+          localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
+        } else if (!currentSessionId && !sessions.length) {
+          setSessionStatus(t("status_no_sessions"));
         }
-        renderSessions();
+
         if (currentSessionId) {
           const s = sessions.find((x) => x.id === currentSessionId);
           if (s) sessionTitleEl.textContent = s.title || "Mesh session";
-          loadSessionMessages(currentSessionId);
-        } else {
-          setSessionStatus("No sessions yet. Create a new one.");
         }
       } catch (e) {
         console.error("loadSessions error", e);
-        setSessionStatus("Failed to load sessions");
+          setSessionState("error", t("status_failed_sessions"));
       }
     }
 
     async function loadSessionMessages(id) {
-      setSessionStatus("Loading messages…");
+      if (!id) return;
+      setSessionState("loading");
       try {
         const res = await fetch(API_SESSION_MESSAGES(id));
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
         renderMessages(data.messages || []);
-        setSessionStatus("Ready");
+        setSessionState("ready");
       } catch (e) {
         console.error("loadSessionMessages error", e);
-        setSessionStatus("Failed to load messages");
+        setSessionState("error", t("status_failed_messages"));
       }
     }
 
-    async function createSession() {
+    async function validateSession(sessionId) {
+      try {
+        const res = await fetch(API_SESSION(sessionId));
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        currentSessionId = data.id || sessionId;
+        sessionTitleEl.textContent = data.title || "Mesh session";
+        localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
+        setSessionState("ready");
+        return true;
+      } catch (e) {
+        console.warn("validateSession error", e);
+        return false;
+      }
+    }
+
+    async function createSession(isRetry = false) {
+      setSessionState("loading");
       try {
         const wallet = walletInputEl.value.trim();
-        const res = await fetch(API_SESSIONS, {
+        const res = await fetch(API_SESSION_NEW, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            title: "New mesh session",
-            wallet: wallet || null
+            title: isRetry ? "Recovered session" : "New mesh session",
+            wallet: wallet || null,
           }),
         });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
         currentSessionId = data.id;
+        localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
         await loadSessions();
+        await loadSessionMessages(currentSessionId);
+        setSessionState("ready");
       } catch (e) {
         console.error("createSession error", e);
-        alert("Failed to create session. Check console for details.");
+        setSessionState("error", t("status_error"));
       }
+    }
+
+    async function ensureSession() {
+      setSessionState("loading");
+      const storedId = localStorage.getItem(SESSION_STORAGE_KEY);
+      if (storedId) {
+        const ok = await validateSession(storedId);
+        if (ok) {
+          await loadSessions();
+          await loadSessionMessages(currentSessionId);
+          return;
+        }
+      }
+      await createSession(true);
     }
 
     async function renameSession() {
@@ -1479,7 +1822,7 @@
       const newName = prompt("Rename session:", currentName);
       if (!newName || newName === currentName) return;
       try {
-        const res = await fetch(`${API_SESSIONS}/${currentSessionId}`, {
+        const res = await fetch(API_SESSION(currentSessionId), {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ title: newName }),
@@ -1505,7 +1848,7 @@
       if (currentSessionId) {
         form.append("session_id", currentSessionId);
       }
-      setUploadStatus("Uploading files…");
+      setUploadStatus(t("status_loading"));
       try {
         const res = await fetch(API_FILES, {
           method: "POST",
@@ -1522,10 +1865,10 @@
           });
         });
         renderPendingFiles();
-        setUploadStatus("Files uploaded", "ok");
+        setUploadStatus(t("upload_success"), "ok");
       } catch (e) {
         console.error("uploadFiles error", e);
-        setUploadStatus("Upload failed", "error");
+        setUploadStatus(t("upload_failed"), "error");
       }
     }
 
@@ -1550,12 +1893,17 @@
       const text = messageInputEl.value.trim();
       if (!text && !pendingFiles.length) return;
       if (!currentSessionId) {
-        alert("No active session. Create one first.");
+        alert(t("no_active_session"));
+        return;
+      }
+      if (sessionState === "loading") return;
+      if (sessionState === "error") {
+        setSessionStatus(t("session_not_ready"));
         return;
       }
       const wallet = walletInputEl.value.trim();
       setSending(false);
-      setSessionStatus("Sending…");
+      setSessionStatus(t("status_sending"));
       usageStatusEl.textContent = "";
 
       const model = modelSelectEl.value || "auto";
@@ -1565,7 +1913,7 @@
         session_id: currentSessionId,
         wallet: wallet || null,
         message: text,
-        attachments: pendingFiles.map((f) => f.id),
+        attachment_ids: pendingFiles.map((f) => f.id),
         model_key: model,
       };
 
@@ -1606,6 +1954,7 @@
             files: (data.files || []).map((f) => ({
               file_id: f.id || f.file_id,
               name: f.name || f.filename,
+              url: f.url || null,
             })),
           });
         }
@@ -1630,7 +1979,7 @@
           content: "Error: " + e.message,
           model: "system",
         });
-        setSessionStatus("Error sending message");
+        setSessionStatus(t("status_error"));
       } finally {
         setSending(true);
       }
@@ -1644,6 +1993,10 @@
       document
         .getElementById("renameSessionBtn")
         .addEventListener("click", renameSession);
+
+      modelSelectEl.addEventListener("change", handleModelChange);
+
+      retrySessionBtnEl.addEventListener("click", ensureSession);
 
       fileInputEl.addEventListener("change", (e) => {
         const files = Array.from(e.target.files || []);
@@ -1673,9 +2026,11 @@
     // --- Init ---
     async function init() {
       cacheDom();
+      initI18n();
       bindEvents();
       await loadWallet();
-      await loadSessions();
+      initModelSelector();
+      await ensureSession();
       loadTelemetry();
       setInterval(loadTelemetry, 15000);
       setSending(true);

@@ -1209,14 +1209,15 @@ def get_blocks_for_viewer():
             height = len(blocks)
         block_txs = [
             tx for tx in chain
-            if tx.get("type") in ("transfer", "coinbase", "service_payment", "ai_knowledge", "token_transfer", "token_create", "token_mint", "token_burn")
+            if tx.get("type") in ("transfer", "coinbase", "service_payment", "ai_knowledge", "token_transfer", "token_create", "token_mint", "token_burn", "swap", "bridge")
             and tx.get("height") == height
         ]
         rsplit = b.get("reward_split") or {}
         reward_to_miner = float(rsplit.get("miner", b.get("reward_to_miner", 0.0)))
         reward_to_ai    = float(rsplit.get("ai", 0.0))
         burn_from_split = float(rsplit.get("burn", 0.0))
-        fees_from_txs   = sum(float(tx.get("fee_burned", 0.0)) for tx in block_txs)
+        # Include swap fees (stored as "fee") and regular fees (stored as "fee_burned")
+        fees_from_txs   = sum(float(tx.get("fee_burned", 0.0) or tx.get("fee", 0.0)) for tx in block_txs)
         blocks.append({
             "index": height,
             "hash": b.get("block_hash",""),
@@ -1235,18 +1236,18 @@ def get_transactions_for_viewer():
     chain = load_json(CHAIN_FILE, [])
     pool  = load_mempool()
 
-    # Confirmed txs από το chain
+    # Confirmed txs από το chain (including swaps)
     chain_txs = [
         t for t in chain
         if isinstance(t, dict)
-        and t.get("type") in ["transfer", "service_payment", "ai_knowledge", "coinbase"]
+        and t.get("type") in ["transfer", "service_payment", "ai_knowledge", "coinbase", "swap", "bridge"]
     ]
 
     # Pending από mempool (χωρίς height)
     pending_txs = [
         t for t in pool
         if isinstance(t, dict)
-        and t.get("type") in ["transfer", "service_payment", "ai_knowledge"]
+        and t.get("type") in ["transfer", "service_payment", "ai_knowledge", "swap", "bridge"]
     ]
 
     all_txs = chain_txs + pending_txs
@@ -1254,15 +1255,33 @@ def get_transactions_for_viewer():
     out = []
     for t in all_txs:
         preview = ""
-        if t.get("type") == "ai_knowledge":
+        tx_type = t.get("type", "transfer")
+
+        if tx_type == "ai_knowledge":
             payload = t.get("ai_payload") or ""
             preview = payload[:96]
 
-        tx_type = t.get("type", "transfer")
         tx_from = t.get("from", "Unknown")
         tx_to   = t.get("to",   "Unknown")
         height  = t.get("height")  # μπορεί να είναι None για pending
         fee     = t.get("fee_burned", 0.0)
+        amount  = t.get("amount", 0.0)
+        token_symbol = t.get("token_symbol", "THR")
+
+        # Handle swap transactions specially
+        if tx_type == "swap":
+            fee = t.get("fee", 0.0)
+            amount = t.get("amount_in", 0.0)
+            token_in = t.get("token_in", "THR")
+            token_out = t.get("token_out", "wBTC")
+            amount_out = t.get("amount_out", 0.0)
+            preview = f"SWAP {amount:.6f} {token_in} → {amount_out:.8f} {token_out}"
+            token_symbol = token_in
+
+        # Handle bridge transactions
+        if tx_type == "bridge":
+            preview = f"BRIDGE {t.get('direction', 'THR→BTC')}"
+            token_symbol = t.get("token", "THR")
 
         tx_id = t.get("tx_id")
         if not tx_id and tx_type == "coinbase":
@@ -1273,11 +1292,12 @@ def get_transactions_for_viewer():
             "height":    height,
             "from":      tx_from,
             "to":        tx_to,
-            "amount":    t.get("amount", 0.0),
-            "fee":       fee,
+            "amount":    amount,
+            "fee_burned": fee,
             "timestamp": t.get("timestamp", ""),
             "type":      tx_type,
             "note":      preview,
+            "token_symbol": token_symbol,
         })
 
     out.sort(key=lambda x: x["timestamp"], reverse=True)
@@ -1446,10 +1466,6 @@ def bridge_page():
 @app.route("/iot")
 def iot_page():
     return render_template("iot.html")
-
-@app.route("/chat")
-def chat_page():
-    return render_template("chat.html")
 
 @app.route("/swap")
 def swap_page():
@@ -2340,6 +2356,11 @@ def api_mempool():
 @app.route("/api/blocks")
 def api_blocks():
     return jsonify(get_blocks_for_viewer()), 200
+
+@app.route("/api/transactions")
+def api_transactions():
+    """Return all transactions for the viewer including swaps"""
+    return jsonify(get_transactions_for_viewer()), 200
 
 
 # ─── NEW SERVICES APIs ─────────────────────────────

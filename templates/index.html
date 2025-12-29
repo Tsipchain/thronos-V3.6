@@ -435,6 +435,235 @@
         .hero-btns { flex-direction: column; align-items: center; }
         .hero-btn { width: 100%; max-width: 300px; justify-content: center; }
     }
+
+    /* ─── Wallet Modal ───────────────────────────────────────────── */
+    .wallet-modal-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.85);
+        backdrop-filter: blur(8px);
+        z-index: 9999;
+        align-items: center;
+        justify-content: center;
+    }
+    .wallet-modal-overlay.active { display: flex; }
+
+    .wallet-modal {
+        background: linear-gradient(135deg, #0a0f0a 0%, #071810 100%);
+        border: 2px solid #00ff66;
+        border-radius: 20px;
+        padding: 30px;
+        width: 90%;
+        max-width: 440px;
+        box-shadow: 0 0 50px rgba(0, 255, 102, 0.3);
+        position: relative;
+    }
+
+    .wallet-modal-close {
+        position: absolute;
+        top: 15px;
+        right: 15px;
+        background: none;
+        border: none;
+        color: #888;
+        font-size: 24px;
+        cursor: pointer;
+        transition: color 0.3s;
+    }
+    .wallet-modal-close:hover { color: #ff4b81; }
+
+    .wallet-modal h2 {
+        text-align: center;
+        color: #00ff66;
+        margin-bottom: 20px;
+        font-size: 1.5em;
+    }
+
+    .wallet-tabs {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 20px;
+    }
+
+    .wallet-tab {
+        flex: 1;
+        padding: 12px;
+        background: rgba(0, 0, 0, 0.4);
+        border: 1px solid #1a3b2e;
+        border-radius: 10px;
+        color: #888;
+        cursor: pointer;
+        text-align: center;
+        font-weight: bold;
+        transition: all 0.3s;
+    }
+    .wallet-tab.active {
+        border-color: #00ff66;
+        color: #00ff66;
+        background: rgba(0, 255, 102, 0.1);
+    }
+    .wallet-tab:hover { border-color: #00ff66; }
+
+    .wallet-panel { display: none; }
+    .wallet-panel.active { display: block; }
+
+    .wallet-input-group {
+        margin-bottom: 16px;
+    }
+    .wallet-input-group label {
+        display: block;
+        color: #888;
+        font-size: 12px;
+        margin-bottom: 6px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+    .wallet-input-group input {
+        width: 100%;
+        padding: 14px;
+        background: rgba(0, 0, 0, 0.6);
+        border: 1px solid #1a3b2e;
+        border-radius: 10px;
+        color: #e0e0e0;
+        font-size: 16px;
+        font-family: monospace;
+    }
+    .wallet-input-group input:focus {
+        outline: none;
+        border-color: #00ff66;
+        box-shadow: 0 0 15px rgba(0, 255, 102, 0.2);
+    }
+
+    .pin-input {
+        display: flex;
+        gap: 10px;
+        justify-content: center;
+        margin: 15px 0;
+    }
+    .pin-input input {
+        width: 50px;
+        height: 60px;
+        text-align: center;
+        font-size: 24px;
+        font-weight: bold;
+        background: rgba(0, 0, 0, 0.6);
+        border: 2px solid #1a3b2e;
+        border-radius: 10px;
+        color: #00ff66;
+    }
+    .pin-input input:focus {
+        outline: none;
+        border-color: #00ff66;
+        box-shadow: 0 0 15px rgba(0, 255, 102, 0.3);
+    }
+
+    .wallet-btn {
+        width: 100%;
+        padding: 16px;
+        background: linear-gradient(135deg, #00ff00 0%, #00ff66 100%);
+        border: none;
+        border-radius: 12px;
+        color: #000;
+        font-weight: bold;
+        font-size: 16px;
+        cursor: pointer;
+        margin-top: 10px;
+        transition: all 0.3s;
+        box-shadow: 0 0 20px rgba(0, 255, 102, 0.3);
+    }
+    .wallet-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 0 30px rgba(0, 255, 102, 0.5);
+    }
+    .wallet-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none;
+    }
+    .wallet-btn.secondary {
+        background: transparent;
+        border: 2px solid #00ff66;
+        color: #00ff66;
+    }
+    .wallet-btn.secondary:hover {
+        background: rgba(0, 255, 102, 0.1);
+    }
+
+    .wallet-status {
+        text-align: center;
+        padding: 10px;
+        margin-top: 10px;
+        border-radius: 8px;
+        font-size: 14px;
+    }
+    .wallet-status.success {
+        background: rgba(0, 255, 102, 0.2);
+        color: #00ff66;
+        border: 1px solid #00ff66;
+    }
+    .wallet-status.error {
+        background: rgba(255, 75, 129, 0.2);
+        color: #ff4b81;
+        border: 1px solid #ff4b81;
+    }
+
+    .wallet-connected-info {
+        text-align: center;
+        padding: 20px;
+    }
+    .wallet-connected-info .address {
+        font-family: monospace;
+        font-size: 14px;
+        color: #00ff66;
+        background: rgba(0, 0, 0, 0.4);
+        padding: 10px 15px;
+        border-radius: 8px;
+        margin: 10px 0;
+        word-break: break-all;
+    }
+    .wallet-connected-info .balance {
+        font-size: 2em;
+        color: #ffd700;
+        font-weight: bold;
+        margin: 15px 0;
+    }
+
+    .passkey-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        width: 100%;
+        padding: 14px;
+        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+        border: none;
+        border-radius: 12px;
+        color: #fff;
+        font-weight: bold;
+        cursor: pointer;
+        margin-top: 15px;
+        transition: all 0.3s;
+    }
+    .passkey-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 0 20px rgba(139, 92, 246, 0.4);
+    }
+
+    .divider {
+        display: flex;
+        align-items: center;
+        gap: 15px;
+        margin: 20px 0;
+        color: #666;
+        font-size: 12px;
+    }
+    .divider::before, .divider::after {
+        content: '';
+        flex: 1;
+        height: 1px;
+        background: #1a3b2e;
+    }
 </style>
 {% endblock %}
 
@@ -451,9 +680,9 @@
             <span class="lang-es">Una blockchain de resistencia. Un compromiso con lo inquemable.</span>
         </p>
         <div class="hero-btns">
-            <a href="/thronos_wallet" class="hero-btn primary">
+            <button onclick="openWalletModal()" class="hero-btn primary" id="heroWalletBtn">
                 💼 <span class="lang-el">Σύνδεση Wallet</span><span class="lang-en">Connect Wallet</span><span class="lang-ja">ウォレット接続</span><span class="lang-ru">Подключить кошелёк</span><span class="lang-es">Conectar Billetera</span>
-            </a>
+            </button>
             <a href="/whitepaper" class="hero-btn secondary">
                 📄 Whitepaper
             </a>
@@ -694,6 +923,196 @@
             <span class="lang-ru">Играть в бету</span>
             <span class="lang-es">Jugar Beta</span>
         </a>
+    </div>
+</div>
+
+<!-- Wallet Connect Modal -->
+<div class="wallet-modal-overlay" id="walletModalOverlay" onclick="if(event.target===this)closeWalletModal()">
+    <div class="wallet-modal">
+        <button class="wallet-modal-close" onclick="closeWalletModal()">×</button>
+        <h2>💼
+            <span class="lang-el">Σύνδεση Wallet</span>
+            <span class="lang-en">Connect Wallet</span>
+            <span class="lang-ja">ウォレット接続</span>
+            <span class="lang-ru">Подключить кошелёк</span>
+            <span class="lang-es">Conectar Billetera</span>
+        </h2>
+
+        <!-- Connected View -->
+        <div id="walletConnectedView" style="display:none;">
+            <div class="wallet-connected-info">
+                <div style="font-size:48px;">✅</div>
+                <div style="color:#888;margin:10px 0;">
+                    <span class="lang-el">Συνδεδεμένο</span>
+                    <span class="lang-en">Connected</span>
+                    <span class="lang-ja">接続済み</span>
+                    <span class="lang-ru">Подключено</span>
+                    <span class="lang-es">Conectado</span>
+                </div>
+                <div class="address" id="connectedAddress"></div>
+                <div class="balance" id="connectedBalance">-- THR</div>
+            </div>
+            <button class="wallet-btn" onclick="window.location.href='/thronos_wallet'">
+                <span class="lang-el">Άνοιγμα Wallet</span>
+                <span class="lang-en">Open Wallet</span>
+                <span class="lang-ja">ウォレットを開く</span>
+                <span class="lang-ru">Открыть кошелёк</span>
+                <span class="lang-es">Abrir Billetera</span>
+            </button>
+            <button class="wallet-btn secondary" onclick="disconnectWallet()">
+                <span class="lang-el">Αποσύνδεση</span>
+                <span class="lang-en">Disconnect</span>
+                <span class="lang-ja">切断</span>
+                <span class="lang-ru">Отключить</span>
+                <span class="lang-es">Desconectar</span>
+            </button>
+        </div>
+
+        <!-- Unlock View (existing wallet needs PIN) -->
+        <div id="walletUnlockView" style="display:none;">
+            <div style="text-align:center;margin-bottom:20px;">
+                <div style="font-size:48px;">🔐</div>
+                <p style="color:#888;">
+                    <span class="lang-el">Εισάγετε το PIN σας για να ξεκλειδώσετε</span>
+                    <span class="lang-en">Enter your PIN to unlock</span>
+                    <span class="lang-ja">PINを入力してロック解除</span>
+                    <span class="lang-ru">Введите PIN для разблокировки</span>
+                    <span class="lang-es">Ingrese su PIN para desbloquear</span>
+                </p>
+            </div>
+            <div class="pin-input" id="unlockPinInput">
+                <input type="password" maxlength="1" oninput="handlePinInput(this, 0, 'unlock')">
+                <input type="password" maxlength="1" oninput="handlePinInput(this, 1, 'unlock')">
+                <input type="password" maxlength="1" oninput="handlePinInput(this, 2, 'unlock')">
+                <input type="password" maxlength="1" oninput="handlePinInput(this, 3, 'unlock')">
+            </div>
+            <div id="unlockStatus" class="wallet-status" style="display:none;"></div>
+            <button class="wallet-btn" onclick="unlockWallet()">
+                <span class="lang-el">Ξεκλείδωμα</span>
+                <span class="lang-en">Unlock</span>
+                <span class="lang-ja">ロック解除</span>
+                <span class="lang-ru">Разблокировать</span>
+                <span class="lang-es">Desbloquear</span>
+            </button>
+        </div>
+
+        <!-- Main Connect View -->
+        <div id="walletConnectView">
+            <div class="wallet-tabs">
+                <div class="wallet-tab active" onclick="switchWalletTab('create')">
+                    <span class="lang-el">Νέο Wallet</span>
+                    <span class="lang-en">New Wallet</span>
+                    <span class="lang-ja">新規作成</span>
+                    <span class="lang-ru">Новый кошелёк</span>
+                    <span class="lang-es">Nueva Billetera</span>
+                </div>
+                <div class="wallet-tab" onclick="switchWalletTab('import')">
+                    <span class="lang-el">Εισαγωγή</span>
+                    <span class="lang-en">Import</span>
+                    <span class="lang-ja">インポート</span>
+                    <span class="lang-ru">Импорт</span>
+                    <span class="lang-es">Importar</span>
+                </div>
+            </div>
+
+            <!-- Create New Wallet Panel -->
+            <div class="wallet-panel active" id="createPanel">
+                <p style="color:#888;text-align:center;margin-bottom:20px;">
+                    <span class="lang-el">Δημιουργήστε ένα νέο wallet με PIN 4 ψηφίων</span>
+                    <span class="lang-en">Create a new wallet with a 4-digit PIN</span>
+                    <span class="lang-ja">4桁のPINで新しいウォレットを作成</span>
+                    <span class="lang-ru">Создайте новый кошелёк с 4-значным PIN</span>
+                    <span class="lang-es">Cree una nueva billetera con PIN de 4 dígitos</span>
+                </p>
+                <div style="text-align:center;">
+                    <label style="color:#888;font-size:12px;text-transform:uppercase;">
+                        <span class="lang-el">Ορίστε PIN</span>
+                        <span class="lang-en">Set PIN</span>
+                        <span class="lang-ja">PINを設定</span>
+                        <span class="lang-ru">Установите PIN</span>
+                        <span class="lang-es">Establezca PIN</span>
+                    </label>
+                </div>
+                <div class="pin-input" id="createPinInput">
+                    <input type="password" maxlength="1" oninput="handlePinInput(this, 0, 'create')">
+                    <input type="password" maxlength="1" oninput="handlePinInput(this, 1, 'create')">
+                    <input type="password" maxlength="1" oninput="handlePinInput(this, 2, 'create')">
+                    <input type="password" maxlength="1" oninput="handlePinInput(this, 3, 'create')">
+                </div>
+                <div id="createStatus" class="wallet-status" style="display:none;"></div>
+                <button class="wallet-btn" onclick="createWallet()">
+                    <span class="lang-el">Δημιουργία Wallet</span>
+                    <span class="lang-en">Create Wallet</span>
+                    <span class="lang-ja">ウォレット作成</span>
+                    <span class="lang-ru">Создать кошелёк</span>
+                    <span class="lang-es">Crear Billetera</span>
+                </button>
+
+                <div class="divider">
+                    <span class="lang-el">ή χρησιμοποιήστε</span>
+                    <span class="lang-en">or use</span>
+                    <span class="lang-ja">または使用</span>
+                    <span class="lang-ru">или используйте</span>
+                    <span class="lang-es">o utilice</span>
+                </div>
+
+                <button class="passkey-btn" onclick="createWithPasskey()">
+                    🔑
+                    <span class="lang-el">Passkey (Βιομετρικά)</span>
+                    <span class="lang-en">Passkey (Biometric)</span>
+                    <span class="lang-ja">パスキー（生体認証）</span>
+                    <span class="lang-ru">Passkey (Биометрия)</span>
+                    <span class="lang-es">Passkey (Biométrico)</span>
+                </button>
+            </div>
+
+            <!-- Import Wallet Panel -->
+            <div class="wallet-panel" id="importPanel">
+                <div class="wallet-input-group">
+                    <label>
+                        <span class="lang-el">Διεύθυνση Wallet</span>
+                        <span class="lang-en">Wallet Address</span>
+                        <span class="lang-ja">ウォレットアドレス</span>
+                        <span class="lang-ru">Адрес кошелька</span>
+                        <span class="lang-es">Dirección de Billetera</span>
+                    </label>
+                    <input type="text" id="importAddress" placeholder="THR...">
+                </div>
+                <div class="wallet-input-group">
+                    <label>
+                        <span class="lang-el">Μυστικό Κλειδί</span>
+                        <span class="lang-en">Secret Key</span>
+                        <span class="lang-ja">秘密鍵</span>
+                        <span class="lang-ru">Секретный ключ</span>
+                        <span class="lang-es">Clave Secreta</span>
+                    </label>
+                    <input type="password" id="importSecret" placeholder="Enter your secret key">
+                </div>
+                <div style="text-align:center;margin-top:15px;">
+                    <label style="color:#888;font-size:12px;text-transform:uppercase;">
+                        <span class="lang-el">Ορίστε PIN για κρυπτογράφηση</span>
+                        <span class="lang-en">Set PIN for encryption</span>
+                        <span class="lang-ja">暗号化用PINを設定</span>
+                        <span class="lang-ru">Установите PIN для шифрования</span>
+                        <span class="lang-es">Establezca PIN para cifrado</span>
+                    </label>
+                </div>
+                <div class="pin-input" id="importPinInput">
+                    <input type="password" maxlength="1" oninput="handlePinInput(this, 0, 'import')">
+                    <input type="password" maxlength="1" oninput="handlePinInput(this, 1, 'import')">
+                    <input type="password" maxlength="1" oninput="handlePinInput(this, 2, 'import')">
+                    <input type="password" maxlength="1" oninput="handlePinInput(this, 3, 'import')">
+                </div>
+                <div id="importStatus" class="wallet-status" style="display:none;"></div>
+                <button class="wallet-btn" onclick="importWallet()">
+                    <span class="lang-el">Εισαγωγή Wallet</span>
+                    <span class="lang-en">Import Wallet</span>
+                    <span class="lang-ja">ウォレットをインポート</span>
+                    <span class="lang-ru">Импортировать кошелёк</span>
+                    <span class="lang-es">Importar Billetera</span>
+                </button>
+            </div>
+        </div>
     </div>
 </div>
 {% endblock %}
@@ -947,6 +1366,335 @@
     window.addEventListener("langChanged", () => {
         loadRecentActivity();
         loadVotingPolls();
+    });
+})();
+
+// ─── Wallet Modal Functions ───────────────────────────────────────
+(function() {
+    const WALLET_STORAGE_KEY = 'thr_wallet_encrypted';
+    const WALLET_ADDR_KEY = 'thr_address';
+    const PASSKEY_KEY = 'thr_passkey_enabled';
+
+    // Simple XOR encryption for PIN (use proper crypto in production)
+    function encryptWithPin(data, pin) {
+        const pinHash = btoa(pin + 'thronos_salt_v1');
+        let result = '';
+        for (let i = 0; i < data.length; i++) {
+            result += String.fromCharCode(data.charCodeAt(i) ^ pinHash.charCodeAt(i % pinHash.length));
+        }
+        return btoa(result);
+    }
+
+    function decryptWithPin(encrypted, pin) {
+        try {
+            const pinHash = btoa(pin + 'thronos_salt_v1');
+            const data = atob(encrypted);
+            let result = '';
+            for (let i = 0; i < data.length; i++) {
+                result += String.fromCharCode(data.charCodeAt(i) ^ pinHash.charCodeAt(i % pinHash.length));
+            }
+            return result;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function getPin(type) {
+        const inputs = document.querySelectorAll(`#${type}PinInput input`);
+        return Array.from(inputs).map(i => i.value).join('');
+    }
+
+    function clearPin(type) {
+        const inputs = document.querySelectorAll(`#${type}PinInput input`);
+        inputs.forEach(i => { i.value = ''; });
+        if (inputs[0]) inputs[0].focus();
+    }
+
+    function showStatus(type, message, isError = false) {
+        const el = document.getElementById(`${type}Status`);
+        if (el) {
+            el.textContent = message;
+            el.className = 'wallet-status ' + (isError ? 'error' : 'success');
+            el.style.display = 'block';
+        }
+    }
+
+    function hideStatus(type) {
+        const el = document.getElementById(`${type}Status`);
+        if (el) el.style.display = 'none';
+    }
+
+    function showView(viewName) {
+        ['walletConnectedView', 'walletUnlockView', 'walletConnectView'].forEach(v => {
+            document.getElementById(v).style.display = 'none';
+        });
+        document.getElementById(viewName).style.display = 'block';
+    }
+
+    window.openWalletModal = function() {
+        const overlay = document.getElementById('walletModalOverlay');
+        overlay.classList.add('active');
+
+        const storedAddress = localStorage.getItem(WALLET_ADDR_KEY);
+        const encryptedWallet = localStorage.getItem(WALLET_STORAGE_KEY);
+
+        if (storedAddress && !encryptedWallet) {
+            // Already connected (no PIN encryption)
+            showView('walletConnectedView');
+            document.getElementById('connectedAddress').textContent = storedAddress;
+            loadWalletBalance(storedAddress);
+        } else if (encryptedWallet) {
+            // Has encrypted wallet, needs unlock
+            showView('walletUnlockView');
+            clearPin('unlock');
+            hideStatus('unlock');
+        } else {
+            // No wallet, show connect options
+            showView('walletConnectView');
+            clearPin('create');
+            clearPin('import');
+            hideStatus('create');
+            hideStatus('import');
+        }
+    };
+
+    window.closeWalletModal = function() {
+        document.getElementById('walletModalOverlay').classList.remove('active');
+    };
+
+    window.switchWalletTab = function(tab) {
+        document.querySelectorAll('.wallet-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.wallet-panel').forEach(p => p.classList.remove('active'));
+
+        if (tab === 'create') {
+            document.querySelector('.wallet-tab:first-child').classList.add('active');
+            document.getElementById('createPanel').classList.add('active');
+        } else {
+            document.querySelector('.wallet-tab:last-child').classList.add('active');
+            document.getElementById('importPanel').classList.add('active');
+        }
+    };
+
+    window.handlePinInput = function(input, index, type) {
+        // Only allow numbers
+        input.value = input.value.replace(/[^0-9]/g, '');
+
+        if (input.value.length === 1) {
+            // Move to next input
+            const inputs = document.querySelectorAll(`#${type}PinInput input`);
+            if (index < 3 && inputs[index + 1]) {
+                inputs[index + 1].focus();
+            }
+        }
+    };
+
+    window.createWallet = async function() {
+        const pin = getPin('create');
+        if (pin.length !== 4) {
+            showStatus('create', 'Please enter a 4-digit PIN', true);
+            return;
+        }
+
+        showStatus('create', 'Creating wallet...', false);
+
+        try {
+            const res = await fetch('/api/wallet/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            const data = await res.json();
+
+            if (data.address && data.secret) {
+                // Encrypt and store
+                const walletData = JSON.stringify({ address: data.address, secret: data.secret });
+                const encrypted = encryptWithPin(walletData, pin);
+
+                localStorage.setItem(WALLET_STORAGE_KEY, encrypted);
+                localStorage.setItem(WALLET_ADDR_KEY, data.address);
+
+                showStatus('create', '✅ Wallet created successfully!', false);
+
+                setTimeout(() => {
+                    showView('walletConnectedView');
+                    document.getElementById('connectedAddress').textContent = data.address;
+                    loadWalletBalance(data.address);
+                    updateHeroButton(data.address);
+                }, 1000);
+            } else {
+                showStatus('create', data.error || 'Failed to create wallet', true);
+            }
+        } catch (e) {
+            showStatus('create', 'Network error: ' + e.message, true);
+        }
+    };
+
+    window.importWallet = async function() {
+        const address = document.getElementById('importAddress').value.trim();
+        const secret = document.getElementById('importSecret').value.trim();
+        const pin = getPin('import');
+
+        if (!address.startsWith('THR')) {
+            showStatus('import', 'Invalid address format (must start with THR)', true);
+            return;
+        }
+        if (!secret) {
+            showStatus('import', 'Please enter your secret key', true);
+            return;
+        }
+        if (pin.length !== 4) {
+            showStatus('import', 'Please enter a 4-digit PIN', true);
+            return;
+        }
+
+        showStatus('import', 'Importing wallet...', false);
+
+        // Encrypt and store
+        const walletData = JSON.stringify({ address, secret });
+        const encrypted = encryptWithPin(walletData, pin);
+
+        localStorage.setItem(WALLET_STORAGE_KEY, encrypted);
+        localStorage.setItem(WALLET_ADDR_KEY, address);
+
+        showStatus('import', '✅ Wallet imported successfully!', false);
+
+        setTimeout(() => {
+            showView('walletConnectedView');
+            document.getElementById('connectedAddress').textContent = address;
+            loadWalletBalance(address);
+            updateHeroButton(address);
+        }, 1000);
+    };
+
+    window.unlockWallet = function() {
+        const pin = getPin('unlock');
+        if (pin.length !== 4) {
+            showStatus('unlock', 'Please enter your 4-digit PIN', true);
+            return;
+        }
+
+        const encrypted = localStorage.getItem(WALLET_STORAGE_KEY);
+        if (!encrypted) {
+            showStatus('unlock', 'No wallet found', true);
+            return;
+        }
+
+        try {
+            const decrypted = decryptWithPin(encrypted, pin);
+            const walletData = JSON.parse(decrypted);
+
+            if (walletData.address) {
+                showView('walletConnectedView');
+                document.getElementById('connectedAddress').textContent = walletData.address;
+                loadWalletBalance(walletData.address);
+                updateHeroButton(walletData.address);
+            } else {
+                showStatus('unlock', 'Invalid PIN', true);
+                clearPin('unlock');
+            }
+        } catch (e) {
+            showStatus('unlock', 'Invalid PIN', true);
+            clearPin('unlock');
+        }
+    };
+
+    window.disconnectWallet = function() {
+        if (confirm('Are you sure you want to disconnect your wallet?')) {
+            localStorage.removeItem(WALLET_STORAGE_KEY);
+            localStorage.removeItem(WALLET_ADDR_KEY);
+            showView('walletConnectView');
+            updateHeroButton(null);
+        }
+    };
+
+    window.createWithPasskey = async function() {
+        if (!window.PublicKeyCredential) {
+            alert('Passkeys are not supported on this device/browser');
+            return;
+        }
+
+        try {
+            // First create the wallet on server
+            const res = await fetch('/api/wallet/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            const data = await res.json();
+
+            if (!data.address || !data.secret) {
+                throw new Error(data.error || 'Failed to create wallet');
+            }
+
+            // Create passkey credential
+            const credential = await navigator.credentials.create({
+                publicKey: {
+                    challenge: new Uint8Array(32),
+                    rp: { name: 'Thronos Network', id: window.location.hostname },
+                    user: {
+                        id: new TextEncoder().encode(data.address),
+                        name: data.address,
+                        displayName: 'Thronos Wallet'
+                    },
+                    pubKeyCredParams: [{ alg: -7, type: 'public-key' }],
+                    authenticatorSelection: {
+                        authenticatorAttachment: 'platform',
+                        residentKey: 'required',
+                        userVerification: 'required'
+                    }
+                }
+            });
+
+            if (credential) {
+                // Store wallet with passkey protection
+                const walletData = JSON.stringify({ address: data.address, secret: data.secret });
+                // Use credential ID as encryption key
+                const credId = btoa(String.fromCharCode(...new Uint8Array(credential.rawId)));
+                const encrypted = encryptWithPin(walletData, credId.slice(0, 32));
+
+                localStorage.setItem(WALLET_STORAGE_KEY, encrypted);
+                localStorage.setItem(WALLET_ADDR_KEY, data.address);
+                localStorage.setItem(PASSKEY_KEY, credId);
+
+                showView('walletConnectedView');
+                document.getElementById('connectedAddress').textContent = data.address;
+                loadWalletBalance(data.address);
+                updateHeroButton(data.address);
+            }
+        } catch (e) {
+            console.error('Passkey error:', e);
+            alert('Failed to create passkey: ' + e.message);
+        }
+    };
+
+    async function loadWalletBalance(address) {
+        try {
+            const res = await fetch(`/api/balance/${address}`);
+            const data = await res.json();
+            const balance = data.balance || 0;
+            document.getElementById('connectedBalance').textContent = balance.toFixed(4) + ' THR';
+        } catch (e) {
+            document.getElementById('connectedBalance').textContent = '-- THR';
+        }
+    }
+
+    function updateHeroButton(address) {
+        const btn = document.getElementById('heroWalletBtn');
+        if (btn) {
+            if (address) {
+                btn.innerHTML = '💼 ' + address.slice(0, 6) + '...' + address.slice(-4);
+            } else {
+                btn.innerHTML = '💼 <span class="lang-el">Σύνδεση Wallet</span><span class="lang-en">Connect Wallet</span><span class="lang-ja">ウォレット接続</span><span class="lang-ru">Подключить кошелёк</span><span class="lang-es">Conectar Billetera</span>';
+            }
+        }
+    }
+
+    // Check on page load if wallet is connected
+    document.addEventListener('DOMContentLoaded', () => {
+        const address = localStorage.getItem(WALLET_ADDR_KEY);
+        if (address) {
+            updateHeroButton(address);
+        }
     });
 })();
 </script>

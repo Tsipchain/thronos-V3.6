@@ -1842,7 +1842,9 @@
 
     async function loadSessions() {
       try {
-        const res = await fetch(API_SESSIONS);
+        const wallet = localStorage.getItem('thr_address') || walletInputEl.value.trim();
+        const url = wallet ? `${API_SESSIONS}?wallet=${encodeURIComponent(wallet)}` : API_SESSIONS;
+        const res = await fetch(url);
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
         sessions = data.sessions || [];
@@ -1869,7 +1871,9 @@
       if (!id) return;
       setSessionState("loading");
       try {
-        const res = await fetch(API_SESSION_MESSAGES(id));
+        const wallet = localStorage.getItem('thr_address') || walletInputEl.value.trim();
+        const url = wallet ? `${API_SESSION_MESSAGES(id)}?wallet=${encodeURIComponent(wallet)}` : API_SESSION_MESSAGES(id);
+        const res = await fetch(url);
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
         const session = data.session || {};
@@ -1889,7 +1893,9 @@
 
     async function validateSession(sessionId) {
       try {
-        const res = await fetch(API_SESSION(sessionId));
+        const wallet = localStorage.getItem('thr_address') || walletInputEl.value.trim();
+        const url = wallet ? `${API_SESSION(sessionId)}?wallet=${encodeURIComponent(wallet)}` : API_SESSION(sessionId);
+        const res = await fetch(url);
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
         currentSessionId = data.id || sessionId;
@@ -1926,7 +1932,10 @@
         console.error("createSession error", e);
         setSessionState("error", t("status_error"));
       }
-      await createSession(true);
+    }
+
+    async function createNewSession() {
+      await createSession(false);
     }
 
     async function ensureSession() {

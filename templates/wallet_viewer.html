@@ -1,82 +1,218 @@
 {% extends "base.html" %}
 
-{% block title %}👛 Thronos Wallet{% endblock %}
+{% block title %}💼 Thronos Wallet{% endblock %}
+
+{% block styles %}
+<style>
+    .wallet-card {
+        background: #111;
+        border: 1px solid #0f0;
+        padding: 20px;
+        margin-bottom: 20px;
+        border-radius: 4px;
+    }
+    input, button {
+        background: #000;
+        color: #0f0;
+        border: 1px solid #0f0;
+        padding: 10px;
+        margin: 5px 0;
+        font-family: monospace;
+        width: 100%;
+        box-sizing: border-box;
+    }
+    button { 
+        cursor: pointer; 
+        font-weight: bold;
+        background: #0f0;
+        color: #000;
+    }
+    button:hover { background: #0c0; }
+    button.secondary {
+        background: transparent;
+        color: #0f0;
+    }
+    button.secondary:hover {
+        background: #111;
+    }
+    
+    .tx {
+        margin-top: 10px;
+        border-bottom: 1px dashed #333;
+        padding: 10px 0;
+    }
+    .btc-val {
+        color: #ff0;
+        font-size: 0.9em;
+    }
+    .hidden { display: none; }
+    
+    .balance-large {
+        font-size: 2em;
+        font-weight: bold;
+        margin: 10px 0;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    .fire-icon-wallet {
+        width: 32px;
+        height: 32px;
+        filter: drop-shadow(0 0 8px #ff6600);
+        animation: glow 2s ease-in-out infinite;
+    }
+    @keyframes glow {
+        0%, 100% { filter: drop-shadow(0 0 8px #ff6600); }
+        50% { filter: drop-shadow(0 0 16px #ff9900) drop-shadow(0 0 24px #ff6600); }
+    }
+</style>
+{% endblock %}
 
 {% block content %}
-<div class="container" style="max-width:600px; margin:40px auto; text-align:center;">
-  <h2>📥 
-    <span class="lang-el">Λήψη THR</span>
-    <span class="lang-en">Receive THR</span>
-    <span class="lang-ja">THR 受け取り</span>
-    <span class="lang-es">Recibir THR</span>
-    <span class="lang-ru">Получить THR</span>
-  </h2>
+  <h1>💼 <span class="lang-el">Το Πορτοφόλι μου</span><span class="lang-en">My Wallet</span></h1>
 
-  {% if thr_address %}
-    <p>
-      <span class="lang-el">Η διεύθυνση πορτοφολιού σου:</span>
-      <span class="lang-en">Your Wallet Address:</span>
-      <span class="lang-ja">あなたのウォレットアドレス:</span>
-      <span class="lang-es">Tu dirección de cartera:</span>
-      <span class="lang-ru">Ваш адрес кошелька:</span>
-    </p>
-    <div style="font-weight:bold; margin-bottom: 15px;">
-      <code id="walletAddress">{{ thr_address }}</code>
-      <button onclick="copyAddress()" style="margin-left: 8px;">
-        📋 
-        <span class="lang-el">Αντιγραφή</span>
-        <span class="lang-en">Copy</span>
-        <span class="lang-ja">コピー</span>
-        <span class="lang-es">Copiar</span>
-        <span class="lang-ru">Копировать</span>
-      </button>
-    </div>
-    <div style="margin-bottom: 20px;">
-      <img src="{{ url_for('wallet_qr_code', thr_addr=thr_address) }}" alt="QR Code" style="max-width:200px; border:1px solid #0f0; border-radius:8px;">
-      <p style="font-size: 0.9em; color: #888;">
-        <span class="lang-el">Σκάναρε το QR για να λάβεις THR.</span>
-        <span class="lang-en">Scan this QR to receive THR.</span>
-        <span class="lang-ja">このQRをスキャンしてTHRを受け取る。</span>
-        <span class="lang-es">Escanea este QR para recibir THR.</span>
-        <span class="lang-ru">Сканируйте QR, чтобы получить THR.</span>
+  <!-- CONNECT SECTION -->
+  <div id="connectSection" class="wallet-card">
+      <h2><span class="lang-el">Σύνδεση Πορτοφολιού</span><span class="lang-en">Connect Wallet</span></h2>
+      <p><span class="lang-el">Εισάγετε τα στοιχεία σας για να συνδεθείτε. Τα κλειδιά αποθηκεύονται μόνο τοπικά (browser).</span><span class="lang-en">Enter your credentials to connect. Keys are stored locally in your browser.</span></p>
+      
+      <label><span class="lang-el">Διεύθυνση THR</span><span class="lang-en">THR Address</span></label>
+      <input type="text" id="inputAddress" placeholder="THR..." />
+      
+      <label><span class="lang-el">Μυστικό Αποστολής (Προαιρετικό για προβολή, Απαραίτητο για αποστολή)</span><span class="lang-en">Send Secret (Optional for view, Required for send)</span></label>
+      <input type="password" id="inputSecret" placeholder="auth_secret..." />
+      
+      <button onclick="connectWallet()">🔓 <span class="lang-el">Σύνδεση</span><span class="lang-en">Connect</span></button>
+      <p style="font-size:0.8em; color:#666;">
+          <span class="lang-el">Δεν έχετε πορτοφόλι;</span><span class="lang-en">Don't have a wallet?</span> 
+          <a href="/pledge">🔥 Pledge to create one</a>
       </p>
-    </div>
-    <div style="margin-bottom: 30px;">
-      <audio id="addrAudio" src="{{ url_for('wallet_audio', thr_addr=thr_address) }}"></audio>
-      <button onclick="document.getElementById('addrAudio').play()">
-        🔊 <span class="lang-el">Αναπαραγωγή Ήχου</span>
-        <span class="lang-en">Play Audio</span>
-        <span class="lang-ja">再生</span>
-        <span class="lang-es">Reproducir</span>
-        <span class="lang-ru">Воспроизвести</span>
-      </button>
-      <a href="{{ url_for('wallet_audio', thr_addr=thr_address) }}" download="ThronosAddress.wav" style="margin-left: 10px;">
-        ⬇️ <span class="lang-el">Λήψη Ήχου</span>
-        <span class="lang-en">Download WAV</span>
-        <span class="lang-ja">ダウンロード</span>
-        <span class="lang-es">Descargar</span>
-        <span class="lang-ru">Скачать</span>
-      </a>
-    </div>
-  {% else %}
-    <p style="color: #ffaa00;">
-      <span class="lang-el">Δεν βρέθηκε διεύθυνση πορτοφολιού.</span>
-      <span class="lang-en">No wallet address found.</span>
-      <span class="lang-ja">ウォレットアドレスが見つかりません。</span>
-      <span class="lang-es">No se encontró dirección de cartera.</span>
-      <span class="lang-ru">Адрес кошелька не найден.</span>
-    </p>
-  {% endif %}
-</div>
+  </div>
+
+  <!-- DASHBOARD SECTION -->
+  <div id="dashboardSection" class="hidden">
+      <div class="wallet-card">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+              <div style="display:flex; align-items:center; gap:10px;">
+                  <img src="{{ url_for('static', filename='img/thronos-token.png') }}" alt="🔥" class="fire-icon-wallet" />
+                  <strong><span id="displayAddress">THR...</span></strong>
+              </div>
+              <button class="secondary" style="width:auto; padding:5px 10px;" onclick="disconnectWallet()">❌ <span class="lang-el">Αποσύνδεση</span><span class="lang-en">Disconnect</span></button>
+          </div>
+          
+          <div class="balance-large">
+              <span id="balance">0</span> THR
+          </div>
+          <div class="btc-val">≈ <span id="btcValue">0.0000</span> BTC</div>
+          
+          <div style="margin-top:20px; display:flex; gap:10px;">
+              <button onclick="window.location.href='/send'">📤 <span class="lang-el">Αποστολή</span><span class="lang-en">Send</span></button>
+              <button class="secondary" onclick="refreshWallet()">🔄 <span class="lang-el">Ανανέωση</span><span class="lang-en">Refresh</span></button>
+          </div>
+      </div>
+
+      <h3><span class="lang-el">Ιστορικό Συναλλαγών</span><span class="lang-en">Transaction History</span></h3>
+      <div id="txHistory" class="wallet-card">
+          <span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span>
+      </div>
+  </div>
+
 {% endblock %}
 
 {% block scripts %}
 <script>
-  function copyAddress() {
-    var addrText = document.getElementById('walletAddress').innerText;
-    navigator.clipboard.writeText(addrText).then(() => {
-      alert("✅ " + addrText);
-    });
-  }
+    // --- Logic ---
+    const $ = (id) => document.getElementById(id);
+
+    function checkConnection() {
+        const addr = localStorage.getItem('thr_address');
+        if (addr) {
+            $('connectSection').classList.add('hidden');
+            $('dashboardSection').classList.remove('hidden');
+            $('displayAddress').textContent = addr;
+            loadWalletData(addr);
+        } else {
+            $('connectSection').classList.remove('hidden');
+            $('dashboardSection').classList.add('hidden');
+        }
+    }
+
+    function connectWallet() {
+        const addr = $('inputAddress').value.trim();
+        const secret = $('inputSecret').value.trim();
+        
+        if (!addr) {
+            alert("Please enter a THR address.");
+            return;
+        }
+        
+        localStorage.setItem('thr_address', addr);
+        if (secret) {
+            localStorage.setItem('thr_secret', secret);
+        }
+        
+        checkConnection();
+    }
+
+    function disconnectWallet() {
+        if(confirm("Are you sure? This will clear your stored keys from this browser.")) {
+            localStorage.removeItem('thr_address');
+            localStorage.removeItem('thr_secret');
+            window.location.reload();
+        }
+    }
+
+    async function refreshWallet() {
+        const addr = localStorage.getItem('thr_address');
+        if (addr) loadWalletData(addr);
+    }
+
+    async function loadWalletData(addr) {
+      try {
+        const res = await fetch(`/wallet_data/${addr}`);
+        if (!res.ok) throw new Error("Server returned " + res.status);
+        const data = await res.json();
+        
+        const balance = parseFloat(data.balance);
+        $('balance').textContent = balance;
+        
+        // Calculate BTC value (Fixed rate: 1 THR = 0.0001 BTC)
+        const btcVal = (balance * 0.0001).toFixed(8);
+        $('btcValue').textContent = btcVal;
+
+        const div = $('txHistory');
+        if (!data.transactions || !data.transactions.length) {
+          div.innerHTML = '<p style="color:#666;">No transactions found.</p>';
+        } else {
+          let html = "";
+          const txs = data.transactions.reverse(); 
+          
+          txs.forEach(tx => {
+            const isIncoming = tx.to === addr;
+            const color = isIncoming ? '#0f0' : '#ff0';
+            const sign = isIncoming ? '+' : '-';
+            
+            html += `
+            <div class="tx">
+              <div style="display:flex; justify-content:space-between;">
+                  <span style="color:#fff;">${tx.timestamp}</span>
+                  <span style="color:${color}; font-weight:bold;">${sign} ${tx.amount ?? 0} THR</span>
+              </div>
+              <div style="font-size:0.8em; color:#888; margin-top:4px;">
+                  ${isIncoming ? 'From: ' + tx.from : 'To: ' + tx.to}
+                  <br>TXID: ${tx.tx_id || 'pending'}
+              </div>
+            </div>`;
+          });
+          div.innerHTML = html;
+        }
+      } catch (e) {
+        console.error(e);
+        $('txHistory').textContent = "Error loading data.";
+      }
+    }
+
+    // Init
+    document.addEventListener('DOMContentLoaded', checkConnection);
 </script>
 {% endblock %}

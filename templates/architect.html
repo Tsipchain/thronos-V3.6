@@ -439,6 +439,8 @@ $("generate").onclick = async () => {
   $("out").textContent = "🔄 Generating architecture...\n\nPlease wait while Pythia analyzes your specifications...";
   $("files").style.display = "none";
   $("files").textContent = "";
+  lastArchitectFiles = [];
+  $("downloadZipBtn").disabled = true;
 
   try {
     const j = await api("/api/architect_generate", {

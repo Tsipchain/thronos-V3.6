@@ -787,7 +787,7 @@
                 fetch("/last_block").then(r => r.json()).catch(() => ({})),
                 fetch("/api/network_stats").then(r => r.json()).catch(() => ({})),
                 fetch("/api/tokens/list").then(r => r.json()).catch(() => ({ tokens: [] })),
-                fetch("/api/pools").then(r => r.json()).catch(() => ({ pools: [] })),
+                fetch("/api/v1/pools").then(r => r.json()).catch(() => ({ pools: [] })),
                 fetch("/api/v1/wallets/count").then(r => r.json()).catch(() => ({ count: 0 }))
             ]);
 

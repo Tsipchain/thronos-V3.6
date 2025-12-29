@@ -33,6 +33,11 @@ import wave
 from datetime import datetime
 from PIL import Image
 
+try:
+    import anthropic
+except Exception:
+    anthropic = None
+
 import re
 import mimetypes
 import requests
@@ -1126,6 +1131,25 @@ def extract_ai_files_from_text(full_text: str):
     return files, cleaned_text
 
 
+@app.route("/api/ai/generated/<filename>", methods=["GET"])
+def api_ai_generated_file(filename):
+    """
+    Download ενός AI-generated αρχείου από το AI_FILES_DIR.
+    Χρησιμοποιείται από /chat και /architect για τα [[FILE:...]].
+    """
+    safe_name = filename.replace("..", "_").replace("/", "_").replace("\\", "_")
+    path = os.path.join(AI_FILES_DIR, safe_name)
+    if not os.path.exists(path):
+        return jsonify({"ok": False, "error": "file not found"}), 404
+
+    return send_file(
+        path,
+        as_attachment=True,
+        download_name=safe_name,
+        mimetype="text/plain",
+    )
+
+
 def enqueue_offline_corpus(wallet: str, prompt: str, response: str, files, session_id: str | None = None):
     """
     Ελαφρύ offline corpus για Whisper / training + sessions.
@@ -2007,19 +2031,74 @@ def api_architect_generate():
     except Exception as e:
         print("architect corpus error:", e)
 
+    resp_files = []
+    for f in files or []:
+        if isinstance(f, dict):
+            fname = f.get("filename") or f.get("name")
+            fsize = f.get("size")
+        else:
+            fname = str(f or "").strip()
+            fsize = None
+        if not fname:
+            continue
+        resp_files.append({
+            "filename": fname,
+            "size": fsize,
+            "url": f"/api/ai/generated/{fname}",
+        })
+
     return jsonify({
         "status": status,
         "quantum_key": quantum_key,
         "blueprint": blueprint,
         "response": cleaned,
-        "files": [
-            {
-                "filename": f.get("filename"),
-                "size": f.get("size")
-            } for f in (files or [])
-        ],
+        "files": resp_files,
         "session_id": session_id,
     }), 200
+
+
+@app.route("/api/architect_download", methods=["POST"])
+def api_architect_download():
+    """
+    Παίρνει λίστα filenames (όπως γυρίζει το /api/architect_generate)
+    και επιστρέφει ZIP με τα αντίστοιχα αρχεία από το AI_FILES_DIR.
+    Body:
+      { "files": ["package.json", "pages_index.js", ...] }
+      ή { "files": [ { "filename": "package.json" }, ... ] }
+    """
+    data = request.get_json(silent=True) or {}
+    files_in = data.get("files") or []
+    if not isinstance(files_in, list) or not files_in:
+        return jsonify({"ok": False, "error": "no files provided"}), 400
+
+    to_zip = []
+    for item in files_in:
+        if isinstance(item, dict):
+            name = (item.get("filename") or "").strip()
+        else:
+            name = str(item or "").strip()
+        if not name:
+            continue
+        safe_name = name.replace("..", "_").replace("/", "_").replace("\\", "_")
+        path = os.path.join(AI_FILES_DIR, safe_name)
+        if os.path.exists(path):
+            to_zip.append((safe_name, path))
+
+    if not to_zip:
+        return jsonify({"ok": False, "error": "no valid files found"}), 404
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for safe_name, path in to_zip:
+            zf.write(path, arcname=safe_name)
+    buf.seek(0)
+
+    return send_file(
+        buf,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name="thronos_architecture.zip",
+    )
 
 # ─── RECOVERY FLOW ─────────────────────────────────
 @app.route("/recovery")
@@ -2479,7 +2558,7 @@ def api_chat():
     wallet = (data.get("wallet") or "").strip()  # MOVED HERE - must be before attachments!
     session_id = (data.get("session_id") or "").strip() or None
     model_key = (data.get("model_key") or "").strip() or None
-    attachments = data.get("attachments") or []
+    attachments = data.get("attachments") or data.get("attachment_ids") or []
 
     # Attachments are file_ids previously uploaded via /api/ai/files/upload
     if attachments:
@@ -2685,6 +2764,22 @@ def api_chat():
         except Exception:
             credits_for_frontend = "infinite"
 
+    resp_files = []
+    for f in files or []:
+        if isinstance(f, dict):
+            fname = f.get("filename") or f.get("name")
+            fsize = f.get("size")
+        else:
+            fname = str(f or "").strip()
+            fsize = None
+        if not fname:
+            continue
+        resp_files.append({
+            "filename": fname,
+            "size": fsize,
+            "url": f"/api/ai/generated/{fname}",
+        })
+
     resp = {
         "response": cleaned,
         "quantum_key": quantum_key,
@@ -2692,7 +2787,7 @@ def api_chat():
         "provider": provider,
         "model": model,
         "wallet": wallet,
-        "files": files,
+        "files": resp_files,
         "credits": credits_for_frontend,
         "session_id": session_id,
     }
@@ -7807,6 +7902,62 @@ def _current_actor_id(wallet: str | None) -> tuple[str, str | None]:
     return wallet, guest_id
 
 
+@app.route("/api/thrai/ask", methods=["POST"])
+def api_thrai_ask():
+    """
+    Lightweight endpoint για τον Quantum Agent (Thrai).
+    Χρησιμοποιείται ΜΟΝΟ από το CUSTOM_MODEL_URL του ai_agent_service.
+    Δεν καλεί ξανά το /api/chat για να αποφύγουμε recursion.
+    """
+    start = time.time()
+    data = request.get_json(silent=True) or {}
+    prompt = (data.get("prompt") or "").strip()
+    history = data.get("history") or []
+    lang = (data.get("lang") or "el").strip()
+    session_id = (data.get("session_id") or "").strip() or None
+
+    if not prompt:
+        return jsonify(ok=False, error="prompt required"), 400
+
+    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    if not api_key or not anthropic:
+        return jsonify(ok=False, error="ANTHROPIC_API_KEY not configured"), 500
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        messages = []
+        for h in history[-10:]:
+            role = h.get("role", "user")
+            content = h.get("content", "")
+            messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": prompt})
+
+        model = os.getenv("THRAI_MODEL", "claude-3-sonnet-20240229")
+        resp = client.messages.create(
+            model=model,
+            max_tokens=2048,
+            temperature=0.3,
+            system="You are the Thronos Quantum Architect (Thrai). Answer clearly and concretely, in the language of the user.",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = ""
+        for block in resp.content:
+            if getattr(block, "type", "") == "text":
+                text += getattr(block, "text", "")
+
+        latency_ms = int((time.time() - start) * 1000)
+        return jsonify(
+            ok=True,
+            response=text,
+            model=model,
+            latency_ms=latency_ms,
+            session_id=session_id,
+        ), 200
+    except Exception as e:
+        app.logger.exception("Thrai agent error")
+        return jsonify(ok=False, error=str(e)), 500
+
+
 # Override existing /api/ai/sessions routes with v2 versions that support guests
 @app.route("/api/ai/sessions", methods=["GET", "POST"])
 def api_ai_sessions_combined():
@@ -7976,6 +8127,91 @@ def api_ai_session_start_v2():
     if guest_id:
         resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
     return resp
+
+
+@app.route("/api/chat/session/new", methods=["POST"])
+def api_chat_session_new():
+    """
+    Alias wrapper πάνω από το POST /api/ai/sessions (v2) για το νέο /chat UI.
+    ΔΕΝ απαιτεί οπωσδήποτε wallet – υποστηρίζει και guest.
+    """
+    data = request.get_json(silent=True) or {}
+    wallet_in = data.get("wallet")
+    title = (data.get("title") or "New Chat").strip()[:120]
+    model = (data.get("model") or "auto").strip()
+
+    identity, guest_id = _current_actor_id(wallet_in)
+    sessions = load_ai_sessions()
+    session_id = f"sess_{secrets.token_hex(8)}"
+    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+    session = {
+        "id": session_id,
+        "wallet": identity,
+        "title": title,
+        "created_at": now,
+        "updated_at": now,
+        "archived": False,
+    }
+    sessions.append(session)
+    save_ai_sessions(sessions)
+
+    return jsonify(ok=True, session=session), 200
+
+
+@app.route("/api/chat/session/<session_id>", methods=["GET"])
+def api_chat_session_get(session_id):
+    """
+    Επιστρέφει session + πρόσφατο ιστορικό από το ai_offline_corpus.json.
+    Χρησιμοποιεί είτε wallet είτε guest cookie για να φιλτράρει.
+    """
+    wallet_in = (request.args.get("wallet") or "").strip()
+    identity, guest_id = _current_actor_id(wallet_in)
+
+    sessions = load_ai_sessions()
+    session = None
+    for s in sessions:
+        if s.get("id") == session_id and s.get("wallet") == identity and not s.get("archived"):
+            session = s
+            break
+    if not session:
+        return jsonify(ok=False, error="session not found"), 404
+
+    corpus = load_json(AI_CORPUS_FILE, [])
+    history = []
+    for entry in corpus:
+        if (entry.get("wallet") or identity) != identity:
+            continue
+        if (entry.get("session_id") or "default") != session_id:
+            continue
+        p = entry.get("prompt") or ""
+        r = entry.get("response") or ""
+        if p:
+            history.append({"role": "user", "content": p})
+        if r:
+            history.append({"role": "assistant", "content": r})
+
+    history = history[-40:]
+    return jsonify(ok=True, session=session, messages=history), 200
+
+
+@app.route("/api/chat/sessions", methods=["GET"])
+def api_chat_sessions_list():
+    """
+    Λίστα sessions για το /chat UI (wallet ή guest).
+    """
+    wallet_in = (request.args.get("wallet") or "").strip()
+    identity, guest_id = _current_actor_id(wallet_in)
+
+    sessions = load_ai_sessions()
+    out = []
+    for s in sessions:
+        if s.get("wallet") != identity or s.get("archived"):
+            continue
+        out.append(s)
+
+    out.sort(key=lambda s: s.get("updated_at") or s.get("created_at") or "", reverse=True)
+    return jsonify(ok=True, sessions=out), 200
 
 
 @app.route("/api/ai/sessions/rename", methods=["POST"])

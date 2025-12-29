@@ -8559,9 +8559,226 @@ def api_v1_music_search():
     }), 200
 
 
+# ─── Token Explorer, NFT & Governance Pages ─────────────────────────────────
+
+@app.route("/explorer")
+def explorer_page():
+    """Render the Token Explorer page"""
+    return render_template("explorer.html")
+
+
+@app.route("/nft")
+def nft_page():
+    """Render the NFT Marketplace page"""
+    return render_template("nft.html")
+
+
+@app.route("/governance")
+def governance_page():
+    """Render the Governance/DAO page"""
+    return render_template("governance.html")
+
+
+# ─── NFT API ─────────────────────────────────────────────────────────────────
+
+NFT_REGISTRY_FILE = os.path.join(DATA_DIR, "nft_registry.json")
+
+def load_nft_registry():
+    return load_json(NFT_REGISTRY_FILE, {"nfts": [], "collections": {}})
+
+def save_nft_registry(registry):
+    save_json(NFT_REGISTRY_FILE, registry)
+
+
+@app.route("/api/v1/nfts", methods=["GET"])
+def api_v1_nfts():
+    """Get all NFTs"""
+    registry = load_nft_registry()
+    return jsonify({"status": "success", "nfts": registry.get("nfts", [])}), 200
+
+
+@app.route("/api/v1/nfts/mint", methods=["POST"])
+def api_v1_nfts_mint():
+    """Mint a new NFT"""
+    name = request.form.get("name", "").strip()
+    description = request.form.get("description", "").strip()
+    category = request.form.get("category", "art")
+    price = float(request.form.get("price", 0))
+    royalties = int(request.form.get("royalties", 10))
+    creator = request.form.get("creator", "").strip()
+
+    if not name or not creator:
+        return jsonify({"status": "error", "message": "Name and creator required"}), 400
+
+    # Handle image upload
+    image_url = None
+    if "image" in request.files:
+        file = request.files["image"]
+        if file and file.filename:
+            ext = file.filename.rsplit(".", 1)[-1].lower()
+            if ext in ("png", "jpg", "jpeg", "gif", "webp"):
+                nft_id = f"NFT{int(time.time() * 1000)}"
+                filename = f"{nft_id}.{ext}"
+                upload_dir = os.path.join(app.static_folder, "nft_images")
+                os.makedirs(upload_dir, exist_ok=True)
+                file.save(os.path.join(upload_dir, filename))
+                image_url = f"/static/nft_images/{filename}"
+
+    # Create NFT
+    nft = {
+        "id": f"NFT{int(time.time() * 1000)}",
+        "name": name,
+        "description": description,
+        "category": category,
+        "price": price,
+        "royalties": royalties,
+        "creator": creator,
+        "owner": creator,
+        "image_url": image_url,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "for_sale": True
+    }
+
+    registry = load_nft_registry()
+    registry["nfts"].append(nft)
+    save_nft_registry(registry)
+
+    return jsonify({"status": "success", "nft": nft}), 201
+
+
+@app.route("/api/v1/nfts/buy", methods=["POST"])
+def api_v1_nfts_buy():
+    """Buy an NFT"""
+    data = request.get_json() or {}
+    nft_id = data.get("nft_id", "").strip()
+    buyer = data.get("buyer", "").strip()
+    auth_secret = data.get("auth_secret", "").strip()
+
+    if not nft_id or not buyer or not auth_secret:
+        return jsonify({"status": "error", "message": "Missing required fields"}), 400
+
+    registry = load_nft_registry()
+    nft = next((n for n in registry["nfts"] if n["id"] == nft_id), None)
+
+    if not nft:
+        return jsonify({"status": "error", "message": "NFT not found"}), 404
+
+    if not nft.get("for_sale"):
+        return jsonify({"status": "error", "message": "NFT not for sale"}), 400
+
+    if nft["owner"] == buyer:
+        return jsonify({"status": "error", "message": "You already own this NFT"}), 400
+
+    # Transfer ownership
+    old_owner = nft["owner"]
+    nft["owner"] = buyer
+    nft["for_sale"] = False
+    save_nft_registry(registry)
+
+    return jsonify({
+        "status": "success",
+        "message": f"NFT transferred from {old_owner} to {buyer}",
+        "nft": nft
+    }), 200
+
+
+# ─── Governance API ──────────────────────────────────────────────────────────
+
+GOVERNANCE_FILE = os.path.join(DATA_DIR, "governance.json")
+
+def load_governance():
+    return load_json(GOVERNANCE_FILE, {"proposals": [], "votes": {}})
+
+def save_governance(gov):
+    save_json(GOVERNANCE_FILE, gov)
+
+
+@app.route("/api/v1/governance/proposals", methods=["GET"])
+def api_v1_governance_proposals():
+    """Get all governance proposals"""
+    gov = load_governance()
+    return jsonify({"status": "success", "proposals": gov.get("proposals", [])}), 200
+
+
+@app.route("/api/v1/governance/proposals", methods=["POST"])
+def api_v1_governance_create_proposal():
+    """Create a new governance proposal"""
+    data = request.get_json() or {}
+    title = data.get("title", "").strip()
+    description = data.get("description", "").strip()
+    category = data.get("category", "other")
+    duration_days = int(data.get("duration_days", 7))
+    creator = data.get("creator", "").strip()
+
+    if not title or not description or not creator:
+        return jsonify({"status": "error", "message": "Missing required fields"}), 400
+
+    proposal = {
+        "id": f"PROP{int(time.time() * 1000)}",
+        "title": title,
+        "description": description,
+        "category": category,
+        "status": "active",
+        "votes_for": 0,
+        "votes_against": 0,
+        "creator": creator,
+        "created_at": time.strftime("%Y-%m-%d", time.gmtime()),
+        "ends_at": time.strftime("%Y-%m-%d", time.gmtime(time.time() + duration_days * 86400))
+    }
+
+    gov = load_governance()
+    gov["proposals"].append(proposal)
+    save_governance(gov)
+
+    return jsonify({"status": "success", "proposal": proposal}), 201
+
+
+@app.route("/api/v1/governance/vote", methods=["POST"])
+def api_v1_governance_vote():
+    """Vote on a proposal"""
+    data = request.get_json() or {}
+    proposal_id = data.get("proposal_id", "").strip()
+    voter = data.get("voter", "").strip()
+    vote = data.get("vote", "").strip()  # "for" or "against"
+    power = int(data.get("power", 1))
+
+    if not proposal_id or not voter or vote not in ("for", "against"):
+        return jsonify({"status": "error", "message": "Invalid vote data"}), 400
+
+    gov = load_governance()
+    proposal = next((p for p in gov["proposals"] if p["id"] == proposal_id), None)
+
+    if not proposal:
+        return jsonify({"status": "error", "message": "Proposal not found"}), 404
+
+    if proposal["status"] != "active":
+        return jsonify({"status": "error", "message": "Proposal is not active"}), 400
+
+    # Check if already voted
+    vote_key = f"{proposal_id}:{voter}"
+    if vote_key in gov.get("votes", {}):
+        return jsonify({"status": "error", "message": "Already voted on this proposal"}), 400
+
+    # Record vote
+    if "votes" not in gov:
+        gov["votes"] = {}
+    gov["votes"][vote_key] = {"vote": vote, "power": power, "timestamp": time.time()}
+
+    # Update proposal counts
+    if vote == "for":
+        proposal["votes_for"] = proposal.get("votes_for", 0) + power
+    else:
+        proposal["votes_against"] = proposal.get("votes_against", 0) + power
+
+    save_governance(gov)
+
+    return jsonify({"status": "success", "message": "Vote recorded"}), 200
+
+
 # ... ΤΕΛΟΣ όλων των routes / helpers ...
 
 print("✓ AI Session fixes loaded - supports guest mode and file uploads")
+print("✓ Token Explorer, NFT Marketplace and Governance pages loaded")
 print("✓ Decent Music Platform loaded - artist registration, uploads, and royalties")
 # --- Startup hooks ---
 ensure_ai_wallet()

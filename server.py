@@ -5391,6 +5391,72 @@ def api_gateway_limits():
         "currency": "USD"
     }), 200
 
+
+# ============================================================================
+# IoT Stripe Checkout Endpoint
+# ============================================================================
+@app.route("/api/stripe/create-checkout", methods=["POST"])
+def api_stripe_iot_checkout():
+    """
+    Create Stripe checkout session for IoT Node Pack purchases.
+    Used by the IoT page for hardware pack purchases.
+    """
+    if not stripe:
+        return jsonify(error="Stripe not configured"), 503
+
+    data = request.get_json() or {}
+    wallet = data.get("wallet")
+    pack_id = data.get("pack_id")
+    price_cents = data.get("price_cents")
+
+    if not wallet:
+        return jsonify(error="Wallet address required"), 400
+    if not pack_id:
+        return jsonify(error="Pack ID required"), 400
+    if not price_cents or price_cents <= 0:
+        return jsonify(error="Invalid price"), 400
+
+    # Pack definitions
+    PACK_NAMES = {
+        "starter_vehicle": "Starter Vehicle Pack - OBD-II Node",
+        "smart_home": "Smart Home Bundle - Gateway + Sensors",
+        "industrial": "Industrial Pro Pack - Gateway + Sensors + PLC Kit"
+    }
+
+    pack_name = PACK_NAMES.get(pack_id, f"IoT Pack: {pack_id}")
+    price_euros = price_cents / 100.0
+
+    try:
+        session = stripe.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=[{
+                'price_data': {
+                    'currency': 'eur',
+                    'product_data': {
+                        'name': pack_name,
+                        'description': f'Thronos IoT Node Pack for earning THR rewards. Hardware will be shipped after payment confirmation.',
+                    },
+                    'unit_amount': int(price_cents),
+                },
+                'quantity': 1,
+            }],
+            mode='payment',
+            success_url=DOMAIN_URL + '/iot?status=success&session_id={CHECKOUT_SESSION_ID}',
+            cancel_url=DOMAIN_URL + '/iot?status=cancel',
+            metadata={
+                'wallet': wallet,
+                'type': 'iot_pack',
+                'pack_id': pack_id,
+                'price_eur': str(price_euros),
+                'timestamp': str(int(time.time()))
+            }
+        )
+
+        return jsonify(url=session.url, id=session.id)
+    except Exception as e:
+        logger.error(f"Stripe IoT checkout error: {e}")
+        return jsonify(error=str(e)), 400
+
 @app.route("/api/gateway/webhook", methods=["POST"])
 def stripe_webhook():
     if not stripe:
@@ -8033,10 +8099,20 @@ def api_ai_sessions_combined():
 
 
 @app.route("/api/ai/sessions/<session_id>/messages", methods=["GET"])
+@app.route("/api/chat/session/<session_id>/messages", methods=["GET"])
 def api_ai_session_messages(session_id):
     """Get messages for a specific session"""
+    wallet_in = (request.args.get("wallet") or "").strip()
+    identity, guest_id = _current_actor_id(wallet_in)
+
     sessions = load_ai_sessions()
-    session = next((s for s in sessions if s.get("id") == session_id), None)
+    session = None
+    for s in sessions:
+        if s.get("id") == session_id and not s.get("archived"):
+            # Allow access if wallet matches or guest session
+            if s.get("wallet") == identity or s.get("wallet", "").startswith("GUEST:"):
+                session = s
+                break
 
     if not session:
         return jsonify({"ok": False, "error": "Session not found"}), 404
@@ -8069,7 +8145,7 @@ def api_ai_session_messages(session_id):
     # Sort by timestamp
     messages.sort(key=lambda m: m.get("timestamp", ""))
 
-    return jsonify({"ok": True, "messages": messages})
+    return jsonify({"ok": True, "session": session, "messages": messages})
 
 
 @app.route("/api/ai/sessions/<session_id>", methods=["PATCH"])
@@ -8180,12 +8256,66 @@ def api_chat_session_new():
     return jsonify(ok=True, session=session), 200
 
 
-@app.route("/api/chat/session/<session_id>", methods=["GET"])
+@app.route("/api/chat/session/<session_id>", methods=["GET", "DELETE", "PATCH"])
 def api_chat_session_get(session_id):
     """
-    Επιστρέφει session + πρόσφατο ιστορικό από το ai_offline_corpus.json.
+    GET: Επιστρέφει session + πρόσφατο ιστορικό από το ai_offline_corpus.json.
+    DELETE: Archives/deletes a session.
+    PATCH: Renames a session.
     Χρησιμοποιεί είτε wallet είτε guest cookie για να φιλτράρει.
     """
+    # Handle DELETE
+    if request.method == "DELETE":
+        wallet_in = request.args.get("wallet") or ""
+        identity, guest_id = _current_actor_id(wallet_in)
+
+        sessions = load_ai_sessions()
+        found = False
+        for s in sessions:
+            if s.get("id") == session_id:
+                # Verify ownership
+                if s.get("wallet") != identity and not s.get("wallet", "").startswith("GUEST:"):
+                    if identity != s.get("wallet"):
+                        return jsonify(ok=False, error="Not authorized"), 403
+                s["archived"] = True
+                s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                found = True
+                break
+
+        if not found:
+            return jsonify(ok=False, error="Session not found"), 404
+
+        save_ai_sessions(sessions)
+        return jsonify(ok=True), 200
+
+    # Handle PATCH (rename)
+    if request.method == "PATCH":
+        data = request.get_json(silent=True) or {}
+        wallet_in = data.get("wallet") or request.args.get("wallet") or ""
+        new_title = (data.get("title") or "").strip()
+
+        if not new_title:
+            return jsonify(ok=False, error="Missing title"), 400
+
+        identity, guest_id = _current_actor_id(wallet_in)
+
+        sessions = load_ai_sessions()
+        found = False
+        for s in sessions:
+            if s.get("id") == session_id:
+                if s.get("wallet") != identity and not s.get("wallet", "").startswith("GUEST:"):
+                    if identity != s.get("wallet"):
+                        return jsonify(ok=False, error="Not authorized"), 403
+                s["title"] = new_title[:120]
+                s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                found = True
+                break
+
+        if not found:
+            return jsonify(ok=False, error="Session not found"), 404
+
+        save_ai_sessions(sessions)
+        return jsonify(ok=True), 200
     wallet_in = (request.args.get("wallet") or "").strip()
     identity, guest_id = _current_actor_id(wallet_in)
 

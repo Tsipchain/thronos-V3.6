@@ -6648,6 +6648,205 @@ def api_v1_complete_course(course_id: str):
     return jsonify(status="success", tx=tx), 200
 
 
+# ─── Quiz API for Courses ──────────────────────────────────────────────
+#
+# Each course can have an optional quiz.  Quizzes are stored as a list of
+# questions with multiple choice answers.  Students must pass the quiz
+# (80% correct) before the teacher can mark them as complete.
+
+QUIZZES_FILE = os.path.join(DATA_DIR, "quizzes.json")
+
+def load_quizzes():
+    return load_json(QUIZZES_FILE, {})
+
+def save_quizzes(quizzes):
+    save_json(QUIZZES_FILE, quizzes)
+
+
+@app.route("/api/v1/courses/<string:course_id>/quiz", methods=["GET"])
+def api_v1_get_quiz(course_id: str):
+    """Return the quiz for a course (without correct answers for students)."""
+    quizzes = load_quizzes()
+    quiz = quizzes.get(course_id, {})
+    if not quiz:
+        return jsonify(quiz=None, message="No quiz for this course"), 200
+
+    # Return questions without correct answer indices (for student view)
+    safe_questions = []
+    for q in quiz.get("questions", []):
+        safe_questions.append({
+            "id": q.get("id"),
+            "question": q.get("question"),
+            "question_el": q.get("question_el", q.get("question")),
+            "options": q.get("options", []),
+            "options_el": q.get("options_el", q.get("options", []))
+        })
+
+    return jsonify(quiz={
+        "course_id": course_id,
+        "title": quiz.get("title", "Course Quiz"),
+        "title_el": quiz.get("title_el", "Quiz Μαθήματος"),
+        "passing_score": quiz.get("passing_score", 80),
+        "questions": safe_questions
+    }), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/quiz", methods=["POST"])
+def api_v1_create_quiz(course_id: str):
+    """Create or update a quiz for a course. Teacher only."""
+    data = request.get_json() or {}
+    teacher = (data.get("teacher_thr") or "").strip()
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+    questions = data.get("questions", [])
+
+    if not teacher or not auth_secret:
+        return jsonify(status="error", message="Missing auth"), 400
+
+    # Verify course exists and teacher owns it
+    courses = load_courses()
+    course = next((c for c in courses if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    if course.get("teacher") != teacher:
+        return jsonify(status="error", message="Not the course teacher"), 403
+
+    # Authenticate teacher
+    pledges = load_json(PLEDGE_CHAIN, [])
+    teacher_pledge = next((p for p in pledges if p.get("thr_address") == teacher), None)
+    if not teacher_pledge:
+        return jsonify(status="error", message="Teacher not pledged"), 404
+    stored_auth_hash = teacher_pledge.get("send_auth_hash")
+    if teacher_pledge.get("has_passphrase"):
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify(status="error", message="Invalid auth"), 403
+
+    # Validate questions format
+    validated_questions = []
+    for i, q in enumerate(questions):
+        if not q.get("question") or not q.get("options") or q.get("correct") is None:
+            return jsonify(status="error", message=f"Invalid question #{i+1}"), 400
+        validated_questions.append({
+            "id": i + 1,
+            "question": q.get("question"),
+            "question_el": q.get("question_el", q.get("question")),
+            "options": q.get("options"),
+            "options_el": q.get("options_el", q.get("options")),
+            "correct": int(q.get("correct"))
+        })
+
+    # Save quiz
+    quizzes = load_quizzes()
+    quizzes[course_id] = {
+        "course_id": course_id,
+        "title": data.get("title", "Course Quiz"),
+        "title_el": data.get("title_el", "Quiz Μαθήματος"),
+        "passing_score": int(data.get("passing_score", 80)),
+        "questions": validated_questions,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    }
+    save_quizzes(quizzes)
+
+    return jsonify(status="success", message="Quiz saved"), 201
+
+
+@app.route("/api/v1/courses/<string:course_id>/quiz/submit", methods=["POST"])
+def api_v1_submit_quiz(course_id: str):
+    """Submit quiz answers and get score. Records passing status."""
+    data = request.get_json() or {}
+    student = (data.get("student_thr") or "").strip()
+    answers = data.get("answers", {})
+
+    if not student:
+        return jsonify(status="error", message="Student address required"), 400
+
+    # Get quiz
+    quizzes = load_quizzes()
+    quiz = quizzes.get(course_id)
+    if not quiz:
+        return jsonify(status="error", message="No quiz for this course"), 404
+
+    # Check enrollment
+    courses = load_courses()
+    course = next((c for c in courses if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    if student not in course.get("students", []):
+        return jsonify(status="error", message="Not enrolled"), 403
+
+    # Calculate score
+    questions = quiz.get("questions", [])
+    total = len(questions)
+    if total == 0:
+        return jsonify(status="error", message="Quiz has no questions"), 500
+
+    correct = 0
+    results = []
+    for q in questions:
+        qid = str(q.get("id"))
+        user_answer = answers.get(qid)
+        is_correct = user_answer is not None and int(user_answer) == q.get("correct")
+        if is_correct:
+            correct += 1
+        results.append({
+            "question_id": qid,
+            "correct": is_correct,
+            "your_answer": user_answer,
+            "correct_answer": q.get("correct")
+        })
+
+    score = round((correct / total) * 100)
+    passing_score = quiz.get("passing_score", 80)
+    passed = score >= passing_score
+
+    # Record quiz attempt
+    quiz_attempts = load_json(os.path.join(DATA_DIR, "quiz_attempts.json"), {})
+    if course_id not in quiz_attempts:
+        quiz_attempts[course_id] = {}
+    quiz_attempts[course_id][student] = {
+        "score": score,
+        "passed": passed,
+        "attempts": quiz_attempts.get(course_id, {}).get(student, {}).get("attempts", 0) + 1,
+        "last_attempt": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    }
+    save_json(os.path.join(DATA_DIR, "quiz_attempts.json"), quiz_attempts)
+
+    # Mark as quiz_passed in course if passed
+    if passed:
+        if "quiz_passed" not in course:
+            course["quiz_passed"] = []
+        if student not in course["quiz_passed"]:
+            course["quiz_passed"].append(student)
+            save_courses(courses)
+
+    return jsonify(
+        status="success",
+        score=score,
+        correct=correct,
+        total=total,
+        passed=passed,
+        passing_score=passing_score,
+        results=results
+    ), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/quiz/status/<string:student>", methods=["GET"])
+def api_v1_quiz_status(course_id: str, student: str):
+    """Check if a student has passed the quiz."""
+    quiz_attempts = load_json(os.path.join(DATA_DIR, "quiz_attempts.json"), {})
+    attempt = quiz_attempts.get(course_id, {}).get(student, {})
+
+    return jsonify(
+        has_attempted=bool(attempt),
+        passed=attempt.get("passed", False),
+        score=attempt.get("score", 0),
+        attempts=attempt.get("attempts", 0)
+    ), 200
+
+
 # ─── Tokens & Pools API ───────────────────────────────────────────────
 #
 # These endpoints implement a minimal DeFi layer for community‑issued

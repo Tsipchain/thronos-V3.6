@@ -7,7 +7,7 @@
 # - Added robust model routing via model_key (gemini-* / gpt-*)
 # - Preserves existing history + block-log behavior
 #
-# NOTE: This file does NOT implement Claude. If UI sends "claude-*" it will be ignored.
+# NOTE: Supports Gemini, OpenAI, Anthropic (Claude), and custom Thrai agent routing.
 
 import os
 import time
@@ -433,7 +433,14 @@ Multiple files can be created in one response. Always describe what you're creat
 
     # ─── Public API ─────────────────────────────────────────────────────────
 
-    def generate_response(self, prompt: str, wallet: Optional[str] = None, model_key: Optional[str] = None, session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+    def generate_response(
+        self,
+        prompt: str,
+        wallet: Optional[str] = None,
+        model_key: Optional[str] = None,
+        session_id: Optional[str] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
         prompt = (prompt or "").strip()
         if not prompt:
             return self._base_payload("Empty prompt.", "error", "local", "offline")

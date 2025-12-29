@@ -1078,7 +1078,7 @@
     const API_SESSION_NEW = "/api/chat/session/new";
     const API_SESSION = (id) => `/api/chat/session/${id}`;
     const API_SESSIONS = "/api/chat/sessions";
-    const API_SESSION_MESSAGES = (id) => `/api/chat/session/${id}/messages`;
+    const API_SESSION_MESSAGES = (id) => `/api/chat/session/${id}`;
     const API_FILES = "/api/ai/files/upload";
     const API_TELEMETRY = "/api/ai/telemetry";
     const API_FEEDBACK = "/api/ai/feedback";
@@ -1759,6 +1759,13 @@
         const res = await fetch(API_SESSION_MESSAGES(id));
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
+        const session = data.session || {};
+        currentSessionId = session.id || id;
+        if (currentSessionId) {
+          localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
+        }
+        sessionTitleEl.textContent = session.title || "Mesh session";
+        modelStatusEl.textContent = session.model || modelSelectEl.value || "auto";
         renderMessages(data.messages || []);
         setSessionState("ready");
       } catch (e) {
@@ -1772,9 +1779,13 @@
         const res = await fetch(API_SESSION(sessionId));
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
-        currentSessionId = data.id || sessionId;
-        sessionTitleEl.textContent = data.title || "Mesh session";
-        localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
+        const session = data.session || {};
+        currentSessionId = session.id || sessionId;
+        sessionTitleEl.textContent = session.title || "Mesh session";
+        modelStatusEl.textContent = session.model || modelSelectEl.value || "auto";
+        if (currentSessionId) {
+          localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
+        }
         setSessionState("ready");
         return true;
       } catch (e) {
@@ -1797,8 +1808,11 @@
         });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
-        currentSessionId = data.id;
-        localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
+        const session = data.session || {};
+        currentSessionId = session.id;
+        if (currentSessionId) {
+          localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
+        }
         await loadSessions();
         await loadSessionMessages(currentSessionId);
         setSessionState("ready");
@@ -1920,7 +1934,7 @@
         session_id: currentSessionId,
         wallet: wallet || null,
         message: text,
-        attachments: pendingFiles.map((f) => f.id),
+        attachment_ids: pendingFiles.map((f) => f.id),
         model_key: model,
         lang: currentLang,
       };

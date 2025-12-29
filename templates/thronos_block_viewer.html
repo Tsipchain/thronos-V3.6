@@ -157,16 +157,18 @@
       <thead>
         <tr>
           <th>TX ID</th>
-          <th>Height</th>
+          <th>Type</th>
           <th>From</th>
           <th>To</th>
           <th>Asset</th><th>Amount</th>
           <th>Fee</th>
+          <th>Details</th>
           <th>Timestamp</th>
         </tr>
       </thead>
       <tbody></tbody>
     </table>
+    <button class="btn" id="btnRefreshTxs" style="margin-top:8px">Refresh Transfers</button>
   </section>
 
   <!-- Mempool -->
@@ -462,6 +464,7 @@ function renderTxs(list){
   // Calculate transfer statistics
   let totalVolume = 0;
   let uniqueAddresses = new Set();
+  let swapCount = 0;
 
   list.forEach(t => {
     const asset = (t && t.token_symbol) ? String(t.token_symbol) : 'THR';
@@ -471,10 +474,11 @@ function renderTxs(list){
     }
     if(t.from) uniqueAddresses.add(t.from);
     if(t.to) uniqueAddresses.add(t.to);
+    if(t.type === 'swap') swapCount++;
   });
 
   // Update stats cards
-  el('#txsTotalCount').textContent = list.length.toLocaleString();
+  el('#txsTotalCount').textContent = list.length.toLocaleString() + (swapCount > 0 ? ` (${swapCount} swaps)` : '');
   el('#txsTotalVolume').textContent = fmtN(totalVolume) + ' THR';
   el('#txsUniqueAddresses').textContent = uniqueAddresses.size.toLocaleString();
   el('#txsAvgSize').textContent = list.length > 0 ? fmtN(totalVolume / list.length) + ' THR' : '—';
@@ -485,15 +489,26 @@ function renderTxs(list){
     const match = !q || JSON.stringify(t).toLowerCase().includes(q);
     if(!match) return;
     const tr=document.createElement('tr');
+
+    // Type badge styling
+    let typeBadge = '<span class="badge b-legacy">transfer</span>';
+    if(t.type === 'swap') typeBadge = '<span class="badge b-hot">swap</span>';
+    else if(t.type === 'bridge') typeBadge = '<span class="badge" style="color:#f0f;background:#f0f30;border-color:#f0f">bridge</span>';
+    else if(t.type === 'coinbase') typeBadge = '<span class="badge b-stratum">coinbase</span>';
+    else if(t.type === 'service_payment') typeBadge = '<span class="badge" style="color:#0af;background:#0af30;border-color:#0af">service</span>';
+
+    const details = t.note ? `<span class="muted" style="font-size:11px">${t.note}</span>` : '—';
+
     tr.innerHTML = `
       <td class="mono">
         <a class="hash" title="${t.tx_id}" onclick="copy('${t.tx_id}')">${short(t.tx_id)}</a>
       </td>
-      <td class="mono k">${t.height ?? '—'}</td>
+      <td>${typeBadge}</td>
       <td class="mono"><a class="addr" onclick="copy('${t.from}')">${short(t.from)}</a></td>
       <td class="mono"><a class="addr" onclick="copy('${t.to}')">${short(t.to)}</a></td>
       <td>${short(asset)}</td><td>${fmtN(t.amount)}</td>
       <td>${fmtN(t.fee_burned)}</td>
+      <td>${details}</td>
       <td class="muted">${rel(t.timestamp)}</td>
     `;
     tb.appendChild(tr);
@@ -586,6 +601,19 @@ async function reloadMempool(){
   }
 }
 
+async function reloadTxs(){
+  try {
+    const r = await fetch('/api/transactions');
+    if (!r.ok) throw new Error(`transactions ${r.status}`);
+    const j = await r.json();
+    CURRENT_TXS = Array.isArray(j) ? j : [];
+  } catch (e) {
+    console.error('Failed to reload transactions:', e);
+    if (!Array.isArray(CURRENT_TXS)) CURRENT_TXS = [];
+  }
+  renderTxs(CURRENT_TXS);
+}
+
 /* ===== Wireup ===== */
 let CURRENT_BLOCKS = BOOT_BLOCKS || [];
 let CURRENT_TXS    = BOOT_TXS || [];
@@ -600,6 +628,7 @@ el('#q').addEventListener('input', ()=>{
 el('#clearBtn').onclick=()=>{ el('#q').value=''; renderBlocks(CURRENT_BLOCKS); renderTxs(CURRENT_TXS); };
 el('#refreshBtn').onclick=reloadBlocks;
 el('#btnLoadMempool')?.addEventListener('click', reloadMempool);
+el('#btnRefreshTxs')?.addEventListener('click', reloadTxs);
 
 // live refresh ticker
 setInterval(()=>{

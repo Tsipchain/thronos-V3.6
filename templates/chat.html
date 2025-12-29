@@ -1002,6 +1002,16 @@
                     📎 Attach file
                   </label>
                   <input id="fileInput" type="file" multiple />
+                  <select id="modelSelect" class="model-select" style="background: var(--bg-alt); color: var(--fg); border-radius: 4px; padding: 4px; font-size: 11px; margin-top: 8px;">
+                    <option value="auto">Auto Select (Prioritize Our Stack)</option>
+
+                    <!-- Custom Thronos / Thrai agent -->
+                    <option value="diko_mas">🧿 Thrai (Custom Agent)</option>
+
+                    <!-- Public providers -->
+                    <option value="gemini-2.5-flash">🚀 Gemini 2.5 Flash</option>
+                    <option value="gpt-4o">🤖 GPT-4o (OpenAI)</option>
+                    <option value="claude-3-sonnet-20240229">Claude 3 Sonnet</option>
                   <select id="modelSelect" class="model-select">
                     <option value="auto">🔀 Auto (Thronos chooses)</option>
                     <option value="gemini-2.5-pro">💎 Gemini 2.5 Pro</option>
@@ -1752,6 +1762,13 @@
         const res = await fetch(API_SESSION_MESSAGES(id));
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
+        const session = data.session || {};
+        currentSessionId = session.id || id;
+        if (currentSessionId) {
+          localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
+        }
+        sessionTitleEl.textContent = session.title || "Mesh session";
+        modelStatusEl.textContent = session.model || modelSelectEl.value || "auto";
         renderMessages(data.messages || []);
         setSessionState("ready");
       } catch (e) {
@@ -1799,6 +1816,7 @@
         console.error("createSession error", e);
         setSessionState("error", t("status_error"));
       }
+      await createSession(true);
     }
 
     async function ensureSession() {
@@ -1915,6 +1933,7 @@
         message: text,
         attachment_ids: pendingFiles.map((f) => f.id),
         model_key: model,
+        lang: currentLang,
       };
 
       // optimistic render user message

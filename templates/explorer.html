@@ -232,11 +232,14 @@
         <p>
             <span class="lang-el">Εξερευνήστε όλα τα tokens και τα balances στο δίκτυο Thronos</span>
             <span class="lang-en">Explore all tokens and balances on the Thronos network</span>
+            <span class="lang-ja">Thronosネットワーク上のすべてのトークンと残高を探索</span>
+            <span class="lang-ru">Исследуйте все токены и балансы в сети Thronos</span>
+            <span class="lang-es">Explora todos los tokens y saldos en la red Thronos</span>
         </p>
         <div class="search-box">
             <input type="text" class="search-input" id="searchInput" placeholder="Search by token symbol or address...">
             <button class="search-btn" onclick="search()">
-                🔍 <span class="lang-el">Αναζήτηση</span><span class="lang-en">Search</span>
+                🔍 <span class="lang-el">Αναζήτηση</span><span class="lang-en">Search</span><span class="lang-ja">検索</span><span class="lang-ru">Поиск</span><span class="lang-es">Buscar</span>
             </button>
         </div>
     </div>
@@ -245,66 +248,66 @@
     <div class="stats-row">
         <div class="stat-card">
             <div class="value" id="totalTokens">0</div>
-            <div class="label"><span class="lang-el">Συνολικά Tokens</span><span class="lang-en">Total Tokens</span></div>
+            <div class="label"><span class="lang-el">Συνολικά Tokens</span><span class="lang-en">Total Tokens</span><span class="lang-ja">トークン総数</span><span class="lang-ru">Всего токенов</span><span class="lang-es">Total Tokens</span></div>
         </div>
         <div class="stat-card">
             <div class="value" id="totalHolders">0</div>
-            <div class="label"><span class="lang-el">Μοναδικοί Κάτοχοι</span><span class="lang-en">Unique Holders</span></div>
+            <div class="label"><span class="lang-el">Μοναδικοί Κάτοχοι</span><span class="lang-en">Unique Holders</span><span class="lang-ja">ユニークホルダー</span><span class="lang-ru">Уникальные держатели</span><span class="lang-es">Titulares Únicos</span></div>
         </div>
         <div class="stat-card">
             <div class="value" id="totalPools">0</div>
-            <div class="label"><span class="lang-el">Liquidity Pools</span><span class="lang-en">Liquidity Pools</span></div>
+            <div class="label"><span class="lang-el">Liquidity Pools</span><span class="lang-en">Liquidity Pools</span><span class="lang-ja">流動性プール</span><span class="lang-ru">Пулы ликвидности</span><span class="lang-es">Pools de Liquidez</span></div>
         </div>
         <div class="stat-card">
             <div class="value" id="totalVolume">0</div>
-            <div class="label"><span class="lang-el">24h Volume (THR)</span><span class="lang-en">24h Volume (THR)</span></div>
+            <div class="label"><span class="lang-el">24h Volume (THR)</span><span class="lang-en">24h Volume (THR)</span><span class="lang-ja">24時間取引量</span><span class="lang-ru">Объём за 24ч</span><span class="lang-es">Volumen 24h</span></div>
         </div>
     </div>
 
     <!-- Tabs -->
     <div class="tabs">
         <button class="tab-btn active" onclick="showTab('tokens')">
-            🪙 <span class="lang-el">Tokens</span><span class="lang-en">Tokens</span>
+            🪙 Tokens
         </button>
         <button class="tab-btn" onclick="showTab('holders')">
-            👥 <span class="lang-el">Top Κάτοχοι</span><span class="lang-en">Top Holders</span>
+            👥 <span class="lang-el">Top Κάτοχοι</span><span class="lang-en">Top Holders</span><span class="lang-ja">トップホルダー</span><span class="lang-ru">Топ держатели</span><span class="lang-es">Top Titulares</span>
         </button>
         <button class="tab-btn" onclick="showTab('pools')">
-            💧 <span class="lang-el">Pools</span><span class="lang-en">Pools</span>
+            💧 Pools
         </button>
     </div>
 
     <!-- Tokens Tab -->
     <div id="tokens-tab" class="section tab-content active">
-        <h2>🪙 <span class="lang-el">Όλα τα Tokens</span><span class="lang-en">All Tokens</span></h2>
+        <h2>🪙 <span class="lang-el">Όλα τα Tokens</span><span class="lang-en">All Tokens</span><span class="lang-ja">すべてのトークン</span><span class="lang-ru">Все токены</span><span class="lang-es">Todos los Tokens</span></h2>
         <div id="tokensGrid" class="token-grid">
-            <div class="loading"><span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span></div>
+            <div class="loading"><span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span><span class="lang-ja">読み込み中...</span><span class="lang-ru">Загрузка...</span><span class="lang-es">Cargando...</span></div>
         </div>
     </div>
 
     <!-- Holders Tab -->
     <div id="holders-tab" class="section tab-content" style="display: none;">
-        <h2>👥 <span class="lang-el">Top Κάτοχοι THR</span><span class="lang-en">Top THR Holders</span></h2>
+        <h2>👥 <span class="lang-el">Top Κάτοχοι THR</span><span class="lang-en">Top THR Holders</span><span class="lang-ja">THRトップホルダー</span><span class="lang-ru">Топ держатели THR</span><span class="lang-es">Top Titulares THR</span></h2>
         <table class="holders-table">
             <thead>
                 <tr>
                     <th>#</th>
-                    <th><span class="lang-el">Διεύθυνση</span><span class="lang-en">Address</span></th>
-                    <th><span class="lang-el">Υπόλοιπο</span><span class="lang-en">Balance</span></th>
-                    <th><span class="lang-el">Ποσοστό</span><span class="lang-en">Percentage</span></th>
+                    <th><span class="lang-el">Διεύθυνση</span><span class="lang-en">Address</span><span class="lang-ja">アドレス</span><span class="lang-ru">Адрес</span><span class="lang-es">Dirección</span></th>
+                    <th><span class="lang-el">Υπόλοιπο</span><span class="lang-en">Balance</span><span class="lang-ja">残高</span><span class="lang-ru">Баланс</span><span class="lang-es">Saldo</span></th>
+                    <th><span class="lang-el">Ποσοστό</span><span class="lang-en">Percentage</span><span class="lang-ja">割合</span><span class="lang-ru">Процент</span><span class="lang-es">Porcentaje</span></th>
                 </tr>
             </thead>
             <tbody id="holdersTable">
-                <tr><td colspan="4" class="loading"><span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span></td></tr>
+                <tr><td colspan="4" class="loading"><span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span><span class="lang-ja">読み込み中...</span><span class="lang-ru">Загрузка...</span><span class="lang-es">Cargando...</span></td></tr>
             </tbody>
         </table>
     </div>
 
     <!-- Pools Tab -->
     <div id="pools-tab" class="section tab-content" style="display: none;">
-        <h2>💧 <span class="lang-el">Liquidity Pools</span><span class="lang-en">Liquidity Pools</span></h2>
+        <h2>💧 Liquidity Pools</h2>
         <div id="poolsGrid" class="token-grid">
-            <div class="loading"><span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span></div>
+            <div class="loading"><span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span><span class="lang-ja">読み込み中...</span><span class="lang-ru">Загрузка...</span><span class="lang-es">Cargando...</span></div>
         </div>
     </div>
 </div>

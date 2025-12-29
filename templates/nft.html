@@ -282,6 +282,9 @@
         <p>
             <span class="lang-el">Δημιουργήστε, αγοράστε και πουλήστε NFTs στο δίκτυο Thronos</span>
             <span class="lang-en">Create, buy and sell NFTs on the Thronos network</span>
+            <span class="lang-ja">ThronosネットワークでNFTを作成、購入、販売</span>
+            <span class="lang-ru">Создавайте, покупайте и продавайте NFT в сети Thronos</span>
+            <span class="lang-es">Crea, compra y vende NFTs en la red Thronos</span>
         </p>
     </div>
 
@@ -289,38 +292,38 @@
     <div class="stats-row">
         <div class="stat-card">
             <div class="value" id="totalNFTs">0</div>
-            <div class="label"><span class="lang-el">Συνολικά NFTs</span><span class="lang-en">Total NFTs</span></div>
+            <div class="label"><span class="lang-el">Συνολικά NFTs</span><span class="lang-en">Total NFTs</span><span class="lang-ja">総NFT数</span><span class="lang-ru">Всего NFT</span><span class="lang-es">Total NFTs</span></div>
         </div>
         <div class="stat-card">
             <div class="value" id="totalCollections">0</div>
-            <div class="label"><span class="lang-el">Συλλογές</span><span class="lang-en">Collections</span></div>
+            <div class="label"><span class="lang-el">Συλλογές</span><span class="lang-en">Collections</span><span class="lang-ja">コレクション</span><span class="lang-ru">Коллекции</span><span class="lang-es">Colecciones</span></div>
         </div>
         <div class="stat-card">
             <div class="value" id="totalVolume">0</div>
-            <div class="label"><span class="lang-el">Συνολικός Όγκος</span><span class="lang-en">Total Volume</span></div>
+            <div class="label"><span class="lang-el">Συνολικός Όγκος</span><span class="lang-en">Total Volume</span><span class="lang-ja">総取引量</span><span class="lang-ru">Общий объём</span><span class="lang-es">Volumen Total</span></div>
         </div>
         <div class="stat-card">
             <div class="value" id="floorPrice">0</div>
-            <div class="label"><span class="lang-el">Floor Price</span><span class="lang-en">Floor Price</span></div>
+            <div class="label"><span class="lang-el">Floor Price</span><span class="lang-en">Floor Price</span><span class="lang-ja">フロア価格</span><span class="lang-ru">Мин. цена</span><span class="lang-es">Precio Mínimo</span></div>
         </div>
     </div>
 
     <!-- Tabs -->
     <div class="tabs">
         <button class="tab-btn active" onclick="showTab('marketplace')">
-            🏪 <span class="lang-el">Αγορά</span><span class="lang-en">Marketplace</span>
+            🏪 <span class="lang-el">Αγορά</span><span class="lang-en">Marketplace</span><span class="lang-ja">マーケット</span><span class="lang-ru">Маркетплейс</span><span class="lang-es">Mercado</span>
         </button>
         <button class="tab-btn" onclick="showTab('my-nfts')">
-            🖼️ <span class="lang-el">Τα NFTs μου</span><span class="lang-en">My NFTs</span>
+            🖼️ <span class="lang-el">Τα NFTs μου</span><span class="lang-en">My NFTs</span><span class="lang-ja">マイNFT</span><span class="lang-ru">Мои NFT</span><span class="lang-es">Mis NFTs</span>
         </button>
         <button class="tab-btn" onclick="showTab('create')">
-            ➕ <span class="lang-el">Δημιουργία</span><span class="lang-en">Create</span>
+            ➕ <span class="lang-el">Δημιουργία</span><span class="lang-en">Create</span><span class="lang-ja">作成</span><span class="lang-ru">Создать</span><span class="lang-es">Crear</span>
         </button>
     </div>
 
     <!-- Marketplace Tab -->
     <div id="marketplace-tab" class="section tab-content active">
-        <h2>🏪 <span class="lang-el">Διαθέσιμα NFTs</span><span class="lang-en">Available NFTs</span></h2>
+        <h2>🏪 <span class="lang-el">Διαθέσιμα NFTs</span><span class="lang-en">Available NFTs</span><span class="lang-ja">利用可能なNFT</span><span class="lang-ru">Доступные NFT</span><span class="lang-es">NFTs Disponibles</span></h2>
 
         <div class="filter-bar">
             <select id="sortBy" onchange="loadNFTs()">

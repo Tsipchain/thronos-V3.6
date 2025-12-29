@@ -273,17 +273,20 @@
         <p>
             <span class="lang-el">Αποκεντρωμένη διακυβέρνηση για την κοινότητα Thronos</span>
             <span class="lang-en">Decentralized governance for the Thronos community</span>
+            <span class="lang-ja">Thronosコミュニティのための分散型ガバナンス</span>
+            <span class="lang-ru">Децентрализованное управление для сообщества Thronos</span>
+            <span class="lang-es">Gobernanza descentralizada para la comunidad Thronos</span>
         </p>
     </div>
 
     <!-- Voting Power -->
     <div class="voting-power-card">
         <div>
-            <div class="label"><span class="lang-el">Η Ψηφοφορική σας Δύναμη</span><span class="lang-en">Your Voting Power</span></div>
+            <div class="label"><span class="lang-el">Η Ψηφοφορική σας Δύναμη</span><span class="lang-en">Your Voting Power</span><span class="lang-ja">あなたの投票力</span><span class="lang-ru">Ваша сила голоса</span><span class="lang-es">Tu Poder de Voto</span></div>
             <div class="power" id="votingPower">0</div>
         </div>
         <div style="text-align: right;">
-            <div class="label"><span class="lang-el">Βασίζεται στο THR balance σας</span><span class="lang-en">Based on your THR balance</span></div>
+            <div class="label"><span class="lang-el">Βασίζεται στο THR balance σας</span><span class="lang-en">Based on your THR balance</span><span class="lang-ja">THR残高に基づく</span><span class="lang-ru">На основе вашего баланса THR</span><span class="lang-es">Basado en tu saldo THR</span></div>
             <div style="color: #d7ffe6;"><span id="walletAddress">Not connected</span></div>
         </div>
     </div>
@@ -292,63 +295,63 @@
     <div class="stats-row">
         <div class="stat-card">
             <div class="value" id="totalProposals">0</div>
-            <div class="label"><span class="lang-el">Συνολικές Προτάσεις</span><span class="lang-en">Total Proposals</span></div>
+            <div class="label"><span class="lang-el">Συνολικές Προτάσεις</span><span class="lang-en">Total Proposals</span><span class="lang-ja">総提案数</span><span class="lang-ru">Всего предложений</span><span class="lang-es">Total Propuestas</span></div>
         </div>
         <div class="stat-card">
             <div class="value" id="activeProposals">0</div>
-            <div class="label"><span class="lang-el">Ενεργές</span><span class="lang-en">Active</span></div>
+            <div class="label"><span class="lang-el">Ενεργές</span><span class="lang-en">Active</span><span class="lang-ja">アクティブ</span><span class="lang-ru">Активные</span><span class="lang-es">Activas</span></div>
         </div>
         <div class="stat-card">
             <div class="value" id="totalVotes">0</div>
-            <div class="label"><span class="lang-el">Συνολικές Ψήφοι</span><span class="lang-en">Total Votes</span></div>
+            <div class="label"><span class="lang-el">Συνολικές Ψήφοι</span><span class="lang-en">Total Votes</span><span class="lang-ja">総投票数</span><span class="lang-ru">Всего голосов</span><span class="lang-es">Total Votos</span></div>
         </div>
         <div class="stat-card">
             <div class="value" id="passRate">0%</div>
-            <div class="label"><span class="lang-el">Ποσοστό Επιτυχίας</span><span class="lang-en">Pass Rate</span></div>
+            <div class="label"><span class="lang-el">Ποσοστό Επιτυχίας</span><span class="lang-en">Pass Rate</span><span class="lang-ja">承認率</span><span class="lang-ru">Процент принятия</span><span class="lang-es">Tasa de Aprobación</span></div>
         </div>
     </div>
 
     <!-- Tabs -->
     <div class="tabs">
         <button class="tab-btn active" onclick="showTab('active')">
-            🔥 <span class="lang-el">Ενεργές</span><span class="lang-en">Active</span>
+            🔥 <span class="lang-el">Ενεργές</span><span class="lang-en">Active</span><span class="lang-ja">アクティブ</span><span class="lang-ru">Активные</span><span class="lang-es">Activas</span>
         </button>
         <button class="tab-btn" onclick="showTab('all')">
-            📋 <span class="lang-el">Όλες</span><span class="lang-en">All</span>
+            📋 <span class="lang-el">Όλες</span><span class="lang-en">All</span><span class="lang-ja">すべて</span><span class="lang-ru">Все</span><span class="lang-es">Todas</span>
         </button>
         <button class="tab-btn" onclick="showTab('create')">
-            ➕ <span class="lang-el">Νέα Πρόταση</span><span class="lang-en">New Proposal</span>
+            ➕ <span class="lang-el">Νέα Πρόταση</span><span class="lang-en">New Proposal</span><span class="lang-ja">新規提案</span><span class="lang-ru">Новое предложение</span><span class="lang-es">Nueva Propuesta</span>
         </button>
     </div>
 
     <!-- Active Proposals -->
     <div id="active-tab" class="section tab-content active">
-        <h2>🔥 <span class="lang-el">Ενεργές Προτάσεις</span><span class="lang-en">Active Proposals</span></h2>
+        <h2>🔥 <span class="lang-el">Ενεργές Προτάσεις</span><span class="lang-en">Active Proposals</span><span class="lang-ja">アクティブな提案</span><span class="lang-ru">Активные предложения</span><span class="lang-es">Propuestas Activas</span></h2>
         <div id="activeProposalsList"></div>
     </div>
 
     <!-- All Proposals -->
     <div id="all-tab" class="section tab-content" style="display: none;">
-        <h2>📋 <span class="lang-el">Όλες οι Προτάσεις</span><span class="lang-en">All Proposals</span></h2>
+        <h2>📋 <span class="lang-el">Όλες οι Προτάσεις</span><span class="lang-en">All Proposals</span><span class="lang-ja">すべての提案</span><span class="lang-ru">Все предложения</span><span class="lang-es">Todas las Propuestas</span></h2>
         <div id="allProposalsList"></div>
     </div>
 
     <!-- Create Proposal -->
     <div id="create-tab" class="section tab-content" style="display: none;">
-        <h2>➕ <span class="lang-el">Δημιουργία Νέας Πρότασης</span><span class="lang-en">Create New Proposal</span></h2>
+        <h2>➕ <span class="lang-el">Δημιουργία Νέας Πρότασης</span><span class="lang-en">Create New Proposal</span><span class="lang-ja">新規提案を作成</span><span class="lang-ru">Создать новое предложение</span><span class="lang-es">Crear Nueva Propuesta</span></h2>
 
         <div class="form-group">
-            <label><span class="lang-el">Τίτλος</span><span class="lang-en">Title</span></label>
+            <label><span class="lang-el">Τίτλος</span><span class="lang-en">Title</span><span class="lang-ja">タイトル</span><span class="lang-ru">Заголовок</span><span class="lang-es">Título</span></label>
             <input type="text" id="proposalTitle" placeholder="Enter proposal title...">
         </div>
 
         <div class="form-group">
-            <label><span class="lang-el">Περιγραφή</span><span class="lang-en">Description</span></label>
+            <label><span class="lang-el">Περιγραφή</span><span class="lang-en">Description</span><span class="lang-ja">説明</span><span class="lang-ru">Описание</span><span class="lang-es">Descripción</span></label>
             <textarea id="proposalDescription" rows="5" placeholder="Describe your proposal in detail..."></textarea>
         </div>
 
         <div class="form-group">
-            <label><span class="lang-el">Κατηγορία</span><span class="lang-en">Category</span></label>
+            <label><span class="lang-el">Κατηγορία</span><span class="lang-en">Category</span><span class="lang-ja">カテゴリ</span><span class="lang-ru">Категория</span><span class="lang-es">Categoría</span></label>
             <select id="proposalCategory">
                 <option value="protocol">🔧 Protocol Change</option>
                 <option value="treasury">💰 Treasury</option>
@@ -359,12 +362,12 @@
         </div>
 
         <div class="form-group">
-            <label><span class="lang-el">Διάρκεια Ψηφοφορίας (ημέρες)</span><span class="lang-en">Voting Duration (days)</span></label>
+            <label><span class="lang-el">Διάρκεια Ψηφοφορίας (ημέρες)</span><span class="lang-en">Voting Duration (days)</span><span class="lang-ja">投票期間（日）</span><span class="lang-ru">Длительность голосования (дни)</span><span class="lang-es">Duración de la Votación (días)</span></label>
             <input type="number" id="proposalDuration" value="7" min="1" max="30">
         </div>
 
         <button class="btn-primary" onclick="createProposal()" style="width: 100%;">
-            🗳️ <span class="lang-el">Υποβολή Πρότασης</span><span class="lang-en">Submit Proposal</span>
+            🗳️ <span class="lang-el">Υποβολή Πρότασης</span><span class="lang-en">Submit Proposal</span><span class="lang-ja">提案を提出</span><span class="lang-ru">Подать предложение</span><span class="lang-es">Enviar Propuesta</span>
         </button>
 
         <p style="margin-top: 15px; font-size: 0.9em; opacity: 0.7;">

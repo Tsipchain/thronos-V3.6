@@ -1,64 +1,600 @@
 {% extends "base.html" %}
 
-{% block title %}Thronos Network{% endblock %}
+{% block title %}Thronos Network - Decentralized Blockchain Platform{% endblock %}
 
 {% block styles %}
 <style>
-    .stats {
-      background: #111;
-      padding: 10px;
-      margin-top: 20px;
-      border: 1px dashed #0f0;
+    /* ─── Hero Section ─────────────────────────────────────────── */
+    .hero {
+        background: linear-gradient(135deg, #000000 0%, #0a1f0a 50%, #000000 100%);
+        border: 2px solid;
+        border-image: linear-gradient(135deg, #00ff66 0%, #ffd700 50%, #00ff66 100%) 1;
+        border-radius: 20px;
+        padding: 50px 30px;
+        text-align: center;
+        margin-bottom: 40px;
+        position: relative;
+        overflow: hidden;
     }
-    .game-link {
-        margin-top: 20px;
-        padding: 10px;
-        border: 1px solid #f0f;
-        color: #f0f;
-        display: inline-block;
+
+    .hero::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        left: -50%;
+        width: 200%;
+        height: 200%;
+        background: radial-gradient(circle, rgba(0, 255, 102, 0.05) 0%, transparent 50%);
+        animation: pulse 8s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+        0%, 100% { transform: scale(1); opacity: 0.5; }
+        50% { transform: scale(1.2); opacity: 0.8; }
+    }
+
+    .hero-content {
+        position: relative;
+        z-index: 1;
+    }
+
+    .hero h1 {
+        font-size: 3em;
+        margin-bottom: 15px;
+        background: linear-gradient(135deg, #00ff00 0%, #ffd700 50%, #00ff66 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        text-shadow: 0 0 40px rgba(0, 255, 102, 0.3);
+    }
+
+    .hero-tagline {
+        font-size: 1.3em;
+        color: #00ff66;
+        margin-bottom: 30px;
+        opacity: 0.9;
+    }
+
+    .hero-btns {
+        display: flex;
+        gap: 20px;
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+
+    .hero-btn {
+        padding: 15px 40px;
+        border-radius: 30px;
+        font-weight: bold;
+        font-size: 1.1em;
         text-decoration: none;
+        transition: all 0.3s;
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
     }
-    .game-link:hover {
-        background: #200;
+
+    .hero-btn.primary {
+        background: linear-gradient(135deg, #00ff00 0%, #00ff66 100%);
+        color: #000;
+        border: 2px solid #00ff66;
+        box-shadow: 0 0 20px rgba(0, 255, 102, 0.3);
     }
+
+    .hero-btn.primary:hover {
+        background: linear-gradient(135deg, #00ff66 0%, #ffd700 100%);
+        transform: translateY(-3px);
+        box-shadow: 0 0 30px rgba(255, 215, 0, 0.4);
+    }
+
+    .hero-btn.secondary {
+        background: transparent;
+        color: #00ff66;
+        border: 2px solid #00ff66;
+    }
+
+    .hero-btn.secondary:hover {
+        background: rgba(0, 255, 102, 0.1);
+        transform: translateY(-3px);
+    }
+
+    /* ─── Live Stats Grid ──────────────────────────────────────── */
+    .stats-section {
+        margin-bottom: 40px;
+    }
+
+    .stats-section h2 {
+        text-align: center;
+        margin-bottom: 25px;
+        color: #00ff66;
+        font-size: 1.5em;
+    }
+
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 20px;
+    }
+
+    .stat-card {
+        background: linear-gradient(135deg, rgba(0, 0, 0, 0.8) 0%, rgba(0, 40, 20, 0.3) 100%);
+        border: 1px solid #1a3b2e;
+        border-radius: 16px;
+        padding: 25px 20px;
+        text-align: center;
+        transition: all 0.3s;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .stat-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: -100%;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(90deg, transparent, rgba(0, 255, 102, 0.1), transparent);
+        transition: left 0.5s;
+    }
+
+    .stat-card:hover {
+        border-color: #00ff66;
+        transform: translateY(-5px);
+        box-shadow: 0 10px 30px rgba(0, 255, 102, 0.2);
+    }
+
+    .stat-card:hover::before {
+        left: 100%;
+    }
+
+    .stat-icon {
+        font-size: 2.5em;
+        margin-bottom: 15px;
+        display: block;
+    }
+
+    .stat-value {
+        font-size: 2em;
+        font-weight: bold;
+        color: #00ff66;
+        font-family: 'Courier New', monospace;
+        margin-bottom: 5px;
+    }
+
+    .stat-label {
+        color: #888;
+        font-size: 0.9em;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    /* ─── Features Grid ────────────────────────────────────────── */
+    .features-section {
+        margin-bottom: 40px;
+    }
+
+    .features-section h2 {
+        text-align: center;
+        margin-bottom: 25px;
+        color: #ffd700;
+        font-size: 1.5em;
+    }
+
+    .features-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 20px;
+    }
+
+    .feature-card {
+        background: linear-gradient(135deg, rgba(10, 10, 10, 0.9) 0%, rgba(26, 59, 46, 0.2) 100%);
+        border: 1px solid #1a3b2e;
+        border-radius: 16px;
+        padding: 25px;
+        transition: all 0.3s;
+        text-decoration: none;
+        color: inherit;
+        display: block;
+    }
+
+    .feature-card:hover {
+        border-color: #00ff66;
+        transform: translateY(-5px);
+        box-shadow: 0 10px 30px rgba(0, 255, 102, 0.15);
+    }
+
+    .feature-icon {
+        font-size: 2.5em;
+        margin-bottom: 15px;
+    }
+
+    .feature-title {
+        font-size: 1.3em;
+        color: #00ff66;
+        margin-bottom: 10px;
+    }
+
+    .feature-desc {
+        color: #888;
+        font-size: 0.95em;
+        line-height: 1.6;
+    }
+
+    /* ─── Quick Actions ────────────────────────────────────────── */
+    .quick-actions {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 15px;
+        margin-bottom: 40px;
+    }
+
+    .quick-action {
+        background: linear-gradient(135deg, #111 0%, #0a1f0a 100%);
+        border: 1px solid #1a3b2e;
+        border-radius: 12px;
+        padding: 20px 15px;
+        text-align: center;
+        text-decoration: none;
+        color: #e0e0e0;
+        transition: all 0.3s;
+    }
+
+    .quick-action:hover {
+        border-color: #00ff66;
+        background: linear-gradient(135deg, #1a3b2e 0%, #0a1f0a 100%);
+        transform: translateY(-3px);
+    }
+
+    .quick-action-icon {
+        font-size: 2em;
+        margin-bottom: 10px;
+        display: block;
+    }
+
+    .quick-action-label {
+        font-size: 0.9em;
+    }
+
+    /* ─── Latest Activity ──────────────────────────────────────── */
+    .activity-section {
+        background: linear-gradient(135deg, rgba(0, 0, 0, 0.8) 0%, rgba(0, 40, 20, 0.2) 100%);
+        border: 1px solid #1a3b2e;
+        border-radius: 16px;
+        padding: 25px;
+        margin-bottom: 40px;
+    }
+
+    .activity-section h2 {
+        color: #00ff66;
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .activity-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+    }
+
+    .activity-item {
+        display: flex;
+        align-items: center;
+        gap: 15px;
+        padding: 12px 0;
+        border-bottom: 1px solid rgba(0, 255, 102, 0.1);
+    }
+
+    .activity-item:last-child {
+        border-bottom: none;
+    }
+
+    .activity-icon {
+        font-size: 1.5em;
+        width: 40px;
+        text-align: center;
+    }
+
+    .activity-details {
+        flex: 1;
+    }
+
+    .activity-title {
+        color: #e0e0e0;
+        font-size: 0.95em;
+    }
+
+    .activity-time {
+        color: #666;
+        font-size: 0.8em;
+    }
+
+    .activity-value {
+        color: #00ff66;
+        font-family: monospace;
+        font-weight: bold;
+    }
+
+    /* ─── Beta Section ─────────────────────────────────────────── */
     .beta-section {
-        background: #1a001a;
-        padding: 15px;
-        margin-top: 20px;
-        border: 1px dashed #f0f;
-        color: #f0f;
+        background: linear-gradient(135deg, #1a001a 0%, #200020 100%);
+        border: 1px solid #f0f;
+        border-radius: 16px;
+        padding: 25px;
+        margin-bottom: 40px;
     }
-    .beta-btn {
+
+    .beta-section h3 {
+        color: #f0f;
+        margin-bottom: 15px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .beta-section p {
+        color: #ccc;
+        margin-bottom: 15px;
+    }
+
+    .voting-polls {
+        display: grid;
+        gap: 15px;
+    }
+
+    .poll-card {
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 0, 255, 0.3);
+        border-radius: 12px;
+        padding: 15px;
+    }
+
+    .poll-title {
+        color: #f0f;
+        font-weight: bold;
+        margin-bottom: 8px;
+    }
+
+    .poll-desc {
+        color: #999;
+        font-size: 0.9em;
+        margin-bottom: 12px;
+    }
+
+    .poll-footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .poll-votes {
+        color: #0f0;
+        font-size: 0.9em;
+    }
+
+    .poll-btn {
         background: #300030;
         color: #f0f;
         border: 1px solid #f0f;
         padding: 8px 16px;
-        text-decoration: none;
-        display: inline-block;
-        margin-top: 10px;
+        border-radius: 20px;
         cursor: pointer;
+        transition: all 0.3s;
     }
-    .beta-btn:hover {
+
+    .poll-btn:hover {
         background: #500050;
+    }
+
+    /* ─── Exchange Rate Banner ─────────────────────────────────── */
+    .rate-banner {
+        background: linear-gradient(135deg, #000 0%, #071810 50%, #000 100%);
+        border: 2px solid;
+        border-image: linear-gradient(135deg, #ffd700 0%, #00ff00 100%) 1;
+        border-radius: 12px;
+        padding: 20px;
+        text-align: center;
+        margin-bottom: 30px;
+    }
+
+    .rate-value {
+        font-size: 1.8em;
+        color: #ffd700;
+        font-weight: bold;
+        font-family: 'Courier New', monospace;
+    }
+
+    .rate-label {
+        color: #888;
+        font-size: 0.9em;
+        margin-top: 5px;
+    }
+
+    /* ─── Spinner ──────────────────────────────────────────────── */
+    .loading-spinner {
+        display: inline-block;
+        width: 20px;
+        height: 20px;
+        border: 2px solid rgba(0, 255, 102, 0.3);
+        border-radius: 50%;
+        border-top-color: #00ff66;
+        animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+
+    /* ─── Responsive ───────────────────────────────────────────── */
+    @media (max-width: 768px) {
+        .hero h1 { font-size: 2em; }
+        .hero-tagline { font-size: 1em; }
+        .stat-value { font-size: 1.5em; }
+        .hero-btns { flex-direction: column; align-items: center; }
+        .hero-btn { width: 100%; max-width: 300px; justify-content: center; }
     }
 </style>
 {% endblock %}
 
 {% block content %}
-<h1>🔥 <span class="lang-el">Καλώς ήρθατε στο Δίκτυο Thronos</span><span class="lang-en">Welcome to the Thronos Network</span></h1>
-<p>
-    <span class="lang-el">Ένα blockchain αντίστασης. Μια δέσμευση στο άκαυστο.</span>
-    <span class="lang-en">A blockchain of resistance. A pledge to the unburnable.</span>
-</p>
-
-<div class="stats">
-  <h2>📈 <span class="lang-el">Ζωντανά Στατιστικά Δικτύου</span><span class="lang-en">Live Network Stats</span></h2>
-  <pre id="chainInfo"><span class="lang-el">Φόρτωση δεδομένων αλυσίδας...</span><span class="lang-en">Loading chain data...</span></pre>
+<!-- Hero Section -->
+<div class="hero">
+    <div class="hero-content">
+        <h1>🔥 THRONOS NETWORK</h1>
+        <p class="hero-tagline">
+            <span class="lang-el">Ένα blockchain αντίστασης. Μια δέσμευση στο άκαυστο.</span>
+            <span class="lang-en">A blockchain of resistance. A pledge to the unburnable.</span>
+        </p>
+        <div class="hero-btns">
+            <a href="/thronos_wallet" class="hero-btn primary">
+                💼 <span class="lang-el">Σύνδεση Wallet</span><span class="lang-en">Connect Wallet</span>
+            </a>
+            <a href="/whitepaper" class="hero-btn secondary">
+                📄 <span class="lang-el">Whitepaper</span><span class="lang-en">Whitepaper</span>
+            </a>
+        </div>
+    </div>
 </div>
 
-<div class="stats">
-  <h3>💰 <span class="lang-el">Ισοτιμία</span><span class="lang-en">Exchange Rate</span></h3>
-  <p>1 THR = <span class="highlight">0.0001 BTC</span> (Pegged)</p>
+<!-- Exchange Rate Banner -->
+<div class="rate-banner">
+    <div class="rate-value">1 THR = 0.0001 BTC</div>
+    <div class="rate-label"><span class="lang-el">Σταθερή Ισοτιμία</span><span class="lang-en">Pegged Rate</span></div>
+</div>
+
+<!-- Live Network Stats -->
+<div class="stats-section">
+    <h2>📊 <span class="lang-el">Ζωντανά Στατιστικά Δικτύου</span><span class="lang-en">Live Network Stats</span></h2>
+    <div class="stats-grid">
+        <div class="stat-card">
+            <span class="stat-icon">⛓️</span>
+            <div class="stat-value" id="statBlocks"><span class="loading-spinner"></span></div>
+            <div class="stat-label"><span class="lang-el">Blocks</span><span class="lang-en">Blocks</span></div>
+        </div>
+        <div class="stat-card">
+            <span class="stat-icon">💰</span>
+            <div class="stat-value" id="statSupply"><span class="loading-spinner"></span></div>
+            <div class="stat-label"><span class="lang-el">THR Supply</span><span class="lang-en">THR Supply</span></div>
+        </div>
+        <div class="stat-card">
+            <span class="stat-icon">👛</span>
+            <div class="stat-value" id="statWallets"><span class="loading-spinner"></span></div>
+            <div class="stat-label"><span class="lang-el">Wallets</span><span class="lang-en">Wallets</span></div>
+        </div>
+        <div class="stat-card">
+            <span class="stat-icon">🪙</span>
+            <div class="stat-value" id="statTokens"><span class="loading-spinner"></span></div>
+            <div class="stat-label"><span class="lang-el">Tokens</span><span class="lang-en">Tokens</span></div>
+        </div>
+        <div class="stat-card">
+            <span class="stat-icon">💎</span>
+            <div class="stat-value" id="statPools"><span class="loading-spinner"></span></div>
+            <div class="stat-label"><span class="lang-el">Pools</span><span class="lang-en">Pools</span></div>
+        </div>
+        <div class="stat-card">
+            <span class="stat-icon">📝</span>
+            <div class="stat-value" id="statTxns"><span class="loading-spinner"></span></div>
+            <div class="stat-label"><span class="lang-el">Συναλλαγές</span><span class="lang-en">Transactions</span></div>
+        </div>
+    </div>
+</div>
+
+<!-- Quick Actions -->
+<div class="quick-actions">
+    <a href="/swap" class="quick-action">
+        <span class="quick-action-icon">🔄</span>
+        <span class="quick-action-label">Swap</span>
+    </a>
+    <a href="/tokens" class="quick-action">
+        <span class="quick-action-icon">🪙</span>
+        <span class="quick-action-label"><span class="lang-el">Tokens</span><span class="lang-en">Tokens</span></span>
+    </a>
+    <a href="/pools" class="quick-action">
+        <span class="quick-action-icon">💎</span>
+        <span class="quick-action-label">Pools</span>
+    </a>
+    <a href="/nft" class="quick-action">
+        <span class="quick-action-icon">🖼️</span>
+        <span class="quick-action-label">NFTs</span>
+    </a>
+    <a href="/bridge" class="quick-action">
+        <span class="quick-action-icon">🌉</span>
+        <span class="quick-action-label">Bridge</span>
+    </a>
+    <a href="/governance" class="quick-action">
+        <span class="quick-action-icon">🏛️</span>
+        <span class="quick-action-label">DAO</span>
+    </a>
+</div>
+
+<!-- Features Grid -->
+<div class="features-section">
+    <h2>🚀 <span class="lang-el">Χαρακτηριστικά Πλατφόρμας</span><span class="lang-en">Platform Features</span></h2>
+    <div class="features-grid">
+        <a href="/tokens" class="feature-card">
+            <div class="feature-icon">🏭</div>
+            <div class="feature-title"><span class="lang-el">Token Factory</span><span class="lang-en">Token Factory</span></div>
+            <div class="feature-desc">
+                <span class="lang-el">Δημιουργήστε τα δικά σας tokens με μία κλικ. ERC-20 compatible με πλήρη έλεγχο.</span>
+                <span class="lang-en">Create your own tokens with one click. ERC-20 compatible with full control.</span>
+            </div>
+        </a>
+        <a href="/nft" class="feature-card">
+            <div class="feature-icon">🖼️</div>
+            <div class="feature-title"><span class="lang-el">NFT Marketplace</span><span class="lang-en">NFT Marketplace</span></div>
+            <div class="feature-desc">
+                <span class="lang-el">Mint, αγοράστε και πουλήστε μοναδικά ψηφιακά έργα τέχνης.</span>
+                <span class="lang-en">Mint, buy and sell unique digital artworks.</span>
+            </div>
+        </a>
+        <a href="/courses" class="feature-card">
+            <div class="feature-icon">📚</div>
+            <div class="feature-title"><span class="lang-el">Learn & Earn</span><span class="lang-en">Learn & Earn</span></div>
+            <div class="feature-desc">
+                <span class="lang-el">Μάθετε για το blockchain και κερδίστε THR tokens ολοκληρώνοντας μαθήματα.</span>
+                <span class="lang-en">Learn about blockchain and earn THR tokens by completing courses.</span>
+            </div>
+        </a>
+        <a href="/evm" class="feature-card">
+            <div class="feature-icon">📜</div>
+            <div class="feature-title"><span class="lang-el">Smart Contracts</span><span class="lang-en">Smart Contracts</span></div>
+            <div class="feature-desc">
+                <span class="lang-el">Deploy EVM-compatible smart contracts με έτοιμα templates.</span>
+                <span class="lang-en">Deploy EVM-compatible smart contracts with ready templates.</span>
+            </div>
+        </a>
+        <a href="/music" class="feature-card">
+            <div class="feature-icon">🎵</div>
+            <div class="feature-title"><span class="lang-el">Decent Music</span><span class="lang-en">Decent Music</span></div>
+            <div class="feature-desc">
+                <span class="lang-el">Αποκεντρωμένη πλατφόρμα μουσικής για καλλιτέχνες και ακροατές.</span>
+                <span class="lang-en">Decentralized music platform for artists and listeners.</span>
+            </div>
+        </a>
+        <a href="/governance" class="feature-card">
+            <div class="feature-icon">🏛️</div>
+            <div class="feature-title"><span class="lang-el">Διακυβέρνηση DAO</span><span class="lang-en">DAO Governance</span></div>
+            <div class="feature-desc">
+                <span class="lang-el">Ψηφίστε για προτάσεις και διαμορφώστε το μέλλον του δικτύου.</span>
+                <span class="lang-en">Vote on proposals and shape the future of the network.</span>
+            </div>
+        </a>
+    </div>
+</div>
+
+<!-- Latest Activity -->
+<div class="activity-section">
+    <h2>📡 <span class="lang-el">Πρόσφατη Δραστηριότητα</span><span class="lang-en">Recent Activity</span></h2>
+    <ul class="activity-list" id="activityList">
+        <li class="activity-item">
+            <span class="activity-icon">⏳</span>
+            <div class="activity-details">
+                <div class="activity-title"><span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span></div>
+            </div>
+        </li>
+    </ul>
 </div>
 
 <!-- Crypto Hunters Beta Section -->
@@ -68,196 +604,218 @@
         <span class="lang-el">Λάβετε μέρος στο κυνήγι! Βοηθήστε μας να δοκιμάσουμε το επερχόμενο παιχνίδι Crypto Hunters. Ψηφίστε για χαρακτηριστικά και κερδίστε ανταμοιβές.</span>
         <span class="lang-en">Join the hunt! Help us test the upcoming Crypto Hunters game. Vote on features and earn rewards.</span>
     </p>
-    <div id="votingPolls">
+    <div id="votingPolls" class="voting-polls">
         <p><span class="lang-el">Φόρτωση ψηφοφοριών...</span><span class="lang-en">Loading polls...</span></p>
     </div>
+    <div style="margin-top: 20px; text-align: center;">
+        <a href="{{ game_panel_url }}" target="_blank" class="hero-btn secondary" style="padding: 12px 30px;">
+            👾 <span class="lang-el">Παίξτε το Beta</span><span class="lang-en">Play Beta</span>
+        </a>
+    </div>
 </div>
-
-
-<a href="{{ game_panel_url }}" target="_blank" class="game-link">
-    👾 <span class="lang-el">Beta Παιχνίδι Crypto Hunters</span><span class="lang-en">Crypto Hunters Beta Game</span>
-</a>
 {% endblock %}
 
 {% block scripts %}
 <script>
-(function () {
-  const labels = {
-    el: {
-      totalBlocks: "Σύνολο Blocks",
-      lastHash:    "Hash Τελευταίου Block",
-      lastMiner:   "Τελευταίος Miner",
-      timestamp:   "Χρονική Σήμανση",
-      totalSupply: "Συνολική Προμήθεια THR"
-    },
-    gr: {
-      totalBlocks: "Σύνολο Blocks",
-      lastHash:    "Hash Τελευταίου Block",
-      lastMiner:   "Τελευταίος Miner",
-      timestamp:   "Χρονική Σήμανση",
-      totalSupply: "Συνολική Προμήθεια THR"
-    },
-    en: {
-      totalBlocks: "Total Blocks",
-      lastHash:    "Last Block Hash",
-      lastMiner:   "Last Miner",
-      timestamp:   "Timestamp",
-      totalSupply: "Total THR Supply"
-    }
-  };
-
-  function renderStats(lastBlock, netStats) {
-    const lang = localStorage.getItem("lang") || "el";
-    const l = labels[lang] || labels["en"]; // Fallback to English if language not found
-
-    const blockCount  = (lastBlock && lastBlock.block_count) || (netStats && netStats.block_count) || 0;
-    const totalSupply = (lastBlock && lastBlock.total_supply) || (netStats && netStats.total_supply) || 0;
-    const lastHash    = (lastBlock && lastBlock.block_hash) || "N/A";
-    const lastMiner   = (lastBlock && lastBlock.thr_address) || "N/A";
-    const ts          = (lastBlock && lastBlock.timestamp) || "N/A";
-
-    const html = `
-${l.totalBlocks}: <span class="highlight">${blockCount}</span>\n
-${l.totalSupply}: <span class="highlight">${totalSupply.toFixed(6)}</span> / ~420,000 THR\n
-${l.lastHash}: ${lastHash}\n
-${l.lastMiner}: ${lastMiner}\n
-${l.timestamp}: ${ts}
-`;
-    document.getElementById("chainInfo").innerHTML = html;
-  }
-
-  function loadStats() {
-    Promise.all([
-      fetch("/last_block").then(r => r.json()).catch(() => ({})),
-      fetch("/api/network_stats").then(r => r.json()).catch(() => ({})),
-    ])
-      .then(([lastBlock, netStats]) => {
-        renderStats(lastBlock, netStats);
-        // Κρατάμε τα τελευταία στον window για debugging αν θες
-        window.__THR_LAST_BLOCK  = lastBlock;
-        window.__THR_NET_STATS   = netStats;
-      })
-      .catch(err => {
-        console.error(err);
-        document.getElementById("chainInfo").innerText =
-          "Failed to load network stats.";
-      });
-  }
-
-  // αρχικό load
-  loadStats();
-
-  // ξανακτίσιμο όταν αλλάζει η γλώσσα
-  window.addEventListener("langChanged", () => {
-    renderStats(window.__THR_LAST_BLOCK || {}, window.__THR_NET_STATS || {});
-  });
-
-  // προαιρετικά: μικρό auto-refresh ανά 30s
-  setInterval(loadStats, 30000);
-})();
-
-// ─── Voting System ───────────────────────────────────────────
 (function() {
-  let currentWallet = null;
+    // ─── Load Network Stats ───────────────────────────────────────
+    async function loadNetworkStats() {
+        try {
+            const [lastBlock, netStats, tokensRes, poolsRes, walletsRes] = await Promise.all([
+                fetch("/last_block").then(r => r.json()).catch(() => ({})),
+                fetch("/api/network_stats").then(r => r.json()).catch(() => ({})),
+                fetch("/api/tokens/list").then(r => r.json()).catch(() => ({ tokens: [] })),
+                fetch("/api/pools").then(r => r.json()).catch(() => ({ pools: [] })),
+                fetch("/api/v1/wallets/count").then(r => r.json()).catch(() => ({ count: 0 }))
+            ]);
 
-  // Get wallet from localStorage if connected
-  function getWallet() {
-    return localStorage.getItem("thr_wallet") || null;
-  }
+            const blockCount = lastBlock.block_count || netStats.block_count || 0;
+            const totalSupply = lastBlock.total_supply || netStats.total_supply || 0;
+            const tokenCount = tokensRes.tokens ? tokensRes.tokens.length : 0;
+            const poolCount = poolsRes.pools ? poolsRes.pools.length : 0;
+            const walletCount = walletsRes.count || 0;
 
-  function loadVotingPolls() {
-    fetch("/api/voting/polls")
-      .then(r => r.json())
-      .then(polls => {
-        renderPolls(polls);
-      })
-      .catch(err => {
-        console.error("Failed to load polls:", err);
-        document.getElementById("votingPolls").innerHTML =
-          '<p style="color: #f00;">Failed to load polls</p>';
-      });
-  }
+            document.getElementById("statBlocks").textContent = blockCount.toLocaleString();
+            document.getElementById("statSupply").textContent = totalSupply.toFixed(2);
+            document.getElementById("statWallets").textContent = walletCount.toLocaleString();
+            document.getElementById("statTokens").textContent = tokenCount.toLocaleString();
+            document.getElementById("statPools").textContent = poolCount.toLocaleString();
+            document.getElementById("statTxns").textContent = (blockCount * 2).toLocaleString(); // Estimate
 
-  function renderPolls(polls) {
-    const lang = localStorage.getItem("lang") || "el";
-    const container = document.getElementById("votingPolls");
-
-    if (!polls || polls.length === 0) {
-      container.innerHTML = `
-        <p><span class="lang-el">Δεν υπάρχουν ενεργές ψηφοφορίες</span>
-        <span class="lang-en">No active polls</span></p>
-      `;
-      return;
+            // Store for refresh
+            window.__THR_STATS = { lastBlock, netStats };
+        } catch (e) {
+            console.error("Failed to load stats:", e);
+            document.querySelectorAll('.stat-value').forEach(el => {
+                if (el.querySelector('.loading-spinner')) {
+                    el.textContent = '-';
+                }
+            });
+        }
     }
 
-    let html = '<div style="margin-top: 10px;">';
-    polls.forEach(poll => {
-      const title = poll.title[lang] || poll.title["en"];
-      const desc = poll.description[lang] || poll.description["en"];
-      const votes = poll.votes || 0;
+    // ─── Load Recent Activity ─────────────────────────────────────
+    async function loadRecentActivity() {
+        const lang = localStorage.getItem("lang") || "el";
+        const activityList = document.getElementById("activityList");
 
-      html += `
-        <div style="margin-bottom: 15px; padding: 10px; border: 1px solid #f0f; background: #200020;">
-          <h4 style="margin: 0 0 5px 0; color: #f0f;">${title}</h4>
-          <p style="margin: 0 0 8px 0; font-size: 0.9em; color: #ccc;">${desc}</p>
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <span style="color: #0f0;">👍 ${votes} ${lang === 'el' ? 'ψήφοι' : 'votes'}</span>
-            <button onclick="vote('${poll.id}')" class="beta-btn" style="margin: 0; padding: 5px 10px; font-size: 0.9em;">
-              <span class="lang-el">Ψηφίστε</span><span class="lang-en">Vote</span>
-            </button>
-          </div>
-        </div>
-      `;
-    });
-    html += '</div>';
+        try {
+            const [lastBlock, tokensRes] = await Promise.all([
+                fetch("/last_block").then(r => r.json()).catch(() => null),
+                fetch("/api/tokens/list").then(r => r.json()).catch(() => ({ tokens: [] }))
+            ]);
 
-    container.innerHTML = html;
-  }
+            const activities = [];
 
-  window.vote = function(pollId) {
-    const lang = localStorage.getItem("lang") || "el";
-    const wallet = getWallet();
+            // Add last block info
+            if (lastBlock && lastBlock.block_hash) {
+                activities.push({
+                    icon: "⛏️",
+                    title: lang === "el" ? `Block ${lastBlock.block_count} mined` : `Block ${lastBlock.block_count} mined`,
+                    time: lastBlock.timestamp || "Recently",
+                    value: lastBlock.thr_address ? lastBlock.thr_address.slice(0, 12) + "..." : ""
+                });
+            }
 
-    fetch("/api/voting/vote", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ poll_id: pollId, wallet: wallet })
-    })
-      .then(r => r.json())
-      .then(data => {
-        if (data.status === "success") {
-          alert(lang === "el" ?
-            "✅ Η ψήφος σας καταγράφηκε! Ευχαριστούμε!" :
-            "✅ Your vote has been recorded! Thank you!"
-          );
-          loadVotingPolls(); // Refresh to show updated count
-        } else if (data.status === "duplicate") {
-          alert(lang === "el" ?
-            "⚠️ Έχετε ήδη ψηφίσει σε αυτή την ψηφοφορία!" :
-            "⚠️ You have already voted in this poll!"
-          );
-        } else {
-          alert(lang === "el" ?
-            "❌ Σφάλμα: " + (data.error || "Άγνωστο σφάλμα") :
-            "❌ Error: " + (data.error || "Unknown error")
-          );
+            // Add recent tokens
+            if (tokensRes.tokens && tokensRes.tokens.length > 0) {
+                const recentTokens = tokensRes.tokens.slice(-3).reverse();
+                recentTokens.forEach(tok => {
+                    activities.push({
+                        icon: "🪙",
+                        title: lang === "el" ? `Token ${tok.symbol} δημιουργήθηκε` : `Token ${tok.symbol} created`,
+                        time: "Recently",
+                        value: tok.current_supply.toLocaleString() + " " + tok.symbol
+                    });
+                });
+            }
+
+            // Render activities
+            if (activities.length === 0) {
+                activityList.innerHTML = `
+                    <li class="activity-item">
+                        <span class="activity-icon">📭</span>
+                        <div class="activity-details">
+                            <div class="activity-title">
+                                <span class="lang-el">Δεν υπάρχει πρόσφατη δραστηριότητα</span>
+                                <span class="lang-en">No recent activity</span>
+                            </div>
+                        </div>
+                    </li>
+                `;
+            } else {
+                activityList.innerHTML = activities.map(act => `
+                    <li class="activity-item">
+                        <span class="activity-icon">${act.icon}</span>
+                        <div class="activity-details">
+                            <div class="activity-title">${act.title}</div>
+                            <div class="activity-time">${act.time}</div>
+                        </div>
+                        <div class="activity-value">${act.value}</div>
+                    </li>
+                `).join("");
+            }
+        } catch (e) {
+            console.error("Failed to load activity:", e);
         }
-      })
-      .catch(err => {
-        console.error("Vote error:", err);
-        alert(lang === "el" ?
-          "❌ Αποτυχία αποστολής ψήφου" :
-          "❌ Failed to submit vote"
-        );
-      });
-  };
+    }
 
-  // Initial load
-  loadVotingPolls();
+    // ─── Load Voting Polls ────────────────────────────────────────
+    async function loadVotingPolls() {
+        const lang = localStorage.getItem("lang") || "el";
+        const container = document.getElementById("votingPolls");
 
-  // Reload when language changes
-  window.addEventListener("langChanged", loadVotingPolls);
+        try {
+            const res = await fetch("/api/voting/polls");
+            const polls = await res.json();
+
+            if (!polls || polls.length === 0) {
+                container.innerHTML = `
+                    <p style="color: #999; text-align: center;">
+                        <span class="lang-el">Δεν υπάρχουν ενεργές ψηφοφορίες</span>
+                        <span class="lang-en">No active polls</span>
+                    </p>
+                `;
+                return;
+            }
+
+            container.innerHTML = polls.map(poll => {
+                const title = poll.title[lang] || poll.title["en"];
+                const desc = poll.description[lang] || poll.description["en"];
+                const votes = poll.votes || 0;
+
+                return `
+                    <div class="poll-card">
+                        <div class="poll-title">${title}</div>
+                        <div class="poll-desc">${desc}</div>
+                        <div class="poll-footer">
+                            <span class="poll-votes">👍 ${votes} ${lang === 'el' ? 'ψήφοι' : 'votes'}</span>
+                            <button onclick="vote('${poll.id}')" class="poll-btn">
+                                <span class="lang-el">Ψηφίστε</span><span class="lang-en">Vote</span>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join("");
+        } catch (e) {
+            console.error("Failed to load polls:", e);
+            container.innerHTML = `<p style="color: #f00;">Failed to load polls</p>`;
+        }
+    }
+
+    // ─── Vote Function ────────────────────────────────────────────
+    window.vote = function(pollId) {
+        const lang = localStorage.getItem("lang") || "el";
+        const wallet = localStorage.getItem("thr_wallet") || null;
+
+        fetch("/api/voting/vote", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ poll_id: pollId, wallet: wallet })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === "success") {
+                alert(lang === "el" ?
+                    "✅ Η ψήφος σας καταγράφηκε! Ευχαριστούμε!" :
+                    "✅ Your vote has been recorded! Thank you!"
+                );
+                loadVotingPolls();
+            } else if (data.status === "duplicate") {
+                alert(lang === "el" ?
+                    "⚠️ Έχετε ήδη ψηφίσει σε αυτή την ψηφοφορία!" :
+                    "⚠️ You have already voted in this poll!"
+                );
+            } else {
+                alert(lang === "el" ?
+                    "❌ Σφάλμα: " + (data.error || "Άγνωστο σφάλμα") :
+                    "❌ Error: " + (data.error || "Unknown error")
+                );
+            }
+        })
+        .catch(err => {
+            console.error("Vote error:", err);
+            alert(lang === "el" ?
+                "❌ Αποτυχία αποστολής ψήφου" :
+                "❌ Failed to submit vote"
+            );
+        });
+    };
+
+    // ─── Initialize ───────────────────────────────────────────────
+    loadNetworkStats();
+    loadRecentActivity();
+    loadVotingPolls();
+
+    // Auto-refresh every 30 seconds
+    setInterval(loadNetworkStats, 30000);
+    setInterval(loadRecentActivity, 60000);
+
+    // Reload on language change
+    window.addEventListener("langChanged", () => {
+        loadRecentActivity();
+        loadVotingPolls();
+    });
 })();
 </script>
-
 {% endblock %}

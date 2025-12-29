@@ -2147,6 +2147,18 @@ def network_stats():
         "pledge_growth": cumulative,
     })
 
+# ─── WALLETS COUNT ─────────────────────────────────────────────────────
+
+@app.route("/api/v1/wallets/count")
+def wallets_count():
+    """Return the count of unique wallets in the ledger"""
+    ledger = load_json(LEDGER_FILE, {})
+    # Count wallets with non-zero balance, excluding system addresses
+    system_addresses = {BURN_ADDRESS, AI_WALLET_ADDRESS, "GENESIS", "SYSTEM"}
+    wallet_count = sum(1 for addr, bal in ledger.items()
+                       if addr not in system_addresses and float(bal) > 0)
+    return jsonify({"count": wallet_count})
+
 # ─── PEERS & HEARTBEAT ─────────────────────────────────────────────────────
 
 def cleanup_expired_peers():

@@ -26,6 +26,7 @@
 # - Admin Withdrawal Panel (V5.1)
 
 import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii
+from urllib.parse import quote
 import qrcode
 import io
 import numpy as np
@@ -1131,6 +1132,25 @@ def extract_ai_files_from_text(full_text: str):
     return files, cleaned_text
 
 
+@app.route("/api/ai/generated/<filename>", methods=["GET"])
+def api_ai_generated_file(filename):
+    """
+    Download ενός AI-generated αρχείου από το AI_FILES_DIR.
+    Χρησιμοποιείται από /chat και /architect για τα [[FILE:...]].
+    """
+    safe_name = filename.replace("..", "_").replace("/", "_").replace("\\", "_")
+    path = os.path.join(AI_FILES_DIR, safe_name)
+    if not os.path.exists(path):
+        return jsonify({"ok": False, "error": "file not found"}), 404
+
+    return send_file(
+        path,
+        as_attachment=True,
+        download_name=safe_name,
+        mimetype="text/plain",
+    )
+
+
 def enqueue_offline_corpus(wallet: str, prompt: str, response: str, files, session_id: str | None = None):
     """
     Ελαφρύ offline corpus για Whisper / training + sessions.
@@ -2012,19 +2032,75 @@ def api_architect_generate():
     except Exception as e:
         print("architect corpus error:", e)
 
+    resp_files = []
+    for f in files or []:
+        if isinstance(f, dict):
+            fname = f.get("filename") or f.get("name")
+            fsize = f.get("size")
+        else:
+            fname = str(f or "").strip()
+            fsize = None
+        if not fname:
+            continue
+        safe_name = fname.replace("..", "_").replace("/", "_").replace("\\", "_")
+        resp_files.append({
+            "filename": safe_name,
+            "size": fsize,
+            "url": f"/api/ai/generated/{quote(safe_name)}",
+        })
+
     return jsonify({
         "status": status,
         "quantum_key": quantum_key,
         "blueprint": blueprint,
         "response": cleaned,
-        "files": [
-            {
-                "filename": f.get("filename"),
-                "size": f.get("size")
-            } for f in (files or [])
-        ],
+        "files": resp_files,
         "session_id": session_id,
     }), 200
+
+
+@app.route("/api/architect_download", methods=["POST"])
+def api_architect_download():
+    """
+    Παίρνει λίστα filenames (όπως γυρίζει το /api/architect_generate)
+    και επιστρέφει ZIP με τα αντίστοιχα αρχεία από το AI_FILES_DIR.
+    Body:
+      { "files": ["package.json", "pages_index.js", ...] }
+      ή { "files": [ { "filename": "package.json" }, ... ] }
+    """
+    data = request.get_json(silent=True) or {}
+    files_in = data.get("files") or []
+    if not isinstance(files_in, list) or not files_in:
+        return jsonify({"ok": False, "error": "no files provided"}), 400
+
+    to_zip = []
+    for item in files_in:
+        if isinstance(item, dict):
+            name = (item.get("filename") or "").strip()
+        else:
+            name = str(item or "").strip()
+        if not name:
+            continue
+        safe_name = name.replace("..", "_").replace("/", "_").replace("\\", "_")
+        path = os.path.join(AI_FILES_DIR, safe_name)
+        if os.path.exists(path):
+            to_zip.append((safe_name, path))
+
+    if not to_zip:
+        return jsonify({"ok": False, "error": "no valid files found"}), 404
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for safe_name, path in to_zip:
+            zf.write(path, arcname=safe_name)
+    buf.seek(0)
+
+    return send_file(
+        buf,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name="thronos_architecture.zip",
+    )
 
 # ─── RECOVERY FLOW ─────────────────────────────────
 @app.route("/recovery")
@@ -2472,7 +2548,7 @@ def api_chat():
     wallet = (data.get("wallet") or "").strip()  # MOVED HERE - must be before attachments!
     session_id = (data.get("session_id") or "").strip() or None
     model_key = (data.get("model_key") or "").strip() or None
-    attachments = data.get("attachments") or []
+    attachments = data.get("attachments") or data.get("attachment_ids") or []
 
     # Attachments are file_ids previously uploaded via /api/ai/files/upload
     if attachments:
@@ -2678,6 +2754,23 @@ def api_chat():
         except Exception:
             credits_for_frontend = "infinite"
 
+    resp_files = []
+    for f in files or []:
+        if isinstance(f, dict):
+            fname = f.get("filename") or f.get("name")
+            fsize = f.get("size")
+        else:
+            fname = str(f or "").strip()
+            fsize = None
+        if not fname:
+            continue
+        safe_name = fname.replace("..", "_").replace("/", "_").replace("\\", "_")
+        resp_files.append({
+            "filename": safe_name,
+            "size": fsize,
+            "url": f"/api/ai/generated/{quote(safe_name)}",
+        })
+
     resp = {
         "response": cleaned,
         "quantum_key": quantum_key,
@@ -2685,7 +2778,7 @@ def api_chat():
         "provider": provider,
         "model": model,
         "wallet": wallet,
-        "files": files,
+        "files": resp_files,
         "credits": credits_for_frontend,
         "session_id": session_id,
     }
@@ -7855,7 +7948,10 @@ def api_chat_session_new():
     sessions.append(session)
     save_ai_sessions(sessions)
 
-    return jsonify(ok=True, session=session), 200
+    resp = make_response(jsonify(ok=True, session=session), 200)
+    if guest_id:
+        resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+    return resp
 
 
 @app.route("/api/chat/session/<session_id>", methods=["GET"])
@@ -7891,7 +7987,10 @@ def api_chat_session_get(session_id):
             history.append({"role": "assistant", "content": r})
 
     history = history[-40:]
-    return jsonify(ok=True, session=session, messages=history), 200
+    resp = make_response(jsonify(ok=True, session=session, messages=history), 200)
+    if guest_id:
+        resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+    return resp
 
 
 @app.route("/api/chat/sessions", methods=["GET"])
@@ -7910,7 +8009,10 @@ def api_chat_sessions_list():
         out.append(s)
 
     out.sort(key=lambda s: s.get("updated_at") or s.get("created_at") or "", reverse=True)
-    return jsonify(ok=True, sessions=out), 200
+    resp = make_response(jsonify(ok=True, sessions=out), 200)
+    if guest_id:
+        resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+    return resp
 
 
 @app.route("/api/ai/sessions/rename", methods=["POST"])

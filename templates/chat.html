@@ -103,6 +103,29 @@
       gap: 10px;
     }
 
+    .brand-main {
+      display: flex;
+      align-items: center;
+    }
+
+    .brand-logo {
+      width: 56px;
+      height: 56px;
+      border-radius: 16px;
+      background: radial-gradient(circle at 30% 0, #23ff6b, #071628);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-right: 14px;
+      box-shadow: 0 0 20px rgba(35, 255, 107, 0.5);
+    }
+
+    .brand-logo img {
+      max-width: 70%;
+      max-height: 70%;
+      display: block;
+    }
+
     .th-chip {
       width: 32px;
       height: 32px;
@@ -557,6 +580,17 @@
       gap: 4px;
     }
 
+    .ai-files {
+      margin-top: 6px;
+      font-size: 11px;
+      color: var(--text);
+    }
+
+    .ai-files a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
     .msg-file-link {
       font-size: 10px;
       padding: 2px 6px;
@@ -906,27 +940,32 @@
     <header class="q-header">
       <div class="q-header-left">
         <div class="th-chip">TH</div>
-        <div class="q-title-block">
-          <div class="q-title" id="titleText">Thronos Quantum</div>
-          <div class="q-subtitle" id="subtitleText">
-            Peer-to-peer encrypted AI console • Bound to Thronos chain
+        <div class="brand-main">
+          <div class="brand-logo">
+            <img src="/static/img/thronos-quantum-q.png" alt="Thronos Quantum" />
+          </div>
+          <div class="q-title-block">
+            <div class="q-title" id="titleText">Thronos Quantum</div>
+            <div class="q-subtitle" id="subtitleText">
+              Peer-to-peer encrypted AI console • Bound to Thronos chain
+            </div>
           </div>
         </div>
       </div>
       <div class="q-header-right">
         <div class="pill">
           <div class="pill-dot"></div>
-          <div class="pill-label">Encryption</div>
-          <div class="pill-value">Active</div>
+          <div class="pill-label" id="encryptionLabel">Encryption</div>
+          <div class="pill-value" id="encryptionValue">Active</div>
         </div>
         <div class="pill pill-quiet">
           <div class="pill-dot"></div>
-          <div class="pill-label">Mode</div>
+          <div class="pill-label" id="modeLabelText">Mode</div>
           <div class="pill-value" id="modeLabel">auto</div>
         </div>
         <div class="pill pill-quiet">
           <div class="pill-dot"></div>
-          <div class="pill-label">Core</div>
+          <div class="pill-label" id="coreLabelText">Core</div>
           <div class="pill-value" id="coreStatus">ready</div>
         </div>
         <div class="pill pill-danger">
@@ -1002,22 +1041,27 @@
                     📎 Attach file
                   </label>
                   <input id="fileInput" type="file" multiple />
-                  <select id="modelSelect" class="model-select" style="background: var(--bg-alt); color: var(--fg); border-radius: 4px; padding: 4px; font-size: 11px; margin-top: 8px;">
+                  <select
+                    id="modelSelect"
+                    class="model-select"
+                    style="background: var(--bg-alt); color: var(--fg); border-radius: 4px; padding: 4px; font-size: 11px; margin-top: 8px;"
+                  >
                     <option value="auto">Auto Select (Prioritize Our Stack)</option>
 
-                    <!-- Custom Thronos / Thrai agent -->
                     <option value="diko_mas">🧿 Thrai (Custom Agent)</option>
 
-                    <!-- Public providers -->
                     <option value="gemini-2.5-flash">🚀 Gemini 2.5 Flash</option>
-                    <option value="gpt-4o">🤖 GPT-4o (OpenAI)</option>
-                    <option value="claude-3-sonnet-20240229">Claude 3 Sonnet</option>
-                  <select id="modelSelect" class="model-select">
-                    <option value="auto">🔀 Auto (Thronos chooses)</option>
                     <option value="gemini-2.5-pro">💎 Gemini 2.5 Pro</option>
-                    <option value="gpt-4.1-mini">🤖 GPT-4.1 Mini (OpenAI)</option>
-                    <option value="claude-3-sonnet">🧠 Claude 3 Sonnet</option>
-                    <option value="custom-default">🛰️ Custom Quantum Agent</option>
+                    <option value="gpt-4o">🤖 GPT-4o (OpenAI)</option>
+                    <option value="claude-3-sonnet-20240229">🧠 Claude 3 Sonnet</option>
+                  </select>
+                  <select
+                    id="chatModeSelect"
+                    style="background: var(--bg-alt); color: var(--fg); border-radius: 4px; padding: 4px; font-size: 11px; margin-top: 8px;"
+                  >
+                    <option value="chat">💬 Chat</option>
+                    <option value="docs">📑 Document attachments</option>
+                    <option value="transform">🛠 Transform attachments</option>
                   </select>
                 </div>
                 <button id="sendBtn" class="send-btn">
@@ -1107,11 +1151,20 @@
         status_failed_messages: "Failed to load messages",
         session_error_banner: "Unable to load chat session.",
         retry: "Retry",
+        encryption_label: "Encryption",
+        encryption_value: "Active",
+        mode_label: "Mode",
+        core_label: "Core",
+        core_ready: "ready",
+        session_title_default: "Mesh session",
         model_label: "Model:",
         credits_label: "AI Credits:",
         wallet_label: "Bound wallet:",
         wallet_placeholder: "THR address",
         message_placeholder: "Type a command to Thronos…",
+        chat_mode_chat: "💬 Chat",
+        chat_mode_docs: "📑 Document attachments",
+        chat_mode_transform: "🛠 Transform attachments",
         attach_file: "📎 Attach file",
         send: "Send",
         telemetry_title: "Node Telemetry",
@@ -1143,11 +1196,20 @@
         status_failed_messages: "Αποτυχία φόρτωσης μηνυμάτων",
         session_error_banner: "Αδυναμία φόρτωσης συνεδρίας.",
         retry: "Ξαναδοκιμή",
+        encryption_label: "Κρυπτογράφηση",
+        encryption_value: "Ενεργή",
+        mode_label: "Λειτουργία",
+        core_label: "Πυρήνας",
+        core_ready: "έτοιμο",
+        session_title_default: "Mesh συνεδρία",
         model_label: "Μοντέλο:",
         credits_label: "AI Credits:",
         wallet_label: "Συνδεδεμένο πορτοφόλι:",
         wallet_placeholder: "Διεύθυνση THR",
         message_placeholder: "Πληκτρολόγησε εντολή προς το Thronos…",
+        chat_mode_chat: "💬 Συνομιλία",
+        chat_mode_docs: "📑 Τεκμηρίωση συνημμένων",
+        chat_mode_transform: "🛠 Μετασχηματισμός συνημμένων",
         attach_file: "📎 Επισύναψη αρχείου",
         send: "Αποστολή",
         telemetry_title: "Τηλεμετρία Κόμβου",
@@ -1179,11 +1241,20 @@
         status_failed_messages: "Error al cargar mensajes",
         session_error_banner: "No se pudo cargar la sesión.",
         retry: "Reintentar",
+        encryption_label: "Cifrado",
+        encryption_value: "Activo",
+        mode_label: "Modo",
+        core_label: "Núcleo",
+        core_ready: "listo",
+        session_title_default: "Sesión mesh",
         model_label: "Modelo:",
         credits_label: "Créditos de IA:",
         wallet_label: "Billetera vinculada:",
         wallet_placeholder: "Dirección THR",
         message_placeholder: "Escribe un comando para Thronos…",
+        chat_mode_chat: "💬 Chat",
+        chat_mode_docs: "📑 Documentar adjuntos",
+        chat_mode_transform: "🛠 Transformar adjuntos",
         attach_file: "📎 Adjuntar archivo",
         send: "Enviar",
         telemetry_title: "Telemetría del nodo",
@@ -1215,11 +1286,20 @@
         status_failed_messages: "メッセージの取得に失敗しました",
         session_error_banner: "セッションを読み込めませんでした。",
         retry: "再試行",
+        encryption_label: "暗号化",
+        encryption_value: "有効",
+        mode_label: "モード",
+        core_label: "コア",
+        core_ready: "準備完了",
+        session_title_default: "メッシュセッション",
         model_label: "モデル:",
         credits_label: "AIクレジット:",
         wallet_label: "紐付けウォレット:",
         wallet_placeholder: "THRアドレス",
         message_placeholder: "Thronosへのコマンドを入力…",
+        chat_mode_chat: "💬 チャット",
+        chat_mode_docs: "📑 添付のドキュメント化",
+        chat_mode_transform: "🛠 添付の変換",
         attach_file: "📎 ファイルを添付",
         send: "送信",
         telemetry_title: "ノードテレメトリ",
@@ -1250,6 +1330,7 @@
       usageStatusEl,
       sendBtnEl,
       modelSelectEl,
+      chatModeSelect,
       modelStatusEl,
       coreStatusEl,
       sessionTitleEl,
@@ -1276,6 +1357,7 @@
       usageStatusEl = document.getElementById("usageStatus");
       sendBtnEl = document.getElementById("sendBtn");
       modelSelectEl = document.getElementById("modelSelect");
+      chatModeSelect = document.getElementById("chatModeSelect");
       modelStatusEl = document.getElementById("modelStatus");
       coreStatusEl = document.getElementById("coreStatus");
       sessionTitleEl = document.getElementById("sessionTitle");
@@ -1362,6 +1444,7 @@
       const map = [
         ["titleText", "brand_title"],
         ["subtitleText", "brand_subtitle"],
+        ["sessionTitle", "session_title_default"],
         ["sessionsTitleLabel", "sessions_title"],
         ["newSessionBtn", "new_session"],
         ["renameSessionBtn", "rename_session"],
@@ -1369,6 +1452,11 @@
         ["modelLabelText", "model_label"],
         ["creditsLabelText", "credits_label"],
         ["walletLabelText", "wallet_label"],
+        ["encryptionLabel", "encryption_label"],
+        ["encryptionValue", "encryption_value"],
+        ["modeLabelText", "mode_label"],
+        ["coreLabelText", "core_label"],
+        ["coreStatus", "core_ready"],
         ["attachLabel", "attach_file"],
         ["sendBtn", "send"],
         ["telemetryTitleLabel", "telemetry_title"],
@@ -1389,6 +1477,11 @@
       if (walletInputEl) walletInputEl.placeholder = t("wallet_placeholder");
       if (messageInputEl) messageInputEl.placeholder = t("message_placeholder");
       if (sessionStatusTagEl) sessionStatusTagEl.textContent = t("status_loading");
+      if (chatModeSelect) {
+        if (chatModeSelect.options[0]) chatModeSelect.options[0].textContent = t("chat_mode_chat");
+        if (chatModeSelect.options[1]) chatModeSelect.options[1].textContent = t("chat_mode_docs");
+        if (chatModeSelect.options[2]) chatModeSelect.options[2].textContent = t("chat_mode_transform");
+      }
     }
 
     function initI18n() {
@@ -1688,6 +1781,25 @@
         bubble.appendChild(filesDiv);
       }
 
+      const aiFiles = msg.aiFiles || [];
+      if (aiFiles.length) {
+        const filesDiv = document.createElement("div");
+        filesDiv.className = "ai-files";
+        filesDiv.innerHTML = "<strong>AI files:</strong><br/>";
+        aiFiles.forEach((f) => {
+          const a = document.createElement("a");
+          const name = f.filename || f.name || "file";
+          const url = f.url || "/api/ai/generated/" + encodeURIComponent(name);
+          a.href = url;
+          a.textContent = name + (f.size ? ` (${f.size} bytes)` : "");
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          filesDiv.appendChild(a);
+          filesDiv.appendChild(document.createElement("br"));
+        });
+        bubble.appendChild(filesDiv);
+      }
+
       if (!isUser) {
         const actions = createThumbButtons(text);
         bubble.appendChild(actions);
@@ -1793,11 +1905,11 @@
       }
     }
 
-    async function createSession(isRetry = false) {
-      setSessionState("loading");
-      try {
-        const wallet = walletInputEl.value.trim();
-        const res = await fetch(API_SESSION_NEW, {
+      async function createSession(isRetry = false) {
+        setSessionState("loading");
+        try {
+          const wallet = walletInputEl.value.trim();
+          const res = await fetch(API_SESSION_NEW, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1813,25 +1925,24 @@
         await loadSessionMessages(currentSessionId);
         setSessionState("ready");
       } catch (e) {
-        console.error("createSession error", e);
-        setSessionState("error", t("status_error"));
-      }
-      await createSession(true);
-    }
-
-    async function ensureSession() {
-      setSessionState("loading");
-      const storedId = localStorage.getItem(SESSION_STORAGE_KEY);
-      if (storedId) {
-        const ok = await validateSession(storedId);
-        if (ok) {
-          await loadSessions();
-          await loadSessionMessages(currentSessionId);
-          return;
+          console.error("createSession error", e);
+          setSessionState("error", t("status_error"));
         }
       }
-      await createSession(true);
-    }
+
+      async function ensureSession() {
+        setSessionState("loading");
+        const storedId = localStorage.getItem(SESSION_STORAGE_KEY);
+        if (storedId) {
+          const ok = await validateSession(storedId);
+        if (ok) {
+          await loadSessions();
+            await loadSessionMessages(currentSessionId);
+            return;
+          }
+        }
+        await createSession();
+      }
 
     async function renameSession() {
       if (!currentSessionId) return;
@@ -1927,17 +2038,35 @@
       const model = modelSelectEl.value || "auto";
       modelStatusEl.textContent = model;
 
+      const mode = chatModeSelect ? chatModeSelect.value : "chat";
+      const userMessage = text;
+      let finalMessage = userMessage;
+
+      if (mode === "docs") {
+        finalMessage =
+          "Λειτούργησε ως Thronos Documentation Engine.\n" +
+          "Με βάση τα συνημμένα αρχεία, γράψε πλήρη τεκμηρίωση σε καθαρό Markdown.\n" +
+          "Η έξοδος πρέπει να είναι ΜΟΝΟ ένα αρχείο μέσα σε block [[FILE:docs_session.md]] ... [[/FILE]].\n\n" +
+          userMessage;
+      } else if (mode === "transform") {
+        finalMessage =
+          "Λειτούργησε ως Thronos File Refiner.\n" +
+          "Πάρε τα συνημμένα αρχεία, βελτίωσέ τα (clean code / διορθώσεις) και γύρισέ τα ως νέα αρχεία.\n" +
+          "Για κάθε αρχείο απάντησε με [[FILE:new_<originalname>]] ... [[/FILE]].\n\n" +
+          userMessage;
+      }
+
       const payload = {
         session_id: currentSessionId,
         wallet: wallet || null,
-        message: text,
-        attachment_ids: pendingFiles.map((f) => f.id),
+        message: finalMessage,
+        attachments: pendingFiles.map((f) => f.id),
         model_key: model,
         lang: currentLang,
       };
 
       // optimistic render user message
-      appendMessage({ role: "user", content: text, model: "user" });
+      appendMessage({ role: "user", content: userMessage, model: "user" });
 
       messageInputEl.value = "";
       pendingFiles = [];
@@ -1970,11 +2099,7 @@
             role: "assistant",
             content: data.response,
             model: data.model || model,
-            files: (data.files || []).map((f) => ({
-              file_id: f.id || f.file_id,
-              name: f.name || f.filename,
-              url: f.url || null,
-            })),
+            aiFiles: data.files || [],
           });
         }
 

@@ -61,6 +61,11 @@ class ThronosAI:
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
         self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
         self.custom_model_url = os.getenv("CUSTOM_MODEL_URL", "").strip()
+        self.diko_mas_model_url = (
+            os.getenv("CUSTOM_MODEL_URL")
+            or os.getenv("DIKO_MAS_MODEL_URL")
+            or "http://127.0.0.1:8080/api/thrai/ask"
+        )
 
         # Default models
         self.gemini_model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
@@ -123,7 +128,7 @@ class ThronosAI:
     def generate_quantum_key(self) -> str:
         return secrets.token_hex(16)
 
-    def _base_payload(self, text: str, status: str, provider: str, model: str) -> Dict[str, Any]:
+    def _build_base_payload(self, text: str, status: str, provider: str, model: str) -> Dict[str, Any]:
         return {
             "response": text,
             "status": status,
@@ -131,6 +136,9 @@ class ThronosAI:
             "model": model,
             "quantum_key": self.generate_quantum_key(),
         }
+
+    def _base_payload(self, text: str, status: str, provider: str, model: str) -> Dict[str, Any]:
+        return self._build_base_payload(text, status, provider, model)
 
     def _language_directive(self, lang: Optional[str]) -> str:
         lang = (lang or "").lower()
@@ -227,7 +235,7 @@ Multiple files can be created in one response. Always describe what you're creat
 
     # ─── Provider calls ─────────────────────────────────────────────────────
 
-    def _call_gemini(self, prompt: str, model_name: str, lang: Optional[str]) -> Dict[str, Any]:
+    def _call_gemini(self, prompt: str, model_name: str, lang: Optional[str] = None, wallet: Optional[str] = None, session_id: Optional[str] = None) -> Dict[str, Any]:
         if not self.gemini_enabled:
             raise RuntimeError("Gemini not available (missing key or library)")
         try:
@@ -248,7 +256,7 @@ Multiple files can be created in one response. Always describe what you're creat
                 return self._base_payload("Quantum Core Notice: Gemini quota/rate limit.", "gemini_quota", "gemini", model_name)
             return self._base_payload(f"Quantum Core Error (Gemini): {msg}", "gemini_error", "gemini", model_name)
 
-    def _call_openai(self, prompt: str, model_name: str, lang: Optional[str]) -> Dict[str, Any]:
+    def _call_openai(self, prompt: str, model_name: str, lang: Optional[str] = None, wallet: Optional[str] = None, session_id: Optional[str] = None) -> Dict[str, Any]:
         if not self.openai_client:
             raise RuntimeError("OpenAI client not initialized")
         try:
@@ -271,7 +279,7 @@ Multiple files can be created in one response. Always describe what you're creat
                 return self._base_payload("Quantum Core Notice: OpenAI quota/rate limit.", "openai_quota", "openai", model_name)
             return self._base_payload(f"Quantum Core Error (OpenAI): {msg}", "openai_error", "openai", model_name)
 
-    def _call_anthropic(self, prompt: str, model_name: str, lang: Optional[str]) -> Dict[str, Any]:
+    def _call_anthropic(self, prompt: str, model_name: str, lang: Optional[str] = None, wallet: Optional[str] = None, session_id: Optional[str] = None) -> Dict[str, Any]:
         if not self.anthropic_enabled:
             raise RuntimeError("Anthropic not available (missing key or library)")
 
@@ -371,6 +379,60 @@ Multiple files can be created in one response. Always describe what you're creat
         )
         return err_payload
 
+    def _call_diko_mas_model(self, prompt: str, wallet: str = "", session_id: Optional[str] = None) -> Dict[str, Any]:
+        if not self.diko_mas_model_url:
+            return self._build_base_payload(
+                "Custom model URL is not configured. Set CUSTOM_MODEL_URL in Railway.",
+                status="config_error",
+                provider="diko_mas",
+                model="thrai",
+            )
+
+        payload = {
+            "prompt": prompt,
+            "session_id": session_id,
+            "wallet": wallet or None,
+        }
+
+        try:
+            res = requests.post(
+                self.diko_mas_model_url,
+                json=payload,
+                timeout=60,
+            )
+
+            try:
+                data = res.json()
+            except Exception:
+                data = {"response": res.text}
+
+            if all(k in data for k in ("response", "status", "provider", "model", "quantum_key")):
+                return data
+
+            txt = data.get("response") or data.get("text") or ""
+            status = data.get("status") or "ok"
+
+            base = self._build_base_payload(
+                txt or "Empty response from custom model.",
+                status=status,
+                provider=data.get("provider") or "diko_mas",
+                model=data.get("model") or "thrai",
+            )
+            if data.get("quantum_key"):
+                base["quantum_key"] = data["quantum_key"]
+
+            return base
+        except Exception as e:
+            return self._build_base_payload(
+                f"Quantum Core Error (Custom): {e}",
+                status="provider_error",
+                provider="diko_mas",
+                model="thrai",
+            )
+
+    def _call_claude(self, prompt: str, model_name: str, lang: Optional[str] = None, wallet: Optional[str] = None, session_id: Optional[str] = None) -> Dict[str, Any]:
+        return self._call_anthropic(prompt, model_name, lang)
+
     # ─── Local / blockchain knowledge ──────────────────────────────────────
 
     def _local_answer(self, prompt: str) -> Dict[str, Any]:
@@ -422,110 +484,99 @@ Multiple files can be created in one response. Always describe what you're creat
     ) -> Dict[str, Any]:
         prompt = (prompt or "").strip()
         if not prompt:
-            return self._base_payload("Empty prompt.", "error", "local", "offline")
+            return self._build_base_payload("Empty prompt.", "error", "local", "offline")
 
         mk = (model_key or "").strip().lower()
         lang = (kwargs.get("lang") or kwargs.get("language") or "").strip().lower() or None
 
-        route_key = mk or self.mode or "auto"
-
-        def store_and_return(ans: Dict[str, Any]) -> Dict[str, Any]:
-            self._store_history(prompt, ans, wallet)
+        def ensure_quantum_key(ans: Dict[str, Any]) -> Dict[str, Any]:
+            if ans is None:
+                return self._build_base_payload(
+                    "Empty response.",
+                    status="provider_error",
+                    provider="thronos_ai",
+                    model=mk or "auto",
+                )
+            if not ans.get("quantum_key"):
+                ans["quantum_key"] = self.generate_quantum_key()
             return ans
 
-        def append_error(local_ans: Dict[str, Any], err: Dict[str, Any]) -> Dict[str, Any]:
-            local_ans["response"] += "\n\n---\n[Σημείωση provider]: " + err.get("response", "")
-            return local_ans
+        try:
+            if mk in ("diko_mas", "custom-default", "thrai"):
+                resp = self._call_diko_mas_model(prompt, wallet=wallet, session_id=session_id)
+            elif mk and mk.startswith("gemini"):
+                resp = self._call_gemini(prompt, mk, lang=lang, wallet=wallet, session_id=session_id)
+            elif mk and (mk.startswith("gpt-") or mk.startswith("o")):
+                resp = self._call_openai(prompt, mk, lang=lang, wallet=wallet, session_id=session_id)
+            elif mk and mk.startswith("claude"):
+                resp = self._call_claude(prompt, mk, lang=lang, wallet=wallet, session_id=session_id)
+            else:
+                providers = []
 
-        def is_success(ans: Dict[str, Any]) -> bool:
-            return ans.get("status") not in {
-                "gemini_error",
-                "gemini_quota",
-                "openai_error",
-                "openai_quota",
-                "anthropic_error",
-                "custom_error",
-            }
+                if self.diko_mas_model_url:
+                    providers.append(lambda: self._call_diko_mas_model(prompt, wallet=wallet, session_id=session_id))
 
-        # Explicit routing
-        if route_key.startswith("gemini-"):
-            try:
-                ans = self._call_gemini(prompt, route_key, lang)
-                if not is_success(ans):
-                    return store_and_return(append_error(self._local_answer(prompt), ans))
-                return store_and_return(ans)
-            except Exception as e:
-                local = self._local_answer(prompt)
-                local["response"] += f"\n\n---\n[Σημείωση provider]: Gemini unavailable: {e}"
-                return store_and_return(local)
+                if self.gemini_api_key:
+                    providers.append(
+                        lambda: self._call_gemini(
+                            prompt,
+                            "gemini-2.5-flash",
+                            lang=lang,
+                            wallet=wallet,
+                            session_id=session_id,
+                        )
+                    )
 
-        if route_key.startswith("gpt-") or route_key.startswith("o"):
-            try:
-                ans = self._call_openai(prompt, route_key, lang)
-                if not is_success(ans):
-                    return store_and_return(append_error(self._local_answer(prompt), ans))
-                return store_and_return(ans)
-            except Exception as e:
-                local = self._local_answer(prompt)
-                local["response"] += f"\n\n---\n[Σημείωση provider]: OpenAI unavailable: {e}"
-                return store_and_return(local)
+                if getattr(self, "anthropic_api_key", None):
+                    providers.append(
+                        lambda: self._call_claude(
+                            prompt,
+                            "claude-3-sonnet-20240229",
+                            lang=lang,
+                            wallet=wallet,
+                            session_id=session_id,
+                        )
+                    )
 
-        if route_key.startswith("claude-"):
-            try:
-                ans = self._call_anthropic(prompt, route_key, lang)
-                if not is_success(ans):
-                    return store_and_return(append_error(self._local_answer(prompt), ans))
-                return store_and_return(ans)
-            except Exception as e:
-                local = self._local_answer(prompt)
-                local["response"] += f"\n\n---\n[Σημείωση provider]: Anthropic unavailable: {e}"
-                return store_and_return(local)
+                if self.openai_api_key:
+                    providers.append(
+                        lambda: self._call_openai(
+                            prompt,
+                            "gpt-4o",
+                            lang=lang,
+                            wallet=wallet,
+                            session_id=session_id,
+                        )
+                    )
 
-        if route_key.startswith("custom-"):
-            try:
-                ans = self._call_custom(prompt, route_key, session_id, lang)
-                if not is_success(ans):
-                    return store_and_return(append_error(self._local_answer(prompt), ans))
-                return store_and_return(ans)
-            except Exception as e:
-                local = self._local_answer(prompt)
-                local["response"] += f"\n\n---\n[Σημείωση provider]: Custom agent unavailable: {e}"
-                return store_and_return(local)
+                resp = None
+                for fn in providers:
+                    try:
+                        r = fn()
+                        if isinstance(r, dict) and r.get("status") not in ("provider_error", "config_error"):
+                            resp = r
+                            break
+                    except Exception:
+                        continue
 
-        if route_key == "local":
-            return store_and_return(self._local_answer(prompt))
+                if resp is None:
+                    resp = self._build_base_payload(
+                        "All AI providers failed. Please try again later.",
+                        status="provider_error",
+                        provider="thronos_ai",
+                        model="auto",
+                    )
 
-        # AUTO pipeline: gemini -> openai -> anthropic -> local
-        last_err = None
-
-        if self.gemini_enabled:
-            try:
-                a = self._call_gemini(prompt, self.gemini_model_name, lang)
-                if is_success(a):
-                    return store_and_return(a)
-                last_err = a
-            except Exception as e:
-                last_err = self._base_payload(f"Gemini unavailable: {e}", "gemini_error", "gemini", self.gemini_model_name)
-
-        if self.openai_client:
-            try:
-                a = self._call_openai(prompt, self.openai_model_name, lang)
-                if is_success(a):
-                    return store_and_return(a)
-                last_err = a
-            except Exception as e:
-                last_err = self._base_payload(f"OpenAI unavailable: {e}", "openai_error", "openai", self.openai_model_name)
-
-        if self.anthropic_enabled:
-            try:
-                a = self._call_anthropic(prompt, self.anthropic_model_name, lang)
-                if is_success(a):
-                    return store_and_return(a)
-                last_err = a
-            except Exception as e:
-                last_err = self._base_payload(f"Anthropic unavailable: {e}", "anthropic_error", "anthropic", self.anthropic_model_name)
-
-        local = self._local_answer(prompt)
-        if last_err:
-            local = append_error(local, last_err)
-        return store_and_return(local)
+            resp = ensure_quantum_key(resp)
+            self._store_history(prompt, resp, wallet)
+            return resp
+        except Exception as e:
+            resp = self._build_base_payload(
+                f"Quantum Core Error: {e}",
+                status="provider_error",
+                provider="thronos_ai",
+                model=mk or "auto",
+            )
+            resp = ensure_quantum_key(resp)
+            self._store_history(prompt, resp, wallet)
+            return resp

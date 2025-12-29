@@ -40,6 +40,7 @@
       <textarea id="spec" placeholder="π.χ. Θέλω login, dashboard, billing, admin panel..."></textarea>
 
       <button id="generate">GENERATE ARCHITECTURE</button>
+      <button id="downloadZipBtn" disabled>Download Project ZIP</button>
 
       <div class="muted">Tip: Τα blueprints ζουν στο /app/data/ai_blueprints (Railway volume).</div>
     </div>
@@ -53,6 +54,7 @@
 
 <script>
 const $ = (id)=>document.getElementById(id);
+let lastArchitectFiles = [];
 
 async function api(url, opts){
   const r = await fetch(url, opts);
@@ -107,6 +109,8 @@ $("generate").onclick = async ()=>{
 
   $("out").textContent = "Generating...\n";
   $("files").textContent = "";
+  lastArchitectFiles = [];
+  $("downloadZipBtn").disabled = true;
 
   try{
     const j = await api("/api/architect_generate",{
@@ -116,12 +120,62 @@ $("generate").onclick = async ()=>{
     });
     setStatus(true,"Architect: online");
     $("out").textContent = j.response || "";
-    $("files").textContent = j.files && j.files.length ? ("Files:\n"+parseFiles(j.files)) : "";
+    lastArchitectFiles = j.files || [];
+    const filesDiv = $("files");
+    filesDiv.innerHTML = "";
+    if (lastArchitectFiles.length > 0) {
+      let log = j.response || "";
+      log += "\n\nFiles:\n";
+      lastArchitectFiles.forEach(f => {
+        const name = f.filename || "file";
+        const url = f.url || ("/api/ai/generated/" + encodeURIComponent(name));
+        log += `- ${name} → ${url}\n`;
+      });
+      $("out").textContent = log;
+      lastArchitectFiles.forEach((f) => {
+        const name = f.filename || "file";
+        const url = f.url || ("/api/ai/generated/" + encodeURIComponent(name));
+        const a = document.createElement("a");
+        a.href = url;
+        a.textContent = name + (f.size ? ` (${f.size} bytes)` : "");
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        filesDiv.appendChild(a);
+        filesDiv.appendChild(document.createElement("br"));
+      });
+    } else {
+      $("files").textContent = j.files && j.files.length ? ("Files:\n"+parseFiles(j.files)) : "";
+    }
+    $("downloadZipBtn").disabled = !lastArchitectFiles.length;
   }catch(e){
     setStatus(false,"Architect: offline");
     $("out").textContent = "Σφάλμα: " + e.message;
   }
 };
+
+const downloadZipBtn = document.getElementById("downloadZipBtn");
+
+downloadZipBtn.addEventListener("click", async () => {
+  if (!lastArchitectFiles || lastArchitectFiles.length === 0) return;
+  const res = await fetch("/api/architect_download", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ files: lastArchitectFiles }),
+  });
+  if (!res.ok) {
+    alert("Failed to build ZIP");
+    return;
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "thronos_architecture.zip";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+});
 
 (async ()=>{
   try{ await loadBlueprints(); setStatus(true,"Architect: online"); }

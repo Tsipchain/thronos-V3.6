@@ -1919,10 +1919,15 @@
         });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
-        currentSessionId = data.id;
-        localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
-        await loadSessions();
-        await loadSessionMessages(currentSessionId);
+        const createdSession = data.session || data;
+        currentSessionId = createdSession ? createdSession.id : null;
+        if (currentSessionId) {
+          localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
+          await loadSessions();
+          await loadSessionMessages(currentSessionId);
+        } else {
+          setSessionStatus(t("status_error"));
+        }
         setSessionState("ready");
       } catch (e) {
           console.error("createSession error", e);

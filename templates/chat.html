@@ -103,42 +103,14 @@
       gap: 10px;
     }
 
-    .brand-main {
-      display: flex;
-      align-items: center;
-    }
-
-    .brand-logo {
-      width: 56px;
-      height: 56px;
-      border-radius: 16px;
-      background: radial-gradient(circle at 30% 0, #23ff6b, #071628);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin-right: 14px;
-      box-shadow: 0 0 20px rgba(35, 255, 107, 0.5);
-    }
-
-    .brand-logo img {
-      max-width: 70%;
-      max-height: 70%;
-      display: block;
-    }
-
-    .th-chip {
-      width: 32px;
-      height: 32px;
-      border-radius: 999px;
-      border: 1px solid var(--accent);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: 700;
-      font-size: 15px;
-      letter-spacing: 0.1em;
-      text-shadow: 0 0 8px rgba(35, 255, 107, 0.9);
-      box-shadow: 0 0 18px rgba(35, 255, 107, 0.4);
+    .q-logo {
+      width: 52px;
+      height: 52px;
+      border-radius: 14px;
+      box-shadow: 0 0 22px rgba(35, 255, 107, 0.45);
+      border: 1px solid rgba(35, 255, 107, 0.35);
+      background: radial-gradient(circle at 30% 20%, rgba(35, 255, 107, 0.14), transparent 65%);
+      object-fit: cover;
     }
 
     .q-title-block {
@@ -939,16 +911,15 @@
   <div class="quantum-shell">
     <header class="q-header">
       <div class="q-header-left">
-        <div class="th-chip">TH</div>
-        <div class="brand-main">
-          <div class="brand-logo">
-            <img src="/static/img/thronos-quantum-q.png" alt="Thronos Quantum" />
-          </div>
-          <div class="q-title-block">
-            <div class="q-title" id="titleText">Thronos Quantum</div>
-            <div class="q-subtitle" id="subtitleText">
-              Peer-to-peer encrypted AI console • Bound to Thronos chain
-            </div>
+        <img
+          class="q-logo"
+          src="{{ url_for('static', filename='img/thronos-quantum-q.png') }}"
+          alt="Thronos Quantum logo"
+        />
+        <div class="q-title-block">
+          <div class="q-title" id="titleText">Thronos Quantum</div>
+          <div class="q-subtitle" id="subtitleText">
+            Peer-to-peer encrypted AI console • Bound to Thronos chain
           </div>
         </div>
       </div>

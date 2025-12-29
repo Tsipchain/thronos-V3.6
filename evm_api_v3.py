@@ -285,6 +285,35 @@ def register_evm_routes(app, data_dir: str, ledger_file: str, chain_file: str, p
         """List all deployed contracts."""
         contracts = evm.list_contracts()
         return jsonify(contracts=contracts), 200
+
+
+    @app.route("/api/evm/contracts/recent", methods=["GET"])
+    def api_evm_list_contracts_recent():
+        """Alias endpoint that returns the most recent deployed contracts."""
+        contracts = evm.list_contracts()
+        try:
+            limit = int(request.args.get("limit", 10))
+        except Exception:
+            limit = 10
+        return jsonify(contracts=contracts[-limit:]), 200
+
+
+    @app.route("/api/evm/templates", methods=["GET"])
+    def api_evm_templates():
+        """Return available contract templates for UI pickers."""
+        templates = [
+            {
+                "name": "Counter",
+                "description": "Minimal counter contract with increment/decrement.",
+                "example": "function inc() public { counter += 1; }",
+            },
+            {
+                "name": "Token",
+                "description": "Simple ERC20-style token stub for demos.",
+                "example": "function transfer(address to, uint amount) public returns (bool)",
+            },
+        ]
+        return jsonify(templates=templates), 200
     
     @app.route("/api/evm/storage/<contract_address>/<int:key>", methods=["GET"])
     def api_evm_get_storage(contract_address: str, key: int):

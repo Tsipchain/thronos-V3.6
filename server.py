@@ -97,6 +97,10 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
+# Unified API contract
+API_BASE_PREFIX = os.getenv("API_BASE_PREFIX", "/api")
+APP_VERSION     = os.getenv("APP_VERSION", "v3.6")
+
 DATA_DIR   = os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data"))
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -2349,6 +2353,25 @@ def network_live():
         "active_peers":        active_peers_count,
     })
 
+
+def _current_chain_height() -> int:
+    """Return current chain height (including HEIGHT_OFFSET)."""
+    chain = load_json(CHAIN_FILE, [])
+    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    return HEIGHT_OFFSET + len(blocks)
+
+
+def _list_api_routes():
+    """Return list of API routes under the configured base prefix."""
+    routes = []
+    for rule in app.url_map.iter_rules():
+        if not str(rule).startswith(API_BASE_PREFIX):
+            continue
+        methods = sorted(m for m in rule.methods if m not in {"HEAD", "OPTIONS"})
+        routes.append({"rule": str(rule), "methods": methods})
+    routes.sort(key=lambda r: r["rule"])
+    return routes
+
 @app.route("/api/mempool")
 def api_mempool():
     return jsonify(load_mempool()), 200
@@ -2363,10 +2386,81 @@ def api_transactions():
     return jsonify(get_transactions_for_viewer()), 200
 
 
+@app.route("/api/health")
+def api_health():
+    """Lightweight health check with chain and version info."""
+    try:
+        height = _current_chain_height()
+    except Exception:
+        height = 0
+    return jsonify({
+        "ok": True,
+        "version": APP_VERSION,
+        "chain_height": height,
+        "api_base": API_BASE_PREFIX,
+        "time": datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    }), 200
+
+
+@app.route("/api/routes")
+def api_routes_listing():
+    """Return a JSON listing of available API routes under the contract base."""
+    return jsonify({"routes": _list_api_routes()}), 200
+
+
 # ─── NEW SERVICES APIs ─────────────────────────────
 @app.route("/api/bridge/data")
 def bridge_data():
     return jsonify(load_json(WATCHER_LEDGER_FILE, [])), 200
+
+
+def _load_bridge_txs():
+    txs = load_json(WATCHER_LEDGER_FILE, [])
+    if isinstance(txs, dict):
+        if "txs" in txs:
+            txs = txs.get("txs", [])
+        elif "transactions" in txs:
+            txs = txs.get("transactions", [])
+        else:
+            txs = list(txs.values())
+    return txs if isinstance(txs, list) else []
+
+
+@app.route("/api/bridge/txs")
+def api_bridge_txs():
+    """Return recorded bridge transactions (alias for watcher ledger)."""
+    return jsonify(txs=_load_bridge_txs()), 200
+
+
+@app.route("/api/bridge/stats")
+def api_bridge_stats():
+    """Return basic bridge statistics for UI dashboards."""
+    txs = _load_bridge_txs()
+    total_btc = 0.0
+    total_thr = 0.0
+    pending = 0
+    for tx in txs:
+        try:
+            total_btc += float(tx.get("btc_amount", tx.get("btc", 0.0)))
+            total_thr += float(tx.get("thr_amount", tx.get("thr", 0.0)))
+        except Exception:
+            pass
+        status = str(tx.get("status", "")).lower()
+        if status in {"pending", "processing"}:
+            pending += 1
+    return jsonify({
+        "txs": len(txs),
+        "total_btc": round(total_btc, 8),
+        "total_thr": round(total_thr, 6),
+        "pending": pending,
+        "last_updated": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }), 200
+
+
+@app.route("/api/bridge/burn", methods=["POST"])
+def api_bridge_burn_alias():
+    """Stub burn endpoint to keep client compatibility when burn flow is disabled."""
+    return jsonify({"ok": False, "message": "Bridge burn flow is not enabled on this node."}), 501
 
 @app.route("/api/iot/data")
 def iot_data():
@@ -3693,6 +3787,44 @@ def api_wallet_tokens(thr_addr):
         "total_tokens": len(tokens),
         "total_value_usd": total_value_usd,
         "last_updated": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    }), 200
+
+
+@app.route("/api/balance/<thr_addr>", methods=["GET"])
+def api_balance_alias(thr_addr: str):
+    """Compatibility alias that exposes a consolidated balance snapshot."""
+    ledger = load_json(LEDGER_FILE, {})
+    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
+    custom_token_balances = load_token_balances()
+
+    thr_balance = round(float(ledger.get(thr_addr, 0.0)), 6)
+    wbtc_balance = round(float(wbtc_ledger.get(thr_addr, 0.0)), 8)
+    l2e_balance = round(float(l2e_ledger.get(thr_addr, 0.0)), 6)
+
+    token_balances = {
+        "THR": thr_balance,
+        "WBTC": wbtc_balance,
+        "L2E": l2e_balance,
+    }
+
+    for symbol, balances in custom_token_balances.items():
+        try:
+            token_balances[symbol] = round(float(balances.get(thr_addr, 0.0)), 6)
+        except Exception:
+            token_balances[symbol] = 0.0
+
+    mempool_pending = [
+        tx for tx in load_mempool()
+        if isinstance(tx, dict) and (tx.get("from") == thr_addr or tx.get("to") == thr_addr or tx.get("thr_address") == thr_addr)
+    ]
+
+    return jsonify({
+        "address": thr_addr,
+        "thr_balance": thr_balance,
+        "token_balances": token_balances,
+        "mempool_pending": mempool_pending,
+        "updated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }), 200
 
 @app.route("/wallet/<thr_addr>")
@@ -6587,6 +6719,12 @@ def api_v1_get_courses():
     return jsonify(courses=courses), 200
 
 
+@app.route("/api/courses", methods=["GET"])
+def api_courses_alias():
+    """Alias for fetching courses without versioned prefix."""
+    return api_v1_get_courses()
+
+
 @app.route("/api/v1/courses/<string:course_id>", methods=["GET"])
 def api_v1_get_course(course_id: str):
     """Return details of a specific course."""
@@ -6753,6 +6891,16 @@ def api_v1_enroll_course(course_id: str):
     course.setdefault("students", []).append(student)
     save_courses(courses)
     return jsonify(status="success", tx=tx, new_balance_from=ledger[student]), 200
+
+
+@app.route("/api/courses/enroll", methods=["POST"])
+def api_courses_enroll_alias():
+    """Alias wrapper that forwards to the versioned enroll endpoint."""
+    data = request.get_json() or {}
+    course_id = (data.get("course_id") or data.get("id") or "").strip()
+    if not course_id:
+        return jsonify(status="error", message="Missing course_id"), 400
+    return api_v1_enroll_course(course_id)
 
 
 @app.route("/api/v1/courses/<string:course_id>/complete", methods=["POST"])
@@ -7025,6 +7173,16 @@ def api_v1_submit_quiz(course_id: str):
         passing_score=passing_score,
         results=results
     ), 200
+
+
+@app.route("/api/courses/quiz/submit", methods=["POST"])
+def api_courses_quiz_submit_alias():
+    """Alias wrapper for submitting course quizzes without the v1 prefix."""
+    data = request.get_json() or {}
+    course_id = (data.get("course_id") or data.get("id") or "").strip()
+    if not course_id:
+        return jsonify(status="error", message="Missing course_id"), 400
+    return api_v1_submit_quiz(course_id)
 
 
 @app.route("/api/v1/courses/<string:course_id>/quiz/status/<string:student>", methods=["GET"])
@@ -8254,6 +8412,12 @@ def api_chat_session_new():
     save_ai_sessions(sessions)
 
     return jsonify(ok=True, session=session), 200
+
+
+@app.route("/api/chat/session", methods=["POST"])
+def api_chat_session_alias():
+    """Alias for creating a new chat session (compatibility with older UI)."""
+    return api_chat_session_new()
 
 
 @app.route("/api/chat/session/<session_id>", methods=["GET", "DELETE", "PATCH"])

@@ -1,0 +1,657 @@
+{% extends "base.html" %}
+
+{% block title %}🗳️ Governance - Thronos DAO{% endblock %}
+
+{% block styles %}
+<style>
+    .gov-container {
+        max-width: 1000px;
+        margin: 0 auto;
+        padding: 20px;
+    }
+    .gov-header {
+        text-align: center;
+        padding: 40px 30px;
+        background: linear-gradient(135deg, #1a2a0a 0%, #0a2a1a 50%, #071510 100%);
+        border: 1px solid #4a7a2a;
+        border-radius: 16px;
+        margin-bottom: 30px;
+    }
+    .gov-header h1 {
+        color: #7AFF3C;
+        font-size: 2.5em;
+        margin: 0;
+        text-shadow: 0 0 20px rgba(122, 255, 60, 0.4);
+    }
+    .gov-header p {
+        color: #d7ffe6;
+        opacity: 0.9;
+        margin-top: 10px;
+    }
+    .stats-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+        margin-bottom: 30px;
+    }
+    .stat-card {
+        background: #0a1a0a;
+        border: 1px solid #2a4a2a;
+        border-radius: 12px;
+        padding: 20px;
+        text-align: center;
+    }
+    .stat-card .value {
+        color: #7AFF3C;
+        font-size: 1.8em;
+        font-weight: bold;
+    }
+    .stat-card .label {
+        color: #d7ffe6;
+        opacity: 0.8;
+        margin-top: 5px;
+    }
+    .section {
+        background: #0a1a0a;
+        border: 1px solid #2a4a2a;
+        border-radius: 14px;
+        padding: 25px;
+        margin-bottom: 25px;
+    }
+    .section h2 {
+        color: #7AFF3C;
+        margin: 0 0 20px 0;
+        border-bottom: 1px solid #2a4a2a;
+        padding-bottom: 10px;
+    }
+    .proposal-card {
+        background: #071510;
+        border: 1px solid #2a4a2a;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 15px;
+        transition: all 0.3s;
+    }
+    .proposal-card:hover {
+        border-color: #7AFF3C;
+    }
+    .proposal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 15px;
+    }
+    .proposal-title {
+        color: #d7ffe6;
+        font-size: 1.2em;
+        font-weight: bold;
+        margin: 0;
+    }
+    .proposal-status {
+        padding: 5px 12px;
+        border-radius: 20px;
+        font-size: 0.8em;
+        font-weight: bold;
+    }
+    .status-active {
+        background: rgba(122, 255, 60, 0.2);
+        color: #7AFF3C;
+        border: 1px solid #7AFF3C;
+    }
+    .status-passed {
+        background: rgba(60, 255, 122, 0.2);
+        color: #3CFF7A;
+        border: 1px solid #3CFF7A;
+    }
+    .status-rejected {
+        background: rgba(255, 107, 107, 0.2);
+        color: #ff6b6b;
+        border: 1px solid #ff6b6b;
+    }
+    .status-pending {
+        background: rgba(255, 193, 7, 0.2);
+        color: #ffc107;
+        border: 1px solid #ffc107;
+    }
+    .proposal-description {
+        color: #d7ffe6;
+        opacity: 0.85;
+        margin-bottom: 15px;
+        line-height: 1.6;
+    }
+    .proposal-meta {
+        display: flex;
+        gap: 20px;
+        font-size: 0.9em;
+        opacity: 0.7;
+        margin-bottom: 15px;
+        flex-wrap: wrap;
+    }
+    .vote-bar {
+        height: 10px;
+        background: #1a2a1a;
+        border-radius: 5px;
+        overflow: hidden;
+        margin-bottom: 10px;
+    }
+    .vote-bar-inner {
+        height: 100%;
+        background: linear-gradient(90deg, #3CFF7A 0%, #7AFF3C 100%);
+        border-radius: 5px;
+        transition: width 0.5s;
+    }
+    .vote-stats {
+        display: flex;
+        justify-content: space-between;
+        font-size: 0.9em;
+        margin-bottom: 15px;
+    }
+    .vote-stats .for { color: #3CFF7A; }
+    .vote-stats .against { color: #ff6b6b; }
+    .vote-buttons {
+        display: flex;
+        gap: 10px;
+    }
+    .btn-vote {
+        flex: 1;
+        padding: 12px;
+        border-radius: 8px;
+        font-weight: bold;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+    .btn-for {
+        background: rgba(60, 255, 122, 0.1);
+        border: 1px solid #3CFF7A;
+        color: #3CFF7A;
+    }
+    .btn-for:hover {
+        background: #3CFF7A;
+        color: #000;
+    }
+    .btn-against {
+        background: rgba(255, 107, 107, 0.1);
+        border: 1px solid #ff6b6b;
+        color: #ff6b6b;
+    }
+    .btn-against:hover {
+        background: #ff6b6b;
+        color: #000;
+    }
+    .btn-primary {
+        padding: 12px 20px;
+        border-radius: 8px;
+        border: 1px solid #7AFF3C;
+        background: #0a1a0a;
+        color: #7AFF3C;
+        cursor: pointer;
+        font-weight: bold;
+        transition: all 0.3s;
+    }
+    .btn-primary:hover {
+        background: #7AFF3C;
+        color: #000;
+    }
+    .form-group {
+        margin-bottom: 15px;
+    }
+    .form-group label {
+        display: block;
+        color: #7AFF3C;
+        margin-bottom: 5px;
+        font-weight: bold;
+    }
+    .form-group input, .form-group textarea, .form-group select {
+        width: 100%;
+        padding: 12px;
+        border-radius: 8px;
+        border: 1px solid #2a4a2a;
+        background: #071510;
+        color: #d7ffe6;
+    }
+    .form-group input:focus, .form-group textarea:focus {
+        outline: none;
+        border-color: #7AFF3C;
+    }
+    .tabs {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 20px;
+    }
+    .tab-btn {
+        padding: 12px 20px;
+        border: 1px solid #2a4a2a;
+        background: #071510;
+        color: #d7ffe6;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+    .tab-btn.active {
+        background: #7AFF3C;
+        color: #000;
+        border-color: #7AFF3C;
+    }
+    .voting-power-card {
+        background: linear-gradient(135deg, #1a2a0a, #0a1a0a);
+        border: 1px solid #4a7a2a;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 15px;
+    }
+    .voting-power-card .power {
+        font-size: 2em;
+        font-weight: bold;
+        color: #7AFF3C;
+    }
+    .voting-power-card .label {
+        font-size: 0.9em;
+        opacity: 0.7;
+    }
+    .empty-state {
+        text-align: center;
+        padding: 40px;
+        opacity: 0.6;
+    }
+    .time-remaining {
+        color: #ffc107;
+        font-weight: bold;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="gov-container">
+    <!-- Header -->
+    <div class="gov-header">
+        <h1>🗳️ Thronos DAO</h1>
+        <p>
+            <span class="lang-el">Αποκεντρωμένη διακυβέρνηση για την κοινότητα Thronos</span>
+            <span class="lang-en">Decentralized governance for the Thronos community</span>
+        </p>
+    </div>
+
+    <!-- Voting Power -->
+    <div class="voting-power-card">
+        <div>
+            <div class="label"><span class="lang-el">Η Ψηφοφορική σας Δύναμη</span><span class="lang-en">Your Voting Power</span></div>
+            <div class="power" id="votingPower">0</div>
+        </div>
+        <div style="text-align: right;">
+            <div class="label"><span class="lang-el">Βασίζεται στο THR balance σας</span><span class="lang-en">Based on your THR balance</span></div>
+            <div style="color: #d7ffe6;"><span id="walletAddress">Not connected</span></div>
+        </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-row">
+        <div class="stat-card">
+            <div class="value" id="totalProposals">0</div>
+            <div class="label"><span class="lang-el">Συνολικές Προτάσεις</span><span class="lang-en">Total Proposals</span></div>
+        </div>
+        <div class="stat-card">
+            <div class="value" id="activeProposals">0</div>
+            <div class="label"><span class="lang-el">Ενεργές</span><span class="lang-en">Active</span></div>
+        </div>
+        <div class="stat-card">
+            <div class="value" id="totalVotes">0</div>
+            <div class="label"><span class="lang-el">Συνολικές Ψήφοι</span><span class="lang-en">Total Votes</span></div>
+        </div>
+        <div class="stat-card">
+            <div class="value" id="passRate">0%</div>
+            <div class="label"><span class="lang-el">Ποσοστό Επιτυχίας</span><span class="lang-en">Pass Rate</span></div>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+        <button class="tab-btn active" onclick="showTab('active')">
+            🔥 <span class="lang-el">Ενεργές</span><span class="lang-en">Active</span>
+        </button>
+        <button class="tab-btn" onclick="showTab('all')">
+            📋 <span class="lang-el">Όλες</span><span class="lang-en">All</span>
+        </button>
+        <button class="tab-btn" onclick="showTab('create')">
+            ➕ <span class="lang-el">Νέα Πρόταση</span><span class="lang-en">New Proposal</span>
+        </button>
+    </div>
+
+    <!-- Active Proposals -->
+    <div id="active-tab" class="section tab-content active">
+        <h2>🔥 <span class="lang-el">Ενεργές Προτάσεις</span><span class="lang-en">Active Proposals</span></h2>
+        <div id="activeProposalsList"></div>
+    </div>
+
+    <!-- All Proposals -->
+    <div id="all-tab" class="section tab-content" style="display: none;">
+        <h2>📋 <span class="lang-el">Όλες οι Προτάσεις</span><span class="lang-en">All Proposals</span></h2>
+        <div id="allProposalsList"></div>
+    </div>
+
+    <!-- Create Proposal -->
+    <div id="create-tab" class="section tab-content" style="display: none;">
+        <h2>➕ <span class="lang-el">Δημιουργία Νέας Πρότασης</span><span class="lang-en">Create New Proposal</span></h2>
+
+        <div class="form-group">
+            <label><span class="lang-el">Τίτλος</span><span class="lang-en">Title</span></label>
+            <input type="text" id="proposalTitle" placeholder="Enter proposal title...">
+        </div>
+
+        <div class="form-group">
+            <label><span class="lang-el">Περιγραφή</span><span class="lang-en">Description</span></label>
+            <textarea id="proposalDescription" rows="5" placeholder="Describe your proposal in detail..."></textarea>
+        </div>
+
+        <div class="form-group">
+            <label><span class="lang-el">Κατηγορία</span><span class="lang-en">Category</span></label>
+            <select id="proposalCategory">
+                <option value="protocol">🔧 Protocol Change</option>
+                <option value="treasury">💰 Treasury</option>
+                <option value="feature">✨ New Feature</option>
+                <option value="community">👥 Community</option>
+                <option value="other">📝 Other</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label><span class="lang-el">Διάρκεια Ψηφοφορίας (ημέρες)</span><span class="lang-en">Voting Duration (days)</span></label>
+            <input type="number" id="proposalDuration" value="7" min="1" max="30">
+        </div>
+
+        <button class="btn-primary" onclick="createProposal()" style="width: 100%;">
+            🗳️ <span class="lang-el">Υποβολή Πρότασης</span><span class="lang-en">Submit Proposal</span>
+        </button>
+
+        <p style="margin-top: 15px; font-size: 0.9em; opacity: 0.7;">
+            <span class="lang-el">⚠️ Απαιτείται minimum 100 THR voting power για να υποβάλετε πρόταση</span>
+            <span class="lang-en">⚠️ Minimum 100 THR voting power required to submit a proposal</span>
+        </p>
+    </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let proposals = [];
+let connectedWallet = localStorage.getItem('thr_address');
+let votingPower = 0;
+
+// Tab switching
+function showTab(name) {
+    document.querySelectorAll('.tab-content').forEach(t => t.style.display = 'none');
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    $(name + '-tab').style.display = 'block';
+    event.target.classList.add('active');
+}
+
+// Load proposals
+async function loadProposals() {
+    try {
+        const res = await fetch('/api/v1/governance/proposals');
+        const data = await res.json();
+        proposals = data.proposals || [];
+
+        // Update stats
+        $('totalProposals').textContent = proposals.length;
+        const active = proposals.filter(p => p.status === 'active');
+        $('activeProposals').textContent = active.length;
+        const passed = proposals.filter(p => p.status === 'passed').length;
+        $('passRate').textContent = proposals.length > 0 ? Math.round((passed / proposals.length) * 100) + '%' : '0%';
+
+        // Render
+        renderProposals(active, 'activeProposalsList');
+        renderProposals(proposals, 'allProposalsList');
+
+    } catch (e) {
+        console.error('Failed to load proposals:', e);
+        // Show demo data
+        proposals = getDemoProposals();
+        renderProposals(proposals.filter(p => p.status === 'active'), 'activeProposalsList');
+        renderProposals(proposals, 'allProposalsList');
+    }
+}
+
+// Demo proposals
+function getDemoProposals() {
+    return [
+        {
+            id: '1',
+            title: 'Increase Mining Rewards by 10%',
+            description: 'This proposal suggests increasing the mining rewards by 10% to incentivize more miners to join the network.',
+            category: 'protocol',
+            status: 'active',
+            votes_for: 15000,
+            votes_against: 3000,
+            creator: 'THR79ca94a7eb70...',
+            created_at: '2025-12-27',
+            ends_at: '2026-01-03'
+        },
+        {
+            id: '2',
+            title: 'Add NFT Marketplace Integration',
+            description: 'Proposal to integrate a native NFT marketplace into the Thronos ecosystem.',
+            category: 'feature',
+            status: 'active',
+            votes_for: 8000,
+            votes_against: 2000,
+            creator: 'THR12345678abcd...',
+            created_at: '2025-12-28',
+            ends_at: '2026-01-04'
+        },
+        {
+            id: '3',
+            title: 'Community Fund Allocation',
+            description: 'Allocate 5000 THR from treasury for community events and marketing.',
+            category: 'treasury',
+            status: 'passed',
+            votes_for: 20000,
+            votes_against: 1000,
+            creator: 'THRabcdef123456...',
+            created_at: '2025-12-20',
+            ends_at: '2025-12-27'
+        }
+    ];
+}
+
+// Render proposals
+function renderProposals(items, containerId) {
+    const container = $(containerId);
+
+    if (!items || items.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <span class="lang-el">Δεν υπάρχουν προτάσεις</span>
+                <span class="lang-en">No proposals found</span>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = items.map(p => {
+        const totalVotes = (p.votes_for || 0) + (p.votes_against || 0);
+        const forPercent = totalVotes > 0 ? Math.round((p.votes_for / totalVotes) * 100) : 0;
+        const statusClass = p.status === 'active' ? 'status-active' :
+                           p.status === 'passed' ? 'status-passed' :
+                           p.status === 'rejected' ? 'status-rejected' : 'status-pending';
+
+        return `
+            <div class="proposal-card">
+                <div class="proposal-header">
+                    <h3 class="proposal-title">${escapeHtml(p.title)}</h3>
+                    <span class="proposal-status ${statusClass}">${p.status.toUpperCase()}</span>
+                </div>
+                <p class="proposal-description">${escapeHtml(p.description)}</p>
+                <div class="proposal-meta">
+                    <span>📁 ${p.category || 'General'}</span>
+                    <span>👤 ${p.creator ? p.creator.substring(0, 12) + '...' : 'Anonymous'}</span>
+                    <span>📅 ${p.created_at || 'N/A'}</span>
+                    ${p.status === 'active' ? `<span class="time-remaining">⏰ Ends: ${p.ends_at || 'N/A'}</span>` : ''}
+                </div>
+                <div class="vote-bar">
+                    <div class="vote-bar-inner" style="width: ${forPercent}%"></div>
+                </div>
+                <div class="vote-stats">
+                    <span class="for">👍 ${formatNumber(p.votes_for || 0)} (${forPercent}%)</span>
+                    <span class="against">👎 ${formatNumber(p.votes_against || 0)} (${100 - forPercent}%)</span>
+                </div>
+                ${p.status === 'active' ? `
+                    <div class="vote-buttons">
+                        <button class="btn-vote btn-for" onclick="vote('${p.id}', 'for')">
+                            👍 <span class="lang-el">Υπέρ</span><span class="lang-en">For</span>
+                        </button>
+                        <button class="btn-vote btn-against" onclick="vote('${p.id}', 'against')">
+                            👎 <span class="lang-el">Κατά</span><span class="lang-en">Against</span>
+                        </button>
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    }).join('');
+}
+
+// Vote
+async function vote(proposalId, voteType) {
+    if (!connectedWallet) {
+        alert('Please connect your wallet first');
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/v1/governance/vote', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                proposal_id: proposalId,
+                voter: connectedWallet,
+                vote: voteType,
+                power: votingPower
+            })
+        });
+        const data = await res.json();
+
+        if (data.status === 'success') {
+            alert('Vote recorded successfully!');
+            loadProposals();
+        } else {
+            alert('Error: ' + (data.message || 'Failed to vote'));
+        }
+    } catch (e) {
+        // Demo mode - just show success
+        alert('Vote recorded! (Demo mode)');
+        const proposal = proposals.find(p => p.id === proposalId);
+        if (proposal) {
+            if (voteType === 'for') proposal.votes_for += votingPower || 100;
+            else proposal.votes_against += votingPower || 100;
+            renderProposals(proposals.filter(p => p.status === 'active'), 'activeProposalsList');
+            renderProposals(proposals, 'allProposalsList');
+        }
+    }
+}
+
+// Create proposal
+async function createProposal() {
+    if (!connectedWallet) {
+        alert('Please connect your wallet first');
+        return;
+    }
+
+    const title = $('proposalTitle').value.trim();
+    const description = $('proposalDescription').value.trim();
+    const category = $('proposalCategory').value;
+    const duration = parseInt($('proposalDuration').value) || 7;
+
+    if (!title || !description) {
+        alert('Please fill in all fields');
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/v1/governance/proposals', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                title,
+                description,
+                category,
+                duration_days: duration,
+                creator: connectedWallet
+            })
+        });
+        const data = await res.json();
+
+        if (data.status === 'success') {
+            alert('Proposal created successfully!');
+            $('proposalTitle').value = '';
+            $('proposalDescription').value = '';
+            loadProposals();
+        } else {
+            alert('Error: ' + (data.message || 'Failed to create proposal'));
+        }
+    } catch (e) {
+        // Demo mode
+        alert('Proposal created! (Demo mode)');
+        proposals.unshift({
+            id: Date.now().toString(),
+            title,
+            description,
+            category,
+            status: 'active',
+            votes_for: 0,
+            votes_against: 0,
+            creator: connectedWallet,
+            created_at: new Date().toISOString().split('T')[0],
+            ends_at: new Date(Date.now() + duration * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+        });
+        $('proposalTitle').value = '';
+        $('proposalDescription').value = '';
+        renderProposals(proposals.filter(p => p.status === 'active'), 'activeProposalsList');
+        renderProposals(proposals, 'allProposalsList');
+        $('totalProposals').textContent = proposals.length;
+        $('activeProposals').textContent = proposals.filter(p => p.status === 'active').length;
+    }
+}
+
+// Load voting power
+async function loadVotingPower() {
+    if (!connectedWallet) {
+        $('walletAddress').textContent = 'Not connected';
+        $('votingPower').textContent = '0';
+        return;
+    }
+
+    $('walletAddress').textContent = connectedWallet.substring(0, 12) + '...';
+
+    try {
+        const res = await fetch(`/api/balance/${connectedWallet}`);
+        const data = await res.json();
+        votingPower = Math.floor(data.balance || 0);
+        $('votingPower').textContent = formatNumber(votingPower);
+    } catch (e) {
+        votingPower = 100; // Demo
+        $('votingPower').textContent = '100';
+    }
+}
+
+// Utilities
+function escapeHtml(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+function formatNumber(num) {
+    if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+    return num.toString();
+}
+
+// Initial load
+loadVotingPower();
+loadProposals();
+</script>
+{% endblock %}

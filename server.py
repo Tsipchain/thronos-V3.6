@@ -2226,6 +2226,18 @@ def network_stats():
         "pledge_growth": cumulative,
     })
 
+# ─── WALLETS COUNT ─────────────────────────────────────────────────────
+
+@app.route("/api/v1/wallets/count")
+def wallets_count():
+    """Return the count of unique wallets in the ledger"""
+    ledger = load_json(LEDGER_FILE, {})
+    # Count wallets with non-zero balance, excluding system addresses
+    system_addresses = {BURN_ADDRESS, AI_WALLET_ADDRESS, "GENESIS", "SYSTEM"}
+    wallet_count = sum(1 for addr, bal in ledger.items()
+                       if addr not in system_addresses and float(bal) > 0)
+    return jsonify({"count": wallet_count})
+
 # ─── PEERS & HEARTBEAT ─────────────────────────────────────────────────────
 
 def cleanup_expired_peers():
@@ -6743,6 +6755,205 @@ def api_v1_complete_course(course_id: str):
     return jsonify(status="success", tx=tx), 200
 
 
+# ─── Quiz API for Courses ──────────────────────────────────────────────
+#
+# Each course can have an optional quiz.  Quizzes are stored as a list of
+# questions with multiple choice answers.  Students must pass the quiz
+# (80% correct) before the teacher can mark them as complete.
+
+QUIZZES_FILE = os.path.join(DATA_DIR, "quizzes.json")
+
+def load_quizzes():
+    return load_json(QUIZZES_FILE, {})
+
+def save_quizzes(quizzes):
+    save_json(QUIZZES_FILE, quizzes)
+
+
+@app.route("/api/v1/courses/<string:course_id>/quiz", methods=["GET"])
+def api_v1_get_quiz(course_id: str):
+    """Return the quiz for a course (without correct answers for students)."""
+    quizzes = load_quizzes()
+    quiz = quizzes.get(course_id, {})
+    if not quiz:
+        return jsonify(quiz=None, message="No quiz for this course"), 200
+
+    # Return questions without correct answer indices (for student view)
+    safe_questions = []
+    for q in quiz.get("questions", []):
+        safe_questions.append({
+            "id": q.get("id"),
+            "question": q.get("question"),
+            "question_el": q.get("question_el", q.get("question")),
+            "options": q.get("options", []),
+            "options_el": q.get("options_el", q.get("options", []))
+        })
+
+    return jsonify(quiz={
+        "course_id": course_id,
+        "title": quiz.get("title", "Course Quiz"),
+        "title_el": quiz.get("title_el", "Quiz Μαθήματος"),
+        "passing_score": quiz.get("passing_score", 80),
+        "questions": safe_questions
+    }), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/quiz", methods=["POST"])
+def api_v1_create_quiz(course_id: str):
+    """Create or update a quiz for a course. Teacher only."""
+    data = request.get_json() or {}
+    teacher = (data.get("teacher_thr") or "").strip()
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+    questions = data.get("questions", [])
+
+    if not teacher or not auth_secret:
+        return jsonify(status="error", message="Missing auth"), 400
+
+    # Verify course exists and teacher owns it
+    courses = load_courses()
+    course = next((c for c in courses if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    if course.get("teacher") != teacher:
+        return jsonify(status="error", message="Not the course teacher"), 403
+
+    # Authenticate teacher
+    pledges = load_json(PLEDGE_CHAIN, [])
+    teacher_pledge = next((p for p in pledges if p.get("thr_address") == teacher), None)
+    if not teacher_pledge:
+        return jsonify(status="error", message="Teacher not pledged"), 404
+    stored_auth_hash = teacher_pledge.get("send_auth_hash")
+    if teacher_pledge.get("has_passphrase"):
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify(status="error", message="Invalid auth"), 403
+
+    # Validate questions format
+    validated_questions = []
+    for i, q in enumerate(questions):
+        if not q.get("question") or not q.get("options") or q.get("correct") is None:
+            return jsonify(status="error", message=f"Invalid question #{i+1}"), 400
+        validated_questions.append({
+            "id": i + 1,
+            "question": q.get("question"),
+            "question_el": q.get("question_el", q.get("question")),
+            "options": q.get("options"),
+            "options_el": q.get("options_el", q.get("options")),
+            "correct": int(q.get("correct"))
+        })
+
+    # Save quiz
+    quizzes = load_quizzes()
+    quizzes[course_id] = {
+        "course_id": course_id,
+        "title": data.get("title", "Course Quiz"),
+        "title_el": data.get("title_el", "Quiz Μαθήματος"),
+        "passing_score": int(data.get("passing_score", 80)),
+        "questions": validated_questions,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    }
+    save_quizzes(quizzes)
+
+    return jsonify(status="success", message="Quiz saved"), 201
+
+
+@app.route("/api/v1/courses/<string:course_id>/quiz/submit", methods=["POST"])
+def api_v1_submit_quiz(course_id: str):
+    """Submit quiz answers and get score. Records passing status."""
+    data = request.get_json() or {}
+    student = (data.get("student_thr") or "").strip()
+    answers = data.get("answers", {})
+
+    if not student:
+        return jsonify(status="error", message="Student address required"), 400
+
+    # Get quiz
+    quizzes = load_quizzes()
+    quiz = quizzes.get(course_id)
+    if not quiz:
+        return jsonify(status="error", message="No quiz for this course"), 404
+
+    # Check enrollment
+    courses = load_courses()
+    course = next((c for c in courses if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    if student not in course.get("students", []):
+        return jsonify(status="error", message="Not enrolled"), 403
+
+    # Calculate score
+    questions = quiz.get("questions", [])
+    total = len(questions)
+    if total == 0:
+        return jsonify(status="error", message="Quiz has no questions"), 500
+
+    correct = 0
+    results = []
+    for q in questions:
+        qid = str(q.get("id"))
+        user_answer = answers.get(qid)
+        is_correct = user_answer is not None and int(user_answer) == q.get("correct")
+        if is_correct:
+            correct += 1
+        results.append({
+            "question_id": qid,
+            "correct": is_correct,
+            "your_answer": user_answer,
+            "correct_answer": q.get("correct")
+        })
+
+    score = round((correct / total) * 100)
+    passing_score = quiz.get("passing_score", 80)
+    passed = score >= passing_score
+
+    # Record quiz attempt
+    quiz_attempts = load_json(os.path.join(DATA_DIR, "quiz_attempts.json"), {})
+    if course_id not in quiz_attempts:
+        quiz_attempts[course_id] = {}
+    quiz_attempts[course_id][student] = {
+        "score": score,
+        "passed": passed,
+        "attempts": quiz_attempts.get(course_id, {}).get(student, {}).get("attempts", 0) + 1,
+        "last_attempt": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    }
+    save_json(os.path.join(DATA_DIR, "quiz_attempts.json"), quiz_attempts)
+
+    # Mark as quiz_passed in course if passed
+    if passed:
+        if "quiz_passed" not in course:
+            course["quiz_passed"] = []
+        if student not in course["quiz_passed"]:
+            course["quiz_passed"].append(student)
+            save_courses(courses)
+
+    return jsonify(
+        status="success",
+        score=score,
+        correct=correct,
+        total=total,
+        passed=passed,
+        passing_score=passing_score,
+        results=results
+    ), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/quiz/status/<string:student>", methods=["GET"])
+def api_v1_quiz_status(course_id: str, student: str):
+    """Check if a student has passed the quiz."""
+    quiz_attempts = load_json(os.path.join(DATA_DIR, "quiz_attempts.json"), {})
+    attempt = quiz_attempts.get(course_id, {}).get(student, {})
+
+    return jsonify(
+        has_attempted=bool(attempt),
+        passed=attempt.get("passed", False),
+        score=attempt.get("score", 0),
+        attempts=attempt.get("attempts", 0)
+    ), 200
+
+
 # ─── Tokens & Pools API ───────────────────────────────────────────────
 #
 # These endpoints implement a minimal DeFi layer for community‑issued
@@ -8596,9 +8807,226 @@ def api_v1_music_search():
     }), 200
 
 
+# ─── Token Explorer, NFT & Governance Pages ─────────────────────────────────
+
+@app.route("/explorer")
+def explorer_page():
+    """Render the Token Explorer page"""
+    return render_template("explorer.html")
+
+
+@app.route("/nft")
+def nft_page():
+    """Render the NFT Marketplace page"""
+    return render_template("nft.html")
+
+
+@app.route("/governance")
+def governance_page():
+    """Render the Governance/DAO page"""
+    return render_template("governance.html")
+
+
+# ─── NFT API ─────────────────────────────────────────────────────────────────
+
+NFT_REGISTRY_FILE = os.path.join(DATA_DIR, "nft_registry.json")
+
+def load_nft_registry():
+    return load_json(NFT_REGISTRY_FILE, {"nfts": [], "collections": {}})
+
+def save_nft_registry(registry):
+    save_json(NFT_REGISTRY_FILE, registry)
+
+
+@app.route("/api/v1/nfts", methods=["GET"])
+def api_v1_nfts():
+    """Get all NFTs"""
+    registry = load_nft_registry()
+    return jsonify({"status": "success", "nfts": registry.get("nfts", [])}), 200
+
+
+@app.route("/api/v1/nfts/mint", methods=["POST"])
+def api_v1_nfts_mint():
+    """Mint a new NFT"""
+    name = request.form.get("name", "").strip()
+    description = request.form.get("description", "").strip()
+    category = request.form.get("category", "art")
+    price = float(request.form.get("price", 0))
+    royalties = int(request.form.get("royalties", 10))
+    creator = request.form.get("creator", "").strip()
+
+    if not name or not creator:
+        return jsonify({"status": "error", "message": "Name and creator required"}), 400
+
+    # Handle image upload
+    image_url = None
+    if "image" in request.files:
+        file = request.files["image"]
+        if file and file.filename:
+            ext = file.filename.rsplit(".", 1)[-1].lower()
+            if ext in ("png", "jpg", "jpeg", "gif", "webp"):
+                nft_id = f"NFT{int(time.time() * 1000)}"
+                filename = f"{nft_id}.{ext}"
+                upload_dir = os.path.join(app.static_folder, "nft_images")
+                os.makedirs(upload_dir, exist_ok=True)
+                file.save(os.path.join(upload_dir, filename))
+                image_url = f"/static/nft_images/{filename}"
+
+    # Create NFT
+    nft = {
+        "id": f"NFT{int(time.time() * 1000)}",
+        "name": name,
+        "description": description,
+        "category": category,
+        "price": price,
+        "royalties": royalties,
+        "creator": creator,
+        "owner": creator,
+        "image_url": image_url,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "for_sale": True
+    }
+
+    registry = load_nft_registry()
+    registry["nfts"].append(nft)
+    save_nft_registry(registry)
+
+    return jsonify({"status": "success", "nft": nft}), 201
+
+
+@app.route("/api/v1/nfts/buy", methods=["POST"])
+def api_v1_nfts_buy():
+    """Buy an NFT"""
+    data = request.get_json() or {}
+    nft_id = data.get("nft_id", "").strip()
+    buyer = data.get("buyer", "").strip()
+    auth_secret = data.get("auth_secret", "").strip()
+
+    if not nft_id or not buyer or not auth_secret:
+        return jsonify({"status": "error", "message": "Missing required fields"}), 400
+
+    registry = load_nft_registry()
+    nft = next((n for n in registry["nfts"] if n["id"] == nft_id), None)
+
+    if not nft:
+        return jsonify({"status": "error", "message": "NFT not found"}), 404
+
+    if not nft.get("for_sale"):
+        return jsonify({"status": "error", "message": "NFT not for sale"}), 400
+
+    if nft["owner"] == buyer:
+        return jsonify({"status": "error", "message": "You already own this NFT"}), 400
+
+    # Transfer ownership
+    old_owner = nft["owner"]
+    nft["owner"] = buyer
+    nft["for_sale"] = False
+    save_nft_registry(registry)
+
+    return jsonify({
+        "status": "success",
+        "message": f"NFT transferred from {old_owner} to {buyer}",
+        "nft": nft
+    }), 200
+
+
+# ─── Governance API ──────────────────────────────────────────────────────────
+
+GOVERNANCE_FILE = os.path.join(DATA_DIR, "governance.json")
+
+def load_governance():
+    return load_json(GOVERNANCE_FILE, {"proposals": [], "votes": {}})
+
+def save_governance(gov):
+    save_json(GOVERNANCE_FILE, gov)
+
+
+@app.route("/api/v1/governance/proposals", methods=["GET"])
+def api_v1_governance_proposals():
+    """Get all governance proposals"""
+    gov = load_governance()
+    return jsonify({"status": "success", "proposals": gov.get("proposals", [])}), 200
+
+
+@app.route("/api/v1/governance/proposals", methods=["POST"])
+def api_v1_governance_create_proposal():
+    """Create a new governance proposal"""
+    data = request.get_json() or {}
+    title = data.get("title", "").strip()
+    description = data.get("description", "").strip()
+    category = data.get("category", "other")
+    duration_days = int(data.get("duration_days", 7))
+    creator = data.get("creator", "").strip()
+
+    if not title or not description or not creator:
+        return jsonify({"status": "error", "message": "Missing required fields"}), 400
+
+    proposal = {
+        "id": f"PROP{int(time.time() * 1000)}",
+        "title": title,
+        "description": description,
+        "category": category,
+        "status": "active",
+        "votes_for": 0,
+        "votes_against": 0,
+        "creator": creator,
+        "created_at": time.strftime("%Y-%m-%d", time.gmtime()),
+        "ends_at": time.strftime("%Y-%m-%d", time.gmtime(time.time() + duration_days * 86400))
+    }
+
+    gov = load_governance()
+    gov["proposals"].append(proposal)
+    save_governance(gov)
+
+    return jsonify({"status": "success", "proposal": proposal}), 201
+
+
+@app.route("/api/v1/governance/vote", methods=["POST"])
+def api_v1_governance_vote():
+    """Vote on a proposal"""
+    data = request.get_json() or {}
+    proposal_id = data.get("proposal_id", "").strip()
+    voter = data.get("voter", "").strip()
+    vote = data.get("vote", "").strip()  # "for" or "against"
+    power = int(data.get("power", 1))
+
+    if not proposal_id or not voter or vote not in ("for", "against"):
+        return jsonify({"status": "error", "message": "Invalid vote data"}), 400
+
+    gov = load_governance()
+    proposal = next((p for p in gov["proposals"] if p["id"] == proposal_id), None)
+
+    if not proposal:
+        return jsonify({"status": "error", "message": "Proposal not found"}), 404
+
+    if proposal["status"] != "active":
+        return jsonify({"status": "error", "message": "Proposal is not active"}), 400
+
+    # Check if already voted
+    vote_key = f"{proposal_id}:{voter}"
+    if vote_key in gov.get("votes", {}):
+        return jsonify({"status": "error", "message": "Already voted on this proposal"}), 400
+
+    # Record vote
+    if "votes" not in gov:
+        gov["votes"] = {}
+    gov["votes"][vote_key] = {"vote": vote, "power": power, "timestamp": time.time()}
+
+    # Update proposal counts
+    if vote == "for":
+        proposal["votes_for"] = proposal.get("votes_for", 0) + power
+    else:
+        proposal["votes_against"] = proposal.get("votes_against", 0) + power
+
+    save_governance(gov)
+
+    return jsonify({"status": "success", "message": "Vote recorded"}), 200
+
+
 # ... ΤΕΛΟΣ όλων των routes / helpers ...
 
 print("✓ AI Session fixes loaded - supports guest mode and file uploads")
+print("✓ Token Explorer, NFT Marketplace and Governance pages loaded")
 print("✓ Decent Music Platform loaded - artist registration, uploads, and royalties")
 # --- Startup hooks ---
 ensure_ai_wallet()

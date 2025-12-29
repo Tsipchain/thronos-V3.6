@@ -34,6 +34,17 @@
       box-sizing: border-box;
     }
 
+    /* Language toggle */
+    .lang-en, .lang-ja, .lang-ru, .lang-es { display: none; }
+    body.lang-en .lang-el { display: none; }
+    body.lang-en .lang-en { display: inline; }
+    body.lang-ja .lang-el { display: none; }
+    body.lang-ja .lang-ja { display: inline; }
+    body.lang-ru .lang-el { display: none; }
+    body.lang-ru .lang-ru { display: inline; }
+    body.lang-es .lang-el { display: none; }
+    body.lang-es .lang-es { display: inline; }
+
     body {
       margin: 0;
       min-height: 100vh;
@@ -917,9 +928,13 @@
           alt="Thronos Quantum logo"
         />
         <div class="q-title-block">
-          <div class="q-title" id="titleText">Thronos Quantum</div>
-          <div class="q-subtitle" id="subtitleText">
-            Peer-to-peer encrypted AI console • Bound to Thronos chain
+          <div class="q-title">Thronos Quantum</div>
+          <div class="q-subtitle">
+            <span class="lang-el">Peer-to-peer encrypted AI console • Bound to Thronos chain</span>
+            <span class="lang-en">Peer-to-peer encrypted AI console • Bound to Thronos chain</span>
+            <span class="lang-ja">P2P暗号化AIコンソール • Thronosチェーンに接続</span>
+            <span class="lang-ru">P2P зашифрованная AI консоль • Привязана к Thronos chain</span>
+            <span class="lang-es">Consola AI encriptada P2P • Conectada a Thronos chain</span>
           </div>
         </div>
       </div>
@@ -951,13 +966,19 @@
       <!-- Sessions -->
       <section class="panel sessions">
         <div class="panel-header">
-          <div class="panel-title" id="sessionsTitleLabel">Sessions</div>
+          <div class="panel-title">
+            <span class="lang-el">Συνεδρίες</span>
+            <span class="lang-en">Sessions</span>
+            <span class="lang-ja">セッション</span>
+            <span class="lang-ru">Сессии</span>
+            <span class="lang-es">Sesiones</span>
+          </div>
           <div class="panel-actions">
             <button class="btn-ghost" id="newSessionBtn">
-              ◦ New
+              ◦ <span class="lang-el">Νέα</span><span class="lang-en">New</span><span class="lang-ja">新規</span><span class="lang-ru">Новая</span><span class="lang-es">Nueva</span>
             </button>
             <button class="btn-ghost btn-ghost-danger" id="renameSessionBtn">
-              ✎ Rename
+              ✎ <span class="lang-el">Μετον.</span><span class="lang-en">Rename</span><span class="lang-ja">名前変更</span><span class="lang-ru">Переим.</span><span class="lang-es">Renombrar</span>
             </button>
           </div>
         </div>
@@ -1064,7 +1085,13 @@
       <!-- Telemetry -->
       <section class="panel telemetry">
         <div class="panel-header">
-          <div class="panel-title" id="telemetryTitleLabel">Node Telemetry</div>
+          <div class="panel-title">
+            <span class="lang-el">Τηλεμετρία Node</span>
+            <span class="lang-en">Node Telemetry</span>
+            <span class="lang-ja">ノードテレメトリ</span>
+            <span class="lang-ru">Телеметрия ноды</span>
+            <span class="lang-es">Telemetría del Nodo</span>
+          </div>
         </div>
         <div class="telemetry-kv">
           <div class="telemetry-row">
@@ -2152,7 +2179,19 @@
       setSending(true);
     }
 
-    document.addEventListener("DOMContentLoaded", init);
+    // --- Language Support ---
+    const LANG_SEQUENCE = ['gr', 'en', 'ja', 'es', 'ru'];
+    const LANG_CLASS_MAP = { 'gr': 'lang-el', 'en': 'lang-en', 'ja': 'lang-ja', 'es': 'lang-es', 'ru': 'lang-ru' };
+
+    function applyLanguage() {
+      const lang = localStorage.getItem("lang") || "gr";
+      document.body.className = LANG_CLASS_MAP[lang] || '';
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      applyLanguage();
+      init();
+    });
   </script>
 </body>
 </html>

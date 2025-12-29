@@ -60,15 +60,11 @@ class ThronosAI:
         self.gemini_api_key = (os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")).strip()
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
         self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-        self.custom_model_url = (
-            os.getenv("CUSTOM_MODEL_URL")
-            or os.getenv("DIKO_MAS_MODEL_URL")
-            or ""
-        ).strip()
+        self.custom_model_url = os.getenv("CUSTOM_MODEL_URL", "").strip()
 
         # Default models
-        self.gemini_model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-        self.openai_model_name = os.getenv("OPENAI_MODEL", "gpt-4o")
+        self.gemini_model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
+        self.openai_model_name = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
         self.anthropic_model_name = os.getenv("ANTHROPIC_MODEL", "claude-3-sonnet")
         self.custom_model_name = os.getenv("CUSTOM_MODEL", "custom-default")
 
@@ -235,7 +231,6 @@ Multiple files can be created in one response. Always describe what you're creat
         if not self.gemini_enabled:
             raise RuntimeError("Gemini not available (missing key or library)")
         try:
-            model_name = model_name or self.gemini_model_name or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
             system_instruction = self._system_prompt(lang)
 
             model = genai.GenerativeModel(
@@ -257,7 +252,6 @@ Multiple files can be created in one response. Always describe what you're creat
         if not self.openai_client:
             raise RuntimeError("OpenAI client not initialized")
         try:
-            model_name = model_name or self.openai_model_name or os.getenv("OPENAI_MODEL", "gpt-4o")
             system_prompt = self._system_prompt(lang)
 
             completion = self.openai_client.chat.completions.create(
@@ -336,61 +330,46 @@ Multiple files can be created in one response. Always describe what you're creat
             ans["latency_ms"] = latency_ms
             return ans
 
-    def _call_custom_model(
-        self,
-        prompt: str,
-        history: Optional[List[Dict]] = None,
-        session_id: Optional[str] = None,
-        lang: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        if not self.custom_model_url:
-            return self._base_payload(
-                "Custom model URL is not configured.",
-                "config_error",
-                "custom",
-                "thrai",
-            )
+    def _call_custom(self, prompt: str, model_name: str, session_id: Optional[str], lang: Optional[str]) -> Dict[str, Any]:
+        if not self.custom_enabled:
+            raise RuntimeError("Custom model URL not configured")
 
+        model = model_name or self.custom_model_name
         payload = {
             "prompt": prompt,
             "session_id": session_id,
-            "history": history or [],
             "lang": lang,
+            "model": model,
         }
-        headers = {"Content-Type": "application/json"}
         last_error = None
         for _ in range(2):
             started = time.time()
             try:
-                res = requests.post(self.custom_model_url, json=payload, headers=headers, timeout=60)
+                resp = requests.post(self.custom_model_url, json=payload, timeout=20)
                 latency_ms = int((time.time() - started) * 1000)
-                if res.status_code >= 400:
-                    last_error = f"HTTP {res.status_code}: {res.text}"
+                if resp.status_code >= 400:
+                    last_error = f"HTTP {resp.status_code}: {resp.text}"
                     continue
                 try:
-                    data = res.json()
+                    data = resp.json()
                 except Exception:
-                    data = {"response": res.text}
+                    data = {"response": resp.text}
                 text = (data.get("response") or data.get("text") or "").strip()
-                result = {
-                    "response": text or "Empty response from custom model.",
-                    "status": "ok" if text else "error",
-                    "provider": "custom",
-                    "model": "thrai",
-                    "quantum_key": self.generate_quantum_key(),
-                }
-                result["latency_ms"] = latency_ms
-                return result
+                if not text:
+                    text = "Quantum Core: empty response from custom agent."
+                ans = self._base_payload(text, "custom", "custom", model)
+                ans["latency_ms"] = latency_ms
+                return ans
             except Exception as e:
                 last_error = str(e)
 
-        return {
-            "response": f"Quantum Core Error (Custom): {last_error or 'Unknown error'}",
-            "status": "custom_error",
-            "provider": "custom",
-            "model": "thrai",
-            "quantum_key": self.generate_quantum_key(),
-        }
+        err_payload = self._base_payload(
+            f"Quantum Core Error (Custom): {last_error or 'Unknown error'}",
+            "custom_error",
+            "custom",
+            model,
+        )
+        return err_payload
 
     # ─── Local / blockchain knowledge ──────────────────────────────────────
 
@@ -447,7 +426,6 @@ Multiple files can be created in one response. Always describe what you're creat
 
         mk = (model_key or "").strip().lower()
         lang = (kwargs.get("lang") or kwargs.get("language") or "").strip().lower() or None
-        history = kwargs.get("history") or []
 
         route_key = mk or self.mode or "auto"
 
@@ -467,47 +445,87 @@ Multiple files can be created in one response. Always describe what you're creat
                 "openai_quota",
                 "anthropic_error",
                 "custom_error",
-                "config_error",
             }
 
-        ans = None
-        try:
-            if mk in ("diko_mas", "custom", "thrai") or mk.startswith("custom-"):
-                ans = self._call_custom_model(prompt, history, session_id, lang)
-            elif mk.startswith("gemini"):
-                ans = self._call_gemini(prompt, mk, lang)
-            elif mk.startswith("gpt") or mk.startswith("o"):
-                ans = self._call_openai(prompt, mk, lang)
-            elif mk.startswith("claude"):
-                ans = self._call_anthropic(prompt, mk, lang)
-            elif route_key.startswith("gemini"):
-                ans = self._call_gemini(prompt, self.gemini_model_name, lang)
-            elif route_key.startswith("gpt") or route_key.startswith("o"):
-                ans = self._call_openai(prompt, self.openai_model_name, lang)
-            elif route_key.startswith("claude"):
-                ans = self._call_anthropic(prompt, self.anthropic_model_name, lang)
-            elif route_key == "local":
-                return store_and_return(self._local_answer(prompt))
-            elif self.mode == "auto" or route_key == "auto":
-                if self.custom_model_url:
-                    ans = self._call_custom_model(prompt, history, session_id, lang)
-                    if "error" in (ans or {}).get("status", ""):
-                        ans = None
-                if not ans and self.gemini_enabled:
-                    ans = self._call_gemini(prompt, "gemini-2.5-flash", lang)
-                if not ans and self.openai_client:
-                    ans = self._call_openai(prompt, "gpt-4o", lang)
-                if not ans and self.anthropic_enabled:
-                    ans = self._call_anthropic(prompt, "claude-3-sonnet-20240229", lang)
-
-            if ans:
+        # Explicit routing
+        if route_key.startswith("gemini-"):
+            try:
+                ans = self._call_gemini(prompt, route_key, lang)
                 if not is_success(ans):
                     return store_and_return(append_error(self._local_answer(prompt), ans))
                 return store_and_return(ans)
-        except Exception as e:
-            local = self._local_answer(prompt)
-            local["response"] += f"\n\n---\n[Σημείωση provider]: {e}"
-            return store_and_return(local)
+            except Exception as e:
+                local = self._local_answer(prompt)
+                local["response"] += f"\n\n---\n[Σημείωση provider]: Gemini unavailable: {e}"
+                return store_and_return(local)
+
+        if route_key.startswith("gpt-") or route_key.startswith("o"):
+            try:
+                ans = self._call_openai(prompt, route_key, lang)
+                if not is_success(ans):
+                    return store_and_return(append_error(self._local_answer(prompt), ans))
+                return store_and_return(ans)
+            except Exception as e:
+                local = self._local_answer(prompt)
+                local["response"] += f"\n\n---\n[Σημείωση provider]: OpenAI unavailable: {e}"
+                return store_and_return(local)
+
+        if route_key.startswith("claude-"):
+            try:
+                ans = self._call_anthropic(prompt, route_key, lang)
+                if not is_success(ans):
+                    return store_and_return(append_error(self._local_answer(prompt), ans))
+                return store_and_return(ans)
+            except Exception as e:
+                local = self._local_answer(prompt)
+                local["response"] += f"\n\n---\n[Σημείωση provider]: Anthropic unavailable: {e}"
+                return store_and_return(local)
+
+        if route_key.startswith("custom-"):
+            try:
+                ans = self._call_custom(prompt, route_key, session_id, lang)
+                if not is_success(ans):
+                    return store_and_return(append_error(self._local_answer(prompt), ans))
+                return store_and_return(ans)
+            except Exception as e:
+                local = self._local_answer(prompt)
+                local["response"] += f"\n\n---\n[Σημείωση provider]: Custom agent unavailable: {e}"
+                return store_and_return(local)
+
+        if route_key == "local":
+            return store_and_return(self._local_answer(prompt))
+
+        # AUTO pipeline: gemini -> openai -> anthropic -> local
+        last_err = None
+
+        if self.gemini_enabled:
+            try:
+                a = self._call_gemini(prompt, self.gemini_model_name, lang)
+                if is_success(a):
+                    return store_and_return(a)
+                last_err = a
+            except Exception as e:
+                last_err = self._base_payload(f"Gemini unavailable: {e}", "gemini_error", "gemini", self.gemini_model_name)
+
+        if self.openai_client:
+            try:
+                a = self._call_openai(prompt, self.openai_model_name, lang)
+                if is_success(a):
+                    return store_and_return(a)
+                last_err = a
+            except Exception as e:
+                last_err = self._base_payload(f"OpenAI unavailable: {e}", "openai_error", "openai", self.openai_model_name)
+
+        if self.anthropic_enabled:
+            try:
+                a = self._call_anthropic(prompt, self.anthropic_model_name, lang)
+                if is_success(a):
+                    return store_and_return(a)
+                last_err = a
+            except Exception as e:
+                last_err = self._base_payload(f"Anthropic unavailable: {e}", "anthropic_error", "anthropic", self.anthropic_model_name)
 
         local = self._local_answer(prompt)
+        if last_err:
+            local = append_error(local, last_err)
         return store_and_return(local)

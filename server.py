@@ -3638,9 +3638,17 @@ def api_create_token():
     description = (data.get("description") or "").strip()
 
     # Token permissions (creator-controlled)
-    transferable = data.get("transferable", True)  # Default: tokens can be sent
-    burnable = data.get("burnable", False)  # Default: tokens cannot be burned
-    mintable = data.get("mintable", False)  # Default: cannot mint new tokens
+    # Handle both JSON booleans and FormData strings ("true"/"false")
+    def parse_bool(val, default=False):
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, str):
+            return val.lower() in ('true', '1', 'yes', 'on')
+        return default
+
+    transferable = parse_bool(data.get("transferable"), True)  # Default: tokens can be sent
+    burnable = parse_bool(data.get("burnable"), False)  # Default: tokens cannot be burned
+    mintable = parse_bool(data.get("mintable"), False)  # Default: cannot mint new tokens
 
     # Check for logo file upload (optional, FREE!)
     logo_file = request.files.get("logo") if request.files else None
@@ -3732,17 +3740,26 @@ def api_create_token():
     # Handle logo upload if provided (FREE - no extra charge!)
     if logo_file and logo_file.filename:
         try:
+            # Ensure logo directory exists
+            os.makedirs(TOKEN_LOGOS_DIR, exist_ok=True)
+
             ext = os.path.splitext(secure_filename(logo_file.filename))[1] or ".png"
             logo_filename = f"{token_id}{ext}"
             logo_path = os.path.join(TOKEN_LOGOS_DIR, logo_filename)
+
+            logger.info(f"Saving logo for {symbol} to: {logo_path}")
             logo_file.save(logo_path)
 
-            # Update token with logo path
-            token["logo"] = f"/static/token_logos/{logo_filename}"
-            tokens[symbol] = token
-            save_custom_tokens(tokens)
+            # Verify file was saved
+            if os.path.exists(logo_path):
+                token["logo"] = f"/static/token_logos/{logo_filename}"
+                tokens[symbol] = token
+                save_custom_tokens(tokens)
+                logger.info(f"Logo saved successfully for token {symbol}: {token['logo']}")
+            else:
+                logger.warning(f"Logo file not found after save for token {symbol}")
         except Exception as e:
-            logger.warning(f"Failed to save logo for token {symbol}: {e}")
+            logger.error(f"Failed to save logo for token {symbol}: {e}", exc_info=True)
 
     if initial_supply > 0:
         token_ledger = {creator: initial_supply}
@@ -3776,19 +3793,33 @@ def api_upload_token_logo(symbol):
         return jsonify({"ok": False, "error": "Token not found"}), 404
 
     if token["creator"] != creator:
+        logger.warning(f"Logo upload unauthorized for {symbol}: {creator} != {token['creator']}")
         return jsonify({"ok": False, "error": "Not authorized"}), 403
 
-    # Save logo
-    ext = os.path.splitext(secure_filename(file.filename))[1] or ".png"
-    logo_filename = f"{token['id']}{ext}"
-    logo_path = os.path.join(TOKEN_LOGOS_DIR, logo_filename)
-    file.save(logo_path)
+    try:
+        # Ensure logo directory exists
+        os.makedirs(TOKEN_LOGOS_DIR, exist_ok=True)
+
+        # Save logo
+        ext = os.path.splitext(secure_filename(file.filename))[1] or ".png"
+        logo_filename = f"{token['id']}{ext}"
+        logo_path = os.path.join(TOKEN_LOGOS_DIR, logo_filename)
+
+        logger.info(f"Uploading logo for {symbol} to: {logo_path}")
+        file.save(logo_path)
+
+        if not os.path.exists(logo_path):
+            return jsonify({"ok": False, "error": "Failed to save logo file"}), 500
+    except Exception as e:
+        logger.error(f"Error saving logo for {symbol}: {e}", exc_info=True)
+        return jsonify({"ok": False, "error": f"Failed to save logo: {str(e)}"}), 500
 
     # Update token
     token["logo"] = f"/static/token_logos/{logo_filename}"
     tokens[symbol.upper()] = token
     save_custom_tokens(tokens)
 
+    logger.info(f"Logo uploaded successfully for {symbol}: {token['logo']}")
     return jsonify({"ok": True, "logo": token["logo"]}), 200
 
 @app.route("/api/tokens/list")
@@ -3860,7 +3891,7 @@ def api_token_transfer():
     if amount <= 0:
         return jsonify({"ok": False, "error": "Amount must be > 0"}), 400
 
-    if not is_valid_address(from_thr) or not is_valid_address(to_thr):
+    if not validate_thr_address(from_thr) or not validate_thr_address(to_thr):
         return jsonify({"ok": False, "error": "Invalid address format"}), 400
 
     # First try custom_tokens.json (dict-based, newer format)
@@ -6750,6 +6781,119 @@ def api_v1_get_pools():
     return jsonify(pools=pools), 200
 
 
+@app.route("/api/v1/pools/positions/<address>")
+def api_v1_user_positions(address):
+    """
+    Get user's liquidity positions with calculated values.
+    Returns share amounts, token amounts, and estimated values.
+    """
+    if not address or not validate_thr_address(address):
+        return jsonify(status="error", message="Invalid address"), 400
+
+    pools = load_pools()
+    user_positions = []
+
+    # Get THR price for value calculations
+    thr_price = 0.0042  # Default, could be from external source
+
+    for pool in pools:
+        providers = pool.get("providers", {})
+        user_shares = float(providers.get(address, 0))
+
+        if user_shares > 0:
+            total_shares = float(pool.get("total_shares", 0))
+            reserves_a = float(pool.get("reserves_a", 0))
+            reserves_b = float(pool.get("reserves_b", 0))
+
+            # Calculate user's portion of each token
+            share_ratio = user_shares / total_shares if total_shares > 0 else 0
+            token_a_amount = round(reserves_a * share_ratio, 6)
+            token_b_amount = round(reserves_b * share_ratio, 6)
+
+            # Estimate value in THR
+            token_a = pool.get("token_a", "")
+            token_b = pool.get("token_b", "")
+
+            # Simple value estimation (in THR)
+            value_thr = 0
+            if token_a == "THR":
+                value_thr += token_a_amount
+            elif token_a == "WBTC":
+                value_thr += token_a_amount * 8000000  # ~8M THR per WBTC estimate
+            else:
+                value_thr += token_a_amount * 0.01  # Custom tokens rough estimate
+
+            if token_b == "THR":
+                value_thr += token_b_amount
+            elif token_b == "WBTC":
+                value_thr += token_b_amount * 8000000
+            else:
+                value_thr += token_b_amount * 0.01
+
+            position = {
+                "pool_id": pool.get("id"),
+                "token_a": token_a,
+                "token_b": token_b,
+                "user_shares": round(user_shares, 6),
+                "total_shares": round(total_shares, 6),
+                "share_percent": round(share_ratio * 100, 4),
+                "token_a_amount": token_a_amount,
+                "token_b_amount": token_b_amount,
+                "value_thr": round(value_thr, 6),
+                "value_usd": round(value_thr * thr_price, 2),
+                "reserves_a": reserves_a,
+                "reserves_b": reserves_b
+            }
+
+            # Add referral info if available
+            referrals = pool.get("referrals", {})
+            user_referrals = [addr for addr, ref in referrals.items() if ref == address]
+            if user_referrals:
+                position["referral_count"] = len(user_referrals)
+                position["referral_bonus_earned"] = round(len(user_referrals) * 0.001, 6)  # 0.1% bonus per referral
+
+            user_positions.append(position)
+
+    # Calculate totals
+    total_value_thr = sum(p["value_thr"] for p in user_positions)
+    total_value_usd = sum(p["value_usd"] for p in user_positions)
+
+    return jsonify({
+        "status": "success",
+        "address": address,
+        "positions": user_positions,
+        "total_pools": len(user_positions),
+        "total_value_thr": round(total_value_thr, 6),
+        "total_value_usd": round(total_value_usd, 2)
+    }), 200
+
+
+@app.route("/api/v1/pools/referral/<pool_id>")
+def api_v1_pool_referral_stats(pool_id):
+    """Get referral statistics for a pool."""
+    pools = load_pools()
+    pool = next((p for p in pools if p.get("id") == pool_id), None)
+
+    if not pool:
+        return jsonify(status="error", message="Pool not found"), 404
+
+    referrals = pool.get("referrals", {})
+
+    # Group referrals by referrer
+    referrer_stats = {}
+    for referred, referrer in referrals.items():
+        if referrer not in referrer_stats:
+            referrer_stats[referrer] = []
+        referrer_stats[referrer].append(referred)
+
+    return jsonify({
+        "status": "success",
+        "pool_id": pool_id,
+        "total_referrals": len(referrals),
+        "referrer_stats": {k: len(v) for k, v in referrer_stats.items()}
+    }), 200
+
+
 @app.route("/api/v1/pools", methods=["POST"])
 def api_v1_create_pool():
     """
@@ -6907,6 +7051,7 @@ def api_v1_add_liquidity():
     provider = (data.get("provider_thr") or "").strip()
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
+    referrer = (data.get("referrer") or "").strip()  # Optional referral address
 
     # Validate inputs
     try:
@@ -7011,6 +7156,20 @@ def api_v1_add_liquidity():
         pool["providers"] = {}
     pool["providers"][provider] = round(float(pool["providers"].get(provider, 0.0)) + shares_minted, 6)
 
+    # Track referral if provided and valid
+    referral_bonus = 0
+    if referrer and validate_thr_address(referrer) and referrer != provider:
+        if "referrals" not in pool:
+            pool["referrals"] = {}
+        # Only track if this is first time adding liquidity (new provider)
+        if provider not in pool["referrals"]:
+            pool["referrals"][provider] = referrer
+            # Give referrer bonus shares (0.5% of new shares)
+            referral_bonus = round(shares_minted * 0.005, 6)
+            pool["providers"][referrer] = round(float(pool["providers"].get(referrer, 0.0)) + referral_bonus, 6)
+            pool["total_shares"] = round(float(pool["total_shares"]) + referral_bonus, 6)
+            logger.info(f"Referral bonus: {referral_bonus} shares to {referrer} for referring {provider}")
+
     save_pools(pools)
 
     # Record transaction
@@ -7039,12 +7198,18 @@ def api_v1_add_liquidity():
     except Exception:
         pass
 
-    return jsonify(
-        status="success",
-        shares_minted=shares_minted,
-        total_shares=pool["total_shares"],
-        provider_shares=pool["providers"][provider]
-    ), 200
+    response = {
+        "status": "success",
+        "shares_minted": shares_minted,
+        "total_shares": pool["total_shares"],
+        "provider_shares": pool["providers"][provider]
+    }
+
+    if referral_bonus > 0:
+        response["referral_bonus"] = referral_bonus
+        response["referrer"] = referrer
+
+    return jsonify(response), 200
 
 
 # ─── REMOVE LIQUIDITY FROM POOL ────────────────────────────────────
@@ -7942,9 +8107,409 @@ def chat_page_v2():
     return render_template("chat.html", thr_wallet=thr_wallet)
 
 
+# ─── DECENT MUSIC PLATFORM ────────────────────────────────────────────
+# Decentralized music platform where artists can upload tracks and receive
+# THR royalties from plays and tips from listeners.
+
+MUSIC_FILE = os.path.join(DATA_DIR, "music_registry.json")
+MUSIC_UPLOADS_DIR = os.path.join("static", "music_uploads")
+os.makedirs(MUSIC_UPLOADS_DIR, exist_ok=True)
+
+
+def load_music_registry():
+    """Load music registry from file"""
+    return load_json(MUSIC_FILE, {"tracks": [], "artists": {}, "plays": {}})
+
+
+def save_music_registry(registry):
+    """Save music registry to file"""
+    save_json(MUSIC_FILE, registry)
+
+
+@app.route("/music")
+def music_page():
+    """Render the Decent Music platform"""
+    return render_template("music.html")
+
+
+@app.route("/api/v1/music/tracks")
+def api_v1_music_tracks():
+    """Get all published tracks"""
+    registry = load_music_registry()
+    tracks = [t for t in registry["tracks"] if t.get("published", True)]
+    # Add play counts
+    for track in tracks:
+        track["play_count"] = len(registry["plays"].get(track["id"], []))
+    # Sort by newest first
+    tracks.sort(key=lambda t: t.get("uploaded_at", ""), reverse=True)
+    return jsonify({"status": "success", "tracks": tracks}), 200
+
+
+@app.route("/api/v1/music/tracks/trending")
+def api_v1_music_trending():
+    """Get trending tracks (most plays in last 7 days)"""
+    registry = load_music_registry()
+    tracks = [t for t in registry["tracks"] if t.get("published", True)]
+
+    # Calculate recent play counts
+    week_ago = time.time() - (7 * 24 * 60 * 60)
+    for track in tracks:
+        recent_plays = [p for p in registry["plays"].get(track["id"], [])
+                       if float(p.get("timestamp", 0)) > week_ago]
+        track["recent_plays"] = len(recent_plays)
+        track["play_count"] = len(registry["plays"].get(track["id"], []))
+
+    # Sort by recent plays
+    tracks.sort(key=lambda t: t.get("recent_plays", 0), reverse=True)
+    return jsonify({"status": "success", "tracks": tracks[:20]}), 200
+
+
+@app.route("/api/v1/music/artist/<artist_address>")
+def api_v1_music_artist(artist_address):
+    """Get artist profile and tracks"""
+    if not validate_thr_address(artist_address):
+        return jsonify({"status": "error", "message": "Invalid address"}), 400
+
+    registry = load_music_registry()
+    artist = registry["artists"].get(artist_address, {})
+    tracks = [t for t in registry["tracks"] if t.get("artist_address") == artist_address]
+
+    # Calculate stats
+    total_plays = sum(len(registry["plays"].get(t["id"], [])) for t in tracks)
+    total_earnings = float(artist.get("total_earnings", 0))
+
+    return jsonify({
+        "status": "success",
+        "artist": artist,
+        "tracks": tracks,
+        "stats": {
+            "total_tracks": len(tracks),
+            "total_plays": total_plays,
+            "total_earnings_thr": total_earnings
+        }
+    }), 200
+
+
+@app.route("/api/v1/music/register_artist", methods=["POST"])
+def api_v1_music_register_artist():
+    """Register as an artist on the platform"""
+    data = request.get_json() or {}
+    address = (data.get("address") or "").strip()
+    artist_name = (data.get("name") or "").strip()
+    bio = (data.get("bio") or "").strip()
+
+    if not address or not validate_thr_address(address):
+        return jsonify({"status": "error", "message": "Invalid THR address"}), 400
+
+    if not artist_name or len(artist_name) < 2:
+        return jsonify({"status": "error", "message": "Artist name required (min 2 chars)"}), 400
+
+    registry = load_music_registry()
+
+    # Check if already registered
+    if address in registry["artists"]:
+        # Update profile
+        registry["artists"][address]["name"] = artist_name
+        registry["artists"][address]["bio"] = bio
+    else:
+        # New registration
+        registry["artists"][address] = {
+            "address": address,
+            "name": artist_name,
+            "bio": bio,
+            "registered_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "total_earnings": 0,
+            "verified": False
+        }
+
+    save_music_registry(registry)
+    logger.info(f"Artist registered/updated: {artist_name} ({address})")
+
+    return jsonify({
+        "status": "success",
+        "artist": registry["artists"][address]
+    }), 200
+
+
+@app.route("/api/v1/music/upload", methods=["POST"])
+def api_v1_music_upload():
+    """Upload a new track"""
+    # Handle form data
+    artist_address = (request.form.get("artist_address") or "").strip()
+    title = (request.form.get("title") or "").strip()
+    genre = (request.form.get("genre") or "Other").strip()
+    description = (request.form.get("description") or "").strip()
+
+    if not artist_address or not validate_thr_address(artist_address):
+        return jsonify({"status": "error", "message": "Invalid artist address"}), 400
+
+    if not title or len(title) < 2:
+        return jsonify({"status": "error", "message": "Track title required"}), 400
+
+    registry = load_music_registry()
+
+    # Check if artist is registered
+    if artist_address not in registry["artists"]:
+        return jsonify({"status": "error", "message": "Please register as an artist first"}), 400
+
+    # Handle audio file
+    if "audio" not in request.files:
+        return jsonify({"status": "error", "message": "Audio file required"}), 400
+
+    audio_file = request.files["audio"]
+    if not audio_file.filename:
+        return jsonify({"status": "error", "message": "Empty filename"}), 400
+
+    # Validate file type
+    allowed_extensions = {'.mp3', '.wav', '.ogg', '.flac', '.m4a'}
+    ext = os.path.splitext(secure_filename(audio_file.filename))[1].lower()
+    if ext not in allowed_extensions:
+        return jsonify({"status": "error", "message": f"Invalid file type. Allowed: {', '.join(allowed_extensions)}"}), 400
+
+    try:
+        # Generate track ID
+        track_id = f"TRACK-{int(time.time())}-{secrets.token_hex(4)}"
+
+        # Save audio file
+        audio_filename = f"{track_id}{ext}"
+        audio_path = os.path.join(MUSIC_UPLOADS_DIR, audio_filename)
+        audio_file.save(audio_path)
+
+        # Handle cover art if provided
+        cover_path = None
+        if "cover" in request.files:
+            cover_file = request.files["cover"]
+            if cover_file.filename:
+                cover_ext = os.path.splitext(secure_filename(cover_file.filename))[1] or ".jpg"
+                cover_filename = f"{track_id}_cover{cover_ext}"
+                cover_path = os.path.join(MUSIC_UPLOADS_DIR, cover_filename)
+                cover_file.save(cover_path)
+
+        # Create track entry
+        track = {
+            "id": track_id,
+            "title": title,
+            "artist_address": artist_address,
+            "artist_name": registry["artists"][artist_address]["name"],
+            "genre": genre,
+            "description": description,
+            "audio_url": f"/static/music_uploads/{audio_filename}",
+            "cover_url": f"/static/music_uploads/{cover_filename}" if cover_path else None,
+            "uploaded_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "published": True,
+            "tips_total": 0
+        }
+
+        registry["tracks"].append(track)
+        registry["plays"][track_id] = []
+        save_music_registry(registry)
+
+        logger.info(f"Track uploaded: {title} by {registry['artists'][artist_address]['name']}")
+
+        return jsonify({
+            "status": "success",
+            "track": track
+        }), 201
+
+    except Exception as e:
+        logger.error(f"Track upload error: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": f"Upload failed: {str(e)}"}), 500
+
+
+@app.route("/api/v1/music/play/<track_id>", methods=["POST"])
+def api_v1_music_play(track_id):
+    """Record a track play and pay royalty to artist"""
+    data = request.get_json() or {}
+    listener_address = (data.get("listener_address") or "").strip()
+
+    registry = load_music_registry()
+    track = next((t for t in registry["tracks"] if t["id"] == track_id), None)
+
+    if not track:
+        return jsonify({"status": "error", "message": "Track not found"}), 404
+
+    # Record play
+    play = {
+        "listener": listener_address or "anonymous",
+        "timestamp": time.time(),
+        "datetime": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    }
+
+    if track_id not in registry["plays"]:
+        registry["plays"][track_id] = []
+    registry["plays"][track_id].append(play)
+
+    # Pay royalty (0.0001 THR per play from platform fund)
+    PLAY_ROYALTY = 0.0001
+    artist_address = track["artist_address"]
+
+    try:
+        ledger = load_json(LEDGER_FILE, {})
+        ai_balance = float(ledger.get(AI_WALLET_ADDRESS, 0))
+
+        if ai_balance >= PLAY_ROYALTY:
+            # Pay artist from AI wallet
+            ledger[AI_WALLET_ADDRESS] = round(ai_balance - PLAY_ROYALTY, 6)
+            ledger[artist_address] = round(float(ledger.get(artist_address, 0)) + PLAY_ROYALTY, 6)
+            save_json(LEDGER_FILE, ledger)
+
+            # Update artist earnings
+            if artist_address in registry["artists"]:
+                registry["artists"][artist_address]["total_earnings"] = \
+                    float(registry["artists"][artist_address].get("total_earnings", 0)) + PLAY_ROYALTY
+
+            play["royalty_paid"] = PLAY_ROYALTY
+    except Exception as e:
+        logger.warning(f"Royalty payment failed: {e}")
+
+    save_music_registry(registry)
+
+    return jsonify({
+        "status": "success",
+        "play_count": len(registry["plays"].get(track_id, [])),
+        "royalty_paid": play.get("royalty_paid", 0)
+    }), 200
+
+
+@app.route("/api/v1/music/tip", methods=["POST"])
+def api_v1_music_tip():
+    """Tip an artist for a track"""
+    data = request.get_json() or {}
+    track_id = (data.get("track_id") or "").strip()
+    from_address = (data.get("from_address") or "").strip()
+    amount = float(data.get("amount", 0))
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+
+    if not track_id or not from_address or amount <= 0:
+        return jsonify({"status": "error", "message": "Invalid tip parameters"}), 400
+
+    registry = load_music_registry()
+    track = next((t for t in registry["tracks"] if t["id"] == track_id), None)
+
+    if not track:
+        return jsonify({"status": "error", "message": "Track not found"}), 404
+
+    artist_address = track["artist_address"]
+
+    # Verify auth
+    pledges = load_json(PLEDGE_CHAIN, [])
+    sender_pledge = next((p for p in pledges if p.get("thr_address") == from_address), None)
+
+    if not sender_pledge:
+        return jsonify({"status": "error", "message": "Sender has not pledged"}), 400
+
+    stored_auth_hash = sender_pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return jsonify({"status": "error", "message": "Send not enabled"}), 400
+
+    if sender_pledge.get("has_passphrase"):
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify({"status": "error", "message": "Invalid auth"}), 403
+
+    # Transfer THR
+    ledger = load_json(LEDGER_FILE, {})
+    sender_balance = float(ledger.get(from_address, 0))
+
+    if sender_balance < amount:
+        return jsonify({"status": "error", "message": "Insufficient balance"}), 400
+
+    ledger[from_address] = round(sender_balance - amount, 6)
+    ledger[artist_address] = round(float(ledger.get(artist_address, 0)) + amount, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    # Update track tips
+    for t in registry["tracks"]:
+        if t["id"] == track_id:
+            t["tips_total"] = float(t.get("tips_total", 0)) + amount
+            break
+
+    # Update artist earnings
+    if artist_address in registry["artists"]:
+        registry["artists"][artist_address]["total_earnings"] = \
+            float(registry["artists"][artist_address].get("total_earnings", 0)) + amount
+
+    save_music_registry(registry)
+
+    # Record transaction
+    chain = load_json(CHAIN_FILE, [])
+    tx_id = f"MUSIC-TIP-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "music_tip",
+        "track_id": track_id,
+        "track_title": track["title"],
+        "from": from_address,
+        "to": artist_address,
+        "amount": amount,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "tx_id": tx_id,
+        "status": "confirmed"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+
+    logger.info(f"Music tip: {amount} THR from {from_address} to {artist_address} for track {track_id}")
+
+    return jsonify({
+        "status": "success",
+        "tx_id": tx_id,
+        "amount": amount,
+        "new_balance": ledger[from_address]
+    }), 200
+
+
+@app.route("/api/v1/music/search")
+def api_v1_music_search():
+    """Search tracks by title, artist, or genre"""
+    query = (request.args.get("q") or "").strip().lower()
+    genre = (request.args.get("genre") or "").strip()
+
+    if not query and not genre:
+        return jsonify({"status": "error", "message": "Search query or genre required"}), 400
+
+    registry = load_music_registry()
+    tracks = registry["tracks"]
+
+    results = []
+    for track in tracks:
+        if not track.get("published", True):
+            continue
+
+        match = False
+        if query:
+            if query in track.get("title", "").lower():
+                match = True
+            elif query in track.get("artist_name", "").lower():
+                match = True
+            elif query in track.get("genre", "").lower():
+                match = True
+            elif query in track.get("description", "").lower():
+                match = True
+
+        if genre and not match:
+            if track.get("genre", "").lower() == genre.lower():
+                match = True
+
+        if match or (genre and track.get("genre", "").lower() == genre.lower()):
+            track["play_count"] = len(registry["plays"].get(track["id"], []))
+            results.append(track)
+
+    return jsonify({
+        "status": "success",
+        "query": query,
+        "genre": genre,
+        "results": results
+    }), 200
+
+
 # ... ΤΕΛΟΣ όλων των routes / helpers ...
 
 print("✓ AI Session fixes loaded - supports guest mode and file uploads")
+print("✓ Decent Music Platform loaded - artist registration, uploads, and royalties")
 # --- Startup hooks ---
 ensure_ai_wallet()
 recompute_height_offset_from_ledger()

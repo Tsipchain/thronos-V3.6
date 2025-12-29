@@ -622,25 +622,28 @@ async function submitToken(evt) {
     const burnable = document.getElementById('tokenBurnable').checked;
     const mintable = document.getElementById('tokenMintable').checked;
 
-    // Create token
-    const payload = {
-      creator_address: creator,
-      name: name,
-      symbol: symbol,
-      initial_supply: supply,
-      max_supply: 0,
-      decimals: decimals,
-      color: color,
-      description: description || `${name} token on Thronos Network`,
-      transferable: transferable,
-      burnable: burnable,
-      mintable: mintable
-    };
+    // Use FormData for token creation (supports logo upload in single request)
+    const formData = new FormData();
+    formData.append('creator_address', creator);
+    formData.append('name', name);
+    formData.append('symbol', symbol);
+    formData.append('initial_supply', supply);
+    formData.append('max_supply', 0);
+    formData.append('decimals', decimals);
+    formData.append('color', color);
+    formData.append('description', description || `${name} token on Thronos Network`);
+    formData.append('transferable', transferable);
+    formData.append('burnable', burnable);
+    formData.append('mintable', mintable);
+
+    // Include logo if uploaded
+    if (uploadedLogo) {
+      formData.append('logo', uploadedLogo);
+    }
 
     const res = await fetch('/api/tokens/create', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: formData  // No Content-Type header - browser sets it with boundary
     });
 
     const data = await res.json();
@@ -649,24 +652,9 @@ async function submitToken(evt) {
       throw new Error(data.error || 'Failed to create token');
     }
 
-    // Upload logo if provided
-    if (uploadedLogo) {
-      const formData = new FormData();
-      formData.append('file', uploadedLogo);
-      formData.append('creator_address', creator);
-
-      const logoRes = await fetch(`/api/tokens/upload_logo/${symbol}`, {
-        method: 'POST',
-        body: formData
-      });
-
-      if (!logoRes.ok) {
-        const logoData = await logoRes.json();
-        console.warn('Logo upload failed:', logoData.error);
-      }
-    }
-
-    showMessage(`✅ Token ${symbol} created successfully! Fee: 100 THR deducted.`, 'success');
+    // Show success with logo confirmation
+    const logoMsg = uploadedLogo ? ' Logo uploaded!' : '';
+    showMessage(`✅ Token ${symbol} created successfully!${logoMsg} Fee: 100 THR deducted.`, 'success');
     await loadTokens();
     document.getElementById('createTokenForm').reset();
     document.getElementById('logoPreview').style.display = 'none';

@@ -1012,6 +1012,12 @@
                     <option value="gemini-2.5-flash">🚀 Gemini 2.5 Flash</option>
                     <option value="gpt-4o">🤖 GPT-4o (OpenAI)</option>
                     <option value="claude-3-sonnet-20240229">Claude 3 Sonnet</option>
+                  <select id="modelSelect" class="model-select">
+                    <option value="auto">🔀 Auto (Thronos chooses)</option>
+                    <option value="gemini-2.5-pro">💎 Gemini 2.5 Pro</option>
+                    <option value="gpt-4.1-mini">🤖 GPT-4.1 Mini (OpenAI)</option>
+                    <option value="claude-3-sonnet">🧠 Claude 3 Sonnet</option>
+                    <option value="custom-default">🛰️ Custom Quantum Agent</option>
                   </select>
                 </div>
                 <button id="sendBtn" class="send-btn">
@@ -1078,7 +1084,7 @@
     const API_SESSION_NEW = "/api/chat/session/new";
     const API_SESSION = (id) => `/api/chat/session/${id}`;
     const API_SESSIONS = "/api/chat/sessions";
-    const API_SESSION_MESSAGES = (id) => `/api/chat/session/${id}`;
+    const API_SESSION_MESSAGES = (id) => `/api/chat/session/${id}/messages`;
     const API_FILES = "/api/ai/files/upload";
     const API_TELEMETRY = "/api/ai/telemetry";
     const API_FEEDBACK = "/api/ai/feedback";
@@ -1336,11 +1342,8 @@
 
     function initModelSelector() {
       const saved = localStorage.getItem(MODEL_STORAGE_KEY) || "auto";
-      const hasSaved = Array.from(modelSelectEl.options).some(
-        (opt) => opt.value === saved
-      );
-      modelSelectEl.value = hasSaved ? saved : "auto";
-      modelStatusEl.textContent = modelSelectEl.value;
+      modelSelectEl.value = saved;
+      modelStatusEl.textContent = saved;
     }
 
     function handleModelChange() {
@@ -1779,13 +1782,9 @@
         const res = await fetch(API_SESSION(sessionId));
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
-        const session = data.session || {};
-        currentSessionId = session.id || sessionId;
-        sessionTitleEl.textContent = session.title || "Mesh session";
-        modelStatusEl.textContent = session.model || modelSelectEl.value || "auto";
-        if (currentSessionId) {
-          localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
-        }
+        currentSessionId = data.id || sessionId;
+        sessionTitleEl.textContent = data.title || "Mesh session";
+        localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
         setSessionState("ready");
         return true;
       } catch (e) {
@@ -1808,11 +1807,8 @@
         });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
-        const session = data.session || {};
-        currentSessionId = session.id;
-        if (currentSessionId) {
-          localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
-        }
+        currentSessionId = data.id;
+        localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
         await loadSessions();
         await loadSessionMessages(currentSessionId);
         setSessionState("ready");
@@ -1820,6 +1816,7 @@
         console.error("createSession error", e);
         setSessionState("error", t("status_error"));
       }
+      await createSession(true);
     }
 
     async function ensureSession() {

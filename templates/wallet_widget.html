@@ -26,6 +26,35 @@
             color: var(--widget-fg);
         }
 
+        /* Language toggle */
+        .lang-en, .lang-ja, .lang-ru, .lang-es { display: none; }
+        body.lang-en .lang-el { display: none; }
+        body.lang-en .lang-en { display: inline; }
+        body.lang-ja .lang-el { display: none; }
+        body.lang-ja .lang-ja { display: inline; }
+        body.lang-ru .lang-el { display: none; }
+        body.lang-ru .lang-ru { display: inline; }
+        body.lang-es .lang-el { display: none; }
+        body.lang-es .lang-es { display: inline; }
+
+        .lang-toggle {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 255, 102, 0.1);
+            border: 1px solid var(--widget-border);
+            color: var(--widget-accent);
+            padding: 6px 12px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 11px;
+            z-index: 100;
+        }
+
+        .lang-toggle:hover {
+            background: rgba(0, 255, 102, 0.2);
+        }
+
         .wallet-widget {
             max-width: 400px;
             margin: 0 auto;
@@ -34,6 +63,7 @@
             border-radius: 16px;
             padding: 20px;
             box-shadow: 0 0 30px rgba(0, 255, 102, 0.1);
+            position: relative;
         }
 
         .widget-header {
@@ -79,12 +109,17 @@
             border: 1px solid var(--widget-border);
             border-radius: 12px;
             transition: all 0.2s ease;
+            cursor: pointer;
         }
 
         .token-item:hover {
             background: rgba(0, 255, 102, 0.08);
             border-color: var(--widget-accent);
             transform: translateY(-1px);
+        }
+
+        .token-item:active {
+            transform: scale(0.98);
         }
 
         .token-logo {
@@ -392,21 +427,21 @@
             color: var(--widget-fg);
             font-family: monospace;
         }
-
-        .token-item {
-            cursor: pointer;
-        }
-
-        .token-item:active {
-            transform: scale(0.98);
-        }
     </style>
 </head>
 <body>
+    <button class="lang-toggle" onclick="toggleLanguage()">🌐 GR</button>
+
     <div class="wallet-widget" id="walletWidget">
         <div class="loading">
             <div class="spinner"></div>
-            <p style="margin-top: 15px;">Loading wallet...</p>
+            <p style="margin-top: 15px;">
+                <span class="lang-el">Φόρτωση πορτοφολιού...</span>
+                <span class="lang-en">Loading wallet...</span>
+                <span class="lang-ja">ウォレットを読み込み中...</span>
+                <span class="lang-ru">Загрузка кошелька...</span>
+                <span class="lang-es">Cargando billetera...</span>
+            </p>
         </div>
     </div>
 
@@ -423,7 +458,13 @@
             </div>
             <div class="token-info-stats">
                 <div class="token-info-stat">
-                    <div class="token-info-stat-label">Your Balance</div>
+                    <div class="token-info-stat-label">
+                        <span class="lang-el">Υπόλοιπο</span>
+                        <span class="lang-en">Your Balance</span>
+                        <span class="lang-ja">残高</span>
+                        <span class="lang-ru">Ваш баланс</span>
+                        <span class="lang-es">Tu Saldo</span>
+                    </div>
                     <div class="token-info-stat-value" id="modalTokenBalance"></div>
                 </div>
                 <div class="token-info-stat">
@@ -431,11 +472,23 @@
                     <div class="token-info-stat-value" id="modalTokenDecimals"></div>
                 </div>
                 <div class="token-info-stat">
-                    <div class="token-info-stat-label">Value in THR</div>
+                    <div class="token-info-stat-label">
+                        <span class="lang-el">Αξία σε THR</span>
+                        <span class="lang-en">Value in THR</span>
+                        <span class="lang-ja">THRでの価値</span>
+                        <span class="lang-ru">Стоимость в THR</span>
+                        <span class="lang-es">Valor en THR</span>
+                    </div>
                     <div class="token-info-stat-value" id="modalTokenValueTHR"></div>
                 </div>
                 <div class="token-info-stat">
-                    <div class="token-info-stat-label">Token Color</div>
+                    <div class="token-info-stat-label">
+                        <span class="lang-el">Χρώμα Token</span>
+                        <span class="lang-en">Token Color</span>
+                        <span class="lang-ja">トークンカラー</span>
+                        <span class="lang-ru">Цвет токена</span>
+                        <span class="lang-es">Color del Token</span>
+                    </div>
                     <div class="token-info-stat-value" id="modalTokenColor">
                         <span id="modalTokenColorBox" style="display: inline-block; width: 20px; height: 20px; border-radius: 4px; vertical-align: middle; margin-left: 5px;"></span>
                     </div>
@@ -445,9 +498,94 @@
     </div>
 
     <script>
+        // Translations
+        const TRANSLATIONS = {
+            el: {
+                walletBalance: "💎 Υπόλοιπο Πορτοφολιού",
+                totalPortfolio: "Συνολικό Χαρτοφυλάκιο",
+                filterByToken: "Φίλτρο ανά Token",
+                allTokens: "Όλα τα Tokens",
+                lastUpdated: "Τελευταία ενημέρωση",
+                refresh: "🔄 Ανανέωση",
+                errorLoading: "Σφάλμα φόρτωσης πορτοφολιού",
+                retry: "Δοκιμάστε ξανά"
+            },
+            en: {
+                walletBalance: "💎 Wallet Balance",
+                totalPortfolio: "Total Portfolio",
+                filterByToken: "Filter by Token",
+                allTokens: "All Tokens",
+                lastUpdated: "Last updated",
+                refresh: "🔄 Refresh",
+                errorLoading: "Error loading wallet",
+                retry: "Retry"
+            },
+            ja: {
+                walletBalance: "💎 ウォレット残高",
+                totalPortfolio: "総ポートフォリオ",
+                filterByToken: "トークンでフィルタ",
+                allTokens: "すべてのトークン",
+                lastUpdated: "最終更新",
+                refresh: "🔄 更新",
+                errorLoading: "ウォレット読み込みエラー",
+                retry: "再試行"
+            },
+            ru: {
+                walletBalance: "💎 Баланс кошелька",
+                totalPortfolio: "Общий портфель",
+                filterByToken: "Фильтр по токену",
+                allTokens: "Все токены",
+                lastUpdated: "Последнее обновление",
+                refresh: "🔄 Обновить",
+                errorLoading: "Ошибка загрузки кошелька",
+                retry: "Повторить"
+            },
+            es: {
+                walletBalance: "💎 Saldo de Billetera",
+                totalPortfolio: "Portafolio Total",
+                filterByToken: "Filtrar por Token",
+                allTokens: "Todos los Tokens",
+                lastUpdated: "Última actualización",
+                refresh: "🔄 Actualizar",
+                errorLoading: "Error al cargar billetera",
+                retry: "Reintentar"
+            }
+        };
+
+        const LANG_SEQUENCE = ['gr', 'en', 'ja', 'es', 'ru'];
+        const LANG_CLASS_MAP = { 'gr': 'lang-el', 'en': 'lang-en', 'ja': 'lang-ja', 'es': 'lang-es', 'ru': 'lang-ru' };
+
+        function getLang() {
+            const lang = localStorage.getItem("lang") || "gr";
+            return lang === "gr" ? "el" : lang;
+        }
+
+        function t(key) {
+            const lang = getLang();
+            return TRANSLATIONS[lang]?.[key] || TRANSLATIONS.en[key] || key;
+        }
+
+        function toggleLanguage() {
+            const current = localStorage.getItem("lang") || "gr";
+            const idx = LANG_SEQUENCE.indexOf(current);
+            const next = LANG_SEQUENCE[(idx + 1) % LANG_SEQUENCE.length];
+            localStorage.setItem("lang", next);
+            applyLanguage();
+        }
+
+        function applyLanguage() {
+            const lang = localStorage.getItem("lang") || "gr";
+            document.body.className = LANG_CLASS_MAP[lang] || '';
+            document.querySelector('.lang-toggle').textContent = '🌐 ' + lang.toUpperCase();
+            // Re-render if data loaded
+            if (allTokens.length > 0) {
+                renderWallet({ address: walletAddress, tokens: allTokens, last_updated: lastUpdated });
+            }
+        }
+
         // Configuration - can be set via URL parameters or embedded config
         const urlParams = new URLSearchParams(window.location.search);
-        const walletAddress = urlParams.get('address') || 'THR79ca94a7eb70a6aa99d12d7fdb01446ef246301a';
+        let walletAddress = urlParams.get('address') || localStorage.getItem('thr_address') || 'THR79ca94a7eb70a6aa99d12d7fdb01446ef246301a';
         const compactMode = urlParams.get('compact') === 'true';
         const showZero = urlParams.get('show_zero') !== 'false';
         const autoRefresh = parseInt(urlParams.get('refresh') || '0');
@@ -456,6 +594,11 @@
         if (compactMode) {
             document.getElementById('walletWidget').classList.add('compact');
         }
+
+        // Store all tokens globally for filtering
+        let allTokens = [];
+        let selectedTokenFilter = 'all';
+        let lastUpdated = '';
 
         async function loadWalletData() {
             const widget = document.getElementById('walletWidget');
@@ -469,63 +612,53 @@
             } catch (error) {
                 widget.innerHTML = `
                     <div class="error">
-                        <strong>Error loading wallet</strong>
+                        <strong>${t('errorLoading')}</strong>
                         <p>${error.message}</p>
-                        <button class="refresh-btn" onclick="loadWalletData()">Retry</button>
+                        <button class="refresh-btn" onclick="loadWalletData()">${t('retry')}</button>
                     </div>
                 `;
             }
         }
 
-        // Store all tokens globally for filtering
-        let allTokens = [];
-        let selectedTokenFilter = 'all';
-
         function renderWallet(data) {
             const widget = document.getElementById('walletWidget');
             allTokens = data.tokens || [];
+            lastUpdated = data.last_updated || '';
 
             // Calculate total balance using dynamic prices from pools
             const totalTHR = allTokens.reduce((sum, t) => {
-                // Use value_in_thr from API (calculated from pool reserves)
                 return sum + (t.value_in_thr || 0);
             }, 0);
 
             let html = `
                 <div class="widget-header">
-                    <div class="widget-title">
-                        💎 Wallet Balance
-                    </div>
+                    <div class="widget-title">${t('walletBalance')}</div>
                 </div>
 
                 <div class="wallet-address">${data.address.slice(0, 12)}...${data.address.slice(-8)}</div>
 
                 ${!compactMode ? `
                 <div class="total-value">
-                    <div class="total-label">Total Portfolio</div>
+                    <div class="total-label">${t('totalPortfolio')}</div>
                     <div class="total-amount">${totalTHR.toFixed(2)} THR</div>
                 </div>
                 ` : ''}
 
                 ${!compactMode ? `
                 <div class="token-selector">
-                    <label class="token-selector-label">Filter by Token</label>
+                    <label class="token-selector-label">${t('filterByToken')}</label>
                     <select class="token-selector-dropdown" id="tokenFilter" onchange="filterTokens()">
-                        <option value="all">All Tokens</option>
+                        <option value="all">${t('allTokens')}</option>
                         ${allTokens.map(t => `<option value="${t.symbol}">${t.symbol} - ${t.name}</option>`).join('')}
                     </select>
                 </div>
                 ` : ''}
 
-                <div class="tokens-list" id="tokensList">
-            `;
+                <div class="tokens-list" id="tokensList"></div>
 
-            html += `</div>`;
-
-            html += `
                 <div class="widget-footer">
-                    <div class="last-updated">Last updated: ${data.last_updated}</div>
-                    <button class="refresh-btn" onclick="loadWalletData()">🔄 Refresh</button>
+                    <div class="last-updated">${t('lastUpdated')}: ${data.last_updated}</div>
+                    <button class="refresh-btn" onclick="loadWalletData()">${t('refresh')}</button>
                 </div>
             `;
 
@@ -612,6 +745,7 @@
         });
 
         // Initial load
+        applyLanguage();
         loadWalletData();
 
         // Auto-refresh if enabled
@@ -625,6 +759,10 @@
             setAddress: (addr) => {
                 walletAddress = addr;
                 loadWalletData();
+            },
+            setLanguage: (lang) => {
+                localStorage.setItem("lang", lang);
+                applyLanguage();
             }
         };
     </script>

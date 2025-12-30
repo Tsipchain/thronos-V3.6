@@ -7,6 +7,7 @@
   <meta name="cgminer-kit-url" content="{{ CGMINER_KIT_URL if CGMINER_KIT_URL is defined else '' }}">
 <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/thronos-token.png') }}">
   <link rel="shortcut icon" type="image/png" href="{{ url_for('static', filename='img/thronos-token.png') }}">
+  <script src="{{ url_for('static', filename='wallet_session.js') }}"></script>
   <style>
     /* Global Styles */
     body {
@@ -186,6 +187,65 @@
         z-index: 999;
         backdrop-filter: blur(10px);
     }
+
+    /* Wallet Login Modal */
+    .wallet-login-btn {
+        background: linear-gradient(135deg, #00ff66 0%, #ffd700 100%);
+        color: #000;
+        border: 1px solid #00ff66;
+        padding: 6px 12px;
+        cursor: pointer;
+        border-radius: 10px;
+        font-weight: bold;
+        box-shadow: 0 0 10px rgba(0,255,102,0.35);
+    }
+    .wallet-login-btn:hover {
+        box-shadow: 0 0 16px rgba(0,255,102,0.55);
+    }
+    .wallet-modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.75);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 2000;
+    }
+    .wallet-modal-overlay.active { display: flex; }
+    .wallet-modal {
+        background: #0a130e;
+        border: 1px solid #0f0;
+        border-radius: 12px;
+        padding: 20px;
+        width: 340px;
+        box-shadow: 0 0 20px rgba(0, 255, 102, 0.25);
+    }
+    .wallet-modal h3 { margin-top: 0; }
+    .wallet-modal label { display: block; margin-top: 10px; font-size: 0.9em; color: #9f9; }
+    .wallet-modal input {
+        width: 100%;
+        padding: 10px;
+        margin-top: 6px;
+        background: #000;
+        color: #0f0;
+        border: 1px solid #0f0;
+        border-radius: 8px;
+    }
+    .wallet-modal-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 15px;
+        justify-content: flex-end;
+    }
+    .wallet-modal-actions button {
+        padding: 10px 14px;
+        border-radius: 8px;
+        border: 1px solid #0f0;
+        background: #001800;
+        color: #0f0;
+        cursor: pointer;
+    }
+    .wallet-modal-actions .primary { background: #00ff66; color: #000; }
     .chain-tokens-inner {
         max-width: 1200px;
         margin: 0 auto;
@@ -1134,6 +1194,9 @@
 <body>
 
 <div class="top-controls">
+    <button id="walletLoginBtn" class="wallet-login-btn" onclick="openHeaderWalletModal()">
+        💼 <span class="lang-el">Σύνδεση</span><span class="lang-en">Login</span>
+    </button>
     <div id="walletStatus" class="wallet-status">
         <img src="{{ url_for('static', filename='img/thronos-token.png') }}" alt="🔥" class="wallet-fire-icon" />
         <span id="walletAddrShort"></span>
@@ -1158,6 +1221,22 @@
         ✖ <span class="lang-el">Αποσύνδεση</span><span class="lang-en">Disconnect</span>
     </button>
     <button class="lang-toggle" onclick="toggleLanguage()">GR</button>
+</div>
+
+<div class="wallet-modal-overlay" id="headerWalletModal" onclick="if(event.target===this) closeHeaderWalletModal()">
+    <div class="wallet-modal" onclick="event.stopPropagation()">
+        <h3>💼 Wallet Login</h3>
+        <label for="walletAddressInput">THR Address</label>
+        <input type="text" id="walletAddressInput" placeholder="THR..." />
+        <label for="walletSendSeedInput">Send Seed (auth secret)</label>
+        <input type="password" id="walletSendSeedInput" placeholder="send_seed / secret" />
+        <label for="walletPinInput">PIN (optional)</label>
+        <input type="password" id="walletPinInput" placeholder="4-8 digits" />
+        <div class="wallet-modal-actions">
+            <button onclick="closeHeaderWalletModal()">Cancel</button>
+            <button class="primary" onclick="submitHeaderWalletLogin()">Save</button>
+        </div>
+    </div>
 </div>
 
 <!-- Send Modal -->
@@ -1470,10 +1549,18 @@ function setLanguage(lang) {
 // Disconnect Wallet Function
 function disconnectWallet() {
     if (confirm('Are you sure you want to disconnect your wallet?')) {
-        localStorage.removeItem('thr_address');
-        localStorage.removeItem('thr_secret');
-        document.getElementById('walletStatus').style.display = 'none';
-        document.getElementById('disconnectBtn').style.display = 'none';
+        walletSession.clearSession();
+        const statusEl = document.getElementById('walletStatus');
+        const loginBtn = document.getElementById('walletLoginBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        if (statusEl) statusEl.style.display = 'none';
+        if (disconnectBtn) disconnectBtn.style.display = 'none';
+        if (loginBtn) loginBtn.style.display = 'inline-block';
+        walletBalancesLoaded = false;
+        tokenBalances = {};
+        if (typeof updateHeroButton === 'function') {
+            updateHeroButton('');
+        }
         window.location.href = '/';
     }
 }
@@ -1484,7 +1571,7 @@ let walletBalancesLoaded = false;
 async function loadWalletBalances(force = false) {
     if (walletBalancesLoaded && !force) return; // Only load once
 
-    const wallet = localStorage.getItem('thr_address');
+    const wallet = walletSession.getAddress();
     if (!wallet) return;
 
     const popup = document.getElementById('walletBalancePopup');
@@ -1558,7 +1645,7 @@ async function updateTokenPrices() {
 
 function renderWalletBalances(data) {
     const popup = document.getElementById('walletBalancePopup');
-    const wallet = localStorage.getItem('thr_address') || '';
+    const wallet = walletSession.getAddress() || '';
     const lang = getCurrentLang();
     const isGreek = isGreekLang(lang);
 
@@ -1757,7 +1844,7 @@ function closeReceiveModal(event) {
 }
 
 function updateReceiveModal() {
-    const addr = localStorage.getItem('thr_address') || '';
+    const addr = walletSession.getAddress() || '';
     const addrEl = document.getElementById('receiveAddress');
     const qrEl = document.getElementById('receiveQr');
     const audioEl = document.getElementById('receiveAudio');
@@ -1793,7 +1880,7 @@ function updateReceiveModal() {
 }
 
 function copyReceiveAddress() {
-    const addr = localStorage.getItem('thr_address');
+    const addr = walletSession.getAddress();
     if (!addr) return;
     copyToClipboard(addr);
 }
@@ -1840,7 +1927,7 @@ function selectNetwork(network) {
 }
 
 async function loadTokenBalances() {
-    const wallet = localStorage.getItem('thr_address');
+    const wallet = walletSession.getAddress();
     if (!wallet) return;
 
     try {
@@ -1920,8 +2007,8 @@ async function submitSend() {
     const to = document.getElementById('sendTo').value.trim();
     const amount = parseFloat(document.getElementById('sendAmount').value);
     const token = document.getElementById('sendToken').value;
-    const from = localStorage.getItem('thr_address');
-    const secret = localStorage.getItem('thr_secret');
+    const from = walletSession.getAddress();
+    const secret = walletSession.getSendSeed();
     const resultDiv = document.getElementById('sendResult');
 
     if (!to || !amount || amount <= 0) {
@@ -2152,40 +2239,96 @@ function initWalletUiControls(){
     }, 100);
 }
 
+function openHeaderWalletModal(){
+    const overlay = document.getElementById('headerWalletModal');
+    if (!overlay) return;
+    document.getElementById('walletAddressInput').value = walletSession.getAddress();
+    document.getElementById('walletSendSeedInput').value = walletSession.getSendSeed();
+    document.getElementById('walletPinInput').value = walletSession.getPin();
+    overlay.classList.add('active');
+}
+
+function closeHeaderWalletModal(){
+    const overlay = document.getElementById('headerWalletModal');
+    if (overlay) overlay.classList.remove('active');
+}
+
+async function submitHeaderWalletLogin(){
+    const existingAddress = walletSession.getAddress();
+    const existingSeed = walletSession.getSendSeed();
+
+    const address = document.getElementById('walletAddressInput').value.trim() || existingAddress;
+    const seed = document.getElementById('walletSendSeedInput').value.trim() || existingSeed;
+    const pin = document.getElementById('walletPinInput').value.trim();
+    if (!address) {
+        alert('Please enter a THR address.');
+        return;
+    }
+
+    // Store session (reuse saved address/seed when logging in with PIN-only)
+    walletSession.saveSession({ address, sendSeed: seed, pin });
+
+    // Sync the PIN with the wallet lock so PIN-only unlock works with the header widget
+    if (pin) {
+        const h = await sha256Hex(pin);
+        localStorage.setItem(WALLET_PIN_HASH_KEY, h);
+        markWalletActive();
+    } else {
+        localStorage.removeItem(WALLET_PIN_HASH_KEY);
+    }
+
+    closeHeaderWalletModal();
+    updateHeaderWalletUi();
+    loadTokenBalances();
+    loadWalletBalances(true);
+    updateReceiveModal();
+    if (typeof updateHeroButton === 'function') {
+        updateHeroButton(address);
+    }
+}
+
+function updateHeaderWalletUi(){
+    const wallet = walletSession.getAddress();
+    const statusEl = document.getElementById('walletStatus');
+    const disconnectEl = document.getElementById('disconnectBtn');
+    const loginBtn = document.getElementById('walletLoginBtn');
+
+    if (wallet) {
+        const short = wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4);
+        if(statusEl){
+            document.getElementById('walletAddrShort').textContent = short;
+            statusEl.style.display = 'flex';
+            if(!statusEl.dataset.init){
+                initWalletUiControls();
+                statusEl.dataset.init = '1';
+            }
+        }
+        if(loginBtn) loginBtn.style.display = 'none';
+        if(disconnectEl) disconnectEl.style.display = 'block';
+        const isPinned = getWalletUiPinned();
+        const hasOpenedBefore = sessionStorage.getItem('wallet_opened_once');
+        if (isPinned || !hasOpenedBefore) {
+            setTimeout(() => {
+                setWalletOpen(true);
+                loadWalletBalances();
+                sessionStorage.setItem('wallet_opened_once', '1');
+            }, 500);
+        }
+    } else {
+        if(statusEl) {
+            statusEl.style.display = 'none';
+            statusEl.classList.remove('open');
+        }
+        if(disconnectEl) disconnectEl.style.display = 'none';
+        if(loginBtn) loginBtn.style.display = 'inline-block';
+    }
+}
+
 // Initialize language and wallet status on load
 document.addEventListener('DOMContentLoaded', () => {
     const savedLang = getCurrentLang();
     setLanguage(savedLang);
-
-    // Check wallet status
-    const wallet = localStorage.getItem('thr_address');
-    if (wallet) {
-        const short = wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4);
-        const statusEl = document.getElementById('walletStatus');
-        const disconnectEl = document.getElementById('disconnectBtn');
-
-        if(statusEl) {
-            document.getElementById('walletAddrShort').textContent = short;
-            statusEl.style.display = 'flex';
-
-            // Wallet popup now opens on click (not hover)
-            initWalletUiControls();
-
-            // Auto-open wallet on page load if pinned or first time
-            const isPinned = getWalletUiPinned();
-            const hasOpenedBefore = sessionStorage.getItem('wallet_opened_once');
-            if (isPinned || !hasOpenedBefore) {
-                setTimeout(() => {
-                    setWalletOpen(true);
-                    loadWalletBalances();
-                    sessionStorage.setItem('wallet_opened_once', '1');
-                }, 500);
-            }
-        }
-        if(disconnectEl) {
-            disconnectEl.style.display = 'block';
-        }
-    }
+    updateHeaderWalletUi();
 });
 
 // ─── TOKEN INFO MODAL FUNCTIONS ───────────────────────────

@@ -26,6 +26,7 @@
 # - Admin Withdrawal Panel (V5.1)
 
 import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii
+from decimal import Decimal, ROUND_DOWN
 import qrcode
 import io
 import numpy as np
@@ -7643,10 +7644,10 @@ def api_v1_create_pool():
 
     The provider must have sufficient balances for both tokens.  Native
     tokens THR and WBTC are debited from their respective ledgers; custom
-    tokens are debited from ``token_balances.json``.  A new pool entry is
-    created with reserves and a simple share model (shares equal to the
-    geometric mean of the deposits).  No trading fee logic is applied
-    yet.
+    tokens are debited from the same custom token ledgers used by the
+    wallet widget.  A new pool entry is created with reserves and a
+    simple share model (shares equal to the geometric mean of the
+    deposits).  No trading fee logic is applied yet.
     """
     data = request.get_json() or {}
     token_a = (data.get("token_a") or "").upper().strip()
@@ -7656,11 +7657,12 @@ def api_v1_create_pool():
     provider = (data.get("provider_thr") or "").strip()
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
+
     # Basic validation
     try:
-        amt_a = float(amt_a_raw)
-        amt_b = float(amt_b_raw)
-    except (TypeError, ValueError):
+        amt_a = Decimal(str(amt_a_raw))
+        amt_b = Decimal(str(amt_b_raw))
+    except Exception:
         return jsonify(status="error", message="Invalid amounts"), 400
     if not token_a or not token_b or token_a == token_b:
         return jsonify(status="error", message="Token symbols must be distinct"), 400
@@ -7684,35 +7686,94 @@ def api_v1_create_pool():
         auth_string = f"{auth_secret}:auth"
     if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
         return jsonify(status="error", message="Invalid auth"), 403
-    # Check provider balances for token_a and token_b
-    # For THR and WBTC, use existing ledgers.  For custom tokens, use token_balances.
-    # Load ledgers
+    wallet_snapshot = get_wallet_balances(provider)
+    tokens_by_symbol = {t.get("symbol"): t for t in wallet_snapshot.get("tokens", [])}
+
     thr_ledger = load_json(LEDGER_FILE, {})
     wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
-    token_balances = load_token_balances()
-    def check_balance(sym, amt):
+    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
+    custom_tokens = load_custom_tokens()
+
+    def resolve_token_state(sym: str):
         if sym == "THR":
-            return float(thr_ledger.get(provider, 0.0)) >= amt
-        elif sym == "WBTC":
-            return float(wbtc_ledger.get(provider, 0.0)) >= amt
-        else:
-            return float(token_balances.get(sym, {}).get(provider, 0.0)) >= amt
-    if not check_balance(token_a, amt_a) or not check_balance(token_b, amt_b):
-        return jsonify(status="error", message="Insufficient balance for one of the tokens"), 400
-    # Deduct balances
-    def deduct(sym, amt):
-        if sym == "THR":
-            thr_ledger[provider] = round(float(thr_ledger.get(provider, 0.0)) - amt, 6)
-        elif sym == "WBTC":
-            wbtc_ledger[provider] = round(float(wbtc_ledger.get(provider, 0.0)) - amt, 6)
-        else:
-            token_balances.setdefault(sym, {})
-            token_balances[sym][provider] = round(float(token_balances[sym].get(provider, 0.0)) - amt, 6)
-    deduct(token_a, amt_a)
-    deduct(token_b, amt_b)
-    save_json(LEDGER_FILE, thr_ledger)
-    save_json(WBTC_LEDGER_FILE, wbtc_ledger)
-    save_token_balances(token_balances)
+            return {
+                "symbol": sym,
+                "decimals": 6,
+                "ledger": thr_ledger,
+                "balance": Decimal(str(wallet_snapshot.get("thr", 0.0))),
+                "save": lambda: save_json(LEDGER_FILE, thr_ledger)
+            }
+        if sym == "WBTC":
+            return {
+                "symbol": sym,
+                "decimals": 8,
+                "ledger": wbtc_ledger,
+                "balance": Decimal(str(wallet_snapshot.get("wbtc", 0.0))),
+                "save": lambda: save_json(WBTC_LEDGER_FILE, wbtc_ledger)
+            }
+        if sym == "L2E":
+            return {
+                "symbol": sym,
+                "decimals": 6,
+                "ledger": l2e_ledger,
+                "balance": Decimal(str(wallet_snapshot.get("l2e", 0.0))),
+                "save": lambda: save_json(L2E_LEDGER_FILE, l2e_ledger)
+            }
+        token_meta = custom_tokens.get(sym)
+        if not token_meta:
+            return None
+        token_id = token_meta.get("id")
+        if not token_id:
+            return None
+        token_ledger = load_custom_token_ledger(token_id)
+        decimals = int(token_meta.get("decimals", 6))
+        return {
+            "symbol": sym,
+            "decimals": decimals,
+            "ledger": token_ledger,
+            "token_id": token_id,
+            "balance": Decimal(str(token_ledger.get(provider, 0.0))),
+            "save": lambda ledger=token_ledger, token_id=token_id: save_custom_token_ledger(token_id, ledger)
+        }
+
+    def to_units(amount: Decimal, decimals: int):
+        scale = Decimal(10) ** decimals
+        return int((amount * scale).to_integral_value(rounding=ROUND_DOWN))
+
+    def validate_and_prepare(sym: str, amt: Decimal):
+        state = resolve_token_state(sym)
+        if not state:
+            return None, jsonify(status="error", message=f"Unsupported token {sym}"), 400
+        amount_units = to_units(amt, state["decimals"])
+        balance_units = to_units(state["balance"], state["decimals"])
+        if amount_units <= 0:
+            return None, jsonify(status="error", message="Amounts must be positive"), 400
+        if balance_units < amount_units:
+            return None, jsonify(status="error", message="Insufficient balance for one of the tokens", requested={"symbol": sym, "amount": float(amt)}, available=float(state["balance"])), 400
+        return state, None, None
+
+    state_a, err_resp_a, err_code_a = validate_and_prepare(token_a, amt_a)
+    if err_resp_a:
+        return err_resp_a, err_code_a
+    state_b, err_resp_b, err_code_b = validate_and_prepare(token_b, amt_b)
+    if err_resp_b:
+        return err_resp_b, err_code_b
+
+    logger.info("[create_pool] provider=%s token_a=%s amount_a=%s token_b=%s amount_b=%s balances=%s", provider, token_a, amt_a, token_b, amt_b, {k: {"balance": v.get("balance"), "decimals": v.get("decimals") } for k, v in tokens_by_symbol.items()})
+
+    amt_a_quantized = amt_a.quantize(Decimal(1) / (Decimal(10) ** state_a["decimals"]), rounding=ROUND_DOWN)
+    amt_b_quantized = amt_b.quantize(Decimal(1) / (Decimal(10) ** state_b["decimals"]), rounding=ROUND_DOWN)
+
+    def deduct(state, amt: Decimal):
+        decimals = state["decimals"]
+        ledger = state["ledger"]
+        current = Decimal(str(ledger.get(provider, 0.0)))
+        new_balance = (current - amt).quantize(Decimal(1) / (Decimal(10) ** decimals), rounding=ROUND_DOWN)
+        ledger[provider] = float(new_balance)
+        state["save"]()
+
+    deduct(state_a, amt_a_quantized)
+    deduct(state_b, amt_b_quantized)
     # Create pool
     pools = load_pools()
     # Ensure pool doesn't already exist
@@ -7720,17 +7781,19 @@ def api_v1_create_pool():
         if (p.get("token_a") == token_a and p.get("token_b") == token_b) or (p.get("token_a") == token_b and p.get("token_b") == token_a):
             return jsonify(status="error", message="Pool already exists"), 400
     pool_id = str(uuid.uuid4())
+    amt_a_float = float(amt_a_quantized)
+    amt_b_float = float(amt_b_quantized)
     # Compute shares as geometric mean (simplified constant product)
     try:
-        shares = (amt_a * amt_b) ** 0.5
+        shares = (amt_a_float * amt_b_float) ** 0.5
     except Exception:
-        shares = min(amt_a, amt_b)
+        shares = min(amt_a_float, amt_b_float)
     new_pool = {
         "id": pool_id,
         "token_a": token_a,
         "token_b": token_b,
-        "reserves_a": round(amt_a, 6),
-        "reserves_b": round(amt_b, 6),
+        "reserves_a": round(amt_a_float, state_a["decimals"]),
+        "reserves_b": round(amt_b_float, state_b["decimals"]),
         "total_shares": round(shares, 6),
         "providers": {
             provider: round(shares, 6)
@@ -7747,8 +7810,8 @@ def api_v1_create_pool():
         "pool_id": pool_id,
         "token_a": token_a,
         "token_b": token_b,
-        "deposited_a": amt_a,
-        "deposited_b": amt_b,
+        "deposited_a": round(amt_a_float, state_a["decimals"]),
+        "deposited_b": round(amt_b_float, state_b["decimals"]),
         "provider": provider,
         "timestamp": ts,
         "tx_id": tx_id,

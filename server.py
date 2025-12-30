@@ -8423,12 +8423,6 @@ def api_chat_session_alias():
     return api_chat_session_new()
 
 
-@app.route("/api/chat/session", methods=["POST"])
-def api_chat_session_alias():
-    """Alias for creating a new chat session (compatibility with older UI)."""
-    return api_chat_session_new()
-
-
 @app.route("/api/chat/session/<session_id>", methods=["GET", "DELETE", "PATCH"])
 def api_chat_session_get(session_id):
     """

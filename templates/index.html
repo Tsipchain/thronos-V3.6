@@ -1671,7 +1671,7 @@
         try {
             const res = await fetch(`/api/balance/${address}`);
             const data = await res.json();
-            const balance = data.balance || 0;
+            const balance = (typeof data.thr_balance === 'number' ? data.thr_balance : data.balance) || (data.token_balances ? data.token_balances.THR || 0 : 0) || 0;
             document.getElementById('connectedBalance').textContent = balance.toFixed(4) + ' THR';
         } catch (e) {
             document.getElementById('connectedBalance').textContent = '-- THR';

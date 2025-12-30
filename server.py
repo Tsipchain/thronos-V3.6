@@ -8411,7 +8411,16 @@ def api_chat_session_new():
     sessions.append(session)
     save_ai_sessions(sessions)
 
-    return jsonify(ok=True, session=session), 200
+    resp = make_response(jsonify(ok=True, session=session))
+    if guest_id:
+        resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+    return resp, 200
+
+
+@app.route("/api/chat/session", methods=["POST"])
+def api_chat_session_alias():
+    """Alias for creating a new chat session (compatibility with older UI)."""
+    return api_chat_session_new()
 
 
 @app.route("/api/chat/session", methods=["POST"])
@@ -8450,7 +8459,10 @@ def api_chat_session_get(session_id):
             return jsonify(ok=False, error="Session not found"), 404
 
         save_ai_sessions(sessions)
-        return jsonify(ok=True), 200
+        resp = make_response(jsonify(ok=True))
+        if guest_id:
+            resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+        return resp, 200
 
     # Handle PATCH (rename)
     if request.method == "PATCH":
@@ -8479,7 +8491,10 @@ def api_chat_session_get(session_id):
             return jsonify(ok=False, error="Session not found"), 404
 
         save_ai_sessions(sessions)
-        return jsonify(ok=True), 200
+        resp = make_response(jsonify(ok=True))
+        if guest_id:
+            resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+        return resp, 200
     wallet_in = (request.args.get("wallet") or "").strip()
     identity, guest_id = _current_actor_id(wallet_in)
 
@@ -8507,7 +8522,10 @@ def api_chat_session_get(session_id):
             history.append({"role": "assistant", "content": r})
 
     history = history[-40:]
-    return jsonify(ok=True, session=session, messages=history), 200
+    resp = make_response(jsonify(ok=True, session=session, messages=history))
+    if guest_id:
+        resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+    return resp, 200
 
 
 @app.route("/api/chat/sessions", methods=["GET"])
@@ -8526,7 +8544,10 @@ def api_chat_sessions_list():
         out.append(s)
 
     out.sort(key=lambda s: s.get("updated_at") or s.get("created_at") or "", reverse=True)
-    return jsonify(ok=True, sessions=out), 200
+    resp = make_response(jsonify(ok=True, sessions=out))
+    if guest_id:
+        resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+    return resp, 200
 
 
 @app.route("/api/ai/sessions/rename", methods=["POST"])

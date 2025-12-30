@@ -631,7 +631,8 @@ async function loadVotingPower() {
     try {
         const res = await fetch(`/api/balance/${connectedWallet}`);
         const data = await res.json();
-        votingPower = Math.floor(data.balance || 0);
+        const balance = (typeof data.thr_balance === 'number' ? data.thr_balance : data.balance) || (data.token_balances ? data.token_balances.THR || 0 : 0) || 0;
+        votingPower = Math.floor(balance);
         $('votingPower').textContent = formatNumber(votingPower);
     } catch (e) {
         votingPower = 100; // Demo

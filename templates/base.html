@@ -2253,15 +2253,30 @@ function closeHeaderWalletModal(){
     if (overlay) overlay.classList.remove('active');
 }
 
-function submitHeaderWalletLogin(){
-    const address = document.getElementById('walletAddressInput').value.trim();
-    const seed = document.getElementById('walletSendSeedInput').value.trim();
+async function submitHeaderWalletLogin(){
+    const existingAddress = walletSession.getAddress();
+    const existingSeed = walletSession.getSendSeed();
+
+    const address = document.getElementById('walletAddressInput').value.trim() || existingAddress;
+    const seed = document.getElementById('walletSendSeedInput').value.trim() || existingSeed;
     const pin = document.getElementById('walletPinInput').value.trim();
     if (!address) {
         alert('Please enter a THR address.');
         return;
     }
+
+    // Store session (reuse saved address/seed when logging in with PIN-only)
     walletSession.saveSession({ address, sendSeed: seed, pin });
+
+    // Sync the PIN with the wallet lock so PIN-only unlock works with the header widget
+    if (pin) {
+        const h = await sha256Hex(pin);
+        localStorage.setItem(WALLET_PIN_HASH_KEY, h);
+        markWalletActive();
+    } else {
+        localStorage.removeItem(WALLET_PIN_HASH_KEY);
+    }
+
     closeHeaderWalletModal();
     updateHeaderWalletUi();
     loadTokenBalances();

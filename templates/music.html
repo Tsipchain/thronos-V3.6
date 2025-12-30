@@ -776,8 +776,8 @@ function renderTracks(tracks, containerId) {
     container.innerHTML = tracks.map(track => `
         <div class="track-card">
             <div class="track-cover">
-                ${track.cover_url
-                    ? `<img src="${track.cover_url}" alt="${track.title}" onerror="this.style.display='none'">`
+                ${track.cover_path || track.cover_url
+                    ? `<img src="${track.cover_path ? '/media/' + track.cover_path : track.cover_url}" alt="${track.title}" onerror="this.src='/static/img/logo.png'">`
                     : '🎵'}
                 <button class="track-play-btn" onclick="playTrack('${track.id}')">▶️</button>
             </div>
@@ -815,8 +815,9 @@ async function playTrack(trackId) {
     // Update player UI
     document.getElementById('playerTitle').textContent = track.title;
     document.getElementById('playerArtist').textContent = track.artist_name;
-    document.getElementById('playerCover').innerHTML = track.cover_url
-        ? `<img src="${track.cover_url}">` : '🎵';
+    const coverSrc = track.cover_path ? `/media/${track.cover_path}` : track.cover_url;
+    document.getElementById('playerCover').innerHTML = coverSrc
+        ? `<img src="${coverSrc}" onerror="this.src='/static/img/logo.png'">` : '🎵';
     document.getElementById('playerContainer').classList.add('active');
 
     // Play audio

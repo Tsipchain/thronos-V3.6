@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <title>Thronos Quantum Chat</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="{{ url_for('static', filename='wallet_session.js') }}"></script>
   <style>
     :root {
       --bg: #020712;
@@ -1032,6 +1033,7 @@
     const API_FILES = "/api/ai/files/upload";
     const API_TELEMETRY = "/api/ai/telemetry";
     const API_FEEDBACK = "/api/ai/feedback";
+    const LOCAL_AI_SESSION_KEY = 'ai_session_id';
 
     // --- DOM refs ---
     let sessionsListEl,
@@ -1082,6 +1084,8 @@
 
     // --- State ---
     let currentSessionId = null;
+    const savedSessionId = localStorage.getItem(LOCAL_AI_SESSION_KEY);
+    if (savedSessionId) currentSessionId = savedSessionId;
     let sessions = [];
     let pendingFiles = []; // { id, name, size }
     let receivedFiles = []; // for any AI-generated [[FILE:...]] blocks
@@ -1219,6 +1223,7 @@
         li.addEventListener("click", () => {
           if (s.id !== currentSessionId) {
             currentSessionId = s.id;
+            localStorage.setItem(LOCAL_AI_SESSION_KEY, currentSessionId);
             loadSessionMessages(s.id);
             renderSessions();
             sessionTitleEl.textContent = s.title || "Mesh session";
@@ -1392,7 +1397,7 @@
     async function loadWallet() {
       try {
         // Read wallet from localStorage (same as other pages)
-        const w = localStorage.getItem('thr_address') || "";
+        const w = walletSession.getAddress() || "";
         walletInputEl.value = w;
 
         // Update wallet label with connection status
@@ -1414,15 +1419,23 @@
 
     async function loadSessions() {
       try {
+        if (!currentSessionId) {
+          const stored = localStorage.getItem(LOCAL_AI_SESSION_KEY);
+          if (stored) currentSessionId = stored;
+        }
         const wallet = walletInputEl.value.trim();
         const url = wallet ? `${API_SESSIONS}?wallet=${encodeURIComponent(wallet)}` : API_SESSIONS;
         const res = await fetch(url);
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
         sessions = data.sessions || [];
+        if (currentSessionId && !sessions.find(s => s.id === currentSessionId) && sessions.length) {
+          currentSessionId = sessions[0].id;
+        }
         if (!currentSessionId && sessions.length) {
           currentSessionId = sessions[0].id;
         }
+        if (currentSessionId) localStorage.setItem(LOCAL_AI_SESSION_KEY, currentSessionId);
         renderSessions();
         if (currentSessionId) {
           const s = sessions.find((x) => x.id === currentSessionId);
@@ -1441,13 +1454,42 @@
       setSessionStatus("Loading messages…");
       try {
         const res = await fetch(API_SESSION_MESSAGES(id));
+        if (res.status === 404) {
+          await handleMissingSession();
+          return;
+        }
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
+        if (data.error && data.error.toLowerCase().includes('session not found')) {
+          await handleMissingSession();
+          return;
+        }
         renderMessages(data.messages || []);
         setSessionStatus("Ready");
       } catch (e) {
         console.error("loadSessionMessages error", e);
         setSessionStatus("Failed to load messages");
+      }
+    }
+
+    async function handleMissingSession() {
+      try {
+        localStorage.removeItem(LOCAL_AI_SESSION_KEY);
+        currentSessionId = null;
+        const wallet = walletInputEl.value.trim();
+        const res = await fetch(API_SESSIONS, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: "Auto-recovered session", wallet: wallet || null })
+        });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        currentSessionId = data.id;
+        localStorage.setItem(LOCAL_AI_SESSION_KEY, currentSessionId);
+        await loadSessions();
+      } catch (err) {
+        console.error("handleMissingSession", err);
+        setSessionStatus("Failed to start new session");
       }
     }
 
@@ -1465,6 +1507,7 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
         currentSessionId = data.id;
+        localStorage.setItem(LOCAL_AI_SESSION_KEY, currentSessionId);
         await loadSessions();
       } catch (e) {
         console.error("createSession error", e);
@@ -1656,6 +1699,12 @@
       clearPendingBtnEl.addEventListener("click", () => {
         pendingFiles = [];
         renderPendingFiles();
+      });
+
+      window.addEventListener("storage", (e) => {
+        if (e.key === 'thr_address' || e.key === 'wallet_bound') {
+          loadWallet();
+        }
       });
 
       sendBtnEl.addEventListener("click", () => {

@@ -762,13 +762,13 @@
 const $ = (id) => document.getElementById(id);
 
 // Language
-const LANG_SEQUENCE = ['gr', 'en', 'ja', 'es', 'ru'];
+window.LANG_SEQUENCE = window.LANG_SEQUENCE || ['gr', 'en', 'ja', 'es', 'ru'];
 const LANG_CLASS_MAP = { 'gr': 'lang-el', 'en': 'lang-en', 'ja': 'lang-ja', 'es': 'lang-es', 'ru': 'lang-ru' };
 
 function toggleLanguage() {
     const current = localStorage.getItem("lang") || "gr";
-    const idx = LANG_SEQUENCE.indexOf(current);
-    const next = LANG_SEQUENCE[(idx + 1) % LANG_SEQUENCE.length];
+    const idx = window.LANG_SEQUENCE.indexOf(current);
+    const next = window.LANG_SEQUENCE[(idx + 1) % window.LANG_SEQUENCE.length];
     localStorage.setItem("lang", next);
     applyLanguage();
 }
@@ -781,7 +781,7 @@ function applyLanguage() {
 }
 
 // Stripe Purchase
-async function purchasePack(packId, price) {
+window.purchasePack = async function purchasePack(packId, price) {
     const wallet = localStorage.getItem('thr_address');
     if (!wallet) {
         alert('Please connect your wallet first!');

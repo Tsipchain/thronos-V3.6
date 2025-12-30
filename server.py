@@ -104,6 +104,21 @@ APP_VERSION     = os.getenv("APP_VERSION", "v3.6")
 DATA_DIR   = os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data"))
 os.makedirs(DATA_DIR, exist_ok=True)
 
+# Unified media root (persists on Railway volume)
+MEDIA_DIR = os.path.join(DATA_DIR, "media")
+TOKEN_LOGOS_DIR = os.path.join(MEDIA_DIR, "token_logos")
+NFT_IMAGES_DIR = os.path.join(MEDIA_DIR, "nft_images")
+COURSE_MEDIA_DIR = os.path.join(MEDIA_DIR, "courses")
+COURSE_COVERS_DIR = os.path.join(COURSE_MEDIA_DIR, "covers")
+COURSE_FILES_DIR = os.path.join(COURSE_MEDIA_DIR, "files")
+MUSIC_AUDIO_DIR = os.path.join(MEDIA_DIR, "music_audio")
+MUSIC_COVER_DIR = os.path.join(MEDIA_DIR, "music_covers")
+L2E_ENROLLMENTS_FILE = os.path.join(DATA_DIR, "l2e_enrollments.json")
+
+for _dir in [MEDIA_DIR, TOKEN_LOGOS_DIR, NFT_IMAGES_DIR, COURSE_MEDIA_DIR,
+             COURSE_COVERS_DIR, COURSE_FILES_DIR, MUSIC_AUDIO_DIR, MUSIC_COVER_DIR]:
+    os.makedirs(_dir, exist_ok=True)
+
 # Node role: "master" or "replica"
 NODE_ROLE = os.getenv("NODE_ROLE", "master").lower()
 MASTER_INTERNAL_URL = os.getenv("MASTER_NODE_URL", "http://localhost:5000")
@@ -475,6 +490,38 @@ def save_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+
+# ─── LIGHTWEIGHT CHAIN CACHE ────────────────────────────────────────────────
+# Mining/miner support endpoints are latency-sensitive and should not block on
+# repeated full-chain reads.  Keep a simple mtime-based cache for the chain and
+# re-use derived views (e.g., reward-bearing blocks).
+CHAIN_CACHE = {
+    "mtime": 0.0,
+    "chain": [],
+    "reward_blocks": [],
+}
+
+
+def load_chain_cached():
+    try:
+        mtime = os.path.getmtime(CHAIN_FILE)
+    except OSError:
+        mtime = 0
+    if CHAIN_CACHE["chain"] and CHAIN_CACHE["mtime"] == mtime:
+        return CHAIN_CACHE["chain"]
+
+    chain = load_json(CHAIN_FILE, [])
+    reward_blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    CHAIN_CACHE.update({"mtime": mtime, "chain": chain, "reward_blocks": reward_blocks})
+    return chain
+
+
+def get_reward_blocks():
+    if CHAIN_CACHE["reward_blocks"]:
+        return CHAIN_CACHE["reward_blocks"]
+    load_chain_cached()
+    return CHAIN_CACHE["reward_blocks"]
+
 def load_mempool():
     return load_json(MEMPOOL_FILE, [])
 
@@ -504,6 +551,123 @@ def load_pools():
 
 def save_pools(pools):
     save_json(POOLS_FILE, pools)
+
+
+def get_all_pools():
+    return load_pools()
+
+
+def get_all_tokens():
+    tokens = load_tokens()
+    for t in tokens:
+        logo_path = t.get("logo_path") or t.get("logo")
+        if logo_path:
+            t["logo_url"] = url_for("media", filename=logo_path, _external=False)
+    return tokens
+
+
+def get_wallet_balances(wallet: str):
+    ledger = load_json(LEDGER_FILE, {})
+    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
+
+    thr_balance = round(float(ledger.get(wallet, 0.0)), 6)
+    wbtc_balance = round(float(wbtc_ledger.get(wallet, 0.0)), 8)
+    l2e_balance = round(float(l2e_ledger.get(wallet, 0.0)), 6)
+
+    custom_token_balances = load_token_balances()
+    prices_cache = {}
+
+    def price_for(symbol):
+        if symbol not in prices_cache:
+            prices_cache[symbol] = get_token_price_in_thr(symbol)
+        return prices_cache[symbol]
+
+    tokens = [
+        {
+            "symbol": "THR",
+            "name": "Thronos",
+            "balance": thr_balance,
+            "decimals": 6,
+            "logo": "/static/img/thronos-token.png",
+            "logo_url": url_for("static", filename="img/thronos-token.png"),
+            "color": "#00ff66",
+            "chain": "Thronos",
+            "type": "native",
+            "price_in_thr": 1.0,
+            "value_in_thr": thr_balance,
+        },
+        {
+            "symbol": "WBTC",
+            "name": "Wrapped Bitcoin",
+            "balance": wbtc_balance,
+            "decimals": 8,
+            "logo": "/static/img/wbtc-logo.png",
+            "logo_url": url_for("static", filename="img/wbtc-logo.png"),
+            "color": "#f7931a",
+            "chain": "Thronos",
+            "type": "wrapped",
+            "price_in_thr": price_for("WBTC"),
+            "value_in_thr": round(wbtc_balance * price_for("WBTC"), 6),
+        },
+        {
+            "symbol": "L2E",
+            "name": "Learn-to-Earn",
+            "balance": l2e_balance,
+            "decimals": 6,
+            "logo": "/static/img/l2e-logo.png",
+            "logo_url": url_for("static", filename="img/l2e-logo.png"),
+            "color": "#00ccff",
+            "chain": "Thronos",
+            "type": "reward",
+            "price_in_thr": price_for("L2E"),
+            "value_in_thr": round(l2e_balance * price_for("L2E"), 6),
+        },
+    ]
+
+    custom_tokens = load_custom_tokens()
+    for symbol, token_data in custom_tokens.items():
+        token_id = token_data.get("id")
+        if not token_id:
+            continue
+        token_ledger = load_custom_token_ledger(token_id)
+        token_balance = round(float(token_ledger.get(wallet, 0.0)), token_data.get("decimals", 6))
+        logo_path = token_data.get("logo_path") or token_data.get("logo")
+        logo_url = url_for("media", filename=logo_path) if logo_path else None
+        tokens.append({
+            "symbol": symbol,
+            "name": token_data.get("name", symbol),
+            "balance": token_balance,
+            "decimals": token_data.get("decimals", 6),
+            "logo": logo_path,
+            "logo_url": logo_url,
+            "color": token_data.get("color", "#00ff66"),
+            "chain": "Thronos",
+            "type": "experimental",
+            "token_id": token_id,
+            "creator": token_data.get("creator", ""),
+            "price_in_thr": price_for(symbol),
+            "value_in_thr": round(token_balance * price_for(symbol), 6),
+        })
+
+    token_balances = {
+        "THR": thr_balance,
+        "WBTC": wbtc_balance,
+        "L2E": l2e_balance,
+    }
+    for symbol, balances in custom_token_balances.items():
+        try:
+            token_balances[symbol] = round(float(balances.get(wallet, 0.0)), 6)
+        except Exception:
+            token_balances[symbol] = 0.0
+
+    return {
+        "thr": thr_balance,
+        "wbtc": wbtc_balance,
+        "l2e": l2e_balance,
+        "token_balances": token_balances,
+        "tokens": tokens,
+    }
 
 def load_attest_store():
     return load_json(ATTEST_STORE_FILE, {})
@@ -736,6 +900,14 @@ def load_courses():
 
 def save_courses(courses):
     save_json(COURSES_FILE, courses)
+
+
+def load_enrollments():
+    return load_json(L2E_ENROLLMENTS_FILE, {})
+
+
+def save_enrollments(enrollments):
+    save_json(L2E_ENROLLMENTS_FILE, enrollments)
 
 # -------------------------------------------------------------------------
 # Peer registry and broadcast helpers
@@ -1049,8 +1221,7 @@ def verify_btc_payment(btc_address, min_amount=MIN_AMOUNT):
         return False, []
 
 def get_mining_target():
-    chain  = load_json(CHAIN_FILE, [])
-    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    blocks = get_reward_blocks()
     if len(blocks) < RETARGET_INTERVAL:
         return INITIAL_TARGET
     last_block  = blocks[-1]
@@ -1395,6 +1566,12 @@ def home():
 def serve_contract(filename):
     return send_from_directory(CONTRACTS_DIR, filename)
 
+@app.route("/media/<path:filename>")
+def media(filename):
+    """Serve persistent media assets from the data volume."""
+    safe_name = filename.lstrip("/..")
+    return send_from_directory(MEDIA_DIR, safe_name)
+
 @app.route("/viewer")
 def viewer():
     return render_template(
@@ -1490,6 +1667,12 @@ def courses_page():
     ``/api/v1/courses`` endpoints for data operations.
     """
     return render_template("courses.html")
+
+
+@app.route("/courses/<string:course_id>")
+def course_detail_page(course_id: str):
+    """Render a single course page with media and quiz access."""
+    return render_template("course_detail.html", course_id=course_id)
 
 # ---------------------------------------------------------------------------
 
@@ -2162,8 +2345,8 @@ def api_last_block():
 
 @app.route("/last_block_hash")
 def last_block_hash():
-    chain  = load_json(CHAIN_FILE, [])
-    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    chain = load_chain_cached()
+    blocks = get_reward_blocks()
     if blocks:
         last = blocks[-1]
         global_height = HEIGHT_OFFSET + len(blocks) - 1
@@ -2179,8 +2362,8 @@ def mining_info():
     target = get_mining_target()
     nbits  = target_to_bits(target)
 
-    chain  = load_json(CHAIN_FILE, [])
-    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    chain  = load_chain_cached()
+    blocks = get_reward_blocks()
 
     last_hash = blocks[-1].get("block_hash", "") if blocks else "0" * 64
 
@@ -3639,21 +3822,18 @@ def pledge_submit():
 
 @app.route("/wallet_data/<thr_addr>")
 def wallet_data(thr_addr):
-    ledger = load_json(LEDGER_FILE, {})
-    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})  # NEW
-    # Load L2E balances from the separate ledger
-    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
-
-    chain = load_json(CHAIN_FILE, [])
-    bal = round(float(ledger.get(thr_addr, 0.0)), 6)
-    wbtc_bal = round(float(wbtc_ledger.get(thr_addr, 0.0)), 8)  # NEW
-    l2e_bal = round(float(l2e_ledger.get(thr_addr, 0.0)), 6)
-
+    balances = get_wallet_balances(thr_addr)
+    chain = load_chain_cached()
     history = [
         tx for tx in chain
         if isinstance(tx, dict) and (tx.get("from") == thr_addr or tx.get("to") == thr_addr)
     ]
-    return jsonify(balance=bal, wbtc_balance=wbtc_bal, l2e_balance=l2e_bal, transactions=history), 200
+    return jsonify(
+        balance=balances["thr"],
+        wbtc_balance=balances["wbtc"],
+        l2e_balance=balances["l2e"],
+        transactions=history,
+    ), 200
 
 def get_token_price_in_thr(symbol):
     """
@@ -3694,90 +3874,12 @@ def api_wallet_tokens(thr_addr):
     Returns all token balances for a wallet with metadata (logos, names, etc.)
     Perfect for wallet widgets and balance displays
     """
-    ledger = load_json(LEDGER_FILE, {})
-    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
-    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
+    balances = get_wallet_balances(thr_addr)
+    tokens = balances["tokens"]
 
-    thr_balance = round(float(ledger.get(thr_addr, 0.0)), 6)
-    wbtc_balance = round(float(wbtc_ledger.get(thr_addr, 0.0)), 8)
-    l2e_balance = round(float(l2e_ledger.get(thr_addr, 0.0)), 6)
-
-    # Get dynamic prices from pools
-    wbtc_price = get_token_price_in_thr("WBTC")
-    l2e_price = get_token_price_in_thr("L2E")
-
-    tokens = [
-        {
-            "symbol": "THR",
-            "name": "Thronos",
-            "balance": thr_balance,
-            "decimals": 6,
-            "logo": "/static/img/thronos-token.png",
-            "color": "#00ff66",
-            "chain": "Thronos",
-            "type": "native",
-            "price_in_thr": 1.0,
-            "value_in_thr": thr_balance
-        },
-        {
-            "symbol": "WBTC",
-            "name": "Wrapped Bitcoin",
-            "balance": wbtc_balance,
-            "decimals": 8,
-            "logo": "/static/img/wbtc-logo.png",
-            "color": "#f7931a",
-            "chain": "Thronos",
-            "type": "wrapped",
-            "price_in_thr": wbtc_price,
-            "value_in_thr": round(wbtc_balance * wbtc_price, 6)
-        },
-        {
-            "symbol": "L2E",
-            "name": "Learn-to-Earn",
-            "balance": l2e_balance,
-            "decimals": 6,
-            "logo": "/static/img/l2e-logo.png",
-            "color": "#00ccff",
-            "chain": "Thronos",
-            "type": "reward",
-            "price_in_thr": l2e_price,
-            "value_in_thr": round(l2e_balance * l2e_price, 6)
-        }
-    ]
-
-    # Add custom experimental tokens
-    custom_tokens = load_custom_tokens()
-    for symbol, token_data in custom_tokens.items():
-        token_id = token_data.get("id")
-        if token_id:
-            # Load the token's ledger to get this wallet's balance
-            token_ledger = load_custom_token_ledger(token_id)
-            token_balance = round(float(token_ledger.get(thr_addr, 0.0)), token_data.get("decimals", 6))
-
-            # Only show if balance > 0 or show_zero is true
-            if token_balance > 0 or request.args.get("show_zero", "true").lower() == "true":
-                # Get dynamic price from pool if available
-                token_price = get_token_price_in_thr(symbol)
-
-                tokens.append({
-                    "symbol": symbol,
-                    "name": token_data.get("name", symbol),
-                    "balance": token_balance,
-                    "decimals": token_data.get("decimals", 6),
-                    "logo": token_data.get("logo", None),
-                    "color": token_data.get("color", "#00ff66"),
-                    "chain": "Thronos",
-                    "type": "experimental",
-                    "token_id": token_id,
-                    "creator": token_data.get("creator", ""),
-                    "price_in_thr": token_price,
-                    "value_in_thr": round(token_balance * token_price, 6)
-                })
-
-    # Filter out zero balances (optional - can be toggled)
     show_zero = request.args.get("show_zero", "true").lower() == "true"
     if not show_zero:
-        tokens = [t for t in tokens if t["balance"] > 0]
+        tokens = [t for t in tokens if t.get("balance", 0) > 0]
 
     total_value_usd = 0  # Placeholder for future price oracle integration
 
@@ -3793,26 +3895,7 @@ def api_wallet_tokens(thr_addr):
 @app.route("/api/balance/<thr_addr>", methods=["GET"])
 def api_balance_alias(thr_addr: str):
     """Compatibility alias that exposes a consolidated balance snapshot."""
-    ledger = load_json(LEDGER_FILE, {})
-    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
-    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
-    custom_token_balances = load_token_balances()
-
-    thr_balance = round(float(ledger.get(thr_addr, 0.0)), 6)
-    wbtc_balance = round(float(wbtc_ledger.get(thr_addr, 0.0)), 8)
-    l2e_balance = round(float(l2e_ledger.get(thr_addr, 0.0)), 6)
-
-    token_balances = {
-        "THR": thr_balance,
-        "WBTC": wbtc_balance,
-        "L2E": l2e_balance,
-    }
-
-    for symbol, balances in custom_token_balances.items():
-        try:
-            token_balances[symbol] = round(float(balances.get(thr_addr, 0.0)), 6)
-        except Exception:
-            token_balances[symbol] = 0.0
+    balances = get_wallet_balances(thr_addr)
 
     mempool_pending = [
         tx for tx in load_mempool()
@@ -3821,8 +3904,8 @@ def api_balance_alias(thr_addr: str):
 
     return jsonify({
         "address": thr_addr,
-        "thr_balance": thr_balance,
-        "token_balances": token_balances,
+        "thr_balance": balances["thr"],
+        "token_balances": balances["token_balances"],
         "mempool_pending": mempool_pending,
         "updated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }), 200
@@ -3851,10 +3934,8 @@ def wallet_widget():
 
 CUSTOM_TOKENS_FILE = os.path.join(DATA_DIR, "custom_tokens.json")
 CUSTOM_TOKENS_LEDGER_DIR = os.path.join(DATA_DIR, "custom_ledgers")
-TOKEN_LOGOS_DIR = os.path.join("static", "token_logos")
 
 os.makedirs(CUSTOM_TOKENS_LEDGER_DIR, exist_ok=True)
-os.makedirs(TOKEN_LOGOS_DIR, exist_ok=True)
 
 def load_custom_tokens():
     """Load custom tokens registry"""
@@ -3995,9 +4076,6 @@ def api_create_token():
     # Handle logo upload if provided (FREE - no extra charge!)
     if logo_file and logo_file.filename:
         try:
-            # Ensure logo directory exists
-            os.makedirs(TOKEN_LOGOS_DIR, exist_ok=True)
-
             ext = os.path.splitext(secure_filename(logo_file.filename))[1] or ".png"
             logo_filename = f"{token_id}{ext}"
             logo_path = os.path.join(TOKEN_LOGOS_DIR, logo_filename)
@@ -4007,10 +4085,10 @@ def api_create_token():
 
             # Verify file was saved
             if os.path.exists(logo_path):
-                token["logo"] = f"/static/token_logos/{logo_filename}"
+                token["logo_path"] = f"token_logos/{logo_filename}"
                 tokens[symbol] = token
                 save_custom_tokens(tokens)
-                logger.info(f"Logo saved successfully for token {symbol}: {token['logo']}")
+                logger.info(f"Logo saved successfully for token {symbol}: {token['logo_path']}")
             else:
                 logger.warning(f"Logo file not found after save for token {symbol}")
         except Exception as e:
@@ -4019,6 +4097,9 @@ def api_create_token():
     if initial_supply > 0:
         token_ledger = {creator: initial_supply}
         save_custom_token_ledger(token_id, token_ledger)
+
+    if token.get("logo_path"):
+        token["logo"] = f"/media/{token['logo_path']}"
 
     logger.info(f"Created experimental token {symbol} by {creator} (fee: {CREATION_FEE} THR)")
     return jsonify({
@@ -4052,9 +4133,6 @@ def api_upload_token_logo(symbol):
         return jsonify({"ok": False, "error": "Not authorized"}), 403
 
     try:
-        # Ensure logo directory exists
-        os.makedirs(TOKEN_LOGOS_DIR, exist_ok=True)
-
         # Save logo
         ext = os.path.splitext(secure_filename(file.filename))[1] or ".png"
         logo_filename = f"{token['id']}{ext}"
@@ -4070,12 +4148,15 @@ def api_upload_token_logo(symbol):
         return jsonify({"ok": False, "error": f"Failed to save logo: {str(e)}"}), 500
 
     # Update token
-    token["logo"] = f"/static/token_logos/{logo_filename}"
+    token["logo_path"] = f"token_logos/{logo_filename}"
     tokens[symbol.upper()] = token
     save_custom_tokens(tokens)
 
-    logger.info(f"Logo uploaded successfully for {symbol}: {token['logo']}")
-    return jsonify({"ok": True, "logo": token["logo"]}), 200
+    logo_url = f"/media/{token['logo_path']}"
+    token["logo"] = logo_url
+
+    logger.info(f"Logo uploaded successfully for {symbol}: {token['logo_path']}")
+    return jsonify({"ok": True, "logo_path": token["logo_path"], "logo": logo_url}), 200
 
 @app.route("/api/tokens/list")
 def api_list_tokens():
@@ -6889,6 +6970,12 @@ def api_v1_enroll_course(course_id: str):
         pass
     # Enroll student
     course.setdefault("students", []).append(student)
+    enrollments = load_enrollments()
+    enrollments.setdefault(course_id, {})[student] = {
+        "enrolled_at": ts,
+        "completed": False
+    }
+    save_enrollments(enrollments)
     save_courses(courses)
     return jsonify(status="success", tx=tx, new_balance_from=ledger[student]), 200
 
@@ -7175,6 +7262,106 @@ def api_v1_submit_quiz(course_id: str):
     ), 200
 
 
+@app.route("/api/l2e/submit_quiz", methods=["POST"])
+def api_l2e_submit_quiz():
+    """Grade a quiz attempt, record completion, and award L2E tokens."""
+    data = request.get_json() or {}
+    course_id = (data.get("course_id") or data.get("id") or "").strip()
+    student = (data.get("student_thr") or "").strip()
+    answers = data.get("answers", {})
+
+    if not course_id or not student:
+        return jsonify(status="error", message="Missing course or student"), 400
+
+    courses = load_courses()
+    course = next((c for c in courses if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+
+    enrollments = load_enrollments()
+    if student not in enrollments.get(course_id, {}) and student not in course.get("students", []):
+        return jsonify(status="error", message="Not enrolled"), 403
+
+    quizzes = load_quizzes()
+    quiz = quizzes.get(course_id)
+    if not quiz:
+        return jsonify(status="error", message="No quiz for this course"), 404
+
+    questions = quiz.get("questions", [])
+    total = len(questions)
+    if total == 0:
+        return jsonify(status="error", message="Quiz has no questions"), 500
+
+    correct = 0
+    results = []
+    for q in questions:
+        qid = str(q.get("id"))
+        user_answer = answers.get(qid)
+        is_correct = user_answer is not None and int(user_answer) == q.get("correct")
+        if is_correct:
+            correct += 1
+        results.append({
+            "question_id": qid,
+            "correct": is_correct,
+            "your_answer": user_answer,
+            "correct_answer": q.get("correct")
+        })
+
+    score = round((correct / total) * 100)
+    passing_score = quiz.get("passing_score", 80)
+    passed = score >= passing_score
+
+    quiz_attempts = load_json(os.path.join(DATA_DIR, "quiz_attempts.json"), {})
+    if course_id not in quiz_attempts:
+        quiz_attempts[course_id] = {}
+    quiz_attempts[course_id][student] = {
+        "score": score,
+        "passed": passed,
+        "attempts": quiz_attempts.get(course_id, {}).get(student, {}).get("attempts", 0) + 1,
+        "last_attempt": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    }
+    save_json(os.path.join(DATA_DIR, "quiz_attempts.json"), quiz_attempts)
+
+    if passed:
+        enrollments.setdefault(course_id, {}).setdefault(student, {})["completed"] = True
+        course.setdefault("completed", [])
+        if student not in course["completed"]:
+            course["completed"].append(student)
+        # Award L2E tokens
+        reward = float(course.get("reward_l2e", 0))
+        if reward > 0:
+            l2e_ledger = load_json(L2E_LEDGER_FILE, {})
+            l2e_ledger[student] = round(float(l2e_ledger.get(student, 0.0)) + reward, 6)
+            save_json(L2E_LEDGER_FILE, l2e_ledger)
+            chain = load_json(CHAIN_FILE, [])
+            ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+            tx_id = f"L2E-REWARD-{len(chain)}-{int(time.time())}-{secrets.token_hex(4)}"
+            chain.append({
+                "type": "l2e_reward",
+                "from": "course",
+                "to": student,
+                "thr_address": course.get("teacher", ""),
+                "amount": round(reward, 6),
+                "course_id": course_id,
+                "timestamp": ts,
+                "tx_id": tx_id,
+                "status": "confirmed"
+            })
+            save_json(CHAIN_FILE, chain)
+            update_last_block(chain[-1], is_block=False)
+        save_enrollments(enrollments)
+        save_courses(courses)
+
+    return jsonify(
+        status="success",
+        score=score,
+        total=total,
+        passed=passed,
+        passing_score=passing_score,
+        results=results
+    ), 200
+
+
 @app.route("/api/courses/quiz/submit", methods=["POST"])
 def api_courses_quiz_submit_alias():
     """Alias wrapper for submitting course quizzes without the v1 prefix."""
@@ -7212,6 +7399,9 @@ def api_v1_get_tokens():
     name, total supply, decimals and owner.
     """
     tokens = load_tokens()
+    for tok in tokens:
+        if tok.get("logo_path"):
+            tok["logo"] = f"/media/{tok['logo_path']}"
     return jsonify(tokens=tokens), 200
 
 
@@ -8743,8 +8933,6 @@ def chat_page_v2():
 # THR royalties from plays and tips from listeners.
 
 MUSIC_FILE = os.path.join(DATA_DIR, "music_registry.json")
-MUSIC_UPLOADS_DIR = os.path.join("static", "music_uploads")
-os.makedirs(MUSIC_UPLOADS_DIR, exist_ok=True)
 
 
 def load_music_registry():
@@ -8757,6 +8945,15 @@ def save_music_registry(registry):
     save_json(MUSIC_FILE, registry)
 
 
+def enrich_track_media(track: dict) -> dict:
+    """Ensure track dictionaries expose media URLs from stored paths."""
+    if track.get("audio_path") and not track.get("audio_url"):
+        track["audio_url"] = f"/media/{track['audio_path']}"
+    if track.get("cover_path"):
+        track["cover_url"] = f"/media/{track['cover_path']}"
+    return track
+
+
 @app.route("/music")
 def music_page():
     """Render the Decent Music platform"""
@@ -8767,7 +8964,7 @@ def music_page():
 def api_v1_music_tracks():
     """Get all published tracks"""
     registry = load_music_registry()
-    tracks = [t for t in registry["tracks"] if t.get("published", True)]
+    tracks = [enrich_track_media(t) for t in registry["tracks"] if t.get("published", True)]
     # Add play counts
     for track in tracks:
         track["play_count"] = len(registry["plays"].get(track["id"], []))
@@ -8780,7 +8977,7 @@ def api_v1_music_tracks():
 def api_v1_music_trending():
     """Get trending tracks (most plays in last 7 days)"""
     registry = load_music_registry()
-    tracks = [t for t in registry["tracks"] if t.get("published", True)]
+    tracks = [enrich_track_media(t) for t in registry["tracks"] if t.get("published", True)]
 
     # Calculate recent play counts
     week_ago = time.time() - (7 * 24 * 60 * 60)
@@ -8803,7 +9000,7 @@ def api_v1_music_artist(artist_address):
 
     registry = load_music_registry()
     artist = registry["artists"].get(artist_address, {})
-    tracks = [t for t in registry["tracks"] if t.get("artist_address") == artist_address]
+    tracks = [enrich_track_media(t) for t in registry["tracks"] if t.get("artist_address") == artist_address]
 
     # Calculate stats
     total_plays = sum(len(registry["plays"].get(t["id"], [])) for t in tracks)
@@ -8901,20 +9098,19 @@ def api_v1_music_upload():
         # Generate track ID
         track_id = f"TRACK-{int(time.time())}-{secrets.token_hex(4)}"
 
-        # Save audio file
+        # Save audio file in persistent media volume
         audio_filename = f"{track_id}{ext}"
-        audio_path = os.path.join(MUSIC_UPLOADS_DIR, audio_filename)
-        audio_file.save(audio_path)
+        audio_relative = os.path.join("music_audio", audio_filename)
+        audio_file.save(os.path.join(MEDIA_DIR, audio_relative))
 
-        # Handle cover art if provided
-        cover_path = None
+        # Handle cover art if provided (stored as <track_id>.jpg under music_covers)
+        cover_relative = None
         if "cover" in request.files:
             cover_file = request.files["cover"]
             if cover_file.filename:
-                cover_ext = os.path.splitext(secure_filename(cover_file.filename))[1] or ".jpg"
-                cover_filename = f"{track_id}_cover{cover_ext}"
-                cover_path = os.path.join(MUSIC_UPLOADS_DIR, cover_filename)
-                cover_file.save(cover_path)
+                cover_filename = f"{track_id}.jpg"
+                cover_relative = os.path.join("music_covers", cover_filename)
+                cover_file.save(os.path.join(MEDIA_DIR, cover_relative))
 
         # Create track entry
         track = {
@@ -8924,8 +9120,10 @@ def api_v1_music_upload():
             "artist_name": registry["artists"][artist_address]["name"],
             "genre": genre,
             "description": description,
-            "audio_url": f"/static/music_uploads/{audio_filename}",
-            "cover_url": f"/static/music_uploads/{cover_filename}" if cover_path else None,
+            "audio_path": audio_relative,
+            "audio_url": f"/media/{audio_relative}",
+            "cover_path": cover_relative,
+            "cover_url": f"/media/{cover_relative}" if cover_relative else None,
             "uploaded_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
             "published": True,
             "tips_total": 0

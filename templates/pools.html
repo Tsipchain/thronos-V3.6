@@ -934,8 +934,8 @@ function renderPools(pools, containerId) {
 
 // Render my pools - Enhanced version with positions
 async function renderMyPools() {
-    const wallet = localStorage.getItem('thr_address');
-    if (!wallet) {
+    const wallet = walletSession.getAddress();
+    if (!wallet || !walletSession.isBound()) {
         document.getElementById('myPoolsEmpty').style.display = 'block';
         document.getElementById('portfolioSummary').style.display = 'none';
         document.getElementById('referralSection').style.display = 'none';
@@ -1140,6 +1140,28 @@ async function loadTokenOptions() {
     }
 }
 
+async function getWalletBalanceMap(wallet) {
+    const res = await fetch(`/api/wallet/tokens/${wallet}?show_zero=true`);
+    if (!res.ok) {
+        throw new Error('Wallet not connected');
+    }
+    const data = await res.json();
+    const balances = {};
+    const list = Array.isArray(data.tokens)
+        ? data.tokens
+        : (data.balances ? Object.entries(data.balances).map(([symbol, balance]) => ({ symbol, balance })) : []);
+    list.forEach(t => {
+        balances[t.symbol] = Number(t.balance) || 0;
+    });
+    if (typeof data.balance !== 'undefined' && typeof balances.THR === 'undefined') {
+        balances.THR = Number(data.balance) || 0;
+    }
+    if (typeof data.jam_balance !== 'undefined') {
+        balances.JAM = Number(data.jam_balance) || 0;
+    }
+    return balances;
+}
+
 // Submit create pool
 async function submitCreatePool(event) {
     event.preventDefault();
@@ -1148,16 +1170,18 @@ async function submitCreatePool(event) {
     const tokenB = document.getElementById('poolTokenB').value;
     const amountA = parseFloat(document.getElementById('poolAmountA').value);
     const amountB = parseFloat(document.getElementById('poolAmountB').value);
-    const provider = localStorage.getItem('thr_address');
-    const secret = localStorage.getItem('thr_secret');
+    const provider = walletSession.getAddress();
+    const secret = walletSession.getSendSeed();
     const messageDiv = document.getElementById('createPoolMessage');
 
-    if (!provider || !secret) {
+    if (!provider || !secret || !walletSession.isBound()) {
         messageDiv.className = 'form-message error';
-        messageDiv.textContent = 'Please connect your wallet first';
+        messageDiv.textContent = 'Wallet not connected';
         messageDiv.style.display = 'block';
         return;
     }
+
+    if(!walletSession.requirePin('create pool')) return;
 
     if (tokenA === tokenB) {
         messageDiv.className = 'form-message error';
@@ -1169,6 +1193,21 @@ async function submitCreatePool(event) {
     if (amountA <= 0 || amountB <= 0) {
         messageDiv.className = 'form-message error';
         messageDiv.textContent = 'Please enter positive amounts';
+        messageDiv.style.display = 'block';
+        return;
+    }
+
+    try {
+        const balances = await getWalletBalanceMap(provider);
+        if ((balances[tokenA] || 0) < amountA || (balances[tokenB] || 0) < amountB) {
+            messageDiv.className = 'form-message error';
+            messageDiv.textContent = 'Error: Insufficient balance';
+            messageDiv.style.display = 'block';
+            return;
+        }
+    } catch (err) {
+        messageDiv.className = 'form-message error';
+        messageDiv.textContent = err.message || 'Wallet not connected';
         messageDiv.style.display = 'block';
         return;
     }
@@ -1231,9 +1270,9 @@ async function addLiquidity(poolId) {
         return;
     }
 
-    const wallet = localStorage.getItem('thr_address');
-    if (!wallet) {
-        alert('Please connect your wallet first!');
+    const wallet = walletSession.getAddress();
+    if (!wallet || !walletSession.isBound()) {
+        alert('Wallet not connected');
         return;
     }
 
@@ -1244,8 +1283,21 @@ async function addLiquidity(poolId) {
     const amountB = prompt(`Enter amount of ${pool.token_b} to add:`);
     if (!amountB || isNaN(amountB) || parseFloat(amountB) <= 0) return;
 
-    const authSecret = prompt('Enter your auth secret:');
+    const authSecret = walletSession.getSendSeed() || prompt('Enter your auth secret:');
     if (!authSecret) return;
+
+    if(!walletSession.requirePin('add liquidity')) return;
+
+    try {
+        const balances = await getWalletBalanceMap(wallet);
+        if ((balances[pool.token_a] || 0) < parseFloat(amountA) || (balances[pool.token_b] || 0) < parseFloat(amountB)) {
+            alert('Error: Insufficient balance');
+            return;
+        }
+    } catch (err) {
+        alert(err.message || 'Wallet not connected');
+        return;
+    }
 
     try {
         // Check for referrer in localStorage
@@ -1290,9 +1342,9 @@ async function removeLiquidity(poolId) {
         return;
     }
 
-    const wallet = localStorage.getItem('thr_address');
-    if (!wallet) {
-        alert('Please connect your wallet first!');
+    const wallet = walletSession.getAddress();
+    if (!wallet || !walletSession.isBound()) {
+        alert('Wallet not connected');
         return;
     }
 
@@ -1311,8 +1363,10 @@ async function removeLiquidity(poolId) {
         return;
     }
 
-    const authSecret = prompt('Enter your auth secret:');
+    const authSecret = walletSession.getSendSeed() || prompt('Enter your auth secret:');
     if (!authSecret) return;
+
+    if(!walletSession.requirePin('remove liquidity')) return;
 
     try {
         const response = await fetch('/api/v1/pools/remove_liquidity', {

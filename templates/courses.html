@@ -348,17 +348,19 @@
     <div class="panel" style="margin-bottom: 20px;">
         <h3>🔐 <span class="lang-el">Σύνδεση Πορτοφολιού</span><span class="lang-en">Wallet Connection</span></h3>
         <div class="input-group">
-            <input id="wallet" class="input-field" placeholder="THR wallet address (e.g., THR123...)" />
-            <input id="secret" class="input-field" type="password" placeholder="auth_secret" />
-            <input id="passphrase" class="input-field" type="password" placeholder="passphrase (optional)" />
+            <input id="wallet" class="input-field" placeholder="THR wallet address" readonly />
             <button id="connectBtn" class="btn-primary">
-                <span class="lang-el">Σύνδεση</span><span class="lang-en">Connect</span>
+                <span class="lang-el">Χρήση Wallet Widget</span><span class="lang-en">Use Wallet Widget</span>
             </button>
         </div>
         <div id="walletStatus" style="margin-top: 10px; display: none;">
             <span style="color: #3CFF7A;">✓ <span class="lang-el">Συνδεδεμένο</span><span class="lang-en">Connected</span>:</span>
             <code id="connectedWallet"></code>
             <span style="margin-left: 15px;">L2E: <strong id="l2eBalance">0</strong></span>
+        </div>
+        <div id="walletWarning" style="margin-top: 10px; color: #ff6b6b; display: none;">
+            <span class="lang-el">Συνδέσου από το widget πορτοφολιού στο header.</span>
+            <span class="lang-en">Connect via the header wallet widget.</span>
         </div>
     </div>
 
@@ -498,34 +500,35 @@ function showTab(name) {
     if (name === 'my-courses') loadMyCourses();
 }
 
-// Connect Wallet
-$("connectBtn").onclick = async () => {
-    const wallet = $("wallet").value.trim();
-    const secret = $("secret").value.trim();
-    const passphrase = $("passphrase").value.trim();
-
-    if (!wallet) {
-        log("Please enter a wallet address", true);
-        return;
+function syncWalletFromSession(showToast = true) {
+    const addr = (window.walletSession?.getAddress && window.walletSession.getAddress()) || '';
+    const secret = (window.walletSession?.getSendSecret && window.walletSession.getSendSecret()) || '';
+    if (!addr || !secret) {
+        $("walletWarning").style.display = "block";
+        $("walletStatus").style.display = "none";
+        if (showToast) log("Please connect via wallet widget", true);
+        return false;
     }
 
-    connectedWallet = wallet;
+    connectedWallet = addr;
     connectedSecret = secret;
-    connectedPassphrase = passphrase;
-
+    connectedPassphrase = '';
+    $("wallet").value = addr;
     $("walletStatus").style.display = "block";
-    $("connectedWallet").textContent = wallet.substring(0, 12) + '...';
+    $("walletWarning").style.display = "none";
+    $("connectedWallet").textContent = addr.substring(0, 12) + '...';
 
-    try {
-        const data = await apiGet(`/api/v1/l2e/balance/${wallet}`);
-        $("l2eBalance").textContent = data.l2e_balance || 0;
-    } catch (e) {
-        log(`Failed to load L2E balance: ${e.message}`, true);
-    }
+    apiGet(`/api/v1/l2e/balance/${addr}`).then(data => {
+        $("l2eBalance").textContent = data.l2e_balance || data.balance || 0;
+    }).catch(e => log(`Failed to load L2E balance: ${e.message}`, true));
 
-    log(`Connected wallet: ${wallet}`);
-    await refresh();
-};
+    if (showToast) log(`Connected wallet: ${addr}`);
+    refresh();
+    return true;
+}
+
+// Connect Wallet
+$("connectBtn").onclick = () => syncWalletFromSession(true);
 
 // Create Course Card
 function courseCard(c) {
@@ -946,12 +949,7 @@ function escapeHtml(str) {
 $("refresh").onclick = refresh;
 
 // Initial load
+syncWalletFromSession(false);
 refresh().catch(e => log(`Initial load error: ${e.message}`, true));
-
-// Auto-load wallet from localStorage
-const savedWallet = localStorage.getItem('thr_address');
-if (savedWallet) {
-    $("wallet").value = savedWallet;
-}
 </script>
 {% endblock %}

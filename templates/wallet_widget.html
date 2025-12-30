@@ -552,7 +552,7 @@
             }
         };
 
-        const LANG_SEQUENCE = ['gr', 'en', 'ja', 'es', 'ru'];
+        window.LANG_SEQUENCE = window.LANG_SEQUENCE || ['gr', 'en', 'ja', 'es', 'ru'];
         const LANG_CLASS_MAP = { 'gr': 'lang-el', 'en': 'lang-en', 'ja': 'lang-ja', 'es': 'lang-es', 'ru': 'lang-ru' };
 
         function getLang() {
@@ -567,8 +567,8 @@
 
         function toggleLanguage() {
             const current = localStorage.getItem("lang") || "gr";
-            const idx = LANG_SEQUENCE.indexOf(current);
-            const next = LANG_SEQUENCE[(idx + 1) % LANG_SEQUENCE.length];
+            const idx = window.LANG_SEQUENCE.indexOf(current);
+            const next = window.LANG_SEQUENCE[(idx + 1) % window.LANG_SEQUENCE.length];
             localStorage.setItem("lang", next);
             applyLanguage();
         }
@@ -679,13 +679,14 @@
             container.innerHTML = '';
 
             tokensToShow.forEach(token => {
+                const logoUrl = token.logo || (token.logo_path ? `/media/${token.logo_path}` : '');
                 const tokenDiv = document.createElement('div');
                 tokenDiv.className = 'token-item';
                 tokenDiv.onclick = () => showTokenInfo(token);
                 tokenDiv.innerHTML = `
                     <div class="token-logo" style="border-color: ${token.color};">
-                        ${token.logo ? `<img src="${token.logo}" alt="${token.symbol}" onerror="this.style.display='none'; this.nextSibling.style.display='block';">` : ''}
-                        <span style="display: ${token.logo ? 'none' : 'block'}; color: ${token.color};">${token.symbol[0]}</span>
+                        ${logoUrl ? `<img src="${logoUrl}" alt="${token.symbol}" onerror="this.style.display='none'; this.nextSibling.style.display='block'; this.onerror=null; this.src='/static/img/logo.png';">` : ''}
+                        <span style="display: ${logoUrl ? 'none' : 'block'}; color: ${token.color};">${token.symbol[0]}</span>
                     </div>
                     <div class="token-info">
                         <div class="token-symbol">${token.symbol}</div>
@@ -711,11 +712,12 @@
         function showTokenInfo(token) {
             const modal = document.getElementById('tokenInfoModal');
             const logoDiv = document.getElementById('modalTokenLogo');
+            const logoUrl = token.logo || (token.logo_path ? `/media/${token.logo_path}` : '');
 
             // Set logo
             logoDiv.style.borderColor = token.color;
-            if (token.logo) {
-                logoDiv.innerHTML = `<img src="${token.logo}" alt="${token.symbol}">`;
+            if (logoUrl) {
+                logoDiv.innerHTML = `<img src="${logoUrl}" alt="${token.symbol}" onerror="this.src='/static/img/logo.png';">`;
             } else {
                 logoDiv.innerHTML = `<span style="color: ${token.color};">${token.symbol[0]}</span>`;
             }

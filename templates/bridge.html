@@ -746,21 +746,9 @@
 <script>
 const $ = (id) => document.getElementById(id);
 
-// Language
-const LANG_SEQUENCE = ['gr', 'en', 'ja', 'es', 'ru'];
-const LANG_CLASS_MAP = { 'gr': 'lang-el', 'en': 'lang-en', 'ja': 'lang-ja', 'es': 'lang-es', 'ru': 'lang-ru' };
-
-function toggleLanguage() {
-    const current = localStorage.getItem("lang") || "gr";
-    const idx = LANG_SEQUENCE.indexOf(current);
-    const next = LANG_SEQUENCE[(idx + 1) % LANG_SEQUENCE.length];
-    localStorage.setItem("lang", next);
-    applyLanguage();
-}
-
-function applyLanguage() {
-    const lang = localStorage.getItem("lang") || "gr";
-    document.body.className = LANG_CLASS_MAP[lang] || '';
+function applyBridgeLanguage() {
+    const lang = getCurrentLang();
+    document.body.className = LANGUAGE_CLASS_MAP[lang] || '';
     const btn = document.querySelector('.lang-toggle-bridge');
     if (btn) btn.textContent = '🌐 ' + lang.toUpperCase();
 }
@@ -848,12 +836,15 @@ function swapDirection() {
     }
 }
 
-function copyAddress() {
-    const addr = $('depositAddress').textContent;
+window.copyAddress = function copyAddress() {
+    const target = $('depositAddress');
+    if (!target) return;
+    const addr = target.textContent;
+    if (!addr) return;
     navigator.clipboard.writeText(addr).then(() => {
         alert('Address copied!');
     });
-}
+};
 
 async function executeBridge() {
     const wallet = localStorage.getItem('thr_address');
@@ -911,7 +902,7 @@ async function executeBridge() {
     } finally {
         btn.disabled = false;
         btn.innerHTML = '🔥 <span class="lang-el">Κάψε THR & Λάβε BTC</span><span class="lang-en">Burn THR & Receive BTC</span>';
-        applyLanguage();
+        applyBridgeLanguage();
     }
 }
 
@@ -965,7 +956,7 @@ $('btcDestination').addEventListener('input', calculateOutput);
 
 // Init
 document.addEventListener('DOMContentLoaded', () => {
-    applyLanguage();
+    applyBridgeLanguage();
     loadBalances();
     loadBridgeStats();
     loadHistory();

@@ -778,7 +778,8 @@ async function loadBalances() {
     try {
         const res = await fetch(`/api/balance/${wallet}`);
         const data = await res.json();
-        $('fromBalance').textContent = (data.balance || 0).toFixed(4) + ' THR';
+        const balance = (typeof data.thr_balance === 'number' ? data.thr_balance : data.balance) || (data.token_balances ? data.token_balances.THR || 0 : 0) || 0;
+        $('fromBalance').textContent = balance.toFixed(4) + ' THR';
     } catch (e) {
         console.error('Failed to load balance:', e);
     }

@@ -104,6 +104,20 @@ APP_VERSION     = os.getenv("APP_VERSION", "v3.6")
 DATA_DIR   = os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data"))
 os.makedirs(DATA_DIR, exist_ok=True)
 
+# Unified media root (persists on Railway volume)
+MEDIA_DIR = os.path.join(DATA_DIR, "media")
+TOKEN_LOGOS_DIR = os.path.join(MEDIA_DIR, "token_logos")
+NFT_IMAGES_DIR = os.path.join(MEDIA_DIR, "nft_images")
+COURSE_MEDIA_DIR = os.path.join(MEDIA_DIR, "courses")
+COURSE_COVERS_DIR = os.path.join(COURSE_MEDIA_DIR, "covers")
+COURSE_FILES_DIR = os.path.join(COURSE_MEDIA_DIR, "files")
+MUSIC_AUDIO_DIR = os.path.join(MEDIA_DIR, "music_audio")
+MUSIC_COVER_DIR = os.path.join(MEDIA_DIR, "music_covers")
+
+for _dir in [MEDIA_DIR, TOKEN_LOGOS_DIR, NFT_IMAGES_DIR, COURSE_MEDIA_DIR,
+             COURSE_COVERS_DIR, COURSE_FILES_DIR, MUSIC_AUDIO_DIR, MUSIC_COVER_DIR]:
+    os.makedirs(_dir, exist_ok=True)
+
 # Node role: "master" or "replica"
 NODE_ROLE = os.getenv("NODE_ROLE", "master").lower()
 MASTER_INTERNAL_URL = os.getenv("MASTER_NODE_URL", "http://localhost:5000")
@@ -1394,6 +1408,12 @@ def home():
 @app.route("/contracts/<path:filename>")
 def serve_contract(filename):
     return send_from_directory(CONTRACTS_DIR, filename)
+
+@app.route("/media/<path:filename>")
+def media(filename):
+    """Serve persistent media assets from the data volume."""
+    safe_name = filename.lstrip("/..")
+    return send_from_directory(MEDIA_DIR, safe_name)
 
 @app.route("/viewer")
 def viewer():
@@ -3851,10 +3871,8 @@ def wallet_widget():
 
 CUSTOM_TOKENS_FILE = os.path.join(DATA_DIR, "custom_tokens.json")
 CUSTOM_TOKENS_LEDGER_DIR = os.path.join(DATA_DIR, "custom_ledgers")
-TOKEN_LOGOS_DIR = os.path.join("static", "token_logos")
 
 os.makedirs(CUSTOM_TOKENS_LEDGER_DIR, exist_ok=True)
-os.makedirs(TOKEN_LOGOS_DIR, exist_ok=True)
 
 def load_custom_tokens():
     """Load custom tokens registry"""
@@ -3995,9 +4013,6 @@ def api_create_token():
     # Handle logo upload if provided (FREE - no extra charge!)
     if logo_file and logo_file.filename:
         try:
-            # Ensure logo directory exists
-            os.makedirs(TOKEN_LOGOS_DIR, exist_ok=True)
-
             ext = os.path.splitext(secure_filename(logo_file.filename))[1] or ".png"
             logo_filename = f"{token_id}{ext}"
             logo_path = os.path.join(TOKEN_LOGOS_DIR, logo_filename)
@@ -4007,10 +4022,10 @@ def api_create_token():
 
             # Verify file was saved
             if os.path.exists(logo_path):
-                token["logo"] = f"/static/token_logos/{logo_filename}"
+                token["logo_path"] = f"token_logos/{logo_filename}"
                 tokens[symbol] = token
                 save_custom_tokens(tokens)
-                logger.info(f"Logo saved successfully for token {symbol}: {token['logo']}")
+                logger.info(f"Logo saved successfully for token {symbol}: {token['logo_path']}")
             else:
                 logger.warning(f"Logo file not found after save for token {symbol}")
         except Exception as e:
@@ -4019,6 +4034,9 @@ def api_create_token():
     if initial_supply > 0:
         token_ledger = {creator: initial_supply}
         save_custom_token_ledger(token_id, token_ledger)
+
+    if token.get("logo_path"):
+        token["logo"] = f"/media/{token['logo_path']}"
 
     logger.info(f"Created experimental token {symbol} by {creator} (fee: {CREATION_FEE} THR)")
     return jsonify({
@@ -4052,9 +4070,6 @@ def api_upload_token_logo(symbol):
         return jsonify({"ok": False, "error": "Not authorized"}), 403
 
     try:
-        # Ensure logo directory exists
-        os.makedirs(TOKEN_LOGOS_DIR, exist_ok=True)
-
         # Save logo
         ext = os.path.splitext(secure_filename(file.filename))[1] or ".png"
         logo_filename = f"{token['id']}{ext}"
@@ -4070,12 +4085,15 @@ def api_upload_token_logo(symbol):
         return jsonify({"ok": False, "error": f"Failed to save logo: {str(e)}"}), 500
 
     # Update token
-    token["logo"] = f"/static/token_logos/{logo_filename}"
+    token["logo_path"] = f"token_logos/{logo_filename}"
     tokens[symbol.upper()] = token
     save_custom_tokens(tokens)
 
-    logger.info(f"Logo uploaded successfully for {symbol}: {token['logo']}")
-    return jsonify({"ok": True, "logo": token["logo"]}), 200
+    logo_url = f"/media/{token['logo_path']}"
+    token["logo"] = logo_url
+
+    logger.info(f"Logo uploaded successfully for {symbol}: {token['logo_path']}")
+    return jsonify({"ok": True, "logo_path": token["logo_path"], "logo": logo_url}), 200
 
 @app.route("/api/tokens/list")
 def api_list_tokens():
@@ -7212,6 +7230,9 @@ def api_v1_get_tokens():
     name, total supply, decimals and owner.
     """
     tokens = load_tokens()
+    for tok in tokens:
+        if tok.get("logo_path"):
+            tok["logo"] = f"/media/{tok['logo_path']}"
     return jsonify(tokens=tokens), 200
 
 

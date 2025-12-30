@@ -1701,6 +1701,12 @@
         renderPendingFiles();
       });
 
+      window.addEventListener("storage", (e) => {
+        if (e.key === 'thr_address' || e.key === 'wallet_bound') {
+          loadWallet();
+        }
+      });
+
       sendBtnEl.addEventListener("click", () => {
         sendMessage();
       });

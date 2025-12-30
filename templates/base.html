@@ -1502,7 +1502,7 @@
 
 <script>
 // Global Language Logic
-const LANG_SEQUENCE = ['gr', 'en', 'ja', 'es', 'ru'];
+    window.LANG_SEQUENCE = window.LANG_SEQUENCE || ['gr', 'en', 'ja', 'es', 'ru'];
 const LANGUAGE_CLASS_MAP = {
     gr: 'lang-el',
     en: 'lang-en',
@@ -1515,7 +1515,7 @@ const DEFAULT_LANG = 'gr';
 function normalizeLang(lang) {
     if (!lang) return DEFAULT_LANG;
     if (lang === 'el') return 'gr';
-    return LANG_SEQUENCE.includes(lang) ? lang : 'en';
+      return window.LANG_SEQUENCE.includes(lang) ? lang : 'en';
 }
 
 function getCurrentLang() {
@@ -1528,9 +1528,9 @@ function isGreekLang(lang) {
 
 function toggleLanguage() {
     const currentLang = getCurrentLang();
-    const currentIndex = LANG_SEQUENCE.indexOf(currentLang);
-    const nextIndex = (currentIndex + 1) % LANG_SEQUENCE.length;
-    setLanguage(LANG_SEQUENCE[nextIndex]);
+      const currentIndex = window.LANG_SEQUENCE.indexOf(currentLang);
+      const nextIndex = (currentIndex + 1) % window.LANG_SEQUENCE.length;
+      setLanguage(window.LANG_SEQUENCE[nextIndex]);
 }
 
 function setLanguage(lang) {

@@ -490,6 +490,38 @@ def save_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+
+# ─── LIGHTWEIGHT CHAIN CACHE ────────────────────────────────────────────────
+# Mining/miner support endpoints are latency-sensitive and should not block on
+# repeated full-chain reads.  Keep a simple mtime-based cache for the chain and
+# re-use derived views (e.g., reward-bearing blocks).
+CHAIN_CACHE = {
+    "mtime": 0.0,
+    "chain": [],
+    "reward_blocks": [],
+}
+
+
+def load_chain_cached():
+    try:
+        mtime = os.path.getmtime(CHAIN_FILE)
+    except OSError:
+        mtime = 0
+    if CHAIN_CACHE["chain"] and CHAIN_CACHE["mtime"] == mtime:
+        return CHAIN_CACHE["chain"]
+
+    chain = load_json(CHAIN_FILE, [])
+    reward_blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    CHAIN_CACHE.update({"mtime": mtime, "chain": chain, "reward_blocks": reward_blocks})
+    return chain
+
+
+def get_reward_blocks():
+    if CHAIN_CACHE["reward_blocks"]:
+        return CHAIN_CACHE["reward_blocks"]
+    load_chain_cached()
+    return CHAIN_CACHE["reward_blocks"]
+
 def load_mempool():
     return load_json(MEMPOOL_FILE, [])
 
@@ -519,6 +551,123 @@ def load_pools():
 
 def save_pools(pools):
     save_json(POOLS_FILE, pools)
+
+
+def get_all_pools():
+    return load_pools()
+
+
+def get_all_tokens():
+    tokens = load_tokens()
+    for t in tokens:
+        logo_path = t.get("logo_path") or t.get("logo")
+        if logo_path:
+            t["logo_url"] = url_for("media", filename=logo_path, _external=False)
+    return tokens
+
+
+def get_wallet_balances(wallet: str):
+    ledger = load_json(LEDGER_FILE, {})
+    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
+
+    thr_balance = round(float(ledger.get(wallet, 0.0)), 6)
+    wbtc_balance = round(float(wbtc_ledger.get(wallet, 0.0)), 8)
+    l2e_balance = round(float(l2e_ledger.get(wallet, 0.0)), 6)
+
+    custom_token_balances = load_token_balances()
+    prices_cache = {}
+
+    def price_for(symbol):
+        if symbol not in prices_cache:
+            prices_cache[symbol] = get_token_price_in_thr(symbol)
+        return prices_cache[symbol]
+
+    tokens = [
+        {
+            "symbol": "THR",
+            "name": "Thronos",
+            "balance": thr_balance,
+            "decimals": 6,
+            "logo": "/static/img/thronos-token.png",
+            "logo_url": url_for("static", filename="img/thronos-token.png"),
+            "color": "#00ff66",
+            "chain": "Thronos",
+            "type": "native",
+            "price_in_thr": 1.0,
+            "value_in_thr": thr_balance,
+        },
+        {
+            "symbol": "WBTC",
+            "name": "Wrapped Bitcoin",
+            "balance": wbtc_balance,
+            "decimals": 8,
+            "logo": "/static/img/wbtc-logo.png",
+            "logo_url": url_for("static", filename="img/wbtc-logo.png"),
+            "color": "#f7931a",
+            "chain": "Thronos",
+            "type": "wrapped",
+            "price_in_thr": price_for("WBTC"),
+            "value_in_thr": round(wbtc_balance * price_for("WBTC"), 6),
+        },
+        {
+            "symbol": "L2E",
+            "name": "Learn-to-Earn",
+            "balance": l2e_balance,
+            "decimals": 6,
+            "logo": "/static/img/l2e-logo.png",
+            "logo_url": url_for("static", filename="img/l2e-logo.png"),
+            "color": "#00ccff",
+            "chain": "Thronos",
+            "type": "reward",
+            "price_in_thr": price_for("L2E"),
+            "value_in_thr": round(l2e_balance * price_for("L2E"), 6),
+        },
+    ]
+
+    custom_tokens = load_custom_tokens()
+    for symbol, token_data in custom_tokens.items():
+        token_id = token_data.get("id")
+        if not token_id:
+            continue
+        token_ledger = load_custom_token_ledger(token_id)
+        token_balance = round(float(token_ledger.get(wallet, 0.0)), token_data.get("decimals", 6))
+        logo_path = token_data.get("logo_path") or token_data.get("logo")
+        logo_url = url_for("media", filename=logo_path) if logo_path else None
+        tokens.append({
+            "symbol": symbol,
+            "name": token_data.get("name", symbol),
+            "balance": token_balance,
+            "decimals": token_data.get("decimals", 6),
+            "logo": logo_path,
+            "logo_url": logo_url,
+            "color": token_data.get("color", "#00ff66"),
+            "chain": "Thronos",
+            "type": "experimental",
+            "token_id": token_id,
+            "creator": token_data.get("creator", ""),
+            "price_in_thr": price_for(symbol),
+            "value_in_thr": round(token_balance * price_for(symbol), 6),
+        })
+
+    token_balances = {
+        "THR": thr_balance,
+        "WBTC": wbtc_balance,
+        "L2E": l2e_balance,
+    }
+    for symbol, balances in custom_token_balances.items():
+        try:
+            token_balances[symbol] = round(float(balances.get(wallet, 0.0)), 6)
+        except Exception:
+            token_balances[symbol] = 0.0
+
+    return {
+        "thr": thr_balance,
+        "wbtc": wbtc_balance,
+        "l2e": l2e_balance,
+        "token_balances": token_balances,
+        "tokens": tokens,
+    }
 
 def load_attest_store():
     return load_json(ATTEST_STORE_FILE, {})
@@ -1072,8 +1221,7 @@ def verify_btc_payment(btc_address, min_amount=MIN_AMOUNT):
         return False, []
 
 def get_mining_target():
-    chain  = load_json(CHAIN_FILE, [])
-    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    blocks = get_reward_blocks()
     if len(blocks) < RETARGET_INTERVAL:
         return INITIAL_TARGET
     last_block  = blocks[-1]
@@ -2197,8 +2345,8 @@ def api_last_block():
 
 @app.route("/last_block_hash")
 def last_block_hash():
-    chain  = load_json(CHAIN_FILE, [])
-    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    chain = load_chain_cached()
+    blocks = get_reward_blocks()
     if blocks:
         last = blocks[-1]
         global_height = HEIGHT_OFFSET + len(blocks) - 1
@@ -2214,8 +2362,8 @@ def mining_info():
     target = get_mining_target()
     nbits  = target_to_bits(target)
 
-    chain  = load_json(CHAIN_FILE, [])
-    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    chain  = load_chain_cached()
+    blocks = get_reward_blocks()
 
     last_hash = blocks[-1].get("block_hash", "") if blocks else "0" * 64
 
@@ -3674,21 +3822,18 @@ def pledge_submit():
 
 @app.route("/wallet_data/<thr_addr>")
 def wallet_data(thr_addr):
-    ledger = load_json(LEDGER_FILE, {})
-    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})  # NEW
-    # Load L2E balances from the separate ledger
-    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
-
-    chain = load_json(CHAIN_FILE, [])
-    bal = round(float(ledger.get(thr_addr, 0.0)), 6)
-    wbtc_bal = round(float(wbtc_ledger.get(thr_addr, 0.0)), 8)  # NEW
-    l2e_bal = round(float(l2e_ledger.get(thr_addr, 0.0)), 6)
-
+    balances = get_wallet_balances(thr_addr)
+    chain = load_chain_cached()
     history = [
         tx for tx in chain
         if isinstance(tx, dict) and (tx.get("from") == thr_addr or tx.get("to") == thr_addr)
     ]
-    return jsonify(balance=bal, wbtc_balance=wbtc_bal, l2e_balance=l2e_bal, transactions=history), 200
+    return jsonify(
+        balance=balances["thr"],
+        wbtc_balance=balances["wbtc"],
+        l2e_balance=balances["l2e"],
+        transactions=history,
+    ), 200
 
 def get_token_price_in_thr(symbol):
     """
@@ -3729,90 +3874,12 @@ def api_wallet_tokens(thr_addr):
     Returns all token balances for a wallet with metadata (logos, names, etc.)
     Perfect for wallet widgets and balance displays
     """
-    ledger = load_json(LEDGER_FILE, {})
-    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
-    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
+    balances = get_wallet_balances(thr_addr)
+    tokens = balances["tokens"]
 
-    thr_balance = round(float(ledger.get(thr_addr, 0.0)), 6)
-    wbtc_balance = round(float(wbtc_ledger.get(thr_addr, 0.0)), 8)
-    l2e_balance = round(float(l2e_ledger.get(thr_addr, 0.0)), 6)
-
-    # Get dynamic prices from pools
-    wbtc_price = get_token_price_in_thr("WBTC")
-    l2e_price = get_token_price_in_thr("L2E")
-
-    tokens = [
-        {
-            "symbol": "THR",
-            "name": "Thronos",
-            "balance": thr_balance,
-            "decimals": 6,
-            "logo": "/static/img/thronos-token.png",
-            "color": "#00ff66",
-            "chain": "Thronos",
-            "type": "native",
-            "price_in_thr": 1.0,
-            "value_in_thr": thr_balance
-        },
-        {
-            "symbol": "WBTC",
-            "name": "Wrapped Bitcoin",
-            "balance": wbtc_balance,
-            "decimals": 8,
-            "logo": "/static/img/wbtc-logo.png",
-            "color": "#f7931a",
-            "chain": "Thronos",
-            "type": "wrapped",
-            "price_in_thr": wbtc_price,
-            "value_in_thr": round(wbtc_balance * wbtc_price, 6)
-        },
-        {
-            "symbol": "L2E",
-            "name": "Learn-to-Earn",
-            "balance": l2e_balance,
-            "decimals": 6,
-            "logo": "/static/img/l2e-logo.png",
-            "color": "#00ccff",
-            "chain": "Thronos",
-            "type": "reward",
-            "price_in_thr": l2e_price,
-            "value_in_thr": round(l2e_balance * l2e_price, 6)
-        }
-    ]
-
-    # Add custom experimental tokens
-    custom_tokens = load_custom_tokens()
-    for symbol, token_data in custom_tokens.items():
-        token_id = token_data.get("id")
-        if token_id:
-            # Load the token's ledger to get this wallet's balance
-            token_ledger = load_custom_token_ledger(token_id)
-            token_balance = round(float(token_ledger.get(thr_addr, 0.0)), token_data.get("decimals", 6))
-
-            # Only show if balance > 0 or show_zero is true
-            if token_balance > 0 or request.args.get("show_zero", "true").lower() == "true":
-                # Get dynamic price from pool if available
-                token_price = get_token_price_in_thr(symbol)
-
-                tokens.append({
-                    "symbol": symbol,
-                    "name": token_data.get("name", symbol),
-                    "balance": token_balance,
-                    "decimals": token_data.get("decimals", 6),
-                    "logo": token_data.get("logo", None),
-                    "color": token_data.get("color", "#00ff66"),
-                    "chain": "Thronos",
-                    "type": "experimental",
-                    "token_id": token_id,
-                    "creator": token_data.get("creator", ""),
-                    "price_in_thr": token_price,
-                    "value_in_thr": round(token_balance * token_price, 6)
-                })
-
-    # Filter out zero balances (optional - can be toggled)
     show_zero = request.args.get("show_zero", "true").lower() == "true"
     if not show_zero:
-        tokens = [t for t in tokens if t["balance"] > 0]
+        tokens = [t for t in tokens if t.get("balance", 0) > 0]
 
     total_value_usd = 0  # Placeholder for future price oracle integration
 
@@ -3828,26 +3895,7 @@ def api_wallet_tokens(thr_addr):
 @app.route("/api/balance/<thr_addr>", methods=["GET"])
 def api_balance_alias(thr_addr: str):
     """Compatibility alias that exposes a consolidated balance snapshot."""
-    ledger = load_json(LEDGER_FILE, {})
-    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
-    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
-    custom_token_balances = load_token_balances()
-
-    thr_balance = round(float(ledger.get(thr_addr, 0.0)), 6)
-    wbtc_balance = round(float(wbtc_ledger.get(thr_addr, 0.0)), 8)
-    l2e_balance = round(float(l2e_ledger.get(thr_addr, 0.0)), 6)
-
-    token_balances = {
-        "THR": thr_balance,
-        "WBTC": wbtc_balance,
-        "L2E": l2e_balance,
-    }
-
-    for symbol, balances in custom_token_balances.items():
-        try:
-            token_balances[symbol] = round(float(balances.get(thr_addr, 0.0)), 6)
-        except Exception:
-            token_balances[symbol] = 0.0
+    balances = get_wallet_balances(thr_addr)
 
     mempool_pending = [
         tx for tx in load_mempool()
@@ -3856,8 +3904,8 @@ def api_balance_alias(thr_addr: str):
 
     return jsonify({
         "address": thr_addr,
-        "thr_balance": thr_balance,
-        "token_balances": token_balances,
+        "thr_balance": balances["thr"],
+        "token_balances": balances["token_balances"],
         "mempool_pending": mempool_pending,
         "updated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }), 200

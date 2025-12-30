@@ -836,13 +836,15 @@ function swapDirection() {
     }
 }
 
-function copyAddress() {
-    const addr = $('depositAddress').textContent;
+window.copyAddress = function copyAddress() {
+    const target = $('depositAddress');
+    if (!target) return;
+    const addr = target.textContent;
+    if (!addr) return;
     navigator.clipboard.writeText(addr).then(() => {
         alert('Address copied!');
     });
-}
-window.copyAddress = copyAddress;
+};
 
 async function executeBridge() {
     const wallet = localStorage.getItem('thr_address');

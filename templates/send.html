@@ -186,10 +186,11 @@ function updateFee() {
 
 // --- Auto-fill from localStorage ---
 document.addEventListener('DOMContentLoaded', () => {
-    const savedAddr = localStorage.getItem('thr_address');
-    const savedSecret = localStorage.getItem('thr_secret');
-    
-    if (savedAddr) {
+    const savedAddr = walletSession.getAddress();
+    const savedSecret = walletSession.getSendSeed();
+    const bound = walletSession.isBound();
+
+    if (savedAddr && bound) {
         $('from_thr').value = savedAddr;
         loadBalance(); // Auto load balance
     } else {
@@ -357,7 +358,7 @@ async function doSend() {
   const from_thr    = $('from_thr').value.trim();
   const to_thr      = $('to_thr').value.trim();
   const amount      = $('amount').value;
-  const auth_secret = $('auth_secret').value.trim();
+  const auth_secret = $('auth_secret').value.trim() || walletSession.getSendSeed();
   const lang = localStorage.getItem('lang') || 'el';
 
   const msg = {
@@ -365,8 +366,15 @@ async function doSend() {
     en:{missingAddr:'Fill in FROM and TO THR address',     missingSecret:'Send_secret from Pledge is required',          error:'Error sending: '}
   }[lang];
 
+  if(!walletSession.isBound()){
+    alert('Wallet not connected');
+    return;
+  }
+
   if(!from_thr || !to_thr){ alert(msg.missingAddr); return; }
   if(!auth_secret){ alert(msg.missingSecret); return; }
+
+  if(!walletSession.requirePin('send funds')) return;
 
   try{
     const res = await fetch('/send_thr', {

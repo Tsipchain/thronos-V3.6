@@ -193,8 +193,8 @@ let balanceTHR = 0;
 let balanceBTC = 0;
 
 document.addEventListener('DOMContentLoaded', async () => {
-    const addr = localStorage.getItem('thr_address');
-    if (!addr) {
+    const addr = walletSession.getAddress();
+    if (!addr || !walletSession.isBound()) {
         $('walletWarning').style.display = 'block';
         $('swapBtn').disabled = true;
         $('swapBtn').textContent = "Connect Wallet";
@@ -259,14 +259,16 @@ function calcTo() {
 }
 
 async function doSwap() {
-    const addr = localStorage.getItem('thr_address');
-    const secret = localStorage.getItem('thr_secret');
+    const addr = walletSession.getAddress();
+    const secret = walletSession.getSendSeed();
     const amount = parseFloat($('amountFrom').value);
-    
-    if (!addr || !secret) {
-        alert("Please connect wallet with secret key first.");
+
+    if (!addr || !secret || !walletSession.isBound()) {
+        alert("Wallet not connected");
         return;
     }
+
+    if(!walletSession.requirePin('swap')) return;
     
     if (!amount || amount <= 0) {
         alert("Enter a valid amount.");

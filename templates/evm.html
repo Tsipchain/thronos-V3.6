@@ -854,11 +854,18 @@ function useTemplate() {
 // Deploy contract
 async function deployContract() {
     const address = document.getElementById('deploy-address').value.trim();
-    const secret = document.getElementById('deploy-secret').value.trim();
+    const secret = document.getElementById('deploy-secret').value.trim() || walletSession.getSendSeed();
     const passphrase = document.getElementById('deploy-passphrase').value.trim();
     const bytecode = document.getElementById('deploy-bytecode').value.trim();
     const value = parseFloat(document.getElementById('deploy-value').value) || 0;
     const gasLimit = parseInt(document.getElementById('deploy-gas').value) || 0;
+
+    if (!walletSession.isBound()) {
+        alert('Wallet not connected');
+        return;
+    }
+
+    if(!walletSession.requirePin('deploy contract')) return;
 
     if (!address || !secret || !bytecode) {
         alert('Missing required fields');
@@ -890,11 +897,18 @@ async function deployContract() {
 // Call contract
 async function callContract() {
     const address = document.getElementById('call-address').value.trim();
-    const secret = document.getElementById('call-secret').value.trim();
+    const secret = document.getElementById('call-secret').value.trim() || walletSession.getSendSeed();
     const passphrase = document.getElementById('call-passphrase').value.trim();
     const contract = document.getElementById('call-contract').value.trim();
     const dataHex = document.getElementById('call-data').value.trim();
     const value = parseFloat(document.getElementById('call-value').value) || 0;
+
+    if (!walletSession.isBound()) {
+        alert('Wallet not connected');
+        return;
+    }
+
+    if(!walletSession.requirePin('execute call')) return;
 
     if (!address || !secret || !contract || !dataHex) {
         alert('Missing required fields');
@@ -980,10 +994,15 @@ function encodeSignature() {
 }
 
 // Auto-load wallet from localStorage
-const savedWallet = localStorage.getItem('thr_address');
+const savedWallet = walletSession.getAddress();
 if (savedWallet) {
     document.getElementById('deploy-address').value = savedWallet;
     document.getElementById('call-address').value = savedWallet;
+}
+const savedSecret = walletSession.getSendSeed();
+if (savedSecret) {
+    if (!document.getElementById('deploy-secret').value) document.getElementById('deploy-secret').value = savedSecret;
+    if (!document.getElementById('call-secret').value) document.getElementById('call-secret').value = savedSecret;
 }
 </script>
 {% endblock %}

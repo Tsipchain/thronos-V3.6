@@ -6927,25 +6927,39 @@ def api_v1_get_course(course_id: str):
 @app.route("/api/v1/courses", methods=["POST"])
 def api_v1_create_course():
     """
-    Create a new course.  The payload must include:
+    Create a new course with optional materials and quiz metadata. Supports
+    both JSON payloads and multipart form submissions (for slide uploads).
+    Required fields:
         - title: name of the course
         - teacher: THR address of the instructor
         - price_thr: cost in THR tokens to enroll
         - reward_l2e: number of L2E tokens to award upon completion
         - auth_secret & (optional) passphrase: authentication for teacher
 
-    The teacher must be an existing pledged address with send rights (i.e.
-    they must have previously called pledge).  We verify the ``auth_secret``
-    against the teacher's stored hash.  A new UUID is generated for the
-    course ID.  Initially no students are enrolled.
+    Optional metadata:
+        - description/title_el
+        - content_type: pdf | video | external
+        - slides (file upload when content_type=pdf)
+        - video_url / content_url
+        - quiz: JSON structure containing pass_score and questions
+
+    The teacher must be an existing pledged address with send rights. A new
+    UUID is generated for the course ID. Materials are stored under
+    ``media/courses/<course_id>``.
     """
-    data = request.get_json() or {}
+    payload = request.get_json() if request.is_json else request.form.to_dict()
+    data = payload or {}
+
+    # Basic fields
     title = (data.get("title") or "").strip()
     teacher = (data.get("teacher") or "").strip()
     price_thr_raw = data.get("price_thr", 0)
     reward_raw = data.get("reward_l2e", 0)
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
+    description = (data.get("description") or "").strip()
+    title_el = (data.get("title_el") or "").strip()
+
     # Validate basic fields
     try:
         price_thr = float(price_thr_raw)
@@ -6954,6 +6968,7 @@ def api_v1_create_course():
         return jsonify(status="error", message="Invalid price or reward"), 400
     if not title or not teacher or price_thr < 0 or reward_l2e <= 0:
         return jsonify(status="error", message="Missing or invalid fields"), 400
+
     # Authenticate teacher
     pledges = load_json(PLEDGE_CHAIN, [])
     teacher_pledge = next((p for p in pledges if p.get("thr_address") == teacher), None)
@@ -6970,20 +6985,109 @@ def api_v1_create_course():
         auth_string = f"{auth_secret}:auth"
     if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
         return jsonify(status="error", message="Invalid auth"), 403
-    # Create the course
+
     courses = load_courses()
     course_id = str(uuid.uuid4())
+
+    # Handle materials (PDF/video/external)
+    materials = {}
+    content_type = (data.get("content_type") or "").strip().lower()
+    if content_type in {"pdf", "video", "external"}:
+        materials["type"] = content_type
+        if content_type == "pdf":
+            slides_file = request.files.get("slides") if not request.is_json else None
+            if slides_file and slides_file.filename:
+                _, ext = os.path.splitext(slides_file.filename)
+                if ext.lower() != ".pdf":
+                    return jsonify(status="error", message="Slides must be a PDF"), 400
+                course_dir = os.path.join(MEDIA_DIR, "courses", course_id)
+                os.makedirs(course_dir, exist_ok=True)
+                slides_relative = os.path.join("courses", course_id, "slides.pdf")
+                slides_file.save(os.path.join(MEDIA_DIR, slides_relative))
+                materials["slides_path"] = slides_relative
+            if "slides_path" not in materials:
+                return jsonify(status="error", message="Slides PDF required for pdf content"), 400
+        elif content_type == "video":
+            materials["video_url"] = (data.get("video_url") or "").strip()
+            if not materials["video_url"]:
+                return jsonify(status="error", message="Video URL required for video content"), 400
+        elif content_type == "external":
+            materials["content_url"] = (data.get("content_url") or "").strip()
+            if not materials["content_url"]:
+                return jsonify(status="error", message="Content URL required for external content"), 400
+
+    # Handle quiz metadata (builder payload from client)
+    quiz_meta = None
+    quiz_raw = data.get("quiz")
+    if isinstance(quiz_raw, str):
+        try:
+            quiz_raw = json.loads(quiz_raw)
+        except Exception:
+            quiz_raw = None
+    if isinstance(quiz_raw, dict):
+        questions = []
+        for idx, q in enumerate(quiz_raw.get("questions", []), start=1):
+            opts = q.get("options", [])
+            if len(opts) != 4:
+                return jsonify(status="error", message=f"Question {idx} must have 4 options"), 400
+            try:
+                correct_idx = int(q.get("correct_index", 0))
+            except Exception:
+                correct_idx = 0
+            questions.append({
+                "id": q.get("id") or idx,
+                "text": (q.get("text") or q.get("question") or "").strip(),
+                "options": [str(o) for o in opts],
+                "correct_index": max(0, min(3, correct_idx))
+            })
+        quiz_meta = {
+            "pass_score": int(quiz_raw.get("pass_score", 70)),
+            "questions": questions
+        }
+
     new_course = {
         "id": course_id,
         "title": title,
+        "title_el": title_el,
+        "description": description,
         "teacher": teacher,
         "price_thr": round(price_thr, 6),
         "reward_l2e": round(reward_l2e, 6),
         "students": [],
         "completed": []
     }
+
+    metadata = {}
+    if materials:
+        metadata["materials"] = materials
+    if quiz_meta:
+        metadata["quiz"] = quiz_meta
+    if metadata:
+        new_course["metadata"] = metadata
+
     courses.append(new_course)
     save_courses(courses)
+
+    # Mirror quiz metadata into quizzes.json for backward compatibility
+    if quiz_meta:
+        quizzes = load_quizzes()
+        quizzes[course_id] = {
+            "course_id": course_id,
+            "title": f"{title} Quiz",
+            "title_el": f"{title} Quiz",
+            "passing_score": quiz_meta.get("pass_score", 70),
+            "questions": [
+                {
+                    "id": q.get("id") or i + 1,
+                    "question": q.get("text"),
+                    "options": q.get("options", []),
+                    "correct": q.get("correct_index", 0)
+                }
+                for i, q in enumerate(quiz_meta.get("questions", []))
+            ],
+        }
+        save_quizzes(quizzes)
+
     return jsonify(status="success", course=new_course), 201
 
 
@@ -7200,30 +7304,68 @@ def save_quizzes(quizzes):
     save_json(QUIZZES_FILE, quizzes)
 
 
+def get_course_quiz(course_id: str):
+    """Return normalized quiz payload from course metadata or quizzes.json."""
+    courses = load_courses()
+    course = next((c for c in courses if c.get("id") == course_id), None)
+    metadata_quiz = course.get("metadata", {}).get("quiz") if course else None
+
+    if metadata_quiz:
+        normalized_questions = []
+        for idx, q in enumerate(metadata_quiz.get("questions", []), start=1):
+            options = q.get("options", [])
+            normalized_questions.append({
+                "id": q.get("id") or idx,
+                "question": q.get("text") or q.get("question"),
+                "options": options,
+                "correct_index": int(q.get("correct_index", 0)),
+            })
+        return {
+            "course_id": course_id,
+            "title": metadata_quiz.get("title") or (course.get("title") if course else "Course") + " Quiz",
+            "pass_score": metadata_quiz.get("pass_score", metadata_quiz.get("passing_score", 80)),
+            "questions": normalized_questions,
+        }
+
+    quizzes = load_quizzes()
+    quiz = quizzes.get(course_id)
+    if quiz:
+        normalized_questions = []
+        for q in quiz.get("questions", []):
+            normalized_questions.append({
+                "id": q.get("id"),
+                "question": q.get("question"),
+                "options": q.get("options", []),
+                "correct_index": int(q.get("correct", 0)),
+            })
+        return {
+            "course_id": course_id,
+            "title": quiz.get("title", "Course Quiz"),
+            "pass_score": quiz.get("passing_score", 80),
+            "questions": normalized_questions,
+        }
+    return None
+
+
 @app.route("/api/v1/courses/<string:course_id>/quiz", methods=["GET"])
 def api_v1_get_quiz(course_id: str):
     """Return the quiz for a course (without correct answers for students)."""
-    quizzes = load_quizzes()
-    quiz = quizzes.get(course_id, {})
+    quiz = get_course_quiz(course_id)
     if not quiz:
         return jsonify(quiz=None, message="No quiz for this course"), 200
 
-    # Return questions without correct answer indices (for student view)
     safe_questions = []
     for q in quiz.get("questions", []):
         safe_questions.append({
             "id": q.get("id"),
             "question": q.get("question"),
-            "question_el": q.get("question_el", q.get("question")),
-            "options": q.get("options", []),
-            "options_el": q.get("options_el", q.get("options", []))
+            "options": q.get("options", [])
         })
 
     return jsonify(quiz={
         "course_id": course_id,
         "title": quiz.get("title", "Course Quiz"),
-        "title_el": quiz.get("title_el", "Quiz Μαθήματος"),
-        "passing_score": quiz.get("passing_score", 80),
+        "passing_score": quiz.get("pass_score", 80),
         "questions": safe_questions
     }), 200
 
@@ -7301,8 +7443,7 @@ def api_v1_submit_quiz(course_id: str):
         return jsonify(status="error", message="Student address required"), 400
 
     # Get quiz
-    quizzes = load_quizzes()
-    quiz = quizzes.get(course_id)
+    quiz = get_course_quiz(course_id)
     if not quiz:
         return jsonify(status="error", message="No quiz for this course"), 404
 
@@ -7325,18 +7466,18 @@ def api_v1_submit_quiz(course_id: str):
     for q in questions:
         qid = str(q.get("id"))
         user_answer = answers.get(qid)
-        is_correct = user_answer is not None and int(user_answer) == q.get("correct")
+        is_correct = user_answer is not None and int(user_answer) == q.get("correct_index")
         if is_correct:
             correct += 1
         results.append({
             "question_id": qid,
             "correct": is_correct,
             "your_answer": user_answer,
-            "correct_answer": q.get("correct")
+            "correct_answer": q.get("correct_index")
         })
 
     score = round((correct / total) * 100)
-    passing_score = quiz.get("passing_score", 80)
+    passing_score = quiz.get("pass_score", 80)
     passed = score >= passing_score
 
     # Record quiz attempt
@@ -7390,8 +7531,7 @@ def api_l2e_submit_quiz():
     if student not in enrollments.get(course_id, {}) and student not in course.get("students", []):
         return jsonify(status="error", message="Not enrolled"), 403
 
-    quizzes = load_quizzes()
-    quiz = quizzes.get(course_id)
+    quiz = get_course_quiz(course_id)
     if not quiz:
         return jsonify(status="error", message="No quiz for this course"), 404
 
@@ -7405,18 +7545,18 @@ def api_l2e_submit_quiz():
     for q in questions:
         qid = str(q.get("id"))
         user_answer = answers.get(qid)
-        is_correct = user_answer is not None and int(user_answer) == q.get("correct")
+        is_correct = user_answer is not None and int(user_answer) == q.get("correct_index")
         if is_correct:
             correct += 1
         results.append({
             "question_id": qid,
             "correct": is_correct,
             "your_answer": user_answer,
-            "correct_answer": q.get("correct")
+            "correct_answer": q.get("correct_index")
         })
 
     score = round((correct / total) * 100)
-    passing_score = quiz.get("passing_score", 80)
+    passing_score = quiz.get("pass_score", 80)
     passed = score >= passing_score
 
     quiz_attempts = load_json(os.path.join(DATA_DIR, "quiz_attempts.json"), {})

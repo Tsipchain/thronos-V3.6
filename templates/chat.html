@@ -1430,8 +1430,13 @@
         const data = await res.json();
         sessions = data.sessions || [];
 
+        const storedSessionId = localStorage.getItem(LOCAL_AI_SESSION_KEY);
+
         let nextSessionId = currentSessionId;
         if (nextSessionId && !sessions.find((s) => s.id === nextSessionId)) {
+          if (storedSessionId === nextSessionId) {
+            localStorage.removeItem(LOCAL_AI_SESSION_KEY);
+          }
           nextSessionId = null;
         }
         if (!nextSessionId && sessions.length) {
@@ -1490,11 +1495,15 @@
       try {
         if (missingId) {
           sessions = sessions.filter((s) => s.id !== missingId);
+          if (currentSessionId === missingId) currentSessionId = null;
+          const stored = localStorage.getItem(LOCAL_AI_SESSION_KEY);
+          if (stored === missingId) localStorage.removeItem(LOCAL_AI_SESSION_KEY);
         }
-        localStorage.removeItem(LOCAL_AI_SESSION_KEY);
-        currentSessionId = null;
         const created = await createSession("Recovered session");
         if (created && created.id) {
+          currentSessionId = created.id;
+          localStorage.setItem(LOCAL_AI_SESSION_KEY, currentSessionId);
+          renderSessions();
           await loadSessionMessages(created.id);
         }
       } catch (err) {

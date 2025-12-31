@@ -1164,6 +1164,16 @@ def ensure_session_messages_file(session_id: str):
         save_json(path, [])
 
 
+def load_session_messages(session_id: str) -> list:
+    """Load messages for a session, sorted by timestamp."""
+    if not session_id:
+        return []
+    path = _session_messages_path(session_id)
+    messages = load_json(path, []) or []
+    messages.sort(key=lambda m: m.get("timestamp", ""))
+    return messages
+
+
 def session_messages_exists(session_id: str) -> bool:
     """Check if a transcript file exists for the given session id."""
     if not session_id:
@@ -8861,8 +8871,8 @@ def api_ai_sessions_combined():
         return resp
 
 
-@app.route("/api/ai/sessions/<session_id>/messages", methods=["GET"])
-@app.route("/api/chat/session/<session_id>/messages", methods=["GET"])
+@app.route("/api/ai/sessions/<session_id>/messages", methods=["GET", "POST"])
+@app.route("/api/chat/session/<session_id>/messages", methods=["GET", "POST"])
 def api_ai_session_messages(session_id):
     """Get messages for a specific session"""
     wallet_in = (request.args.get("wallet") or "").strip()
@@ -8871,24 +8881,30 @@ def api_ai_session_messages(session_id):
     sessions = load_ai_sessions()
     session = None
     for s in sessions:
-        if s.get("id") == session_id and not s.get("archived"):
-            # Allow access if wallet matches or guest session
-            if s.get("wallet") == identity or s.get("wallet", "").startswith("GUEST:"):
-                session = s
-                break
+        if (
+            s.get("id") == session_id
+            and not s.get("archived")
+            and s.get("wallet") == identity
+        ):
+            session = s
+            break
 
     if not session:
         return jsonify({"ok": False, "error": "Session not found"}), 404
 
-    transcript_path = _session_messages_path(session_id)
-    if not os.path.exists(transcript_path):
-        return jsonify({"ok": False, "error": "Session not found"}), 404
+    ensure_session_messages_file(session_id)
+    messages = load_session_messages(session_id)
 
-    messages = load_json(transcript_path, []) or []
-    # Sort by timestamp
-    messages.sort(key=lambda m: m.get("timestamp", ""))
-
-    return jsonify({"ok": True, "session": session, "messages": messages})
+    resp = make_response(jsonify({"ok": True, "session": session, "messages": messages}))
+    if guest_id:
+        resp.set_cookie(
+            GUEST_COOKIE_NAME,
+            guest_id,
+            max_age=GUEST_TTL_SECONDS,
+            httponly=True,
+            samesite="Lax",
+        )
+    return resp
 
 
 @app.route("/api/ai/sessions/<session_id>", methods=["PATCH"])

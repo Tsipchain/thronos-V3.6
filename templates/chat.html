@@ -1033,7 +1033,7 @@
     const API_FILES = "/api/ai/files/upload";
     const API_TELEMETRY = "/api/ai/telemetry";
     const API_FEEDBACK = "/api/ai/feedback";
-    const LOCAL_AI_SESSION_KEY = 'ai_session_id';
+    const ACTIVE_SESSION_KEY = "thronos_ai_active_session";
 
     // --- DOM refs ---
     let sessionsListEl,
@@ -1083,10 +1083,8 @@
     }
 
     // --- State ---
-    let currentSessionId = null;
-    const savedSessionId = localStorage.getItem(LOCAL_AI_SESSION_KEY);
-    if (savedSessionId) currentSessionId = savedSessionId;
-    let sessions = [];
+    let currentSessionId = localStorage.getItem(ACTIVE_SESSION_KEY) || null;
+    let aiSessions = [];
     let pendingFiles = []; // { id, name, size }
     let receivedFiles = []; // for any AI-generated [[FILE:...]] blocks
 
@@ -1155,7 +1153,7 @@
 
     function renderSessions() {
       sessionsListEl.innerHTML = "";
-      sessions.forEach((s) => {
+      aiSessions.forEach((s) => {
         const li = document.createElement("li");
         li.className =
           "session-item" + (s.id === currentSessionId ? " active" : "");
@@ -1183,15 +1181,15 @@
             });
             if (res.ok) {
               // Remove from local array
-              sessions = sessions.filter(sess => sess.id !== s.id);
+              aiSessions = aiSessions.filter(sess => sess.id !== s.id);
               // If deleted current session, switch to first available
-              if (s.id === currentSessionId && sessions.length > 0) {
-                currentSessionId = sessions[0].id;
+              if (s.id === currentSessionId && aiSessions.length > 0) {
+                currentSessionId = aiSessions[0].id;
                 loadSessionMessages(currentSessionId);
-                sessionTitleEl.textContent = sessions[0].title || "Mesh session";
-              } else if (sessions.length === 0) {
+                sessionTitleEl.textContent = aiSessions[0].title || "Mesh session";
+              } else if (aiSessions.length === 0) {
                 // No sessions left, create new one
-                await createNewSession();
+                await createSession();
               }
               renderSessions();
             }
@@ -1223,7 +1221,7 @@
         li.addEventListener("click", () => {
           if (s.id !== currentSessionId) {
             currentSessionId = s.id;
-            localStorage.setItem(LOCAL_AI_SESSION_KEY, currentSessionId);
+            localStorage.setItem(ACTIVE_SESSION_KEY, currentSessionId);
             loadSessionMessages(s.id);
             renderSessions();
             sessionTitleEl.textContent = s.title || "Mesh session";
@@ -1420,47 +1418,37 @@
     async function loadSessions() {
       try {
         setSessionStatus("Loading sessions…");
-        const stored = localStorage.getItem(LOCAL_AI_SESSION_KEY);
-        if (!currentSessionId && stored) currentSessionId = stored;
-
         const wallet = walletInputEl.value.trim();
-        const url = wallet ? `${API_SESSIONS}?wallet=${encodeURIComponent(wallet)}` : API_SESSIONS;
+        const url = wallet
+          ? `${API_SESSIONS}?wallet=${encodeURIComponent(wallet)}`
+          : API_SESSIONS;
         const res = await fetch(url);
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
-        sessions = data.sessions || [];
+        aiSessions = data.sessions || [];
 
-        const storedSessionId = localStorage.getItem(LOCAL_AI_SESSION_KEY);
-
-        let nextSessionId = currentSessionId;
-        if (nextSessionId && !sessions.find((s) => s.id === nextSessionId)) {
-          if (storedSessionId === nextSessionId) {
-            localStorage.removeItem(LOCAL_AI_SESSION_KEY);
-          }
-          nextSessionId = null;
-        }
-        if (!nextSessionId && sessions.length) {
-          nextSessionId = sessions[0].id;
+        if (currentSessionId && !aiSessions.find((s) => s.id === currentSessionId)) {
+          currentSessionId = null;
         }
 
-        if (!nextSessionId) {
-          const created = await createSession("New mesh session");
-          if (created && created.id) {
-            nextSessionId = created.id;
-          }
+        if (!aiSessions.length) {
+          await createSession("New mesh session");
         }
 
-        if (!nextSessionId) {
+        if (!currentSessionId && aiSessions.length) {
+          currentSessionId = aiSessions[0].id;
+        }
+
+        if (!currentSessionId) {
           setSessionStatus("Failed to prepare a session");
           renderSessions();
           return;
         }
 
-        currentSessionId = nextSessionId;
-        localStorage.setItem(LOCAL_AI_SESSION_KEY, currentSessionId);
+        localStorage.setItem(ACTIVE_SESSION_KEY, currentSessionId);
         renderSessions();
 
-        const active = sessions.find((x) => x.id === currentSessionId);
+        const active = aiSessions.find((x) => x.id === currentSessionId);
         if (active) sessionTitleEl.textContent = active.title || "Mesh session";
         await loadSessionMessages(currentSessionId);
       } catch (e) {
@@ -1472,7 +1460,11 @@
     async function loadSessionMessages(id) {
       setSessionStatus("Loading messages…");
       try {
-        const res = await fetch(API_SESSION_MESSAGES(id));
+        const wallet = walletInputEl.value.trim();
+        const url = wallet
+          ? `${API_SESSION_MESSAGES(id)}?wallet=${encodeURIComponent(wallet)}`
+          : API_SESSION_MESSAGES(id);
+        const res = await fetch(url);
         if (res.status === 404) {
           await handleMissingSession(id);
           return;
@@ -1494,18 +1486,36 @@
     async function handleMissingSession(missingId = null) {
       try {
         if (missingId) {
-          sessions = sessions.filter((s) => s.id !== missingId);
+          aiSessions = aiSessions.filter((s) => s.id !== missingId);
           if (currentSessionId === missingId) currentSessionId = null;
-          const stored = localStorage.getItem(LOCAL_AI_SESSION_KEY);
-          if (stored === missingId) localStorage.removeItem(LOCAL_AI_SESSION_KEY);
+          const stored = localStorage.getItem(ACTIVE_SESSION_KEY);
+          if (stored === missingId) localStorage.removeItem(ACTIVE_SESSION_KEY);
         }
-        const created = await createSession("Recovered session");
-        if (created && created.id) {
-          currentSessionId = created.id;
-          localStorage.setItem(LOCAL_AI_SESSION_KEY, currentSessionId);
-          renderSessions();
-          await loadSessionMessages(created.id);
+
+        renderSessions();
+
+        if (!aiSessions.length) {
+          const created = await createSession("New mesh session");
+          if (!created || !created.id) {
+            setSessionStatus("Failed to start new session");
+            return;
+          }
         }
+
+        if (!currentSessionId && aiSessions.length) {
+          currentSessionId = aiSessions[0].id;
+        }
+
+        if (!currentSessionId) {
+          setSessionStatus("Failed to start new session");
+          return;
+        }
+
+        localStorage.setItem(ACTIVE_SESSION_KEY, currentSessionId);
+        const active = aiSessions.find((s) => s.id === currentSessionId);
+        if (active) sessionTitleEl.textContent = active.title || "Mesh session";
+
+        await loadSessionMessages(currentSessionId);
       } catch (err) {
         console.error("handleMissingSession", err);
         setSessionStatus("Failed to start new session");
@@ -1530,12 +1540,12 @@
         const nextSession = { ...session, id: newId || session.id, title: session.title || title };
         if (!nextSession.id) return null;
         currentSessionId = nextSession.id;
-        localStorage.setItem(LOCAL_AI_SESSION_KEY, currentSessionId);
-        const existingIdx = sessions.findIndex((s) => s.id === nextSession.id);
+        localStorage.setItem(ACTIVE_SESSION_KEY, currentSessionId);
+        const existingIdx = aiSessions.findIndex((s) => s.id === nextSession.id);
         if (existingIdx >= 0) {
-          sessions[existingIdx] = { ...sessions[existingIdx], ...nextSession };
+          aiSessions[existingIdx] = { ...aiSessions[existingIdx], ...nextSession };
         } else {
-          sessions.unshift(nextSession);
+          aiSessions.unshift(nextSession);
         }
         renderSessions();
         sessionTitleEl.textContent = nextSession.title || "Mesh session";
@@ -1549,7 +1559,7 @@
 
     async function renameSession() {
       if (!currentSessionId) return;
-      const s = sessions.find((x) => x.id === currentSessionId);
+      const s = aiSessions.find((x) => x.id === currentSessionId);
       const currentName = s ? s.title || "" : "";
       const newName = prompt("Rename session:", currentName);
       if (!newName || newName === currentName) return;

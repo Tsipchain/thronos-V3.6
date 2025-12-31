@@ -9297,6 +9297,48 @@ def api_ai_telemetry():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/ai/providers", methods=["GET"])
+def api_ai_providers():
+    """Expose availability of AI providers (Gemini / OpenAI / Claude / Custom)."""
+    if not ai_agent:
+        return jsonify({"providers": [], "error": "AI Agent not initialized"}), 503
+
+    providers = []
+
+    def add_provider(name: str, enabled: bool, default_model: str, note: str = ""):
+        providers.append({
+            "name": name,
+            "enabled": bool(enabled),
+            "default_model": default_model,
+            "note": note or ("online" if enabled else "offline"),
+        })
+
+    # Gemini
+    gemini_note = "" if ai_agent.gemini_enabled else "Missing GEMINI_API_KEY or library"
+    add_provider("gemini", ai_agent.gemini_enabled, ai_agent.gemini_model_name, gemini_note)
+
+    # OpenAI
+    openai_note = ""
+    if not ai_agent.openai_api_key:
+        openai_note = "Missing OPENAI_API_KEY"
+    elif not ai_agent.openai_client:
+        openai_note = "SDK unavailable; using HTTPS fallback"
+    add_provider("openai", ai_agent.openai_enabled, ai_agent.openai_model_name, openai_note)
+
+    # Anthropic / Claude
+    claude_note = "" if ai_agent.anthropic_enabled else "Missing ANTHROPIC_API_KEY"
+    add_provider("anthropic", ai_agent.anthropic_enabled, ai_agent.anthropic_model_name, claude_note)
+
+    # Custom / Thrai
+    custom_note = "" if ai_agent.custom_enabled else "Missing CUSTOM_MODEL_URL"
+    add_provider("custom", ai_agent.custom_enabled, ai_agent.custom_model_name, custom_note)
+
+    return jsonify({
+        "mode": ai_agent.mode,
+        "providers": providers,
+    }), 200
+
+
 # AI Feedback endpoint - records user feedback on AI responses
 @app.route("/api/ai/feedback", methods=["POST"])
 def api_ai_feedback():

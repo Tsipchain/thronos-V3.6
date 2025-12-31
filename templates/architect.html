@@ -349,11 +349,38 @@
       </div>
       <pre id="out">// <span class="lang-el">Το αποτέλεσμα θα εμφανιστεί εδώ...</span><span class="lang-en">Generation output will appear here...</span><span class="lang-ja">生成結果がここに表示されます...</span><span class="lang-ru">Результат генерации появится здесь...</span><span class="lang-es">El resultado aparecerá aquí...</span></pre>
       <div class="files-output" id="files" style="display: none;"></div>
+      <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+        <button id="downloadZipBtn" class="generate-btn" style="display: none; padding: 10px 16px;">⬇️ Download ZIP</button>
+      </div>
     </div>
   </div>
 
 <script>
 const $ = (id) => document.getElementById(id);
+const downloadZipBtn = document.getElementById("downloadZipBtn");
+
+function resetDownloadBtn() {
+  if (!downloadZipBtn) return;
+  downloadZipBtn.disabled = true;
+  downloadZipBtn.style.display = "none";
+  downloadZipBtn.removeAttribute("data-url");
+}
+
+function enableDownloadBtn(url) {
+  if (!downloadZipBtn || !url) return;
+  downloadZipBtn.dataset.url = url;
+  downloadZipBtn.disabled = false;
+  downloadZipBtn.style.display = "inline-flex";
+}
+
+if (downloadZipBtn) {
+  downloadZipBtn.addEventListener("click", () => {
+    const url = downloadZipBtn.dataset.url;
+    if (url) {
+      window.location.href = url;
+    }
+  });
+}
 
 // Language support
 window.LANG_SEQUENCE = window.LANG_SEQUENCE || ['gr', 'en', 'ja', 'es', 'ru'];
@@ -440,7 +467,7 @@ $("generate").onclick = async () => {
   $("files").style.display = "none";
   $("files").textContent = "";
   lastArchitectFiles = [];
-  $("downloadZipBtn").disabled = true;
+  resetDownloadBtn();
 
   try {
     const j = await api("/api/architect_generate", {
@@ -455,6 +482,12 @@ $("generate").onclick = async () => {
     if (j.files && j.files.length) {
       $("files").style.display = "block";
       $("files").innerHTML = "<strong>📁 Generated Files:</strong><br>" + parseFiles(j.files);
+    }
+
+    if (j.zip_url) {
+      enableDownloadBtn(j.zip_url);
+    } else {
+      resetDownloadBtn();
     }
   } catch(e) {
     setStatus(false);

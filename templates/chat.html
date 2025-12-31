@@ -1419,31 +1419,45 @@
 
     async function loadSessions() {
       try {
-        if (!currentSessionId) {
-          const stored = localStorage.getItem(LOCAL_AI_SESSION_KEY);
-          if (stored) currentSessionId = stored;
-        }
+        setSessionStatus("Loading sessions…");
+        const stored = localStorage.getItem(LOCAL_AI_SESSION_KEY);
+        if (!currentSessionId && stored) currentSessionId = stored;
+
         const wallet = walletInputEl.value.trim();
         const url = wallet ? `${API_SESSIONS}?wallet=${encodeURIComponent(wallet)}` : API_SESSIONS;
         const res = await fetch(url);
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
         sessions = data.sessions || [];
-        if (currentSessionId && !sessions.find(s => s.id === currentSessionId) && sessions.length) {
-          currentSessionId = sessions[0].id;
+
+        let nextSessionId = currentSessionId;
+        if (nextSessionId && !sessions.find((s) => s.id === nextSessionId)) {
+          nextSessionId = null;
         }
-        if (!currentSessionId && sessions.length) {
-          currentSessionId = sessions[0].id;
+        if (!nextSessionId && sessions.length) {
+          nextSessionId = sessions[0].id;
         }
-        if (currentSessionId) localStorage.setItem(LOCAL_AI_SESSION_KEY, currentSessionId);
+
+        if (!nextSessionId) {
+          const created = await createSession("New mesh session");
+          if (created && created.id) {
+            nextSessionId = created.id;
+          }
+        }
+
+        if (!nextSessionId) {
+          setSessionStatus("Failed to prepare a session");
+          renderSessions();
+          return;
+        }
+
+        currentSessionId = nextSessionId;
+        localStorage.setItem(LOCAL_AI_SESSION_KEY, currentSessionId);
         renderSessions();
-        if (currentSessionId) {
-          const s = sessions.find((x) => x.id === currentSessionId);
-          if (s) sessionTitleEl.textContent = s.title || "Mesh session";
-          loadSessionMessages(currentSessionId);
-        } else {
-          setSessionStatus("No sessions yet. Create a new one.");
-        }
+
+        const active = sessions.find((x) => x.id === currentSessionId);
+        if (active) sessionTitleEl.textContent = active.title || "Mesh session";
+        await loadSessionMessages(currentSessionId);
       } catch (e) {
         console.error("loadSessions error", e);
         setSessionStatus("Failed to load sessions");
@@ -1455,13 +1469,13 @@
       try {
         const res = await fetch(API_SESSION_MESSAGES(id));
         if (res.status === 404) {
-          await handleMissingSession();
+          await handleMissingSession(id);
           return;
         }
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
         if (data.error && data.error.toLowerCase().includes('session not found')) {
-          await handleMissingSession();
+          await handleMissingSession(id);
           return;
         }
         renderMessages(data.messages || []);
@@ -1472,46 +1486,55 @@
       }
     }
 
-    async function handleMissingSession() {
+    async function handleMissingSession(missingId = null) {
       try {
+        if (missingId) {
+          sessions = sessions.filter((s) => s.id !== missingId);
+        }
         localStorage.removeItem(LOCAL_AI_SESSION_KEY);
         currentSessionId = null;
-        const wallet = walletInputEl.value.trim();
-        const res = await fetch(API_SESSIONS, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: "Auto-recovered session", wallet: wallet || null })
-        });
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        const data = await res.json();
-        currentSessionId = data.id;
-        localStorage.setItem(LOCAL_AI_SESSION_KEY, currentSessionId);
-        await loadSessions();
+        const created = await createSession("Recovered session");
+        if (created && created.id) {
+          await loadSessionMessages(created.id);
+        }
       } catch (err) {
         console.error("handleMissingSession", err);
         setSessionStatus("Failed to start new session");
       }
     }
 
-    async function createSession() {
+    async function createSession(title = "New mesh session") {
       try {
         const wallet = walletInputEl.value.trim();
         const res = await fetch(API_SESSIONS, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            title: "New mesh session",
+            title,
             wallet: wallet || null
           }),
         });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
-        currentSessionId = data.id;
+        const session = data.session || {};
+        const newId = data.id || session.id;
+        const nextSession = { ...session, id: newId || session.id, title: session.title || title };
+        if (!nextSession.id) return null;
+        currentSessionId = nextSession.id;
         localStorage.setItem(LOCAL_AI_SESSION_KEY, currentSessionId);
-        await loadSessions();
+        const existingIdx = sessions.findIndex((s) => s.id === nextSession.id);
+        if (existingIdx >= 0) {
+          sessions[existingIdx] = { ...sessions[existingIdx], ...nextSession };
+        } else {
+          sessions.unshift(nextSession);
+        }
+        renderSessions();
+        sessionTitleEl.textContent = nextSession.title || "Mesh session";
+        return nextSession;
       } catch (e) {
         console.error("createSession error", e);
         alert("Failed to create session. Check console for details.");
+        return null;
       }
     }
 
@@ -1683,7 +1706,7 @@
     function bindEvents() {
       document
         .getElementById("newSessionBtn")
-        .addEventListener("click", createSession);
+        .addEventListener("click", () => createSession());
       document
         .getElementById("renameSessionBtn")
         .addEventListener("click", renameSession);

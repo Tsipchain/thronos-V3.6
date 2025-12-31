@@ -8871,8 +8871,8 @@ def api_ai_sessions_combined():
         return resp
 
 
-@app.route("/api/ai/sessions/<session_id>/messages", methods=["GET"])
-@app.route("/api/chat/session/<session_id>/messages", methods=["GET"])
+@app.route("/api/ai/sessions/<session_id>/messages", methods=["GET", "POST"])
+@app.route("/api/chat/session/<session_id>/messages", methods=["GET", "POST"])
 def api_ai_session_messages(session_id):
     """Get messages for a specific session"""
     wallet_in = (request.args.get("wallet") or "").strip()
@@ -8881,22 +8881,30 @@ def api_ai_session_messages(session_id):
     sessions = load_ai_sessions()
     session = None
     for s in sessions:
-        if s.get("id") == session_id and not s.get("archived"):
-            # Allow access if wallet matches or guest session
-            if s.get("wallet") == identity or s.get("wallet", "").startswith("GUEST:"):
-                session = s
-                break
+        if (
+            s.get("id") == session_id
+            and not s.get("archived")
+            and s.get("wallet") == identity
+        ):
+            session = s
+            break
 
     if not session:
         return jsonify({"ok": False, "error": "Session not found"}), 404
 
-    transcript_path = _session_messages_path(session_id)
-    if not os.path.exists(transcript_path):
-        ensure_session_messages_file(session_id)
-
+    ensure_session_messages_file(session_id)
     messages = load_session_messages(session_id)
 
-    return jsonify({"ok": True, "session": session, "messages": messages})
+    resp = make_response(jsonify({"ok": True, "session": session, "messages": messages}))
+    if guest_id:
+        resp.set_cookie(
+            GUEST_COOKIE_NAME,
+            guest_id,
+            max_age=GUEST_TTL_SECONDS,
+            httponly=True,
+            samesite="Lax",
+        )
+    return resp
 
 
 @app.route("/api/ai/sessions/<session_id>", methods=["PATCH"])

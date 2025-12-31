@@ -369,6 +369,7 @@ os.makedirs(AI_FILES_DIR, exist_ok=True)
 
 # NEW: αποθήκευση sessions (λίστα συνομιλιών)
 AI_SESSIONS_FILE = os.path.join(DATA_DIR, "ai_sessions.json")
+AI_SESSIONS_DIR = os.path.join(DATA_DIR, "ai_sessions")
 AI_FILES_INDEX = os.path.join(DATA_DIR, "ai_files_index.json")
 
 ADMIN_SECRET   = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
@@ -378,6 +379,9 @@ MIN_AMOUNT    = 0.00001
 
 CONTRACTS_DIR = os.path.join(DATA_DIR, "contracts")
 os.makedirs(CONTRACTS_DIR, exist_ok=True)
+
+# Ensure the session transcripts directory exists for per-session message files
+os.makedirs(AI_SESSIONS_DIR, exist_ok=True)
 
 UPLOADS_DIR = os.path.join(DATA_DIR, "uploads")
 os.makedirs(UPLOADS_DIR, exist_ok=True)
@@ -558,13 +562,73 @@ def get_all_pools():
     return load_pools()
 
 
+def _base_token_catalog():
+    """Return metadata for the core Thronos tokens with supply details."""
+    ledger = load_json(LEDGER_FILE, {})
+    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
+
+    def supply_of(ledger_map):
+        try:
+            return round(sum(float(v) for v in ledger_map.values()), 6)
+        except Exception:
+            return 0.0
+
+    return [
+        {
+            "symbol": "THR",
+            "name": "Thronos",
+            "decimals": 6,
+            "logo_url": url_for("static", filename="img/thronos-token.png", _external=False),
+            "total_supply": supply_of(ledger),
+            "type": "native",
+        },
+        {
+            "symbol": "WBTC",
+            "name": "Wrapped Bitcoin",
+            "decimals": 8,
+            "logo_url": url_for("static", filename="img/wbtc-logo.png", _external=False),
+            "total_supply": supply_of(wbtc_ledger),
+            "type": "wrapped",
+        },
+        {
+            "symbol": "L2E",
+            "name": "Learn-to-Earn",
+            "decimals": 6,
+            "logo_url": url_for("static", filename="img/l2e-logo.png", _external=False),
+            "total_supply": supply_of(l2e_ledger),
+            "type": "reward",
+        },
+    ]
+
+
 def get_all_tokens():
-    tokens = load_tokens()
-    for t in tokens:
+    """Centralized catalog that returns base + custom tokens."""
+    catalog = _base_token_catalog()
+
+    custom_tokens = load_tokens()
+    for t in custom_tokens:
         logo_path = t.get("logo_path") or t.get("logo")
         if logo_path:
             t["logo_url"] = url_for("media", filename=logo_path, _external=False)
-    return tokens
+        if t.get("symbol"):
+            catalog.append(t)
+
+    experimental = load_custom_tokens()
+    for symbol, meta in experimental.items():
+        token_id = meta.get("id")
+        logo_path = meta.get("logo_path") or meta.get("logo")
+        catalog.append({
+            "symbol": symbol,
+            "name": meta.get("name", symbol),
+            "decimals": meta.get("decimals", 6),
+            "logo_url": url_for("media", filename=logo_path, _external=False) if logo_path else None,
+            "total_supply": meta.get("total_supply") or meta.get("initial_supply"),
+            "type": "experimental",
+            "token_id": token_id,
+        })
+
+    return catalog
 
 
 def get_wallet_balances(wallet: str):
@@ -1086,6 +1150,105 @@ def save_ai_sessions(sessions):
     save_json(AI_SESSIONS_FILE, sessions)
 
 
+def _session_messages_path(session_id: str) -> str:
+    safe_id = str(session_id or "").replace("/", "_")
+    return os.path.join(AI_SESSIONS_DIR, f"{safe_id}.json")
+
+
+def ensure_session_messages_file(session_id: str):
+    if not session_id:
+        return
+    path = _session_messages_path(session_id)
+    os.makedirs(AI_SESSIONS_DIR, exist_ok=True)
+    if not os.path.exists(path):
+        save_json(path, [])
+
+
+def session_messages_exists(session_id: str) -> bool:
+    """Check if a transcript file exists for the given session id."""
+    if not session_id:
+        return False
+    path = _session_messages_path(session_id)
+    return os.path.exists(path)
+
+
+def remove_session_from_index(session_id: str, wallet: str | None = None):
+    """Remove a session from the index, optionally scoped by wallet."""
+    if not session_id:
+        return
+    sessions = load_ai_sessions()
+    new_sessions = []
+    for s in sessions:
+        if s.get("id") != session_id:
+            new_sessions.append(s)
+            continue
+        if wallet and s.get("wallet") != wallet:
+            new_sessions.append(s)
+    if len(new_sessions) != len(sessions):
+        save_ai_sessions(new_sessions)
+
+
+def append_session_transcript(session_id: str, prompt: str, response: str, files, timestamp: str):
+    """Persist a conversation turn to the per-session transcript file."""
+    if not session_id:
+        return
+
+    path = _session_messages_path(session_id)
+    os.makedirs(AI_SESSIONS_DIR, exist_ok=True)
+    transcript = load_json(path, [])
+
+    if prompt:
+        transcript.append({
+            "role": "user",
+            "content": prompt,
+            "timestamp": timestamp,
+            "session_id": session_id,
+        })
+
+    if response:
+        entry = {
+            "role": "assistant",
+            "content": response,
+            "timestamp": timestamp,
+            "session_id": session_id,
+        }
+        if files:
+            entry["files"] = files
+        transcript.append(entry)
+
+    transcript = transcript[-400:]
+    save_json(path, transcript)
+
+
+def ensure_session_exists(session_id: str, wallet: str | None) -> dict:
+    """Return an existing session or recreate it on disk."""
+    if not session_id:
+        return {}
+
+    sessions = load_ai_sessions()
+    for s in sessions:
+        if s.get("id") == session_id:
+            ensure_session_messages_file(session_id)
+            return s
+
+    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    recovered = {
+        "id": session_id,
+        "wallet": (wallet or "").strip(),
+        "title": "Recovered Session",
+        "created_at": now,
+        "updated_at": now,
+        "archived": False,
+        "model": None,
+        "message_count": 0,
+        "meta": {"recovered": True},
+    }
+    sessions.append(recovered)
+    save_ai_sessions(sessions)
+    ensure_session_messages_file(session_id)
+    return recovered
+
+
 def attach_uploaded_files_to_session(session_id: str, wallet: str, files: list):
     """
     Link uploaded file metadata to a session, so the agent can see them.
@@ -1318,11 +1481,12 @@ def api_ai_generated_file(filename):
     if not os.path.exists(path):
         return jsonify({"ok": False, "error": "file not found"}), 404
 
+    mime, _ = mimetypes.guess_type(safe_name)
     return send_file(
         path,
         as_attachment=True,
         download_name=safe_name,
-        mimetype="text/plain",
+        mimetype=mime or "application/octet-stream",
     )
 
 
@@ -1347,6 +1511,7 @@ def enqueue_offline_corpus(wallet: str, prompt: str, response: str, files, sessi
     corpus.append(entry)
     corpus = corpus[-1000:]
     save_json(AI_CORPUS_FILE, corpus)
+    append_session_transcript(sid, prompt, response, files, ts)
 
     # update / create session meta
     if wallet:
@@ -2251,12 +2416,28 @@ def api_architect_generate():
             "url": f"/api/ai/generated/{fname}",
         })
 
+    zip_url = None
+    if resp_files:
+        safe_bp = blueprint.replace("/", "_").replace("..", "_") or "bp"
+        zip_name = f"architect_{safe_bp}_{int(time.time())}.zip"
+        zip_path = os.path.join(AI_FILES_DIR, zip_name)
+        try:
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for item in resp_files:
+                    fp = os.path.join(AI_FILES_DIR, item["filename"])
+                    if os.path.exists(fp):
+                        zf.write(fp, arcname=item["filename"])
+            zip_url = url_for("api_ai_generated_file", filename=zip_name, _external=False)
+        except Exception as e:
+            app.logger.error("Architect zip build failed: %s", e)
+
     return jsonify({
         "status": status,
         "quantum_key": quantum_key,
         "blueprint": blueprint,
         "response": cleaned,
         "files": resp_files,
+        "zip_url": zip_url,
         "session_id": session_id,
     }), 200
 
@@ -2858,6 +3039,9 @@ def api_chat():
     session_id = (data.get("session_id") or "").strip() or None
     model_key = (data.get("model_key") or "").strip() or None
     attachments = data.get("attachments") or data.get("attachment_ids") or []
+
+    if session_id:
+        ensure_session_exists(session_id, wallet)
 
     # Attachments are file_ids previously uploaded via /api/ai/files/upload
     if attachments:
@@ -7399,10 +7583,19 @@ def api_v1_get_tokens():
     List all issued tokens.  Each token entry includes its symbol,
     name, total supply, decimals and owner.
     """
-    tokens = load_tokens()
-    for tok in tokens:
-        if tok.get("logo_path"):
-            tok["logo"] = f"/media/{tok['logo_path']}"
+    wallet = (request.args.get("wallet") or "").strip() or None
+    tokens = get_all_tokens()
+
+    if wallet:
+        balances = get_wallet_balances(wallet)
+        token_map = {t.get("symbol"): t for t in tokens}
+        for t in balances.get("tokens", []):
+            sym = t.get("symbol")
+            if not sym:
+                continue
+            entry = token_map.setdefault(sym, {})
+            entry.update({k: v for k, v in t.items() if k not in entry})
+
     return jsonify(tokens=tokens), 200
 
 
@@ -8466,7 +8659,25 @@ def api_ai_sessions_combined():
         identity, guest_id = _current_actor_id(wallet)
 
         sessions = load_ai_sessions()
-        user_sessions = [s for s in sessions if s.get("wallet") == identity and not s.get("archived")]
+        user_sessions = []
+        orphan_ids = set()
+
+        for s in sessions:
+            sid = s.get("id")
+            if not sid:
+                continue
+
+            if session_messages_exists(sid):
+                if s.get("wallet") == identity and not s.get("archived"):
+                    user_sessions.append(s)
+            else:
+                orphan_ids.add(sid)
+                # Optional cleanup of the index for orphaned sessions
+                remove_session_from_index(sid, wallet=identity)
+
+        if orphan_ids:
+            sessions = [s for s in sessions if s.get("id") not in orphan_ids]
+            save_ai_sessions(sessions)
 
         # Sort by updated_at (newest first)
         user_sessions.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
@@ -8502,6 +8713,7 @@ def api_ai_sessions_combined():
         }
         sessions.append(session)
         save_ai_sessions(sessions)
+        ensure_session_messages_file(session_id)
 
         resp = make_response(jsonify({"ok": True, "id": session_id, "session": session}))
         if guest_id:
@@ -8528,31 +8740,11 @@ def api_ai_session_messages(session_id):
     if not session:
         return jsonify({"ok": False, "error": "Session not found"}), 404
 
-    # Load messages from corpus for this session
-    corpus = load_json(AI_CORPUS_FILE, []) or []
+    transcript_path = _session_messages_path(session_id)
+    if not os.path.exists(transcript_path):
+        return jsonify({"ok": False, "error": "Session not found"}), 404
 
-    # Build messages list from corpus entries
-    messages = []
-    for entry in corpus:
-        if entry.get("session_id") == session_id:
-            # Add user message
-            if entry.get("prompt"):
-                messages.append({
-                    "role": "user",
-                    "content": entry.get("prompt"),
-                    "timestamp": entry.get("timestamp"),
-                    "session_id": session_id
-                })
-            # Add assistant message
-            if entry.get("response"):
-                messages.append({
-                    "role": "assistant",
-                    "content": entry.get("response"),
-                    "timestamp": entry.get("timestamp"),
-                    "session_id": session_id,
-                    "files": entry.get("files", [])
-                })
-
+    messages = load_json(transcript_path, []) or []
     # Sort by timestamp
     messages.sort(key=lambda m: m.get("timestamp", ""))
 
@@ -8630,6 +8822,7 @@ def api_ai_session_start_v2():
     }
     sessions.append(session)
     save_ai_sessions(sessions)
+    ensure_session_messages_file(session_id)
 
     resp = make_response(jsonify({"ok": True, "session": session}))
     if guest_id:
@@ -8663,6 +8856,7 @@ def api_chat_session_new():
     }
     sessions.append(session)
     save_ai_sessions(sessions)
+    ensure_session_messages_file(session_id)
 
     resp = make_response(jsonify(ok=True, session=session))
     if guest_id:

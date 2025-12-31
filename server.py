@@ -1164,6 +1164,30 @@ def ensure_session_messages_file(session_id: str):
         save_json(path, [])
 
 
+def session_messages_exists(session_id: str) -> bool:
+    """Check if a transcript file exists for the given session id."""
+    if not session_id:
+        return False
+    path = _session_messages_path(session_id)
+    return os.path.exists(path)
+
+
+def remove_session_from_index(session_id: str, wallet: str | None = None):
+    """Remove a session from the index, optionally scoped by wallet."""
+    if not session_id:
+        return
+    sessions = load_ai_sessions()
+    new_sessions = []
+    for s in sessions:
+        if s.get("id") != session_id:
+            new_sessions.append(s)
+            continue
+        if wallet and s.get("wallet") != wallet:
+            new_sessions.append(s)
+    if len(new_sessions) != len(sessions):
+        save_ai_sessions(new_sessions)
+
+
 def append_session_transcript(session_id: str, prompt: str, response: str, files, timestamp: str):
     """Persist a conversation turn to the per-session transcript file."""
     if not session_id:
@@ -8782,12 +8806,14 @@ def api_ai_sessions_combined():
             sid = s.get("id")
             if not sid:
                 continue
-            transcript_path = _session_messages_path(sid)
-            if not os.path.exists(transcript_path):
+
+            if session_messages_exists(sid):
+                if s.get("wallet") == identity and not s.get("archived"):
+                    user_sessions.append(s)
+            else:
                 orphan_ids.add(sid)
-                continue
-            if s.get("wallet") == identity and not s.get("archived"):
-                user_sessions.append(s)
+                # Optional cleanup of the index for orphaned sessions
+                remove_session_from_index(sid, wallet=identity)
 
         if orphan_ids:
             sessions = [s for s in sessions if s.get("id") not in orphan_ids]

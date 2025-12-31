@@ -83,7 +83,9 @@ class ThronosAI:
 
         # Provider availability
         self.gemini_enabled = bool(self.gemini_api_key and genai)
-        self.openai_enabled = bool(self.openai_api_key and OpenAI)
+        # OpenAI should work even if the SDK isn't installed; we'll fall back
+        # to a direct HTTPS call when the client is missing.
+        self.openai_enabled = bool(self.openai_api_key)
         self.anthropic_enabled = bool(self.anthropic_api_key)
         self.custom_enabled = bool(self.custom_model_url)
 
@@ -110,7 +112,10 @@ class ThronosAI:
         if not self.openai_enabled:
             return
         try:
-            self.openai_client = OpenAI(api_key=self.openai_api_key)
+            if OpenAI:
+                self.openai_client = OpenAI(api_key=self.openai_api_key)
+            else:
+                self.openai_client = None
         except Exception:
             self.openai_client = None
 
@@ -257,19 +262,47 @@ Multiple files can be created in one response. Always describe what you're creat
             return self._base_payload(f"Quantum Core Error (Gemini): {msg}", "gemini_error", "gemini", model_name)
 
     def _call_openai(self, prompt: str, model_name: str, lang: Optional[str] = None, wallet: Optional[str] = None, session_id: Optional[str] = None) -> Dict[str, Any]:
-        if not self.openai_client:
-            raise RuntimeError("OpenAI client not initialized")
-        try:
-            system_prompt = self._system_prompt(lang)
+        if not self.openai_enabled:
+            raise RuntimeError("OpenAI not available (missing key)")
 
-            completion = self.openai_client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-            )
-            txt = (completion.choices[0].message.content or "").strip()
+        system_prompt = self._system_prompt(lang)
+        try:
+            if self.openai_client:
+                completion = self.openai_client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt},
+                    ],
+                )
+                txt = (completion.choices[0].message.content or "").strip()
+            else:
+                headers = {
+                    "Authorization": f"Bearer {self.openai_api_key}",
+                    "Content-Type": "application/json",
+                }
+                payload = {
+                    "model": model_name,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt},
+                    ],
+                }
+                r = requests.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=30,
+                )
+                if r.status_code >= 400:
+                    raise RuntimeError(f"HTTP {r.status_code}: {r.text}")
+                data = r.json()
+                txt = ""
+                try:
+                    txt = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "")
+                except Exception:
+                    txt = data.get("response", "")
+
             if not txt:
                 txt = "Quantum Core: empty response from OpenAI."
             return self._base_payload(txt, "openai", "openai", model_name)

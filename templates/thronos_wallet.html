@@ -125,8 +125,9 @@
     const $ = (id) => document.getElementById(id);
 
     function checkConnection() {
-        const addr = localStorage.getItem('thr_address');
-        if (addr) {
+        const addr = walletSession.getAddress();
+        const bound = walletSession.isBound();
+        if (addr && bound) {
             $('connectSection').classList.add('hidden');
             $('dashboardSection').classList.remove('hidden');
             $('displayAddress').textContent = addr;
@@ -146,18 +147,14 @@
             return;
         }
         
-        localStorage.setItem('thr_address', addr);
-        if (secret) {
-            localStorage.setItem('thr_secret', secret);
-        }
-        
+        walletSession.saveSession({ address: addr, sendSeed: secret, bound: true });
+
         checkConnection();
     }
 
     function disconnectWallet() {
         if(confirm("Are you sure? This will clear your stored keys from this browser.")) {
-            localStorage.removeItem('thr_address');
-            localStorage.removeItem('thr_secret');
+            walletSession.clearSession();
             window.location.reload();
         }
     }

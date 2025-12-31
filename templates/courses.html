@@ -348,17 +348,19 @@
     <div class="panel" style="margin-bottom: 20px;">
         <h3>🔐 <span class="lang-el">Σύνδεση Πορτοφολιού</span><span class="lang-en">Wallet Connection</span></h3>
         <div class="input-group">
-            <input id="wallet" class="input-field" placeholder="THR wallet address (e.g., THR123...)" />
-            <input id="secret" class="input-field" type="password" placeholder="auth_secret" />
-            <input id="passphrase" class="input-field" type="password" placeholder="passphrase (optional)" />
+            <input id="wallet" class="input-field" placeholder="THR wallet address" readonly />
             <button id="connectBtn" class="btn-primary">
-                <span class="lang-el">Σύνδεση</span><span class="lang-en">Connect</span>
+                <span class="lang-el">Χρήση Wallet Widget</span><span class="lang-en">Use Wallet Widget</span>
             </button>
         </div>
         <div id="walletStatus" style="margin-top: 10px; display: none;">
             <span style="color: #3CFF7A;">✓ <span class="lang-el">Συνδεδεμένο</span><span class="lang-en">Connected</span>:</span>
             <code id="connectedWallet"></code>
             <span style="margin-left: 15px;">L2E: <strong id="l2eBalance">0</strong></span>
+        </div>
+        <div id="walletWarning" style="margin-top: 10px; color: #ff6b6b; display: none;">
+            <span class="lang-el">Συνδέσου από το widget πορτοφολιού στο header.</span>
+            <span class="lang-en">Connect via the header wallet widget.</span>
         </div>
     </div>
 
@@ -392,11 +394,37 @@
             <h3>➕ <span class="lang-el">Δημιουργία Μαθήματος (Εκπαιδευτές)</span><span class="lang-en">Create Course (Teachers Only)</span></h3>
             <input id="title" class="input-field" placeholder="Course Title" style="width: 100%; margin-bottom: 10px;" />
             <input id="titleEl" class="input-field" placeholder="Τίτλος Μαθήματος (Ελληνικά)" style="width: 100%; margin-bottom: 10px;" />
-            <input id="description" class="input-field" placeholder="Description (optional)" style="width: 100%; margin-bottom: 10px;" />
+            <input id="description" class="input-field" placeholder="Description (optional)" style="width: 100%; margin-bottom:10px;" />
             <div class="input-group">
                 <input id="price" class="input-field" type="number" step="0.1" placeholder="Price in THR" />
                 <input id="reward" class="input-field" type="number" step="0.1" placeholder="L2E Reward" />
             </div>
+
+            <h4 style="margin-top:15px;">📂 <span class="lang-el">Περιεχόμενο Μαθήματος</span><span class="lang-en">Course Content</span></h4>
+            <div class="input-group" style="align-items:center;">
+                <label><input type="radio" name="contentType" value="pdf" checked /> PDF</label>
+                <label><input type="radio" name="contentType" value="video" /> Video</label>
+                <label><input type="radio" name="contentType" value="external" /> External</label>
+            </div>
+            <div id="pdfFields" class="input-group">
+                <input id="slides" type="file" accept="application/pdf" class="input-field" />
+            </div>
+            <div id="videoFields" class="input-group" style="display:none;">
+                <input id="videoUrl" class="input-field" placeholder="Video URL (YouTube / MP4)" />
+            </div>
+            <div id="externalFields" class="input-group" style="display:none;">
+                <input id="contentUrl" class="input-field" placeholder="External content URL" />
+            </div>
+
+            <h4 style="margin-top:15px;">📝 <span class="lang-el">Quiz Builder</span><span class="lang-en">Quiz Builder</span></h4>
+            <div class="input-group">
+                <input id="passScore" class="input-field" type="number" min="1" max="100" value="70" placeholder="Pass score (%)" />
+            </div>
+            <div id="quizQuestions"></div>
+            <button class="btn-secondary" style="width: 100%; margin: 10px 0;" id="addQuestionBtn">
+                ➕ <span class="lang-el">Προσθήκη Ερώτησης</span><span class="lang-en">Add Question</span>
+            </button>
+
             <button id="create" class="btn-primary" style="width: 100%;">
                 <span class="lang-el">Δημιουργία Μαθήματος</span><span class="lang-en">Create Course</span>
             </button>
@@ -404,7 +432,7 @@
         </div>
     </div>
 
-    <!-- My Courses Tab -->
+    <!-- My Courses Tab --><!-- My Courses Tab -->
     <div id="my-courses-tab" class="tab-content">
         <div class="panel">
             <h3>📖 <span class="lang-el">Τα Μαθήματά μου</span><span class="lang-en">My Courses</span></h3>
@@ -461,6 +489,7 @@ let connectedSecret = null;
 let connectedPassphrase = null;
 let currentQuizCourseId = null;
 let currentQuizQuestions = [];
+let builderQuestions = [];
 let currentLang = localStorage.getItem('lang') || 'en';
 
 // API Helpers
@@ -478,6 +507,43 @@ async function apiPost(url, body) {
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return await r.json();
+}
+
+// Content/quiz builder helpers
+function toggleContentFields() {
+    const type = document.querySelector('input[name="contentType"]:checked')?.value || 'pdf';
+    $("pdfFields").style.display = type === 'pdf' ? 'flex' : 'none';
+    $("videoFields").style.display = type === 'video' ? 'flex' : 'none';
+    $("externalFields").style.display = type === 'external' ? 'flex' : 'none';
+}
+
+function addBuilderQuestion() {
+    const idx = builderQuestions.length;
+    builderQuestions.push({ text: '', options: ['', '', '', ''], correct_index: 0 });
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'question-card';
+    wrapper.id = `builder-question-${idx}`;
+    wrapper.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+            <strong>${currentLang === 'el' ? 'Ερώτηση' : 'Question'} #${idx + 1}</strong>
+            <button type="button" style="background:none;border:none;color:#ff6b6b;cursor:pointer;" onclick="removeBuilderQuestion(${idx})">✕</button>
+        </div>
+        <input class="input-field" placeholder="${currentLang === 'el' ? 'Ερώτηση' : 'Question'}" style="width:100%; margin-bottom:8px;" onchange="builderQuestions[${idx}].text = this.value">
+        ${['A','B','C','D'].map((label,i)=>`
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+                <input type="radio" name="builder-correct-${idx}" value="${i}" ${i===0 ? 'checked' : ''} onchange="builderQuestions[${idx}].correct_index=${i}">
+                <input class="input-field" placeholder="Option ${label}" style="flex:1;" onchange="builderQuestions[${idx}].options[${i}]=this.value">
+            </div>
+        `).join('')}
+    `;
+    $("quizQuestions").appendChild(wrapper);
+}
+
+function removeBuilderQuestion(idx) {
+    const el = $("builder-question-" + idx);
+    if (el) el.remove();
+    builderQuestions[idx] = null;
 }
 
 // Logging
@@ -498,33 +564,46 @@ function showTab(name) {
     if (name === 'my-courses') loadMyCourses();
 }
 
-// Connect Wallet
-$("connectBtn").onclick = async () => {
-    const wallet = $("wallet").value.trim();
-    const secret = $("secret").value.trim();
-    const passphrase = $("passphrase").value.trim();
-
-    if (!wallet) {
-        log("Please enter a wallet address", true);
-        return;
+function syncWalletFromSession(showToast = true) {
+    const addr = (window.walletSession?.getAddress && window.walletSession.getAddress()) || '';
+    const secret = (window.walletSession?.getSendSecret && window.walletSession.getSendSecret()) || '';
+    if (!addr || !secret) {
+        $("walletWarning").style.display = "block";
+        $("walletStatus").style.display = "none";
+        if (showToast) log("Please connect via wallet widget", true);
+        return false;
     }
 
-    connectedWallet = wallet;
+    connectedWallet = addr;
     connectedSecret = secret;
-    connectedPassphrase = passphrase;
-
+    connectedPassphrase = '';
+    $("wallet").value = addr;
     $("walletStatus").style.display = "block";
-    $("connectedWallet").textContent = wallet.substring(0, 12) + '...';
+    $("walletWarning").style.display = "none";
+    $("connectedWallet").textContent = addr.substring(0, 12) + '...';
 
-    try {
-        const data = await apiGet(`/api/v1/l2e/balance/${wallet}`);
-        $("l2eBalance").textContent = data.l2e_balance || 0;
-    } catch (e) {
-        log(`Failed to load L2E balance: ${e.message}`, true);
-    }
+    apiGet(`/api/v1/l2e/balance/${addr}`).then(data => {
+        $("l2eBalance").textContent = data.l2e_balance || data.balance || 0;
+    }).catch(e => log(`Failed to load L2E balance: ${e.message}`, true));
 
-    log(`Connected wallet: ${wallet}`);
-    await refresh();
+    if (showToast) log(`Connected wallet: ${addr}`);
+    refresh();
+    return true;
+}
+
+// Connect Wallet
+$("connectBtn").onclick = () => syncWalletFromSession(true);
+
+// Content type toggles & quiz builder init
+document.querySelectorAll('input[name="contentType"]').forEach(radio => {
+    radio.addEventListener('change', toggleContentFields);
+});
+toggleContentFields();
+addBuilderQuestion();
+
+$("addQuestionBtn").onclick = (e) => {
+    e.preventDefault();
+    addBuilderQuestion();
 };
 
 // Create Course Card
@@ -536,7 +615,7 @@ function courseCard(c) {
     const isCompleted = connectedWallet && (c.completed || []).includes(connectedWallet);
     const isQuizPassed = connectedWallet && (c.quiz_passed || []).includes(connectedWallet);
     const isTeacher = connectedWallet && c.teacher === connectedWallet;
-    const hasQuiz = c.has_quiz;
+    const hasQuiz = (c.quiz && c.quiz.questions && c.quiz.questions.length > 0) || c.has_quiz;
 
     let badges = "";
     if (isEnrolled) badges += `<span class="badge badge-enrolled">${currentLang === 'el' ? 'Εγγεγραμμένος' : 'Enrolled'}</span>`;
@@ -556,8 +635,8 @@ function courseCard(c) {
                 </div>
             </div>
             <div class="course-actions">
-                <button class="btn-enroll btn-primary" ${isEnrolled || !connectedWallet ? 'disabled' : ''}>
-                    ${isEnrolled ? '✓ ' + (currentLang === 'el' ? 'Εγγράφηκε' : 'Enrolled') : '📝 ' + (currentLang === 'el' ? 'Εγγραφή' : 'Enroll')}
+                <button class="btn-enroll btn-primary" ${!connectedWallet ? 'disabled' : ''}>
+                    ${isEnrolled ? '📖 ' + (currentLang === 'el' ? 'Άνοιγμα' : 'Open course') : '📝 ' + (currentLang === 'el' ? 'Εγγραφή' : 'Enroll')}
                 </button>
                 ${hasQuiz && isEnrolled && !isCompleted ? `
                     <button class="btn-quiz btn-secondary" onclick="openQuiz('${c.id}')">
@@ -576,8 +655,13 @@ function courseCard(c) {
         </div>
     `;
 
-    // Enroll button
-    el.querySelector(".btn-enroll").onclick = async () => {
+    // Enroll/Open button
+    const enrollBtn = el.querySelector(".btn-enroll");
+    enrollBtn.onclick = async () => {
+        if (isEnrolled) {
+            window.location.href = `/courses/${c.id}`;
+            return;
+        }
         if (!connectedWallet || !connectedSecret) {
             log("Please connect wallet first", true);
             return;
@@ -601,6 +685,11 @@ function courseCard(c) {
             log(`Enrollment error: ${e.message}`, true);
         }
     };
+
+    if (isEnrolled) {
+        enrollBtn.disabled = false;
+        enrollBtn.textContent = currentLang === 'el' ? '📖 Άνοιγμα Μαθήματος' : '📖 Open course';
+    }
 
     // Complete button (for teachers)
     const completeBtn = el.querySelector(".btn-complete");
@@ -707,33 +796,76 @@ $("create").onclick = async () => {
     const title = $("title").value.trim();
     const price = parseFloat($("price").value || "0");
     const reward = parseFloat($("reward").value || "0");
+    const passScore = parseInt($("passScore").value || "70", 10);
+    const contentType = document.querySelector('input[name="contentType"]:checked')?.value || 'pdf';
 
     if (!title || price < 0 || reward <= 0) {
         log("Invalid input: Title required, price >= 0, reward > 0", true);
         return;
     }
 
+    const validQuestions = builderQuestions.filter(q => q && q.text && q.options.every(o => o));
+    if (validQuestions.length === 0) {
+        log("Add at least one quiz question", true);
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append("title", title);
+    formData.append("description", $("description").value.trim());
+    formData.append("teacher", connectedWallet);
+    formData.append("price_thr", price);
+    formData.append("reward_l2e", reward);
+    formData.append("auth_secret", connectedSecret);
+    formData.append("passphrase", connectedPassphrase || "");
+    formData.append("content_type", contentType);
+    formData.append("pass_score", passScore);
+    formData.append("quiz_questions", JSON.stringify(validQuestions));
+
+    if (contentType === 'pdf') {
+        const file = $("slides").files[0];
+        if (!file) {
+            log("Please upload slides PDF", true);
+            return;
+        }
+        formData.append("slides", file);
+    } else if (contentType === 'video') {
+        const videoUrl = $("videoUrl").value.trim();
+        if (!videoUrl) {
+            log("Video URL required", true);
+            return;
+        }
+        formData.append("video_url", videoUrl);
+    } else {
+        const contentUrl = $("contentUrl").value.trim();
+        if (!contentUrl) {
+            log("External content URL required", true);
+            return;
+        }
+        formData.append("content_url", contentUrl);
+    }
+
     try {
         log(`Creating course "${title}"...`);
-        const result = await apiPost("/api/v1/courses", {
-            title,
-            teacher: connectedWallet,
-            price_thr: price,
-            reward_l2e: reward,
-            auth_secret: connectedSecret,
-            passphrase: connectedPassphrase
-        });
+        const response = await fetch("/api/v1/courses", { method: "POST", body: formData });
+        const result = await response.json();
 
-        if (result.status === "success") {
+        if (response.ok && result.status === "success") {
             log(`Course "${title}" created! ID: ${result.course.id}`);
             $("title").value = "";
             $("titleEl").value = "";
             $("description").value = "";
             $("price").value = "";
             $("reward").value = "";
+            $("videoUrl").value = "";
+            $("contentUrl").value = "";
+            $("slides").value = "";
+            $("quizQuestions").innerHTML = "";
+            builderQuestions = [];
+            addBuilderQuestion();
             await refresh();
         } else {
-            log(`Course creation failed: ${result.message}`, true);
+            log(`Course creation failed: ${result.message || response.statusText}`, true);
         }
     } catch (e) {
         log(`Creation error: ${e.message}`, true);
@@ -946,12 +1078,7 @@ function escapeHtml(str) {
 $("refresh").onclick = refresh;
 
 // Initial load
+syncWalletFromSession(false);
 refresh().catch(e => log(`Initial load error: ${e.message}`, true));
-
-// Auto-load wallet from localStorage
-const savedWallet = localStorage.getItem('thr_address');
-if (savedWallet) {
-    $("wallet").value = savedWallet;
-}
 </script>
 {% endblock %}

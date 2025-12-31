@@ -466,6 +466,24 @@
         display: flex;
         gap: 8px;
     }
+
+    .wallet-popup-login label {
+        display: block;
+        margin-top: 10px;
+        font-size: 12px;
+        color: #9f9;
+    }
+
+    .wallet-popup-login input {
+        width: 100%;
+        padding: 8px;
+        margin-top: 4px;
+        background: #000;
+        color: #0f0;
+        border: 1px solid #0f0;
+        border-radius: 6px;
+        box-sizing: border-box;
+    }
     .wallet-popup-btn {
         flex: 1;
         padding: 8px 12px;
@@ -1203,17 +1221,34 @@
 
         <!-- Wallet Balance Popup Widget -->
         <div class="wallet-balance-popup" id="walletBalancePopup" onclick="event.stopPropagation();">
-            
-<div class="wallet-popup-topbar">
-    <div class="wallet-popup-title">Wallet</div>
-    <div class="wallet-popup-actions">
-        <button id="walletPinBtn" class="wallet-mini-btn" title="Pin">Pin</button>
-        <button id="walletLockBtn" class="wallet-mini-btn" title="Lock">Lock</button>
-    </div>
-</div>
-<div class="wallet-popup-loading">
-                <div class="wallet-popup-spinner"></div>
-                Loading balances...
+            <div class="wallet-popup-topbar">
+                <div class="wallet-popup-title">Wallet</div>
+                <div class="wallet-popup-actions">
+                    <button id="walletPinBtn" class="wallet-mini-btn" title="Pin">Pin</button>
+                    <button id="walletLockBtn" class="wallet-mini-btn" title="Lock">Lock</button>
+                </div>
+            </div>
+
+            <div id="walletLoginSection" class="wallet-popup-login" style="display:none;">
+                <label for="walletWidgetAddress">THR Address</label>
+                <input type="text" id="walletWidgetAddress" placeholder="THR..." />
+                <label for="walletWidgetSecret">Send Secret</label>
+                <input type="password" id="walletWidgetSecret" placeholder="send_secret" />
+                <label for="walletWidgetPin">PIN (optional)</label>
+                <input type="password" id="walletWidgetPin" placeholder="4-8 digits" />
+                <div class="wallet-modal-actions" style="margin-top:10px;">
+                    <button class="primary" onclick="submitHeaderWalletLogin()">Save</button>
+                </div>
+                <div style="font-size:11px; color:#9f9; opacity:0.7; margin-top:6px;">
+                    Stored locally (thr_address, send_secret, wallet_pin).
+                </div>
+            </div>
+
+            <div id="walletContentSection">
+                <div class="wallet-popup-loading">
+                    <div class="wallet-popup-spinner"></div>
+                    Loading balances...
+                </div>
             </div>
         </div>
     </div>
@@ -1221,22 +1256,6 @@
         ✖ <span class="lang-el">Αποσύνδεση</span><span class="lang-en">Disconnect</span>
     </button>
     <button class="lang-toggle" onclick="toggleLanguage()">GR</button>
-</div>
-
-<div class="wallet-modal-overlay" id="headerWalletModal" onclick="if(event.target===this) closeHeaderWalletModal()">
-    <div class="wallet-modal" onclick="event.stopPropagation()">
-        <h3>💼 Wallet Login</h3>
-        <label for="walletAddressInput">THR Address</label>
-        <input type="text" id="walletAddressInput" placeholder="THR..." />
-        <label for="walletSendSeedInput">Send Seed (auth secret)</label>
-        <input type="password" id="walletSendSeedInput" placeholder="send_seed / secret" />
-        <label for="walletPinInput">PIN (optional)</label>
-        <input type="password" id="walletPinInput" placeholder="4-8 digits" />
-        <div class="wallet-modal-actions">
-            <button onclick="closeHeaderWalletModal()">Cancel</button>
-            <button class="primary" onclick="submitHeaderWalletLogin()">Save</button>
-        </div>
-    </div>
 </div>
 
 <!-- Send Modal -->
@@ -1483,7 +1502,7 @@
 
 <script>
 // Global Language Logic
-const LANG_SEQUENCE = ['gr', 'en', 'ja', 'es', 'ru'];
+    window.LANG_SEQUENCE = window.LANG_SEQUENCE || ['gr', 'en', 'ja', 'es', 'ru'];
 const LANGUAGE_CLASS_MAP = {
     gr: 'lang-el',
     en: 'lang-en',
@@ -1496,7 +1515,7 @@ const DEFAULT_LANG = 'gr';
 function normalizeLang(lang) {
     if (!lang) return DEFAULT_LANG;
     if (lang === 'el') return 'gr';
-    return LANG_SEQUENCE.includes(lang) ? lang : 'en';
+      return window.LANG_SEQUENCE.includes(lang) ? lang : 'en';
 }
 
 function getCurrentLang() {
@@ -1509,9 +1528,9 @@ function isGreekLang(lang) {
 
 function toggleLanguage() {
     const currentLang = getCurrentLang();
-    const currentIndex = LANG_SEQUENCE.indexOf(currentLang);
-    const nextIndex = (currentIndex + 1) % LANG_SEQUENCE.length;
-    setLanguage(LANG_SEQUENCE[nextIndex]);
+      const currentIndex = window.LANG_SEQUENCE.indexOf(currentLang);
+      const nextIndex = (currentIndex + 1) % window.LANG_SEQUENCE.length;
+      setLanguage(window.LANG_SEQUENCE[nextIndex]);
 }
 
 function setLanguage(lang) {
@@ -1553,15 +1572,16 @@ function disconnectWallet() {
         const statusEl = document.getElementById('walletStatus');
         const loginBtn = document.getElementById('walletLoginBtn');
         const disconnectBtn = document.getElementById('disconnectBtn');
-        if (statusEl) statusEl.style.display = 'none';
+        if (statusEl) statusEl.classList.remove('open');
         if (disconnectBtn) disconnectBtn.style.display = 'none';
         if (loginBtn) loginBtn.style.display = 'inline-block';
+        showWalletLoginForm();
+        updateHeaderWalletUi();
         walletBalancesLoaded = false;
         tokenBalances = {};
         if (typeof updateHeroButton === 'function') {
             updateHeroButton('');
         }
-        window.location.href = '/';
     }
 }
 
@@ -1571,14 +1591,25 @@ let walletBalancesLoaded = false;
 async function loadWalletBalances(force = false) {
     if (walletBalancesLoaded && !force) return; // Only load once
 
-    const wallet = walletSession.getAddress();
-    if (!wallet) return;
+    if (!walletSession.isBound()) {
+        walletBalancesLoaded = false;
+        showWalletLoginForm();
+        return;
+    }
 
-    const popup = document.getElementById('walletBalancePopup');
-    if (!popup) return;
+    const wallet = walletSession.getAddress();
+    if (!wallet) {
+        showWalletLoginForm();
+        return;
+    }
+
+    const content = document.getElementById('walletContentSection');
+    if (!content) return;
+
+    showWalletContentSection();
 
     if (force) {
-        popup.innerHTML = `
+        content.innerHTML = `
             <div class="wallet-popup-header">💎 Wallet Balance</div>
             <div class="wallet-popup-loading">
                 <div class="wallet-popup-spinner"></div>
@@ -1595,7 +1626,7 @@ async function loadWalletBalances(force = false) {
         renderWalletBalances(data);
         walletBalancesLoaded = true;
     } catch (error) {
-        popup.innerHTML = `
+        content.innerHTML = `
             <div class="wallet-popup-header">💎 Wallet Balance</div>
             <div style="text-align: center; color: #ff4d4d; font-size: 11px; padding: 10px;">
                 Failed to load balances
@@ -1644,7 +1675,13 @@ async function updateTokenPrices() {
 }
 
 function renderWalletBalances(data) {
-    const popup = document.getElementById('walletBalancePopup');
+    const content = document.getElementById('walletContentSection');
+    if(!content) return;
+    if(!walletSession.isBound()){
+        showWalletLoginForm();
+        return;
+    }
+
     const wallet = walletSession.getAddress() || '';
     const lang = getCurrentLang();
     const isGreek = isGreekLang(lang);
@@ -1795,7 +1832,7 @@ function renderWalletBalances(data) {
         </div>
     `;
 
-    popup.innerHTML = html;
+    content.innerHTML = html;
 
     // Apply language after render
     const savedLang = getCurrentLang();
@@ -2011,6 +2048,13 @@ async function submitSend() {
     const secret = walletSession.getSendSeed();
     const resultDiv = document.getElementById('sendResult');
 
+    if (!walletSession.isBound()) {
+        resultDiv.className = 'send-result error';
+        resultDiv.textContent = 'Wallet not connected';
+        resultDiv.style.display = 'block';
+        return;
+    }
+
     if (!to || !amount || amount <= 0) {
         resultDiv.className = 'send-result error';
         resultDiv.textContent = 'Please enter valid recipient and amount';
@@ -2033,6 +2077,8 @@ async function submitSend() {
         resultDiv.style.display = 'block';
         return;
     }
+
+    if(!walletSession.requirePin('send tokens')) return;
 
     try {
         // Calculate fee based on selected speed
@@ -2239,34 +2285,57 @@ function initWalletUiControls(){
     }, 100);
 }
 
+function showWalletLoginForm(){
+    const loginSection = document.getElementById('walletLoginSection');
+    const contentSection = document.getElementById('walletContentSection');
+    if(loginSection){
+        loginSection.style.display = 'block';
+        const addrInput = document.getElementById('walletWidgetAddress');
+        const secretInput = document.getElementById('walletWidgetSecret');
+        const pinInput = document.getElementById('walletWidgetPin');
+        if(addrInput) addrInput.value = walletSession.getAddress();
+        if(secretInput) secretInput.value = walletSession.getSendSeed();
+        if(pinInput) pinInput.value = walletSession.getPin();
+        setTimeout(()=>{ if(addrInput) addrInput.focus(); }, 50);
+    }
+    if(contentSection) contentSection.style.display = 'none';
+}
+
+function showWalletContentSection(){
+    const loginSection = document.getElementById('walletLoginSection');
+    const contentSection = document.getElementById('walletContentSection');
+    if(loginSection) loginSection.style.display = 'none';
+    if(contentSection) contentSection.style.display = 'block';
+}
+
 function openHeaderWalletModal(){
-    const overlay = document.getElementById('headerWalletModal');
-    if (!overlay) return;
-    document.getElementById('walletAddressInput').value = walletSession.getAddress();
-    document.getElementById('walletSendSeedInput').value = walletSession.getSendSeed();
-    document.getElementById('walletPinInput').value = walletSession.getPin();
-    overlay.classList.add('active');
+    setWalletOpen(true);
+    if(!walletSession.isBound()){
+        showWalletLoginForm();
+    } else {
+        showWalletContentSection();
+        loadWalletBalances(true);
+    }
 }
 
 function closeHeaderWalletModal(){
-    const overlay = document.getElementById('headerWalletModal');
-    if (overlay) overlay.classList.remove('active');
+    setWalletOpen(false);
 }
 
 async function submitHeaderWalletLogin(){
     const existingAddress = walletSession.getAddress();
     const existingSeed = walletSession.getSendSeed();
 
-    const address = document.getElementById('walletAddressInput').value.trim() || existingAddress;
-    const seed = document.getElementById('walletSendSeedInput').value.trim() || existingSeed;
-    const pin = document.getElementById('walletPinInput').value.trim();
+    const address = (document.getElementById('walletWidgetAddress')?.value || '').trim() || existingAddress;
+    const seed = (document.getElementById('walletWidgetSecret')?.value || '').trim() || existingSeed;
+    const pin = (document.getElementById('walletWidgetPin')?.value || '').trim();
     if (!address) {
         alert('Please enter a THR address.');
         return;
     }
 
     // Store session (reuse saved address/seed when logging in with PIN-only)
-    walletSession.saveSession({ address, sendSeed: seed, pin });
+    walletSession.saveSession({ address, sendSeed: seed, pin, bound: true });
 
     // Sync the PIN with the wallet lock so PIN-only unlock works with the header widget
     if (pin) {
@@ -2277,7 +2346,7 @@ async function submitHeaderWalletLogin(){
         localStorage.removeItem(WALLET_PIN_HASH_KEY);
     }
 
-    closeHeaderWalletModal();
+    showWalletContentSection();
     updateHeaderWalletUi();
     loadTokenBalances();
     loadWalletBalances(true);
@@ -2289,22 +2358,27 @@ async function submitHeaderWalletLogin(){
 
 function updateHeaderWalletUi(){
     const wallet = walletSession.getAddress();
+    const bound = walletSession.isBound();
     const statusEl = document.getElementById('walletStatus');
     const disconnectEl = document.getElementById('disconnectBtn');
     const loginBtn = document.getElementById('walletLoginBtn');
 
-    if (wallet) {
-        const short = wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4);
-        if(statusEl){
-            document.getElementById('walletAddrShort').textContent = short;
-            statusEl.style.display = 'flex';
-            if(!statusEl.dataset.init){
-                initWalletUiControls();
-                statusEl.dataset.init = '1';
-            }
+    const hasWallet = bound && wallet;
+    const short = hasWallet ? wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4) : 'Connect';
+
+    if(statusEl){
+        document.getElementById('walletAddrShort').textContent = short;
+        statusEl.style.display = 'flex';
+        if(!statusEl.dataset.init){
+            initWalletUiControls();
+            statusEl.dataset.init = '1';
         }
-        if(loginBtn) loginBtn.style.display = 'none';
-        if(disconnectEl) disconnectEl.style.display = 'block';
+    }
+
+    if(disconnectEl) disconnectEl.style.display = hasWallet ? 'block' : 'none';
+    if(loginBtn) loginBtn.style.display = 'inline-block';
+
+    if(hasWallet){
         const isPinned = getWalletUiPinned();
         const hasOpenedBefore = sessionStorage.getItem('wallet_opened_once');
         if (isPinned || !hasOpenedBefore) {
@@ -2315,12 +2389,9 @@ function updateHeaderWalletUi(){
             }, 500);
         }
     } else {
-        if(statusEl) {
-            statusEl.style.display = 'none';
-            statusEl.classList.remove('open');
-        }
-        if(disconnectEl) disconnectEl.style.display = 'none';
-        if(loginBtn) loginBtn.style.display = 'inline-block';
+        setWalletOpen(false);
+        showWalletLoginForm();
+        walletBalancesLoaded = false;
     }
 }
 

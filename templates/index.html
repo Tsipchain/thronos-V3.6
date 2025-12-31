@@ -1194,11 +1194,6 @@
     }
 
     window.handleHeroWalletClick = function() {
-        const address = walletSession.getAddress();
-        if (address) {
-            window.location.href = '/wallet';
-            return;
-        }
         if (typeof openHeaderWalletModal === 'function') {
             openHeaderWalletModal();
         }

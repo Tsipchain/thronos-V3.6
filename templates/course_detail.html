@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Course{% endblock %}
+{% block content %}
+<div class="l2e-container" style="max-width: 900px; margin: 40px auto; color: #d7ffe6;">
+    <div id="courseHeader" class="panel" style="background:#07120b;border:1px solid #1a5a2f;border-radius:14px;padding:20px;">
+        <h1 id="courseTitle">Course</h1>
+        <p id="courseDesc"></p>
+        <div id="courseMedia"></div>
+    </div>
+    <div class="panel" style="margin-top:20px;background:#050b07;border:1px solid #1a5a2f;border-radius:14px;padding:20px;">
+        <h3>📝 Quiz</h3>
+        <div id="quizArea">Loading...</div>
+        <button id="submitBtn" class="btn-primary" style="margin-top:15px;" onclick="submitQuiz()">Submit</button>
+    </div>
+</div>
+<script>
+const courseId = "{{ course_id }}";
+let courseData = null;
+let quizData = null;
+let walletAddr = '';
+let enrolled = false;
+
+function mediaTag(course){
+    const materials = course.materials || {};
+    if (materials.type === 'video' && materials.video_url){
+        return `<video controls style="width:100%; max-height:320px;">
+<source src="${materials.video_url}" type="video/mp4">
+</video>`;
+    }
+    if (materials.type === 'external' && materials.content_url){
+        return `<a href="${materials.content_url}" target="_blank" style="color:#3CFF7A;">${materials.content_url}</a>`;
+    }
+    if (materials.type === 'pdf' && materials.slides_path){
+        const url = `/media/${materials.slides_path}`;
+        return `<iframe src="${url}" style="width:100%;height:480px;"></iframe>`;
+    }
+    if (course.video_url){
+        return `<video controls style="width:100%; max-height:320px;">
+<source src="${course.video_url}" type="video/mp4">
+</video>`;
+    }
+    if (course.slides_path){
+        const url = `/media/${course.slides_path}`;
+        return `<iframe src="${url}" style="width:100%;height:400px;"></iframe>`;
+    }
+    return '<div style="opacity:0.6;">No materials</div>';
+}
+
+async function loadCourse(){
+    const res = await fetch(`/api/v1/courses/${courseId}`);
+    const data = await res.json();
+    courseData = data.course;
+    if (!courseData){
+        document.getElementById('courseHeader').innerHTML = '<p class="error">Course not found</p>';
+        return;
+    }
+    document.getElementById('courseTitle').textContent = courseData.title;
+    document.getElementById('courseDesc').textContent = courseData.description || '';
+    const cover = courseData.cover_path ? `/media/${courseData.cover_path}` : '/static/img/logo.png';
+    document.getElementById('courseHeader').insertAdjacentHTML('afterbegin', `<img src="${cover}" style="width:100%;max-height:240px;object-fit:cover;border-radius:10px;" onerror="this.src='/static/img/logo.png'">`);
+    document.getElementById('courseMedia').innerHTML = mediaTag(courseData);
+    await loadQuiz();
+    checkEnrollment();
+}
+
+async function loadQuiz(){
+    const res = await fetch(`/api/v1/courses/${courseId}/quiz`);
+    const payload = await res.json();
+    quizData = payload.quiz;
+    if (!quizData || !quizData.questions){
+        document.getElementById('quizArea').textContent = 'No quiz yet';
+        document.getElementById('submitBtn').style.display='none';
+        return;
+    }
+    document.getElementById('quizArea').innerHTML = `<button class="btn-primary" onclick="renderQuiz()" style="width:100%;">${quizData.questions.length} ${quizData.questions.length === 1 ? 'question' : 'questions'} • Start Quiz</button>`;
+}
+
+function checkEnrollment(){
+    walletAddr = window.walletSession?.getAddress ? window.walletSession.getAddress() : '';
+    if (!walletAddr){
+        document.getElementById('quizArea').innerHTML = 'Connect wallet from header to access quiz.';
+        document.getElementById('courseMedia').innerHTML = '<div class="error">Connect wallet to open course content.</div>';
+        return;
+    }
+    enrolled = (courseData.students || []).includes(walletAddr);
+    if (!enrolled){
+        document.getElementById('quizArea').innerHTML = '<div class="error">Please enroll from the courses list to view materials and quiz.</div>';
+        document.getElementById('courseMedia').innerHTML = '<div class="error">Enrollment required to view course materials.</div>';
+        document.getElementById('submitBtn').style.display='none';
+    } else {
+        document.getElementById('courseMedia').innerHTML = mediaTag(courseData);
+    }
+}
+
+function renderQuiz(){
+    if (!quizData || !quizData.questions){
+        return;
+    }
+    if (!enrolled){
+        alert('Enroll in the course first.');
+        return;
+    }
+    let html = quizData.questions.map(q=>`
+        <div style="margin-bottom:12px;">
+            <div style="font-weight:700;">${q.text || q.question}</div>
+            ${(q.options || []).map((opt,i)=>`<label style="display:block;margin-left:10px;"><input type='radio' name='q${q.id}' value='${i}'> ${opt}</label>`).join('')}
+        </div>
+    `).join('');
+    html += `<p style="opacity:0.7;">Pass score: ${quizData.pass_score || 70}%</p>`;
+    document.getElementById('quizArea').innerHTML = html;
+    document.getElementById('submitBtn').style.display='inline-block';
+}
+
+async function submitQuiz(){
+    if (!walletAddr){
+        alert('Connect wallet from header widget.');
+        return;
+    }
+    if (!enrolled){
+        alert('Enroll in the course first.');
+        return;
+    }
+    const answers = {};
+    (quizData?.questions||[]).forEach(q=>{
+        const val = document.querySelector(`input[name='q${q.id}']:checked`);
+        if(val) answers[q.id] = parseInt(val.value, 10);
+    });
+    const res = await fetch('/api/l2e/submit_quiz', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({course_id: courseId, student_thr: walletAddr, answers})
+    });
+    const payload = await res.json();
+    if (!res.ok || payload.status === 'error'){
+        alert(payload.message || 'Error submitting quiz');
+        return;
+    }
+    alert(payload.passed ? 'Quiz passed! L2E awarded.' : 'Quiz submitted. Try again.');
+}
+
+loadCourse();
+</script>
+{% endblock %}

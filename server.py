@@ -558,13 +558,73 @@ def get_all_pools():
     return load_pools()
 
 
+def _base_token_catalog():
+    """Return metadata for the core Thronos tokens with supply details."""
+    ledger = load_json(LEDGER_FILE, {})
+    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
+
+    def supply_of(ledger_map):
+        try:
+            return round(sum(float(v) for v in ledger_map.values()), 6)
+        except Exception:
+            return 0.0
+
+    return [
+        {
+            "symbol": "THR",
+            "name": "Thronos",
+            "decimals": 6,
+            "logo_url": url_for("static", filename="img/thronos-token.png", _external=False),
+            "total_supply": supply_of(ledger),
+            "type": "native",
+        },
+        {
+            "symbol": "WBTC",
+            "name": "Wrapped Bitcoin",
+            "decimals": 8,
+            "logo_url": url_for("static", filename="img/wbtc-logo.png", _external=False),
+            "total_supply": supply_of(wbtc_ledger),
+            "type": "wrapped",
+        },
+        {
+            "symbol": "L2E",
+            "name": "Learn-to-Earn",
+            "decimals": 6,
+            "logo_url": url_for("static", filename="img/l2e-logo.png", _external=False),
+            "total_supply": supply_of(l2e_ledger),
+            "type": "reward",
+        },
+    ]
+
+
 def get_all_tokens():
-    tokens = load_tokens()
-    for t in tokens:
+    """Centralized catalog that returns base + custom tokens."""
+    catalog = _base_token_catalog()
+
+    custom_tokens = load_tokens()
+    for t in custom_tokens:
         logo_path = t.get("logo_path") or t.get("logo")
         if logo_path:
             t["logo_url"] = url_for("media", filename=logo_path, _external=False)
-    return tokens
+        if t.get("symbol"):
+            catalog.append(t)
+
+    experimental = load_custom_tokens()
+    for symbol, meta in experimental.items():
+        token_id = meta.get("id")
+        logo_path = meta.get("logo_path") or meta.get("logo")
+        catalog.append({
+            "symbol": symbol,
+            "name": meta.get("name", symbol),
+            "decimals": meta.get("decimals", 6),
+            "logo_url": url_for("media", filename=logo_path, _external=False) if logo_path else None,
+            "total_supply": meta.get("total_supply") or meta.get("initial_supply"),
+            "type": "experimental",
+            "token_id": token_id,
+        })
+
+    return catalog
 
 
 def get_wallet_balances(wallet: str):
@@ -1086,6 +1146,33 @@ def save_ai_sessions(sessions):
     save_json(AI_SESSIONS_FILE, sessions)
 
 
+def ensure_session_exists(session_id: str, wallet: str | None) -> dict:
+    """Return an existing session or recreate it on disk."""
+    if not session_id:
+        return {}
+
+    sessions = load_ai_sessions()
+    for s in sessions:
+        if s.get("id") == session_id:
+            return s
+
+    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    recovered = {
+        "id": session_id,
+        "wallet": (wallet or "").strip(),
+        "title": "Recovered Session",
+        "created_at": now,
+        "updated_at": now,
+        "archived": False,
+        "model": None,
+        "message_count": 0,
+        "meta": {"recovered": True},
+    }
+    sessions.append(recovered)
+    save_ai_sessions(sessions)
+    return recovered
+
+
 def attach_uploaded_files_to_session(session_id: str, wallet: str, files: list):
     """
     Link uploaded file metadata to a session, so the agent can see them.
@@ -1318,11 +1405,12 @@ def api_ai_generated_file(filename):
     if not os.path.exists(path):
         return jsonify({"ok": False, "error": "file not found"}), 404
 
+    mime, _ = mimetypes.guess_type(safe_name)
     return send_file(
         path,
         as_attachment=True,
         download_name=safe_name,
-        mimetype="text/plain",
+        mimetype=mime or "application/octet-stream",
     )
 
 
@@ -2251,12 +2339,28 @@ def api_architect_generate():
             "url": f"/api/ai/generated/{fname}",
         })
 
+    zip_url = None
+    if resp_files:
+        safe_bp = blueprint.replace("/", "_").replace("..", "_") or "bp"
+        zip_name = f"architect_{safe_bp}_{int(time.time())}.zip"
+        zip_path = os.path.join(AI_FILES_DIR, zip_name)
+        try:
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for item in resp_files:
+                    fp = os.path.join(AI_FILES_DIR, item["filename"])
+                    if os.path.exists(fp):
+                        zf.write(fp, arcname=item["filename"])
+            zip_url = url_for("api_ai_generated_file", filename=zip_name, _external=False)
+        except Exception as e:
+            app.logger.error("Architect zip build failed: %s", e)
+
     return jsonify({
         "status": status,
         "quantum_key": quantum_key,
         "blueprint": blueprint,
         "response": cleaned,
         "files": resp_files,
+        "zip_url": zip_url,
         "session_id": session_id,
     }), 200
 
@@ -2858,6 +2962,9 @@ def api_chat():
     session_id = (data.get("session_id") or "").strip() or None
     model_key = (data.get("model_key") or "").strip() or None
     attachments = data.get("attachments") or data.get("attachment_ids") or []
+
+    if session_id:
+        ensure_session_exists(session_id, wallet)
 
     # Attachments are file_ids previously uploaded via /api/ai/files/upload
     if attachments:
@@ -7399,10 +7506,19 @@ def api_v1_get_tokens():
     List all issued tokens.  Each token entry includes its symbol,
     name, total supply, decimals and owner.
     """
-    tokens = load_tokens()
-    for tok in tokens:
-        if tok.get("logo_path"):
-            tok["logo"] = f"/media/{tok['logo_path']}"
+    wallet = (request.args.get("wallet") or "").strip() or None
+    tokens = get_all_tokens()
+
+    if wallet:
+        balances = get_wallet_balances(wallet)
+        token_map = {t.get("symbol"): t for t in tokens}
+        for t in balances.get("tokens", []):
+            sym = t.get("symbol")
+            if not sym:
+                continue
+            entry = token_map.setdefault(sym, {})
+            entry.update({k: v for k, v in t.items() if k not in entry})
+
     return jsonify(tokens=tokens), 200
 
 

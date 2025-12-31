@@ -1164,6 +1164,16 @@ def ensure_session_messages_file(session_id: str):
         save_json(path, [])
 
 
+def load_session_messages(session_id: str) -> list:
+    """Load messages for a session, sorted by timestamp."""
+    if not session_id:
+        return []
+    path = _session_messages_path(session_id)
+    messages = load_json(path, []) or []
+    messages.sort(key=lambda m: m.get("timestamp", ""))
+    return messages
+
+
 def session_messages_exists(session_id: str) -> bool:
     """Check if a transcript file exists for the given session id."""
     if not session_id:
@@ -8882,11 +8892,9 @@ def api_ai_session_messages(session_id):
 
     transcript_path = _session_messages_path(session_id)
     if not os.path.exists(transcript_path):
-        return jsonify({"ok": False, "error": "Session not found"}), 404
+        ensure_session_messages_file(session_id)
 
-    messages = load_json(transcript_path, []) or []
-    # Sort by timestamp
-    messages.sort(key=lambda m: m.get("timestamp", ""))
+    messages = load_session_messages(session_id)
 
     return jsonify({"ok": True, "session": session, "messages": messages})
 

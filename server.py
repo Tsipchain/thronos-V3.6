@@ -38,7 +38,7 @@ import io
 import numpy as np
 import wave
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any
 from PIL import Image
 
 try:
@@ -54,8 +54,8 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 from apscheduler.schedulers.background import BackgroundScheduler
 from ai_models_config import base_model_config, OPENAI_MODEL_FILTER
-from ai_interaction_ledger import compute_model_stats
-from llm_registry import AI_MODEL_REGISTRY, PROVIDER_METADATA
+from ai_interaction_ledger import compute_model_stats, create_ai_transfer_from_ledger_entry
+from llm_registry import AI_MODEL_REGISTRY
 
 # ── Local modules
 try:
@@ -898,7 +898,15 @@ def record_ai_interaction(
         "user_rating": user_rating if user_rating is not None else (feedback or {}).get("score"),
     }
 
+    preview = (output or "")[:80]
+    if preview:
+        entry["preview"] = preview
+
     append_ai_interaction(entry)
+    try:
+        create_ai_transfer_from_ledger_entry(entry)
+    except Exception:
+        logger.exception("Failed to create AI transfer entry", extra={"provider": provider, "model": model})
     return entry
 
 
@@ -2141,11 +2149,31 @@ def get_transactions_for_viewer():
     out = []
     for t in all_txs:
         preview = ""
+        details_payload = t.get("details")
+        details = details_payload if isinstance(details_payload, dict) else None
         tx_type = t.get("type", "transfer")
 
         if tx_type == "ai_knowledge":
             payload = t.get("ai_payload") or ""
-            preview = payload[:96]
+            payload_obj: dict[str, Any] = {}
+            if isinstance(payload, str):
+                try:
+                    payload_obj = json.loads(payload)
+                except Exception:
+                    payload_obj = {}
+
+            preview = "Legacy AI TX (prompt_tail truncated)"
+            if details is None:
+                details = {
+                    "kind": "ai_knowledge_legacy",
+                    "provider": payload_obj.get("provider"),
+                    "model": payload_obj.get("model"),
+                    "has_prompt_tail": bool(payload_obj.get("prompt_tail")),
+                    "has_response_tail": bool(payload_obj.get("response_tail")),
+                }
+
+        if details and details.get("kind") == "ai_interaction" and not preview:
+            preview = "AI interaction transfer"
 
         tx_from = t.get("from", "Unknown")
         tx_to   = t.get("to",   "Unknown")
@@ -2183,6 +2211,7 @@ def get_transactions_for_viewer():
             "timestamp": t.get("timestamp", ""),
             "type":      tx_type,
             "note":      preview,
+            "details":   details,
             "token_symbol": token_symbol,
         })
 

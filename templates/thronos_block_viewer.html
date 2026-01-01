@@ -456,6 +456,38 @@ function renderBlocks(list){
   el('#tipBadge').style.display = hot?'inline-block':'none';
 }
 
+function formatAiDetails(details){
+  const provider = details?.provider || 'unknown';
+  const model = details?.model || 'unknown';
+  const task = details?.task_type || 'unknown';
+  const pHash = (details?.prompt_hash || '').slice(0,8) || '—';
+  const rHash = (details?.response_hash || '').slice(0,8) || '—';
+  let summary = `AI TX · provider: ${provider} · model: ${model} · task: ${task} · hashes: ${pHash} / ${rHash}`;
+  const preview = (details?.preview || '').slice(0,80);
+  if(preview){
+    summary += `<div class="muted" style="font-size:11px">preview: ${preview}</div>`;
+  }
+  return summary;
+}
+
+function renderTxDetailsCell(t){
+  const d = t?.details;
+  if(d && typeof d === 'object'){
+    if(d.kind === 'ai_interaction'){
+      return formatAiDetails(d);
+    }
+    if(d.kind === 'ai_knowledge_legacy' || d.prompt_tail){
+      return '<span class="muted" style="font-size:11px">Legacy AI TX (prompt_tail truncated)</span>';
+    }
+  }
+
+  if(t?.type === 'ai_knowledge'){
+    return '<span class="muted" style="font-size:11px">Legacy AI TX (prompt_tail truncated)</span>';
+  }
+
+  return t?.note ? `<span class="muted" style="font-size:11px">${t.note}</span>` : '—';
+}
+
 function renderTxs(list){
   const q = el('#q').value.trim().toLowerCase();
   const tb = tbody('#tblTxs');
@@ -497,7 +529,7 @@ function renderTxs(list){
     else if(t.type === 'coinbase') typeBadge = '<span class="badge b-stratum">coinbase</span>';
     else if(t.type === 'service_payment') typeBadge = '<span class="badge" style="color:#0af;background:#0af30;border-color:#0af">service</span>';
 
-    const details = t.note ? `<span class="muted" style="font-size:11px">${t.note}</span>` : '—';
+    const details = renderTxDetailsCell(t);
 
     tr.innerHTML = `
       <td class="mono">

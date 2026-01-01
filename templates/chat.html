@@ -957,7 +957,7 @@
                   </label>
                   <input id="fileInput" type="file" multiple />
                   <select id="modelSelect" class="model-select">
-                    <option value="auto">🔀 Auto (Thronos chooses)</option>
+                    <option value="auto">Auto (Thronos chooses)</option>
                   </select>
                 </div>
                 <button id="sendBtn" class="send-btn">
@@ -1084,8 +1084,6 @@
     let aiSessions = [];
     let pendingFiles = []; // { id, name, size }
     let receivedFiles = []; // for any AI-generated [[FILE:...]] blocks
-    let providerHealth = {};
-
     // --- Utilities ---
     function setUploadStatus(text, mode = "") {
       uploadStatusEl.textContent = text || "";
@@ -1630,46 +1628,55 @@
       }
     }
 
-    async function loadModelHealth() {
-      try {
-        const res = await fetch(API_HEALTH);
-        if (!res.ok) return {};
-        return await res.json();
-      } catch (e) {
-        console.warn("health check failed", e);
-        return {};
-      }
-    }
-
     async function loadModels() {
+      if (!modelSelectEl) return;
+
+      const existingAuto = modelSelectEl.querySelector('option[value="auto"]');
+      modelSelectEl.innerHTML = "";
+      const autoOpt = existingAuto || document.createElement("option");
+      autoOpt.value = "auto";
+      autoOpt.textContent = "Auto (Thronos chooses)";
+      modelSelectEl.appendChild(autoOpt);
+
       try {
-        const [modelsRes, health] = await Promise.all([fetch(API_MODELS), loadModelHealth()]);
-        providerHealth = health || {};
-        if (!modelsRes.ok) return;
+        const res = await fetch(API_MODELS);
+        if (!res.ok) {
+          console.error("Failed to load models", res.status);
+          return;
+        }
+        const data = await res.json();
+        const providers = data.providers || [];
+        let defaultSelected = false;
 
-        const data = await modelsRes.json();
-        const providers = data.providers || {};
-        modelSelectEl.innerHTML = "";
+        providers.forEach((provider) => {
+          const optgroup = document.createElement("optgroup");
+          optgroup.label = provider.label || provider.id;
 
-        const autoOpt = document.createElement("option");
-        autoOpt.value = "auto";
-        autoOpt.textContent = "🔀 Auto (Thronos chooses)";
-        modelSelectEl.appendChild(autoOpt);
-
-        Object.entries(providers).forEach(([provider, info]) => {
-          const enabled = info.enabled && (providerHealth[provider] || "ok") === "ok";
-          (info.models || []).forEach((m) => {
+          (provider.models || []).forEach((model) => {
             const opt = document.createElement("option");
-            opt.value = m.id;
-            opt.dataset.provider = provider;
-            opt.textContent = `${m.label || m.id} (${provider})`;
-            if (!enabled) {
-              opt.disabled = true;
-              opt.textContent += " [offline]";
+            opt.value = model.id;
+            opt.dataset.provider = provider.id;
+
+            let label = model.label || model.id;
+            if (model.tier && model.tier !== "standard") {
+              label += ` · ${model.tier}`;
             }
-            if (m.default && enabled) opt.selected = true;
-            modelSelectEl.appendChild(opt);
+            if (model.stats && model.stats.error_rate !== undefined) {
+              label += ` · err ${(model.stats.error_rate * 100).toFixed(1)}%`;
+            }
+            opt.textContent = label;
+
+            if (model.default && !defaultSelected) {
+              opt.selected = true;
+              defaultSelected = true;
+            }
+
+            optgroup.appendChild(opt);
           });
+
+          if (optgroup.children.length) {
+            modelSelectEl.appendChild(optgroup);
+          }
         });
       } catch (e) {
         console.warn("model load failed", e);
@@ -1723,11 +1730,33 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        const data = await res.json();
 
-        if (data.ok === false) {
-          throw new Error(data.error || "Provider unavailable");
+        let data = null;
+        try {
+          data = await res.json();
+        } catch (e) {
+          // keep null
+        }
+
+        if (!res.ok || (data && (data.ok === false || data.error))) {
+          const errText = (data && (data.error || data.details)) || `HTTP ${res.status}`;
+          appendMessage({
+            role: "assistant",
+            content: `Provider error: ${errText}. Try another model or Auto.`,
+            model: "system",
+          });
+          setSessionStatus("Provider error");
+          return;
+        }
+
+        if (!data) {
+          appendMessage({
+            role: "assistant",
+            content: "Provider error: empty response. Try another model or Auto.",
+            model: "system",
+          });
+          setSessionStatus("Provider error");
+          return;
         }
 
         const aiText = data.message || data.response || "";
@@ -1763,7 +1792,7 @@
         console.error("sendMessage error", e);
         appendMessage({
           role: "assistant",
-          content: "Error: " + e.message,
+          content: "Provider error. Try another model or Auto.",
           model: "system",
         });
         setSessionStatus("Error sending message");

@@ -38,17 +38,29 @@ except Exception:
     anthropic = None
 
 from ai_interaction_ledger import record_ai_interaction
+from llm_registry import find_model, get_default_model
 
 
-def _choose_provider(model: str) -> str:
-    model_l = (model or "").lower()
-    if model_l.startswith("claude") or "claude" in model_l:
-        return "anthropic"
-    if model_l.startswith("gemini") or "bison" in model_l:
-        return "gemini"
-    if model_l.startswith("gpt") or model_l.startswith("o4") or model_l.startswith("o-") or "gpt" in model_l:
-        return "openai"
-    return "openai"
+def _resolve_model(model: Optional[str]) -> Optional[dict]:
+    mode = os.getenv("THRONOS_AI_MODE", "all").lower()
+    if mode in ("router", "auto", "all"):
+        normalized_mode = "all"
+    elif mode == "openai_only":
+        normalized_mode = "openai"
+    else:
+        normalized_mode = mode
+
+    if not model or model == "auto":
+        default_model = get_default_model(None if normalized_mode == "all" else normalized_mode)
+        return default_model.__dict__ if default_model else None
+
+    info = find_model(model)
+    if not info:
+        return None
+
+    if normalized_mode != "all" and info.provider != normalized_mode:
+        return None
+    return info.__dict__
 
 
 def call_openai(model: str, messages: List[Dict[str, str]], system_prompt: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 4096) -> Dict[str, Any]:
@@ -136,13 +148,44 @@ def call_gemini(model: str, messages: List[Dict[str, str]], system_prompt: Optio
     return (getattr(resp, "text", "") or "").strip()
 
 
-def call_llm(model: str, messages: List[Dict[str, str]], system_prompt: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 4096, session_id: Optional[str] = None, wallet: Optional[str] = None, difficulty: Optional[str] = None, block_hash: Optional[str] = None) -> Dict[str, Any]:
-    provider = _choose_provider(model)
-    mode = os.getenv("THRONOS_AI_MODE", "router").lower()
-    if mode == "openai_only":
-        provider = "openai"
-        if not model or _choose_provider(model) != "openai":
-            model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+def call_llm(
+    model: str,
+    messages: List[Dict[str, str]],
+    system_prompt: Optional[str] = None,
+    temperature: float = 0.7,
+    max_tokens: int = 4096,
+    session_id: Optional[str] = None,
+    wallet: Optional[str] = None,
+    difficulty: Optional[str] = None,
+    block_hash: Optional[str] = None,
+) -> Dict[str, Any]:
+    resolved = _resolve_model(model)
+    if not resolved:
+        return {
+            "response": "Unknown or disabled model_id",
+            "status": "model_not_found",
+            "error": "Unknown model_id",
+        }
+
+    provider = resolved.get("provider")
+    resolved_model = resolved.get("id")
+    tier = resolved.get("tier")
+
+    mode = os.getenv("THRONOS_AI_MODE", "all").lower()
+    if mode in ("router", "auto", "all"):
+        normalized_mode = "all"
+    elif mode == "openai_only":
+        normalized_mode = "openai"
+    else:
+        normalized_mode = mode
+    if normalized_mode != "all" and provider != normalized_mode:
+        return {
+            "response": "Provider blocked by THRONOS_AI_MODE",
+            "status": "forbidden",
+            "error": "Provider not allowed",
+        }
+
+    model = resolved_model
 
     started = time.time()
     text = ""
@@ -158,6 +201,7 @@ def call_llm(model: str, messages: List[Dict[str, str]], system_prompt: Optional
         else:
             raise RuntimeError(f"Unsupported provider for model {model}")
     except Exception as exc:
+        logging.exception("LLM provider error", extra={"provider": provider, "model": model})
         error = str(exc)
 
     duration = time.time() - started
@@ -165,22 +209,26 @@ def call_llm(model: str, messages: List[Dict[str, str]], system_prompt: Optional
     record_ai_interaction(
         provider=provider,
         model=model,
+        tier=tier,
         prompt_text=prompt_text,
         output_text=text,
         duration=duration,
+        latency_ms=int(duration * 1000),
         session_id=session_id,
         wallet=wallet,
         difficulty=difficulty,
         block_hash=block_hash,
         error=error,
+        success=error is None,
     )
 
     if error:
         return {
             "response": f"Quantum Core Error ({provider}): {error}",
-            "status": f"{provider}_error",
+            "status": "provider_error",
             "provider": provider,
             "model": model,
+            "error": error,
         }
 
     return {

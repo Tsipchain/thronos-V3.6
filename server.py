@@ -55,10 +55,95 @@ from werkzeug.utils import secure_filename
 from apscheduler.schedulers.background import BackgroundScheduler
 from ai_models_config import base_model_config, OPENAI_MODEL_FILTER
 from ai_interaction_ledger import compute_model_stats, create_ai_transfer_from_ledger_entry
-from llm_registry import AI_MODEL_REGISTRY
+# κοντά στα άλλα AI routes, στο server.py
+from llm_registry import AI_MODEL_REGISTRY, get_default_model_for_mode
+from ai_interaction_ledger import compute_model_stats
+import traceback
 
-# ── Local modules
-try:
+@app.route("/api/ai/models", methods=["GET"])
+@limiter.limit("20/minute")
+def api_ai_models():
+    """
+    Επιστρέφει τα διαθέσιμα LLM models ανά provider + basic stats.
+    Αν κάτι πάει στραβά, γυρίζει fallback λίστα για να ΜΗΝ σκάει το UI.
+    """
+    try:
+        mode_env = os.getenv("THRONOS_AI_MODE", "all").lower()
+        if mode_env in ("router", "auto", "all"):
+            mode = "all"
+        elif mode_env == "openai_only":
+            mode = "openai"
+        else:
+            mode = mode_env
+
+        stats = compute_model_stats() or {}
+        providers: Dict[str, Dict[str, Any]] = {}
+        models: List[Dict[str, Any]] = []
+
+        for provider_name, provider_models in AI_MODEL_REGISTRY.items():
+            provider_stats = stats.get("providers", {}).get(provider_name, {})
+            provider_enabled = any(getattr(m, "enabled", False) for m in provider_models)
+
+            providers[provider_name] = {
+                "id": provider_name,
+                "display_name": provider_stats.get("display_name", provider_name.title()),
+                "enabled": bool(provider_enabled),
+                "total_calls": provider_stats.get("total_calls", 0),
+                "avg_latency_ms": provider_stats.get("avg_latency_ms", 0.0),
+            }
+
+            for m in provider_models:
+                model_stats = stats.get("models", {}).get(m.id, {})
+                models.append(
+                    {
+                        "id": m.id,
+                        "provider": m.provider,
+                        "display_name": m.display_name,
+                        "tier": m.tier,
+                        "default": bool(m.default),
+                        "enabled": bool(m.enabled),
+                        "stats": model_stats,
+                    }
+                )
+
+        return jsonify(
+            {
+                "mode": mode,
+                "providers": providers,
+                "models": models,
+            }
+        ), 200
+
+    except Exception as exc:
+        # ΔΕΝ αφήνουμε να σκάσει – logάρουμε, και δίνουμε fallback
+        print("ERROR in /api/ai/models:", exc, flush=True)
+        traceback.print_exc()
+
+        fallback = {
+            "mode": "fallback",
+            "providers": {
+                "openai": {
+                    "id": "openai",
+                    "display_name": "OpenAI",
+                    "enabled": True,
+                    "total_calls": 0,
+                    "avg_latency_ms": 0.0,
+                }
+            },
+            "models": [
+                {
+                    "id": "gpt-4.1-mini",
+                    "provider": "openai",
+                    "display_name": "GPT-4.1 Mini",
+                    "tier": "standard",
+                    "default": True,
+                    "enabled": True,
+                    "stats": {},
+                }
+            ],
+        }
+        return jsonify(fallback), 200
+
     from phantom_gateway_mainnet import get_btc_txns
     from secure_pledge_embed import create_secure_pdf_contract
     from phantom_decode import decode_payload_from_image

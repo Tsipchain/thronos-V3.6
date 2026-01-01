@@ -10232,153 +10232,77 @@ def api_ai_providers_health():
 @app.route("/api/ai/models", methods=["GET"])
 def api_ai_models():
     """
-    Return the catalog of available LLM models grouped by provider.
-
-    Η απόκριση χρησιμοποιείται από το templates/chat.html και αποθηκεύεται
-    στο window.API_MODELS. Πρέπει να έχει:
-      - mode: current AI mode (auto/openai/anthropic/gemini/custom)
-      - providers: map[provider_id] -> metadata
-      - models: map[model_id] -> model metadata (provider + stats)
+    Επιστρέφει ενοποιημένη λίστα μοντέλων για το Thronos Quantum UI.
+    Χρησιμοποιεί το AI_MODEL_REGISTRY και τα stats από το AI Interaction Ledger.
+    Δεν σκάει αν κάποιος provider δεν έχει API key – απλά τον μαρκάρει ως disabled.
     """
-    # Current AI mode (hint για το UI)
-    mode = os.environ.get("THRONOS_AI_MODE", "auto") or "auto"
-    mode = mode.lower()
+    try:
+        # Τι mode έχουμε ρυθμίσει στο node (π.χ. "all", "openai", "anthropic", "google")
+        raw_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
+        if raw_mode in ("", "router", "auto"):
+            mode = "all"
+        else:
+            mode = raw_mode
 
-    # Αν για κάποιο λόγο δεν έχουμε ai_agent (fallback stub), δώσε ένα static config
-    if not ai_agent:
-        fallback = {
-            "mode": "fallback",
-            "providers": {
-                "openai": {
-                    "id": "openai",
-                    "name": "OpenAI",
-                    "description": "Static fallback configuration when AI agent is disabled.",
-                    "enabled": True,
-                }
-            },
-            "models": {
-                "gpt-4.1-mini": {
-                    "id": "gpt-4.1-mini",
-                    "provider": "openai",
-                    "display_name": "GPT-4.1 mini",
-                    "tier": "standard",
-                    "default": True,
-                    "enabled": True,
-                    "stats": {
-                        "input_price": 0.0,
-                        "output_price": 0.0,
-                        "avg_latency_ms": 0,
-                        "total_calls": 0,
-                        "error_rate": 0.0,
-                    },
-                }
-            },
-        }
-        return jsonify(fallback), 200
+        # Βασικό config – ποιοι providers είναι ενεργοί στο σύστημα
+        base_cfg = base_model_config() or {}
+        enabled_providers = set((base_cfg.get("providers") or {}).keys())
 
-    # Ποιοι providers είναι πραγματικά ενεργοποιημένοι σε αυτό το node
-    provider_enabled = {
-        "openai": getattr(ai_agent, "openai_enabled", False),
-        "anthropic": getattr(ai_agent, "anthropic_enabled", False),
-        "gemini": getattr(ai_agent, "gemini_enabled", False),
-        "custom": getattr(ai_agent, "custom_enabled", False),
-    }
+        # Στατιστικά ανά model id από το AI Interaction Ledger
+        model_stats = compute_model_stats() or {}
 
-    providers: Dict[str, Dict[str, Any]] = {}
-    models: Dict[str, Dict[str, Any]] = {}
+        providers = {}
+        models = []
 
-    # Χτίζουμε providers + models από το κεντρικό registry
-    for provider_name, registry_models in AI_MODEL_REGISTRY.items():
-        # Αν το mode είναι «κλείδωμα» σε έναν provider, φιλτράρουμε
-        if mode in {"openai", "anthropic", "gemini", "custom"} and provider_name != mode:
-            continue
+        # Για κάθε provider και τα μοντέλα του
+        for provider_name, model_list in AI_MODEL_REGISTRY.items():
+            # Αν έχουμε περιορισμένο mode, φιλτράρουμε (π.χ. μόνο "openai")
+            if mode != "all" and provider_name != mode:
+                continue
 
-        enabled = provider_enabled.get(provider_name, False)
+            provider_enabled = provider_name in enabled_providers
 
-        # Κρύψε providers χωρίς API key (εκτός από custom)
-        if provider_name != "custom" and not enabled:
-            continue
-
-        base_meta = PROVIDER_METADATA.get(
-            provider_name,
-            {
-                "id": provider_name,
-                "name": provider_name.capitalize(),
-                "description": provider_name,
-            },
-        )
-        providers[provider_name] = {
-            **base_meta,
-            "enabled": bool(enabled),
-        }
-
-        for m in registry_models:
-            stats = compute_model_stats(provider_name, m.id)
-
-            models[m.id] = {
-                "id": m.id,
-                "provider": provider_name,
-                # llm_registry.ModelInfo έχει display_name / tier / default / enabled κλπ
-                "display_name": getattr(m, "display_name", m.id),
-                "tier": getattr(m, "tier", "standard"),
-                "default": getattr(m, "default", False),
-                "enabled": getattr(m, "enabled", True) and enabled,
-                "family": getattr(m, "family", None),
-                "max_output_tokens": getattr(m, "max_output_tokens", None),
-                "context_window": getattr(m, "context_window", None),
-                "note": getattr(m, "note", ""),
-                "stats": {
-                    # compute_model_stats δίνει αυτά, .get για ασφάλεια
-                    "input_price": stats.get("input_price", 0.0),
-                    "output_price": stats.get("output_price", 0.0),
-                    "avg_latency_ms": stats.get("avg_latency_ms", 0),
-                    "total_calls": stats.get("total_calls", 0),
-                    "error_rate": stats.get("error_rate", 0.0),
-                },
+            # Βασικά metadata provider για το UI
+            providers[provider_name] = {
+                "key": provider_name,
+                "label": provider_name.capitalize(),
+                "enabled": provider_enabled,
             }
 
-    # Αν για κάποιο λόγο κάτι πήγε στραβά και δεν υπάρχει τίποτα, δώσε fallback
-    if not providers or not models:
-        fallback = {
-            "mode": "fallback",
-            "providers": {
-                "openai": {
-                    "id": "openai",
-                    "name": "OpenAI",
-                    "description": "Fallback configuration when registry is empty.",
-                    "enabled": True,
-                }
-            },
-            "models": {
-                "gpt-4.1-mini": {
-                    "id": "gpt-4.1-mini",
-                    "provider": "openai",
-                    "display_name": "GPT-4.1 mini",
-                    "tier": "standard",
-                    "default": True,
-                    "enabled": True,
-                    "stats": {
-                        "input_price": 0.0,
-                        "output_price": 0.0,
-                        "avg_latency_ms": 0,
-                        "total_calls": 0,
-                        "error_rate": 0.0,
-                    },
-                }
-            },
+            for mi in model_list:
+                # mi είναι ModelInfo dataclass από το llm_registry
+                stats = model_stats.get(mi.id, {})
+                models.append(
+                    {
+                        "id": mi.id,
+                        "provider": mi.provider,
+                        "label": mi.label,
+                        "alias": mi.alias,
+                        "tier": mi.tier,
+                        "family": mi.family,
+                        "safety_tuned": mi.safety_tuned,
+                        "supports_vision": mi.supports_vision,
+                        "supports_audio": mi.supports_audio,
+                        "supports_tools": mi.supports_tools,
+                        "enabled": provider_enabled and mi.enabled_by_default,
+                        "stats": {
+                            "total_calls": stats.get("total_calls", 0),
+                            "avg_latency_ms": stats.get("avg_latency_ms", 0.0),
+                        },
+                    }
+                )
+
+        payload = {
+            "mode": mode,
+            "providers": providers,
+            "models": models,
         }
-        return jsonify(fallback), 200
+        return jsonify(payload), 200
 
-    payload = {
-        "mode": mode,
-        "providers": providers,
-        "models": models,
-    }
-    return jsonify(payload), 200
+    except Exception as exc:
+        app.logger.exception("api_ai_models error")
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
-
-
-# AI Feedback endpoint - records user feedback on AI responses
 @app.route("/api/ai/feedback", methods=["POST"])
 def api_ai_feedback():
     """Record user feedback (thumbs up/down) on AI responses"""

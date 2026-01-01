@@ -21,6 +21,11 @@ PROVIDERS_FILE = os.path.join(DATA_DIR, "ai_providers.json")
 SESSIONS_FILE = os.path.join(DATA_DIR, "ai_sessions.json")
 INTERACTIONS_FILE = os.path.join(DATA_DIR, "ai_interactions_v4.jsonl")
 SCORES_FILE = os.path.join(DATA_DIR, "ai_scores.jsonl")
+VIEWER_CHAIN_FILE = os.getenv(
+    "THRONOS_CHAIN_FILE", os.path.join(DATA_DIR, "phantom_tx_chain.json")
+)
+AI_AGENT_WALLET = os.getenv("THR_AI_AGENT_WALLET", "THR_AI_AGENT_WALLET_V1")
+AI_TRANSFER_AMOUNT = float(os.getenv("AI_TRANSFER_AMOUNT", "0.001"))
 
 
 def _hash_text(text: str) -> str:
@@ -55,6 +60,11 @@ def _save_json(path: str, data: Any) -> None:
         pass
 
 
+def _safe_load_chain(path: str) -> List[Dict[str, Any]]:
+    data = _load_json(path, [])
+    return data if isinstance(data, list) else []
+
+
 def _chain_append(data: Dict[str, Any]) -> None:
     entry = {"timestamp": time.time(), "id": str(uuid.uuid4()), **data}
     _append_jsonl(CHAIN_FILE, entry)
@@ -78,6 +88,65 @@ def log_interaction(interaction: Dict[str, Any]) -> None:
 
 def log_score(score: Dict[str, Any]) -> None:
     _append_jsonl(SCORES_FILE, score)
+
+
+def create_ai_transfer_from_ledger_entry(entry: Dict[str, Any]) -> None:
+    """Create a sanitized AI transfer visible in the viewer.
+
+    The transfer is written into the main ``phantom_tx_chain.json`` file so it
+    appears in the Transfers tab without leaking raw prompts or responses.
+    """
+
+    try:
+        from_address = entry.get("wallet") or entry.get("user_wallet") or "AI_SYSTEM"
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+        prompt_hash = entry.get("prompt_hash") or entry.get("input_hash") or ""
+        response_hash = entry.get("output_hash") or entry.get("output_sha") or ""
+        short_hash = (prompt_hash or response_hash or uuid.uuid4().hex)[:8]
+        tx_id = f"AI-{int(time.time())}-{short_hash}"
+
+        details: Dict[str, Any] = {
+            "kind": "ai_interaction",
+            "provider": entry.get("provider", "unknown"),
+            "model": entry.get("model_id") or entry.get("model") or "unknown",
+            "task_type": (entry.get("metadata") or {}).get("task_type")
+            or entry.get("difficulty")
+            or "unknown",
+            "prompt_hash": prompt_hash,
+            "response_hash": response_hash,
+            "session_id": entry.get("session_id"),
+            "wallet": entry.get("wallet") or entry.get("user_wallet"),
+            "success": bool(entry.get("success", True)),
+        }
+
+        preview = entry.get("preview") or entry.get("output_preview")
+        if isinstance(preview, str) and preview:
+            details["preview"] = preview[:80]
+
+        tx = {
+            "tx_id": tx_id,
+            "type": "transfer",
+            "from": from_address,
+            "to": AI_AGENT_WALLET,
+            "asset": "THR",
+            "token_symbol": "THR",
+            "amount": AI_TRANSFER_AMOUNT,
+            "fee": 0.0,
+            "fee_burned": 0.0,
+            "details": details,
+            "timestamp": timestamp,
+        }
+
+        chain = _safe_load_chain(VIEWER_CHAIN_FILE)
+        chain.append(tx)
+        _save_json(VIEWER_CHAIN_FILE, chain)
+    except Exception:
+        # Transfers must not block the main AI interaction logging flow.
+        try:
+            print("[AI-LEDGER] Failed to create AI transfer", flush=True)
+        except Exception:
+            pass
 
 
 def record_ai_interaction(
@@ -121,6 +190,10 @@ def record_ai_interaction(
         "metadata": metadata or {},
     }
 
+    preview = (output_text or "")[:80]
+    if preview:
+        entry["preview"] = preview
+
     _append_jsonl(LEDGER_FILE, entry)
     _chain_append({"type": "ai_interaction", "data": entry})
 
@@ -133,6 +206,12 @@ def record_ai_interaction(
         chain.append({"type": "ai_interaction", "data": entry})
         _save_json(BLOCKCHAIN_FILE, chain)
     except Exception:
+        pass
+
+    try:
+        create_ai_transfer_from_ledger_entry(entry)
+    except Exception:
+        # Avoid breaking the main recording flow due to transfer persistence issues
         pass
 
 

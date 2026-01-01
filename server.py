@@ -4140,6 +4140,11 @@ def save_custom_tokens(tokens):
     """Save custom tokens registry"""
     save_json(CUSTOM_TOKENS_FILE, tokens)
 
+def get_custom_token_entry_by_symbol(symbol: str):
+    symbol = (symbol or "").upper()
+    tokens = load_custom_tokens()
+    return tokens.get(symbol)
+
 def load_custom_token_ledger(token_id):
     """Load ledger for a specific custom token"""
     ledger_file = os.path.join(CUSTOM_TOKENS_LEDGER_DIR, f"{token_id}.json")
@@ -4149,6 +4154,18 @@ def save_custom_token_ledger(token_id, ledger):
     """Save ledger for a specific custom token"""
     ledger_file = os.path.join(CUSTOM_TOKENS_LEDGER_DIR, f"{token_id}.json")
     save_json(ledger_file, ledger)
+
+def load_custom_token_ledger_by_symbol(symbol: str):
+    token_entry = get_custom_token_entry_by_symbol(symbol)
+    if not token_entry:
+        return None
+    return load_custom_token_ledger(token_entry.get("id"))
+
+def save_custom_token_ledger_by_symbol(symbol: str, ledger):
+    token_entry = get_custom_token_entry_by_symbol(symbol)
+    if not token_entry:
+        return
+    save_custom_token_ledger(token_entry.get("id"), ledger)
 
 @app.route("/api/tokens/create", methods=["POST"])
 def api_create_token():
@@ -8255,17 +8272,36 @@ def api_v1_add_liquidity():
     # Check balances
     thr_ledger = load_json(LEDGER_FILE, {})
     wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
     token_balances = load_token_balances()
 
-    def check_balance(sym, amt):
+    def available_balance(sym):
         if sym == "THR":
-            return float(thr_ledger.get(provider, 0.0)) >= amt
-        elif sym == "WBTC":
-            return float(wbtc_ledger.get(provider, 0.0)) >= amt
-        else:
-            return float(token_balances.get(sym, {}).get(provider, 0.0)) >= amt
+            return float(thr_ledger.get(provider, 0.0))
+        if sym == "WBTC":
+            return float(wbtc_ledger.get(provider, 0.0))
+        if sym == "L2E":
+            return float(l2e_ledger.get(provider, 0.0))
 
-    if not check_balance(token_a, amt_a) or not check_balance(token_b, amt_b):
+        custom_ledger = load_custom_token_ledger_by_symbol(sym) or {}
+        ledger_balance = float(custom_ledger.get(provider, 0.0))
+        token_balance = float(token_balances.get(sym, {}).get(provider, 0.0))
+        return ledger_balance + token_balance
+
+    available_a = available_balance(token_a)
+    available_b = available_balance(token_b)
+
+    if available_a < amt_a or available_b < amt_b:
+        failing_token = token_a if available_a < amt_a else token_b
+        required_amt = amt_a if available_a < amt_a else amt_b
+        available_amt = available_a if available_a < amt_a else available_b
+        logger.warning(
+            "[add_liquidity][insufficient] provider=%s token=%s required=%s available=%s",
+            provider,
+            failing_token,
+            required_amt,
+            available_amt,
+        )
         return jsonify(status="error", message="Insufficient balance"), 400
 
     # Deduct balances
@@ -8274,15 +8310,26 @@ def api_v1_add_liquidity():
             thr_ledger[provider] = round(float(thr_ledger.get(provider, 0.0)) - amt, 6)
         elif sym == "WBTC":
             wbtc_ledger[provider] = round(float(wbtc_ledger.get(provider, 0.0)) - amt, 6)
+        elif sym == "L2E":
+            l2e_ledger[provider] = round(float(l2e_ledger.get(provider, 0.0)) - amt, 6)
         else:
-            token_balances.setdefault(sym, {})
-            token_balances[sym][provider] = round(float(token_balances[sym].get(provider, 0.0)) - amt, 6)
+            custom_ledger = load_custom_token_ledger_by_symbol(sym) or {}
+            ledger_balance = float(custom_ledger.get(provider, 0.0))
+            deduct_from_ledger = min(ledger_balance, amt)
+            remaining = amt - deduct_from_ledger
+            custom_ledger[provider] = round(ledger_balance - deduct_from_ledger, 6)
+            save_custom_token_ledger_by_symbol(sym, custom_ledger)
+
+            if remaining > 0:
+                token_balances.setdefault(sym, {})
+                token_balances[sym][provider] = round(float(token_balances[sym].get(provider, 0.0)) - remaining, 6)
 
     deduct(token_a, amt_a)
     deduct(token_b, amt_b)
 
     save_json(LEDGER_FILE, thr_ledger)
     save_json(WBTC_LEDGER_FILE, wbtc_ledger)
+    save_json(L2E_LEDGER_FILE, l2e_ledger)
     save_token_balances(token_balances)
 
     # Mint shares proportional to liquidity added
@@ -9850,10 +9897,10 @@ def api_v1_nfts_mint():
             if ext in ("png", "jpg", "jpeg", "gif", "webp"):
                 nft_id = f"NFT{int(time.time() * 1000)}"
                 filename = f"{nft_id}.{ext}"
-                upload_dir = os.path.join(app.static_folder, "nft_images")
+                upload_dir = NFT_IMAGES_DIR
                 os.makedirs(upload_dir, exist_ok=True)
                 file.save(os.path.join(upload_dir, filename))
-                image_url = f"/static/nft_images/{filename}"
+                image_url = f"/media/nft_images/{filename}"
 
     # Create NFT
     nft = {

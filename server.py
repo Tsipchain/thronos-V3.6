@@ -56,6 +56,53 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from ai_models_config import base_model_config
 from ai_interaction_ledger import (
     record_ai_interaction,
+    get_ai_stats,
+    list_interactions,
+    interaction_to_block,
+    log_ai_error,
+    create_ai_transfer_from_ledger_entry,
+    compute_model_stats,
+)
+from llm_registry import AI_MODEL_REGISTRY, get_default_model_for_mode
+import traceback
+
+# BTC gateway / pledge / stego, quorum crypto & AI agent service
+try:
+    from phantom_gateway_mainnet import get_btc_txns
+    from secure_pledge_embed import create_secure_pdf_contract
+    from phantom_decode import decode_payload_from_image
+    from ai_agent_service import ThronosAI, call_llm, _resolve_model
+    # Quorum modules (placeholders until real crypto wiring)
+    from quorum_crypto import aggregate as qc_aggregate, verify as qc_verify
+except ImportError as e:
+    print(f"CRITICAL IMPORT ERROR: {e}")
+    # Fallback mocks to prevent 500 on start if files missing
+    get_btc_txns = lambda *args, **kwargs: []
+    create_secure_pdf_contract = lambda *args, **kwargs: "error.pdf"
+    decode_payload_from_image = lambda *args, **kwargs: None
+
+    class ThronosAI:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def generate_response(self, *args, **kwargs):
+            return {"response": "AI Service Unavailable", "status": "error"}
+
+    def call_llm(*args, **kwargs):
+        return {"response": "AI Service Unavailable", "status": "error"}
+
+    def _resolve_model(*args, **kwargs):
+        return None
+
+    def qc_aggregate(*args, **kwargs):
+        return None
+
+    def qc_verify(*args, **kwargs):
+        return False
+
+from ai_models_config import base_model_config
+from ai_interaction_ledger import (
+    record_ai_interaction,
     compute_model_stats,
     list_interactions,
     interaction_to_block,

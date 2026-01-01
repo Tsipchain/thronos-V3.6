@@ -100,29 +100,7 @@ except ImportError as e:
     def qc_verify(*args, **kwargs):
         return False
 
-from ai_models_config import base_model_config
-from ai_interaction_ledger import (
-    record_ai_interaction,
-    compute_model_stats,
-    list_interactions,
-    interaction_to_block,
-    log_ai_error,
-)
-from llm_registry import AI_MODEL_REGISTRY, compute_model_stats
-from ai_agent_service import ThronosAI, call_llm, _resolve_model
 
-from ai_interaction_ledger import compute_model_stats, create_ai_transfer_from_ledger_entry
-# κοντά στα άλλα AI routes, στο server.py
-from llm_registry import AI_MODEL_REGISTRY, get_default_model_for_mode
-from ai_interaction_ledger import compute_model_stats
-import traceback
-
-
-
-    from phantom_gateway_mainnet import get_btc_txns
-    from secure_pledge_embed import create_secure_pdf_contract
-    from phantom_decode import decode_payload_from_image
-    from ai_agent_service import ThronosAI, call_llm, _resolve_model
     # ── Quorum modules (placeholders μέχρι να μπει real crypto)
     from quorum_crypto import aggregate as qc_aggregate, verify as qc_verify
 except ImportError as e:

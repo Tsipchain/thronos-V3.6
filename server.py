@@ -38,6 +38,7 @@ import io
 import numpy as np
 import wave
 from datetime import datetime
+from typing import Any, Dict, List
 from PIL import Image
 
 try:
@@ -54,14 +55,14 @@ from werkzeug.utils import secure_filename
 from apscheduler.schedulers.background import BackgroundScheduler
 from ai_models_config import base_model_config, OPENAI_MODEL_FILTER
 from ai_interaction_ledger import compute_model_stats
-from llm_registry import AI_MODEL_REGISTRY
+from llm_registry import AI_MODEL_REGISTRY, PROVIDER_METADATA
 
 # ── Local modules
 try:
     from phantom_gateway_mainnet import get_btc_txns
     from secure_pledge_embed import create_secure_pdf_contract
     from phantom_decode import decode_payload_from_image
-    from ai_agent_service import ThronosAI, call_llm
+    from ai_agent_service import ThronosAI, call_llm, _resolve_model
     # ── Quorum modules (placeholders μέχρι να μπει real crypto)
     from quorum_crypto import aggregate as qc_aggregate, verify as qc_verify
 except ImportError as e:
@@ -75,6 +76,8 @@ except ImportError as e:
         def generate_quantum_key(self): return "mock_key"
     def call_llm(*args, **kwargs):
         return {"response": "AI Service Unavailable", "status": "error"}
+    def _resolve_model(*args, **kwargs):
+        return None
     qc_aggregate = lambda *args: None
     qc_verify = lambda *args: False
 
@@ -10057,9 +10060,13 @@ def api_ai_provider_chat():
     max_tokens = int(data.get("max_tokens") or 1024)
     temperature = float(data.get("temperature") or 0.6)
 
+    resolved_model = _resolve_model(model)
+    if not resolved_model:
+        return jsonify({"error": "Unknown or disabled model id"}), 400
+
     try:
         result = call_llm(
-            model,
+            resolved_model.id,
             messages,
             system_prompt=(data.get("system_prompt") or None),
             temperature=temperature,
@@ -10192,36 +10199,33 @@ def api_ai_models():
             mode = mode_env
         stats = compute_model_stats()
 
-        providers = []
-        for provider_name, models in AI_MODEL_REGISTRY.items():
+        providers: Dict[str, Dict[str, str]] = {}
+        models: List[Dict[str, Any]] = []
+
+        for provider_name, provider_models in AI_MODEL_REGISTRY.items():
             if mode != "all" and provider_name != mode:
                 continue
 
-            items = []
-            for m in models:
-                if not m.enabled:
-                    continue
+            providers[provider_name] = PROVIDER_METADATA.get(
+                provider_name,
+                {"id": provider_name, "name": provider_name.capitalize(), "description": provider_name},
+            )
+
+            for m in provider_models:
                 model_stats = stats.get(m.id, {}) if isinstance(stats, dict) else {}
-                items.append(
+                models.append(
                     {
                         "id": m.id,
-                        "label": m.label,
+                        "provider": m.provider,
+                        "display_name": m.display_name,
                         "tier": m.tier,
                         "default": m.default,
+                        "enabled": bool(m.enabled),
                         "stats": model_stats,
                     }
                 )
 
-            if items:
-                providers.append(
-                    {
-                        "id": provider_name,
-                        "label": provider_name.capitalize(),
-                        "models": items,
-                    }
-                )
-
-        return jsonify({"mode": mode, "providers": providers})
+        return jsonify({"mode": mode, "providers": providers, "models": models})
     except Exception as exc:
         app.logger.exception("/api/ai/models error", extra={"error": str(exc)})
         return jsonify({"error": str(exc)}), 500

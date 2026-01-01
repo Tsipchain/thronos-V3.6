@@ -40,6 +40,11 @@ except Exception:
 from ai_interaction_ledger import record_ai_interaction
 from llm_registry import find_model, get_default_model
 
+try:
+    from thronos_ai_scoring import ThronosAIScorer
+except Exception:  # pragma: no cover - optional dependency
+    ThronosAIScorer = None  # type: ignore
+
 
 def _resolve_model(model: Optional[str]) -> Optional[dict]:
     mode = os.getenv("THRONOS_AI_MODE", "all").lower()
@@ -187,6 +192,22 @@ def call_llm(
 
     model = resolved_model
 
+    prompt_text = "\n\n".join([m.get("content", "") for m in messages])
+    routing_meta: Dict[str, Any] = {}
+    if ThronosAIScorer is not None:
+        try:
+            router = ThronosAIScorer()
+            decision = router.route_provider(prompt_text)
+            routing_meta = {
+                "provider": decision.provider,
+                "confidence": decision.confidence,
+                "label": decision.label,
+            }
+            if decision.provider:
+                provider = decision.provider
+        except Exception:
+            routing_meta = {"provider": provider, "label": "router_error"}
+
     started = time.time()
     text = ""
     error = None
@@ -205,7 +226,6 @@ def call_llm(
         error = str(exc)
 
     duration = time.time() - started
-    prompt_text = "\n\n".join([m.get("content", "") for m in messages])
     record_ai_interaction(
         provider=provider,
         model=model,

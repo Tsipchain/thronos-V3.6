@@ -904,8 +904,11 @@
             <button class="btn-ghost" id="newSessionBtn">
               ◦ New
             </button>
-            <button class="btn-ghost btn-ghost-danger" id="renameSessionBtn">
+            <button class="btn-ghost" id="renameSessionBtn">
               ✎ Rename
+            </button>
+            <button class="btn-ghost btn-ghost-danger" id="deleteSelectedBtn">
+              🗑 Delete selected
             </button>
           </div>
         </div>
@@ -1084,6 +1087,7 @@
     // --- State ---
     let currentSessionId = localStorage.getItem(ACTIVE_SESSION_KEY) || null;
     let aiSessions = [];
+    let selectedSessionIds = new Set();
     let pendingFiles = []; // { id, name, size }
     let receivedFiles = []; // for any AI-generated [[FILE:...]] blocks
     // --- Utilities ---
@@ -1202,6 +1206,20 @@
         const nameRow = document.createElement("div");
         nameRow.className = "session-name-row";
 
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.className = "session-select";
+        checkbox.checked = selectedSessionIds.has(s.id);
+        checkbox.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (checkbox.checked) {
+            selectedSessionIds.add(s.id);
+          } else {
+            selectedSessionIds.delete(s.id);
+          }
+          updateDeleteSelectedButtonState();
+        });
+
         const nameSpan = document.createElement("div");
         nameSpan.className = "session-name";
         nameSpan.textContent = s.title || "Untitled session";
@@ -1247,6 +1265,7 @@
           s.created_at || ""
         }`;
 
+        nameRow.appendChild(checkbox);
         nameRow.appendChild(nameSpan);
         nameRow.appendChild(deleteBtn);
 
@@ -1276,6 +1295,7 @@
 
         sessionsListEl.appendChild(li);
       });
+      updateDeleteSelectedButtonState();
     }
 
     function renderPendingFiles() {
@@ -1637,6 +1657,50 @@
       }
     }
 
+    function updateDeleteSelectedButtonState() {
+      const btn = document.getElementById("deleteSelectedBtn");
+      if (!btn) return;
+      const count = selectedSessionIds.size;
+      btn.disabled = count === 0;
+      btn.textContent =
+        count > 0
+          ? `🗑 Delete ${count} selected`
+          : "🗑 Delete selected";
+    }
+
+    async function deleteSelectedSessions() {
+      if (selectedSessionIds.size === 0) return;
+
+      const count = selectedSessionIds.size;
+      if (
+        !confirm(
+          `Delete ${count} selected session${count > 1 ? "s" : ""}? This cannot be undone.`
+        )
+      ) {
+        return;
+      }
+
+      const ids = Array.from(selectedSessionIds);
+      for (const id of ids) {
+        try {
+          const res = await fetch(`${API_SESSIONS}/${id}`, { method: "DELETE" });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          aiSessions = aiSessions.filter((s) => s.id !== id);
+          if (currentSessionId === id) {
+            currentSessionId = null;
+            messagesEl.innerHTML = "";
+            sessionTitleEl.textContent = "Thronos Quantum Chat";
+          }
+        } catch (err) {
+          console.error("Failed to delete session", id, err);
+        }
+      }
+
+      selectedSessionIds.clear();
+      renderSessions();
+      updateDeleteSelectedButtonState();
+    }
+
     async function uploadFiles(files) {
       if (!files || !files.length) return;
       const form = new FormData();
@@ -1904,6 +1968,9 @@
       document
         .getElementById("renameSessionBtn")
         .addEventListener("click", renameSession);
+      document
+        .getElementById("deleteSelectedBtn")
+        .addEventListener("click", deleteSelectedSessions);
 
       fileInputEl.addEventListener("change", (e) => {
         const files = Array.from(e.target.files || []);

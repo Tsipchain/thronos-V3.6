@@ -39,6 +39,11 @@ except Exception:
 
 from ai_interaction_ledger import record_ai_interaction
 
+try:
+    from thronos_ai_scoring import ThronosAIScorer
+except Exception:  # pragma: no cover - optional dependency
+    ThronosAIScorer = None  # type: ignore
+
 
 def _choose_provider(model: str) -> str:
     model_l = (model or "").lower()
@@ -144,6 +149,22 @@ def call_llm(model: str, messages: List[Dict[str, str]], system_prompt: Optional
         if not model or _choose_provider(model) != "openai":
             model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
+    prompt_text = "\n\n".join([m.get("content", "") for m in messages])
+    routing_meta: Dict[str, Any] = {}
+    if ThronosAIScorer is not None:
+        try:
+            router = ThronosAIScorer()
+            decision = router.route_provider(prompt_text)
+            routing_meta = {
+                "provider": decision.provider,
+                "confidence": decision.confidence,
+                "label": decision.label,
+            }
+            if decision.provider:
+                provider = decision.provider
+        except Exception:
+            routing_meta = {"provider": provider, "label": "router_error"}
+
     started = time.time()
     text = ""
     error = None
@@ -161,7 +182,6 @@ def call_llm(model: str, messages: List[Dict[str, str]], system_prompt: Optional
         error = str(exc)
 
     duration = time.time() - started
-    prompt_text = "\n\n".join([m.get("content", "") for m in messages])
     record_ai_interaction(
         provider=provider,
         model=model,
@@ -173,6 +193,7 @@ def call_llm(model: str, messages: List[Dict[str, str]], system_prompt: Optional
         difficulty=difficulty,
         block_hash=block_hash,
         error=error,
+        metadata={"routing": routing_meta},
     )
 
     if error:

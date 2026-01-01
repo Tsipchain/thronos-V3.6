@@ -53,7 +53,17 @@ from flask import Flask, request, jsonify, render_template, send_from_directory,
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 from apscheduler.schedulers.background import BackgroundScheduler
-from ai_models_config import base_model_config, OPENAI_MODEL_FILTER
+from ai_models_config import base_model_config
+from ai_interaction_ledger import (
+    record_ai_interaction,
+    get_ai_stats,
+    list_interactions,
+    interaction_to_block,
+    log_ai_error,
+)
+from llm_registry import AI_MODEL_REGISTRY, compute_model_stats
+from ai_agent_service import ThronosAI, call_llm, _resolve_model
+
 from ai_interaction_ledger import compute_model_stats, create_ai_transfer_from_ledger_entry
 # κοντά στα άλλα AI routes, στο server.py
 from llm_registry import AI_MODEL_REGISTRY, get_default_model_for_mode
@@ -10220,114 +10230,152 @@ def api_ai_providers_health():
 
 
 @app.route("/api/ai/models", methods=["GET"])
-@limiter.limit("20/minute")
 def api_ai_models():
     """
-    Επιστρέφει τα διαθέσιμα LLM models ανά provider + basic stats.
-    Αν κάτι πάει στραβά, γυρίζει fallback λίστα για να ΜΗΝ σκάει το UI.
+    Return the catalog of available LLM models grouped by provider.
+
+    Η απόκριση χρησιμοποιείται από το templates/chat.html και αποθηκεύεται
+    στο window.API_MODELS. Πρέπει να έχει:
+      - mode: current AI mode (auto/openai/anthropic/gemini/custom)
+      - providers: map[provider_id] -> metadata
+      - models: map[model_id] -> model metadata (provider + stats)
     """
-    try:
-        mode_env = os.getenv("THRONOS_AI_MODE", "all").lower()
-        if mode_env in ("router", "auto", "all"):
-            mode = "all"
-        elif mode_env == "openai_only":
-            mode = "openai"
-        else:
-            mode = mode_env
+    # Current AI mode (hint για το UI)
+    mode = os.environ.get("THRONOS_AI_MODE", "auto") or "auto"
+    mode = mode.lower()
 
-        stats = compute_model_stats() or {}
-        providers: Dict[str, Dict[str, Any]] = {}
-        models: List[Dict[str, Any]] = []
-
-        for provider_name, provider_models in AI_MODEL_REGISTRY.items():
-            provider_stats = stats.get("providers", {}).get(provider_name, {})
-            provider_enabled = any(getattr(m, "enabled", False) for m in provider_models)
-
-            providers[provider_name] = {
-                "id": provider_name,
-                "display_name": provider_stats.get("display_name", provider_name.title()),
-                "enabled": bool(provider_enabled),
-                "total_calls": provider_stats.get("total_calls", 0),
-                "avg_latency_ms": provider_stats.get("avg_latency_ms", 0.0),
-            }
-
-            for m in provider_models:
-                model_stats = stats.get("models", {}).get(m.id, {})
-                models.append(
-                    {
-                        "id": m.id,
-                        "provider": m.provider,
-                        "display_name": m.display_name,
-                        "tier": m.tier,
-                        "default": bool(m.default),
-                        "enabled": bool(m.enabled),
-                        "stats": model_stats,
-                    }
-                )
-
-        return jsonify(
-            {
-                "mode": mode,
-                "providers": providers,
-                "models": models,
-            }
-        ), 200
-
-    except Exception as exc:
-        # ΔΕΝ αφήνουμε να σκάσει – logάρουμε, και δίνουμε fallback
-        print("ERROR in /api/ai/models:", exc, flush=True)
-        traceback.print_exc()
-
+    # Αν για κάποιο λόγο δεν έχουμε ai_agent (fallback stub), δώσε ένα static config
+    if not ai_agent:
         fallback = {
             "mode": "fallback",
             "providers": {
                 "openai": {
                     "id": "openai",
-                    "display_name": "OpenAI",
+                    "name": "OpenAI",
+                    "description": "Static fallback configuration when AI agent is disabled.",
                     "enabled": True,
-                    "total_calls": 0,
-                    "avg_latency_ms": 0.0,
                 }
             },
-            "models": [
-                {
+            "models": {
+                "gpt-4.1-mini": {
                     "id": "gpt-4.1-mini",
                     "provider": "openai",
-                    "display_name": "GPT-4.1 Mini",
+                    "display_name": "GPT-4.1 mini",
                     "tier": "standard",
                     "default": True,
                     "enabled": True,
-                    "stats": {},
+                    "stats": {
+                        "input_price": 0.0,
+                        "output_price": 0.0,
+                        "avg_latency_ms": 0,
+                        "total_calls": 0,
+                        "error_rate": 0.0,
+                    },
                 }
-            ],
+            },
         }
         return jsonify(fallback), 200
-        })
 
-    # Gemini
-    gemini_note = "" if ai_agent.gemini_enabled else "Missing GEMINI_API_KEY or library"
-    add_provider("gemini", ai_agent.gemini_enabled, ai_agent.gemini_model_name, gemini_note)
+    # Ποιοι providers είναι πραγματικά ενεργοποιημένοι σε αυτό το node
+    provider_enabled = {
+        "openai": getattr(ai_agent, "openai_enabled", False),
+        "anthropic": getattr(ai_agent, "anthropic_enabled", False),
+        "gemini": getattr(ai_agent, "gemini_enabled", False),
+        "custom": getattr(ai_agent, "custom_enabled", False),
+    }
 
-    # OpenAI
-    openai_note = ""
-    if not ai_agent.openai_api_key:
-        openai_note = "Missing OPENAI_API_KEY"
-    elif not ai_agent.openai_client:
-        openai_note = "SDK unavailable; using HTTPS fallback"
-    add_provider("openai", ai_agent.openai_enabled, ai_agent.openai_model_name, openai_note)
+    providers: Dict[str, Dict[str, Any]] = {}
+    models: Dict[str, Dict[str, Any]] = {}
 
-    # Anthropic / Claude
-    claude_note = "" if ai_agent.anthropic_enabled else "Missing ANTHROPIC_API_KEY"
-    add_provider("anthropic", ai_agent.anthropic_enabled, ai_agent.anthropic_model_name, claude_note)
+    # Χτίζουμε providers + models από το κεντρικό registry
+    for provider_name, registry_models in AI_MODEL_REGISTRY.items():
+        # Αν το mode είναι «κλείδωμα» σε έναν provider, φιλτράρουμε
+        if mode in {"openai", "anthropic", "gemini", "custom"} and provider_name != mode:
+            continue
 
-    # Custom / Thrai
-    custom_note = "" if ai_agent.custom_enabled else "Missing CUSTOM_MODEL_URL"
-    add_provider("custom", ai_agent.custom_enabled, ai_agent.custom_model_name, custom_note)
+        enabled = provider_enabled.get(provider_name, False)
 
-    return jsonify({
-        "mode": ai_agent.mode,
+        # Κρύψε providers χωρίς API key (εκτός από custom)
+        if provider_name != "custom" and not enabled:
+            continue
+
+        base_meta = PROVIDER_METADATA.get(
+            provider_name,
+            {
+                "id": provider_name,
+                "name": provider_name.capitalize(),
+                "description": provider_name,
+            },
+        )
+        providers[provider_name] = {
+            **base_meta,
+            "enabled": bool(enabled),
+        }
+
+        for m in registry_models:
+            stats = compute_model_stats(provider_name, m.id)
+
+            models[m.id] = {
+                "id": m.id,
+                "provider": provider_name,
+                # llm_registry.ModelInfo έχει display_name / tier / default / enabled κλπ
+                "display_name": getattr(m, "display_name", m.id),
+                "tier": getattr(m, "tier", "standard"),
+                "default": getattr(m, "default", False),
+                "enabled": getattr(m, "enabled", True) and enabled,
+                "family": getattr(m, "family", None),
+                "max_output_tokens": getattr(m, "max_output_tokens", None),
+                "context_window": getattr(m, "context_window", None),
+                "note": getattr(m, "note", ""),
+                "stats": {
+                    # compute_model_stats δίνει αυτά, .get για ασφάλεια
+                    "input_price": stats.get("input_price", 0.0),
+                    "output_price": stats.get("output_price", 0.0),
+                    "avg_latency_ms": stats.get("avg_latency_ms", 0),
+                    "total_calls": stats.get("total_calls", 0),
+                    "error_rate": stats.get("error_rate", 0.0),
+                },
+            }
+
+    # Αν για κάποιο λόγο κάτι πήγε στραβά και δεν υπάρχει τίποτα, δώσε fallback
+    if not providers or not models:
+        fallback = {
+            "mode": "fallback",
+            "providers": {
+                "openai": {
+                    "id": "openai",
+                    "name": "OpenAI",
+                    "description": "Fallback configuration when registry is empty.",
+                    "enabled": True,
+                }
+            },
+            "models": {
+                "gpt-4.1-mini": {
+                    "id": "gpt-4.1-mini",
+                    "provider": "openai",
+                    "display_name": "GPT-4.1 mini",
+                    "tier": "standard",
+                    "default": True,
+                    "enabled": True,
+                    "stats": {
+                        "input_price": 0.0,
+                        "output_price": 0.0,
+                        "avg_latency_ms": 0,
+                        "total_calls": 0,
+                        "error_rate": 0.0,
+                    },
+                }
+            },
+        }
+        return jsonify(fallback), 200
+
+    payload = {
+        "mode": mode,
         "providers": providers,
-    }), 200
+        "models": models,
+    }
+    return jsonify(payload), 200
+
 
 
 # AI Feedback endpoint - records user feedback on AI responses

@@ -60,6 +60,48 @@ from ai_interaction_ledger import (
     list_interactions,
     interaction_to_block,
     log_ai_error,
+    create_ai_transfer_from_ledger_entry,
+)
+from llm_registry import AI_MODEL_REGISTRY, get_default_model_for_mode
+from ai_agent_service import ThronosAI, call_llm, _resolve_model
+import traceback
+
+# Optional Phantom / quorum imports – wrapped in try so app still boots if missing
+try:
+    from phantom_gateway_mainnet import get_btc_txns
+    from secure_pledge_embed import create_secure_pdf_contract
+    from phantom_decode import decode_payload_from_image
+    from quorum_crypto import aggregate as qc_aggregate, verify as qc_verify
+except ImportError as e:
+    print(f"CRITICAL IMPORT ERROR: {e}")
+
+    # Fallback mocks to prevent 500 on start if files are missing
+    get_btc_txns = lambda addr, txid: []
+    create_secure_pdf_contract = lambda *args, **kwargs: "error.pdf"
+    decode_payload_from_image = lambda *args, **kwargs: None
+
+    class ThronosAI:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def generate_response(self, *args, **kwargs):
+            return {"response": "AI Service Unavailable", "status": "error"}
+
+    def call_llm(*args, **kwargs):
+        return {"response": "AI Service Unavailable", "status": "error"}
+
+    def _resolve_model(*args, **kwargs):
+        return None
+
+    qc_aggregate = lambda *args, **kwargs: None
+    qc_verify = lambda *args, **kwargs: False
+
+from ai_interaction_ledger import (
+    record_ai_interaction,
+    compute_model_stats,
+    list_interactions,
+    interaction_to_block,
+    log_ai_error,
 )
 from llm_registry import AI_MODEL_REGISTRY, compute_model_stats
 from ai_agent_service import ThronosAI, call_llm, _resolve_model

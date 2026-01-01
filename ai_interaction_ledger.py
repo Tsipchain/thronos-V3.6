@@ -306,3 +306,69 @@ def load_interactions() -> List[Dict[str, Any]]:
         return []
 
     return interactions
+
+
+
+def list_interactions(limit: int = 200) -> List[Dict[str, Any]]:
+    """Return recent AI interactions from the ledger, newest first.
+
+    This is a thin convenience wrapper used by the Flask API; the core
+    logic remains in ``load_interactions`` above.
+    """
+    interactions = load_interactions()
+    interactions.sort(
+        key=lambda e: e.get("timestamp") or e.get("created_at", ""),
+        reverse=True,
+    )
+    if limit and limit > 0:
+        return interactions[:limit]
+    return interactions
+
+
+def get_ai_stats() -> Dict[str, Any]:
+    """Public helper used by the Flask API to get aggregated stats.
+
+    Under the hood we reuse ``compute_model_stats`` which reads the
+    persisted model stats JSON produced by the background aggregator.
+    """
+    return compute_model_stats()
+
+
+def interaction_to_block(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """Transform a ledger entry into a minimal block payload for the chain.
+
+    Kept intentionally small so that it can be safely embedded as a
+    Thronos block without leaking full prompt / response contents.
+    """
+    return {
+        "type": "ai_interaction",
+        "timestamp": entry.get("timestamp"),
+        "session_id": entry.get("session_id"),
+        "provider": entry.get("provider"),
+        "model": entry.get("model"),
+        "wallet": entry.get("wallet"),
+        "success": entry.get("success"),
+        "hash": entry.get("hash"),
+    }
+
+
+def log_ai_error(
+    provider: str,
+    model: str,
+    message: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Record an error-only entry in the AI ledger.
+
+    This keeps error information in the same stream as successful
+    calls, so the aggregator can compute error rates per model.
+    """
+    entry: Dict[str, Any] = {
+        "timestamp": _utc_now(),
+        "provider": provider,
+        "model": model,
+        "error": message,
+        "success": False,
+        "metadata": metadata or {},
+    }
+    _append_jsonl(LEDGER_FILE, entry)

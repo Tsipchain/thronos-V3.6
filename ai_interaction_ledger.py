@@ -20,11 +20,9 @@ import hashlib
 import json
 import os
 import time
-import uuid
-from typing import Any, Dict, Optional
+import hashlib
+from typing import Optional, Dict, Any, Dict as TypingDict
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data"))
 
 LEDGER_FILE = os.path.join(DATA_DIR, "ai_interactions.log")
 BLOCKCHAIN_FILE = os.path.join(DATA_DIR, "thronos_blockchain.json")
@@ -179,6 +177,9 @@ def record_ai_interaction(
     block_hash: Optional[str] = None,
     error: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    tier: Optional[str] = None,
+    latency_ms: Optional[int] = None,
+    success: Optional[bool] = None,
 ) -> None:
     """Backward compatible logger used by legacy callers.
 
@@ -190,14 +191,18 @@ def record_ai_interaction(
         "timestamp": time.time(),
         "provider": provider,
         "model": model,
+        "model_id": model,
+        "tier": tier,
         "prompt_hash": _hash_text(prompt_text),
         "output_hash": _hash_text(output_text),
         "duration": duration,
+        "latency_ms": latency_ms if latency_ms is not None else int(duration * 1000),
         "session_id": session_id,
         "wallet": wallet,
         "difficulty": difficulty,
         "block_hash": block_hash,
         "error": error,
+        "success": success if success is not None else not bool(error),
         "metadata": metadata or {},
     }
 
@@ -236,3 +241,75 @@ def record_ai_interaction(
             json.dump(chain, f, indent=2, ensure_ascii=False)
     except Exception:
         pass
+
+
+def compute_model_stats() -> TypingDict[str, dict]:
+    stats: TypingDict[str, dict] = {}
+    if not os.path.exists(LEDGER_FILE):
+        return stats
+
+    try:
+        with open(LEDGER_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    entry = json.loads(line.strip())
+                except Exception:
+                    continue
+
+                model_id = entry.get("model_id") or entry.get("model")
+                if not model_id:
+                    continue
+
+                model_stats = stats.setdefault(
+                    model_id,
+                    {
+                        "total_calls": 0,
+                        "errors": 0,
+                        "latency_sum_ms": 0.0,
+                        "ratings": [],
+                    },
+                )
+
+                model_stats["total_calls"] += 1
+                if not entry.get("success", entry.get("error") is None):
+                    model_stats["errors"] += 1
+
+                latency_ms = entry.get("latency_ms")
+                if latency_ms is None:
+                    try:
+                        latency_ms = float(entry.get("duration", 0)) * 1000
+                    except Exception:
+                        latency_ms = 0
+                try:
+                    model_stats["latency_sum_ms"] += float(latency_ms or 0)
+                except Exception:
+                    pass
+
+                rating = None
+                metadata = entry.get("metadata") or {}
+                if isinstance(metadata, dict):
+                    rating = metadata.get("rating") or metadata.get("user_rating")
+                if rating is None:
+                    rating = entry.get("user_rating")
+                if rating is not None:
+                    try:
+                        model_stats["ratings"].append(float(rating))
+                    except Exception:
+                        pass
+    except Exception:
+        return stats
+
+    aggregated: TypingDict[str, dict] = {}
+    for model_id, data in stats.items():
+        total = max(1, data.get("total_calls", 0))
+        avg_latency = (data.get("latency_sum_ms", 0.0) / total) if total else 0.0
+        ratings = data.get("ratings", []) or []
+        avg_rating = sum(ratings) / len(ratings) if ratings else None
+        aggregated[model_id] = {
+            "total_calls": data.get("total_calls", 0),
+            "error_rate": (data.get("errors", 0) / total) if total else 0.0,
+            "avg_latency_ms": avg_latency,
+            "avg_user_rating": avg_rating,
+        }
+
+    return aggregated

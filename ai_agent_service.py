@@ -46,7 +46,7 @@ from ai_interaction_ledger import record_ai_interaction
 from llm_registry import find_model, get_default_model
 
 
-def _resolve_model(model: Optional[str]) -> Optional[dict]:
+def _resolve_model(model: Optional[str]):
     mode = os.getenv("THRONOS_AI_MODE", "all").lower()
     if mode in ("router", "auto", "all"):
         normalized_mode = "all"
@@ -56,23 +56,22 @@ def _resolve_model(model: Optional[str]) -> Optional[dict]:
         normalized_mode = mode
 
     if not model or model == "auto":
-        env_default_id = (os.getenv("THRONOS_DEFAULT_MODEL_ID") or "").strip()
+        env_default_id = (os.getenv("THRONOS_DEFAULT_MODEL_ID") or "gpt-4.1-mini").strip()
         if env_default_id:
             env_default = find_model(env_default_id)
             if env_default and env_default.enabled:
                 if normalized_mode in ("all", env_default.provider):
-                    return env_default.__dict__
+                    return env_default
 
-        default_model = get_default_model(None if normalized_mode == "all" else normalized_mode)
-        return default_model.__dict__ if default_model else None
+        return get_default_model(None if normalized_mode == "all" else normalized_mode)
 
     info = find_model(model)
     if not info or not info.enabled:
         return None
 
     if normalized_mode != "all" and info.provider != normalized_mode:
-        return info.__dict__
-    return info.__dict__
+        return None
+    return info
 
 
 def call_openai(model: str, messages: List[Dict[str, str]], system_prompt: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 4096) -> Dict[str, Any]:
@@ -171,19 +170,20 @@ def call_llm(
     difficulty: Optional[str] = None,
     block_hash: Optional[str] = None,
 ) -> Dict[str, Any]:
+    requested_model = model
     resolved = _resolve_model(model)
     if not resolved:
         return {
-            "response": "Unknown or disabled model_id",
+            "response": "Unknown or disabled model id",
             "status": "model_not_found",
             "provider": None,
             "model": model,
-            "error": "Unknown model_id",
+            "error": "Unknown or disabled model id",
         }
 
-    provider = resolved.get("provider")
-    resolved_model = resolved.get("id")
-    tier = resolved.get("tier")
+    provider = resolved.provider
+    resolved_model = resolved.id
+    tier = resolved.tier
 
     mode = os.getenv("THRONOS_AI_MODE", "all").lower()
     if mode in ("router", "auto", "all"):
@@ -205,7 +205,9 @@ def call_llm(
     prompt_text = "\n\n".join([m.get("content", "") for m in messages])
     routing_meta: Dict[str, Any] = {}
 
-    if ThronosAIScorer is not None and mode == "router":
+    is_auto = not requested_model or requested_model == "auto"
+
+    if ThronosAIScorer is not None and mode == "router" and not is_auto:
         try:
             router = ThronosAIScorer()
             decision = router.route_provider(prompt_text)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
@@ -7,27 +8,87 @@ from typing import Dict, List, Optional
 @dataclass
 class ModelInfo:
     id: str
-    label: str
-    provider: str  # "openai" | "anthropic" | "gemini"
+    provider: str
+    display_name: str
     tier: str = "standard"
     default: bool = False
     enabled: bool = True
 
 
+PROVIDER_METADATA: Dict[str, Dict[str, str]] = {
+    "openai": {
+        "id": "openai",
+        "name": "OpenAI (GPT)",
+        "description": "OpenAI GPT-4.1 family",
+    },
+    "anthropic": {
+        "id": "anthropic",
+        "name": "Anthropic (Claude)",
+        "description": "Claude 3.5 models",
+    },
+    "gemini": {
+        "id": "gemini",
+        "name": "Google Gemini",
+        "description": "Gemini 1.5 / 2.0 models",
+    },
+    "local": {
+        "id": "local",
+        "name": "Thronos Offline Corpus",
+        "description": "Local knowledge base / blockchain log",
+    },
+    "thronos": {
+        "id": "thronos",
+        "name": "Thronos / Thrai",
+        "description": "Custom Thronos model",
+    },
+}
+
+
 AI_MODEL_REGISTRY: Dict[str, List[ModelInfo]] = {
     "openai": [
-        ModelInfo(id="gpt-4.1", label="GPT-4.1", provider="openai", tier="premium", default=True),
-        ModelInfo(id="gpt-4.1-mini", label="GPT-4.1 mini", provider="openai", tier="fast"),
-        ModelInfo(id="o3-mini", label="o3-mini (reasoning)", provider="openai", tier="reasoning"),
+        ModelInfo(id="gpt-4.1-mini", display_name="GPT-4.1 mini", provider="openai", tier="fast", default=True),
+        ModelInfo(id="gpt-4.1", display_name="GPT-4.1", provider="openai", tier="premium"),
+        ModelInfo(id="gpt-4.1-preview", display_name="GPT-4.1 Preview", provider="openai", tier="preview"),
+        ModelInfo(id="o3-mini", display_name="o3-mini (reasoning)", provider="openai", tier="reasoning"),
     ],
     "anthropic": [
-        ModelInfo(id="claude-3.5-sonnet", label="Claude 3.5 Sonnet", provider="anthropic", tier="premium", default=True),
+        ModelInfo(id="claude-3.5-sonnet", display_name="Claude 3.5 Sonnet", provider="anthropic", tier="premium", default=True),
+        ModelInfo(id="claude-3.5-haiku", display_name="Claude 3.5 Haiku", provider="anthropic", tier="fast"),
     ],
     "gemini": [
-        ModelInfo(id="gemini-1.5-pro", label="Gemini 1.5 Pro", provider="gemini", tier="premium", default=True),
-        ModelInfo(id="gemini-1.5-flash", label="Gemini 1.5 Flash", provider="gemini", tier="fast"),
+        ModelInfo(id="gemini-2.0-flash", display_name="Gemini 2.0 Flash", provider="gemini", tier="fast", default=True),
+        ModelInfo(id="gemini-1.5-pro", display_name="Gemini 1.5 Pro", provider="gemini", tier="premium"),
+        ModelInfo(id="gemini-1.5-flash", display_name="Gemini 1.5 Flash", provider="gemini", tier="fast"),
+    ],
+    "local": [
+        ModelInfo(id="offline_corpus", display_name="Offline corpus", provider="local", tier="local", default=False, enabled=True),
+    ],
+    "thronos": [
+        ModelInfo(id="thrai", display_name="Thronos Thrai", provider="thronos", tier="custom", default=False, enabled=True),
     ],
 }
+
+
+def _apply_env_flags() -> None:
+    has_openai = bool((os.getenv("OPENAI_API_KEY") or "").strip())
+    has_anthropic = bool((os.getenv("ANTHROPIC_API_KEY") or "").strip())
+    has_gemini = bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
+
+    for provider_name, models in AI_MODEL_REGISTRY.items():
+        if provider_name == "openai":
+            enabled = has_openai
+        elif provider_name == "anthropic":
+            enabled = has_anthropic
+        elif provider_name == "gemini":
+            enabled = has_gemini
+        else:
+            enabled = True
+
+        for m in models:
+            m.enabled = enabled
+
+
+_apply_env_flags()
 
 
 def find_model(model_id: str) -> Optional[ModelInfo]:

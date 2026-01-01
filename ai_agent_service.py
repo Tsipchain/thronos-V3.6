@@ -37,13 +37,13 @@ try:
 except Exception:
     anthropic = None
 
+try:
+    from ai_router import ThronosAIScorer  # type: ignore
+except Exception:
+    ThronosAIScorer = None  # type: ignore
+
 from ai_interaction_ledger import record_ai_interaction
 from llm_registry import find_model, get_default_model
-
-try:
-    from thronos_ai_scoring import ThronosAIScorer
-except Exception:  # pragma: no cover - optional dependency
-    ThronosAIScorer = None  # type: ignore
 
 
 def _resolve_model(model: Optional[str]) -> Optional[dict]:
@@ -191,9 +191,9 @@ def call_llm(
         }
 
     model = resolved_model
-
     prompt_text = "\n\n".join([m.get("content", "") for m in messages])
     routing_meta: Dict[str, Any] = {}
+
     if ThronosAIScorer is not None:
         try:
             router = ThronosAIScorer()
@@ -240,6 +240,7 @@ def call_llm(
         block_hash=block_hash,
         error=error,
         success=error is None,
+        metadata=routing_meta,
     )
 
     if error:

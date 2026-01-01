@@ -1,7 +1,11 @@
+"""AI Interaction Ledger utilities for the Quantum backend."""
+
+from __future__ import annotations
+
+import hashlib
 import json
 import os
 import time
-import hashlib
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -12,15 +16,68 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 LEDGER_FILE = os.path.join(DATA_DIR, "ai_interactions.log")
 BLOCKCHAIN_FILE = os.path.join(DATA_DIR, "thronos_blockchain.json")
-CHAIN_FILE = os.path.join(DATA_DIR, "ai_interaction_chain.json")
+CHAIN_FILE = os.path.join(DATA_DIR, "ai_interaction_chain.jsonl")
 PROVIDERS_FILE = os.path.join(DATA_DIR, "ai_providers.json")
 SESSIONS_FILE = os.path.join(DATA_DIR, "ai_sessions.json")
-INTERACTIONS_FILE = os.path.join(DATA_DIR, "ai_interactions_v4.json")
-SCORES_FILE = os.path.join(DATA_DIR, "ai_scores.json")
+INTERACTIONS_FILE = os.path.join(DATA_DIR, "ai_interactions_v4.jsonl")
+SCORES_FILE = os.path.join(DATA_DIR, "ai_scores.jsonl")
 
 
 def _hash_text(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+
+def _append_jsonl(path: str, data: Dict[str, Any]) -> None:
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(data, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _load_json(path: str, default: Any) -> Any:
+    if not os.path.exists(path):
+        return default
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def _save_json(path: str, data: Any) -> None:
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _chain_append(data: Dict[str, Any]) -> None:
+    entry = {"timestamp": time.time(), "id": str(uuid.uuid4()), **data}
+    _append_jsonl(CHAIN_FILE, entry)
+
+
+def register_provider(provider_info: Dict[str, Any]) -> None:
+    providers: List[Dict[str, Any]] = _load_json(PROVIDERS_FILE, [])
+    providers.append(provider_info)
+    _save_json(PROVIDERS_FILE, providers)
+
+
+def register_session(session_info: Dict[str, Any]) -> None:
+    sessions: List[Dict[str, Any]] = _load_json(SESSIONS_FILE, [])
+    sessions.append(session_info)
+    _save_json(SESSIONS_FILE, sessions)
+
+
+def log_interaction(interaction: Dict[str, Any]) -> None:
+    _append_jsonl(INTERACTIONS_FILE, interaction)
+
+
+def log_score(score: Dict[str, Any]) -> None:
+    _append_jsonl(SCORES_FILE, score)
 
 
 def record_ai_interaction(
@@ -58,13 +115,9 @@ def record_ai_interaction(
         "metadata": metadata or {},
     }
 
-    try:
-        with open(LEDGER_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+    _append_jsonl(LEDGER_FILE, entry)
+    _chain_append({"type": "ai_interaction", "data": entry})
 
-    # Optional append to blockchain file as a special AI block type
     try:
         if os.path.exists(BLOCKCHAIN_FILE):
             with open(BLOCKCHAIN_FILE, "r", encoding="utf-8") as f:
@@ -72,8 +125,7 @@ def record_ai_interaction(
         else:
             chain = []
         chain.append({"type": "ai_interaction", "data": entry})
-        with open(BLOCKCHAIN_FILE, "w", encoding="utf-8") as f:
-            json.dump(chain, f, indent=2, ensure_ascii=False)
+        _save_json(BLOCKCHAIN_FILE, chain)
     except Exception:
         pass
 

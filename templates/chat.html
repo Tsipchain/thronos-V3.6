@@ -1029,6 +1029,7 @@
     const API_MODELS = "/api/ai/models";
     const API_HEALTH = "/api/ai/providers/health";
     const ACTIVE_SESSION_KEY = "thronos_ai_active_session";
+    const SESSION_CACHE_KEY = "thronos_ai_session_cache_v1";
 
     // --- DOM refs ---
     let sessionsListEl,
@@ -1054,6 +1055,7 @@
       creditsLabelEl;
 
     let sessionMessages = [];
+    let messagesBySession = {};
 
     function cacheDom() {
       sessionsListEl = document.getElementById("sessionsList");
@@ -1122,6 +1124,48 @@
       }, 50);
     }
 
+    function persistSessionCache() {
+      try {
+        const payload = {
+          sessions: aiSessions || [],
+          messagesBySession: messagesBySession || {},
+        };
+        localStorage.setItem(SESSION_CACHE_KEY, JSON.stringify(payload));
+      } catch (e) {
+        console.warn("persist cache failed", e);
+      }
+    }
+
+    function hydrateSessionCache() {
+      try {
+        const raw = localStorage.getItem(SESSION_CACHE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        aiSessions = parsed.sessions || [];
+        messagesBySession = parsed.messagesBySession || {};
+        if (!currentSessionId && aiSessions.length) {
+          currentSessionId = aiSessions[0].id;
+        }
+        if (currentSessionId && messagesBySession[currentSessionId]) {
+          sessionMessages = messagesBySession[currentSessionId] || [];
+          renderSessions();
+          renderMessages(sessionMessages);
+        }
+      } catch (e) {
+        console.warn("hydrate cache failed", e);
+      }
+    }
+
+    function updateSessionMessageCount(sessionId) {
+      aiSessions = aiSessions.map((s) => {
+        if (s.id === sessionId) {
+          const count = (messagesBySession[sessionId] || []).length;
+          return { ...s, message_count: count };
+        }
+        return s;
+      });
+    }
+
     function escapeHtml(text) {
       return text
         .replace(/&/g, "&amp;")
@@ -1178,6 +1222,7 @@
             if (res.ok) {
               // Remove from local array
               aiSessions = aiSessions.filter(sess => sess.id !== s.id);
+              delete messagesBySession[s.id];
               // If deleted current session, switch to first available
               if (s.id === currentSessionId && aiSessions.length > 0) {
                 currentSessionId = aiSessions[0].id;
@@ -1187,6 +1232,7 @@
                 // No sessions left, create new one
                 await createSession();
               }
+              persistSessionCache();
               renderSessions();
             }
           } catch (e) {
@@ -1218,6 +1264,10 @@
           if (s.id !== currentSessionId) {
             currentSessionId = s.id;
             localStorage.setItem(ACTIVE_SESSION_KEY, currentSessionId);
+            const cachedMsgs = messagesBySession[s.id] || [];
+            if (cachedMsgs.length) {
+              renderMessages(cachedMsgs);
+            }
             loadSessionMessages(s.id);
             renderSessions();
             sessionTitleEl.textContent = s.title || "Mesh session";
@@ -1422,7 +1472,10 @@
         const res = await fetch(url);
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
-        aiSessions = data.sessions || [];
+        aiSessions = (data.sessions || []).map((s) => {
+          const count = (messagesBySession[s.id] || []).length;
+          return { ...s, message_count: count || s.message_count || 0 };
+        });
 
         if (currentSessionId && !aiSessions.find((s) => s.id === currentSessionId)) {
           currentSessionId = null;
@@ -1447,6 +1500,7 @@
 
         const active = aiSessions.find((x) => x.id === currentSessionId);
         if (active) sessionTitleEl.textContent = active.title || "Mesh session";
+        persistSessionCache();
         await loadSessionMessages(currentSessionId);
       } catch (e) {
         console.error("loadSessions error", e);
@@ -1472,7 +1526,12 @@
           await handleMissingSession(id);
           return;
         }
-        renderMessages(data.messages || []);
+        const msgs = data.messages || [];
+        messagesBySession[id] = msgs;
+        renderMessages(msgs);
+        updateSessionMessageCount(id);
+        renderSessions();
+        persistSessionCache();
         setSessionStatus("Ready");
       } catch (e) {
         console.error("loadSessionMessages error", e);
@@ -1485,11 +1544,13 @@
         if (missingId) {
           aiSessions = aiSessions.filter((s) => s.id !== missingId);
           if (currentSessionId === missingId) currentSessionId = null;
+          delete messagesBySession[missingId];
           const stored = localStorage.getItem(ACTIVE_SESSION_KEY);
           if (stored === missingId) localStorage.removeItem(ACTIVE_SESSION_KEY);
         }
 
         renderSessions();
+        persistSessionCache();
 
         if (!aiSessions.length) {
           const created = await createSession("New mesh session");
@@ -1544,6 +1605,9 @@
         } else {
           aiSessions.unshift(nextSession);
         }
+        messagesBySession[nextSession.id] = messagesBySession[nextSession.id] || [];
+        updateSessionMessageCount(nextSession.id);
+        persistSessionCache();
         renderSessions();
         sessionTitleEl.textContent = nextSession.title || "Mesh session";
         return nextSession;
@@ -1631,12 +1695,20 @@
     async function loadModels() {
       if (!modelSelectEl) return;
 
-      const existingAuto = modelSelectEl.querySelector('option[value="auto"]');
+      const previousValue = modelSelectEl.value || "auto";
       modelSelectEl.innerHTML = "";
-      const autoOpt = existingAuto || document.createElement("option");
+      const autoOpt = document.createElement("option");
       autoOpt.value = "auto";
       autoOpt.textContent = "Auto (Thronos chooses)";
       modelSelectEl.appendChild(autoOpt);
+
+      const providerLabels = {
+        openai: "OpenAI (GPT)",
+        anthropic: "Anthropic (Claude)",
+        gemini: "Google Gemini",
+        local: "Thronos Offline Corpus",
+        thronos: "Thronos / Thrai",
+      };
 
       try {
         const res = await fetch(API_MODELS);
@@ -1645,28 +1717,39 @@
           return;
         }
         const data = await res.json();
-        const providers = data.providers || [];
+        const providers = data.providers || {};
+        const models = data.models || [];
+
+        const providerOrder = ["openai", "anthropic", "gemini", "local", "thronos"];
         let defaultSelected = false;
 
-        providers.forEach((provider) => {
-          const optgroup = document.createElement("optgroup");
-          optgroup.label = provider.label || provider.id;
+        providerOrder.forEach((providerId) => {
+          const providerModels = models.filter((m) => m.provider === providerId);
+          if (!providerModels.length) return;
 
-          (provider.models || []).forEach((model) => {
+          const optgroup = document.createElement("optgroup");
+          const meta = providers[providerId] || {};
+          optgroup.label = meta.name || providerLabels[providerId] || providerId;
+
+          providerModels.forEach((model) => {
             const opt = document.createElement("option");
             opt.value = model.id;
-            opt.dataset.provider = provider.id;
+            opt.dataset.provider = model.provider;
 
-            let label = model.label || model.id;
+            let label = model.display_name || model.id;
             if (model.tier && model.tier !== "standard") {
               label += ` · ${model.tier}`;
             }
             if (model.stats && model.stats.error_rate !== undefined) {
               label += ` · err ${(model.stats.error_rate * 100).toFixed(1)}%`;
             }
+            if (!model.enabled) {
+              label += " (API key missing)";
+              opt.disabled = true;
+            }
             opt.textContent = label;
 
-            if (model.default && !defaultSelected) {
+            if (model.default && model.enabled && !defaultSelected) {
               opt.selected = true;
               defaultSelected = true;
             }
@@ -1678,6 +1761,10 @@
             modelSelectEl.appendChild(optgroup);
           }
         });
+
+        if (!defaultSelected && previousValue && modelSelectEl.querySelector(`option[value="${previousValue}"]`)) {
+          modelSelectEl.value = previousValue;
+        }
       } catch (e) {
         console.warn("model load failed", e);
       }
@@ -1718,6 +1805,10 @@
       // optimistic render user message
       const userMessage = { role: "user", content: text, model: model };
       sessionMessages.push(userMessage);
+      messagesBySession[currentSessionId] = sessionMessages.slice();
+      updateSessionMessageCount(currentSessionId);
+      persistSessionCache();
+      renderSessions();
       appendMessage(userMessage);
 
       messageInputEl.value = "";
@@ -1771,6 +1862,10 @@
             })),
           };
           sessionMessages.push(assistantMessage);
+          messagesBySession[currentSessionId] = sessionMessages.slice();
+          updateSessionMessageCount(currentSessionId);
+          persistSessionCache();
+          renderSessions();
           appendMessage(assistantMessage);
         }
 
@@ -1844,6 +1939,7 @@
     // --- Init ---
     async function init() {
       cacheDom();
+      hydrateSessionCache();
       bindEvents();
       await loadModels();
       await loadWallet();

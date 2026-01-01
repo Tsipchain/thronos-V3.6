@@ -958,13 +958,6 @@
                   <input id="fileInput" type="file" multiple />
                   <select id="modelSelect" class="model-select">
                     <option value="auto">🔀 Auto (Thronos chooses)</option>
-                    <option value="gpt-4o">🤖 GPT-4o (OpenAI)</option>
-                    <option value="gpt-4o-mini">🤖 GPT-4o Mini (OpenAI)</option>
-                    <option value="claude-sonnet-4">🧠 Claude Sonnet 4 (Anthropic)</option>
-                    <option value="gemini-2.0-flash">⚡ Gemini 2.0 Flash</option>
-                    <option value="gemini-2.0-flash-exp">⚡ Gemini 2.0 Flash Exp</option>
-                    <option value="gemini-2.5-flash">🚀 Gemini 2.5 Flash</option>
-                    <option value="gemini-2.5-pro">💎 Gemini 2.5 Pro</option>
                   </select>
                 </div>
                 <button id="sendBtn" class="send-btn">
@@ -1029,10 +1022,12 @@
     const API_WALLET = "/api/ai/wallet";
     const API_SESSIONS = "/api/ai/sessions";
     const API_SESSION_MESSAGES = (id) => `/api/ai/sessions/${id}/messages`;
-    const API_CHAT = "/api/ai/chat";
+    const API_CHAT = "/api/ai/providers/chat";
     const API_FILES = "/api/ai/files/upload";
     const API_TELEMETRY = "/api/ai/telemetry";
     const API_FEEDBACK = "/api/ai/feedback";
+    const API_MODELS = "/api/ai/models";
+    const API_HEALTH = "/api/ai/providers/health";
     const ACTIVE_SESSION_KEY = "thronos_ai_active_session";
 
     // --- DOM refs ---
@@ -1057,6 +1052,8 @@
       pendingTxsLabelEl,
       difficultyLabelEl,
       creditsLabelEl;
+
+    let sessionMessages = [];
 
     function cacheDom() {
       sessionsListEl = document.getElementById("sessionsList");
@@ -1087,6 +1084,7 @@
     let aiSessions = [];
     let pendingFiles = []; // { id, name, size }
     let receivedFiles = []; // for any AI-generated [[FILE:...]] blocks
+    let providerHealth = {};
 
     // --- Utilities ---
     function setUploadStatus(text, mode = "") {
@@ -1386,8 +1384,9 @@
     }
 
     function renderMessages(list) {
+      sessionMessages = list || [];
       messagesEl.innerHTML = "";
-      (list || []).forEach(appendMessage);
+      sessionMessages.forEach(appendMessage);
     }
 
     // --- API calls ---
@@ -1631,6 +1630,52 @@
       }
     }
 
+    async function loadModelHealth() {
+      try {
+        const res = await fetch(API_HEALTH);
+        if (!res.ok) return {};
+        return await res.json();
+      } catch (e) {
+        console.warn("health check failed", e);
+        return {};
+      }
+    }
+
+    async function loadModels() {
+      try {
+        const [modelsRes, health] = await Promise.all([fetch(API_MODELS), loadModelHealth()]);
+        providerHealth = health || {};
+        if (!modelsRes.ok) return;
+
+        const data = await modelsRes.json();
+        const providers = data.providers || {};
+        modelSelectEl.innerHTML = "";
+
+        const autoOpt = document.createElement("option");
+        autoOpt.value = "auto";
+        autoOpt.textContent = "🔀 Auto (Thronos chooses)";
+        modelSelectEl.appendChild(autoOpt);
+
+        Object.entries(providers).forEach(([provider, info]) => {
+          const enabled = info.enabled && (providerHealth[provider] || "ok") === "ok";
+          (info.models || []).forEach((m) => {
+            const opt = document.createElement("option");
+            opt.value = m.id;
+            opt.dataset.provider = provider;
+            opt.textContent = `${m.label || m.id} (${provider})`;
+            if (!enabled) {
+              opt.disabled = true;
+              opt.textContent += " [offline]";
+            }
+            if (m.default && enabled) opt.selected = true;
+            modelSelectEl.appendChild(opt);
+          });
+        });
+      } catch (e) {
+        console.warn("model load failed", e);
+      }
+    }
+
     async function sendMessage() {
       const text = messageInputEl.value.trim();
       if (!text && !pendingFiles.length) return;
@@ -1644,18 +1689,29 @@
       usageStatusEl.textContent = "";
 
       const model = modelSelectEl.value || "auto";
+      const selectedOption = modelSelectEl.selectedOptions[0];
+      const provider = selectedOption?.dataset.provider || null;
       modelStatusEl.textContent = model;
+
+      const history = (sessionMessages || []).map((m) => ({
+        role: m.role,
+        content: m.content,
+      }));
+      history.push({ role: "user", content: text });
 
       const payload = {
         session_id: currentSessionId,
         wallet: wallet || null,
-        message: text,
+        messages: history,
         attachments: pendingFiles.map((f) => f.id),
-        model_key: model,
+        model,
       };
+      if (provider && provider !== "auto") payload.provider = provider;
 
       // optimistic render user message
-      appendMessage({ role: "user", content: text, model: "user" });
+      const userMessage = { role: "user", content: text, model: model };
+      sessionMessages.push(userMessage);
+      appendMessage(userMessage);
 
       messageInputEl.value = "";
       pendingFiles = [];
@@ -1670,37 +1726,32 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
 
-        // Handle no credits case
-        if (data.status === "no_credits") {
-          appendMessage({
-            role: "assistant",
-            content: data.response || "No AI credits available. Please purchase an AI pack to continue.",
-            model: "system",
-          });
-          setSessionStatus("Ready");
-          setSending(true);
-          return;
+        if (data.ok === false) {
+          throw new Error(data.error || "Provider unavailable");
         }
 
-        // AI reply - handle actual server response format
-        if (data.response) {
-          appendMessage({
+        const aiText = data.message || data.response || "";
+        if (aiText) {
+          const assistantMessage = {
             role: "assistant",
-            content: data.response,
+            content: aiText,
             model: data.model || model,
             files: (data.files || []).map((f) => ({
               file_id: f.id || f.file_id,
               name: f.name || f.filename,
             })),
-          });
+          };
+          sessionMessages.push(assistantMessage);
+          appendMessage(assistantMessage);
         }
 
-        // Update credits display if available
-        if (data.credits !== undefined) {
+        if (data.usage) {
+          const u = data.usage;
+          usageStatusEl.textContent = `Usage: in ${u.input_tokens || 0} / out ${u.output_tokens || 0}`;
+        } else if (data.credits !== undefined) {
           usageStatusEl.textContent = `AI Credits: ${data.credits}`;
         }
 
-        // Update wallet if returned
         if (data.wallet) {
           walletInputEl.value = data.wallet;
           const w = data.wallet;
@@ -1765,6 +1816,7 @@
     async function init() {
       cacheDom();
       bindEvents();
+      await loadModels();
       await loadWallet();
       await loadSessions();
       loadTelemetry();

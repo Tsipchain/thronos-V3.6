@@ -1,5 +1,10 @@
 # server.py  (ThronosChain — Full, unified, quorum-enabled)
 # - pledge + secure PDF (AES + QR + stego)
+#
+# Enable postponed evaluation for type hints used in helper functions.
+from __future__ import annotations
+#
+# --- Imports ---
 # - wallet + mining rewards
 # - data volume (/app/data)
 # - whitelist για free pledges
@@ -46,6 +51,7 @@ from flask import Flask, request, jsonify, render_template, send_from_directory,
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 from apscheduler.schedulers.background import BackgroundScheduler
+from ai_models_config import base_model_config, OPENAI_MODEL_FILTER
 
 # ── Local modules
 try:
@@ -119,6 +125,13 @@ L2E_ENROLLMENTS_FILE = os.path.join(DATA_DIR, "l2e_enrollments.json")
 for _dir in [MEDIA_DIR, TOKEN_LOGOS_DIR, NFT_IMAGES_DIR, COURSE_MEDIA_DIR,
              COURSE_COVERS_DIR, COURSE_FILES_DIR, MUSIC_AUDIO_DIR, MUSIC_COVER_DIR]:
     os.makedirs(_dir, exist_ok=True)
+
+# AI provider/model caches
+MODEL_CATALOG: dict = {}
+MODEL_CATALOG_LAST_REFRESH = 0.0
+MODEL_REFRESH_INTERVAL_SECONDS = float(os.getenv("MODEL_REFRESH_INTERVAL_SECONDS", 6 * 3600))
+PROVIDER_HEALTH_CACHE: dict = {}
+PROVIDER_HEALTH_TTL = 300  # seconds
 
 # Node role: "master" or "replica"
 NODE_ROLE = os.getenv("NODE_ROLE", "master").lower()
@@ -480,6 +493,281 @@ try:
 except Exception as e:
     print(f"AI Init Error: {e}")
     ai_agent = None
+
+
+def _usage_from_dict(raw: dict | None) -> dict:
+    if not isinstance(raw, dict):
+        return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
+    def _num(val):
+        try:
+            return int(val or 0)
+        except Exception:
+            return 0
+
+    usage = {
+        "input_tokens": _num(raw.get("input_tokens")),
+        "output_tokens": _num(raw.get("output_tokens")),
+    }
+    usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
+    return usage
+
+
+def _split_system_and_messages(messages: list[dict]) -> tuple[str | None, list[dict]]:
+    system_prompt = None
+    chat_messages: list[dict] = []
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        role = (m.get("role") or "").lower()
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        if role == "system":
+            system_prompt = (system_prompt + "\n" + content) if system_prompt else content
+        else:
+            chat_messages.append({"role": role if role in ("user", "assistant") else "user", "content": content})
+    return system_prompt, chat_messages
+
+
+def call_claude(model: str, messages: list[dict], max_tokens: int = 2048, temperature: float = 0.6) -> dict:
+    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    if not api_key:
+        app.logger.error("Claude call blocked: missing ANTHROPIC_API_KEY")
+        raise RuntimeError("Claude provider unavailable")
+
+    system_prompt, chat_messages = _split_system_and_messages(messages)
+    if not chat_messages:
+        raise RuntimeError("No chat messages provided")
+
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    payload = {
+        "model": model or "claude-3.5-sonnet-latest",
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "messages": chat_messages,
+    }
+    if system_prompt:
+        payload["system"] = system_prompt
+
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers=headers,
+            json=payload,
+            timeout=30,
+        )
+    except requests.Timeout:
+        app.logger.error("Claude timeout", extra={"model": model})
+        raise
+    except Exception as exc:  # pragma: no cover - defensive
+        app.logger.error("Claude call failed", extra={"model": model, "error": str(exc)})
+        raise
+
+    if resp.status_code in (401, 403):
+        app.logger.error("Claude auth failure", extra={"model": model, "status": resp.status_code})
+    if resp.status_code >= 400:
+        raise RuntimeError(f"HTTP {resp.status_code}: {resp.text}")
+
+    data = resp.json()
+    text = "".join(
+        [part.get("text", "") for part in data.get("content", []) if isinstance(part, dict)]
+    )
+    return {
+        "content": text.strip(),
+        "usage": _usage_from_dict(data.get("usage")),
+    }
+
+
+def call_openai_chat(model: str, messages: list[dict], max_tokens: int = 2048, temperature: float = 0.6) -> dict:
+    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    if not api_key:
+        app.logger.error("OpenAI call blocked: missing OPENAI_API_KEY")
+        raise RuntimeError("OpenAI provider unavailable")
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model or "gpt-4.1",
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    try:
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=30,
+        )
+    except requests.Timeout:
+        app.logger.error("OpenAI timeout", extra={"model": model})
+        raise
+
+    if resp.status_code in (401, 403):
+        app.logger.error("OpenAI auth failure", extra={"model": model, "status": resp.status_code})
+    if resp.status_code >= 400:
+        raise RuntimeError(f"HTTP {resp.status_code}: {resp.text}")
+
+    data = resp.json()
+    message = ""
+    try:
+        message = data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+    except Exception:
+        message = data.get("content", "") or ""
+    usage = _usage_from_dict(data.get("usage"))
+    return {"content": message.strip(), "usage": usage}
+
+
+def call_gemini_chat(model: str, messages: list[dict], max_tokens: int = 1024, temperature: float = 0.6) -> dict:
+    api_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+    if not api_key:
+        app.logger.error("Gemini call blocked: missing GEMINI_API_KEY/GOOGLE_API_KEY")
+        raise RuntimeError("Gemini provider unavailable")
+
+    contents = [m.get("content", "") for m in messages if isinstance(m, dict)]
+    prompt = "\n\n".join(contents).strip()
+    if not prompt:
+        raise RuntimeError("No chat messages provided")
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    params = {"key": api_key}
+    body = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"maxOutputTokens": max_tokens, "temperature": temperature},
+    }
+    try:
+        resp = requests.post(url, params=params, json=body, timeout=30)
+    except requests.Timeout:
+        app.logger.error("Gemini timeout", extra={"model": model})
+        raise
+
+    if resp.status_code in (401, 403):
+        app.logger.error("Gemini auth failure", extra={"model": model, "status": resp.status_code})
+    if resp.status_code >= 400:
+        raise RuntimeError(f"HTTP {resp.status_code}: {resp.text}")
+
+    data = resp.json()
+    candidates = data.get("candidates", []) or []
+    text = ""
+    if candidates:
+        parts = candidates[0].get("content", {}).get("parts", [])
+        text = "".join([p.get("text", "") for p in parts if isinstance(p, dict)])
+    return {"content": text.strip(), "usage": _usage_from_dict(data.get("usage"))}
+
+
+def _infer_provider(model: str | None, explicit: str | None = None) -> str:
+    if explicit:
+        return explicit.lower()
+    if not model:
+        return "anthropic"
+    ml = model.lower()
+    if ml.startswith("gpt") or ml.startswith("o1") or ml.startswith("o3"):
+        return "openai"
+    if ml.startswith("gemini"):
+        return "google"
+    if ml.startswith("claude"):
+        return "anthropic"
+    return "anthropic"
+
+
+def refresh_model_catalog(force: bool = False) -> dict:
+    global MODEL_CATALOG, MODEL_CATALOG_LAST_REFRESH
+    now = time.time()
+    if MODEL_CATALOG and not force and now - MODEL_CATALOG_LAST_REFRESH < MODEL_REFRESH_INTERVAL_SECONDS:
+        return MODEL_CATALOG
+
+    catalog = base_model_config()
+    provider_keys = {
+        "openai": bool((os.getenv("OPENAI_API_KEY") or "").strip()),
+        "anthropic": bool((os.getenv("ANTHROPIC_API_KEY") or "").strip()),
+        "google": bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()),
+    }
+
+    if provider_keys.get("openai"):
+        try:
+            res = requests.get(
+                "https://api.openai.com/v1/models",
+                headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"},
+                timeout=8,
+            )
+            if res.status_code == 200:
+                data = res.json().get("data", [])
+                ids = set()
+                for item in data:
+                    mid = item.get("id", "")
+                    if any(mid.startswith(pfx) for pfx in OPENAI_MODEL_FILTER):
+                        ids.add(mid)
+                models = catalog.get("openai", {}).get("models", [])
+                existing_ids = {m["id"] for m in models}
+                for mid in sorted(ids):
+                    if mid not in existing_ids:
+                        models.append({"id": mid, "label": mid})
+        except Exception as exc:
+            app.logger.warning("OpenAI model sync failed", extra={"error": str(exc)})
+
+    for provider, data in catalog.items():
+        data["enabled"] = provider_keys.get(provider, False)
+
+    MODEL_CATALOG = {"providers": catalog, "refreshed_at": datetime.utcnow().isoformat(timespec="seconds") + "Z"}
+    MODEL_CATALOG_LAST_REFRESH = now
+    return MODEL_CATALOG
+
+
+def _health_cache_ok(provider: str):
+    cached = PROVIDER_HEALTH_CACHE.get(provider)
+    if not cached:
+        return None
+    if time.time() - cached.get("ts", 0) <= PROVIDER_HEALTH_TTL:
+        return cached.get("status")
+    return None
+
+
+def _check_provider_health(provider: str) -> str:
+    cached = _health_cache_ok(provider)
+    if cached:
+        return cached
+
+    status = "ok"
+    try:
+        if provider == "anthropic":
+            call_claude("claude-3.5-sonnet-latest", [{"role": "user", "content": "ping"}], max_tokens=1, temperature=0)
+        elif provider == "openai":
+            call_openai_chat("gpt-4.1-mini", [{"role": "user", "content": "ping"}], max_tokens=1, temperature=0)
+        elif provider == "google":
+            call_gemini_chat("gemini-1.5-flash-latest", [{"role": "user", "content": "ping"}], max_tokens=1, temperature=0)
+        else:
+            status = "error"
+    except Exception as exc:
+        status = "error"
+        app.logger.warning("Provider health check failed", extra={"provider": provider, "error": str(exc)})
+
+    PROVIDER_HEALTH_CACHE[provider] = {"status": status, "ts": time.time()}
+    return status
+
+
+def _start_model_scheduler():
+    enabled = (os.getenv("SCHEDULER_ENABLED", "true").lower() not in ("0", "false", "no"))
+    if not enabled:
+        app.logger.info("Model refresh scheduler disabled via SCHEDULER_ENABLED")
+        return
+
+    def _job():
+        try:
+            refresh_model_catalog(force=True)
+        except Exception as exc:  # pragma: no cover - background job safety
+            app.logger.warning("Model refresh job failed", extra={"error": str(exc)})
+
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(_job, "interval", seconds=MODEL_REFRESH_INTERVAL_SECONDS, id="model_refresh", replace_existing=True)
+    scheduler.start()
+    app.logger.info("Background scheduler started for model catalog refresh")
 
 
 # ─── HELPERS ───────────────────────────────────────
@@ -9257,6 +9545,52 @@ def api_ai_session_delete_v2():
 
 # Add file upload endpoint
 # Add /api/ai/chat as alias to /api/chat (for backward compatibility)
+@app.route("/api/ai/providers/chat", methods=["POST"])
+def api_ai_provider_chat():
+    data = request.get_json(silent=True) or {}
+    messages = data.get("messages") or []
+    single = (data.get("message") or "").strip()
+    if single and not messages:
+        messages = [{"role": "user", "content": single}]
+    if not isinstance(messages, list) or not messages:
+        return jsonify({"ok": False, "error": "messages required"}), 400
+
+    model = (data.get("model") or data.get("model_key") or "claude-3.5-sonnet-latest").strip()
+    provider = _infer_provider(model, explicit=(data.get("provider") or None))
+    max_tokens = int(data.get("max_tokens") or 1024)
+    temperature = float(data.get("temperature") or 0.6)
+
+    try:
+        if provider == "anthropic":
+            result = call_claude(model, messages, max_tokens=max_tokens, temperature=temperature)
+        elif provider == "openai":
+            result = call_openai_chat(model, messages, max_tokens=max_tokens, temperature=temperature)
+        elif provider == "google":
+            result = call_gemini_chat(model, messages, max_tokens=max_tokens, temperature=temperature)
+        else:
+            raise RuntimeError(f"Unsupported provider {provider}")
+    except Exception as exc:
+        return (
+            jsonify({
+                "ok": False,
+                "error": f"{provider.capitalize()} provider unavailable",
+                "details": str(exc),
+            }),
+            502,
+        )
+
+    return jsonify(
+        {
+            "ok": True,
+            "provider": provider,
+            "model": model,
+            "message": result.get("content", ""),
+            "response": result.get("content", ""),
+            "usage": result.get("usage", {}),
+        }
+    )
+
+
 @app.route("/api/ai/chat", methods=["POST"])
 def api_ai_chat_alias():
     """Alias for /api/chat endpoint"""
@@ -9342,6 +9676,30 @@ def api_ai_telemetry():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ai/providers/health", methods=["GET"])
+def api_ai_providers_health():
+    providers = {"openai": "error", "anthropic": "error", "google": "error"}
+    for name in providers.keys():
+        providers[name] = _check_provider_health(name)
+    return jsonify(providers)
+
+
+@app.route("/api/ai/models", methods=["GET"])
+def api_ai_models():
+    catalog = refresh_model_catalog()
+    health = {name: _check_provider_health(name) for name in ("openai", "anthropic", "google")}
+
+    providers = {}
+    for name, data in catalog.get("providers", {}).items():
+        entry = dict(data)
+        entry["health"] = health.get(name, "error")
+        # hide models when provider disabled or unhealthy
+        entry["enabled"] = bool(entry.get("enabled")) and entry["health"] == "ok"
+        providers[name] = entry
+
+    return jsonify({"providers": providers, "refreshed_at": catalog.get("refreshed_at")})
 
 
 @app.route("/api/ai/providers", methods=["GET"])
@@ -10059,6 +10417,8 @@ print("✓ AI Session fixes loaded - supports guest mode and file uploads")
 print("✓ Token Explorer, NFT Marketplace and Governance pages loaded")
 print("✓ Decent Music Platform loaded - artist registration, uploads, and royalties")
 # --- Startup hooks ---
+refresh_model_catalog(force=True)
+_start_model_scheduler()
 ensure_ai_wallet()
 recompute_height_offset_from_ledger()
 initialize_voting()  # Initialize voting polls

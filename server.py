@@ -31,6 +31,7 @@ from __future__ import annotations
 # - Admin Withdrawal Panel (V5.1)
 
 import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii
+from collections import Counter
 from decimal import Decimal, ROUND_DOWN
 import qrcode
 import io
@@ -806,6 +807,13 @@ def _save_jsonl(path: str, entries: list[dict]) -> None:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+def _status_is_success(status: str) -> bool:
+    status_l = (status or "").lower()
+    if not status_l:
+        return False
+    return not any(token in status_l for token in ("error", "quota", "no_credits", "provider_error", "blocked"))
+
+
 def load_ai_interactions() -> list[dict]:
     return _load_jsonl(AI_INTERACTIONS_FILE)
 
@@ -838,6 +846,11 @@ def record_ai_interaction(
     ai_credits_spent: float,
     feedback: dict | None = None,
     metadata: dict | None = None,
+    success: bool | None = None,
+    task_type: str | None = None,
+    routing: dict | None = None,
+    hallucination_flags: list | None = None,
+    user_rating: float | None = None,
 ) -> dict:
     ts_ms = int(time.time() * 1000)
     entry = {
@@ -859,6 +872,11 @@ def record_ai_interaction(
         else {"score": None, "tags": []},
         "eval": {"auto_score": None, "notes": None},
         "metadata": metadata or {},
+        "success": bool(success) if success is not None else _status_is_success((metadata or {}).get("status")),
+        "task_type": task_type,
+        "routing": routing or {},
+        "hallucination_flags": hallucination_flags or (metadata or {}).get("hallucination_flags") or [],
+        "user_rating": user_rating if user_rating is not None else (feedback or {}).get("score"),
     }
 
     append_ai_interaction(entry)
@@ -906,12 +924,14 @@ def _summarize_ai_metrics(interactions: list[dict]) -> dict:
                 "avg_latency_ms": 0.0,
                 "avg_cost_usd": 0.0,
                 "avg_feedback_score": None,
+                "success_rate": 0.0,
             },
         )
 
         bucket["calls"] += 1
         bucket["avg_latency_ms"] += float(entry.get("latency_ms") or 0.0)
         bucket["avg_cost_usd"] += float(entry.get("cost_usd") or 0.0)
+        bucket["success_rate"] += 1.0 if entry.get("success") else 0.0
 
         fb_score = None
         fb = entry.get("feedback") or {}
@@ -929,10 +949,67 @@ def _summarize_ai_metrics(interactions: list[dict]) -> dict:
         calls = max(1, bucket["calls"])
         bucket["avg_latency_ms"] = bucket["avg_latency_ms"] / calls
         bucket["avg_cost_usd"] = bucket["avg_cost_usd"] / calls
+        bucket["success_rate"] = bucket["success_rate"] / calls
         if bucket["avg_feedback_score"] is not None:
             bucket["avg_feedback_score"] = bucket["avg_feedback_score"] / calls
 
     return {"by_model": summary}
+
+
+def _aggregate_model_metrics(interactions: list[dict]) -> dict:
+    metrics: dict[str, dict] = {}
+
+    for entry in interactions:
+        key = f"{entry.get('provider', 'unknown')}:{entry.get('model', 'unknown')}"
+        bucket = metrics.setdefault(
+            key,
+            {
+                "calls": 0,
+                "successes": 0,
+                "latency_total": 0.0,
+                "cost_total": 0.0,
+                "hallucination_flags": Counter(),
+                "rating_total": 0.0,
+                "rating_count": 0,
+            },
+        )
+
+        bucket["calls"] += 1
+        bucket["latency_total"] += float(entry.get("latency_ms") or 0.0)
+        bucket["cost_total"] += float(entry.get("cost_usd") or 0.0)
+        if entry.get("success") is True or _status_is_success((entry.get("metadata") or {}).get("status")):
+            bucket["successes"] += 1
+
+        for flag in entry.get("hallucination_flags") or []:
+            bucket["hallucination_flags"][str(flag)] += 1
+
+        rating_val = entry.get("user_rating")
+        if rating_val is None:
+            fb = entry.get("feedback") or {}
+            try:
+                rating_val = float(fb.get("score")) if fb.get("score") is not None else None
+            except Exception:
+                rating_val = None
+        if rating_val is not None:
+            bucket["rating_total"] += float(rating_val)
+            bucket["rating_count"] += 1
+
+    result: dict[str, dict] = {}
+    for key, bucket in metrics.items():
+        calls = max(bucket.get("calls", 0), 1)
+        hallucination_flags = bucket.get("hallucination_flags", Counter())
+        result[key] = {
+            "success_rate": bucket.get("successes", 0) / calls,
+            "avg_cost": bucket.get("cost_total", 0.0) / calls,
+            "avg_latency": bucket.get("latency_total", 0.0) / calls,
+            "hallucination_flags": dict(hallucination_flags),
+            "user_rating": (bucket.get("rating_total", 0.0) / bucket.get("rating_count", 1))
+            if bucket.get("rating_count")
+            else None,
+            "calls": bucket.get("calls", 0),
+        }
+
+    return result
 
 
 # ─── LIGHTWEIGHT CHAIN CACHE ────────────────────────────────────────────────
@@ -3726,7 +3803,17 @@ def api_chat():
         "files": resp_files,
         "credits": credits_for_frontend,
         "session_id": session_id,
+        "routing": None,
+        "task_type": None,
     }
+
+    routing_meta = raw.get("routing") if isinstance(raw, dict) else None
+    task_type_meta = raw.get("task_type") if isinstance(raw, dict) else None
+    hallucination_flags = raw.get("hallucination_flags") if isinstance(raw, dict) else []
+    user_rating = raw.get("user_rating") if isinstance(raw, dict) else None
+
+    resp["routing"] = routing_meta
+    resp["task_type"] = task_type_meta
 
     try:
         record_ai_interaction(
@@ -3742,7 +3829,12 @@ def api_chat():
             latency_ms=latency_ms,
             ai_credits_spent=ai_credits_spent,
             feedback=None,
-            metadata={"status": status},
+            metadata={"status": status, "task_type": task_type_meta, "routing": routing_meta},
+            success=_status_is_success(status),
+            task_type=task_type_meta,
+            routing=routing_meta,
+            hallucination_flags=hallucination_flags or [],
+            user_rating=user_rating,
         )
     except Exception:
         logger.exception("Failed to record AI interaction")
@@ -3819,6 +3911,36 @@ def api_ai_metrics_summary():
     )
 
     return jsonify(_summarize_ai_metrics(filtered)), 200
+
+
+@app.route("/api/ai/metrics", methods=["GET"])
+def api_ai_metrics_public():
+    provider = request.args.get("provider") or None
+    model = request.args.get("model") or None
+    wallet = request.args.get("wallet") or None
+    try:
+        from_ts = int(request.args.get("from_ts")) if request.args.get("from_ts") else None
+    except Exception:
+        from_ts = None
+    try:
+        to_ts = int(request.args.get("to_ts")) if request.args.get("to_ts") else None
+    except Exception:
+        to_ts = None
+
+    interactions = load_ai_interactions()
+    filtered = _filter_ai_interactions(
+        interactions,
+        provider=provider,
+        model=model,
+        wallet=wallet,
+        from_ts=from_ts,
+        to_ts=to_ts,
+    )
+
+    return jsonify({
+        "models": _aggregate_model_metrics(filtered),
+        "updated_at": int(time.time() * 1000),
+    }), 200
 
 
 @app.route(f"{API_BASE_PREFIX}/ai/interactions/<interaction_id>/feedback", methods=["POST"])

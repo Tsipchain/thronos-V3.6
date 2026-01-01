@@ -127,6 +127,12 @@ class AIInteractionTests(unittest.TestCase):
         self.assertIn("by_model", summary)
         self.assertIn("openai:gpt-4o", summary["by_model"])
 
+        public_metrics = self.client.get("/api/ai/metrics")
+        self.assertEqual(public_metrics.status_code, 200)
+        payload = public_metrics.get_json()
+        self.assertIn("models", payload)
+        self.assertIn("openai:gpt-4o", payload["models"])
+
     def test_chat_endpoint_records_interaction(self):
         resp = self.client.post(
             "/api/chat",

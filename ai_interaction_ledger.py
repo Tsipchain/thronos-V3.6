@@ -96,6 +96,12 @@ def record_ai_interaction(
     latency_ms: Optional[int] = None,
     success: Optional[bool] = None,
 ) -> None:
+    """Backward compatible logger used by legacy callers.
+
+    Internally it now writes into the v4 interaction ledger so the new REST
+    endpoints and routing helper can reuse the same data set.
+    """
+
     entry = {
         "timestamp": time.time(),
         "provider": provider,

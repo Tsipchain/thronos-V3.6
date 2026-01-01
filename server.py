@@ -111,6 +111,8 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 API_BASE_PREFIX = os.getenv("API_BASE_PREFIX", "/api")
 APP_VERSION     = os.getenv("APP_VERSION", "v3.6")
 
+AI_LOG_API_KEY = os.getenv("AI_LOG_API_KEY", os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW"))
+
 DATA_DIR   = os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data"))
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -498,6 +500,11 @@ except Exception as e:
     print(f"AI Init Error: {e}")
     ai_agent = None
 
+try:
+    ai_scorer = ThronosAIScorer()
+except Exception:
+    ai_scorer = None
+
 
 def _usage_from_dict(raw: dict | None) -> dict:
     if not isinstance(raw, dict):
@@ -786,6 +793,11 @@ def save_json(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _authorized_logging_request(req) -> bool:
+    key = req.headers.get("X-API-Key") or req.args.get("api_key") or ""
+    return str(key) == str(AI_LOG_API_KEY)
 
 
 def _load_jsonl(path: str) -> list:
@@ -3571,6 +3583,10 @@ def api_chat():
 
     if session_id:
         ensure_session_exists(session_id, wallet)
+        try:
+            register_session({"session_id": session_id, "user_wallet": wallet or None})
+        except Exception:
+            pass
 
     # Attachments are file_ids previously uploaded via /api/ai/files/upload
     if attachments:
@@ -3818,7 +3834,7 @@ def api_chat():
     resp["task_type"] = task_type_meta
 
     try:
-        record_ai_interaction(
+        interaction_entry = record_ai_interaction(
             session_id=session_id,
             user_wallet=wallet or None,
             provider=provider,
@@ -3840,7 +3856,88 @@ def api_chat():
         )
     except Exception:
         logger.exception("Failed to record AI interaction")
+        interaction_entry = None
+
+    if ai_scorer and interaction_entry and interaction_entry.get("id"):
+        try:
+            scoring = ai_scorer.score_interaction(full_prompt, full_text)
+            ledger_log_score(
+                interaction_id=interaction_entry.get("id"),
+                quality_score=scoring.get("quality_score", 0.0),
+                safety_score=scoring.get("safety_score", 0.0),
+                domain_label=scoring.get("domain_label"),
+                model_decision=scoring.get("routing_label"),
+                human_feedback=None,
+            )
+            resp["score"] = scoring
+        except Exception:
+            logger.exception("Failed to append AI score")
     return jsonify(resp), 200
+
+
+@app.route("/api/v1/ai/log", methods=["POST"])
+def api_ai_log_v1():
+    if not _authorized_logging_request(request):
+        return jsonify(error="Forbidden"), 403
+
+    data = request.get_json() or {}
+    provider_id = data.get("provider_id") or data.get("provider")
+    model = data.get("model") or ""
+    if not provider_id:
+        return jsonify(error="provider_id is required"), 400
+
+    prompt_text = data.get("prompt") or data.get("prompt_text") or ""
+    response_text = data.get("response") or data.get("response_text") or ""
+    session_id = data.get("session_id") or data.get("session")
+    if session_id:
+        try:
+            register_session({"session_id": session_id, "user_wallet": data.get("user_wallet") or data.get("wallet")})
+        except Exception:
+            pass
+
+    if data.get("provider_info"):
+        try:
+            register_provider(data.get("provider_info"))
+        except Exception:
+            pass
+
+    entry = ledger_log_interaction(
+        session_id=session_id,
+        provider_id=provider_id,
+        prompt_text=prompt_text,
+        response_text=response_text,
+        model=model,
+        tokens_in=int(data.get("tokens_in") or data.get("tokens_input") or 0),
+        tokens_out=int(data.get("tokens_out") or data.get("tokens_output") or 0),
+        latency_ms=int(data.get("latency_ms") or data.get("latency") or 0),
+        cost_est=float(data.get("cost_est") or data.get("cost_usd") or 0.0),
+        user_wallet=data.get("user_wallet") or data.get("wallet"),
+        metadata=data.get("metadata") or {},
+    )
+
+    return jsonify(status="ok", interaction=entry), 201
+
+
+@app.route("/api/v1/ai/score", methods=["POST"])
+def api_ai_score_v1():
+    if not _authorized_logging_request(request):
+        return jsonify(error="Forbidden"), 403
+
+    data = request.get_json() or {}
+    interaction_id = data.get("interaction_id")
+    if not interaction_id:
+        return jsonify(error="interaction_id is required"), 400
+
+    score_entry = ledger_log_score(
+        interaction_id=interaction_id,
+        quality_score=float(data.get("quality_score") or 0.0),
+        safety_score=float(data.get("safety_score") or 0.0),
+        domain_label=data.get("domain_label"),
+        model_decision=data.get("model_decision"),
+        human_feedback=data.get("human_feedback"),
+    )
+
+    return jsonify(status="ok", score=score_entry), 201
 
 
 @app.route(f"{API_BASE_PREFIX}/ai/interactions", methods=["GET"])

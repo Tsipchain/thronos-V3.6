@@ -80,6 +80,7 @@ class ThronosAI:
 
         self.ai_history_file = os.path.join(self.data_dir, "ai_history.json")
         self.ai_block_log_file = os.path.join(self.data_dir, "ai_block_log.json")
+        self.ai_interactions_file = os.path.join(self.data_dir, "ai_interactions.jsonl")
 
         # Provider availability
         self.gemini_enabled = bool(self.gemini_api_key and genai)
@@ -205,6 +206,116 @@ Multiple files can be created in one response. Always describe what you're creat
                 json.dump(items, f, indent=2, ensure_ascii=False)
         except Exception:
             pass
+
+    # ─── Interaction ledger (shared dataset for routing + metrics) ──────────
+
+    def _load_interaction_ledger(self, limit: int = 4000) -> List[Dict[str, Any]]:
+        """Load past AI interactions from the shared ledger (JSONL).
+
+        The ledger is persisted in ``ai_interactions.jsonl`` and is also used by
+        the backend API.  We keep a cap to avoid loading unbounded history in
+        memory.
+        """
+
+        entries: List[Dict[str, Any]] = []
+        if not os.path.exists(self.ai_interactions_file):
+            return entries
+
+        try:
+            with open(self.ai_interactions_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entries.append(json.loads(line))
+                    except Exception:
+                        continue
+        except Exception:
+            return []
+
+        if len(entries) > limit:
+            entries = entries[-limit:]
+        return entries
+
+    def _status_is_success(self, status: str) -> bool:
+        status_l = (status or "").lower()
+        if not status_l:
+            return False
+        error_tokens = ["error", "quota", "blocked", "no_credits", "provider_error"]
+        return not any(tok in status_l for tok in error_tokens)
+
+    def _infer_task_type(self, prompt: str) -> str:
+        """Lightweight heuristic to bucket prompts into task types.
+
+        The routing policy uses this to scope historical success rates.
+        """
+
+        prompt_l = (prompt or "").lower()
+        if any(k in prompt_l for k in ["code", "function", "class", "python", "bug", "compile"]):
+            return "coding"
+        if any(k in prompt_l for k in ["design", "idea", "creative", "story", "lyrics"]):
+            return "creative"
+        if any(k in prompt_l for k in ["translate", "language", "english", "greek", "spanish"]):
+            return "translation"
+        if any(k in prompt_l for k in ["analyze", "summary", "explain", "reason"]):
+            return "analysis"
+        return "general"
+
+    def _score_providers(self, task_type: str) -> Dict[str, float]:
+        """Return a simple Laplace-smoothed success rate per provider."""
+
+        entries = self._load_interaction_ledger()
+        stats: Dict[str, Dict[str, float]] = {}
+
+        for entry in entries:
+            provider = entry.get("provider") or "unknown"
+            if provider not in ("openai", "anthropic", "gemini", "local"):
+                continue
+            entry_task = entry.get("task_type") or entry.get("metadata", {}).get("task_type")
+            if entry_task and entry_task != task_type:
+                continue
+
+            bucket = stats.setdefault(provider, {"success": 1.0, "total": 2.0})
+            bucket["total"] += 1.0
+
+            success = bool(entry.get("success")) or self._status_is_success(
+                entry.get("metadata", {}).get("status") or entry.get("status") or ""
+            )
+            if success:
+                bucket["success"] += 1.0
+
+        scores: Dict[str, float] = {}
+        for provider, bucket in stats.items():
+            success = bucket.get("success", 1.0)
+            total = max(bucket.get("total", 2.0), 1.0)
+            scores[provider] = success / total
+
+        return scores
+
+    def _rank_providers(self, task_type: str) -> List[Dict[str, Any]]:
+        """Return available providers ranked by historical success."""
+
+        scores = self._score_providers(task_type)
+        availability: List[Dict[str, Any]] = []
+
+        if self.openai_enabled:
+            availability.append({"provider": "openai", "model": self.openai_model_name})
+        if self.anthropic_enabled:
+            availability.append({"provider": "anthropic", "model": self.anthropic_model_name})
+        if self.gemini_enabled:
+            availability.append({"provider": "gemini", "model": self.gemini_model_name})
+
+        # Local fallback is always available
+        availability.append({"provider": "local", "model": "offline_corpus"})
+
+        for item in availability:
+            item["score"] = scores.get(item["provider"], 0.5)
+
+        # Stable sort: highest score first, then a deterministic preference order
+        preference = {"openai": 3, "anthropic": 2, "gemini": 1, "local": 0}
+        availability.sort(key=lambda x: (x["score"], preference.get(x["provider"], -1)), reverse=True)
+        return availability
 
     def _hash_short(self, text: str) -> str:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()[:24]
@@ -521,6 +632,8 @@ Multiple files can be created in one response. Always describe what you're creat
 
         mk = (model_key or "").strip().lower()
         lang = (kwargs.get("lang") or kwargs.get("language") or "").strip().lower() or None
+        task_type = self._infer_task_type(prompt)
+        routing_info: Dict[str, Any] = {"task_type": task_type}
 
         def ensure_quantum_key(ans: Dict[str, Any]) -> Dict[str, Any]:
             if ans is None:
@@ -536,61 +649,72 @@ Multiple files can be created in one response. Always describe what you're creat
 
         try:
             if mk in ("diko_mas", "custom-default", "thrai"):
+                routing_info["selected"] = "diko_mas"
+                routing_info["attempts"] = []
                 resp = self._call_diko_mas_model(prompt, wallet=wallet, session_id=session_id)
             elif mk and mk.startswith("gemini"):
+                routing_info["selected"] = "gemini"
+                routing_info["attempts"] = []
                 resp = self._call_gemini(prompt, mk, lang=lang, wallet=wallet, session_id=session_id)
             elif mk and (mk.startswith("gpt-") or mk.startswith("o")):
+                routing_info["selected"] = "openai"
+                routing_info["attempts"] = []
                 resp = self._call_openai(prompt, mk, lang=lang, wallet=wallet, session_id=session_id)
             elif mk and mk.startswith("claude"):
+                routing_info["selected"] = "anthropic"
+                routing_info["attempts"] = []
                 resp = self._call_claude(prompt, mk, lang=lang, wallet=wallet, session_id=session_id)
             else:
-                providers = []
-
-                if self.diko_mas_model_url:
-                    providers.append(lambda: self._call_diko_mas_model(prompt, wallet=wallet, session_id=session_id))
-
-                if self.gemini_api_key:
-                    providers.append(
-                        lambda: self._call_gemini(
-                            prompt,
-                            "gemini-2.5-flash",
-                            lang=lang,
-                            wallet=wallet,
-                            session_id=session_id,
-                        )
-                    )
-
-                if getattr(self, "anthropic_api_key", None):
-                    providers.append(
-                        lambda: self._call_claude(
-                            prompt,
-                            "claude-3-sonnet-20240229",
-                            lang=lang,
-                            wallet=wallet,
-                            session_id=session_id,
-                        )
-                    )
-
-                if self.openai_api_key:
-                    providers.append(
-                        lambda: self._call_openai(
-                            prompt,
-                            "gpt-4o",
-                            lang=lang,
-                            wallet=wallet,
-                            session_id=session_id,
-                        )
-                    )
-
+                ranked = self._rank_providers(task_type)
+                routing_info["ranked"] = ranked
+                attempts: List[Dict[str, Any]] = []
                 resp = None
-                for fn in providers:
+
+                for candidate in ranked:
+                    provider = candidate["provider"]
+                    model_choice = candidate.get("model")
+                    started = time.time()
                     try:
-                        r = fn()
-                        if isinstance(r, dict) and r.get("status") not in ("provider_error", "config_error"):
-                            resp = r
-                            break
-                    except Exception:
-                        continue
+                        if provider == "openai":
+                            r = self._call_openai(prompt, model_choice, lang=lang, wallet=wallet, session_id=session_id)
+                        elif provider == "anthropic":
+                            r = self._call_claude(prompt, model_choice, lang=lang, wallet=wallet, session_id=session_id)
+                        elif provider == "gemini":
+                            r = self._call_gemini(prompt, model_choice, lang=lang, wallet=wallet, session_id=session_id)
+                        else:
+                            r = self._local_answer(prompt)
+                    except Exception as e:
+                        r = self._base_payload(
+                            f"Quantum Core Error ({provider}): {e}",
+                            status=f"{provider}_error",
+                            provider=provider,
+                            model=model_choice or "auto",
+                        )
+                    latency_ms = int((time.time() - started) * 1000)
+                    if isinstance(r, dict) and "latency_ms" not in r:
+                        r["latency_ms"] = latency_ms
+
+                    attempts.append({
+                        "provider": provider,
+                        "model": model_choice,
+                        "status": r.get("status", ""),
+                        "latency_ms": r.get("latency_ms"),
+                    })
+
+                    if isinstance(r, dict) and self._status_is_success(r.get("status")):
+                        resp = r
+                        routing_info["selected"] = provider
+                        break
+                    if resp is None:
+                        resp = r
+
+                routing_info["attempts"] = attempts
+
+                if resp is not None and routing_info.get("selected") is None:
+                    if isinstance(resp, dict):
+                        routing_info["selected"] = resp.get("provider")
+                    else:
+                        routing_info["selected"] = None
 
                 if resp is None:
                     resp = self._build_base_payload(
@@ -600,6 +724,9 @@ Multiple files can be created in one response. Always describe what you're creat
                         model="auto",
                     )
 
+            if isinstance(resp, dict):
+                resp["routing"] = routing_info
+                resp["task_type"] = task_type
             resp = ensure_quantum_key(resp)
             self._store_history(prompt, resp, wallet)
             return resp
@@ -610,6 +737,8 @@ Multiple files can be created in one response. Always describe what you're creat
                 provider="thronos_ai",
                 model=mk or "auto",
             )
+            resp["routing"] = routing_info
+            resp["task_type"] = task_type
             resp = ensure_quantum_key(resp)
             self._store_history(prompt, resp, wallet)
             return resp

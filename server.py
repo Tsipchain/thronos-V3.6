@@ -134,6 +134,7 @@ LAST_BLOCK_FILE     = os.path.join(DATA_DIR, "last_block.json")
 WHITELIST_FILE      = os.path.join(DATA_DIR, "free_pledge_whitelist.json")
 AI_CREDS_FILE       = os.path.join(DATA_DIR, "ai_agent_credentials.json")
 AI_BLOCK_LOG_FILE   = os.path.join(DATA_DIR, "ai_block_log.json")
+AI_INTERACTIONS_FILE = os.path.join(DATA_DIR, "ai_interactions.jsonl")
 WATCHER_LEDGER_FILE = os.path.join(DATA_DIR, "watcher_ledger.json")
 IOT_DATA_FILE       = os.path.join(DATA_DIR, "iot_data.json")
 IOT_PARKING_FILE    = os.path.join(DATA_DIR, "iot_parking.json")
@@ -494,6 +495,156 @@ def save_json(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _load_jsonl(path: str) -> list:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip()]
+        return [json.loads(line) for line in lines]
+    except FileNotFoundError:
+        return []
+    except Exception:
+        try:
+            return load_json(path, [])
+        except Exception:
+            return []
+
+
+def _save_jsonl(path: str, entries: list[dict]) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for entry in entries:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def load_ai_interactions() -> list[dict]:
+    return _load_jsonl(AI_INTERACTIONS_FILE)
+
+
+def save_ai_interactions(entries: list[dict]) -> None:
+    _save_jsonl(AI_INTERACTIONS_FILE, entries)
+
+
+def append_ai_interaction(entry: dict) -> None:
+    os.makedirs(os.path.dirname(AI_INTERACTIONS_FILE), exist_ok=True)
+    with open(AI_INTERACTIONS_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def _sha256_hex(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def record_ai_interaction(
+    session_id: str | None,
+    user_wallet: str | None,
+    provider: str,
+    model: str,
+    prompt: str,
+    output: str,
+    tokens_input: int,
+    tokens_output: int,
+    cost_usd: float,
+    latency_ms: int,
+    ai_credits_spent: float,
+    feedback: dict | None = None,
+    metadata: dict | None = None,
+) -> dict:
+    ts_ms = int(time.time() * 1000)
+    entry = {
+        "id": str(uuid.uuid4()),
+        "timestamp": ts_ms,
+        "session_id": session_id,
+        "user_wallet": user_wallet,
+        "provider": provider,
+        "model": model,
+        "input_hash": _sha256_hex(prompt or ""),
+        "output_hash": _sha256_hex(output or ""),
+        "tokens_input": int(tokens_input or 0),
+        "tokens_output": int(tokens_output or 0),
+        "cost_usd": float(cost_usd or 0.0),
+        "latency_ms": int(latency_ms or 0),
+        "ai_credits_spent": float(ai_credits_spent or 0.0),
+        "feedback": feedback
+        if feedback is not None
+        else {"score": None, "tags": []},
+        "eval": {"auto_score": None, "notes": None},
+        "metadata": metadata or {},
+    }
+
+    append_ai_interaction(entry)
+    return entry
+
+
+def _filter_ai_interactions(
+    interactions: list[dict],
+    provider: str | None = None,
+    model: str | None = None,
+    wallet: str | None = None,
+    from_ts: int | None = None,
+    to_ts: int | None = None,
+) -> list[dict]:
+    filtered = []
+    for entry in interactions:
+        if provider and str(entry.get("provider", "")) != provider:
+            continue
+        if model and str(entry.get("model", "")) != model:
+            continue
+        if wallet and str(entry.get("user_wallet", "")) != wallet:
+            continue
+        ts_raw = entry.get("timestamp")
+        try:
+            ts_val = int(ts_raw)
+        except Exception:
+            ts_val = None
+
+        if from_ts is not None and ts_val is not None and ts_val < from_ts:
+            continue
+        if to_ts is not None and ts_val is not None and ts_val > to_ts:
+            continue
+        filtered.append(entry)
+    return filtered
+
+
+def _summarize_ai_metrics(interactions: list[dict]) -> dict:
+    summary: dict[str, dict] = {}
+    for entry in interactions:
+        key = f"{entry.get('provider', 'unknown')}:{entry.get('model', 'unknown')}"
+        bucket = summary.setdefault(
+            key,
+            {
+                "calls": 0,
+                "avg_latency_ms": 0.0,
+                "avg_cost_usd": 0.0,
+                "avg_feedback_score": None,
+            },
+        )
+
+        bucket["calls"] += 1
+        bucket["avg_latency_ms"] += float(entry.get("latency_ms") or 0.0)
+        bucket["avg_cost_usd"] += float(entry.get("cost_usd") or 0.0)
+
+        fb_score = None
+        fb = entry.get("feedback") or {}
+        try:
+            fb_score = int(fb.get("score"))
+        except Exception:
+            fb_score = None
+
+        if fb_score is not None:
+            if bucket["avg_feedback_score"] is None:
+                bucket["avg_feedback_score"] = 0.0
+            bucket["avg_feedback_score"] += float(fb_score)
+
+    for bucket in summary.values():
+        calls = max(1, bucket["calls"])
+        bucket["avg_latency_ms"] = bucket["avg_latency_ms"] / calls
+        bucket["avg_cost_usd"] = bucket["avg_cost_usd"] / calls
+        if bucket["avg_feedback_score"] is not None:
+            bucket["avg_feedback_score"] = bucket["avg_feedback_score"] / calls
+
+    return {"by_model": summary}
 
 
 # ─── LIGHTWEIGHT CHAIN CACHE ────────────────────────────────────────────────
@@ -3049,6 +3200,7 @@ def api_chat():
     session_id = (data.get("session_id") or "").strip() or None
     model_key = (data.get("model_key") or "").strip() or None
     attachments = data.get("attachments") or data.get("attachment_ids") or []
+    ai_credits_spent = 0.0
 
     if session_id:
         ensure_session_exists(session_id, wallet)
@@ -3204,7 +3356,9 @@ def api_chat():
 
     # --- Κλήση στον ThronosAI provider ---
     # Pass model_key AND session_id to generate_response
+    call_started = time.time()
     raw = ai_agent.generate_response(full_prompt, wallet=wallet, model_key=model_key, session_id=session_id)
+    latency_ms = int((time.time() - call_started) * 1000)
 
     if isinstance(raw, dict):
         full_text = str(raw.get("response") or "")
@@ -3244,6 +3398,7 @@ def api_chat():
         credits_map[wallet] = after
         save_ai_credits(credits_map)
         credits_for_frontend = after
+        ai_credits_spent = max(0.0, float(before - after))
     else:
         # For demo sessions, report remaining free messages.  This
         # communicates to the user how many additional messages they may
@@ -3284,7 +3439,127 @@ def api_chat():
         "credits": credits_for_frontend,
         "session_id": session_id,
     }
+
+    try:
+        record_ai_interaction(
+            session_id=session_id,
+            user_wallet=wallet or None,
+            provider=provider,
+            model=model,
+            prompt=full_prompt,
+            output=full_text,
+            tokens_input=len(full_prompt.split()),
+            tokens_output=len(full_text.split()),
+            cost_usd=0.0,
+            latency_ms=latency_ms,
+            ai_credits_spent=ai_credits_spent,
+            feedback=None,
+            metadata={"status": status},
+        )
+    except Exception:
+        logger.exception("Failed to record AI interaction")
     return jsonify(resp), 200
+
+
+@app.route(f"{API_BASE_PREFIX}/ai/interactions", methods=["GET"])
+def api_ai_interactions_list():
+    secret = request.args.get("secret", "")
+    if secret != ADMIN_SECRET:
+        return jsonify(error="Forbidden"), 403
+
+    provider = request.args.get("provider") or None
+    model = request.args.get("model") or None
+    wallet = request.args.get("wallet") or None
+    try:
+        from_ts = int(request.args.get("from_ts")) if request.args.get("from_ts") else None
+    except Exception:
+        from_ts = None
+    try:
+        to_ts = int(request.args.get("to_ts")) if request.args.get("to_ts") else None
+    except Exception:
+        to_ts = None
+
+    try:
+        limit = min(500, max(1, int(request.args.get("limit", 100))))
+    except Exception:
+        limit = 100
+    try:
+        offset = max(0, int(request.args.get("offset", 0)))
+    except Exception:
+        offset = 0
+
+    interactions = load_ai_interactions()
+    filtered = _filter_ai_interactions(
+        interactions,
+        provider=provider,
+        model=model,
+        wallet=wallet,
+        from_ts=from_ts,
+        to_ts=to_ts,
+    )
+
+    sliced = filtered[offset : offset + limit]
+    return jsonify(total=len(filtered), interactions=sliced), 200
+
+
+@app.route(f"{API_BASE_PREFIX}/ai/metrics/summary", methods=["GET"])
+def api_ai_metrics_summary():
+    secret = request.args.get("secret", "")
+    if secret != ADMIN_SECRET:
+        return jsonify(error="Forbidden"), 403
+
+    provider = request.args.get("provider") or None
+    model = request.args.get("model") or None
+    wallet = request.args.get("wallet") or None
+    try:
+        from_ts = int(request.args.get("from_ts")) if request.args.get("from_ts") else None
+    except Exception:
+        from_ts = None
+    try:
+        to_ts = int(request.args.get("to_ts")) if request.args.get("to_ts") else None
+    except Exception:
+        to_ts = None
+
+    interactions = load_ai_interactions()
+    filtered = _filter_ai_interactions(
+        interactions,
+        provider=provider,
+        model=model,
+        wallet=wallet,
+        from_ts=from_ts,
+        to_ts=to_ts,
+    )
+
+    return jsonify(_summarize_ai_metrics(filtered)), 200
+
+
+@app.route(f"{API_BASE_PREFIX}/ai/interactions/<interaction_id>/feedback", methods=["POST"])
+def api_ai_interactions_feedback(interaction_id: str):
+    data = request.get_json() or {}
+    raw_score = data.get("score")
+    try:
+        score_val = int(raw_score) if raw_score is not None else None
+    except Exception:
+        score_val = None
+
+    tags = data.get("tags") or []
+    if not isinstance(tags, list):
+        tags = []
+    tags = [str(t) for t in tags if t is not None]
+
+    interactions = load_ai_interactions()
+    updated = False
+    for entry in interactions:
+        if entry.get("id") == interaction_id:
+            entry["feedback"] = {"score": score_val, "tags": tags}
+            updated = True
+            break
+
+    if not updated:
+        return jsonify(error="Not found"), 404
+
+    save_ai_interactions(interactions)
+    return jsonify(status="ok", feedback={"score": score_val, "tags": tags}), 200
 
 @app.route("/api/upload_training_data", methods=["POST"])
 def api_upload_training_data():

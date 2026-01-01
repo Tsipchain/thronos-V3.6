@@ -14,6 +14,7 @@ import time
 import json
 import secrets
 import hashlib
+import logging
 from typing import Dict, Any, List, Optional
 
 import requests
@@ -35,6 +36,159 @@ try:
     import anthropic
 except Exception:
     anthropic = None
+
+from ai_interaction_ledger import record_ai_interaction
+
+
+def _choose_provider(model: str) -> str:
+    model_l = (model or "").lower()
+    if model_l.startswith("claude") or "claude" in model_l:
+        return "anthropic"
+    if model_l.startswith("gemini") or "bison" in model_l:
+        return "gemini"
+    if model_l.startswith("gpt") or model_l.startswith("o4") or model_l.startswith("o-") or "gpt" in model_l:
+        return "openai"
+    return "openai"
+
+
+def call_openai(model: str, messages: List[Dict[str, str]], system_prompt: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 4096) -> Dict[str, Any]:
+    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    if not api_key:
+        logging.warning("missing OPENAI_API_KEY")
+        raise RuntimeError("OpenAI API key missing")
+
+    if system_prompt:
+        messages = ([{"role": "system", "content": system_prompt}] + messages)
+
+    client = OpenAI(api_key=api_key) if OpenAI else None
+    if not client:
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        payload = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+        r = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=30)
+        if r.status_code >= 400:
+            raise RuntimeError(f"HTTP {r.status_code}: {r.text}")
+        data = r.json()
+        return (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "")
+
+    completion = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    return (completion.choices[0].message.content or "").strip()
+
+
+def call_anthropic(model: str, messages: List[Dict[str, str]], system_prompt: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 4096) -> str:
+    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    if not api_key:
+        logging.warning("missing ANTHROPIC_API_KEY")
+        raise RuntimeError("Anthropic API key missing")
+
+    if system_prompt:
+        sys_prompt = system_prompt
+    else:
+        sys_prompt = None
+
+    if anthropic:
+        client = anthropic.Anthropic(api_key=api_key)
+        resp = client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=sys_prompt,
+            messages=messages,
+            temperature=temperature,
+        )
+        return "".join([p.text for p in getattr(resp, "content", []) if hasattr(p, "text")]).strip()
+
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    payload = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": sys_prompt,
+        "messages": messages,
+        "temperature": temperature,
+    }
+    r = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload, timeout=30)
+    if r.status_code >= 400:
+        raise RuntimeError(f"HTTP {r.status_code}: {r.text}")
+    data = r.json()
+    return "".join([item.get("text", "") for item in data.get("content", []) if isinstance(item, dict)]).strip()
+
+
+def call_gemini(model: str, messages: List[Dict[str, str]], system_prompt: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 4096) -> str:
+    api_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+    if not api_key:
+        logging.warning("missing GEMINI_API_KEY/GOOGLE_API_KEY")
+        raise RuntimeError("Gemini API key missing")
+    if not genai:
+        raise RuntimeError("Gemini SDK not installed")
+
+    genai.configure(api_key=api_key)
+    system_instruction = system_prompt or None
+    model_client = genai.GenerativeModel(model, system_instruction=system_instruction)
+    user_content = "\n\n".join([m.get("content", "") for m in messages if m.get("role") != "system"])
+    resp = model_client.generate_content(user_content, generation_config={"temperature": temperature, "max_output_tokens": max_tokens})
+    return (getattr(resp, "text", "") or "").strip()
+
+
+def call_llm(model: str, messages: List[Dict[str, str]], system_prompt: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 4096, session_id: Optional[str] = None, wallet: Optional[str] = None, difficulty: Optional[str] = None, block_hash: Optional[str] = None) -> Dict[str, Any]:
+    provider = _choose_provider(model)
+    mode = os.getenv("THRONOS_AI_MODE", "router").lower()
+    if mode == "openai_only":
+        provider = "openai"
+        if not model or _choose_provider(model) != "openai":
+            model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+
+    started = time.time()
+    text = ""
+    error = None
+
+    try:
+        if provider == "openai":
+            text = call_openai(model, messages, system_prompt=system_prompt, temperature=temperature, max_tokens=max_tokens)
+        elif provider == "anthropic":
+            text = call_anthropic(model, messages, system_prompt=system_prompt, temperature=temperature, max_tokens=max_tokens)
+        elif provider == "gemini":
+            text = call_gemini(model, messages, system_prompt=system_prompt, temperature=temperature, max_tokens=max_tokens)
+        else:
+            raise RuntimeError(f"Unsupported provider for model {model}")
+    except Exception as exc:
+        error = str(exc)
+
+    duration = time.time() - started
+    prompt_text = "\n\n".join([m.get("content", "") for m in messages])
+    record_ai_interaction(
+        provider=provider,
+        model=model,
+        prompt_text=prompt_text,
+        output_text=text,
+        duration=duration,
+        session_id=session_id,
+        wallet=wallet,
+        difficulty=difficulty,
+        block_hash=block_hash,
+        error=error,
+    )
+
+    if error:
+        return {
+            "response": f"Quantum Core Error ({provider}): {error}",
+            "status": f"{provider}_error",
+            "provider": provider,
+            "model": model,
+        }
+
+    return {
+        "response": text or "Quantum Core: empty response.",
+        "status": provider,
+        "provider": provider,
+        "model": model,
+    }
 
 
 class ThronosAI:
@@ -630,10 +784,9 @@ Multiple files can be created in one response. Always describe what you're creat
         if not prompt:
             return self._build_base_payload("Empty prompt.", "error", "local", "offline")
 
-        mk = (model_key or "").strip().lower()
+        mk = (model_key or os.getenv("OPENAI_MODEL", "gpt-4.1-mini")).strip()
         lang = (kwargs.get("lang") or kwargs.get("language") or "").strip().lower() or None
         task_type = self._infer_task_type(prompt)
-        routing_info: Dict[str, Any] = {"task_type": task_type}
 
         def ensure_quantum_key(ans: Dict[str, Any]) -> Dict[str, Any]:
             if ans is None:
@@ -647,86 +800,22 @@ Multiple files can be created in one response. Always describe what you're creat
                 ans["quantum_key"] = self.generate_quantum_key()
             return ans
 
+        messages = [{"role": "user", "content": prompt}]
+        system_prompt = self._system_prompt(lang)
+
         try:
-            if mk in ("diko_mas", "custom-default", "thrai"):
-                routing_info["selected"] = "diko_mas"
-                routing_info["attempts"] = []
-                resp = self._call_diko_mas_model(prompt, wallet=wallet, session_id=session_id)
-            elif mk and mk.startswith("gemini"):
-                routing_info["selected"] = "gemini"
-                routing_info["attempts"] = []
-                resp = self._call_gemini(prompt, mk, lang=lang, wallet=wallet, session_id=session_id)
-            elif mk and (mk.startswith("gpt-") or mk.startswith("o")):
-                routing_info["selected"] = "openai"
-                routing_info["attempts"] = []
-                resp = self._call_openai(prompt, mk, lang=lang, wallet=wallet, session_id=session_id)
-            elif mk and mk.startswith("claude"):
-                routing_info["selected"] = "anthropic"
-                routing_info["attempts"] = []
-                resp = self._call_claude(prompt, mk, lang=lang, wallet=wallet, session_id=session_id)
-            else:
-                ranked = self._rank_providers(task_type)
-                routing_info["ranked"] = ranked
-                attempts: List[Dict[str, Any]] = []
-                resp = None
-
-                for candidate in ranked:
-                    provider = candidate["provider"]
-                    model_choice = candidate.get("model")
-                    started = time.time()
-                    try:
-                        if provider == "openai":
-                            r = self._call_openai(prompt, model_choice, lang=lang, wallet=wallet, session_id=session_id)
-                        elif provider == "anthropic":
-                            r = self._call_claude(prompt, model_choice, lang=lang, wallet=wallet, session_id=session_id)
-                        elif provider == "gemini":
-                            r = self._call_gemini(prompt, model_choice, lang=lang, wallet=wallet, session_id=session_id)
-                        else:
-                            r = self._local_answer(prompt)
-                    except Exception as e:
-                        r = self._base_payload(
-                            f"Quantum Core Error ({provider}): {e}",
-                            status=f"{provider}_error",
-                            provider=provider,
-                            model=model_choice or "auto",
-                        )
-                    latency_ms = int((time.time() - started) * 1000)
-                    if isinstance(r, dict) and "latency_ms" not in r:
-                        r["latency_ms"] = latency_ms
-
-                    attempts.append({
-                        "provider": provider,
-                        "model": model_choice,
-                        "status": r.get("status", ""),
-                        "latency_ms": r.get("latency_ms"),
-                    })
-
-                    if isinstance(r, dict) and self._status_is_success(r.get("status")):
-                        resp = r
-                        routing_info["selected"] = provider
-                        break
-                    if resp is None:
-                        resp = r
-
-                routing_info["attempts"] = attempts
-
-                if resp is not None and routing_info.get("selected") is None:
-                    if isinstance(resp, dict):
-                        routing_info["selected"] = resp.get("provider")
-                    else:
-                        routing_info["selected"] = None
-
-                if resp is None:
-                    resp = self._build_base_payload(
-                        "All AI providers failed. Please try again later.",
-                        status="provider_error",
-                        provider="thronos_ai",
-                        model="auto",
-                    )
-
-            if isinstance(resp, dict):
-                resp["routing"] = routing_info
-                resp["task_type"] = task_type
+            resp = call_llm(
+                mk,
+                messages,
+                system_prompt=system_prompt,
+                temperature=float(kwargs.get("temperature", 0.7)),
+                max_tokens=int(kwargs.get("max_tokens", 4096)),
+                session_id=session_id,
+                wallet=wallet,
+                difficulty=kwargs.get("difficulty"),
+                block_hash=kwargs.get("block_hash"),
+            )
+            resp["task_type"] = task_type
             resp = ensure_quantum_key(resp)
             self._store_history(prompt, resp, wallet)
             return resp
@@ -737,7 +826,6 @@ Multiple files can be created in one response. Always describe what you're creat
                 provider="thronos_ai",
                 model=mk or "auto",
             )
-            resp["routing"] = routing_info
             resp["task_type"] = task_type
             resp = ensure_quantum_key(resp)
             self._store_history(prompt, resp, wallet)

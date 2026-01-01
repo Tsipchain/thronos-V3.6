@@ -56,15 +56,22 @@ def _resolve_model(model: Optional[str]) -> Optional[dict]:
         normalized_mode = mode
 
     if not model or model == "auto":
+        env_default_id = (os.getenv("THRONOS_DEFAULT_MODEL_ID") or "").strip()
+        if env_default_id:
+            env_default = find_model(env_default_id)
+            if env_default and env_default.enabled:
+                if normalized_mode in ("all", env_default.provider):
+                    return env_default.__dict__
+
         default_model = get_default_model(None if normalized_mode == "all" else normalized_mode)
         return default_model.__dict__ if default_model else None
 
     info = find_model(model)
-    if not info:
+    if not info or not info.enabled:
         return None
 
     if normalized_mode != "all" and info.provider != normalized_mode:
-        return None
+        return info.__dict__
     return info.__dict__
 
 
@@ -169,6 +176,8 @@ def call_llm(
         return {
             "response": "Unknown or disabled model_id",
             "status": "model_not_found",
+            "provider": None,
+            "model": model,
             "error": "Unknown model_id",
         }
 
@@ -187,6 +196,8 @@ def call_llm(
         return {
             "response": "Provider blocked by THRONOS_AI_MODE",
             "status": "forbidden",
+            "provider": provider,
+            "model": model,
             "error": "Provider not allowed",
         }
 
@@ -194,7 +205,7 @@ def call_llm(
     prompt_text = "\n\n".join([m.get("content", "") for m in messages])
     routing_meta: Dict[str, Any] = {}
 
-    if ThronosAIScorer is not None:
+    if ThronosAIScorer is not None and mode == "router":
         try:
             router = ThronosAIScorer()
             decision = router.route_provider(prompt_text)
@@ -226,22 +237,25 @@ def call_llm(
         error = str(exc)
 
     duration = time.time() - started
-    record_ai_interaction(
-        provider=provider,
-        model=model,
-        tier=tier,
-        prompt_text=prompt_text,
-        output_text=text,
-        duration=duration,
-        latency_ms=int(duration * 1000),
-        session_id=session_id,
-        wallet=wallet,
-        difficulty=difficulty,
-        block_hash=block_hash,
-        error=error,
-        success=error is None,
-        metadata=routing_meta,
-    )
+    try:
+        record_ai_interaction(
+            provider=provider,
+            model=model,
+            tier=tier,
+            prompt_text=prompt_text,
+            output_text=text,
+            duration=duration,
+            latency_ms=int(duration * 1000),
+            session_id=session_id,
+            wallet=wallet,
+            difficulty=difficulty,
+            block_hash=block_hash,
+            error=error,
+            success=error is None,
+            metadata=routing_meta,
+        )
+    except Exception:
+        logging.exception("Failed to record AI interaction", extra={"provider": provider, "model": model})
 
     if error:
         return {

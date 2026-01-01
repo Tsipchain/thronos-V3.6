@@ -61,7 +61,7 @@ try:
     from phantom_gateway_mainnet import get_btc_txns
     from secure_pledge_embed import create_secure_pdf_contract
     from phantom_decode import decode_payload_from_image
-    from ai_agent_service import ThronosAI
+    from ai_agent_service import ThronosAI, call_llm
     # ── Quorum modules (placeholders μέχρι να μπει real crypto)
     from quorum_crypto import aggregate as qc_aggregate, verify as qc_verify
 except ImportError as e:
@@ -73,6 +73,8 @@ except ImportError as e:
     class ThronosAI:
         def generate_response(self, *args, **kwargs): return {"response": "AI Service Unavailable", "status": "error"}
         def generate_quantum_key(self): return "mock_key"
+    def call_llm(*args, **kwargs):
+        return {"response": "AI Service Unavailable", "status": "error"}
     qc_aggregate = lambda *args: None
     qc_verify = lambda *args: False
 
@@ -10045,46 +10047,42 @@ def api_ai_session_delete_v2():
 def api_ai_provider_chat():
     data = request.get_json(silent=True) or {}
     messages = data.get("messages") or []
-    single = (data.get("message") or "").strip()
-    if single and not messages:
-        messages = [{"role": "user", "content": single}]
+    prompt = (data.get("prompt") or data.get("message") or "").strip()
+    if prompt and not messages:
+        messages = [{"role": "user", "content": prompt}]
     if not isinstance(messages, list) or not messages:
         return jsonify({"ok": False, "error": "messages required"}), 400
 
-    model = (data.get("model") or data.get("model_key") or "claude-3.5-sonnet-latest").strip()
-    provider = _infer_provider(model, explicit=(data.get("provider") or None))
+    model = (data.get("model") or data.get("model_key") or None) or "auto"
     max_tokens = int(data.get("max_tokens") or 1024)
     temperature = float(data.get("temperature") or 0.6)
 
     try:
-        if provider == "anthropic":
-            result = call_claude(model, messages, max_tokens=max_tokens, temperature=temperature)
-        elif provider == "openai":
-            result = call_openai_chat(model, messages, max_tokens=max_tokens, temperature=temperature)
-        elif provider == "google":
-            result = call_gemini_chat(model, messages, max_tokens=max_tokens, temperature=temperature)
-        else:
-            raise RuntimeError(f"Unsupported provider {provider}")
+        result = call_llm(
+            model,
+            messages,
+            system_prompt=(data.get("system_prompt") or None),
+            temperature=temperature,
+            max_tokens=max_tokens,
+            session_id=data.get("session_id"),
+            wallet=data.get("wallet"),
+            difficulty=data.get("difficulty"),
+            block_hash=data.get("block_hash"),
+        )
     except Exception as exc:
+        app.logger.exception("AI provider chat failed")
         return (
-            jsonify({
-                "ok": False,
-                "error": f"{provider.capitalize()} provider unavailable",
-                "details": str(exc),
-            }),
-            502,
+            jsonify(
+                {
+                    "response": "Quantum Core Internal Error",
+                    "status": "internal_error",
+                    "error": str(exc),
+                }
+            ),
+            500,
         )
 
-    return jsonify(
-        {
-            "ok": True,
-            "provider": provider,
-            "model": model,
-            "message": result.get("content", ""),
-            "response": result.get("content", ""),
-            "usage": result.get("usage", {}),
-        }
-    )
+    return jsonify({"ok": True, **result})
 
 
 @app.route("/api/ai/chat", methods=["POST"])

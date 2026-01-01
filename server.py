@@ -54,30 +54,34 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 from apscheduler.schedulers.background import BackgroundScheduler
 from ai_models_config import base_model_config
+from ai_models_config import base_model_config
 from ai_interaction_ledger import (
     record_ai_interaction,
     get_ai_stats,
     list_interactions,
     interaction_to_block,
     log_ai_error,
+    compute_model_stats,
+    create_ai_transfer_from_ledger_entry,
 )
-from llm_registry import AI_MODEL_REGISTRY, compute_model_stats
-from ai_agent_service import ThronosAI, call_llm, _resolve_model
-
-from ai_interaction_ledger import compute_model_stats, create_ai_transfer_from_ledger_entry
-# κοντά στα άλλα AI routes, στο server.py
 from llm_registry import AI_MODEL_REGISTRY, get_default_model_for_mode
-from ai_interaction_ledger import compute_model_stats
 import traceback
 
-
-
+try:
     from phantom_gateway_mainnet import get_btc_txns
     from secure_pledge_embed import create_secure_pdf_contract
     from phantom_decode import decode_payload_from_image
-    from ai_agent_service import ThronosAI, call_llm, _resolve_model
     # ── Quorum modules (placeholders μέχρι να μπει real crypto)
     from quorum_crypto import aggregate as qc_aggregate, verify as qc_verify
+except ImportError as e:
+    print(f"[CRITICAL IMPORT ERROR]: {e}")
+    # Fallback mocks to prevent 500 on start if files missing
+    get_btc_txns = lambda *_a, **_k: []
+    create_secure_pdf_contract = lambda *args, **kwargs: "error.pdf"
+    decode_payload_from_image = lambda *args, **kwargs: None
+    qc_aggregate = lambda *args, **kwargs: {"combined": None, "raw_shares": []}
+    qc_verify = lambda *_a, **_k: False
+
 except ImportError as e:
     print(f"CRITICAL IMPORT ERROR: {e}")
     # Fallback mocks to prevent 500 on start if files missing

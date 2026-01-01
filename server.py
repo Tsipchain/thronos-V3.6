@@ -53,6 +53,8 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 from apscheduler.schedulers.background import BackgroundScheduler
 from ai_models_config import base_model_config, OPENAI_MODEL_FILTER
+from ai_interaction_ledger import compute_model_stats
+from llm_registry import AI_MODEL_REGISTRY
 
 # ── Local modules
 try:
@@ -10085,18 +10087,49 @@ def api_ai_providers_health():
 
 @app.route("/api/ai/models", methods=["GET"])
 def api_ai_models():
-    catalog = refresh_model_catalog()
-    health = {name: _check_provider_health(name) for name in ("openai", "anthropic", "google")}
+    try:
+        mode_env = os.getenv("THRONOS_AI_MODE", "all").lower()
+        if mode_env in ("router", "auto", "all"):
+            mode = "all"
+        elif mode_env == "openai_only":
+            mode = "openai"
+        else:
+            mode = mode_env
+        stats = compute_model_stats()
 
-    providers = {}
-    for name, data in catalog.get("providers", {}).items():
-        entry = dict(data)
-        entry["health"] = health.get(name, "error")
-        # hide models when provider disabled or unhealthy
-        entry["enabled"] = bool(entry.get("enabled")) and entry["health"] == "ok"
-        providers[name] = entry
+        providers = []
+        for provider_name, models in AI_MODEL_REGISTRY.items():
+            if mode != "all" and provider_name != mode:
+                continue
 
-    return jsonify({"providers": providers, "refreshed_at": catalog.get("refreshed_at")})
+            items = []
+            for m in models:
+                if not m.enabled:
+                    continue
+                model_stats = stats.get(m.id, {}) if isinstance(stats, dict) else {}
+                items.append(
+                    {
+                        "id": m.id,
+                        "label": m.label,
+                        "tier": m.tier,
+                        "default": m.default,
+                        "stats": model_stats,
+                    }
+                )
+
+            if items:
+                providers.append(
+                    {
+                        "id": provider_name,
+                        "label": provider_name.capitalize(),
+                        "models": items,
+                    }
+                )
+
+        return jsonify({"mode": mode, "providers": providers})
+    except Exception as exc:
+        app.logger.exception("/api/ai/models error", extra={"error": str(exc)})
+        return jsonify({"error": str(exc)}), 500
 
 
 @app.route("/api/ai/providers", methods=["GET"])

@@ -51,7 +51,7 @@ import re
 import mimetypes
 import json
 import requests
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, render_template
 
 try:
     from flask_cors import CORS

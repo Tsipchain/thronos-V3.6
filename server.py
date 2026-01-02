@@ -75,7 +75,7 @@ from ai_interaction_ledger import (
     create_ai_transfer_from_ledger_entry,
     compute_model_stats,
 )
-from llm_registry import AI_MODEL_REGISTRY, get_default_model_for_mode
+from llm_registry import AI_MODEL_REGISTRY
 from ai_agent_service import ThronosAI, call_llm, _resolve_model
 
 # Optional Phantom + quorum imports - wrapped in try so app still boots if missing

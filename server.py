@@ -61,6 +61,7 @@ except ImportError:  # Railway ή env χωρίς flask_cors
         return app
 
 from werkzeug.middleware.proxy_fix import ProxyFix
+from apscheduler.schedulers.background import BackgroundScheduler
 
 import os
 import json

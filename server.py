@@ -52,7 +52,14 @@ import mimetypes
 import json
 import requests
 from flask import Flask, request, jsonify, send_from_directory
-from flask_cors import CORS
+
+try:
+    from flask_cors import CORS
+except ImportError:  # Railway ή env χωρίς flask_cors
+    def CORS(app, *args, **kwargs):
+        # απλό no-op fallback ώστε ο server να μην σκάει
+        return app
+
 import os
 import json
 import uuid
@@ -63,6 +70,7 @@ CORS(app)
 
 SESSIONS_DIR = "sessions"
 os.makedirs(SESSIONS_DIR, exist_ok=True)
+
 
 @app.route('/chat_sessions', methods=['GET'])
 def chat_sessions():

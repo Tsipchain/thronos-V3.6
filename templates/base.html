@@ -1252,6 +1252,76 @@
                 <span class="lang-es">Conectar</span>
             </span>
         </button>
+<script>
+function shortAddr(a){ return a ? (a.slice(0,6)+"…"+a.slice(-4)) : ""; }
+
+function isUnlocked(){
+  return localStorage.getItem("thr_unlocked")==="1"
+      && localStorage.getItem("thr_pin_verified")==="1"
+      && !!localStorage.getItem("thr_address");
+}
+
+function renderWalletBtn(){
+  const btnText = document.getElementById("walletBtnText");
+  if(!btnText) return;
+
+  if(isUnlocked()){
+    btnText.textContent = shortAddr(localStorage.getItem("thr_address"));
+  } else {
+    // κράτα το multi-lang UI σου: απλά βάλε το default label εδώ
+    btnText.textContent = "Σύνδεση";
+  }
+}
+
+function handleWalletBtnClick(){
+  if(!isUnlocked()){
+    window.location.href="/wallet";
+    return;
+  }
+  // unlocked: άνοιξε το popup widget
+  const pop = document.getElementById("walletBalancePopup");
+  if(pop) pop.classList.toggle("open");
+  refreshWalletBalances();
+}
+
+async function refreshWalletBalances(){
+  const addr = localStorage.getItem("thr_address");
+  if(!addr) return;
+
+  const display = document.getElementById("walletBalanceDisplay");
+  if(display) display.innerHTML = "Loading…";
+
+  // IMPORTANT: βάλε εδώ ΤΟ ΣΩΣΤΟ endpoint που χρησιμοποιεί ήδη το /wallet
+  // Π.χ. /api/wallet/balances?address=...
+  const url = `/api/wallet/balances?address=${encodeURIComponent(addr)}`;
+
+  try{
+    const r = await fetch(url, {credentials:"include"});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const data = await r.json();
+
+    // παράδειγμα rendering (προσαρμόζεις στο JSON σου)
+    const thr = data.THR ?? data.thr ?? 0;
+    const wbtc = data.WBTC ?? data.wbtc ?? 0;
+
+    if(display){
+      display.innerHTML = `
+        <div style="line-height:1.6">
+          <div>THR: <b>${thr}</b></div>
+          <div>WBTC: <b>${wbtc}</b></div>
+        </div>
+      `;
+    }
+  }catch(e){
+    if(display) display.innerHTML = `<span style="color:#f66">Failed to load balances</span>`;
+    console.error("Wallet balances error:", e);
+  }
+}
+
+document.addEventListener("DOMContentLoaded", renderWalletBtn);
+window.addEventListener("storage", renderWalletBtn);
+window.addEventListener("thronos_wallet_updated", renderWalletBtn);
+</script>
 
         <!-- Wallet Balance Popup Widget -->
         <div class="wallet-balance-popup" id="walletBalancePopup" onclick="event.stopPropagation();">

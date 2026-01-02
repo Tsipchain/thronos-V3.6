@@ -4553,58 +4553,6 @@ def api_ai_history():
 #
 #     return jsonify({"wallet": wallet, "sessions": sessions}), 200
 
-@app.route("/api/ai_sessions/start", methods=["POST"])
-@app.route("/api/ai/sessions/start", methods=["POST"])
-def api_ai_session_start():
-
-    data = request.get_json(silent=True) or {}
-    wallet = (data.get("wallet") or "").strip()
-    title = (data.get("title") or "").strip() or "New Chat"
-    model = (data.get("model") or "").strip() or None
-
-    if not wallet:
-        return jsonify({"ok": False, "error": "wallet required"}), 400
-
-    sid = secrets.token_hex(8)
-    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-    session = {
-        "id": sid,
-        "wallet": wallet,
-        "title": title,
-        "created_at": now,
-        "updated_at": now,
-        "archived": False,
-        "model": model,
-        "message_count": 0,
-        "meta": {},
-    }
-
-    sessions = load_ai_sessions()
-    sessions.append(session)
-    save_ai_sessions(sessions)
-    return jsonify({"ok": True, "session": session})
-
-    if not wallet:
-        return jsonify(error="Wallet required"), 400
-
-    sid = secrets.token_hex(8)
-    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-    if not title:
-        title = "Νέα συνομιλία"
-
-    sessions = load_ai_sessions()
-    session = {
-        "id": sid,
-        "wallet": wallet,
-        "title": title[:80],
-        "created_at": ts,
-        "updated_at": ts,
-    }
-    sessions.append(session)
-    save_ai_sessions(sessions)
-
-    return jsonify(status="ok", session=session), 200
-
 @app.route("/api/ai_sessions/rename", methods=["POST"])
 @app.route("/api/ai/sessions/rename", methods=["POST"])  # Add slash version!
 def api_ai_session_rename():

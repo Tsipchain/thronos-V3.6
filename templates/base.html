@@ -126,30 +126,58 @@
         display: flex;
         gap: 10px;
         z-index: 100;
-    }
-    
-    /* Wallet Status Indicator */
-    .wallet-status {
-        background: #002200;
-        color: #0f0;
-        border: 1px solid #004400;
-        padding: 5px 10px;
-        font-size: 0.8em;
-        cursor: pointer;
-        display: none;
         align-items: center;
-        gap: 6px;
+    }
+
+    /* Unified Wallet Button */
+    .wallet-unified-btn {
+        background: linear-gradient(135deg, #00ff66 0%, #00cc52 100%);
+        color: #000;
+        border: none;
+        padding: 10px 20px;
+        cursor: pointer;
+        border-radius: 25px;
+        font-weight: bold;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        box-shadow: 0 0 20px rgba(0,255,102,0.4);
+        transition: all 0.3s ease;
         position: relative;
     }
-    .wallet-status:hover {
-        background: #004400;
+    .wallet-unified-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 0 30px rgba(0,255,102,0.6);
+    }
+    .wallet-unified-btn.connected {
+        background: linear-gradient(135deg, #1a3b2e 0%, #0a1f0a 100%);
+        color: #00ff66;
+        border: 2px solid #00ff66;
+        padding: 8px 16px;
+    }
+    .wallet-unified-btn.connected:hover {
+        background: linear-gradient(135deg, #1a5540 0%, #0f2a14 100%);
+    }
+    .wallet-unified-btn .wallet-icon {
+        font-size: 16px;
+    }
+    .wallet-unified-btn .wallet-address {
+        font-family: 'Courier New', monospace;
+        font-size: 13px;
+    }
+
+    /* Wallet Status Indicator (hidden by default, shown as popup trigger when connected) */
+    .wallet-status {
+        display: none;
+        position: relative;
     }
     .wallet-status.open .wallet-balance-popup {
         display: block;
     }
     .wallet-fire-icon {
-        width: 16px;
-        height: 16px;
+        width: 18px;
+        height: 18px;
         vertical-align: middle;
         filter: drop-shadow(0 0 4px #ff6600);
     }
@@ -1212,51 +1240,63 @@
 <body>
 
 <div class="top-controls">
-    <button id="walletLoginBtn" class="wallet-login-btn" onclick="openHeaderWalletModal()">
-        💼 <span class="lang-el">Σύνδεση</span><span class="lang-en">Login</span>
-    </button>
-    <div id="walletStatus" class="wallet-status">
-        <img src="{{ url_for('static', filename='img/thronos-token.png') }}" alt="🔥" class="wallet-fire-icon" />
-        <span id="walletAddrShort"></span>
+    <!-- Unified Wallet Button -->
+    <div style="position: relative;">
+        <button id="walletUnifiedBtn" class="wallet-unified-btn" onclick="handleWalletBtnClick()">
+            <span class="wallet-icon">💎</span>
+            <span id="walletBtnText">
+                <span class="lang-el">Σύνδεση</span>
+                <span class="lang-en">Connect</span>
+                <span class="lang-ja">接続</span>
+                <span class="lang-ru">Подключить</span>
+                <span class="lang-es">Conectar</span>
+            </span>
+        </button>
 
         <!-- Wallet Balance Popup Widget -->
         <div class="wallet-balance-popup" id="walletBalancePopup" onclick="event.stopPropagation();">
             <div class="wallet-popup-topbar">
-                <div class="wallet-popup-title">Wallet</div>
+                <div class="wallet-popup-title">
+                    <img src="{{ url_for('static', filename='img/thronos-token.png') }}" alt="THR" style="width:16px;height:16px;vertical-align:middle;margin-right:6px;">
+                    Wallet
+                </div>
                 <div class="wallet-popup-actions">
                     <button id="walletPinBtn" class="wallet-mini-btn" title="Pin">Pin</button>
                     <button id="walletLockBtn" class="wallet-mini-btn" title="Lock">Lock</button>
                 </div>
             </div>
 
-            <div id="walletLoginSection" class="wallet-popup-login" style="display:none;">
-                <label for="walletWidgetAddress">THR Address</label>
-                <input type="text" id="walletWidgetAddress" placeholder="THR..." />
-                <label for="walletWidgetSecret">Send Secret</label>
-                <input type="password" id="walletWidgetSecret" placeholder="send_secret" />
-                <label for="walletWidgetPin">PIN (optional)</label>
-                <input type="password" id="walletWidgetPin" placeholder="4-8 digits" />
-                <div class="wallet-modal-actions" style="margin-top:10px;">
-                    <button class="primary" onclick="submitHeaderWalletLogin()">Save</button>
-                </div>
-                <div style="font-size:11px; color:#9f9; opacity:0.7; margin-top:6px;">
-                    Stored locally (thr_address, send_secret, wallet_pin).
-                </div>
+            <div id="walletBalanceDisplay" style="text-align:center;padding:10px 0;font-size:1.8em;color:#00ff66;font-weight:bold;">
+                <span class="lang-el">Φόρτωση...</span>
+                <span class="lang-en">Loading...</span>
             </div>
 
             <div id="walletContentSection">
-                <div class="wallet-popup-loading">
-                    <div class="wallet-popup-spinner"></div>
-                    Loading balances...
-                </div>
+                <div id="walletTokensList" style="max-height:200px;overflow-y:auto;"></div>
             </div>
+
+            <div style="margin-top:15px;display:flex;gap:8px;">
+                <button onclick="openSendModal()" style="flex:1;padding:10px;background:#00ff66;color:#000;border:none;border-radius:8px;font-weight:bold;cursor:pointer;">
+                    📤 <span class="lang-el">Αποστολή</span><span class="lang-en">Send</span>
+                </button>
+                <button onclick="openReceiveModal()" style="flex:1;padding:10px;background:transparent;color:#00ff66;border:1px solid #00ff66;border-radius:8px;font-weight:bold;cursor:pointer;">
+                    📥 <span class="lang-el">Λήψη</span><span class="lang-en">Receive</span>
+                </button>
+            </div>
+
+            <button onclick="disconnectWallet()" style="width:100%;margin-top:10px;padding:8px;background:rgba(255,50,50,0.1);color:#ff6666;border:1px solid rgba(255,50,50,0.3);border-radius:8px;cursor:pointer;font-size:12px;">
+                ✖ <span class="lang-el">Αποσύνδεση</span><span class="lang-en">Disconnect</span>
+            </button>
         </div>
     </div>
-    <button id="disconnectBtn" class="disconnect-btn" onclick="disconnectWallet()">
-        ✖ <span class="lang-el">Αποσύνδεση</span><span class="lang-en">Disconnect</span>
-    </button>
+
     <button class="lang-toggle" onclick="toggleLanguage()">GR</button>
 </div>
+
+<!-- Hidden elements for backward compatibility -->
+<div id="walletStatus" style="display:none;"><span id="walletAddrShort"></span></div>
+<button id="disconnectBtn" style="display:none;"></button>
+<button id="walletLoginBtn" style="display:none;"></button>
 
 <!-- Send Modal -->
 <div class="send-modal" id="sendModal" onclick="closeSendModal(event)">
@@ -1569,16 +1609,25 @@ function setLanguage(lang) {
 function disconnectWallet() {
     if (confirm('Are you sure you want to disconnect your wallet?')) {
         walletSession.clearSession();
-        const statusEl = document.getElementById('walletStatus');
-        const loginBtn = document.getElementById('walletLoginBtn');
-        const disconnectBtn = document.getElementById('disconnectBtn');
-        if (statusEl) statusEl.classList.remove('open');
-        if (disconnectBtn) disconnectBtn.style.display = 'none';
-        if (loginBtn) loginBtn.style.display = 'inline-block';
-        showWalletLoginForm();
+
+        // Close popup
+        const popup = document.getElementById('walletBalancePopup');
+        if (popup) popup.style.display = 'none';
+
+        // Reset balance display
+        const balanceDisplay = document.getElementById('walletBalanceDisplay');
+        if (balanceDisplay) {
+            balanceDisplay.innerHTML = `
+                <span class="lang-el">Φόρτωση...</span>
+                <span class="lang-en">Loading...</span>
+            `;
+        }
+
+        // Update UI
         updateHeaderWalletUi();
         walletBalancesLoaded = false;
         tokenBalances = {};
+
         if (typeof updateHeroButton === 'function') {
             updateHeroButton('');
         }
@@ -1676,9 +1725,11 @@ async function updateTokenPrices() {
 
 function renderWalletBalances(data) {
     const content = document.getElementById('walletContentSection');
-    if(!content) return;
+    const balanceDisplay = document.getElementById('walletBalanceDisplay');
+    const tokensList = document.getElementById('walletTokensList');
+
     if(!walletSession.isBound()){
-        showWalletLoginForm();
+        if (balanceDisplay) balanceDisplay.textContent = '0.000000 THR';
         return;
     }
 
@@ -1722,20 +1773,18 @@ function renderWalletBalances(data) {
         }
     });
 
-    const totalBTC = btcPrice > 0 ? totalUSD / btcPrice : 0;
+    // Update main balance display
+    if (balanceDisplay) {
+        balanceDisplay.innerHTML = `
+            <div style="font-size:0.5em;color:#888;margin-bottom:5px;">${isGreek ? 'ΥΠΟΛΟΙΠΟ WALLET' : 'WALLET BALANCE'}</div>
+            <div>${formatBalance(totalTHR)} THR</div>
+            <div style="font-size:0.4em;color:#888;">≈ $${totalUSD.toFixed(2)}</div>
+        `;
+    }
 
-    // Labels
-    const portfolioLabel = isGreek ? 'Συνολική Αξία' : 'Portfolio Value';
-    const assetsLabel = isGreek ? 'Περιουσιακά Στοιχεία' : 'Assets';
-    const sendLabel = isGreek ? 'Αποστολή' : 'Send';
-    const receiveLabel = isGreek ? 'Λήψη' : 'Receive';
-    const swapLabel = 'Swap';
-    const bridgeLabel = 'Bridge';
-    const pledgeLabel = 'Pledge';
-    const historyLabel = isGreek ? 'Ιστορικό' : 'History';
+    // Render token rows
     const noTokensLabel = isGreek ? 'Δεν βρέθηκαν tokens' : 'No tokens found';
 
-    // Render token rows with logos and values
     const tokenRows = tokens.filter(t => Number(t.balance) > 0).map(t => {
         const balance = Number(t.balance) || 0;
         const symbol = t.symbol;
@@ -1746,93 +1795,24 @@ function renderWalletBalances(data) {
             priceUSD: 0
         };
         const valueUSD = balance * tokenInfo.priceUSD;
-        const valueTHR = symbol === 'THR' ? balance : (thrPrice > 0 ? valueUSD / thrPrice : 0);
-
-        const logoHtml = tokenInfo.logo
-            ? `<img src="${tokenInfo.logo}" alt="${symbol}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-               <span style="display:none; color:${tokenInfo.color}; font-weight:bold;">${symbol[0]}</span>`
-            : `<span style="color:${tokenInfo.color}; font-weight:bold;">${symbol[0]}</span>`;
 
         return `
-            <div class="wallet-token-item" onclick="openTokenInfoModal('${symbol}')" style="cursor: pointer;" title="Click for token details">
-                <div class="wallet-token-logo" style="border-color: ${tokenInfo.color}; background: linear-gradient(135deg, ${tokenInfo.color}22 0%, ${tokenInfo.color}11 100%);">
-                    ${logoHtml}
+            <div onclick="openTokenInfoModal('${symbol}')" style="display:flex;align-items:center;justify-content:space-between;padding:8px;background:rgba(0,255,102,0.05);border-radius:8px;margin-bottom:6px;cursor:pointer;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;background:${tokenInfo.color}22;border-radius:50%;font-size:12px;">${symbol[0]}</span>
+                    <span style="font-weight:bold;font-size:13px;">${symbol}</span>
                 </div>
-                <div class="wallet-token-info">
-                    <div class="wallet-token-name">
-                        ${escapeHtml(tokenInfo.name || symbol)}
-                        <span class="wallet-token-symbol">${escapeHtml(symbol)}</span>
-                    </div>
-                    ${symbol !== 'THR' ? `<div class="wallet-token-thr-value">≈ ${valueTHR.toFixed(2)} THR</div>` : ''}
-                </div>
-                <div class="wallet-token-values">
-                    <div class="wallet-token-balance">${formatBalance(balance)} ${symbol}</div>
-                    <div class="wallet-token-usd">≈ $${valueUSD.toFixed(2)}</div>
+                <div style="text-align:right;">
+                    <div style="font-family:monospace;font-size:13px;color:#00ff66;">${formatBalance(balance)}</div>
+                    <div style="font-size:10px;color:#666;">≈ $${valueUSD.toFixed(2)}</div>
                 </div>
             </div>
         `;
     }).join('');
 
-    const shortAddr = wallet ? `${wallet.slice(0, 8)}...${wallet.slice(-6)}` : '';
-
-    const html = `
-        <div class="wallet-popup-header">
-            <span class="lang-el">Thronos Wallet</span>
-            <span class="lang-en">Thronos Wallet</span>
-        </div>
-
-        <!-- Address Section -->
-        <div class="wallet-popup-address">
-            <div class="wallet-popup-address-text" title="${escapeHtml(wallet)}">${escapeHtml(shortAddr)}</div>
-            <button class="wallet-popup-copy-btn" onclick="copyToClipboard('${escapeHtml(wallet)}'); this.textContent='✓'; setTimeout(()=>this.textContent='Copy', 1500);">Copy</button>
-        </div>
-
-        <!-- Portfolio Summary -->
-        <div class="wallet-portfolio-summary">
-            <div class="wallet-portfolio-label">${portfolioLabel}</div>
-            <div class="wallet-portfolio-value">${formatBalance(totalTHR)} THR</div>
-            <div class="wallet-portfolio-usd">≈ $${totalUSD.toFixed(2)} USD</div>
-            <div class="wallet-portfolio-btc">
-                <span style="font-size: 14px;">₿</span> ${totalBTC.toFixed(8)} BTC
-            </div>
-        </div>
-
-        <!-- Token List -->
-        <div style="font-size: 11px; color: #56ff9a; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">${assetsLabel}</div>
-        <div class="wallet-token-list">
-            ${tokenRows || `<div style="text-align: center; opacity: 0.6; padding: 20px;">${noTokensLabel}</div>`}
-        </div>
-
-        <!-- Quick Actions -->
-        <div class="wallet-quick-actions">
-            <a href="javascript:void(0)" class="wallet-quick-btn" onclick="openSendModal()">
-                <span class="wallet-quick-btn-icon">💸</span>
-                <span class="wallet-quick-btn-label">${sendLabel}</span>
-            </a>
-            <a href="javascript:void(0)" class="wallet-quick-btn" onclick="openReceiveModal()">
-                <span class="wallet-quick-btn-icon">📥</span>
-                <span class="wallet-quick-btn-label">${receiveLabel}</span>
-            </a>
-            <a href="/swap" class="wallet-quick-btn">
-                <span class="wallet-quick-btn-icon">🔄</span>
-                <span class="wallet-quick-btn-label">${swapLabel}</span>
-            </a>
-            <a href="/bridge" class="wallet-quick-btn">
-                <span class="wallet-quick-btn-icon">🌉</span>
-                <span class="wallet-quick-btn-label">${bridgeLabel}</span>
-            </a>
-            <a href="/pledge" class="wallet-quick-btn">
-                <span class="wallet-quick-btn-icon">🔥</span>
-                <span class="wallet-quick-btn-label">${pledgeLabel}</span>
-            </a>
-            <a href="/viewer" class="wallet-quick-btn">
-                <span class="wallet-quick-btn-icon">📜</span>
-                <span class="wallet-quick-btn-label">${historyLabel}</span>
-            </a>
-        </div>
-    `;
-
-    content.innerHTML = html;
+    if (tokensList) {
+        tokensList.innerHTML = tokenRows || `<div style="text-align:center;padding:15px;color:#666;font-size:12px;">${noTokensLabel}</div>`;
+    }
 
     // Apply language after render
     const savedLang = getCurrentLang();
@@ -2359,24 +2339,38 @@ async function submitHeaderWalletLogin(){
 function updateHeaderWalletUi(){
     const wallet = walletSession.getAddress();
     const bound = walletSession.isBound();
+    const unifiedBtn = document.getElementById('walletUnifiedBtn');
+    const walletBtnText = document.getElementById('walletBtnText');
     const statusEl = document.getElementById('walletStatus');
-    const disconnectEl = document.getElementById('disconnectBtn');
-    const loginBtn = document.getElementById('walletLoginBtn');
+    const balanceDisplay = document.getElementById('walletBalanceDisplay');
 
     const hasWallet = bound && wallet;
-    const short = hasWallet ? wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4) : 'Connect';
+    const short = hasWallet ? wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4) : '';
 
-    if(statusEl){
-        document.getElementById('walletAddrShort').textContent = short;
-        statusEl.style.display = 'flex';
-        if(!statusEl.dataset.init){
-            initWalletUiControls();
-            statusEl.dataset.init = '1';
+    // Update unified button
+    if (unifiedBtn) {
+        if (hasWallet) {
+            unifiedBtn.classList.add('connected');
+            if (walletBtnText) {
+                walletBtnText.innerHTML = `<span class="wallet-address">${short}</span>`;
+            }
+        } else {
+            unifiedBtn.classList.remove('connected');
+            if (walletBtnText) {
+                walletBtnText.innerHTML = `
+                    <span class="lang-el">Σύνδεση</span>
+                    <span class="lang-en">Connect</span>
+                    <span class="lang-ja">接続</span>
+                    <span class="lang-ru">Подключить</span>
+                    <span class="lang-es">Conectar</span>
+                `;
+            }
         }
     }
 
-    if(disconnectEl) disconnectEl.style.display = hasWallet ? 'block' : 'none';
-    if(loginBtn) loginBtn.style.display = 'inline-block';
+    // Backward compat: update hidden walletAddrShort
+    const addrShortEl = document.getElementById('walletAddrShort');
+    if (addrShortEl) addrShortEl.textContent = short;
 
     if(hasWallet){
         const isPinned = getWalletUiPinned();
@@ -2390,10 +2384,43 @@ function updateHeaderWalletUi(){
         }
     } else {
         setWalletOpen(false);
-        showWalletLoginForm();
         walletBalancesLoaded = false;
     }
+
+    // Re-apply language
+    const lang = getCurrentLang();
+    setLanguage(lang);
 }
+
+// Handle unified wallet button click
+function handleWalletBtnClick() {
+    const wallet = walletSession.getAddress();
+    const bound = walletSession.isBound();
+
+    if (bound && wallet) {
+        // Connected - toggle popup
+        const popup = document.getElementById('walletBalancePopup');
+        if (popup) {
+            const isOpen = popup.style.display === 'block';
+            popup.style.display = isOpen ? 'none' : 'block';
+            if (!isOpen) {
+                loadWalletBalances(true);
+            }
+        }
+    } else {
+        // Not connected - open login modal
+        openHeaderWalletModal();
+    }
+}
+
+// Close popup when clicking outside
+document.addEventListener('click', function(e) {
+    const popup = document.getElementById('walletBalancePopup');
+    const btn = document.getElementById('walletUnifiedBtn');
+    if (popup && btn && !popup.contains(e.target) && !btn.contains(e.target)) {
+        popup.style.display = 'none';
+    }
+});
 
 // Initialize language and wallet status on load
 document.addEventListener('DOMContentLoaded', () => {

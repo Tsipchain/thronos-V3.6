@@ -67,6 +67,7 @@ import os
 import json
 import uuid
 from llm_registry import AI_MODEL_REGISTRY, get_model_for_provider, get_default_model_for_mode
+from ai_models_config import base_model_config
 
 app = Flask(__name__)
 CORS(app)

@@ -60,6 +60,8 @@ except ImportError:  # Railway ή env χωρίς flask_cors
         # απλό no-op fallback ώστε ο server να μην σκάει
         return app
 
+from werkzeug.middleware.proxy_fix import ProxyFix
+
 import os
 import json
 import uuid

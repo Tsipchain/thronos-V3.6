@@ -75,12 +75,30 @@ from ai_interaction_ledger import (
     log_ai_error,
 )
 
-# Optional EVM API routes (wallet, swaps, liquidity).
-# Αν το module λείπει (π.χ. σε παλιά deployment), απλά δεν τις κάνουμε register.
+## ----------------------------------------
+# Optional EVM / DEX routes (wallet, swaps, liquidity)
+# ----------------------------------------
+try:
+    # από το thronos-V3.6: όλα τα wallet / swaps / pools κλπ.
+    from evm_api_v3 import register_evm_routes
+except ImportError:
+    register_evm_routes = None
+
 try:
     from evm_api_v3 import register_evm_routes
 except ImportError:
     register_evm_routes = None
+
+try:
+    from own_api_v1 import register_own_routes
+except ImportError:
+    register_own_routes = None
+...
+if register_evm_routes is not None:
+    register_evm_routes(app, DATA_DIR, LEDGER_FILE, CHAIN_FILE, PLEDGE_CHAIN)
+
+if register_own_routes is not None:
+    register_own_routes(app)
 
 # Optional Phantom + quorum imports - τυλιγμένα σε try ώστε να bootάρει το app
 try:

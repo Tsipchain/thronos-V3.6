@@ -78,6 +78,14 @@ from ai_interaction_ledger import (
 from llm_registry import AI_MODEL_REGISTRY
 from ai_agent_service import ThronosAI, call_llm, _resolve_model
 
+# Optional EVM integration – safe import
+try:
+    # αν στο μέλλον βάλεις πραγματικό evm_api, θα ενεργοποιηθεί αυτόματα
+    from evm_api import register_evm_routes  # type: ignore
+except Exception:
+    # προς το παρόν δεν έχουμε EVM backend → απλά το απενεργοποιούμε
+    register_evm_routes = None
+
 # Optional Phantom + quorum imports - wrapped in try so app still boots if missing
 try:
     from phantom_gateway_mainnet import get_btc_txns

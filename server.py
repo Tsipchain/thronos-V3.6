@@ -160,12 +160,12 @@ try:
     from own_api_v1 import register_own_routes
 except ImportError:
     register_own_routes = None
-...
-if register_evm_routes is not None:
-    register_evm_routes(app, DATA_DIR, LEDGER_FILE, CHAIN_FILE, PLEDGE_CHAIN)
 
+# Register own routes (doesn't need DATA_DIR)
 if register_own_routes is not None:
     register_own_routes(app)
+
+# Note: EVM route registration happens later after DATA_DIR and other variables are defined
 
 # Optional Phantom + quorum imports - τυλιγμένα σε try ώστε να bootάρει το app
 try:

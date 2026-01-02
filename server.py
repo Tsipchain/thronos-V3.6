@@ -69,12 +69,14 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from ai_models_config import base_model_config
 from ai_interaction_ledger import (
     record_ai_interaction,
+    get_ai_stats,
     list_interactions,
     interaction_to_block,
     log_ai_error,
-    create_ai_transfer_from_ledger_entry,
     compute_model_stats,
+    create_ai_transfer_from_ledger_entry,
 )
+
 from llm_registry import AI_MODEL_REGISTRY
 from ai_agent_service import ThronosAI, call_llm, _resolve_model
 

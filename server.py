@@ -74,16 +74,19 @@ from ai_interaction_ledger import (
     interaction_to_block,
     log_ai_error,
 )
+# Optional EVM API routes ...
+...
+# Optional Phantom + quorum imports - wrapped in try ...
+from phantom_gateway_mainnet import get_btc_txns
 
-# Optional EVM API routes (wallet, swaps, liquidity).
-# Αν το module λείπει (π.χ. σε παλιά deployment), απλά δεν τις κάνουμε register.
+from llm_registry import AI_MODEL_REGISTRY
+from ai_agent_service import ThronosAI, call_llm, _resolve_model
+
+# Optional Phantom + quorum imports - wrapped in try so app still boots if missing
 try:
-    from evm_api_v3 import register_evm_routes
-except ImportError:
-    register_evm_routes = None
-# Register EVM / DEX API routes if available
-if register_evm_routes is not None:
-    register_evm_routes(app)
+    from phantom_gateway_mainnet import get_btc_txns
+    ...
+
 
 # Optional Phantom + quorum imports - wrapped in try so app still boots if missing
 try:

@@ -120,7 +120,6 @@ def get_default_model(provider: Optional[str] = None) -> Optional[ModelInfo]:
 # Default model helper (backwards-compatible)
 # ---------------------------------------------------------------------------
 
-import os
 
 
 def get_default_model_for_mode(mode: str) -> str:

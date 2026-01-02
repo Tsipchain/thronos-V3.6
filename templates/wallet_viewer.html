@@ -74,8 +74,19 @@
   <!-- CONNECT SECTION -->
   <div id="connectSection" class="wallet-card">
       <h2><span class="lang-el">Σύνδεση Πορτοφολιού</span><span class="lang-en">Connect Wallet</span></h2>
-      <p><span class="lang-el">Χρησιμοποίησε το κουμπί πορτοφολιού επάνω δεξιά για να συνδεθείς.</span><span class="lang-en">Use the top-right wallet button to connect.</span></p>
-      <button onclick="openHeaderWalletModal()">💼 <span class="lang-el">Άνοιγμα Σύνδεσης</span><span class="lang-en">Open Login</span></button>
+      <p><span class="lang-el">Εισάγετε τα στοιχεία σας για να συνδεθείτε. Τα κλειδιά αποθηκεύονται μόνο τοπικά (browser).</span><span class="lang-en">Enter your credentials to connect. Keys are stored locally in your browser.</span></p>
+      
+      <label><span class="lang-el">Διεύθυνση THR</span><span class="lang-en">THR Address</span></label>
+      <input type="text" id="inputAddress" placeholder="THR..." />
+      
+      <label><span class="lang-el">Μυστικό Αποστολής (Προαιρετικό για προβολή, Απαραίτητο για αποστολή)</span><span class="lang-en">Send Secret (Optional for view, Required for send)</span></label>
+      <input type="password" id="inputSecret" placeholder="auth_secret..." />
+      
+      <button onclick="connectWallet()">🔓 <span class="lang-el">Σύνδεση</span><span class="lang-en">Connect</span></button>
+      <p style="font-size:0.8em; color:#666;">
+          <span class="lang-el">Δεν έχετε πορτοφόλι;</span><span class="lang-en">Don't have a wallet?</span> 
+          <a href="/pledge">🔥 Pledge to create one</a>
+      </p>
   </div>
 
   <!-- DASHBOARD SECTION -->
@@ -110,10 +121,11 @@
 
 {% block scripts %}
 <script>
+    // --- Logic ---
     const $ = (id) => document.getElementById(id);
 
     function checkConnection() {
-        const addr = walletSession.getAddress();
+        const addr = localStorage.getItem('thr_address');
         if (addr) {
             $('connectSection').classList.add('hidden');
             $('dashboardSection').classList.remove('hidden');
@@ -125,10 +137,34 @@
         }
     }
 
-    function refreshWallet() {
-        const addr = walletSession.getAddress();
+    function connectWallet() {
+        const addr = $('inputAddress').value.trim();
+        const secret = $('inputSecret').value.trim();
+        
+        if (!addr) {
+            alert("Please enter a THR address.");
+            return;
+        }
+        
+        localStorage.setItem('thr_address', addr);
+        if (secret) {
+            localStorage.setItem('thr_secret', secret);
+        }
+        
+        checkConnection();
+    }
+
+    function disconnectWallet() {
+        if(confirm("Are you sure? This will clear your stored keys from this browser.")) {
+            localStorage.removeItem('thr_address');
+            localStorage.removeItem('thr_secret');
+            window.location.reload();
+        }
+    }
+
+    async function refreshWallet() {
+        const addr = localStorage.getItem('thr_address');
         if (addr) loadWalletData(addr);
-        else checkConnection();
     }
 
     async function loadWalletData(addr) {
@@ -136,10 +172,10 @@
         const res = await fetch(`/wallet_data/${addr}`);
         if (!res.ok) throw new Error("Server returned " + res.status);
         const data = await res.json();
-
+        
         const balance = parseFloat(data.balance);
         $('balance').textContent = balance;
-
+        
         // Calculate BTC value (Fixed rate: 1 THR = 0.0001 BTC)
         const btcVal = (balance * 0.0001).toFixed(8);
         $('btcValue').textContent = btcVal;
@@ -149,13 +185,13 @@
           div.innerHTML = '<p style="color:#666;">No transactions found.</p>';
         } else {
           let html = "";
-          const txs = data.transactions.reverse();
-
+          const txs = data.transactions.reverse(); 
+          
           txs.forEach(tx => {
             const isIncoming = tx.to === addr;
             const color = isIncoming ? '#0f0' : '#ff0';
             const sign = isIncoming ? '+' : '-';
-
+            
             html += `
             <div class="tx">
               <div style="display:flex; justify-content:space-between;">
@@ -176,12 +212,7 @@
       }
     }
 
+    // Init
     document.addEventListener('DOMContentLoaded', checkConnection);
-    window.addEventListener('storage', (ev) => {
-        if (ev.key === walletSession.ADDRESS_KEY) {
-            checkConnection();
-        }
-    });
 </script>
 {% endblock %}
-

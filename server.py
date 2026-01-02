@@ -46,115 +46,69 @@ try:
 except Exception:
     anthropic = None
 
+import os
 import re
 import mimetypes
+import json
 import requests
-from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, url_for, send_file
+from flask import (
+    Flask,
+    request,
+    jsonify,
+    render_template,
+    send_from_directory,
+    redirect,
+    url_for,
+    send_file,
+)
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 from apscheduler.schedulers.background import BackgroundScheduler
+
+# AI config & ledger imports
 from ai_models_config import base_model_config
 from ai_interaction_ledger import (
     record_ai_interaction,
-    compute_model_stats,
     list_interactions,
     interaction_to_block,
     log_ai_error,
     create_ai_transfer_from_ledger_entry,
+    compute_model_stats,
 )
 from llm_registry import AI_MODEL_REGISTRY, get_default_model_for_mode
 from ai_agent_service import ThronosAI, call_llm, _resolve_model
-import traceback
 
-# Optional Phantom / quorum imports – wrapped in try so app still boots if missing
+# Optional Phantom + quorum imports - wrapped in try so app still boots if missing
 try:
     from phantom_gateway_mainnet import get_btc_txns
     from secure_pledge_embed import create_secure_pdf_contract
     from phantom_decode import decode_payload_from_image
     from quorum_crypto import aggregate as qc_aggregate, verify as qc_verify
 except ImportError as e:
-    print(f"CRITICAL IMPORT ERROR: {e}")
+    print("CRITICAL IMPORT ERROR:", e)
 
     # Fallback mocks to prevent 500 on start if files are missing
-    get_btc_txns = lambda addr, txid: []
-    create_secure_pdf_contract = lambda *args, **kwargs: "error.pdf"
-    decode_payload_from_image = lambda *args, **kwargs: None
+    def get_btc_txns(addr, txid):
+        return []
 
-    class ThronosAI:
-        def __init__(self, *args, **kwargs):
-            pass
+    def create_secure_pdf_contract(*args, **kwargs):
+        # Αν λείπει το πραγματικό module, γυρνάμε ένα placeholder filename
+        return "error.pdf"
 
-        def generate_response(self, *args, **kwargs):
-            return {"response": "AI Service Unavailable", "status": "error"}
-
-    def call_llm(*args, **kwargs):
-        return {"response": "AI Service Unavailable", "status": "error"}
-
-    def _resolve_model(*args, **kwargs):
+    def decode_payload_from_image(*args, **kwargs):
         return None
 
-    qc_aggregate = lambda *args, **kwargs: None
-    qc_verify = lambda *args, **kwargs: False
+    def qc_aggregate(*args, **kwargs):
+        return None
 
-from ai_interaction_ledger import (
-    record_ai_interaction,
-    compute_model_stats,
-    list_interactions,
-    interaction_to_block,
-    log_ai_error,
-)
-from llm_registry import AI_MODEL_REGISTRY, compute_model_stats
-from ai_agent_service import ThronosAI, call_llm, _resolve_model
+    def qc_verify(*args, **kwargs):
+        return False
 
-from ai_interaction_ledger import compute_model_stats, create_ai_transfer_from_ledger_entry
-# κοντά στα άλλα AI routes, στο server.py
-from llm_registry import AI_MODEL_REGISTRY, get_default_model_for_mode
-from ai_interaction_ledger import compute_model_stats
+
 import traceback
+import traceback as _traceback
 
 
-
-    from phantom_gateway_mainnet import get_btc_txns
-    from secure_pledge_embed import create_secure_pdf_contract
-    from phantom_decode import decode_payload_from_image
-    from ai_agent_service import ThronosAI, call_llm, _resolve_model
-    # ── Quorum modules (placeholders μέχρι να μπει real crypto)
-    from quorum_crypto import aggregate as qc_aggregate, verify as qc_verify
-except ImportError as e:
-    print(f"CRITICAL IMPORT ERROR: {e}")
-    # Fallback mocks to prevent 500 on start if files missing
-    get_btc_txns = lambda a,b: []
-    create_secure_pdf_contract = lambda *args: "error.pdf"
-    decode_payload_from_image = lambda *args: None
-    class ThronosAI:
-        def generate_response(self, *args, **kwargs): return {"response": "AI Service Unavailable", "status": "error"}
-        def generate_quantum_key(self): return "mock_key"
-    def call_llm(*args, **kwargs):
-        return {"response": "AI Service Unavailable", "status": "error"}
-    def _resolve_model(*args, **kwargs):
-        return None
-    qc_aggregate = lambda *args: None
-    qc_verify = lambda *args: False
-
-# ── Optional EVM routes (block explorer / tx viewer endpoints)
-# Be noisy on import failures so Railway logs show the real reason.
-import traceback as _traceback  # local alias to avoid clashes
-
-register_evm_routes = None  # type: ignore
-try:
-    from evm_api import register_evm_routes as _register_evm_routes  # type: ignore
-    register_evm_routes = _register_evm_routes  # type: ignore
-    print("[EVM] evm_api loaded")
-except Exception as _e1:
-    print(f"[EVM] evm_api import failed: {_e1}")
-    _traceback.print_exc()
-    try:
-        from evm_api_v3 import register_evm_routes as _register_evm_routes  # type: ignore
-        register_evm_routes = _register_evm_routes  # type: ignore
-        print("[EVM] evm_api_v3 loaded")
-    except Exception as _e2:
-        print(f"[EVM] evm_api_v3 import failed: {_e2}")
-        _traceback.print_exc()
 
 # ─── CONFIG ────────────────────────────────────────
 app = Flask(__name__)

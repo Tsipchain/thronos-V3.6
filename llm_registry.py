@@ -1,207 +1,155 @@
-
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
-from typing import Dict, List, Iterable, Optional
+from typing import Dict, List, Optional
 
 
 @dataclass
 class ModelInfo:
-    """
-    Canonical registry entry for an AI model that can be used by Thronos.
-
-    The fields here are intentionally generic so they can work across providers.
-    Only `id` is required by the low‑level client – everything else is metadata
-    for routing / UI / analytics.
-    """
-
-    # Identifier that will be passed to the underlying SDK (e.g. "gpt-4o")
     id: str
-
-    # Logical provider name: "openai", "anthropic", "google", "local"
     provider: str
-
-    # Human friendly label shown in the UI
-    label: str
-
-    # Short alias we can also accept when resolving (e.g. "gpt4o")
-    alias: str
-
-    # Pricing / capability tier – purely descriptive
-    tier: str  # e.g. "flagship", "fast", "cheap"
-
-    # Family for grouping (e.g. "gpt-4", "claude-3.5", "gemini-2.0")
-    family: str
-
-    # Whether this is a safety tuned / instruction tuned variant
-    safety_tuned: bool = True
-
-    # Modality flags
-    supports_vision: bool = False
-    supports_audio: bool = False
-    supports_tools: bool = False
-
-    # Whether this model is available by default in the UI
-    enabled_by_default: bool = True
-
-    # Whether Architect is allowed to use this model explicitly
-    architect_enabled: bool = True
-
-    # Whether the Quantum chat console can select this model explicitly
-    chat_enabled: bool = True
+    display_name: str
+    tier: str = "standard"
+    default: bool = False
+    enabled: bool = True
 
 
-# Base registry – per provider we keep a list of ModelInfo entries.
-# NOTE: The `id` values below must match the IDs that the ai_agent_service
-#      knows how to call for each provider.
+PROVIDER_METADATA: Dict[str, Dict[str, str]] = {
+    "openai": {
+        "id": "openai",
+        "name": "OpenAI (GPT)",
+        "description": "OpenAI GPT-4.1 family",
+    },
+    "anthropic": {
+        "id": "anthropic",
+        "name": "Anthropic (Claude)",
+        "description": "Claude 3.7 models",
+    },
+    "gemini": {
+        "id": "gemini",
+        "name": "Google Gemini",
+        "description": "Gemini 2.0 / 3.0 models",
+    },
+    "local": {
+        "id": "local",
+        "name": "Thronos Offline Corpus",
+        "description": "Local knowledge base / blockchain log",
+    },
+    "thronos": {
+        "id": "thronos",
+        "name": "Thronos / Thrai",
+        "description": "Custom Thronos model",
+    },
+}
+
+
 AI_MODEL_REGISTRY: Dict[str, List[ModelInfo]] = {
     "openai": [
-        ModelInfo(
-            id="gpt-4o",
-            provider="openai",
-            label="GPT‑4o (general)",
-            alias="gpt4o",
-            tier="flagship",
-            family="gpt-4",
-            safety_tuned=True,
-            supports_vision=True,
-            supports_audio=False,
-            supports_tools=True,
-            enabled_by_default=True,
-            architect_enabled=True,
-            chat_enabled=True,
-        ),
-        ModelInfo(
-            id="gpt-4o-mini",
-            provider="openai",
-            label="GPT‑4o mini (cheap + fast)",
-            alias="gpt4o-mini",
-            tier="fast",
-            family="gpt-4-mini",
-            safety_tuned=True,
-            supports_vision=True,
-            supports_audio=False,
-            supports_tools=True,
-            enabled_by_default=True,
-            architect_enabled=True,
-            chat_enabled=True,
-        ),
+        ModelInfo(id="gpt-4.1-mini", display_name="GPT-4.1 mini", provider="openai", tier="fast", default=True),
+        ModelInfo(id="gpt-4.1", display_name="GPT-4.1", provider="openai", tier="premium"),
+        ModelInfo(id="gpt-4.1-preview", display_name="GPT-4.1 Preview", provider="openai", tier="preview"),
+        ModelInfo(id="o3-mini", display_name="o3-mini (reasoning)", provider="openai", tier="reasoning"),
     ],
     "anthropic": [
-        ModelInfo(
-            id="claude-3.5-sonnet",
-            provider="anthropic",
-            label="Claude 3.5 Sonnet",
-            alias="claude-sonnet-35",
-            tier="flagship",
-            family="claude-3.5",
-            safety_tuned=True,
-            supports_vision=True,
-            supports_audio=False,
-            supports_tools=True,
-            enabled_by_default=True,
-            architect_enabled=True,
-            chat_enabled=True,
-        ),
-        ModelInfo(
-            id="claude-3.5-haiku",
-            provider="anthropic",
-            label="Claude 3.5 Haiku",
-            alias="claude-haiku-35",
-            tier="fast",
-            family="claude-3.5",
-            safety_tuned=True,
-            supports_vision=True,
-            supports_audio=False,
-            supports_tools=True,
-            enabled_by_default=True,
-            architect_enabled=True,
-            chat_enabled=True,
-        ),
+        ModelInfo(id="claude-3.5-sonnet", display_name="Claude 3.7 Sonnet", provider="anthropic", tier="premium", default=True),
+        ModelInfo(id="claude-3.5-haiku", display_name="Claude 3.5 Haiku", provider="anthropic", tier="fast"),
     ],
-    "google": [
-        ModelInfo(
-            id="gemini-2.0-flash",
-            provider="google",
-            label="Gemini 2.0 Flash",
-            alias="gemini-2.0-flash",
-            tier="fast",
-            family="gemini-2.0",
-            safety_tuned=True,
-            supports_vision=True,
-            supports_audio=True,
-            supports_tools=True,
-            enabled_by_default=True,
-            architect_enabled=True,
-            chat_enabled=True,
-        ),
-        ModelInfo(
-            id="gemini-2.0-pro",
-            provider="google",
-            label="Gemini 2.0 Pro",
-            alias="gemini-2.0-pro",
-            tier="flagship",
-            family="gemini-2.0",
-            safety_tuned=True,
-            supports_vision=True,
-            supports_audio=True,
-            supports_tools=True,
-            enabled_by_default=True,
-            architect_enabled=True,
-            chat_enabled=True,
-        ),
+    "gemini": [
+        ModelInfo(id="gemini-2.0-flash", display_name="Gemini 2.0 Flash", provider="gemini", tier="fast", default=True),
+        ModelInfo(id="gemini-2.5-pro", display_name="Gemini 2.5 Pro", provider="gemini", tier="premium"),
+        ModelInfo(id="gemini-2.5-flash", display_name="Gemini 2.5 Flash", provider="gemini", tier="fast"),
     ],
     "local": [
-        # Placeholder example – you can wire this to whatever local / Ollama
-        # model you want, or leave it disabled in production.
-        ModelInfo(
-            id="local-llama-3.1",
-            provider="local",
-            label="Local Llama 3.1 (Ollama)",
-            alias="llama-3.1-local",
-            tier="experimental",
-            family="llama-3.1",
-            safety_tuned=False,
-            supports_vision=False,
-            supports_audio=False,
-            supports_tools=False,
-            enabled_by_default=False,
-            architect_enabled=False,
-            chat_enabled=False,
-        )
+        ModelInfo(id="offline_corpus", display_name="Offline corpus", provider="local", tier="local", default=False, enabled=True),
+    ],
+    "thronos": [
+        ModelInfo(id="thrai", display_name="Thronos Thrai", provider="thronos", tier="custom", default=False, enabled=True),
     ],
 }
 
 
-def iter_all_models() -> Iterable[ModelInfo]:
-    for models in AI_MODEL_REGISTRY.values():
-        for mi in models:
-            yield mi
+def _apply_env_flags() -> None:
+    has_openai = bool((os.getenv("OPENAI_API_KEY") or "").strip())
+    has_anthropic = bool((os.getenv("ANTHROPIC_API_KEY") or "").strip())
+    has_gemini = bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
+
+    for provider_name, models in AI_MODEL_REGISTRY.items():
+        if provider_name == "openai":
+            enabled = has_openai
+        elif provider_name == "anthropic":
+            enabled = has_anthropic
+        elif provider_name == "gemini":
+            enabled = has_gemini
+        else:
+            enabled = True
+
+        for m in models:
+            m.enabled = enabled
 
 
-def find_model(key: str) -> Optional[ModelInfo]:
-    """
-    Resolve a model either by id or alias.
-    """
-    key = (key or "").strip()
-    if not key:
-        return None
+_apply_env_flags()
 
-    for mi in iter_all_models():
-        if mi.id == key or mi.alias == key:
-            return mi
+
+def find_model(model_id: str) -> Optional[ModelInfo]:
+    for provider_models in AI_MODEL_REGISTRY.values():
+        for m in provider_models:
+            if m.id == model_id:
+                return m
     return None
+
+
+def get_default_model(provider: Optional[str] = None) -> Optional[ModelInfo]:
+    if provider:
+        models = AI_MODEL_REGISTRY.get(provider, [])
+        for m in models:
+            if m.default and m.enabled:
+                return m
+        return next((m for m in models if m.enabled), None)
+
+    for models in AI_MODEL_REGISTRY.values():
+        for m in models:
+            if m.default and m.enabled:
+                return m
+    for models in AI_MODEL_REGISTRY.values():
+        default_candidate = next((m for m in models if m.enabled), None)
+        if default_candidate:
+            return default_candidate
+    return None
+# ---------------------------------------------------------------------------
+# Default model helper (backwards-compatible)
+# ---------------------------------------------------------------------------
+
+import os
 
 
 def get_default_model_for_mode(mode: str) -> str:
     """
-    Fallback defaults when the caller passes model="auto".
-    These IDs must also exist in AI_MODEL_REGISTRY above.
+    Επιστρέφει το default μοντέλο για το δοσμένο mode.
+    Χρησιμοποιείται από το server.py για να επιλέγει fallback μοντέλο.
+
+    Λογική:
+    1. Αν υπάρχει ειδικό env για το mode, το τιμάμε.
+       - THRONOS_DEFAULT_CHAT_MODEL
+       - THRONOS_DEFAULT_CODE_MODEL
+       - THRONOS_DEFAULT_VISION_MODEL
+    2. Αλλιώς κοιτάμε ένα γενικό:
+       - THRONOS_DEFAULT_MODEL
+    3. Τελευταίο fallback: ένα ασφαλές μοντέλο (π.χ. gpt-4.1-mini).
     """
-    mode = (mode or "").lower()
-    if mode in {"architect", "blueprint"}:
-        return "gemini-2.0-flash"
-    if mode in {"chat", "console", "quantum"}:
-        return "gpt-4o"
-    # generic fallback
-    return "gpt-4o"
+
+    mode = (mode or "").strip().lower()
+
+    # 1) mode-specific env, π.χ. THRONOS_DEFAULT_CHAT_MODEL
+    env_key = f"THRONOS_DEFAULT_{mode.upper()}_MODEL"
+    env_value = os.getenv(env_key)
+    if env_value:
+        return env_value.strip()
+
+    # 2) global default
+    global_default = os.getenv("THRONOS_DEFAULT_MODEL")
+    if global_default:
+        return global_default.strip()
+
+    # 3) hardcoded ασφαλές fallback
+    return "gpt-4.1-mini"

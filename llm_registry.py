@@ -24,12 +24,12 @@ PROVIDER_METADATA: Dict[str, Dict[str, str]] = {
     "anthropic": {
         "id": "anthropic",
         "name": "Anthropic (Claude)",
-        "description": "Claude 3.5 models",
+        "description": "Claude 3.7 models",
     },
     "gemini": {
         "id": "gemini",
         "name": "Google Gemini",
-        "description": "Gemini 1.5 / 2.0 models",
+        "description": "Gemini 2.0 / 3.0 models",
     },
     "local": {
         "id": "local",
@@ -52,13 +52,13 @@ AI_MODEL_REGISTRY: Dict[str, List[ModelInfo]] = {
         ModelInfo(id="o3-mini", display_name="o3-mini (reasoning)", provider="openai", tier="reasoning"),
     ],
     "anthropic": [
-        ModelInfo(id="claude-3.5-sonnet", display_name="Claude 3.5 Sonnet", provider="anthropic", tier="premium", default=True),
+        ModelInfo(id="claude-3.5-sonnet", display_name="Claude 3.7 Sonnet", provider="anthropic", tier="premium", default=True),
         ModelInfo(id="claude-3.5-haiku", display_name="Claude 3.5 Haiku", provider="anthropic", tier="fast"),
     ],
     "gemini": [
         ModelInfo(id="gemini-2.0-flash", display_name="Gemini 2.0 Flash", provider="gemini", tier="fast", default=True),
-        ModelInfo(id="gemini-1.5-pro", display_name="Gemini 1.5 Pro", provider="gemini", tier="premium"),
-        ModelInfo(id="gemini-1.5-flash", display_name="Gemini 1.5 Flash", provider="gemini", tier="fast"),
+        ModelInfo(id="gemini-2.5-pro", display_name="Gemini 2.5 Pro", provider="gemini", tier="premium"),
+        ModelInfo(id="gemini-2.5-flash", display_name="Gemini 2.5 Flash", provider="gemini", tier="fast"),
     ],
     "local": [
         ModelInfo(id="offline_corpus", display_name="Offline corpus", provider="local", tier="local", default=False, enabled=True),
@@ -116,3 +116,40 @@ def get_default_model(provider: Optional[str] = None) -> Optional[ModelInfo]:
         if default_candidate:
             return default_candidate
     return None
+# ---------------------------------------------------------------------------
+# Default model helper (backwards-compatible)
+# ---------------------------------------------------------------------------
+
+import os
+
+
+def get_default_model_for_mode(mode: str) -> str:
+    """
+    Επιστρέφει το default μοντέλο για το δοσμένο mode.
+    Χρησιμοποιείται από το server.py για να επιλέγει fallback μοντέλο.
+
+    Λογική:
+    1. Αν υπάρχει ειδικό env για το mode, το τιμάμε.
+       - THRONOS_DEFAULT_CHAT_MODEL
+       - THRONOS_DEFAULT_CODE_MODEL
+       - THRONOS_DEFAULT_VISION_MODEL
+    2. Αλλιώς κοιτάμε ένα γενικό:
+       - THRONOS_DEFAULT_MODEL
+    3. Τελευταίο fallback: ένα ασφαλές μοντέλο (π.χ. gpt-4.1-mini).
+    """
+
+    mode = (mode or "").strip().lower()
+
+    # 1) mode-specific env, π.χ. THRONOS_DEFAULT_CHAT_MODEL
+    env_key = f"THRONOS_DEFAULT_{mode.upper()}_MODEL"
+    env_value = os.getenv(env_key)
+    if env_value:
+        return env_value.strip()
+
+    # 2) global default
+    global_default = os.getenv("THRONOS_DEFAULT_MODEL")
+    if global_default:
+        return global_default.strip()
+
+    # 3) hardcoded ασφαλές fallback
+    return "gpt-4.1-mini"

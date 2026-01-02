@@ -17,7 +17,7 @@ rarfile>=4.1
 python-magic>=0.4.27
 numpy>=1.26
 pycryptodomex>=3.20
-
+flask-cors
 # --- ML (uncomment only if you really need it in production) ---
 # scipy>=1.11
 # scikit-learn>=1.3

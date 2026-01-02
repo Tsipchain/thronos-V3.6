@@ -74,19 +74,42 @@ from ai_interaction_ledger import (
     interaction_to_block,
     log_ai_error,
 )
-# Optional EVM API routes ...
-...
-# Optional Phantom + quorum imports - wrapped in try ...
-from phantom_gateway_mainnet import get_btc_txns
 
-from llm_registry import AI_MODEL_REGISTRY
-from ai_agent_service import ThronosAI, call_llm, _resolve_model
+# Optional EVM API routes (wallet, swaps, liquidity).
+# Αν το module λείπει (π.χ. σε παλιά deployment), απλά δεν τις κάνουμε register.
+try:
+    from evm_api_v3 import register_evm_routes
+except ImportError:
+    register_evm_routes = None
 
-# Optional Phantom + quorum imports - wrapped in try so app still boots if missing
+# Optional Phantom + quorum imports - τυλιγμένα σε try ώστε να bootάρει το app
 try:
     from phantom_gateway_mainnet import get_btc_txns
-    ...
+    from secure_pledge_embed import create_secure_pdf_contract
+    from phantom_decode import decode_payload_from_image
+    from quorum_crypto import aggregate as qc_aggregate, verify as qc_verify
+except ImportError as e:
+    print("CRITICAL IMPORT ERROR:", e)
 
+    # Fallback mocks για να μη τρώμε 500άρια στο boot
+    def get_btc_txns(addr, txid):
+        return []
+
+    def create_secure_pdf_contract(*args, **kwargs):
+        # placeholder όταν λείπει το πραγματικό module
+        return "error.pdf"
+
+    def decode_payload_from_image(*args, **kwargs):
+        return None
+
+    def qc_aggregate(*args, **kwargs):
+        return None
+
+    def qc_verify(*args, **kwargs):
+        return False
+
+from llm_registry import AI_MODEL_REGISTRY, get_default_model_for_mode
+from ai_agent_service import ThronosAI, call_llm, _resolve_model
 
 # Optional Phantom + quorum imports - wrapped in try so app still boots if missing
 try:

@@ -63,7 +63,7 @@ except ImportError:  # Railway ή env χωρίς flask_cors
 import os
 import json
 import uuid
-from llm_registry import get_model_for_provider, get_default_model_for_mode
+from llm_registry import AI_MODEL_REGISTRY, get_model_for_provider, get_default_model_for_mode
 
 app = Flask(__name__)
 CORS(app)

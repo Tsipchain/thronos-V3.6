@@ -10235,95 +10235,80 @@ def api_ai_providers_health():
     return jsonify(providers)
 
 
+# --- Helper για καθαρά labels ανά provider --- #
+PROVIDER_LABELS = {
+    "openai": "OpenAI",
+    "anthropic": "Anthropic / Claude",
+    "gemini": "Google Gemini",
+    "xai": "xAI / Grok",
+    "local": "Local / Custom",
+}
+
+def get_provider_label(provider_key: str) -> str:
+    return PROVIDER_LABELS.get(provider_key, provider_key.title())
+
+
 @app.route("/api/ai/models", methods=["GET"])
 def api_ai_models():
     """
-    Επιστρέφει providers + models για το Quantum UI.
-    Χρησιμοποιεί το AI_MODEL_REGISTRY και τα στατιστικά από το ai_interaction_ledger,
-    αλλά δεν απαιτεί ειδικά πεδία πάνω στο ModelInfo – όλα είναι με getattr + defaults.
+    Επιστρέφει όλα τα διαθέσιμα AI models, ομαδοποιημένα ανά provider,
+    ώστε το front-end dropdown να τα δείχνει όμορφα.
     """
     try:
-        # Ποιο mode τρέχει (openai / anthropic / all κ.λπ.)
-        raw_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
-        mode = raw_mode if raw_mode not in ("", "auto", "router") else "all"
+        # λίστα με providers για grouping στο UI
+        providers = []
+        # flat λίστα με όλα τα models
+        models = []
 
-        base_cfg = base_model_config() or {}
+        # THRONOS_AI_MODE μπορεί να περιορίζει τι δείχνουμε (π.χ. "prod" vs "dev")
+        mode_flag = os.getenv("THRONOS_AI_MODE", "prod").lower()
+        dev_mode = mode_flag in ("dev", "debug", "all")
 
-        # Στατιστικά κλήσεων ανά model_id από το interaction ledger
-        # { "gpt-4.1-mini": {"total_calls": N, "avg_latency_ms": X}, ... }
-        model_stats = compute_model_stats()
+        for provider_key, model_list in AI_MODEL_REGISTRY.items():
+            # provider meta
+            provider_enabled = any(m.enabled_by_default for m in model_list)
 
-        providers_payload = []
-        models_payload = []
-
-        for provider_name, provider in AI_MODEL_REGISTRY.items():
-            # Αν έχεις ειδικό mode και δεν ταιριάζει ο provider, τον προσπερνάμε
-            if mode != "all" and provider_name != mode:
-                continue
-
-            # Θεωρούμε ότι ο provider έχει μέθοδο is_available()
-            # (ή αν δεν έχει, τον θεωρούμε διαθέσιμο)
-            is_available = True
-            try:
-                if hasattr(provider, "is_available"):
-                    is_available = bool(provider.is_available())
-            except Exception:
-                is_available = True
-
-            providers_payload.append(
+            providers.append(
                 {
-                    "key": provider_name,
-                    "name": provider_name.capitalize(),
-                    "enabled": is_available,
-                    "available": is_available,
+                    "key": provider_key,
+                    "name": get_provider_label(provider_key),
+                    "enabled": provider_enabled,
                 }
             )
 
-            # provider.models: λίστα από ModelInfo
-            for mi in getattr(provider, "models", []):
-                model_id = mi.id
-                stats = model_stats.get(model_id, {}) or {}
+            # κάθε μοντέλο ως ξεχωριστό "mode" στο dropdown
+            for m in model_list:
+                # αν δεν είναι default και δεν είμαστε σε dev, κρύψ’ το
+                if not m.enabled_by_default and not dev_mode:
+                    continue
 
-                label = getattr(mi, "display_name", None) or model_id
-                tier = getattr(mi, "tier", "standard")
-                enabled_flag = getattr(mi, "enabled", True)
-
-                models_payload.append(
+                models.append(
                     {
-                        "id": model_id,
-                        "provider": provider_name,
-                        "label": label,
-                        # safe defaults – τα περιμένει το frontend, άρα τα δίνουμε έστω και dummy
-                        "alias": getattr(mi, "alias", model_id),
-                        "tier": tier,
-                        "family": getattr(mi, "family", provider_name),
-                        "safety_tuned": getattr(mi, "safety_tuned", True),
-                        "supports_audio": getattr(mi, "supports_audio", False),
-                        "supports_vision": getattr(mi, "supports_vision", False),
-                        "supports_tools": getattr(mi, "supports_tools", False),
-                        "enabled_by_default": getattr(
-                            mi, "default", enabled_flag
-                        ),
-                        "provider_enabled": is_available,
-                        "provider_available": is_available,
-                        # stats
-                        "total_calls": stats.get("total_calls", 0),
-                        "avg_latency_ms": stats.get("avg_latency_ms", 0.0),
+                        "id": m.id,                      # π.χ. "gpt-4.1-mini"
+                        "provider": provider_key,        # π.χ. "openai"
+                        "label": m.label or m.id,        # όνομα που βλέπει ο χρήστης
+                        "family": m.family,              # π.χ. "gpt-4", "claude-3"
+                        "tier": m.tier,                  # "fast", "pro", "experimental"
+                        "context_tokens": m.context_window,
+                        "enabled": m.enabled_by_default,
+                        "supports_vision": bool(getattr(m, "supports_vision", False)),
+                        "supports_audio": bool(getattr(m, "supports_audio", False)),
+                        "safety_tuned": bool(getattr(m, "safety_tuned", False)),
                     }
                 )
 
         payload = {
             "ok": True,
-            "mode": mode,
-            "base_config": base_cfg,
-            "providers": providers_payload,
-            "models": models_payload,
+            "mode": "auto",      # default mode που έχεις ήδη στο chat
+            "providers": providers,
+            "models": models,
         }
         return jsonify(payload), 200
 
     except Exception as e:
-        app.logger.exception("api_ai_models error")
+        app.logger.exception("api_ai_models failed")
         return jsonify({"ok": False, "error": str(e)}), 500
+
 
 
 @app.route("/api/ai/feedback", methods=["POST"])

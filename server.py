@@ -81,6 +81,9 @@ try:
     from evm_api_v3 import register_evm_routes
 except ImportError:
     register_evm_routes = None
+# Register EVM / DEX API routes if available
+if register_evm_routes is not None:
+    register_evm_routes(app)
 
 # Optional Phantom + quorum imports - wrapped in try so app still boots if missing
 try:

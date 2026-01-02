@@ -69,12 +69,23 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from ai_models_config import base_model_config
 from ai_interaction_ledger import (
     record_ai_interaction,
+    compute_model_stats,
     list_interactions,
     interaction_to_block,
     log_ai_error,
-    create_ai_transfer_from_ledger_entry,
-    compute_model_stats,
 )
+
+# Optional EVM API routes (wallet, swaps, liquidity).
+# Αν το module λείπει (π.χ. σε παλιά deployment), απλά δεν τις κάνουμε register.
+try:
+    from evm_api_v3 import register_evm_routes
+except ImportError:
+    register_evm_routes = None
+
+# Optional Phantom + quorum imports - wrapped in try so app still boots if missing
+try:
+    from phantom_gateway_mainnet import get_btc_txns
+
 from llm_registry import AI_MODEL_REGISTRY
 from ai_agent_service import ThronosAI, call_llm, _resolve_model
 

@@ -153,3 +153,10 @@ def get_default_model_for_mode(mode: str) -> str:
 
     # 3) hardcoded ασφαλές fallback
     return "gpt-4.1-mini"
+
+def get_default_model(mode: str = "chat") -> str:
+    """
+    Legacy alias για την παλιά λογική.
+    Οτιδήποτε στο σύστημα ζητάει get_default_model() θα περνάει από εδώ.
+    """
+    return get_default_model_for_mode(mode)

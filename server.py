@@ -142,77 +142,6 @@ def serve_static(filename):
 if __name__ == '__main__':
     app.run(debug=True)
 
-
-@app.route('/chat_sessions', methods=['GET'])
-def chat_sessions():
-    try:
-        sessions = []
-        for filename in os.listdir(SESSIONS_DIR):
-            if filename.endswith(".json"):
-                sessions.append(filename.replace(".json", ""))
-        return jsonify({"sessions": sessions})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/send_message', methods=['POST'])
-def send_message():
-    data = request.json
-    session_id = data.get("session_id", str(uuid.uuid4()))
-    user_message = data.get("message", "")
-    provider = data.get("provider", "gpt")
-    mode = data.get("mode", "chat")
-    credits = int(data.get("credits", 0))
-
-    session_file = os.path.join(SESSIONS_DIR, f"{session_id}.json")
-
-    try:
-        if not os.path.exists(session_file):
-            with open(session_file, "w") as f:
-                json.dump({"messages": []}, f)
-
-        with open(session_file, "r") as f:
-            session_data = json.load(f)
-
-        session_data["messages"].append({"role": "user", "content": user_message})
-
-        model = get_model_for_provider(provider, mode) or get_default_model_for_mode(mode)
-        if not model:
-            return jsonify({"error": "No model available for this provider/mode."}), 400
-
-        ai_response = f"Simulated response from {model} to: {user_message}"  # Placeholder
-        session_data["messages"].append({"role": "assistant", "content": ai_response})
-
-        with open(session_file, "w") as f:
-            json.dump(session_data, f)
-
-        return jsonify({
-            "session_id": session_id,
-            "messages": session_data["messages"],
-            "model": model
-        })
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/load_history/<session_id>', methods=['GET'])
-def load_history(session_id):
-    session_file = os.path.join(SESSIONS_DIR, f"{session_id}.json")
-    if not os.path.exists(session_file):
-        return jsonify({"messages": []})
-    try:
-        with open(session_file, "r") as f:
-            session_data = json.load(f)
-        return jsonify({"messages": session_data.get("messages", [])})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/static/<path:filename>', methods=['GET'])
-def serve_static(filename):
-    return send_from_directory("static", filename)
-
-if __name__ == '__main__':
-    app.run(debug=True)
-
 ## ----------------------------------------
 # Optional EVM / DEX routes (wallet, swaps, liquidity)
 # ----------------------------------------
@@ -4623,58 +4552,6 @@ def api_ai_history():
 #     sessions.sort(key=_key, reverse=True)
 #
 #     return jsonify({"wallet": wallet, "sessions": sessions}), 200
-
-@app.route("/api/ai_sessions/start", methods=["POST"])
-@app.route("/api/ai/sessions/start", methods=["POST"])
-def api_ai_session_start():
-
-    data = request.get_json(silent=True) or {}
-    wallet = (data.get("wallet") or "").strip()
-    title = (data.get("title") or "").strip() or "New Chat"
-    model = (data.get("model") or "").strip() or None
-
-    if not wallet:
-        return jsonify({"ok": False, "error": "wallet required"}), 400
-
-    sid = secrets.token_hex(8)
-    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-    session = {
-        "id": sid,
-        "wallet": wallet,
-        "title": title,
-        "created_at": now,
-        "updated_at": now,
-        "archived": False,
-        "model": model,
-        "message_count": 0,
-        "meta": {},
-    }
-
-    sessions = load_ai_sessions()
-    sessions.append(session)
-    save_ai_sessions(sessions)
-    return jsonify({"ok": True, "session": session})
-
-    if not wallet:
-        return jsonify(error="Wallet required"), 400
-
-    sid = secrets.token_hex(8)
-    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-    if not title:
-        title = "Νέα συνομιλία"
-
-    sessions = load_ai_sessions()
-    session = {
-        "id": sid,
-        "wallet": wallet,
-        "title": title[:80],
-        "created_at": ts,
-        "updated_at": ts,
-    }
-    sessions.append(session)
-    save_ai_sessions(sessions)
-
-    return jsonify(status="ok", session=session), 200
 
 @app.route("/api/ai_sessions/rename", methods=["POST"])
 @app.route("/api/ai/sessions/rename", methods=["POST"])  # Add slash version!

@@ -122,12 +122,6 @@ def get_default_model(provider: Optional[str] = None) -> Optional[ModelInfo]:
 
 import os
 
-
-def get_default_model_for_mode(mode: str) -> str:
-    """
-    Επιστρέφει το default μοντέλο για το δοσμένο mode.
-    Χρησιμοποιείται από το server.py για να επιλέγει fallback μοντέλο.
-
     Λογική:
     1. Αν υπάρχει ειδικό env για το mode, το τιμάμε.
        - THRONOS_DEFAULT_CHAT_MODEL
@@ -160,3 +154,100 @@ def get_default_model(mode: str = "chat") -> str:
     Οτιδήποτε στο σύστημα ζητάει get_default_model() θα περνάει από εδώ.
     """
     return get_default_model_for_mode(mode)
+
+    # -------------------------------------------------------------
+# ΝΕΑ λογική για επιλογή μοντέλου ανά provider + mode
+# -------------------------------------------------------------
+from typing import Optional
+
+
+def _normalize_provider_name(provider: Optional[str]) -> Optional[str]:
+    """
+    Ενοποίηση ονομάτων provider από UI/παλιά versions σε canonical keys
+    που υπάρχουν στο AI_MODEL_REGISTRY.
+    """
+    if not provider:
+        return None
+
+    p = provider.strip().lower()
+
+    alias_map = {
+        # OpenAI
+        "gpt": "openai",
+        "openai": "openai",
+        "oai": "openai",
+
+        # Anthropic
+        "claude": "anthropic",
+        "anthropic": "anthropic",
+
+        # Google / Gemini
+        "google": "gemini",
+        "gemini": "gemini",
+
+        # Local
+        "local": "local",
+        "ollama": "local",
+
+        # Thronos custom
+        "thronos": "thronos",
+    }
+
+    return alias_map.get(p, p)
+
+
+def get_model_for_provider(
+    provider: Optional[str] = None,
+    mode: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Επιστρέφει το κατάλληλο model_id (string) για τον δοθέντα provider & mode.
+
+    - provider: π.χ. "openai", "gpt", "claude", "gemini", "local", "thronos"
+    - mode: π.χ. "chat", "tools", "vision", "audio", "embed"
+
+    Αν δεν βρεθεί κάτι ειδικό, επιστρέφει fallback από get_default_model_for_mode().
+    """
+
+    # Αν δεν δόθηκε provider, άσε το mode-default να αποφασίσει
+    if not provider:
+        return get_default_model_for_mode(mode or "chat")
+
+    provider_key = _normalize_provider_name(provider)
+    if not provider_key:
+        return get_default_model_for_mode(mode or "chat")
+
+    provider_registry = AI_MODEL_REGISTRY.get(provider_key)
+    if not provider_registry:
+        # Άγνωστος provider -> fallback στο global default για το συγκεκριμένο mode
+        return get_default_model_for_mode(mode or "chat")
+
+    wanted_mode = (mode or "chat").lower()
+
+    # 1) Προσπάθησε να βρεις μοντέλο που:
+    #    - υποστηρίζει το συγκεκριμένο mode
+    #    - και είναι "default" για τον provider (αν έχεις βάλει τέτοιο flag στο registry)
+    for model_id, cfg in provider_registry.items():
+        modes = cfg.get("modes") or []
+        if wanted_mode in modes and cfg.get("default"):
+            return model_id
+
+    # 2) Αλλιώς, πάρε οποιοδήποτε enabled μοντέλο που υποστηρίζει αυτό το mode
+    for model_id, cfg in provider_registry.items():
+        modes = cfg.get("modes") or []
+        if wanted_mode in modes and cfg.get("enabled", True):
+            return model_id
+
+    # 3) Αν δεν βρεθεί με βάση το mode, πάρε ένα default του provider (αν υπάρχει)
+    for model_id, cfg in provider_registry.items():
+        if cfg.get("default"):
+            return model_id
+
+    # 4) Τελευταία λύση: οποιοδήποτε enabled μοντέλο του provider
+    for model_id, cfg in provider_registry.items():
+        if cfg.get("enabled", True):
+            return model_id
+
+    # 5) Αν φτάσαμε εδώ, γύρνα στο global default per mode
+    return get_default_model_for_mode(wanted_mode)
+

@@ -5272,7 +5272,9 @@ def api_create_token():
     if logo_file and logo_file.filename:
         try:
             ext = os.path.splitext(secure_filename(logo_file.filename))[1] or ".png"
-            logo_filename = f"{token_id}{ext}"
+            # Collision-free naming: SYMBOL_timestamp.ext
+            timestamp = int(time.time() * 1000)
+            logo_filename = f"{symbol}_{timestamp}{ext}"
             logo_path = os.path.join(TOKEN_LOGOS_DIR, logo_filename)
 
             logger.info(f"Saving logo for {symbol} to: {logo_path}")
@@ -5328,9 +5330,10 @@ def api_upload_token_logo(symbol):
         return jsonify({"ok": False, "error": "Not authorized"}), 403
 
     try:
-        # Save logo
+        # Save logo with collision-free naming: SYMBOL_timestamp.ext
         ext = os.path.splitext(secure_filename(file.filename))[1] or ".png"
-        logo_filename = f"{token['id']}{ext}"
+        timestamp = int(time.time() * 1000)
+        logo_filename = f"{symbol}_{timestamp}{ext}"
         logo_path = os.path.join(TOKEN_LOGOS_DIR, logo_filename)
 
         logger.info(f"Uploading logo for {symbol} to: {logo_path}")

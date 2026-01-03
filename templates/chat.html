@@ -1756,6 +1756,24 @@
       }
     }
 
+    function showDegradedModeNotice(message) {
+      const noticeId = "degraded-mode-notice";
+      let notice = document.getElementById(noticeId);
+      if (!notice) {
+        notice = document.createElement("div");
+        notice.id = noticeId;
+        notice.style.cssText = "background: rgba(255, 75, 129, 0.15); border: 1px solid var(--danger); border-radius: 12px; padding: 10px 14px; margin: 8px 0 8px 0; font-size: 12px; color: var(--danger);";
+        const inputBlock = document.querySelector(".chat-input-block");
+        if (inputBlock) inputBlock.insertAdjacentElement("afterbegin", notice);
+      }
+      notice.innerHTML = `⚠️ <strong>Degraded Mode:</strong> ${message}. AUTO routing still available.`;
+    }
+
+    function hideDegradedModeNotice() {
+      const notice = document.getElementById("degraded-mode-notice");
+      if (notice) notice.remove();
+    }
+
     async function loadModels() {
       if (!modelSelectEl) return;
 
@@ -1776,11 +1794,23 @@
 
       try {
         const res = await fetch(API_MODELS);
-        if (!res.ok) {
-          console.error("Failed to load models", res.status);
+
+        // Always attempt to parse JSON, even on error status
+        let data = null;
+        try {
+          data = await res.json();
+        } catch (e) {
+          console.error("Failed to parse models response", e);
+          showDegradedModeNotice("Models API unreachable");
           return;
         }
-        const data = await res.json();
+
+        // Check for degraded mode
+        if (data.ok === false || data.fallback_active === true) {
+          showDegradedModeNotice(data.error_message || "Provider configuration unavailable");
+        } else {
+          hideDegradedModeNotice();
+        }
         const providers = data.providers || {};
         const models = data.models || [];
 
@@ -1800,15 +1830,15 @@
             opt.value = model.id;
             opt.dataset.provider = model.provider;
 
-            let label = model.display_name || model.id;
+            let label = model.display_name || model.label || model.id;
             if (model.tier && model.tier !== "standard") {
               label += ` · ${model.tier}`;
             }
             if (model.stats && model.stats.error_rate !== undefined) {
               label += ` · err ${(model.stats.error_rate * 100).toFixed(1)}%`;
             }
-            if (!model.enabled) {
-              label += " (API key missing)";
+            if (!model.enabled || model.degraded) {
+              label += model.degraded ? " (degraded)" : " (API key missing)";
               opt.disabled = true;
             }
             opt.textContent = label;
@@ -1831,6 +1861,7 @@
         }
       } catch (e) {
         console.warn("model load failed", e);
+        showDegradedModeNotice("Failed to load models");
       }
     }
 

@@ -511,7 +511,25 @@ async function loadModels() {
 
   try {
     const res = await fetch("/api/ai/models");
-    const data = await res.json();
+
+    let data = null;
+    try {
+      data = await res.json();
+    } catch (e) {
+      console.error("Models API parse error", e);
+      setStatus(false, "Models unavailable");
+      return;
+    }
+
+    // Check for degraded mode
+    if (data.ok === false || data.fallback_active === true) {
+      setStatus(false, data.error_message || "Degraded mode");
+      const statusPill = document.getElementById("statusPill");
+      if (statusPill) {
+        statusPill.innerHTML = '<div class="pill-dot" style="background: var(--danger); box-shadow: 0 0 8px var(--danger);"></div><span class="lang-el">Υποβαθμισμένη λειτουργία</span><span class="lang-en">Degraded Mode</span><span class="lang-ja">機能制限モード</span><span class="lang-ru">Ограниченный режим</span><span class="lang-es">Modo Degradado</span>';
+      }
+    }
+
     const providers = data.providers || {};
     const models = data.models || [];
 
@@ -532,10 +550,10 @@ async function loadModels() {
       provModels.forEach(m => {
         const opt = document.createElement("option");
         opt.value = m.id;
-        opt.textContent = `${m.emoji || '🤖'} ${m.name || m.id}`;
-        if (!enabled || m.disabled) {
+        opt.textContent = `${m.emoji || '🤖'} ${m.label || m.display_name || m.id}`;
+        if (!enabled || m.disabled || m.degraded || !m.enabled) {
           opt.disabled = true;
-          opt.textContent += ' (disabled)';
+          opt.textContent += m.degraded ? ' (degraded)' : ' (disabled)';
         }
         modelSel.appendChild(opt);
       });
@@ -546,7 +564,8 @@ async function loadModels() {
       modelSel.value = previousValue;
     }
   } catch (e) {
-    console.warn("Failed to load models from API, using defaults:", e);
+    console.warn("Failed to load models from API:", e);
+    setStatus(false, "Models unavailable");
   }
 }
 

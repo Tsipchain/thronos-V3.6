@@ -1,0 +1,73 @@
+{
+  "advice_id": "PYTH-ADV-2026-A-001",
+  "timestamp": "2026-01-03T00:00:00Z",
+  "severity": "BLOCKER",
+  "category": "API_RELIABILITY",
+  "title": "/api/ai/models Degraded Mode Implementation",
+  "summary": "Implemented graceful degradation for /api/ai/models endpoint to prevent 500 errors and UI crashes",
+  "problem_statement": "/api/ai/models returned HTTP 500 when provider initialization failed, causing /chat and /architect pages to render blank or fail. Users could not select AI models and the UI became unusable.",
+  "solution_implemented": "Option A - Graceful Degradation with Fallback Models",
+  "technical_changes": [
+    {
+      "file": "server.py",
+      "lines": "10387-10517",
+      "change_type": "error_handling",
+      "description": "Added _get_fallback_models() helper and comprehensive try-except blocks. Endpoint now ALWAYS returns HTTP 200 with degraded mode payload when providers fail."
+    },
+    {
+      "file": "templates/chat.html",
+      "lines": "1759-1865",
+      "change_type": "ui_enhancement",
+      "description": "Added showDegradedModeNotice() and hideDegradedModeNotice() functions. UI now displays clear warning when in degraded mode while keeping AUTO routing available."
+    },
+    {
+      "file": "templates/architect.html",
+      "lines": "505-570",
+      "change_type": "ui_enhancement",
+      "description": "Added degraded mode detection and status pill update. Architect page now shows degraded mode indicator and handles fallback models gracefully."
+    }
+  ],
+  "benefits": [
+    "Zero 500 errors from /api/ai/models endpoint",
+    "Chat and Architect pages never crash",
+    "Users can always use AUTO routing even in degraded mode",
+    "Clear error messaging improves user experience",
+    "Fallback models provide graceful degradation"
+  ],
+  "testing_performed": {
+    "normal_operation": "Verified model dropdown populates correctly with all providers enabled",
+    "missing_api_keys": "Tested with removed API keys - degraded mode activates correctly",
+    "provider_failure": "Simulated provider failures - fallback models shown",
+    "ui_responsiveness": "Confirmed no blank pages or crashes in any failure scenario"
+  },
+  "acceptance_criteria_met": [
+    "/api/ai/models never returns 500",
+    "/chat and /architect open without blank pages",
+    "Model dropdown shows AUTO + fallback models in degraded mode",
+    "Degraded mode notice visible to users",
+    "Selecting non-AUTO models possible when API is OK"
+  ],
+  "deployment_status": "READY_FOR_PRODUCTION",
+  "rollback_plan": "If issues occur, revert server.py changes to line 10459 (previous return 500 behavior). Frontend changes are defensive and can remain.",
+  "monitoring_recommendations": [
+    "Monitor /api/ai/models response times and error rates",
+    "Track degraded mode activations in logs",
+    "Alert on sustained degraded mode (>5 minutes)",
+    "Track user model selections vs AUTO usage"
+  ],
+  "dao_voting_reference": "GOV-2026-A-001",
+  "patch_plan_reference": "PATCH-2026-A-001",
+  "pytheia_report_reference": "PYTH-2026-A-001",
+  "next_steps": [
+    "Deploy to Railway production environment",
+    "Monitor for 24 hours",
+    "Gather user feedback on degraded mode messaging",
+    "Consider adding retry logic for transient provider failures"
+  ],
+  "risk_assessment": {
+    "implementation_risk": "LOW",
+    "deployment_risk": "LOW",
+    "user_impact": "HIGH_POSITIVE",
+    "technical_debt": "NONE"
+  }
+}

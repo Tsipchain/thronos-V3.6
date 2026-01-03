@@ -1242,7 +1242,7 @@
 
 <div class="top-controls">
     <!-- Unified Wallet Button -->
-    <div style="position: relative;">
+    <div id="walletStatus" class="wallet-status" style="position: relative; display: block;">
         <button id="walletUnifiedBtn" class="wallet-unified-btn" onclick="handleWalletBtnClick()">
             <span class="wallet-icon">💎</span>
             <span id="walletBtnText">
@@ -1299,7 +1299,7 @@
 </div>
 
 <!-- Hidden elements for backward compatibility -->
-<div id="walletStatus" style="display:none;"><span id="walletAddrShort"></span></div>
+<!-- walletStatus is now the div containing walletUnifiedBtn and walletBalancePopup -->
 <button id="disconnectBtn" style="display:none;"></button>
 <button id="walletLoginBtn" style="display:none;"></button>
 
@@ -1684,8 +1684,7 @@ function disconnectWallet() {
         walletSession.clearSession();
 
         // Close popup
-        const popup = document.getElementById('walletBalancePopup');
-        if (popup) popup.style.display = 'none';
+        setWalletOpen(false);
 
         // Reset balance display
         const balanceDisplay = document.getElementById('walletBalanceDisplay');
@@ -1715,20 +1714,20 @@ async function loadWalletBalances(force = false) {
 
     if (!walletSession.isBound()) {
         walletBalancesLoaded = false;
-        showWalletLoginForm();
+        // Login is now handled by the modal, not inside the popup
         return;
     }
 
     const wallet = walletSession.getAddress();
     if (!wallet) {
-        showWalletLoginForm();
+        // Login is now handled by the modal, not inside the popup
         return;
     }
 
     const content = document.getElementById('walletContentSection');
     if (!content) return;
 
-    showWalletContentSection();
+    // Content section is always visible, no need to toggle
 
     if (force) {
         content.innerHTML = `
@@ -2375,6 +2374,9 @@ function initWalletUiControls(){
     }, 100);
 }
 
+// These functions are no longer needed - login is now handled via the modal
+// Keeping them commented out for reference
+/*
 function showWalletLoginForm(){
     const loginSection = document.getElementById('walletLoginSection');
     const contentSection = document.getElementById('walletContentSection');
@@ -2397,6 +2399,7 @@ function showWalletContentSection(){
     if(loginSection) loginSection.style.display = 'none';
     if(contentSection) contentSection.style.display = 'block';
 }
+*/
 
 // Open the wallet login modal
 function openWalletModal(){
@@ -2488,7 +2491,7 @@ async function submitHeaderWalletLogin(){
     // Update UI and open wallet popup
     updateHeaderWalletUi();
     setWalletOpen(true);
-    showWalletContentSection();
+    // Content section is always visible, no need to toggle
     loadTokenBalances();
     loadWalletBalances(true);
     updateReceiveModal();
@@ -2560,13 +2563,12 @@ function handleWalletBtnClick() {
 
     if (bound && wallet) {
         // Connected - toggle popup
-        const popup = document.getElementById('walletBalancePopup');
-        if (popup) {
-            const isOpen = popup.style.display === 'block';
-            popup.style.display = isOpen ? 'none' : 'block';
-            if (!isOpen) {
-                loadWalletBalances(true);
-            }
+        const isOpen = isWalletOpen();
+        if (isOpen) {
+            setWalletOpen(false);
+        } else {
+            setWalletOpen(true);
+            loadWalletBalances(true);
         }
     } else {
         // Not connected - open login modal
@@ -2578,8 +2580,13 @@ function handleWalletBtnClick() {
 document.addEventListener('click', function(e) {
     const popup = document.getElementById('walletBalancePopup');
     const btn = document.getElementById('walletUnifiedBtn');
-    if (popup && btn && !popup.contains(e.target) && !btn.contains(e.target)) {
-        popup.style.display = 'none';
+    const statusEl = document.getElementById('walletStatus');
+
+    if (popup && btn && statusEl && !popup.contains(e.target) && !btn.contains(e.target)) {
+        // Don't close if wallet is pinned
+        if (!getWalletUiPinned()) {
+            setWalletOpen(false);
+        }
     }
 });
 

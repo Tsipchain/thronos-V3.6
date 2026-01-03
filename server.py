@@ -10384,12 +10384,42 @@ def api_ai_providers_health():
     return jsonify(providers)
 
 
+def _get_fallback_models():
+    """Return minimal curated model list for degraded mode."""
+    try:
+        from ai_models_config import CURATED_MODELS
+        fallback = []
+        for provider, data in CURATED_MODELS.items():
+            for model in data.get("models", []):
+                fallback.append({
+                    "id": model["id"],
+                    "provider": provider,
+                    "label": model["label"],
+                    "enabled": False,  # Mark as disabled in degraded mode
+                    "degraded": True,
+                    "tier": "fallback",
+                    "display_name": model["label"]
+                })
+        return fallback
+    except Exception as e:
+        app.logger.error(f"Failed to load fallback models: {e}")
+        return [{
+            "id": "auto",
+            "provider": "thronos",
+            "label": "AUTO (Emergency Fallback)",
+            "enabled": True,
+            "degraded": True,
+            "tier": "emergency"
+        }]
+
+
 @app.route("/api/ai/models", methods=["GET"])
 def api_ai_models():
     """
     Επιστρέφει ενοποιημένη λίστα μοντέλων για το Thronos Quantum UI.
     Χρησιμοποιεί το AI_MODEL_REGISTRY και τα stats από το AI Interaction Ledger.
     Δεν σκάει αν κάποιος provider δεν έχει API key – απλά τον μαρκάρει ως disabled.
+    NEVER returns 500 - always returns 200 with degraded mode fallback if needed.
     """
     try:
         # Τι mode έχουμε ρυθμίσει στο node (π.χ. "all", "openai", "anthropic", "google")
@@ -10400,11 +10430,28 @@ def api_ai_models():
             mode = raw_mode
 
         # Βασικό config – ποιοι providers είναι ενεργοί στο σύστημα
-        base_cfg = base_model_config() or {}
-        enabled_providers = set((base_cfg.get("providers") or {}).keys())
+        try:
+            base_cfg = base_model_config() or {}
+            enabled_providers = set((base_cfg.get("providers") or {}).keys())
+        except Exception as cfg_err:
+            app.logger.warning(f"base_model_config failed: {cfg_err}")
+            # Degraded mode fallback
+            return jsonify({
+                "ok": False,
+                "mode": "degraded",
+                "error_code": "PROVIDER_CONFIG_FAILED",
+                "error_message": "Provider configuration unavailable",
+                "providers": {},
+                "models": _get_fallback_models(),
+                "fallback_active": True
+            }), 200
 
         # Στατιστικά ανά model id από το AI Interaction Ledger
-        model_stats = compute_model_stats() or {}
+        try:
+            model_stats = compute_model_stats() or {}
+        except Exception as stats_err:
+            app.logger.warning(f"compute_model_stats failed: {stats_err}")
+            model_stats = {}  # Continue without stats
 
         providers = {}
         models = []
@@ -10448,15 +10495,26 @@ def api_ai_models():
                 )
 
         payload = {
+            "ok": True,
             "mode": mode,
             "providers": providers,
             "models": models,
+            "fallback_active": False
         }
         return jsonify(payload), 200
 
     except Exception as exc:
-        app.logger.exception("api_ai_models error")
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        app.logger.exception("api_ai_models catastrophic error")
+        # Last resort fallback - NEVER return 500
+        return jsonify({
+            "ok": False,
+            "mode": "degraded",
+            "error_code": "CATASTROPHIC_FAILURE",
+            "error_message": str(exc),
+            "providers": {},
+            "models": _get_fallback_models(),
+            "fallback_active": True
+        }), 200  # ← ALWAYS 200, never 500
 
 @app.route("/api/ai/feedback", methods=["POST"])
 def api_ai_feedback():

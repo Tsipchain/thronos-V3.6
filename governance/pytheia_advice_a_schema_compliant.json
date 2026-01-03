@@ -1,0 +1,116 @@
+{
+  "schema_version": "PYTHEIA Advice v1.0.0",
+  "timestamp": "2026-01-03T12:00:00Z",
+  "auditor": "PYTHEIA AI Node",
+  "repo": "https://github.com/Tsipchain/thronos-V3.6",
+  "commit": "e5d2dad",
+  "title": "Fix /api/ai/models 500 Error with Degraded Mode Fallback",
+  "severity": "BLOCKER",
+  "priorities": [
+    {
+      "id": "P1",
+      "title": "/api/ai/models returns 500 on provider failure",
+      "severity": "BLOCKER",
+      "status": "resolved",
+      "files": ["server.py:10387-10517"],
+      "description": "The /api/ai/models endpoint returns HTTP 500 when provider initialization fails or env vars are missing, causing /chat and /architect pages to crash or render blank. Users cannot select AI models, resulting in complete AI feature failure.",
+      "impact": "Critical: Complete UI failure for /chat and /architect. Zero user access to AI model selection. AUTO routing unavailable. User experience catastrophic."
+    },
+    {
+      "id": "P2",
+      "title": "Frontend lacks graceful degradation handling",
+      "severity": "MAJOR",
+      "status": "resolved",
+      "files": ["templates/chat.html:1759-1865", "templates/architect.html:505-570"],
+      "description": "Frontend code does not handle API failures gracefully. When /api/ai/models fails, the model dropdown shows only AUTO with no indication of degraded state or error messaging to users.",
+      "impact": "High: Users have no visibility into system state. No feedback on provider availability. Poor user experience even when AUTO routing works."
+    },
+    {
+      "id": "P3",
+      "title": "No fallback model catalog for degraded operation",
+      "severity": "MAJOR",
+      "status": "resolved",
+      "files": ["server.py:10387-10413", "ai_models_config.py:15-58"],
+      "description": "System lacks fallback mechanism to provide curated model list when dynamic discovery fails. No degraded mode implementation exists.",
+      "impact": "Medium: Even when some providers work, complete system failure occurs due to single provider issue. No graceful degradation path."
+    }
+  ],
+  "options": [
+    {
+      "id": "A",
+      "title": "Graceful Degradation with Fallback Models",
+      "scope": "Add comprehensive error handling in /api/ai/models, return HTTP 200 with degraded mode payload, implement fallback model catalog, add frontend degraded mode notices",
+      "effort": "60 minutes implementation + 30 minutes testing",
+      "risk": "Low",
+      "cost_thr": 0,
+      "vote_recommendation": "STRONGLY_APPROVE"
+    },
+    {
+      "id": "B",
+      "title": "Silent Fallback with Curated Models",
+      "scope": "Return curated static models on failure without degraded mode flag, minimal frontend changes",
+      "effort": "30 minutes implementation + 15 minutes testing",
+      "risk": "Medium",
+      "cost_thr": 0,
+      "vote_recommendation": "NEUTRAL"
+    }
+  ],
+  "patch_plan": {
+    "phases": [
+      {
+        "phase": 1,
+        "title": "Implement _get_fallback_models() helper",
+        "files": ["server.py"],
+        "changes": "Add helper function that returns curated model list from ai_models_config.py. Include emergency fallback if even that fails. Returns models marked as degraded=true."
+      },
+      {
+        "phase": 2,
+        "title": "Wrap base_model_config() in try-except",
+        "files": ["server.py"],
+        "changes": "Add try-except around base_model_config() call. On exception, log warning and return HTTP 200 with degraded mode payload including fallback models."
+      },
+      {
+        "phase": 3,
+        "title": "Wrap compute_model_stats() in try-except",
+        "files": ["server.py"],
+        "changes": "Add try-except around compute_model_stats() call. On exception, log warning and continue with empty stats dict. Stats failure should not trigger full degradation."
+      },
+      {
+        "phase": 4,
+        "title": "Update main exception handler to return 200",
+        "files": ["server.py"],
+        "changes": "Change catastrophic exception handler from returning 500 to returning 200 with full degraded mode payload. Add detailed logging."
+      },
+      {
+        "phase": 5,
+        "title": "Add degraded mode notice functions to chat.html",
+        "files": ["templates/chat.html"],
+        "changes": "Implement showDegradedModeNotice() and hideDegradedModeNotice() functions. Insert warning banner in chat input block when degraded mode detected."
+      },
+      {
+        "phase": 6,
+        "title": "Update chat.html loadModels() for degraded mode",
+        "files": ["templates/chat.html"],
+        "changes": "Add degraded mode detection in loadModels(). Show notice when ok=false or fallback_active=true. Mark degraded models as disabled."
+      },
+      {
+        "phase": 7,
+        "title": "Update architect.html for degraded mode",
+        "files": ["templates/architect.html"],
+        "changes": "Add degraded mode detection and status pill update in loadModels(). Handle degraded models gracefully."
+      }
+    ],
+    "tests": [
+      "Normal operation: All providers enabled, verify full model list loads",
+      "Missing API key: Remove one provider key, verify degraded mode activates correctly",
+      "Complete provider failure: Corrupt config, verify fallback models shown and pages don't crash",
+      "Stats ledger corruption: Malform ledger file, verify stats fail gracefully without triggering degradation",
+      "UI responsiveness: Verify no blank pages in any failure scenario",
+      "AUTO routing: Confirm AUTO option always available even in degraded mode"
+    ],
+    "rollback": "If issues occur, revert server.py changes to line 10459 (previous return 500 behavior). Frontend changes are defensive and can remain. Full rollback: git revert <commit-hash>."
+  },
+  "governance_url": "https://thrchain.up.railway.app/governance",
+  "requires_approval": false,
+  "auto_executable": true
+}

@@ -148,6 +148,15 @@
     }
     .vote-stats .for { color: #3CFF7A; }
     .vote-stats .against { color: #ff6b6b; }
+    .vote-info {
+        margin: 10px 0;
+        text-align: center;
+        opacity: 0.8;
+        font-size: 0.85em;
+    }
+    .vote-info strong {
+        color: #3CFF7A;
+    }
     .vote-buttons {
         display: flex;
         gap: 10px;
@@ -639,11 +648,14 @@ function renderProposals(items, containerId) {
                     <span class="against">👎 ${formatNumber(p.votes_against || 0)} (${100 - forPercent}%)</span>
                 </div>
                 ${p.status === 'active' ? `
+                    <div class="vote-info">
+                        <small>Voting as: <strong>${connectedWallet || '(not connected)'}</strong></small>
+                    </div>
                     <div class="vote-buttons">
-                        <button class="btn-vote btn-for" onclick="vote('${p.id}', 'for')">
+                        <button type="button" class="btn-vote btn-for" onclick="vote('${p.id}', 'for')" ${!connectedWallet ? 'disabled title="Connect wallet first"' : ''}>
                             👍 <span class="lang-el">Υπέρ</span><span class="lang-en">For</span>
                         </button>
-                        <button class="btn-vote btn-against" onclick="vote('${p.id}', 'against')">
+                        <button type="button" class="btn-vote btn-against" onclick="vote('${p.id}', 'against')" ${!connectedWallet ? 'disabled title="Connect wallet first"' : ''}>
                             👎 <span class="lang-el">Κατά</span><span class="lang-en">Against</span>
                         </button>
                     </div>
@@ -653,11 +665,24 @@ function renderProposals(items, containerId) {
     }).join('');
 }
 
+// FIX 3: Track votes to prevent accidental double-voting
+const userVotedProposals = new Set();
+
 // Vote
 async function vote(proposalId, voteType) {
+    // FIX 3B: Ensure wallet is connected
     if (!connectedWallet) {
         alert('Please connect your wallet first');
         return;
+    }
+
+    // FIX 3A: Confirm first vote to prevent accidental clicks
+    if (!userVotedProposals.has(proposalId)) {
+        const voteLabel = voteType === 'for' ? '👍 FOR' : '👎 AGAINST';
+        const confirmed = confirm(`Confirm vote ${voteLabel} on this proposal?\n\nVoting as: ${connectedWallet}\nCost: 0.01 THR (burned)\n\nThis action cannot be undone.`);
+        if (!confirmed) {
+            return;
+        }
     }
 
     try {
@@ -674,6 +699,7 @@ async function vote(proposalId, voteType) {
         const data = await res.json();
 
         if (data.status === 'success') {
+            userVotedProposals.add(proposalId);  // Track successful vote
             alert('Vote recorded successfully!');
             loadProposals();
         } else {
@@ -684,6 +710,7 @@ async function vote(proposalId, voteType) {
         alert('Vote recorded! (Demo mode)');
         const proposal = proposals.find(p => p.id === proposalId);
         if (proposal) {
+            userVotedProposals.add(proposalId);  // Track demo vote
             if (voteType === 'for') proposal.votes_for += votingPower || 100;
             else proposal.votes_against += votingPower || 100;
             renderProposals(proposals.filter(p => p.status === 'active'), 'activeProposalsList');

@@ -532,6 +532,7 @@ async function loadModels() {
 
     const providers = data.providers || {};
     const models = data.models || [];
+    const providerStatus = data.provider_status || {};  // FIX 2: Get provider status
 
     // Group models by provider
     const providerGroups = {};
@@ -553,7 +554,17 @@ async function loadModels() {
         opt.textContent = `${m.emoji || '🤖'} ${m.label || m.display_name || m.id}`;
         if (!enabled || m.disabled || m.degraded || !m.enabled) {
           opt.disabled = true;
-          opt.textContent += m.degraded ? ' (degraded)' : ' (disabled)';
+          // FIX 2: Show specific missing env vars
+          if (m.degraded) {
+            opt.textContent += ' (degraded)';
+          } else {
+            const status = providerStatus[m.provider];
+            if (status && status.missing_env_vars && status.missing_env_vars.length > 0) {
+              opt.textContent += ` (missing: ${status.missing_env_vars.join(" or ")})`;
+            } else {
+              opt.textContent += ' (disabled)';
+            }
+          }
         }
         modelSel.appendChild(opt);
       });

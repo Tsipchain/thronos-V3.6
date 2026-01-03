@@ -70,9 +70,24 @@ AI_MODEL_REGISTRY: Dict[str, List[ModelInfo]] = {
 
 
 def _apply_env_flags() -> None:
-    has_openai = bool((os.getenv("OPENAI_API_KEY") or "").strip())
-    has_anthropic = bool((os.getenv("ANTHROPIC_API_KEY") or "").strip())
-    has_gemini = bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
+    # FIX 2: Support env var aliases and log which vars were checked
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # Check OpenAI: OPENAI_API_KEY or OPENAI_KEY
+    openai_key = (os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip()
+    has_openai = bool(openai_key)
+    logger.debug(f"OpenAI provider check: OPENAI_API_KEY={bool(os.getenv('OPENAI_API_KEY'))}, OPENAI_KEY={bool(os.getenv('OPENAI_KEY'))} → enabled={has_openai}")
+
+    # Check Anthropic: ANTHROPIC_API_KEY
+    anthropic_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    has_anthropic = bool(anthropic_key)
+    logger.debug(f"Anthropic provider check: ANTHROPIC_API_KEY={bool(os.getenv('ANTHROPIC_API_KEY'))} → enabled={has_anthropic}")
+
+    # Check Gemini: GEMINI_API_KEY or GOOGLE_API_KEY
+    gemini_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+    has_gemini = bool(gemini_key)
+    logger.debug(f"Gemini provider check: GEMINI_API_KEY={bool(os.getenv('GEMINI_API_KEY'))}, GOOGLE_API_KEY={bool(os.getenv('GOOGLE_API_KEY'))} → enabled={has_gemini}")
 
     for provider_name, models in AI_MODEL_REGISTRY.items():
         if provider_name == "openai":
@@ -89,6 +104,46 @@ def _apply_env_flags() -> None:
 
 
 _apply_env_flags()
+
+
+def get_provider_status() -> dict:
+    """
+    FIX 2: Return provider status with env var names checked.
+    Returns dict with provider → {enabled: bool, env_vars_checked: [str], missing_env_vars: [str]}
+    """
+    status = {}
+
+    # OpenAI
+    openai_vars = ["OPENAI_API_KEY", "OPENAI_KEY"]
+    openai_available = any(os.getenv(v) for v in openai_vars)
+    openai_missing = [v for v in openai_vars if not os.getenv(v)]
+    status["openai"] = {
+        "enabled": openai_available,
+        "env_vars_checked": openai_vars,
+        "missing_env_vars": openai_missing if not openai_available else []
+    }
+
+    # Anthropic
+    anthropic_vars = ["ANTHROPIC_API_KEY"]
+    anthropic_available = any(os.getenv(v) for v in anthropic_vars)
+    anthropic_missing = [v for v in anthropic_vars if not os.getenv(v)]
+    status["anthropic"] = {
+        "enabled": anthropic_available,
+        "env_vars_checked": anthropic_vars,
+        "missing_env_vars": anthropic_missing if not anthropic_available else []
+    }
+
+    # Gemini
+    gemini_vars = ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
+    gemini_available = any(os.getenv(v) for v in gemini_vars)
+    gemini_missing = [v for v in gemini_vars if not os.getenv(v)]
+    status["gemini"] = {
+        "enabled": gemini_available,
+        "env_vars_checked": gemini_vars,
+        "missing_env_vars": gemini_missing if not gemini_available else []
+    }
+
+    return status
 
 
 def find_model(model_id: str) -> Optional[ModelInfo]:

@@ -346,13 +346,17 @@
       </div>
       <div class="card">
         <h4>Platform Status</h4>
-        <div class="big" id="musicStatus">Coming Soon</div>
-        <div class="small muted">implementation pending</div>
+        <div class="big" id="musicStatus" style="color: #ff9800;">Not Connected</div>
+        <div class="small muted">music data unavailable</div>
       </div>
     </div>
     <div style="text-align:center;padding:40px;color:#9fdfb4">
-      <p style="font-size:16px">🎵 Music Platform Coming Soon</p>
-      <p style="font-size:12px;opacity:0.7">The decentralized music streaming and royalty distribution platform is currently under development.</p>
+      <p style="font-size:16px">🎵 Music Platform Status</p>
+      <p style="font-size:12px;opacity:0.7">
+        <strong style="color:#ff9800">Missing:</strong> /api/music/tracks endpoint, backend music registry, MUSIC_VOLUME env var<br>
+        <strong>To enable:</strong> Deploy music backend service and configure environment variables<br>
+        <strong>Current state:</strong> UI ready, backend integration pending
+      </p>
     </div>
   </section>
 </div>

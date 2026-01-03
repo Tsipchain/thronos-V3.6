@@ -1242,7 +1242,7 @@
 
 <div class="top-controls">
     <!-- Unified Wallet Button -->
-    <div style="position: relative;">
+    <div id="walletStatus" class="wallet-status" style="position: relative; display: block;">
         <button id="walletUnifiedBtn" class="wallet-unified-btn" onclick="handleWalletBtnClick()">
             <span class="wallet-icon">💎</span>
             <span id="walletBtnText">
@@ -1299,7 +1299,7 @@
 </div>
 
 <!-- Hidden elements for backward compatibility -->
-<div id="walletStatus" style="display:none;"><span id="walletAddrShort"></span></div>
+<!-- walletStatus is now the div containing walletUnifiedBtn and walletBalancePopup -->
 <button id="disconnectBtn" style="display:none;"></button>
 <button id="walletLoginBtn" style="display:none;"></button>
 

@@ -3531,6 +3531,53 @@ def api_bridge_stats():
     }), 200
 
 
+@app.route("/api/bridge/status")
+def api_bridge_status():
+    """
+    Return operational status of the bridge.
+
+    Returns:
+        - ok: boolean indicating if bridge is operational
+        - mode: "disabled" | "manual" | "beta" | "live"
+        - last_sync: timestamp of last sync
+        - reserves: current bridge reserves (if applicable)
+        - notes: human-readable status message
+    """
+    txs = _load_bridge_txs()
+
+    # Determine mode based on configuration and endpoint availability
+    # Currently the burn endpoint returns 501, so bridge is in "manual" mode
+    mode = os.getenv("BRIDGE_MODE", "manual")
+    notes = "Bitcoin bridge is in manual mode. Automated bridging is coming soon. Check roadmap for updates."
+
+    # Calculate basic stats
+    last_tx_time = None
+    if txs:
+        try:
+            # Try to get the most recent transaction timestamp
+            for tx in reversed(txs):
+                if "timestamp" in tx:
+                    last_tx_time = tx["timestamp"]
+                    break
+        except Exception:
+            pass
+
+    return jsonify({
+        "ok": mode in {"beta", "live"},
+        "mode": mode,
+        "last_sync": last_tx_time or datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "reserves": {
+            "btc": 0.0,  # Would be calculated from actual reserve wallet
+            "thr": 0.0   # Would be calculated from bridge contract
+        },
+        "notes": notes,
+        "endpoints": {
+            "stats": "/api/bridge/stats",
+            "history": "/api/bridge/history/<address>",
+            "burn": "disabled"  # Currently returns 501
+        }
+    }), 200
+
 
 @app.route("/api/bridge/history/<address>")
 def api_bridge_history(address):

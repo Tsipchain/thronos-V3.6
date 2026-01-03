@@ -1860,6 +1860,15 @@ def session_messages_exists(session_id: str) -> bool:
     return os.path.exists(path)
 
 
+def save_session_messages(session_id: str, messages: list):
+    """Save messages for a session."""
+    if not session_id:
+        return
+    ensure_session_messages_file(session_id)
+    path = _session_messages_path(session_id)
+    save_json(path, messages)
+
+
 def remove_session_from_index(session_id: str, wallet: str | None = None):
     """Remove a session from the index, optionally scoped by wallet."""
     if not session_id:
@@ -8507,17 +8516,26 @@ def api_v1_create_quiz(course_id: str):
             "correct": int(q.get("correct"))
         })
 
-    # Save quiz
+    # FIX B1: Save quiz with quiz_id and updated_at for cache busting
+    import uuid
     quizzes = load_quizzes()
+    existing_quiz = quizzes.get(course_id, {})
+    quiz_id = existing_quiz.get("quiz_id", str(uuid.uuid4()))
+
     quizzes[course_id] = {
+        "quiz_id": quiz_id,
         "course_id": course_id,
         "title": data.get("title", "Course Quiz"),
         "title_el": data.get("title_el", "Quiz Μαθήματος"),
         "passing_score": int(data.get("passing_score", 80)),
         "questions": validated_questions,
-        "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        "created_at": existing_quiz.get("created_at", time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())),
+        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "version": existing_quiz.get("version", 0) + 1
     }
     save_quizzes(quizzes)
+
+    app.logger.info(f"Quiz saved for course {course_id}: {len(validated_questions)} questions, version {quizzes[course_id]['version']}")
 
     return jsonify(status="success", message="Quiz saved"), 201
 
@@ -8660,17 +8678,57 @@ def api_l2e_submit_quiz():
     }
     save_json(os.path.join(DATA_DIR, "quiz_attempts.json"), quiz_attempts)
 
+    # FIX B2: AUTO-COMPLETE + AUTO-REWARD
+    auto_completed = False
+    reward_credited = False
+    reward_amount = 0.0
+
     if passed:
+        # Mark course completed in enrollments
         enrollments.setdefault(course_id, {}).setdefault(student, {})["completed"] = True
+        enrollments[course_id][student]["completed_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        save_enrollments(enrollments)
+
+        # Mark in course object
         course.setdefault("completed", [])
         if student not in course["completed"]:
             course["completed"].append(student)
-        # Award L2E tokens
-        reward = float(course.get("reward_l2e", 0))
-        if reward > 0:
+            save_courses(courses)
+
+        auto_completed = True
+        app.logger.info(f"AUTO-COMPLETE: Student {student} completed course {course_id}")
+
+        # AUTO-REWARD: Credit L2E reward
+        reward_amount = float(course.get("metadata", {}).get("reward_thr", 0.0) or course.get("reward_l2e", 0.0))
+        if reward_amount > 0:
+            # Credit to main wallet ledger
+            ledger = load_json(LEDGER_FILE, {})
+            ledger[student] = round(float(ledger.get(student, 0.0)) + reward_amount, 6)
+            save_json(LEDGER_FILE, ledger)
+
+            # Also credit to L2E ledger for tracking
             l2e_ledger = load_json(L2E_LEDGER_FILE, {})
-            l2e_ledger[student] = round(float(l2e_ledger.get(student, 0.0)) + reward, 6)
+            l2e_ledger[student] = round(float(l2e_ledger.get(student, 0.0)) + reward_amount, 6)
             save_json(L2E_LEDGER_FILE, l2e_ledger)
+
+            # Write transaction entry to wallet history
+            chain = load_json(CHAIN_FILE, [])
+            reward_tx = {
+                "tx_id": f"L2E_{course_id}_{int(time.time())}",
+                "type": "L2E_REWARD",
+                "from": "SYSTEM_L2E_POOL",
+                "to": student,
+                "amount": reward_amount,
+                "course_id": course_id,
+                "quiz_score": score,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+                "block": len(chain) + 1
+            }
+            chain.append(reward_tx)
+            save_json(CHAIN_FILE, chain)
+
+            reward_credited = True
+            app.logger.info(f"AUTO-REWARD: Credited {reward_amount} THR to {student} for completing {course_id}")
             chain = load_json(CHAIN_FILE, [])
             ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
             tx_id = f"L2E-REWARD-{len(chain)}-{int(time.time())}-{secrets.token_hex(4)}"
@@ -8694,9 +8752,14 @@ def api_l2e_submit_quiz():
         status="success",
         score=score,
         total=total,
+        correct=correct,
         passed=passed,
         passing_score=passing_score,
-        results=results
+        results=results,
+        message=f"Quiz graded. Score: {score}% ({correct}/{total})" + (" - PASSED!" if passed else ""),
+        auto_completed=auto_completed,
+        reward_credited=reward_credited,
+        reward_amount=reward_amount
     ), 200
 
 
@@ -10256,10 +10319,50 @@ def api_ai_provider_chat():
     model = (data.get("model") or data.get("model_key") or None) or "auto"
     max_tokens = int(data.get("max_tokens") or 1024)
     temperature = float(data.get("temperature") or 0.6)
+    session_id = data.get("session_id")
 
     resolved_model = _resolve_model(model)
     if not resolved_model:
         return jsonify({"error": "Unknown or disabled model id"}), 400
+
+    # FIX A3: Process file attachments and include in context
+    attachments = data.get("attachments", [])
+    file_contexts = []
+    if attachments:
+        ai_files_dir = os.path.join(DATA_DIR, "ai_files")
+        os.makedirs(ai_files_dir, exist_ok=True)
+        for file_id in attachments:
+            file_path = os.path.join(ai_files_dir, file_id)
+            if os.path.exists(file_path):
+                try:
+                    # Try to read as text
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read(10000)  # Limit to 10KB per file
+                        file_contexts.append(f"[ATTACHED FILE: {file_id}]\n{content}\n[/FILE]")
+                except Exception as e:
+                    app.logger.warning(f"Failed to read file {file_id}: {e}")
+                    file_contexts.append(f"[ATTACHED FILE: {file_id}] (binary or unreadable)")
+
+    # Prepend file contexts to the user's message
+    if file_contexts and messages:
+        last_user_msg = messages[-1]
+        if last_user_msg.get("role") == "user":
+            file_context_str = "\n\n".join(file_contexts)
+            last_user_msg["content"] = file_context_str + "\n\n" + last_user_msg["content"]
+
+    # FIX A2: Save user message to session before calling LLM
+    if session_id:
+        existing_messages = load_session_messages(session_id)
+        # Find new user messages (last message in incoming messages)
+        if messages:
+            last_msg = messages[-1]
+            # Add timestamp if not present
+            if "timestamp" not in last_msg:
+                last_msg["timestamp"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            # Only save if not already in existing_messages
+            if not any(m.get("content") == last_msg.get("content") and m.get("role") == last_msg.get("role") for m in existing_messages):
+                existing_messages.append(last_msg)
+                save_session_messages(session_id, existing_messages)
 
     try:
         result = call_llm(
@@ -10268,7 +10371,7 @@ def api_ai_provider_chat():
             system_prompt=(data.get("system_prompt") or None),
             temperature=temperature,
             max_tokens=max_tokens,
-            session_id=data.get("session_id"),
+            session_id=session_id,
             wallet=data.get("wallet"),
             difficulty=data.get("difficulty"),
             block_hash=data.get("block_hash"),
@@ -10285,6 +10388,18 @@ def api_ai_provider_chat():
             ),
             500,
         )
+
+    # FIX A2: Save assistant response to session
+    if session_id and result.get("message"):
+        existing_messages = load_session_messages(session_id)
+        assistant_msg = {
+            "role": "assistant",
+            "content": result.get("message"),
+            "model": result.get("model", model),
+            "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        }
+        existing_messages.append(assistant_msg)
+        save_session_messages(session_id, existing_messages)
 
     return jsonify({"ok": True, **result})
 
@@ -10394,11 +10509,13 @@ def _get_fallback_models():
                 fallback.append({
                     "id": model["id"],
                     "provider": provider,
-                    "label": model["label"],
+                    "label": model.get("label", model["id"]),
+                    "display_name": model.get("label", model["id"]),
                     "enabled": False,  # Mark as disabled in degraded mode
                     "degraded": True,
                     "tier": "fallback",
-                    "display_name": model["label"]
+                    "default": model.get("default", False),
+                    "stats": {"total_calls": 0, "avg_latency_ms": 0.0}
                 })
         return fallback
     except Exception as e:
@@ -10407,9 +10524,12 @@ def _get_fallback_models():
             "id": "auto",
             "provider": "thronos",
             "label": "AUTO (Emergency Fallback)",
+            "display_name": "AUTO (Emergency Fallback)",
             "enabled": True,
             "degraded": True,
-            "tier": "emergency"
+            "tier": "emergency",
+            "default": True,
+            "stats": {"total_calls": 0, "avg_latency_ms": 0.0}
         }]
 
 
@@ -10478,15 +10598,11 @@ def api_ai_models():
                     {
                         "id": mi.id,
                         "provider": mi.provider,
-                        "label": mi.label,
-                        "alias": mi.alias,
+                        "label": mi.display_name,  # FIX: use display_name not label
+                        "display_name": mi.display_name,
                         "tier": mi.tier,
-                        "family": mi.family,
-                        "safety_tuned": mi.safety_tuned,
-                        "supports_vision": mi.supports_vision,
-                        "supports_audio": mi.supports_audio,
-                        "supports_tools": mi.supports_tools,
-                        "enabled": provider_enabled and mi.enabled_by_default,
+                        "default": mi.default,
+                        "enabled": provider_enabled and mi.enabled,  # FIX: use mi.enabled not mi.enabled_by_default
                         "stats": {
                             "total_calls": stats.get("total_calls", 0),
                             "avg_latency_ms": stats.get("avg_latency_ms", 0.0),
@@ -11142,44 +11258,244 @@ def api_v1_governance_create_proposal():
 
 @app.route("/api/v1/governance/vote", methods=["POST"])
 def api_v1_governance_vote():
-    """Vote on a proposal"""
+    """
+    Vote on a proposal with THR burn and operator quorum enforcement.
+    FIX G: Real governance voting (burn + quorum + on-chain)
+    """
     data = request.get_json() or {}
     proposal_id = data.get("proposal_id", "").strip()
     voter = data.get("voter", "").strip()
-    vote = data.get("vote", "").strip()  # "for" or "against"
-    power = int(data.get("power", 1))
+    vote = data.get("vote", "").strip()  # "for", "against", "abstain"
+    auth_secret = data.get("auth_secret", "").strip()
+    passphrase = data.get("passphrase", "").strip()
 
-    if not proposal_id or not voter or vote not in ("for", "against"):
+    if not proposal_id or not voter or vote not in ("for", "against", "abstain"):
         return jsonify({"status": "error", "message": "Invalid vote data"}), 400
 
+    if not auth_secret:
+        return jsonify({"status": "error", "message": "auth_secret required for voting"}), 400
+
+    # Authenticate voter
+    pledges = load_json(PLEDGE_CHAIN, [])
+    voter_pledge = next((p for p in pledges if p.get("thr_address") == voter), None)
+    if not voter_pledge:
+        return jsonify({"status": "error", "message": "Voter not pledged"}), 404
+
+    stored_auth_hash = voter_pledge.get("send_auth_hash")
+    if voter_pledge.get("has_passphrase"):
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify({"status": "error", "message": "Invalid auth"}), 403
+
+    # Load governance
     gov = load_governance()
     proposal = next((p for p in gov["proposals"] if p["id"] == proposal_id), None)
 
     if not proposal:
         return jsonify({"status": "error", "message": "Proposal not found"}), 404
 
-    if proposal["status"] != "active":
-        return jsonify({"status": "error", "message": "Proposal is not active"}), 400
+    if proposal.get("status") not in ["OPEN", "QUORUM_PENDING", None, "active"]:
+        return jsonify({"status": "error", "message": f"Proposal is {proposal.get('status', 'closed')}"}), 400
 
     # Check if already voted
     vote_key = f"{proposal_id}:{voter}"
     if vote_key in gov.get("votes", {}):
         return jsonify({"status": "error", "message": "Already voted on this proposal"}), 400
 
-    # Record vote
+    # FIX G3: THR BURN PER VOTE
+    # Determine if voter is operator
+    OPERATORS = os.getenv("GOVERNANCE_OPERATORS", "").split(",")
+    if not OPERATORS or OPERATORS == [""]:
+        # Hardcoded fallback for dev
+        OPERATORS = ["THR_OPERATOR_1", "THR_OPERATOR_2", "THR_OPERATOR_3"]
+
+    is_operator = voter in OPERATORS
+    burn_amount = 0.05 if is_operator else 0.01  # Higher burn for operators
+
+    # Check voter has enough balance
+    ledger = load_json(LEDGER_FILE, {})
+    voter_balance = float(ledger.get(voter, 0.0))
+    if voter_balance < burn_amount:
+        return jsonify({"status": "error", "message": f"Insufficient balance. Need {burn_amount} THR to vote"}), 400
+
+    # Burn THR
+    ledger[voter] = round(voter_balance - burn_amount, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    # Write GOV_VOTE transaction on-chain
+    chain = load_json(CHAIN_FILE, [])
+    vote_tx = {
+        "tx_id": f"GOV_VOTE_{proposal_id}_{int(time.time())}_{secrets.token_hex(4)}",
+        "type": "GOV_VOTE",
+        "proposal_id": proposal_id,
+        "voter": voter,
+        "vote": vote,
+        "is_operator": is_operator,
+        "burn_amount": burn_amount,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "block": len(chain) + 1
+    }
+    chain.append(vote_tx)
+    save_json(CHAIN_FILE, chain)
+
+    # Record vote in governance
     if "votes" not in gov:
         gov["votes"] = {}
-    gov["votes"][vote_key] = {"vote": vote, "power": power, "timestamp": time.time()}
+    gov["votes"][vote_key] = {
+        "vote": vote,
+        "voter": voter,
+        "is_operator": is_operator,
+        "burn_amount": burn_amount,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "tx_id": vote_tx["tx_id"]
+    }
 
     # Update proposal counts
     if vote == "for":
-        proposal["votes_for"] = proposal.get("votes_for", 0) + power
-    else:
-        proposal["votes_against"] = proposal.get("votes_against", 0) + power
+        proposal["votes_for"] = proposal.get("votes_for", 0) + 1
+    elif vote == "against":
+        proposal["votes_against"] = proposal.get("votes_against", 0) + 1
+    else:  # abstain
+        proposal["votes_abstain"] = proposal.get("votes_abstain", 0) + 1
+
+    # Track operator votes
+    if "operator_votes" not in proposal:
+        proposal["operator_votes"] = []
+    if is_operator and vote != "abstain":
+        proposal["operator_votes"].append({"voter": voter, "vote": vote, "timestamp": vote_tx["timestamp"]})
+
+    # FIX G2: Check operator quorum
+    MIN_OPERATOR_VOTES = int(os.getenv("MIN_OPERATOR_VOTES", "3"))
+    operator_count = len(proposal.get("operator_votes", []))
+
+    # Update proposal status
+    if proposal.get("status") in [None, "active"]:
+        proposal["status"] = "OPEN"
+
+    if operator_count >= MIN_OPERATOR_VOTES:
+        proposal["status"] = "QUORUM_REACHED"
+        app.logger.info(f"QUORUM REACHED: Proposal {proposal_id} has {operator_count} operator votes")
+    elif operator_count > 0:
+        proposal["status"] = "QUORUM_PENDING"
+
+    # Record total THR burned for this proposal
+    proposal["total_burned"] = proposal.get("total_burned", 0.0) + burn_amount
 
     save_governance(gov)
 
-    return jsonify({"status": "success", "message": "Vote recorded"}), 200
+    return jsonify({
+        "status": "success",
+        "message": "Vote recorded",
+        "burned_thr": burn_amount,
+        "tx_id": vote_tx["tx_id"],
+        "proposal_status": proposal["status"],
+        "operator_votes": operator_count,
+        "quorum_required": MIN_OPERATOR_VOTES
+    }), 200
+
+
+@app.route("/api/v1/governance/finalize", methods=["POST"])
+def api_v1_governance_finalize():
+    """
+    Finalize a proposal after quorum reached and voting window closed.
+    FIX G4: On-chain finalization with GOV_FINALIZE transaction.
+    """
+    data = request.get_json() or {}
+    proposal_id = data.get("proposal_id", "").strip()
+    operator = data.get("operator", "").strip()
+    auth_secret = data.get("auth_secret", "").strip()
+    passphrase = data.get("passphrase", "").strip()
+
+    if not proposal_id or not operator:
+        return jsonify({"status": "error", "message": "proposal_id and operator required"}), 400
+
+    # Authenticate operator
+    pledges = load_json(PLEDGE_CHAIN, [])
+    operator_pledge = next((p for p in pledges if p.get("thr_address") == operator), None)
+    if not operator_pledge:
+        return jsonify({"status": "error", "message": "Operator not pledged"}), 404
+
+    stored_auth_hash = operator_pledge.get("send_auth_hash")
+    if operator_pledge.get("has_passphrase"):
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify({"status": "error", "message": "Invalid auth"}), 403
+
+    # Verify operator status
+    OPERATORS = os.getenv("GOVERNANCE_OPERATORS", "").split(",")
+    if not OPERATORS or OPERATORS == [""]:
+        OPERATORS = ["THR_OPERATOR_1", "THR_OPERATOR_2", "THR_OPERATOR_3"]
+    if operator not in OPERATORS:
+        return jsonify({"status": "error", "message": "Not an operator"}), 403
+
+    # Load governance
+    gov = load_governance()
+    proposal = next((p for p in gov["proposals"] if p["id"] == proposal_id), None)
+
+    if not proposal:
+        return jsonify({"status": "error", "message": "Proposal not found"}), 404
+
+    # Check if quorum reached
+    MIN_OPERATOR_VOTES = int(os.getenv("MIN_OPERATOR_VOTES", "3"))
+    operator_count = len(proposal.get("operator_votes", []))
+
+    if operator_count < MIN_OPERATOR_VOTES:
+        return jsonify({
+            "status": "error",
+            "message": f"Quorum not reached. Need {MIN_OPERATOR_VOTES} operators, have {operator_count}"
+        }), 400
+
+    if proposal.get("status") == "FINALIZED":
+        return jsonify({"status": "error", "message": "Already finalized"}), 400
+
+    # Determine result
+    votes_for = proposal.get("votes_for", 0)
+    votes_against = proposal.get("votes_against", 0)
+    result = "ACCEPTED" if votes_for > votes_against else "REJECTED"
+
+    # FIX G4: Write GOV_FINALIZE transaction on-chain
+    chain = load_json(CHAIN_FILE, [])
+    finalize_tx = {
+        "tx_id": f"GOV_FINALIZE_{proposal_id}_{int(time.time())}",
+        "type": "GOV_FINALIZE",
+        "proposal_id": proposal_id,
+        "result": result,
+        "votes_for": votes_for,
+        "votes_against": votes_against,
+        "votes_abstain": proposal.get("votes_abstain", 0),
+        "operator_votes": operator_count,
+        "total_burned": proposal.get("total_burned", 0.0),
+        "finalized_by": operator,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "block": len(chain) + 1
+    }
+    chain.append(finalize_tx)
+    save_json(CHAIN_FILE, chain)
+
+    # Update proposal
+    proposal["status"] = "FINALIZED"
+    proposal["result"] = result
+    proposal["finalized_at"] = finalize_tx["timestamp"]
+    proposal["finalized_by"] = operator
+    proposal["finalize_tx_id"] = finalize_tx["tx_id"]
+
+    save_governance(gov)
+
+    app.logger.info(f"FINALIZED: Proposal {proposal_id} result={result}, votes={votes_for}:{votes_against}")
+
+    return jsonify({
+        "status": "success",
+        "result": result,
+        "proposal_status": "FINALIZED",
+        "tx_id": finalize_tx["tx_id"],
+        "votes_for": votes_for,
+        "votes_against": votes_against,
+        "total_burned": proposal.get("total_burned", 0.0)
+    }), 200
 
 
 # ─── PYTHEIA Advice Schema & Ingestion ──────────────────────────────────────

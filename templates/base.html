@@ -1715,20 +1715,20 @@ async function loadWalletBalances(force = false) {
 
     if (!walletSession.isBound()) {
         walletBalancesLoaded = false;
-        showWalletLoginForm();
+        // Login is now handled by the modal, not inside the popup
         return;
     }
 
     const wallet = walletSession.getAddress();
     if (!wallet) {
-        showWalletLoginForm();
+        // Login is now handled by the modal, not inside the popup
         return;
     }
 
     const content = document.getElementById('walletContentSection');
     if (!content) return;
 
-    showWalletContentSection();
+    // Content section is always visible, no need to toggle
 
     if (force) {
         content.innerHTML = `
@@ -2375,6 +2375,9 @@ function initWalletUiControls(){
     }, 100);
 }
 
+// These functions are no longer needed - login is now handled via the modal
+// Keeping them commented out for reference
+/*
 function showWalletLoginForm(){
     const loginSection = document.getElementById('walletLoginSection');
     const contentSection = document.getElementById('walletContentSection');
@@ -2397,6 +2400,7 @@ function showWalletContentSection(){
     if(loginSection) loginSection.style.display = 'none';
     if(contentSection) contentSection.style.display = 'block';
 }
+*/
 
 // Open the wallet login modal
 function openWalletModal(){
@@ -2488,7 +2492,7 @@ async function submitHeaderWalletLogin(){
     // Update UI and open wallet popup
     updateHeaderWalletUi();
     setWalletOpen(true);
-    showWalletContentSection();
+    // Content section is always visible, no need to toggle
     loadTokenBalances();
     loadWalletBalances(true);
     updateReceiveModal();

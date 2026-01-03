@@ -47,9 +47,8 @@
       justify-content: center;
       position: relative;
       flex-wrap: wrap;
-      z-index: 1500;
     }
-
+    
     .nav-list {
       list-style: none;
       margin: 0;
@@ -58,7 +57,7 @@
       flex-wrap: wrap;
       justify-content: center;
     }
-
+    
     .nav-item {
       position: relative;
     }
@@ -98,7 +97,7 @@
       min-width: 180px;
       box-shadow: 0px 8px 16px 0px rgba(0,255,0,0.2);
       border: 1px solid #0f0;
-      z-index: 2000;
+      z-index: 10;
       top: 100%;
       left: 0;
     }
@@ -1242,7 +1241,7 @@
 
 <div class="top-controls">
     <!-- Unified Wallet Button -->
-    <div id="walletStatus" class="wallet-status" style="position: relative; display: block;">
+    <div style="position: relative;">
         <button id="walletUnifiedBtn" class="wallet-unified-btn" onclick="handleWalletBtnClick()">
             <span class="wallet-icon">💎</span>
             <span id="walletBtnText">
@@ -1285,10 +1284,6 @@
                 </button>
             </div>
 
-            <button id="minerKitBtn" onclick="downloadMinerKit()" style="width:100%;margin-top:10px;padding:10px;background:linear-gradient(135deg, rgba(255,150,0,0.2) 0%, rgba(255,100,0,0.1) 100%);color:#ffa500;border:1px solid rgba(255,150,0,0.4);border-radius:8px;font-weight:bold;cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center;gap:6px;">
-                ⛏️ <span class="lang-el">Λήψη Miner Kit</span><span class="lang-en">Download Miner Kit</span><span class="lang-ja">マイナーキットをダウンロード</span><span class="lang-ru">Скачать Miner Kit</span><span class="lang-es">Descargar Miner Kit</span>
-            </button>
-
             <button onclick="disconnectWallet()" style="width:100%;margin-top:10px;padding:8px;background:rgba(255,50,50,0.1);color:#ff6666;border:1px solid rgba(255,50,50,0.3);border-radius:8px;cursor:pointer;font-size:12px;">
                 ✖ <span class="lang-el">Αποσύνδεση</span><span class="lang-en">Disconnect</span>
             </button>
@@ -1299,77 +1294,9 @@
 </div>
 
 <!-- Hidden elements for backward compatibility -->
-<!-- walletStatus is now the div containing walletUnifiedBtn and walletBalancePopup -->
+<div id="walletStatus" style="display:none;"><span id="walletAddrShort"></span></div>
 <button id="disconnectBtn" style="display:none;"></button>
 <button id="walletLoginBtn" style="display:none;"></button>
-
-<!-- Wallet Login Modal (unified for first-time and returning users) -->
-<div class="wallet-modal-overlay" id="walletModalOverlay" onclick="closeWalletModal(event)">
-    <div class="wallet-modal" onclick="event.stopPropagation()">
-        <button class="wallet-modal-close" onclick="closeWalletModal()" style="position:absolute;top:10px;right:10px;background:transparent;border:1px solid #666;color:#888;width:28px;height:28px;border-radius:50%;cursor:pointer;font-size:18px;">✖</button>
-
-        <h3 style="text-align:center;color:#00ff66;margin-bottom:20px;">
-            💎 <span class="lang-el">Σύνδεση Πορτοφολιού</span><span class="lang-en">Connect Wallet</span><span class="lang-ja">ウォレット接続</span><span class="lang-ru">Подключить кошелёк</span><span class="lang-es">Conectar Billetera</span>
-        </h3>
-
-        <!-- Login Section (inside popup for first-time or returning users) -->
-        <div id="walletLoginSection">
-            <div id="walletFirstTimeFields" style="display:block;">
-                <label>
-                    <span class="lang-el">Διεύθυνση THR</span>
-                    <span class="lang-en">THR Address</span>
-                    <span class="lang-ja">THRアドレス</span>
-                    <span class="lang-ru">Адрес THR</span>
-                    <span class="lang-es">Dirección THR</span>
-                </label>
-                <input type="text" id="walletWidgetAddress" placeholder="THR..." />
-
-                <label>
-                    <span class="lang-el">Send Seed / Secret</span>
-                    <span class="lang-en">Send Seed / Secret</span>
-                    <span class="lang-ja">送信シード</span>
-                    <span class="lang-ru">Секретный ключ</span>
-                    <span class="lang-es">Semilla de envío</span>
-                </label>
-                <input type="password" id="walletWidgetSecret" placeholder="Your secret..." />
-            </div>
-
-            <label>
-                <span class="lang-el">PIN (4-8 ψηφία)</span>
-                <span class="lang-en">PIN (4-8 digits)</span>
-                <span class="lang-ja">PIN (4-8桁)</span>
-                <span class="lang-ru">PIN (4-8 цифр)</span>
-                <span class="lang-es">PIN (4-8 dígitos)</span>
-            </label>
-            <input type="password" id="walletWidgetPin" placeholder="****" maxlength="8" />
-
-            <div class="wallet-modal-actions">
-                <button onclick="closeWalletModal()">
-                    <span class="lang-el">Ακύρωση</span>
-                    <span class="lang-en">Cancel</span>
-                    <span class="lang-ja">キャンセル</span>
-                    <span class="lang-ru">Отмена</span>
-                    <span class="lang-es">Cancelar</span>
-                </button>
-                <button class="primary" id="walletModalSubmitBtn" onclick="submitHeaderWalletLogin()">
-                    <span class="lang-el">Σύνδεση</span>
-                    <span class="lang-en">Connect</span>
-                    <span class="lang-ja">接続</span>
-                    <span class="lang-ru">Подключить</span>
-                    <span class="lang-es">Conectar</span>
-                </button>
-            </div>
-
-            <div style="margin-top:15px;text-align:center;font-size:11px;color:#666;">
-                <span class="lang-el">Δεν έχετε πορτοφόλι; <a href="/wallet" style="color:#00ff66;">Δημιουργία νέου</a></span>
-                <span class="lang-en">Don't have a wallet? <a href="/wallet" style="color:#00ff66;">Create new</a></span>
-                <span class="lang-ja">ウォレットをお持ちでないですか？ <a href="/wallet" style="color:#00ff66;">新規作成</a></span>
-                <span class="lang-ru">Нет кошелька? <a href="/wallet" style="color:#00ff66;">Создать новый</a></span>
-                <span class="lang-es">¿No tienes billetera? <a href="/wallet" style="color:#00ff66;">Crear nueva</a></span>
-            </div>
-        </div>
-    </div>
-</div>
 
 <!-- Send Modal -->
 <div class="send-modal" id="sendModal" onclick="closeSendModal(event)">
@@ -1684,7 +1611,8 @@ function disconnectWallet() {
         walletSession.clearSession();
 
         // Close popup
-        setWalletOpen(false);
+        const popup = document.getElementById('walletBalancePopup');
+        if (popup) popup.style.display = 'none';
 
         // Reset balance display
         const balanceDisplay = document.getElementById('walletBalanceDisplay');
@@ -1714,20 +1642,20 @@ async function loadWalletBalances(force = false) {
 
     if (!walletSession.isBound()) {
         walletBalancesLoaded = false;
-        // Login is now handled by the modal, not inside the popup
+        showWalletLoginForm();
         return;
     }
 
     const wallet = walletSession.getAddress();
     if (!wallet) {
-        // Login is now handled by the modal, not inside the popup
+        showWalletLoginForm();
         return;
     }
 
     const content = document.getElementById('walletContentSection');
     if (!content) return;
 
-    // Content section is always visible, no need to toggle
+    showWalletContentSection();
 
     if (force) {
         content.innerHTML = `
@@ -1978,43 +1906,6 @@ function playReceiveAudio() {
     const audioEl = document.getElementById('receiveAudio');
     if (audioEl && audioEl.src) {
         audioEl.play();
-    }
-}
-
-function downloadMinerKit() {
-    // Get miner kit URL from meta tag or fallback to default
-    const metaTag = document.querySelector('meta[name="cgminer-kit-url"]');
-    const kitUrl = (metaTag && metaTag.content) || '/static/cgminer_kit.zip';
-
-    if (!kitUrl || kitUrl === '') {
-        const lang = getCurrentLang();
-        const isGreek = isGreekLang(lang);
-        alert(isGreek ?
-            '❌ Το Miner Kit δεν είναι διαθέσιμο αυτή τη στιγμή.' :
-            '❌ Miner Kit is not available at this time.');
-        return;
-    }
-
-    // Open download in new tab
-    const link = document.createElement('a');
-    link.href = kitUrl;
-    link.download = 'cgminer_kit.zip';
-    link.target = '_blank';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    const lang = getCurrentLang();
-    const isGreek = isGreekLang(lang);
-
-    // Show success message
-    const btn = document.getElementById('minerKitBtn');
-    if (btn) {
-        const origText = btn.innerHTML;
-        btn.innerHTML = isGreek ? '✅ Λήψη ξεκίνησε!' : '✅ Download started!';
-        setTimeout(() => {
-            btn.innerHTML = origText;
-        }, 2000);
     }
 }
 
@@ -2374,9 +2265,6 @@ function initWalletUiControls(){
     }, 100);
 }
 
-// These functions are no longer needed - login is now handled via the modal
-// Keeping them commented out for reference
-/*
 function showWalletLoginForm(){
     const loginSection = document.getElementById('walletLoginSection');
     const contentSection = document.getElementById('walletContentSection');
@@ -2399,56 +2287,19 @@ function showWalletContentSection(){
     if(loginSection) loginSection.style.display = 'none';
     if(contentSection) contentSection.style.display = 'block';
 }
-*/
 
-// Open the wallet login modal
-function openWalletModal(){
-    const overlay = document.getElementById('walletModalOverlay');
-    if(!overlay) return;
-
-    const existingAddress = walletSession.getAddress();
-    const existingSeed = walletSession.getSendSeed();
-    const firstTimeFields = document.getElementById('walletFirstTimeFields');
-    const addrInput = document.getElementById('walletWidgetAddress');
-    const secretInput = document.getElementById('walletWidgetSecret');
-    const pinInput = document.getElementById('walletWidgetPin');
-
-    // If address/seed exist, hide those fields (returning user - PIN only)
-    if(existingAddress && existingSeed){
-        if(firstTimeFields) firstTimeFields.style.display = 'none';
-        if(pinInput){
-            pinInput.value = '';
-            setTimeout(() => pinInput.focus(), 100);
-        }
-    } else {
-        // First-time user: show all fields
-        if(firstTimeFields) firstTimeFields.style.display = 'block';
-        if(addrInput){
-            addrInput.value = existingAddress || '';
-            setTimeout(() => addrInput.focus(), 100);
-        }
-        if(secretInput) secretInput.value = existingSeed || '';
-        if(pinInput) pinInput.value = '';
-    }
-
-    overlay.classList.add('active');
-}
-
-function closeWalletModal(event){
-    if(event && event.target.id !== 'walletModalOverlay' && event.type === 'click'){
-        return; // Only close when clicking overlay background or close button
-    }
-    const overlay = document.getElementById('walletModalOverlay');
-    if(overlay) overlay.classList.remove('active');
-}
-
-// Alias for compatibility
 function openHeaderWalletModal(){
-    openWalletModal();
+    setWalletOpen(true);
+    if(!walletSession.isBound()){
+        showWalletLoginForm();
+    } else {
+        showWalletContentSection();
+        loadWalletBalances(true);
+    }
 }
 
 function closeHeaderWalletModal(){
-    closeWalletModal();
+    setWalletOpen(false);
 }
 
 async function submitHeaderWalletLogin(){
@@ -2459,17 +2310,7 @@ async function submitHeaderWalletLogin(){
     const seed = (document.getElementById('walletWidgetSecret')?.value || '').trim() || existingSeed;
     const pin = (document.getElementById('walletWidgetPin')?.value || '').trim();
     if (!address) {
-        const lang = getCurrentLang();
-        const isGreek = isGreekLang(lang);
-        alert(isGreek ? 'Παρακαλώ εισάγετε διεύθυνση THR.' : 'Please enter a THR address.');
-        return;
-    }
-
-    // Validate PIN if provided
-    if (pin && !/^\d{4,8}$/.test(pin)) {
-        const lang = getCurrentLang();
-        const isGreek = isGreekLang(lang);
-        alert(isGreek ? 'Το PIN πρέπει να είναι 4-8 ψηφία.' : 'PIN must be 4-8 digits.');
+        alert('Please enter a THR address.');
         return;
     }
 
@@ -2485,13 +2326,8 @@ async function submitHeaderWalletLogin(){
         localStorage.removeItem(WALLET_PIN_HASH_KEY);
     }
 
-    // Close the modal
-    closeWalletModal();
-
-    // Update UI and open wallet popup
+    showWalletContentSection();
     updateHeaderWalletUi();
-    setWalletOpen(true);
-    // Content section is always visible, no need to toggle
     loadTokenBalances();
     loadWalletBalances(true);
     updateReceiveModal();
@@ -2563,12 +2399,13 @@ function handleWalletBtnClick() {
 
     if (bound && wallet) {
         // Connected - toggle popup
-        const isOpen = isWalletOpen();
-        if (isOpen) {
-            setWalletOpen(false);
-        } else {
-            setWalletOpen(true);
-            loadWalletBalances(true);
+        const popup = document.getElementById('walletBalancePopup');
+        if (popup) {
+            const isOpen = popup.style.display === 'block';
+            popup.style.display = isOpen ? 'none' : 'block';
+            if (!isOpen) {
+                loadWalletBalances(true);
+            }
         }
     } else {
         // Not connected - open login modal
@@ -2580,13 +2417,8 @@ function handleWalletBtnClick() {
 document.addEventListener('click', function(e) {
     const popup = document.getElementById('walletBalancePopup');
     const btn = document.getElementById('walletUnifiedBtn');
-    const statusEl = document.getElementById('walletStatus');
-
-    if (popup && btn && statusEl && !popup.contains(e.target) && !btn.contains(e.target)) {
-        // Don't close if wallet is pinned
-        if (!getWalletUiPinned()) {
-            setWalletOpen(false);
-        }
+    if (popup && btn && !popup.contains(e.target) && !btn.contains(e.target)) {
+        popup.style.display = 'none';
     }
 });
 
@@ -2595,26 +2427,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const savedLang = getCurrentLang();
     setLanguage(savedLang);
     updateHeaderWalletUi();
-});
-
-// Storage event listener for cross-tab sync
-window.addEventListener('storage', (ev) => {
-    // Sync wallet state across tabs
-    if (ev.key === walletSession.ADDRESS_KEY || ev.key === walletSession.BOUND_KEY) {
-        updateHeaderWalletUi();
-        if (typeof updateHeroButton === 'function') {
-            updateHeroButton(walletSession.getAddress());
-        }
-        // If wallet was disconnected in another tab, close popup
-        if (!walletSession.isBound()) {
-            setWalletOpen(false);
-            walletBalancesLoaded = false;
-            tokenBalances = {};
-        } else {
-            // If wallet was connected in another tab, reload balances
-            loadWalletBalances(true);
-        }
-    }
 });
 
 // ─── TOKEN INFO MODAL FUNCTIONS ───────────────────────────

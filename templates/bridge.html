@@ -803,6 +803,27 @@ function selectFromToken(token) {
     calculateOutput();
 }
 
+// Improved BTC address validation supporting all address types
+function isValidBtcAddress(address) {
+    if (!address || typeof address !== 'string') return false;
+    address = address.trim();
+
+    // Legacy P2PKH (starts with 1)
+    if (/^1[a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(address)) return true;
+
+    // Legacy P2SH (starts with 3)
+    if (/^3[a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(address)) return true;
+
+    // Native SegWit P2WPKH/P2WSH (starts with bc1q)
+    // Bech32 uses lowercase only, excludes 1, b, i, o
+    if (/^bc1q[ac-hj-np-z02-9]{38,58}$/.test(address.toLowerCase())) return true;
+
+    // Taproot P2TR (starts with bc1p)
+    if (/^bc1p[ac-hj-np-z02-9]{58}$/.test(address.toLowerCase())) return true;
+
+    return false;
+}
+
 function calculateOutput() {
     const amount = parseFloat($('fromAmount').value) || 0;
     let output = 0;
@@ -815,9 +836,9 @@ function calculateOutput() {
         $('toAmount').value = output.toFixed(4) + ' THR';
     }
 
-    // Enable/disable button
+    // Enable/disable button with improved validation
     const btcDest = $('btcDestination').value.trim();
-    const isValidBtc = btcDest.match(/^(bc1|[13])[a-zA-Z0-9]{25,42}$/);
+    const isValidBtc = isValidBtcAddress(btcDest);
     $('bridgeBtn').disabled = amount <= 0 || !isValidBtc;
 }
 
@@ -863,8 +884,8 @@ async function executeBridge() {
         return;
     }
 
-    if (!btcDest.match(/^(bc1|[13])[a-zA-Z0-9]{25,42}$/)) {
-        alert('Please enter a valid BTC address');
+    if (!isValidBtcAddress(btcDest)) {
+        alert('Please enter a valid BTC address (Legacy, SegWit, or Taproot)');
         return;
     }
 

@@ -446,6 +446,13 @@ async function loadNFTs() {
         $('totalNFTs').textContent = nfts.length;
         $('totalCollections').textContent = new Set(nfts.map(n => n.collection || 'default')).size;
 
+        // Calculate total volume and floor price
+        const totalVolume = nfts.reduce((sum, n) => sum + (parseFloat(n.price) || 0), 0);
+        const prices = nfts.map(n => parseFloat(n.price) || 0).filter(p => p > 0);
+        const floorPrice = prices.length > 0 ? Math.min(...prices) : 0;
+        $('totalVolume').textContent = totalVolume.toFixed(2) + ' THR';
+        $('floorPrice').textContent = floorPrice.toFixed(2) + ' THR';
+
         if (nfts.length === 0) {
             grid.innerHTML = `
                 <div class="empty-state" style="grid-column: 1/-1;">
@@ -457,7 +464,38 @@ async function loadNFTs() {
             return;
         }
 
-        renderNFTs(nfts, grid);
+        // Apply filters and sorting
+        let filteredNFTs = [...nfts];
+
+        // Category filter
+        const category = $('category').value;
+        if (category && category !== 'all') {
+            filteredNFTs = filteredNFTs.filter(n => n.category === category);
+        }
+
+        // Sorting
+        const sortBy = $('sortBy').value;
+        if (sortBy === 'price_low') {
+            filteredNFTs.sort((a, b) => (parseFloat(a.price) || 0) - (parseFloat(b.price) || 0));
+        } else if (sortBy === 'price_high') {
+            filteredNFTs.sort((a, b) => (parseFloat(b.price) || 0) - (parseFloat(a.price) || 0));
+        } else {
+            // Recent - sort by created_at or id descending
+            filteredNFTs.sort((a, b) => (b.created_at || b.id || '').localeCompare(a.created_at || a.id || ''));
+        }
+
+        if (filteredNFTs.length === 0) {
+            grid.innerHTML = `
+                <div class="empty-state" style="grid-column: 1/-1;">
+                    <div class="icon">🔍</div>
+                    <p><span class="lang-el">Δεν βρέθηκαν NFTs με αυτά τα κριτήρια</span>
+                    <span class="lang-en">No NFTs found with these filters</span></p>
+                </div>
+            `;
+            return;
+        }
+
+        renderNFTs(filteredNFTs, grid);
     } catch (e) {
         grid.innerHTML = '<div class="empty-state">Failed to load NFTs</div>';
     }
@@ -600,9 +638,41 @@ async function buyNFT(nftId) {
         return;
     }
 
-    const authSecret = prompt('Enter your auth_secret:');
-    if (!authSecret) return;
+    // Get auth secret from wallet session (if using PIN system) or prompt securely
+    const storedSecret = localStorage.getItem('thr_secret') || localStorage.getItem('send_seed');
+    if (!storedSecret) {
+        // Show inline input instead of ugly prompt
+        const secretInput = document.createElement('div');
+        secretInput.innerHTML = `
+            <div style="margin-top: 15px; padding: 15px; background: #1a0f2e; border-radius: 8px; border: 1px solid #3d2066;">
+                <label style="color: #B366FF; display: block; margin-bottom: 8px;">
+                    <span class="lang-el">Εισάγετε το seed σας</span>
+                    <span class="lang-en">Enter your send seed</span>
+                </label>
+                <input type="password" id="buyAuthSecret" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #3d2066; background: #0f0a1a; color: #d7ffe6;">
+                <button onclick="confirmBuyNFT('${nftId}')" class="btn-primary" style="margin-top: 10px;">
+                    <span class="lang-el">Επιβεβαίωση Αγοράς</span>
+                    <span class="lang-en">Confirm Purchase</span>
+                </button>
+            </div>
+        `;
+        $('buyModalContent').appendChild(secretInput);
+        return;
+    }
 
+    await executeBuyNFT(nftId, storedSecret);
+}
+
+async function confirmBuyNFT(nftId) {
+    const authSecret = $('buyAuthSecret').value;
+    if (!authSecret) {
+        alert('Please enter your send seed');
+        return;
+    }
+    await executeBuyNFT(nftId, authSecret);
+}
+
+async function executeBuyNFT(nftId, authSecret) {
     try {
         const res = await fetch('/api/v1/nfts/buy', {
             method: 'POST',

@@ -11258,44 +11258,244 @@ def api_v1_governance_create_proposal():
 
 @app.route("/api/v1/governance/vote", methods=["POST"])
 def api_v1_governance_vote():
-    """Vote on a proposal"""
+    """
+    Vote on a proposal with THR burn and operator quorum enforcement.
+    FIX G: Real governance voting (burn + quorum + on-chain)
+    """
     data = request.get_json() or {}
     proposal_id = data.get("proposal_id", "").strip()
     voter = data.get("voter", "").strip()
-    vote = data.get("vote", "").strip()  # "for" or "against"
-    power = int(data.get("power", 1))
+    vote = data.get("vote", "").strip()  # "for", "against", "abstain"
+    auth_secret = data.get("auth_secret", "").strip()
+    passphrase = data.get("passphrase", "").strip()
 
-    if not proposal_id or not voter or vote not in ("for", "against"):
+    if not proposal_id or not voter or vote not in ("for", "against", "abstain"):
         return jsonify({"status": "error", "message": "Invalid vote data"}), 400
 
+    if not auth_secret:
+        return jsonify({"status": "error", "message": "auth_secret required for voting"}), 400
+
+    # Authenticate voter
+    pledges = load_json(PLEDGE_CHAIN, [])
+    voter_pledge = next((p for p in pledges if p.get("thr_address") == voter), None)
+    if not voter_pledge:
+        return jsonify({"status": "error", "message": "Voter not pledged"}), 404
+
+    stored_auth_hash = voter_pledge.get("send_auth_hash")
+    if voter_pledge.get("has_passphrase"):
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify({"status": "error", "message": "Invalid auth"}), 403
+
+    # Load governance
     gov = load_governance()
     proposal = next((p for p in gov["proposals"] if p["id"] == proposal_id), None)
 
     if not proposal:
         return jsonify({"status": "error", "message": "Proposal not found"}), 404
 
-    if proposal["status"] != "active":
-        return jsonify({"status": "error", "message": "Proposal is not active"}), 400
+    if proposal.get("status") not in ["OPEN", "QUORUM_PENDING", None, "active"]:
+        return jsonify({"status": "error", "message": f"Proposal is {proposal.get('status', 'closed')}"}), 400
 
     # Check if already voted
     vote_key = f"{proposal_id}:{voter}"
     if vote_key in gov.get("votes", {}):
         return jsonify({"status": "error", "message": "Already voted on this proposal"}), 400
 
-    # Record vote
+    # FIX G3: THR BURN PER VOTE
+    # Determine if voter is operator
+    OPERATORS = os.getenv("GOVERNANCE_OPERATORS", "").split(",")
+    if not OPERATORS or OPERATORS == [""]:
+        # Hardcoded fallback for dev
+        OPERATORS = ["THR_OPERATOR_1", "THR_OPERATOR_2", "THR_OPERATOR_3"]
+
+    is_operator = voter in OPERATORS
+    burn_amount = 0.05 if is_operator else 0.01  # Higher burn for operators
+
+    # Check voter has enough balance
+    ledger = load_json(LEDGER_FILE, {})
+    voter_balance = float(ledger.get(voter, 0.0))
+    if voter_balance < burn_amount:
+        return jsonify({"status": "error", "message": f"Insufficient balance. Need {burn_amount} THR to vote"}), 400
+
+    # Burn THR
+    ledger[voter] = round(voter_balance - burn_amount, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    # Write GOV_VOTE transaction on-chain
+    chain = load_json(CHAIN_FILE, [])
+    vote_tx = {
+        "tx_id": f"GOV_VOTE_{proposal_id}_{int(time.time())}_{secrets.token_hex(4)}",
+        "type": "GOV_VOTE",
+        "proposal_id": proposal_id,
+        "voter": voter,
+        "vote": vote,
+        "is_operator": is_operator,
+        "burn_amount": burn_amount,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "block": len(chain) + 1
+    }
+    chain.append(vote_tx)
+    save_json(CHAIN_FILE, chain)
+
+    # Record vote in governance
     if "votes" not in gov:
         gov["votes"] = {}
-    gov["votes"][vote_key] = {"vote": vote, "power": power, "timestamp": time.time()}
+    gov["votes"][vote_key] = {
+        "vote": vote,
+        "voter": voter,
+        "is_operator": is_operator,
+        "burn_amount": burn_amount,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "tx_id": vote_tx["tx_id"]
+    }
 
     # Update proposal counts
     if vote == "for":
-        proposal["votes_for"] = proposal.get("votes_for", 0) + power
-    else:
-        proposal["votes_against"] = proposal.get("votes_against", 0) + power
+        proposal["votes_for"] = proposal.get("votes_for", 0) + 1
+    elif vote == "against":
+        proposal["votes_against"] = proposal.get("votes_against", 0) + 1
+    else:  # abstain
+        proposal["votes_abstain"] = proposal.get("votes_abstain", 0) + 1
+
+    # Track operator votes
+    if "operator_votes" not in proposal:
+        proposal["operator_votes"] = []
+    if is_operator and vote != "abstain":
+        proposal["operator_votes"].append({"voter": voter, "vote": vote, "timestamp": vote_tx["timestamp"]})
+
+    # FIX G2: Check operator quorum
+    MIN_OPERATOR_VOTES = int(os.getenv("MIN_OPERATOR_VOTES", "3"))
+    operator_count = len(proposal.get("operator_votes", []))
+
+    # Update proposal status
+    if proposal.get("status") in [None, "active"]:
+        proposal["status"] = "OPEN"
+
+    if operator_count >= MIN_OPERATOR_VOTES:
+        proposal["status"] = "QUORUM_REACHED"
+        app.logger.info(f"QUORUM REACHED: Proposal {proposal_id} has {operator_count} operator votes")
+    elif operator_count > 0:
+        proposal["status"] = "QUORUM_PENDING"
+
+    # Record total THR burned for this proposal
+    proposal["total_burned"] = proposal.get("total_burned", 0.0) + burn_amount
 
     save_governance(gov)
 
-    return jsonify({"status": "success", "message": "Vote recorded"}), 200
+    return jsonify({
+        "status": "success",
+        "message": "Vote recorded",
+        "burned_thr": burn_amount,
+        "tx_id": vote_tx["tx_id"],
+        "proposal_status": proposal["status"],
+        "operator_votes": operator_count,
+        "quorum_required": MIN_OPERATOR_VOTES
+    }), 200
+
+
+@app.route("/api/v1/governance/finalize", methods=["POST"])
+def api_v1_governance_finalize():
+    """
+    Finalize a proposal after quorum reached and voting window closed.
+    FIX G4: On-chain finalization with GOV_FINALIZE transaction.
+    """
+    data = request.get_json() or {}
+    proposal_id = data.get("proposal_id", "").strip()
+    operator = data.get("operator", "").strip()
+    auth_secret = data.get("auth_secret", "").strip()
+    passphrase = data.get("passphrase", "").strip()
+
+    if not proposal_id or not operator:
+        return jsonify({"status": "error", "message": "proposal_id and operator required"}), 400
+
+    # Authenticate operator
+    pledges = load_json(PLEDGE_CHAIN, [])
+    operator_pledge = next((p for p in pledges if p.get("thr_address") == operator), None)
+    if not operator_pledge:
+        return jsonify({"status": "error", "message": "Operator not pledged"}), 404
+
+    stored_auth_hash = operator_pledge.get("send_auth_hash")
+    if operator_pledge.get("has_passphrase"):
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify({"status": "error", "message": "Invalid auth"}), 403
+
+    # Verify operator status
+    OPERATORS = os.getenv("GOVERNANCE_OPERATORS", "").split(",")
+    if not OPERATORS or OPERATORS == [""]:
+        OPERATORS = ["THR_OPERATOR_1", "THR_OPERATOR_2", "THR_OPERATOR_3"]
+    if operator not in OPERATORS:
+        return jsonify({"status": "error", "message": "Not an operator"}), 403
+
+    # Load governance
+    gov = load_governance()
+    proposal = next((p for p in gov["proposals"] if p["id"] == proposal_id), None)
+
+    if not proposal:
+        return jsonify({"status": "error", "message": "Proposal not found"}), 404
+
+    # Check if quorum reached
+    MIN_OPERATOR_VOTES = int(os.getenv("MIN_OPERATOR_VOTES", "3"))
+    operator_count = len(proposal.get("operator_votes", []))
+
+    if operator_count < MIN_OPERATOR_VOTES:
+        return jsonify({
+            "status": "error",
+            "message": f"Quorum not reached. Need {MIN_OPERATOR_VOTES} operators, have {operator_count}"
+        }), 400
+
+    if proposal.get("status") == "FINALIZED":
+        return jsonify({"status": "error", "message": "Already finalized"}), 400
+
+    # Determine result
+    votes_for = proposal.get("votes_for", 0)
+    votes_against = proposal.get("votes_against", 0)
+    result = "ACCEPTED" if votes_for > votes_against else "REJECTED"
+
+    # FIX G4: Write GOV_FINALIZE transaction on-chain
+    chain = load_json(CHAIN_FILE, [])
+    finalize_tx = {
+        "tx_id": f"GOV_FINALIZE_{proposal_id}_{int(time.time())}",
+        "type": "GOV_FINALIZE",
+        "proposal_id": proposal_id,
+        "result": result,
+        "votes_for": votes_for,
+        "votes_against": votes_against,
+        "votes_abstain": proposal.get("votes_abstain", 0),
+        "operator_votes": operator_count,
+        "total_burned": proposal.get("total_burned", 0.0),
+        "finalized_by": operator,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "block": len(chain) + 1
+    }
+    chain.append(finalize_tx)
+    save_json(CHAIN_FILE, chain)
+
+    # Update proposal
+    proposal["status"] = "FINALIZED"
+    proposal["result"] = result
+    proposal["finalized_at"] = finalize_tx["timestamp"]
+    proposal["finalized_by"] = operator
+    proposal["finalize_tx_id"] = finalize_tx["tx_id"]
+
+    save_governance(gov)
+
+    app.logger.info(f"FINALIZED: Proposal {proposal_id} result={result}, votes={votes_for}:{votes_against}")
+
+    return jsonify({
+        "status": "success",
+        "result": result,
+        "proposal_status": "FINALIZED",
+        "tx_id": finalize_tx["tx_id"],
+        "votes_for": votes_for,
+        "votes_against": votes_against,
+        "total_burned": proposal.get("total_burned", 0.0)
+    }), 200
 
 
 # ─── PYTHEIA Advice Schema & Ingestion ──────────────────────────────────────

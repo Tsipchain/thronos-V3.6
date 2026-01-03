@@ -931,17 +931,44 @@ async function submitQuiz() {
         return;
     }
 
-    // Collect answers
+    // Reset previous highlights
+    document.querySelectorAll('.question-card').forEach(card => {
+        card.style.border = '1px solid #1a5a2f';
+    });
+
+    // Collect answers and track unanswered questions
     const answers = {};
-    currentQuizQuestions.forEach(q => {
+    const unansweredQuestions = [];
+
+    currentQuizQuestions.forEach((q, idx) => {
         const selected = document.querySelector(`input[name="q${q.id}"]:checked`);
         if (selected) {
             answers[q.id] = parseInt(selected.value);
+        } else {
+            unansweredQuestions.push(idx + 1);
         }
     });
 
-    if (Object.keys(answers).length < currentQuizQuestions.length) {
-        alert(currentLang === 'el' ? 'Απαντήστε σε όλες τις ερωτήσεις' : 'Please answer all questions');
+    if (unansweredQuestions.length > 0) {
+        // Highlight unanswered questions
+        unansweredQuestions.forEach(qNum => {
+            const questionCards = document.querySelectorAll('.question-card');
+            if (questionCards[qNum - 1]) {
+                questionCards[qNum - 1].style.border = '2px solid #ff6b6b';
+                questionCards[qNum - 1].style.boxShadow = '0 0 10px rgba(255, 107, 107, 0.3)';
+            }
+        });
+
+        // Scroll to first unanswered question
+        const firstUnanswered = document.querySelectorAll('.question-card')[unansweredQuestions[0] - 1];
+        if (firstUnanswered) {
+            firstUnanswered.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        const msg = currentLang === 'el'
+            ? `Απαντήστε σε όλες τις ερωτήσεις. Λείπουν: ${unansweredQuestions.join(', ')}`
+            : `Please answer all questions. Missing: ${unansweredQuestions.join(', ')}`;
+        alert(msg);
         return;
     }
 

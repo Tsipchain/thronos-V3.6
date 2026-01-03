@@ -443,7 +443,7 @@
         inset: 0;
         background: rgba(0, 0, 0, 0.85);
         backdrop-filter: blur(8px);
-        z-index: 9999;
+        z-index: 3000;
         align-items: center;
         justify-content: center;
     }
@@ -1194,8 +1194,24 @@
     }
 
     window.handleHeroWalletClick = function() {
-        if (typeof openHeaderWalletModal === 'function') {
-            openHeaderWalletModal();
+        const addr = walletSession.getAddress();
+        const pin = walletSession.getPin();
+
+        // If device is already bound (has address + PIN), do PIN-only unlock
+        if (addr && pin) {
+            const entered = prompt('Enter PIN to unlock wallet');
+            if (entered === null) return; // User cancelled
+            if (entered === pin) {
+                walletSession.setBound(true);
+                window.location.reload();
+            } else {
+                alert('Wrong PIN');
+            }
+        } else {
+            // First-time or after "Forget Device" - show full modal
+            if (typeof openHeaderWalletModal === 'function') {
+                openHeaderWalletModal();
+            }
         }
     };
 

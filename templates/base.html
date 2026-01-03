@@ -97,7 +97,7 @@
       min-width: 180px;
       box-shadow: 0px 8px 16px 0px rgba(0,255,0,0.2);
       border: 1px solid #0f0;
-      z-index: 10;
+      z-index: 3000;
       top: 100%;
       left: 0;
     }
@@ -125,7 +125,7 @@
         right: 10px;
         display: flex;
         gap: 10px;
-        z-index: 100;
+        z-index: 1100;
     }
     
     /* Wallet Status Indicator */
@@ -169,7 +169,7 @@
         min-width: 300px;
         max-width: 360px;
         box-shadow: 0 0 30px rgba(0, 255, 102, 0.3), 0 0 15px rgba(255, 215, 0, 0.2);
-        z-index: 1000;
+        z-index: 2500;
         color: #e6ffe5;
         backdrop-filter: blur(10px);
     }
@@ -184,7 +184,7 @@
         border-top: 2px solid;
         border-image: linear-gradient(90deg, transparent, #00ff66, #ffd700, #00ff66, transparent) 1;
         padding: 10px 20px;
-        z-index: 999;
+        z-index: 2800;
         backdrop-filter: blur(10px);
     }
 
@@ -209,7 +209,7 @@
         display: none;
         align-items: center;
         justify-content: center;
-        z-index: 2000;
+        z-index: 3000;
     }
     .wallet-modal-overlay.active { display: flex; }
     .wallet-modal {
@@ -709,7 +709,7 @@
         width: 100%;
         height: 100%;
         background: rgba(0, 0, 0, 0.9);
-        z-index: 10000;
+        z-index: 3000;
         align-items: center;
         justify-content: center;
     }
@@ -998,7 +998,7 @@
         width: 100%;
         height: 100%;
         background: rgba(0, 0, 0, 0.92);
-        z-index: 10001;
+        z-index: 3000;
         align-items: center;
         justify-content: center;
         backdrop-filter: blur(5px);
@@ -1567,21 +1567,50 @@ function setLanguage(lang) {
 
 // Disconnect Wallet Function
 function disconnectWallet() {
-    if (confirm('Are you sure you want to disconnect your wallet?')) {
-        walletSession.clearSession();
-        const statusEl = document.getElementById('walletStatus');
-        const loginBtn = document.getElementById('walletLoginBtn');
-        const disconnectBtn = document.getElementById('disconnectBtn');
-        if (statusEl) statusEl.classList.remove('open');
-        if (disconnectBtn) disconnectBtn.style.display = 'none';
-        if (loginBtn) loginBtn.style.display = 'inline-block';
-        showWalletLoginForm();
+    // Disconnect only clears bound flag, keeps credentials for PIN unlock
+    walletSession.disconnect();
+    const statusEl = document.getElementById('walletStatus');
+    const disconnectBtn = document.getElementById('disconnectBtn');
+    if (statusEl) statusEl.classList.remove('open');
+    if (disconnectBtn) disconnectBtn.style.display = 'none';
+    showWalletLoginForm();
+    updateWalletUI();
+    walletBalancesLoaded = false;
+    tokenBalances = {};
+}
+
+// Forget Device Function (full wipe)
+function forgetDeviceAction() {
+    if (confirm('This will remove ALL wallet data from this device. Continue?')) {
+        walletSession.forgetDevice();
+        updateWalletUI();
         updateHeaderWalletUi();
         walletBalancesLoaded = false;
         tokenBalances = {};
         if (typeof updateHeroButton === 'function') {
             updateHeroButton('');
         }
+        location.reload();
+    }
+}
+
+// Update Wallet UI (login button visibility)
+function updateWalletUI() {
+    const loginBtn = document.getElementById('walletLoginBtn');
+    const addr = walletSession.getAddress();
+    const bound = walletSession.isBound();
+
+    if (loginBtn) {
+        // Hide login button when wallet is connected (bound)
+        if (bound && addr) {
+            loginBtn.style.display = 'none';
+        } else {
+            loginBtn.style.display = 'inline-block';
+        }
+    }
+
+    if (typeof updateHeaderWalletUi === 'function') {
+        updateHeaderWalletUi();
     }
 }
 
@@ -2309,6 +2338,26 @@ function showWalletContentSection(){
 }
 
 function openHeaderWalletModal(){
+    const addr = walletSession.getAddress();
+    const pin = walletSession.getPin();
+
+    // If device has credentials (address + PIN), do PIN-only unlock
+    if (addr && pin && !walletSession.isBound()) {
+        const entered = prompt('Enter PIN to unlock wallet');
+        if (entered === null) return; // User cancelled
+        if (entered === pin) {
+            walletSession.setBound(true);
+            setWalletOpen(true);
+            showWalletContentSection();
+            loadWalletBalances(true);
+            updateWalletUI();
+        } else {
+            alert('Wrong PIN');
+        }
+        return;
+    }
+
+    // Otherwise show modal
     setWalletOpen(true);
     if(!walletSession.isBound()){
         showWalletLoginForm();
@@ -2348,6 +2397,7 @@ async function submitHeaderWalletLogin(){
 
     showWalletContentSection();
     updateHeaderWalletUi();
+    updateWalletUI();
     loadTokenBalances();
     loadWalletBalances(true);
     updateReceiveModal();
@@ -2376,7 +2426,8 @@ function updateHeaderWalletUi(){
     }
 
     if(disconnectEl) disconnectEl.style.display = hasWallet ? 'block' : 'none';
-    if(loginBtn) loginBtn.style.display = 'inline-block';
+    // Hide login button when wallet is connected
+    if(loginBtn) loginBtn.style.display = hasWallet ? 'none' : 'inline-block';
 
     if(hasWallet){
         const isPinned = getWalletUiPinned();
@@ -2703,7 +2754,7 @@ function showToast(message, duration = 2000) {
         border-radius: 8px;
         font-size: 12px;
         font-weight: 600;
-        z-index: 100000;
+        z-index: 5000;
         box-shadow: 0 4px 15px rgba(0, 255, 102, 0.4);
         animation: toastFadeIn 0.3s ease-out;
     `;

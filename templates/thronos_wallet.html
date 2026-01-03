@@ -108,6 +108,7 @@
           <div style="margin-top:20px; display:flex; gap:10px;">
               <button onclick="window.location.href='/send'">📤 <span class="lang-el">Αποστολή</span><span class="lang-en">Send</span></button>
               <button class="secondary" onclick="refreshWallet()">🔄 <span class="lang-el">Ανανέωση</span><span class="lang-en">Refresh</span></button>
+              <button class="secondary" onclick="forgetDevice()" style="color:#ff4444; border-color:#ff4444;">🗑️ <span class="lang-el">Forget Device</span><span class="lang-en">Forget Device</span></button>
           </div>
       </div>
 
@@ -153,8 +154,14 @@
     }
 
     function disconnectWallet() {
-        if(confirm("Are you sure? This will clear your stored keys from this browser.")) {
-            walletSession.clearSession();
+        // Disconnect only clears session, keeps credentials for PIN unlock
+        walletSession.disconnect();
+        window.location.reload();
+    }
+
+    function forgetDevice() {
+        if(confirm("This will remove ALL wallet data from this device. Continue?")) {
+            walletSession.forgetDevice();
             window.location.reload();
         }
     }

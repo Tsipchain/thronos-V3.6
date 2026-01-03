@@ -57,13 +57,24 @@
     localStorage.setItem(BOUND_KEY, v ? '1' : '0');
   }
 
-  function clearSession(){
+  function disconnect(){
+    // Only clear bound flag, keep credentials for PIN-only unlock
+    setBound(false);
+  }
+
+  function forgetDevice(){
+    // Full wipe - only for "Forget Device" action
     localStorage.removeItem(ADDRESS_KEY);
     localStorage.removeItem(SEND_SECRET_KEY);
     localStorage.removeItem(SEND_SEED_KEY);
     localStorage.removeItem(SEND_SEED_COMPAT_KEY);
     localStorage.removeItem(PIN_KEY);
     localStorage.removeItem(BOUND_KEY);
+  }
+
+  function clearSession(){
+    // Alias for backward compatibility - calls forgetDevice
+    forgetDevice();
   }
 
   function saveSession({address, sendSeed, pin, bound}){
@@ -101,6 +112,8 @@
     setPin,
     isBound,
     setBound,
+    disconnect,
+    forgetDevice,
     clearSession,
     saveSession,
     requirePin

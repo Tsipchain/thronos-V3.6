@@ -109,38 +109,38 @@ _apply_env_flags()
 def get_provider_status() -> dict:
     """
     FIX 2: Return provider status with env var names checked.
-    Returns dict with provider → {enabled: bool, env_vars_checked: [str], missing_env_vars: [str]}
+    Returns dict with provider → {configured: bool, checked_env: [str], missing_env: [str]}
     """
     status = {}
 
     # OpenAI
     openai_vars = ["OPENAI_API_KEY", "OPENAI_KEY"]
-    openai_available = any(os.getenv(v) for v in openai_vars)
+    openai_configured = any(os.getenv(v) for v in openai_vars)
     openai_missing = [v for v in openai_vars if not os.getenv(v)]
     status["openai"] = {
-        "enabled": openai_available,
-        "env_vars_checked": openai_vars,
-        "missing_env_vars": openai_missing if not openai_available else []
+        "configured": openai_configured,
+        "checked_env": openai_vars,
+        "missing_env": openai_missing if not openai_configured else []
     }
 
     # Anthropic
     anthropic_vars = ["ANTHROPIC_API_KEY"]
-    anthropic_available = any(os.getenv(v) for v in anthropic_vars)
+    anthropic_configured = any(os.getenv(v) for v in anthropic_vars)
     anthropic_missing = [v for v in anthropic_vars if not os.getenv(v)]
     status["anthropic"] = {
-        "enabled": anthropic_available,
-        "env_vars_checked": anthropic_vars,
-        "missing_env_vars": anthropic_missing if not anthropic_available else []
+        "configured": anthropic_configured,
+        "checked_env": anthropic_vars,
+        "missing_env": anthropic_missing if not anthropic_configured else []
     }
 
     # Gemini
     gemini_vars = ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
-    gemini_available = any(os.getenv(v) for v in gemini_vars)
+    gemini_configured = any(os.getenv(v) for v in gemini_vars)
     gemini_missing = [v for v in gemini_vars if not os.getenv(v)]
     status["gemini"] = {
-        "enabled": gemini_available,
-        "env_vars_checked": gemini_vars,
-        "missing_env_vars": gemini_missing if not gemini_available else []
+        "configured": gemini_configured,
+        "checked_env": gemini_vars,
+        "missing_env": gemini_missing if not gemini_configured else []
     }
 
     return status

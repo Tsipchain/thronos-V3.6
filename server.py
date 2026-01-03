@@ -1843,11 +1843,37 @@ def ensure_session_messages_file(session_id: str):
 
 
 def load_session_messages(session_id: str) -> list:
-    """Load messages for a session, sorted by timestamp."""
+    """
+    Load messages for a session, sorted by timestamp.
+    FIX 3: Migrates old messages without msg_id/timestamp.
+    """
     if not session_id:
         return []
     path = _session_messages_path(session_id)
     messages = load_json(path, []) or []
+
+    # FIX 3: Migration for old sessions without msg_id/ts
+    needs_save = False
+    for i, msg in enumerate(messages):
+        # Add msg_id if missing
+        if "msg_id" not in msg:
+            msg["msg_id"] = f"msg_migrated_{i}_{secrets.token_hex(4)}"
+            needs_save = True
+
+        # Add timestamp if missing (use epoch for old messages)
+        if "timestamp" not in msg or not msg["timestamp"]:
+            msg["timestamp"] = "1970-01-01T00:00:00Z"
+            needs_save = True
+
+        # Ensure ts shorthand exists for compatibility
+        if "ts" not in msg and "timestamp" in msg:
+            msg["ts"] = msg["timestamp"]
+            needs_save = True
+
+    # Save if we migrated any messages
+    if needs_save:
+        save_session_messages(session_id, messages)
+
     messages.sort(key=lambda m: m.get("timestamp", ""))
     return messages
 
@@ -3471,17 +3497,58 @@ def api_transactions():
 
 @app.route("/api/health")
 def api_health():
-    """Lightweight health check with chain and version info."""
+    """
+    Lightweight health check with chain and version info.
+    FIX 1: Extended with build info for deployment verification.
+    """
     try:
         height = _current_chain_height()
     except Exception:
         height = 0
+
+    # FIX 1: Get git commit hash for deployment verification
+    git_commit = "unknown"
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            cwd=os.path.dirname(os.path.abspath(__file__))
+        )
+        if result.returncode == 0:
+            git_commit = result.stdout.strip()
+    except Exception:
+        pass
+
+    # FIX 1: Build metadata
+    build_info = {
+        "git_commit": git_commit,
+        "build_time": os.path.getmtime(__file__) if os.path.exists(__file__) else None,
+        "DATA_DIR": os.getenv("DATA_DIR", "/app/data"),
+        "node_role": os.getenv("NODE_ROLE", "standalone"),
+        "degraded_mode_enabled": True  # Always use degraded mode patterns
+    }
+
+    # FIX 1: Env presence check (names only, no secrets)
+    env_present = {
+        "OPENAI_API_KEY": bool(os.getenv("OPENAI_API_KEY")),
+        "OPENAI_KEY": bool(os.getenv("OPENAI_KEY")),
+        "ANTHROPIC_API_KEY": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "GEMINI_API_KEY": bool(os.getenv("GEMINI_API_KEY")),
+        "GOOGLE_API_KEY": bool(os.getenv("GOOGLE_API_KEY")),
+        "DATA_DIR": bool(os.getenv("DATA_DIR"))
+    }
+
     return jsonify({
         "ok": True,
         "version": APP_VERSION,
         "chain_height": height,
         "api_base": API_BASE_PREFIX,
-        "time": datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        "time": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "build": build_info,
+        "env_present": env_present
     }), 200
 
 

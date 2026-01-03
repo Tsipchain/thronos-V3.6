@@ -2723,6 +2723,10 @@ function closeTokenInfoModal(event) {
                 </span>
             </div>
         </div>
+        <!-- FIX 1: Build info for deployment verification -->
+        <div style="margin-left: auto; padding-left: 15px; opacity: 0.6; font-size: 10px; white-space: nowrap;">
+            <span id="buildCommit" title="Git commit hash">loading...</span>
+        </div>
     </div>
 </div>
 
@@ -2852,6 +2856,19 @@ function downloadCGMinerKit() {
                 `;
             });
             scrollEl.innerHTML = html;
+
+            // FIX 1: Load build info for deployment verification
+            try {
+                const healthResp = await fetch('/api/health');
+                const health = await healthResp.json();
+                const buildCommitEl = document.getElementById('buildCommit');
+                if (buildCommitEl && health.build && health.build.git_commit) {
+                    buildCommitEl.textContent = `build: ${health.build.git_commit}`;
+                    buildCommitEl.title = `Git commit: ${health.build.git_commit}\nDATA_DIR: ${health.build.DATA_DIR}\nNode: ${health.build.node_role}`;
+                }
+            } catch(e) {
+                console.log('Build info not available:', e);
+            }
 
         } catch(err) {
             console.error('Chain tokens widget error:', err);

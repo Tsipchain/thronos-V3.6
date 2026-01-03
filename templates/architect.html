@@ -552,19 +552,21 @@ async function loadModels() {
         const opt = document.createElement("option");
         opt.value = m.id;
         opt.textContent = `${m.emoji || '🤖'} ${m.label || m.display_name || m.id}`;
+        // FIX 2: If configured=true, NEVER show "missing"
+        const status = providerStatus[m.provider];
+        const isConfigured = status && status.configured;
+
         if (!enabled || m.disabled || m.degraded || !m.enabled) {
           opt.disabled = true;
-          // FIX 2: Show specific missing env vars
           if (m.degraded) {
             opt.textContent += ' (degraded)';
-          } else {
-            const status = providerStatus[m.provider];
-            if (status && status.missing_env_vars && status.missing_env_vars.length > 0) {
-              opt.textContent += ` (missing: ${status.missing_env_vars.join(" or ")})`;
-            } else {
-              opt.textContent += ' (disabled)';
-            }
+          } else if (!isConfigured && status && status.missing_env && status.missing_env.length > 0) {
+            // Only show missing if configured=false
+            opt.textContent += ` (missing: ${status.missing_env.join(" or ")})`;
+          } else if (!isConfigured) {
+            opt.textContent += ' (disabled)';
           }
+          // If configured=true but still disabled, don't add "missing" label
         }
         modelSel.appendChild(opt);
       });

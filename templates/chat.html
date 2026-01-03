@@ -1850,18 +1850,20 @@
             if (model.stats && model.stats.error_rate !== undefined) {
               label += ` · err ${(model.stats.error_rate * 100).toFixed(1)}%`;
             }
+            // FIX 2: If configured=true, NEVER show "missing"
+            const status = providerStatus[model.provider];
+            const isConfigured = status && status.configured;
+
             if (!model.enabled || model.degraded) {
-              // FIX 2: Show specific missing env vars instead of generic message
               if (model.degraded) {
                 label += " (degraded)";
-              } else {
-                const status = providerStatus[model.provider];
-                if (status && status.missing_env_vars && status.missing_env_vars.length > 0) {
-                  label += ` (missing: ${status.missing_env_vars.join(" or ")})`;
-                } else {
-                  label += " (API key missing)";
-                }
+              } else if (!isConfigured && status && status.missing_env && status.missing_env.length > 0) {
+                // Only show missing if configured=false
+                label += ` (missing: ${status.missing_env.join(" or ")})`;
+              } else if (!isConfigured) {
+                label += " (API key missing)";
               }
+              // If configured=true but still disabled, don't add "missing" label
               opt.disabled = true;
             }
             opt.textContent = label;

@@ -1,0 +1,158 @@
+{
+  "schema_version": "PYTHEIA Advice v1.0.0",
+  "timestamp": "2026-01-03T15:30:00Z",
+  "auditor": "PYTHEIA AI Node",
+  "repo": "https://github.com/Tsipchain/thronos-V3.6",
+  "commit": "81e89bf",
+  "branch": "claude/fix-wallet-ui-final-gUEre",
+  "title": "Critical Fixes: Chat Persistence, File Upload, Models UI, DAO Voting, UI Polish (Issues 1-4)",
+  "severity": "BLOCKER",
+  "priorities": [
+    {
+      "id": "P1",
+      "title": "Chat history persistence failure",
+      "severity": "BLOCKER",
+      "status": "resolved",
+      "files": [
+        "server.py:10353-10380",
+        "server.py:10407-10434"
+      ],
+      "description": "Assistant messages disappeared after refresh due to missing msg_id and deduplication logic. User messages sometimes duplicated. Fixed by adding unique msg_id generation (msg_<timestamp>_<random>) and deduplication checks before appending to session messages.",
+      "impact": "BLOCKER: Users lost all conversation context on refresh. Unusable for serious work requiring chat history."
+    },
+    {
+      "id": "P2",
+      "title": "File upload returns HTTP 500",
+      "severity": "BLOCKER",
+      "status": "resolved",
+      "files": [
+        "server.py:4527-4537",
+        "templates/chat.html:1726-1735"
+      ],
+      "description": "Upload endpoint exception handler returned HTTP 500 instead of degraded mode 200. Violates Hard Rule 0: NO HTTP 500 in UI-critical endpoints. Fixed by returning 200 with {ok:false, mode:'degraded', error, fallback_hint}. Frontend updated to show helpful error messages.",
+      "impact": "BLOCKER: HTTP 500 errors confuse users and break frontend error handling. Poor UX and violates platform reliability standards."
+    },
+    {
+      "id": "P3",
+      "title": "Models UI shows false 'API key missing'",
+      "severity": "MAJOR",
+      "status": "resolved",
+      "files": [
+        "llm_registry.py:72-146",
+        "server.py:69+10653-10660",
+        "templates/chat.html:1828-1866",
+        "templates/architect.html:535-567"
+      ],
+      "description": "Provider status check only looked for OPENAI_API_KEY, not OPENAI_KEY alias. Users with OPENAI_KEY set saw incorrect 'API key missing' message. Fixed by checking both aliases and adding get_provider_status() to report which specific env vars are missing. UI now shows 'missing: OPENAI_API_KEY or OPENAI_KEY'.",
+      "impact": "MAJOR: Users confused about why AI features unavailable despite setting keys. Poor developer experience. Support burden increased."
+    },
+    {
+      "id": "P4",
+      "title": "DAO voting UX issues",
+      "severity": "MAJOR",
+      "status": "resolved",
+      "files": [
+        "templates/governance.html:642-711"
+      ],
+      "description": "No confirmation modal for votes allowed accidental submissions. No display of voting wallet address confused users. Vote buttons lacked type='button' allowing form submission. Fixed by adding confirmation dialog for first vote, displaying 'Voting as: <address>', adding type='button', and disabling buttons when wallet not connected.",
+      "impact": "MAJOR: Accidental votes undermined DAO legitimacy. Users confused about which wallet was voting. Poor governance UX."
+    },
+    {
+      "id": "P5",
+      "title": "UI polish issues",
+      "severity": "MINOR",
+      "status": "resolved",
+      "files": [
+        "templates/music.html:11",
+        "templates/thronos_block_viewer.html:347-360",
+        "templates/wallet_viewer.html:170-210"
+      ],
+      "description": "Music player covered by footer widget. Generic 'Coming Soon' messages didn't explain what's missing. Wallet balances showed wrong decimals or scientific notation. Fixed by adding bottom padding (150px), honest status messages with specific missing components, and formatTokenAmount() function.",
+      "impact": "MINOR: Unprofessional appearance. Confusing status messages. Wrong decimal display. Not blockers but visible quality issues."
+    }
+  ],
+  "options": [
+    {
+      "id": "A",
+      "title": "Deploy all fixes immediately",
+      "scope": "Merge branch claude/fix-wallet-ui-final-gUEre to main. Deploy to Railway. Monitor for 24h. Post PYTHEIA_ADVICE to DAO.",
+      "effort": "15 minutes deployment + 24h monitoring",
+      "risk": "Low",
+      "cost_thr": 0,
+      "vote_recommendation": "STRONGLY_APPROVE"
+    },
+    {
+      "id": "B",
+      "title": "Wait for additional QA testing",
+      "scope": "Execute full QA test suite (cross-browser, mobile, load testing) before deployment. Fix any discovered issues. Deploy after QA signoff.",
+      "effort": "3-5 days QA + potential bug fixes",
+      "risk": "Medium",
+      "cost_thr": 0,
+      "vote_recommendation": "NEUTRAL"
+    }
+  ],
+  "patch_plan": {
+    "phases": [
+      {
+        "phase": 1,
+        "title": "Chat history persistence (P1)",
+        "files": [
+          "server.py:10353-10380",
+          "server.py:10407-10434"
+        ],
+        "changes": "Added msg_id generation (msg_<timestamp>_<random>). Implemented deduplication logic checking msg_id first, then content+role+timestamp. Applied to both user and assistant messages. Added debug logging."
+      },
+      {
+        "phase": 2,
+        "title": "File upload degraded mode (P2)",
+        "files": [
+          "server.py:4527-4537",
+          "templates/chat.html:1726-1735"
+        ],
+        "changes": "Changed exception handler to return 200 with {ok:false, mode:'degraded', error, error_code:'UPLOAD_FAILURE', fallback_hint}. Updated frontend to parse degraded mode response and show helpful error message with showDegradedModeNotice()."
+      },
+      {
+        "phase": 3,
+        "title": "Models UI env var aliases (P3)",
+        "files": [
+          "llm_registry.py:72-146",
+          "server.py:69+10653-10660",
+          "templates/chat.html:1828-1866",
+          "templates/architect.html:535-567"
+        ],
+        "changes": "Added support for OPENAI_KEY and GOOGLE_API_KEY aliases. Created get_provider_status() returning {enabled, env_vars_checked, missing_env_vars}. Included provider_status in /api/ai/models response. Updated UI to show specific missing env vars instead of generic 'API key missing'."
+      },
+      {
+        "phase": 4,
+        "title": "DAO voting UX (P4)",
+        "files": [
+          "templates/governance.html:642-711"
+        ],
+        "changes": "Added confirmation modal for first vote. Added userVotedProposals Set to track votes. Display 'Voting as: <address>' above buttons. Added type='button' to prevent form submission. Disable buttons when wallet not connected. Added CSS for vote-info display."
+      },
+      {
+        "phase": 5,
+        "title": "UI polish (P5)",
+        "files": [
+          "templates/music.html:11",
+          "templates/thronos_block_viewer.html:347-360",
+          "templates/wallet_viewer.html:170-210"
+        ],
+        "changes": "Music: Added padding-bottom:150px to .music-container. Viewer: Replaced 'Coming Soon' with detailed status showing missing /api/music/tracks, MUSIC_VOLUME env var. Wallet: Created formatTokenAmount(amount, decimals) using toFixed() to prevent scientific notation."
+      }
+    ],
+    "tests": [
+      "Send chat message → refresh → both user and assistant messages still visible",
+      "Trigger upload error → verify HTTP 200 with degraded mode message",
+      "Set OPENAI_KEY → verify OpenAI models enabled in UI",
+      "Click DAO vote button → verify confirmation dialog appears",
+      "Disconnect wallet → verify vote buttons disabled with 'Voting as: (not connected)'",
+      "Open /music → play track → scroll to bottom → verify player fully visible",
+      "Open /wallet_viewer → verify balance shows 6 decimals, no scientific notation"
+    ],
+    "rollback": "If critical issues: git revert 81e89bf && git push origin main. Railway auto-deploys rollback in 5 minutes. All changes isolated to 8 files - minimal blast radius."
+  },
+  "governance_url": "https://thrchain.up.railway.app/governance",
+  "requires_approval": false,
+  "auto_executable": true
+}

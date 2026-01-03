@@ -66,7 +66,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import os
 import json
 import uuid
-from llm_registry import AI_MODEL_REGISTRY, get_model_for_provider, get_default_model_for_mode
+from llm_registry import AI_MODEL_REGISTRY, get_model_for_provider, get_default_model_for_mode, get_provider_status
 from ai_models_config import base_model_config
 
 app = Flask(__name__)
@@ -4526,7 +4526,15 @@ def api_ai_files_upload():
         return jsonify(ok=True, files=uploaded)
     except Exception as e:
         app.logger.exception("Upload failed: %s", e)
-        return jsonify(ok=False, error=str(e)), 500
+        # FIX 1B: Never return 500, use degraded mode pattern
+        return jsonify(
+            ok=False,
+            mode="degraded",
+            error="File upload temporarily unavailable",
+            error_code="UPLOAD_FAILURE",
+            details=str(e),
+            fallback_hint="Try again with a smaller file or contact support"
+        ), 200
 
 
 @app.route("/api/ai/files/<file_id>", methods=["GET"])
@@ -10325,7 +10333,7 @@ def api_ai_provider_chat():
     if not resolved_model:
         return jsonify({"error": "Unknown or disabled model id"}), 400
 
-    # FIX A3: Process file attachments and include in context
+    # FIX 1A: Process file attachments and include in context
     attachments = data.get("attachments", [])
     file_contexts = []
     if attachments:
@@ -10350,19 +10358,34 @@ def api_ai_provider_chat():
             file_context_str = "\n\n".join(file_contexts)
             last_user_msg["content"] = file_context_str + "\n\n" + last_user_msg["content"]
 
-    # FIX A2: Save user message to session before calling LLM
-    if session_id:
+    # FIX 1A: Save user message to session with proper ID and deduplication
+    if session_id and messages:
         existing_messages = load_session_messages(session_id)
-        # Find new user messages (last message in incoming messages)
-        if messages:
-            last_msg = messages[-1]
-            # Add timestamp if not present
-            if "timestamp" not in last_msg:
-                last_msg["timestamp"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-            # Only save if not already in existing_messages
-            if not any(m.get("content") == last_msg.get("content") and m.get("role") == last_msg.get("role") for m in existing_messages):
-                existing_messages.append(last_msg)
-                save_session_messages(session_id, existing_messages)
+        last_msg = messages[-1]  # Last message should be user message
+
+        # Add metadata if missing
+        if "timestamp" not in last_msg:
+            last_msg["timestamp"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        if "msg_id" not in last_msg:
+            last_msg["msg_id"] = f"msg_{int(time.time()*1000)}_{secrets.token_hex(4)}"
+
+        # Deduplicate by msg_id (if exists) or by content+role+timestamp
+        is_duplicate = False
+        if last_msg.get("msg_id"):
+            is_duplicate = any(m.get("msg_id") == last_msg.get("msg_id") for m in existing_messages)
+        else:
+            # Fallback: check content+role only for messages from same second
+            is_duplicate = any(
+                m.get("content") == last_msg.get("content") and
+                m.get("role") == last_msg.get("role") and
+                m.get("timestamp", "")[:19] == last_msg.get("timestamp", "")[:19]  # Same second
+                for m in existing_messages
+            )
+
+        if not is_duplicate:
+            existing_messages.append(last_msg)
+            save_session_messages(session_id, existing_messages)
+            app.logger.debug(f"Saved user message to session {session_id}: {last_msg.get('msg_id')}")
 
     try:
         result = call_llm(
@@ -10389,17 +10412,34 @@ def api_ai_provider_chat():
             500,
         )
 
-    # FIX A2: Save assistant response to session
+    # FIX A2: Save assistant response to session with proper ID and deduplication
     if session_id and result.get("message"):
         existing_messages = load_session_messages(session_id)
         assistant_msg = {
             "role": "assistant",
             "content": result.get("message"),
             "model": result.get("model", model),
-            "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "msg_id": f"msg_{int(time.time()*1000)}_{secrets.token_hex(4)}"
         }
-        existing_messages.append(assistant_msg)
-        save_session_messages(session_id, existing_messages)
+
+        # Deduplicate by msg_id or content+role+timestamp
+        is_duplicate = False
+        if assistant_msg.get("msg_id"):
+            is_duplicate = any(m.get("msg_id") == assistant_msg.get("msg_id") for m in existing_messages)
+        if not is_duplicate:
+            # Fallback: check content+role from same second
+            is_duplicate = any(
+                m.get("content") == assistant_msg.get("content") and
+                m.get("role") == assistant_msg.get("role") and
+                m.get("timestamp", "")[:19] == assistant_msg.get("timestamp", "")[:19]
+                for m in existing_messages
+            )
+
+        if not is_duplicate:
+            existing_messages.append(assistant_msg)
+            save_session_messages(session_id, existing_messages)
+            app.logger.debug(f"Saved assistant message to session {session_id}: {assistant_msg.get('msg_id')}")
 
     return jsonify({"ok": True, **result})
 
@@ -10610,10 +10650,14 @@ def api_ai_models():
                     }
                 )
 
+        # FIX 2: Add provider_status to show which env vars are checked
+        provider_status = get_provider_status()
+
         payload = {
             "ok": True,
             "mode": mode,
             "providers": providers,
+            "provider_status": provider_status,  # New field for UI debugging
             "models": models,
             "fallback_active": False
         }

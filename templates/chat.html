@@ -1721,8 +1721,20 @@
           method: "POST",
           body: form,
         });
-        if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
+
+        // FIX 1B: Handle degraded mode response (ok=false but HTTP 200)
+        if (!data.ok) {
+          const errorMsg = data.error || "Upload failed";
+          const hint = data.fallback_hint || "Please try again";
+          console.error("Upload degraded mode:", data);
+          setUploadStatus(`${errorMsg}. ${hint}`, "error");
+          if (data.mode === "degraded") {
+            showDegradedModeNotice(`File upload unavailable: ${data.error}`);
+          }
+          return;
+        }
+
         const uploaded = data.files || [];
         uploaded.forEach((f) => {
           pendingFiles.push({
@@ -1735,7 +1747,7 @@
         setUploadStatus("Files uploaded", "ok");
       } catch (e) {
         console.error("uploadFiles error", e);
-        setUploadStatus("Upload failed", "error");
+        setUploadStatus("Upload failed. Please try again", "error");
       }
     }
 
@@ -1813,6 +1825,7 @@
         }
         const providers = data.providers || {};
         const models = data.models || [];
+        const providerStatus = data.provider_status || {};  // FIX 2: Get provider status
 
         const providerOrder = ["openai", "anthropic", "gemini", "local", "thronos"];
         let defaultSelected = false;
@@ -1838,7 +1851,17 @@
               label += ` · err ${(model.stats.error_rate * 100).toFixed(1)}%`;
             }
             if (!model.enabled || model.degraded) {
-              label += model.degraded ? " (degraded)" : " (API key missing)";
+              // FIX 2: Show specific missing env vars instead of generic message
+              if (model.degraded) {
+                label += " (degraded)";
+              } else {
+                const status = providerStatus[model.provider];
+                if (status && status.missing_env_vars && status.missing_env_vars.length > 0) {
+                  label += ` (missing: ${status.missing_env_vars.join(" or ")})`;
+                } else {
+                  label += " (API key missing)";
+                }
+              }
               opt.disabled = true;
             }
             opt.textContent = label;

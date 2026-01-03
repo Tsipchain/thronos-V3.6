@@ -167,15 +167,24 @@
         if (addr) loadWalletData(addr);
     }
 
+    // FIX 4C: Format token amounts with proper decimals and no scientific notation
+    function formatTokenAmount(amount, decimals) {
+      const decimalPlaces = decimals || 6;
+      const num = parseFloat(amount) || 0;
+      // Prevent scientific notation by using toFixed
+      return num.toFixed(decimalPlaces);
+    }
+
     async function loadWalletData(addr) {
       try {
         const res = await fetch(`/wallet_data/${addr}`);
         if (!res.ok) throw new Error("Server returned " + res.status);
         const data = await res.json();
-        
+
         const balance = parseFloat(data.balance);
-        $('balance').textContent = balance;
-        
+        const tokenDecimals = data.token_decimals || 6;  // Get decimals from response or default to 6
+        $('balance').textContent = formatTokenAmount(balance, tokenDecimals);
+
         // Calculate BTC value (Fixed rate: 1 THR = 0.0001 BTC)
         const btcVal = (balance * 0.0001).toFixed(8);
         $('btcValue').textContent = btcVal;
@@ -191,12 +200,13 @@
             const isIncoming = tx.to === addr;
             const color = isIncoming ? '#0f0' : '#ff0';
             const sign = isIncoming ? '+' : '-';
-            
+            const formattedAmount = formatTokenAmount(tx.amount ?? 0, tokenDecimals);
+
             html += `
             <div class="tx">
               <div style="display:flex; justify-content:space-between;">
                   <span style="color:#fff;">${tx.timestamp}</span>
-                  <span style="color:${color}; font-weight:bold;">${sign} ${tx.amount ?? 0} THR</span>
+                  <span style="color:${color}; font-weight:bold;">${sign} ${formattedAmount} THR</span>
               </div>
               <div style="font-size:0.8em; color:#888; margin-top:4px;">
                   ${isIncoming ? 'From: ' + tx.from : 'To: ' + tx.to}

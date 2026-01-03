@@ -1,0 +1,194 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://thrchain.up.railway.app/schemas/pytheia-advice.schema.json",
+  "title": "PYTHEIA Advice Schema",
+  "version": "1.0.0",
+  "description": "Schema for PYTHEIA AI Node audit reports and governance proposals for Thronos DAO",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "timestamp",
+    "auditor",
+    "repo",
+    "commit",
+    "title",
+    "severity",
+    "priorities",
+    "options",
+    "patch_plan"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "PYTHEIA Advice v1.0.0",
+      "description": "Schema version identifier"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of audit"
+    },
+    "auditor": {
+      "type": "string",
+      "description": "Name of the auditor (e.g., 'PYTHEIA AI Node')"
+    },
+    "repo": {
+      "type": "string",
+      "format": "uri",
+      "description": "Repository URL"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{7,40}$",
+      "description": "Git commit hash of audited code"
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "Short title of the audit"
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["BLOCKER", "MAJOR", "MINOR", "INFO"],
+      "description": "Overall severity level"
+    },
+    "priorities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "severity", "status", "files", "description", "impact"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^P[0-9]+$",
+            "description": "Priority ID (e.g., P1, P2)"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["BLOCKER", "MAJOR", "MINOR", "INFO"]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["open", "in_progress", "resolved", "pass", "needs_verification"]
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 500
+            }
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "impact": {
+            "type": "string",
+            "maxLength": 500
+          }
+        }
+      }
+    },
+    "options": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "scope", "effort", "risk", "cost_thr", "vote_recommendation"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Z]$"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "scope": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "effort": {
+            "type": "string",
+            "maxLength": 50
+          },
+          "risk": {
+            "type": "string",
+            "enum": ["Low", "Medium", "High"]
+          },
+          "cost_thr": {
+            "type": "number",
+            "minimum": 0
+          },
+          "vote_recommendation": {
+            "type": "string",
+            "enum": ["APPROVE", "STRONGLY_APPROVE", "REJECT", "NEUTRAL"]
+          }
+        }
+      }
+    },
+    "patch_plan": {
+      "type": "object",
+      "required": ["phases", "tests", "rollback"],
+      "properties": {
+        "phases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["phase", "title", "files", "changes"],
+            "properties": {
+              "phase": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "title": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "changes": {
+                "type": "string",
+                "maxLength": 1000
+              }
+            }
+          }
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "rollback": {
+          "type": "string",
+          "maxLength": 500
+        }
+      }
+    },
+    "governance_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "requires_approval": {
+      "type": "boolean",
+      "default": true
+    },
+    "auto_executable": {
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

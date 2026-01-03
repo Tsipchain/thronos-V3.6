@@ -262,6 +262,71 @@
         color: #ffc107;
         font-weight: bold;
     }
+    /* PYTHEIA Advice Styling */
+    .pytheia-badge {
+        display: inline-block;
+        background: linear-gradient(135deg, #7AFF3C, #3CFF7A);
+        color: #000;
+        padding: 5px 12px;
+        border-radius: 20px;
+        font-size: 0.8em;
+        font-weight: bold;
+        margin-left: 10px;
+    }
+    .pytheia-card {
+        border: 2px solid #7AFF3C !important;
+        background: linear-gradient(135deg, rgba(122, 255, 60, 0.05), rgba(60, 255, 122, 0.05));
+    }
+    .pytheia-section {
+        background: rgba(122, 255, 60, 0.05);
+        border: 1px solid rgba(122, 255, 60, 0.2);
+        border-radius: 8px;
+        padding: 15px;
+        margin-top: 15px;
+    }
+    .pytheia-section h4 {
+        color: #7AFF3C;
+        margin: 0 0 10px 0;
+        font-size: 1em;
+    }
+    .priority-item, .option-item {
+        background: rgba(10, 26, 10, 0.5);
+        border: 1px solid #2a4a2a;
+        border-radius: 6px;
+        padding: 10px;
+        margin-bottom: 8px;
+    }
+    .priority-item strong, .option-item strong {
+        color: #7AFF3C;
+    }
+    .severity-badge {
+        display: inline-block;
+        padding: 3px 10px;
+        border-radius: 12px;
+        font-size: 0.75em;
+        font-weight: bold;
+        margin-left: 8px;
+    }
+    .severity-BLOCKER {
+        background: rgba(255, 107, 107, 0.3);
+        color: #ff6b6b;
+        border: 1px solid #ff6b6b;
+    }
+    .severity-MAJOR {
+        background: rgba(255, 193, 7, 0.3);
+        color: #ffc107;
+        border: 1px solid #ffc107;
+    }
+    .severity-MINOR {
+        background: rgba(60, 255, 122, 0.2);
+        color: #3CFF7A;
+        border: 1px solid #3CFF7A;
+    }
+    .severity-INFO {
+        background: rgba(122, 255, 60, 0.2);
+        color: #7AFF3C;
+        border: 1px solid #7AFF3C;
+    }
 </style>
 {% endblock %}
 
@@ -481,10 +546,81 @@ function renderProposals(items, containerId) {
                            p.status === 'passed' ? 'status-passed' :
                            p.status === 'rejected' ? 'status-rejected' : 'status-pending';
 
+        // Check if this is PYTHEIA advice
+        const isPytheia = p.type === 'PYTHEIA_ADVICE';
+        const cardClass = isPytheia ? 'proposal-card pytheia-card' : 'proposal-card';
+
+        // Build PYTHEIA sections if applicable
+        let pytheiaContent = '';
+        if (isPytheia && p.pytheia_data) {
+            const data = p.pytheia_data;
+
+            // Priorities section
+            if (data.priorities && data.priorities.length > 0) {
+                pytheiaContent += `
+                    <div class="pytheia-section">
+                        <h4>🎯 Priorities</h4>
+                        ${data.priorities.map(pr => `
+                            <div class="priority-item">
+                                <strong>${pr.id}: ${escapeHtml(pr.title)}</strong>
+                                <span class="severity-badge severity-${pr.severity}">${pr.severity}</span>
+                                <div style="margin-top: 5px; opacity: 0.85; font-size: 0.9em;">${escapeHtml(pr.description)}</div>
+                                <div style="margin-top: 5px; opacity: 0.7; font-size: 0.85em;">
+                                    📁 ${pr.files ? pr.files.join(', ') : 'N/A'} | Status: ${pr.status}
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            }
+
+            // Options section
+            if (data.options && data.options.length > 0) {
+                pytheiaContent += `
+                    <div class="pytheia-section">
+                        <h4>⚙️ Options</h4>
+                        ${data.options.map(opt => `
+                            <div class="option-item">
+                                <strong>Option ${opt.id}: ${escapeHtml(opt.title)}</strong>
+                                <div style="margin-top: 5px; opacity: 0.85; font-size: 0.9em;">${escapeHtml(opt.scope)}</div>
+                                <div style="margin-top: 5px; opacity: 0.7; font-size: 0.85em;">
+                                    ⚡ Effort: ${opt.effort} | Risk: ${opt.risk} | Cost: ${opt.cost_thr} THR | Vote: ${opt.vote_recommendation}
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            }
+
+            // Patch plan section
+            if (data.patch_plan) {
+                const plan = data.patch_plan;
+                pytheiaContent += `
+                    <div class="pytheia-section">
+                        <h4>🔧 Patch Plan</h4>
+                        ${plan.phases ? plan.phases.map(ph => `
+                            <div style="opacity: 0.85; font-size: 0.9em; margin-bottom: 8px;">
+                                <strong style="color: #7AFF3C;">Phase ${ph.phase}: ${escapeHtml(ph.title)}</strong><br>
+                                ${escapeHtml(ph.changes)}
+                            </div>
+                        `).join('') : ''}
+                        ${plan.tests && plan.tests.length > 0 ? `
+                            <div style="margin-top: 10px; opacity: 0.7; font-size: 0.85em;">
+                                <strong>Tests:</strong> ${plan.tests.join(', ')}
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }
+        }
+
         return `
-            <div class="proposal-card">
+            <div class="${cardClass}">
                 <div class="proposal-header">
-                    <h3 class="proposal-title">${escapeHtml(p.title)}</h3>
+                    <h3 class="proposal-title">
+                        ${escapeHtml(p.title)}
+                        ${isPytheia ? '<span class="pytheia-badge">🤖 PYTHEIA AI</span>' : ''}
+                    </h3>
                     <span class="proposal-status ${statusClass}">${p.status.toUpperCase()}</span>
                 </div>
                 <p class="proposal-description">${escapeHtml(p.description)}</p>
@@ -494,6 +630,7 @@ function renderProposals(items, containerId) {
                     <span>📅 ${p.created_at || 'N/A'}</span>
                     ${p.status === 'active' ? `<span class="time-remaining">⏰ Ends: ${p.ends_at || 'N/A'}</span>` : ''}
                 </div>
+                ${pytheiaContent}
                 <div class="vote-bar">
                     <div class="vote-bar-inner" style="width: ${forPercent}%"></div>
                 </div>

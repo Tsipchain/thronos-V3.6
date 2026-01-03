@@ -1860,6 +1860,15 @@ def session_messages_exists(session_id: str) -> bool:
     return os.path.exists(path)
 
 
+def save_session_messages(session_id: str, messages: list):
+    """Save messages for a session."""
+    if not session_id:
+        return
+    ensure_session_messages_file(session_id)
+    path = _session_messages_path(session_id)
+    save_json(path, messages)
+
+
 def remove_session_from_index(session_id: str, wallet: str | None = None):
     """Remove a session from the index, optionally scoped by wallet."""
     if not session_id:
@@ -8507,17 +8516,26 @@ def api_v1_create_quiz(course_id: str):
             "correct": int(q.get("correct"))
         })
 
-    # Save quiz
+    # FIX B1: Save quiz with quiz_id and updated_at for cache busting
+    import uuid
     quizzes = load_quizzes()
+    existing_quiz = quizzes.get(course_id, {})
+    quiz_id = existing_quiz.get("quiz_id", str(uuid.uuid4()))
+
     quizzes[course_id] = {
+        "quiz_id": quiz_id,
         "course_id": course_id,
         "title": data.get("title", "Course Quiz"),
         "title_el": data.get("title_el", "Quiz Μαθήματος"),
         "passing_score": int(data.get("passing_score", 80)),
         "questions": validated_questions,
-        "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        "created_at": existing_quiz.get("created_at", time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())),
+        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "version": existing_quiz.get("version", 0) + 1
     }
     save_quizzes(quizzes)
+
+    app.logger.info(f"Quiz saved for course {course_id}: {len(validated_questions)} questions, version {quizzes[course_id]['version']}")
 
     return jsonify(status="success", message="Quiz saved"), 201
 
@@ -8660,17 +8678,57 @@ def api_l2e_submit_quiz():
     }
     save_json(os.path.join(DATA_DIR, "quiz_attempts.json"), quiz_attempts)
 
+    # FIX B2: AUTO-COMPLETE + AUTO-REWARD
+    auto_completed = False
+    reward_credited = False
+    reward_amount = 0.0
+
     if passed:
+        # Mark course completed in enrollments
         enrollments.setdefault(course_id, {}).setdefault(student, {})["completed"] = True
+        enrollments[course_id][student]["completed_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        save_enrollments(enrollments)
+
+        # Mark in course object
         course.setdefault("completed", [])
         if student not in course["completed"]:
             course["completed"].append(student)
-        # Award L2E tokens
-        reward = float(course.get("reward_l2e", 0))
-        if reward > 0:
+            save_courses(courses)
+
+        auto_completed = True
+        app.logger.info(f"AUTO-COMPLETE: Student {student} completed course {course_id}")
+
+        # AUTO-REWARD: Credit L2E reward
+        reward_amount = float(course.get("metadata", {}).get("reward_thr", 0.0) or course.get("reward_l2e", 0.0))
+        if reward_amount > 0:
+            # Credit to main wallet ledger
+            ledger = load_json(LEDGER_FILE, {})
+            ledger[student] = round(float(ledger.get(student, 0.0)) + reward_amount, 6)
+            save_json(LEDGER_FILE, ledger)
+
+            # Also credit to L2E ledger for tracking
             l2e_ledger = load_json(L2E_LEDGER_FILE, {})
-            l2e_ledger[student] = round(float(l2e_ledger.get(student, 0.0)) + reward, 6)
+            l2e_ledger[student] = round(float(l2e_ledger.get(student, 0.0)) + reward_amount, 6)
             save_json(L2E_LEDGER_FILE, l2e_ledger)
+
+            # Write transaction entry to wallet history
+            chain = load_json(CHAIN_FILE, [])
+            reward_tx = {
+                "tx_id": f"L2E_{course_id}_{int(time.time())}",
+                "type": "L2E_REWARD",
+                "from": "SYSTEM_L2E_POOL",
+                "to": student,
+                "amount": reward_amount,
+                "course_id": course_id,
+                "quiz_score": score,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+                "block": len(chain) + 1
+            }
+            chain.append(reward_tx)
+            save_json(CHAIN_FILE, chain)
+
+            reward_credited = True
+            app.logger.info(f"AUTO-REWARD: Credited {reward_amount} THR to {student} for completing {course_id}")
             chain = load_json(CHAIN_FILE, [])
             ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
             tx_id = f"L2E-REWARD-{len(chain)}-{int(time.time())}-{secrets.token_hex(4)}"
@@ -8694,9 +8752,14 @@ def api_l2e_submit_quiz():
         status="success",
         score=score,
         total=total,
+        correct=correct,
         passed=passed,
         passing_score=passing_score,
-        results=results
+        results=results,
+        message=f"Quiz graded. Score: {score}% ({correct}/{total})" + (" - PASSED!" if passed else ""),
+        auto_completed=auto_completed,
+        reward_credited=reward_credited,
+        reward_amount=reward_amount
     ), 200
 
 
@@ -10256,10 +10319,50 @@ def api_ai_provider_chat():
     model = (data.get("model") or data.get("model_key") or None) or "auto"
     max_tokens = int(data.get("max_tokens") or 1024)
     temperature = float(data.get("temperature") or 0.6)
+    session_id = data.get("session_id")
 
     resolved_model = _resolve_model(model)
     if not resolved_model:
         return jsonify({"error": "Unknown or disabled model id"}), 400
+
+    # FIX A3: Process file attachments and include in context
+    attachments = data.get("attachments", [])
+    file_contexts = []
+    if attachments:
+        ai_files_dir = os.path.join(DATA_DIR, "ai_files")
+        os.makedirs(ai_files_dir, exist_ok=True)
+        for file_id in attachments:
+            file_path = os.path.join(ai_files_dir, file_id)
+            if os.path.exists(file_path):
+                try:
+                    # Try to read as text
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read(10000)  # Limit to 10KB per file
+                        file_contexts.append(f"[ATTACHED FILE: {file_id}]\n{content}\n[/FILE]")
+                except Exception as e:
+                    app.logger.warning(f"Failed to read file {file_id}: {e}")
+                    file_contexts.append(f"[ATTACHED FILE: {file_id}] (binary or unreadable)")
+
+    # Prepend file contexts to the user's message
+    if file_contexts and messages:
+        last_user_msg = messages[-1]
+        if last_user_msg.get("role") == "user":
+            file_context_str = "\n\n".join(file_contexts)
+            last_user_msg["content"] = file_context_str + "\n\n" + last_user_msg["content"]
+
+    # FIX A2: Save user message to session before calling LLM
+    if session_id:
+        existing_messages = load_session_messages(session_id)
+        # Find new user messages (last message in incoming messages)
+        if messages:
+            last_msg = messages[-1]
+            # Add timestamp if not present
+            if "timestamp" not in last_msg:
+                last_msg["timestamp"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            # Only save if not already in existing_messages
+            if not any(m.get("content") == last_msg.get("content") and m.get("role") == last_msg.get("role") for m in existing_messages):
+                existing_messages.append(last_msg)
+                save_session_messages(session_id, existing_messages)
 
     try:
         result = call_llm(
@@ -10268,7 +10371,7 @@ def api_ai_provider_chat():
             system_prompt=(data.get("system_prompt") or None),
             temperature=temperature,
             max_tokens=max_tokens,
-            session_id=data.get("session_id"),
+            session_id=session_id,
             wallet=data.get("wallet"),
             difficulty=data.get("difficulty"),
             block_hash=data.get("block_hash"),
@@ -10285,6 +10388,18 @@ def api_ai_provider_chat():
             ),
             500,
         )
+
+    # FIX A2: Save assistant response to session
+    if session_id and result.get("message"):
+        existing_messages = load_session_messages(session_id)
+        assistant_msg = {
+            "role": "assistant",
+            "content": result.get("message"),
+            "model": result.get("model", model),
+            "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        }
+        existing_messages.append(assistant_msg)
+        save_session_messages(session_id, existing_messages)
 
     return jsonify({"ok": True, **result})
 
@@ -10394,11 +10509,13 @@ def _get_fallback_models():
                 fallback.append({
                     "id": model["id"],
                     "provider": provider,
-                    "label": model["label"],
+                    "label": model.get("label", model["id"]),
+                    "display_name": model.get("label", model["id"]),
                     "enabled": False,  # Mark as disabled in degraded mode
                     "degraded": True,
                     "tier": "fallback",
-                    "display_name": model["label"]
+                    "default": model.get("default", False),
+                    "stats": {"total_calls": 0, "avg_latency_ms": 0.0}
                 })
         return fallback
     except Exception as e:
@@ -10407,9 +10524,12 @@ def _get_fallback_models():
             "id": "auto",
             "provider": "thronos",
             "label": "AUTO (Emergency Fallback)",
+            "display_name": "AUTO (Emergency Fallback)",
             "enabled": True,
             "degraded": True,
-            "tier": "emergency"
+            "tier": "emergency",
+            "default": True,
+            "stats": {"total_calls": 0, "avg_latency_ms": 0.0}
         }]
 
 
@@ -10478,15 +10598,11 @@ def api_ai_models():
                     {
                         "id": mi.id,
                         "provider": mi.provider,
-                        "label": mi.label,
-                        "alias": mi.alias,
+                        "label": mi.display_name,  # FIX: use display_name not label
+                        "display_name": mi.display_name,
                         "tier": mi.tier,
-                        "family": mi.family,
-                        "safety_tuned": mi.safety_tuned,
-                        "supports_vision": mi.supports_vision,
-                        "supports_audio": mi.supports_audio,
-                        "supports_tools": mi.supports_tools,
-                        "enabled": provider_enabled and mi.enabled_by_default,
+                        "default": mi.default,
+                        "enabled": provider_enabled and mi.enabled,  # FIX: use mi.enabled not mi.enabled_by_default
                         "stats": {
                             "total_calls": stats.get("total_calls", 0),
                             "avg_latency_ms": stats.get("avg_latency_ms", 0.0),

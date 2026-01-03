@@ -5272,7 +5272,9 @@ def api_create_token():
     if logo_file and logo_file.filename:
         try:
             ext = os.path.splitext(secure_filename(logo_file.filename))[1] or ".png"
-            logo_filename = f"{token_id}{ext}"
+            # Collision-free naming: SYMBOL_timestamp.ext
+            timestamp = int(time.time() * 1000)
+            logo_filename = f"{symbol}_{timestamp}{ext}"
             logo_path = os.path.join(TOKEN_LOGOS_DIR, logo_filename)
 
             logger.info(f"Saving logo for {symbol} to: {logo_path}")
@@ -5328,9 +5330,10 @@ def api_upload_token_logo(symbol):
         return jsonify({"ok": False, "error": "Not authorized"}), 403
 
     try:
-        # Save logo
+        # Save logo with collision-free naming: SYMBOL_timestamp.ext
         ext = os.path.splitext(secure_filename(file.filename))[1] or ".png"
-        logo_filename = f"{token['id']}{ext}"
+        timestamp = int(time.time() * 1000)
+        logo_filename = f"{symbol}_{timestamp}{ext}"
         logo_path = os.path.join(TOKEN_LOGOS_DIR, logo_filename)
 
         logger.info(f"Uploading logo for {symbol} to: {logo_path}")
@@ -11119,6 +11122,103 @@ def api_v1_governance_vote():
     save_governance(gov)
 
     return jsonify({"status": "success", "message": "Vote recorded"}), 200
+
+
+# ─── PYTHEIA Advice Schema & Ingestion ──────────────────────────────────────
+
+@app.route("/schemas/pytheia-advice.schema.json")
+def serve_pytheia_schema():
+    """Serve PYTHEIA Advice JSON Schema"""
+    schema_path = os.path.join(os.path.dirname(__file__), "schemas", "pytheia-advice.schema.json")
+    if not os.path.exists(schema_path):
+        return jsonify({"status": "error", "message": "Schema file not found"}), 404
+    return send_file(schema_path, mimetype="application/schema+json")
+
+
+@app.route("/api/governance/pytheia/advice", methods=["POST"])
+def api_pytheia_advice():
+    """
+    Ingest PYTHEIA AI Node audit advice.
+    Validates against pytheia-advice.schema.json and stores as special governance post.
+    Returns: {"status": "success", "post_id": "...", "url": "..."}
+    """
+    data = request.get_json() or {}
+
+    # Basic validation - check required fields per schema
+    required = ["schema_version", "timestamp", "auditor", "repo", "commit",
+                "title", "severity", "priorities", "options", "patch_plan"]
+    missing = [f for f in required if f not in data]
+    if missing:
+        return jsonify({
+            "status": "error",
+            "message": f"Missing required fields: {', '.join(missing)}"
+        }), 400
+
+    # Validate schema_version
+    if data.get("schema_version") != "PYTHEIA Advice v1.0.0":
+        return jsonify({
+            "status": "error",
+            "message": "Invalid schema_version. Expected 'PYTHEIA Advice v1.0.0'"
+        }), 400
+
+    # Validate severity
+    valid_severities = ["BLOCKER", "MAJOR", "MINOR", "INFO"]
+    if data.get("severity") not in valid_severities:
+        return jsonify({
+            "status": "error",
+            "message": f"Invalid severity. Must be one of: {', '.join(valid_severities)}"
+        }), 400
+
+    # Validate priorities array
+    priorities = data.get("priorities", [])
+    if not isinstance(priorities, list) or len(priorities) < 1 or len(priorities) > 20:
+        return jsonify({
+            "status": "error",
+            "message": "priorities must be an array with 1-20 items"
+        }), 400
+
+    # Validate options array
+    options = data.get("options", [])
+    if not isinstance(options, list) or len(options) < 1 or len(options) > 5:
+        return jsonify({
+            "status": "error",
+            "message": "options must be an array with 1-5 items"
+        }), 400
+
+    # Create governance post
+    post_id = f"PYTHEIA{int(time.time() * 1000)}"
+
+    # Build governance proposal from PYTHEIA advice
+    proposal = {
+        "id": post_id,
+        "type": "PYTHEIA_ADVICE",  # Special type for rendering
+        "title": data.get("title"),
+        "description": f"Audit by {data.get('auditor')} - Severity: {data.get('severity')}",
+        "category": "protocol",  # PYTHEIA advice is always protocol-related
+        "status": "active" if data.get("requires_approval", True) else "info",
+        "votes_for": 0,
+        "votes_against": 0,
+        "creator": data.get("auditor", "PYTHEIA AI Node"),
+        "created_at": time.strftime("%Y-%m-%d", time.gmtime()),
+        "ends_at": time.strftime("%Y-%m-%d", time.gmtime(time.time() + 7 * 86400)),  # 7 days
+        # Store full PYTHEIA data
+        "pytheia_data": data
+    }
+
+    # Save to governance
+    gov = load_governance()
+    gov["proposals"].append(proposal)
+    save_governance(gov)
+
+    # Generate URL
+    governance_url = data.get("governance_url") or "https://thrchain.up.railway.app/governance"
+
+    return jsonify({
+        "status": "success",
+        "post_id": post_id,
+        "url": governance_url,
+        "message": "PYTHEIA advice posted to governance successfully"
+    }), 201
 
 
 # ... ΤΕΛΟΣ όλων των routes / helpers ...

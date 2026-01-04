@@ -91,8 +91,9 @@ from ai_interaction_ledger import compute_model_stats
 app = Flask(__name__)
 CORS(app)
 
-SESSIONS_DIR = "sessions"
-os.makedirs(SESSIONS_DIR, exist_ok=True)
+# FIX 9: Redirect old SESSIONS_DIR to volume-backed AI_SESSIONS_DIR (defined later at line 550)
+# This ensures all sessions persist across deployments
+SESSIONS_DIR = None  # Will be set after DATA_DIR is defined
 
 
 @app.route('/chat_sessions', methods=['GET'])
@@ -549,6 +550,11 @@ os.makedirs(AI_FILES_DIR, exist_ok=True)
 AI_SESSIONS_FILE = os.path.join(DATA_DIR, "ai_sessions.json")
 AI_SESSIONS_DIR = os.path.join(DATA_DIR, "ai_sessions")
 AI_FILES_INDEX = os.path.join(DATA_DIR, "ai_files_index.json")
+
+# FIX 9: Set SESSIONS_DIR to point to volume-backed AI_SESSIONS_DIR
+# This ensures all chat sessions persist across Railway deploys
+global SESSIONS_DIR
+SESSIONS_DIR = AI_SESSIONS_DIR
 
 ADMIN_SECRET   = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
 
@@ -1979,32 +1985,87 @@ def append_session_transcript(session_id: str, prompt: str, response: str, files
 
 
 def ensure_session_exists(session_id: str, wallet: str | None) -> dict:
-    """Return an existing session or recreate it on disk."""
+    """
+    FIX 9: Return an existing session or recreate it on disk.
+    Graceful degradation - returns empty dict on errors.
+    """
     if not session_id:
         return {}
 
-    sessions = load_ai_sessions()
-    for s in sessions:
-        if s.get("id") == session_id:
-            ensure_session_messages_file(session_id)
-            return s
+    try:
+        sessions = load_ai_sessions()
+        for s in sessions:
+            if s.get("id") == session_id:
+                ensure_session_messages_file(session_id)
+                return s
 
-    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-    recovered = {
-        "id": session_id,
-        "wallet": (wallet or "").strip(),
-        "title": "Recovered Session",
-        "created_at": now,
-        "updated_at": now,
-        "archived": False,
-        "model": None,
-        "message_count": 0,
-        "meta": {"recovered": True},
-    }
-    sessions.append(recovered)
-    save_ai_sessions(sessions)
-    ensure_session_messages_file(session_id)
-    return recovered
+        now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        recovered = {
+            "id": session_id,
+            "wallet": (wallet or "").strip(),
+            "title": "Recovered Session",
+            "created_at": now,
+            "updated_at": now,
+            "archived": False,
+            "model": None,
+            "message_count": 0,
+            "meta": {"recovered": True},
+        }
+        sessions.append(recovered)
+        save_ai_sessions(sessions)
+        ensure_session_messages_file(session_id)
+        logger.info(f"Session recovered: {session_id} (wallet: {wallet})")
+        return recovered
+    except Exception as e:
+        logger.error(f"Failed to ensure session {session_id}: {e}")
+        return {}  # Graceful degradation
+
+
+def generate_stable_session_key(wallet: str | None = None) -> str:
+    """
+    FIX 9: Generate stable session key.
+
+    - If wallet provided: deterministic key based on wallet + timestamp (day)
+    - If no wallet (guest): random UUID
+
+    This ensures sessions are stable across requests for same wallet on same day.
+    """
+    if wallet:
+        # Deterministic key: wallet + date (changes daily for privacy)
+        from datetime import date
+        today = date.today().isoformat()
+        seed = f"{wallet}:{today}"
+        # Use first 16 chars of sha256 hash
+        import hashlib
+        hash_hex = hashlib.sha256(seed.encode()).hexdigest()[:16]
+        return f"session_{hash_hex}"
+    else:
+        # Guest mode: random UUID
+        return str(uuid.uuid4())
+
+
+def register_session(session_data: dict) -> bool:
+    """
+    FIX 9: Register/update a session in the canonical store.
+    Wrapper around ensure_session_exists with graceful degradation.
+
+    Args:
+        session_data: {"session_id": str, "user_wallet": str | None, ...}
+
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        session_id = session_data.get("session_id")
+        if not session_id:
+            return False
+
+        wallet = session_data.get("user_wallet") or session_data.get("wallet")
+        ensure_session_exists(session_id, wallet)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to register session: {e}")
+        return False  # Graceful degradation
 
 
 def attach_uploaded_files_to_session(session_id: str, wallet: str, files: list):

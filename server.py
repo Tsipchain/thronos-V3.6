@@ -4141,7 +4141,6 @@ def api_chat():
             "url": f"/api/ai/generated/{fname}",
         })
 
-    # N1: Include credits_spent in response for billing transparency
     resp = {
         "response": cleaned,
         "quantum_key": quantum_key,
@@ -4151,7 +4150,6 @@ def api_chat():
         "wallet": wallet,
         "files": resp_files,
         "credits": credits_for_frontend,
-        "credits_spent": ai_credits_spent if wallet else 0,  # N1: Show how many credits were charged
         "session_id": session_id,
         "routing": None,
         "task_type": None,
@@ -4989,112 +4987,6 @@ def api_ai_purchase_pack():
         pack=pack,
         total_credits=total_credits,
     ), 200
-
-
-# N1: Credits/Billing status endpoint
-@app.route("/api/credits/status", methods=["GET"])
-def api_credits_status():
-    """
-    Returns current credits balance and billing policy information.
-
-    Query params:
-    - wallet: optional wallet address to check balance
-
-    Response:
-    {
-        "ok": true,
-        "mode": "online" | "degraded",
-        "wallet": "...",  // if provided
-        "credits_balance": 0,
-        "last_charge": {...} | null,  // last credit charge transaction
-        "pricing_policy": {
-            "type": "pack_based",  // or "direct_thr"
-            "cost_per_message": 1,
-            "free_messages_limit": 10,
-            "available_packs": [...]
-        },
-        "data_dir": "/app/data",
-        "build": {
-            "git_commit": "...",
-            "timestamp": "..."
-        }
-    }
-    """
-    try:
-        wallet = request.args.get("wallet", "").strip()
-
-        # Get credits balance
-        credits_map = load_ai_credits()
-        credits_balance = int(credits_map.get(wallet, 0)) if wallet else 0
-
-        # Get last charge (from chain if wallet provided)
-        last_charge = None
-        if wallet:
-            try:
-                chain = load_json(CHAIN_FILE, [])
-                # Find last service_payment for this wallet
-                for tx in reversed(chain):
-                    if tx.get("type") == "service_payment" and tx.get("from") == wallet:
-                        last_charge = {
-                            "tx_id": tx.get("tx_id"),
-                            "pack_code": tx.get("pack_code"),
-                            "credits": tx.get("pack_credits"),
-                            "amount_thr": tx.get("amount"),
-                            "timestamp": tx.get("timestamp")
-                        }
-                        break
-            except Exception as e:
-                app.logger.warning(f"Failed to load last_charge for {wallet}: {e}")
-
-        # Get available packs
-        packs = load_ai_packs()
-
-        # Get git commit for build info
-        git_commit = "unknown"
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["git", "rev-parse", "--short", "HEAD"],
-                capture_output=True,
-                text=True,
-                timeout=2,
-                cwd=BASE_DIR
-            )
-            if result.returncode == 0:
-                git_commit = result.stdout.strip()
-        except Exception:
-            pass
-
-        response = {
-            "ok": True,
-            "mode": "online",
-            "wallet": wallet if wallet else None,
-            "credits_balance": credits_balance,
-            "last_charge": last_charge,
-            "pricing_policy": {
-                "type": "pack_based",
-                "description": "Users purchase AI packs with THR to receive credits. Each message costs credits.",
-                "cost_per_message": AI_CREDIT_COST_PER_MSG,
-                "free_messages_limit": AI_FREE_MESSAGES_LIMIT,
-                "available_packs": packs
-            },
-            "data_dir": os.getenv("DATA_DIR", "/app/data"),
-            "build": {
-                "git_commit": git_commit,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-            }
-        }
-
-        return jsonify(response), 200
-
-    except Exception as e:
-        app.logger.error(f"Credits status endpoint error: {e}")
-        return jsonify({
-            "ok": False,
-            "mode": "degraded",
-            "error": "Failed to load credits status",
-            "error_code": "CREDITS_STATUS_ERROR"
-        }), 200  # Still return 200 with degraded mode
 
 
 # ─── NODE REGISTRATION / IOT KIT ───────────────────

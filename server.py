@@ -550,7 +550,7 @@ os.makedirs(AI_FILES_DIR, exist_ok=True)
 AI_SESSIONS_FILE = os.path.join(DATA_DIR, "ai_sessions.json")
 AI_SESSIONS_DIR = os.path.join(DATA_DIR, "ai_sessions")
 AI_FILES_INDEX = os.path.join(DATA_DIR, "ai_files_index.json")
-
+os.makedirs(SESSIONS_DIR, exist_ok=True)
 # FIX 9: Set SESSIONS_DIR to point to volume-backed AI_SESSIONS_DIR
 # This ensures all chat sessions persist across Railway deploys
 SESSIONS_DIR = AI_SESSIONS_DIR
@@ -10289,7 +10289,7 @@ def api_ai_sessions_combined():
         return resp
 
 
-@app.route("/api/ai/sessions/<session_id>/messages", methods=["GET", "POST"])
+
 @app.route("/api/chat/session/<session_id>/messages", methods=["GET", "POST"])
 def api_ai_session_messages(session_id):
     """Get messages for a specific session"""
@@ -10887,8 +10887,9 @@ def _get_fallback_models():
         }]
 
 
-@app.route("/api/ai/models", methods=["GET"])
+@app.route("/api/ai_models", methods=["GET"])
 def api_ai_models():
+
     """
     Επιστρέφει ενοποιημένη λίστα μοντέλων για το Thronos Quantum UI.
     Χρησιμοποιεί το AI_MODEL_REGISTRY και τα stats από το AI Interaction Ledger.
@@ -10905,8 +10906,14 @@ def api_ai_models():
 
         # Βασικό config – ποιοι providers είναι ενεργοί στο σύστημα
         try:
-            base_cfg = base_model_config() or {}
-            enabled_providers = set((base_cfg.get("providers") or {}).keys())
+           base_cfg = base_model_config() or {}
+
+providers_cfg = base_cfg.get("providers")
+if isinstance(providers_cfg, dict) and providers_cfg:
+    enabled_providers = set(providers_cfg.keys())
+else:
+    enabled_providers = set(base_cfg.keys())  # <-- αυτό λείπει σήμερα
+
         except Exception as cfg_err:
             app.logger.warning(f"base_model_config failed: {cfg_err}")
             # Degraded mode fallback

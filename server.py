@@ -91,8 +91,9 @@ from ai_interaction_ledger import compute_model_stats
 app = Flask(__name__)
 CORS(app)
 
-SESSIONS_DIR = "sessions"
-os.makedirs(SESSIONS_DIR, exist_ok=True)
+# FIX 9: Redirect old SESSIONS_DIR to volume-backed AI_SESSIONS_DIR (defined later at line 550)
+# This ensures all sessions persist across deployments
+SESSIONS_DIR = None  # Will be set after DATA_DIR is defined
 
 
 @app.route('/chat_sessions', methods=['GET'])
@@ -550,6 +551,11 @@ AI_SESSIONS_FILE = os.path.join(DATA_DIR, "ai_sessions.json")
 AI_SESSIONS_DIR = os.path.join(DATA_DIR, "ai_sessions")
 AI_FILES_INDEX = os.path.join(DATA_DIR, "ai_files_index.json")
 
+# FIX 9: Set SESSIONS_DIR to point to volume-backed AI_SESSIONS_DIR
+# This ensures all chat sessions persist across Railway deploys
+global SESSIONS_DIR
+SESSIONS_DIR = AI_SESSIONS_DIR
+
 ADMIN_SECRET   = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
 
 BTC_RECEIVER  = "1QFeDPwEF8yEgPEfP79hpc8pHytXMz9oEQ"
@@ -579,6 +585,10 @@ SWAP_POOL_ADDRESS = "THR_SWAP_POOL_V1"
 GAME_POOL_ADDRESS = "THR_CRYPTO_HUNTERS_POOL"
 GAME_PANEL_URL    = os.getenv("GAME_PANEL_URL", "/game")  # Crypto Hunters admin panel URL
 GATEWAY_ADDRESS   = "THR_FIAT_GATEWAY_V1"
+
+# FIX 8: Initialize billing module (clean separation: Chat=credits, Architect=THR)
+import billing
+billing.init_billing(DATA_DIR, LEDGER_FILE, CHAIN_FILE, AI_CREDITS_FILE, AI_WALLET_ADDRESS)
 
 # --- Learn‑to‑Earn Token Config ---
 #
@@ -1975,32 +1985,87 @@ def append_session_transcript(session_id: str, prompt: str, response: str, files
 
 
 def ensure_session_exists(session_id: str, wallet: str | None) -> dict:
-    """Return an existing session or recreate it on disk."""
+    """
+    FIX 9: Return an existing session or recreate it on disk.
+    Graceful degradation - returns empty dict on errors.
+    """
     if not session_id:
         return {}
 
-    sessions = load_ai_sessions()
-    for s in sessions:
-        if s.get("id") == session_id:
-            ensure_session_messages_file(session_id)
-            return s
+    try:
+        sessions = load_ai_sessions()
+        for s in sessions:
+            if s.get("id") == session_id:
+                ensure_session_messages_file(session_id)
+                return s
 
-    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-    recovered = {
-        "id": session_id,
-        "wallet": (wallet or "").strip(),
-        "title": "Recovered Session",
-        "created_at": now,
-        "updated_at": now,
-        "archived": False,
-        "model": None,
-        "message_count": 0,
-        "meta": {"recovered": True},
-    }
-    sessions.append(recovered)
-    save_ai_sessions(sessions)
-    ensure_session_messages_file(session_id)
-    return recovered
+        now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        recovered = {
+            "id": session_id,
+            "wallet": (wallet or "").strip(),
+            "title": "Recovered Session",
+            "created_at": now,
+            "updated_at": now,
+            "archived": False,
+            "model": None,
+            "message_count": 0,
+            "meta": {"recovered": True},
+        }
+        sessions.append(recovered)
+        save_ai_sessions(sessions)
+        ensure_session_messages_file(session_id)
+        logger.info(f"Session recovered: {session_id} (wallet: {wallet})")
+        return recovered
+    except Exception as e:
+        logger.error(f"Failed to ensure session {session_id}: {e}")
+        return {}  # Graceful degradation
+
+
+def generate_stable_session_key(wallet: str | None = None) -> str:
+    """
+    FIX 9: Generate stable session key.
+
+    - If wallet provided: deterministic key based on wallet + timestamp (day)
+    - If no wallet (guest): random UUID
+
+    This ensures sessions are stable across requests for same wallet on same day.
+    """
+    if wallet:
+        # Deterministic key: wallet + date (changes daily for privacy)
+        from datetime import date
+        today = date.today().isoformat()
+        seed = f"{wallet}:{today}"
+        # Use first 16 chars of sha256 hash
+        import hashlib
+        hash_hex = hashlib.sha256(seed.encode()).hexdigest()[:16]
+        return f"session_{hash_hex}"
+    else:
+        # Guest mode: random UUID
+        return str(uuid.uuid4())
+
+
+def register_session(session_data: dict) -> bool:
+    """
+    FIX 9: Register/update a session in the canonical store.
+    Wrapper around ensure_session_exists with graceful degradation.
+
+    Args:
+        session_data: {"session_id": str, "user_wallet": str | None, ...}
+
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        session_id = session_data.get("session_id")
+        if not session_id:
+            return False
+
+        wallet = session_data.get("user_wallet") or session_data.get("wallet")
+        ensure_session_exists(session_id, wallet)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to register session: {e}")
+        return False  # Graceful degradation
 
 
 def attach_uploaded_files_to_session(session_id: str, wallet: str, files: list):
@@ -3102,6 +3167,10 @@ def api_architect_generate():
     if not blueprint or not project_spec:
         return jsonify(error="Missing blueprint or spec"), 400
 
+    # FIX 8: Require wallet for Architect (THR billing mode)
+    if not wallet:
+        return jsonify(error="Wallet required for Architect (THR billing)"), 400
+
     # Load blueprint
     bp_path = os.path.join(DATA_DIR, "ai_blueprints", blueprint)
     if not os.path.exists(bp_path):
@@ -3175,6 +3244,38 @@ def api_architect_generate():
     except Exception as e:
         print("architect corpus error:", e)
 
+    # FIX 8: Calculate Architect fee (base + variable)
+    tokens_out = len(full_text.split())  # Rough token estimate (words)
+    files_count = len(files) if files else 0
+    architect_fee = billing.calculate_architect_fee(tokens_out=tokens_out, files_count=files_count, blueprint_complexity=1)
+
+    # FIX 8: Charge THR (Architect billing mode - no credits)
+    charge_success, charge_error, charge_telemetry = billing.charge_thr(
+        wallet=wallet,
+        amount=architect_fee,
+        reason="architect_usage",
+        product="architect",
+        metadata={
+            "blueprint": blueprint,
+            "files_generated": files_count,
+            "tokens_out": tokens_out,
+            "model": model_key,
+            "session_id": session_id
+        }
+    )
+
+    if not charge_success:
+        # Insufficient THR - return error
+        return jsonify({
+            "error": charge_error,
+            "status": "insufficient_thr",
+            "thr_available": charge_telemetry.get("thr_available", 0),
+            "thr_needed": float(architect_fee)
+        }), 402  # Payment Required
+
+    # FIX 8: Grant credits reward (1 THR → 10 credits)
+    reward_telemetry = billing.grant_credits_from_thr_spend(wallet, architect_fee)
+
     resp_files = []
     for f in files or []:
         if isinstance(f, dict):
@@ -3214,6 +3315,11 @@ def api_architect_generate():
         "files": resp_files,
         "zip_url": zip_url,
         "session_id": session_id,
+        # FIX 8: Billing info
+        "thr_spent": float(architect_fee),
+        "credits_granted": reward_telemetry.get("credits_delta", 0),
+        "billing_channel": "thr",
+        "tx_id": charge_telemetry.get("tx_id"),
     }), 200
 
 
@@ -4008,11 +4114,10 @@ def api_chat():
     if not msg:
         return jsonify(error="Message required"), 400
 
-    # --- Credits & free usage check ---
+    # --- FIX 8: Credits check (Chat billing mode) ---
     credits_value = None
     if wallet:
-        # If a wallet is provided, enforce the paid credits model.  Each
-        # message costs one credit and balances are tracked in ai_credits.json.
+        # Check credits availability (don't deduct yet - wait for successful AI call)
         credits_map = load_ai_credits()
         try:
             credits_value = int(credits_map.get(wallet, 0) or 0)
@@ -4143,18 +4248,18 @@ def api_chat():
     except Exception as e:
         print("offline corpus enqueue error:", e)
 
-    # --- Credit burn ---
+    # --- FIX 8: Consume credits (Chat billing mode - no THR) ---
     if wallet:
-        credits_map = load_ai_credits()
-        try:
-            before = int(credits_map.get(wallet, 0) or 0)
-        except (TypeError, ValueError):
-            before = 0
-        after = max(0, before - AI_CREDIT_COST_PER_MSG)
-        credits_map[wallet] = after
-        save_ai_credits(credits_map)
-        credits_for_frontend = after
-        ai_credits_spent = max(0.0, float(before - after))
+        # Use billing module (clean separation, telemetry, cross-charge guard)
+        success, error_msg, telemetry = billing.consume_credits(wallet, AI_CREDIT_COST_PER_MSG, product="chat")
+        if not success:
+            # This shouldn't happen (already checked above), but handle gracefully
+            logger.error(f"Credits consumption failed after AI call: {error_msg}")
+            credits_for_frontend = 0
+            ai_credits_spent = 0.0
+        else:
+            credits_for_frontend = telemetry.get("credits_after", 0)
+            ai_credits_spent = abs(telemetry.get("credits_delta", 0))
     else:
         # For demo sessions, report remaining free messages.  This
         # communicates to the user how many additional messages they may
@@ -4167,6 +4272,7 @@ def api_chat():
             credits_for_frontend = max(0, AI_FREE_MESSAGES_LIMIT - used_now)
         except Exception:
             credits_for_frontend = "infinite"
+        ai_credits_spent = 0.0
 
     resp_files = []
     for f in files or []:
@@ -10822,8 +10928,12 @@ def api_ai_models():
             app.logger.warning(f"compute_model_stats failed: {stats_err}")
             model_stats = {}  # Continue without stats
 
+        # FIX 7: Get provider_status early (contains source field)
+        provider_status = get_provider_status()
+
         providers = {}
         models = []
+        seen_models = set()  # FIX 7: Dedupe by (provider, model_id)
 
         # Για κάθε provider και τα μοντέλα του
         for provider_name, model_list in AI_MODEL_REGISTRY.items():
@@ -10833,14 +10943,25 @@ def api_ai_models():
 
             provider_enabled = provider_name in enabled_providers
 
+            # FIX 7: Get source from provider_status
+            provider_source = provider_status.get(provider_name, {}).get("source", "registry")
+
             # Βασικά metadata provider για το UI
             providers[provider_name] = {
                 "key": provider_name,
                 "label": provider_name.capitalize(),
                 "enabled": provider_enabled,
+                "source": provider_source,  # FIX 7: Add source field for debugging
             }
 
             for mi in model_list:
+                # FIX 7: Dedupe check - skip if (provider, model_id) already seen
+                model_key = (mi.provider, mi.id)
+                if model_key in seen_models:
+                    app.logger.warning(f"Duplicate model skipped: {mi.provider}/{mi.id} (display: {mi.display_name})")
+                    continue
+                seen_models.add(model_key)
+
                 # mi είναι ModelInfo dataclass από το llm_registry
                 stats = model_stats.get(mi.id, {})
                 models.append(
@@ -10858,9 +10979,6 @@ def api_ai_models():
                         },
                     }
                 )
-
-        # FIX 2: Add provider_status to show which env vars are checked
-        provider_status = get_provider_status()
 
         payload = {
             "ok": True,

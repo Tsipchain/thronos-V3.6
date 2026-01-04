@@ -51,57 +51,69 @@ except ImportError:
 
 ### Observable Proof
 Console shows 404 for paths like:
-- `12e-logo.png`
-- `TOKEN1_...jpg`
-- `media/static/token_1_...jpg`
+- `/static/token_logos/T_949fe6f8185cd.jpg`
+- Expected: `/media/token_logos/...` (DATA_DIR-backed)
+
+### Root Cause
+Custom tokens store logos in `DATA_DIR/media/token_logos/` but were being served with `/static/` prefix, causing 404s. Built-in tokens are in `/static/img/` or `/static/img/tokens/`.
 
 ### Changes Made
 **File**: `server.py`
 
-**Lines 5245-5247**: Create tokens directory
-```python
-# CRITICAL FIX #2: Ensure tokens logo directory exists
-STATIC_TOKENS_DIR = os.path.join(BASE_DIR, "static", "img", "tokens")
-os.makedirs(STATIC_TOKENS_DIR, exist_ok=True)
-```
-
-**Lines 5253-5321**: Patched `resolve_token_logo()` with canonical fallback strategy
+**Lines 5281-5337**: Patched `resolve_token_logo()` to return relative paths
 ```python
 def resolve_token_logo(token_data: dict) -> str:
     """
-    CRITICAL FIX #2: Resolve token logo with canonical fallback strategy.
+    CRITICAL FIX #2: Resolve token logo with canonical path mapping.
+    Returns relative path - caller adds /media/ or /static/ prefix.
+
     Fallback order:
-    1. token_data['logo_url'] (if absolute URL)
-    2. /static/img/tokens/<SYMBOL>.png
-    3. /static/img/tokens/<NAME>.png (sanitized)
-    4. /static/img/tokens/<token_id>.png
-    5. /static/img/<SYMBOL>.png (legacy fallback)
-    6. None (frontend shows circle letter icon)
+    1. token_data['logo_path'] (custom tokens in DATA_DIR/media/token_logos)
+    2. DATA_DIR/media/token_logos/<SYMBOL>_*.* (uploaded custom logos)
+    3. /static/img/tokens/<SYMBOL>.png (built-in tokens)
+    4. /static/img/<SYMBOL>.png (legacy built-in)
+    5. None (frontend shows circle letter icon)
     """
-    # Strategy 1: Check by SYMBOL
-    # /static/img/tokens/THR.png or /static/img/tokens/thr.png
-
-    # Strategy 2: Check by NAME (sanitized)
-    # /static/img/tokens/Bitcoin.png
-
-    # Strategy 3: Check by token_id
-    # /static/img/tokens/token_123.png
-
-    # Strategy 4: Legacy fallback
-    # /static/img/THR.png or /static/img/THR.webp
+    # Returns relative path without prefix:
+    # - "token_logos/SYMBOL_timestamp.ext" for custom tokens
+    # - "img/tokens/SYMBOL.png" for built-in tokens
+    # - "img/SYMBOL.png" for legacy built-in
 ```
 
-### No Widget Changes
-- ✅ Did NOT rewrite wallet widget
-- ✅ Patched resolve_token_logo() function only
-- ✅ Wallet widget already uses logo_url from API (N5 patch)
+**Lines 1396-1407**: Patched caller to add correct URL prefix
+```python
+# CRITICAL FIX #2: Use correct logo URL (media vs static)
+logo_path = resolve_token_logo(token_data)
+
+# If logo_path starts with "token_logos/", it's in MEDIA_DIR → use /media/
+# Otherwise (e.g., "img/..."), it's in static → use /static/
+if logo_path:
+    if logo_path.startswith("token_logos/"):
+        logo_url = f"/media/{logo_path}"
+    else:
+        logo_url = f"/static/{logo_path}"
+else:
+    logo_url = None
+```
+
+### Canonical URL Patterns
+- **Custom tokens**: `/media/token_logos/SYMBOL_timestamp.ext`
+  - Routes to: `DATA_DIR/media/token_logos/` (line 2508-2512)
+- **Built-in tokens**: `/static/img/tokens/SYMBOL.png`
+  - Routes to: `BASE_DIR/static/img/tokens/` (line 159-161)
+- **Legacy built-in**: `/static/img/SYMBOL.png`
+  - Routes to: `BASE_DIR/static/img/` (line 159-161)
+
+### Routing Endpoints
+- **Line 159-161**: `/static/<path>` → `send_from_directory("static", filename)`
+- **Line 2508-2512**: `/media/<path>` → `send_from_directory(MEDIA_DIR, filename)`
 
 ### Acceptance Tests
 - [ ] Refresh wallet → zero 404s for token logos
-- [ ] Refresh explorer → zero 404s for token logos
+- [ ] Network tab → custom tokens load from /media/token_logos/ (HTTP 200)
+- [ ] Network tab → built-in tokens load from /static/img/ (HTTP 200)
 - [ ] THR logo visible
-- [ ] wBTC logo visible
-- [ ] At least 2 custom tokens show logo
+- [ ] All custom tokens show correct logos
 
 ---
 

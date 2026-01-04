@@ -85,6 +85,8 @@ import json
 import uuid
 from llm_registry import AI_MODEL_REGISTRY, get_model_for_provider, get_default_model_for_mode, get_provider_status
 from ai_models_config import base_model_config
+# CRITICAL FIX #6: Import compute_model_stats from ai_interaction_ledger
+from ai_interaction_ledger import compute_model_stats
 
 app = Flask(__name__)
 CORS(app)

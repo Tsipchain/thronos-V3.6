@@ -100,7 +100,7 @@ def _apply_env_flags() -> None:
     has_thronos = bool(custom_url)
     # Also check THRONOS_AI_MODE allows custom (if mode is restrictive)
     ai_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
-    if ai_mode not in ("all", "router", "auto", "custom", ""):
+    if ai_mode not in ("all", "router", "auto", "custom", "hybrid", ""):
         has_thronos = False  # Restricted mode doesn't allow custom
     logger.debug(f"Thronos provider check: CUSTOM_MODEL_URL={bool(custom_url)}, THRONOS_AI_MODE={ai_mode} → enabled={has_thronos}")
 
@@ -181,11 +181,11 @@ def get_provider_status() -> dict:
     thronos_vars = ["CUSTOM_MODEL_URI", "CUSTOM_MODEL_URL", "THRONOS_AI_MODE"]
     custom_url = (os.getenv("CUSTOM_MODEL_URI") or os.getenv("CUSTOM_MODEL_URL") or "").strip()
     ai_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
-    thronos_configured = bool(custom_url) and ai_mode in ("all", "router", "auto", "custom", "")
+    thronos_configured = bool(custom_url) and ai_mode in ("all", "router", "auto", "custom", "hybrid", "")
     thronos_missing = []
     if not custom_url:
         thronos_missing.append("CUSTOM_MODEL_URI or CUSTOM_MODEL_URL")
-    if ai_mode not in ("all", "router", "auto", "custom", ""):
+    if ai_mode not in ("all", "router", "auto", "custom", "hybrid", ""):
         thronos_missing.append(f"THRONOS_AI_MODE={ai_mode} (restrictive)")
     status["thronos"] = {
         "configured": thronos_configured,

@@ -10308,7 +10308,16 @@ def api_ai_session_messages(session_id):
             break
 
     if not session:
-        return jsonify({"ok": False, "error": "Session not found"}), 404
+        resp = make_response(jsonify({"ok": True, "session": None, "messages": []}))
+        if guest_id:
+            resp.set_cookie(
+                GUEST_COOKIE_NAME,
+                guest_id,
+                max_age=GUEST_TTL_SECONDS,
+                httponly=True,
+                samesite="Lax",
+            )
+        return resp, 200
 
     ensure_session_messages_file(session_id)
     messages = load_session_messages(session_id)
@@ -10323,6 +10332,12 @@ def api_ai_session_messages(session_id):
             samesite="Lax",
         )
     return resp
+
+
+@app.route("/api/ai/sessions/<session_id>/messages", methods=["GET", "POST"])
+def api_ai_session_messages_alias(session_id):
+    """Compatibility shim for legacy /api/ai/sessions/<id>/messages route."""
+    return api_ai_session_messages(session_id)
 
 
 @app.route("/api/ai/sessions/<session_id>", methods=["PATCH"])
@@ -10899,7 +10914,7 @@ def api_ai_models():
     try:
         # Τι mode έχουμε ρυθμίσει στο node (π.χ. "all", "openai", "anthropic", "google")
         raw_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
-        if raw_mode in ("", "router", "auto"):
+        if raw_mode in ("", "router", "auto", "hybrid"):
             mode = "all"
         else:
             mode = raw_mode

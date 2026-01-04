@@ -61,16 +61,16 @@ AI_MODEL_REGISTRY: Dict[str, List[ModelInfo]] = {
         ModelInfo(id="gemini-2.5-flash", display_name="Gemini 2.5 Flash", provider="gemini", tier="fast"),
     ],
     "local": [
-        ModelInfo(id="offline_corpus", display_name="Offline corpus", provider="local", tier="local", default=False, enabled=True),
+        ModelInfo(id="offline_corpus", display_name="Offline corpus (local)", provider="local", tier="local", default=False, enabled=True),
     ],
     "thronos": [
-        ModelInfo(id="thrai", display_name="Thronos Thrai", provider="thronos", tier="custom", default=False, enabled=True),
+        ModelInfo(id="thrai", display_name="Thronos / Thrai (custom)", provider="thronos", tier="custom", default=False, enabled=True),
     ],
 }
 
 
 def _apply_env_flags() -> None:
-    # FIX 2: Support env var aliases and log which vars were checked
+    # FIX 7: Support env var aliases and check availability for local/thronos
     import logging
     logger = logging.getLogger(__name__)
 
@@ -89,6 +89,21 @@ def _apply_env_flags() -> None:
     has_gemini = bool(gemini_key)
     logger.debug(f"Gemini provider check: GEMINI_API_KEY={bool(os.getenv('GEMINI_API_KEY'))}, GOOGLE_API_KEY={bool(os.getenv('GOOGLE_API_KEY'))} → enabled={has_gemini}")
 
+    # Check local: offline corpus file exists
+    data_dir = os.getenv("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
+    corpus_file = os.path.join(data_dir, "ai_offline_corpus.json")
+    has_local = os.path.exists(corpus_file)
+    logger.debug(f"Local provider check: corpus_file={corpus_file} exists={has_local} → enabled={has_local}")
+
+    # Check thronos: CUSTOM_MODEL_URL configured
+    custom_url = (os.getenv("CUSTOM_MODEL_URL") or "").strip()
+    has_thronos = bool(custom_url)
+    # Also check THRONOS_AI_MODE allows custom (if mode is restrictive)
+    ai_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
+    if ai_mode not in ("all", "router", "auto", "custom", ""):
+        has_thronos = False  # Restricted mode doesn't allow custom
+    logger.debug(f"Thronos provider check: CUSTOM_MODEL_URL={bool(custom_url)}, THRONOS_AI_MODE={ai_mode} → enabled={has_thronos}")
+
     for provider_name, models in AI_MODEL_REGISTRY.items():
         if provider_name == "openai":
             enabled = has_openai
@@ -96,6 +111,10 @@ def _apply_env_flags() -> None:
             enabled = has_anthropic
         elif provider_name == "gemini":
             enabled = has_gemini
+        elif provider_name == "local":
+            enabled = has_local
+        elif provider_name == "thronos":
+            enabled = has_thronos
         else:
             enabled = True
 
@@ -108,8 +127,8 @@ _apply_env_flags()
 
 def get_provider_status() -> dict:
     """
-    FIX 2: Return provider status with env var names checked.
-    Returns dict with provider → {configured: bool, checked_env: [str], missing_env: [str]}
+    FIX 7: Return provider status with env var names checked.
+    Returns dict with provider → {configured: bool, checked_env: [str], missing_env: [str], source: str}
     """
     status = {}
 
@@ -120,7 +139,8 @@ def get_provider_status() -> dict:
     status["openai"] = {
         "configured": openai_configured,
         "checked_env": openai_vars,
-        "missing_env": openai_missing if not openai_configured else []
+        "missing_env": openai_missing if not openai_configured else [],
+        "source": "registry"
     }
 
     # Anthropic
@@ -130,7 +150,8 @@ def get_provider_status() -> dict:
     status["anthropic"] = {
         "configured": anthropic_configured,
         "checked_env": anthropic_vars,
-        "missing_env": anthropic_missing if not anthropic_configured else []
+        "missing_env": anthropic_missing if not anthropic_configured else [],
+        "source": "registry"
     }
 
     # Gemini
@@ -140,7 +161,37 @@ def get_provider_status() -> dict:
     status["gemini"] = {
         "configured": gemini_configured,
         "checked_env": gemini_vars,
-        "missing_env": gemini_missing if not gemini_configured else []
+        "missing_env": gemini_missing if not gemini_configured else [],
+        "source": "registry"
+    }
+
+    # Local (offline corpus)
+    data_dir = os.getenv("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
+    corpus_file = os.path.join(data_dir, "ai_offline_corpus.json")
+    local_configured = os.path.exists(corpus_file)
+    status["local"] = {
+        "configured": local_configured,
+        "checked_env": ["DATA_DIR"],
+        "missing_env": [] if local_configured else ["ai_offline_corpus.json"],
+        "corpus_file": corpus_file,
+        "source": "registry"
+    }
+
+    # Thronos (custom model)
+    thronos_vars = ["CUSTOM_MODEL_URL", "THRONOS_AI_MODE"]
+    custom_url = (os.getenv("CUSTOM_MODEL_URL") or "").strip()
+    ai_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
+    thronos_configured = bool(custom_url) and ai_mode in ("all", "router", "auto", "custom", "")
+    thronos_missing = []
+    if not custom_url:
+        thronos_missing.append("CUSTOM_MODEL_URL")
+    if ai_mode not in ("all", "router", "auto", "custom", ""):
+        thronos_missing.append(f"THRONOS_AI_MODE={ai_mode} (restrictive)")
+    status["thronos"] = {
+        "configured": thronos_configured,
+        "checked_env": thronos_vars,
+        "missing_env": thronos_missing,
+        "source": "registry"
     }
 
     return status

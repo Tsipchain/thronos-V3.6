@@ -10822,8 +10822,12 @@ def api_ai_models():
             app.logger.warning(f"compute_model_stats failed: {stats_err}")
             model_stats = {}  # Continue without stats
 
+        # FIX 7: Get provider_status early (contains source field)
+        provider_status = get_provider_status()
+
         providers = {}
         models = []
+        seen_models = set()  # FIX 7: Dedupe by (provider, model_id)
 
         # Για κάθε provider και τα μοντέλα του
         for provider_name, model_list in AI_MODEL_REGISTRY.items():
@@ -10833,14 +10837,25 @@ def api_ai_models():
 
             provider_enabled = provider_name in enabled_providers
 
+            # FIX 7: Get source from provider_status
+            provider_source = provider_status.get(provider_name, {}).get("source", "registry")
+
             # Βασικά metadata provider για το UI
             providers[provider_name] = {
                 "key": provider_name,
                 "label": provider_name.capitalize(),
                 "enabled": provider_enabled,
+                "source": provider_source,  # FIX 7: Add source field for debugging
             }
 
             for mi in model_list:
+                # FIX 7: Dedupe check - skip if (provider, model_id) already seen
+                model_key = (mi.provider, mi.id)
+                if model_key in seen_models:
+                    app.logger.warning(f"Duplicate model skipped: {mi.provider}/{mi.id} (display: {mi.display_name})")
+                    continue
+                seen_models.add(model_key)
+
                 # mi είναι ModelInfo dataclass από το llm_registry
                 stats = model_stats.get(mi.id, {})
                 models.append(
@@ -10858,9 +10873,6 @@ def api_ai_models():
                         },
                     }
                 )
-
-        # FIX 2: Add provider_status to show which env vars are checked
-        provider_status = get_provider_status()
 
         payload = {
             "ok": True,

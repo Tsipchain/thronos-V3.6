@@ -4590,6 +4590,29 @@ def api_ai_files_upload():
                 # don't fail upload if session linking fails
                 app.logger.exception("attach_uploaded_files_to_session failed: %s", e)
 
+        # PRIORITY 1: Telemetry - append to index.jsonl for PYTHEIA/IoT knowledge accounting
+        try:
+            telemetry_index = os.path.join(DATA_DIR, "ai_files", "index.jsonl")
+            os.makedirs(os.path.dirname(telemetry_index), exist_ok=True)
+
+            telemetry_entry = {
+                "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                "event": "file_upload_success",
+                "wallet": wallet or guest_id,
+                "session_id": session_id,
+                "file_count": len(uploaded),
+                "total_size": sum(f["size"] for f in uploaded),
+                "files": [{"id": f["id"], "name": f["name"], "size": f["size"], "mimetype": f["mimetype"]} for f in uploaded]
+            }
+
+            with open(telemetry_index, "a", encoding="utf-8") as f:
+                f.write(json.dumps(telemetry_entry, ensure_ascii=False) + "\n")
+
+            app.logger.debug(f"Telemetry recorded: {len(uploaded)} files uploaded")
+        except Exception as telemetry_err:
+            # Don't fail the upload if telemetry fails
+            app.logger.warning(f"Telemetry append failed: {telemetry_err}")
+
         return jsonify(ok=True, files=uploaded)
     except Exception as e:
         app.logger.exception("Upload failed: %s", e)

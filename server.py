@@ -5453,16 +5453,63 @@ def pledge_submit():
 
 @app.route("/wallet_data/<thr_addr>")
 def wallet_data(thr_addr):
+    """QUEST A+B: Enhanced wallet data with categorized history"""
     balances = get_wallet_balances(thr_addr)
     chain = load_chain_cached()
-    history = [
-        tx for tx in chain
-        if isinstance(tx, dict) and (tx.get("from") == thr_addr or tx.get("to") == thr_addr)
-    ]
+
+    # QUEST B: Categorize transactions with labels
+    history = []
+    for tx in chain:
+        if not isinstance(tx, dict):
+            continue
+        if tx.get("from") != thr_addr and tx.get("to") != thr_addr:
+            continue
+
+        tx_type = tx.get("type", "unknown")
+
+        # QUEST B: Category/label mapping
+        category_labels = {
+            "send": "Send",
+            "receive": "Receive",
+            "SEND_TOKEN": "Token Send",
+            "RECEIVE_TOKEN": "Token Receive",
+            "IOT_PARKING_RESERVATION": "IoT Parking",
+            "IOT_AUTOPILOT": "IoT Autopilot",
+            "BRIDGE_WITHDRAW_REQUEST": "Bridge Withdrawal",
+            "BRIDGE_DEPOSIT_DETECTED": "Bridge Deposit",
+            "L2E_REWARD": "Learn-to-Earn Reward",
+            "MUSIC_OFFLINE_TIP": "Music Tip",
+            "service_payment": "Service Payment",
+            "architect_payment": "AI Architect"
+        }
+
+        label = category_labels.get(tx_type, "Unknown")
+
+        # Determine asset symbol
+        asset_symbol = tx.get("token_symbol") or tx.get("symbol") or "THR"
+
+        # Get fee burned if exists
+        fee_burned = tx.get("fee_burned", 0) or tx.get("fee", 0)
+
+        # Determine status
+        status = tx.get("status", "confirmed")
+        if status not in ["pending", "confirmed", "failed"]:
+            status = "confirmed"  # Default to confirmed for older TXs
+
+        history.append({
+            **tx,
+            "category_label": label,
+            "asset_symbol": asset_symbol,
+            "fee_burned": fee_burned,
+            "status": status,
+            "explorer_link": f"/explorer?tx_id={tx.get('tx_id', '')}"
+        })
+
     return jsonify(
         balance=balances["thr"],
         wbtc_balance=balances["wbtc"],
         l2e_balance=balances["l2e"],
+        tokens=balances["tokens"],  # QUEST A: Include all tokens
         transactions=history,
     ), 200
 
@@ -5544,6 +5591,48 @@ def api_balance_alias(thr_addr: str):
 @app.route("/wallet/<thr_addr>")
 def wallet_redirect(thr_addr):
     return redirect(url_for("wallet_data", thr_addr=thr_addr)),302
+
+@app.route("/api/tx/status", methods=["GET"])
+def api_tx_status():
+    """
+    QUEST C: Transaction status check for pending support.
+    Returns status of a transaction (pending/confirmed/failed).
+    """
+    tx_id = request.args.get("tx_id", "").strip()
+    if not tx_id:
+        return jsonify({"ok": False, "error": "Missing tx_id"}), 400
+
+    # Check chain first
+    chain = load_chain_cached()
+    for tx in chain:
+        if isinstance(tx, dict) and tx.get("tx_id") == tx_id:
+            return jsonify({
+                "ok": True,
+                "tx_id": tx_id,
+                "status": tx.get("status", "confirmed"),
+                "block": tx.get("block"),
+                "timestamp": tx.get("timestamp"),
+                "found_in": "chain"
+            }), 200
+
+    # Check mempool
+    mempool = load_mempool()
+    for tx in mempool:
+        if isinstance(tx, dict) and tx.get("tx_id") == tx_id:
+            return jsonify({
+                "ok": True,
+                "tx_id": tx_id,
+                "status": "pending",
+                "timestamp": tx.get("timestamp"),
+                "found_in": "mempool"
+            }), 200
+
+    # Not found
+    return jsonify({
+        "ok": False,
+        "error": "Transaction not found",
+        "tx_id": tx_id
+    }), 404
 
 @app.route("/widget/wallet")
 def wallet_widget():

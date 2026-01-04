@@ -166,6 +166,53 @@ build_info = {
 
 ---
 
+## ✅ FIX #6: compute_model_stats NameError
+
+### Observable Proof
+Production logs showed:
+```
+compute_model_stats failed: name 'compute_model_stats' is not defined
+```
+
+This error occurred in the scheduler job that powers the `/api/ai_models` endpoint.
+
+### Root Cause
+- Function `compute_model_stats()` exists in `ai_interaction_ledger.py:218`
+- Called in `server.py:10820` without being imported
+- Every scheduler cycle crashed with NameError
+
+### Changes Made
+**File**: `server.py`
+
+**Lines 88-89**: Import the missing function
+```python
+# CRITICAL FIX #6: Import compute_model_stats from ai_interaction_ledger
+from ai_interaction_ledger import compute_model_stats
+```
+
+**Line 10820**: Call site (already had try/except, now works)
+```python
+try:
+    model_stats = compute_model_stats() or {}
+except Exception as stats_err:
+    app.logger.warning(f"compute_model_stats failed: {stats_err}")
+    model_stats = {}  # Continue without stats
+```
+
+### Expected Behavior
+- Function successfully reads `ai_interactions.jsonl` ledger
+- Computes statistics per model: total_calls, errors, avg_latency, ratings
+- Returns dict keyed by model_id (e.g., "gpt-4o", "gemini-2.5-pro")
+- Used by `/api/ai_models` to show model performance stats
+
+### Acceptance Tests
+- [ ] After deploy: Monitor logs for 3+ scheduler cycles
+- [ ] Zero "name 'compute_model_stats' is not defined" errors
+- [ ] `/api/ai_models` returns HTTP 200 with model stats
+- [ ] If actual stats computation fails, logs show real error (not NameError)
+
+---
+
 ## ✅ FIX #4: Architect Language White-Screen
 
 ### Observable Proof
@@ -291,19 +338,20 @@ Performed comprehensive code analysis of billing logic for Chat and Architect en
 - ✅ No new endpoints created
 - ✅ No new widgets created
 - ✅ No architectural expansion
-- ✅ Patched existing logic only (Fixes #1-#3)
+- ✅ Patched existing logic only (Fixes #1-#3, #6)
 - ✅ Documented existing logic (Fixes #4-#5)
 
 **Files Modified**: 2
-- `server.py` (3 sections patched: imports, token logos, git commit)
+- `server.py` (4 sections patched: imports, token logos, git commit, scheduler)
 - `templates/architect.html` (already fixed in N2: CSS + JS for language support)
 
 **Fixes Completed**:
-1. ✅ **Upload crash** - Import secure_filename with fallback (lines 65-79)
-2. ✅ **Token logos 404** - Canonical path mapping media vs static (lines 1396-1407, 5281-5337)
-3. ✅ **Git commit "unknown"** - Environment variable detection (lines 3529-3567)
+1. ✅ **Upload crash** - Import secure_filename with fallback (server.py:65-79)
+2. ✅ **Token logos 404** - Canonical path mapping media vs static (server.py:1396-1407, 5281-5337)
+3. ✅ **Git commit "unknown"** - Environment variable detection (server.py:3529-3567)
 4. ✅ **Architect language white-screen** - CSS + normalizeLang (templates/architect.html:30-46, 388-416)
 5. ✅ **Billing separation** - Documented Chat (credits) vs Architect (free) with NO mixed logic
+6. ✅ **compute_model_stats NameError** - Import from ai_interaction_ledger (server.py:88-89)
 
 **Documentation Created**:
 - `governance/BILLING_SEPARATION_REPORT.md` - Comprehensive billing analysis
@@ -315,10 +363,10 @@ Performed comprehensive code analysis of billing logic for Chat and Architect en
 - ✅ Observable changes only (all fixes target specific errors/404s)
 
 **Awaiting**:
-1. LIVE production verification for Fixes #1-#3 after deployment
+1. LIVE production verification for Fixes #1-#3, #6 after deployment
 2. User decision on Fix #5: Should Architect charge THR per usage (requires new logic)?
 
-**Commit**: `ee3a92d` (billing docs), `ca90121` (token logos docs), `5b03ce7` (token logos fix), `51723c9` (critical fixes #1-#3)
+**Commits**: `1f151f2` (Fix #6), `9b78a34` (docs #4-#5), `ee3a92d` (billing docs), `ca90121` (docs #2), `5b03ce7` (fix #2), `7978377` (fixes #1-#3)
 
 ---
 

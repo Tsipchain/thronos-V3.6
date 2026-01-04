@@ -580,6 +580,10 @@ GAME_POOL_ADDRESS = "THR_CRYPTO_HUNTERS_POOL"
 GAME_PANEL_URL    = os.getenv("GAME_PANEL_URL", "/game")  # Crypto Hunters admin panel URL
 GATEWAY_ADDRESS   = "THR_FIAT_GATEWAY_V1"
 
+# FIX 8: Initialize billing module (clean separation: Chat=credits, Architect=THR)
+import billing
+billing.init_billing(DATA_DIR, LEDGER_FILE, CHAIN_FILE, AI_CREDITS_FILE, AI_WALLET_ADDRESS)
+
 # --- Learn‑to‑Earn Token Config ---
 #
 # A separate ledger is maintained for the Learn‑to‑Earn (L2E) token.  This
@@ -3102,6 +3106,10 @@ def api_architect_generate():
     if not blueprint or not project_spec:
         return jsonify(error="Missing blueprint or spec"), 400
 
+    # FIX 8: Require wallet for Architect (THR billing mode)
+    if not wallet:
+        return jsonify(error="Wallet required for Architect (THR billing)"), 400
+
     # Load blueprint
     bp_path = os.path.join(DATA_DIR, "ai_blueprints", blueprint)
     if not os.path.exists(bp_path):
@@ -3175,6 +3183,38 @@ def api_architect_generate():
     except Exception as e:
         print("architect corpus error:", e)
 
+    # FIX 8: Calculate Architect fee (base + variable)
+    tokens_out = len(full_text.split())  # Rough token estimate (words)
+    files_count = len(files) if files else 0
+    architect_fee = billing.calculate_architect_fee(tokens_out=tokens_out, files_count=files_count, blueprint_complexity=1)
+
+    # FIX 8: Charge THR (Architect billing mode - no credits)
+    charge_success, charge_error, charge_telemetry = billing.charge_thr(
+        wallet=wallet,
+        amount=architect_fee,
+        reason="architect_usage",
+        product="architect",
+        metadata={
+            "blueprint": blueprint,
+            "files_generated": files_count,
+            "tokens_out": tokens_out,
+            "model": model_key,
+            "session_id": session_id
+        }
+    )
+
+    if not charge_success:
+        # Insufficient THR - return error
+        return jsonify({
+            "error": charge_error,
+            "status": "insufficient_thr",
+            "thr_available": charge_telemetry.get("thr_available", 0),
+            "thr_needed": float(architect_fee)
+        }), 402  # Payment Required
+
+    # FIX 8: Grant credits reward (1 THR → 10 credits)
+    reward_telemetry = billing.grant_credits_from_thr_spend(wallet, architect_fee)
+
     resp_files = []
     for f in files or []:
         if isinstance(f, dict):
@@ -3214,6 +3254,11 @@ def api_architect_generate():
         "files": resp_files,
         "zip_url": zip_url,
         "session_id": session_id,
+        # FIX 8: Billing info
+        "thr_spent": float(architect_fee),
+        "credits_granted": reward_telemetry.get("credits_delta", 0),
+        "billing_channel": "thr",
+        "tx_id": charge_telemetry.get("tx_id"),
     }), 200
 
 
@@ -4008,11 +4053,10 @@ def api_chat():
     if not msg:
         return jsonify(error="Message required"), 400
 
-    # --- Credits & free usage check ---
+    # --- FIX 8: Credits check (Chat billing mode) ---
     credits_value = None
     if wallet:
-        # If a wallet is provided, enforce the paid credits model.  Each
-        # message costs one credit and balances are tracked in ai_credits.json.
+        # Check credits availability (don't deduct yet - wait for successful AI call)
         credits_map = load_ai_credits()
         try:
             credits_value = int(credits_map.get(wallet, 0) or 0)
@@ -4143,18 +4187,18 @@ def api_chat():
     except Exception as e:
         print("offline corpus enqueue error:", e)
 
-    # --- Credit burn ---
+    # --- FIX 8: Consume credits (Chat billing mode - no THR) ---
     if wallet:
-        credits_map = load_ai_credits()
-        try:
-            before = int(credits_map.get(wallet, 0) or 0)
-        except (TypeError, ValueError):
-            before = 0
-        after = max(0, before - AI_CREDIT_COST_PER_MSG)
-        credits_map[wallet] = after
-        save_ai_credits(credits_map)
-        credits_for_frontend = after
-        ai_credits_spent = max(0.0, float(before - after))
+        # Use billing module (clean separation, telemetry, cross-charge guard)
+        success, error_msg, telemetry = billing.consume_credits(wallet, AI_CREDIT_COST_PER_MSG, product="chat")
+        if not success:
+            # This shouldn't happen (already checked above), but handle gracefully
+            logger.error(f"Credits consumption failed after AI call: {error_msg}")
+            credits_for_frontend = 0
+            ai_credits_spent = 0.0
+        else:
+            credits_for_frontend = telemetry.get("credits_after", 0)
+            ai_credits_spent = abs(telemetry.get("credits_delta", 0))
     else:
         # For demo sessions, report remaining free messages.  This
         # communicates to the user how many additional messages they may
@@ -4167,6 +4211,7 @@ def api_chat():
             credits_for_frontend = max(0, AI_FREE_MESSAGES_LIMIT - used_now)
         except Exception:
             credits_for_frontend = "infinite"
+        ai_credits_spent = 0.0
 
     resp_files = []
     for f in files or []:

@@ -1882,6 +1882,51 @@ def ensure_session_messages_file(session_id: str):
         save_json(path, [])
 
 
+def prune_empty_sessions():
+    """
+    Remove sessions whose message files are missing or empty.
+
+    Returns a summary dict: {"deleted": N, "kept": M, "errors": [...]}
+    """
+
+    result = {"deleted": 0, "kept": 0, "errors": []}
+    try:
+        sessions = load_ai_sessions()
+    except Exception as exc:  # pragma: no cover - defensive
+        return {"deleted": 0, "kept": 0, "errors": [f"load failed: {exc}"]}
+
+    pruned = []
+    for session in sessions:
+        sid = session.get("id") or session.get("session_id")
+        if not sid:
+            result["errors"].append("session missing id; skipped")
+            continue
+
+        path = _session_messages_path(sid)
+        try:
+            if not os.path.exists(path):
+                result["deleted"] += 1
+                continue
+
+            messages = load_json(path, [])
+            if not messages:
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+                result["deleted"] += 1
+                continue
+
+            pruned.append(session)
+        except Exception as exc:  # pragma: no cover - defensive
+            result["errors"].append(f"{sid}: {exc}")
+            pruned.append(session)
+
+    result["kept"] = len(pruned)
+    save_ai_sessions(pruned)
+    return result
+
+
 def load_session_messages(session_id: str) -> list:
     """
     Load messages for a session, sorted by timestamp.
@@ -2895,6 +2940,28 @@ def api_admin_withdrawals_action():
         return jsonify(status="success"), 200
     else:
         return jsonify(status="error", message="Request not found"), 404
+
+
+@app.route("/api/admin/prune_sessions", methods=["POST"])
+def api_admin_prune_sessions():
+    """Admin: remove empty/missing chat sessions."""
+
+    payload = request.get_json(silent=True) or {}
+    secret = (
+        request.headers.get("X-Admin-Secret")
+        or request.args.get("secret")
+        or payload.get("secret")
+    )
+
+    if secret != ADMIN_SECRET:
+        return jsonify(error="Forbidden"), 403
+
+    try:
+        result = prune_empty_sessions()
+        return jsonify(ok=True, **result), 200
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("prune sessions failed")
+        return jsonify(ok=False, error=str(exc)), 500
 
 # ─── ADDRESS MIGRATION ENDPOINT ─────────────────────────────────────────────
 
@@ -11985,6 +12052,15 @@ _start_model_scheduler()
 ensure_ai_wallet()
 recompute_height_offset_from_ledger()
 initialize_voting()  # Initialize voting polls
+try:  # Best-effort cleanup to avoid startup failures
+    prune_result = prune_empty_sessions()
+    logger.info(
+        "Pruned empty sessions on startup: deleted=%s kept=%s",
+        prune_result.get("deleted"),
+        prune_result.get("kept"),
+    )
+except Exception as exc:  # pragma: no cover - defensive
+    logger.warning(f"Startup session prune skipped: {exc}")
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 13311))

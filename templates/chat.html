@@ -910,6 +910,9 @@
             <button class="btn-ghost btn-ghost-danger" id="deleteSelectedBtn">
               🗑 Delete selected
             </button>
+            <button class="btn-ghost" id="cleanSessionsBtn" style="display: none">
+              🧹 Clean empty sessions
+            </button>
           </div>
         </div>
         <ul id="sessionsList" class="sessions-list"></ul>
@@ -1033,6 +1036,8 @@
     const API_FEEDBACK = "/api/ai/feedback";
     const API_MODELS = "/api/ai_models";
     const API_HEALTH = "/api/ai/providers/health";
+    const ADMIN_SECRET_KEY = "thronos_admin_secret";
+    const ADMIN_MODE_KEY = "thronos_admin_mode";
     const ACTIVE_SESSION_KEY = "thronos_ai_active_session";
     const SESSION_CACHE_KEY = "thronos_ai_session_cache_v1";
 
@@ -1054,6 +1059,7 @@
       coreStatusEl,
       sessionTitleEl,
       sessionStatusTagEl,
+      cleanSessionsBtnEl,
       hashrateLabelEl,
       pendingTxsLabelEl,
       difficultyLabelEl,
@@ -1080,6 +1086,7 @@
       coreStatusEl = document.getElementById("coreStatus");
       sessionTitleEl = document.getElementById("sessionTitle");
       sessionStatusTagEl = document.getElementById("sessionStatusTag");
+      cleanSessionsBtnEl = document.getElementById("cleanSessionsBtn");
       hashrateLabelEl = document.getElementById("hashrateLabel");
       pendingTxsLabelEl = document.getElementById("pendingTxsLabel");
       difficultyLabelEl = document.getElementById("difficultyLabel");
@@ -1092,6 +1099,8 @@
     let selectedSessionIds = new Set();
     let pendingFiles = []; // { id, name, size }
     let receivedFiles = []; // for any AI-generated [[FILE:...]] blocks
+    let adminSecret = "";
+    let adminMode = false;
     // --- Utilities ---
     function setUploadStatus(text, mode = "") {
       uploadStatusEl.textContent = text || "";
@@ -1140,6 +1149,28 @@
       } catch (e) {
         console.warn("persist cache failed", e);
       }
+    }
+
+    function updateAdminControls() {
+      if (!cleanSessionsBtnEl) return;
+      const visible = !!adminSecret || adminMode;
+      cleanSessionsBtnEl.style.display = visible ? "inline-flex" : "none";
+    }
+
+    function initAdminAccess() {
+      const params = new URLSearchParams(window.location.search);
+      const querySecret = params.get("admin_secret") || params.get("secret");
+      if (querySecret) {
+        localStorage.setItem(ADMIN_SECRET_KEY, querySecret);
+      }
+      if (params.get("admin") === "1") {
+        localStorage.setItem(ADMIN_MODE_KEY, "1");
+      }
+
+      adminSecret =
+        localStorage.getItem(ADMIN_SECRET_KEY) || window.ADMIN_SECRET || "";
+      adminMode = localStorage.getItem(ADMIN_MODE_KEY) === "1";
+      updateAdminControls();
     }
 
     function hydrateSessionCache() {
@@ -1527,6 +1558,41 @@
       } catch (e) {
         console.error("loadSessions error", e);
         setSessionStatus("Failed to load sessions");
+      }
+    }
+
+    async function pruneSessions() {
+      if (!adminSecret && !adminMode) {
+        setSessionStatus("Admin secret required for cleanup");
+        return;
+      }
+
+      try {
+        setSessionStatus("Cleaning empty sessions…");
+        const url = adminSecret
+          ? `/api/admin/prune_sessions?secret=${encodeURIComponent(adminSecret)}`
+          : "/api/admin/prune_sessions";
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(adminSecret ? { "X-Admin-Secret": adminSecret } : {}),
+          },
+        });
+
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(`HTTP ${res.status}: ${errText}`);
+        }
+
+        const data = await res.json();
+        const deleted = data.deleted ?? 0;
+        const kept = data.kept ?? 0;
+        setSessionStatus(`Cleaned ${deleted} empty sessions (kept ${kept})`);
+        await loadSessions();
+      } catch (e) {
+        console.error("pruneSessions error", e);
+        setSessionStatus("Failed to clean sessions");
       }
     }
 
@@ -2034,6 +2100,10 @@
         .getElementById("deleteSelectedBtn")
         .addEventListener("click", deleteSelectedSessions);
 
+      if (cleanSessionsBtnEl) {
+        cleanSessionsBtnEl.addEventListener("click", pruneSessions);
+      }
+
       fileInputEl.addEventListener("change", (e) => {
         const files = Array.from(e.target.files || []);
         if (files.length) {
@@ -2068,6 +2138,7 @@
     // --- Init ---
     async function init() {
       cacheDom();
+      initAdminAccess();
       hydrateSessionCache();
       bindEvents();
       await loadModels();

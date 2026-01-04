@@ -10888,7 +10888,7 @@ def _get_fallback_models():
         }]
 
 
-@app.route("/api/ai_models"), methods=["GET"])
+ @app.route("/api/ai_models"), methods=["GET"])
 def api_ai_models():
     """
     Επιστρέφει ενοποιημένη λίστα μοντέλων για το Thronos Quantum UI.
@@ -10906,8 +10906,14 @@ def api_ai_models():
 
         # Βασικό config – ποιοι providers είναι ενεργοί στο σύστημα
         try:
-            base_cfg = base_model_config() or {}
-            enabled_providers = set((base_cfg.get("providers") or {}).keys())
+           base_cfg = base_model_config() or {}
+
+providers_cfg = base_cfg.get("providers")
+if isinstance(providers_cfg, dict) and providers_cfg:
+    enabled_providers = set(providers_cfg.keys())
+else:
+    enabled_providers = set(base_cfg.keys())  # <-- αυτό λείπει σήμερα
+
         except Exception as cfg_err:
             app.logger.warning(f"base_model_config failed: {cfg_err}")
             # Degraded mode fallback

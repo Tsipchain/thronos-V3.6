@@ -93,7 +93,6 @@ CORS(app)
 
 # FIX 9: Redirect old SESSIONS_DIR to volume-backed AI_SESSIONS_DIR (defined later at line 550)
 # This ensures all sessions persist across deployments
-SESSIONS_DIR = None  # Will be set after DATA_DIR is defined
 
 
 @app.route('/chat_sessions', methods=['GET'])
@@ -549,8 +548,9 @@ os.makedirs(AI_FILES_DIR, exist_ok=True)
 # NEW: αποθήκευση sessions (λίστα συνομιλιών)
 AI_SESSIONS_FILE = os.path.join(DATA_DIR, "ai_sessions.json")
 AI_SESSIONS_DIR = os.path.join(DATA_DIR, "ai_sessions")
+SESSIONS_DIR = AI_SESSIONS_DIR
 AI_FILES_INDEX = os.path.join(DATA_DIR, "ai_files_index.json")
-os.makedirs(SESSIONS_DIR, exist_ok=True)
+
 # FIX 9: Set SESSIONS_DIR to point to volume-backed AI_SESSIONS_DIR
 # This ensures all chat sessions persist across Railway deploys
 SESSIONS_DIR = AI_SESSIONS_DIR
@@ -10541,7 +10541,16 @@ def api_ai_session_messages(session_id):
             break
 
     if not session:
-        return jsonify({"ok": False, "error": "Session not found"}), 404
+        resp = make_response(jsonify({"ok": True, "session": None, "messages": []}))
+        if guest_id:
+            resp.set_cookie(
+                GUEST_COOKIE_NAME,
+                guest_id,
+                max_age=GUEST_TTL_SECONDS,
+                httponly=True,
+                samesite="Lax",
+            )
+        return resp, 200
 
     ensure_session_messages_file(session_id)
     messages = load_session_messages(session_id)
@@ -10556,6 +10565,12 @@ def api_ai_session_messages(session_id):
             samesite="Lax",
         )
     return resp
+
+
+@app.route("/api/ai/sessions/<session_id>/messages", methods=["GET", "POST"])
+def api_ai_session_messages_alias(session_id):
+    """Compatibility shim for legacy /api/ai/sessions/<id>/messages route."""
+    return api_ai_session_messages(session_id)
 
 
 @app.route("/api/ai/sessions/<session_id>", methods=["PATCH"])
@@ -11132,20 +11147,20 @@ def api_ai_models():
     try:
         # Τι mode έχουμε ρυθμίσει στο node (π.χ. "all", "openai", "anthropic", "google")
         raw_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
-        if raw_mode in ("", "router", "auto"):
+        if raw_mode in ("", "router", "auto", "hybrid"):
             mode = "all"
         else:
             mode = raw_mode
 
         # Βασικό config – ποιοι providers είναι ενεργοί στο σύστημα
         try:
-           base_cfg = base_model_config() or {}
+            base_cfg = base_model_config() or {}
 
-providers_cfg = base_cfg.get("providers")
-if isinstance(providers_cfg, dict) and providers_cfg:
-    enabled_providers = set(providers_cfg.keys())
-else:
-    enabled_providers = set(base_cfg.keys())  # <-- αυτό λείπει σήμερα
+            providers_cfg = base_cfg.get("providers")
+            if isinstance(providers_cfg, dict) and providers_cfg:
+                enabled_providers = set(providers_cfg.keys())
+            else:
+                enabled_providers = set(base_cfg.keys())  # <-- αυτό λείπει σήμερα
 
         except Exception as cfg_err:
             app.logger.warning(f"base_model_config failed: {cfg_err}")

@@ -338,11 +338,12 @@ Performed comprehensive code analysis of billing logic for Chat and Architect en
 - ✅ No new endpoints created
 - ✅ No new widgets created
 - ✅ No architectural expansion
-- ✅ Patched existing logic only (Fixes #1-#3, #6)
+- ✅ Patched existing logic only (Fixes #1-#3, #6-#7)
 - ✅ Documented existing logic (Fixes #4-#5)
 
-**Files Modified**: 2
-- `server.py` (4 sections patched: imports, token logos, git commit, scheduler)
+**Files Modified**: 3
+- `server.py` (5 sections patched: imports, token logos, git commit, scheduler, model catalog)
+- `llm_registry.py` (3 sections: display names, availability rules, provider status)
 - `templates/architect.html` (already fixed in N2: CSS + JS for language support)
 
 **Fixes Completed**:
@@ -352,21 +353,23 @@ Performed comprehensive code analysis of billing logic for Chat and Architect en
 4. ✅ **Architect language white-screen** - CSS + normalizeLang (templates/architect.html:30-46, 388-416)
 5. ✅ **Billing separation** - Documented Chat (credits) vs Architect (free) with NO mixed logic
 6. ✅ **compute_model_stats NameError** - Import from ai_interaction_ledger (server.py:88-89)
+7. ✅ **Model catalog duplicates** - Canonical labels, availability, deduplication (llm_registry.py, server.py)
 
 **Documentation Created**:
 - `governance/BILLING_SEPARATION_REPORT.md` - Comprehensive billing analysis
+- `governance/FIX_7_MODEL_CATALOG_CANONICAL.md` - Model catalog unification
 
 **Hard Rules Compliance**:
 - ✅ No HTTP 500 (degraded mode maintained in upload handler)
 - ✅ DATA_DIR=/app/data (verified for uploads, media, telemetry)
 - ✅ Telemetry append-only JSONL (ai_files/index.jsonl)
-- ✅ Observable changes only (all fixes target specific errors/404s)
+- ✅ Observable changes only (all fixes target specific errors/404s/duplicates)
 
 **Awaiting**:
-1. LIVE production verification for Fixes #1-#3, #6 after deployment
+1. LIVE production verification for Fixes #1-#3, #6-#7 after deployment
 2. User decision on Fix #5: Should Architect charge THR per usage (requires new logic)?
 
-**Commits**: `1f151f2` (Fix #6), `9b78a34` (docs #4-#5), `ee3a92d` (billing docs), `ca90121` (docs #2), `5b03ce7` (fix #2), `7978377` (fixes #1-#3)
+**Commits**: `74caf5b` (docs #7), `f551603` (Fix #7), `6cc9526` (docs #6), `1f151f2` (Fix #6), `9b78a34` (docs #4-#5), `ee3a92d` (billing docs), `ca90121` (docs #2), `5b03ce7` (fix #2), `7978377` (fixes #1-#3)
 
 ---
 

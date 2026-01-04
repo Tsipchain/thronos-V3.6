@@ -96,7 +96,7 @@ def _apply_env_flags() -> None:
     logger.debug(f"Local provider check: corpus_file={corpus_file} exists={has_local} → enabled={has_local}")
 
     # Check thronos: CUSTOM_MODEL_URL configured
-    custom_url = (os.getenv("CUSTOM_MODEL_URL") or "").strip()
+    custom_url = (os.getenv("CUSTOM_MODEL_URI") or os.getenv("CUSTOM_MODEL_URL") or "").strip()
     has_thronos = bool(custom_url)
     # Also check THRONOS_AI_MODE allows custom (if mode is restrictive)
     ai_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()

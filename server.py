@@ -85,6 +85,8 @@ import json
 import uuid
 from llm_registry import AI_MODEL_REGISTRY, get_model_for_provider, get_default_model_for_mode, get_provider_status
 from ai_models_config import base_model_config
+# CRITICAL FIX #6: Import compute_model_stats from ai_interaction_ledger
+from ai_interaction_ledger import compute_model_stats
 
 app = Flask(__name__)
 CORS(app)
@@ -1393,9 +1395,18 @@ def get_wallet_balances(wallet: str):
         token_ledger = load_custom_token_ledger(token_id)
         token_balance = round(float(token_ledger.get(wallet, 0.0)), token_data.get("decimals", 6))
 
-        # PRIORITY 3: Use fallback logo resolution
+        # CRITICAL FIX #2: Use correct logo URL (media vs static)
         logo_path = resolve_token_logo(token_data)
-        logo_url = f"/static/{logo_path}" if logo_path else None
+
+        # If logo_path starts with "token_logos/", it's in MEDIA_DIR → use /media/
+        # Otherwise (e.g., "img/..."), it's in static → use /static/
+        if logo_path:
+            if logo_path.startswith("token_logos/"):
+                logo_url = f"/media/{logo_path}"
+            else:
+                logo_url = f"/static/{logo_path}"
+        else:
+            logo_url = None
 
         tokens.append({
             "symbol": symbol,
@@ -5271,32 +5282,37 @@ def save_custom_tokens(tokens):
 
 def resolve_token_logo(token_data: dict) -> str:
     """
-    CRITICAL FIX #2: Resolve token logo with canonical fallback strategy.
-    Fallback order:
-    1. token_data['logo_url'] (if absolute URL)
-    2. /static/img/tokens/<SYMBOL>.png
-    3. /static/img/tokens/<NAME>.png (sanitized)
-    4. /static/img/tokens/<token_id>.png
-    5. /static/img/<SYMBOL>.png (legacy fallback)
-    6. None (frontend shows circle letter icon)
-    """
-    # Check if logo_url already exists and is absolute
-    if token_data.get("logo_url"):
-        logo_url = token_data["logo_url"]
-        if logo_url.startswith("http://") or logo_url.startswith("https://"):
-            return logo_url
+    CRITICAL FIX #2: Resolve token logo with canonical path mapping.
+    Returns relative path - caller adds /media/ or /static/ prefix.
 
-    # Check if legacy logo_path exists
+    Fallback order:
+    1. token_data['logo_path'] (custom tokens in DATA_DIR/media/token_logos)
+    2. DATA_DIR/media/token_logos/<SYMBOL>_*.* (uploaded custom logos)
+    3. /static/img/tokens/<SYMBOL>.png (built-in tokens)
+    4. /static/img/<SYMBOL>.png (legacy built-in)
+    5. None (frontend shows circle letter icon)
+    """
+    # Check if logo_path already exists (custom tokens)
+    # This will be something like "token_logos/SYMBOL_timestamp.ext"
     if token_data.get("logo_path"):
         return token_data["logo_path"]
 
-    # Primary: Check /static/img/tokens/ directory
-    static_tokens_dir = os.path.join(BASE_DIR, "static", "img", "tokens")
-
-    # Strategy 1: Check by SYMBOL
     symbol = token_data.get("symbol", "").upper()
+
+    # Strategy 1: Check DATA_DIR/media/token_logos/ (uploaded custom tokens)
     if symbol:
-        # Try SYMBOL.png in tokens dir
+        token_logos_dir = os.path.join(DATA_DIR, "media", "token_logos")
+        if os.path.exists(token_logos_dir):
+            # Look for files matching SYMBOL_* pattern
+            for filename in os.listdir(token_logos_dir):
+                if filename.startswith(f"{symbol}_"):
+                    return f"token_logos/{filename}"
+
+    # Strategy 2: Check /static/img/tokens/ (built-in tokens)
+    if symbol:
+        static_tokens_dir = os.path.join(BASE_DIR, "static", "img", "tokens")
+
+        # Try SYMBOL.png
         png_path = os.path.join(static_tokens_dir, f"{symbol}.png")
         if os.path.exists(png_path):
             return f"img/tokens/{symbol}.png"
@@ -5306,24 +5322,7 @@ def resolve_token_logo(token_data: dict) -> str:
         if os.path.exists(png_lower):
             return f"img/tokens/{symbol.lower()}.png"
 
-    # Strategy 2: Check by NAME (sanitized)
-    name = token_data.get("name", "")
-    if name:
-        # Sanitize name: only alphanumeric and underscore
-        sanitized_name = re.sub(r'[^a-zA-Z0-9_]', '', name)
-        if sanitized_name:
-            name_png = os.path.join(static_tokens_dir, f"{sanitized_name}.png")
-            if os.path.exists(name_png):
-                return f"img/tokens/{sanitized_name}.png"
-
-    # Strategy 3: Check by token_id
-    token_id = token_data.get("token_id") or token_data.get("id")
-    if token_id:
-        id_png = os.path.join(static_tokens_dir, f"{token_id}.png")
-        if os.path.exists(id_png):
-            return f"img/tokens/{token_id}.png"
-
-    # Legacy fallback: Check /static/img/ (old location)
+    # Strategy 3: Check /static/img/ (legacy built-in)
     if symbol:
         static_img_dir = os.path.join(BASE_DIR, "static", "img")
 

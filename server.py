@@ -61,6 +61,23 @@ except ImportError:  # Railway ή env χωρίς flask_cors
         return app
 
 from werkzeug.middleware.proxy_fix import ProxyFix
+
+# CRITICAL FIX #1: Import secure_filename with fallback
+try:
+    from werkzeug.utils import secure_filename
+except ImportError:
+    # Fallback sanitizer if werkzeug doesn't have secure_filename
+    def secure_filename(filename):
+        """Minimal filename sanitizer - replace non-alphanumeric with underscore"""
+        if not filename:
+            return "unnamed"
+        # Keep extension, sanitize base name
+        import re
+        name, ext = os.path.splitext(filename)
+        name = re.sub(r'[^a-zA-Z0-9_.-]', '_', name)[:100]  # Max 100 chars
+        ext = re.sub(r'[^a-zA-Z0-9.]', '', ext)[:10]  # Max 10 chars for extension
+        return (name + ext) if name else "unnamed" + ext
+
 from apscheduler.schedulers.background import BackgroundScheduler
 
 import os
@@ -3509,25 +3526,40 @@ def api_health():
     except Exception:
         height = 0
 
-    # FIX 1: Get git commit hash for deployment verification
+    # CRITICAL FIX #3: Get git commit from env vars (Railway, Vercel, etc) or git command
     git_commit = "unknown"
-    try:
-        import subprocess
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=2,
-            cwd=os.path.dirname(os.path.abspath(__file__))
-        )
-        if result.returncode == 0:
-            git_commit = result.stdout.strip()
-    except Exception:
-        pass
+    checked_env = []
+
+    # Try environment variables first (Railway, Vercel, etc)
+    env_vars = ["RAILWAY_GIT_COMMIT_SHA", "GIT_COMMIT", "COMMIT_SHA", "VERCEL_GIT_COMMIT_SHA"]
+    for env_var in env_vars:
+        checked_env.append(env_var)
+        commit_sha = os.getenv(env_var)
+        if commit_sha:
+            # Take first 7 chars for short hash
+            git_commit = commit_sha[:7] if len(commit_sha) > 7 else commit_sha
+            break
+
+    # Fallback: try git command (for local dev)
+    if git_commit == "unknown":
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                cwd=os.path.dirname(os.path.abspath(__file__))
+            )
+            if result.returncode == 0:
+                git_commit = result.stdout.strip()
+        except Exception:
+            pass
 
     # FIX 1: Build metadata
     build_info = {
         "git_commit": git_commit,
+        "checked_env": checked_env,  # Show which env vars we checked
         "build_time": os.path.getmtime(__file__) if os.path.exists(__file__) else None,
         "DATA_DIR": os.getenv("DATA_DIR", "/app/data"),
         "node_role": os.getenv("NODE_ROLE", "standalone"),
@@ -5225,6 +5257,10 @@ CUSTOM_TOKENS_LEDGER_DIR = os.path.join(DATA_DIR, "custom_ledgers")
 
 os.makedirs(CUSTOM_TOKENS_LEDGER_DIR, exist_ok=True)
 
+# CRITICAL FIX #2: Ensure tokens logo directory exists
+STATIC_TOKENS_DIR = os.path.join(BASE_DIR, "static", "img", "tokens")
+os.makedirs(STATIC_TOKENS_DIR, exist_ok=True)
+
 def load_custom_tokens():
     """Load custom tokens registry"""
     return load_json(CUSTOM_TOKENS_FILE, {})
@@ -5235,40 +5271,71 @@ def save_custom_tokens(tokens):
 
 def resolve_token_logo(token_data: dict) -> str:
     """
-    PRIORITY 3: Resolve token logo with fallback chain.
+    CRITICAL FIX #2: Resolve token logo with canonical fallback strategy.
     Fallback order:
-    1. token_data['logo_path'] (from tokens.json)
-    2. /static/img/<SYMBOL>.png (case-insensitive)
-    3. /static/img/<SYMBOL>.webp (case-insensitive)
-    4. None (placeholder handled by frontend)
+    1. token_data['logo_url'] (if absolute URL)
+    2. /static/img/tokens/<SYMBOL>.png
+    3. /static/img/tokens/<NAME>.png (sanitized)
+    4. /static/img/tokens/<token_id>.png
+    5. /static/img/<SYMBOL>.png (legacy fallback)
+    6. None (frontend shows circle letter icon)
     """
-    # Check if logo_path already exists in token data
+    # Check if logo_url already exists and is absolute
+    if token_data.get("logo_url"):
+        logo_url = token_data["logo_url"]
+        if logo_url.startswith("http://") or logo_url.startswith("https://"):
+            return logo_url
+
+    # Check if legacy logo_path exists
     if token_data.get("logo_path"):
         return token_data["logo_path"]
 
-    # Check for static image files
+    # Primary: Check /static/img/tokens/ directory
+    static_tokens_dir = os.path.join(BASE_DIR, "static", "img", "tokens")
+
+    # Strategy 1: Check by SYMBOL
     symbol = token_data.get("symbol", "").upper()
+    if symbol:
+        # Try SYMBOL.png in tokens dir
+        png_path = os.path.join(static_tokens_dir, f"{symbol}.png")
+        if os.path.exists(png_path):
+            return f"img/tokens/{symbol}.png"
+
+        # Try lowercase variant
+        png_lower = os.path.join(static_tokens_dir, f"{symbol.lower()}.png")
+        if os.path.exists(png_lower):
+            return f"img/tokens/{symbol.lower()}.png"
+
+    # Strategy 2: Check by NAME (sanitized)
+    name = token_data.get("name", "")
+    if name:
+        # Sanitize name: only alphanumeric and underscore
+        sanitized_name = re.sub(r'[^a-zA-Z0-9_]', '', name)
+        if sanitized_name:
+            name_png = os.path.join(static_tokens_dir, f"{sanitized_name}.png")
+            if os.path.exists(name_png):
+                return f"img/tokens/{sanitized_name}.png"
+
+    # Strategy 3: Check by token_id
+    token_id = token_data.get("token_id") or token_data.get("id")
+    if token_id:
+        id_png = os.path.join(static_tokens_dir, f"{token_id}.png")
+        if os.path.exists(id_png):
+            return f"img/tokens/{token_id}.png"
+
+    # Legacy fallback: Check /static/img/ (old location)
     if symbol:
         static_img_dir = os.path.join(BASE_DIR, "static", "img")
 
-        # Try .png
-        png_path = os.path.join(static_img_dir, f"{symbol}.png")
-        if os.path.exists(png_path):
+        # Try legacy .png
+        legacy_png = os.path.join(static_img_dir, f"{symbol}.png")
+        if os.path.exists(legacy_png):
             return f"img/{symbol}.png"
 
-        # Try .webp
-        webp_path = os.path.join(static_img_dir, f"{symbol}.webp")
-        if os.path.exists(webp_path):
+        # Try legacy .webp
+        legacy_webp = os.path.join(static_img_dir, f"{symbol}.webp")
+        if os.path.exists(legacy_webp):
             return f"img/{symbol}.webp"
-
-        # Try lowercase variants
-        png_lower = os.path.join(static_img_dir, f"{symbol.lower()}.png")
-        if os.path.exists(png_lower):
-            return f"img/{symbol.lower()}.png"
-
-        webp_lower = os.path.join(static_img_dir, f"{symbol.lower()}.webp")
-        if os.path.exists(webp_lower):
-            return f"img/{symbol.lower()}.webp"
 
     return None
 

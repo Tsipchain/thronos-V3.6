@@ -2216,6 +2216,46 @@ def api_ai_generated_file(filename):
     )
 
 
+# N3: Offline Corpus status endpoint
+def get_corpus_status():
+    """Returns status of offline corpus system for N3."""
+    try:
+        corpus = load_json(AI_CORPUS_FILE, [])
+        corpus_count = len(corpus)
+
+        # Check if corpus file exists and is writable
+        corpus_exists = os.path.exists(AI_CORPUS_FILE)
+        corpus_dir = os.path.dirname(AI_CORPUS_FILE)
+        corpus_writable = os.access(corpus_dir, os.W_OK) if os.path.exists(corpus_dir) else False
+
+        # Corpus is enabled if it's writable
+        enabled = corpus_writable
+
+        # Determine reason if disabled
+        reason = None
+        if not enabled:
+            if not os.path.exists(corpus_dir):
+                reason = "corpus_dir_missing"
+            elif not corpus_writable:
+                reason = "corpus_dir_not_writable"
+
+        return {
+            "enabled": enabled,
+            "reason": reason,
+            "corpus_file": AI_CORPUS_FILE,
+            "corpus_count": corpus_count,
+            "corpus_exists": corpus_exists,
+            "corpus_writable": corpus_writable,
+            "max_entries": 1000
+        }
+    except Exception as e:
+        return {
+            "enabled": False,
+            "reason": "error_loading_corpus",
+            "error": str(e),
+            "corpus_file": AI_CORPUS_FILE
+        }
+
 def enqueue_offline_corpus(wallet: str, prompt: str, response: str, files, session_id: str | None = None):
     """
     Ελαφρύ offline corpus για Whisper / training + sessions.
@@ -4729,6 +4769,80 @@ def api_upload_status():
             "mode": "degraded",
             "error": "Failed to check upload status",
             "error_code": "UPLOAD_STATUS_ERROR",
+            "details": str(e)
+        }), 200
+
+
+# N3: Corpus status endpoint
+@app.route("/api/ai/corpus/status", methods=["GET"])
+def api_corpus_status():
+    """
+    Returns offline corpus status and configuration.
+    Used for production verification and UI transparency.
+
+    Response:
+    {
+        "ok": true,
+        "mode": "online" | "degraded",
+        "enabled": true,
+        "reason": null | "corpus_dir_missing" | "corpus_dir_not_writable",
+        "available_corpora": [...],  // Future: list of available corpus files
+        "selected": "default",  // Future: currently selected corpus
+        "corpus_file": "/app/data/ai_offline_corpus.json",
+        "corpus_count": 152,
+        "data_dir": "/app/data",
+        "build": {...}
+    }
+    """
+    try:
+        status = get_corpus_status()
+
+        # Get git commit
+        git_commit = "unknown"
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                cwd=BASE_DIR
+            )
+            if result.returncode == 0:
+                git_commit = result.stdout.strip()
+        except Exception:
+            pass
+
+        response = {
+            "ok": status["enabled"],
+            "mode": "online" if status["enabled"] else "degraded",
+            "enabled": status["enabled"],
+            "reason": status.get("reason"),
+            "available_corpora": ["default"],  # Future: could scan for multiple corpus files
+            "selected": "default",
+            "corpus_file": status["corpus_file"],
+            "corpus_count": status.get("corpus_count", 0),
+            "corpus_exists": status.get("corpus_exists", False),
+            "corpus_writable": status.get("corpus_writable", False),
+            "max_entries": status.get("max_entries", 1000),
+            "data_dir": DATA_DIR,
+            "build": {
+                "git_commit": git_commit,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+            }
+        }
+
+        return jsonify(response), 200
+
+    except Exception as e:
+        app.logger.error(f"Corpus status endpoint error: {e}")
+        return jsonify({
+            "ok": False,
+            "mode": "degraded",
+            "enabled": False,
+            "reason": "error",
+            "error": "Failed to check corpus status",
+            "error_code": "CORPUS_STATUS_ERROR",
             "details": str(e)
         }), 200
 

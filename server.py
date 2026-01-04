@@ -4632,6 +4632,107 @@ def api_ai_files_upload():
         ), 200
 
 
+# N4: Upload status endpoint for production verification
+@app.route("/api/upload/status", methods=["GET"])
+def api_upload_status():
+    """
+    Returns upload system status and configuration.
+    Used for production verification and debugging.
+
+    Response:
+    {
+        "ok": true,
+        "mode": "online" | "degraded",
+        "upload_dir": "/app/data/ai_uploads",
+        "telemetry_index": "/app/data/ai_files/index.jsonl",
+        "dir_writable": true,
+        "dir_exists": true,
+        "disk_space_mb": 1024,
+        "recent_uploads_count": 5,
+        "build": {...}
+    }
+    """
+    try:
+        import shutil
+
+        # Check directory status
+        dir_exists = os.path.exists(AI_UPLOADS_DIR)
+        dir_writable = os.access(AI_UPLOADS_DIR, os.W_OK) if dir_exists else False
+
+        # Check disk space
+        try:
+            stat = shutil.disk_usage(DATA_DIR)
+            disk_free_mb = stat.free // (1024 * 1024)
+        except Exception:
+            disk_free_mb = None
+
+        # Count recent uploads
+        try:
+            idx = load_upload_index()
+            recent_uploads_count = len(idx)
+        except Exception:
+            recent_uploads_count = None
+
+        # Check telemetry index
+        telemetry_index_path = os.path.join(DATA_DIR, "ai_files", "index.jsonl")
+        telemetry_exists = os.path.exists(telemetry_index_path)
+        telemetry_writable = os.access(os.path.dirname(telemetry_index_path), os.W_OK) if os.path.exists(os.path.dirname(telemetry_index_path)) else False
+
+        # Get git commit
+        git_commit = "unknown"
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                cwd=BASE_DIR
+            )
+            if result.returncode == 0:
+                git_commit = result.stdout.strip()
+        except Exception:
+            pass
+
+        # Determine mode
+        if not dir_writable or disk_free_mb and disk_free_mb < 100:
+            mode = "degraded"
+            ok = False
+        else:
+            mode = "online"
+            ok = True
+
+        response = {
+            "ok": ok,
+            "mode": mode,
+            "upload_dir": AI_UPLOADS_DIR,
+            "telemetry_index": telemetry_index_path,
+            "dir_exists": dir_exists,
+            "dir_writable": dir_writable,
+            "disk_free_mb": disk_free_mb,
+            "recent_uploads_count": recent_uploads_count,
+            "telemetry_index_exists": telemetry_exists,
+            "telemetry_writable": telemetry_writable,
+            "data_dir": DATA_DIR,
+            "build": {
+                "git_commit": git_commit,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+            }
+        }
+
+        return jsonify(response), 200
+
+    except Exception as e:
+        app.logger.error(f"Upload status endpoint error: {e}")
+        return jsonify({
+            "ok": False,
+            "mode": "degraded",
+            "error": "Failed to check upload status",
+            "error_code": "UPLOAD_STATUS_ERROR",
+            "details": str(e)
+        }), 200
+
+
 @app.route("/api/ai/files/<file_id>", methods=["GET"])
 def api_ai_files_get(file_id):
     """

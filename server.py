@@ -93,7 +93,6 @@ CORS(app)
 
 # FIX 9: Redirect old SESSIONS_DIR to volume-backed AI_SESSIONS_DIR (defined later at line 550)
 # This ensures all sessions persist across deployments
-SESSIONS_DIR = None  # Will be set after DATA_DIR is defined
 
 
 @app.route('/chat_sessions', methods=['GET'])
@@ -549,12 +548,12 @@ os.makedirs(AI_FILES_DIR, exist_ok=True)
 # NEW: αποθήκευση sessions (λίστα συνομιλιών)
 AI_SESSIONS_FILE = os.path.join(DATA_DIR, "ai_sessions.json")
 AI_SESSIONS_DIR = os.path.join(DATA_DIR, "ai_sessions")
+SESSIONS_DIR = AI_SESSIONS_DIR
 AI_FILES_INDEX = os.path.join(DATA_DIR, "ai_files_index.json")
-os.makedirs(SESSIONS_DIR, exist_ok=True)
+
 # FIX 9: Set SESSIONS_DIR to point to volume-backed AI_SESSIONS_DIR
 # This ensures all chat sessions persist across Railway deploys
-
-SESSIONS_DIR = AI_SESSIONS_DIR
+os.makedirs(SESSIONS_DIR, exist_ok=True)
 
 ADMIN_SECRET   = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
 
@@ -10907,13 +10906,13 @@ def api_ai_models():
 
         # Βασικό config – ποιοι providers είναι ενεργοί στο σύστημα
         try:
-           base_cfg = base_model_config() or {}
+            base_cfg = base_model_config() or {}
 
-providers_cfg = base_cfg.get("providers")
-if isinstance(providers_cfg, dict) and providers_cfg:
-    enabled_providers = set(providers_cfg.keys())
-else:
-    enabled_providers = set(base_cfg.keys())  # <-- αυτό λείπει σήμερα
+            providers_cfg = base_cfg.get("providers")
+            if isinstance(providers_cfg, dict) and providers_cfg:
+                enabled_providers = set(providers_cfg.keys())
+            else:
+                enabled_providers = set(base_cfg.keys())  # <-- αυτό λείπει σήμερα
 
         except Exception as cfg_err:
             app.logger.warning(f"base_model_config failed: {cfg_err}")

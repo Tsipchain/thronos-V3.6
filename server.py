@@ -11409,11 +11409,12 @@ def api_v1_governance_vote():
     if not auth_secret:
         return jsonify({"status": "error", "message": "auth_secret required for voting"}), 400
 
-    # Authenticate voter
+    # PRIORITY 2: Authenticate voter (log rejection reason)
     pledges = load_json(PLEDGE_CHAIN, [])
     voter_pledge = next((p for p in pledges if p.get("thr_address") == voter), None)
     if not voter_pledge:
-        return jsonify({"status": "error", "message": "Voter not pledged"}), 404
+        app.logger.warning(f"Vote rejected: auth_failed (not_pledged) | proposal={proposal_id} voter={voter}")
+        return jsonify({"status": "error", "message": "Voter not pledged", "reason": "auth_failed"}), 404
 
     stored_auth_hash = voter_pledge.get("send_auth_hash")
     if voter_pledge.get("has_passphrase"):
@@ -11421,7 +11422,8 @@ def api_v1_governance_vote():
     else:
         auth_string = f"{auth_secret}:auth"
     if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify({"status": "error", "message": "Invalid auth"}), 403
+        app.logger.warning(f"Vote rejected: auth_failed (invalid_auth) | proposal={proposal_id} voter={voter}")
+        return jsonify({"status": "error", "message": "Invalid auth", "reason": "auth_failed"}), 403
 
     # Load governance
     gov = load_governance()
@@ -11433,10 +11435,11 @@ def api_v1_governance_vote():
     if proposal.get("status") not in ["OPEN", "QUORUM_PENDING", None, "active"]:
         return jsonify({"status": "error", "message": f"Proposal is {proposal.get('status', 'closed')}"}), 400
 
-    # Check if already voted
+    # PRIORITY 2: Check if already voted (log rejection reason)
     vote_key = f"{proposal_id}:{voter}"
     if vote_key in gov.get("votes", {}):
-        return jsonify({"status": "error", "message": "Already voted on this proposal"}), 400
+        app.logger.warning(f"Vote rejected: already_voted | proposal={proposal_id} voter={voter}")
+        return jsonify({"status": "error", "message": "Already voted on this proposal", "reason": "already_voted"}), 400
 
     # FIX G3: THR BURN PER VOTE
     # Determine if voter is operator
@@ -11448,11 +11451,12 @@ def api_v1_governance_vote():
     is_operator = voter in OPERATORS
     burn_amount = 0.05 if is_operator else 0.01  # Higher burn for operators
 
-    # Check voter has enough balance
+    # PRIORITY 2: Check voter has enough balance (log rejection reason)
     ledger = load_json(LEDGER_FILE, {})
     voter_balance = float(ledger.get(voter, 0.0))
     if voter_balance < burn_amount:
-        return jsonify({"status": "error", "message": f"Insufficient balance. Need {burn_amount} THR to vote"}), 400
+        app.logger.warning(f"Vote rejected: insufficient_balance | proposal={proposal_id} voter={voter} balance={voter_balance} need={burn_amount}")
+        return jsonify({"status": "error", "message": f"Insufficient balance. Need {burn_amount} THR to vote", "reason": "insufficient_balance"}), 400
 
     # Burn THR
     ledger[voter] = round(voter_balance - burn_amount, 6)

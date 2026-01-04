@@ -953,6 +953,7 @@
     }
     
     /* Language Toggle */
+    /* PRIORITY 8: Language dropdown (5 languages) */
     .lang-toggle {
         background: #222;
         color: #0f0;
@@ -960,6 +961,78 @@
         padding: 5px 10px;
         cursor: pointer;
     }
+
+    .lang-dropdown {
+        position: relative;
+        display: inline-block;
+    }
+
+    .lang-dropdown-btn {
+        background: linear-gradient(135deg, #003311 0%, #001a0a 100%);
+        color: #00ff66;
+        border: 1px solid #00ff66;
+        padding: 6px 12px;
+        cursor: pointer;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        box-shadow: 0 0 8px rgba(0, 255, 102, 0.2);
+        transition: all 0.2s ease;
+    }
+
+    .lang-dropdown-btn:hover {
+        background: linear-gradient(135deg, #004422 0%, #002211 100%);
+        box-shadow: 0 0 12px rgba(0, 255, 102, 0.4);
+    }
+
+    .lang-dropdown-content {
+        display: none;
+        position: absolute;
+        background: #0a130e;
+        min-width: 140px;
+        box-shadow: 0 4px 20px rgba(0, 255, 102, 0.3);
+        z-index: 3100;
+        border: 1px solid #00ff66;
+        border-radius: 8px;
+        overflow: hidden;
+        top: 100%;
+        right: 0;
+        margin-top: 4px;
+    }
+
+    .lang-dropdown.active .lang-dropdown-content {
+        display: block;
+    }
+
+    .lang-dropdown-item {
+        color: #00ff66;
+        padding: 10px 16px;
+        text-decoration: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        font-size: 12px;
+        transition: background 0.2s ease;
+        border-bottom: 1px solid rgba(0, 255, 102, 0.1);
+    }
+
+    .lang-dropdown-item:last-child {
+        border-bottom: none;
+    }
+
+    .lang-dropdown-item:hover {
+        background: rgba(0, 255, 102, 0.1);
+    }
+
+    .lang-dropdown-item.active {
+        background: rgba(0, 255, 102, 0.15);
+        font-weight: 700;
+    }
+
     .lang-en, .lang-ja, .lang-es, .lang-ru { display: none; }
 
     /* Utility Classes */
@@ -1264,7 +1337,36 @@
     <button id="disconnectBtn" class="disconnect-btn" onclick="disconnectWallet()">
         ✖ <span class="lang-el">Αποσύνδεση</span><span class="lang-en">Disconnect</span>
     </button>
-    <button class="lang-toggle" onclick="toggleLanguage()">GR</button>
+    <!-- PRIORITY 8: Language dropdown (5 languages: EN/EL/ES/RU/JA) -->
+    <div class="lang-dropdown" id="langDropdown">
+        <button class="lang-dropdown-btn" onclick="toggleLangDropdown(event)">
+            <span id="currentLangFlag">🇬🇷</span>
+            <span id="currentLangCode">GR</span>
+            <span style="font-size: 10px;">▼</span>
+        </button>
+        <div class="lang-dropdown-content">
+            <div class="lang-dropdown-item" data-lang="gr" onclick="selectLanguageFromDropdown('gr')">
+                <span>🇬🇷</span>
+                <span>Ελληνικά (GR)</span>
+            </div>
+            <div class="lang-dropdown-item" data-lang="en" onclick="selectLanguageFromDropdown('en')">
+                <span>🇬🇧</span>
+                <span>English (EN)</span>
+            </div>
+            <div class="lang-dropdown-item" data-lang="es" onclick="selectLanguageFromDropdown('es')">
+                <span>🇪🇸</span>
+                <span>Español (ES)</span>
+            </div>
+            <div class="lang-dropdown-item" data-lang="ru" onclick="selectLanguageFromDropdown('ru')">
+                <span>🇷🇺</span>
+                <span>Русский (RU)</span>
+            </div>
+            <div class="lang-dropdown-item" data-lang="ja" onclick="selectLanguageFromDropdown('ja')">
+                <span>🇯🇵</span>
+                <span>日本語 (JA)</span>
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- Send Modal -->
@@ -1570,9 +1672,64 @@ function setLanguage(lang) {
         toggleBtn.textContent = normalizedLang.toUpperCase();
     }
 
+    // PRIORITY 8: Update dropdown UI
+    updateLangDropdownUI(normalizedLang);
+
     // Trigger custom event for pages that need to re-render content
     window.dispatchEvent(new CustomEvent('langChanged', { detail: { lang: normalizedLang } }));
 }
+
+// PRIORITY 8: Language dropdown functions
+const LANG_FLAGS = {
+    gr: '🇬🇷',
+    en: '🇬🇧',
+    es: '🇪🇸',
+    ru: '🇷🇺',
+    ja: '🇯🇵'
+};
+
+function updateLangDropdownUI(lang) {
+    const flagEl = document.getElementById('currentLangFlag');
+    const codeEl = document.getElementById('currentLangCode');
+
+    if (flagEl) flagEl.textContent = LANG_FLAGS[lang] || '🇬🇧';
+    if (codeEl) codeEl.textContent = lang.toUpperCase();
+
+    // Update active state in dropdown items
+    document.querySelectorAll('.lang-dropdown-item').forEach(item => {
+        item.classList.toggle('active', item.dataset.lang === lang);
+    });
+}
+
+function toggleLangDropdown(event) {
+    event.stopPropagation();
+    const dropdown = document.getElementById('langDropdown');
+    if (dropdown) {
+        dropdown.classList.toggle('active');
+    }
+}
+
+function selectLanguageFromDropdown(lang) {
+    setLanguage(lang);
+    const dropdown = document.getElementById('langDropdown');
+    if (dropdown) {
+        dropdown.classList.remove('active');
+    }
+}
+
+// Close dropdown when clicking outside
+document.addEventListener('click', (event) => {
+    const dropdown = document.getElementById('langDropdown');
+    if (dropdown && !dropdown.contains(event.target)) {
+        dropdown.classList.remove('active');
+    }
+});
+
+// Initialize dropdown on load
+document.addEventListener('DOMContentLoaded', () => {
+    const currentLang = getCurrentLang();
+    updateLangDropdownUI(currentLang);
+});
 
 // Disconnect Wallet Function
 function disconnectWallet() {

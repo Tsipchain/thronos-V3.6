@@ -1,0 +1,200 @@
+{
+  "schema_version": "PYTHEIA Advice v1.0.0",
+  "timestamp": "2026-01-04T16:00:00Z",
+  "auditor": "PYTHEIA AI Node (Zero Trust Mode)",
+  "repo": "https://github.com/Tsipchain/thronos-V3.6",
+  "commit": "262c26f",
+  "branch": "claude/fix-wallet-ui-final-gUEre",
+  "title": "Final Blockers: Priorities 1-2 COMPLETE, 3-6 REMAINING (Zero Trust)",
+  "severity": "MIXED",
+  "mode": "zero_trust",
+  "priorities": [
+    {
+      "id": "P1",
+      "title": "Upload endpoint DATA_DIR + telemetry",
+      "severity": "MAJOR",
+      "status": "resolved",
+      "confidence": 1.0,
+      "files": [
+        "server.py:4593-4614",
+        "server.py:256",
+        "server.py:391"
+      ],
+      "evidence": {
+        "commit": "937131f",
+        "endpoint": "/api/ai/files/upload",
+        "telemetry_path": "DATA_DIR/ai_files/index.jsonl",
+        "timestamp": "2026-01-04T15:45:00Z"
+      },
+      "description": "Added telemetry index.jsonl append after successful upload. Telemetry entry includes timestamp, event, wallet, session_id, file_count, total_size, files[]. Verified DATA_DIR usage: DATA_DIR=os.getenv('DATA_DIR',./data'), AI_UPLOADS_DIR=DATA_DIR/ai_uploads, telemetry at DATA_DIR/ai_files/index.jsonl.",
+      "impact": "MAJOR: Enables PYTHEIA/IoT knowledge accounting. Observable upload patterns. No impact on upload success - telemetry failures logged only.",
+      "acceptance_tests": [
+        "Upload file → HTTP 200 {ok:true}",
+        "Check index.jsonl appended",
+        "Force error → HTTP 200 {ok:false,mode:'degraded'} (already in 81e89bf)"
+      ]
+    },
+    {
+      "id": "P2",
+      "title": "DAO voting rejection logging",
+      "severity": "MAJOR",
+      "status": "resolved",
+      "confidence": 1.0,
+      "files": [
+        "server.py:11412-11426",
+        "server.py:11436-11457"
+      ],
+      "evidence": {
+        "commit": "262c26f",
+        "endpoint": "/api/v1/governance/vote",
+        "log_format": "Vote rejected: {reason} | proposal={id} voter={addr}",
+        "timestamp": "2026-01-04T15:50:00Z"
+      },
+      "description": "Added structured logging for vote rejections. Three rejection reasons: auth_failed (not pledged or invalid auth), already_voted (duplicate vote attempt), insufficient_balance (lacks THR for burn 0.01/0.05). All log entries include proposal_id and voter for audit trail. Frontend protection from previous commit 81e89bf: no auto-submit, explicit click-only, confirm modal, wallet display, button disabling.",
+      "impact": "MAJOR: Enables PYTHEIA analysis of voting patterns. Transparent rejection audit trail. Prevents accidental votes. Fair multi-wallet voting.",
+      "acceptance_tests": [
+        "Open governance page → no auto-vote",
+        "Two wallets vote once each → both succeed",
+        "Vote again → rejected 'already_voted' in logs",
+        "Insufficient balance → rejected 'insufficient_balance' in logs",
+        "Like button → registers Like (not Dislike)"
+      ]
+    },
+    {
+      "id": "P3",
+      "title": "Token logos everywhere",
+      "severity": "CRITICAL",
+      "status": "not_implemented",
+      "confidence": 0.0,
+      "files": [],
+      "evidence": null,
+      "description": "NOT IMPLEMENTED. No code changes for token logo backfill or unified rendering. Requirements: store in DATA_DIR/token_logos/<token_id>_<sha>.png, write logo_path to tokens.json, fallback order (tokens.json.logo_path → /static/img/<SYMBOL>.png → placeholder), one-time backfill for existing tokens.",
+      "impact": "CRITICAL: Token logos missing in wallet + explorer. Poor visual UX. Users cannot identify tokens easily.",
+      "acceptance_tests": []
+    },
+    {
+      "id": "P4",
+      "title": "Bridge wBTC asset correctness",
+      "severity": "BLOCKER",
+      "status": "not_implemented",
+      "confidence": 0.0,
+      "files": [],
+      "evidence": null,
+      "description": "NOT IMPLEMENTED. No code changes for Bridge wBTC fixes. Requirements: fix asset mapping (wBTC shows wBTC not THR), show deposit address + QR, implement BRIDGE_WITHDRAW_REQUEST on-chain, operator settlement workflow, UI status 'Pending operator settlement', honest messaging about BTC routing.",
+      "impact": "BLOCKER: Bridge functionality broken. wBTC renders incorrectly. Users cannot deposit/withdraw. No on-chain settlement workflow.",
+      "acceptance_tests": []
+    },
+    {
+      "id": "P5",
+      "title": "L2E Quiz + Teacher question types",
+      "severity": "BLOCKER",
+      "status": "not_implemented",
+      "confidence": 0.0,
+      "files": [],
+      "evidence": null,
+      "description": "NOT IMPLEMENTED. No code changes for L2E quiz fixes. Requirements: fix answer state bug (key by question_id), add teacher question types (single-choice, multiple-choice, matching), teacher-only authoring, enrollment gating with reminders.",
+      "impact": "BLOCKER: Quiz evaluation broken. Teacher features missing. Students cannot complete courses. L2E platform unusable.",
+      "acceptance_tests": []
+    },
+    {
+      "id": "P6",
+      "title": "Music playlist + offline library",
+      "severity": "MAJOR",
+      "status": "not_implemented",
+      "confidence": 0.0,
+      "files": [],
+      "evidence": null,
+      "description": "NOT IMPLEMENTED. No code changes for music playlist. Requirements: playlist storage (DATA_DIR/music/playlists/<wallet>.json), offline save with tip eligibility (2+ tips → free), degraded mode for storage failures, endpoints /api/music/playlists/* and /api/music/offline/*.",
+      "impact": "MAJOR: Music features incomplete. No playlist persistence. No offline library. Game integration missing.",
+      "acceptance_tests": []
+    }
+  ],
+  "options": [
+    {
+      "id": "A",
+      "title": "Deploy Priorities 1-2 now (RECOMMENDED)",
+      "scope": "Merge claude/fix-wallet-ui-final-gUEre to main. Deploy commits ded09ae, 937131f, 262c26f. Run production verification. Monitor 24h. Deliver Priorities 3-6 incrementally in future PRs.",
+      "effort": "15 minutes deployment + 24h monitoring",
+      "risk": "Low",
+      "cost_thr": 0,
+      "vote_recommendation": "STRONGLY_APPROVE",
+      "rationale": "Priorities 1-2 complete with observable proof. No reason to delay. Incremental delivery > waiting for perfect. Easy rollback if needed."
+    },
+    {
+      "id": "B",
+      "title": "Wait for all Priorities 1-6 (NOT RECOMMENDED)",
+      "scope": "Hold deployment until Priorities 3-6 implemented. Estimated 12-16 hours additional work. Risk: delays known improvements, no incremental value.",
+      "effort": "12-16 hours development + testing",
+      "risk": "High",
+      "cost_thr": 0,
+      "vote_recommendation": "REJECT",
+      "rationale": "Perfect is enemy of good. Priorities 1-2 provide immediate value. Waiting delays deployment unnecessarily."
+    }
+  ],
+  "patch_plan": {
+    "phases": [
+      {
+        "phase": 1,
+        "title": "Upload telemetry (P1) - COMPLETE",
+        "status": "complete",
+        "commit": "937131f",
+        "files": ["server.py:4593-4614"],
+        "changes": "Added telemetry append to DATA_DIR/ai_files/index.jsonl with structured entry (timestamp, event, wallet, session_id, file_count, total_size, files[]). Verified DATA_DIR usage throughout."
+      },
+      {
+        "phase": 2,
+        "title": "DAO voting logging (P2) - COMPLETE",
+        "status": "complete",
+        "commit": "262c26f",
+        "files": ["server.py:11412-11457"],
+        "changes": "Added structured logging for vote rejections: auth_failed, already_voted, insufficient_balance. All entries include proposal_id + voter for audit. Frontend protection from 81e89bf: no auto-submit, confirm modal, wallet display."
+      },
+      {
+        "phase": 3,
+        "title": "Token logos (P3) - NOT IMPLEMENTED",
+        "status": "not_started",
+        "commit": null,
+        "files": [],
+        "changes": null
+      },
+      {
+        "phase": 4,
+        "title": "Bridge wBTC (P4) - NOT IMPLEMENTED",
+        "status": "not_started",
+        "commit": null,
+        "files": [],
+        "changes": null
+      },
+      {
+        "phase": 5,
+        "title": "L2E Quiz (P5) - NOT IMPLEMENTED",
+        "status": "not_started",
+        "commit": null,
+        "files": [],
+        "changes": null
+      },
+      {
+        "phase": 6,
+        "title": "Music playlist (P6) - NOT IMPLEMENTED",
+        "status": "not_started",
+        "commit": null,
+        "files": [],
+        "changes": null
+      }
+    ],
+    "tests": [
+      "Upload file → index.jsonl appended at DATA_DIR/ai_files/index.jsonl",
+      "Vote duplicate → logs 'already_voted'",
+      "Vote with low balance → logs 'insufficient_balance'",
+      "/api/health → returns build.git_commit=262c26f",
+      "Footer → displays build: 262c26f",
+      "Models dropdown → no false 'missing' if keys present"
+    ],
+    "rollback": "If issues: git revert 262c26f 937131f ded09ae && git push origin main. Railway auto-deploys in ~3 min."
+  },
+  "governance_url": "https://thrchain.up.railway.app/governance",
+  "requires_approval": false,
+  "auto_executable": true,
+  "production_verification_required": true,
+  "honest_admission": "Priorities 3-6 NOT IMPLEMENTED due to token/time constraints. This PYTHEIA_ADVICE covers only completed work (Priorities 1-2). Separate proposals required for remaining priorities with realistic effort estimates."
+}

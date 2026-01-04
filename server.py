@@ -1375,8 +1375,11 @@ def get_wallet_balances(wallet: str):
             continue
         token_ledger = load_custom_token_ledger(token_id)
         token_balance = round(float(token_ledger.get(wallet, 0.0)), token_data.get("decimals", 6))
-        logo_path = token_data.get("logo_path") or token_data.get("logo")
-        logo_url = url_for("media", filename=logo_path) if logo_path else None
+
+        # PRIORITY 3: Use fallback logo resolution
+        logo_path = resolve_token_logo(token_data)
+        logo_url = f"/static/{logo_path}" if logo_path else None
+
         tokens.append({
             "symbol": symbol,
             "name": token_data.get("name", symbol),
@@ -1843,11 +1846,37 @@ def ensure_session_messages_file(session_id: str):
 
 
 def load_session_messages(session_id: str) -> list:
-    """Load messages for a session, sorted by timestamp."""
+    """
+    Load messages for a session, sorted by timestamp.
+    FIX 3: Migrates old messages without msg_id/timestamp.
+    """
     if not session_id:
         return []
     path = _session_messages_path(session_id)
     messages = load_json(path, []) or []
+
+    # FIX 3: Migration for old sessions without msg_id/ts
+    needs_save = False
+    for i, msg in enumerate(messages):
+        # Add msg_id if missing
+        if "msg_id" not in msg:
+            msg["msg_id"] = f"msg_migrated_{i}_{secrets.token_hex(4)}"
+            needs_save = True
+
+        # Add timestamp if missing (use epoch for old messages)
+        if "timestamp" not in msg or not msg["timestamp"]:
+            msg["timestamp"] = "1970-01-01T00:00:00Z"
+            needs_save = True
+
+        # Ensure ts shorthand exists for compatibility
+        if "ts" not in msg and "timestamp" in msg:
+            msg["ts"] = msg["timestamp"]
+            needs_save = True
+
+    # Save if we migrated any messages
+    if needs_save:
+        save_session_messages(session_id, messages)
+
     messages.sort(key=lambda m: m.get("timestamp", ""))
     return messages
 
@@ -3471,17 +3500,58 @@ def api_transactions():
 
 @app.route("/api/health")
 def api_health():
-    """Lightweight health check with chain and version info."""
+    """
+    Lightweight health check with chain and version info.
+    FIX 1: Extended with build info for deployment verification.
+    """
     try:
         height = _current_chain_height()
     except Exception:
         height = 0
+
+    # FIX 1: Get git commit hash for deployment verification
+    git_commit = "unknown"
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            cwd=os.path.dirname(os.path.abspath(__file__))
+        )
+        if result.returncode == 0:
+            git_commit = result.stdout.strip()
+    except Exception:
+        pass
+
+    # FIX 1: Build metadata
+    build_info = {
+        "git_commit": git_commit,
+        "build_time": os.path.getmtime(__file__) if os.path.exists(__file__) else None,
+        "DATA_DIR": os.getenv("DATA_DIR", "/app/data"),
+        "node_role": os.getenv("NODE_ROLE", "standalone"),
+        "degraded_mode_enabled": True  # Always use degraded mode patterns
+    }
+
+    # FIX 1: Env presence check (names only, no secrets)
+    env_present = {
+        "OPENAI_API_KEY": bool(os.getenv("OPENAI_API_KEY")),
+        "OPENAI_KEY": bool(os.getenv("OPENAI_KEY")),
+        "ANTHROPIC_API_KEY": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "GEMINI_API_KEY": bool(os.getenv("GEMINI_API_KEY")),
+        "GOOGLE_API_KEY": bool(os.getenv("GOOGLE_API_KEY")),
+        "DATA_DIR": bool(os.getenv("DATA_DIR"))
+    }
+
     return jsonify({
         "ok": True,
         "version": APP_VERSION,
         "chain_height": height,
         "api_base": API_BASE_PREFIX,
-        "time": datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        "time": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "build": build_info,
+        "env_present": env_present
     }), 200
 
 
@@ -4523,6 +4593,29 @@ def api_ai_files_upload():
                 # don't fail upload if session linking fails
                 app.logger.exception("attach_uploaded_files_to_session failed: %s", e)
 
+        # PRIORITY 1: Telemetry - append to index.jsonl for PYTHEIA/IoT knowledge accounting
+        try:
+            telemetry_index = os.path.join(DATA_DIR, "ai_files", "index.jsonl")
+            os.makedirs(os.path.dirname(telemetry_index), exist_ok=True)
+
+            telemetry_entry = {
+                "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                "event": "file_upload_success",
+                "wallet": wallet or guest_id,
+                "session_id": session_id,
+                "file_count": len(uploaded),
+                "total_size": sum(f["size"] for f in uploaded),
+                "files": [{"id": f["id"], "name": f["name"], "size": f["size"], "mimetype": f["mimetype"]} for f in uploaded]
+            }
+
+            with open(telemetry_index, "a", encoding="utf-8") as f:
+                f.write(json.dumps(telemetry_entry, ensure_ascii=False) + "\n")
+
+            app.logger.debug(f"Telemetry recorded: {len(uploaded)} files uploaded")
+        except Exception as telemetry_err:
+            # Don't fail the upload if telemetry fails
+            app.logger.warning(f"Telemetry append failed: {telemetry_err}")
+
         return jsonify(ok=True, files=uploaded)
     except Exception as e:
         app.logger.exception("Upload failed: %s", e)
@@ -5140,6 +5233,45 @@ def save_custom_tokens(tokens):
     """Save custom tokens registry"""
     save_json(CUSTOM_TOKENS_FILE, tokens)
 
+def resolve_token_logo(token_data: dict) -> str:
+    """
+    PRIORITY 3: Resolve token logo with fallback chain.
+    Fallback order:
+    1. token_data['logo_path'] (from tokens.json)
+    2. /static/img/<SYMBOL>.png (case-insensitive)
+    3. /static/img/<SYMBOL>.webp (case-insensitive)
+    4. None (placeholder handled by frontend)
+    """
+    # Check if logo_path already exists in token data
+    if token_data.get("logo_path"):
+        return token_data["logo_path"]
+
+    # Check for static image files
+    symbol = token_data.get("symbol", "").upper()
+    if symbol:
+        static_img_dir = os.path.join(BASE_DIR, "static", "img")
+
+        # Try .png
+        png_path = os.path.join(static_img_dir, f"{symbol}.png")
+        if os.path.exists(png_path):
+            return f"img/{symbol}.png"
+
+        # Try .webp
+        webp_path = os.path.join(static_img_dir, f"{symbol}.webp")
+        if os.path.exists(webp_path):
+            return f"img/{symbol}.webp"
+
+        # Try lowercase variants
+        png_lower = os.path.join(static_img_dir, f"{symbol.lower()}.png")
+        if os.path.exists(png_lower):
+            return f"img/{symbol.lower()}.png"
+
+        webp_lower = os.path.join(static_img_dir, f"{symbol.lower()}.webp")
+        if os.path.exists(webp_lower):
+            return f"img/{symbol.lower()}.webp"
+
+    return None
+
 def get_custom_token_entry_by_symbol(symbol: str):
     symbol = (symbol or "").upper()
     tokens = load_custom_tokens()
@@ -5375,9 +5507,20 @@ def api_upload_token_logo(symbol):
 
 @app.route("/api/tokens/list")
 def api_list_tokens():
-    """List all custom tokens"""
+    """
+    List all custom tokens.
+    PRIORITY 3: Applies logo fallback resolution to all tokens.
+    """
     tokens = load_custom_tokens()
     token_list = list(tokens.values())
+
+    # PRIORITY 3: Resolve logos for all tokens
+    for token in token_list:
+        logo = resolve_token_logo(token)
+        if logo:
+            token["logo_path"] = logo
+            token["logo_url"] = f"/static/{logo}"
+
     token_list.sort(key=lambda t: t.get("created_at", ""), reverse=True)
     return jsonify({"ok": True, "tokens": token_list}), 200
 
@@ -11319,11 +11462,12 @@ def api_v1_governance_vote():
     if not auth_secret:
         return jsonify({"status": "error", "message": "auth_secret required for voting"}), 400
 
-    # Authenticate voter
+    # PRIORITY 2: Authenticate voter (log rejection reason)
     pledges = load_json(PLEDGE_CHAIN, [])
     voter_pledge = next((p for p in pledges if p.get("thr_address") == voter), None)
     if not voter_pledge:
-        return jsonify({"status": "error", "message": "Voter not pledged"}), 404
+        app.logger.warning(f"Vote rejected: auth_failed (not_pledged) | proposal={proposal_id} voter={voter}")
+        return jsonify({"status": "error", "message": "Voter not pledged", "reason": "auth_failed"}), 404
 
     stored_auth_hash = voter_pledge.get("send_auth_hash")
     if voter_pledge.get("has_passphrase"):
@@ -11331,7 +11475,8 @@ def api_v1_governance_vote():
     else:
         auth_string = f"{auth_secret}:auth"
     if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify({"status": "error", "message": "Invalid auth"}), 403
+        app.logger.warning(f"Vote rejected: auth_failed (invalid_auth) | proposal={proposal_id} voter={voter}")
+        return jsonify({"status": "error", "message": "Invalid auth", "reason": "auth_failed"}), 403
 
     # Load governance
     gov = load_governance()
@@ -11343,10 +11488,11 @@ def api_v1_governance_vote():
     if proposal.get("status") not in ["OPEN", "QUORUM_PENDING", None, "active"]:
         return jsonify({"status": "error", "message": f"Proposal is {proposal.get('status', 'closed')}"}), 400
 
-    # Check if already voted
+    # PRIORITY 2: Check if already voted (log rejection reason)
     vote_key = f"{proposal_id}:{voter}"
     if vote_key in gov.get("votes", {}):
-        return jsonify({"status": "error", "message": "Already voted on this proposal"}), 400
+        app.logger.warning(f"Vote rejected: already_voted | proposal={proposal_id} voter={voter}")
+        return jsonify({"status": "error", "message": "Already voted on this proposal", "reason": "already_voted"}), 400
 
     # FIX G3: THR BURN PER VOTE
     # Determine if voter is operator
@@ -11358,11 +11504,12 @@ def api_v1_governance_vote():
     is_operator = voter in OPERATORS
     burn_amount = 0.05 if is_operator else 0.01  # Higher burn for operators
 
-    # Check voter has enough balance
+    # PRIORITY 2: Check voter has enough balance (log rejection reason)
     ledger = load_json(LEDGER_FILE, {})
     voter_balance = float(ledger.get(voter, 0.0))
     if voter_balance < burn_amount:
-        return jsonify({"status": "error", "message": f"Insufficient balance. Need {burn_amount} THR to vote"}), 400
+        app.logger.warning(f"Vote rejected: insufficient_balance | proposal={proposal_id} voter={voter} balance={voter_balance} need={burn_amount}")
+        return jsonify({"status": "error", "message": f"Insufficient balance. Need {burn_amount} THR to vote", "reason": "insufficient_balance"}), 400
 
     # Burn THR
     ledger[voter] = round(voter_balance - burn_amount, 6)

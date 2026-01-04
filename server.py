@@ -10888,7 +10888,7 @@ def _get_fallback_models():
         }]
 
 
-@app.route("/api/ai/models", methods=["GET"])
+@app.route("/api/ai_models"), methods=["GET"])
 def api_ai_models():
     """
     Επιστρέφει ενοποιημένη λίστα μοντέλων για το Thronos Quantum UI.

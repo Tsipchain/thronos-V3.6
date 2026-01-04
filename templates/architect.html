@@ -27,14 +27,21 @@
       min-height: 100vh;
     }
 
-    /* Language toggle */
+    /* Language toggle - N2 FIX: Added body.lang-el rules for Greek */
     .lang-en, .lang-ja, .lang-ru, .lang-es { display: none; }
+    /* Greek (default) */
+    body.lang-el .lang-en, body.lang-el .lang-ja, body.lang-el .lang-ru, body.lang-el .lang-es { display: none; }
+    body.lang-el .lang-el { display: inline; }
+    /* English */
     body.lang-en .lang-el { display: none; }
     body.lang-en .lang-en { display: inline; }
+    /* Japanese */
     body.lang-ja .lang-el { display: none; }
     body.lang-ja .lang-ja { display: inline; }
+    /* Russian */
     body.lang-ru .lang-el { display: none; }
     body.lang-ru .lang-ru { display: inline; }
+    /* Spanish */
     body.lang-es .lang-el { display: none; }
     body.lang-es .lang-es { display: inline; }
 
@@ -378,12 +385,18 @@ if (downloadZipBtn) {
   });
 }
 
-// Language support
+// Language support - N2 FIX: Added normalizeLang + safe applyLanguage
 window.LANG_SEQUENCE = window.LANG_SEQUENCE || ['gr', 'en', 'ja', 'es', 'ru'];
 const LANG_CLASS_MAP = { 'gr': 'lang-el', 'en': 'lang-en', 'ja': 'lang-ja', 'es': 'lang-es', 'ru': 'lang-ru' };
 
+function normalizeLang(lang) {
+  if (!lang) return 'gr';
+  if (lang === 'el') return 'gr'; // N2 FIX: Normalize 'el' to 'gr'
+  return window.LANG_SEQUENCE.includes(lang) ? lang : 'gr';
+}
+
 function toggleLanguage() {
-  const current = localStorage.getItem("lang") || "gr";
+  const current = normalizeLang(localStorage.getItem("lang"));
   const idx = window.LANG_SEQUENCE.indexOf(current);
   const next = window.LANG_SEQUENCE[(idx + 1) % window.LANG_SEQUENCE.length];
   localStorage.setItem("lang", next);
@@ -391,9 +404,15 @@ function toggleLanguage() {
 }
 
 function applyLanguage() {
-  const lang = localStorage.getItem("lang") || "gr";
-  document.body.className = LANG_CLASS_MAP[lang] || '';
-  document.querySelector('.lang-toggle').textContent = '🌐 ' + lang.toUpperCase();
+  const lang = normalizeLang(localStorage.getItem("lang"));
+  const targetClass = LANG_CLASS_MAP[lang] || 'lang-el';
+  document.body.className = targetClass;
+
+  // N2 FIX: Safe querySelector - check if element exists
+  const toggleBtn = document.querySelector('.lang-toggle');
+  if (toggleBtn) {
+    toggleBtn.textContent = '🌐 ' + lang.toUpperCase();
+  }
 }
 
 async function api(url, opts) {

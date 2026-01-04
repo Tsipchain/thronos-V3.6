@@ -679,7 +679,8 @@
             container.innerHTML = '';
 
             tokensToShow.forEach(token => {
-                const logoUrl = token.logo || (token.logo_path ? `/media/${token.logo_path}` : '');
+                // N5 FIX: Use logo_url from API response (includes /static prefix from resolve_token_logo)
+                const logoUrl = token.logo_url || '';
                 const tokenDiv = document.createElement('div');
                 tokenDiv.className = 'token-item';
                 tokenDiv.onclick = () => showTokenInfo(token);
@@ -712,7 +713,8 @@
         function showTokenInfo(token) {
             const modal = document.getElementById('tokenInfoModal');
             const logoDiv = document.getElementById('modalTokenLogo');
-            const logoUrl = token.logo || (token.logo_path ? `/media/${token.logo_path}` : '');
+            // N5 FIX: Use logo_url from API response
+            const logoUrl = token.logo_url || '';
 
             // Set logo
             logoDiv.style.borderColor = token.color;

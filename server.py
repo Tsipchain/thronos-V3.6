@@ -1375,8 +1375,11 @@ def get_wallet_balances(wallet: str):
             continue
         token_ledger = load_custom_token_ledger(token_id)
         token_balance = round(float(token_ledger.get(wallet, 0.0)), token_data.get("decimals", 6))
-        logo_path = token_data.get("logo_path") or token_data.get("logo")
-        logo_url = url_for("media", filename=logo_path) if logo_path else None
+
+        # PRIORITY 3: Use fallback logo resolution
+        logo_path = resolve_token_logo(token_data)
+        logo_url = f"/static/{logo_path}" if logo_path else None
+
         tokens.append({
             "symbol": symbol,
             "name": token_data.get("name", symbol),
@@ -5230,6 +5233,45 @@ def save_custom_tokens(tokens):
     """Save custom tokens registry"""
     save_json(CUSTOM_TOKENS_FILE, tokens)
 
+def resolve_token_logo(token_data: dict) -> str:
+    """
+    PRIORITY 3: Resolve token logo with fallback chain.
+    Fallback order:
+    1. token_data['logo_path'] (from tokens.json)
+    2. /static/img/<SYMBOL>.png (case-insensitive)
+    3. /static/img/<SYMBOL>.webp (case-insensitive)
+    4. None (placeholder handled by frontend)
+    """
+    # Check if logo_path already exists in token data
+    if token_data.get("logo_path"):
+        return token_data["logo_path"]
+
+    # Check for static image files
+    symbol = token_data.get("symbol", "").upper()
+    if symbol:
+        static_img_dir = os.path.join(BASE_DIR, "static", "img")
+
+        # Try .png
+        png_path = os.path.join(static_img_dir, f"{symbol}.png")
+        if os.path.exists(png_path):
+            return f"img/{symbol}.png"
+
+        # Try .webp
+        webp_path = os.path.join(static_img_dir, f"{symbol}.webp")
+        if os.path.exists(webp_path):
+            return f"img/{symbol}.webp"
+
+        # Try lowercase variants
+        png_lower = os.path.join(static_img_dir, f"{symbol.lower()}.png")
+        if os.path.exists(png_lower):
+            return f"img/{symbol.lower()}.png"
+
+        webp_lower = os.path.join(static_img_dir, f"{symbol.lower()}.webp")
+        if os.path.exists(webp_lower):
+            return f"img/{symbol.lower()}.webp"
+
+    return None
+
 def get_custom_token_entry_by_symbol(symbol: str):
     symbol = (symbol or "").upper()
     tokens = load_custom_tokens()
@@ -5465,9 +5507,20 @@ def api_upload_token_logo(symbol):
 
 @app.route("/api/tokens/list")
 def api_list_tokens():
-    """List all custom tokens"""
+    """
+    List all custom tokens.
+    PRIORITY 3: Applies logo fallback resolution to all tokens.
+    """
     tokens = load_custom_tokens()
     token_list = list(tokens.values())
+
+    # PRIORITY 3: Resolve logos for all tokens
+    for token in token_list:
+        logo = resolve_token_logo(token)
+        if logo:
+            token["logo_path"] = logo
+            token["logo_url"] = f"/static/{logo}"
+
     token_list.sort(key=lambda t: t.get("created_at", ""), reverse=True)
     return jsonify({"ok": True, "tokens": token_list}), 200
 

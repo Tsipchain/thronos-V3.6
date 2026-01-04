@@ -910,6 +910,9 @@
             <button class="btn-ghost btn-ghost-danger" id="deleteSelectedBtn">
               🗑 Delete selected
             </button>
+            <button class="btn-ghost" id="cleanSessionsBtn" style="display: none">
+              🧹 Clean empty sessions
+            </button>
           </div>
         </div>
         <ul id="sessionsList" class="sessions-list"></ul>
@@ -1023,14 +1026,18 @@
   <script>
     // --- Endpoint constants ---
     const API_WALLET = "/api/ai/wallet";
-    const API_SESSIONS = "/api/ai/sessions";
-    const API_SESSION_MESSAGES = (id) => `/api/ai/sessions/${id}/messages`;
-    const API_CHAT = "/api/ai/providers/chat";
+    const API_SESSIONS = "/api/chat/sessions";
+    const API_SESSION_DETAIL = (id) => `/api/chat/session/${id}`;
+    const API_SESSION_CREATE = "/api/chat/session/new";
+    const API_SESSION_MESSAGES = (id) => `/api/chat/session/${id}/messages`;
+    const API_CHAT = "/api/chat";
     const API_FILES = "/api/ai/files";
     const API_TELEMETRY = "/api/ai/telemetry";
     const API_FEEDBACK = "/api/ai/feedback";
     const API_MODELS = "/api/ai_models";
     const API_HEALTH = "/api/ai/providers/health";
+    const ADMIN_SECRET_KEY = "thronos_admin_secret";
+    const ADMIN_MODE_KEY = "thronos_admin_mode";
     const ACTIVE_SESSION_KEY = "thronos_ai_active_session";
     const SESSION_CACHE_KEY = "thronos_ai_session_cache_v1";
 
@@ -1052,6 +1059,7 @@
       coreStatusEl,
       sessionTitleEl,
       sessionStatusTagEl,
+      cleanSessionsBtnEl,
       hashrateLabelEl,
       pendingTxsLabelEl,
       difficultyLabelEl,
@@ -1078,6 +1086,7 @@
       coreStatusEl = document.getElementById("coreStatus");
       sessionTitleEl = document.getElementById("sessionTitle");
       sessionStatusTagEl = document.getElementById("sessionStatusTag");
+      cleanSessionsBtnEl = document.getElementById("cleanSessionsBtn");
       hashrateLabelEl = document.getElementById("hashrateLabel");
       pendingTxsLabelEl = document.getElementById("pendingTxsLabel");
       difficultyLabelEl = document.getElementById("difficultyLabel");
@@ -1090,6 +1099,8 @@
     let selectedSessionIds = new Set();
     let pendingFiles = []; // { id, name, size }
     let receivedFiles = []; // for any AI-generated [[FILE:...]] blocks
+    let adminSecret = "";
+    let adminMode = false;
     // --- Utilities ---
     function setUploadStatus(text, mode = "") {
       uploadStatusEl.textContent = text || "";
@@ -1138,6 +1149,28 @@
       } catch (e) {
         console.warn("persist cache failed", e);
       }
+    }
+
+    function updateAdminControls() {
+      if (!cleanSessionsBtnEl) return;
+      const visible = !!adminSecret || adminMode;
+      cleanSessionsBtnEl.style.display = visible ? "inline-flex" : "none";
+    }
+
+    function initAdminAccess() {
+      const params = new URLSearchParams(window.location.search);
+      const querySecret = params.get("admin_secret") || params.get("secret");
+      if (querySecret) {
+        localStorage.setItem(ADMIN_SECRET_KEY, querySecret);
+      }
+      if (params.get("admin") === "1") {
+        localStorage.setItem(ADMIN_MODE_KEY, "1");
+      }
+
+      adminSecret =
+        localStorage.getItem(ADMIN_SECRET_KEY) || window.ADMIN_SECRET || "";
+      adminMode = localStorage.getItem(ADMIN_MODE_KEY) === "1";
+      updateAdminControls();
     }
 
     function hydrateSessionCache() {
@@ -1234,7 +1267,7 @@
           if (!confirm(`Delete "${s.title || 'Untitled session'}"?`)) return;
 
           try {
-            const res = await fetch(`/api/ai/sessions/${s.id}`, {
+            const res = await fetch(API_SESSION_DETAIL(s.id), {
               method: "DELETE",
             });
             if (res.ok) {
@@ -1528,6 +1561,41 @@
       }
     }
 
+    async function pruneSessions() {
+      if (!adminSecret && !adminMode) {
+        setSessionStatus("Admin secret required for cleanup");
+        return;
+      }
+
+      try {
+        setSessionStatus("Cleaning empty sessions…");
+        const url = adminSecret
+          ? `/api/admin/prune_sessions?secret=${encodeURIComponent(adminSecret)}`
+          : "/api/admin/prune_sessions";
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(adminSecret ? { "X-Admin-Secret": adminSecret } : {}),
+          },
+        });
+
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(`HTTP ${res.status}: ${errText}`);
+        }
+
+        const data = await res.json();
+        const deleted = data.deleted ?? 0;
+        const kept = data.kept ?? 0;
+        setSessionStatus(`Cleaned ${deleted} empty sessions (kept ${kept})`);
+        await loadSessions();
+      } catch (e) {
+        console.error("pruneSessions error", e);
+        setSessionStatus("Failed to clean sessions");
+      }
+    }
+
     async function loadSessionMessages(id) {
       setSessionStatus("Loading messages…");
       try {
@@ -1603,7 +1671,7 @@
     async function createSession(title = "New mesh session") {
       try {
         const wallet = walletInputEl.value.trim();
-        const res = await fetch(API_SESSIONS, {
+        const res = await fetch(API_SESSION_CREATE, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1645,7 +1713,7 @@
       const newName = prompt("Rename session:", currentName);
       if (!newName || newName === currentName) return;
       try {
-        const res = await fetch(`${API_SESSIONS}/${currentSessionId}`, {
+        const res = await fetch(API_SESSION_DETAIL(currentSessionId), {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ title: newName }),
@@ -1683,7 +1751,7 @@
       const ids = Array.from(selectedSessionIds);
       for (const id of ids) {
         try {
-          const res = await fetch(`${API_SESSIONS}/${id}`, { method: "DELETE" });
+          const res = await fetch(API_SESSION_DETAIL(id), { method: "DELETE" });
           if (!res.ok) throw new Error("HTTP " + res.status);
           aiSessions = aiSessions.filter((s) => s.id !== id);
           if (currentSessionId === id) {
@@ -1827,6 +1895,12 @@
         const models = data.models || [];
         const providerStatus = data.provider_status || {};  // FIX 2: Get provider status
 
+        if (!models.length) {
+          autoOpt.textContent = "Auto only (router available)";
+          modelSelectEl.value = "auto";
+          return;
+        }
+
         const providerOrder = ["openai", "anthropic", "gemini", "local", "thronos"];
         let defaultSelected = false;
 
@@ -1903,8 +1977,6 @@
       usageStatusEl.textContent = "";
 
       const model = modelSelectEl.value || "auto";
-      const selectedOption = modelSelectEl.selectedOptions[0];
-      const provider = selectedOption?.dataset.provider || null;
       modelStatusEl.textContent = model;
 
       const history = (sessionMessages || []).map((m) => ({
@@ -1917,10 +1989,10 @@
         session_id: currentSessionId,
         wallet: wallet || null,
         messages: history,
+        message: text,
         attachments: pendingFiles.map((f) => f.id),
-        model,
+        model_id: model,
       };
-      if (provider && provider !== "auto") payload.provider = provider;
 
       // optimistic render user message
       const userMessage = { role: "user", content: text, model: model };
@@ -2028,6 +2100,10 @@
         .getElementById("deleteSelectedBtn")
         .addEventListener("click", deleteSelectedSessions);
 
+      if (cleanSessionsBtnEl) {
+        cleanSessionsBtnEl.addEventListener("click", pruneSessions);
+      }
+
       fileInputEl.addEventListener("change", (e) => {
         const files = Array.from(e.target.files || []);
         if (files.length) {
@@ -2062,6 +2138,7 @@
     // --- Init ---
     async function init() {
       cacheDom();
+      initAdminAccess();
       hydrateSessionCache();
       bindEvents();
       await loadModels();

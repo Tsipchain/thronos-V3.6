@@ -1882,6 +1882,51 @@ def ensure_session_messages_file(session_id: str):
         save_json(path, [])
 
 
+def prune_empty_sessions():
+    """
+    Remove sessions whose message files are missing or empty.
+
+    Returns a summary dict: {"deleted": N, "kept": M, "errors": [...]}
+    """
+
+    result = {"deleted": 0, "kept": 0, "errors": []}
+    try:
+        sessions = load_ai_sessions()
+    except Exception as exc:  # pragma: no cover - defensive
+        return {"deleted": 0, "kept": 0, "errors": [f"load failed: {exc}"]}
+
+    pruned = []
+    for session in sessions:
+        sid = session.get("id") or session.get("session_id")
+        if not sid:
+            result["errors"].append("session missing id; skipped")
+            continue
+
+        path = _session_messages_path(sid)
+        try:
+            if not os.path.exists(path):
+                result["deleted"] += 1
+                continue
+
+            messages = load_json(path, [])
+            if not messages:
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+                result["deleted"] += 1
+                continue
+
+            pruned.append(session)
+        except Exception as exc:  # pragma: no cover - defensive
+            result["errors"].append(f"{sid}: {exc}")
+            pruned.append(session)
+
+    result["kept"] = len(pruned)
+    save_ai_sessions(pruned)
+    return result
+
+
 def load_session_messages(session_id: str) -> list:
     """
     Load messages for a session, sorted by timestamp.
@@ -2896,6 +2941,28 @@ def api_admin_withdrawals_action():
     else:
         return jsonify(status="error", message="Request not found"), 404
 
+
+@app.route("/api/admin/prune_sessions", methods=["POST"])
+def api_admin_prune_sessions():
+    """Admin: remove empty/missing chat sessions."""
+
+    payload = request.get_json(silent=True) or {}
+    secret = (
+        request.headers.get("X-Admin-Secret")
+        or request.args.get("secret")
+        or payload.get("secret")
+    )
+
+    if secret != ADMIN_SECRET:
+        return jsonify(error="Forbidden"), 403
+
+    try:
+        result = prune_empty_sessions()
+        return jsonify(ok=True, **result), 200
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("prune sessions failed")
+        return jsonify(ok=False, error=str(exc)), 500
+
 # ─── ADDRESS MIGRATION ENDPOINT ─────────────────────────────────────────────
 
 @app.route("/admin/migrate")
@@ -3161,7 +3228,7 @@ def api_architect_generate():
     session_id  = (data.get("session_id") or "").strip() or None
     blueprint   = (data.get("blueprint") or "").strip()
     project_spec = (data.get("spec") or data.get("specs") or "").strip() # Handle both keys just in case
-    model_key   = (data.get("model") or data.get("model_key") or "gpt-4o").strip()
+    model_key   = (data.get("model_id") or data.get("model") or data.get("model_key") or "gpt-4o").strip()
 
     if not blueprint or not project_spec:
         return jsonify(error="Missing blueprint or spec"), 400
@@ -4055,7 +4122,7 @@ def api_chat():
     msg = (data.get("message") or "").strip()
     wallet = (data.get("wallet") or "").strip()  # MOVED HERE - must be before attachments!
     session_id = (data.get("session_id") or "").strip() or None
-    model_key = (data.get("model_key") or "").strip() or None
+    model_key = (data.get("model_id") or data.get("model") or data.get("model_key") or "").strip() or None
     attachments = data.get("attachments") or data.get("attachment_ids") or []
     ai_credits_spent = 0.0
 
@@ -10653,7 +10720,7 @@ def api_ai_provider_chat():
     if not isinstance(messages, list) or not messages:
         return jsonify({"ok": False, "error": "messages required"}), 400
 
-    model = (data.get("model") or data.get("model_key") or None) or "auto"
+    model = (data.get("model_id") or data.get("model") or data.get("model_key") or None) or "auto"
     max_tokens = int(data.get("max_tokens") or 1024)
     temperature = float(data.get("temperature") or 0.6)
     session_id = data.get("session_id")
@@ -10919,28 +10986,11 @@ def api_ai_models():
         else:
             mode = raw_mode
 
-        # Βασικό config – ποιοι providers είναι ενεργοί στο σύστημα
-        try:
-            base_cfg = base_model_config() or {}
-
-            providers_cfg = base_cfg.get("providers")
-            if isinstance(providers_cfg, dict) and providers_cfg:
-                enabled_providers = set(providers_cfg.keys())
-            else:
-                enabled_providers = set(base_cfg.keys())  # <-- αυτό λείπει σήμερα
-
-        except Exception as cfg_err:
-            app.logger.warning(f"base_model_config failed: {cfg_err}")
-            # Degraded mode fallback
-            return jsonify({
-                "ok": False,
-                "mode": "degraded",
-                "error_code": "PROVIDER_CONFIG_FAILED",
-                "error_message": "Provider configuration unavailable",
-                "providers": {},
-                "models": _get_fallback_models(),
-                "fallback_active": True
-            }), 200
+        # Βασικό config – ποιοι providers είναι ενεργοί στο σύστημα (llm_registry is source of truth)
+        enabled_providers = set()
+        for provider_name, model_list in AI_MODEL_REGISTRY.items():
+            if any(m.enabled for m in model_list):
+                enabled_providers.add(provider_name)
 
         # Στατιστικά ανά model id από το AI Interaction Ledger
         try:
@@ -12002,6 +12052,15 @@ _start_model_scheduler()
 ensure_ai_wallet()
 recompute_height_offset_from_ledger()
 initialize_voting()  # Initialize voting polls
+try:  # Best-effort cleanup to avoid startup failures
+    prune_result = prune_empty_sessions()
+    logger.info(
+        "Pruned empty sessions on startup: deleted=%s kept=%s",
+        prune_result.get("deleted"),
+        prune_result.get("kept"),
+    )
+except Exception as exc:  # pragma: no cover - defensive
+    logger.warning(f"Startup session prune skipped: {exc}")
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 13311))

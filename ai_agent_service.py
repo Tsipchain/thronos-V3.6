@@ -299,12 +299,14 @@ class ThronosAI:
         self.gemini_api_key = (os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")).strip()
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
         self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-        self.custom_model_url = os.getenv("CUSTOM_MODEL_URL", "").strip()
-        self.diko_mas_model_url = (
+        custom_url = (
             os.getenv("CUSTOM_MODEL_URL")
+            or os.getenv("CUSTOM_MODEL_URI")
             or os.getenv("DIKO_MAS_MODEL_URL")
-            or "http://127.0.0.1:8080/api/thrai/ask"
-        )
+            or ""
+        ).strip()
+        self.custom_model_url = custom_url
+        self.diko_mas_model_url = custom_url or "http://127.0.0.1:8080/api/thrai/ask"
 
         # Default models
         self.gemini_model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")

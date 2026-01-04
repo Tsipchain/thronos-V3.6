@@ -1023,9 +1023,11 @@
   <script>
     // --- Endpoint constants ---
     const API_WALLET = "/api/ai/wallet";
-    const API_SESSIONS = "/api/ai/sessions";
-    const API_SESSION_MESSAGES = (id) => `/api/ai/sessions/${id}/messages`;
-    const API_CHAT = "/api/ai/providers/chat";
+    const API_SESSIONS = "/api/chat/sessions";
+    const API_SESSION_DETAIL = (id) => `/api/chat/session/${id}`;
+    const API_SESSION_CREATE = "/api/chat/session/new";
+    const API_SESSION_MESSAGES = (id) => `/api/chat/session/${id}/messages`;
+    const API_CHAT = "/api/chat";
     const API_FILES = "/api/ai/files";
     const API_TELEMETRY = "/api/ai/telemetry";
     const API_FEEDBACK = "/api/ai/feedback";
@@ -1234,7 +1236,7 @@
           if (!confirm(`Delete "${s.title || 'Untitled session'}"?`)) return;
 
           try {
-            const res = await fetch(`/api/ai/sessions/${s.id}`, {
+            const res = await fetch(API_SESSION_DETAIL(s.id), {
               method: "DELETE",
             });
             if (res.ok) {
@@ -1603,7 +1605,7 @@
     async function createSession(title = "New mesh session") {
       try {
         const wallet = walletInputEl.value.trim();
-        const res = await fetch(API_SESSIONS, {
+        const res = await fetch(API_SESSION_CREATE, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1645,7 +1647,7 @@
       const newName = prompt("Rename session:", currentName);
       if (!newName || newName === currentName) return;
       try {
-        const res = await fetch(`${API_SESSIONS}/${currentSessionId}`, {
+        const res = await fetch(API_SESSION_DETAIL(currentSessionId), {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ title: newName }),
@@ -1683,7 +1685,7 @@
       const ids = Array.from(selectedSessionIds);
       for (const id of ids) {
         try {
-          const res = await fetch(`${API_SESSIONS}/${id}`, { method: "DELETE" });
+          const res = await fetch(API_SESSION_DETAIL(id), { method: "DELETE" });
           if (!res.ok) throw new Error("HTTP " + res.status);
           aiSessions = aiSessions.filter((s) => s.id !== id);
           if (currentSessionId === id) {
@@ -1827,6 +1829,12 @@
         const models = data.models || [];
         const providerStatus = data.provider_status || {};  // FIX 2: Get provider status
 
+        if (!models.length) {
+          autoOpt.textContent = "Auto only (router available)";
+          modelSelectEl.value = "auto";
+          return;
+        }
+
         const providerOrder = ["openai", "anthropic", "gemini", "local", "thronos"];
         let defaultSelected = false;
 
@@ -1903,8 +1911,6 @@
       usageStatusEl.textContent = "";
 
       const model = modelSelectEl.value || "auto";
-      const selectedOption = modelSelectEl.selectedOptions[0];
-      const provider = selectedOption?.dataset.provider || null;
       modelStatusEl.textContent = model;
 
       const history = (sessionMessages || []).map((m) => ({
@@ -1917,10 +1923,10 @@
         session_id: currentSessionId,
         wallet: wallet || null,
         messages: history,
+        message: text,
         attachments: pendingFiles.map((f) => f.id),
-        model,
+        model_id: model,
       };
-      if (provider && provider !== "auto") payload.provider = provider;
 
       // optimistic render user message
       const userMessage = { role: "user", content: text, model: model };

@@ -3161,7 +3161,7 @@ def api_architect_generate():
     session_id  = (data.get("session_id") or "").strip() or None
     blueprint   = (data.get("blueprint") or "").strip()
     project_spec = (data.get("spec") or data.get("specs") or "").strip() # Handle both keys just in case
-    model_key   = (data.get("model") or data.get("model_key") or "gpt-4o").strip()
+    model_key   = (data.get("model_id") or data.get("model") or data.get("model_key") or "gpt-4o").strip()
 
     if not blueprint or not project_spec:
         return jsonify(error="Missing blueprint or spec"), 400
@@ -4055,7 +4055,7 @@ def api_chat():
     msg = (data.get("message") or "").strip()
     wallet = (data.get("wallet") or "").strip()  # MOVED HERE - must be before attachments!
     session_id = (data.get("session_id") or "").strip() or None
-    model_key = (data.get("model_key") or "").strip() or None
+    model_key = (data.get("model_id") or data.get("model") or data.get("model_key") or "").strip() or None
     attachments = data.get("attachments") or data.get("attachment_ids") or []
     ai_credits_spent = 0.0
 
@@ -10653,7 +10653,7 @@ def api_ai_provider_chat():
     if not isinstance(messages, list) or not messages:
         return jsonify({"ok": False, "error": "messages required"}), 400
 
-    model = (data.get("model") or data.get("model_key") or None) or "auto"
+    model = (data.get("model_id") or data.get("model") or data.get("model_key") or None) or "auto"
     max_tokens = int(data.get("max_tokens") or 1024)
     temperature = float(data.get("temperature") or 0.6)
     session_id = data.get("session_id")
@@ -10919,28 +10919,11 @@ def api_ai_models():
         else:
             mode = raw_mode
 
-        # Βασικό config – ποιοι providers είναι ενεργοί στο σύστημα
-        try:
-            base_cfg = base_model_config() or {}
-
-            providers_cfg = base_cfg.get("providers")
-            if isinstance(providers_cfg, dict) and providers_cfg:
-                enabled_providers = set(providers_cfg.keys())
-            else:
-                enabled_providers = set(base_cfg.keys())  # <-- αυτό λείπει σήμερα
-
-        except Exception as cfg_err:
-            app.logger.warning(f"base_model_config failed: {cfg_err}")
-            # Degraded mode fallback
-            return jsonify({
-                "ok": False,
-                "mode": "degraded",
-                "error_code": "PROVIDER_CONFIG_FAILED",
-                "error_message": "Provider configuration unavailable",
-                "providers": {},
-                "models": _get_fallback_models(),
-                "fallback_active": True
-            }), 200
+        # Βασικό config – ποιοι providers είναι ενεργοί στο σύστημα (llm_registry is source of truth)
+        enabled_providers = set()
+        for provider_name, model_list in AI_MODEL_REGISTRY.items():
+            if any(m.enabled for m in model_list):
+                enabled_providers.add(provider_name)
 
         # Στατιστικά ανά model id από το AI Interaction Ledger
         try:

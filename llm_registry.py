@@ -95,8 +95,8 @@ def _apply_env_flags() -> None:
     has_local = os.path.exists(corpus_file)
     logger.debug(f"Local provider check: corpus_file={corpus_file} exists={has_local} → enabled={has_local}")
 
-    # Check thronos: CUSTOM_MODEL_URL/CUSTOM_MODEL_URI configured
-    custom_url = (os.getenv("CUSTOM_MODEL_URI") or os.getenv("CUSTOM_MODEL_URL") or "").strip()
+    # Check thronos: CUSTOM_MODEL_URL configured (CUSTOM_MODEL_URI kept as legacy alias)
+    custom_url = (os.getenv("CUSTOM_MODEL_URL") or os.getenv("CUSTOM_MODEL_URI") or "").strip()
     has_thronos = bool(custom_url)
     # Also check THRONOS_AI_MODE allows custom (if mode is restrictive)
     ai_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
@@ -178,13 +178,13 @@ def get_provider_status() -> dict:
     }
 
     # Thronos (custom model)
-    thronos_vars = ["CUSTOM_MODEL_URI", "CUSTOM_MODEL_URL", "THRONOS_AI_MODE"]
-    custom_url = (os.getenv("CUSTOM_MODEL_URI") or os.getenv("CUSTOM_MODEL_URL") or "").strip()
+    thronos_vars = ["CUSTOM_MODEL_URL", "THRONOS_AI_MODE"]
+    custom_url = (os.getenv("CUSTOM_MODEL_URL") or os.getenv("CUSTOM_MODEL_URI") or "").strip()
     ai_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
     thronos_configured = bool(custom_url) and ai_mode in ("all", "router", "auto", "custom", "hybrid", "")
     thronos_missing = []
     if not custom_url:
-        thronos_missing.append("CUSTOM_MODEL_URI or CUSTOM_MODEL_URL")
+        thronos_missing.append("CUSTOM_MODEL_URL (or legacy CUSTOM_MODEL_URI)")
     if ai_mode not in ("all", "router", "auto", "custom", "hybrid", ""):
         thronos_missing.append(f"THRONOS_AI_MODE={ai_mode} (restrictive)")
     status["thronos"] = {

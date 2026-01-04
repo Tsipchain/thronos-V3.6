@@ -174,7 +174,7 @@
         backdrop-filter: blur(10px);
     }
 
-    /* Chain Tokens Widget (Footer) */
+    /* Chain Tokens Widget (Footer) - PRIORITY 7: Auto-hide */
     .chain-tokens-widget {
         position: fixed;
         bottom: 0;
@@ -186,6 +186,15 @@
         padding: 10px 20px;
         z-index: 2800;
         backdrop-filter: blur(10px);
+        transform: translateY(0);
+        opacity: 1;
+        transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s ease-out;
+    }
+
+    .chain-tokens-widget.hidden {
+        transform: translateY(100%);
+        opacity: 0;
+        pointer-events: none;
     }
 
     /* Wallet Login Modal */
@@ -2880,6 +2889,82 @@ function downloadCGMinerKit() {
 
     // Refresh every 60 seconds
     setInterval(loadChainTokensWidget, 60000);
+})();
+
+// PRIORITY 7: Footer auto-hide behavior
+(function() {
+    let footerHideTimer = null;
+    let isFooterHovered = false;
+    let lastScrollY = window.scrollY;
+    let lastActivity = Date.now();
+
+    const footer = document.getElementById('chainTokensWidget');
+    if (!footer) return;
+
+    function hideFooter() {
+        if (!isFooterHovered) {
+            footer.classList.add('hidden');
+        }
+    }
+
+    function showFooter() {
+        footer.classList.remove('hidden');
+        resetHideTimer();
+    }
+
+    function resetHideTimer() {
+        if (footerHideTimer) clearTimeout(footerHideTimer);
+        footerHideTimer = setTimeout(hideFooter, 10000); // 10 seconds
+    }
+
+    // Show footer on scroll (detect both up and down scroll)
+    let scrollTimeout;
+    window.addEventListener('scroll', () => {
+        const currentScrollY = window.scrollY;
+
+        // Show footer on any scroll activity
+        if (Math.abs(currentScrollY - lastScrollY) > 5) {
+            showFooter();
+            lastScrollY = currentScrollY;
+            lastActivity = Date.now();
+        }
+
+        // Detect end of page
+        if (scrollTimeout) clearTimeout(scrollTimeout);
+        scrollTimeout = setTimeout(() => {
+            const scrolledToBottom = (window.innerHeight + window.scrollY) >= document.body.offsetHeight - 50;
+            if (scrolledToBottom) {
+                showFooter();
+            }
+        }, 100);
+    }, { passive: true });
+
+    // Show footer on mousemove (debounced)
+    let mouseMoveTimeout;
+    window.addEventListener('mousemove', () => {
+        if (mouseMoveTimeout) clearTimeout(mouseMoveTimeout);
+        mouseMoveTimeout = setTimeout(() => {
+            const now = Date.now();
+            if (now - lastActivity > 1000) { // Only if 1s elapsed since last activity
+                showFooter();
+                lastActivity = now;
+            }
+        }, 150);
+    }, { passive: true });
+
+    // Pause auto-hide when hovering footer
+    footer.addEventListener('mouseenter', () => {
+        isFooterHovered = true;
+        if (footerHideTimer) clearTimeout(footerHideTimer);
+    });
+
+    footer.addEventListener('mouseleave', () => {
+        isFooterHovered = false;
+        resetHideTimer();
+    });
+
+    // Initial timer
+    resetHideTimer();
 })();
 </script>
 

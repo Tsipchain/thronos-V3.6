@@ -553,7 +553,6 @@ AI_FILES_INDEX = os.path.join(DATA_DIR, "ai_files_index.json")
 
 # FIX 9: Set SESSIONS_DIR to point to volume-backed AI_SESSIONS_DIR
 # This ensures all chat sessions persist across Railway deploys
-global SESSIONS_DIR
 SESSIONS_DIR = AI_SESSIONS_DIR
 
 ADMIN_SECRET   = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")

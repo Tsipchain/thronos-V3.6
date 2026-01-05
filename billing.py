@@ -140,6 +140,23 @@ def consume_credits(wallet: str, amount: int, product: str = "chat") -> Tuple[bo
     }
     _record_telemetry(telemetry)
 
+    try:
+        chain = _load_json(CHAIN_FILE, [])
+        tx = {
+            "type": "CREDITS_CONSUME",
+            "from": wallet,
+            "to": AI_WALLET_ADDRESS,
+            "amount": float(amount),
+            "symbol": "CREDITS",
+            "status": "confirmed",
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "tx_id": f"CREDITS-{int(time.time())}-{len(chain)}",
+        }
+        chain.append(tx)
+        _save_json(CHAIN_FILE, chain)
+    except Exception as e:
+        logger.error(f"Failed to append credits tx: {e}")
+
     logger.info(f"Credits consumed: {wallet} -{amount} credits (now {new_balance})")
     return True, "", telemetry
 

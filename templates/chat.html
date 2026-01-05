@@ -1031,7 +1031,7 @@
     const API_SESSION_CREATE = "/api/chat/session/new";
     const API_SESSION_MESSAGES = (id) => `/api/chat/session/${id}/messages`;
     const API_CHAT = "/api/chat";
-    const API_FILES = "/api/ai/files";
+    const API_FILES = "/api/ai/files/upload";
     const API_TELEMETRY = "/api/ai/telemetry";
     const API_FEEDBACK = "/api/ai/feedback";
     const API_MODELS = "/api/ai_models";
@@ -1110,6 +1110,12 @@
       uploadStatusEl.textContent = text || "";
       uploadStatusEl.classList.remove("ok", "error");
       if (mode) uploadStatusEl.classList.add(mode);
+    }
+
+    function sessionTypeLabel(meta = {}) {
+      const raw =
+        meta.session_type || (meta.meta && meta.meta.session_type) || "chat";
+      return String(raw || "chat").toUpperCase();
     }
 
     function setSessionStatus(text) {
@@ -1297,10 +1303,9 @@
         });
 
         const statusPill = document.createElement("div");
+        const sessionType = sessionTypeLabel(s);
         statusPill.className = "session-status-pill";
-        statusPill.innerHTML = `<span>${(s.model || "auto").toUpperCase()}</span> · ${
-          s.created_at || ""
-        }`;
+        statusPill.innerHTML = `<span>${sessionType}</span> · ${(s.model || "auto").toUpperCase()}`;
 
         nameRow.appendChild(checkbox);
         nameRow.appendChild(nameSpan);
@@ -1636,7 +1641,8 @@
         updateSessionMessageCount(id);
         renderSessions();
         persistSessionCache();
-        setSessionStatus("Ready");
+        const sessionType = sessionTypeLabel(sessionMeta);
+        setSessionStatus(`${sessionType} session`);
       } catch (e) {
         console.error("loadSessionMessages error", e);
         setSessionStatus("Failed to load messages");

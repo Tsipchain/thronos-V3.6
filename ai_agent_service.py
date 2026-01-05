@@ -69,7 +69,13 @@ def _resolve_model(
 
     def _provider_configured(provider: str) -> bool:
         info = provider_status.get(provider) if isinstance(provider_status, dict) else None
-        return bool(info and info.get("configured"))
+        if not info:
+            return False
+        if not info.get("configured"):
+            return False
+        if info.get("library_loaded") is False:
+            return False
+        return True
 
     def _match_alias(candidate: str):
         cand_norm = (candidate or "").strip().lower().replace(" ", "").replace("-", "")

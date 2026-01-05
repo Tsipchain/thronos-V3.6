@@ -871,7 +871,7 @@ def refresh_model_catalog(force: bool = False) -> dict:
 
     catalog = base_model_config()
     provider_keys = {
-        "openai": bool((os.getenv("OPENAI_API_KEY") or "").strip()),
+        "openai": bool((os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip()),
         "anthropic": bool((os.getenv("ANTHROPIC_API_KEY") or "").strip()),
         "google": bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()),
     }
@@ -1817,18 +1817,29 @@ def _default_model_id():
         return "auto"
 
 
+def _normalized_ai_mode() -> str:
+    raw_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
+    if raw_mode in ("", "router", "auto", "hybrid", "all"):
+        return "all"
+    if raw_mode == "openai_only":
+        return "openai"
+    return raw_mode
+
+
 def _select_callable_model(model_id: str | None, session_type: str | None = None):
     """Return a callable model id (or error response) respecting mode/provider availability."""
 
     provider_status = get_provider_status()
-    raw_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
-    normalized_mode = "all" if raw_mode in ("", "router", "auto", "hybrid") else ("openai" if raw_mode == "openai_only" else raw_mode)
+    normalized_mode = _normalized_ai_mode()
 
     callable_ids = []
     for provider_name, models in AI_MODEL_REGISTRY.items():
         if normalized_mode != "all" and provider_name != normalized_mode:
             continue
-        if not provider_status.get(provider_name, {}).get("configured"):
+        provider_info = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
+        if not provider_info.get("configured"):
+            continue
+        if provider_info.get("library_loaded") is False:
             continue
         for m in models:
             callable_ids.append(m.id)
@@ -1857,8 +1868,15 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
 
     # Nothing callable: return JSON error without charging
     disabled_models = []
+    provider_diagnostics = {}
     for provider, models in AI_MODEL_REGISTRY.items():
-        if not provider_status.get(provider, {}).get("configured"):
+        pinfo = provider_status.get(provider, {}) if isinstance(provider_status, dict) else {}
+        provider_diagnostics[provider] = {
+            "configured": pinfo.get("configured"),
+            "library_loaded": pinfo.get("library_loaded", True),
+            "has_key": pinfo.get("has_key", pinfo.get("configured")),
+        }
+        if not pinfo.get("configured") or pinfo.get("library_loaded") is False:
             disabled_models.extend([m.id for m in models])
 
     missing_keys = [p for p, info in provider_status.items() if not info.get("configured")]
@@ -1868,6 +1886,7 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
         "error": "No callable AI model in current mode",
         "suggested_model": default_model_id,
         "providers": provider_status,
+        "provider_diagnostics": provider_diagnostics,
         "requested_model": requested,
         "mode": normalized_mode,
         "missing_keys": missing_keys,
@@ -2057,7 +2076,7 @@ def prune_empty_sessions():
 
     pruned = []
     now = datetime.utcnow()
-    stale_hours = 24
+    stale_hours = 168
     for session in sessions:
         sid = session.get("id") or session.get("session_id")
         if not sid:
@@ -3437,6 +3456,8 @@ def api_architect_generate():
         "session_type": "architect",
         "billing_unit": "thr",
         "charged": False,
+        "mode": _normalized_ai_mode(),
+        "callable": False,
     }
 
     if session_id:
@@ -3448,6 +3469,7 @@ def api_architect_generate():
         call_meta["failure_reason"] = "model_not_callable"
         call_meta["selected_model"] = selected_model or model_key or "auto"
         call_meta["fallback_notice"] = fallback_notice
+        call_meta["callable"] = False
         _log_ai_call(call_meta)
         if wallet:
             # Preserve credit count so UI can show remaining balance
@@ -3464,6 +3486,7 @@ def api_architect_generate():
         model_key = selected_model
         if session_id:
             _save_session_selected_model(session_id, model_key)
+        call_meta["callable"] = True
 
     # If the requested model is not callable in current mode/providers, fall back before billing
     fallback_notice = fallback_notice  # reuse notice if any
@@ -4611,6 +4634,8 @@ def api_chat():
         "session_type": "chat",
         "billing_unit": "credits",
         "charged": False,
+        "mode": _normalized_ai_mode(),
+        "callable": False,
     }
 
     if session_id:
@@ -4632,6 +4657,7 @@ def api_chat():
         call_meta["failure_reason"] = "model_not_callable"
         call_meta["selected_model"] = selected_model or model_key or "auto"
         call_meta["fallback_notice"] = fallback_notice
+        call_meta["callable"] = False
         _log_ai_call(call_meta)
         return error_resp
     if selected_model:
@@ -4643,6 +4669,7 @@ def api_chat():
             call_meta["selected_model"] = resolved.id
             call_meta["resolved_model"] = resolved.id
             call_meta["resolved_provider"] = resolved.provider
+            call_meta["callable"] = True
     elif model_key:
         resolved = _resolve_model(model_key)
         if resolved:
@@ -12047,8 +12074,7 @@ def api_ai_models():
     NEVER returns 500 - always returns 200 with degraded mode fallback if needed.
     """
     try:
-        raw_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
-        mode = "all" if raw_mode in ("", "router", "auto", "hybrid") else raw_mode
+        mode = _normalized_ai_mode()
 
         default_model = get_default_model(None if mode == "all" else mode)
         default_model_id = default_model.id if default_model else None
@@ -12092,6 +12118,16 @@ def api_ai_models():
             ),
             200,
         )
+
+
+@app.route("/api/ai/provider_status", methods=["GET"])
+def api_ai_provider_status():
+    """Lightweight provider status for debugging callability (JSON only)."""
+    try:
+        return jsonify({"providers": get_provider_status()}), 200
+    except Exception as exc:  # pragma: no cover - defensive
+        app.logger.warning("provider_status_failed", extra={"error": str(exc)})
+        return jsonify({"providers": {}, "error": str(exc)}), 200
 
 @app.route("/api/ai/feedback", methods=["POST"])
 def api_ai_feedback():

@@ -17,6 +17,13 @@
         <div id="quizArea">Connect your wallet and open the quiz.</div>
         <button id="submitBtn" class="btn-primary" style="margin-top:15px; display:none;" onclick="submitQuiz()">Submit</button>
     </div>
+    <div id="teacherDash" class="panel" style="margin-top:20px;display:none;background:#050b07;border:1px solid #1a5a2f;border-radius:14px;padding:20px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+            <h3 style="margin:0;">👩‍🏫 Teacher Dashboard</h3>
+            <button class="btn-secondary" id="refreshTeacher">Refresh</button>
+        </div>
+        <div id="teacherTable" style="margin-top:12px;overflow-x:auto;"></div>
+    </div>
 </div>
 <script>
 const courseId = "{{ course_id }}";
@@ -74,6 +81,14 @@ function setEnrollmentState() {
 
     renderMaterials(courseData);
     toggleQuizAvailability();
+
+    // Teacher dashboard visibility
+    if (isTeacher) {
+        document.getElementById('teacherDash').style.display = 'block';
+        loadTeacherDashboard();
+    } else {
+        document.getElementById('teacherDash').style.display = 'none';
+    }
 }
 
 function renderMaterials(course){
@@ -130,6 +145,10 @@ function renderCourse(course){
     const cover = course.cover_path ? `/media/${course.cover_path}` : '/static/img/logo.png';
     document.getElementById('courseHeader').insertAdjacentHTML('afterbegin', `<img src="${cover}" style="width:100%;max-height:240px;object-fit:cover;border-radius:10px;" onerror="this.src='/static/img/logo.png'">`);
     renderMaterials(course);
+    if (studentAddr && course.teacher === studentAddr) {
+        document.getElementById('teacherDash').style.display = 'block';
+        loadTeacherDashboard();
+    }
 }
 
 async function loadCourse(){
@@ -155,6 +174,49 @@ async function loadQuiz(){
         metaBox.textContent = `Passing score: ${quizData.passing_score || quizData.pass_score || 80}%`;
     }
     toggleQuizAvailability();
+}
+
+async function loadTeacherDashboard(){
+    const table = document.getElementById('teacherTable');
+    if (!courseData || !studentAddr || courseData.teacher !== studentAddr) {
+        table.innerHTML = '<div style="opacity:0.7;">Teacher view only.</div>';
+        return;
+    }
+    table.innerHTML = '<div style="opacity:0.7;">Loading...</div>';
+    try {
+        const res = await fetch(`/api/v1/courses/${courseId}/teacher_dashboard?teacher=${studentAddr}`);
+        const data = await res.json();
+        if (data.status !== 'success') throw new Error(data.message || 'Failed');
+        if (!data.students || data.students.length === 0) {
+            table.innerHTML = '<div style="opacity:0.7;">No students yet.</div>';
+            return;
+        }
+        const rows = data.students.map(s => `
+            <tr>
+                <td>${s.student}</td>
+                <td>${s.tuition_paid ? '✅' : '⏳'}</td>
+                <td>${s.best_score || 0}%</td>
+                <td>${s.passed ? '✅' : '—'}</td>
+                <td>${s.reward_paid ? '✅' : '—'}</td>
+                <td>${s.reward_txid || '-'}</td>
+            </tr>`).join('');
+        table.innerHTML = `
+            <table style="width:100%;border-collapse:collapse;">
+                <thead>
+                    <tr>
+                        <th style="text-align:left;border-bottom:1px solid #1a5a2f;padding:6px;">Student</th>
+                        <th style="text-align:left;border-bottom:1px solid #1a5a2f;padding:6px;">Tuition</th>
+                        <th style="text-align:left;border-bottom:1px solid #1a5a2f;padding:6px;">Best Score</th>
+                        <th style="text-align:left;border-bottom:1px solid #1a5a2f;padding:6px;">Passed</th>
+                        <th style="text-align:left;border-bottom:1px solid #1a5a2f;padding:6px;">Reward Paid</th>
+                        <th style="text-align:left;border-bottom:1px solid #1a5a2f;padding:6px;">Reward TX</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+    } catch (e) {
+        table.innerHTML = `<div style="color:#ff6b6b;">${e.message}</div>`;
+    }
 }
 
 function startQuiz(){
@@ -197,6 +259,11 @@ function submitQuiz(){
         }
         alert(res.message || res.status || 'Submitted');
     }).catch(e=>alert(e.message));
+}
+
+const refreshTeacherBtn = document.getElementById('refreshTeacher');
+if (refreshTeacherBtn) {
+    refreshTeacherBtn.onclick = loadTeacherDashboard;
 }
 
 loadCourse();

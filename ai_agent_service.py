@@ -43,11 +43,11 @@ except Exception:
     ThronosAIScorer = None  # type: ignore
 
 from ai_interaction_ledger import record_ai_interaction
-from llm_registry import find_model, get_default_model, list_enabled_model_ids
+from llm_registry import find_model, get_default_model, list_enabled_model_ids, AI_MODEL_REGISTRY
 
 
 def _resolve_model(model: Optional[str]):
-    mode = os.getenv("THRONOS_AI_MODE", "all").lower()
+    mode = (os.getenv("THRONOS_AI_MODE", "all").strip().lower() or "all")
     if mode in ("router", "auto", "all"):
         normalized_mode = "all"
     elif mode == "openai_only":
@@ -55,17 +55,26 @@ def _resolve_model(model: Optional[str]):
     else:
         normalized_mode = mode
 
+    def _match_alias(candidate: str):
+        cand_norm = (candidate or "").strip().lower().replace(" ", "").replace("-", "")
+        for provider_models in AI_MODEL_REGISTRY.values():
+            for m in provider_models:
+                display_norm = m.display_name.lower().replace(" ", "").replace("-", "")
+                if cand_norm == display_norm:
+                    return m
+        return None
+
     if not model or model == "auto":
         env_default_id = (os.getenv("THRONOS_DEFAULT_MODEL_ID") or "gpt-4.1-mini").strip()
         if env_default_id:
-            env_default = find_model(env_default_id)
+            env_default = find_model(env_default_id) or _match_alias(env_default_id)
             if env_default and env_default.enabled:
                 if normalized_mode in ("all", env_default.provider):
                     return env_default
 
         return get_default_model(None if normalized_mode == "all" else normalized_mode)
 
-    info = find_model(model)
+    info = find_model(model) or _match_alias(model)
     if not info or not info.enabled:
         return None
 
@@ -75,7 +84,7 @@ def _resolve_model(model: Optional[str]):
 
 
 def call_openai(model: str, messages: List[Dict[str, str]], system_prompt: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 4096) -> Dict[str, Any]:
-    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    api_key = (os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip()
     if not api_key:
         logging.warning("missing OPENAI_API_KEY")
         raise RuntimeError("OpenAI API key missing")
@@ -197,7 +206,7 @@ def call_llm(
     resolved_model = resolved.id
     tier = resolved.tier
 
-    mode = os.getenv("THRONOS_AI_MODE", "all").lower()
+    mode = (os.getenv("THRONOS_AI_MODE", "all").strip().lower() or "all")
     if mode in ("router", "auto", "all"):
         normalized_mode = "all"
     elif mode == "openai_only":
@@ -305,7 +314,7 @@ class ThronosAI:
     """
 
     def __init__(self) -> None:
-        self.mode = os.getenv("THRONOS_AI_MODE", "auto").lower()
+        self.mode = (os.getenv("THRONOS_AI_MODE", "all").strip().lower() or "all")
 
         # Keys
         self.gemini_api_key = (os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")).strip()

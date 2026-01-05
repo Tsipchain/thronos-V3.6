@@ -2018,6 +2018,7 @@ def _save_session_selected_model(session_id: str, selected_model_id: str):
 
 
 def _ensure_session_type(session_id: str, session_type: str):
+    """Ensure a session carries the expected immutable session_type."""
     if not session_id:
         return False
     sessions = load_ai_sessions()
@@ -2025,7 +2026,14 @@ def _ensure_session_type(session_id: str, session_type: str):
     for s in sessions:
         if s.get("id") == session_id:
             meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
-            if meta.get("session_type") != session_type:
+            current = (s.get("session_type") or meta.get("session_type") or "chat").lower()
+            if current != session_type:
+                logger.warning(
+                    "session_type_mismatch",
+                    extra={"session_id": session_id, "expected": session_type, "found": current},
+                )
+                return False
+            if meta.get("session_type") is None:
                 meta["session_type"] = session_type
                 s["meta"] = meta
                 s["session_type"] = session_type
@@ -2245,6 +2253,13 @@ def ensure_session_exists(session_id: str, wallet: str | None, session_type: str
         sessions = load_ai_sessions()
         for s in sessions:
             if s.get("id") == session_id:
+                existing_type = (s.get("session_type") or (s.get("meta") or {}).get("session_type") or "chat").lower()
+                if session_type and existing_type != session_type:
+                    logger.warning(
+                        "session_type_conflict",
+                        extra={"session_id": session_id, "expected": session_type, "found": existing_type},
+                    )
+                    return {}
                 ensure_session_messages_file(session_id)
                 return s
 
@@ -3461,7 +3476,16 @@ def api_architect_generate():
     }
 
     if session_id:
-        _ensure_session_type(session_id, "architect")
+        if _ensure_session_type(session_id, "architect") is False:
+            return (
+                jsonify(
+                    ok=False,
+                    error="Session type mismatch",
+                    expected="architect",
+                    session_id=session_id,
+                ),
+                409,
+            )
 
     selected_model, fallback_notice, error_resp = _select_callable_model(model_key, session_type="architect")
     if error_resp:
@@ -4645,7 +4669,17 @@ def api_chat():
                 if s.get("id") == session_id:
                     stype = s.get("session_type") or (s.get("meta") or {}).get("session_type") or "chat"
                     if stype != "chat":
-                        session_id = None
+                        call_meta["failure_reason"] = "session_type_mismatch"
+                        return (
+                            jsonify(
+                                ok=False,
+                                error="Session type mismatch",
+                                expected="chat",
+                                found=stype,
+                                session_id=session_id,
+                            ),
+                            409,
+                        )
                     break
         except Exception:
             session_id = session_id
@@ -11384,8 +11418,9 @@ def api_ai_sessions_combined():
             "updated_at": now,
             "message_count": 0,
             "archived": False,
-            "meta": {"session_type": "chat"},
+            "meta": {"session_type": "chat", "selected_model_id": model or _default_model_id()},
             "session_type": "chat",
+            "selected_model_id": model or _default_model_id(),
         }
         sessions.append(session)
         save_ai_sessions(sessions)
@@ -11469,10 +11504,10 @@ def api_ai_session_update(session_id):
             break
 
     if not found:
-        return jsonify({"ok": False, "error": "Session not found"}), 404
+        return jsonify({"ok": True, "deleted": False}), 200
 
     save_ai_sessions(sessions)
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "deleted": True})
 
 
 @app.route("/api/ai_sessions/<session_id>/model", methods=["POST"])
@@ -11561,8 +11596,9 @@ def api_ai_session_start_v2():
         "updated_at": now,
         "message_count": 0,
         "archived": False,
-        "meta": {"selected_model_id": default_model_id},
+        "meta": {"selected_model_id": default_model_id, "session_type": "chat"},
         "selected_model_id": default_model_id,
+        "session_type": "chat",
     }
     sessions.append(session)
     save_ai_sessions(sessions)
@@ -11598,8 +11634,9 @@ def api_chat_session_new():
         "created_at": now,
         "updated_at": now,
         "archived": False,
-        "meta": {"selected_model_id": default_model_id},
+        "meta": {"selected_model_id": default_model_id, "session_type": "chat"},
         "selected_model_id": default_model_id,
+        "session_type": "chat",
     }
     sessions.append(session)
     save_ai_sessions(sessions)
@@ -11644,10 +11681,13 @@ def api_chat_session_get(session_id):
                 break
 
         if not found:
-            return jsonify(ok=False, error="Session not found"), 404
+            resp = make_response(jsonify(ok=True, deleted=False))
+            if guest_id:
+                resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+            return resp, 200
 
         save_ai_sessions(sessions)
-        resp = make_response(jsonify(ok=True))
+        resp = make_response(jsonify(ok=True, deleted=True))
         if guest_id:
             resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
         return resp, 200
@@ -11797,10 +11837,10 @@ def api_ai_session_delete_v2():
             break
     
     if not found:
-        return jsonify({"ok": False, "error": "Session not found"}), 404
-    
+        return jsonify({"ok": True, "deleted": False})
+
     save_ai_sessions(sessions)
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "deleted": True})
 
 
 # Add file upload endpoint

@@ -2285,6 +2285,12 @@ function getTxType(tx) {
     const rawType = (tx.type || '').toUpperCase();
     const note = (tx.note || tx.description || '').toUpperCase();
     const symbol = (tx.symbol || tx.asset_symbol || 'THR').toUpperCase();
+    const meta = tx.metadata || tx.meta || {};
+    const billingUnit = (meta.billing_unit || '').toLowerCase();
+    const sessionType = (meta.session_type || '').toLowerCase();
+
+    if (billingUnit === 'thr' || sessionType === 'architect') return 'architect';
+    if (billingUnit === 'credits' || sessionType === 'chat') return 'ai_credits';
 
     // Explicit classification rules (priority order)
     if (rawType.startsWith('ARCHITECT')) return 'architect';

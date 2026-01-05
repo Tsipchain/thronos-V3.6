@@ -1558,6 +1558,17 @@
             <button class="history-tab-btn" data-filter="bridge" onclick="filterHistory('bridge')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
                 <span class="lang-el">Bridge</span><span class="lang-en">Bridge</span>
             </button>
+            <button class="history-tab-btn" data-filter="swap" onclick="filterHistory('swap')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                <span class="lang-el">Swaps</span><span class="lang-en">Swaps</span>
+            </button>
+        </div>
+
+        <div id="tokenIndexBar" style="display:none; margin: 0 4px 10px 4px;">
+            <div style="display:flex; align-items:center; gap:6px; overflow-x:auto; padding-bottom:6px; scrollbar-width: thin;" id="tokenIndexScroll"></div>
+            <div style="display:flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 4px;">
+                <button class="history-tab-btn" style="flex:0 0 auto; min-width: 80px; padding: 6px 8px;" onclick="clearTokenFilter()">All Tokens</button>
+                <button class="history-tab-btn" style="flex:0 0 auto; min-width: 80px; padding: 6px 8px;" onclick="shareTokenFilter()">Share / Copy</button>
+            </div>
         </div>
 
         <div id="historyContent" style="max-height: 500px; overflow-y: auto;">
@@ -2232,6 +2243,7 @@ function playReceiveAudio() {
 // Wallet History Modal Functions
 let allTransactions = [];
 let currentHistoryFilter = 'all';
+let currentTokenFilter = null;
 
 function openWalletHistoryModal() {
     document.getElementById('walletHistoryModal').classList.add('active');
@@ -2244,8 +2256,13 @@ function closeWalletHistoryModal(event) {
     }
 }
 
-function filterHistory(filter) {
+function filterHistory(filter, tokenSymbol = null) {
     currentHistoryFilter = filter;
+    if (filter !== 'token') {
+        currentTokenFilter = null;
+    } else if (tokenSymbol) {
+        currentTokenFilter = tokenSymbol;
+    }
 
     // Update tab button styles
     document.querySelectorAll('.history-tab-btn').forEach(btn => {
@@ -2269,6 +2286,7 @@ function getTxType(tx) {
     const symbol = (tx.symbol || 'THR').toUpperCase();
 
     // Explicit classification rules
+    if (rawType.startsWith('SWAP_') || rawType.startsWith('DEX_') || rawType.startsWith('AMM_') || rawType.startsWith('LIQUIDITY_') || note.includes('SWAP') || note.includes('DEX') || note.includes('AMM') || note.includes('LIQUIDITY')) return 'swap';
     if (rawType.startsWith('L2E_') || rawType.includes('L2E') || rawType.includes('LEARN') || note.includes('L2E')) return 'l2e';
     if (rawType.startsWith('AI_') || rawType.startsWith('CREDITS_') || rawType.includes('CHAT') || note.includes('AI TRANSFER')) return 'ai';
     if (rawType.startsWith('IOT_') || rawType.includes('PARKING') || note.includes('IOT')) return 'iot';
@@ -2304,19 +2322,105 @@ function formatTxDate(timestamp) {
     }
 }
 
+function buildTokenIndexData() {
+    const counts = {};
+    allTransactions.forEach(tx => {
+        if (getTxType(tx) === 'token') {
+            const sym = (tx.symbol || '').toUpperCase() || 'TOKEN';
+            counts[sym] = (counts[sym] || 0) + 1;
+        }
+    });
+
+    const select = document.getElementById('sendToken');
+    if (select) {
+        Array.from(select.options).forEach(opt => {
+            const sym = (opt.value || '').toUpperCase();
+            if (sym && sym !== 'THR' && counts[sym] === undefined) {
+                counts[sym] = 0;
+            }
+        });
+    }
+
+    return Object.keys(counts)
+        .sort((a, b) => a.localeCompare(b))
+        .map(sym => ({ symbol: sym, count: counts[sym] }));
+}
+
+function renderTokenIndex() {
+    const scroll = document.getElementById('tokenIndexScroll');
+    const bar = document.getElementById('tokenIndexBar');
+    if (!scroll || !bar) return false;
+
+    const tokens = buildTokenIndexData();
+    if (!tokens || tokens.length === 0) {
+        scroll.innerHTML = '<div style="opacity:0.7; font-size:11px;">No tokens detected</div>';
+        return false;
+    }
+
+    let html = '';
+    tokens.forEach(token => {
+        const isActive = currentTokenFilter && currentTokenFilter.toUpperCase() === token.symbol;
+        const badge = `<span style="background:rgba(0,255,102,0.2); color:#00ff66; padding:1px 5px; border-radius:8px; font-size:9px;">${token.count}</span>`;
+        const chipStyle = isActive
+            ? 'background:rgba(0,255,102,0.25); border-color:rgba(0,255,102,0.6); color:#00ff66;'
+            : 'background:rgba(0,255,102,0.08); border-color:rgba(0,255,102,0.25); color:#00ff66;';
+
+        html += `<button class="history-tab-btn" style="flex:0 0 auto; min-width:70px; padding:6px 8px; display:flex; align-items:center; gap:6px; ${chipStyle}" onclick="filterHistory('token','${token.symbol}')">`;
+        html += `<span style="width:20px; height:20px; border-radius:50%; background: rgba(0,255,102,0.15); display:flex; align-items:center; justify-content:center; font-weight:bold;">${escapeHtml(token.symbol[0] || '?')}</span>`;
+        html += `<span style="font-size:11px;">${escapeHtml(token.symbol)}</span>${badge}`;
+        html += `</button>`;
+    });
+
+    scroll.innerHTML = html;
+    return true;
+}
+
+function clearTokenFilter() {
+    currentTokenFilter = null;
+    filterHistory('token');
+}
+
+function shareTokenFilter() {
+    const token = currentTokenFilter;
+    const text = token ? `#history=tokens&token=${encodeURIComponent(token)}` : '#history=tokens';
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => showToast('Copied to clipboard'));
+    } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        showToast('Copied to clipboard');
+    }
+}
+
 function renderHistory() {
     const content = document.getElementById('historyContent');
     const addr = walletSession.getAddress();
+    const tokenIndexBar = document.getElementById('tokenIndexBar');
 
     if (!allTransactions || allTransactions.length === 0) {
         content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions found</div>';
         return;
     }
 
+    if (currentHistoryFilter === 'token') {
+        const hasTokens = renderTokenIndex();
+        if (tokenIndexBar) tokenIndexBar.style.display = hasTokens ? 'block' : 'none';
+    } else if (tokenIndexBar) {
+        tokenIndexBar.style.display = 'none';
+    }
+
     // Filter transactions
     let filtered = allTransactions;
     if (currentHistoryFilter !== 'all') {
         filtered = allTransactions.filter(tx => getTxType(tx) === currentHistoryFilter);
+    }
+
+    if (currentHistoryFilter === 'token' && currentTokenFilter) {
+        filtered = filtered.filter(tx => (tx.symbol || '').toUpperCase() === currentTokenFilter.toUpperCase());
     }
 
     if (filtered.length === 0) {
@@ -2346,7 +2450,18 @@ function renderHistory() {
         const typeLabel = txType === 'l2e' ? 'L2E' :
                          txType === 'ai' ? 'AI' :
                          txType === 'iot' ? 'IoT' :
-                         txType === 'bridge' ? 'Bridge' : '';
+                         txType === 'bridge' ? 'Bridge' :
+                         txType === 'swap' ? 'Swap' : '';
+        const isSwap = txType === 'swap';
+        const amountInRaw = tx.amount_in ?? tx.amountIn ?? tx.input_amount ?? tx.amount ?? 0;
+        const amountIn = Number.isFinite(Number(amountInRaw)) ? Number(amountInRaw) : 0;
+        const amountOut = tx.amount_out ?? tx.amountOut ?? tx.output_amount ?? tx.received_amount;
+        const amountOutNum = (amountOut !== undefined && Number.isFinite(Number(amountOut))) ? Number(amountOut) : null;
+        const amountDisplay = isSwap
+            ? `${amountIn.toFixed(6)} ${tx.symbol_in || tx.from_symbol || tx.symbol || 'THR'}${amountOutNum !== null ? ` → ${amountOutNum.toFixed(6)} ${tx.symbol_out || tx.to_symbol || tx.target_symbol || tx.swap_out || ''}` : ''}`
+            : `${Number(amountInRaw || 0).toFixed(6)} ${tx.symbol || 'THR'}`;
+        const swapPair = isSwap ? (tx.pair || tx.route || `${(tx.swap_in || tx.from_symbol || tx.symbol || '?')}${tx.swap_out || tx.to_symbol || tx.target_symbol ? `/${tx.swap_out || tx.to_symbol || tx.target_symbol}` : ''}`) : '';
+        const swapDirection = isSwap ? (tx.direction || tx.side || '') : '';
 
         html += `
             <div style="background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 8px; padding: 12px;">
@@ -2357,11 +2472,12 @@ function renderHistory() {
                         ${typeLabel ? `<span style="background: rgba(0,191,255,0.2); color: #00bfff; padding: 2px 6px; border-radius: 4px; font-size: 10px;">${typeLabel}</span>` : ''}
                         ${statusBadge}
                     </div>
-                    <div style="font-weight: bold; color: #00ff66;">${Number(tx.amount || 0).toFixed(6)} ${tx.symbol || 'THR'}</div>
+                    <div style="font-weight: bold; color: #00ff66;">${amountDisplay}</div>
                 </div>
                 <div style="font-size: 11px; opacity: 0.7;">
                     ${isSent ? (isGreek ? 'Προς:' : 'To:') : (isGreek ? 'Από:' : 'From:')} ${shortAddr}
                 </div>
+                ${isSwap ? `<div style="font-size: 11px; opacity: 0.75; margin-top: 4px;">${isGreek ? 'Ζεύγος:' : 'Pair:'} ${escapeHtml(swapPair || 'Unknown pair')}${swapDirection ? ` • ${escapeHtml(swapDirection)}` : ''}</div>` : ''}
                 ${tx.timestamp ? `<div style="font-size: 10px; opacity: 0.5; margin-top: 4px;">${formatTxDate(tx.timestamp)}</div>` : ''}
             </div>
         `;

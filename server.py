@@ -30,7 +30,7 @@ from __future__ import annotations
 # - Real Fiat Gateway (Stripe + Bank Withdrawals) (V5.0)
 # - Admin Withdrawal Panel (V5.1)
 
-import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii
+import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile
 from collections import Counter
 from decimal import Decimal, ROUND_DOWN
 import qrcode
@@ -966,8 +966,19 @@ def load_json(path, default):
 
 def save_json(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    dir_name = os.path.dirname(path)
+    base_name = os.path.basename(path)
+    try:
+        with tempfile.NamedTemporaryFile("w", delete=False, dir=dir_name, prefix=f".{base_name}.", suffix=".tmp", encoding="utf-8") as tmp:
+            json.dump(data, tmp, ensure_ascii=False, indent=2)
+            tmp_path = tmp.name
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            if "tmp_path" in locals() and os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
 
 
 def _authorized_logging_request(req) -> bool:
@@ -1875,6 +1886,7 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
             "configured": pinfo.get("configured"),
             "library_loaded": pinfo.get("library_loaded", True),
             "has_key": pinfo.get("has_key", pinfo.get("configured")),
+            "key_sources_checked": pinfo.get("key_sources_checked") or pinfo.get("checked_env"),
         }
         if not pinfo.get("configured") or pinfo.get("library_loaded") is False:
             disabled_models.extend([m.id for m in models])
@@ -10384,6 +10396,26 @@ def api_v1_create_token():
 def api_v1_get_pools():
     """Return the list of all liquidity pools."""
     pools = load_pools()
+    try:
+        btc_data = fetch_btc_price()
+        btc_usd = float(btc_data.get("usd") or btc_data.get("eur") or 0)
+    except Exception:
+        btc_usd = 0.0
+    thr_usd = btc_usd * 0.0001 if btc_usd else 0.0
+
+    for pool in pools:
+        try:
+            reserves_a = float(pool.get("reserves_a", 0))
+            reserves_b = float(pool.get("reserves_b", 0))
+            price_a_thr = get_token_price_in_thr(pool.get("token_a", "THR"))
+            price_b_thr = get_token_price_in_thr(pool.get("token_b", "THR"))
+            tvl_thr = (reserves_a * price_a_thr) + (reserves_b * price_b_thr)
+            pool["tvl_thr"] = round(tvl_thr, 6)
+            pool["tvl_btc"] = round(tvl_thr * 0.0001, 8)
+            if thr_usd:
+                pool["tvl_usd"] = round(tvl_thr * thr_usd, 2)
+        except Exception:
+            continue
     return jsonify(pools=pools), 200
 
 
@@ -10885,7 +10917,8 @@ def api_v1_add_liquidity():
         "provider": provider,
         "timestamp": ts,
         "tx_id": tx_id,
-        "status": "confirmed"
+        "status": "confirmed",
+        "metadata": {"feature": "pools", "billing_unit": "thr"},
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
@@ -11038,7 +11071,8 @@ def api_v1_remove_liquidity():
         "provider": provider,
         "timestamp": ts,
         "tx_id": tx_id,
-        "status": "confirmed"
+        "status": "confirmed",
+        "metadata": {"feature": "pools", "billing_unit": "thr"},
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
@@ -11250,7 +11284,8 @@ def api_v1_pool_swap():
         "trader": trader,
         "timestamp": ts,
         "tx_id": tx_id,
-        "status": "confirmed"
+        "status": "confirmed",
+        "metadata": {"feature": "pools", "billing_unit": "thr"},
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
@@ -11566,10 +11601,10 @@ def api_ai_session_delete_by_id(session_id):
             break
 
     if not found:
-        return jsonify({"ok": False, "error": "Session not found"}), 404
+        return jsonify({"ok": True, "deleted": False}), 200
 
     save_ai_sessions(sessions)
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "deleted": True})
 
 
 @app.route("/api/ai/sessions/start", methods=["POST"])

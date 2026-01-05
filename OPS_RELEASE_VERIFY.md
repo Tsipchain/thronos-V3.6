@@ -14,3 +14,16 @@
 5. **Chat session stability**
    - Reset a chat session (clear messages) and refresh; session should remain listed with messages intact.
    - Delete a chat session and confirm the UI switches to another session without "session not found" loops.
+6. **Provider debugging**
+   - Verify `/api/ai/provider_status` lists key sources checked and any last errors per provider.
+   - `/api/ai/provider_status` and `/api/ai_models` agree on enabled providers when `THRONOS_AI_MODE` is `hybrid` or `all`.
+7. **AI callability**
+   - Chat request with a concrete model (e.g., `gpt-4.1-mini`) either succeeds or returns structured JSON with `call_attempted:false` and no charges.
+8. **Session flows**
+   - Deleting a session returns `{ok:true}`; the UI should move to another session without loading the deleted id.
+   - Resetting/clearing messages must not prune the session; refreshing should still show it.
+9. **Pools + history**
+   - `/pools` shows non-zero TVL estimates using wallet USD logic.
+   - Wallet history displays pool swaps/liquidity actions under the Swaps tab.
+10. **Menu and language**
+    - Wallet and language selectors remain visible and clickable at common desktop widths.

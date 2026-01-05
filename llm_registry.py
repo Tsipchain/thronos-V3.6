@@ -157,72 +157,61 @@ def _apply_env_flags() -> None:
 _apply_env_flags()
 
 
+def _provider_status_entry(configured: bool, key_sources: list[str], library_loaded: Optional[bool] = True, last_error: Optional[str] = None, extra: Optional[dict] = None) -> dict:
+    entry = {
+        "configured": configured,
+        "has_key": configured,
+        "library_loaded": library_loaded if library_loaded is not None else True,
+        "checked_env": key_sources,
+        "key_sources_checked": key_sources,
+        "missing_env": [] if configured else key_sources,
+        "last_sync_ok": True,
+        "last_error": last_error,
+        "source": "registry",
+    }
+    if extra:
+        entry.update(extra)
+    return entry
+
+
 def get_provider_status() -> dict:
     """
-    FIX 7: Return provider status with env var names checked.
-    Returns dict with provider → {configured: bool, checked_env: [str], missing_env: [str], source: str}
+    Return provider status with explicit key source tracing and library flags.
+    Never exposes secrets; only reports which env names were checked.
     """
     status = {}
 
-    # OpenAI
     openai_vars = ["OPENAI_API_KEY", "OPENAI_KEY"]
     openai_primary = (os.getenv("OPENAI_API_KEY") or "").strip()
     openai_legacy = (os.getenv("OPENAI_KEY") or "").strip()
     openai_configured = bool(openai_primary or openai_legacy)
-    status["openai"] = {
-        "configured": openai_configured,
-        "has_key": openai_configured,
-        "library_loaded": True,  # requests fallback supported
-        "checked_env": openai_vars,
-        "missing_env": [] if openai_configured else openai_vars,
-        "last_sync_ok": True,
-        "source": "registry"
-    }
+    status["openai"] = _provider_status_entry(
+        openai_configured,
+        openai_vars,
+        library_loaded=True,
+        extra={"configured_by": "OPENAI_API_KEY" if openai_primary else ("OPENAI_KEY" if openai_legacy else None)},
+    )
 
-    # Anthropic
     anthropic_vars = ["ANTHROPIC_API_KEY"]
     anthropic_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
     anthropic_configured = bool(anthropic_key)
-    status["anthropic"] = {
-        "configured": anthropic_configured,
-        "has_key": anthropic_configured,
-        "library_loaded": True,  # anthropic SDK imported lazily with fallback
-        "checked_env": anthropic_vars,
-        "missing_env": [] if anthropic_configured else anthropic_vars,
-        "last_sync_ok": True,
-        "source": "registry"
-    }
+    status["anthropic"] = _provider_status_entry(anthropic_configured, anthropic_vars, library_loaded=True)
 
-    # Gemini
     gemini_vars = ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
     gemini_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
     gemini_configured = bool(gemini_key)
-    status["gemini"] = {
-        "configured": gemini_configured,
-        "has_key": gemini_configured,
-        "library_loaded": bool(genai),
-        "checked_env": gemini_vars,
-        "missing_env": [] if gemini_configured else gemini_vars,
-        "last_sync_ok": True,
-        "source": "registry"
-    }
+    status["gemini"] = _provider_status_entry(gemini_configured, gemini_vars, library_loaded=bool(genai))
 
-    # Local (offline corpus)
     data_dir = os.getenv("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
     corpus_file = os.path.join(data_dir, "ai_offline_corpus.json")
     local_configured = os.path.exists(corpus_file)
-    status["local"] = {
-        "configured": local_configured,
-        "has_key": local_configured,
-        "library_loaded": True,
-        "checked_env": ["DATA_DIR"],
-        "missing_env": [] if local_configured else ["ai_offline_corpus.json"],
-        "corpus_file": corpus_file,
-        "last_sync_ok": True,
-        "source": "registry"
-    }
+    status["local"] = _provider_status_entry(
+        local_configured,
+        ["DATA_DIR"],
+        library_loaded=True,
+        extra={"corpus_file": corpus_file},
+    )
 
-    # Thronos (custom model)
     thronos_vars = ["CUSTOM_MODEL_URL", "THRONOS_AI_MODE"]
     custom_url = (os.getenv("CUSTOM_MODEL_URL") or os.getenv("CUSTOM_MODEL_URI") or "").strip()
     ai_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
@@ -232,15 +221,12 @@ def get_provider_status() -> dict:
         thronos_missing.append("CUSTOM_MODEL_URL (or legacy CUSTOM_MODEL_URI)")
     if ai_mode not in ("all", "router", "auto", "custom", "hybrid", ""):
         thronos_missing.append(f"THRONOS_AI_MODE={ai_mode} (restrictive)")
-    status["thronos"] = {
-        "configured": thronos_configured,
-        "has_key": thronos_configured,
-        "library_loaded": True,
-        "checked_env": thronos_vars,
-        "missing_env": thronos_missing,
-        "last_sync_ok": True,
-        "source": "registry"
-    }
+    status["thronos"] = _provider_status_entry(
+        thronos_configured,
+        thronos_vars,
+        library_loaded=True,
+        extra={"missing_env": thronos_missing},
+    )
 
     return status
 

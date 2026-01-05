@@ -47,21 +47,23 @@
     .navbar {
       background: #111;
       border-bottom: 1px solid #0f0;
-      padding: 0;
+      padding: 40px 0 0 0;
       margin-bottom: 30px;
       display: flex;
       justify-content: center;
       position: relative;
       flex-wrap: wrap;
+      min-height: 82px;
     }
     
     .nav-list {
       list-style: none;
       margin: 0;
-      padding: 0;
+      padding: 12px 0 0 0;
       display: flex;
       flex-wrap: wrap;
       justify-content: center;
+      width: 100%;
     }
     
     .nav-item {
@@ -127,11 +129,14 @@
     /* Top Bar Controls */
     .top-controls {
         position: absolute;
-        top: 10px;
-        right: 10px;
+        top: 8px;
+        right: 12px;
         display: flex;
         gap: 10px;
         z-index: 1100;
+        flex-wrap: wrap;
+        max-width: 360px;
+        justify-content: flex-end;
     }
     
     /* Wallet Status Indicator */
@@ -2288,9 +2293,11 @@ function getTxType(tx) {
     const meta = tx.metadata || tx.meta || {};
     const billingUnit = (meta.billing_unit || '').toLowerCase();
     const sessionType = (meta.session_type || '').toLowerCase();
+    const featureTag = (meta.feature || '').toLowerCase();
 
     if (billingUnit === 'thr' || sessionType === 'architect') return 'architect';
     if (billingUnit === 'credits' || sessionType === 'chat') return 'ai_credits';
+    if (featureTag === 'pools' || featureTag === 'swaps') return 'swap';
 
     // Explicit classification rules (priority order)
     if (rawType.startsWith('ARCHITECT')) return 'architect';

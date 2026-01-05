@@ -1035,6 +1035,7 @@
     const API_TELEMETRY = "/api/ai/telemetry";
     const API_FEEDBACK = "/api/ai/feedback";
     const API_MODELS = "/api/ai_models";
+    const API_SESSION_MODEL = (id) => `/api/ai_sessions/${id}/model`;
     const API_HEALTH = "/api/ai/providers/health";
     const ADMIN_SECRET_KEY = "thronos_admin_secret";
     const ADMIN_MODE_KEY = "thronos_admin_mode";
@@ -1067,6 +1068,8 @@
 
     let sessionMessages = [];
     let messagesBySession = {};
+    let defaultModelId = "auto";
+    let pendingModelSelection = null;
 
     function cacheDom() {
       sessionsListEl = document.getElementById("sessionsList");
@@ -1615,6 +1618,18 @@
           return;
         }
         const msgs = data.messages || [];
+        const sessionMeta = data.session || {};
+        const sessionModel =
+          sessionMeta.selected_model_id ||
+          (sessionMeta.meta && sessionMeta.meta.selected_model_id) ||
+          defaultModelId;
+        pendingModelSelection = sessionModel || defaultModelId;
+        applyModelSelection(pendingModelSelection);
+        const sessionIdx = aiSessions.findIndex((s) => s.id === id);
+        if (sessionIdx >= 0) {
+          aiSessions[sessionIdx].selected_model_id = sessionModel;
+          aiSessions[sessionIdx].meta = { ...(aiSessions[sessionIdx].meta || {}), selected_model_id: sessionModel };
+        }
         messagesBySession[id] = msgs;
         renderMessages(msgs);
         updateSessionMessageCount(id);
@@ -1854,113 +1869,99 @@
       if (notice) notice.remove();
     }
 
+    function applyModelSelection(preferred) {
+      if (!modelSelectEl) return;
+      const target = preferred || pendingModelSelection || defaultModelId || "auto";
+      if (target && !modelSelectEl.querySelector(`option[value="${target}"]`)) {
+        const opt = document.createElement("option");
+        opt.value = target;
+        opt.textContent = target;
+        modelSelectEl.appendChild(opt);
+      }
+      modelSelectEl.value = target;
+      pendingModelSelection = target;
+      if (modelStatusEl) modelStatusEl.textContent = target || "auto";
+    }
+
     async function loadModels() {
       if (!modelSelectEl) return;
 
-      const previousValue = modelSelectEl.value || "auto";
+      const previousValue = modelSelectEl.value || pendingModelSelection || defaultModelId || "auto";
       modelSelectEl.innerHTML = "";
       const autoOpt = document.createElement("option");
       autoOpt.value = "auto";
       autoOpt.textContent = "Auto (Thronos chooses)";
       modelSelectEl.appendChild(autoOpt);
 
-      const providerLabels = {
-        openai: "OpenAI (GPT)",
-        anthropic: "Anthropic (Claude)",
-        gemini: "Google Gemini",
-        local: "Thronos Offline Corpus",
-        thronos: "Thronos / Thrai",
-      };
-
       try {
         const res = await fetch(API_MODELS);
 
-        // Always attempt to parse JSON, even on error status
         let data = null;
         try {
           data = await res.json();
         } catch (e) {
           console.error("Failed to parse models response", e);
-          showDegradedModeNotice("Models API unreachable");
+          hideDegradedModeNotice();
+          applyModelSelection(previousValue);
           return;
         }
 
-        // Check for degraded mode
-        if (data.ok === false || data.fallback_active === true) {
-          showDegradedModeNotice(data.error_message || "Provider configuration unavailable");
-        } else {
-          hideDegradedModeNotice();
-        }
-        const providers = data.providers || {};
-        const models = data.models || [];
-        const providerStatus = data.provider_status || {};  // FIX 2: Get provider status
+        const models = Array.isArray(data.models) ? data.models : [];
+        defaultModelId = data.default_model_id || "auto";
 
         if (!models.length) {
-          autoOpt.textContent = "Auto only (router available)";
-          modelSelectEl.value = "auto";
+          autoOpt.textContent = "AUTO only (router available)";
+          applyModelSelection(defaultModelId);
           return;
         }
 
-        const providerOrder = ["openai", "anthropic", "gemini", "local", "thronos"];
-        let defaultSelected = false;
-
-        providerOrder.forEach((providerId) => {
-          const providerModels = models.filter((m) => m.provider === providerId);
-          if (!providerModels.length) return;
-
-          const optgroup = document.createElement("optgroup");
-          const meta = providers[providerId] || {};
-          optgroup.label = meta.name || providerLabels[providerId] || providerId;
-
-          providerModels.forEach((model) => {
-            const opt = document.createElement("option");
-            opt.value = model.id;
-            opt.dataset.provider = model.provider;
-
-            let label = model.display_name || model.label || model.id;
-            if (model.tier && model.tier !== "standard") {
-              label += ` · ${model.tier}`;
-            }
-            if (model.stats && model.stats.error_rate !== undefined) {
-              label += ` · err ${(model.stats.error_rate * 100).toFixed(1)}%`;
-            }
-            // FIX 2: If configured=true, NEVER show "missing"
-            const status = providerStatus[model.provider];
-            const isConfigured = status && status.configured;
-
-            if (!model.enabled || model.degraded) {
-              if (model.degraded) {
-                label += " (degraded)";
-              } else if (!isConfigured && status && status.missing_env && status.missing_env.length > 0) {
-                // Only show missing if configured=false
-                label += ` (missing: ${status.missing_env.join(" or ")})`;
-              } else if (!isConfigured) {
-                label += " (API key missing)";
-              }
-              // If configured=true but still disabled, don't add "missing" label
-              opt.disabled = true;
-            }
-            opt.textContent = label;
-
-            if (model.default && model.enabled && !defaultSelected) {
-              opt.selected = true;
-              defaultSelected = true;
-            }
-
-            optgroup.appendChild(opt);
-          });
-
-          if (optgroup.children.length) {
-            modelSelectEl.appendChild(optgroup);
+        models.forEach((model) => {
+          const opt = document.createElement("option");
+          opt.value = model.id;
+          opt.textContent = model.label || model.id;
+          if (model.enabled === false) {
+            opt.disabled = true;
+            opt.textContent += " (disabled)";
           }
+          modelSelectEl.appendChild(opt);
         });
 
-        if (!defaultSelected && previousValue && modelSelectEl.querySelector(`option[value="${previousValue}"]`)) {
-          modelSelectEl.value = previousValue;
-        }
+        applyModelSelection(previousValue);
       } catch (e) {
         console.warn("model load failed", e);
-        showDegradedModeNotice("Failed to load models");
+        autoOpt.textContent = "AUTO only (router available)";
+        applyModelSelection(defaultModelId);
+      }
+    }
+
+    async function persistModelSelection(modelId) {
+      if (!currentSessionId || !modelId) {
+        pendingModelSelection = modelId || defaultModelId;
+        return;
+      }
+
+      try {
+        const res = await fetch(API_SESSION_MODEL(currentSessionId), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model_id: modelId, wallet: walletInputEl.value.trim() || null }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+        const selected = data.selected_model_id || modelId;
+        applyModelSelection(selected);
+
+        const idx = aiSessions.findIndex((s) => s.id === currentSessionId);
+        if (idx >= 0) {
+          aiSessions[idx].selected_model_id = selected;
+          aiSessions[idx].meta = { ...(aiSessions[idx].meta || {}), selected_model_id: selected };
+        }
+        pendingModelSelection = selected;
+      } catch (e) {
+        console.warn("Failed to persist model selection", e);
+        applyModelSelection(modelId || defaultModelId);
       }
     }
 
@@ -1976,7 +1977,7 @@
       setSessionStatus("Sending…");
       usageStatusEl.textContent = "";
 
-      const model = modelSelectEl.value || "auto";
+      const model = modelSelectEl.value || pendingModelSelection || defaultModelId || "auto";
       modelStatusEl.textContent = model;
 
       const history = (sessionMessages || []).map((m) => ({
@@ -2111,6 +2112,14 @@
         }
         fileInputEl.value = "";
       });
+
+      if (modelSelectEl) {
+        modelSelectEl.addEventListener("change", (e) => {
+          const selected = e.target.value || defaultModelId;
+          pendingModelSelection = selected;
+          persistModelSelection(selected);
+        });
+      }
 
       clearPendingBtnEl.addEventListener("click", () => {
         pendingFiles = [];

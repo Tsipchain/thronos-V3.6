@@ -43,7 +43,7 @@ except Exception:
     ThronosAIScorer = None  # type: ignore
 
 from ai_interaction_ledger import record_ai_interaction
-from llm_registry import find_model, get_default_model
+from llm_registry import find_model, get_default_model, list_enabled_model_ids
 
 
 def _resolve_model(model: Optional[str]):
@@ -171,6 +171,7 @@ def call_llm(
     block_hash: Optional[str] = None,
 ) -> Dict[str, Any]:
     requested_model = model
+    enabled_model_ids = list_enabled_model_ids()
     resolved = _resolve_model(model)
     if not resolved:
         return {
@@ -178,7 +179,9 @@ def call_llm(
             "status": "model_not_found",
             "provider": None,
             "model": model,
-            "error": "Unknown or disabled model id",
+            "error": "unknown_or_disabled_model_id",
+            "enabled_model_ids": enabled_model_ids,
+            "default_model_id": get_default_model().id if get_default_model() else None,
         }
 
     provider = resolved.provider

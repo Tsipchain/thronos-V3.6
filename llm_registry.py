@@ -205,6 +205,25 @@ def find_model(model_id: str) -> Optional[ModelInfo]:
     return None
 
 
+def list_enabled_model_ids(mode: Optional[str] = None) -> List[str]:
+    """Return a list of enabled model ids, respecting THRONOS_AI_MODE if provided."""
+
+    normalized_mode = (mode or os.getenv("THRONOS_AI_MODE", "all")).strip().lower()
+    if normalized_mode in ("", "router", "auto", "hybrid"):
+        normalized_mode = "all"
+    if normalized_mode == "openai_only":
+        normalized_mode = "openai"
+
+    enabled_ids: List[str] = []
+    for provider_name, models in AI_MODEL_REGISTRY.items():
+        if normalized_mode != "all" and provider_name != normalized_mode:
+            continue
+        for m in models:
+            if m.enabled:
+                enabled_ids.append(m.id)
+    return enabled_ids
+
+
 def get_default_model(provider: Optional[str] = None) -> Optional[ModelInfo]:
     if provider:
         models = AI_MODEL_REGISTRY.get(provider, [])

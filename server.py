@@ -1821,32 +1821,45 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
     """Return a callable model id (or error response) respecting mode/provider availability."""
 
     provider_status = get_provider_status()
-    enabled_ids = set(list_enabled_model_ids())
+    raw_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
+    normalized_mode = "all" if raw_mode in ("", "router", "auto", "hybrid") else ("openai" if raw_mode == "openai_only" else raw_mode)
+
+    callable_ids = []
+    for provider_name, models in AI_MODEL_REGISTRY.items():
+        if normalized_mode != "all" and provider_name != normalized_mode:
+            continue
+        if not provider_status.get(provider_name, {}).get("configured"):
+            continue
+        for m in models:
+            callable_ids.append(m.id)
+
     default_model_id = _default_model_id()
-    requested = (model_id or "").strip() or default_model_id
+    if default_model_id not in callable_ids and callable_ids:
+        default_model_id = callable_ids[0]
+
+    requested = (model_id or "").strip() or default_model_id or "auto"
 
     fallback_notice = None
 
-    if requested and requested not in enabled_ids and requested != "auto":
-        fallback_notice = f"Model '{requested}' not enabled; using {default_model_id}"
+    if requested not in callable_ids and requested != "auto":
+        fallback_notice = f"Model '{requested}' not callable; using {default_model_id}" if default_model_id else None
         requested = default_model_id
 
-    resolved = _resolve_model(requested)
+    resolved = _resolve_model(requested, normalized_mode=normalized_mode, provider_status=provider_status) if requested else None
     if resolved:
         return resolved.id, fallback_notice, None
 
-    # Last-chance fallback to default model if mode/provider gating blocked the requested one
-    fallback = _resolve_model(default_model_id)
-    if fallback:
-        notice = fallback_notice or f"Model '{requested or 'auto'}' not available; using {fallback.id}"
-        return fallback.id, notice, None
+    for mid in callable_ids:
+        resolved = _resolve_model(mid, normalized_mode=normalized_mode, provider_status=provider_status)
+        if resolved:
+            notice = fallback_notice or f"Model '{requested or 'auto'}' not available; using {resolved.id}"
+            return resolved.id, notice, None
 
     # Nothing callable: return JSON error without charging
     disabled_models = []
     for provider, models in AI_MODEL_REGISTRY.items():
-        for m in models:
-            if not m.enabled:
-                disabled_models.append(m.id)
+        if not provider_status.get(provider, {}).get("configured"):
+            disabled_models.extend([m.id for m in models])
 
     missing_keys = [p for p, info in provider_status.items() if not info.get("configured")]
     error_payload = {
@@ -1856,9 +1869,11 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
         "suggested_model": default_model_id,
         "providers": provider_status,
         "requested_model": requested,
-        "mode": (os.getenv("THRONOS_AI_MODE") or "all").lower(),
+        "mode": normalized_mode,
         "missing_keys": missing_keys,
         "disabled_models": disabled_models,
+        "resolved_model": None,
+        "call_attempted": False,
         "session_type": (session_type or "unknown"),
     }
     return None, fallback_notice, (jsonify(error_payload), 200)
@@ -2041,6 +2056,8 @@ def prune_empty_sessions():
         return {"deleted": 0, "kept": 0, "errors": [f"load failed: {exc}"]}
 
     pruned = []
+    now = datetime.utcnow()
+    stale_hours = 24
     for session in sessions:
         sid = session.get("id") or session.get("session_id")
         if not sid:
@@ -2055,16 +2072,35 @@ def prune_empty_sessions():
         path = _session_messages_path(sid)
         try:
             if not os.path.exists(path):
-                result["deleted"] += 1
+                updated_at = session.get("updated_at") or session.get("created_at")
+                try:
+                    ts = datetime.fromisoformat(updated_at.replace("Z", "+00:00")) if updated_at else None
+                except Exception:
+                    ts = None
+                age_hours = (now - ts).total_seconds() / 3600 if ts else 0
+                if age_hours > stale_hours:
+                    result["deleted"] += 1
+                    continue
+                ensure_session_messages_file(sid)
+                pruned.append(session)
                 continue
 
             messages = load_json(path, [])
             if not messages:
+                updated_at = session.get("updated_at") or session.get("created_at")
                 try:
-                    os.remove(path)
-                except FileNotFoundError:
-                    pass
-                result["deleted"] += 1
+                    ts = datetime.fromisoformat(updated_at.replace("Z", "+00:00")) if updated_at else None
+                except Exception:
+                    ts = None
+                age_hours = (now - ts).total_seconds() / 3600 if ts else 0
+                if age_hours > stale_hours:
+                    try:
+                        os.remove(path)
+                    except FileNotFoundError:
+                        pass
+                    result["deleted"] += 1
+                    continue
+                pruned.append(session)
                 continue
 
             pruned.append(session)
@@ -3393,12 +3429,14 @@ def api_architect_generate():
         "session_id": session_id,
         "requested_model": model_key or "auto",
         "selected_model": None,
+        "resolved_model": None,
         "resolved_provider": None,
         "call_attempted": False,
         "failure_reason": None,
         "provider_status": get_provider_status(),
         "session_type": "architect",
         "billing_unit": "thr",
+        "charged": False,
     }
 
     if session_id:
@@ -3487,6 +3525,7 @@ def api_architect_generate():
     resolved_info = _resolve_model(model_key)
     if resolved_info:
         call_meta["selected_model"] = resolved_info.id
+        call_meta["resolved_model"] = resolved_info.id
         call_meta["resolved_provider"] = resolved_info.provider
     try:
         call_meta["call_attempted"] = True
@@ -4564,12 +4603,14 @@ def api_chat():
         "session_id": session_id,
         "requested_model": model_key or "auto",
         "selected_model": None,
+        "resolved_model": None,
         "resolved_provider": None,
         "call_attempted": False,
         "failure_reason": None,
         "provider_status": get_provider_status(),
         "session_type": "chat",
         "billing_unit": "credits",
+        "charged": False,
     }
 
     if session_id:
@@ -4600,11 +4641,13 @@ def api_chat():
         resolved = _resolve_model(model_key)
         if resolved:
             call_meta["selected_model"] = resolved.id
+            call_meta["resolved_model"] = resolved.id
             call_meta["resolved_provider"] = resolved.provider
     elif model_key:
         resolved = _resolve_model(model_key)
         if resolved:
             call_meta["selected_model"] = resolved.id
+            call_meta["resolved_model"] = resolved.id
             call_meta["resolved_provider"] = resolved.provider
 
     if session_id:
@@ -4860,6 +4903,8 @@ def api_chat():
         except Exception:
             credits_for_frontend = "infinite"
         ai_credits_spent = 0.0
+
+    call_meta["charged"] = bool(ai_credits_spent and ai_credits_spent > 0)
 
     resp_files = []
     for f in files or []:

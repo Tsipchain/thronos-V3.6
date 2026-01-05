@@ -43,17 +43,33 @@ except Exception:
     ThronosAIScorer = None  # type: ignore
 
 from ai_interaction_ledger import record_ai_interaction
-from llm_registry import find_model, get_default_model, list_enabled_model_ids, AI_MODEL_REGISTRY
+from llm_registry import (
+    find_model,
+    get_default_model,
+    list_enabled_model_ids,
+    AI_MODEL_REGISTRY,
+    get_provider_status,
+)
 
 
-def _resolve_model(model: Optional[str]):
-    mode = (os.getenv("THRONOS_AI_MODE", "all").strip().lower() or "all")
-    if mode in ("router", "auto", "all"):
+def _resolve_model(
+    model: Optional[str],
+    normalized_mode: Optional[str] = None,
+    provider_status: Optional[dict] = None,
+):
+    raw_mode = normalized_mode or (os.getenv("THRONOS_AI_MODE", "all").strip().lower() or "all")
+    if raw_mode in ("router", "auto", "all", "hybrid"):
         normalized_mode = "all"
-    elif mode == "openai_only":
+    elif raw_mode == "openai_only":
         normalized_mode = "openai"
     else:
-        normalized_mode = mode
+        normalized_mode = raw_mode
+
+    provider_status = provider_status or get_provider_status()
+
+    def _provider_configured(provider: str) -> bool:
+        info = provider_status.get(provider) if isinstance(provider_status, dict) else None
+        return bool(info and info.get("configured"))
 
     def _match_alias(candidate: str):
         cand_norm = (candidate or "").strip().lower().replace(" ", "").replace("-", "")
@@ -68,17 +84,29 @@ def _resolve_model(model: Optional[str]):
         env_default_id = (os.getenv("THRONOS_DEFAULT_MODEL_ID") or "gpt-4.1-mini").strip()
         if env_default_id:
             env_default = find_model(env_default_id) or _match_alias(env_default_id)
-            if env_default and env_default.enabled:
-                if normalized_mode in ("all", env_default.provider):
-                    return env_default
+            if env_default and (normalized_mode in ("all", env_default.provider)) and _provider_configured(env_default.provider):
+                return env_default
 
-        return get_default_model(None if normalized_mode == "all" else normalized_mode)
+        fallback = get_default_model(None if normalized_mode == "all" else normalized_mode)
+        if fallback and _provider_configured(fallback.provider):
+            return fallback
+
+        for provider_name, model_list in AI_MODEL_REGISTRY.items():
+            if normalized_mode != "all" and provider_name != normalized_mode:
+                continue
+            if not _provider_configured(provider_name):
+                continue
+            if model_list:
+                return model_list[0]
+        return None
 
     info = find_model(model) or _match_alias(model)
-    if not info or not info.enabled:
+    if not info:
         return None
 
     if normalized_mode != "all" and info.provider != normalized_mode:
+        return None
+    if not _provider_configured(info.provider):
         return None
     return info
 
@@ -207,7 +235,7 @@ def call_llm(
     tier = resolved.tier
 
     mode = (os.getenv("THRONOS_AI_MODE", "all").strip().lower() or "all")
-    if mode in ("router", "auto", "all"):
+    if mode in ("router", "auto", "all", "hybrid"):
         normalized_mode = "all"
     elif mode == "openai_only":
         normalized_mode = "openai"

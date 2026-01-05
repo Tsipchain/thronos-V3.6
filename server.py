@@ -3556,6 +3556,7 @@ def api_architect_generate():
         except Exception as e:
             app.logger.error("Architect zip build failed: %s", e)
 
+    call_meta["response_status"] = status
     _log_ai_call(call_meta)
     return jsonify({
         "status": status,
@@ -4877,6 +4878,7 @@ def api_chat():
             resp["score"] = scoring
         except Exception:
             logger.exception("Failed to append AI score")
+    call_meta["response_status"] = status
     _log_ai_call(call_meta)
     return jsonify(resp), 200
 

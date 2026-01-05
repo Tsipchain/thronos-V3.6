@@ -354,6 +354,22 @@
       color: var(--muted);
     }
 
+    .session-status-pill.chat {
+      border-color: rgba(0, 200, 255, 0.4);
+      color: #9ed8ff;
+    }
+
+    .session-status-pill.architect {
+      border-color: rgba(255, 180, 90, 0.4);
+      color: #ffd7a0;
+    }
+
+    .session-hint {
+      margin: 6px 0 4px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
     .session-status-pill span {
       color: var(--accent);
     }
@@ -915,6 +931,7 @@
             </button>
           </div>
         </div>
+        <div class="session-hint">Chat sessions burn AI Credits only. Architect sessions consume THR and return blueprints; session type is locked at creation.</div>
         <ul id="sessionsList" class="sessions-list"></ul>
       </section>
 
@@ -1112,6 +1129,12 @@
       if (mode) uploadStatusEl.classList.add(mode);
     }
 
+    function sessionTypeLabel(meta = {}) {
+      const raw =
+        meta.session_type || (meta.meta && meta.meta.session_type) || "chat";
+      return String(raw || "chat").toUpperCase();
+    }
+
     function setSessionStatus(text) {
       sessionStatusTagEl.textContent = text;
     }
@@ -1297,10 +1320,10 @@
         });
 
         const statusPill = document.createElement("div");
-        statusPill.className = "session-status-pill";
-        statusPill.innerHTML = `<span>${(s.model || "auto").toUpperCase()}</span> · ${
-          s.created_at || ""
-        }`;
+        const sessionType = sessionTypeLabel(s);
+        statusPill.className = `session-status-pill ${sessionType === "ARCHITECT" ? "architect" : "chat"}`;
+        const badgeIcon = sessionType === "ARCHITECT" ? "🏗️" : "💬";
+        statusPill.innerHTML = `<span>${badgeIcon} ${sessionType}</span> · ${(s.model || "auto").toUpperCase()}`;
 
         nameRow.appendChild(checkbox);
         nameRow.appendChild(nameSpan);
@@ -1636,7 +1659,8 @@
         updateSessionMessageCount(id);
         renderSessions();
         persistSessionCache();
-        setSessionStatus("Ready");
+        const sessionType = sessionTypeLabel(sessionMeta);
+        setSessionStatus(`${sessionType} session`);
       } catch (e) {
         console.error("loadSessionMessages error", e);
         setSessionStatus("Failed to load messages");

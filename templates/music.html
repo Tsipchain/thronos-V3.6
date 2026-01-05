@@ -86,12 +86,39 @@
         border-radius: 12px;
         overflow: hidden;
         transition: all 0.3s;
+        cursor: pointer;
     }
 
     .track-card:hover {
         border-color: #ff6600;
         box-shadow: 0 0 20px rgba(255, 102, 0, 0.3);
         transform: translateY(-3px);
+    }
+
+    /* QUEST: Now Playing Highlight */
+    .track-card.now-playing {
+        border: 2px solid #ff6600;
+        background: linear-gradient(135deg, rgba(255, 102, 0, 0.2) 0%, rgba(255, 136, 0, 0.1) 100%);
+        box-shadow: 0 0 30px rgba(255, 102, 0, 0.5);
+        transform: scale(1.02);
+    }
+
+    .track-card.now-playing .track-title {
+        color: #ff6600;
+    }
+
+    .track-card.now-playing::before {
+        content: '▶️';
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        background: rgba(255, 102, 0, 0.9);
+        color: #000;
+        padding: 5px 10px;
+        border-radius: 15px;
+        font-size: 12px;
+        z-index: 10;
+        font-weight: bold;
     }
 
     .track-cover {
@@ -174,7 +201,7 @@
         color: #ffd700;
     }
 
-    /* Audio Player */
+    /* Audio Player - QUEST: Ensure it's visible and not behind footer */
     .player-container {
         position: fixed;
         bottom: 0;
@@ -184,7 +211,8 @@
         border-top: 2px solid #ff6600;
         padding: 15px 20px;
         display: none;
-        z-index: 1000;
+        z-index: 2900; /* Above chain tokens widget (2800) */
+        backdrop-filter: blur(10px);
     }
 
     .player-container.active {
@@ -775,12 +803,14 @@ function renderTracks(tracks, containerId) {
     if (emptyEl) emptyEl.style.display = 'none';
 
     container.innerHTML = tracks.map(track => `
-        <div class="track-card">
+        <div class="track-card ${currentTrack && currentTrack.id === track.id ? 'now-playing' : ''}"
+             data-track-id="${track.id}"
+             onclick="playTrack('${track.id}')">
             <div class="track-cover">
                 ${track.cover_path || track.cover_url
                     ? `<img src="${track.cover_path ? '/media/' + track.cover_path : track.cover_url}" alt="${track.title}" onerror="this.src='/static/img/logo.png'">`
                     : '🎵'}
-                <button class="track-play-btn" onclick="playTrack('${track.id}')">▶️</button>
+                <button class="track-play-btn" onclick="event.stopPropagation(); playTrack('${track.id}')">▶️</button>
             </div>
             <div class="track-info">
                 <div class="track-title">${track.title}</div>
@@ -805,6 +835,14 @@ async function playTrack(trackId) {
 
     currentTrack = track;
 
+    // QUEST: Remove highlight from all tracks, add to current
+    document.querySelectorAll('.track-card').forEach(card => {
+        card.classList.remove('now-playing');
+    });
+    document.querySelectorAll(`[data-track-id="${trackId}"]`).forEach(card => {
+        card.classList.add('now-playing');
+    });
+
     // Record play
     const wallet = localStorage.getItem('thr_address');
     fetch(`/api/v1/music/play/${trackId}`, {
@@ -825,6 +863,14 @@ async function playTrack(trackId) {
     audioElement.src = track.audio_url;
     audioElement.play();
     document.getElementById('playPauseBtn').textContent = '⏸️';
+
+    // QUEST: Scroll player into view if needed
+    setTimeout(() => {
+        const playerEl = document.getElementById('playerContainer');
+        if (playerEl && playerEl.classList.contains('active')) {
+            playerEl.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        }
+    }, 100);
 }
 
 function togglePlay() {

@@ -2757,6 +2757,11 @@ def bridge_page():
 def iot_page():
     return render_template("iot.html")
 
+@app.route("/parking")
+def parking_page():
+    """QUEST: New parking route with map template"""
+    return render_template("parking.html")
+
 @app.route("/swap")
 def swap_page():
     return render_template("swap.html")
@@ -9096,16 +9101,25 @@ def api_v1_complete_course(course_id: str):
     # Check enrollment and completion status
     if student not in course.get("students", []):
         return jsonify(status="error", message="Student not enrolled"), 400
-    if student in course.get("completed", []):
-        return jsonify(status="success", message="Already completed"), 200
+
+    # QUEST: Track completion status per student with reward_paid flag
+    completions = course.setdefault("completions", {})
+    student_completion = completions.get(student, {})
+
+    # Check if student already received reward
+    if student_completion.get("reward_paid", False):
+        return jsonify(status="success", message="Reward already paid"), 200
+
     # Determine reward
     reward = float(course.get("reward_l2e", 0.0))
     if reward <= 0:
         return jsonify(status="error", message="Invalid reward"), 500
+
     # Update L2E ledger
     l2e_ledger = load_json(L2E_LEDGER_FILE, {})
     l2e_ledger[student] = round(float(l2e_ledger.get(student, 0.0)) + reward, 6)
     save_json(L2E_LEDGER_FILE, l2e_ledger)
+
     # Record reward transaction
     chain = load_json(CHAIN_FILE, [])
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
@@ -9128,10 +9142,119 @@ def api_v1_complete_course(course_id: str):
         broadcast_tx(tx)
     except Exception:
         pass
-    # Mark as completed
-    course.setdefault("completed", []).append(student)
+
+    # QUEST: Mark as completed with reward tracking
+    completions[student] = {
+        "completed": True,
+        "reward_paid": True,
+        "reward_txid": tx_id,
+        "best_score": student_completion.get("best_score", 100),
+        "completion_date": ts
+    }
+
+    # Legacy support: also append to completed list
+    if student not in course.get("completed", []):
+        course.setdefault("completed", []).append(student)
+
     save_courses(courses)
     return jsonify(status="success", tx=tx), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/reconcile", methods=["POST"])
+def api_v1_reconcile_course_reward(course_id: str):
+    """
+    QUEST: Reconcile reward for students who completed but reward_paid=false.
+    Allows one-time payout for cases where old state exists (completed=true but no reward).
+    """
+    data = request.get_json() or {}
+    student = (data.get("student_thr") or "").strip()
+    teacher = (data.get("teacher_thr") or "").strip()
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+
+    if not student or not teacher or not auth_secret:
+        return jsonify(status="error", message="Missing required fields"), 400
+
+    # Fetch course
+    courses = load_courses()
+    course = next((c for c in courses if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+
+    # Verify teacher
+    if course.get("teacher") != teacher:
+        return jsonify(status="error", message="Only course creator can reconcile"), 403
+
+    # Authenticate teacher
+    stored_auth_hash = get_auth_hash(teacher)
+    if not stored_auth_hash:
+        return jsonify(status="error", message="Teacher not registered"), 403
+
+    if passphrase:
+        auth_string = hashlib.sha256(f"{auth_secret}:{passphrase}".encode()).hexdigest() + ":passphrase"
+    else:
+        auth_string = f"{auth_secret}:auth"
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify(status="error", message="Invalid auth"), 403
+
+    # Check if student completed but didn't get reward
+    completions = course.get("completions", {})
+    student_completion = completions.get(student, {})
+
+    # Check legacy completed list if completions dict doesn't exist
+    if not student_completion and student in course.get("completed", []):
+        student_completion = {"completed": True, "reward_paid": False}
+
+    if not student_completion.get("completed", False):
+        return jsonify(status="error", message="Student has not completed course"), 400
+
+    if student_completion.get("reward_paid", False):
+        return jsonify(status="error", message="Reward already paid"), 400
+
+    # Pay reward
+    reward = float(course.get("reward_l2e", 0.0))
+    if reward <= 0:
+        return jsonify(status="error", message="Invalid reward"), 500
+
+    # Update L2E ledger
+    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
+    l2e_ledger[student] = round(float(l2e_ledger.get(student, 0.0)) + reward, 6)
+    save_json(L2E_LEDGER_FILE, l2e_ledger)
+
+    # Record reward transaction
+    chain = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx_id = f"L2E-RECONCILE-{len(chain)}-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "l2e_reward",
+        "from": "course_reconcile",
+        "to": student,
+        "thr_address": teacher,
+        "amount": round(reward, 6),
+        "course_id": course_id,
+        "timestamp": ts,
+        "tx_id": tx_id,
+        "status": "confirmed"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+    try:
+        broadcast_tx(tx)
+    except Exception:
+        pass
+
+    # Update completion record
+    course.setdefault("completions", {})[student] = {
+        "completed": True,
+        "reward_paid": True,
+        "reward_txid": tx_id,
+        "best_score": student_completion.get("best_score", 100),
+        "reconcile_date": ts
+    }
+
+    save_courses(courses)
+    return jsonify(status="success", message="Reward reconciled", tx=tx), 200
 
 
 # ─── Quiz API for Courses ──────────────────────────────────────────────

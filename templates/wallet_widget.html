@@ -56,7 +56,7 @@
         }
 
         .wallet-widget {
-            max-width: 400px;
+            max-width: 500px;
             margin: 0 auto;
             background: var(--widget-panel);
             border: 1px solid var(--widget-border);
@@ -64,6 +64,248 @@
             padding: 20px;
             box-shadow: 0 0 30px rgba(0, 255, 102, 0.1);
             position: relative;
+        }
+
+        /* Wallet Action Buttons */
+        .wallet-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .wallet-btn {
+            flex: 1;
+            padding: 10px;
+            background: rgba(0, 255, 102, 0.1);
+            border: 1px solid var(--widget-border);
+            color: var(--widget-accent);
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .wallet-btn:hover {
+            background: rgba(0, 255, 102, 0.2);
+            border-color: var(--widget-accent);
+        }
+
+        /* Modal Styles */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 5000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: var(--widget-panel);
+            border: 2px solid var(--widget-accent);
+            border-radius: 16px;
+            padding: 25px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            position: relative;
+        }
+
+        .modal-close {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: none;
+            border: none;
+            color: var(--widget-muted);
+            font-size: 24px;
+            cursor: pointer;
+            padding: 5px 10px;
+        }
+
+        .modal-close:hover {
+            color: var(--widget-accent);
+        }
+
+        .modal-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--widget-accent);
+            margin-bottom: 20px;
+            padding-right: 30px;
+        }
+
+        /* Transaction History Styles */
+        .tx-item {
+            padding: 12px;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--widget-border);
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+
+        .tx-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .tx-amount {
+            font-weight: 700;
+            font-family: monospace;
+        }
+
+        .tx-amount.incoming {
+            color: var(--widget-accent);
+        }
+
+        .tx-amount.outgoing {
+            color: #ffd700;
+        }
+
+        .tx-details {
+            font-size: 11px;
+            color: var(--widget-muted);
+            word-break: break-all;
+        }
+
+        .tx-status {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        .tx-status.confirmed {
+            background: rgba(0, 255, 102, 0.2);
+            color: var(--widget-accent);
+        }
+
+        .tx-status.pending {
+            background: rgba(255, 215, 0, 0.2);
+            color: #ffd700;
+        }
+
+        /* Send Form Styles */
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 11px;
+            color: var(--widget-muted);
+            margin-bottom: 6px;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 10px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid var(--widget-border);
+            color: var(--widget-fg);
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 13px;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--widget-accent);
+            box-shadow: 0 0 10px rgba(0, 255, 102, 0.2);
+        }
+
+        .form-submit {
+            width: 100%;
+            padding: 12px;
+            background: var(--widget-accent);
+            color: var(--widget-bg);
+            border: none;
+            border-radius: 8px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .form-submit:hover {
+            background: var(--widget-muted);
+            transform: translateY(-1px);
+        }
+
+        .form-submit:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Bridge Tab Styles */
+        .wallet-tabs {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 20px;
+            border-bottom: 1px solid var(--widget-border);
+        }
+
+        .wallet-tab {
+            padding: 10px 15px;
+            background: transparent;
+            border: none;
+            color: var(--widget-muted);
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            border-bottom: 2px solid transparent;
+            transition: all 0.3s;
+        }
+
+        .wallet-tab.active {
+            color: var(--widget-accent);
+            border-bottom-color: var(--widget-accent);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .deposit-address {
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid var(--widget-border);
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 15px;
+            word-break: break-all;
+            font-family: monospace;
+            font-size: 12px;
+            text-align: center;
+        }
+
+        .copy-btn {
+            margin-top: 10px;
+            padding: 8px 16px;
+            background: rgba(0, 255, 102, 0.1);
+            border: 1px solid var(--widget-accent);
+            color: var(--widget-accent);
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+
+        .copy-btn:hover {
+            background: rgba(0, 255, 102, 0.2);
         }
 
         .widget-header {
@@ -497,6 +739,83 @@
         </div>
     </div>
 
+    <!-- History Modal -->
+    <div class="modal-overlay" id="historyModal">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeHistoryModal()">×</button>
+            <div class="modal-title"><span class="lang-el">Ιστορικό Συναλλαγών</span><span class="lang-en">Transaction History</span></div>
+            <div id="historyContent">
+                <p style="color: var(--widget-muted);">Loading...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Send Modal -->
+    <div class="modal-overlay" id="sendModal">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeSendModal()">×</button>
+            <div class="modal-title"><span class="lang-el">Αποστολή Tokens</span><span class="lang-en">Send Tokens</span></div>
+            <form id="sendForm" onsubmit="handleSend(event)">
+                <div class="form-group">
+                    <label class="form-label"><span class="lang-el">Προς Διεύθυνση</span><span class="lang-en">To Address</span></label>
+                    <input type="text" class="form-input" id="sendToAddress" placeholder="THR..." required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label"><span class="lang-el">Ποσό</span><span class="lang-en">Amount</span></label>
+                    <input type="number" class="form-input" id="sendAmount" placeholder="0.0" step="0.000001" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label"><span class="lang-el">Token</span><span class="lang-en">Token</span></label>
+                    <select class="form-input" id="sendToken">
+                        <option value="THR">THR</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label"><span class="lang-el">Μυστικό Αποστολής</span><span class="lang-en">Send Secret</span></label>
+                    <input type="password" class="form-input" id="sendSecret" placeholder="auth_secret" required>
+                </div>
+                <div id="sendStatus" style="margin: 15px 0; min-height: 20px; color: var(--widget-muted); font-size: 12px;"></div>
+                <button type="submit" class="form-submit" id="sendSubmitBtn">
+                    <span class="lang-el">Αποστολή</span><span class="lang-en">Send</span>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Bridge Modal -->
+    <div class="modal-overlay" id="bridgeModal">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeBridgeModal()">×</button>
+            <div class="modal-title"><span class="lang-el">Bridge - Κατάθεση BTC</span><span class="lang-en">Bridge - BTC Deposit</span></div>
+            <div class="wallet-tabs">
+                <button class="wallet-tab active" onclick="switchBridgeTab('deposit')">
+                    <span class="lang-el">Κατάθεση</span><span class="lang-en">Deposit</span>
+                </button>
+                <button class="wallet-tab" onclick="switchBridgeTab('withdraw')">
+                    <span class="lang-el">Ανάληψη</span><span class="lang-en">Withdraw</span>
+                </button>
+            </div>
+            <div id="depositTab" class="tab-content active">
+                <p style="color: var(--widget-muted); font-size: 12px; margin-bottom: 15px;">
+                    <span class="lang-el">Στείλτε BTC στη διεύθυνση κατάθεσης για να λάβετε wBTC</span>
+                    <span class="lang-en">Send BTC to the deposit address to receive wBTC</span>
+                </p>
+                <div id="depositAddressContainer">
+                    <p style="color: var(--widget-muted);">Loading deposit address...</p>
+                </div>
+            </div>
+            <div id="withdrawTab" class="tab-content">
+                <p style="color: var(--widget-muted); font-size: 12px;">
+                    <span class="lang-el">Η λειτουργία ανάληψης είναι διαθέσιμη στο πλήρες Bridge interface</span>
+                    <span class="lang-en">Withdrawal function is available in the full Bridge interface</span>
+                </p>
+                <a href="/bridge" class="form-submit" style="display: block; text-align: center; text-decoration: none; margin-top: 15px;">
+                    <span class="lang-el">Άνοιγμα Bridge</span><span class="lang-en">Open Bridge</span>
+                </a>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Translations
         const TRANSLATIONS = {
@@ -508,7 +827,13 @@
                 lastUpdated: "Τελευταία ενημέρωση",
                 refresh: "🔄 Ανανέωση",
                 errorLoading: "Σφάλμα φόρτωσης πορτοφολιού",
-                retry: "Δοκιμάστε ξανά"
+                retry: "Δοκιμάστε ξανά",
+                history: "Ιστορικό",
+                send: "Αποστολή",
+                bridge: "Bridge",
+                transactionHistory: "Ιστορικό Συναλλαγών",
+                sendTokens: "Αποστολή Tokens",
+                bridgeDeposit: "Bridge Κατάθεση"
             },
             en: {
                 walletBalance: "💎 Wallet Balance",
@@ -518,7 +843,13 @@
                 lastUpdated: "Last updated",
                 refresh: "🔄 Refresh",
                 errorLoading: "Error loading wallet",
-                retry: "Retry"
+                retry: "Retry",
+                history: "History",
+                send: "Send",
+                bridge: "Bridge",
+                transactionHistory: "Transaction History",
+                sendTokens: "Send Tokens",
+                bridgeDeposit: "Bridge Deposit"
             },
             ja: {
                 walletBalance: "💎 ウォレット残高",
@@ -660,6 +991,12 @@
                     <div class="last-updated">${t('lastUpdated')}: ${data.last_updated}</div>
                     <button class="refresh-btn" onclick="loadWalletData()">${t('refresh')}</button>
                 </div>
+
+                <div class="wallet-actions">
+                    <button class="wallet-btn" onclick="openHistoryModal()">📜 ${t('history')}</button>
+                    <button class="wallet-btn" onclick="openSendModal()">📤 ${t('send')}</button>
+                    <button class="wallet-btn" onclick="openBridgeModal()">🌉 ${t('bridge')}</button>
+                </div>
             `;
 
             widget.innerHTML = html;
@@ -769,6 +1106,254 @@
                 applyLanguage();
             }
         };
+
+        // ========== QUEST: Wallet Widget Modals ==========
+
+        // History Modal
+        async function openHistoryModal() {
+            document.getElementById('historyModal').classList.add('active');
+            document.getElementById('historyContent').innerHTML = '<p style="color: var(--widget-muted);">Loading...</p>';
+
+            try {
+                const res = await fetch(`/wallet_data/${walletAddress}`);
+                if (!res.ok) throw new Error('Failed to load history');
+                const data = await res.json();
+
+                const transactions = data.transactions || [];
+                if (transactions.length === 0) {
+                    document.getElementById('historyContent').innerHTML = '<p style="color: var(--widget-muted); text-align: center;">No transactions found</p>';
+                    return;
+                }
+
+                let html = '';
+                transactions.reverse().forEach(tx => {
+                    const isIncoming = tx.to === walletAddress;
+                    const amountClass = isIncoming ? 'incoming' : 'outgoing';
+                    const sign = isIncoming ? '+' : '-';
+                    const status = tx.status || 'confirmed';
+
+                    html += `
+                        <div class="tx-item">
+                            <div class="tx-header">
+                                <span class="tx-amount ${amountClass}">${sign}${tx.amount || 0} ${tx.token || 'THR'}</span>
+                                <span class="tx-status ${status}">${status.toUpperCase()}</span>
+                            </div>
+                            <div class="tx-details">
+                                ${isIncoming ? 'From: ' : 'To: '} ${isIncoming ? tx.from : tx.to}<br>
+                                ${tx.timestamp || 'Unknown time'}<br>
+                                TXID: ${(tx.tx_id || 'pending').substring(0, 16)}...
+                            </div>
+                        </div>
+                    `;
+                });
+
+                document.getElementById('historyContent').innerHTML = html;
+            } catch (e) {
+                console.error('Error loading history:', e);
+                document.getElementById('historyContent').innerHTML = '<p style="color: #ff4444;">Error loading transaction history</p>';
+            }
+        }
+
+        function closeHistoryModal() {
+            document.getElementById('historyModal').classList.remove('active');
+        }
+
+        // Send Modal with Pending TX Polling
+        let pendingTxId = null;
+        let pollInterval = null;
+
+        function openSendModal() {
+            document.getElementById('sendModal').classList.add('active');
+            document.getElementById('sendStatus').innerHTML = '';
+            document.getElementById('sendForm').reset();
+
+            // Populate token dropdown with available tokens
+            const selectElement = document.getElementById('sendToken');
+            selectElement.innerHTML = '<option value="THR">THR</option>';
+            allTokens.forEach(token => {
+                if (token.balance > 0) {
+                    selectElement.innerHTML += `<option value="${token.symbol}">${token.symbol} (${token.balance.toFixed(token.decimals)})</option>`;
+                }
+            });
+        }
+
+        function closeSendModal() {
+            document.getElementById('sendModal').classList.remove('active');
+            if (pollInterval) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+            }
+            pendingTxId = null;
+        }
+
+        async function handleSend(e) {
+            e.preventDefault();
+
+            const toAddress = document.getElementById('sendToAddress').value.trim();
+            const amount = parseFloat(document.getElementById('sendAmount').value);
+            const token = document.getElementById('sendToken').value;
+            const secret = document.getElementById('sendSecret').value.trim();
+
+            const submitBtn = document.getElementById('sendSubmitBtn');
+            const statusDiv = document.getElementById('sendStatus');
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Sending...';
+            statusDiv.innerHTML = '<span style="color: #ffd700;">⏳ Processing transaction...</span>';
+
+            try {
+                const res = await fetch('/send_tokens', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        from_address: walletAddress,
+                        to_address: toAddress,
+                        amount: amount,
+                        token: token,
+                        auth_secret: secret,
+                        passphrase: ''
+                    })
+                });
+
+                const data = await res.json();
+
+                if (data.tx_id || data.status === 'success') {
+                    pendingTxId = data.tx_id;
+                    statusDiv.innerHTML = `<span style="color: var(--widget-accent);">✅ Transaction submitted!<br>TXID: ${(pendingTxId || 'pending').substring(0, 16)}...</span>`;
+
+                    // Start polling for status
+                    if (pendingTxId) {
+                        pollTransactionStatus(pendingTxId, statusDiv);
+                    }
+
+                    // Reset form after 2 seconds
+                    setTimeout(() => {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = '<span class="lang-el">Αποστολή</span><span class="lang-en">Send</span>';
+                        loadWalletData(); // Refresh wallet data
+                    }, 2000);
+                } else {
+                    throw new Error(data.message || data.error || 'Transaction failed');
+                }
+            } catch (err) {
+                console.error('Send error:', err);
+                statusDiv.innerHTML = `<span style="color: #ff4444;">❌ Error: ${err.message}</span>`;
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<span class="lang-el">Αποστολή</span><span class="lang-en">Send</span>';
+            }
+        }
+
+        async function pollTransactionStatus(txId, statusDiv) {
+            if (pollInterval) clearInterval(pollInterval);
+
+            let attempts = 0;
+            const maxAttempts = 30; // Poll for up to 5 minutes (30 * 10s)
+
+            pollInterval = setInterval(async () => {
+                attempts++;
+
+                try {
+                    const res = await fetch(`/api/tx/status?tx_id=${encodeURIComponent(txId)}`);
+                    const data = await res.json();
+
+                    if (data.status === 'confirmed') {
+                        statusDiv.innerHTML = `<span style="color: var(--widget-accent);">✅ Transaction confirmed!<br>Block: ${data.block || 'N/A'}</span>`;
+                        clearInterval(pollInterval);
+                        pollInterval = null;
+                        loadWalletData(); // Refresh wallet
+                    } else if (data.status === 'failed') {
+                        statusDiv.innerHTML = `<span style="color: #ff4444;">❌ Transaction failed: ${data.message || 'Unknown error'}</span>`;
+                        clearInterval(pollInterval);
+                        pollInterval = null;
+                    } else if (attempts >= maxAttempts) {
+                        statusDiv.innerHTML += '<br><span style="color: #ffd700;">⏱️ Still pending. Check back later.</span>';
+                        clearInterval(pollInterval);
+                        pollInterval = null;
+                    }
+                } catch (err) {
+                    console.error('Poll error:', err);
+                    if (attempts >= maxAttempts) {
+                        clearInterval(pollInterval);
+                        pollInterval = null;
+                    }
+                }
+            }, 10000); // Poll every 10 seconds
+        }
+
+        // Bridge Modal
+        async function openBridgeModal() {
+            document.getElementById('bridgeModal').classList.add('active');
+            loadBridgeDeposit();
+        }
+
+        function closeBridgeModal() {
+            document.getElementById('bridgeModal').classList.remove('active');
+        }
+
+        function switchBridgeTab(tab) {
+            document.querySelectorAll('#bridgeModal .wallet-tab').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('#bridgeModal .tab-content').forEach(content => content.classList.remove('active'));
+
+            if (tab === 'deposit') {
+                document.querySelector('#bridgeModal .wallet-tab:first-child').classList.add('active');
+                document.getElementById('depositTab').classList.add('active');
+            } else {
+                document.querySelector('#bridgeModal .wallet-tab:last-child').classList.add('active');
+                document.getElementById('withdrawTab').classList.add('active');
+            }
+        }
+
+        async function loadBridgeDeposit() {
+            const container = document.getElementById('depositAddressContainer');
+            container.innerHTML = '<p style="color: var(--widget-muted);">Loading deposit address...</p>';
+
+            try {
+                const res = await fetch(`/api/bridge/deposit?wallet=${encodeURIComponent(walletAddress)}`);
+                if (!res.ok) throw new Error('Failed to load deposit address');
+                const data = await res.json();
+
+                if (data.ok && data.deposit_address) {
+                    container.innerHTML = `
+                        <div class="deposit-address">
+                            <div style="font-size: 11px; color: var(--widget-muted); margin-bottom: 8px;">
+                                <span class="lang-el">Διεύθυνση Κατάθεσης BTC</span>
+                                <span class="lang-en">BTC Deposit Address</span>
+                            </div>
+                            <div style="color: var(--widget-accent); font-weight: 600;">${data.deposit_address}</div>
+                        </div>
+                        <button class="copy-btn" onclick="copyDepositAddress('${data.deposit_address}')">
+                            📋 <span class="lang-el">Αντιγραφή</span><span class="lang-en">Copy</span>
+                        </button>
+                        <p style="color: var(--widget-muted); font-size: 11px; margin-top: 15px;">
+                            <span class="lang-el">⚠️ Στείλτε μόνο BTC σε αυτή τη διεύθυνση. Άλλα assets θα χαθούν.</span>
+                            <span class="lang-en">⚠️ Only send BTC to this address. Other assets will be lost.</span>
+                        </p>
+                    `;
+                } else {
+                    throw new Error(data.error || 'Invalid response');
+                }
+            } catch (err) {
+                console.error('Bridge deposit error:', err);
+                container.innerHTML = `<p style="color: #ff4444;">Error: ${err.message}</p>`;
+            }
+        }
+
+        function copyDepositAddress(address) {
+            navigator.clipboard.writeText(address).then(() => {
+                alert('✅ Address copied to clipboard!');
+            }).catch(() => {
+                prompt('Copy this address:', address);
+            });
+        }
+
+        // Close modals on background click
+        document.addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal-overlay')) {
+                closeHistoryModal();
+                closeSendModal();
+                closeBridgeModal();
+            }
+        });
     </script>
 </body>
 </html>

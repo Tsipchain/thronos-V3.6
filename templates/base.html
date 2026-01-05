@@ -10,11 +10,16 @@
   <script src="{{ url_for('static', filename='wallet_session.js') }}"></script>
   <style>
     /* Global Styles */
+    :root {
+      --footer-safe: 110px;
+    }
+
     body {
       background-color: #000;
       color: #0f0;
       font-family: "Courier New", monospace;
       padding: 20px;
+      padding-bottom: calc(var(--footer-safe, 110px) + 24px);
       line-height: 1.6;
       margin: 0;
     }
@@ -35,6 +40,7 @@
       max-width: 1000px;
       margin: 0 auto;
       padding: 0 20px;
+      padding-bottom: calc(var(--footer-safe, 110px) + 24px);
     }
     
     /* Navigation Bar */

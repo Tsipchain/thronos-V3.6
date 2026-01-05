@@ -3678,10 +3678,17 @@ def api_health():
             pass
 
     # FIX 1: Build metadata
+    build_time = os.path.getmtime(__file__) if os.path.exists(__file__) else None
+    # Build ID: unique identifier combining git commit and build timestamp
+    build_id = f"{git_commit}"
+    if build_time:
+        build_id += f"-{int(build_time)}"
+
     build_info = {
         "git_commit": git_commit,
+        "build_id": build_id,
         "checked_env": checked_env,  # Show which env vars we checked
-        "build_time": os.path.getmtime(__file__) if os.path.exists(__file__) else None,
+        "build_time": build_time,
         "DATA_DIR": os.getenv("DATA_DIR", "/app/data"),
         "node_role": os.getenv("NODE_ROLE", "standalone"),
         "degraded_mode_enabled": True  # Always use degraded mode patterns

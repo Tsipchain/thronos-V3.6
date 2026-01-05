@@ -3034,9 +3034,10 @@ function downloadCGMinerKit() {
                 const healthResp = await fetch('/api/health');
                 const health = await healthResp.json();
                 const buildCommitEl = document.getElementById('buildCommit');
-                if (buildCommitEl && health.build && health.build.git_commit) {
-                    buildCommitEl.textContent = `build: ${health.build.git_commit}`;
-                    buildCommitEl.title = `Git commit: ${health.build.git_commit}\nDATA_DIR: ${health.build.DATA_DIR}\nNode: ${health.build.node_role}`;
+                if (buildCommitEl && health.build) {
+                    const displayText = health.build.build_id || health.build.git_commit || 'unknown';
+                    buildCommitEl.textContent = `build: ${displayText}`;
+                    buildCommitEl.title = `Build ID: ${health.build.build_id || 'N/A'}\nGit commit: ${health.build.git_commit || 'N/A'}\nDATA_DIR: ${health.build.DATA_DIR}\nNode: ${health.build.node_role}`;
                 }
             } catch(e) {
                 console.log('Build info not available:', e);

@@ -47,7 +47,7 @@ from llm_registry import find_model, get_default_model, list_enabled_model_ids
 
 
 def _resolve_model(model: Optional[str]):
-    mode = os.getenv("THRONOS_AI_MODE", "all").lower()
+    mode = (os.getenv("THRONOS_AI_MODE", "all").strip().lower() or "all")
     if mode in ("router", "auto", "all"):
         normalized_mode = "all"
     elif mode == "openai_only":
@@ -197,7 +197,7 @@ def call_llm(
     resolved_model = resolved.id
     tier = resolved.tier
 
-    mode = os.getenv("THRONOS_AI_MODE", "all").lower()
+    mode = (os.getenv("THRONOS_AI_MODE", "all").strip().lower() or "all")
     if mode in ("router", "auto", "all"):
         normalized_mode = "all"
     elif mode == "openai_only":
@@ -305,7 +305,7 @@ class ThronosAI:
     """
 
     def __init__(self) -> None:
-        self.mode = os.getenv("THRONOS_AI_MODE", "auto").lower()
+        self.mode = (os.getenv("THRONOS_AI_MODE", "all").strip().lower() or "all")
 
         # Keys
         self.gemini_api_key = (os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")).strip()

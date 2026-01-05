@@ -1848,8 +1848,21 @@ def _select_callable_model(model_id: str | None):
         "error": "No callable AI model in current mode",
         "suggested_model": default_model_id,
         "providers": provider_status,
+        "requested_model": requested,
+        "mode": (os.getenv("THRONOS_AI_MODE") or "all").lower(),
     }
     return None, fallback_notice, (jsonify(error_payload), 200)
+
+
+def _log_ai_call(meta: dict):
+    """Structured AI call logging without secrets."""
+    try:
+        app.logger.info("ai_call_meta", extra={"ai_call": meta})
+    except Exception:
+        try:
+            app.logger.info(f"ai_call_meta: {meta}")
+        except Exception:
+            pass
 
 # ---------------------------------------------------------------------------
 # Free usage counters
@@ -3335,9 +3348,23 @@ def api_architect_generate():
     model_key   = (data.get("model_id") or data.get("model") or data.get("model_key") or "gpt-4o").strip()
     credits_value = 0
 
+    call_meta = {
+        "endpoint": "api_architect_generate",
+        "session_id": session_id,
+        "requested_model": model_key or "auto",
+        "selected_model": None,
+        "resolved_provider": None,
+        "call_attempted": False,
+        "failure_reason": None,
+    }
+
     selected_model, fallback_notice, error_resp = _select_callable_model(model_key)
     if error_resp:
         # Model is not callable in current mode/providers; return JSON without billing
+        call_meta["failure_reason"] = "model_not_callable"
+        call_meta["selected_model"] = selected_model or model_key or "auto"
+        call_meta["fallback_notice"] = fallback_notice
+        _log_ai_call(call_meta)
         if wallet:
             # Preserve credit count so UI can show remaining balance
             credits_map = load_ai_credits()
@@ -3411,10 +3438,17 @@ def api_architect_generate():
     # Note: server.py uses 'ai_agent' global instance
     # Pass session_id to maintain context if needed (though architect usually is one-shot,
     # but user might refine in same session)
+    resolved_info = _resolve_model(model_key)
+    if resolved_info:
+        call_meta["selected_model"] = resolved_info.id
+        call_meta["resolved_provider"] = resolved_info.provider
     try:
+        call_meta["call_attempted"] = True
         raw = ai_agent.generate_response(prompt, wallet=wallet, model_key=model_key, session_id=session_id)
     except Exception as exc:
         app.logger.exception("Architect generation failed")
+        call_meta["failure_reason"] = str(exc)
+        _log_ai_call(call_meta)
         return jsonify(
             ok=False,
             status="provider_error",
@@ -3434,6 +3468,8 @@ def api_architect_generate():
 
     status_l = str(status or "").lower()
     if status_l in {"provider_error", "error", "model_not_available", "model_not_found", "forbidden"}:
+        call_meta["failure_reason"] = status_l
+        _log_ai_call(call_meta)
         return jsonify(
             ok=False,
             status=status,
@@ -3520,6 +3556,8 @@ def api_architect_generate():
         except Exception as e:
             app.logger.error("Architect zip build failed: %s", e)
 
+    call_meta["response_status"] = status
+    _log_ai_call(call_meta)
     return jsonify({
         "status": status,
         "quantum_key": quantum_key,
@@ -4475,14 +4513,37 @@ def api_chat():
     attachments = data.get("attachments") or data.get("attachment_ids") or []
     ai_credits_spent = 0.0
 
+    call_meta = {
+        "endpoint": "api_chat",
+        "session_id": session_id,
+        "requested_model": model_key or "auto",
+        "selected_model": None,
+        "resolved_provider": None,
+        "call_attempted": False,
+        "failure_reason": None,
+    }
+
     selected_model, fallback_notice, error_resp = _select_callable_model(model_key)
     if error_resp:
         # Model not callable – return JSON without consuming credits
+        call_meta["failure_reason"] = "model_not_callable"
+        call_meta["selected_model"] = selected_model or model_key or "auto"
+        call_meta["fallback_notice"] = fallback_notice
+        _log_ai_call(call_meta)
         return error_resp
     if selected_model:
         model_key = selected_model
         if session_id:
             _save_session_selected_model(session_id, model_key)
+        resolved = _resolve_model(model_key)
+        if resolved:
+            call_meta["selected_model"] = resolved.id
+            call_meta["resolved_provider"] = resolved.provider
+    elif model_key:
+        resolved = _resolve_model(model_key)
+        if resolved:
+            call_meta["selected_model"] = resolved.id
+            call_meta["resolved_provider"] = resolved.provider
 
     if session_id:
         ensure_session_exists(session_id, wallet)
@@ -4642,7 +4703,28 @@ def api_chat():
     # --- Κλήση στον ThronosAI provider ---
     # Pass model_key AND session_id to generate_response
     call_started = time.time()
-    raw = ai_agent.generate_response(full_prompt, wallet=wallet, model_key=model_key, session_id=session_id)
+    resolved_info = _resolve_model(model_key)
+    if resolved_info:
+        call_meta["selected_model"] = resolved_info.id
+        call_meta["resolved_provider"] = resolved_info.provider
+    try:
+        call_meta["call_attempted"] = True
+        raw = ai_agent.generate_response(full_prompt, wallet=wallet, model_key=model_key, session_id=session_id)
+    except Exception as exc:
+        app.logger.exception("AI chat generation failed")
+        call_meta["failure_reason"] = str(exc)
+        _log_ai_call(call_meta)
+        resp = {
+            "ok": False,
+            "status": "provider_error",
+            "error": str(exc),
+            "response": "AI unavailable in current mode",
+            "model_notice": fallback_notice,
+            "wallet": wallet,
+            "credits": credits_value if credits_value is not None else 0,
+            "session_id": session_id,
+        }
+        return jsonify(resp), 500
     latency_ms = int((time.time() - call_started) * 1000)
 
     if isinstance(raw, dict):
@@ -4684,6 +4766,8 @@ def api_chat():
     raw_status = ""
     if isinstance(raw, dict) and raw.get("status"):
         raw_status = str(raw.get("status")).lower()
+    if raw_status in charge_block_statuses:
+        call_meta["failure_reason"] = raw_status
     can_charge = bool(wallet) and raw_status not in charge_block_statuses
 
     if wallet and can_charge:
@@ -4794,6 +4878,8 @@ def api_chat():
             resp["score"] = scoring
         except Exception:
             logger.exception("Failed to append AI score")
+    call_meta["response_status"] = status
+    _log_ai_call(call_meta)
     return jsonify(resp), 200
 
 
@@ -9951,6 +10037,41 @@ def api_v1_quiz_status(course_id: str, student: str):
     ), 200
 
 
+@app.route("/api/v1/courses/<string:course_id>/teacher_dashboard", methods=["GET"])
+def api_v1_course_teacher_dashboard(course_id: str):
+    """Return per-student status for the teacher dashboard (tuition, score, reward)."""
+    teacher = (request.args.get("teacher") or "").strip()
+
+    courses = load_courses()
+    course = next((c for c in courses if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+
+    if teacher and course.get("teacher") != teacher:
+        return jsonify(status="error", message="Teacher mismatch"), 403
+
+    enrollments = load_enrollments()
+    quiz_attempts = load_json(os.path.join(DATA_DIR, "quiz_attempts.json"), {})
+    course_enrollments = enrollments.get(course_id, {})
+    completions = course.get("completions", {})
+
+    students = set(course.get("students", [])) | set(course_enrollments.keys())
+    rows = []
+    for student in sorted(students):
+        attempt = quiz_attempts.get(course_id, {}).get(student, {})
+        completion = completions.get(student, {})
+        rows.append({
+            "student": student,
+            "tuition_paid": student in course.get("students", []),
+            "best_score": attempt.get("score", 0),
+            "passed": attempt.get("passed", False),
+            "reward_paid": completion.get("reward_paid", False),
+            "reward_txid": completion.get("reward_txid"),
+        })
+
+    return jsonify(status="success", students=rows), 200
+
+
 # ─── Tokens & Pools API ───────────────────────────────────────────────
 #
 # These endpoints implement a minimal DeFi layer for community‑issued
@@ -11821,8 +11942,10 @@ def api_ai_models():
                     {
                         "id": mi.id,
                         "label": mi.display_name,
+                        "display_name": mi.display_name,
                         "provider": mi.provider,
                         "enabled": mi.enabled,
+                        "mode": mode,
                     }
                 )
 

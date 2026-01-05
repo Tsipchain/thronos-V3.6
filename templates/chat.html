@@ -1041,6 +1041,7 @@
     const ADMIN_MODE_KEY = "thronos_admin_mode";
     const ACTIVE_SESSION_KEY = "thronos_ai_active_session";
     const SESSION_CACHE_KEY = "thronos_ai_session_cache_v1";
+    const SELECTED_MODEL_KEY = "thronos_ai_selected_model_v1";
 
     // --- DOM refs ---
     let sessionsListEl,
@@ -1886,7 +1887,8 @@
     async function loadModels() {
       if (!modelSelectEl) return;
 
-      const previousValue = modelSelectEl.value || pendingModelSelection || defaultModelId || "auto";
+      // Get previously selected model from localStorage first, then fall back to other sources
+      const previousValue = localStorage.getItem(SELECTED_MODEL_KEY) || modelSelectEl.value || pendingModelSelection || defaultModelId || "auto";
       modelSelectEl.innerHTML = "";
       const autoOpt = document.createElement("option");
       autoOpt.value = "auto";
@@ -2140,6 +2142,14 @@
         if (e.key === "Enter" && !e.shiftKey) {
           e.preventDefault();
           sendMessage();
+        }
+      });
+
+      // Save selected model to localStorage when it changes
+      modelSelectEl.addEventListener("change", () => {
+        const selectedModel = modelSelectEl.value;
+        if (selectedModel) {
+          localStorage.setItem(SELECTED_MODEL_KEY, selectedModel);
         }
       });
     }

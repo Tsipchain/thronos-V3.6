@@ -1074,7 +1074,10 @@ def record_ai_interaction(
 
     append_ai_interaction(entry)
     try:
-        create_ai_transfer_from_ledger_entry(entry)
+        if "create_ai_transfer_from_ledger_entry" in globals():
+            create_ai_transfer_from_ledger_entry(entry)
+        else:
+            logger.warning("AI transfer handler missing; skipping entry", extra={"provider": provider, "model": model})
     except Exception:
         logger.exception("Failed to create AI transfer entry", extra={"provider": provider, "model": model})
     return entry
@@ -3303,6 +3306,26 @@ def api_architect_generate():
         if session_id:
             _save_session_selected_model(session_id, model_key)
 
+    # If the requested model is not callable in current mode/providers, fall back before billing
+    fallback_notice = None
+    resolved_model = _resolve_model(model_key or default_model_id)
+    if not resolved_model:
+        resolved_model = _resolve_model(default_model_id)
+        if resolved_model:
+            fallback_notice = f"Model '{model_key or 'auto'}' not available; using {resolved_model.id}"
+            model_key = resolved_model.id
+            if session_id:
+                _save_session_selected_model(session_id, model_key)
+        else:
+            return jsonify(
+                response="Selected model is unavailable in the current mode. Please try Auto or another provider.",
+                status="model_not_available",
+                wallet=wallet,
+                credits=credits_value or 0,
+                files=[],
+                session_id=session_id,
+            ), 200
+
     if not blueprint or not project_spec:
         return jsonify(error="Missing blueprint or spec"), 400
 
@@ -4597,7 +4620,20 @@ def api_chat():
         print("offline corpus enqueue error:", e)
 
     # --- FIX 8: Consume credits (Chat billing mode - no THR) ---
-    if wallet:
+    charge_block_statuses = {
+        "model_not_found",
+        "model_not_available",
+        "forbidden",
+        "provider_error",
+        "error",
+        "no_credits",
+    }
+    raw_status = ""
+    if isinstance(raw, dict) and raw.get("status"):
+        raw_status = str(raw.get("status")).lower()
+    can_charge = bool(wallet) and raw_status not in charge_block_statuses
+
+    if wallet and can_charge:
         # Use billing module (clean separation, telemetry, cross-charge guard)
         success, error_msg, telemetry = billing.consume_credits(wallet, AI_CREDIT_COST_PER_MSG, product="chat")
         if not success:
@@ -4608,6 +4644,10 @@ def api_chat():
         else:
             credits_for_frontend = telemetry.get("credits_after", 0)
             ai_credits_spent = abs(telemetry.get("credits_delta", 0))
+    elif wallet:
+        # Wallet present but we skipped billing due to model gating
+        credits_for_frontend = credits_value if credits_value is not None else 0
+        ai_credits_spent = 0.0
     else:
         # For demo sessions, report remaining free messages.  This
         # communicates to the user how many additional messages they may
@@ -4651,6 +4691,8 @@ def api_chat():
         "routing": None,
         "task_type": None,
     }
+    if fallback_notice:
+        resp["model_notice"] = fallback_notice
 
     routing_meta = raw.get("routing") if isinstance(raw, dict) else None
     task_type_meta = raw.get("task_type") if isinstance(raw, dict) else None
@@ -4996,6 +5038,14 @@ def api_ai_credits():
     return jsonify({"wallet": wallet, "credits": value}), 200
 
 
+@app.route("/api/ai/files", methods=["POST", "GET"])
+def api_ai_files_entrypoint():
+    """Safe guard endpoint to avoid HTML 404s when clients hit /api/ai/files directly."""
+    if request.method == "GET":
+        return jsonify(ok=False, error="Listing not available", fallback_hint="Use POST /api/ai/files/upload"), 400
+    return api_ai_files_upload()
+
+
 @app.route("/api/ai/files/upload", methods=["POST"])
 def api_ai_files_upload():
     """
@@ -5006,7 +5056,6 @@ def api_ai_files_upload():
       { ok: true, files: [{id, name, size, mimetype, sha256}] }
     """
     try:
-        # accept either files[] or files
         files = (request.files.getlist("files") or request.files.getlist("files[]") or request.files.getlist("file"))
         if not files:
             return jsonify(ok=False, error="No files uploaded. Use multipart field 'files'."), 400
@@ -5014,8 +5063,6 @@ def api_ai_files_upload():
         wallet = (request.form.get("wallet") or "").strip()
         session_id = (request.form.get("session_id") or "").strip()
         purpose = (request.form.get("purpose") or "chat").strip()
-
-        # Get guest_id for non-wallet users (ownership tracking)
         guest_id = get_or_set_guest_id() if not wallet else None
 
         os.makedirs(AI_UPLOADS_DIR, exist_ok=True)
@@ -5026,7 +5073,6 @@ def api_ai_files_upload():
                 continue
 
             original_name = secure_filename(fs.filename)
-            # keep original extension when possible
             ext = os.path.splitext(original_name)[1][:16]
             ext = re.sub(r"[^a-zA-Z0-9.]", "", ext)
 
@@ -5039,7 +5085,6 @@ def api_ai_files_upload():
             saved_name = f"{file_id}{ext}"
             save_path = os.path.join(AI_UPLOADS_DIR, saved_name)
 
-            # if same content already exists, don't rewrite
             if not os.path.exists(save_path):
                 with open(save_path, "wb") as f:
                     f.write(blob)
@@ -5050,13 +5095,13 @@ def api_ai_files_upload():
                 "id": file_id,
                 "saved_name": saved_name,
                 "original_name": original_name,
-                "filename": original_name,  # For consistency with chat endpoint
-                "path": save_path,  # Needed for AI chat to read file
+                "filename": original_name,
+                "path": save_path,
                 "size": len(blob),
                 "mimetype": mimetype,
                 "sha256": sha,
                 "wallet": wallet,
-                "guest_id": guest_id,  # ADDED - for ownership tracking when no wallet
+                "guest_id": guest_id,
                 "session_id": session_id,
                 "purpose": purpose,
                 "created_at": int(time.time()),
@@ -5065,7 +5110,6 @@ def api_ai_files_upload():
             with open(meta_path, "w", encoding="utf-8") as f:
                 json.dump(meta, f, ensure_ascii=False, indent=2)
 
-            # Update the unified upload index so chat endpoint can find this file
             idx = load_upload_index()
             idx[file_id] = meta
             save_upload_index(idx)
@@ -5081,16 +5125,12 @@ def api_ai_files_upload():
         if not uploaded:
             return jsonify(ok=False, error="No valid files received."), 400
 
-        # Optionally link uploads to a session's memory (so the model can use them later)
-        # We store only metadata references, not the raw bytes in the session json.
         if session_id:
             try:
                 attach_uploaded_files_to_session(session_id=session_id, wallet=wallet, files=uploaded)
             except Exception as e:
-                # don't fail upload if session linking fails
                 app.logger.exception("attach_uploaded_files_to_session failed: %s", e)
 
-        # PRIORITY 1: Telemetry - append to index.jsonl for PYTHEIA/IoT knowledge accounting
         try:
             telemetry_index = os.path.join(DATA_DIR, "ai_files", "index.jsonl")
             os.makedirs(os.path.dirname(telemetry_index), exist_ok=True)
@@ -5110,13 +5150,11 @@ def api_ai_files_upload():
 
             app.logger.debug(f"Telemetry recorded: {len(uploaded)} files uploaded")
         except Exception as telemetry_err:
-            # Don't fail the upload if telemetry fails
             app.logger.warning(f"Telemetry append failed: {telemetry_err}")
 
         return jsonify(ok=True, files=uploaded)
     except Exception as e:
         app.logger.exception("Upload failed: %s", e)
-        # FIX 1B: Never return 500, use degraded mode pattern
         return jsonify(
             ok=False,
             mode="degraded",
@@ -5619,22 +5657,24 @@ def wallet_data(thr_addr):
         if tx.get("from") != thr_addr and tx.get("to") != thr_addr:
             continue
 
-        tx_type = tx.get("type", "unknown")
+        tx_type = (tx.get("type") or "unknown").upper()
 
         # QUEST B: Category/label mapping
         category_labels = {
-            "send": "Send",
-            "receive": "Receive",
+            "SEND": "Send",
+            "RECEIVE": "Receive",
             "SEND_TOKEN": "Token Send",
             "RECEIVE_TOKEN": "Token Receive",
+            "TOKEN_TRANSFER": "Token Transfer",
+            "SWAP": "Swap",
             "IOT_PARKING_RESERVATION": "IoT Parking",
             "IOT_AUTOPILOT": "IoT Autopilot",
             "BRIDGE_WITHDRAW_REQUEST": "Bridge Withdrawal",
             "BRIDGE_DEPOSIT_DETECTED": "Bridge Deposit",
             "L2E_REWARD": "Learn-to-Earn Reward",
             "MUSIC_OFFLINE_TIP": "Music Tip",
-            "service_payment": "Service Payment",
-            "architect_payment": "AI Architect"
+            "SERVICE_PAYMENT": "Service Payment",
+            "ARCHITECT_PAYMENT": "AI Architect"
         }
 
         label = category_labels.get(tx_type, "Unknown")
@@ -5654,8 +5694,15 @@ def wallet_data(thr_addr):
             **tx,
             "category_label": label,
             "asset_symbol": asset_symbol,
+            "symbol": tx.get("symbol") or asset_symbol,
+            "symbol_in": tx.get("symbol_in") or tx.get("from_symbol"),
+            "symbol_out": tx.get("symbol_out") or tx.get("to_symbol"),
+            "amount_in": tx.get("amount_in") or tx.get("amount"),
+            "amount_out": tx.get("amount_out") or tx.get("received_amount") or tx.get("output_amount"),
             "fee_burned": fee_burned,
             "status": status,
+            "timestamp": tx.get("timestamp"),
+            "note": tx.get("note") or tx.get("description"),
             "explorer_link": f"/explorer?tx_id={tx.get('tx_id', '')}"
         })
 

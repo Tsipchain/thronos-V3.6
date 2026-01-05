@@ -2283,16 +2283,16 @@ function filterHistory(filter, tokenSymbol = null) {
 function getTxType(tx) {
     const rawType = (tx.type || '').toUpperCase();
     const note = (tx.note || tx.description || '').toUpperCase();
-    const symbol = (tx.symbol || 'THR').toUpperCase();
+    const symbol = (tx.symbol || tx.asset_symbol || 'THR').toUpperCase();
 
-    // Explicit classification rules
-    if (rawType.startsWith('SWAP_') || rawType.startsWith('DEX_') || rawType.startsWith('AMM_') || rawType.startsWith('LIQUIDITY_') || note.includes('SWAP') || note.includes('DEX') || note.includes('AMM') || note.includes('LIQUIDITY')) return 'swap';
+    // Explicit classification rules (priority order)
+    if (rawType.startsWith('SWAP') || rawType.startsWith('DEX_') || rawType.startsWith('AMM_') || rawType.startsWith('LIQUIDITY_')) return 'swap';
+    if (rawType.startsWith('TOKEN_TRANSFER') || (symbol && symbol !== 'THR')) return 'token';
     if (rawType.startsWith('L2E_') || rawType.includes('L2E') || rawType.includes('LEARN') || note.includes('L2E')) return 'l2e';
     if (rawType.startsWith('AI_') || rawType.startsWith('CREDITS_') || rawType.includes('CHAT') || note.includes('AI TRANSFER')) return 'ai';
     if (rawType.startsWith('IOT_') || rawType.includes('PARKING') || note.includes('IOT')) return 'iot';
     if (rawType.startsWith('BRIDGE_') || rawType.includes('BRIDGE') || rawType.includes('DEPOSIT')) return 'bridge';
-    if (symbol === 'THR') return 'thr';
-    return 'token'; // Custom tokens
+    return 'thr';
 }
 
 function formatTxDate(timestamp) {

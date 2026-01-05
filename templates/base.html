@@ -1534,6 +1534,71 @@
     </div>
 </div>
 
+<!-- Wallet History Modal -->
+<div class="send-modal" id="walletHistoryModal" onclick="closeWalletHistoryModal(event)">
+    <div class="send-modal-content" onclick="event.stopPropagation()">
+        <div class="send-modal-header">
+            📜
+            <span class="lang-el">Ιστορικό Συναλλαγών</span>
+            <span class="lang-en">Transaction History</span>
+        </div>
+
+        <div id="historyContent" style="max-height: 500px; overflow-y: auto;">
+            <div class="wallet-popup-loading">
+                <div class="wallet-popup-spinner"></div>
+                <span class="lang-el">Φόρτωση ιστορικού...</span>
+                <span class="lang-en">Loading history...</span>
+            </div>
+        </div>
+
+        <div style="margin-top:10px;text-align:right;">
+            <button class="send-modal-btn" onclick="closeWalletHistoryModal()">
+                <span class="lang-el">Κλείσιμο</span>
+                <span class="lang-en">Close</span>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Bridge Modal -->
+<div class="send-modal" id="bridgeModal" onclick="closeBridgeModal(event)">
+    <div class="send-modal-content" onclick="event.stopPropagation()">
+        <div class="send-modal-header">
+            🌉
+            <span class="lang-el">Bridge Deposit</span>
+            <span class="lang-en">Bridge Deposit</span>
+        </div>
+
+        <div id="bridgeContent">
+            <div class="send-form-group">
+                <label class="send-form-label">
+                    <span class="lang-el">Διεύθυνση Κατάθεσης</span>
+                    <span class="lang-en">Deposit Address</span>
+                </label>
+                <div style="display:flex;align-items:center;gap:8px;word-break:break-all;">
+                    <code id="bridgeDepositAddress" style="font-size:13px;">—</code>
+                    <button class="send-modal-btn" style="padding:6px 10px;" onclick="copyBridgeAddress()">📋
+                        <span class="lang-el">Αντιγραφή</span>
+                        <span class="lang-en">Copy</span>
+                    </button>
+                </div>
+            </div>
+
+            <div id="bridgeEmpty" class="send-result error" style="display:none;">
+                <span class="lang-el">Συνδέστε πορτοφόλι για bridge deposit.</span>
+                <span class="lang-en">Connect wallet to get bridge deposit address.</span>
+            </div>
+        </div>
+
+        <div style="margin-top:10px;text-align:right;">
+            <button class="send-modal-btn" onclick="closeBridgeModal()">
+                <span class="lang-el">Κλείσιμο</span>
+                <span class="lang-en">Close</span>
+            </button>
+        </div>
+    </div>
+</div>
+
 <!-- Token Info Modal -->
 <div class="token-info-modal" id="tokenInfoModal" onclick="closeTokenInfoModal(event)">
     <div class="token-info-content" onclick="event.stopPropagation()">
@@ -2026,7 +2091,7 @@ function renderWalletBalances(data) {
                 <span class="wallet-quick-btn-icon">🔥</span>
                 <span class="wallet-quick-btn-label">${pledgeLabel}</span>
             </a>
-            <a href="/viewer" class="wallet-quick-btn">
+            <a href="javascript:void(0)" class="wallet-quick-btn" onclick="openWalletHistoryModal()">
                 <span class="wallet-quick-btn-icon">📜</span>
                 <span class="wallet-quick-btn-label">${historyLabel}</span>
             </a>
@@ -2065,6 +2130,11 @@ function openSendModal() {
 function closeSendModal(event) {
     if (!event || event.target.id === 'sendModal') {
         document.getElementById('sendModal').classList.remove('active');
+        // Stop any active transaction polling
+        if (txPollInterval) {
+            clearInterval(txPollInterval);
+            txPollInterval = null;
+        }
     }
 }
 
@@ -2127,6 +2197,130 @@ function playReceiveAudio() {
     const audioEl = document.getElementById('receiveAudio');
     if (audioEl && audioEl.src) {
         audioEl.play();
+    }
+}
+
+// Wallet History Modal Functions
+function openWalletHistoryModal() {
+    document.getElementById('walletHistoryModal').classList.add('active');
+    loadWalletHistory();
+}
+
+function closeWalletHistoryModal(event) {
+    if (!event || event.target.id === 'walletHistoryModal') {
+        document.getElementById('walletHistoryModal').classList.remove('active');
+    }
+}
+
+async function loadWalletHistory() {
+    const content = document.getElementById('historyContent');
+    const addr = walletSession.getAddress();
+
+    if (!addr) {
+        content.innerHTML = '<div class="send-result error" style="margin: 20px;">Connect wallet to view history</div>';
+        return;
+    }
+
+    try {
+        const response = await fetch(`/wallet_data/${encodeURIComponent(addr)}`);
+        const data = await response.json();
+
+        if (!data.transactions || data.transactions.length === 0) {
+            content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions found</div>';
+            return;
+        }
+
+        const lang = getCurrentLang();
+        const isGreek = isGreekLang(lang);
+
+        let html = '<div style="display: flex; flex-direction: column; gap: 10px;">';
+
+        data.transactions.slice(0, 50).forEach(tx => {
+            const isSent = tx.from === addr;
+            const isReceived = tx.to === addr;
+            const direction = isSent ? (isGreek ? 'Αποστολή' : 'Sent') : (isGreek ? 'Λήψη' : 'Received');
+            const directionIcon = isSent ? '📤' : '📥';
+            const directionColor = isSent ? '#ff6666' : '#66ff66';
+
+            const otherAddr = isSent ? tx.to : tx.from;
+            const shortAddr = otherAddr ? `${otherAddr.slice(0, 8)}...${otherAddr.slice(-6)}` : 'N/A';
+
+            const statusBadge = tx.status === 'confirmed'
+                ? `<span style="background: #00ff0033; color: #00ff00; padding: 2px 6px; border-radius: 4px; font-size: 10px;">✓ ${isGreek ? 'Επιβεβαιώθηκε' : 'Confirmed'}</span>`
+                : `<span style="background: #ffff0033; color: #ffff00; padding: 2px 6px; border-radius: 4px; font-size: 10px;">⏳ ${isGreek ? 'Εκκρεμεί' : 'Pending'}</span>`;
+
+            html += `
+                <div style="background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="font-size: 20px;">${directionIcon}</span>
+                            <span style="color: ${directionColor}; font-weight: bold;">${direction}</span>
+                            ${statusBadge}
+                        </div>
+                        <div style="font-weight: bold; color: #00ff66;">${Number(tx.amount || 0).toFixed(6)} ${tx.symbol || 'THR'}</div>
+                    </div>
+                    <div style="font-size: 11px; opacity: 0.7;">
+                        ${isSent ? (isGreek ? 'Προς:' : 'To:') : (isGreek ? 'Από:' : 'From:')} ${shortAddr}
+                    </div>
+                    ${tx.timestamp ? `<div style="font-size: 10px; opacity: 0.5; margin-top: 4px;">${new Date(tx.timestamp * 1000).toLocaleString()}</div>` : ''}
+                </div>
+            `;
+        });
+
+        html += '</div>';
+        content.innerHTML = html;
+
+    } catch (error) {
+        console.error('Failed to load history:', error);
+        content.innerHTML = '<div class="send-result error" style="margin: 20px;">Failed to load transaction history</div>';
+    }
+}
+
+// Bridge Modal Functions
+function openBridgeModal() {
+    document.getElementById('bridgeModal').classList.add('active');
+    loadBridgeDeposit();
+}
+
+function closeBridgeModal(event) {
+    if (!event || event.target.id === 'bridgeModal') {
+        document.getElementById('bridgeModal').classList.remove('active');
+    }
+}
+
+async function loadBridgeDeposit() {
+    const addr = walletSession.getAddress();
+    const depositEl = document.getElementById('bridgeDepositAddress');
+    const emptyEl = document.getElementById('bridgeEmpty');
+
+    if (!addr) {
+        if (depositEl) depositEl.textContent = '—';
+        if (emptyEl) emptyEl.style.display = 'block';
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/bridge/deposit?wallet=${encodeURIComponent(addr)}`);
+        const data = await response.json();
+
+        if (data.deposit_address) {
+            if (depositEl) depositEl.textContent = data.deposit_address;
+            if (emptyEl) emptyEl.style.display = 'none';
+        } else {
+            if (depositEl) depositEl.textContent = '—';
+            if (emptyEl) emptyEl.style.display = 'block';
+        }
+    } catch (error) {
+        console.error('Failed to load bridge deposit:', error);
+        if (depositEl) depositEl.textContent = 'Error loading address';
+        if (emptyEl) emptyEl.style.display = 'block';
+    }
+}
+
+function copyBridgeAddress() {
+    const addr = document.getElementById('bridgeDepositAddress').textContent;
+    if (addr && addr !== '—') {
+        copyToClipboard(addr);
     }
 }
 
@@ -2241,6 +2435,69 @@ function setMaxAmount() {
     document.getElementById('sendAmount').value = maxAmount.toFixed(6);
 }
 
+// Transaction status polling
+let txPollInterval = null;
+
+async function pollTransactionStatus(txid, resultDiv) {
+    let pollCount = 0;
+    const maxPolls = 60; // 10 minutes max (60 * 10s)
+
+    // Clear any existing poll
+    if (txPollInterval) {
+        clearInterval(txPollInterval);
+    }
+
+    const checkStatus = async () => {
+        try {
+            const response = await fetch(`/api/tx/status?tx_id=${encodeURIComponent(txid)}`);
+            const data = await response.json();
+
+            const statusIndicator = document.getElementById('txStatusIndicator');
+            if (!statusIndicator) {
+                // Modal closed, stop polling
+                clearInterval(txPollInterval);
+                return;
+            }
+
+            if (data.status === 'confirmed' || data.confirmed) {
+                statusIndicator.textContent = '✓ Confirmed!';
+                statusIndicator.style.color = '#00ff00';
+                clearInterval(txPollInterval);
+
+                // Close modal after 2 seconds
+                setTimeout(() => {
+                    closeSendModal();
+                }, 2000);
+            } else if (data.status === 'failed') {
+                statusIndicator.textContent = '✕ Transaction failed';
+                statusIndicator.style.color = '#ff6666';
+                clearInterval(txPollInterval);
+            } else {
+                // Still pending
+                pollCount++;
+                if (pollCount >= maxPolls) {
+                    statusIndicator.textContent = '⏱ Confirmation pending (check history later)';
+                    statusIndicator.style.color = '#ffaa00';
+                    clearInterval(txPollInterval);
+
+                    setTimeout(() => {
+                        closeSendModal();
+                    }, 3000);
+                }
+            }
+        } catch (error) {
+            console.error('Status poll error:', error);
+            // Don't stop polling on network errors, just continue
+        }
+    };
+
+    // Initial check immediately
+    await checkStatus();
+
+    // Then poll every 10 seconds
+    txPollInterval = setInterval(checkStatus, 10000);
+}
+
 async function submitSend() {
     const to = document.getElementById('sendTo').value.trim();
     const amount = parseFloat(document.getElementById('sendAmount').value);
@@ -2335,9 +2592,19 @@ async function submitSend() {
             resultDiv.textContent = `Error: ${errorMsg}`;
             resultDiv.style.display = 'block';
         } else {
-            resultDiv.className = 'send-result success';
+            // Show pending status with txid
             const actualFee = data.fee_burned || data.fee || fee;
-            resultDiv.textContent = `✓ ${amount} ${token} sent! Fee: ${actualFee.toFixed(6)} THR`;
+            const txid = data.tx_id || data.txid || 'pending';
+            const shortTxid = txid.length > 16 ? `${txid.slice(0, 8)}...${txid.slice(-8)}` : txid;
+
+            resultDiv.className = 'send-result success';
+            resultDiv.innerHTML = `
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                    <div>⏳ ${amount} ${token} sent! Fee: ${actualFee.toFixed(6)} THR</div>
+                    <div style="font-size: 11px; opacity: 0.8;">TX: ${shortTxid}</div>
+                    <div id="txStatusIndicator" style="font-size: 11px; color: #ffff00;">⏳ Pending confirmation...</div>
+                </div>
+            `;
             resultDiv.style.display = 'block';
 
             // Reset wallet balances to reload
@@ -2350,10 +2617,15 @@ async function submitSend() {
                 loadWalletBalances(true);
             }, 1000);
 
-            // Close modal after 2 seconds
-            setTimeout(() => {
-                closeSendModal();
-            }, 2000);
+            // Start polling for transaction status if we have a txid
+            if (txid && txid !== 'pending') {
+                pollTransactionStatus(txid, resultDiv);
+            } else {
+                // If no txid, close after 3 seconds
+                setTimeout(() => {
+                    closeSendModal();
+                }, 3000);
+            }
         }
     } catch (error) {
         resultDiv.className = 'send-result error';
@@ -3034,9 +3306,10 @@ function downloadCGMinerKit() {
                 const healthResp = await fetch('/api/health');
                 const health = await healthResp.json();
                 const buildCommitEl = document.getElementById('buildCommit');
-                if (buildCommitEl && health.build && health.build.git_commit) {
-                    buildCommitEl.textContent = `build: ${health.build.git_commit}`;
-                    buildCommitEl.title = `Git commit: ${health.build.git_commit}\nDATA_DIR: ${health.build.DATA_DIR}\nNode: ${health.build.node_role}`;
+                if (buildCommitEl && health.build) {
+                    const displayText = health.build.build_id || health.build.git_commit || 'unknown';
+                    buildCommitEl.textContent = `build: ${displayText}`;
+                    buildCommitEl.title = `Build ID: ${health.build.build_id || 'N/A'}\nGit commit: ${health.build.git_commit || 'N/A'}\nDATA_DIR: ${health.build.DATA_DIR}\nNode: ${health.build.node_role}`;
                 }
             } catch(e) {
                 console.log('Build info not available:', e);

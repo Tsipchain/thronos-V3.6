@@ -3811,10 +3811,17 @@ def api_health():
             pass
 
     # FIX 1: Build metadata
+    build_time = os.path.getmtime(__file__) if os.path.exists(__file__) else None
+    # Build ID: unique identifier combining git commit and build timestamp
+    build_id = f"{git_commit}"
+    if build_time:
+        build_id += f"-{int(build_time)}"
+
     build_info = {
         "git_commit": git_commit,
+        "build_id": build_id,
         "checked_env": checked_env,  # Show which env vars we checked
-        "build_time": os.path.getmtime(__file__) if os.path.exists(__file__) else None,
+        "build_time": build_time,
         "DATA_DIR": os.getenv("DATA_DIR", "/app/data"),
         "node_role": os.getenv("NODE_ROLE", "standalone"),
         "degraded_mode_enabled": True  # Always use degraded mode patterns
@@ -9371,19 +9378,84 @@ def api_v1_create_quiz(course_id: str):
     if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
         return jsonify(status="error", message="Invalid auth"), 403
 
-    # Validate questions format
+    # QUEST: Validate questions format (support multiple types)
     validated_questions = []
     for i, q in enumerate(questions):
-        if not q.get("question") or not q.get("options") or q.get("correct") is None:
-            return jsonify(status="error", message=f"Invalid question #{i+1}"), 400
-        validated_questions.append({
+        qtype = q.get("type", "single")  # Default to single choice
+        question_text = q.get("question")
+
+        if not question_text:
+            return jsonify(status="error", message=f"Invalid question #{i+1}: missing question text"), 400
+
+        base_question = {
             "id": i + 1,
-            "question": q.get("question"),
-            "question_el": q.get("question_el", q.get("question")),
-            "options": q.get("options"),
-            "options_el": q.get("options_el", q.get("options")),
-            "correct": int(q.get("correct"))
-        })
+            "type": qtype,
+            "question": question_text,
+            "question_el": q.get("question_el", question_text)
+        }
+
+        # Validate based on type
+        if qtype == "single":
+            # Single choice: requires options and correct index
+            if not q.get("options") or q.get("correct") is None:
+                return jsonify(status="error", message=f"Question #{i+1}: single choice requires options and correct index"), 400
+            base_question.update({
+                "options": q.get("options"),
+                "options_el": q.get("options_el", q.get("options")),
+                "correct": int(q.get("correct"))
+            })
+
+        elif qtype == "multi":
+            # Multiple choice: requires options and correct indices (array)
+            if not q.get("options") or not q.get("correct_multiple"):
+                return jsonify(status="error", message=f"Question #{i+1}: multi choice requires options and correct_multiple array"), 400
+            base_question.update({
+                "options": q.get("options"),
+                "options_el": q.get("options_el", q.get("options")),
+                "correct_multiple": [int(idx) for idx in q.get("correct_multiple", [])]
+            })
+
+        elif qtype == "match":
+            # Matching: requires left items and right items
+            if not q.get("left_items") or not q.get("right_items"):
+                return jsonify(status="error", message=f"Question #{i+1}: match requires left_items and right_items"), 400
+            base_question.update({
+                "left_items": q.get("left_items"),
+                "right_items": q.get("right_items"),
+                "correct_pairs": q.get("correct_pairs", {})  # dict: {left_idx: right_idx}
+            })
+
+        elif qtype == "order":
+            # Ordering: requires items to be ordered
+            if not q.get("items"):
+                return jsonify(status="error", message=f"Question #{i+1}: order requires items array"), 400
+            base_question.update({
+                "items": q.get("items"),
+                "correct_order": q.get("correct_order", list(range(len(q.get("items", [])))))
+            })
+
+        elif qtype == "tf":
+            # True/False: just needs correct boolean
+            if q.get("correct") is None:
+                return jsonify(status="error", message=f"Question #{i+1}: tf requires correct (0 or 1)"), 400
+            base_question.update({
+                "options": ["False", "True"],
+                "correct": int(q.get("correct"))
+            })
+
+        elif qtype == "short":
+            # Short answer: requires correct answer(s)
+            if not q.get("correct_answers"):
+                return jsonify(status="error", message=f"Question #{i+1}: short requires correct_answers array"), 400
+            base_question.update({
+                "correct_answers": q.get("correct_answers"),
+                "case_sensitive": q.get("case_sensitive", False)
+            })
+
+        else:
+            return jsonify(status="error", message=f"Question #{i+1}: unknown type '{qtype}'"), 400
+
+        validated_questions.append(base_question)
 
     # FIX B1: Save quiz with quiz_id and updated_at for cache busting
     import uuid
@@ -9432,7 +9504,7 @@ def api_v1_submit_quiz(course_id: str):
     if student not in course.get("students", []):
         return jsonify(status="error", message="Not enrolled"), 403
 
-    # Calculate score
+    # QUEST: Calculate score with support for multiple question types
     questions = quiz.get("questions", [])
     total = len(questions)
     if total == 0:
@@ -9440,17 +9512,65 @@ def api_v1_submit_quiz(course_id: str):
 
     correct = 0
     results = []
+
     for q in questions:
         qid = str(q.get("id"))
+        qtype = q.get("type", "single")
         user_answer = answers.get(qid)
-        is_correct = user_answer is not None and int(user_answer) == q.get("correct_index")
+        is_correct = False
+        correct_answer = None
+
+        # Deterministic grading per type
+        if qtype == "single" or qtype == "tf":
+            # Single choice or True/False: compare index
+            correct_answer = q.get("correct")
+            if user_answer is not None:
+                is_correct = int(user_answer) == correct_answer
+
+        elif qtype == "multi":
+            # Multiple choice: user must select all correct indices
+            correct_answer = sorted(q.get("correct_multiple", []))
+            if user_answer is not None:
+                user_selections = sorted([int(idx) for idx in user_answer] if isinstance(user_answer, list) else [int(user_answer)])
+                is_correct = user_selections == correct_answer
+
+        elif qtype == "match":
+            # Matching: user pairs must match correct pairs
+            correct_answer = q.get("correct_pairs", {})
+            if user_answer is not None:
+                # user_answer should be dict: {left_idx: right_idx}
+                user_pairs = {str(k): int(v) for k, v in (user_answer.items() if isinstance(user_answer, dict) else {})}
+                correct_pairs = {str(k): int(v) for k, v in correct_answer.items()}
+                is_correct = user_pairs == correct_pairs
+
+        elif qtype == "order":
+            # Ordering: user order must match correct order
+            correct_answer = q.get("correct_order", [])
+            if user_answer is not None:
+                user_order = [int(idx) for idx in user_answer] if isinstance(user_answer, list) else []
+                is_correct = user_order == correct_answer
+
+        elif qtype == "short":
+            # Short answer: case-sensitive or insensitive comparison
+            correct_answers = q.get("correct_answers", [])
+            case_sensitive = q.get("case_sensitive", False)
+            if user_answer is not None:
+                user_text = str(user_answer).strip()
+                if case_sensitive:
+                    is_correct = user_text in correct_answers
+                else:
+                    is_correct = user_text.lower() in [ans.lower() for ans in correct_answers]
+            correct_answer = correct_answers
+
         if is_correct:
             correct += 1
+
         results.append({
             "question_id": qid,
+            "type": qtype,
             "correct": is_correct,
             "your_answer": user_answer,
-            "correct_answer": q.get("correct_index")
+            "correct_answer": correct_answer
         })
 
     score = round((correct / total) * 100)
@@ -9469,10 +9589,11 @@ def api_v1_submit_quiz(course_id: str):
     }
     save_json(os.path.join(DATA_DIR, "quiz_attempts.json"), quiz_attempts)
 
-    # PRIORITY 6: AUTO-COMPLETE + AUTO-REWARD
+    # QUEST: AUTO-COMPLETE + AUTO-REWARD (with proper reward_paid tracking)
     auto_completed = False
     reward_credited = False
     reward_amount = 0.0
+    reward_txid = None
 
     if passed:
         # Mark as quiz_passed in course
@@ -9480,6 +9601,11 @@ def api_v1_submit_quiz(course_id: str):
             course["quiz_passed"] = []
         if student not in course["quiz_passed"]:
             course["quiz_passed"].append(student)
+
+        # Check if student already received reward (use completions tracking)
+        completions = course.setdefault("completions", {})
+        student_completion = completions.get(student, {})
+        already_paid = student_completion.get("reward_paid", False)
 
         # Mark course completed
         course.setdefault("completed", [])
@@ -9496,35 +9622,54 @@ def api_v1_submit_quiz(course_id: str):
 
         save_courses(courses)
         auto_completed = True
-        app.logger.info(f"PRIORITY 6: AUTO-COMPLETE: Student {student} completed course {course_id}")
+        app.logger.info(f"QUEST: AUTO-COMPLETE: Student {student} completed course {course_id}")
 
-        # AUTO-REWARD: Credit L2E reward
+        # QUEST: AUTO-REWARD - Only pay if not already paid
         reward_amount = float(course.get("metadata", {}).get("reward_thr", 0.0) or course.get("reward_l2e", 0.0))
-        if reward_amount > 0:
-            # Credit to main wallet ledger
-            ledger = load_json(LEDGER_FILE, {})
-            ledger[student] = round(float(ledger.get(student, 0.0)) + reward_amount, 6)
-            save_json(LEDGER_FILE, ledger)
+
+        if reward_amount > 0 and not already_paid:
+            # Update L2E ledger
+            l2e_ledger = load_json(L2E_LEDGER_FILE, {})
+            l2e_ledger[student] = round(float(l2e_ledger.get(student, 0.0)) + reward_amount, 6)
+            save_json(L2E_LEDGER_FILE, l2e_ledger)
 
             # Create L2E reward transaction
             chain = load_json(CHAIN_FILE, [])
+            ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+            reward_txid = f"L2E-AUTO-{course_id}-{int(time.time())}-{secrets.token_hex(4)}"
+
             reward_tx = {
-                "tx_id": f"L2E_REWARD_{course_id}_{int(time.time())}_{secrets.token_hex(4)}",
-                "type": "L2E_REWARD",
-                "from": "SYSTEM_L2E_POOL",
+                "tx_id": reward_txid,
+                "type": "l2e_reward",
+                "from": "course_auto",
                 "to": student,
-                "amount": reward_amount,
+                "thr_address": course.get("teacher", "system"),
+                "amount": round(reward_amount, 6),
                 "course_id": course_id,
                 "quiz_score": score,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-                "block": len(chain) + 1
+                "timestamp": ts,
+                "status": "confirmed"
             }
             chain.append(reward_tx)
             save_json(CHAIN_FILE, chain)
             update_last_block(reward_tx, is_block=False)
+            try:
+                broadcast_tx(reward_tx)
+            except Exception:
+                pass
+
+            # Update completion record with reward tracking
+            completions[student] = {
+                "completed": True,
+                "reward_paid": True,
+                "reward_txid": reward_txid,
+                "best_score": max(score, student_completion.get("best_score", 0)),
+                "completion_date": ts
+            }
+            save_courses(courses)
 
             reward_credited = True
-            app.logger.info(f"PRIORITY 6: AUTO-REWARD: Credited {reward_amount} THR to {student} for course {course_id}")
+            app.logger.info(f"QUEST: AUTO-REWARD: Credited {reward_amount} L2E to {student} for course {course_id}, tx: {reward_txid}")
 
     return jsonify(
         status="success",
@@ -9536,7 +9681,8 @@ def api_v1_submit_quiz(course_id: str):
         results=results,
         auto_completed=auto_completed,
         reward_credited=reward_credited,
-        reward_amount=reward_amount
+        reward_amount=reward_amount,
+        reward_txid=reward_txid
     ), 200
 
 

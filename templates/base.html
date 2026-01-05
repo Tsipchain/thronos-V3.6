@@ -2264,14 +2264,15 @@ function filterHistory(filter) {
 }
 
 function getTxType(tx) {
-    const type = (tx.type || '').toLowerCase();
+    const rawType = (tx.type || '').toUpperCase();
+    const note = (tx.note || tx.description || '').toUpperCase();
     const symbol = (tx.symbol || 'THR').toUpperCase();
 
-    // Determine transaction type
-    if (type.includes('l2e') || type.includes('learn') || type.includes('course')) return 'l2e';
-    if (type.includes('ai') || type.includes('chat') || type.includes('agent')) return 'ai';
-    if (type.includes('iot') || type.includes('parking') || type.includes('smart')) return 'iot';
-    if (type.includes('bridge') || type.includes('deposit') || type.includes('withdraw')) return 'bridge';
+    // Explicit classification rules
+    if (rawType.startsWith('L2E_') || rawType.includes('L2E') || rawType.includes('LEARN') || note.includes('L2E')) return 'l2e';
+    if (rawType.startsWith('AI_') || rawType.startsWith('CREDITS_') || rawType.includes('CHAT') || note.includes('AI TRANSFER')) return 'ai';
+    if (rawType.startsWith('IOT_') || rawType.includes('PARKING') || note.includes('IOT')) return 'iot';
+    if (rawType.startsWith('BRIDGE_') || rawType.includes('BRIDGE') || rawType.includes('DEPOSIT')) return 'bridge';
     if (symbol === 'THR') return 'thr';
     return 'token'; // Custom tokens
 }
@@ -2283,13 +2284,16 @@ function formatTxDate(timestamp) {
             // Unix timestamp (seconds or milliseconds)
             date = timestamp > 10000000000 ? new Date(timestamp) : new Date(timestamp * 1000);
         } else if (typeof timestamp === 'string') {
-            // ISO string or other format
-            date = new Date(timestamp);
+            const numeric = Number(timestamp);
+            if (!Number.isNaN(numeric)) {
+                date = numeric > 10000000000 ? new Date(numeric) : new Date(numeric * 1000);
+            } else {
+                date = new Date(timestamp);
+            }
         } else {
             return '';
         }
 
-        // Check if date is valid
         if (isNaN(date.getTime())) {
             return timestamp ? String(timestamp) : '';
         }
@@ -2453,13 +2457,7 @@ function selectSpeed(speed) {
 
 function selectNetwork(network) {
     if (network === 'bitcoin') {
-        // Bitcoin bridge coming soon
-    const lang = getCurrentLang();
-    const isGreek = isGreekLang(lang);
-    alert(isGreek ?
-        '🚧 Η γέφυρα Bitcoin έρχεται σύντομα! Δείτε το Roadmap για περισσότερες πληροφορίες.' :
-        '🚧 Bitcoin Bridge coming soon! Check the Roadmap for more info.'
-    );
+        openBridgeModal();
         return;
     }
     selectedNetwork = network;

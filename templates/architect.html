@@ -100,19 +100,22 @@
       box-shadow: 0 0 8px var(--accent);
     }
 
-    .lang-toggle {
+    .lang-control {
       margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .lang-select {
+      min-width: 150px;
       background: var(--accent-soft);
       border: 1px solid var(--border);
       color: var(--accent);
-      padding: 6px 14px;
-      border-radius: 20px;
+      padding: 6px 12px;
+      border-radius: 12px;
       cursor: pointer;
       font-size: 12px;
-    }
-
-    .lang-toggle:hover {
-      background: rgba(0, 255, 102, 0.2);
     }
 
     select, textarea, input, button {
@@ -287,17 +290,26 @@
       <span class="lang-es">En línea</span>
     </div>
     <div class="input-row">
-      <span class="section-title" style="margin: 0;">Wallet</span>
+      <span class="section-title" style="margin: 0;" data-i18n="label.wallet" data-i18n-default="Wallet">Wallet</span>
       <input id="wallet" placeholder="THR..." style="width: 200px"/>
     </div>
     <div class="input-row">
-      <span class="section-title" style="margin: 0;">Model</span>
+      <span class="section-title" style="margin: 0;" data-i18n="label.model" data-i18n-default="Model">Model</span>
       <select id="model">
         <option value="auto">🔀 Auto (Pythia chooses)</option>
-        <!-- Models loaded dynamically from /api/ai/models -->
+        <!-- Models loaded dynamically from /api/ai_models -->
       </select>
     </div>
-    <button class="lang-toggle" onclick="toggleLanguage()">🌐 GR</button>
+    <div class="lang-control">
+      <span class="section-title" style="margin: 0;" data-i18n="label.language" data-i18n-default="Language">Language</span>
+      <select id="languageSelect" class="lang-select" aria-label="Language">
+        <option value="gr">Ελληνικά</option>
+        <option value="en">English</option>
+        <option value="ja">日本語</option>
+        <option value="es">Español</option>
+        <option value="ru">Русский</option>
+      </select>
+    </div>
   </div>
 
   <div class="wrap">
@@ -385,33 +397,81 @@ if (downloadZipBtn) {
   });
 }
 
-// Language support - N2 FIX: Added normalizeLang + safe applyLanguage
-window.LANG_SEQUENCE = window.LANG_SEQUENCE || ['gr', 'en', 'ja', 'es', 'ru'];
-const LANG_CLASS_MAP = { 'gr': 'lang-el', 'en': 'lang-en', 'ja': 'lang-ja', 'es': 'lang-es', 'ru': 'lang-ru' };
+// Language support - data-i18n based with safe fallback
+const LANG_SEQUENCE = ['gr', 'en', 'ja', 'es', 'ru'];
+const LANG_ALIAS = { el: 'gr' };
+const DEFAULT_LANG = 'en';
+let TRANSLATIONS_CACHE = null;
 
 function normalizeLang(lang) {
-  if (!lang) return 'gr';
-  if (lang === 'el') return 'gr'; // N2 FIX: Normalize 'el' to 'gr'
-  return window.LANG_SEQUENCE.includes(lang) ? lang : 'gr';
+  if (!lang) return DEFAULT_LANG;
+  const alias = LANG_ALIAS[lang];
+  const normalized = alias || lang;
+  return LANG_SEQUENCE.includes(normalized) ? normalized : DEFAULT_LANG;
 }
 
-function toggleLanguage() {
-  const current = normalizeLang(localStorage.getItem("lang"));
-  const idx = window.LANG_SEQUENCE.indexOf(current);
-  const next = window.LANG_SEQUENCE[(idx + 1) % window.LANG_SEQUENCE.length];
-  localStorage.setItem("lang", next);
-  applyLanguage();
+function harvestTranslations() {
+  const store = {};
+  const langRegex = /lang-([a-z]+)/;
+  document.querySelectorAll('.lang-el, .lang-en, .lang-ja, .lang-ru, .lang-es').forEach((node) => {
+    const parent = node.parentElement;
+    if (!parent) return;
+    if (!parent.dataset.i18n) {
+      parent.dataset.i18n = `auto-i18n-${Object.keys(store).length}`;
+    }
+    const key = parent.dataset.i18n;
+    const match = node.className.match(langRegex);
+    const lang = normalizeLang(match && match[1]);
+    store[key] = store[key] || {};
+    store[key][lang] = node.textContent.trim();
+  });
+  document.querySelectorAll('[data-i18n]').forEach((node) => {
+    const key = node.dataset.i18n;
+    store[key] = store[key] || {};
+    const fallback = node.dataset.i18nDefault || node.textContent.trim();
+    if (!store[key][DEFAULT_LANG]) {
+      store[key][DEFAULT_LANG] = fallback;
+    }
+  });
+  return store;
 }
 
-function applyLanguage() {
-  const lang = normalizeLang(localStorage.getItem("lang"));
-  const targetClass = LANG_CLASS_MAP[lang] || 'lang-el';
-  document.body.className = targetClass;
+function applyTranslations(langOverride) {
+  const lang = normalizeLang(langOverride || localStorage.getItem('lang'));
+  localStorage.setItem('lang', lang);
+  document.documentElement.lang = lang;
 
-  // N2 FIX: Safe querySelector - check if element exists
-  const toggleBtn = document.querySelector('.lang-toggle');
-  if (toggleBtn) {
-    toggleBtn.textContent = '🌐 ' + lang.toUpperCase();
+  if (!TRANSLATIONS_CACHE) {
+    TRANSLATIONS_CACHE = harvestTranslations();
+  }
+
+  try {
+    document.querySelectorAll('[data-i18n]').forEach((node) => {
+      const key = node.dataset.i18n;
+      const table = TRANSLATIONS_CACHE[key] || {};
+      const fallback = table[DEFAULT_LANG] || node.dataset.i18nDefault || node.textContent;
+      const value = table[lang] || fallback || key;
+      if (node.dataset.i18nAttr === 'placeholder') {
+        node.placeholder = value;
+      } else {
+        node.textContent = value;
+      }
+    });
+  } catch (err) {
+    console.warn('translation apply failed', err);
+    document.querySelectorAll('[data-i18n]').forEach((node) => {
+      const fallback = node.dataset.i18nDefault || node.textContent;
+      if (node.dataset.i18nAttr === 'placeholder') {
+        node.placeholder = fallback;
+      } else {
+        node.textContent = fallback;
+      }
+    });
+  }
+
+  const langSelect = document.getElementById('languageSelect');
+  if (langSelect && langSelect.value !== lang) {
+    langSelect.value = lang;
   }
 }
 
@@ -453,6 +513,7 @@ async function loadBlueprints() {
     opt.textContent = "📁 " + b;
     sel.appendChild(opt);
   });
+  applyTranslations();
 }
 
 function parseFiles(lines) {
@@ -488,7 +549,7 @@ $("generate").onclick = async () => {
     const j = await api("/api/architect_generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ wallet, blueprint, spec, model })
+      body: JSON.stringify({ wallet, blueprint, spec, model_id: model })
     });
 
     setStatus(true);
@@ -510,7 +571,7 @@ $("generate").onclick = async () => {
   } finally {
     btn.disabled = false;
     btn.innerHTML = '🚀 <span class="lang-el">ΔΗΜΙΟΥΡΓΙΑ ΑΡΧΙΤΕΚΤΟΝΙΚΗΣ</span><span class="lang-en">GENERATE ARCHITECTURE</span><span class="lang-ja">アーキテクチャ生成</span><span class="lang-ru">СОЗДАТЬ АРХИТЕКТУРУ</span><span class="lang-es">GENERAR ARQUITECTURA</span>';
-    applyLanguage();
+    applyTranslations();
   }
 };
 
@@ -518,6 +579,11 @@ $("generate").onclick = async () => {
 const savedWallet = localStorage.getItem('thr_address');
 if (savedWallet) {
   $("wallet").value = savedWallet;
+}
+
+const langSelectEl = document.getElementById('languageSelect');
+if (langSelectEl) {
+  langSelectEl.addEventListener('change', (e) => applyTranslations(e.target.value));
 }
 
 // Load Models from API
@@ -529,7 +595,7 @@ async function loadModels() {
   modelSel.innerHTML = '<option value="auto">🔀 Auto (Pythia chooses)</option>';
 
   try {
-    const res = await fetch("/api/ai/models");
+    const res = await fetch("/api/ai_models");
 
     let data = null;
     try {
@@ -540,70 +606,44 @@ async function loadModels() {
       return;
     }
 
-    // Check for degraded mode
-    if (data.ok === false || data.fallback_active === true) {
-      setStatus(false, data.error_message || "Degraded mode");
-      const statusPill = document.getElementById("statusPill");
-      if (statusPill) {
-        statusPill.innerHTML = '<div class="pill-dot" style="background: var(--danger); box-shadow: 0 0 8px var(--danger);"></div><span class="lang-el">Υποβαθμισμένη λειτουργία</span><span class="lang-en">Degraded Mode</span><span class="lang-ja">機能制限モード</span><span class="lang-ru">Ограниченный режим</span><span class="lang-es">Modo Degradado</span>';
-      }
+    const models = Array.isArray(data.models) ? data.models : [];
+    const defaultModelId = data.default_model_id || "auto";
+
+    if (!models.length) {
+      const autoOnly = document.createElement("option");
+      autoOnly.value = defaultModelId;
+      autoOnly.textContent = "🔀 Auto only (router available)";
+      modelSel.innerHTML = "";
+      modelSel.appendChild(autoOnly);
+      return;
     }
 
-    const providers = data.providers || {};
-    const models = data.models || [];
-    const providerStatus = data.provider_status || {};  // FIX 2: Get provider status
-
-    // Group models by provider
-    const providerGroups = {};
-    models.forEach(m => {
-      const prov = m.provider || 'unknown';
-      if (!providerGroups[prov]) providerGroups[prov] = [];
-      providerGroups[prov].push(m);
+    models.forEach((m) => {
+      const opt = document.createElement("option");
+      opt.value = m.id;
+      opt.textContent = `${m.label || m.id}`;
+      if (m.enabled === false) {
+        opt.disabled = true;
+        opt.textContent += " (disabled)";
+      }
+      modelSel.appendChild(opt);
     });
 
-    // Add models grouped by provider
-    Object.keys(providerGroups).sort().forEach(provName => {
-      const provModels = providerGroups[provName];
-      const provInfo = providers[provName] || {};
-      const enabled = provInfo.enabled !== false;
-
-      provModels.forEach(m => {
-        const opt = document.createElement("option");
-        opt.value = m.id;
-        opt.textContent = `${m.emoji || '🤖'} ${m.label || m.display_name || m.id}`;
-        // FIX 2: If configured=true, NEVER show "missing"
-        const status = providerStatus[m.provider];
-        const isConfigured = status && status.configured;
-
-        if (!enabled || m.disabled || m.degraded || !m.enabled) {
-          opt.disabled = true;
-          if (m.degraded) {
-            opt.textContent += ' (degraded)';
-          } else if (!isConfigured && status && status.missing_env && status.missing_env.length > 0) {
-            // Only show missing if configured=false
-            opt.textContent += ` (missing: ${status.missing_env.join(" or ")})`;
-          } else if (!isConfigured) {
-            opt.textContent += ' (disabled)';
-          }
-          // If configured=true but still disabled, don't add "missing" label
-        }
-        modelSel.appendChild(opt);
-      });
-    });
-
-    // Restore previous value if exists
-    if (previousValue && Array.from(modelSel.options).some(o => o.value === previousValue)) {
+    if (previousValue && Array.from(modelSel.options).some((o) => o.value === previousValue)) {
       modelSel.value = previousValue;
+    } else if (Array.from(modelSel.options).some((o) => o.value === defaultModelId)) {
+      modelSel.value = defaultModelId;
     }
   } catch (e) {
     console.warn("Failed to load models from API:", e);
     setStatus(false, "Models unavailable");
   }
+  applyTranslations();
 }
 
 // Initialize
 (async () => {
-  applyLanguage();
+  applyTranslations();
   try {
     await Promise.all([loadBlueprints(), loadModels()]);
     setStatus(true);

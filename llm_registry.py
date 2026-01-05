@@ -95,8 +95,8 @@ def _apply_env_flags() -> None:
     has_local = os.path.exists(corpus_file)
     logger.debug(f"Local provider check: corpus_file={corpus_file} exists={has_local} → enabled={has_local}")
 
-    # Check thronos: CUSTOM_MODEL_URL/CUSTOM_MODEL_URI configured
-    custom_url = (os.getenv("CUSTOM_MODEL_URI") or os.getenv("CUSTOM_MODEL_URL") or "").strip()
+    # Check thronos: CUSTOM_MODEL_URL configured (CUSTOM_MODEL_URI kept as legacy alias)
+    custom_url = (os.getenv("CUSTOM_MODEL_URL") or os.getenv("CUSTOM_MODEL_URI") or "").strip()
     has_thronos = bool(custom_url)
     # Also check THRONOS_AI_MODE allows custom (if mode is restrictive)
     ai_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
@@ -178,13 +178,13 @@ def get_provider_status() -> dict:
     }
 
     # Thronos (custom model)
-    thronos_vars = ["CUSTOM_MODEL_URI", "CUSTOM_MODEL_URL", "THRONOS_AI_MODE"]
-    custom_url = (os.getenv("CUSTOM_MODEL_URI") or os.getenv("CUSTOM_MODEL_URL") or "").strip()
+    thronos_vars = ["CUSTOM_MODEL_URL", "THRONOS_AI_MODE"]
+    custom_url = (os.getenv("CUSTOM_MODEL_URL") or os.getenv("CUSTOM_MODEL_URI") or "").strip()
     ai_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
     thronos_configured = bool(custom_url) and ai_mode in ("all", "router", "auto", "custom", "hybrid", "")
     thronos_missing = []
     if not custom_url:
-        thronos_missing.append("CUSTOM_MODEL_URI or CUSTOM_MODEL_URL")
+        thronos_missing.append("CUSTOM_MODEL_URL (or legacy CUSTOM_MODEL_URI)")
     if ai_mode not in ("all", "router", "auto", "custom", "hybrid", ""):
         thronos_missing.append(f"THRONOS_AI_MODE={ai_mode} (restrictive)")
     status["thronos"] = {
@@ -203,6 +203,25 @@ def find_model(model_id: str) -> Optional[ModelInfo]:
             if m.id == model_id:
                 return m
     return None
+
+
+def list_enabled_model_ids(mode: Optional[str] = None) -> List[str]:
+    """Return a list of enabled model ids, respecting THRONOS_AI_MODE if provided."""
+
+    normalized_mode = (mode or os.getenv("THRONOS_AI_MODE", "all")).strip().lower()
+    if normalized_mode in ("", "router", "auto", "hybrid"):
+        normalized_mode = "all"
+    if normalized_mode == "openai_only":
+        normalized_mode = "openai"
+
+    enabled_ids: List[str] = []
+    for provider_name, models in AI_MODEL_REGISTRY.items():
+        if normalized_mode != "all" and provider_name != normalized_mode:
+            continue
+        for m in models:
+            if m.enabled:
+                enabled_ids.append(m.id)
+    return enabled_ids
 
 
 def get_default_model(provider: Optional[str] = None) -> Optional[ModelInfo]:

@@ -761,23 +761,87 @@
 <script>
 const $ = (id) => document.getElementById(id);
 
-// Language
-window.LANG_SEQUENCE = window.LANG_SEQUENCE || ['gr', 'en', 'ja', 'es', 'ru'];
-const LANG_CLASS_MAP = { 'gr': 'lang-el', 'en': 'lang-en', 'ja': 'lang-ja', 'es': 'lang-es', 'ru': 'lang-ru' };
+// Language (data-i18n with safe fallback)
+const LANG_SEQUENCE = ['gr', 'en', 'ja', 'es', 'ru'];
+const LANG_ALIAS = { el: 'gr' };
+const DEFAULT_LANG = 'en';
+let TRANSLATIONS_CACHE = null;
 
-function toggleLanguage() {
-    const current = localStorage.getItem("lang") || "gr";
-    const idx = window.LANG_SEQUENCE.indexOf(current);
-    const next = window.LANG_SEQUENCE[(idx + 1) % window.LANG_SEQUENCE.length];
-    localStorage.setItem("lang", next);
-    applyLanguage();
+function normalizeLang(lang) {
+    if (!lang) return DEFAULT_LANG;
+    const alias = LANG_ALIAS[lang];
+    const normalized = alias || lang;
+    return LANG_SEQUENCE.includes(normalized) ? normalized : DEFAULT_LANG;
 }
 
-function applyLanguage() {
-    const lang = localStorage.getItem("lang") || "gr";
-    document.body.className = LANG_CLASS_MAP[lang] || '';
+function harvestTranslations() {
+    const store = {};
+    const langRegex = /lang-([a-z]+)/;
+    document.querySelectorAll('.lang-el, .lang-en, .lang-ja, .lang-ru, .lang-es').forEach((node) => {
+        const parent = node.parentElement;
+        if (!parent) return;
+        if (!parent.dataset.i18n) {
+            parent.dataset.i18n = `auto-i18n-${Object.keys(store).length}`;
+        }
+        const key = parent.dataset.i18n;
+        const match = node.className.match(langRegex);
+        const lang = normalizeLang(match && match[1]);
+        store[key] = store[key] || {};
+        store[key][lang] = node.textContent.trim();
+    });
+    document.querySelectorAll('[data-i18n]').forEach((node) => {
+        const key = node.dataset.i18n;
+        store[key] = store[key] || {};
+        const fallback = node.dataset.i18nDefault || node.textContent.trim();
+        if (!store[key][DEFAULT_LANG]) {
+            store[key][DEFAULT_LANG] = fallback;
+        }
+    });
+    return store;
+}
+
+function applyTranslations(langOverride) {
+    const lang = normalizeLang(langOverride || localStorage.getItem('lang'));
+    localStorage.setItem('lang', lang);
+    document.documentElement.lang = lang;
+
+    if (!TRANSLATIONS_CACHE) {
+        TRANSLATIONS_CACHE = harvestTranslations();
+    }
+
+    try {
+        document.querySelectorAll('[data-i18n]').forEach((node) => {
+            const key = node.dataset.i18n;
+            const table = TRANSLATIONS_CACHE[key] || {};
+            const fallback = table[DEFAULT_LANG] || node.dataset.i18nDefault || node.textContent;
+            const value = table[lang] || fallback || key;
+            if (node.dataset.i18nAttr === 'placeholder') {
+                node.placeholder = value;
+            } else {
+                node.textContent = value;
+            }
+        });
+    } catch (err) {
+        console.warn('translation apply failed', err);
+        document.querySelectorAll('[data-i18n]').forEach((node) => {
+            const fallback = node.dataset.i18nDefault || node.textContent;
+            if (node.dataset.i18nAttr === 'placeholder') {
+                node.placeholder = fallback;
+            } else {
+                node.textContent = fallback;
+            }
+        });
+    }
+
     const btn = document.querySelector('.lang-toggle-iot');
     if (btn) btn.textContent = '🌐 ' + lang.toUpperCase();
+}
+
+function toggleLanguage() {
+    const current = normalizeLang(localStorage.getItem('lang'));
+    const idx = LANG_SEQUENCE.indexOf(current);
+    const next = LANG_SEQUENCE[(idx + 1) % LANG_SEQUENCE.length];
+    applyTranslations(next);
 }
 
 // Stripe Purchase
@@ -893,8 +957,9 @@ function updateWater() {
 
 // Init
 document.addEventListener('DOMContentLoaded', () => {
-    applyLanguage();
+    applyTranslations();
     renderParking();
+    applyTranslations();
     updateWater();
     setInterval(updateWater, 5000);
 });

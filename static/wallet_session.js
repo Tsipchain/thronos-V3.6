@@ -5,6 +5,9 @@
   const SEND_SEED_COMPAT_KEY = 'thr_secret';
   const PIN_KEY = 'wallet_pin';
   const BOUND_KEY = 'wallet_bound';
+  const LOCK_KEY = 'wallet_locked';
+
+  let customUnlockHandler = null;
 
   function setItem(key, value){
     if(value){
@@ -49,6 +52,84 @@
     setItem(PIN_KEY, pin ? pin.trim() : '');
   }
 
+  function isLocked(){
+    return localStorage.getItem(LOCK_KEY) === '1';
+  }
+
+  function lockWallet(){
+    // Keep credentials local but require unlock before use
+    setBound(false);
+    localStorage.setItem(LOCK_KEY, '1');
+  }
+
+  function setCustomUnlockHandler(fn){
+    customUnlockHandler = typeof fn === 'function' ? fn : null;
+  }
+
+  async function unlockWallet(options = {}){
+    // Short-circuit if already unlocked/bound
+    if (!isLocked() && isBound()) return true;
+
+    // Custom (passkey/biometric) handler first
+    if (customUnlockHandler) {
+      try {
+        const ok = await customUnlockHandler(options);
+        if (ok) {
+          setBound(true);
+          localStorage.setItem(LOCK_KEY, '0');
+          return true;
+        }
+      } catch (e) {
+        console.warn('Custom unlock handler failed', e);
+      }
+    }
+
+    // Optional biometric hook from wrapper
+    if (options.useBiometrics && window.ThronosWalletHooks && typeof window.ThronosWalletHooks.biometricUnlock === 'function') {
+      const ok = await window.ThronosWalletHooks.biometricUnlock();
+      if (ok) {
+        setBound(true);
+        localStorage.setItem(LOCK_KEY, '0');
+        return true;
+      }
+    }
+
+    // PIN unlock
+    const storedPin = getPin();
+    if (storedPin) {
+      const providedPin = options.pin || null;
+      if (providedPin) {
+        if (providedPin === storedPin) {
+          setBound(true);
+          localStorage.setItem(LOCK_KEY, '0');
+          return true;
+        }
+        return false;
+      }
+      if (options.prompt !== false) {
+        const entered = prompt('Enter wallet PIN to unlock');
+        if (entered === null) return false;
+        if (entered === storedPin) {
+          setBound(true);
+          localStorage.setItem(LOCK_KEY, '0');
+          return true;
+        }
+        alert('Wrong PIN.');
+        return false;
+      }
+    }
+
+    // If no PIN set, consider unlocked with saved credentials
+    const hasCreds = !!(getAddress() && getSendSeed());
+    if (hasCreds) {
+      setBound(true);
+      localStorage.setItem(LOCK_KEY, '0');
+      return true;
+    }
+
+    return false;
+  }
+
   function isBound(){
     return localStorage.getItem(BOUND_KEY) === '1';
   }
@@ -60,6 +141,7 @@
   function disconnect(){
     // Only clear bound flag, keep credentials for PIN-only unlock
     setBound(false);
+    localStorage.setItem(LOCK_KEY, '1');
   }
 
   function forgetDevice(){
@@ -70,6 +152,7 @@
     localStorage.removeItem(SEND_SEED_COMPAT_KEY);
     localStorage.removeItem(PIN_KEY);
     localStorage.removeItem(BOUND_KEY);
+    localStorage.removeItem(LOCK_KEY);
   }
 
   function clearSession(){
@@ -82,6 +165,10 @@
     setSendSeed(sendSeed || '');
     setPin(pin || '');
     setBound(bound !== undefined ? !!bound : !!(address && sendSeed));
+    // Save sessions default to unlocked state once credentials are present
+    if (address || sendSeed) {
+      localStorage.setItem(LOCK_KEY, '0');
+    }
   }
 
   function requirePin(actionLabel = 'continue'){
@@ -102,6 +189,7 @@
     SEND_SEED_KEY,
     PIN_KEY,
     BOUND_KEY,
+    LOCK_KEY,
     getAddress,
     setAddress,
     getSendSeed,
@@ -110,6 +198,10 @@
     setSendSecret,
     getPin,
     setPin,
+    isLocked,
+    lockWallet,
+    unlockWallet,
+    setCustomUnlockHandler,
     isBound,
     setBound,
     disconnect,

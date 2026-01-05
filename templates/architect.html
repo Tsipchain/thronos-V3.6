@@ -541,9 +541,15 @@ $("generate").onclick = async () => {
   btn.disabled = true;
   btn.innerHTML = "⏳ Generating...";
 
-  $("out").textContent = "🔄 Generating architecture...\n\nPlease wait while Pythia analyzes your specifications...";
-  $("files").style.display = "none";
-  $("files").textContent = "";
+  const outEl = $("out");
+  if (outEl) {
+    outEl.textContent = "🔄 Generating architecture...\n\nPlease wait while Pythia analyzes your specifications...";
+  }
+  const filesEl = $("files");
+  if (filesEl) {
+    filesEl.style.display = "none";
+    filesEl.textContent = "";
+  }
   lastArchitectFiles = [];
   resetDownloadBtn();
 
@@ -555,11 +561,13 @@ $("generate").onclick = async () => {
     });
 
     setStatus(true);
-    $("out").textContent = j.response || "No response received.";
+    if (outEl) {
+      outEl.textContent = j.response || "No response received.";
+    }
 
-    if (j.files && j.files.length) {
-      $("files").style.display = "block";
-      $("files").innerHTML = "<strong>📁 Generated Files:</strong><br>" + parseFiles(j.files);
+    if (filesEl && j.files && j.files.length) {
+      filesEl.style.display = "block";
+      filesEl.innerHTML = "<strong>📁 Generated Files:</strong><br>" + parseFiles(j.files);
     }
 
     if (j.zip_url) {
@@ -569,7 +577,9 @@ $("generate").onclick = async () => {
     }
   } catch(e) {
     setStatus(false);
-    $("out").textContent = "❌ Error: " + e.message;
+    if (outEl) {
+      outEl.textContent = "❌ Error: " + e.message;
+    }
   } finally {
     btn.disabled = false;
     btn.innerHTML = '🚀 <span class="lang-el">ΔΗΜΙΟΥΡΓΙΑ ΑΡΧΙΤΕΚΤΟΝΙΚΗΣ</span><span class="lang-en">GENERATE ARCHITECTURE</span><span class="lang-ja">アーキテクチャ生成</span><span class="lang-ru">СОЗДАТЬ АРХИТЕКТУРУ</span><span class="lang-es">GENERAR ARQUITECTURA</span>';

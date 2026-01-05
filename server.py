@@ -1816,6 +1816,41 @@ def _default_model_id():
     except Exception:
         return "auto"
 
+
+def _select_callable_model(model_id: str | None):
+    """Return a callable model id (or error response) respecting mode/provider availability."""
+
+    enabled_ids = set(list_enabled_model_ids())
+    default_model_id = _default_model_id()
+    requested = (model_id or "").strip() or default_model_id
+
+    fallback_notice = None
+
+    if requested and requested not in enabled_ids and requested != "auto":
+        fallback_notice = f"Model '{requested}' not enabled; using {default_model_id}"
+        requested = default_model_id
+
+    resolved = _resolve_model(requested)
+    if resolved:
+        return resolved.id, fallback_notice, None
+
+    # Last-chance fallback to default model if mode/provider gating blocked the requested one
+    fallback = _resolve_model(default_model_id)
+    if fallback:
+        notice = fallback_notice or f"Model '{requested or 'auto'}' not available; using {fallback.id}"
+        return fallback.id, notice, None
+
+    # Nothing callable: return JSON error without charging
+    provider_status = get_provider_status()
+    error_payload = {
+        "ok": False,
+        "status": "model_not_available",
+        "error": "No callable AI model in current mode",
+        "suggested_model": default_model_id,
+        "providers": provider_status,
+    }
+    return None, fallback_notice, (jsonify(error_payload), 200)
+
 # ---------------------------------------------------------------------------
 # Free usage counters
 # ---------------------------------------------------------------------------
@@ -3298,33 +3333,29 @@ def api_architect_generate():
     blueprint   = (data.get("blueprint") or "").strip()
     project_spec = (data.get("spec") or data.get("specs") or "").strip() # Handle both keys just in case
     model_key   = (data.get("model_id") or data.get("model") or data.get("model_key") or "gpt-4o").strip()
+    credits_value = 0
 
-    enabled_model_ids = set(list_enabled_model_ids())
-    default_model_id = _default_model_id()
-    if model_key and model_key not in enabled_model_ids:
-        model_key = default_model_id
+    selected_model, fallback_notice, error_resp = _select_callable_model(model_key)
+    if error_resp:
+        # Model is not callable in current mode/providers; return JSON without billing
+        if wallet:
+            # Preserve credit count so UI can show remaining balance
+            credits_map = load_ai_credits()
+            try:
+                credits_value = int(credits_map.get(wallet, 0) or 0)
+            except (TypeError, ValueError):
+                credits_value = 0
+            payload = error_resp[0].get_json() if hasattr(error_resp[0], "get_json") else {}
+            payload["credits"] = credits_value
+            return jsonify(payload), error_resp[1]
+        return error_resp
+    if selected_model:
+        model_key = selected_model
         if session_id:
             _save_session_selected_model(session_id, model_key)
 
     # If the requested model is not callable in current mode/providers, fall back before billing
-    fallback_notice = None
-    resolved_model = _resolve_model(model_key or default_model_id)
-    if not resolved_model:
-        resolved_model = _resolve_model(default_model_id)
-        if resolved_model:
-            fallback_notice = f"Model '{model_key or 'auto'}' not available; using {resolved_model.id}"
-            model_key = resolved_model.id
-            if session_id:
-                _save_session_selected_model(session_id, model_key)
-        else:
-            return jsonify(
-                response="Selected model is unavailable in the current mode. Please try Auto or another provider.",
-                status="model_not_available",
-                wallet=wallet,
-                credits=credits_value or 0,
-                files=[],
-                session_id=session_id,
-            ), 200
+    fallback_notice = fallback_notice  # reuse notice if any
 
     if not blueprint or not project_spec:
         return jsonify(error="Missing blueprint or spec"), 400
@@ -3378,9 +3409,19 @@ def api_architect_generate():
 
     # Call AI
     # Note: server.py uses 'ai_agent' global instance
-    # Pass session_id to maintain context if needed (though architect usually is one-shot, 
+    # Pass session_id to maintain context if needed (though architect usually is one-shot,
     # but user might refine in same session)
-    raw = ai_agent.generate_response(prompt, wallet=wallet, model_key=model_key, session_id=session_id)
+    try:
+        raw = ai_agent.generate_response(prompt, wallet=wallet, model_key=model_key, session_id=session_id)
+    except Exception as exc:
+        app.logger.exception("Architect generation failed")
+        return jsonify(
+            ok=False,
+            status="provider_error",
+            error=str(exc),
+            response="Architect temporarily unavailable",
+            model_notice=fallback_notice,
+        ), 500
 
     if isinstance(raw, dict):
         full_text   = str(raw.get("response") or "")
@@ -3390,6 +3431,16 @@ def api_architect_generate():
         full_text   = str(raw)
         quantum_key = ai_agent.generate_quantum_key()
         status      = "architect"
+
+    status_l = str(status or "").lower()
+    if status_l in {"provider_error", "error", "model_not_available", "model_not_found", "forbidden"}:
+        return jsonify(
+            ok=False,
+            status=status,
+            response=full_text or "Architect unavailable",
+            model_notice=fallback_notice,
+            files=[],
+        ), 400
 
     # Extract files
     try:
@@ -4424,10 +4475,12 @@ def api_chat():
     attachments = data.get("attachments") or data.get("attachment_ids") or []
     ai_credits_spent = 0.0
 
-    enabled_model_ids = set(list_enabled_model_ids())
-    default_model_id = _default_model_id()
-    if model_key and model_key not in enabled_model_ids:
-        model_key = default_model_id
+    selected_model, fallback_notice, error_resp = _select_callable_model(model_key)
+    if error_resp:
+        # Model not callable – return JSON without consuming credits
+        return error_resp
+    if selected_model:
+        model_key = selected_model
         if session_id:
             _save_session_selected_model(session_id, model_key)
 
@@ -5046,7 +5099,13 @@ def api_ai_files_entrypoint():
     return api_ai_files_upload()
 
 
-@app.route("/api/ai/files/upload", methods=["POST"])
+@app.route("/api/ai/upload", methods=["POST", "GET"])
+def api_ai_files_upload_alias():
+    """Alias endpoint to ensure JSON response for legacy upload callers."""
+    return api_ai_files_upload()
+
+
+@app.route("/api/ai/files/upload", methods=["POST", "GET"])
 def api_ai_files_upload():
     """
     Multipart upload endpoint used by /chat:
@@ -5055,6 +5114,9 @@ def api_ai_files_upload():
     Returns:
       { ok: true, files: [{id, name, size, mimetype, sha256}] }
     """
+    if request.method == "GET":
+        return jsonify(ok=False, error="Upload requires POST multipart form", error_code="UPLOAD_METHOD"), 405
+
     try:
         files = (request.files.getlist("files") or request.files.getlist("files[]") or request.files.getlist("file"))
         if not files:

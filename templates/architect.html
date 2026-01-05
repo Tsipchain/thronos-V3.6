@@ -488,7 +488,9 @@ async function api(url, opts) {
 
 function setStatus(ok, text) {
   const pill = $("statusPill");
+  if (!pill) return;
   const dot = pill.querySelector('.pill-dot');
+  if (!dot) return;
   dot.style.background = ok ? "var(--accent)" : "var(--danger)";
   dot.style.boxShadow = ok ? "0 0 8px var(--accent)" : "0 0 8px var(--danger)";
 }

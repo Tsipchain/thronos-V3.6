@@ -86,6 +86,15 @@ def _resolve_model(
                     return m
         return None
 
+    def _match_alias(candidate: str):
+        cand_norm = (candidate or "").strip().lower().replace(" ", "").replace("-", "")
+        for provider_models in AI_MODEL_REGISTRY.values():
+            for m in provider_models:
+                display_norm = m.display_name.lower().replace(" ", "").replace("-", "")
+                if cand_norm == display_norm:
+                    return m
+        return None
+
     if not model or model == "auto":
         env_default_id = (os.getenv("THRONOS_DEFAULT_MODEL_ID") or "gpt-4.1-mini").strip()
         if env_default_id:

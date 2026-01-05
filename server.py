@@ -3527,6 +3527,9 @@ def api_architect_generate():
     # If the requested model is not callable in current mode/providers, fall back before billing
     fallback_notice = fallback_notice  # reuse notice if any
 
+    # If the requested model is not callable in current mode/providers, fall back before billing
+    fallback_notice = fallback_notice  # reuse notice if any
+
     if not blueprint or not project_spec:
         return jsonify(error="Missing blueprint or spec"), 400
 

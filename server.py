@@ -1820,6 +1820,7 @@ def _default_model_id():
 def _select_callable_model(model_id: str | None):
     """Return a callable model id (or error response) respecting mode/provider availability."""
 
+    provider_status = get_provider_status()
     enabled_ids = set(list_enabled_model_ids())
     default_model_id = _default_model_id()
     requested = (model_id or "").strip() or default_model_id
@@ -1841,7 +1842,13 @@ def _select_callable_model(model_id: str | None):
         return fallback.id, notice, None
 
     # Nothing callable: return JSON error without charging
-    provider_status = get_provider_status()
+    disabled_models = []
+    for provider, models in AI_MODEL_REGISTRY.items():
+        for m in models:
+            if not m.enabled:
+                disabled_models.append(m.id)
+
+    missing_keys = [p for p, info in provider_status.items() if not info.get("configured")]
     error_payload = {
         "ok": False,
         "status": "model_not_available",
@@ -1850,6 +1857,8 @@ def _select_callable_model(model_id: str | None):
         "providers": provider_status,
         "requested_model": requested,
         "mode": (os.getenv("THRONOS_AI_MODE") or "all").lower(),
+        "missing_keys": missing_keys,
+        "disabled_models": disabled_models,
     }
     return None, fallback_notice, (jsonify(error_payload), 200)
 
@@ -1917,6 +1926,8 @@ def load_ai_sessions():
         updated = s.get("updated_at") or s.get("updated") or created
         meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
         selected_model_id = meta.get("selected_model_id") or s.get("selected_model_id") or _default_model_id()
+        session_type = meta.get("session_type") or s.get("session_type") or "chat"
+        meta["session_type"] = session_type
         out.append({
             "id": sid,
             "wallet": wallet,
@@ -1928,6 +1939,7 @@ def load_ai_sessions():
             "message_count": int(s.get("message_count") or s.get("messages_count") or 0),
             "meta": meta,
             "selected_model_id": selected_model_id,
+            "session_type": session_type,
         })
     return out
 
@@ -1968,6 +1980,26 @@ def _save_session_selected_model(session_id: str, selected_model_id: str):
     if updated:
         save_ai_sessions(sessions)
     return updated
+
+
+def _ensure_session_type(session_id: str, session_type: str):
+    if not session_id:
+        return False
+    sessions = load_ai_sessions()
+    changed = False
+    for s in sessions:
+        if s.get("id") == session_id:
+            meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
+            if meta.get("session_type") != session_type:
+                meta["session_type"] = session_type
+                s["meta"] = meta
+                s["session_type"] = session_type
+                s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                changed = True
+            break
+    if changed:
+        save_ai_sessions(sessions)
+    return changed
 
 
 def _normalize_session_selected_model(session: dict):
@@ -3356,7 +3388,11 @@ def api_architect_generate():
         "resolved_provider": None,
         "call_attempted": False,
         "failure_reason": None,
+        "provider_status": get_provider_status(),
     }
+
+    if session_id:
+        _ensure_session_type(session_id, "architect")
 
     selected_model, fallback_notice, error_resp = _select_callable_model(model_key)
     if error_resp:
@@ -4521,7 +4557,21 @@ def api_chat():
         "resolved_provider": None,
         "call_attempted": False,
         "failure_reason": None,
+        "provider_status": get_provider_status(),
     }
+
+    if session_id:
+        try:
+            sessions = load_ai_sessions()
+            for s in sessions:
+                if s.get("id") == session_id:
+                    stype = s.get("session_type") or (s.get("meta") or {}).get("session_type") or "chat"
+                    if stype != "chat":
+                        session_id = None
+                    break
+        except Exception:
+            session_id = session_id
+        call_meta["session_id"] = session_id
 
     selected_model, fallback_notice, error_resp = _select_callable_model(model_key)
     if error_resp:
@@ -5822,7 +5872,8 @@ def wallet_data(thr_addr):
             "L2E_REWARD": "Learn-to-Earn Reward",
             "MUSIC_OFFLINE_TIP": "Music Tip",
             "SERVICE_PAYMENT": "Service Payment",
-            "ARCHITECT_PAYMENT": "AI Architect"
+            "ARCHITECT_PAYMENT": "AI Architect",
+            "CREDITS_CONSUME": "AI Credits"
         }
 
         label = category_labels.get(tx_type, "Unknown")
@@ -11198,8 +11249,10 @@ def api_ai_sessions_combined():
             if not sid:
                 continue
 
+            session_type = (s.get("session_type") or (s.get("meta") or {}).get("session_type") or "chat")
+
             if session_messages_exists(sid):
-                if s.get("wallet") == identity and not s.get("archived"):
+                if s.get("wallet") == identity and not s.get("archived") and session_type == "chat":
                     _normalize_session_selected_model(s)
                     user_sessions.append(s)
             else:
@@ -11241,7 +11294,8 @@ def api_ai_sessions_combined():
             "updated_at": now,
             "message_count": 0,
             "archived": False,
-            "meta": {},
+            "meta": {"session_type": "chat"},
+            "session_type": "chat",
         }
         sessions.append(session)
         save_ai_sessions(sessions)
@@ -11267,6 +11321,7 @@ def api_ai_session_messages(session_id):
             s.get("id") == session_id
             and not s.get("archived")
             and s.get("wallet") == identity
+            and (s.get("session_type") or (s.get("meta") or {}).get("session_type") or "chat") == "chat"
         ):
             session = s
             break
@@ -11585,6 +11640,8 @@ def api_chat_sessions_list():
     out = []
     for s in sessions:
         if s.get("wallet") != identity or s.get("archived"):
+            continue
+        if (s.get("session_type") or (s.get("meta") or {}).get("session_type") or "chat") != "chat":
             continue
         out.append(s)
 

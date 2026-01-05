@@ -1553,7 +1553,8 @@
                 <span class="lang-el">Tokens</span><span class="lang-en">Tokens</span>
             </button>
             <button class="history-tab-btn" data-filter="l2e" onclick="filterHistory('l2e')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">L2E</button>
-            <button class="history-tab-btn" data-filter="ai" onclick="filterHistory('ai')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">AI</button>
+            <button class="history-tab-btn" data-filter="ai_credits" onclick="filterHistory('ai_credits')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">AI Credits</button>
+            <button class="history-tab-btn" data-filter="architect" onclick="filterHistory('architect')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">Architect</button>
             <button class="history-tab-btn" data-filter="iot" onclick="filterHistory('iot')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">IoT</button>
             <button class="history-tab-btn" data-filter="bridge" onclick="filterHistory('bridge')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
                 <span class="lang-el">Bridge</span><span class="lang-en">Bridge</span>
@@ -2286,10 +2287,11 @@ function getTxType(tx) {
     const symbol = (tx.symbol || tx.asset_symbol || 'THR').toUpperCase();
 
     // Explicit classification rules (priority order)
+    if (rawType.startsWith('ARCHITECT')) return 'architect';
+    if (rawType.startsWith('CREDITS_') || rawType.startsWith('AI_') || rawType.includes('CHAT') || note.includes('AI TRANSFER')) return 'ai_credits';
     if (rawType.startsWith('SWAP') || rawType.startsWith('DEX_') || rawType.startsWith('AMM_') || rawType.startsWith('LIQUIDITY_')) return 'swap';
     if (rawType.startsWith('TOKEN_TRANSFER') || (symbol && symbol !== 'THR')) return 'token';
     if (rawType.startsWith('L2E_') || rawType.includes('L2E') || rawType.includes('LEARN') || note.includes('L2E')) return 'l2e';
-    if (rawType.startsWith('AI_') || rawType.startsWith('CREDITS_') || rawType.includes('CHAT') || note.includes('AI TRANSFER')) return 'ai';
     if (rawType.startsWith('IOT_') || rawType.includes('PARKING') || note.includes('IOT')) return 'iot';
     if (rawType.startsWith('BRIDGE_') || rawType.includes('BRIDGE') || rawType.includes('DEPOSIT')) return 'bridge';
     return 'thr';
@@ -2448,7 +2450,8 @@ function renderHistory() {
 
         const txType = getTxType(tx);
         const typeLabel = txType === 'l2e' ? 'L2E' :
-                         txType === 'ai' ? 'AI' :
+                         txType === 'ai_credits' ? 'AI Credits' :
+                         txType === 'architect' ? 'Architect' :
                          txType === 'iot' ? 'IoT' :
                          txType === 'bridge' ? 'Bridge' :
                          txType === 'swap' ? 'Swap' : '';

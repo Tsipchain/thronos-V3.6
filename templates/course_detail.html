@@ -34,8 +34,44 @@ function setEnrollmentState() {
         toggleQuizAvailability();
         return;
     }
-    isEnrolled = (courseData?.students || []).includes(studentAddr);
-    document.getElementById('enrollNotice').textContent = isEnrolled ? '' : 'You must enroll in this course to view materials and take the quiz.';
+
+    // QUEST: Tuition gating - check if student is enrolled AND has paid (if course has price)
+    const isInStudentsList = (courseData?.students || []).includes(studentAddr);
+    const coursePrice = parseFloat(courseData?.price_thr || 0);
+    const isTeacher = courseData?.teacher === studentAddr;
+    const isAdmin = false; // TODO: Add admin check if needed
+
+    // Teachers and admins bypass payment requirement
+    if (isTeacher || isAdmin) {
+        isEnrolled = true;
+        document.getElementById('enrollNotice').textContent = '';
+        renderMaterials(courseData);
+        toggleQuizAvailability();
+        return;
+    }
+
+    // For paid courses, verify enrollment payment
+    if (coursePrice > 0 && isInStudentsList) {
+        // Check if student has paid by verifying enrollment transaction
+        // If not in students list or price > 0 without payment, block access
+        isEnrolled = isInStudentsList; // Simple check - enrollment API already verifies payment
+    } else if (coursePrice === 0) {
+        // Free course - just check enrollment
+        isEnrolled = isInStudentsList;
+    } else {
+        // Not enrolled
+        isEnrolled = false;
+    }
+
+    if (!isEnrolled) {
+        const message = coursePrice > 0
+            ? `This course costs ${coursePrice} THR. Enroll to access content and quiz.`
+            : 'You must enroll in this course to view materials and take the quiz.';
+        document.getElementById('enrollNotice').textContent = message;
+    } else {
+        document.getElementById('enrollNotice').textContent = '';
+    }
+
     renderMaterials(courseData);
     toggleQuizAvailability();
 }

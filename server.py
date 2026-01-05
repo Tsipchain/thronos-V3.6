@@ -83,10 +83,15 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import os
 import json
 import uuid
-from llm_registry import AI_MODEL_REGISTRY, get_model_for_provider, get_default_model_for_mode, get_provider_status
+from llm_registry import (
+    AI_MODEL_REGISTRY,
+    get_model_for_provider,
+    get_default_model_for_mode,
+    get_provider_status,
+    get_default_model,
+    list_enabled_model_ids,
+)
 from ai_models_config import base_model_config
-# CRITICAL FIX #6: Import compute_model_stats from ai_interaction_ledger
-from ai_interaction_ledger import compute_model_stats
 
 app = Flask(__name__)
 CORS(app)
@@ -1796,6 +1801,16 @@ def load_ai_credits():
 def save_ai_credits(credits):
     save_json(AI_CREDITS_FILE, credits)
 
+
+def _default_model_id():
+    """Return the preferred default model id from the registry (or 'auto')."""
+
+    try:
+        default_model = get_default_model()
+        return default_model.id if default_model else "auto"
+    except Exception:
+        return "auto"
+
 # ---------------------------------------------------------------------------
 # Free usage counters
 # ---------------------------------------------------------------------------
@@ -1847,6 +1862,8 @@ def load_ai_sessions():
         wallet = (s.get("wallet") or s.get("thr_wallet") or "").strip()
         created = s.get("created_at") or s.get("created") or _now()
         updated = s.get("updated_at") or s.get("updated") or created
+        meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
+        selected_model_id = meta.get("selected_model_id") or s.get("selected_model_id") or _default_model_id()
         out.append({
             "id": sid,
             "wallet": wallet,
@@ -1856,7 +1873,8 @@ def load_ai_sessions():
             "archived": bool(s.get("archived", False)),
             "model": s.get("model") or s.get("ai_model") or None,
             "message_count": int(s.get("message_count") or s.get("messages_count") or 0),
-            "meta": s.get("meta") if isinstance(s.get("meta"), dict) else {},
+            "meta": meta,
+            "selected_model_id": selected_model_id,
         })
     return out
 
@@ -1880,6 +1898,92 @@ def ensure_session_messages_file(session_id: str):
     os.makedirs(AI_SESSIONS_DIR, exist_ok=True)
     if not os.path.exists(path):
         save_json(path, [])
+
+
+def _save_session_selected_model(session_id: str, selected_model_id: str):
+    sessions = load_ai_sessions()
+    updated = False
+    for s in sessions:
+        if s.get("id") == session_id:
+            meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
+            meta["selected_model_id"] = selected_model_id
+            s["meta"] = meta
+            s["selected_model_id"] = selected_model_id
+            s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            updated = True
+            break
+    if updated:
+        save_ai_sessions(sessions)
+    return updated
+
+
+def _normalize_session_selected_model(session: dict):
+    """Ensure a session carries a valid selected_model_id and persist if needed."""
+    if not isinstance(session, dict):
+        return _default_model_id(), False
+
+    enabled_ids = set(list_enabled_model_ids())
+    default_model_id = _default_model_id()
+    meta = session.get("meta") if isinstance(session.get("meta"), dict) else {}
+    selected = meta.get("selected_model_id") or session.get("selected_model_id") or default_model_id
+
+    if selected not in enabled_ids:
+        selected = default_model_id
+        _save_session_selected_model(session.get("id"), selected)
+        meta["selected_model_id"] = selected
+        session["meta"] = meta
+        session["selected_model_id"] = selected
+        return selected, True
+
+    session["selected_model_id"] = selected
+    meta["selected_model_id"] = selected
+    session["meta"] = meta
+    return selected, False
+
+
+def prune_empty_sessions():
+    """
+    Remove sessions whose message files are missing or empty.
+
+    Returns a summary dict: {"deleted": N, "kept": M, "errors": [...]}
+    """
+
+    result = {"deleted": 0, "kept": 0, "errors": []}
+    try:
+        sessions = load_ai_sessions()
+    except Exception as exc:  # pragma: no cover - defensive
+        return {"deleted": 0, "kept": 0, "errors": [f"load failed: {exc}"]}
+
+    pruned = []
+    for session in sessions:
+        sid = session.get("id") or session.get("session_id")
+        if not sid:
+            result["errors"].append("session missing id; skipped")
+            continue
+
+        path = _session_messages_path(sid)
+        try:
+            if not os.path.exists(path):
+                result["deleted"] += 1
+                continue
+
+            messages = load_json(path, [])
+            if not messages:
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+                result["deleted"] += 1
+                continue
+
+            pruned.append(session)
+        except Exception as exc:  # pragma: no cover - defensive
+            result["errors"].append(f"{sid}: {exc}")
+            pruned.append(session)
+
+    result["kept"] = len(pruned)
+    save_ai_sessions(pruned)
+    return result
 
 
 def load_session_messages(session_id: str) -> list:
@@ -2901,6 +3005,28 @@ def api_admin_withdrawals_action():
     else:
         return jsonify(status="error", message="Request not found"), 404
 
+
+@app.route("/api/admin/prune_sessions", methods=["POST"])
+def api_admin_prune_sessions():
+    """Admin: remove empty/missing chat sessions."""
+
+    payload = request.get_json(silent=True) or {}
+    secret = (
+        request.headers.get("X-Admin-Secret")
+        or request.args.get("secret")
+        or payload.get("secret")
+    )
+
+    if secret != ADMIN_SECRET:
+        return jsonify(error="Forbidden"), 403
+
+    try:
+        result = prune_empty_sessions()
+        return jsonify(ok=True, **result), 200
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("prune sessions failed")
+        return jsonify(ok=False, error=str(exc)), 500
+
 # ─── ADDRESS MIGRATION ENDPOINT ─────────────────────────────────────────────
 
 @app.route("/admin/migrate")
@@ -3166,7 +3292,14 @@ def api_architect_generate():
     session_id  = (data.get("session_id") or "").strip() or None
     blueprint   = (data.get("blueprint") or "").strip()
     project_spec = (data.get("spec") or data.get("specs") or "").strip() # Handle both keys just in case
-    model_key   = (data.get("model") or data.get("model_key") or "gpt-4o").strip()
+    model_key   = (data.get("model_id") or data.get("model") or data.get("model_key") or "gpt-4o").strip()
+
+    enabled_model_ids = set(list_enabled_model_ids())
+    default_model_id = _default_model_id()
+    if model_key and model_key not in enabled_model_ids:
+        model_key = default_model_id
+        if session_id:
+            _save_session_selected_model(session_id, model_key)
 
     if not blueprint or not project_spec:
         return jsonify(error="Missing blueprint or spec"), 400
@@ -4262,9 +4395,16 @@ def api_chat():
     msg = (data.get("message") or "").strip()
     wallet = (data.get("wallet") or "").strip()  # MOVED HERE - must be before attachments!
     session_id = (data.get("session_id") or "").strip() or None
-    model_key = (data.get("model_key") or "").strip() or None
+    model_key = (data.get("model_id") or data.get("model") or data.get("model_key") or "").strip() or None
     attachments = data.get("attachments") or data.get("attachment_ids") or []
     ai_credits_spent = 0.0
+
+    enabled_model_ids = set(list_enabled_model_ids())
+    default_model_id = _default_model_id()
+    if model_key and model_key not in enabled_model_ids:
+        model_key = default_model_id
+        if session_id:
+            _save_session_selected_model(session_id, model_key)
 
     if session_id:
         ensure_session_exists(session_id, wallet)
@@ -10828,6 +10968,7 @@ def api_ai_sessions_combined():
 
             if session_messages_exists(sid):
                 if s.get("wallet") == identity and not s.get("archived"):
+                    _normalize_session_selected_model(s)
                     user_sessions.append(s)
             else:
                 orphan_ids.add(sid)
@@ -10912,6 +11053,7 @@ def api_ai_session_messages(session_id):
 
     ensure_session_messages_file(session_id)
     messages = load_session_messages(session_id)
+    _normalize_session_selected_model(session)
 
     resp = make_response(jsonify({"ok": True, "session": session, "messages": messages}))
     if guest_id:
@@ -10956,6 +11098,49 @@ def api_ai_session_update(session_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/ai_sessions/<session_id>/model", methods=["POST"])
+def api_ai_session_model_update(session_id):
+    """Persist the selected model for a session."""
+
+    data = request.get_json(silent=True) or {}
+    wallet_in = data.get("wallet") or request.args.get("wallet") or ""
+    model_id = (data.get("model_id") or "").strip()
+
+    identity, guest_id = _current_actor_id(wallet_in)
+
+    sessions = load_ai_sessions()
+    target = None
+    for s in sessions:
+        if s.get("id") == session_id:
+            target = s
+            break
+
+    if not target:
+        return jsonify({"ok": False, "error": "Session not found"}), 404
+
+    owner = target.get("wallet") or ""
+    if owner and not owner.startswith("GUEST:") and owner != identity:
+        return jsonify({"ok": False, "error": "Not authorized"}), 403
+
+    enabled_ids = set(list_enabled_model_ids())
+    default_model_id = _default_model_id()
+    selected = model_id if model_id in enabled_ids else default_model_id
+
+    _save_session_selected_model(session_id, selected)
+
+    resp_payload = {
+        "ok": True,
+        "selected_model_id": selected,
+        "default_model_id": default_model_id,
+        "enabled_model_ids": sorted(enabled_ids),
+        "reset": bool(model_id and selected != model_id),
+    }
+    resp = make_response(jsonify(resp_payload))
+    if guest_id:
+        resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+    return resp, 200
+
+
 @app.route("/api/ai/sessions/<session_id>", methods=["DELETE"])
 def api_ai_session_delete_by_id(session_id):
     """Delete/archive a session by ID using DELETE method"""
@@ -10989,6 +11174,7 @@ def api_ai_session_start_v2():
     session_id = f"sess_{secrets.token_hex(8)}"
     now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
+    default_model_id = _default_model_id()
     session = {
         "id": session_id,
         "wallet": identity,
@@ -10998,7 +11184,8 @@ def api_ai_session_start_v2():
         "updated_at": now,
         "message_count": 0,
         "archived": False,
-        "meta": {},
+        "meta": {"selected_model_id": default_model_id},
+        "selected_model_id": default_model_id,
     }
     sessions.append(session)
     save_ai_sessions(sessions)
@@ -11026,6 +11213,7 @@ def api_chat_session_new():
     session_id = f"sess_{secrets.token_hex(8)}"
     now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
+    default_model_id = _default_model_id()
     session = {
         "id": session_id,
         "wallet": identity,
@@ -11033,6 +11221,8 @@ def api_chat_session_new():
         "created_at": now,
         "updated_at": now,
         "archived": False,
+        "meta": {"selected_model_id": default_model_id},
+        "selected_model_id": default_model_id,
     }
     sessions.append(session)
     save_ai_sessions(sessions)
@@ -11127,6 +11317,8 @@ def api_chat_session_get(session_id):
             break
     if not session:
         return jsonify(ok=False, error="session not found"), 404
+
+    _normalize_session_selected_model(session)
 
     corpus = load_json(AI_CORPUS_FILE, [])
     history = []
@@ -11244,7 +11436,7 @@ def api_ai_provider_chat():
     if not isinstance(messages, list) or not messages:
         return jsonify({"ok": False, "error": "messages required"}), 400
 
-    model = (data.get("model") or data.get("model_key") or None) or "auto"
+    model = (data.get("model_id") or data.get("model") or data.get("model_key") or None) or "auto"
     max_tokens = int(data.get("max_tokens") or 1024)
     temperature = float(data.get("temperature") or 0.6)
     session_id = data.get("session_id")
@@ -11503,117 +11695,49 @@ def api_ai_models():
     NEVER returns 500 - always returns 200 with degraded mode fallback if needed.
     """
     try:
-        # Τι mode έχουμε ρυθμίσει στο node (π.χ. "all", "openai", "anthropic", "google")
         raw_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
-        if raw_mode in ("", "router", "auto", "hybrid"):
-            mode = "all"
-        else:
-            mode = raw_mode
+        mode = "all" if raw_mode in ("", "router", "auto", "hybrid") else raw_mode
 
-        # Βασικό config – ποιοι providers είναι ενεργοί στο σύστημα
-        try:
-            base_cfg = base_model_config() or {}
+        default_model = get_default_model(None if mode == "all" else mode)
+        default_model_id = default_model.id if default_model else None
 
-            providers_cfg = base_cfg.get("providers")
-            if isinstance(providers_cfg, dict) and providers_cfg:
-                enabled_providers = set(providers_cfg.keys())
-            else:
-                enabled_providers = set(base_cfg.keys())  # <-- αυτό λείπει σήμερα
-
-        except Exception as cfg_err:
-            app.logger.warning(f"base_model_config failed: {cfg_err}")
-            # Degraded mode fallback
-            return jsonify({
-                "ok": False,
-                "mode": "degraded",
-                "error_code": "PROVIDER_CONFIG_FAILED",
-                "error_message": "Provider configuration unavailable",
-                "providers": {},
-                "models": _get_fallback_models(),
-                "fallback_active": True
-            }), 200
-
-        # Στατιστικά ανά model id από το AI Interaction Ledger
-        try:
-            model_stats = compute_model_stats() or {}
-        except Exception as stats_err:
-            app.logger.warning(f"compute_model_stats failed: {stats_err}")
-            model_stats = {}  # Continue without stats
-
-        # FIX 7: Get provider_status early (contains source field)
-        provider_status = get_provider_status()
-
-        providers = {}
         models = []
-        seen_models = set()  # FIX 7: Dedupe by (provider, model_id)
-
-        # Για κάθε provider και τα μοντέλα του
         for provider_name, model_list in AI_MODEL_REGISTRY.items():
-            # Αν έχουμε περιορισμένο mode, φιλτράρουμε (π.χ. μόνο "openai")
             if mode != "all" and provider_name != mode:
                 continue
-
-            provider_enabled = provider_name in enabled_providers
-
-            # FIX 7: Get source from provider_status
-            provider_source = provider_status.get(provider_name, {}).get("source", "registry")
-
-            # Βασικά metadata provider για το UI
-            providers[provider_name] = {
-                "key": provider_name,
-                "label": provider_name.capitalize(),
-                "enabled": provider_enabled,
-                "source": provider_source,  # FIX 7: Add source field for debugging
-            }
-
             for mi in model_list:
-                # FIX 7: Dedupe check - skip if (provider, model_id) already seen
-                model_key = (mi.provider, mi.id)
-                if model_key in seen_models:
-                    app.logger.warning(f"Duplicate model skipped: {mi.provider}/{mi.id} (display: {mi.display_name})")
-                    continue
-                seen_models.add(model_key)
-
-                # mi είναι ModelInfo dataclass από το llm_registry
-                stats = model_stats.get(mi.id, {})
                 models.append(
                     {
                         "id": mi.id,
+                        "label": mi.display_name,
                         "provider": mi.provider,
-                        "label": mi.display_name,  # FIX: use display_name not label
-                        "display_name": mi.display_name,
-                        "tier": mi.tier,
-                        "default": mi.default,
-                        "enabled": provider_enabled and mi.enabled,  # FIX: use mi.enabled not mi.enabled_by_default
-                        "stats": {
-                            "total_calls": stats.get("total_calls", 0),
-                            "avg_latency_ms": stats.get("avg_latency_ms", 0.0),
-                        },
+                        "enabled": mi.enabled,
                     }
                 )
 
         payload = {
-            "ok": True,
-            "mode": mode,
-            "providers": providers,
-            "provider_status": provider_status,  # New field for UI debugging
             "models": models,
-            "fallback_active": False
+            "default_model_id": default_model_id,
         }
         return jsonify(payload), 200
 
     except Exception as exc:
         app.logger.exception("api_ai_models catastrophic error")
-        # Last resort fallback - NEVER return 500
-        return jsonify({
-            "ok": False,
-            "mode": "degraded",
-            "error_code": "CATASTROPHIC_FAILURE",
-            "error_message": str(exc),
-            "providers": {},
-            "models": _get_fallback_models(),
-            "fallback_active": True
-        }), 200  # ← ALWAYS 200, never 500
+        fallback_models = [
+            {"id": m.get("id"), "label": m.get("label"), "provider": m.get("provider"), "enabled": True}
+            for m in _get_fallback_models()
+        ]
+        return (
+            jsonify(
+                {
+                    "models": fallback_models,
+                    "default_model_id": fallback_models[0]["id"] if fallback_models else None,
+                    "error_code": "CATASTROPHIC_FAILURE",
+                    "error_message": str(exc),
+                }
+            ),
+            200,
+        )
 
 @app.route("/api/ai/feedback", methods=["POST"])
 def api_ai_feedback():
@@ -12794,6 +12918,15 @@ _start_model_scheduler()
 ensure_ai_wallet()
 recompute_height_offset_from_ledger()
 initialize_voting()  # Initialize voting polls
+try:  # Best-effort cleanup to avoid startup failures
+    prune_result = prune_empty_sessions()
+    logger.info(
+        "Pruned empty sessions on startup: deleted=%s kept=%s",
+        prune_result.get("deleted"),
+        prune_result.get("kept"),
+    )
+except Exception as exc:  # pragma: no cover - defensive
+    logger.warning(f"Startup session prune skipped: {exc}")
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 13311))

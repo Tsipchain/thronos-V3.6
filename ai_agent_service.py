@@ -43,7 +43,7 @@ except Exception:
     ThronosAIScorer = None  # type: ignore
 
 from ai_interaction_ledger import record_ai_interaction
-from llm_registry import find_model, get_default_model
+from llm_registry import find_model, get_default_model, list_enabled_model_ids
 
 
 def _resolve_model(model: Optional[str]):
@@ -171,6 +171,7 @@ def call_llm(
     block_hash: Optional[str] = None,
 ) -> Dict[str, Any]:
     requested_model = model
+    enabled_model_ids = list_enabled_model_ids()
     resolved = _resolve_model(model)
     if not resolved:
         # QUEST: Better error messaging for disabled models
@@ -310,12 +311,14 @@ class ThronosAI:
         self.gemini_api_key = (os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")).strip()
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
         self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-        self.custom_model_url = os.getenv("CUSTOM_MODEL_URL", "").strip()
-        self.diko_mas_model_url = (
+        custom_url = (
             os.getenv("CUSTOM_MODEL_URL")
+            or os.getenv("CUSTOM_MODEL_URI")
             or os.getenv("DIKO_MAS_MODEL_URL")
-            or "http://127.0.0.1:8080/api/thrai/ask"
-        )
+            or ""
+        ).strip()
+        self.custom_model_url = custom_url
+        self.diko_mas_model_url = custom_url or "http://127.0.0.1:8080/api/thrai/ask"
 
         # Default models
         self.gemini_model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")

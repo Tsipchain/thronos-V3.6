@@ -3363,6 +3363,7 @@ def api_architect_generate():
         # Model is not callable in current mode/providers; return JSON without billing
         call_meta["failure_reason"] = "model_not_callable"
         call_meta["selected_model"] = selected_model or model_key or "auto"
+        call_meta["fallback_notice"] = fallback_notice
         _log_ai_call(call_meta)
         if wallet:
             # Preserve credit count so UI can show remaining balance
@@ -4526,12 +4527,22 @@ def api_chat():
         # Model not callable – return JSON without consuming credits
         call_meta["failure_reason"] = "model_not_callable"
         call_meta["selected_model"] = selected_model or model_key or "auto"
+        call_meta["fallback_notice"] = fallback_notice
         _log_ai_call(call_meta)
         return error_resp
     if selected_model:
         model_key = selected_model
         if session_id:
             _save_session_selected_model(session_id, model_key)
+        resolved = _resolve_model(model_key)
+        if resolved:
+            call_meta["selected_model"] = resolved.id
+            call_meta["resolved_provider"] = resolved.provider
+    elif model_key:
+        resolved = _resolve_model(model_key)
+        if resolved:
+            call_meta["selected_model"] = resolved.id
+            call_meta["resolved_provider"] = resolved.provider
 
     if session_id:
         ensure_session_exists(session_id, wallet)
@@ -11929,8 +11940,10 @@ def api_ai_models():
                     {
                         "id": mi.id,
                         "label": mi.display_name,
+                        "display_name": mi.display_name,
                         "provider": mi.provider,
                         "enabled": mi.enabled,
+                        "mode": mode,
                     }
                 )
 

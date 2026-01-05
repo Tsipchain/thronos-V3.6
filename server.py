@@ -92,6 +92,8 @@ from llm_registry import (
     list_enabled_model_ids,
 )
 from ai_models_config import base_model_config
+# CRITICAL FIX #6: Import compute_model_stats and create_ai_transfer_from_ledger_entry from ai_interaction_ledger
+from ai_interaction_ledger import compute_model_stats, create_ai_transfer_from_ledger_entry
 
 app = Flask(__name__)
 CORS(app)

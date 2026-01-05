@@ -1543,6 +1543,23 @@
             <span class="lang-en">Transaction History</span>
         </div>
 
+        <!-- History Tabs -->
+        <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; padding: 0 4px;">
+            <button class="history-tab-btn active" data-filter="all" onclick="filterHistory('all')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.2); border: 1px solid rgba(0,255,102,0.4); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                <span class="lang-el">Όλα</span><span class="lang-en">All</span>
+            </button>
+            <button class="history-tab-btn" data-filter="thr" onclick="filterHistory('thr')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">THR</button>
+            <button class="history-tab-btn" data-filter="token" onclick="filterHistory('token')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                <span class="lang-el">Tokens</span><span class="lang-en">Tokens</span>
+            </button>
+            <button class="history-tab-btn" data-filter="l2e" onclick="filterHistory('l2e')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">L2E</button>
+            <button class="history-tab-btn" data-filter="ai" onclick="filterHistory('ai')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">AI</button>
+            <button class="history-tab-btn" data-filter="iot" onclick="filterHistory('iot')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">IoT</button>
+            <button class="history-tab-btn" data-filter="bridge" onclick="filterHistory('bridge')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                <span class="lang-el">Bridge</span><span class="lang-en">Bridge</span>
+            </button>
+        </div>
+
         <div id="historyContent" style="max-height: 500px; overflow-y: auto;">
             <div class="wallet-popup-loading">
                 <div class="wallet-popup-spinner"></div>
@@ -1569,11 +1586,23 @@
             <span class="lang-en">Bridge Deposit</span>
         </div>
 
+        <!-- Deposit-only warning -->
+        <div style="background: rgba(255,255,0,0.1); border: 1px solid rgba(255,255,0,0.3); border-radius: 8px; padding: 10px; margin-bottom: 12px; font-size: 11px; color: #ffff99;">
+            <div style="font-weight: bold; margin-bottom: 4px;">⚠️
+                <span class="lang-el">Μόνο Κατάθεση (BTC→Thronos)</span>
+                <span class="lang-en">Deposit Only (BTC→Thronos)</span>
+            </div>
+            <div style="opacity: 0.9;">
+                <span class="lang-el">Αναλήψεις απενεργοποιημένες / Σύντομα διαθέσιμες</span>
+                <span class="lang-en">Withdrawals disabled / Coming soon</span>
+            </div>
+        </div>
+
         <div id="bridgeContent">
             <div class="send-form-group">
                 <label class="send-form-label">
-                    <span class="lang-el">Διεύθυνση Κατάθεσης</span>
-                    <span class="lang-en">Deposit Address</span>
+                    <span class="lang-el">Διεύθυνση Κατάθεσης Bridge (όχι Pledge)</span>
+                    <span class="lang-en">Bridge Deposit Address (not Pledge)</span>
                 </label>
                 <div style="display:flex;align-items:center;gap:8px;word-break:break-all;">
                     <code id="bridgeDepositAddress" style="font-size:13px;">—</code>
@@ -2201,6 +2230,9 @@ function playReceiveAudio() {
 }
 
 // Wallet History Modal Functions
+let allTransactions = [];
+let currentHistoryFilter = 'all';
+
 function openWalletHistoryModal() {
     document.getElementById('walletHistoryModal').classList.add('active');
     loadWalletHistory();
@@ -2210,6 +2242,129 @@ function closeWalletHistoryModal(event) {
     if (!event || event.target.id === 'walletHistoryModal') {
         document.getElementById('walletHistoryModal').classList.remove('active');
     }
+}
+
+function filterHistory(filter) {
+    currentHistoryFilter = filter;
+
+    // Update tab button styles
+    document.querySelectorAll('.history-tab-btn').forEach(btn => {
+        if (btn.dataset.filter === filter) {
+            btn.style.background = 'rgba(0,255,102,0.2)';
+            btn.style.borderColor = 'rgba(0,255,102,0.4)';
+            btn.classList.add('active');
+        } else {
+            btn.style.background = 'rgba(0,255,102,0.05)';
+            btn.style.borderColor = 'rgba(0,255,102,0.2)';
+            btn.classList.remove('active');
+        }
+    });
+
+    renderHistory();
+}
+
+function getTxType(tx) {
+    const type = (tx.type || '').toLowerCase();
+    const symbol = (tx.symbol || 'THR').toUpperCase();
+
+    // Determine transaction type
+    if (type.includes('l2e') || type.includes('learn') || type.includes('course')) return 'l2e';
+    if (type.includes('ai') || type.includes('chat') || type.includes('agent')) return 'ai';
+    if (type.includes('iot') || type.includes('parking') || type.includes('smart')) return 'iot';
+    if (type.includes('bridge') || type.includes('deposit') || type.includes('withdraw')) return 'bridge';
+    if (symbol === 'THR') return 'thr';
+    return 'token'; // Custom tokens
+}
+
+function formatTxDate(timestamp) {
+    try {
+        let date;
+        if (typeof timestamp === 'number') {
+            // Unix timestamp (seconds or milliseconds)
+            date = timestamp > 10000000000 ? new Date(timestamp) : new Date(timestamp * 1000);
+        } else if (typeof timestamp === 'string') {
+            // ISO string or other format
+            date = new Date(timestamp);
+        } else {
+            return '';
+        }
+
+        // Check if date is valid
+        if (isNaN(date.getTime())) {
+            return timestamp ? String(timestamp) : '';
+        }
+
+        return date.toLocaleString();
+    } catch (e) {
+        return timestamp ? String(timestamp) : '';
+    }
+}
+
+function renderHistory() {
+    const content = document.getElementById('historyContent');
+    const addr = walletSession.getAddress();
+
+    if (!allTransactions || allTransactions.length === 0) {
+        content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions found</div>';
+        return;
+    }
+
+    // Filter transactions
+    let filtered = allTransactions;
+    if (currentHistoryFilter !== 'all') {
+        filtered = allTransactions.filter(tx => getTxType(tx) === currentHistoryFilter);
+    }
+
+    if (filtered.length === 0) {
+        content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions in this category</div>';
+        return;
+    }
+
+    const lang = getCurrentLang();
+    const isGreek = isGreekLang(lang);
+
+    let html = '<div style="display: flex; flex-direction: column; gap: 10px;">';
+
+    filtered.slice(0, 50).forEach(tx => {
+        const isSent = tx.from === addr;
+        const direction = isSent ? (isGreek ? 'Αποστολή' : 'Sent') : (isGreek ? 'Λήψη' : 'Received');
+        const directionIcon = isSent ? '📤' : '📥';
+        const directionColor = isSent ? '#ff6666' : '#66ff66';
+
+        const otherAddr = isSent ? tx.to : tx.from;
+        const shortAddr = otherAddr ? `${otherAddr.slice(0, 8)}...${otherAddr.slice(-6)}` : 'N/A';
+
+        const statusBadge = tx.status === 'confirmed'
+            ? `<span style="background: #00ff0033; color: #00ff00; padding: 2px 6px; border-radius: 4px; font-size: 10px;">✓ ${isGreek ? 'Επιβεβαιώθηκε' : 'Confirmed'}</span>`
+            : `<span style="background: #ffff0033; color: #ffff00; padding: 2px 6px; border-radius: 4px; font-size: 10px;">⏳ ${isGreek ? 'Εκκρεμεί' : 'Pending'}</span>`;
+
+        const txType = getTxType(tx);
+        const typeLabel = txType === 'l2e' ? 'L2E' :
+                         txType === 'ai' ? 'AI' :
+                         txType === 'iot' ? 'IoT' :
+                         txType === 'bridge' ? 'Bridge' : '';
+
+        html += `
+            <div style="background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 8px; padding: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 20px;">${directionIcon}</span>
+                        <span style="color: ${directionColor}; font-weight: bold;">${direction}</span>
+                        ${typeLabel ? `<span style="background: rgba(0,191,255,0.2); color: #00bfff; padding: 2px 6px; border-radius: 4px; font-size: 10px;">${typeLabel}</span>` : ''}
+                        ${statusBadge}
+                    </div>
+                    <div style="font-weight: bold; color: #00ff66;">${Number(tx.amount || 0).toFixed(6)} ${tx.symbol || 'THR'}</div>
+                </div>
+                <div style="font-size: 11px; opacity: 0.7;">
+                    ${isSent ? (isGreek ? 'Προς:' : 'To:') : (isGreek ? 'Από:' : 'From:')} ${shortAddr}
+                </div>
+                ${tx.timestamp ? `<div style="font-size: 10px; opacity: 0.5; margin-top: 4px;">${formatTxDate(tx.timestamp)}</div>` : ''}
+            </div>
+        `;
+    });
+
+    html += '</div>';
+    content.innerHTML = html;
 }
 
 async function loadWalletHistory() {
@@ -2227,48 +2382,12 @@ async function loadWalletHistory() {
 
         if (!data.transactions || data.transactions.length === 0) {
             content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions found</div>';
+            allTransactions = [];
             return;
         }
 
-        const lang = getCurrentLang();
-        const isGreek = isGreekLang(lang);
-
-        let html = '<div style="display: flex; flex-direction: column; gap: 10px;">';
-
-        data.transactions.slice(0, 50).forEach(tx => {
-            const isSent = tx.from === addr;
-            const isReceived = tx.to === addr;
-            const direction = isSent ? (isGreek ? 'Αποστολή' : 'Sent') : (isGreek ? 'Λήψη' : 'Received');
-            const directionIcon = isSent ? '📤' : '📥';
-            const directionColor = isSent ? '#ff6666' : '#66ff66';
-
-            const otherAddr = isSent ? tx.to : tx.from;
-            const shortAddr = otherAddr ? `${otherAddr.slice(0, 8)}...${otherAddr.slice(-6)}` : 'N/A';
-
-            const statusBadge = tx.status === 'confirmed'
-                ? `<span style="background: #00ff0033; color: #00ff00; padding: 2px 6px; border-radius: 4px; font-size: 10px;">✓ ${isGreek ? 'Επιβεβαιώθηκε' : 'Confirmed'}</span>`
-                : `<span style="background: #ffff0033; color: #ffff00; padding: 2px 6px; border-radius: 4px; font-size: 10px;">⏳ ${isGreek ? 'Εκκρεμεί' : 'Pending'}</span>`;
-
-            html += `
-                <div style="background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 8px; padding: 12px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <span style="font-size: 20px;">${directionIcon}</span>
-                            <span style="color: ${directionColor}; font-weight: bold;">${direction}</span>
-                            ${statusBadge}
-                        </div>
-                        <div style="font-weight: bold; color: #00ff66;">${Number(tx.amount || 0).toFixed(6)} ${tx.symbol || 'THR'}</div>
-                    </div>
-                    <div style="font-size: 11px; opacity: 0.7;">
-                        ${isSent ? (isGreek ? 'Προς:' : 'To:') : (isGreek ? 'Από:' : 'From:')} ${shortAddr}
-                    </div>
-                    ${tx.timestamp ? `<div style="font-size: 10px; opacity: 0.5; margin-top: 4px;">${new Date(tx.timestamp * 1000).toLocaleString()}</div>` : ''}
-                </div>
-            `;
-        });
-
-        html += '</div>';
-        content.innerHTML = html;
+        allTransactions = data.transactions;
+        renderHistory();
 
     } catch (error) {
         console.error('Failed to load history:', error);

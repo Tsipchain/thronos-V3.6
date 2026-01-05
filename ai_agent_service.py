@@ -173,12 +173,23 @@ def call_llm(
     requested_model = model
     resolved = _resolve_model(model)
     if not resolved:
+        # QUEST: Better error messaging for disabled models
+        from llm_registry import find_model
+        model_info = find_model(model)
+        if model_info:
+            if not model_info.enabled:
+                error_msg = f"Model '{model}' ({model_info.provider}) is disabled. Please configure the {model_info.provider.upper()}_API_KEY environment variable."
+            else:
+                error_msg = f"Model '{model}' found but not available in current mode."
+        else:
+            error_msg = f"Unknown model id '{model}'. Please select a model from /api/ai_models."
+
         return {
-            "response": "Unknown or disabled model id",
+            "response": error_msg,
             "status": "model_not_found",
             "provider": None,
             "model": model,
-            "error": "Unknown or disabled model id",
+            "error": error_msg,
         }
 
     provider = resolved.provider

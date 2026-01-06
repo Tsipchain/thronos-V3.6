@@ -346,17 +346,17 @@
       </div>
       <div class="card">
         <h4>Platform Status</h4>
-        <div class="big" id="musicStatus" style="color: #ff9800;">Not Connected</div>
-        <div class="small muted">music data unavailable</div>
+        <div class="big" id="musicStatus" style="color: #ff9800;">Loading…</div>
+        <div class="small muted" id="musicStatusNote">checking endpoints</div>
       </div>
     </div>
-    <div style="text-align:center;padding:40px;color:#9fdfb4">
-      <p style="font-size:16px">🎵 Music Platform Status</p>
-      <p style="font-size:12px;opacity:0.7">
-        <strong style="color:#ff9800">Missing:</strong> /api/music/tracks endpoint, backend music registry, MUSIC_VOLUME env var<br>
-        <strong>To enable:</strong> Deploy music backend service and configure environment variables<br>
-        <strong>Current state:</strong> UI ready, backend integration pending
-      </p>
+    <div class="panel" style="margin-top:12px">
+      <table id="musicTable">
+        <thead>
+          <tr><th>Title</th><th>Artist</th><th>Genre</th><th>Plays</th></tr>
+        </thead>
+        <tbody id="musicBody"><tr><td colspan="4" style="text-align:center;color:#9fdfb4">Loading tracks…</td></tr></tbody>
+      </table>
     </div>
   </section>
 </div>
@@ -396,6 +396,7 @@ document.querySelectorAll('.tab').forEach(t=>{
     if(tab==='tokens') loadTokens();
     if(tab==='pools') loadPools();
     if(tab==='l2e') loadL2E();
+    if(tab==='music') loadMusic();
   };
 });
 
@@ -877,6 +878,52 @@ async function loadL2E(){
     el('#l2eCompletions').textContent = '0';
     el('#l2eTotalDistributed').textContent = '0 L2E';
     document.getElementById('l2eBody').innerHTML = '<tr><td colspan="6" style="text-align:center;color:#ff5577">Error loading courses</td></tr>';
+  }
+}
+
+async function loadMusic(){
+  try{
+    const statusR = await fetch('/api/music/status');
+    if(statusR.ok){
+      const statusJ = await statusR.json();
+      el('#musicTotalArtists').textContent = statusJ.artists ?? 0;
+      el('#musicTotalTracks').textContent = statusJ.tracks ?? 0;
+      el('#musicRoyaltiesPaid').textContent = `${(statusJ.royalties_thr ?? 0).toLocaleString()} THR`;
+      const connected = !!statusJ.connected;
+      el('#musicStatus').textContent = connected ? 'Online' : 'Degraded';
+      el('#musicStatus').style.color = connected ? '#16ff57' : '#ffd166';
+      el('#musicStatusNote').textContent = connected ? 'registry connected' : 'partial data';
+    }
+
+    const tracksR = await fetch('/api/music/tracks?limit=12');
+    const body = el('#musicBody');
+    body.innerHTML = '';
+    if(!tracksR.ok){
+      body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#ff5577">Unable to load tracks</td></tr>';
+      return;
+    }
+    const tracksJ = await tracksR.json();
+    const tracks = Array.isArray(tracksJ.tracks) ? tracksJ.tracks : [];
+    if(tracks.length === 0){
+      body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#9fdfb4">No tracks published yet</td></tr>';
+      return;
+    }
+    tracks.forEach(t => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="mono k">${t.title || '—'}</td>
+        <td class="mono">${t.artist_name || t.artist_address || '—'}</td>
+        <td>${t.genre || '—'}</td>
+        <td class="mono">${(t.play_count||0).toLocaleString()}</td>`;
+      body.appendChild(tr);
+    });
+  }catch(e){
+    console.error('Music load failed', e);
+    el('#musicStatus').textContent = 'Offline';
+    el('#musicStatus').style.color = '#ff9800';
+    el('#musicStatusNote').textContent = 'music endpoints unavailable';
+    const body = el('#musicBody');
+    body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#ff5577">Music service unavailable</td></tr>';
   }
 }
 </script>

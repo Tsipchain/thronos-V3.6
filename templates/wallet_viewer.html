@@ -260,13 +260,24 @@
 
     async function loadWalletData(addr) {
       try {
-        const res = await fetch(`/wallet_data/${addr}`);
-        if (!res.ok) throw new Error("Server returned " + res.status);
-        const data = await res.json();
+        const [walletRes, feedRes] = await Promise.all([
+          fetch(`/wallet_data/${addr}`),
+          fetch(`/api/tx_feed?wallet=${encodeURIComponent(addr)}`)
+        ]);
+
+        if (!walletRes.ok) throw new Error("Server returned " + walletRes.status);
+        const data = await walletRes.json();
+        const feed = feedRes.ok ? await feedRes.json() : [];
 
         const balance = parseFloat(data.balance);
         tokenDecimals = data.token_decimals || 6;  // Get decimals from response or default to 6
-        walletTxs = data.transactions || [];
+
+        const normalizedFeed = Array.isArray(feed) ? feed : [];
+        walletTxs = (normalizedFeed.length ? normalizedFeed : (data.transactions || [])).map(tx => ({
+          ...tx,
+          direction: tx.direction || (tx.to === addr ? 'in' : (tx.from === addr ? 'out' : tx.direction)),
+        }));
+
         $('balance').textContent = formatTokenAmount(balance, tokenDecimals);
 
         // Calculate BTC value (Fixed rate: 1 THR = 0.0001 BTC)

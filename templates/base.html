@@ -732,9 +732,11 @@
         z-index: 3000;
         align-items: center;
         justify-content: center;
+        pointer-events: none;
     }
     .send-modal.active {
         display: flex;
+        pointer-events: auto;
     }
     .send-modal-content {
         background: linear-gradient(135deg, #000000 0%, #071810 50%, #000000 100%);
@@ -2287,9 +2289,19 @@ function filterHistory(filter, tokenSymbol = null) {
 }
 
 function getTxType(tx) {
+    const kind = (tx.kind || tx.type || '').toLowerCase();
+    if (kind) {
+        if (kind === 'swap') return 'swap';
+        if (kind === 'bridge') return 'bridge';
+        if (kind === 'l2e') return 'l2e';
+        if (kind === 'ai_credit') return 'ai_credits';
+        if (kind === 'iot') return 'iot';
+        if (kind === 'token_transfer') return 'token';
+    }
+
     const rawType = (tx.type || '').toUpperCase();
     const note = (tx.note || tx.description || '').toUpperCase();
-    const symbol = (tx.symbol || tx.asset_symbol || 'THR').toUpperCase();
+    const symbol = (tx.symbol || tx.asset || tx.asset_symbol || 'THR').toUpperCase();
     const meta = tx.metadata || tx.meta || {};
     const category = (meta.category || '').toLowerCase();
     const billingUnit = (meta.billing_unit || '').toLowerCase();
@@ -2520,16 +2532,22 @@ async function loadWalletHistory() {
     }
 
     try {
-        const response = await fetch(`/wallet_data/${encodeURIComponent(addr)}`);
-        const data = await response.json();
+        const [walletRes, feedRes] = await Promise.all([
+            fetch(`/wallet_data/${encodeURIComponent(addr)}`),
+            fetch(`/api/tx_feed?wallet=${encodeURIComponent(addr)}`)
+        ]);
 
-        if (!data.transactions || data.transactions.length === 0) {
+        const data = walletRes.ok ? await walletRes.json() : {};
+        const feed = feedRes.ok ? await feedRes.json() : [];
+
+        const transactions = Array.isArray(feed) && feed.length ? feed : (data.transactions || []);
+        if (!transactions || transactions.length === 0) {
             content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions found</div>';
             allTransactions = [];
             return;
         }
 
-        allTransactions = data.transactions;
+        allTransactions = transactions;
         renderHistory();
 
     } catch (error) {

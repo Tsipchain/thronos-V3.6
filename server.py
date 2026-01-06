@@ -1313,8 +1313,11 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         "ai_knowledge": "ai_credit",
         "iot": "iot",
         "iot_parking": "iot",
+        "iot_parking_reservation": "iot",
+        "iot_autopilot": "iot",
         "token_mint": "mint",
         "token_burn": "burn",
+        "music_offline_tip": "token_transfer",
     }
     kind = kind_map.get(tx_type_raw, tx_type_raw or "transfer")
 
@@ -2908,8 +2911,12 @@ def _tx_feed(include_pending: bool = True, include_bridge: bool = True) -> list[
 
 def get_transactions_for_viewer():
     out = []
+    allowed_kinds = {"transfer", "token_transfer", "swap", "bridge", "ai_credit", "l2e", "iot"}
     for norm in _tx_feed():
-        if norm.get("kind") not in {"transfer", "token_transfer", "swap", "bridge", "ai_credit", "l2e"}:
+        kind = (norm.get("kind") or norm.get("type") or "").lower()
+        norm["kind"] = kind or "transfer"
+        norm.setdefault("type", norm["kind"])
+        if kind not in allowed_kinds:
             continue
 
         raw_note = norm.get("note") or ""
@@ -4208,6 +4215,36 @@ def api_mempool():
 def api_blocks():
     return jsonify(get_blocks_for_viewer()), 200
 
+@app.route("/api/tx_feed")
+def api_tx_feed():
+    """Unified normalized transaction feed for viewer + wallet."""
+
+    wallet = (request.args.get("wallet") or "").strip()
+    kinds_param = request.args.get("kinds") or ""
+    include_pending = (request.args.get("include_pending") or "true").lower() != "false"
+    include_bridge = (request.args.get("include_bridge") or "true").lower() != "false"
+
+    kinds = {k.strip().lower() for k in kinds_param.split(",") if k.strip()}
+
+    feed = _tx_feed(include_pending=include_pending, include_bridge=include_bridge)
+    normalized = []
+    for tx in feed:
+        kind = (tx.get("kind") or tx.get("type") or "").lower()
+        tx["kind"] = kind or "transfer"
+        tx.setdefault("type", tx["kind"])
+        if kinds and tx["kind"] not in kinds:
+            continue
+
+        if wallet:
+            parties = set(tx.get("parties") or [])
+            parties.update({tx.get("from"), tx.get("to"), tx.get("trader")})
+            if wallet not in parties:
+                continue
+
+        normalized.append(tx)
+
+    return jsonify(normalized), 200
+
 @app.route("/api/transactions")
 def api_transactions():
     """Return all transactions for the viewer including swaps"""
@@ -4620,17 +4657,19 @@ def iot_autonomous_request():
     save_json(LEDGER_FILE,ledger)
     chain=load_json(CHAIN_FILE,[])
     tx={
-        "type":"service_payment",
+        "type":"iot_autopilot",
         "service":"AI_AUTOPILOT",
         "from":wallet,
         "to":AI_WALLET_ADDRESS,
         "amount":amount,
         "timestamp":time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-        "tx_id":f"SRV-{len(chain)}-{int(time.time())}"
+        "tx_id":f"SRV-{len(chain)}-{int(time.time())}",
+        "meta":{"category":"iot","feature":"autopilot"},
     }
     chain.append(tx)
     save_json(CHAIN_FILE,chain)
     update_last_block(tx,is_block=False)
+    persist_normalized_tx(tx)
     print(f"🤖 AI Autopilot Activated for {wallet}. Payment: {amount} THR")
     return jsonify(status="granted", message="AI Driver Activated"),200
 
@@ -4717,7 +4756,7 @@ def api_iot_reserve():
     # PRIORITY 9: Create chain transaction for parking reservation
     chain = load_json(CHAIN_FILE, [])
     tx = {
-        "type": "IOT_PARKING_RESERVATION",
+        "type": "iot_parking_reservation",
         "tx_id": f"PARKING-{len(chain)}-{int(time.time())}",
         "from": wallet,
         "to": AI_WALLET_ADDRESS,
@@ -4732,6 +4771,7 @@ def api_iot_reserve():
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
     update_last_block(tx, is_block=False)
+    persist_normalized_tx(tx)
 
     app.logger.info(f"🅿️  Parking Reserved: {spot_id} → {wallet} | {duration_hours}h | {parking_fee} THR")
 
@@ -6188,14 +6228,17 @@ def wallet_data(thr_addr):
             continue
 
         status = norm.get("status", "confirmed")
+        kind = (norm.get("kind") or norm.get("type") or "").lower()
         direction = "out"
         if thr_addr == norm.get("to"):
             direction = "in"
-        if norm.get("kind") == "swap":
+        if kind == "swap":
             direction = "swap"
 
         history.append({
             **{k: v for k, v in norm.items() if k not in {"parties"}},
+            "kind": kind or "transfer",
+            "type": kind or norm.get("type") or "transfer",
             "category_label": category_labels.get(norm.get("kind", "").lower(), norm.get("kind", "").title()),
             "asset_symbol": norm.get("asset") or norm.get("token_symbol") or "THR",
             "symbol": norm.get("token_symbol") or norm.get("asset") or "THR",
@@ -12061,22 +12104,24 @@ def api_ai_session_rename_v2():
 
     sessions = load_ai_sessions()
     found = False
+    updated_session = None
     for s in sessions:
         if s.get("id") == session_id:
             # Optional: verify ownership if wallet provided
             if wallet and s.get("wallet") != wallet and not s.get("wallet", "").startswith("GUEST:"):
                 return jsonify({"ok": False, "error": "Not authorized"}), 403
-            
+
             s["title"] = new_title[:120]
             s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
             found = True
+            updated_session = s
             break
     
     if not found:
         return jsonify({"ok": False, "error": "Session not found"}), 404
     
     save_ai_sessions(sessions)
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "session": updated_session})
 
 
 @app.route("/api/ai/sessions/delete", methods=["POST"])
@@ -12089,24 +12134,38 @@ def api_ai_session_delete_v2():
     if not session_id:
         return jsonify({"ok": False, "error": "Missing id"}), 400
 
+    purge = bool(data.get("purge"))
+
     sessions = load_ai_sessions()
     found = False
-    for s in sessions:
+    deleted_session = None
+
+    for idx, s in enumerate(list(sessions)):
         if s.get("id") == session_id:
             # Optional: verify ownership
             if wallet and s.get("wallet") != wallet and not s.get("wallet", "").startswith("GUEST:"):
                 return jsonify({"ok": False, "error": "Not authorized"}), 403
-            
-            s["archived"] = True
-            s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+            if purge:
+                sessions.pop(idx)
+                remove_session_from_index(session_id, wallet=wallet)
+                try:
+                    os.remove(_session_messages_path(session_id))
+                except Exception:
+                    pass
+                deleted_session = {"id": session_id, "purged": True}
+            else:
+                s["archived"] = True
+                s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                deleted_session = s
             found = True
             break
-    
+
     if not found:
         return jsonify({"ok": True, "deleted": False})
 
     save_ai_sessions(sessions)
-    return jsonify({"ok": True, "deleted": True})
+    return jsonify({"ok": True, "deleted": True, "session": deleted_session})
 
 
 # Add file upload endpoint
@@ -12510,6 +12569,47 @@ def enrich_track_media(track: dict) -> dict:
 def music_page():
     """Render the Decent Music platform"""
     return render_template("music.html")
+
+
+@app.route("/api/music/status")
+def api_music_status():
+    """Lightweight status endpoint consumed by the viewer music tab."""
+
+    registry = load_music_registry()
+    tracks = [t for t in registry.get("tracks", []) if t.get("published", True)]
+    total_artists = len(registry.get("artists", {}))
+    total_tracks = len(tracks)
+    total_plays = sum(len(v) for v in registry.get("plays", {}).values())
+    total_royalties = 0.0
+    for artist in registry.get("artists", {}).values():
+        try:
+            total_royalties += float(artist.get("total_earnings", 0.0))
+        except Exception:
+            continue
+
+    return jsonify({
+        "connected": bool(registry),
+        "artists": total_artists,
+        "tracks": total_tracks,
+        "plays": total_plays,
+        "royalties_thr": round(total_royalties, 6),
+    }), 200
+
+
+@app.route("/api/music/tracks")
+def api_music_tracks_compact():
+    """Compact alias for the v1 tracks endpoint."""
+    try:
+        limit = int(request.args.get("limit", 25))
+    except Exception:
+        limit = 25
+
+    registry = load_music_registry()
+    tracks = [enrich_track_media(t) for t in registry.get("tracks", []) if t.get("published", True)]
+    tracks.sort(key=lambda t: t.get("uploaded_at", ""), reverse=True)
+    for t in tracks:
+        t["play_count"] = len(registry.get("plays", {}).get(t.get("id"), []))
+    return jsonify({"ok": True, "tracks": tracks[:limit], "total": len(tracks)}), 200
 
 
 @app.route("/api/v1/music/tracks")
@@ -13042,7 +13142,7 @@ def api_music_offline_save():
                 # Create tip transaction
                 chain = load_json(CHAIN_FILE, [])
                 tx = {
-                    "type": "MUSIC_OFFLINE_TIP",
+                    "type": "music_offline_tip",
                     "tx_id": f"MUSIC_TIP-{len(chain)}-{int(time.time())}",
                     "from": wallet,
                     "to": artist_wallet,
@@ -13050,11 +13150,13 @@ def api_music_offline_save():
                     "track_id": track_id,
                     "track_title": track.get("title", "Unknown"),
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-                    "status": "confirmed"
+                    "status": "confirmed",
+                    "meta": {"feature": "music", "category": "music_tip"},
                 }
                 chain.append(tx)
                 save_json(CHAIN_FILE, chain)
                 update_last_block(tx, is_block=False)
+                persist_normalized_tx(tx)
 
                 tip_sent = True
                 app.logger.info(f"🎵 Offline Tip: {wallet} → {artist_wallet} | {tip_amount} THR | Track: {track_id}")

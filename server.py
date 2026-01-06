@@ -325,6 +325,7 @@ IOT_DATA_FILE       = os.path.join(DATA_DIR, "iot_data.json")
 IOT_PARKING_FILE    = os.path.join(DATA_DIR, "iot_parking.json")
 MEMPOOL_FILE        = os.path.join(DATA_DIR, "mempool.json")
 ATTEST_STORE_FILE   = os.path.join(DATA_DIR, "attest_store.json")
+TX_LOG_FILE         = os.path.join(DATA_DIR, "tx_ledger.json")
 WITHDRAWALS_FILE    = os.path.join(DATA_DIR, "withdrawals.json") # NEW
 VOTING_FILE         = os.path.join(DATA_DIR, "voting.json") # Feature voting for Crypto Hunters
 PEERS_FILE          = os.path.join(DATA_DIR, "active_peers.json") # Heartbeat tracking
@@ -1260,6 +1261,270 @@ def load_mempool():
 
 def save_mempool(pool):
     save_json(MEMPOOL_FILE, pool)
+
+
+def load_tx_log():
+    """Load the normalized transaction ledger (persistent across resets)."""
+    return load_json(TX_LOG_FILE, [])
+
+
+def save_tx_log(txs):
+    save_json(TX_LOG_FILE, txs)
+
+
+def _canonical_kind(kind_raw: str) -> str:
+    """Map heterogeneous kind/type values to a canonical taxonomy."""
+
+    lookup = {
+        "pool_swap": "swap",
+        "swap": "swap",
+        "token_transfer": "token_transfer",
+        "send_token": "token_transfer",
+        "receive_token": "token_transfer",
+        "bridge": "bridge",
+        "bridge_withdraw_request": "bridge",
+        "bridge_deposit_detected": "bridge",
+        "l2e_reward": "l2e",
+        "l2e": "l2e",
+        "credits_consume": "ai_credits",
+        "service_payment": "ai_credits",
+        "ai_knowledge": "ai_credits",
+        "ai_credit": "ai_credits",
+        "ai_credits": "ai_credits",
+        "iot": "iot",
+        "iot_parking": "parking",
+        "iot_parking_reservation": "parking",
+        "iot_autopilot": "autopilot",
+        "token_mint": "mint",
+        "token_burn": "burn",
+        "music_offline_tip": "music",
+        "music_tip": "music",
+    }
+    kind = (kind_raw or "transfer").lower()
+    return lookup.get(kind, kind or "transfer")
+
+
+def _resolve_token_meta(symbol: str) -> dict:
+    """Return canonical token metadata with decimals and supply hints."""
+    sym = (symbol or "").upper() or "THR"
+    catalog = get_all_tokens()
+    for t in catalog:
+        if (t.get("symbol") or "").upper() == sym:
+            meta = {
+                "symbol": sym,
+                "decimals": t.get("decimals", 6),
+                "decimals_is_default": t.get("decimals") is None,
+                "total_supply": t.get("total_supply"),
+                "name": t.get("name") or sym,
+                "creator": t.get("creator") or t.get("owner"),
+                "created_at": t.get("created_at"),
+                "holders_count": t.get("holders_count"),
+            }
+            if meta["decimals"] is None:
+                meta["decimals"] = 6
+                meta["decimals_is_default"] = True
+            return meta
+
+    return {"symbol": sym, "decimals": 6, "decimals_is_default": True}
+
+
+def _normalize_tx_for_display(tx: dict) -> dict | None:
+    """Normalize heterogeneous TX records for viewer/wallet consumption.
+
+    Returns a dict with a stable schema: tx_id, kind, asset, amount, from, to,
+    fee_burned, status, note, meta, timestamp. Compatibility aliases (type,
+    token_symbol, amount_out, token_out) are preserved for existing templates.
+    """
+    if not isinstance(tx, dict):
+        return None
+
+    tx_type_raw = (tx.get("type") or tx.get("kind") or "transfer").lower()
+    status = tx.get("status") or "confirmed"
+    timestamp = tx.get("timestamp") or ""
+    tx_id = tx.get("tx_id") or tx.get("hash") or tx.get("id") or tx.get("bridge_id")
+
+    amount = float(tx.get("amount", 0.0) or 0.0)
+    asset_symbol = (tx.get("token_symbol") or tx.get("symbol") or tx.get("asset") or "THR").upper()
+    token_meta = _resolve_token_meta(asset_symbol)
+    decimals = token_meta.get("decimals", 6)
+    fee = float(tx.get("fee_burned", 0.0) or tx.get("fee", 0.0) or 0.0)
+
+    parties: set[str] = set()
+    for key in (
+        "from",
+        "to",
+        "trader",
+        "payer",
+        "receiver",
+        "address",
+        "wallet",
+        "student",
+        "user",
+        "sender",
+        "driver",
+        "owner",
+    ):
+        val = tx.get(key)
+        if val:
+            parties.add(val)
+
+    kind = _canonical_kind(tx_type_raw)
+
+    meta: dict[str, Any] = {}
+
+    norm = {
+        "tx_id": tx_id or "",  # will be filled later if missing
+        "kind": kind,
+        "type": kind,  # backward compatible alias for templates
+        "from": tx.get("from")
+        or tx.get("trader")
+        or tx.get("payer")
+        or tx.get("address")
+        or tx.get("sender")
+        or tx.get("driver")
+        or tx.get("owner"),
+        "to": tx.get("to") or tx.get("receiver") or tx.get("wallet") or tx.get("destination"),
+        "amount": amount,
+        "fee_burned": fee,
+        "timestamp": timestamp,
+        "status": status,
+        "note": tx.get("note") or tx.get("preview") or tx.get("description"),
+        "token_symbol": asset_symbol,
+        "asset": asset_symbol,
+        "meta": meta,
+        "parties": sorted(parties),
+        "decimals": decimals,
+        "decimals_is_default": token_meta.get("decimals_is_default", False),
+        "display_amount": amount,
+    }
+
+    # Token transfers
+    if tx_type_raw in ("token_transfer", "send_token", "receive_token"):
+        norm["kind"] = norm["type"] = "token_transfer"
+        norm["token_symbol"] = (tx.get("token_symbol") or tx.get("symbol") or asset_symbol).upper()
+        norm["asset"] = norm["token_symbol"]
+        norm["fee_burned"] = float(tx.get("fee_burned_thr", fee) or 0.0)
+        token_meta = _resolve_token_meta(norm["asset"])
+        norm["decimals"] = token_meta.get("decimals", decimals)
+        norm["decimals_is_default"] = token_meta.get("decimals_is_default", False)
+
+    # Swap / pool swap
+    if tx_type_raw in ("pool_swap", "swap"):
+        amount_in = float(tx.get("amount_in", tx.get("amount", 0.0)) or 0.0)
+        amount_out = float(tx.get("amount_out", tx.get("received_amount", 0.0)) or 0.0)
+        token_in = (tx.get("token_in") or tx.get("token_symbol") or tx.get("symbol") or "THR").upper()
+        token_out = (tx.get("token_out") or tx.get("to_symbol") or "WBTC").upper()
+
+        norm.update({
+            "kind": "swap",
+            "type": "swap",
+            "subtype": tx_type_raw,
+            "token_symbol": token_in,
+            "asset": token_in,
+            "amount": amount_in,
+            "amount_out": amount_out,
+            "token_out": token_out,
+            "note": norm.get("note") or f"Swap {amount_in:.6f} {token_in} → {amount_out:.6f} {token_out}",
+            "display_amount": amount_in,
+        })
+        norm["meta"].update({
+            "pool_id": tx.get("pool_id"),
+            "amount_in": amount_in,
+            "amount_out": amount_out,
+            "token_in": token_in,
+            "token_out": token_out,
+            "pair": f"{token_in}/{token_out}",
+        })
+        if tx.get("trader"):
+            norm["from"] = tx.get("trader")
+            norm["to"] = tx.get("trader")
+
+    # Bridge transfers
+    if tx_type_raw.startswith("bridge") or tx_type_raw == "bridge":
+        norm["kind"] = norm["type"] = "bridge"
+        norm["asset"] = (tx.get("token") or asset_symbol or "THR").upper()
+        norm["token_symbol"] = norm["asset"]
+        norm["meta"].update({
+            "btc_amount": tx.get("btc_amount") or tx.get("btc"),
+            "thr_amount": tx.get("thr_amount") or tx.get("thr"),
+        })
+
+    # L2E rewards
+    if tx_type_raw.startswith("l2e"):
+        norm["kind"] = norm["type"] = "l2e"
+        norm["asset"] = "L2E"
+        norm["token_symbol"] = "L2E"
+        norm["display_amount"] = amount or tx.get("reward", 0)
+
+    # AI credits / services
+    if tx_type_raw in ("credits_consume", "service_payment", "ai_knowledge", "ai_credit", "ai_credits"):
+        norm["kind"] = norm["type"] = "ai_credits"
+        norm["asset"] = norm.get("token_symbol") or asset_symbol
+        norm["display_amount"] = amount
+
+    # Coinbase fallback id
+    if not tx_id and tx_type_raw == "coinbase":
+        norm["tx_id"] = f"COINBASE-{tx.get('height')}"
+
+    if not norm.get("tx_id"):
+        payload = f"{kind}:{norm.get('from','')}-{norm.get('to','')}-{timestamp}-{amount}"
+        norm["tx_id"] = hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+    return norm
+
+
+def _seed_tx_log_from_chain() -> list[dict]:
+    """Ensure the tx ledger contains legacy chain entries (deduped)."""
+
+    ledger = load_tx_log()
+    seen = {entry.get("tx_id") or entry.get("hash") for entry in ledger if isinstance(entry, dict)}
+    chain = load_json(CHAIN_FILE, [])
+
+    updated = False
+    for raw in chain:
+        norm = _normalize_tx_for_display(raw)
+        if not norm:
+            continue
+        tx_id = norm.get("tx_id")
+        if tx_id and tx_id in seen:
+            continue
+        ledger.append(norm)
+        if tx_id:
+            seen.add(tx_id)
+        updated = True
+
+    if updated:
+        ledger.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        save_tx_log(ledger)
+
+    return ledger
+
+
+def persist_normalized_tx(raw_tx: dict, status_override: str | None = None):
+    """Store or update a normalized tx record in the persistent log."""
+
+    norm = _normalize_tx_for_display(raw_tx)
+    if not norm:
+        return
+
+    if status_override:
+        norm["status"] = status_override
+
+    ledger = load_tx_log()
+    replaced = False
+    for idx, existing in enumerate(ledger):
+        if existing.get("tx_id") == norm.get("tx_id"):
+            merged = existing.copy()
+            merged.update(norm)
+            ledger[idx] = merged
+            replaced = True
+            break
+
+    if not replaced:
+        ledger.append(norm)
+
+    ledger.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    save_tx_log(ledger)
 
 # ─── Token & Pool Helpers ────────────────────────────────────────────
 
@@ -2680,35 +2945,78 @@ def get_blocks_for_viewer():
     blocks.sort(key=lambda x: x["index"], reverse=True)
     return blocks
 
+def _tx_feed(include_pending: bool = True, include_bridge: bool = True) -> list[dict]:
+    """Return normalized tx records from the shared ledger plus optional extras."""
+
+    records = list(_seed_tx_log_from_chain())
+    # Canonicalize kinds in case the ledger has legacy values
+    for r in records:
+        if isinstance(r, dict):
+            r_kind = _canonical_kind(r.get("kind") or r.get("type") or "")
+            r["kind"] = r_kind
+            r.setdefault("type", r_kind)
+
+    seen_ids = {r.get("tx_id") for r in records if r.get("tx_id")}
+
+    if include_pending:
+        for raw_tx in load_mempool():
+            norm = _normalize_tx_for_display(raw_tx)
+            if not norm:
+                continue
+            tx_id = norm.get("tx_id")
+            if tx_id and tx_id in seen_ids:
+                continue
+            norm["status"] = "pending"
+            records.append(norm)
+            if tx_id:
+                seen_ids.add(tx_id)
+
+    if include_bridge:
+        for bridge_tx in _load_bridge_txs():
+            if not isinstance(bridge_tx, dict):
+                continue
+            bridge_tx.setdefault("type", "bridge")
+            norm = _normalize_tx_for_display(bridge_tx)
+            if not norm:
+                continue
+            tx_id = norm.get("tx_id")
+            if tx_id and tx_id in seen_ids:
+                continue
+            records.append(norm)
+            if tx_id:
+                seen_ids.add(tx_id)
+
+    records.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    return records
+
+
 def get_transactions_for_viewer():
-    chain = load_json(CHAIN_FILE, [])
-    pool  = load_mempool()
-
-    # Confirmed txs από το chain (including swaps)
-    chain_txs = [
-        t for t in chain
-        if isinstance(t, dict)
-        and t.get("type") in ["transfer", "service_payment", "ai_knowledge", "coinbase", "swap", "bridge"]
-    ]
-
-    # Pending από mempool (χωρίς height)
-    pending_txs = [
-        t for t in pool
-        if isinstance(t, dict)
-        and t.get("type") in ["transfer", "service_payment", "ai_knowledge", "swap", "bridge"]
-    ]
-
-    all_txs = chain_txs + pending_txs
-
     out = []
-    for t in all_txs:
-        preview = ""
-        details_payload = t.get("details")
-        details = details_payload if isinstance(details_payload, dict) else None
-        tx_type = t.get("type", "transfer")
+    allowed_kinds = {
+        "transfer",
+        "token_transfer",
+        "swap",
+        "bridge",
+        "ai_credits",
+        "l2e",
+        "iot",
+        "autopilot",
+        "parking",
+        "music",
+    }
+    for norm in _tx_feed():
+        kind = _canonical_kind(norm.get("kind") or norm.get("type") or "")
+        norm["kind"] = kind or "transfer"
+        norm.setdefault("type", norm["kind"])
+        if norm["kind"] not in allowed_kinds:
+            continue
 
-        if tx_type == "ai_knowledge":
-            payload = t.get("ai_payload") or ""
+        raw_note = norm.get("note") or ""
+        details_payload = norm.get("details")
+        details = details_payload if isinstance(details_payload, dict) else None
+
+        if norm.get("kind") == "ai_credits" and not raw_note:
+            payload = norm.get("ai_payload") or ""
             payload_obj: dict[str, Any] = {}
             if isinstance(payload, str):
                 try:
@@ -2716,7 +3024,7 @@ def get_transactions_for_viewer():
                 except Exception:
                     payload_obj = {}
 
-            preview = "Legacy AI TX (prompt_tail truncated)"
+            raw_note = "Legacy AI TX (prompt_tail truncated)"
             if details is None:
                 details = {
                     "kind": "ai_knowledge_legacy",
@@ -2726,50 +3034,18 @@ def get_transactions_for_viewer():
                     "has_response_tail": bool(payload_obj.get("response_tail")),
                 }
 
-        if details and details.get("kind") == "ai_interaction" and not preview:
-            preview = "AI interaction transfer"
+        if details and details.get("kind") == "ai_interaction" and not raw_note:
+            raw_note = "AI interaction transfer"
 
-        tx_from = t.get("from", "Unknown")
-        tx_to   = t.get("to",   "Unknown")
-        height  = t.get("height")  # μπορεί να είναι None για pending
-        fee     = t.get("fee_burned", 0.0)
-        amount  = t.get("amount", 0.0)
-        token_symbol = t.get("token_symbol", "THR")
-
-        # Handle swap transactions specially
-        if tx_type == "swap":
-            fee = t.get("fee", 0.0)
-            amount = t.get("amount_in", 0.0)
-            token_in = t.get("token_in", "THR")
-            token_out = t.get("token_out", "wBTC")
-            amount_out = t.get("amount_out", 0.0)
-            preview = f"SWAP {amount:.6f} {token_in} → {amount_out:.8f} {token_out}"
-            token_symbol = token_in
-
-        # Handle bridge transactions
-        if tx_type == "bridge":
-            preview = f"BRIDGE {t.get('direction', 'THR→BTC')}"
-            token_symbol = t.get("token", "THR")
-
-        tx_id = t.get("tx_id")
-        if not tx_id and tx_type == "coinbase":
-            tx_id = f"COINBASE-{height}"
-
-        out.append({
-            "tx_id":     tx_id or "N/A",
-            "height":    height,
-            "from":      tx_from,
-            "to":        tx_to,
-            "amount":    amount,
-            "fee_burned": fee,
-            "timestamp": t.get("timestamp", ""),
-            "type":      tx_type,
-            "note":      preview,
-            "details":   details,
-            "token_symbol": token_symbol,
+        norm.update({
+            "details": details,
+            "note": raw_note,
+            "height": norm.get("height"),
         })
 
-    out.sort(key=lambda x: x["timestamp"], reverse=True)
+        out.append(norm)
+
+    out.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
     return out
 
 
@@ -2871,7 +3147,7 @@ def viewer():
     return render_template(
         "thronos_block_viewer.html",
         blocks=get_blocks_for_viewer(),
-        transactions=get_transactions_for_viewer(),
+        transactions=_tx_feed(),
     )
 
 @app.route("/wallet")
@@ -4031,6 +4307,43 @@ def api_mempool():
 def api_blocks():
     return jsonify(get_blocks_for_viewer()), 200
 
+@app.route("/api/tx_feed")
+def api_tx_feed():
+    """Unified normalized transaction feed for viewer + wallet."""
+
+    wallet = (request.args.get("wallet") or "").strip()
+    kinds_param = request.args.get("kinds") or ""
+    include_pending = (request.args.get("include_pending") or "true").lower() != "false"
+    include_bridge = (request.args.get("include_bridge") or "true").lower() != "false"
+
+    kinds = {k.strip().lower() for k in kinds_param.split(",") if k.strip()}
+
+    feed = _tx_feed(include_pending=include_pending, include_bridge=include_bridge)
+    normalized = []
+    for tx in feed:
+        kind = _canonical_kind(tx.get("kind") or tx.get("type") or "")
+        tx["kind"] = kind or "transfer"
+        tx.setdefault("type", tx["kind"])
+        if kinds and tx["kind"] not in kinds:
+            continue
+
+        if wallet:
+            parties = set(tx.get("parties") or [])
+            parties.update({tx.get("from"), tx.get("to"), tx.get("trader")})
+            if wallet not in parties:
+                continue
+
+        normalized.append(tx)
+
+    if request.args.get("debug_counts"):
+        counts: dict[str, int] = {}
+        for tx in normalized:
+            k = tx.get("kind") or "unknown"
+            counts[k] = counts.get(k, 0) + 1
+        app.logger.info("tx_feed_counts", extra={"counts": counts, "wallet": wallet or None})
+
+    return jsonify(normalized), 200
+
 @app.route("/api/transactions")
 def api_transactions():
     """Return all transactions for the viewer including swaps"""
@@ -4443,17 +4756,19 @@ def iot_autonomous_request():
     save_json(LEDGER_FILE,ledger)
     chain=load_json(CHAIN_FILE,[])
     tx={
-        "type":"service_payment",
+        "type":"iot_autopilot",
         "service":"AI_AUTOPILOT",
         "from":wallet,
         "to":AI_WALLET_ADDRESS,
         "amount":amount,
         "timestamp":time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-        "tx_id":f"SRV-{len(chain)}-{int(time.time())}"
+        "tx_id":f"SRV-{len(chain)}-{int(time.time())}",
+        "meta":{"category":"iot","feature":"autopilot"},
     }
     chain.append(tx)
     save_json(CHAIN_FILE,chain)
     update_last_block(tx,is_block=False)
+    persist_normalized_tx(tx)
     print(f"🤖 AI Autopilot Activated for {wallet}. Payment: {amount} THR")
     return jsonify(status="granted", message="AI Driver Activated"),200
 
@@ -4540,7 +4855,7 @@ def api_iot_reserve():
     # PRIORITY 9: Create chain transaction for parking reservation
     chain = load_json(CHAIN_FILE, [])
     tx = {
-        "type": "IOT_PARKING_RESERVATION",
+        "type": "iot_parking_reservation",
         "tx_id": f"PARKING-{len(chain)}-{int(time.time())}",
         "from": wallet,
         "to": AI_WALLET_ADDRESS,
@@ -4555,6 +4870,7 @@ def api_iot_reserve():
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
     update_last_block(tx, is_block=False)
+    persist_normalized_tx(tx)
 
     app.logger.info(f"🅿️  Parking Reserved: {spot_id} → {wallet} | {duration_hours}h | {parking_fee} THR")
 
@@ -5855,6 +6171,7 @@ def api_ai_purchase_pack():
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
     update_last_block(tx, is_block=False)
+    persist_normalized_tx(tx)
 
     print(
         f"🤖 AI Pack purchased: {pack.get('code')} by {wallet} "
@@ -5991,65 +6308,56 @@ def pledge_submit():
 def wallet_data(thr_addr):
     """QUEST A+B: Enhanced wallet data with categorized history"""
     balances = get_wallet_balances(thr_addr)
-    chain = load_chain_cached()
-
     # QUEST B: Categorize transactions with labels
     history = []
-    for tx in chain:
-        if not isinstance(tx, dict):
+
+    category_labels = {
+        "transfer": "Transfer",
+        "token_transfer": "Token Transfer",
+        "swap": "Swap",
+        "bridge": "Bridge",
+        "l2e": "Learn-to-Earn Reward",
+        "ai_credits": "AI Credits",
+        "iot": "IoT",
+        "autopilot": "Autopilot",
+        "parking": "Parking",
+        "music": "Music",
+    }
+
+    for norm in _tx_feed():
+        parties = set(norm.get("parties") or [])
+        if thr_addr not in parties and thr_addr not in {norm.get("from"), norm.get("to")}:  # type: ignore[arg-type]
             continue
-        if tx.get("from") != thr_addr and tx.get("to") != thr_addr:
-            continue
 
-        tx_type = (tx.get("type") or "unknown").upper()
-
-        # QUEST B: Category/label mapping
-        category_labels = {
-            "SEND": "Send",
-            "RECEIVE": "Receive",
-            "SEND_TOKEN": "Token Send",
-            "RECEIVE_TOKEN": "Token Receive",
-            "TOKEN_TRANSFER": "Token Transfer",
-            "SWAP": "Swap",
-            "IOT_PARKING_RESERVATION": "IoT Parking",
-            "IOT_AUTOPILOT": "IoT Autopilot",
-            "BRIDGE_WITHDRAW_REQUEST": "Bridge Withdrawal",
-            "BRIDGE_DEPOSIT_DETECTED": "Bridge Deposit",
-            "L2E_REWARD": "Learn-to-Earn Reward",
-            "MUSIC_OFFLINE_TIP": "Music Tip",
-            "SERVICE_PAYMENT": "Service Payment",
-            "ARCHITECT_PAYMENT": "AI Architect",
-            "CREDITS_CONSUME": "AI Credits"
-        }
-
-        label = category_labels.get(tx_type, "Unknown")
-
-        # Determine asset symbol
-        asset_symbol = tx.get("token_symbol") or tx.get("symbol") or "THR"
-
-        # Get fee burned if exists
-        fee_burned = tx.get("fee_burned", 0) or tx.get("fee", 0)
-
-        # Determine status
-        status = tx.get("status", "confirmed")
-        if status not in ["pending", "confirmed", "failed"]:
-            status = "confirmed"  # Default to confirmed for older TXs
+        status = norm.get("status", "confirmed")
+        kind = _canonical_kind(norm.get("kind") or norm.get("type") or "")
+        direction = "out"
+        if thr_addr == norm.get("to"):
+            direction = "in"
+        if kind == "swap":
+            direction = "swap"
 
         history.append({
-            **tx,
-            "category_label": label,
-            "asset_symbol": asset_symbol,
-            "symbol": tx.get("symbol") or asset_symbol,
-            "symbol_in": tx.get("symbol_in") or tx.get("from_symbol"),
-            "symbol_out": tx.get("symbol_out") or tx.get("to_symbol"),
-            "amount_in": tx.get("amount_in") or tx.get("amount"),
-            "amount_out": tx.get("amount_out") or tx.get("received_amount") or tx.get("output_amount"),
-            "fee_burned": fee_burned,
+            **{k: v for k, v in norm.items() if k not in {"parties"}},
+            "kind": kind or "transfer",
+            "type": kind or norm.get("type") or "transfer",
+            "category_label": category_labels.get(kind, norm.get("kind", "").title()),
+            "asset_symbol": norm.get("asset") or norm.get("token_symbol") or "THR",
+            "symbol": norm.get("token_symbol") or norm.get("asset") or "THR",
+            "symbol_in": norm.get("meta", {}).get("token_in") or norm.get("token_symbol"),
+            "symbol_out": norm.get("meta", {}).get("token_out") or norm.get("token_out"),
+            "amount_in": norm.get("amount"),
+            "amount_out": norm.get("amount_out") or norm.get("meta", {}).get("amount_out"),
+            "fee_burned": norm.get("fee_burned", 0.0),
             "status": status,
-            "timestamp": tx.get("timestamp"),
-            "note": tx.get("note") or tx.get("description"),
-            "explorer_link": f"/explorer?tx_id={tx.get('tx_id', '')}"
+            "timestamp": norm.get("timestamp"),
+            "note": norm.get("note"),
+            "explorer_link": f"/explorer?tx_id={norm.get('tx_id', '')}",
+            "direction": direction,
+            "display_amount": norm.get("amount", 0.0),
         })
+
+    history.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
 
     return jsonify(
         balance=balances["thr"],
@@ -6207,9 +6515,40 @@ os.makedirs(CUSTOM_TOKENS_LEDGER_DIR, exist_ok=True)
 STATIC_TOKENS_DIR = os.path.join(BASE_DIR, "static", "img", "tokens")
 os.makedirs(STATIC_TOKENS_DIR, exist_ok=True)
 
-def load_custom_tokens():
-    """Load custom tokens registry"""
-    return load_json(CUSTOM_TOKENS_FILE, {})
+def load_custom_tokens(include_legacy: bool = True):
+    """Load custom tokens registry and optionally merge legacy tokens.json entries.
+
+    The project historically stored issued tokens in two formats:
+    - ``custom_tokens.json`` (dict keyed by symbol)
+    - ``tokens.json`` (list of dicts)
+
+    To avoid "reset" behaviour on restart/redeploy, we merge both sources into
+    a single dict keyed by uppercase symbol.  Legacy tokens are marked with a
+    ``source"" key so downstream callers can decide whether to persist back to
+    the legacy file if needed.
+    """
+    tokens = load_json(CUSTOM_TOKENS_FILE, {})
+
+    if include_legacy:
+        legacy_tokens = load_json(TOKENS_FILE, [])
+        for t in legacy_tokens:
+            if not isinstance(t, dict):
+                continue
+            symbol = (t.get("symbol") or "").upper()
+            if not symbol:
+                continue
+            if symbol in tokens:
+                continue  # Custom tokens take precedence
+            legacy_entry = dict(t)
+            legacy_entry["symbol"] = symbol
+            legacy_entry.setdefault("name", symbol)
+            legacy_entry.setdefault("decimals", 6)
+            legacy_entry.setdefault("creator", legacy_entry.get("owner"))
+            legacy_entry.setdefault("id", legacy_entry.get("token_id") or symbol)
+            legacy_entry["source"] = "legacy"
+            tokens[symbol] = legacy_entry
+
+    return tokens
 
 def save_custom_tokens(tokens):
     """Save custom tokens registry"""
@@ -6798,6 +7137,7 @@ def api_token_burn():
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
+    persist_normalized_tx(tx)
 
     logger.info(f"Token burn: {amount} {symbol} burned by {from_thr}, new supply: {token['current_supply']}")
     return jsonify({
@@ -6919,6 +7259,7 @@ def api_token_mint():
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
+    persist_normalized_tx(tx)
 
     logger.info(f"Token mint: {amount} {symbol} minted by {creator} to {to_thr}, new supply: {token['current_supply']}")
     return jsonify({
@@ -7028,6 +7369,7 @@ def send_thr_internal(from_thr, to_thr, amount_raw, auth_secret, passphrase="", 
     chain = load_json(CHAIN_FILE, [])
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
+    persist_normalized_tx(tx)
 
     return jsonify({
         "ok": True,
@@ -7145,6 +7487,7 @@ def transfer_custom_token(symbol, from_thr, to_thr, amount_raw, auth_secret, pas
     chain = load_json(CHAIN_FILE, [])
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
+    persist_normalized_tx(tx)
 
     logger.info(f"Token transfer: {amount} {symbol} from {from_thr[:10]}... to {to_thr[:10]}... (fee: {thr_fee} THR)")
 
@@ -7209,30 +7552,63 @@ def api_tokens_stats():
     """Get stats for all tokens including holder counts."""
     stats = []
 
-    # THR stats
-    thr_ledger = load_json(LEDGER_FILE, {})
-    thr_holders = sum(1 for b in thr_ledger.values() if float(b) > 0)
-    thr_supply = sum(float(b) for b in thr_ledger.values())
-    stats.append({
-        "symbol": "THR",
-        "name": "Thronos",
-        "holders_count": thr_holders,
-        "total_supply": round(thr_supply, 6),
-        "color": "#ff6600"
-    })
+    # Build activity index from the persistent ledger for last transfer/transfer counts
+    activity: dict[str, dict] = {}
+    ledger = _seed_tx_log_from_chain()
+    allowed_for_activity = {
+        "transfer",
+        "token_transfer",
+        "swap",
+        "bridge",
+        "mint",
+        "burn",
+        "ai_credits",
+        "l2e",
+        "iot",
+        "autopilot",
+        "parking",
+        "music",
+    }
+    for norm in ledger:
+        if not isinstance(norm, dict):
+            continue
+        kind = (norm.get("kind") or norm.get("type") or "").lower()
+        if kind not in allowed_for_activity:
+            continue
+        symbol = (norm.get("asset") or norm.get("token_symbol") or "THR").upper()
+        bucket = activity.setdefault(symbol, {"count": 0, "last": None})
+        bucket["count"] += 1
+        ts = norm.get("timestamp")
+        if ts and (not bucket["last"] or str(ts) > str(bucket["last"])):
+            bucket["last"] = ts
 
-    # Custom tokens stats
-    tokens = load_custom_tokens()
-    for symbol, token in tokens.items():
-        ledger = load_custom_token_ledger(token["id"])
-        holders = sum(1 for b in ledger.values() if float(b) > 0)
+    catalog = get_all_tokens()
+    for token in catalog:
+        symbol = (token.get("symbol") or "THR").upper()
+        token_meta = _resolve_token_meta(symbol)
+        if symbol == "THR":
+            ledger_map = load_json(LEDGER_FILE, {})
+            holders = sum(1 for b in ledger_map.values() if float(b) > 0)
+            total_supply = sum(float(b) for b in ledger_map.values())
+        else:
+            token_id = token.get("token_id") or token.get("id") or symbol
+            ledger_map = load_custom_token_ledger(token_id) if token_id else {}
+            holders = sum(1 for b in ledger_map.values() if float(b) > 0)
+            total_supply = token.get("total_supply") or token.get("current_supply") or token_meta.get("total_supply", 0)
+
         stats.append({
             "symbol": symbol,
-            "name": token["name"],
+            "name": token.get("name") or token_meta.get("name") or symbol,
             "holders_count": holders,
-            "total_supply": token.get("total_supply", 0),
+            "total_supply": total_supply,
             "color": token.get("color", "#00ff66"),
-            "logo": token.get("logo")
+            "logo": token.get("logo") or token.get("logo_url"),
+            "transfers_count": activity.get(symbol, {}).get("count", 0),
+            "last_transfer": activity.get(symbol, {}).get("last"),
+            "decimals": token_meta.get("decimals", 6),
+            "decimals_is_default": token_meta.get("decimals_is_default", False),
+            "creator": token_meta.get("creator") or token.get("creator"),
+            "created_at": token_meta.get("created_at") or token.get("created_at"),
         })
 
     return jsonify({"ok": True, "tokens": stats}), 200
@@ -7324,6 +7700,7 @@ def send_thr():
     pool=load_mempool()
     pool.append(tx)
     save_mempool(pool)
+    persist_normalized_tx(tx, status_override="pending")
     update_last_block(tx, is_block=False)
     # Broadcast the new pending transaction to peers.  Best effort –
     # failures are ignored.
@@ -7456,6 +7833,7 @@ def send_token():
     pool = load_mempool()
     pool.append(tx)
     save_mempool(pool)
+    persist_normalized_tx(tx, status_override="pending")
     update_last_block(tx, is_block=False)
 
     try:
@@ -9156,7 +9534,23 @@ def send_l2e():
 def api_v1_get_courses():
     """Return the list of all courses."""
     courses = load_courses()
-    return jsonify(courses=courses), 200
+    normalized = []
+    for c in courses:
+        if not isinstance(c, dict):
+            continue
+        c = c.copy()
+        c["enrollments"] = c.get("enrollments") or []
+        c["completions"] = c.get("completions") or []
+        try:
+            c["price_thr"] = float(c.get("price_thr") or c.get("price") or 0)
+        except Exception:
+            c["price_thr"] = 0.0
+        try:
+            c["reward_l2e"] = float(c.get("reward_l2e") or c.get("reward") or 0)
+        except Exception:
+            c["reward_l2e"] = 0.0
+        normalized.append(c)
+    return jsonify(courses=normalized), 200
 
 
 @app.route("/api/courses", methods=["GET"])
@@ -11086,6 +11480,7 @@ def api_v1_remove_liquidity():
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
+    persist_normalized_tx(tx)
     update_last_block(tx, is_block=False)
 
     try:
@@ -11300,6 +11695,7 @@ def api_v1_pool_swap():
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
     update_last_block(tx, is_block=False)
+    persist_normalized_tx(tx)
 
     try:
         broadcast_tx(tx)
@@ -11336,7 +11732,7 @@ def _current_actor_id(wallet: str | None) -> tuple[str, str | None]:
     Returns (identity_key, guest_id or None).
     If no wallet provided, uses guest id for anonymous usage.
     """
-    wallet = (wallet or "").strip()
+    wallet = (wallet or request.cookies.get("thr_address") or "").strip()
     guest_id = None
     if not wallet:
         guest_id = get_or_set_guest_id()
@@ -11368,10 +11764,41 @@ def api_thrai_ask():
     try:
         client = anthropic.Anthropic(api_key=api_key)
         messages = []
-        for h in history[-10:]:
+        recent_hist = history[-10:]
+        for h in recent_hist:
             role = h.get("role", "user")
             content = h.get("content", "")
             messages.append({"role": role, "content": content})
+
+        # Lightweight retrieval from offline corpus
+        corpus = load_json(AI_CORPUS_FILE, [])
+        keywords = [w.lower() for w in prompt.split() if len(w) > 3]
+        scored = []
+        for entry in corpus:
+            blob = f"{entry.get('prompt','')} {entry.get('response','')}".lower()
+            score = sum(1 for kw in keywords if kw in blob)
+            if score:
+                scored.append((score, entry))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        context_blocks = []
+        for _, entry in scored[:3]:
+            context_blocks.append(
+                f"[ARCHIVE {entry.get('timestamp')}] {entry.get('prompt','')[:160]}\n{entry.get('response','')[:400]}"
+            )
+
+        summary_tail = "\n".join([f"{m.get('role')}: {m.get('content','')[:200]}" for m in recent_hist[-4:]])
+        retrieval_context = "\n\n".join(context_blocks) if context_blocks else "(no prior knowledge found)"
+
+        system_prompt = (
+            "You are the Thronos Quantum Architect (Thrai). "
+            "Answer clearly and concretely, in the language of the user. "
+            "Use the retrieved project memory when helpful and do not repeat your last message verbatim."
+        )
+        if context_blocks:
+            system_prompt += "\nRetrieved knowledge:\n" + retrieval_context
+        if summary_tail:
+            system_prompt += "\nRecent conversation summary:\n" + summary_tail
+
         messages.append({"role": "user", "content": prompt})
 
         model = os.getenv("THRAI_MODEL", "claude-3-sonnet-20240229")
@@ -11379,8 +11806,8 @@ def api_thrai_ask():
             model=model,
             max_tokens=2048,
             temperature=0.3,
-            system="You are the Thronos Quantum Architect (Thrai). Answer clearly and concretely, in the language of the user.",
-            messages=[{"role": "user", "content": prompt}],
+            system=system_prompt,
+            messages=messages,
         )
         text = ""
         for block in resp.content:
@@ -11535,24 +11962,34 @@ def api_ai_session_update(session_id):
     """Update session (e.g., rename)"""
     data = request.get_json(silent=True) or {}
     new_title = (data.get("title") or "").strip()
+    wallet_in = data.get("wallet") or request.args.get("wallet") or ""
+    identity, guest_id = _current_actor_id(wallet_in)
 
     if not new_title:
         return jsonify({"ok": False, "error": "Missing title"}), 400
 
     sessions = load_ai_sessions()
     found = False
+    updated_session = None
     for s in sessions:
         if s.get("id") == session_id:
+            owner = s.get("wallet") or ""
+            if owner and wallet_in and owner != wallet_in and not (owner.startswith("GUEST:") and identity.startswith("GUEST:")):
+                return jsonify({"ok": False, "error": "Not authorized"}), 403
             s["title"] = new_title[:120]
             s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            updated_session = s
             found = True
             break
 
     if not found:
-        return jsonify({"ok": True, "deleted": False}), 200
+        return jsonify({"ok": False, "error": "Session not found"}), 404
 
     save_ai_sessions(sessions)
-    return jsonify({"ok": True, "deleted": True})
+    resp = make_response(jsonify({"ok": True, "updated": True, "session": updated_session}))
+    if guest_id:
+        resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+    return resp
 
 
 @app.route("/api/ai_sessions/<session_id>/model", methods=["POST"])
@@ -11601,10 +12038,15 @@ def api_ai_session_model_update(session_id):
 @app.route("/api/ai/sessions/<session_id>", methods=["DELETE"])
 def api_ai_session_delete_by_id(session_id):
     """Delete/archive a session by ID using DELETE method"""
+    wallet_in = request.args.get("wallet") or ""
+    identity, guest_id = _current_actor_id(wallet_in)
     sessions = load_ai_sessions()
     found = False
     for s in sessions:
         if s.get("id") == session_id:
+            owner = s.get("wallet") or ""
+            if wallet_in and owner and owner != wallet_in and not (owner.startswith("GUEST:") and identity.startswith("GUEST:")):
+                return jsonify({"ok": False, "error": "Not authorized"}), 403
             s["archived"] = True
             s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
             found = True
@@ -11614,7 +12056,10 @@ def api_ai_session_delete_by_id(session_id):
         return jsonify({"ok": True, "deleted": False}), 200
 
     save_ai_sessions(sessions)
-    return jsonify({"ok": True, "deleted": True})
+    resp = make_response(jsonify({"ok": True, "deleted": True}))
+    if guest_id:
+        resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+    return resp
 
 
 @app.route("/api/ai/sessions/start", methods=["POST"])
@@ -11833,29 +12278,35 @@ def api_ai_session_rename_v2():
     data = request.get_json(silent=True) or {}
     session_id = data.get("id") or data.get("session_id")
     new_title = (data.get("title") or "").strip()
-    wallet = data.get("wallet")
+    wallet = data.get("wallet") or request.args.get("wallet") or ""
+    identity, guest_id = _current_actor_id(wallet)
 
     if not session_id or not new_title:
         return jsonify({"ok": False, "error": "Missing id or title"}), 400
 
     sessions = load_ai_sessions()
     found = False
+    updated_session = None
     for s in sessions:
         if s.get("id") == session_id:
-            # Optional: verify ownership if wallet provided
-            if wallet and s.get("wallet") != wallet and not s.get("wallet", "").startswith("GUEST:"):
+            owner = s.get("wallet") or ""
+            if wallet and owner and owner != wallet and not (owner.startswith("GUEST:") and identity.startswith("GUEST:")):
                 return jsonify({"ok": False, "error": "Not authorized"}), 403
-            
+
             s["title"] = new_title[:120]
             s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
             found = True
+            updated_session = s
             break
     
     if not found:
         return jsonify({"ok": False, "error": "Session not found"}), 404
     
     save_ai_sessions(sessions)
-    return jsonify({"ok": True})
+    resp = make_response(jsonify({"ok": True, "session": updated_session}))
+    if guest_id:
+        resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+    return resp
 
 
 @app.route("/api/ai/sessions/delete", methods=["POST"])
@@ -11863,29 +12314,48 @@ def api_ai_session_delete_v2():
     """Delete/archive a session"""
     data = request.get_json(silent=True) or {}
     session_id = data.get("id") or data.get("session_id")
-    wallet = data.get("wallet")
+    wallet = data.get("wallet") or request.args.get("wallet") or ""
+    identity, guest_id = _current_actor_id(wallet)
 
     if not session_id:
         return jsonify({"ok": False, "error": "Missing id"}), 400
 
+    purge = bool(data.get("purge"))
+
     sessions = load_ai_sessions()
     found = False
-    for s in sessions:
+    deleted_session = None
+
+    for idx, s in enumerate(list(sessions)):
         if s.get("id") == session_id:
             # Optional: verify ownership
-            if wallet and s.get("wallet") != wallet and not s.get("wallet", "").startswith("GUEST:"):
+            owner = s.get("wallet") or ""
+            if wallet and owner and owner != wallet and not (owner.startswith("GUEST:") and identity.startswith("GUEST:")):
                 return jsonify({"ok": False, "error": "Not authorized"}), 403
-            
-            s["archived"] = True
-            s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+            if purge:
+                sessions.pop(idx)
+                remove_session_from_index(session_id, wallet=wallet)
+                try:
+                    os.remove(_session_messages_path(session_id))
+                except Exception:
+                    pass
+                deleted_session = {"id": session_id, "purged": True}
+            else:
+                s["archived"] = True
+                s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                deleted_session = s
             found = True
             break
-    
+
     if not found:
         return jsonify({"ok": True, "deleted": False})
 
     save_ai_sessions(sessions)
-    return jsonify({"ok": True, "deleted": True})
+    resp = make_response(jsonify({"ok": True, "deleted": True, "session": deleted_session}))
+    if guest_id:
+        resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+    return resp
 
 
 # Add file upload endpoint
@@ -12289,6 +12759,55 @@ def enrich_track_media(track: dict) -> dict:
 def music_page():
     """Render the Decent Music platform"""
     return render_template("music.html")
+
+
+@app.route("/api/music/status")
+def api_music_status():
+    """Lightweight status endpoint consumed by the viewer music tab."""
+
+    registry = load_music_registry()
+    tracks = [t for t in registry.get("tracks", []) if t.get("published", True)]
+    total_artists = len(registry.get("artists", {}))
+    total_tracks = len(tracks)
+    total_plays = sum(len(v) for v in registry.get("plays", {}).values())
+    total_royalties = 0.0
+    for artist in registry.get("artists", {}).values():
+        try:
+            total_royalties += float(artist.get("total_earnings", 0.0))
+        except Exception:
+            continue
+
+    connected = bool(registry) or os.path.exists(MUSIC_FILE)
+    note = "registry connected"
+    if not connected:
+        note = "music registry missing"
+    elif total_tracks == 0:
+        note = "registry connected (no tracks configured)"
+
+    return jsonify({
+        "connected": connected,
+        "artists": total_artists,
+        "tracks": total_tracks,
+        "plays": total_plays,
+        "royalties_thr": round(total_royalties, 6),
+        "status_note": note,
+    }), 200
+
+
+@app.route("/api/music/tracks")
+def api_music_tracks_compact():
+    """Compact alias for the v1 tracks endpoint."""
+    try:
+        limit = int(request.args.get("limit", 25))
+    except Exception:
+        limit = 25
+
+    registry = load_music_registry()
+    tracks = [enrich_track_media(t) for t in registry.get("tracks", []) if t.get("published", True)]
+    tracks.sort(key=lambda t: t.get("uploaded_at", ""), reverse=True)
+    for t in tracks:
+        t["play_count"] = len(registry.get("plays", {}).get(t.get("id"), []))
+    return jsonify({"ok": True, "tracks": tracks[:limit], "total": len(tracks)}), 200
 
 
 @app.route("/api/v1/music/tracks")
@@ -12821,7 +13340,7 @@ def api_music_offline_save():
                 # Create tip transaction
                 chain = load_json(CHAIN_FILE, [])
                 tx = {
-                    "type": "MUSIC_OFFLINE_TIP",
+                    "type": "music_offline_tip",
                     "tx_id": f"MUSIC_TIP-{len(chain)}-{int(time.time())}",
                     "from": wallet,
                     "to": artist_wallet,
@@ -12829,11 +13348,13 @@ def api_music_offline_save():
                     "track_id": track_id,
                     "track_title": track.get("title", "Unknown"),
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-                    "status": "confirmed"
+                    "status": "confirmed",
+                    "meta": {"feature": "music", "category": "music_tip"},
                 }
                 chain.append(tx)
                 save_json(CHAIN_FILE, chain)
                 update_last_block(tx, is_block=False)
+                persist_normalized_tx(tx)
 
                 tip_sent = True
                 app.logger.info(f"🎵 Offline Tip: {wallet} → {artist_wallet} | {tip_amount} THR | Track: {track_id}")

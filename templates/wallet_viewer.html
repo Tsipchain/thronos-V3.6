@@ -201,6 +201,8 @@
     function canonicalKind(kindRaw) {
         const k = (kindRaw || '').toLowerCase();
         const map = {
+            'thr_transfer': 'thr_transfer',
+            'transfer': 'thr_transfer',
             'pool_swap': 'swap',
             'swap': 'swap',
             'token_transfer': 'token_transfer',
@@ -215,7 +217,7 @@
             'iot_parking_reservation': 'parking',
             'iot_autopilot': 'autopilot',
         };
-        return map[k] || k || 'transfer';
+        return map[k] || k || 'thr_transfer';
     }
 
     let walletTxs = [];
@@ -279,6 +281,7 @@
 
     async function loadWalletData(addr) {
       try {
+        currentFilter = 'all';
         const [walletRes, feedRes] = await Promise.all([
           fetch(`/wallet_data/${addr}`),
           fetch(`/api/tx_feed?wallet=${encodeURIComponent(addr)}`)

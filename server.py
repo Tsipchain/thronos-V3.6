@@ -1273,9 +1273,16 @@ def save_tx_log(txs):
 
 
 def _canonical_kind(kind_raw: str) -> str:
-    """Map heterogeneous kind/type values to a canonical taxonomy."""
+    """Map heterogeneous kind/type values to a canonical taxonomy.
+
+    Default THR value uses ``thr_transfer`` instead of the generic ``transfer``
+    so filters can distinguish native sends from token transfers without
+    heuristics.
+    """
 
     lookup = {
+        "transfer": "thr_transfer",
+        "thr_transfer": "thr_transfer",
         "pool_swap": "swap",
         "swap": "swap",
         "token_transfer": "token_transfer",
@@ -1300,8 +1307,8 @@ def _canonical_kind(kind_raw: str) -> str:
         "music_offline_tip": "music",
         "music_tip": "music",
     }
-    kind = (kind_raw or "transfer").lower()
-    return lookup.get(kind, kind or "transfer")
+    kind = (kind_raw or "thr_transfer").lower()
+    return lookup.get(kind, kind or "thr_transfer")
 
 
 def _resolve_token_meta(symbol: str) -> dict:
@@ -1343,6 +1350,7 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
     timestamp = tx.get("timestamp") or ""
     tx_id = tx.get("tx_id") or tx.get("hash") or tx.get("id") or tx.get("bridge_id")
 
+    amount_raw = tx.get("amount_raw")
     amount = float(tx.get("amount", 0.0) or 0.0)
     asset_symbol = (tx.get("token_symbol") or tx.get("symbol") or tx.get("asset") or "THR").upper()
     token_meta = _resolve_token_meta(asset_symbol)
@@ -1384,6 +1392,7 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         or tx.get("driver")
         or tx.get("owner"),
         "to": tx.get("to") or tx.get("receiver") or tx.get("wallet") or tx.get("destination"),
+        "amount_raw": amount_raw if amount_raw is not None else None,
         "amount": amount,
         "fee_burned": fee,
         "timestamp": timestamp,
@@ -1396,7 +1405,16 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         "decimals": decimals,
         "decimals_is_default": token_meta.get("decimals_is_default", False),
         "display_amount": amount,
+        "asset_symbol": asset_symbol,
     }
+
+    # Apply decimals to the display amount if we have a raw value
+    if amount_raw is not None:
+        try:
+            norm["display_amount"] = float(amount_raw) / (10 ** decimals)
+            norm["amount"] = norm["display_amount"]
+        except Exception:
+            pass
 
     # Token transfers
     if tx_type_raw in ("token_transfer", "send_token", "receive_token"):
@@ -1407,6 +1425,14 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         token_meta = _resolve_token_meta(norm["asset"])
         norm["decimals"] = token_meta.get("decimals", decimals)
         norm["decimals_is_default"] = token_meta.get("decimals_is_default", False)
+        norm["asset_symbol"] = norm["asset"]
+        if norm.get("amount_raw") is not None:
+            try:
+                norm["display_amount"] = float(norm["amount_raw"]) / (10 ** norm["decimals"])
+                norm["amount"] = norm["display_amount"]
+            except Exception:
+                pass
+        norm.setdefault("note", f"Token transfer {norm.get('display_amount', norm.get('amount', 0))} {norm['asset']}")
 
     # Swap / pool swap
     if tx_type_raw in ("pool_swap", "swap"):
@@ -1426,6 +1452,7 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
             "token_out": token_out,
             "note": norm.get("note") or f"Swap {amount_in:.6f} {token_in} → {amount_out:.6f} {token_out}",
             "display_amount": amount_in,
+            "asset_symbol": token_in,
         })
         norm["meta"].update({
             "pool_id": tx.get("pool_id"),
@@ -1434,6 +1461,7 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
             "token_in": token_in,
             "token_out": token_out,
             "pair": f"{token_in}/{token_out}",
+            "amount_out_raw": tx.get("amount_out_raw"),
         })
         if tx.get("trader"):
             norm["from"] = tx.get("trader")
@@ -1465,6 +1493,12 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
     # Coinbase fallback id
     if not tx_id and tx_type_raw == "coinbase":
         norm["tx_id"] = f"COINBASE-{tx.get('height')}"
+
+    # Fill missing parties from known participants if they were captured
+    if not norm.get("from") and parties:
+        norm["from"] = next(iter(parties))
+    if not norm.get("to") and parties:
+        norm["to"] = next(reversed(sorted(parties))) if len(parties) > 1 else norm.get("from")
 
     if not norm.get("tx_id"):
         payload = f"{kind}:{norm.get('from','')}-{norm.get('to','')}-{timestamp}-{amount}"
@@ -2993,6 +3027,7 @@ def _tx_feed(include_pending: bool = True, include_bridge: bool = True) -> list[
 def get_transactions_for_viewer():
     out = []
     allowed_kinds = {
+        "thr_transfer",
         "transfer",
         "token_transfer",
         "swap",
@@ -6330,31 +6365,55 @@ def wallet_data(thr_addr):
             continue
 
         status = norm.get("status", "confirmed")
-        kind = _canonical_kind(norm.get("kind") or norm.get("type") or "")
+        kind = _canonical_kind(norm.get("kind") or norm.get("type") or "") or "thr_transfer"
         direction = "out"
         if thr_addr == norm.get("to"):
             direction = "in"
         if kind == "swap":
             direction = "swap"
 
+        asset_symbol = (norm.get("asset") or norm.get("token_symbol") or "THR").upper()
+        token_meta = _resolve_token_meta(asset_symbol)
+        decimals = norm.get("decimals") or token_meta.get("decimals", 6)
+        display_amount = norm.get("amount", 0.0)
+        if norm.get("amount_raw") is not None:
+            try:
+                display_amount = float(norm.get("amount_raw", 0.0)) / (10 ** decimals)
+            except Exception:
+                pass
+
+        amt_out_raw = norm.get("meta", {}).get("amount_out_raw")
+        amount_out_val = norm.get("amount_out") or norm.get("meta", {}).get("amount_out")
+        token_out_symbol = (norm.get("meta", {}).get("token_out") or norm.get("token_out") or asset_symbol).upper()
+        token_out_meta = _resolve_token_meta(token_out_symbol)
+        decimals_out = token_out_meta.get("decimals", decimals)
+        display_amount_out = amount_out_val
+        if amt_out_raw is not None:
+            try:
+                display_amount_out = float(amt_out_raw) / (10 ** decimals_out)
+            except Exception:
+                pass
+
         history.append({
             **{k: v for k, v in norm.items() if k not in {"parties"}},
-            "kind": kind or "transfer",
-            "type": kind or norm.get("type") or "transfer",
+            "kind": kind,
+            "type": kind,
             "category_label": category_labels.get(kind, norm.get("kind", "").title()),
-            "asset_symbol": norm.get("asset") or norm.get("token_symbol") or "THR",
+            "asset_symbol": asset_symbol,
             "symbol": norm.get("token_symbol") or norm.get("asset") or "THR",
             "symbol_in": norm.get("meta", {}).get("token_in") or norm.get("token_symbol"),
-            "symbol_out": norm.get("meta", {}).get("token_out") or norm.get("token_out"),
-            "amount_in": norm.get("amount"),
-            "amount_out": norm.get("amount_out") or norm.get("meta", {}).get("amount_out"),
+            "symbol_out": token_out_symbol,
+            "amount_in": display_amount,
+            "amount_out": display_amount_out,
             "fee_burned": norm.get("fee_burned", 0.0),
             "status": status,
             "timestamp": norm.get("timestamp"),
             "note": norm.get("note"),
             "explorer_link": f"/explorer?tx_id={norm.get('tx_id', '')}",
             "direction": direction,
-            "display_amount": norm.get("amount", 0.0),
+            "display_amount": display_amount,
+            "decimals": decimals,
+            "decimals_is_default": norm.get("decimals_is_default", False) or token_meta.get("decimals_is_default", False),
         })
 
     history.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
@@ -7556,6 +7615,7 @@ def api_tokens_stats():
     activity: dict[str, dict] = {}
     ledger = _seed_tx_log_from_chain()
     allowed_for_activity = {
+        "thr_transfer",
         "transfer",
         "token_transfer",
         "swap",
@@ -11727,6 +11787,8 @@ recompute_height_offset_from_ledger()  # <-- Initialize offset
 
 from flask import make_response
 
+THRAI_LAST_RESPONSES: dict[str, dict] = {}
+
 def _current_actor_id(wallet: str | None) -> tuple[str, str | None]:
     """
     Returns (identity_key, guest_id or None).
@@ -11753,6 +11815,17 @@ def api_thrai_ask():
     history = data.get("history") or []
     lang = (data.get("lang") or "el").strip()
     session_id = (data.get("session_id") or "").strip() or None
+
+    if not prompt and isinstance(history, list):
+        # Fallback: pull the last user message from provided history payload
+        for msg in reversed(history):
+            if not isinstance(msg, dict):
+                continue
+            role = (msg.get("role") or "").lower()
+            content = (msg.get("content") or "").strip()
+            if role == "user" and content:
+                prompt = content
+                break
 
     if not prompt:
         return jsonify(ok=False, error="prompt required"), 400
@@ -11789,6 +11862,8 @@ def api_thrai_ask():
         summary_tail = "\n".join([f"{m.get('role')}: {m.get('content','')[:200]}" for m in recent_hist[-4:]])
         retrieval_context = "\n\n".join(context_blocks) if context_blocks else "(no prior knowledge found)"
 
+        last_meta = THRAI_LAST_RESPONSES.get(session_id or "default") if session_id or history else None
+
         system_prompt = (
             "You are the Thronos Quantum Architect (Thrai). "
             "Answer clearly and concretely, in the language of the user. "
@@ -11798,6 +11873,8 @@ def api_thrai_ask():
             system_prompt += "\nRetrieved knowledge:\n" + retrieval_context
         if summary_tail:
             system_prompt += "\nRecent conversation summary:\n" + summary_tail
+        if last_meta and last_meta.get("response"):
+            system_prompt += "\nPrevious reply snapshot:\n" + (last_meta.get("response", "")[:240])
 
         messages.append({"role": "user", "content": prompt})
 
@@ -11815,6 +11892,15 @@ def api_thrai_ask():
                 text += getattr(block, "text", "")
 
         latency_ms = int((time.time() - start) * 1000)
+
+        # Track last response per session to detect accidental repeats
+        resp_hash = hashlib.sha256(text.encode()).hexdigest() if text else None
+        THRAI_LAST_RESPONSES[session_id or "default"] = {
+            "prompt": prompt,
+            "response": text,
+            "hash": resp_hash,
+            "ts": time.time(),
+        }
         return jsonify(
             ok=True,
             response=text,

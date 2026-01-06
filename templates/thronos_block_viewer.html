@@ -372,6 +372,8 @@ const fmtN = (n) => {
 const canonicalKind = (kindRaw) => {
   const k = (kindRaw || '').toLowerCase();
   const map = {
+    'thr_transfer': 'thr_transfer',
+    'transfer': 'thr_transfer',
     'pool_swap': 'swap',
     'swap': 'swap',
     'token_transfer': 'token_transfer',
@@ -386,7 +388,7 @@ const canonicalKind = (kindRaw) => {
     'iot_parking_reservation': 'parking',
     'iot_autopilot': 'autopilot',
   };
-  return map[k] || k || 'transfer';
+  return map[k] || k || 'thr_transfer';
 };
 const short = s => (s && s.length>20 ? s.slice(0,20)+'…' : (s||'—'));
 const rel = ts => {

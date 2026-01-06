@@ -1774,7 +1774,8 @@
         const res = await fetch(API_SESSION_DETAIL(currentSessionId), {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: newName }),
+          credentials: "include",
+          body: JSON.stringify({ title: newName, wallet: walletInputEl.value.trim() || null }),
         });
         if (!res.ok) throw new Error("HTTP " + res.status);
         await loadSessions();
@@ -1809,7 +1810,11 @@
       const ids = Array.from(selectedSessionIds);
       for (const id of ids) {
         try {
-          const res = await fetch(API_SESSION_DETAIL(id), { method: "DELETE" });
+          const wallet = walletInputEl.value.trim();
+          const res = await fetch(`${API_SESSION_DETAIL(id)}${wallet ? `?wallet=${encodeURIComponent(wallet)}` : ''}`, {
+            method: "DELETE",
+            credentials: "include"
+          });
           if (!res.ok) throw new Error("HTTP " + res.status);
           aiSessions = aiSessions.filter((s) => s.id !== id);
           if (currentSessionId === id) {

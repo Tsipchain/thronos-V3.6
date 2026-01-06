@@ -38,7 +38,7 @@
 15. **Session auth**
     - PATCH/DELETE chat session rename/delete endpoints return 200 (no 403) and changes persist after refresh.
 16. **Token decimals + activity**
-    - Viewer → Tokens shows correct decimals/supply per token (HPNNIS/JAM/MAR etc.) with “(default)” only when registry is missing decimals.
+    - Viewer → Tokens shows correct decimals/supply per token (HPNNIS/JAM/MAR/L2E/WBTC) with “(default)” only when registry is missing decimals.
     - Token transfer amounts render with correct precision across Viewer Transfers and Wallet Tokens.
 17. **Transfers detail completeness**
     - After a token transfer + swap, Viewer Transfers rows include asset/amount/from/to and swap pair details; Wallet history shows them under the correct tabs.
@@ -46,3 +46,7 @@
     - Viewer → L2E cards/tables render numeric values (no NaN/undefined) even when courses have empty enrollments/completions.
 19. **Offline/Thrai retrieval**
     - `/api/thrai/ask` responds using new prompts (no repetition of last answer) and can surface stored architect deliverables when queried.
+20. **Wallet filters**
+    - Opening/closing the wallet history modal resets to a safe default (“All”) and category counts match `/api/tx_feed?wallet=...&debug_counts=1` output (no token misclassification).
+21. **Post-restart persistence**
+    - Token transfers remain visible in Viewer Transfers and Wallet Tokens after a restart/redeploy using the persistent tx_ledger.

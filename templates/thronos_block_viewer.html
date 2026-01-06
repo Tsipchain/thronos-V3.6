@@ -369,6 +369,25 @@ const fmtN = (n) => {
   if (!Number.isFinite(num)) return '0';
   return num.toLocaleString(undefined,{minimumFractionDigits:3,maximumFractionDigits:6});
 };
+const canonicalKind = (kindRaw) => {
+  const k = (kindRaw || '').toLowerCase();
+  const map = {
+    'pool_swap': 'swap',
+    'swap': 'swap',
+    'token_transfer': 'token_transfer',
+    'send_token': 'token_transfer',
+    'receive_token': 'token_transfer',
+    'ai_credit': 'ai_credits',
+    'ai_credits': 'ai_credits',
+    'credits_consume': 'ai_credits',
+    'service_payment': 'ai_credits',
+    'ai_knowledge': 'ai_credits',
+    'iot_parking': 'parking',
+    'iot_parking_reservation': 'parking',
+    'iot_autopilot': 'autopilot',
+  };
+  return map[k] || k || 'transfer';
+};
 const short = s => (s && s.length>20 ? s.slice(0,20)+'…' : (s||'—'));
 const rel = ts => {
   if(!ts) return '—';
@@ -509,14 +528,15 @@ function renderTxs(list){
   let swapCount = 0;
 
   list.forEach(t => {
-    const asset = (t && t.token_symbol) ? String(t.token_symbol) : 'THR';
+    const asset = (t && (t.asset || t.token_symbol)) ? String(t.asset || t.token_symbol) : 'THR';
+    const kind = canonicalKind(t && (t.kind || t.type));
     // Only count THR for volume (to avoid mixing token types)
     if(asset === 'THR') {
       totalVolume += (t.amount || 0);
     }
     if(t.from) uniqueAddresses.add(t.from);
     if(t.to) uniqueAddresses.add(t.to);
-    if(t.type === 'swap') swapCount++;
+    if(kind === 'swap') swapCount++;
   });
 
   // Update stats cards
@@ -527,18 +547,22 @@ function renderTxs(list){
 
   // Render transfers table
   list.forEach(t=>{
-    const asset = (t && t.token_symbol) ? String(t.token_symbol) : 'THR';
+    const asset = (t && (t.asset || t.token_symbol)) ? String(t.asset || t.token_symbol) : 'THR';
+    const kind = canonicalKind(t && (t.kind || t.type));
     const match = !q || JSON.stringify(t).toLowerCase().includes(q);
     if(!match) return;
     const tr=document.createElement('tr');
 
     // Type badge styling
     let typeBadge = '<span class="badge b-legacy">transfer</span>';
-    if(t.type === 'swap') typeBadge = '<span class="badge b-hot">swap</span>';
-    else if(t.type === 'bridge') typeBadge = '<span class="badge" style="color:#f0f;background:#f0f30;border-color:#f0f">bridge</span>';
-    else if(t.type === 'coinbase') typeBadge = '<span class="badge b-stratum">coinbase</span>';
-    else if(t.type === 'service_payment') typeBadge = '<span class="badge" style="color:#0af;background:#0af30;border-color:#0af">service</span>';
-    else if(t.type === 'token_transfer') typeBadge = '<span class="badge" style="color:#0f0;background:#0f03;border-color:#0f0">token</span>';
+    if(kind === 'swap') typeBadge = '<span class="badge b-hot">swap</span>';
+    else if(kind === 'bridge') typeBadge = '<span class="badge" style="color:#f0f;background:#f0f30;border-color:#f0f">bridge</span>';
+    else if(kind === 'coinbase') typeBadge = '<span class="badge b-stratum">coinbase</span>';
+    else if(kind === 'ai_credits') typeBadge = '<span class="badge" style="color:#0af;background:#0af30;border-color:#0af">ai</span>';
+    else if(kind === 'token_transfer') typeBadge = '<span class="badge" style="color:#0f0;background:#0f03;border-color:#0f0">token</span>';
+    else if(kind === 'l2e') typeBadge = '<span class="badge" style="color:#ffd166;background:#ffd16622;border-color:#ffd166">l2e</span>';
+    else if(kind === 'iot' || kind === 'autopilot' || kind === 'parking') typeBadge = '<span class="badge" style="color:#0ff;background:#0ff1a;border-color:#0ff">iot</span>';
+    else if(kind === 'music') typeBadge = '<span class="badge" style="color:#ff9bf2;background:#ff9bf220;border-color:#ff9bf2">music</span>';
 
     const details = renderTxDetailsCell(t);
 
@@ -646,7 +670,7 @@ async function reloadMempool(){
 
 async function reloadTxs(){
   try {
-    const r = await fetch('/api/transactions');
+    const r = await fetch('/api/tx_feed');
     if (!r.ok) throw new Error(`transactions ${r.status}`);
     const j = await r.json();
     CURRENT_TXS = Array.isArray(j) ? j : [];
@@ -892,7 +916,8 @@ async function loadMusic(){
       const connected = !!statusJ.connected;
       el('#musicStatus').textContent = connected ? 'Online' : 'Degraded';
       el('#musicStatus').style.color = connected ? '#16ff57' : '#ffd166';
-      el('#musicStatusNote').textContent = connected ? 'registry connected' : 'partial data';
+      const note = statusJ.status_note || (connected ? 'registry connected' : 'partial data');
+      el('#musicStatusNote').textContent = note;
     }
 
     const tracksR = await fetch('/api/music/tracks?limit=12');

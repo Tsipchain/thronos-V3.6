@@ -198,6 +198,26 @@
       return num.toFixed(decimalPlaces);
     }
 
+    function canonicalKind(kindRaw) {
+        const k = (kindRaw || '').toLowerCase();
+        const map = {
+            'pool_swap': 'swap',
+            'swap': 'swap',
+            'token_transfer': 'token_transfer',
+            'send_token': 'token_transfer',
+            'receive_token': 'token_transfer',
+            'ai_credit': 'ai_credits',
+            'ai_credits': 'ai_credits',
+            'credits_consume': 'ai_credits',
+            'service_payment': 'ai_credits',
+            'ai_knowledge': 'ai_credits',
+            'iot_parking': 'parking',
+            'iot_parking_reservation': 'parking',
+            'iot_autopilot': 'autopilot',
+        };
+        return map[k] || k || 'transfer';
+    }
+
     let walletTxs = [];
     let currentFilter = 'all';
     let currentAddress = '';
@@ -216,11 +236,10 @@
       }
 
       const filtered = txs.filter(tx => {
-        const type = (tx.type || '').toLowerCase();
-        const asset = (tx.asset_symbol || tx.asset || tx.token_symbol || 'THR').toUpperCase();
-        if (currentFilter === 'tokens') return type === 'token_transfer' || asset !== 'THR';
-        if (currentFilter === 'swaps') return type === 'swap';
-        if (currentFilter === 'transfers') return type !== 'swap' && asset === 'THR';
+        const kind = canonicalKind(tx.kind || tx.type);
+        if (currentFilter === 'tokens') return kind === 'token_transfer';
+        if (currentFilter === 'swaps') return kind === 'swap';
+        if (currentFilter === 'transfers') return kind !== 'swap' && kind !== 'token_transfer';
         return true;
       });
 
@@ -232,13 +251,13 @@
       let html = "";
       filtered.forEach(tx => {
         const isIncoming = tx.direction === 'in' || tx.to === currentAddress;
-        const isSwap = tx.direction === 'swap' || tx.type === 'swap';
+        const isSwap = tx.direction === 'swap' || (tx.kind || tx.type) === 'swap';
         const color = isSwap ? '#0ff' : (isIncoming ? '#0f0' : '#ff0');
         const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
         const asset = (tx.asset_symbol || tx.asset || tx.token_symbol || 'THR').toUpperCase();
         const decimals = tx.decimals || tokenDecimals;
         const formattedAmount = formatTokenAmount(tx.display_amount ?? tx.amount ?? 0, decimals);
-        const label = (tx.category_label || tx.type || '').toString().toUpperCase();
+        const label = (tx.category_label || tx.kind || tx.type || '').toString().toUpperCase();
 
         html += `
             <div class="tx">
@@ -275,6 +294,7 @@
         const normalizedFeed = Array.isArray(feed) ? feed : [];
         walletTxs = (normalizedFeed.length ? normalizedFeed : (data.transactions || [])).map(tx => ({
           ...tx,
+          kind: (tx.kind || tx.type || 'transfer').toLowerCase(),
           direction: tx.direction || (tx.to === addr ? 'in' : (tx.from === addr ? 'out' : tx.direction)),
         }));
 

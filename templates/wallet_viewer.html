@@ -41,6 +41,21 @@
         border-bottom: 1px dashed #333;
         padding: 10px 0;
     }
+    .tx-filters {
+        display:flex;
+        gap:8px;
+        flex-wrap:wrap;
+        margin-bottom:8px;
+    }
+    .tx-filter-btn {
+        padding:6px 10px;
+        border:1px solid #0f0;
+        background:#000;
+        color:#0f0;
+        cursor:pointer;
+        border-radius:6px;
+    }
+    .tx-filter-btn.active { background:#0f0; color:#000; }
     .btc-val {
         color: #ff0;
         font-size: 0.9em;
@@ -112,6 +127,12 @@
       </div>
 
       <h3><span class="lang-el">Ιστορικό Συναλλαγών</span><span class="lang-en">Transaction History</span></h3>
+      <div class="tx-filters">
+        <button class="tx-filter-btn active" data-filter="all" onclick="renderTxHistory('all')">All</button>
+        <button class="tx-filter-btn" data-filter="transfers" onclick="renderTxHistory('transfers')">Transfers</button>
+        <button class="tx-filter-btn" data-filter="tokens" onclick="renderTxHistory('tokens')">Tokens</button>
+        <button class="tx-filter-btn" data-filter="swaps" onclick="renderTxHistory('swaps')">Swaps</button>
+      </div>
       <div id="txHistory" class="wallet-card">
           <span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span>
       </div>
@@ -130,6 +151,7 @@
             $('connectSection').classList.add('hidden');
             $('dashboardSection').classList.remove('hidden');
             $('displayAddress').textContent = addr;
+            currentAddress = addr;
             loadWalletData(addr);
         } else {
             $('connectSection').classList.remove('hidden');
@@ -150,7 +172,8 @@
         if (secret) {
             localStorage.setItem('thr_secret', secret);
         }
-        
+
+        currentAddress = addr;
         checkConnection();
     }
 
@@ -175,47 +198,93 @@
       return num.toFixed(decimalPlaces);
     }
 
+    let walletTxs = [];
+    let currentFilter = 'all';
+    let currentAddress = '';
+    let tokenDecimals = 6;
+
+    function renderTxHistory(filter) {
+      if (filter) currentFilter = filter;
+      const div = $('txHistory');
+      const btns = document.querySelectorAll('.tx-filter-btn');
+      btns.forEach(btn => btn.classList.toggle('active', btn.dataset.filter === currentFilter));
+
+      const txs = walletTxs || [];
+      if (!txs.length) {
+        div.innerHTML = '<p style="color:#666;">No transactions found.</p>';
+        return;
+      }
+
+      const filtered = txs.filter(tx => {
+        const kind = (tx.kind || tx.type || '').toLowerCase();
+        const asset = (tx.asset_symbol || tx.asset || tx.token_symbol || 'THR').toUpperCase();
+        if (currentFilter === 'tokens') return kind === 'token_transfer';
+        if (currentFilter === 'swaps') return kind === 'swap';
+        if (currentFilter === 'transfers') return kind !== 'swap' && kind !== 'token_transfer';
+        return true;
+      });
+
+      if (!filtered.length) {
+        div.innerHTML = '<p style="color:#666;">No transactions match this filter.</p>';
+        return;
+      }
+
+      let html = "";
+      filtered.forEach(tx => {
+        const isIncoming = tx.direction === 'in' || tx.to === currentAddress;
+        const isSwap = tx.direction === 'swap' || (tx.kind || tx.type) === 'swap';
+        const color = isSwap ? '#0ff' : (isIncoming ? '#0f0' : '#ff0');
+        const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
+        const asset = (tx.asset_symbol || tx.asset || tx.token_symbol || 'THR').toUpperCase();
+        const decimals = tx.decimals || tokenDecimals;
+        const formattedAmount = formatTokenAmount(tx.display_amount ?? tx.amount ?? 0, decimals);
+        const label = (tx.category_label || tx.kind || tx.type || '').toString().toUpperCase();
+
+        html += `
+            <div class="tx">
+              <div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">
+                  <span style="color:#fff;">${tx.timestamp || ''}</span>
+                  <span style="color:${color}; font-weight:bold;">${sign} ${formattedAmount} ${asset}</span>
+              </div>
+              <div style="font-size:0.85em; color:#9adf9a; margin-top:4px;">${label}</div>
+              <div style="font-size:0.8em; color:#888; margin-top:4px;">
+                  ${isSwap ? `Trader: ${tx.from || tx.trader || currentAddress}` : (isIncoming ? 'From: ' + (tx.from || '') : 'To: ' + (tx.to || ''))}
+                  <br>TXID: ${(tx.tx_id || 'pending')}
+                  ${tx.amount_out ? `<br>Output: ${formatTokenAmount(tx.amount_out, decimals)} ${(tx.token_out || asset)}` : ''}
+              </div>
+            </div>`;
+      });
+
+      div.innerHTML = html;
+    }
+
     async function loadWalletData(addr) {
       try {
-        const res = await fetch(`/wallet_data/${addr}`);
-        if (!res.ok) throw new Error("Server returned " + res.status);
-        const data = await res.json();
+        const [walletRes, feedRes] = await Promise.all([
+          fetch(`/wallet_data/${addr}`),
+          fetch(`/api/tx_feed?wallet=${encodeURIComponent(addr)}`)
+        ]);
+
+        if (!walletRes.ok) throw new Error("Server returned " + walletRes.status);
+        const data = await walletRes.json();
+        const feed = feedRes.ok ? await feedRes.json() : [];
 
         const balance = parseFloat(data.balance);
-        const tokenDecimals = data.token_decimals || 6;  // Get decimals from response or default to 6
+        tokenDecimals = data.token_decimals || 6;  // Get decimals from response or default to 6
+
+        const normalizedFeed = Array.isArray(feed) ? feed : [];
+        walletTxs = (normalizedFeed.length ? normalizedFeed : (data.transactions || [])).map(tx => ({
+          ...tx,
+          kind: (tx.kind || tx.type || 'transfer').toLowerCase(),
+          direction: tx.direction || (tx.to === addr ? 'in' : (tx.from === addr ? 'out' : tx.direction)),
+        }));
+
         $('balance').textContent = formatTokenAmount(balance, tokenDecimals);
 
         // Calculate BTC value (Fixed rate: 1 THR = 0.0001 BTC)
         const btcVal = (balance * 0.0001).toFixed(8);
         $('btcValue').textContent = btcVal;
-
-        const div = $('txHistory');
-        if (!data.transactions || !data.transactions.length) {
-          div.innerHTML = '<p style="color:#666;">No transactions found.</p>';
-        } else {
-          let html = "";
-          const txs = data.transactions.reverse(); 
-          
-          txs.forEach(tx => {
-            const isIncoming = tx.to === addr;
-            const color = isIncoming ? '#0f0' : '#ff0';
-            const sign = isIncoming ? '+' : '-';
-            const formattedAmount = formatTokenAmount(tx.amount ?? 0, tokenDecimals);
-
-            html += `
-            <div class="tx">
-              <div style="display:flex; justify-content:space-between;">
-                  <span style="color:#fff;">${tx.timestamp}</span>
-                  <span style="color:${color}; font-weight:bold;">${sign} ${formattedAmount} THR</span>
-              </div>
-              <div style="font-size:0.8em; color:#888; margin-top:4px;">
-                  ${isIncoming ? 'From: ' + tx.from : 'To: ' + tx.to}
-                  <br>TXID: ${tx.tx_id || 'pending'}
-              </div>
-            </div>`;
-          });
-          div.innerHTML = html;
-        }
+        renderTxHistory(currentFilter);
       } catch (e) {
         console.error(e);
         $('txHistory').textContent = "Error loading data.";

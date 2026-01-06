@@ -346,24 +346,29 @@
       </div>
       <div class="card">
         <h4>Platform Status</h4>
-        <div class="big" id="musicStatus" style="color: #ff9800;">Not Connected</div>
-        <div class="small muted">music data unavailable</div>
+        <div class="big" id="musicStatus" style="color: #ff9800;">Loading…</div>
+        <div class="small muted" id="musicStatusNote">checking endpoints</div>
       </div>
     </div>
-    <div style="text-align:center;padding:40px;color:#9fdfb4">
-      <p style="font-size:16px">🎵 Music Platform Status</p>
-      <p style="font-size:12px;opacity:0.7">
-        <strong style="color:#ff9800">Missing:</strong> /api/music/tracks endpoint, backend music registry, MUSIC_VOLUME env var<br>
-        <strong>To enable:</strong> Deploy music backend service and configure environment variables<br>
-        <strong>Current state:</strong> UI ready, backend integration pending
-      </p>
+    <div class="panel" style="margin-top:12px">
+      <table id="musicTable">
+        <thead>
+          <tr><th>Title</th><th>Artist</th><th>Genre</th><th>Plays</th></tr>
+        </thead>
+        <tbody id="musicBody"><tr><td colspan="4" style="text-align:center;color:#9fdfb4">Loading tracks…</td></tr></tbody>
+      </table>
     </div>
   </section>
 </div>
 
 <script>
 /* ===== Utilities ===== */
-const fmtN = (n) => (n==null?'—':Number(n).toLocaleString(undefined,{minimumFractionDigits:3,maximumFractionDigits:6}));
+const fmtN = (n) => {
+  if (n == null) return '—';
+  const num = Number(n);
+  if (!Number.isFinite(num)) return '0';
+  return num.toLocaleString(undefined,{minimumFractionDigits:3,maximumFractionDigits:6});
+};
 const short = s => (s && s.length>20 ? s.slice(0,20)+'…' : (s||'—'));
 const rel = ts => {
   if(!ts) return '—';
@@ -391,6 +396,7 @@ document.querySelectorAll('.tab').forEach(t=>{
     if(tab==='tokens') loadTokens();
     if(tab==='pools') loadPools();
     if(tab==='l2e') loadL2E();
+    if(tab==='music') loadMusic();
   };
 });
 
@@ -503,14 +509,15 @@ function renderTxs(list){
   let swapCount = 0;
 
   list.forEach(t => {
-    const asset = (t && t.token_symbol) ? String(t.token_symbol) : 'THR';
+    const asset = (t && (t.asset || t.token_symbol)) ? String(t.asset || t.token_symbol) : 'THR';
+    const kind = (t && (t.kind || t.type)) ? String(t.kind || t.type).toLowerCase() : '';
     // Only count THR for volume (to avoid mixing token types)
     if(asset === 'THR') {
       totalVolume += (t.amount || 0);
     }
     if(t.from) uniqueAddresses.add(t.from);
     if(t.to) uniqueAddresses.add(t.to);
-    if(t.type === 'swap') swapCount++;
+    if(kind === 'swap') swapCount++;
   });
 
   // Update stats cards
@@ -521,17 +528,22 @@ function renderTxs(list){
 
   // Render transfers table
   list.forEach(t=>{
-    const asset = (t && t.token_symbol) ? String(t.token_symbol) : 'THR';
+    const asset = (t && (t.asset || t.token_symbol)) ? String(t.asset || t.token_symbol) : 'THR';
+    const kind = (t && (t.kind || t.type)) ? String(t.kind || t.type).toLowerCase() : 'transfer';
     const match = !q || JSON.stringify(t).toLowerCase().includes(q);
     if(!match) return;
     const tr=document.createElement('tr');
 
     // Type badge styling
     let typeBadge = '<span class="badge b-legacy">transfer</span>';
-    if(t.type === 'swap') typeBadge = '<span class="badge b-hot">swap</span>';
-    else if(t.type === 'bridge') typeBadge = '<span class="badge" style="color:#f0f;background:#f0f30;border-color:#f0f">bridge</span>';
-    else if(t.type === 'coinbase') typeBadge = '<span class="badge b-stratum">coinbase</span>';
-    else if(t.type === 'service_payment') typeBadge = '<span class="badge" style="color:#0af;background:#0af30;border-color:#0af">service</span>';
+    if(kind === 'swap') typeBadge = '<span class="badge b-hot">swap</span>';
+    else if(kind === 'bridge') typeBadge = '<span class="badge" style="color:#f0f;background:#f0f30;border-color:#f0f">bridge</span>';
+    else if(kind === 'coinbase') typeBadge = '<span class="badge b-stratum">coinbase</span>';
+    else if(kind === 'ai_credit') typeBadge = '<span class="badge" style="color:#0af;background:#0af30;border-color:#0af">ai</span>';
+    else if(kind === 'token_transfer') typeBadge = '<span class="badge" style="color:#0f0;background:#0f03;border-color:#0f0">token</span>';
+    else if(kind === 'l2e') typeBadge = '<span class="badge" style="color:#ffd166;background:#ffd16622;border-color:#ffd166">l2e</span>';
+    else if(kind === 'iot' || kind === 'autopilot' || kind === 'parking') typeBadge = '<span class="badge" style="color:#0ff;background:#0ff1a;border-color:#0ff">iot</span>';
+    else if(kind === 'music') typeBadge = '<span class="badge" style="color:#ff9bf2;background:#ff9bf220;border-color:#ff9bf2">music</span>';
 
     const details = renderTxDetailsCell(t);
 
@@ -540,8 +552,8 @@ function renderTxs(list){
         <a class="hash" title="${t.tx_id}" onclick="copy('${t.tx_id}')">${short(t.tx_id)}</a>
       </td>
       <td>${typeBadge}</td>
-      <td class="mono"><a class="addr" onclick="copy('${t.from}')">${short(t.from)}</a></td>
-      <td class="mono"><a class="addr" onclick="copy('${t.to}')">${short(t.to)}</a></td>
+      <td class="mono"><a class="addr" onclick="copy('${t.from||''}')">${short(t.from||'—')}</a></td>
+      <td class="mono"><a class="addr" onclick="copy('${t.to||''}')">${short(t.to||'—')}</a></td>
       <td>${short(asset)}</td><td>${fmtN(t.amount)}</td>
       <td>${fmtN(t.fee_burned)}</td>
       <td>${details}</td>
@@ -639,7 +651,7 @@ async function reloadMempool(){
 
 async function reloadTxs(){
   try {
-    const r = await fetch('/api/transactions');
+    const r = await fetch('/api/tx_feed');
     if (!r.ok) throw new Error(`transactions ${r.status}`);
     const j = await r.json();
     CURRENT_TXS = Array.isArray(j) ? j : [];
@@ -866,7 +878,58 @@ async function loadL2E(){
     });
   }catch(e){
     console.error('L2E load error:', e);
+    el('#l2eActiveCourses').textContent = '0';
+    el('#l2eTotalEnrollments').textContent = '0';
+    el('#l2eCompletions').textContent = '0';
+    el('#l2eTotalDistributed').textContent = '0 L2E';
     document.getElementById('l2eBody').innerHTML = '<tr><td colspan="6" style="text-align:center;color:#ff5577">Error loading courses</td></tr>';
+  }
+}
+
+async function loadMusic(){
+  try{
+    const statusR = await fetch('/api/music/status');
+    if(statusR.ok){
+      const statusJ = await statusR.json();
+      el('#musicTotalArtists').textContent = statusJ.artists ?? 0;
+      el('#musicTotalTracks').textContent = statusJ.tracks ?? 0;
+      el('#musicRoyaltiesPaid').textContent = `${(statusJ.royalties_thr ?? 0).toLocaleString()} THR`;
+      const connected = !!statusJ.connected;
+      el('#musicStatus').textContent = connected ? 'Online' : 'Degraded';
+      el('#musicStatus').style.color = connected ? '#16ff57' : '#ffd166';
+      const note = statusJ.status_note || (connected ? 'registry connected' : 'partial data');
+      el('#musicStatusNote').textContent = note;
+    }
+
+    const tracksR = await fetch('/api/music/tracks?limit=12');
+    const body = el('#musicBody');
+    body.innerHTML = '';
+    if(!tracksR.ok){
+      body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#ff5577">Unable to load tracks</td></tr>';
+      return;
+    }
+    const tracksJ = await tracksR.json();
+    const tracks = Array.isArray(tracksJ.tracks) ? tracksJ.tracks : [];
+    if(tracks.length === 0){
+      body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#9fdfb4">No tracks published yet</td></tr>';
+      return;
+    }
+    tracks.forEach(t => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="mono k">${t.title || '—'}</td>
+        <td class="mono">${t.artist_name || t.artist_address || '—'}</td>
+        <td>${t.genre || '—'}</td>
+        <td class="mono">${(t.play_count||0).toLocaleString()}</td>`;
+      body.appendChild(tr);
+    });
+  }catch(e){
+    console.error('Music load failed', e);
+    el('#musicStatus').textContent = 'Offline';
+    el('#musicStatus').style.color = '#ff9800';
+    el('#musicStatusNote').textContent = 'music endpoints unavailable';
+    const body = el('#musicBody');
+    body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#ff5577">Music service unavailable</td></tr>';
   }
 }
 </script>

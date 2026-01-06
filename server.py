@@ -325,6 +325,7 @@ IOT_DATA_FILE       = os.path.join(DATA_DIR, "iot_data.json")
 IOT_PARKING_FILE    = os.path.join(DATA_DIR, "iot_parking.json")
 MEMPOOL_FILE        = os.path.join(DATA_DIR, "mempool.json")
 ATTEST_STORE_FILE   = os.path.join(DATA_DIR, "attest_store.json")
+TX_LOG_FILE         = os.path.join(DATA_DIR, "tx_ledger.json")
 WITHDRAWALS_FILE    = os.path.join(DATA_DIR, "withdrawals.json") # NEW
 VOTING_FILE         = os.path.join(DATA_DIR, "voting.json") # Feature voting for Crypto Hunters
 PEERS_FILE          = os.path.join(DATA_DIR, "active_peers.json") # Heartbeat tracking
@@ -1262,22 +1263,32 @@ def save_mempool(pool):
     save_json(MEMPOOL_FILE, pool)
 
 
+def load_tx_log():
+    """Load the normalized transaction ledger (persistent across resets)."""
+    return load_json(TX_LOG_FILE, [])
+
+
+def save_tx_log(txs):
+    save_json(TX_LOG_FILE, txs)
+
+
 def _normalize_tx_for_display(tx: dict) -> dict | None:
     """Normalize heterogeneous TX records for viewer/wallet consumption.
 
-    Returns a dict with common keys: tx_id, type, from, to, amount, fee_burned,
-    token_symbol/asset, timestamp, status, note, amount_out, token_out, parties.
+    Returns a dict with a stable schema: tx_id, kind, asset, amount, from, to,
+    fee_burned, status, note, meta, timestamp. Compatibility aliases (type,
+    token_symbol, amount_out, token_out) are preserved for existing templates.
     """
     if not isinstance(tx, dict):
         return None
 
-    tx_type_raw = (tx.get("type") or "transfer").lower()
+    tx_type_raw = (tx.get("type") or tx.get("kind") or "transfer").lower()
     status = tx.get("status") or "confirmed"
     timestamp = tx.get("timestamp") or ""
-    tx_id = tx.get("tx_id") or tx.get("hash") or tx.get("id")
+    tx_id = tx.get("tx_id") or tx.get("hash") or tx.get("id") or tx.get("bridge_id")
 
     amount = float(tx.get("amount", 0.0) or 0.0)
-    asset_symbol = (tx.get("token_symbol") or tx.get("symbol") or "THR").upper()
+    asset_symbol = (tx.get("token_symbol") or tx.get("symbol") or tx.get("asset") or "THR").upper()
     fee = float(tx.get("fee_burned", 0.0) or tx.get("fee", 0.0) or 0.0)
 
     parties: set[str] = set()
@@ -1286,9 +1297,33 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         if val:
             parties.add(val)
 
+    kind_map = {
+        "pool_swap": "swap",
+        "swap": "swap",
+        "token_transfer": "token_transfer",
+        "send_token": "token_transfer",
+        "receive_token": "token_transfer",
+        "bridge": "bridge",
+        "bridge_withdraw_request": "bridge",
+        "bridge_deposit_detected": "bridge",
+        "l2e_reward": "l2e",
+        "l2e": "l2e",
+        "credits_consume": "ai_credit",
+        "service_payment": "ai_credit",
+        "ai_knowledge": "ai_credit",
+        "iot": "iot",
+        "iot_parking": "iot",
+        "token_mint": "mint",
+        "token_burn": "burn",
+    }
+    kind = kind_map.get(tx_type_raw, tx_type_raw or "transfer")
+
+    meta: dict[str, Any] = {}
+
     norm = {
-        "tx_id": tx_id or "N/A",
-        "type": tx_type_raw,
+        "tx_id": tx_id or "",  # will be filled later if missing
+        "kind": kind,
+        "type": kind,  # backward compatible alias for templates
         "from": tx.get("from") or tx.get("trader") or tx.get("payer") or tx.get("address"),
         "to": tx.get("to") or tx.get("receiver") or tx.get("wallet"),
         "amount": amount,
@@ -1298,12 +1333,13 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         "note": tx.get("note") or tx.get("preview") or tx.get("description"),
         "token_symbol": asset_symbol,
         "asset": asset_symbol,
-        "parties": parties,
+        "meta": meta,
+        "parties": sorted(parties),
     }
 
     # Token transfers
     if tx_type_raw in ("token_transfer", "send_token", "receive_token"):
-        norm["type"] = "token_transfer"
+        norm["kind"] = norm["type"] = "token_transfer"
         norm["token_symbol"] = (tx.get("token_symbol") or tx.get("symbol") or asset_symbol).upper()
         norm["asset"] = norm["token_symbol"]
         norm["fee_burned"] = float(tx.get("fee_burned_thr", fee) or 0.0)
@@ -1316,6 +1352,7 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         token_out = (tx.get("token_out") or tx.get("to_symbol") or "WBTC").upper()
 
         norm.update({
+            "kind": "swap",
             "type": "swap",
             "subtype": tx_type_raw,
             "token_symbol": token_in,
@@ -1325,31 +1362,92 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
             "token_out": token_out,
             "note": norm.get("note") or f"Swap {amount_in:.6f} {token_in} → {amount_out:.6f} {token_out}",
         })
+        norm["meta"].update({
+            "pool_id": tx.get("pool_id"),
+            "amount_in": amount_in,
+            "amount_out": amount_out,
+            "token_in": token_in,
+            "token_out": token_out,
+        })
         if tx.get("trader"):
             norm["from"] = tx.get("trader")
             norm["to"] = tx.get("trader")
 
     # Bridge transfers
     if tx_type_raw.startswith("bridge") or tx_type_raw == "bridge":
-        norm["type"] = "bridge"
+        norm["kind"] = norm["type"] = "bridge"
         norm["asset"] = (tx.get("token") or asset_symbol or "THR").upper()
         norm["token_symbol"] = norm["asset"]
+        norm["meta"].update({
+            "btc_amount": tx.get("btc_amount") or tx.get("btc"),
+            "thr_amount": tx.get("thr_amount") or tx.get("thr"),
+        })
 
     # L2E rewards
     if tx_type_raw.startswith("l2e"):
-        norm["type"] = "l2e_reward"
+        norm["kind"] = norm["type"] = "l2e"
         norm["asset"] = "L2E"
         norm["token_symbol"] = "L2E"
 
     # AI credits / services
     if tx_type_raw in ("credits_consume", "service_payment", "ai_knowledge"):
-        norm["asset"] = norm["token_symbol"]
+        norm["kind"] = norm["type"] = "ai_credit"
+        norm["asset"] = norm.get("token_symbol") or asset_symbol
 
     # Coinbase fallback id
     if not tx_id and tx_type_raw == "coinbase":
         norm["tx_id"] = f"COINBASE-{tx.get('height')}"
 
+    if not norm.get("tx_id"):
+        payload = f"{kind}:{norm.get('from','')}-{norm.get('to','')}-{timestamp}-{amount}"
+        norm["tx_id"] = hashlib.sha256(payload.encode()).hexdigest()[:16]
+
     return norm
+
+
+def _seed_tx_log_from_chain() -> list[dict]:
+    """Backfill the tx log once from the chain file if it is empty."""
+    ledger = load_tx_log()
+    if ledger:
+        return ledger
+
+    chain = load_json(CHAIN_FILE, [])
+    normalized: list[dict] = []
+    for raw in chain:
+        norm = _normalize_tx_for_display(raw)
+        if norm:
+            normalized.append(norm)
+
+    normalized.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    save_tx_log(normalized)
+    return normalized
+
+
+def persist_normalized_tx(raw_tx: dict, status_override: str | None = None):
+    """Store or update a normalized tx record in the persistent log."""
+
+    norm = _normalize_tx_for_display(raw_tx)
+    if not norm:
+        return
+
+    if status_override:
+        norm["status"] = status_override
+
+    ledger = load_tx_log()
+    replaced = False
+    for idx, existing in enumerate(ledger):
+        if existing.get("tx_id") == norm.get("tx_id"):
+            merged = existing.copy()
+            merged.update(norm)
+            ledger[idx] = merged
+            replaced = True
+            break
+
+    if not replaced:
+        ledger.append(norm)
+
+    ledger.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    save_tx_log(ledger)
 
 # ─── Token & Pool Helpers ────────────────────────────────────────────
 
@@ -2770,28 +2868,56 @@ def get_blocks_for_viewer():
     blocks.sort(key=lambda x: x["index"], reverse=True)
     return blocks
 
+def _tx_feed(include_pending: bool = True, include_bridge: bool = True) -> list[dict]:
+    """Return normalized tx records from the shared ledger plus optional extras."""
+
+    records = list(_seed_tx_log_from_chain())
+    seen_ids = {r.get("tx_id") for r in records if r.get("tx_id")}
+
+    if include_pending:
+        for raw_tx in load_mempool():
+            norm = _normalize_tx_for_display(raw_tx)
+            if not norm:
+                continue
+            tx_id = norm.get("tx_id")
+            if tx_id and tx_id in seen_ids:
+                continue
+            norm["status"] = "pending"
+            records.append(norm)
+            if tx_id:
+                seen_ids.add(tx_id)
+
+    if include_bridge:
+        for bridge_tx in _load_bridge_txs():
+            if not isinstance(bridge_tx, dict):
+                continue
+            bridge_tx.setdefault("type", "bridge")
+            norm = _normalize_tx_for_display(bridge_tx)
+            if not norm:
+                continue
+            tx_id = norm.get("tx_id")
+            if tx_id and tx_id in seen_ids:
+                continue
+            records.append(norm)
+            if tx_id:
+                seen_ids.add(tx_id)
+
+    records.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    return records
+
+
 def get_transactions_for_viewer():
-    chain = load_json(CHAIN_FILE, [])
-    pool  = load_mempool()
-
-    all_txs = [t for t in chain if isinstance(t, dict)] + [t for t in pool if isinstance(t, dict)]
-
     out = []
-    for t in all_txs:
-        norm = _normalize_tx_for_display(t)
-        if not norm:
+    for norm in _tx_feed():
+        if norm.get("kind") not in {"transfer", "token_transfer", "swap", "bridge", "ai_credit", "l2e"}:
             continue
 
-        if norm.get("type") not in {"transfer", "token_transfer", "swap", "bridge", "service_payment", "ai_knowledge", "l2e_reward"}:
-            continue
-
-        # Enrich AI legacy payloads with display details
-        details_payload = t.get("details")
+        raw_note = norm.get("note") or ""
+        details_payload = norm.get("details")
         details = details_payload if isinstance(details_payload, dict) else None
-        preview = norm.get("note") or ""
 
-        if norm.get("type") == "ai_knowledge" and not preview:
-            payload = t.get("ai_payload") or ""
+        if norm.get("kind") == "ai_credit" and not raw_note:
+            payload = norm.get("ai_payload") or ""
             payload_obj: dict[str, Any] = {}
             if isinstance(payload, str):
                 try:
@@ -2799,7 +2925,7 @@ def get_transactions_for_viewer():
                 except Exception:
                     payload_obj = {}
 
-            preview = "Legacy AI TX (prompt_tail truncated)"
+            raw_note = "Legacy AI TX (prompt_tail truncated)"
             if details is None:
                 details = {
                     "kind": "ai_knowledge_legacy",
@@ -2809,13 +2935,13 @@ def get_transactions_for_viewer():
                     "has_response_tail": bool(payload_obj.get("response_tail")),
                 }
 
-        if details and details.get("kind") == "ai_interaction" and not preview:
-            preview = "AI interaction transfer"
+        if details and details.get("kind") == "ai_interaction" and not raw_note:
+            raw_note = "AI interaction transfer"
 
         norm.update({
             "details": details,
-            "note": preview,
-            "height": t.get("height"),
+            "note": raw_note,
+            "height": norm.get("height"),
         })
 
         out.append(norm)
@@ -5906,6 +6032,7 @@ def api_ai_purchase_pack():
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
     update_last_block(tx, is_block=False)
+    persist_normalized_tx(tx)
 
     print(
         f"🤖 AI Pack purchased: {pack.get('code')} by {wallet} "
@@ -6042,67 +6169,44 @@ def pledge_submit():
 def wallet_data(thr_addr):
     """QUEST A+B: Enhanced wallet data with categorized history"""
     balances = get_wallet_balances(thr_addr)
-    chain = load_chain_cached()
-    mempool = load_mempool()
-
     # QUEST B: Categorize transactions with labels
     history = []
 
     category_labels = {
-        "send": "Send",
-        "receive": "Receive",
+        "transfer": "Transfer",
         "token_transfer": "Token Transfer",
         "swap": "Swap",
         "bridge": "Bridge",
-        "bridge_withdraw_request": "Bridge Withdrawal",
-        "bridge_deposit_detected": "Bridge Deposit",
-        "l2e_reward": "Learn-to-Earn Reward",
-        "music_offline_tip": "Music Tip",
-        "service_payment": "Service Payment",
-        "architect_payment": "AI Architect",
-        "credits_consume": "AI Credits",
+        "l2e": "Learn-to-Earn Reward",
+        "ai_credit": "AI Credits",
+        "iot": "IoT",
     }
 
-    seen_ids: set[str] = set()
-    for raw_tx in chain + mempool:
-        norm = _normalize_tx_for_display(raw_tx)
-        if not norm:
-            continue
-
-        tx_id = norm.get("tx_id") or ""
-        if tx_id and tx_id in seen_ids:
-            continue
-        if tx_id:
-            seen_ids.add(tx_id)
-
-        # Determine if the wallet is involved
-        if thr_addr not in norm.get("parties", set()):
+    for norm in _tx_feed():
+        parties = set(norm.get("parties") or [])
+        if thr_addr not in parties and thr_addr not in {norm.get("from"), norm.get("to")}:  # type: ignore[arg-type]
             continue
 
         status = norm.get("status", "confirmed")
-        if raw_tx in mempool:
-            status = "pending"
-
         direction = "out"
         if thr_addr == norm.get("to"):
             direction = "in"
-        if norm.get("type") == "swap":
+        if norm.get("kind") == "swap":
             direction = "swap"
 
         history.append({
-            **raw_tx,
-            **{k: v for k, v in norm.items() if k != "parties"},
-            "category_label": category_labels.get(norm.get("type", "").lower(), norm.get("type", "").title()),
+            **{k: v for k, v in norm.items() if k not in {"parties"}},
+            "category_label": category_labels.get(norm.get("kind", "").lower(), norm.get("kind", "").title()),
             "asset_symbol": norm.get("asset") or norm.get("token_symbol") or "THR",
-            "symbol": norm.get("token_symbol") or "THR",
-            "symbol_in": raw_tx.get("symbol_in") or raw_tx.get("from_symbol"),
-            "symbol_out": raw_tx.get("symbol_out") or raw_tx.get("to_symbol"),
-            "amount_in": norm.get("amount") if norm.get("type") == "swap" else raw_tx.get("amount_in") or raw_tx.get("amount"),
-            "amount_out": norm.get("amount_out") or raw_tx.get("received_amount") or raw_tx.get("output_amount"),
+            "symbol": norm.get("token_symbol") or norm.get("asset") or "THR",
+            "symbol_in": norm.get("meta", {}).get("token_in") or norm.get("token_symbol"),
+            "symbol_out": norm.get("meta", {}).get("token_out") or norm.get("token_out"),
+            "amount_in": norm.get("amount"),
+            "amount_out": norm.get("amount_out") or norm.get("meta", {}).get("amount_out"),
             "fee_burned": norm.get("fee_burned", 0.0),
             "status": status,
             "timestamp": norm.get("timestamp"),
-            "note": norm.get("note") or raw_tx.get("description"),
+            "note": norm.get("note"),
             "explorer_link": f"/explorer?tx_id={norm.get('tx_id', '')}",
             "direction": direction,
             "display_amount": norm.get("amount", 0.0),
@@ -6888,6 +6992,7 @@ def api_token_burn():
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
+    persist_normalized_tx(tx)
 
     logger.info(f"Token burn: {amount} {symbol} burned by {from_thr}, new supply: {token['current_supply']}")
     return jsonify({
@@ -7009,6 +7114,7 @@ def api_token_mint():
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
+    persist_normalized_tx(tx)
 
     logger.info(f"Token mint: {amount} {symbol} minted by {creator} to {to_thr}, new supply: {token['current_supply']}")
     return jsonify({
@@ -7118,6 +7224,7 @@ def send_thr_internal(from_thr, to_thr, amount_raw, auth_secret, passphrase="", 
     chain = load_json(CHAIN_FILE, [])
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
+    persist_normalized_tx(tx)
 
     return jsonify({
         "ok": True,
@@ -7235,6 +7342,7 @@ def transfer_custom_token(symbol, from_thr, to_thr, amount_raw, auth_secret, pas
     chain = load_json(CHAIN_FILE, [])
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
+    persist_normalized_tx(tx)
 
     logger.info(f"Token transfer: {amount} {symbol} from {from_thr[:10]}... to {to_thr[:10]}... (fee: {thr_fee} THR)")
 
@@ -11197,6 +11305,7 @@ def api_v1_remove_liquidity():
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
+    persist_normalized_tx(tx)
     update_last_block(tx, is_block=False)
 
     try:
@@ -11411,6 +11520,7 @@ def api_v1_pool_swap():
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
     update_last_block(tx, is_block=False)
+    persist_normalized_tx(tx)
 
     try:
         broadcast_tx(tx)

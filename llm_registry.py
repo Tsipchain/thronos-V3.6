@@ -139,6 +139,23 @@ def _provider_status_entry(
     return entry
 
 
+def _provider_status_entry(configured: bool, key_sources: list[str], library_loaded: Optional[bool] = True, last_error: Optional[str] = None, extra: Optional[dict] = None) -> dict:
+    entry = {
+        "configured": configured,
+        "has_key": configured,
+        "library_loaded": library_loaded if library_loaded is not None else True,
+        "checked_env": key_sources,
+        "key_sources_checked": key_sources,
+        "missing_env": [] if configured else key_sources,
+        "last_sync_ok": True,
+        "last_error": last_error,
+        "source": "registry",
+    }
+    if extra:
+        entry.update(extra)
+    return entry
+
+
 def get_provider_status() -> dict:
     """
     Return provider status with explicit key source tracing and library flags.

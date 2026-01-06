@@ -1,8 +1,18 @@
 from __future__ import annotations
 
 import os
+import importlib.util
 from dataclasses import dataclass
 from typing import Dict, List, Optional
+
+MODEL_DISABLE_REASONS: Dict[str, str] = {}
+
+
+def _module_available(module_name: str) -> bool:
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except Exception:
+        return False
 
 try:
     import google.generativeai as genai
@@ -74,87 +84,59 @@ AI_MODEL_REGISTRY: Dict[str, List[ModelInfo]] = {
 }
 
 
-def _apply_env_flags() -> None:
-    # FIX 7: Support env var aliases and check availability for local/thronos
-    import logging
+def find_model(model_id: str) -> Optional[ModelInfo]:
+    for provider_models in AI_MODEL_REGISTRY.values():
+        for m in provider_models:
+            if m.id == model_id:
+                return m
+    return None
 
-    logger = logging.getLogger(__name__)
 
-    # Check OpenAI: prefer OPENAI_API_KEY, accept legacy OPENAI_KEY as fallback only
-    openai_primary = (os.getenv("OPENAI_API_KEY") or "").strip()
-    openai_legacy = (os.getenv("OPENAI_KEY") or "").strip()
-    openai_key = openai_primary or openai_legacy
-    has_openai = bool(openai_key)
-    logger.debug(
-        "OpenAI provider check: OPENAI_API_KEY=%s, OPENAI_KEY=%s → enabled=%s",
-        bool(openai_primary),
-        bool(openai_legacy),
-        has_openai,
-    )
+def mark_model_disabled(model_id: str, reason: str) -> None:
+    model = find_model(model_id)
+    if not model:
+        return
+    model.enabled = False
+    MODEL_DISABLE_REASONS[model_id] = reason
 
-    # Check Anthropic: ANTHROPIC_API_KEY
-    anthropic_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
-    has_anthropic = bool(anthropic_key)
-    logger.debug(
-        "Anthropic provider check: ANTHROPIC_API_KEY=%s → enabled=%s",
-        bool(anthropic_key),
-        has_anthropic,
-    )
 
-    # Check Gemini: GEMINI_API_KEY or GOOGLE_API_KEY
-    gemini_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
-    has_gemini = bool(gemini_key)
-    logger.debug(
-        "Gemini provider check: GEMINI_API_KEY=%s, GOOGLE_API_KEY=%s → enabled=%s",
-        bool(os.getenv("GEMINI_API_KEY")),
-        bool(os.getenv("GOOGLE_API_KEY")),
-        has_gemini,
-    )
-
-    # Check local: offline corpus file exists
-    data_dir = os.getenv("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
-    corpus_file = os.path.join(data_dir, "ai_offline_corpus.json")
-    has_local = os.path.exists(corpus_file)
-    logger.debug(
-        "Local provider check: corpus_file=%s exists=%s → enabled=%s",
-        corpus_file,
-        has_local,
-        has_local,
-    )
-
-    # Check thronos: CUSTOM_MODEL_URL configured (CUSTOM_MODEL_URI kept as legacy alias)
-    custom_url = (os.getenv("CUSTOM_MODEL_URL") or os.getenv("CUSTOM_MODEL_URI") or "").strip()
-    has_thronos = bool(custom_url)
-    # Also check THRONOS_AI_MODE allows custom (if mode is restrictive)
-    ai_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
-    if ai_mode not in ("all", "router", "auto", "custom", "hybrid", ""):
-        has_thronos = False  # Restricted mode doesn't allow custom
-    logger.debug(
-        "Thronos provider check: CUSTOM_MODEL_URL=%s, THRONOS_AI_MODE=%s → enabled=%s",
-        bool(custom_url),
-        ai_mode,
-        has_thronos,
-    )
+def _apply_env_flags(provider_status: Optional[dict] = None) -> None:
+    provider_status = provider_status or get_provider_status()
 
     for provider_name, models in AI_MODEL_REGISTRY.items():
-        if provider_name == "openai":
-            enabled = has_openai
-        elif provider_name == "anthropic":
-            enabled = has_anthropic
-        elif provider_name == "gemini":
-            enabled = has_gemini
-        elif provider_name == "local":
-            enabled = has_local
-        elif provider_name == "thronos":
-            enabled = has_thronos
-        else:
-            enabled = True
+        info = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
+        enabled = bool(info.get("configured", False)) and info.get("library_loaded", True)
 
         for m in models:
             m.enabled = enabled
+            reason = MODEL_DISABLE_REASONS.get(m.id)
+            if reason:
+                m.enabled = False
 
 
-_apply_env_flags()
+def _provider_status_entry(
+    configured: bool,
+    key_sources: list[str],
+    library_loaded: Optional[bool] = True,
+    last_error: Optional[str] = None,
+    extra: Optional[dict] = None,
+) -> dict:
+    checked_sources = [{"source": "env", "key": k, "present": bool((os.getenv(k) or "").strip())} for k in key_sources]
+    entry = {
+        "configured": configured,
+        "has_key": configured,
+        "library_loaded": library_loaded if library_loaded is not None else True,
+        "checked_env": key_sources,
+        "key_sources_checked": key_sources,
+        "checked_sources": checked_sources,
+        "missing_env": [] if configured else key_sources,
+        "last_sync_ok": True,
+        "last_error": last_error,
+        "source": "registry",
+    }
+    if extra:
+        entry.update(extra)
+    return entry
 
 
 def _provider_status_entry(configured: bool, key_sources: list[str], library_loaded: Optional[bool] = True, last_error: Optional[str] = None, extra: Optional[dict] = None) -> dict:
@@ -181,36 +163,66 @@ def get_provider_status() -> dict:
     """
     status = {}
 
+    invalid_by_provider: Dict[str, List[dict]] = {}
+    for mid, reason in MODEL_DISABLE_REASONS.items():
+        m = find_model(mid)
+        if not m:
+            continue
+        invalid_by_provider.setdefault(m.provider, []).append({"id": mid, "reason": reason})
+
     openai_vars = ["OPENAI_API_KEY", "OPENAI_KEY"]
     openai_primary = (os.getenv("OPENAI_API_KEY") or "").strip()
     openai_legacy = (os.getenv("OPENAI_KEY") or "").strip()
     openai_configured = bool(openai_primary or openai_legacy)
-    status["openai"] = _provider_status_entry(
+    openai_lib = _module_available("openai")
+    openai_entry = _provider_status_entry(
         openai_configured,
         openai_vars,
-        library_loaded=True,
+        library_loaded=openai_lib,
         extra={"configured_by": "OPENAI_API_KEY" if openai_primary else ("OPENAI_KEY" if openai_legacy else None)},
     )
+    openai_entry["checked_sources"].append({"source": "import", "module": "openai", "present": openai_lib})
+    openai_entry["invalid_models"] = invalid_by_provider.get("openai", [])
+    if openai_entry["invalid_models"] and not openai_entry.get("last_error"):
+        openai_entry["last_error"] = openai_entry["invalid_models"][0].get("reason")
+    status["openai"] = openai_entry
 
     anthropic_vars = ["ANTHROPIC_API_KEY"]
     anthropic_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
     anthropic_configured = bool(anthropic_key)
-    status["anthropic"] = _provider_status_entry(anthropic_configured, anthropic_vars, library_loaded=True)
+    anthropic_lib = _module_available("anthropic")
+    anthropic_entry = _provider_status_entry(anthropic_configured, anthropic_vars, library_loaded=anthropic_lib)
+    anthropic_entry["checked_sources"].append({"source": "import", "module": "anthropic", "present": anthropic_lib})
+    anthropic_entry["invalid_models"] = invalid_by_provider.get("anthropic", [])
+    if anthropic_entry["invalid_models"] and not anthropic_entry.get("last_error"):
+        anthropic_entry["last_error"] = anthropic_entry["invalid_models"][0].get("reason")
+    status["anthropic"] = anthropic_entry
 
     gemini_vars = ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
     gemini_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
     gemini_configured = bool(gemini_key)
-    status["gemini"] = _provider_status_entry(gemini_configured, gemini_vars, library_loaded=bool(genai))
+    gemini_lib = bool(genai)
+    gemini_entry = _provider_status_entry(gemini_configured, gemini_vars, library_loaded=gemini_lib)
+    gemini_entry["checked_sources"].append({"source": "import", "module": "google.generativeai", "present": gemini_lib})
+    gemini_entry["invalid_models"] = invalid_by_provider.get("gemini", [])
+    if gemini_entry["invalid_models"] and not gemini_entry.get("last_error"):
+        gemini_entry["last_error"] = gemini_entry["invalid_models"][0].get("reason")
+    status["gemini"] = gemini_entry
 
     data_dir = os.getenv("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
     corpus_file = os.path.join(data_dir, "ai_offline_corpus.json")
     local_configured = os.path.exists(corpus_file)
-    status["local"] = _provider_status_entry(
+    local_entry = _provider_status_entry(
         local_configured,
         ["DATA_DIR"],
         library_loaded=True,
         extra={"corpus_file": corpus_file},
     )
+    local_entry["checked_sources"].append({"source": "file", "path": corpus_file, "present": local_configured})
+    local_entry["invalid_models"] = invalid_by_provider.get("local", [])
+    if local_entry["invalid_models"] and not local_entry.get("last_error"):
+        local_entry["last_error"] = local_entry["invalid_models"][0].get("reason")
+    status["local"] = local_entry
 
     thronos_vars = ["CUSTOM_MODEL_URL", "THRONOS_AI_MODE"]
     custom_url = (os.getenv("CUSTOM_MODEL_URL") or os.getenv("CUSTOM_MODEL_URI") or "").strip()
@@ -221,26 +233,28 @@ def get_provider_status() -> dict:
         thronos_missing.append("CUSTOM_MODEL_URL (or legacy CUSTOM_MODEL_URI)")
     if ai_mode not in ("all", "router", "auto", "custom", "hybrid", ""):
         thronos_missing.append(f"THRONOS_AI_MODE={ai_mode} (restrictive)")
-    status["thronos"] = _provider_status_entry(
+    thronos_entry = _provider_status_entry(
         thronos_configured,
         thronos_vars,
         library_loaded=True,
-        extra={"missing_env": thronos_missing},
+        extra={"missing_env": thronos_missing, "custom_url": bool(custom_url)},
     )
+    thronos_entry["checked_sources"].append({"source": "env", "key": "CUSTOM_MODEL_URI", "present": bool(os.getenv("CUSTOM_MODEL_URI"))})
+    thronos_entry["invalid_models"] = invalid_by_provider.get("thronos", [])
+    if thronos_entry["invalid_models"] and not thronos_entry.get("last_error"):
+        thronos_entry["last_error"] = thronos_entry["invalid_models"][0].get("reason")
+    status["thronos"] = thronos_entry
 
     return status
 
 
-def find_model(model_id: str) -> Optional[ModelInfo]:
-    for provider_models in AI_MODEL_REGISTRY.values():
-        for m in provider_models:
-            if m.id == model_id:
-                return m
-    return None
+_apply_env_flags(get_provider_status())
 
 
 def list_enabled_model_ids(mode: Optional[str] = None) -> List[str]:
     """Return a list of enabled model ids, respecting THRONOS_AI_MODE if provided."""
+
+    _apply_env_flags(get_provider_status())
 
     normalized_mode = (mode or os.getenv("THRONOS_AI_MODE", "all")).strip().lower()
     if normalized_mode in ("", "router", "auto", "hybrid"):

@@ -2291,9 +2291,16 @@ function getTxType(tx) {
     const note = (tx.note || tx.description || '').toUpperCase();
     const symbol = (tx.symbol || tx.asset_symbol || 'THR').toUpperCase();
     const meta = tx.metadata || tx.meta || {};
+    const category = (meta.category || '').toLowerCase();
     const billingUnit = (meta.billing_unit || '').toLowerCase();
     const sessionType = (meta.session_type || '').toLowerCase();
     const featureTag = (meta.feature || '').toLowerCase();
+
+    if (category) {
+        if (category.includes('architect')) return 'architect';
+        if (category.includes('credit') || category.includes('chat')) return 'ai_credits';
+        if (category.includes('swap') || category.includes('liquidity') || category.includes('pool')) return 'swap';
+    }
 
     if (billingUnit === 'thr' || sessionType === 'architect') return 'architect';
     if (billingUnit === 'credits' || sessionType === 'chat') return 'ai_credits';

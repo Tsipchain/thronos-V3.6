@@ -1297,22 +1297,36 @@
             const res = await fetch(API_SESSION_DETAIL(s.id), {
               method: "DELETE",
             });
-            if (res.ok) {
-              // Remove from local array
-              aiSessions = aiSessions.filter(sess => sess.id !== s.id);
-              delete messagesBySession[s.id];
-              // If deleted current session, switch to first available
-              if (s.id === currentSessionId && aiSessions.length > 0) {
-                currentSessionId = aiSessions[0].id;
-                loadSessionMessages(currentSessionId);
-                sessionTitleEl.textContent = aiSessions[0].title || "Mesh session";
-              } else if (aiSessions.length === 0) {
-                // No sessions left, create new one
-                await createSession();
-              }
-              persistSessionCache();
-              renderSessions();
+            const payload = (await res.json().catch(() => ({}))) || {};
+            if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+
+            const wasDeleted = payload.deleted !== false; // idempotent: deleted=false means already gone
+            if (!wasDeleted) {
+              setSessionStatus("Session already removed");
+              return;
             }
+
+            aiSessions = aiSessions.filter((sess) => sess.id !== s.id);
+            delete messagesBySession[s.id];
+
+            if (s.id === currentSessionId) {
+              currentSessionId = aiSessions.length ? aiSessions[0].id : null;
+              if (currentSessionId) {
+                localStorage.setItem(ACTIVE_SESSION_KEY, currentSessionId);
+                await loadSessionMessages(currentSessionId);
+                const active = aiSessions.find((x) => x.id === currentSessionId);
+                sessionTitleEl.textContent = (active && active.title) || "Mesh session";
+              } else {
+                localStorage.removeItem(ACTIVE_SESSION_KEY);
+                const created = await createSession();
+                if (created && created.id) {
+                  await loadSessionMessages(created.id);
+                }
+              }
+            }
+
+            persistSessionCache();
+            renderSessions();
           } catch (e) {
             console.error("Delete session error:", e);
             alert("Failed to delete session");
@@ -1637,6 +1651,10 @@
         }
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
+        if (!data.session && (!data.messages || data.messages.length === 0)) {
+          await handleMissingSession(id);
+          return;
+        }
         if (data.error && data.error.toLowerCase().includes('session not found')) {
           await handleMissingSession(id);
           return;

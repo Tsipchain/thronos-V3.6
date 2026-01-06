@@ -90,6 +90,7 @@ from llm_registry import (
     get_provider_status,
     get_default_model,
     list_enabled_model_ids,
+    _apply_env_flags,
 )
 from ai_models_config import base_model_config
 # CRITICAL FIX #6: Import compute_model_stats and create_ai_transfer_from_ledger_entry from ai_interaction_ledger
@@ -1843,14 +1844,23 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
     provider_status = get_provider_status()
     normalized_mode = _normalized_ai_mode()
 
+    def _provider_configured(name: str, info: dict | None) -> bool:
+        if info and info.get("configured") and info.get("library_loaded", True) is not False:
+            return True
+        if name == "openai":
+            return bool((os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip())
+        if name == "anthropic":
+            return bool((os.getenv("ANTHROPIC_API_KEY") or "").strip())
+        if name == "gemini":
+            return bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
+        return False
+
     callable_ids = []
     for provider_name, models in AI_MODEL_REGISTRY.items():
         if normalized_mode != "all" and provider_name != normalized_mode:
             continue
         provider_info = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
-        if not provider_info.get("configured"):
-            continue
-        if provider_info.get("library_loaded") is False:
+        if not _provider_configured(provider_name, provider_info):
             continue
         for m in models:
             callable_ids.append(m.id)
@@ -3523,9 +3533,6 @@ def api_architect_generate():
         if session_id:
             _save_session_selected_model(session_id, model_key)
         call_meta["callable"] = True
-
-    # If the requested model is not callable in current mode/providers, fall back before billing
-    fallback_notice = fallback_notice  # reuse notice if any
 
     # If the requested model is not callable in current mode/providers, fall back before billing
     fallback_notice = fallback_notice  # reuse notice if any
@@ -12152,6 +12159,8 @@ def api_ai_models():
     NEVER returns 500 - always returns 200 with degraded mode fallback if needed.
     """
     try:
+        _apply_env_flags(get_provider_status())
+
         mode = _normalized_ai_mode()
 
         default_model = get_default_model(None if mode == "all" else mode)

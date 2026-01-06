@@ -49,6 +49,7 @@ from llm_registry import (
     list_enabled_model_ids,
     AI_MODEL_REGISTRY,
     get_provider_status,
+    mark_model_disabled,
 )
 
 
@@ -69,22 +70,21 @@ def _resolve_model(
 
     def _provider_configured(provider: str) -> bool:
         info = provider_status.get(provider) if isinstance(provider_status, dict) else None
-        if not info:
-            return False
-        if not info.get("configured"):
-            return False
-        if info.get("library_loaded") is False:
-            return False
-        return True
+        if info:
+            if not info.get("configured"):
+                return False
+            if info.get("library_loaded") is False:
+                return False
+            return True
 
-    def _match_alias(candidate: str):
-        cand_norm = (candidate or "").strip().lower().replace(" ", "").replace("-", "")
-        for provider_models in AI_MODEL_REGISTRY.values():
-            for m in provider_models:
-                display_norm = m.display_name.lower().replace(" ", "").replace("-", "")
-                if cand_norm == display_norm:
-                    return m
-        return None
+        # Fallback directly to env detection if status payload is missing/empty
+        if provider == "openai":
+            return bool((os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip())
+        if provider == "anthropic":
+            return bool((os.getenv("ANTHROPIC_API_KEY") or "").strip())
+        if provider == "gemini":
+            return bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
+        return False
 
     def _match_alias(candidate: str):
         cand_norm = (candidate or "").strip().lower().replace(" ", "").replace("-", "")
@@ -211,6 +211,22 @@ def call_gemini(model: str, messages: List[Dict[str, str]], system_prompt: Optio
     return (getattr(resp, "text", "") or "").strip()
 
 
+def _read_offline_corpus(corpus_file: str, messages: List[Dict[str, str]]) -> str:
+    prompt = "\n\n".join([m.get("content", "") for m in messages if m.get("role") == "user"]).strip()
+    try:
+        with open(corpus_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list) and data:
+            latest = data[-1]
+            if isinstance(latest, dict):
+                return latest.get("response") or latest.get("text") or "Offline corpus entry found but empty."
+            if isinstance(latest, str):
+                return latest
+        return "No offline corpus entries found."
+    except Exception:
+        return f"Offline corpus available ({corpus_file}) but unreadable for prompt: {prompt[:80]}"
+
+
 def call_llm(
     model: str,
     messages: List[Dict[str, str]],
@@ -268,6 +284,7 @@ def call_llm(
     model = resolved_model
     prompt_text = "\n\n".join([m.get("content", "") for m in messages])
     routing_meta: Dict[str, Any] = {}
+    call_attempted = False
 
     is_auto = not requested_model or requested_model == "auto"
 
@@ -291,16 +308,69 @@ def call_llm(
 
     try:
         if provider == "openai":
+            call_attempted = True
             text = call_openai(model, messages, system_prompt=system_prompt, temperature=temperature, max_tokens=max_tokens)
         elif provider == "anthropic":
+            call_attempted = True
             text = call_anthropic(model, messages, system_prompt=system_prompt, temperature=temperature, max_tokens=max_tokens)
         elif provider == "gemini":
+            call_attempted = True
             text = call_gemini(model, messages, system_prompt=system_prompt, temperature=temperature, max_tokens=max_tokens)
+        elif provider == "local":
+            data_dir = os.getenv("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
+            corpus_file = os.path.join(data_dir, "ai_offline_corpus.json")
+            if not os.path.exists(corpus_file):
+                routing_meta["call_attempted"] = False
+                return {
+                    "response": "Offline corpus not configured.",
+                    "status": "provider_error",
+                    "provider": provider,
+                    "model": model,
+                    "call_attempted": False,
+                }
+            call_attempted = True
+            text = _read_offline_corpus(corpus_file, messages)
+        elif provider in ("thronos", "custom"):
+            custom_url = (os.getenv("CUSTOM_MODEL_URL") or os.getenv("CUSTOM_MODEL_URI") or "").strip()
+            if not custom_url:
+                routing_meta["call_attempted"] = False
+                return {
+                    "response": "Custom model endpoint not configured.",
+                    "status": "provider_error",
+                    "provider": provider,
+                    "model": model,
+                    "call_attempted": False,
+                }
+            call_attempted = True
+            payload = {
+                "messages": messages,
+                "system_prompt": system_prompt or "",
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "session_id": session_id,
+            }
+            res = requests.post(custom_url, json=payload, timeout=60)
+            try:
+                data = res.json()
+                text = data.get("response") or data.get("text") or ""
+                if not text:
+                    text = res.text
+            except Exception:
+                text = res.text
         else:
-            raise RuntimeError(f"Unsupported provider for model {model}")
+            routing_meta["call_attempted"] = False
+            return {
+                "response": f"Unsupported provider for model {model}",
+                "status": "provider_error",
+                "provider": provider,
+                "model": model,
+                "call_attempted": False,
+            }
     except Exception as exc:
         logging.exception("LLM provider error", extra={"provider": provider, "model": model})
         error = str(exc)
+        if provider == "anthropic" and ("not found" in error.lower() or "404" in error):
+            mark_model_disabled(model, f"anthropic_not_found:{error}")
 
     duration = time.time() - started
     try:
@@ -318,7 +388,7 @@ def call_llm(
             block_hash=block_hash,
             error=error,
             success=error is None,
-            metadata=routing_meta,
+            metadata={**routing_meta, "call_attempted": call_attempted},
         )
     except Exception:
         logging.exception("Failed to record AI interaction", extra={"provider": provider, "model": model})
@@ -330,6 +400,7 @@ def call_llm(
             "provider": provider,
             "model": model,
             "error": error,
+            "call_attempted": call_attempted,
         }
 
     return {
@@ -337,6 +408,7 @@ def call_llm(
         "status": provider,
         "provider": provider,
         "model": model,
+        "call_attempted": call_attempted,
     }
 
 

@@ -369,6 +369,25 @@ const fmtN = (n) => {
   if (!Number.isFinite(num)) return '0';
   return num.toLocaleString(undefined,{minimumFractionDigits:3,maximumFractionDigits:6});
 };
+const canonicalKind = (kindRaw) => {
+  const k = (kindRaw || '').toLowerCase();
+  const map = {
+    'pool_swap': 'swap',
+    'swap': 'swap',
+    'token_transfer': 'token_transfer',
+    'send_token': 'token_transfer',
+    'receive_token': 'token_transfer',
+    'ai_credit': 'ai_credits',
+    'ai_credits': 'ai_credits',
+    'credits_consume': 'ai_credits',
+    'service_payment': 'ai_credits',
+    'ai_knowledge': 'ai_credits',
+    'iot_parking': 'parking',
+    'iot_parking_reservation': 'parking',
+    'iot_autopilot': 'autopilot',
+  };
+  return map[k] || k || 'transfer';
+};
 const short = s => (s && s.length>20 ? s.slice(0,20)+'…' : (s||'—'));
 const rel = ts => {
   if(!ts) return '—';
@@ -510,7 +529,7 @@ function renderTxs(list){
 
   list.forEach(t => {
     const asset = (t && (t.asset || t.token_symbol)) ? String(t.asset || t.token_symbol) : 'THR';
-    const kind = (t && (t.kind || t.type)) ? String(t.kind || t.type).toLowerCase() : '';
+    const kind = canonicalKind(t && (t.kind || t.type));
     // Only count THR for volume (to avoid mixing token types)
     if(asset === 'THR') {
       totalVolume += (t.amount || 0);
@@ -529,7 +548,7 @@ function renderTxs(list){
   // Render transfers table
   list.forEach(t=>{
     const asset = (t && (t.asset || t.token_symbol)) ? String(t.asset || t.token_symbol) : 'THR';
-    const kind = (t && (t.kind || t.type)) ? String(t.kind || t.type).toLowerCase() : 'transfer';
+    const kind = canonicalKind(t && (t.kind || t.type));
     const match = !q || JSON.stringify(t).toLowerCase().includes(q);
     if(!match) return;
     const tr=document.createElement('tr');
@@ -539,7 +558,7 @@ function renderTxs(list){
     if(kind === 'swap') typeBadge = '<span class="badge b-hot">swap</span>';
     else if(kind === 'bridge') typeBadge = '<span class="badge" style="color:#f0f;background:#f0f30;border-color:#f0f">bridge</span>';
     else if(kind === 'coinbase') typeBadge = '<span class="badge b-stratum">coinbase</span>';
-    else if(kind === 'ai_credit') typeBadge = '<span class="badge" style="color:#0af;background:#0af30;border-color:#0af">ai</span>';
+    else if(kind === 'ai_credits') typeBadge = '<span class="badge" style="color:#0af;background:#0af30;border-color:#0af">ai</span>';
     else if(kind === 'token_transfer') typeBadge = '<span class="badge" style="color:#0f0;background:#0f03;border-color:#0f0">token</span>';
     else if(kind === 'l2e') typeBadge = '<span class="badge" style="color:#ffd166;background:#ffd16622;border-color:#ffd166">l2e</span>';
     else if(kind === 'iot' || kind === 'autopilot' || kind === 'parking') typeBadge = '<span class="badge" style="color:#0ff;background:#0ff1a;border-color:#0ff">iot</span>';

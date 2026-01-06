@@ -198,6 +198,26 @@
       return num.toFixed(decimalPlaces);
     }
 
+    function canonicalKind(kindRaw) {
+        const k = (kindRaw || '').toLowerCase();
+        const map = {
+            'pool_swap': 'swap',
+            'swap': 'swap',
+            'token_transfer': 'token_transfer',
+            'send_token': 'token_transfer',
+            'receive_token': 'token_transfer',
+            'ai_credit': 'ai_credits',
+            'ai_credits': 'ai_credits',
+            'credits_consume': 'ai_credits',
+            'service_payment': 'ai_credits',
+            'ai_knowledge': 'ai_credits',
+            'iot_parking': 'parking',
+            'iot_parking_reservation': 'parking',
+            'iot_autopilot': 'autopilot',
+        };
+        return map[k] || k || 'transfer';
+    }
+
     let walletTxs = [];
     let currentFilter = 'all';
     let currentAddress = '';
@@ -216,8 +236,7 @@
       }
 
       const filtered = txs.filter(tx => {
-        const kind = (tx.kind || tx.type || '').toLowerCase();
-        const asset = (tx.asset_symbol || tx.asset || tx.token_symbol || 'THR').toUpperCase();
+        const kind = canonicalKind(tx.kind || tx.type);
         if (currentFilter === 'tokens') return kind === 'token_transfer';
         if (currentFilter === 'swaps') return kind === 'swap';
         if (currentFilter === 'transfers') return kind !== 'swap' && kind !== 'token_transfer';

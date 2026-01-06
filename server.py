@@ -1272,6 +1272,38 @@ def save_tx_log(txs):
     save_json(TX_LOG_FILE, txs)
 
 
+def _canonical_kind(kind_raw: str) -> str:
+    """Map heterogeneous kind/type values to a canonical taxonomy."""
+
+    lookup = {
+        "pool_swap": "swap",
+        "swap": "swap",
+        "token_transfer": "token_transfer",
+        "send_token": "token_transfer",
+        "receive_token": "token_transfer",
+        "bridge": "bridge",
+        "bridge_withdraw_request": "bridge",
+        "bridge_deposit_detected": "bridge",
+        "l2e_reward": "l2e",
+        "l2e": "l2e",
+        "credits_consume": "ai_credits",
+        "service_payment": "ai_credits",
+        "ai_knowledge": "ai_credits",
+        "ai_credit": "ai_credits",
+        "ai_credits": "ai_credits",
+        "iot": "iot",
+        "iot_parking": "parking",
+        "iot_parking_reservation": "parking",
+        "iot_autopilot": "autopilot",
+        "token_mint": "mint",
+        "token_burn": "burn",
+        "music_offline_tip": "music",
+        "music_tip": "music",
+    }
+    kind = (kind_raw or "transfer").lower()
+    return lookup.get(kind, kind or "transfer")
+
+
 def _normalize_tx_for_display(tx: dict) -> dict | None:
     """Normalize heterogeneous TX records for viewer/wallet consumption.
 
@@ -1297,30 +1329,7 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         if val:
             parties.add(val)
 
-    kind_map = {
-        "pool_swap": "swap",
-        "swap": "swap",
-        "token_transfer": "token_transfer",
-        "send_token": "token_transfer",
-        "receive_token": "token_transfer",
-        "bridge": "bridge",
-        "bridge_withdraw_request": "bridge",
-        "bridge_deposit_detected": "bridge",
-        "l2e_reward": "l2e",
-        "l2e": "l2e",
-        "credits_consume": "ai_credit",
-        "service_payment": "ai_credit",
-        "ai_knowledge": "ai_credit",
-        "iot": "iot",
-        "iot_parking": "parking",
-        "iot_parking_reservation": "parking",
-        "iot_autopilot": "autopilot",
-        "token_mint": "mint",
-        "token_burn": "burn",
-        "music_offline_tip": "music",
-        "music_tip": "music",
-    }
-    kind = kind_map.get(tx_type_raw, tx_type_raw or "transfer")
+    kind = _canonical_kind(tx_type_raw)
 
     meta: dict[str, Any] = {}
 
@@ -1394,8 +1403,8 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         norm["token_symbol"] = "L2E"
 
     # AI credits / services
-    if tx_type_raw in ("credits_consume", "service_payment", "ai_knowledge"):
-        norm["kind"] = norm["type"] = "ai_credit"
+    if tx_type_raw in ("credits_consume", "service_payment", "ai_knowledge", "ai_credit", "ai_credits"):
+        norm["kind"] = norm["type"] = "ai_credits"
         norm["asset"] = norm.get("token_symbol") or asset_symbol
 
     # Coinbase fallback id
@@ -2885,6 +2894,13 @@ def _tx_feed(include_pending: bool = True, include_bridge: bool = True) -> list[
     """Return normalized tx records from the shared ledger plus optional extras."""
 
     records = list(_seed_tx_log_from_chain())
+    # Canonicalize kinds in case the ledger has legacy values
+    for r in records:
+        if isinstance(r, dict):
+            r_kind = _canonical_kind(r.get("kind") or r.get("type") or "")
+            r["kind"] = r_kind
+            r.setdefault("type", r_kind)
+
     seen_ids = {r.get("tx_id") for r in records if r.get("tx_id")}
 
     if include_pending:
@@ -2926,7 +2942,7 @@ def get_transactions_for_viewer():
         "token_transfer",
         "swap",
         "bridge",
-        "ai_credit",
+        "ai_credits",
         "l2e",
         "iot",
         "autopilot",
@@ -2934,7 +2950,7 @@ def get_transactions_for_viewer():
         "music",
     }
     for norm in _tx_feed():
-        kind = (norm.get("kind") or norm.get("type") or "").lower()
+        kind = _canonical_kind(norm.get("kind") or norm.get("type") or "")
         norm["kind"] = kind or "transfer"
         norm.setdefault("type", norm["kind"])
         if norm["kind"] not in allowed_kinds:
@@ -2944,7 +2960,7 @@ def get_transactions_for_viewer():
         details_payload = norm.get("details")
         details = details_payload if isinstance(details_payload, dict) else None
 
-        if norm.get("kind") == "ai_credit" and not raw_note:
+        if norm.get("kind") == "ai_credits" and not raw_note:
             payload = norm.get("ai_payload") or ""
             payload_obj: dict[str, Any] = {}
             if isinstance(payload, str):
@@ -4250,7 +4266,7 @@ def api_tx_feed():
     feed = _tx_feed(include_pending=include_pending, include_bridge=include_bridge)
     normalized = []
     for tx in feed:
-        kind = (tx.get("kind") or tx.get("type") or "").lower()
+        kind = _canonical_kind(tx.get("kind") or tx.get("type") or "")
         tx["kind"] = kind or "transfer"
         tx.setdefault("type", tx["kind"])
         if kinds and tx["kind"] not in kinds:
@@ -6239,7 +6255,7 @@ def wallet_data(thr_addr):
         "swap": "Swap",
         "bridge": "Bridge",
         "l2e": "Learn-to-Earn Reward",
-        "ai_credit": "AI Credits",
+        "ai_credits": "AI Credits",
         "iot": "IoT",
         "autopilot": "Autopilot",
         "parking": "Parking",
@@ -6252,7 +6268,7 @@ def wallet_data(thr_addr):
             continue
 
         status = norm.get("status", "confirmed")
-        kind = (norm.get("kind") or norm.get("type") or "").lower()
+        kind = _canonical_kind(norm.get("kind") or norm.get("type") or "")
         direction = "out"
         if thr_addr == norm.get("to"):
             direction = "in"
@@ -6263,7 +6279,7 @@ def wallet_data(thr_addr):
             **{k: v for k, v in norm.items() if k not in {"parties"}},
             "kind": kind or "transfer",
             "type": kind or norm.get("type") or "transfer",
-            "category_label": category_labels.get(norm.get("kind", "").lower(), norm.get("kind", "").title()),
+            "category_label": category_labels.get(kind, norm.get("kind", "").title()),
             "asset_symbol": norm.get("asset") or norm.get("token_symbol") or "THR",
             "symbol": norm.get("token_symbol") or norm.get("asset") or "THR",
             "symbol_in": norm.get("meta", {}).get("token_in") or norm.get("token_symbol"),
@@ -7484,7 +7500,7 @@ def api_tokens_stats():
         "bridge",
         "mint",
         "burn",
-        "ai_credit",
+        "ai_credits",
         "l2e",
         "iot",
         "autopilot",

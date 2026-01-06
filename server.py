@@ -30,7 +30,7 @@ from __future__ import annotations
 # - Real Fiat Gateway (Stripe + Bank Withdrawals) (V5.0)
 # - Admin Withdrawal Panel (V5.1)
 
-import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii
+import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile
 from collections import Counter
 from decimal import Decimal, ROUND_DOWN
 import qrcode
@@ -90,6 +90,7 @@ from llm_registry import (
     get_provider_status,
     get_default_model,
     list_enabled_model_ids,
+    _apply_env_flags,
 )
 from ai_models_config import base_model_config
 # CRITICAL FIX #6: Import compute_model_stats and create_ai_transfer_from_ledger_entry from ai_interaction_ledger
@@ -871,7 +872,7 @@ def refresh_model_catalog(force: bool = False) -> dict:
 
     catalog = base_model_config()
     provider_keys = {
-        "openai": bool((os.getenv("OPENAI_API_KEY") or "").strip()),
+        "openai": bool((os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip()),
         "anthropic": bool((os.getenv("ANTHROPIC_API_KEY") or "").strip()),
         "google": bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()),
     }
@@ -966,8 +967,19 @@ def load_json(path, default):
 
 def save_json(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    dir_name = os.path.dirname(path)
+    base_name = os.path.basename(path)
+    try:
+        with tempfile.NamedTemporaryFile("w", delete=False, dir=dir_name, prefix=f".{base_name}.", suffix=".tmp", encoding="utf-8") as tmp:
+            json.dump(data, tmp, ensure_ascii=False, indent=2)
+            tmp_path = tmp.name
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            if "tmp_path" in locals() and os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
 
 
 def _authorized_logging_request(req) -> bool:
@@ -1074,7 +1086,10 @@ def record_ai_interaction(
 
     append_ai_interaction(entry)
     try:
-        create_ai_transfer_from_ledger_entry(entry)
+        if "create_ai_transfer_from_ledger_entry" in globals():
+            create_ai_transfer_from_ledger_entry(entry)
+        else:
+            logger.warning("AI transfer handler missing; skipping entry", extra={"provider": provider, "model": model})
     except Exception:
         logger.exception("Failed to create AI transfer entry", extra={"provider": provider, "model": model})
     return entry
@@ -1813,6 +1828,108 @@ def _default_model_id():
     except Exception:
         return "auto"
 
+
+def _normalized_ai_mode() -> str:
+    raw_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
+    if raw_mode in ("", "router", "auto", "hybrid", "all"):
+        return "all"
+    if raw_mode == "openai_only":
+        return "openai"
+    return raw_mode
+
+
+def _select_callable_model(model_id: str | None, session_type: str | None = None):
+    """Return a callable model id (or error response) respecting mode/provider availability."""
+
+    provider_status = get_provider_status()
+    normalized_mode = _normalized_ai_mode()
+
+    def _provider_configured(name: str, info: dict | None) -> bool:
+        if info and info.get("configured") and info.get("library_loaded", True) is not False:
+            return True
+        if name == "openai":
+            return bool((os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip())
+        if name == "anthropic":
+            return bool((os.getenv("ANTHROPIC_API_KEY") or "").strip())
+        if name == "gemini":
+            return bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
+        return False
+
+    callable_ids = []
+    for provider_name, models in AI_MODEL_REGISTRY.items():
+        if normalized_mode != "all" and provider_name != normalized_mode:
+            continue
+        provider_info = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
+        if not _provider_configured(provider_name, provider_info):
+            continue
+        for m in models:
+            callable_ids.append(m.id)
+
+    default_model_id = _default_model_id()
+    if default_model_id not in callable_ids and callable_ids:
+        default_model_id = callable_ids[0]
+
+    requested = (model_id or "").strip() or default_model_id or "auto"
+
+    fallback_notice = None
+
+    if requested not in callable_ids and requested != "auto":
+        fallback_notice = f"Model '{requested}' not callable; using {default_model_id}" if default_model_id else None
+        requested = default_model_id
+
+    resolved = _resolve_model(requested, normalized_mode=normalized_mode, provider_status=provider_status) if requested else None
+    if resolved:
+        return resolved.id, fallback_notice, None
+
+    for mid in callable_ids:
+        resolved = _resolve_model(mid, normalized_mode=normalized_mode, provider_status=provider_status)
+        if resolved:
+            notice = fallback_notice or f"Model '{requested or 'auto'}' not available; using {resolved.id}"
+            return resolved.id, notice, None
+
+    # Nothing callable: return JSON error without charging
+    disabled_models = []
+    provider_diagnostics = {}
+    for provider, models in AI_MODEL_REGISTRY.items():
+        pinfo = provider_status.get(provider, {}) if isinstance(provider_status, dict) else {}
+        provider_diagnostics[provider] = {
+            "configured": pinfo.get("configured"),
+            "library_loaded": pinfo.get("library_loaded", True),
+            "has_key": pinfo.get("has_key", pinfo.get("configured")),
+            "key_sources_checked": pinfo.get("key_sources_checked") or pinfo.get("checked_env"),
+        }
+        if not pinfo.get("configured") or pinfo.get("library_loaded") is False:
+            disabled_models.extend([m.id for m in models])
+
+    missing_keys = [p for p, info in provider_status.items() if not info.get("configured")]
+    error_payload = {
+        "ok": False,
+        "status": "model_not_available",
+        "error": "No callable AI model in current mode",
+        "suggested_model": default_model_id,
+        "providers": provider_status,
+        "provider_diagnostics": provider_diagnostics,
+        "requested_model": requested,
+        "mode": normalized_mode,
+        "missing_keys": missing_keys,
+        "disabled_models": disabled_models,
+        "resolved_model": None,
+        "call_attempted": False,
+        "session_type": (session_type or "unknown"),
+    }
+    return None, fallback_notice, (jsonify(error_payload), 200)
+
+
+def _log_ai_call(meta: dict):
+    """Structured AI call logging without secrets."""
+    try:
+        app.logger.info("ai_call_meta", extra={"ai_call": meta})
+    except Exception:
+        try:
+            app.logger.info(f"ai_call_meta: {meta}")
+        except Exception:
+            pass
+
 # ---------------------------------------------------------------------------
 # Free usage counters
 # ---------------------------------------------------------------------------
@@ -1866,6 +1983,8 @@ def load_ai_sessions():
         updated = s.get("updated_at") or s.get("updated") or created
         meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
         selected_model_id = meta.get("selected_model_id") or s.get("selected_model_id") or _default_model_id()
+        session_type = meta.get("session_type") or s.get("session_type") or "chat"
+        meta["session_type"] = session_type
         out.append({
             "id": sid,
             "wallet": wallet,
@@ -1877,6 +1996,7 @@ def load_ai_sessions():
             "message_count": int(s.get("message_count") or s.get("messages_count") or 0),
             "meta": meta,
             "selected_model_id": selected_model_id,
+            "session_type": session_type,
         })
     return out
 
@@ -1919,6 +2039,34 @@ def _save_session_selected_model(session_id: str, selected_model_id: str):
     return updated
 
 
+def _ensure_session_type(session_id: str, session_type: str):
+    """Ensure a session carries the expected immutable session_type."""
+    if not session_id:
+        return False
+    sessions = load_ai_sessions()
+    changed = False
+    for s in sessions:
+        if s.get("id") == session_id:
+            meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
+            current = (s.get("session_type") or meta.get("session_type") or "chat").lower()
+            if current != session_type:
+                logger.warning(
+                    "session_type_mismatch",
+                    extra={"session_id": session_id, "expected": session_type, "found": current},
+                )
+                return False
+            if meta.get("session_type") is None:
+                meta["session_type"] = session_type
+                s["meta"] = meta
+                s["session_type"] = session_type
+                s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                changed = True
+            break
+    if changed:
+        save_ai_sessions(sessions)
+    return changed
+
+
 def _normalize_session_selected_model(session: dict):
     """Ensure a session carries a valid selected_model_id and persist if needed."""
     if not isinstance(session, dict):
@@ -1957,25 +2105,51 @@ def prune_empty_sessions():
         return {"deleted": 0, "kept": 0, "errors": [f"load failed: {exc}"]}
 
     pruned = []
+    now = datetime.utcnow()
+    stale_hours = 168
     for session in sessions:
         sid = session.get("id") or session.get("session_id")
         if not sid:
             result["errors"].append("session missing id; skipped")
             continue
 
+        session_type = (session.get("session_type") or (session.get("meta") or {}).get("session_type") or "chat").lower()
+        if session_type != "chat":
+            pruned.append(session)
+            continue
+
         path = _session_messages_path(sid)
         try:
             if not os.path.exists(path):
-                result["deleted"] += 1
+                updated_at = session.get("updated_at") or session.get("created_at")
+                try:
+                    ts = datetime.fromisoformat(updated_at.replace("Z", "+00:00")) if updated_at else None
+                except Exception:
+                    ts = None
+                age_hours = (now - ts).total_seconds() / 3600 if ts else 0
+                if age_hours > stale_hours:
+                    result["deleted"] += 1
+                    continue
+                ensure_session_messages_file(sid)
+                pruned.append(session)
                 continue
 
             messages = load_json(path, [])
             if not messages:
+                updated_at = session.get("updated_at") or session.get("created_at")
                 try:
-                    os.remove(path)
-                except FileNotFoundError:
-                    pass
-                result["deleted"] += 1
+                    ts = datetime.fromisoformat(updated_at.replace("Z", "+00:00")) if updated_at else None
+                except Exception:
+                    ts = None
+                age_hours = (now - ts).total_seconds() / 3600 if ts else 0
+                if age_hours > stale_hours:
+                    try:
+                        os.remove(path)
+                    except FileNotFoundError:
+                        pass
+                    result["deleted"] += 1
+                    continue
+                pruned.append(session)
                 continue
 
             pruned.append(session)
@@ -2089,7 +2263,7 @@ def append_session_transcript(session_id: str, prompt: str, response: str, files
     save_json(path, transcript)
 
 
-def ensure_session_exists(session_id: str, wallet: str | None) -> dict:
+def ensure_session_exists(session_id: str, wallet: str | None, session_type: str | None = None) -> dict:
     """
     FIX 9: Return an existing session or recreate it on disk.
     Graceful degradation - returns empty dict on errors.
@@ -2101,6 +2275,13 @@ def ensure_session_exists(session_id: str, wallet: str | None) -> dict:
         sessions = load_ai_sessions()
         for s in sessions:
             if s.get("id") == session_id:
+                existing_type = (s.get("session_type") or (s.get("meta") or {}).get("session_type") or "chat").lower()
+                if session_type and existing_type != session_type:
+                    logger.warning(
+                        "session_type_conflict",
+                        extra={"session_id": session_id, "expected": session_type, "found": existing_type},
+                    )
+                    return {}
                 ensure_session_messages_file(session_id)
                 return s
 
@@ -2114,7 +2295,8 @@ def ensure_session_exists(session_id: str, wallet: str | None) -> dict:
             "archived": False,
             "model": None,
             "message_count": 0,
-            "meta": {"recovered": True},
+            "meta": {"recovered": True, "session_type": session_type or "chat"},
+            "session_type": session_type or "chat",
         }
         sessions.append(recovered)
         save_ai_sessions(sessions)
@@ -2166,7 +2348,8 @@ def register_session(session_data: dict) -> bool:
             return False
 
         wallet = session_data.get("user_wallet") or session_data.get("wallet")
-        ensure_session_exists(session_id, wallet)
+        stype = session_data.get("session_type") or session_data.get("type") or "chat"
+        ensure_session_exists(session_id, wallet, stype)
         return True
     except Exception as e:
         logger.error(f"Failed to register session: {e}")
@@ -3295,13 +3478,64 @@ def api_architect_generate():
     blueprint   = (data.get("blueprint") or "").strip()
     project_spec = (data.get("spec") or data.get("specs") or "").strip() # Handle both keys just in case
     model_key   = (data.get("model_id") or data.get("model") or data.get("model_key") or "gpt-4o").strip()
+    credits_value = 0
 
-    enabled_model_ids = set(list_enabled_model_ids())
-    default_model_id = _default_model_id()
-    if model_key and model_key not in enabled_model_ids:
-        model_key = default_model_id
+    call_meta = {
+        "endpoint": "api_architect_generate",
+        "session_id": session_id,
+        "requested_model": model_key or "auto",
+        "selected_model": None,
+        "resolved_model": None,
+        "resolved_provider": None,
+        "call_attempted": False,
+        "failure_reason": None,
+        "provider_status": get_provider_status(),
+        "session_type": "architect",
+        "billing_unit": "thr",
+        "charged": False,
+        "mode": _normalized_ai_mode(),
+        "callable": False,
+    }
+
+    if session_id:
+        if _ensure_session_type(session_id, "architect") is False:
+            return (
+                jsonify(
+                    ok=False,
+                    error="Session type mismatch",
+                    expected="architect",
+                    session_id=session_id,
+                ),
+                409,
+            )
+
+    selected_model, fallback_notice, error_resp = _select_callable_model(model_key, session_type="architect")
+    if error_resp:
+        # Model is not callable in current mode/providers; return JSON without billing
+        call_meta["failure_reason"] = "model_not_callable"
+        call_meta["selected_model"] = selected_model or model_key or "auto"
+        call_meta["fallback_notice"] = fallback_notice
+        call_meta["callable"] = False
+        _log_ai_call(call_meta)
+        if wallet:
+            # Preserve credit count so UI can show remaining balance
+            credits_map = load_ai_credits()
+            try:
+                credits_value = int(credits_map.get(wallet, 0) or 0)
+            except (TypeError, ValueError):
+                credits_value = 0
+            payload = error_resp[0].get_json() if hasattr(error_resp[0], "get_json") else {}
+            payload["credits"] = credits_value
+            return jsonify(payload), error_resp[1]
+        return error_resp
+    if selected_model:
+        model_key = selected_model
         if session_id:
             _save_session_selected_model(session_id, model_key)
+        call_meta["callable"] = True
+
+    # If the requested model is not callable in current mode/providers, fall back before billing
+    fallback_notice = fallback_notice  # reuse notice if any
 
     if not blueprint or not project_spec:
         return jsonify(error="Missing blueprint or spec"), 400
@@ -3355,9 +3589,27 @@ def api_architect_generate():
 
     # Call AI
     # Note: server.py uses 'ai_agent' global instance
-    # Pass session_id to maintain context if needed (though architect usually is one-shot, 
+    # Pass session_id to maintain context if needed (though architect usually is one-shot,
     # but user might refine in same session)
-    raw = ai_agent.generate_response(prompt, wallet=wallet, model_key=model_key, session_id=session_id)
+    resolved_info = _resolve_model(model_key)
+    if resolved_info:
+        call_meta["selected_model"] = resolved_info.id
+        call_meta["resolved_model"] = resolved_info.id
+        call_meta["resolved_provider"] = resolved_info.provider
+    try:
+        call_meta["call_attempted"] = True
+        raw = ai_agent.generate_response(prompt, wallet=wallet, model_key=model_key, session_id=session_id)
+    except Exception as exc:
+        app.logger.exception("Architect generation failed")
+        call_meta["failure_reason"] = str(exc)
+        _log_ai_call(call_meta)
+        return jsonify(
+            ok=False,
+            status="provider_error",
+            error=str(exc),
+            response="Architect temporarily unavailable",
+            model_notice=fallback_notice,
+        ), 500
 
     if isinstance(raw, dict):
         full_text   = str(raw.get("response") or "")
@@ -3367,6 +3619,18 @@ def api_architect_generate():
         full_text   = str(raw)
         quantum_key = ai_agent.generate_quantum_key()
         status      = "architect"
+
+    status_l = str(status or "").lower()
+    if status_l in {"provider_error", "error", "model_not_available", "model_not_found", "forbidden"}:
+        call_meta["failure_reason"] = status_l
+        _log_ai_call(call_meta)
+        return jsonify(
+            ok=False,
+            status=status,
+            response=full_text or "Architect unavailable",
+            model_notice=fallback_notice,
+            files=[],
+        ), 400
 
     # Extract files
     try:
@@ -3446,6 +3710,8 @@ def api_architect_generate():
         except Exception as e:
             app.logger.error("Architect zip build failed: %s", e)
 
+    call_meta["response_status"] = status
+    _log_ai_call(call_meta)
     return jsonify({
         "status": status,
         "quantum_key": quantum_key,
@@ -4401,15 +4667,74 @@ def api_chat():
     attachments = data.get("attachments") or data.get("attachment_ids") or []
     ai_credits_spent = 0.0
 
-    enabled_model_ids = set(list_enabled_model_ids())
-    default_model_id = _default_model_id()
-    if model_key and model_key not in enabled_model_ids:
-        model_key = default_model_id
-        if session_id:
-            _save_session_selected_model(session_id, model_key)
+    call_meta = {
+        "endpoint": "api_chat",
+        "session_id": session_id,
+        "requested_model": model_key or "auto",
+        "selected_model": None,
+        "resolved_model": None,
+        "resolved_provider": None,
+        "call_attempted": False,
+        "failure_reason": None,
+        "provider_status": get_provider_status(),
+        "session_type": "chat",
+        "billing_unit": "credits",
+        "charged": False,
+        "mode": _normalized_ai_mode(),
+        "callable": False,
+    }
 
     if session_id:
-        ensure_session_exists(session_id, wallet)
+        try:
+            sessions = load_ai_sessions()
+            for s in sessions:
+                if s.get("id") == session_id:
+                    stype = s.get("session_type") or (s.get("meta") or {}).get("session_type") or "chat"
+                    if stype != "chat":
+                        call_meta["failure_reason"] = "session_type_mismatch"
+                        return (
+                            jsonify(
+                                ok=False,
+                                error="Session type mismatch",
+                                expected="chat",
+                                found=stype,
+                                session_id=session_id,
+                            ),
+                            409,
+                        )
+                    break
+        except Exception:
+            session_id = session_id
+        call_meta["session_id"] = session_id
+
+    selected_model, fallback_notice, error_resp = _select_callable_model(model_key, session_type="chat")
+    if error_resp:
+        # Model not callable – return JSON without consuming credits
+        call_meta["failure_reason"] = "model_not_callable"
+        call_meta["selected_model"] = selected_model or model_key or "auto"
+        call_meta["fallback_notice"] = fallback_notice
+        call_meta["callable"] = False
+        _log_ai_call(call_meta)
+        return error_resp
+    if selected_model:
+        model_key = selected_model
+        if session_id:
+            _save_session_selected_model(session_id, model_key)
+        resolved = _resolve_model(model_key)
+        if resolved:
+            call_meta["selected_model"] = resolved.id
+            call_meta["resolved_model"] = resolved.id
+            call_meta["resolved_provider"] = resolved.provider
+            call_meta["callable"] = True
+    elif model_key:
+        resolved = _resolve_model(model_key)
+        if resolved:
+            call_meta["selected_model"] = resolved.id
+            call_meta["resolved_model"] = resolved.id
+            call_meta["resolved_provider"] = resolved.provider
+
+    if session_id:
+        ensure_session_exists(session_id, wallet, "chat")
         try:
             register_session({"session_id": session_id, "user_wallet": wallet or None})
         except Exception:
@@ -4566,7 +4891,28 @@ def api_chat():
     # --- Κλήση στον ThronosAI provider ---
     # Pass model_key AND session_id to generate_response
     call_started = time.time()
-    raw = ai_agent.generate_response(full_prompt, wallet=wallet, model_key=model_key, session_id=session_id)
+    resolved_info = _resolve_model(model_key)
+    if resolved_info:
+        call_meta["selected_model"] = resolved_info.id
+        call_meta["resolved_provider"] = resolved_info.provider
+    try:
+        call_meta["call_attempted"] = True
+        raw = ai_agent.generate_response(full_prompt, wallet=wallet, model_key=model_key, session_id=session_id)
+    except Exception as exc:
+        app.logger.exception("AI chat generation failed")
+        call_meta["failure_reason"] = str(exc)
+        _log_ai_call(call_meta)
+        resp = {
+            "ok": False,
+            "status": "provider_error",
+            "error": str(exc),
+            "response": "AI unavailable in current mode",
+            "model_notice": fallback_notice,
+            "wallet": wallet,
+            "credits": credits_value if credits_value is not None else 0,
+            "session_id": session_id,
+        }
+        return jsonify(resp), 500
     latency_ms = int((time.time() - call_started) * 1000)
 
     if isinstance(raw, dict):
@@ -4597,7 +4943,22 @@ def api_chat():
         print("offline corpus enqueue error:", e)
 
     # --- FIX 8: Consume credits (Chat billing mode - no THR) ---
-    if wallet:
+    charge_block_statuses = {
+        "model_not_found",
+        "model_not_available",
+        "forbidden",
+        "provider_error",
+        "error",
+        "no_credits",
+    }
+    raw_status = ""
+    if isinstance(raw, dict) and raw.get("status"):
+        raw_status = str(raw.get("status")).lower()
+    if raw_status in charge_block_statuses:
+        call_meta["failure_reason"] = raw_status
+    can_charge = bool(wallet) and raw_status not in charge_block_statuses
+
+    if wallet and can_charge:
         # Use billing module (clean separation, telemetry, cross-charge guard)
         success, error_msg, telemetry = billing.consume_credits(wallet, AI_CREDIT_COST_PER_MSG, product="chat")
         if not success:
@@ -4608,6 +4969,10 @@ def api_chat():
         else:
             credits_for_frontend = telemetry.get("credits_after", 0)
             ai_credits_spent = abs(telemetry.get("credits_delta", 0))
+    elif wallet:
+        # Wallet present but we skipped billing due to model gating
+        credits_for_frontend = credits_value if credits_value is not None else 0
+        ai_credits_spent = 0.0
     else:
         # For demo sessions, report remaining free messages.  This
         # communicates to the user how many additional messages they may
@@ -4621,6 +4986,8 @@ def api_chat():
         except Exception:
             credits_for_frontend = "infinite"
         ai_credits_spent = 0.0
+
+    call_meta["charged"] = bool(ai_credits_spent and ai_credits_spent > 0)
 
     resp_files = []
     for f in files or []:
@@ -4651,6 +5018,8 @@ def api_chat():
         "routing": None,
         "task_type": None,
     }
+    if fallback_notice:
+        resp["model_notice"] = fallback_notice
 
     routing_meta = raw.get("routing") if isinstance(raw, dict) else None
     task_type_meta = raw.get("task_type") if isinstance(raw, dict) else None
@@ -4674,7 +5043,13 @@ def api_chat():
             latency_ms=latency_ms,
             ai_credits_spent=ai_credits_spent,
             feedback=None,
-            metadata={"status": status, "task_type": task_type_meta, "routing": routing_meta},
+            metadata={
+                "status": status,
+                "task_type": task_type_meta,
+                "routing": routing_meta,
+                "session_type": "chat",
+                "billing_unit": "credits",
+            },
             success=_status_is_success(status),
             task_type=task_type_meta,
             routing=routing_meta,
@@ -4699,6 +5074,8 @@ def api_chat():
             resp["score"] = scoring
         except Exception:
             logger.exception("Failed to append AI score")
+    call_meta["response_status"] = status
+    _log_ai_call(call_meta)
     return jsonify(resp), 200
 
 
@@ -4996,7 +5373,21 @@ def api_ai_credits():
     return jsonify({"wallet": wallet, "credits": value}), 200
 
 
-@app.route("/api/ai/files/upload", methods=["POST"])
+@app.route("/api/ai/files", methods=["POST", "GET"])
+def api_ai_files_entrypoint():
+    """Safe guard endpoint to avoid HTML 404s when clients hit /api/ai/files directly."""
+    if request.method == "GET":
+        return jsonify(ok=False, error="Listing not available", fallback_hint="Use POST /api/ai/files/upload"), 400
+    return api_ai_files_upload()
+
+
+@app.route("/api/ai/upload", methods=["POST", "GET"])
+def api_ai_files_upload_alias():
+    """Alias endpoint to ensure JSON response for legacy upload callers."""
+    return api_ai_files_upload()
+
+
+@app.route("/api/ai/files/upload", methods=["POST", "GET"])
 def api_ai_files_upload():
     """
     Multipart upload endpoint used by /chat:
@@ -5005,8 +5396,10 @@ def api_ai_files_upload():
     Returns:
       { ok: true, files: [{id, name, size, mimetype, sha256}] }
     """
+    if request.method == "GET":
+        return jsonify(ok=False, error="Upload requires POST multipart form", error_code="UPLOAD_METHOD"), 405
+
     try:
-        # accept either files[] or files
         files = (request.files.getlist("files") or request.files.getlist("files[]") or request.files.getlist("file"))
         if not files:
             return jsonify(ok=False, error="No files uploaded. Use multipart field 'files'."), 400
@@ -5014,8 +5407,6 @@ def api_ai_files_upload():
         wallet = (request.form.get("wallet") or "").strip()
         session_id = (request.form.get("session_id") or "").strip()
         purpose = (request.form.get("purpose") or "chat").strip()
-
-        # Get guest_id for non-wallet users (ownership tracking)
         guest_id = get_or_set_guest_id() if not wallet else None
 
         os.makedirs(AI_UPLOADS_DIR, exist_ok=True)
@@ -5026,7 +5417,6 @@ def api_ai_files_upload():
                 continue
 
             original_name = secure_filename(fs.filename)
-            # keep original extension when possible
             ext = os.path.splitext(original_name)[1][:16]
             ext = re.sub(r"[^a-zA-Z0-9.]", "", ext)
 
@@ -5039,7 +5429,6 @@ def api_ai_files_upload():
             saved_name = f"{file_id}{ext}"
             save_path = os.path.join(AI_UPLOADS_DIR, saved_name)
 
-            # if same content already exists, don't rewrite
             if not os.path.exists(save_path):
                 with open(save_path, "wb") as f:
                     f.write(blob)
@@ -5050,13 +5439,13 @@ def api_ai_files_upload():
                 "id": file_id,
                 "saved_name": saved_name,
                 "original_name": original_name,
-                "filename": original_name,  # For consistency with chat endpoint
-                "path": save_path,  # Needed for AI chat to read file
+                "filename": original_name,
+                "path": save_path,
                 "size": len(blob),
                 "mimetype": mimetype,
                 "sha256": sha,
                 "wallet": wallet,
-                "guest_id": guest_id,  # ADDED - for ownership tracking when no wallet
+                "guest_id": guest_id,
                 "session_id": session_id,
                 "purpose": purpose,
                 "created_at": int(time.time()),
@@ -5065,7 +5454,6 @@ def api_ai_files_upload():
             with open(meta_path, "w", encoding="utf-8") as f:
                 json.dump(meta, f, ensure_ascii=False, indent=2)
 
-            # Update the unified upload index so chat endpoint can find this file
             idx = load_upload_index()
             idx[file_id] = meta
             save_upload_index(idx)
@@ -5081,16 +5469,12 @@ def api_ai_files_upload():
         if not uploaded:
             return jsonify(ok=False, error="No valid files received."), 400
 
-        # Optionally link uploads to a session's memory (so the model can use them later)
-        # We store only metadata references, not the raw bytes in the session json.
         if session_id:
             try:
                 attach_uploaded_files_to_session(session_id=session_id, wallet=wallet, files=uploaded)
             except Exception as e:
-                # don't fail upload if session linking fails
                 app.logger.exception("attach_uploaded_files_to_session failed: %s", e)
 
-        # PRIORITY 1: Telemetry - append to index.jsonl for PYTHEIA/IoT knowledge accounting
         try:
             telemetry_index = os.path.join(DATA_DIR, "ai_files", "index.jsonl")
             os.makedirs(os.path.dirname(telemetry_index), exist_ok=True)
@@ -5110,13 +5494,11 @@ def api_ai_files_upload():
 
             app.logger.debug(f"Telemetry recorded: {len(uploaded)} files uploaded")
         except Exception as telemetry_err:
-            # Don't fail the upload if telemetry fails
             app.logger.warning(f"Telemetry append failed: {telemetry_err}")
 
         return jsonify(ok=True, files=uploaded)
     except Exception as e:
         app.logger.exception("Upload failed: %s", e)
-        # FIX 1B: Never return 500, use degraded mode pattern
         return jsonify(
             ok=False,
             mode="degraded",
@@ -5619,22 +6001,25 @@ def wallet_data(thr_addr):
         if tx.get("from") != thr_addr and tx.get("to") != thr_addr:
             continue
 
-        tx_type = tx.get("type", "unknown")
+        tx_type = (tx.get("type") or "unknown").upper()
 
         # QUEST B: Category/label mapping
         category_labels = {
-            "send": "Send",
-            "receive": "Receive",
+            "SEND": "Send",
+            "RECEIVE": "Receive",
             "SEND_TOKEN": "Token Send",
             "RECEIVE_TOKEN": "Token Receive",
+            "TOKEN_TRANSFER": "Token Transfer",
+            "SWAP": "Swap",
             "IOT_PARKING_RESERVATION": "IoT Parking",
             "IOT_AUTOPILOT": "IoT Autopilot",
             "BRIDGE_WITHDRAW_REQUEST": "Bridge Withdrawal",
             "BRIDGE_DEPOSIT_DETECTED": "Bridge Deposit",
             "L2E_REWARD": "Learn-to-Earn Reward",
             "MUSIC_OFFLINE_TIP": "Music Tip",
-            "service_payment": "Service Payment",
-            "architect_payment": "AI Architect"
+            "SERVICE_PAYMENT": "Service Payment",
+            "ARCHITECT_PAYMENT": "AI Architect",
+            "CREDITS_CONSUME": "AI Credits"
         }
 
         label = category_labels.get(tx_type, "Unknown")
@@ -5654,8 +6039,15 @@ def wallet_data(thr_addr):
             **tx,
             "category_label": label,
             "asset_symbol": asset_symbol,
+            "symbol": tx.get("symbol") or asset_symbol,
+            "symbol_in": tx.get("symbol_in") or tx.get("from_symbol"),
+            "symbol_out": tx.get("symbol_out") or tx.get("to_symbol"),
+            "amount_in": tx.get("amount_in") or tx.get("amount"),
+            "amount_out": tx.get("amount_out") or tx.get("received_amount") or tx.get("output_amount"),
             "fee_burned": fee_burned,
             "status": status,
+            "timestamp": tx.get("timestamp"),
+            "note": tx.get("note") or tx.get("description"),
             "explorer_link": f"/explorer?tx_id={tx.get('tx_id', '')}"
         })
 
@@ -9842,6 +10234,41 @@ def api_v1_quiz_status(course_id: str, student: str):
     ), 200
 
 
+@app.route("/api/v1/courses/<string:course_id>/teacher_dashboard", methods=["GET"])
+def api_v1_course_teacher_dashboard(course_id: str):
+    """Return per-student status for the teacher dashboard (tuition, score, reward)."""
+    teacher = (request.args.get("teacher") or "").strip()
+
+    courses = load_courses()
+    course = next((c for c in courses if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+
+    if teacher and course.get("teacher") != teacher:
+        return jsonify(status="error", message="Teacher mismatch"), 403
+
+    enrollments = load_enrollments()
+    quiz_attempts = load_json(os.path.join(DATA_DIR, "quiz_attempts.json"), {})
+    course_enrollments = enrollments.get(course_id, {})
+    completions = course.get("completions", {})
+
+    students = set(course.get("students", [])) | set(course_enrollments.keys())
+    rows = []
+    for student in sorted(students):
+        attempt = quiz_attempts.get(course_id, {}).get(student, {})
+        completion = completions.get(student, {})
+        rows.append({
+            "student": student,
+            "tuition_paid": student in course.get("students", []),
+            "best_score": attempt.get("score", 0),
+            "passed": attempt.get("passed", False),
+            "reward_paid": completion.get("reward_paid", False),
+            "reward_txid": completion.get("reward_txid"),
+        })
+
+    return jsonify(status="success", students=rows), 200
+
+
 # ─── Tokens & Pools API ───────────────────────────────────────────────
 #
 # These endpoints implement a minimal DeFi layer for community‑issued
@@ -9979,6 +10406,26 @@ def api_v1_create_token():
 def api_v1_get_pools():
     """Return the list of all liquidity pools."""
     pools = load_pools()
+    try:
+        btc_data = fetch_btc_price()
+        btc_usd = float(btc_data.get("usd") or btc_data.get("eur") or 0)
+    except Exception:
+        btc_usd = 0.0
+    thr_usd = btc_usd * 0.0001 if btc_usd else 0.0
+
+    for pool in pools:
+        try:
+            reserves_a = float(pool.get("reserves_a", 0))
+            reserves_b = float(pool.get("reserves_b", 0))
+            price_a_thr = get_token_price_in_thr(pool.get("token_a", "THR"))
+            price_b_thr = get_token_price_in_thr(pool.get("token_b", "THR"))
+            tvl_thr = (reserves_a * price_a_thr) + (reserves_b * price_b_thr)
+            pool["tvl_thr"] = round(tvl_thr, 6)
+            pool["tvl_btc"] = round(tvl_thr * 0.0001, 8)
+            if thr_usd:
+                pool["tvl_usd"] = round(tvl_thr * thr_usd, 2)
+        except Exception:
+            continue
     return jsonify(pools=pools), 200
 
 
@@ -10480,7 +10927,8 @@ def api_v1_add_liquidity():
         "provider": provider,
         "timestamp": ts,
         "tx_id": tx_id,
-        "status": "confirmed"
+        "status": "confirmed",
+        "metadata": {"feature": "pools", "billing_unit": "thr"},
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
@@ -10633,7 +11081,8 @@ def api_v1_remove_liquidity():
         "provider": provider,
         "timestamp": ts,
         "tx_id": tx_id,
-        "status": "confirmed"
+        "status": "confirmed",
+        "metadata": {"feature": "pools", "billing_unit": "thr"},
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
@@ -10845,7 +11294,8 @@ def api_v1_pool_swap():
         "trader": trader,
         "timestamp": ts,
         "tx_id": tx_id,
-        "status": "confirmed"
+        "status": "confirmed",
+        "metadata": {"feature": "pools", "billing_unit": "thr"},
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
@@ -10968,8 +11418,10 @@ def api_ai_sessions_combined():
             if not sid:
                 continue
 
+            session_type = (s.get("session_type") or (s.get("meta") or {}).get("session_type") or "chat")
+
             if session_messages_exists(sid):
-                if s.get("wallet") == identity and not s.get("archived"):
+                if s.get("wallet") == identity and not s.get("archived") and session_type == "chat":
                     _normalize_session_selected_model(s)
                     user_sessions.append(s)
             else:
@@ -11011,7 +11463,9 @@ def api_ai_sessions_combined():
             "updated_at": now,
             "message_count": 0,
             "archived": False,
-            "meta": {},
+            "meta": {"session_type": "chat", "selected_model_id": model or _default_model_id()},
+            "session_type": "chat",
+            "selected_model_id": model or _default_model_id(),
         }
         sessions.append(session)
         save_ai_sessions(sessions)
@@ -11037,6 +11491,7 @@ def api_ai_session_messages(session_id):
             s.get("id") == session_id
             and not s.get("archived")
             and s.get("wallet") == identity
+            and (s.get("session_type") or (s.get("meta") or {}).get("session_type") or "chat") == "chat"
         ):
             session = s
             break
@@ -11094,10 +11549,10 @@ def api_ai_session_update(session_id):
             break
 
     if not found:
-        return jsonify({"ok": False, "error": "Session not found"}), 404
+        return jsonify({"ok": True, "deleted": False}), 200
 
     save_ai_sessions(sessions)
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "deleted": True})
 
 
 @app.route("/api/ai_sessions/<session_id>/model", methods=["POST"])
@@ -11156,10 +11611,10 @@ def api_ai_session_delete_by_id(session_id):
             break
 
     if not found:
-        return jsonify({"ok": False, "error": "Session not found"}), 404
+        return jsonify({"ok": True, "deleted": False}), 200
 
     save_ai_sessions(sessions)
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "deleted": True})
 
 
 @app.route("/api/ai/sessions/start", methods=["POST"])
@@ -11186,8 +11641,9 @@ def api_ai_session_start_v2():
         "updated_at": now,
         "message_count": 0,
         "archived": False,
-        "meta": {"selected_model_id": default_model_id},
+        "meta": {"selected_model_id": default_model_id, "session_type": "chat"},
         "selected_model_id": default_model_id,
+        "session_type": "chat",
     }
     sessions.append(session)
     save_ai_sessions(sessions)
@@ -11223,8 +11679,9 @@ def api_chat_session_new():
         "created_at": now,
         "updated_at": now,
         "archived": False,
-        "meta": {"selected_model_id": default_model_id},
+        "meta": {"selected_model_id": default_model_id, "session_type": "chat"},
         "selected_model_id": default_model_id,
+        "session_type": "chat",
     }
     sessions.append(session)
     save_ai_sessions(sessions)
@@ -11269,10 +11726,13 @@ def api_chat_session_get(session_id):
                 break
 
         if not found:
-            return jsonify(ok=False, error="Session not found"), 404
+            resp = make_response(jsonify(ok=True, deleted=False))
+            if guest_id:
+                resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+            return resp, 200
 
         save_ai_sessions(sessions)
-        resp = make_response(jsonify(ok=True))
+        resp = make_response(jsonify(ok=True, deleted=True))
         if guest_id:
             resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
         return resp, 200
@@ -11356,6 +11816,8 @@ def api_chat_sessions_list():
     for s in sessions:
         if s.get("wallet") != identity or s.get("archived"):
             continue
+        if (s.get("session_type") or (s.get("meta") or {}).get("session_type") or "chat") != "chat":
+            continue
         out.append(s)
 
     out.sort(key=lambda s: s.get("updated_at") or s.get("created_at") or "", reverse=True)
@@ -11420,10 +11882,10 @@ def api_ai_session_delete_v2():
             break
     
     if not found:
-        return jsonify({"ok": False, "error": "Session not found"}), 404
-    
+        return jsonify({"ok": True, "deleted": False})
+
     save_ai_sessions(sessions)
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "deleted": True})
 
 
 # Add file upload endpoint
@@ -11697,8 +12159,9 @@ def api_ai_models():
     NEVER returns 500 - always returns 200 with degraded mode fallback if needed.
     """
     try:
-        raw_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
-        mode = "all" if raw_mode in ("", "router", "auto", "hybrid") else raw_mode
+        _apply_env_flags(get_provider_status())
+
+        mode = _normalized_ai_mode()
 
         default_model = get_default_model(None if mode == "all" else mode)
         default_model_id = default_model.id if default_model else None
@@ -11712,8 +12175,10 @@ def api_ai_models():
                     {
                         "id": mi.id,
                         "label": mi.display_name,
+                        "display_name": mi.display_name,
                         "provider": mi.provider,
                         "enabled": mi.enabled,
+                        "mode": mode,
                     }
                 )
 
@@ -11740,6 +12205,16 @@ def api_ai_models():
             ),
             200,
         )
+
+
+@app.route("/api/ai/provider_status", methods=["GET"])
+def api_ai_provider_status():
+    """Lightweight provider status for debugging callability (JSON only)."""
+    try:
+        return jsonify({"providers": get_provider_status()}), 200
+    except Exception as exc:  # pragma: no cover - defensive
+        app.logger.warning("provider_status_failed", extra={"error": str(exc)})
+        return jsonify({"providers": {}, "error": str(exc)}), 200
 
 @app.route("/api/ai/feedback", methods=["POST"])
 def api_ai_feedback():

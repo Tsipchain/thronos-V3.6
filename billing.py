@@ -140,6 +140,24 @@ def consume_credits(wallet: str, amount: int, product: str = "chat") -> Tuple[bo
     }
     _record_telemetry(telemetry)
 
+    try:
+        chain = _load_json(CHAIN_FILE, [])
+        tx = {
+            "type": "CREDITS_CONSUME",
+            "from": wallet,
+            "to": AI_WALLET_ADDRESS,
+            "amount": float(amount),
+            "symbol": "CREDITS",
+            "status": "confirmed",
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "tx_id": f"CREDITS-{int(time.time())}-{len(chain)}",
+            "metadata": {"billing_unit": "credits", "session_type": "chat", "product": product},
+        }
+        chain.append(tx)
+        _save_json(CHAIN_FILE, chain)
+    except Exception as e:
+        logger.error(f"Failed to append credits tx: {e}")
+
     logger.info(f"Credits consumed: {wallet} -{amount} credits (now {new_balance})")
     return True, "", telemetry
 
@@ -201,6 +219,9 @@ def charge_thr(wallet: str, amount: Decimal, reason: str, product: str = "archit
 
     # Create chain transaction
     chain = _load_json(CHAIN_FILE, [])
+    tx_meta = {"billing_unit": "thr", "session_type": "architect", "product": product}
+    if metadata:
+        tx_meta.update(metadata)
     tx = {
         "type": "architect_payment",
         "reason": reason,
@@ -209,9 +230,8 @@ def charge_thr(wallet: str, amount: Decimal, reason: str, product: str = "archit
         "amount": float(amount),
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
         "tx_id": f"ARCH-{int(time.time())}-{len(chain)}",
+        "metadata": tx_meta,
     }
-    if metadata:
-        tx["metadata"] = metadata
     chain.append(tx)
     _save_json(CHAIN_FILE, chain)
 

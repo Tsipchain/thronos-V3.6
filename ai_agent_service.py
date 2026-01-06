@@ -43,39 +43,91 @@ except Exception:
     ThronosAIScorer = None  # type: ignore
 
 from ai_interaction_ledger import record_ai_interaction
-from llm_registry import find_model, get_default_model, list_enabled_model_ids
+from llm_registry import (
+    find_model,
+    get_default_model,
+    list_enabled_model_ids,
+    AI_MODEL_REGISTRY,
+    get_provider_status,
+    mark_model_disabled,
+)
 
 
-def _resolve_model(model: Optional[str]):
-    mode = os.getenv("THRONOS_AI_MODE", "all").lower()
-    if mode in ("router", "auto", "all"):
+def _resolve_model(
+    model: Optional[str],
+    normalized_mode: Optional[str] = None,
+    provider_status: Optional[dict] = None,
+):
+    raw_mode = normalized_mode or (os.getenv("THRONOS_AI_MODE", "all").strip().lower() or "all")
+    if raw_mode in ("router", "auto", "all", "hybrid"):
         normalized_mode = "all"
-    elif mode == "openai_only":
+    elif raw_mode == "openai_only":
         normalized_mode = "openai"
     else:
-        normalized_mode = mode
+        normalized_mode = raw_mode
+
+    provider_status = provider_status or get_provider_status()
+
+    def _provider_configured(provider: str) -> bool:
+        info = provider_status.get(provider) if isinstance(provider_status, dict) else None
+        if info:
+            if not info.get("configured"):
+                return False
+            if info.get("library_loaded") is False:
+                return False
+            return True
+
+        # Fallback directly to env detection if status payload is missing/empty
+        if provider == "openai":
+            return bool((os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip())
+        if provider == "anthropic":
+            return bool((os.getenv("ANTHROPIC_API_KEY") or "").strip())
+        if provider == "gemini":
+            return bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
+        return False
+
+    def _match_alias(candidate: str):
+        cand_norm = (candidate or "").strip().lower().replace(" ", "").replace("-", "")
+        for provider_models in AI_MODEL_REGISTRY.values():
+            for m in provider_models:
+                display_norm = m.display_name.lower().replace(" ", "").replace("-", "")
+                if cand_norm == display_norm:
+                    return m
+        return None
 
     if not model or model == "auto":
         env_default_id = (os.getenv("THRONOS_DEFAULT_MODEL_ID") or "gpt-4.1-mini").strip()
         if env_default_id:
-            env_default = find_model(env_default_id)
-            if env_default and env_default.enabled:
-                if normalized_mode in ("all", env_default.provider):
-                    return env_default
+            env_default = find_model(env_default_id) or _match_alias(env_default_id)
+            if env_default and (normalized_mode in ("all", env_default.provider)) and _provider_configured(env_default.provider):
+                return env_default
 
-        return get_default_model(None if normalized_mode == "all" else normalized_mode)
+        fallback = get_default_model(None if normalized_mode == "all" else normalized_mode)
+        if fallback and _provider_configured(fallback.provider):
+            return fallback
 
-    info = find_model(model)
-    if not info or not info.enabled:
+        for provider_name, model_list in AI_MODEL_REGISTRY.items():
+            if normalized_mode != "all" and provider_name != normalized_mode:
+                continue
+            if not _provider_configured(provider_name):
+                continue
+            if model_list:
+                return model_list[0]
+        return None
+
+    info = find_model(model) or _match_alias(model)
+    if not info:
         return None
 
     if normalized_mode != "all" and info.provider != normalized_mode:
+        return None
+    if not _provider_configured(info.provider):
         return None
     return info
 
 
 def call_openai(model: str, messages: List[Dict[str, str]], system_prompt: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 4096) -> Dict[str, Any]:
-    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    api_key = (os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip()
     if not api_key:
         logging.warning("missing OPENAI_API_KEY")
         raise RuntimeError("OpenAI API key missing")
@@ -159,6 +211,22 @@ def call_gemini(model: str, messages: List[Dict[str, str]], system_prompt: Optio
     return (getattr(resp, "text", "") or "").strip()
 
 
+def _read_offline_corpus(corpus_file: str, messages: List[Dict[str, str]]) -> str:
+    prompt = "\n\n".join([m.get("content", "") for m in messages if m.get("role") == "user"]).strip()
+    try:
+        with open(corpus_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list) and data:
+            latest = data[-1]
+            if isinstance(latest, dict):
+                return latest.get("response") or latest.get("text") or "Offline corpus entry found but empty."
+            if isinstance(latest, str):
+                return latest
+        return "No offline corpus entries found."
+    except Exception:
+        return f"Offline corpus available ({corpus_file}) but unreadable for prompt: {prompt[:80]}"
+
+
 def call_llm(
     model: str,
     messages: List[Dict[str, str]],
@@ -197,8 +265,8 @@ def call_llm(
     resolved_model = resolved.id
     tier = resolved.tier
 
-    mode = os.getenv("THRONOS_AI_MODE", "all").lower()
-    if mode in ("router", "auto", "all"):
+    mode = (os.getenv("THRONOS_AI_MODE", "all").strip().lower() or "all")
+    if mode in ("router", "auto", "all", "hybrid"):
         normalized_mode = "all"
     elif mode == "openai_only":
         normalized_mode = "openai"
@@ -216,6 +284,7 @@ def call_llm(
     model = resolved_model
     prompt_text = "\n\n".join([m.get("content", "") for m in messages])
     routing_meta: Dict[str, Any] = {}
+    call_attempted = False
 
     is_auto = not requested_model or requested_model == "auto"
 
@@ -239,16 +308,69 @@ def call_llm(
 
     try:
         if provider == "openai":
+            call_attempted = True
             text = call_openai(model, messages, system_prompt=system_prompt, temperature=temperature, max_tokens=max_tokens)
         elif provider == "anthropic":
+            call_attempted = True
             text = call_anthropic(model, messages, system_prompt=system_prompt, temperature=temperature, max_tokens=max_tokens)
         elif provider == "gemini":
+            call_attempted = True
             text = call_gemini(model, messages, system_prompt=system_prompt, temperature=temperature, max_tokens=max_tokens)
+        elif provider == "local":
+            data_dir = os.getenv("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
+            corpus_file = os.path.join(data_dir, "ai_offline_corpus.json")
+            if not os.path.exists(corpus_file):
+                routing_meta["call_attempted"] = False
+                return {
+                    "response": "Offline corpus not configured.",
+                    "status": "provider_error",
+                    "provider": provider,
+                    "model": model,
+                    "call_attempted": False,
+                }
+            call_attempted = True
+            text = _read_offline_corpus(corpus_file, messages)
+        elif provider in ("thronos", "custom"):
+            custom_url = (os.getenv("CUSTOM_MODEL_URL") or os.getenv("CUSTOM_MODEL_URI") or "").strip()
+            if not custom_url:
+                routing_meta["call_attempted"] = False
+                return {
+                    "response": "Custom model endpoint not configured.",
+                    "status": "provider_error",
+                    "provider": provider,
+                    "model": model,
+                    "call_attempted": False,
+                }
+            call_attempted = True
+            payload = {
+                "messages": messages,
+                "system_prompt": system_prompt or "",
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "session_id": session_id,
+            }
+            res = requests.post(custom_url, json=payload, timeout=60)
+            try:
+                data = res.json()
+                text = data.get("response") or data.get("text") or ""
+                if not text:
+                    text = res.text
+            except Exception:
+                text = res.text
         else:
-            raise RuntimeError(f"Unsupported provider for model {model}")
+            routing_meta["call_attempted"] = False
+            return {
+                "response": f"Unsupported provider for model {model}",
+                "status": "provider_error",
+                "provider": provider,
+                "model": model,
+                "call_attempted": False,
+            }
     except Exception as exc:
         logging.exception("LLM provider error", extra={"provider": provider, "model": model})
         error = str(exc)
+        if provider == "anthropic" and ("not found" in error.lower() or "404" in error):
+            mark_model_disabled(model, f"anthropic_not_found:{error}")
 
     duration = time.time() - started
     try:
@@ -266,7 +388,7 @@ def call_llm(
             block_hash=block_hash,
             error=error,
             success=error is None,
-            metadata=routing_meta,
+            metadata={**routing_meta, "call_attempted": call_attempted},
         )
     except Exception:
         logging.exception("Failed to record AI interaction", extra={"provider": provider, "model": model})
@@ -278,6 +400,7 @@ def call_llm(
             "provider": provider,
             "model": model,
             "error": error,
+            "call_attempted": call_attempted,
         }
 
     return {
@@ -285,6 +408,7 @@ def call_llm(
         "status": provider,
         "provider": provider,
         "model": model,
+        "call_attempted": call_attempted,
     }
 
 
@@ -305,7 +429,7 @@ class ThronosAI:
     """
 
     def __init__(self) -> None:
-        self.mode = os.getenv("THRONOS_AI_MODE", "auto").lower()
+        self.mode = (os.getenv("THRONOS_AI_MODE", "all").strip().lower() or "all")
 
         # Keys
         self.gemini_api_key = (os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")).strip()

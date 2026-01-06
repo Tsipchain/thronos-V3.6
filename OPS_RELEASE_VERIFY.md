@@ -37,3 +37,12 @@
     - `/api/music/status` responds with connected metadata; Viewer → Music shows status/empty-state messaging instead of “Not Connected”.
 15. **Session auth**
     - PATCH/DELETE chat session rename/delete endpoints return 200 (no 403) and changes persist after refresh.
+16. **Token decimals + activity**
+    - Viewer → Tokens shows correct decimals/supply per token (HPNNIS/JAM/MAR etc.) with “(default)” only when registry is missing decimals.
+    - Token transfer amounts render with correct precision across Viewer Transfers and Wallet Tokens.
+17. **Transfers detail completeness**
+    - After a token transfer + swap, Viewer Transfers rows include asset/amount/from/to and swap pair details; Wallet history shows them under the correct tabs.
+18. **L2E numbers**
+    - Viewer → L2E cards/tables render numeric values (no NaN/undefined) even when courses have empty enrollments/completions.
+19. **Offline/Thrai retrieval**
+    - `/api/thrai/ask` responds using new prompts (no repetition of last answer) and can surface stored architect deliverables when queried.

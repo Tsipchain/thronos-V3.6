@@ -1304,6 +1304,30 @@ def _canonical_kind(kind_raw: str) -> str:
     return lookup.get(kind, kind or "transfer")
 
 
+def _resolve_token_meta(symbol: str) -> dict:
+    """Return canonical token metadata with decimals and supply hints."""
+    sym = (symbol or "").upper() or "THR"
+    catalog = get_all_tokens()
+    for t in catalog:
+        if (t.get("symbol") or "").upper() == sym:
+            meta = {
+                "symbol": sym,
+                "decimals": t.get("decimals", 6),
+                "decimals_is_default": t.get("decimals") is None,
+                "total_supply": t.get("total_supply"),
+                "name": t.get("name") or sym,
+                "creator": t.get("creator") or t.get("owner"),
+                "created_at": t.get("created_at"),
+                "holders_count": t.get("holders_count"),
+            }
+            if meta["decimals"] is None:
+                meta["decimals"] = 6
+                meta["decimals_is_default"] = True
+            return meta
+
+    return {"symbol": sym, "decimals": 6, "decimals_is_default": True}
+
+
 def _normalize_tx_for_display(tx: dict) -> dict | None:
     """Normalize heterogeneous TX records for viewer/wallet consumption.
 
@@ -1321,10 +1345,25 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
 
     amount = float(tx.get("amount", 0.0) or 0.0)
     asset_symbol = (tx.get("token_symbol") or tx.get("symbol") or tx.get("asset") or "THR").upper()
+    token_meta = _resolve_token_meta(asset_symbol)
+    decimals = token_meta.get("decimals", 6)
     fee = float(tx.get("fee_burned", 0.0) or tx.get("fee", 0.0) or 0.0)
 
     parties: set[str] = set()
-    for key in ("from", "to", "trader", "payer", "receiver", "address", "wallet", "student", "user"):
+    for key in (
+        "from",
+        "to",
+        "trader",
+        "payer",
+        "receiver",
+        "address",
+        "wallet",
+        "student",
+        "user",
+        "sender",
+        "driver",
+        "owner",
+    ):
         val = tx.get(key)
         if val:
             parties.add(val)
@@ -1337,8 +1376,14 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         "tx_id": tx_id or "",  # will be filled later if missing
         "kind": kind,
         "type": kind,  # backward compatible alias for templates
-        "from": tx.get("from") or tx.get("trader") or tx.get("payer") or tx.get("address"),
-        "to": tx.get("to") or tx.get("receiver") or tx.get("wallet"),
+        "from": tx.get("from")
+        or tx.get("trader")
+        or tx.get("payer")
+        or tx.get("address")
+        or tx.get("sender")
+        or tx.get("driver")
+        or tx.get("owner"),
+        "to": tx.get("to") or tx.get("receiver") or tx.get("wallet") or tx.get("destination"),
         "amount": amount,
         "fee_burned": fee,
         "timestamp": timestamp,
@@ -1348,6 +1393,9 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         "asset": asset_symbol,
         "meta": meta,
         "parties": sorted(parties),
+        "decimals": decimals,
+        "decimals_is_default": token_meta.get("decimals_is_default", False),
+        "display_amount": amount,
     }
 
     # Token transfers
@@ -1356,6 +1404,9 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         norm["token_symbol"] = (tx.get("token_symbol") or tx.get("symbol") or asset_symbol).upper()
         norm["asset"] = norm["token_symbol"]
         norm["fee_burned"] = float(tx.get("fee_burned_thr", fee) or 0.0)
+        token_meta = _resolve_token_meta(norm["asset"])
+        norm["decimals"] = token_meta.get("decimals", decimals)
+        norm["decimals_is_default"] = token_meta.get("decimals_is_default", False)
 
     # Swap / pool swap
     if tx_type_raw in ("pool_swap", "swap"):
@@ -1374,6 +1425,7 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
             "amount_out": amount_out,
             "token_out": token_out,
             "note": norm.get("note") or f"Swap {amount_in:.6f} {token_in} → {amount_out:.6f} {token_out}",
+            "display_amount": amount_in,
         })
         norm["meta"].update({
             "pool_id": tx.get("pool_id"),
@@ -1381,6 +1433,7 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
             "amount_out": amount_out,
             "token_in": token_in,
             "token_out": token_out,
+            "pair": f"{token_in}/{token_out}",
         })
         if tx.get("trader"):
             norm["from"] = tx.get("trader")
@@ -1401,11 +1454,13 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         norm["kind"] = norm["type"] = "l2e"
         norm["asset"] = "L2E"
         norm["token_symbol"] = "L2E"
+        norm["display_amount"] = amount or tx.get("reward", 0)
 
     # AI credits / services
     if tx_type_raw in ("credits_consume", "service_payment", "ai_knowledge", "ai_credit", "ai_credits"):
         norm["kind"] = norm["type"] = "ai_credits"
         norm["asset"] = norm.get("token_symbol") or asset_symbol
+        norm["display_amount"] = amount
 
     # Coinbase fallback id
     if not tx_id and tx_type_raw == "coinbase":
@@ -4279,6 +4334,13 @@ def api_tx_feed():
                 continue
 
         normalized.append(tx)
+
+    if request.args.get("debug_counts"):
+        counts: dict[str, int] = {}
+        for tx in normalized:
+            k = tx.get("kind") or "unknown"
+            counts[k] = counts.get(k, 0) + 1
+        app.logger.info("tx_feed_counts", extra={"counts": counts, "wallet": wallet or None})
 
     return jsonify(normalized), 200
 
@@ -7520,35 +7582,33 @@ def api_tokens_stats():
         if ts and (not bucket["last"] or str(ts) > str(bucket["last"])):
             bucket["last"] = ts
 
-    # THR stats
-    thr_ledger = load_json(LEDGER_FILE, {})
-    thr_holders = sum(1 for b in thr_ledger.values() if float(b) > 0)
-    thr_supply = sum(float(b) for b in thr_ledger.values())
-    stats.append({
-        "symbol": "THR",
-        "name": "Thronos",
-        "holders_count": thr_holders,
-        "total_supply": round(thr_supply, 6),
-        "color": "#ff6600",
-        "transfers_count": activity.get("THR", {}).get("count", 0),
-        "last_transfer": activity.get("THR", {}).get("last"),
-    })
+    catalog = get_all_tokens()
+    for token in catalog:
+        symbol = (token.get("symbol") or "THR").upper()
+        token_meta = _resolve_token_meta(symbol)
+        if symbol == "THR":
+            ledger_map = load_json(LEDGER_FILE, {})
+            holders = sum(1 for b in ledger_map.values() if float(b) > 0)
+            total_supply = sum(float(b) for b in ledger_map.values())
+        else:
+            token_id = token.get("token_id") or token.get("id") or symbol
+            ledger_map = load_custom_token_ledger(token_id) if token_id else {}
+            holders = sum(1 for b in ledger_map.values() if float(b) > 0)
+            total_supply = token.get("total_supply") or token.get("current_supply") or token_meta.get("total_supply", 0)
 
-    # Custom + legacy tokens stats
-    tokens = load_custom_tokens()
-    for symbol, token in tokens.items():
-        token_id = token.get("id") or token.get("token_id") or symbol
-        ledger = load_custom_token_ledger(token_id)
-        holders = sum(1 for b in ledger.values() if float(b) > 0)
         stats.append({
             "symbol": symbol,
-            "name": token.get("name", symbol),
+            "name": token.get("name") or token_meta.get("name") or symbol,
             "holders_count": holders,
-            "total_supply": token.get("total_supply", token.get("current_supply", 0)),
+            "total_supply": total_supply,
             "color": token.get("color", "#00ff66"),
-            "logo": token.get("logo"),
+            "logo": token.get("logo") or token.get("logo_url"),
             "transfers_count": activity.get(symbol, {}).get("count", 0),
             "last_transfer": activity.get(symbol, {}).get("last"),
+            "decimals": token_meta.get("decimals", 6),
+            "decimals_is_default": token_meta.get("decimals_is_default", False),
+            "creator": token_meta.get("creator") or token.get("creator"),
+            "created_at": token_meta.get("created_at") or token.get("created_at"),
         })
 
     return jsonify({"ok": True, "tokens": stats}), 200
@@ -9474,7 +9534,23 @@ def send_l2e():
 def api_v1_get_courses():
     """Return the list of all courses."""
     courses = load_courses()
-    return jsonify(courses=courses), 200
+    normalized = []
+    for c in courses:
+        if not isinstance(c, dict):
+            continue
+        c = c.copy()
+        c["enrollments"] = c.get("enrollments") or []
+        c["completions"] = c.get("completions") or []
+        try:
+            c["price_thr"] = float(c.get("price_thr") or c.get("price") or 0)
+        except Exception:
+            c["price_thr"] = 0.0
+        try:
+            c["reward_l2e"] = float(c.get("reward_l2e") or c.get("reward") or 0)
+        except Exception:
+            c["reward_l2e"] = 0.0
+        normalized.append(c)
+    return jsonify(courses=normalized), 200
 
 
 @app.route("/api/courses", methods=["GET"])
@@ -11656,7 +11732,7 @@ def _current_actor_id(wallet: str | None) -> tuple[str, str | None]:
     Returns (identity_key, guest_id or None).
     If no wallet provided, uses guest id for anonymous usage.
     """
-    wallet = (wallet or "").strip()
+    wallet = (wallet or request.cookies.get("thr_address") or "").strip()
     guest_id = None
     if not wallet:
         guest_id = get_or_set_guest_id()
@@ -11688,10 +11764,41 @@ def api_thrai_ask():
     try:
         client = anthropic.Anthropic(api_key=api_key)
         messages = []
-        for h in history[-10:]:
+        recent_hist = history[-10:]
+        for h in recent_hist:
             role = h.get("role", "user")
             content = h.get("content", "")
             messages.append({"role": role, "content": content})
+
+        # Lightweight retrieval from offline corpus
+        corpus = load_json(AI_CORPUS_FILE, [])
+        keywords = [w.lower() for w in prompt.split() if len(w) > 3]
+        scored = []
+        for entry in corpus:
+            blob = f"{entry.get('prompt','')} {entry.get('response','')}".lower()
+            score = sum(1 for kw in keywords if kw in blob)
+            if score:
+                scored.append((score, entry))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        context_blocks = []
+        for _, entry in scored[:3]:
+            context_blocks.append(
+                f"[ARCHIVE {entry.get('timestamp')}] {entry.get('prompt','')[:160]}\n{entry.get('response','')[:400]}"
+            )
+
+        summary_tail = "\n".join([f"{m.get('role')}: {m.get('content','')[:200]}" for m in recent_hist[-4:]])
+        retrieval_context = "\n\n".join(context_blocks) if context_blocks else "(no prior knowledge found)"
+
+        system_prompt = (
+            "You are the Thronos Quantum Architect (Thrai). "
+            "Answer clearly and concretely, in the language of the user. "
+            "Use the retrieved project memory when helpful and do not repeat your last message verbatim."
+        )
+        if context_blocks:
+            system_prompt += "\nRetrieved knowledge:\n" + retrieval_context
+        if summary_tail:
+            system_prompt += "\nRecent conversation summary:\n" + summary_tail
+
         messages.append({"role": "user", "content": prompt})
 
         model = os.getenv("THRAI_MODEL", "claude-3-sonnet-20240229")
@@ -11699,8 +11806,8 @@ def api_thrai_ask():
             model=model,
             max_tokens=2048,
             temperature=0.3,
-            system="You are the Thronos Quantum Architect (Thrai). Answer clearly and concretely, in the language of the user.",
-            messages=[{"role": "user", "content": prompt}],
+            system=system_prompt,
+            messages=messages,
         )
         text = ""
         for block in resp.content:

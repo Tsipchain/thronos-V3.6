@@ -789,6 +789,9 @@ async function loadTokens(){
       const tr = document.createElement('tr');
       const holdersCount = (t.holders_count !== undefined) ? t.holders_count : '—';
       const transfersCount = (t.transfers_count !== undefined) ? t.transfers_count : '—';
+      const decimalsLabel = (t.decimals !== undefined && t.decimals !== null)
+        ? `${t.decimals}${t.decimals_is_default ? ' (default)' : ''}`
+        : '6 (default)';
 
       // Prepare logo HTML
       const color = t.color || '#00ff66';
@@ -803,7 +806,7 @@ async function loadTokens(){
         <td class="mono">${fmtN(t.total_supply || t.supply || 0)}</td>
         <td class="mono k">${typeof holdersCount === 'number' ? holdersCount.toLocaleString() : holdersCount}</td>
         <td class="mono">${typeof transfersCount === 'number' ? transfersCount.toLocaleString() : transfersCount}</td>
-        <td>${t.decimals || 6}</td>
+        <td>${decimalsLabel}</td>
         <td class="mono"><a class="addr" onclick="copy('${t.creator||'—'}')">${short(t.creator||'—')}</a></td>
         <td class="muted">${rel(t.created_at||'')}</td>
       `;
@@ -865,9 +868,12 @@ async function loadL2E(){
     let totalDistributed = 0;
 
     courses.forEach(c => {
-      totalEnroll += (c.enrollments||[]).length;
-      totalComplete += (c.completions||[]).length;
-      totalDistributed += (c.completions||[]).length * (c.reward||0);
+      const enrollments = Array.isArray(c.enrollments) ? c.enrollments.length : 0;
+      const completions = Array.isArray(c.completions) ? c.completions.length : 0;
+      const reward = Number(c.reward || c.reward_l2e || 0) || 0;
+      totalEnroll += enrollments;
+      totalComplete += completions;
+      totalDistributed += completions * reward;
     });
 
     el('#l2eTotalEnrollments').textContent = totalEnroll;
@@ -885,13 +891,17 @@ async function loadL2E(){
 
     courses.forEach(c=>{
       const tr = document.createElement('tr');
+      const reward = Number(c.reward || c.reward_l2e || 0) || 0;
+      const price = Number(c.price_thr || c.price || 0) || 0;
+      const enrollments = Array.isArray(c.enrollments) ? c.enrollments.length : 0;
+      const completions = Array.isArray(c.completions) ? c.completions.length : 0;
       tr.innerHTML = `
         <td>${c.title||'Untitled'}</td>
         <td class="mono"><a class="addr" onclick="copy('${c.teacher||''}')">${short(c.teacher||'—')}</a></td>
-        <td>${fmtN(c.price||0)}</td>
-        <td class="k">${fmtN(c.reward||0)}</td>
-        <td>${(c.enrollments||[]).length}</td>
-        <td>${(c.completions||[]).length}</td>
+        <td>${fmtN(price)}</td>
+        <td class="k">${fmtN(reward)}</td>
+        <td>${enrollments}</td>
+        <td>${completions}</td>
       `;
       tb.appendChild(tr);
     });

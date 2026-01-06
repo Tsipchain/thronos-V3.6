@@ -116,10 +116,13 @@ def _apply_env_flags(provider_status: Optional[dict] = None) -> None:
 
     for provider_name, models in AI_MODEL_REGISTRY.items():
         info = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
-        enabled = bool(info.get("configured", False)) and info.get("library_loaded", True)
+        enabled = bool(info.get("configured", False))
+        degraded = enabled and not info.get("library_loaded", True)
 
         for m in models:
             m.enabled = enabled
+            if degraded:
+                m.degraded = True
             reason = MODEL_DISABLE_REASONS.get(m.id)
             if reason:
                 m.enabled = False

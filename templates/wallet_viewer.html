@@ -220,6 +220,12 @@
         return map[k] || k || 'thr_transfer';
     }
 
+    function normalizeAssetSymbol(value) {
+        const symbol = String(value || '').trim().toUpperCase();
+        if (!symbol || symbol === 'TOKEN') return 'THR';
+        return symbol;
+    }
+
     let walletTxs = [];
     let currentFilter = 'all';
     let currentAddress = '';
@@ -256,7 +262,7 @@
         const isSwap = tx.direction === 'swap' || (tx.kind || tx.type) === 'swap';
         const color = isSwap ? '#0ff' : (isIncoming ? '#0f0' : '#ff0');
         const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
-        const asset = (tx.asset_symbol || tx.asset || tx.token_symbol || 'THR').toUpperCase();
+        const asset = normalizeAssetSymbol(tx.asset_symbol || tx.asset || tx.token_symbol || 'THR');
         const decimals = tx.decimals || tokenDecimals;
         const formattedAmount = formatTokenAmount(tx.display_amount ?? tx.amount ?? 0, decimals);
         const label = (tx.category_label || tx.kind || tx.type || '').toString().toUpperCase();

@@ -1312,9 +1312,16 @@ def _canonical_kind(kind_raw: str) -> str:
     return lookup.get(kind, kind or "thr_transfer")
 
 
+def _sanitize_asset_symbol(symbol: str, fallback: str = "THR") -> str:
+    sym = (symbol or "").upper().strip()
+    if not sym or sym == "TOKEN":
+        return fallback
+    return sym
+
+
 def _resolve_token_meta(symbol: str) -> dict:
     """Return canonical token metadata with decimals and supply hints."""
-    sym = (symbol or "").upper() or "THR"
+    sym = _sanitize_asset_symbol(symbol)
     catalog = get_all_tokens()
     for t in catalog:
         if (t.get("symbol") or "").upper() == sym:
@@ -1358,7 +1365,7 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         except Exception:
             pass
     amount = float(tx.get("amount", 0.0) or 0.0)
-    asset_symbol = (tx.get("token_symbol") or tx.get("symbol") or tx.get("asset") or "THR").upper()
+    asset_symbol = _sanitize_asset_symbol(tx.get("token_symbol") or tx.get("symbol") or tx.get("asset") or "THR")
     token_meta = _resolve_token_meta(asset_symbol)
     decimals = token_meta.get("decimals", 6)
     fee = float(tx.get("fee_burned", 0.0) or tx.get("fee", 0.0) or 0.0)
@@ -1414,6 +1421,11 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         "asset_symbol": asset_symbol,
     }
 
+    if kind == "transfer" and asset_symbol == "THR":
+        norm["token_symbol"] = None
+        norm["asset"] = "THR"
+        norm["asset_symbol"] = "THR"
+
     # Apply decimals to the display amount if we have a raw value
     if amount_raw is not None:
         try:
@@ -1425,7 +1437,7 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
     # Token transfers
     if tx_type_raw in ("token_transfer", "send_token", "receive_token"):
         norm["kind"] = norm["type"] = "token_transfer"
-        norm["token_symbol"] = (tx.get("token_symbol") or tx.get("symbol") or asset_symbol).upper()
+        norm["token_symbol"] = _sanitize_asset_symbol(tx.get("token_symbol") or tx.get("symbol") or asset_symbol)
         norm["asset"] = norm["token_symbol"]
         norm["fee_burned"] = float(tx.get("fee_burned_thr", fee) or 0.0)
         token_meta = _resolve_token_meta(norm["asset"])
@@ -1444,8 +1456,8 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
     if tx_type_raw in ("pool_swap", "swap"):
         amount_in = float(tx.get("amount_in", tx.get("amount", 0.0)) or 0.0)
         amount_out = float(tx.get("amount_out", tx.get("received_amount", 0.0)) or 0.0)
-        token_in = (tx.get("token_in") or tx.get("token_symbol") or tx.get("symbol") or "THR").upper()
-        token_out = (tx.get("token_out") or tx.get("to_symbol") or "WBTC").upper()
+        token_in = _sanitize_asset_symbol(tx.get("token_in") or tx.get("token_symbol") or tx.get("symbol") or "THR")
+        token_out = _sanitize_asset_symbol(tx.get("token_out") or tx.get("to_symbol") or "WBTC")
 
         norm.update({
             "kind": "swap",

@@ -3612,8 +3612,15 @@ function downloadCGMinerKit() {
       if(!out) return;
       const r = await fetch("/api/health", {cache:"no-store"});
       const j = await r.json();
-      const build = j.build_id || j.build || j.git_commit || "—";
-      out.textContent = "build: " + build;
+      let build = j.build_id || j.git_commit || null;
+      if (!build && j.build) {
+        if (typeof j.build === "string") {
+          build = j.build;
+        } else if (typeof j.build === "object") {
+          build = j.build.build_id || j.build.git_commit || null;
+        }
+      }
+      out.textContent = "build: " + (build || "—");
     }catch(e){}
   }
 

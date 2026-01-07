@@ -1127,6 +1127,12 @@
                     return;
                 }
 
+                const normalizeAssetSymbol = (value) => {
+                    const symbol = String(value || '').trim().toUpperCase();
+                    if (!symbol || symbol === 'TOKEN') return 'THR';
+                    return symbol;
+                };
+
                 let html = '';
                 transactions.reverse().forEach(tx => {
                     const direction = tx.direction || (tx.to === walletAddress ? 'in' : 'out');
@@ -1135,7 +1141,7 @@
                     const amountClass = isSwap ? 'swap' : (isIncoming ? 'incoming' : 'outgoing');
                     const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
                     const status = tx.status || 'confirmed';
-                    const asset = (tx.asset_symbol || tx.asset || tx.token_symbol || 'THR').toUpperCase();
+                    const asset = normalizeAssetSymbol(tx.asset_symbol || tx.asset || tx.token_symbol || 'THR');
                     const decimals = tx.decimals || 6;
                     const amountVal = tx.display_amount ?? tx.amount ?? 0;
                     const amountStr = Number(amountVal).toFixed(decimals);

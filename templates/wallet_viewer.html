@@ -259,6 +259,7 @@
         const isIncoming = tx.direction === 'in' || tx.to === currentAddress;
         const kind = normalizeKind(tx.kind);
         const isSwap = tx.direction === 'swap' || kind === 'swap' || kind === 'pool_swap';
+        const isLiquidity = kind.startsWith('liquidity_') || kind === 'add_liquidity' || kind === 'remove_liquidity';
         const color = isSwap ? '#0ff' : (isIncoming ? '#0f0' : '#ff0');
         const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
         const isToken = kind === 'token_transfer';
@@ -267,6 +268,26 @@
         const decimals = tx.decimals || tokenDecimals;
         const formattedAmount = formatTokenAmount(tx.display_amount ?? tx.amount ?? 0, decimals);
         const label = (tx.category_label || tx.kind || tx.type || '').toString().toUpperCase();
+
+        // Fee information
+        const fee = tx.fee_burned || tx.fee || 0;
+        const feeDisplay = fee > 0 ? `<br>Fee: ${fee} THR` : '';
+
+        // Pool/liquidity specific info
+        let poolInfo = '';
+        if (isLiquidity) {
+          const action = kind.includes('add') ? 'Add Liquidity' : 'Remove Liquidity';
+          poolInfo = `<br><span style="color:#0ff;">${action}</span>`;
+        } else if (isSwap && tx.meta) {
+          const fromAsset = tx.meta.from_asset || asset;
+          const toAsset = tx.meta.to_asset || 'THR';
+          poolInfo = `<br><span style="color:#0ff;">Swap: ${fromAsset} → ${toAsset}</span>`;
+        }
+
+        // Token price info
+        const priceInfo = (tx.meta && tx.meta.token_price_thr)
+          ? `<br><span style="color:#888;">Price: ${tx.meta.token_price_thr} THR per ${asset}</span>`
+          : '';
 
         html += `
             <div class="tx">
@@ -277,6 +298,7 @@
               <div style="font-size:0.85em; color:#9adf9a; margin-top:4px;">${label}</div>
               <div style="font-size:0.8em; color:#888; margin-top:4px;">
                   ${isSwap ? `Trader: ${tx.from || tx.trader || currentAddress}` : (isIncoming ? 'From: ' + (tx.from || '') : 'To: ' + (tx.to || ''))}
+                  ${feeDisplay}${poolInfo}${priceInfo}
                   <br>TXID: ${(tx.tx_id || 'pending')}
                   ${tx.amount_out ? `<br>Output: ${formatTokenAmount(tx.amount_out, decimals)} ${(tx.token_out || asset)}` : ''}
               </div>

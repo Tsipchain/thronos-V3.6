@@ -1118,28 +1118,23 @@
             transactions: [],
         };
 
-        function normalizeKind(tx) {
-            return String(tx.kind || '').toLowerCase();
-        }
+        const getKind = (tx) => (tx.kind || tx.type || '').toLowerCase();
 
-        function isTokenTx(tx) {
-            return normalizeKind(tx) === 'token_transfer';
-        }
+        const isTokenTx = (tx) => getKind(tx) === 'token_transfer';
 
-        function sanitizeTokenSymbol(symbol) {
-            const sym = String(symbol || '').toUpperCase().trim();
-            if (!sym || sym === 'TOKEN' || sym === 'TKN' || sym === 'UNKNOWN') {
-                return '';
-            }
-            return sym;
-        }
+        const isSwapTx = (tx) => ['swap', 'pool_swap', 'liquidity_add', 'liquidity_remove'].includes(getKind(tx));
 
-        function displayAsset(tx) {
+        const getAssetSymbol = (tx) => {
             if (isTokenTx(tx)) {
-                const sym = sanitizeTokenSymbol(tx.asset_symbol || tx.asset);
-                return sym || '(unknown token)';
+                const sym = (tx.asset_symbol || tx.asset || tx.token_symbol || '').toUpperCase();
+                if (!sym) return 'UNKNOWN_TOKEN';
+                return sym;
             }
-            return 'THR';
+            return (tx.asset_symbol || tx.asset || 'THR').toUpperCase();
+        };
+
+        function isValidTokenSymbol(symbol) {
+            return symbol && !['THR', 'TOKEN', 'UNKNOWN_TOKEN'].includes(symbol);
         }
 
         function displayAmount(tx) {
@@ -1175,18 +1170,21 @@
                 return;
             }
 
+            const tokenTxs = txs.filter(isTokenTx);
             const tokenSymbols = Array.from(new Set(
-                txs
-                    .filter(tx => isTokenTx(tx))
-                    .map(tx => sanitizeTokenSymbol(tx.asset_symbol || tx.asset))
-                    .filter(sym => sym)
+                tokenTxs.map(getAssetSymbol).filter(isValidTokenSymbol)
             ));
 
             const filtered = txs.filter(tx => {
-                const kind = normalizeKind(tx);
-                if (historyState.filter === 'thr') return kind === 'transfer' || kind === 'thr_transfer';
-                if (historyState.filter === 'tokens') return kind === 'token_transfer';
-                if (historyState.filter === 'swaps') return kind === 'swap' || kind === 'pool_swap';
+                const kind = getKind(tx);
+                const asset = getAssetSymbol(tx);
+                if (historyState.filter === 'thr') {
+                    return !isTokenTx(tx) && !isSwapTx(tx) && asset === 'THR';
+                }
+                if (historyState.filter === 'tokens') {
+                    return isTokenTx(tx) && isValidTokenSymbol(asset);
+                }
+                if (historyState.filter === 'swaps') return isSwapTx(tx);
                 if (historyState.filter === 'l2e') return kind === 'l2e' || kind === 'l2e_reward';
                 if (historyState.filter === 'ai_credits') return kind === 'ai_credits' || kind === 'ai_credit';
                 if (historyState.filter === 'iot') return kind === 'iot' || kind === 'iot_parking' || kind === 'iot_parking_reservation' || kind === 'iot_autopilot';
@@ -1195,7 +1193,7 @@
                 return true;
             }).filter(tx => {
                 if (historyState.filter !== 'tokens' || !historyState.selectedToken) return true;
-                return sanitizeTokenSymbol(tx.asset_symbol || tx.asset) === historyState.selectedToken;
+                return getAssetSymbol(tx) === historyState.selectedToken;
             });
 
             const tabs = [
@@ -1243,13 +1241,13 @@
             }
 
             html += filtered.map(tx => {
-                const kind = normalizeKind(tx);
+                const kind = getKind(tx);
                 const isIncoming = tx.direction === 'in' || tx.to === walletAddress;
-                const isSwap = kind === 'swap' || kind === 'pool_swap';
+                const isSwap = isSwapTx(tx);
                 const amountClass = isSwap ? 'swap' : (isIncoming ? 'incoming' : 'outgoing');
                 const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
                 const status = tx.status || 'confirmed';
-                const asset = displayAsset(tx);
+                const asset = getAssetSymbol(tx);
                 const amountStr = displayAmount(tx);
 
                 return `

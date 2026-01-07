@@ -10,16 +10,11 @@
   <script src="{{ url_for('static', filename='wallet_session.js') }}"></script>
   <style>
     /* Global Styles */
-    :root {
-      --footer-safe: 110px;
-    }
-
     body {
       background-color: #000;
       color: #0f0;
       font-family: "Courier New", monospace;
       padding: 20px;
-      padding-bottom: calc(var(--footer-safe, 110px) + 24px);
       line-height: 1.6;
       margin: 0;
     }
@@ -40,7 +35,6 @@
       max-width: 1000px;
       margin: 0 auto;
       padding: 0 20px;
-      padding-bottom: calc(var(--footer-safe, 110px) + 24px);
     }
     
     /* Navigation Bar */
@@ -185,28 +179,32 @@
         backdrop-filter: blur(10px);
     }
 
-    /* Chain Tokens Widget (Footer) - PRIORITY 7: Auto-hide */
-    .chain-tokens-widget {
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        background: linear-gradient(180deg, transparent 0%, rgba(0, 20, 10, 0.95) 20%, rgba(0, 30, 15, 0.98) 100%);
+    /* Chain Tokens Widget (Footer) — AUTO-HIDE FIXED FOOTER */
+    .chain-tokens-widget{
+        position: relative;
+        width: 100%;
+        background: linear-gradient(180deg, transparent 0%, rgba(0, 20, 10, 0.92) 20%, rgba(0, 30, 15, 0.98) 100%);
         border-top: 2px solid;
         border-image: linear-gradient(90deg, transparent, #00ff66, #ffd700, #00ff66, transparent) 1;
-        padding: 10px 20px;
-        z-index: 2800;
         backdrop-filter: blur(10px);
-        transform: translateY(0);
-        opacity: 1;
-        transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s ease-out;
+        padding: 10px 20px;
     }
 
-    .chain-tokens-widget.hidden {
-        transform: translateY(100%);
-        opacity: 0;
-        pointer-events: none;
+    .chain-tokens-footer-meta{
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap: 16px;
+        margin-top: 8px;
+        font-size: 12px;
+        opacity: 0.9;
     }
+    .chain-tokens-footer-meta .right{
+        text-align:right;
+        white-space: nowrap;
+    }
+
+    .page-footer-spacer { height: 15vh; min-height: 120px; }
 
     /* Wallet Login Modal */
     .wallet-login-btn {
@@ -230,8 +228,9 @@
         align-items: center;
         justify-content: center;
         z-index: 3000;
+        pointer-events: none;
     }
-    .wallet-modal-overlay.active { display: flex; }
+    .wallet-modal-overlay.active { display: flex; pointer-events: auto; }
     .wallet-modal {
         background: #0a130e;
         border: 1px solid #0f0;
@@ -732,9 +731,11 @@
         z-index: 3000;
         align-items: center;
         justify-content: center;
+        pointer-events: none;
     }
     .send-modal.active {
         display: flex;
+        pointer-events: auto;
     }
     .send-modal-content {
         background: linear-gradient(135deg, #000000 0%, #071810 50%, #000000 100%);
@@ -2251,14 +2252,24 @@ let allTransactions = [];
 let currentHistoryFilter = 'all';
 let currentTokenFilter = null;
 
+function resetHistoryFilters() {
+    currentHistoryFilter = 'all';
+    currentTokenFilter = null;
+    const tokenIndexBar = document.getElementById('tokenIndexBar');
+    if (tokenIndexBar) tokenIndexBar.style.display = 'none';
+}
+
 function openWalletHistoryModal() {
     document.getElementById('walletHistoryModal').classList.add('active');
+    resetHistoryFilters();
+    filterHistory('all');
     loadWalletHistory();
 }
 
 function closeWalletHistoryModal(event) {
     if (!event || event.target.id === 'walletHistoryModal') {
         document.getElementById('walletHistoryModal').classList.remove('active');
+        resetHistoryFilters();
     }
 }
 
@@ -2287,33 +2298,27 @@ function filterHistory(filter, tokenSymbol = null) {
 }
 
 function getTxType(tx) {
-    const rawType = (tx.type || '').toUpperCase();
-    const note = (tx.note || tx.description || '').toUpperCase();
-    const symbol = (tx.symbol || tx.asset_symbol || 'THR').toUpperCase();
-    const meta = tx.metadata || tx.meta || {};
-    const category = (meta.category || '').toLowerCase();
-    const billingUnit = (meta.billing_unit || '').toLowerCase();
-    const sessionType = (meta.session_type || '').toLowerCase();
-    const featureTag = (meta.feature || '').toLowerCase();
+    const raw = (tx.kind || tx.type || '').toLowerCase();
+    const kindMap = {
+        'thr_transfer': 'thr',
+        'transfer': 'thr',
+        'token_transfer': 'token',
+        'swap': 'swap',
+        'pool_swap': 'swap',
+        'bridge': 'bridge',
+        'l2e': 'l2e',
+        'ai_credit': 'ai_credits',
+        'ai_credits': 'ai_credits',
+        'iot': 'iot',
+        'autopilot': 'iot',
+        'parking': 'iot',
+        'architect_job': 'architect',
+        'music': 'music',
+    };
+    if (kindMap[raw]) return kindMap[raw];
 
-    if (category) {
-        if (category.includes('architect')) return 'architect';
-        if (category.includes('credit') || category.includes('chat')) return 'ai_credits';
-        if (category.includes('swap') || category.includes('liquidity') || category.includes('pool')) return 'swap';
-    }
-
-    if (billingUnit === 'thr' || sessionType === 'architect') return 'architect';
-    if (billingUnit === 'credits' || sessionType === 'chat') return 'ai_credits';
-    if (featureTag === 'pools' || featureTag === 'swaps') return 'swap';
-
-    // Explicit classification rules (priority order)
-    if (rawType.startsWith('ARCHITECT')) return 'architect';
-    if (rawType.startsWith('CREDITS_') || rawType.startsWith('AI_') || rawType.includes('CHAT') || note.includes('AI TRANSFER')) return 'ai_credits';
-    if (rawType.startsWith('SWAP') || rawType.startsWith('DEX_') || rawType.startsWith('AMM_') || rawType.startsWith('LIQUIDITY_')) return 'swap';
-    if (rawType.startsWith('TOKEN_TRANSFER') || (symbol && symbol !== 'THR')) return 'token';
-    if (rawType.startsWith('L2E_') || rawType.includes('L2E') || rawType.includes('LEARN') || note.includes('L2E')) return 'l2e';
-    if (rawType.startsWith('IOT_') || rawType.includes('PARKING') || note.includes('IOT')) return 'iot';
-    if (rawType.startsWith('BRIDGE_') || rawType.includes('BRIDGE') || rawType.includes('DEPOSIT')) return 'bridge';
+    const asset = (tx.symbol || tx.asset || tx.asset_symbol || tx.token_symbol || 'THR').toUpperCase();
+    if (asset && asset !== 'THR') return 'token';
     return 'thr';
 }
 
@@ -2423,6 +2428,10 @@ function renderHistory() {
     const addr = walletSession.getAddress();
     const tokenIndexBar = document.getElementById('tokenIndexBar');
 
+    if (currentHistoryFilter !== 'token') {
+        currentTokenFilter = null;
+    }
+
     if (!allTransactions || allTransactions.length === 0) {
         content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions found</div>';
         return;
@@ -2520,16 +2529,22 @@ async function loadWalletHistory() {
     }
 
     try {
-        const response = await fetch(`/wallet_data/${encodeURIComponent(addr)}`);
-        const data = await response.json();
+        const [walletRes, feedRes] = await Promise.all([
+            fetch(`/wallet_data/${encodeURIComponent(addr)}`),
+            fetch(`/api/tx_feed?wallet=${encodeURIComponent(addr)}`)
+        ]);
 
-        if (!data.transactions || data.transactions.length === 0) {
+        const data = walletRes.ok ? await walletRes.json() : {};
+        const feed = feedRes.ok ? await feedRes.json() : [];
+
+        const transactions = Array.isArray(feed) && feed.length ? feed : (data.transactions || []);
+        if (!transactions || transactions.length === 0) {
             content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions found</div>';
             allTransactions = [];
             return;
         }
 
-        allTransactions = data.transactions;
+        allTransactions = transactions;
         renderHistory();
 
     } catch (error) {
@@ -3403,6 +3418,7 @@ function closeTokenInfoModal(event) {
 }
 </script>
 
+<div class="page-footer-spacer"></div>
 <!-- Chain Tokens Widget (Footer) -->
 <div class="chain-tokens-widget" id="chainTokensWidget">
     <div class="chain-tokens-inner">
@@ -3423,10 +3439,10 @@ function closeTokenInfoModal(event) {
                 </span>
             </div>
         </div>
-        <!-- FIX 1: Build info for deployment verification -->
-        <div style="margin-left: auto; padding-left: 15px; opacity: 0.6; font-size: 10px; white-space: nowrap;">
-            <span id="buildCommit" title="Git commit hash">loading...</span>
-        </div>
+    </div>
+    <div class="chain-tokens-footer-meta">
+        <div class="left">Thronos Network ® CopyRights 2023–2026</div>
+        <div class="right" id="build-info">build: —</div>
     </div>
 </div>
 
@@ -3557,20 +3573,6 @@ function downloadCGMinerKit() {
             });
             scrollEl.innerHTML = html;
 
-            // FIX 1: Load build info for deployment verification
-            try {
-                const healthResp = await fetch('/api/health');
-                const health = await healthResp.json();
-                const buildCommitEl = document.getElementById('buildCommit');
-                if (buildCommitEl && health.build) {
-                    const displayText = health.build.build_id || health.build.git_commit || 'unknown';
-                    buildCommitEl.textContent = `build: ${displayText}`;
-                    buildCommitEl.title = `Build ID: ${health.build.build_id || 'N/A'}\nGit commit: ${health.build.git_commit || 'N/A'}\nDATA_DIR: ${health.build.DATA_DIR}\nNode: ${health.build.node_role}`;
-                }
-            } catch(e) {
-                console.log('Build info not available:', e);
-            }
-
         } catch(err) {
             console.error('Chain tokens widget error:', err);
         }
@@ -3583,80 +3585,31 @@ function downloadCGMinerKit() {
     setInterval(loadChainTokensWidget, 60000);
 })();
 
-// PRIORITY 7: Footer auto-hide behavior
-(function() {
-    let footerHideTimer = null;
-    let isFooterHovered = false;
-    let lastScrollY = window.scrollY;
-    let lastActivity = Date.now();
+</script>
 
-    const footer = document.getElementById('chainTokensWidget');
-    if (!footer) return;
-
-    function hideFooter() {
-        if (!isFooterHovered) {
-            footer.classList.add('hidden');
+<script>
+(function(){
+  async function hydrateBuild(){
+    try{
+      const out = document.getElementById("build-info");
+      if(!out) return;
+      const r = await fetch("/api/health", {cache:"no-store"});
+      const j = await r.json();
+      let build = j.build_id || j.git_commit || null;
+      if (!build && j.build) {
+        if (typeof j.build === "string") {
+          build = j.build;
+        } else if (typeof j.build === "object") {
+          build = j.build.build_id || j.build.git_commit || null;
         }
-    }
+      }
+      out.textContent = "build: " + (build || "—");
+    }catch(e){}
+  }
 
-    function showFooter() {
-        footer.classList.remove('hidden');
-        resetHideTimer();
-    }
-
-    function resetHideTimer() {
-        if (footerHideTimer) clearTimeout(footerHideTimer);
-        footerHideTimer = setTimeout(hideFooter, 10000); // 10 seconds
-    }
-
-    // Show footer on scroll (detect both up and down scroll)
-    let scrollTimeout;
-    window.addEventListener('scroll', () => {
-        const currentScrollY = window.scrollY;
-
-        // Show footer on any scroll activity
-        if (Math.abs(currentScrollY - lastScrollY) > 5) {
-            showFooter();
-            lastScrollY = currentScrollY;
-            lastActivity = Date.now();
-        }
-
-        // Detect end of page
-        if (scrollTimeout) clearTimeout(scrollTimeout);
-        scrollTimeout = setTimeout(() => {
-            const scrolledToBottom = (window.innerHeight + window.scrollY) >= document.body.offsetHeight - 50;
-            if (scrolledToBottom) {
-                showFooter();
-            }
-        }, 100);
-    }, { passive: true });
-
-    // Show footer on mousemove (debounced)
-    let mouseMoveTimeout;
-    window.addEventListener('mousemove', () => {
-        if (mouseMoveTimeout) clearTimeout(mouseMoveTimeout);
-        mouseMoveTimeout = setTimeout(() => {
-            const now = Date.now();
-            if (now - lastActivity > 1000) { // Only if 1s elapsed since last activity
-                showFooter();
-                lastActivity = now;
-            }
-        }, 150);
-    }, { passive: true });
-
-    // Pause auto-hide when hovering footer
-    footer.addEventListener('mouseenter', () => {
-        isFooterHovered = true;
-        if (footerHideTimer) clearTimeout(footerHideTimer);
-    });
-
-    footer.addEventListener('mouseleave', () => {
-        isFooterHovered = false;
-        resetHideTimer();
-    });
-
-    // Initial timer
-    resetHideTimer();
+  document.addEventListener("DOMContentLoaded", ()=>{
+    hydrateBuild();
+  });
 })();
 </script>
 

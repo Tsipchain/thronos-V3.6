@@ -1112,56 +1112,190 @@
         // ========== QUEST: Wallet Widget Modals ==========
 
         // History Modal
+        const historyState = {
+            filter: 'all',
+            selectedToken: '',
+            transactions: [],
+        };
+
+        function canonicalKind(tx) {
+            const kind = String(tx.kind || tx.type || '').toLowerCase();
+            const map = {
+                'thr_transfer': 'thr',
+                'transfer': 'thr',
+                'token_transfer': 'token',
+                'token_mint': 'token',
+                'token_burn': 'token',
+                'pool_swap': 'swap',
+                'swap': 'swap',
+                'l2e': 'l2e',
+                'l2e_reward': 'l2e',
+                'ai_credit': 'ai_credits',
+                'ai_credits': 'ai_credits',
+                'iot': 'iot',
+                'iot_parking': 'iot',
+                'iot_parking_reservation': 'iot',
+                'iot_autopilot': 'iot',
+                'bridge': 'bridge',
+                'architect': 'architect',
+                'architect_job': 'architect',
+            };
+            if (map[kind]) return map[kind];
+
+            const asset = String(tx.asset_symbol || tx.asset || tx.symbol || tx.token_symbol || '').toUpperCase();
+            if (asset && asset !== 'THR' && asset !== 'TOKEN') return 'token';
+            return 'thr';
+        }
+
+        function displayAsset(tx) {
+            if (canonicalKind(tx) === 'token') {
+                const sym = String(tx.asset_symbol || tx.asset || tx.symbol || tx.token_symbol || '').toUpperCase().trim();
+                if (!sym || sym === 'THR' || sym === 'TOKEN') {
+                    return '(unknown token)';
+                }
+                return sym;
+            }
+            return 'THR';
+        }
+
+        function displayAmount(tx) {
+            const amountVal = tx.display_amount ?? tx.amount ?? 0;
+            const decimals = Number.isFinite(Number(tx.decimals)) ? Number(tx.decimals) : 6;
+            return Number(amountVal || 0).toFixed(decimals);
+        }
+
+        function setHistoryFilter(filter) {
+            historyState.filter = filter;
+            historyState.selectedToken = '';
+            renderHistoryContent();
+        }
+
+        function setHistoryToken(token) {
+            historyState.selectedToken = token;
+            renderHistoryContent();
+        }
+
+        function resetHistoryState() {
+            historyState.filter = 'all';
+            historyState.selectedToken = '';
+        }
+
+        function renderHistoryContent() {
+            const container = document.getElementById('historyContent');
+            const txs = historyState.transactions || [];
+
+            if (!txs.length) {
+                container.innerHTML = '<p style="color: var(--widget-muted); text-align: center;">No transactions found</p>';
+                return;
+            }
+
+            const tokenSymbols = Array.from(new Set(
+                txs
+                    .filter(tx => canonicalKind(tx) === 'token')
+                    .map(tx => displayAsset(tx))
+                    .filter(sym => sym && sym !== '(unknown token)' && sym !== 'TOKEN')
+            ));
+
+            const filtered = txs.filter(tx => {
+                const kind = canonicalKind(tx);
+                if (historyState.filter === 'thr') return kind === 'thr';
+                if (historyState.filter === 'tokens') return kind === 'token';
+                if (historyState.filter === 'swaps') return kind === 'swap';
+                if (historyState.filter === 'l2e') return kind === 'l2e';
+                if (historyState.filter === 'ai_credits') return kind === 'ai_credits';
+                if (historyState.filter === 'iot') return kind === 'iot';
+                if (historyState.filter === 'bridge') return kind === 'bridge';
+                if (historyState.filter === 'architect') return kind === 'architect';
+                return true;
+            }).filter(tx => {
+                if (historyState.filter !== 'tokens' || !historyState.selectedToken) return true;
+                return displayAsset(tx) === historyState.selectedToken;
+            });
+
+            const tabs = [
+                { id: 'all', label: 'All' },
+                { id: 'thr', label: 'THR' },
+                { id: 'tokens', label: 'Tokens' },
+                { id: 'swaps', label: 'Swaps' },
+                { id: 'l2e', label: 'L2E' },
+                { id: 'ai_credits', label: 'AI Credits' },
+                { id: 'bridge', label: 'Bridge' },
+                { id: 'iot', label: 'IoT' },
+            ];
+
+            let html = `
+                <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;">
+                    ${tabs.map(tab => `
+                        <button class="wallet-btn" style="padding:6px 10px; font-size:11px; ${historyState.filter === tab.id ? 'border-color:#00ff66;' : ''}"
+                            onclick="setHistoryFilter('${tab.id}')">
+                            ${tab.label}
+                        </button>
+                    `).join('')}
+                </div>
+            `;
+
+            if (historyState.filter === 'tokens' && tokenSymbols.length) {
+                html += `
+                    <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;">
+                        <button class="wallet-btn" style="padding:5px 10px; font-size:11px; ${!historyState.selectedToken ? 'border-color:#00ff66;' : ''}"
+                            onclick="setHistoryToken('')">
+                            All Tokens
+                        </button>
+                        ${tokenSymbols.map(sym => `
+                            <button class="wallet-btn" style="padding:5px 10px; font-size:11px; ${historyState.selectedToken === sym ? 'border-color:#00ff66;' : ''}"
+                                onclick="setHistoryToken('${sym}')">
+                                ${sym}
+                            </button>
+                        `).join('')}
+                    </div>
+                `;
+            }
+
+            if (!filtered.length) {
+                container.innerHTML = html + '<p style="color: var(--widget-muted); text-align: center;">No transactions match this filter</p>';
+                return;
+            }
+
+            html += filtered.map(tx => {
+                const kind = canonicalKind(tx);
+                const isIncoming = tx.direction === 'in' || tx.to === walletAddress;
+                const isSwap = kind === 'swap';
+                const amountClass = isSwap ? 'swap' : (isIncoming ? 'incoming' : 'outgoing');
+                const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
+                const status = tx.status || 'confirmed';
+                const asset = displayAsset(tx);
+                const amountStr = displayAmount(tx);
+
+                return `
+                    <div class="tx-item">
+                        <div class="tx-header">
+                            <span class="tx-amount ${amountClass}">${sign}${amountStr} ${asset}</span>
+                            <span class="tx-status ${status}">${status.toUpperCase()}</span>
+                        </div>
+                        <div class="tx-details">
+                            ${isSwap ? 'Trader: ' + (tx.from || walletAddress) : (isIncoming ? 'From: ' + (tx.from || '') : 'To: ' + (tx.to || ''))}<br>
+                            ${tx.timestamp || 'Unknown time'}<br>
+                            TXID: ${(tx.tx_id || 'pending').substring(0, 16)}...
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            container.innerHTML = html;
+        }
+
         async function openHistoryModal() {
             document.getElementById('historyModal').classList.add('active');
             document.getElementById('historyContent').innerHTML = '<p style="color: var(--widget-muted);">Loading...</p>';
+            resetHistoryState();
 
             try {
                 const res = await fetch(`/wallet_data/${walletAddress}`);
                 if (!res.ok) throw new Error('Failed to load history');
                 const data = await res.json();
 
-                const transactions = data.transactions || [];
-                if (transactions.length === 0) {
-                    document.getElementById('historyContent').innerHTML = '<p style="color: var(--widget-muted); text-align: center;">No transactions found</p>';
-                    return;
-                }
-
-                const normalizeAssetSymbol = (value) => {
-                    const symbol = String(value || '').trim().toUpperCase();
-                    if (!symbol || symbol === 'TOKEN') return 'THR';
-                    return symbol;
-                };
-
-                let html = '';
-                transactions.reverse().forEach(tx => {
-                    const direction = tx.direction || (tx.to === walletAddress ? 'in' : 'out');
-                    const isIncoming = direction === 'in';
-                    const isSwap = direction === 'swap' || tx.type === 'swap';
-                    const amountClass = isSwap ? 'swap' : (isIncoming ? 'incoming' : 'outgoing');
-                    const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
-                    const status = tx.status || 'confirmed';
-                    const asset = normalizeAssetSymbol(tx.asset_symbol || tx.asset || tx.token_symbol || 'THR');
-                    const decimals = tx.decimals || 6;
-                    const amountVal = tx.display_amount ?? tx.amount ?? 0;
-                    const amountStr = Number(amountVal).toFixed(decimals);
-
-                    html += `
-                        <div class="tx-item">
-                            <div class="tx-header">
-                                <span class="tx-amount ${amountClass}">${sign}${amountStr} ${asset}</span>
-                                <span class="tx-status ${status}">${status.toUpperCase()}</span>
-                            </div>
-                            <div class="tx-details">
-                                ${isSwap ? 'Trader: ' + (tx.from || walletAddress) : (isIncoming ? 'From: ' + (tx.from || '') : 'To: ' + (tx.to || ''))}<br>
-                                ${tx.timestamp || 'Unknown time'}<br>
-                                TXID: ${(tx.tx_id || 'pending').substring(0, 16)}...
-                            </div>
-                        </div>
-                    `;
-                });
-
-                document.getElementById('historyContent').innerHTML = html;
+                historyState.transactions = (data.transactions || []).slice().reverse();
+                renderHistoryContent();
             } catch (e) {
                 console.error('Error loading history:', e);
                 document.getElementById('historyContent').innerHTML = '<p style="color: #ff4444;">Error loading transaction history</p>';
@@ -1170,6 +1304,7 @@
 
         function closeHistoryModal() {
             document.getElementById('historyModal').classList.remove('active');
+            resetHistoryState();
         }
 
         // Send Modal with Pending TX Polling

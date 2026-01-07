@@ -181,27 +181,13 @@
 
     /* Chain Tokens Widget (Footer) — AUTO-HIDE FIXED FOOTER */
     .chain-tokens-widget{
-        position: fixed;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        z-index: 500;
+        position: relative;
         width: 100%;
         background: linear-gradient(180deg, transparent 0%, rgba(0, 20, 10, 0.92) 20%, rgba(0, 30, 15, 0.98) 100%);
         border-top: 2px solid;
         border-image: linear-gradient(90deg, transparent, #00ff66, #ffd700, #00ff66, transparent) 1;
         backdrop-filter: blur(10px);
         padding: 10px 20px;
-        transform: translateY(100%);
-        opacity: 0;
-        pointer-events: none;
-        transition: transform 0.25s ease, opacity 0.25s ease;
-    }
-
-    .chain-tokens-widget.is-visible{
-        transform: translateY(0);
-        opacity: 1;
-        pointer-events: auto;
     }
 
     .chain-tokens-footer-meta{
@@ -217,6 +203,8 @@
         text-align:right;
         white-space: nowrap;
     }
+
+    .page-footer-spacer { height: 15vh; min-height: 120px; }
 
     /* Wallet Login Modal */
     .wallet-login-btn {
@@ -3430,6 +3418,7 @@ function closeTokenInfoModal(event) {
 }
 </script>
 
+<div class="page-footer-spacer"></div>
 <!-- Chain Tokens Widget (Footer) -->
 <div class="chain-tokens-widget" id="chainTokensWidget">
     <div class="chain-tokens-inner">
@@ -3600,12 +3589,6 @@ function downloadCGMinerKit() {
 
 <script>
 (function(){
-  function setFooterVisible(v){
-    const el = document.querySelector(".chain-tokens-widget");
-    if(!el) return;
-    el.classList.toggle("is-visible", !!v);
-  }
-
   async function hydrateBuild(){
     try{
       const out = document.getElementById("build-info");
@@ -3624,23 +3607,8 @@ function downloadCGMinerKit() {
     }catch(e){}
   }
 
-  function initObserver(){
-    const sentinel = document.getElementById("footer-sentinel");
-    if(!sentinel) return;
-
-    setFooterVisible(false);
-
-    const obs = new IntersectionObserver((entries)=>{
-      const atBottom = entries.some(e => e.isIntersecting);
-      setFooterVisible(atBottom);
-    }, { threshold: 0 });
-
-    obs.observe(sentinel);
-  }
-
   document.addEventListener("DOMContentLoaded", ()=>{
     hydrateBuild();
-    initObserver();
   });
 })();
 </script>

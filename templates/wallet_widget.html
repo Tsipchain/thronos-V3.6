@@ -103,10 +103,12 @@
             z-index: 5000;
             align-items: center;
             justify-content: center;
+            pointer-events: none;
         }
 
         .modal-overlay.active {
             display: flex;
+            pointer-events: auto;
         }
 
         .modal-content {
@@ -1125,21 +1127,33 @@
                     return;
                 }
 
+                const normalizeAssetSymbol = (value) => {
+                    const symbol = String(value || '').trim().toUpperCase();
+                    if (!symbol || symbol === 'TOKEN') return 'THR';
+                    return symbol;
+                };
+
                 let html = '';
                 transactions.reverse().forEach(tx => {
-                    const isIncoming = tx.to === walletAddress;
-                    const amountClass = isIncoming ? 'incoming' : 'outgoing';
-                    const sign = isIncoming ? '+' : '-';
+                    const direction = tx.direction || (tx.to === walletAddress ? 'in' : 'out');
+                    const isIncoming = direction === 'in';
+                    const isSwap = direction === 'swap' || tx.type === 'swap';
+                    const amountClass = isSwap ? 'swap' : (isIncoming ? 'incoming' : 'outgoing');
+                    const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
                     const status = tx.status || 'confirmed';
+                    const asset = normalizeAssetSymbol(tx.asset_symbol || tx.asset || tx.token_symbol || 'THR');
+                    const decimals = tx.decimals || 6;
+                    const amountVal = tx.display_amount ?? tx.amount ?? 0;
+                    const amountStr = Number(amountVal).toFixed(decimals);
 
                     html += `
                         <div class="tx-item">
                             <div class="tx-header">
-                                <span class="tx-amount ${amountClass}">${sign}${tx.amount || 0} ${tx.token || 'THR'}</span>
+                                <span class="tx-amount ${amountClass}">${sign}${amountStr} ${asset}</span>
                                 <span class="tx-status ${status}">${status.toUpperCase()}</span>
                             </div>
                             <div class="tx-details">
-                                ${isIncoming ? 'From: ' : 'To: '} ${isIncoming ? tx.from : tx.to}<br>
+                                ${isSwap ? 'Trader: ' + (tx.from || walletAddress) : (isIncoming ? 'From: ' + (tx.from || '') : 'To: ' + (tx.to || ''))}<br>
                                 ${tx.timestamp || 'Unknown time'}<br>
                                 TXID: ${(tx.tx_id || 'pending').substring(0, 16)}...
                             </div>

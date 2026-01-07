@@ -958,6 +958,12 @@
             allTokens = data.tokens || [];
             lastUpdated = data.last_updated || '';
 
+            // Filter out invalid/generic tokens
+            const validTokensForDropdown = allTokens.filter(token => {
+                const sym = token.symbol.toUpperCase();
+                return sym !== 'TOKEN' && sym !== 'UNKNOWN_TOKEN' && sym !== 'UNKNOWN';
+            });
+
             // Calculate total balance using dynamic prices from pools
             const totalTHR = allTokens.reduce((sum, t) => {
                 return sum + (t.value_in_thr || 0);
@@ -982,7 +988,7 @@
                     <label class="token-selector-label">${t('filterByToken')}</label>
                     <select class="token-selector-dropdown" id="tokenFilter" onchange="filterTokens()">
                         <option value="all">${t('allTokens')}</option>
-                        ${allTokens.map(t => `<option value="${t.symbol}">${t.symbol} - ${t.name}</option>`).join('')}
+                        ${validTokensForDropdown.map(t => `<option value="${t.symbol}">${t.symbol} - ${t.name}</option>`).join('')}
                     </select>
                 </div>
                 ` : ''}
@@ -1011,9 +1017,15 @@
             const container = document.getElementById('tokensList');
             if (!container) return;
 
+            // Filter out invalid/generic tokens
+            const validTokens = allTokens.filter(token => {
+                const sym = token.symbol.toUpperCase();
+                return sym !== 'TOKEN' && sym !== 'UNKNOWN_TOKEN' && sym !== 'UNKNOWN';
+            });
+
             const tokensToShow = selectedTokenFilter === 'all'
-                ? allTokens
-                : allTokens.filter(t => t.symbol === selectedTokenFilter);
+                ? validTokens
+                : validTokens.filter(t => t.symbol === selectedTokenFilter);
 
             container.innerHTML = '';
 
@@ -1139,7 +1151,28 @@
                 const sym = sanitizeTokenSymbol(tx.asset_symbol || tx.asset || tx.symbol);
                 return sym || '(unknown token)';
             }
-            return 'THR';
+            return sym || 'THR';
+        };
+        const isThrTransfer = (tx) => {
+            // Must be thr_transfer kind AND THR asset (not tokens)
+            return getKind(tx) === 'thr_transfer' && getAssetSymbol(tx) === 'THR';
+        };
+        const isSwapTx = (tx) => getKind(tx) === 'swap' || getKind(tx).startsWith('liquidity_') || getKind(tx).includes('pool');
+        const isBridgeTx = (tx) => getKind(tx).startsWith('bridge');
+        const isIoTTx = (tx) => getKind(tx).startsWith('iot') || getKind(tx).includes('parking') || getKind(tx) === 'autopilot';
+        const isAiCreditsTx = (tx) => getKind(tx).startsWith('ai') || getKind(tx).includes('credits');
+
+        function shouldExcludeTx(tx) {
+            const kind = getKind(tx);
+            const asset = getAssetSymbol(tx);
+            if (kind === 'block') return true;
+            if (!tx.from && !tx.to) return true;
+            if (tx.amount === 0 && asset === 'THR' && kind !== 'thr_transfer') return true;
+            return false;
+        }
+
+        function isValidTokenSymbol(symbol) {
+            return symbol && !['THR', 'TOKEN', 'UNKNOWN_TOKEN'].includes(symbol);
         }
 
         function displayAmount(tx) {
@@ -1168,13 +1201,20 @@
 
         function renderHistoryContent() {
             const container = document.getElementById('historyContent');
-            const txs = historyState.transactions || [];
+            const txs = (historyState.transactions || []).filter(tx => !shouldExcludeTx(tx));
 
             if (!txs.length) {
                 container.innerHTML = '<p style="color: var(--widget-muted); text-align: center;">No transactions found</p>';
                 return;
             }
 
+            // Get all token-related transactions (transfers + swaps with tokens)
+            const tokenTxs = txs.filter(tx => {
+                const asset = getAssetSymbol(tx);
+                const isTokenTx = isTokenTransfer(tx) && isValidTokenSymbol(asset);
+                const isTokenSwap = isSwapTx(tx) && asset !== 'THR' && isValidTokenSymbol(asset);
+                return isTokenTx || isTokenSwap;
+            });
             const tokenSymbols = Array.from(new Set(
                 txs
                     .filter(tx => isTokenTx(tx))
@@ -1205,6 +1245,7 @@
                 { id: 'swaps', label: 'Swaps' },
                 { id: 'l2e', label: 'L2E' },
                 { id: 'ai_credits', label: 'AI Credits' },
+                { id: 'architect', label: 'Architect' },
                 { id: 'bridge', label: 'Bridge' },
                 { id: 'iot', label: 'IoT' },
             ];
@@ -1249,7 +1290,7 @@
                 const amountClass = isSwap ? 'swap' : (isIncoming ? 'incoming' : 'outgoing');
                 const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
                 const status = tx.status || 'confirmed';
-                const asset = displayAsset(tx);
+                const asset = getAssetSymbol(tx);
                 const amountStr = displayAmount(tx);
 
                 return `

@@ -390,6 +390,67 @@ const canonicalKind = (kindRaw) => {
   };
   return map[k] || k || 'thr_transfer';
 };
+const CATEGORY_RULES = {
+  transfers: {
+    label: 'Transfers',
+    kinds: [
+      'thr_transfer',
+      'transfer',
+      'swap',
+      'bridge',
+      'coinbase',
+      'ai_credits',
+      'token_transfer',
+      'l2e',
+      'iot',
+      'autopilot',
+      'parking',
+      'music',
+    ],
+    predicate: (tx) => {
+      const kind = canonicalKind(tx?.kind || tx?.type);
+      if (kind === 'block') return false;
+      if (!tx?.from && !tx?.to) return false;
+      return true;
+    },
+  },
+  tokens: {
+    label: 'Tokens',
+    kinds: ['token_transfer'],
+    predicate: (tx) => canonicalKind(tx?.kind || tx?.type) === 'token_transfer',
+  },
+  thr: {
+    label: 'THR',
+    kinds: ['thr_transfer', 'transfer'],
+    predicate: (tx) => {
+      const kind = canonicalKind(tx?.kind || tx?.type);
+      const asset = (tx?.asset || tx?.asset_symbol || tx?.token_symbol || 'THR').toUpperCase();
+      return (kind === 'thr_transfer' || kind === 'transfer') && asset === 'THR';
+    },
+  },
+  other: {
+    label: 'Other/Unknown',
+    predicate: (tx) => {
+      const kind = canonicalKind(tx?.kind || tx?.type);
+      const known = new Set([
+        'thr_transfer',
+        'transfer',
+        'swap',
+        'pool_swap',
+        'bridge',
+        'coinbase',
+        'ai_credits',
+        'token_transfer',
+        'l2e',
+        'iot',
+        'autopilot',
+        'parking',
+        'music',
+      ]);
+      return !known.has(kind);
+    },
+  },
+};
 const short = s => (s && s.length>20 ? s.slice(0,20)+'…' : (s||'—'));
 const rel = ts => {
   if(!ts) return '—';
@@ -523,14 +584,15 @@ function renderTxs(list){
   const q = el('#q').value.trim().toLowerCase();
   const tb = tbody('#tblTxs');
   tb.innerHTML='';
+  const txList = list.filter(CATEGORY_RULES.transfers.predicate);
 
   // Calculate transfer statistics
   let totalVolume = 0;
   let uniqueAddresses = new Set();
   let swapCount = 0;
 
-  list.forEach(t => {
-    const asset = (t && (t.asset || t.token_symbol)) ? String(t.asset || t.token_symbol) : 'THR';
+  txList.forEach(t => {
+    const asset = (t && (t.asset || t.asset_symbol || t.token_symbol)) ? String(t.asset || t.asset_symbol || t.token_symbol) : 'THR';
     const kind = canonicalKind(t && (t.kind || t.type));
     // Only count THR for volume (to avoid mixing token types)
     if(asset === 'THR') {
@@ -542,14 +604,14 @@ function renderTxs(list){
   });
 
   // Update stats cards
-  el('#txsTotalCount').textContent = list.length.toLocaleString() + (swapCount > 0 ? ` (${swapCount} swaps)` : '');
+  el('#txsTotalCount').textContent = txList.length.toLocaleString() + (swapCount > 0 ? ` (${swapCount} swaps)` : '');
   el('#txsTotalVolume').textContent = fmtN(totalVolume) + ' THR';
   el('#txsUniqueAddresses').textContent = uniqueAddresses.size.toLocaleString();
-  el('#txsAvgSize').textContent = list.length > 0 ? fmtN(totalVolume / list.length) + ' THR' : '—';
+  el('#txsAvgSize').textContent = txList.length > 0 ? fmtN(totalVolume / txList.length) + ' THR' : '—';
 
   // Render transfers table
-  list.forEach(t=>{
-    const asset = (t && (t.asset || t.token_symbol)) ? String(t.asset || t.token_symbol) : 'THR';
+  txList.forEach(t=>{
+    const asset = (t && (t.asset || t.asset_symbol || t.token_symbol)) ? String(t.asset || t.asset_symbol || t.token_symbol) : 'THR';
     const kind = canonicalKind(t && (t.kind || t.type));
     const match = !q || JSON.stringify(t).toLowerCase().includes(q);
     if(!match) return;
@@ -565,6 +627,7 @@ function renderTxs(list){
     else if(kind === 'l2e') typeBadge = '<span class="badge" style="color:#ffd166;background:#ffd16622;border-color:#ffd166">l2e</span>';
     else if(kind === 'iot' || kind === 'autopilot' || kind === 'parking') typeBadge = '<span class="badge" style="color:#0ff;background:#0ff1a;border-color:#0ff">iot</span>';
     else if(kind === 'music') typeBadge = '<span class="badge" style="color:#ff9bf2;background:#ff9bf220;border-color:#ff9bf2">music</span>';
+    else if(CATEGORY_RULES.other.predicate(t)) typeBadge = '<span class="badge" style="color:#f7d6ff;background:#f7d6ff22;border-color:#f7d6ff">other</span>';
 
     const details = renderTxDetailsCell(t);
 

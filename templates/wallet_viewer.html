@@ -129,9 +129,14 @@
       <h3><span class="lang-el">Ιστορικό Συναλλαγών</span><span class="lang-en">Transaction History</span></h3>
       <div class="tx-filters">
         <button class="tx-filter-btn active" data-filter="all" onclick="renderTxHistory('all')">All</button>
-        <button class="tx-filter-btn" data-filter="transfers" onclick="renderTxHistory('transfers')">Transfers</button>
+        <button class="tx-filter-btn" data-filter="transfers" onclick="renderTxHistory('transfers')">THR</button>
         <button class="tx-filter-btn" data-filter="tokens" onclick="renderTxHistory('tokens')">Tokens</button>
         <button class="tx-filter-btn" data-filter="swaps" onclick="renderTxHistory('swaps')">Swaps</button>
+        <button class="tx-filter-btn" data-filter="l2e" onclick="renderTxHistory('l2e')">L2E</button>
+        <button class="tx-filter-btn" data-filter="ai_credits" onclick="renderTxHistory('ai_credits')">AI Credits</button>
+        <button class="tx-filter-btn" data-filter="architect" onclick="renderTxHistory('architect')">Architect</button>
+        <button class="tx-filter-btn" data-filter="bridge" onclick="renderTxHistory('bridge')">Bridge</button>
+        <button class="tx-filter-btn" data-filter="iot" onclick="renderTxHistory('iot')">IoT</button>
       </div>
       <div id="txHistory" class="wallet-card">
           <span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span>
@@ -219,7 +224,7 @@
       const btns = document.querySelectorAll('.tx-filter-btn');
       btns.forEach(btn => btn.classList.toggle('active', btn.dataset.filter === currentFilter));
 
-      const txs = walletTxs || [];
+      const txs = (walletTxs || []).filter(tx => !shouldExcludeTx(tx));
       if (!txs.length) {
         div.innerHTML = '<p style="color:#666;">No transactions found.</p>';
         return;

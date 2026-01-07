@@ -10,16 +10,11 @@
   <script src="{{ url_for('static', filename='wallet_session.js') }}"></script>
   <style>
     /* Global Styles */
-    :root {
-      --footer-safe: 110px;
-    }
-
     body {
       background-color: #000;
       color: #0f0;
       font-family: "Courier New", monospace;
       padding: 20px;
-      padding-bottom: calc(var(--footer-safe, 110px) + 24px);
       line-height: 1.6;
       margin: 0;
     }
@@ -40,7 +35,6 @@
       max-width: 1000px;
       margin: 0 auto;
       padding: 0 20px;
-      padding-bottom: calc(var(--footer-safe, 110px) + 24px);
     }
     
     /* Navigation Bar */
@@ -185,27 +179,34 @@
         backdrop-filter: blur(10px);
     }
 
-    /* Chain Tokens Widget (Footer) - PRIORITY 7: Auto-hide */
+    /* Chain Tokens Widget (Footer) */
     .chain-tokens-widget {
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        background: linear-gradient(180deg, transparent 0%, rgba(0, 20, 10, 0.95) 20%, rgba(0, 30, 15, 0.98) 100%);
+        position: relative;
+        width: 100%;
+        margin-top: 60px;
+        background: linear-gradient(180deg, rgba(0, 20, 10, 0.85) 0%, rgba(0, 30, 15, 0.98) 100%);
         border-top: 2px solid;
         border-image: linear-gradient(90deg, transparent, #00ff66, #ffd700, #00ff66, transparent) 1;
         padding: 10px 20px;
-        z-index: 2800;
         backdrop-filter: blur(10px);
-        transform: translateY(0);
-        opacity: 1;
-        transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s ease-out;
     }
 
-    .chain-tokens-widget.hidden {
-        transform: translateY(100%);
-        opacity: 0;
-        pointer-events: none;
+    .chain-tokens-footer-meta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-top: 8px;
+        font-size: 11px;
+        opacity: 0.7;
+        width: 100%;
+    }
+
+    .chain-tokens-footer-meta .footer-version {
+        margin-left: auto;
+        font-size: 10px;
+        white-space: nowrap;
+        opacity: 0.85;
     }
 
     /* Wallet Login Modal */
@@ -3440,8 +3441,10 @@ function closeTokenInfoModal(event) {
                 </span>
             </div>
         </div>
-        <!-- FIX 1: Build info for deployment verification -->
-        <div style="margin-left: auto; padding-left: 15px; opacity: 0.6; font-size: 10px; white-space: nowrap;">
+    </div>
+    <div class="chain-tokens-footer-meta">
+        <div>Thronos Network ® CopyRights 2023–2026</div>
+        <div class="footer-version">
             <span id="buildCommit" title="Git commit hash">loading...</span>
         </div>
     </div>
@@ -3600,81 +3603,6 @@ function downloadCGMinerKit() {
     setInterval(loadChainTokensWidget, 60000);
 })();
 
-// PRIORITY 7: Footer auto-hide behavior
-(function() {
-    let footerHideTimer = null;
-    let isFooterHovered = false;
-    let lastScrollY = window.scrollY;
-    let lastActivity = Date.now();
-
-    const footer = document.getElementById('chainTokensWidget');
-    if (!footer) return;
-
-    function hideFooter() {
-        if (!isFooterHovered) {
-            footer.classList.add('hidden');
-        }
-    }
-
-    function showFooter() {
-        footer.classList.remove('hidden');
-        resetHideTimer();
-    }
-
-    function resetHideTimer() {
-        if (footerHideTimer) clearTimeout(footerHideTimer);
-        footerHideTimer = setTimeout(hideFooter, 10000); // 10 seconds
-    }
-
-    // Show footer on scroll (detect both up and down scroll)
-    let scrollTimeout;
-    window.addEventListener('scroll', () => {
-        const currentScrollY = window.scrollY;
-
-        // Show footer on any scroll activity
-        if (Math.abs(currentScrollY - lastScrollY) > 5) {
-            showFooter();
-            lastScrollY = currentScrollY;
-            lastActivity = Date.now();
-        }
-
-        // Detect end of page
-        if (scrollTimeout) clearTimeout(scrollTimeout);
-        scrollTimeout = setTimeout(() => {
-            const scrolledToBottom = (window.innerHeight + window.scrollY) >= document.body.offsetHeight - 50;
-            if (scrolledToBottom) {
-                showFooter();
-            }
-        }, 100);
-    }, { passive: true });
-
-    // Show footer on mousemove (debounced)
-    let mouseMoveTimeout;
-    window.addEventListener('mousemove', () => {
-        if (mouseMoveTimeout) clearTimeout(mouseMoveTimeout);
-        mouseMoveTimeout = setTimeout(() => {
-            const now = Date.now();
-            if (now - lastActivity > 1000) { // Only if 1s elapsed since last activity
-                showFooter();
-                lastActivity = now;
-            }
-        }, 150);
-    }, { passive: true });
-
-    // Pause auto-hide when hovering footer
-    footer.addEventListener('mouseenter', () => {
-        isFooterHovered = true;
-        if (footerHideTimer) clearTimeout(footerHideTimer);
-    });
-
-    footer.addEventListener('mouseleave', () => {
-        isFooterHovered = false;
-        resetHideTimer();
-    });
-
-    // Initial timer
-    resetHideTimer();
-})();
 </script>
 
 <script src="{{ url_for('static', filename='wallet_sdk.js') }}"></script>

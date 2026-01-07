@@ -199,19 +199,28 @@
     }
 
     const getKind = (tx) => (tx.kind || tx.type || '').toLowerCase();
-
-    const isTokenTx = (tx) => getKind(tx) === 'token_transfer';
-
-    const isSwapTx = (tx) => ['swap', 'pool_swap', 'liquidity_add', 'liquidity_remove'].includes(getKind(tx));
-
+    const isTokenTransfer = (tx) => getKind(tx) === 'token_transfer';
     const getAssetSymbol = (tx) => {
-        if (isTokenTx(tx)) {
-            const sym = (tx.asset_symbol || tx.asset || tx.token_symbol || '').toUpperCase();
-            if (!sym) return 'UNKNOWN_TOKEN';
-            return sym;
+        const sym = (tx.asset_symbol || tx.asset || '').toUpperCase();
+        if (isTokenTransfer(tx)) {
+            return sym || 'UNKNOWN_TOKEN';
         }
-        return (tx.asset_symbol || tx.asset || 'THR').toUpperCase();
+        return sym || 'THR';
     };
+    const isThrTransfer = (tx) => getKind(tx) === 'thr_transfer' || (getKind(tx) === 'transfer' && getAssetSymbol(tx) === 'THR');
+    const isSwapTx = (tx) => getKind(tx) === 'swap' || getKind(tx).startsWith('liquidity_') || getKind(tx).includes('pool');
+    const isBridgeTx = (tx) => getKind(tx).startsWith('bridge_');
+    const isIoTTx = (tx) => getKind(tx).startsWith('iot_') || getKind(tx).includes('parking');
+    const isAiCreditsTx = (tx) => getKind(tx).startsWith('ai_') || getKind(tx).includes('credits');
+
+    function shouldExcludeTx(tx) {
+        const kind = getKind(tx);
+        const asset = getAssetSymbol(tx);
+        if (kind === 'block') return true;
+        if (!tx.from && !tx.to) return true;
+        if (tx.amount === 0 && asset === 'THR' && kind !== 'thr_transfer') return true;
+        return false;
+    }
 
     function isValidTokenSymbol(symbol) {
         return symbol && !['THR', 'TOKEN', 'UNKNOWN_TOKEN'].includes(symbol);
@@ -228,7 +237,7 @@
       const btns = document.querySelectorAll('.tx-filter-btn');
       btns.forEach(btn => btn.classList.toggle('active', btn.dataset.filter === currentFilter));
 
-      const txs = walletTxs || [];
+      const txs = (walletTxs || []).filter(tx => !shouldExcludeTx(tx));
       if (!txs.length) {
         div.innerHTML = '<p style="color:#666;">No transactions found.</p>';
         return;
@@ -237,11 +246,12 @@
       const filtered = txs.filter(tx => {
         const kind = getKind(tx);
         const asset = getAssetSymbol(tx);
-        if (currentFilter === 'tokens') return isTokenTx(tx) && isValidTokenSymbol(asset);
+        if (currentFilter === 'tokens') return isTokenTransfer(tx) && isValidTokenSymbol(asset);
         if (currentFilter === 'swaps') return isSwapTx(tx);
-        if (currentFilter === 'transfers') {
-          return !isTokenTx(tx) && !isSwapTx(tx) && asset === 'THR';
-        }
+        if (currentFilter === 'transfers') return isThrTransfer(tx);
+        if (currentFilter === 'bridge') return isBridgeTx(tx);
+        if (currentFilter === 'iot') return isIoTTx(tx);
+        if (currentFilter === 'ai_credits') return isAiCreditsTx(tx);
         return true;
       });
 

@@ -1119,19 +1119,28 @@
         };
 
         const getKind = (tx) => (tx.kind || tx.type || '').toLowerCase();
-
-        const isTokenTx = (tx) => getKind(tx) === 'token_transfer';
-
-        const isSwapTx = (tx) => ['swap', 'pool_swap', 'liquidity_add', 'liquidity_remove'].includes(getKind(tx));
-
+        const isTokenTransfer = (tx) => getKind(tx) === 'token_transfer';
         const getAssetSymbol = (tx) => {
-            if (isTokenTx(tx)) {
-                const sym = (tx.asset_symbol || tx.asset || tx.token_symbol || '').toUpperCase();
-                if (!sym) return 'UNKNOWN_TOKEN';
-                return sym;
+            const sym = (tx.asset_symbol || tx.asset || '').toUpperCase();
+            if (isTokenTransfer(tx)) {
+                return sym || 'UNKNOWN_TOKEN';
             }
-            return (tx.asset_symbol || tx.asset || 'THR').toUpperCase();
+            return sym || 'THR';
         };
+        const isThrTransfer = (tx) => getKind(tx) === 'thr_transfer' || (getKind(tx) === 'transfer' && getAssetSymbol(tx) === 'THR');
+        const isSwapTx = (tx) => getKind(tx) === 'swap' || getKind(tx).startsWith('liquidity_') || getKind(tx).includes('pool');
+        const isBridgeTx = (tx) => getKind(tx).startsWith('bridge_');
+        const isIoTTx = (tx) => getKind(tx).startsWith('iot_') || getKind(tx).includes('parking');
+        const isAiCreditsTx = (tx) => getKind(tx).startsWith('ai_') || getKind(tx).includes('credits');
+
+        function shouldExcludeTx(tx) {
+            const kind = getKind(tx);
+            const asset = getAssetSymbol(tx);
+            if (kind === 'block') return true;
+            if (!tx.from && !tx.to) return true;
+            if (tx.amount === 0 && asset === 'THR' && kind !== 'thr_transfer') return true;
+            return false;
+        }
 
         function isValidTokenSymbol(symbol) {
             return symbol && !['THR', 'TOKEN', 'UNKNOWN_TOKEN'].includes(symbol);
@@ -1163,14 +1172,14 @@
 
         function renderHistoryContent() {
             const container = document.getElementById('historyContent');
-            const txs = historyState.transactions || [];
+            const txs = (historyState.transactions || []).filter(tx => !shouldExcludeTx(tx));
 
             if (!txs.length) {
                 container.innerHTML = '<p style="color: var(--widget-muted); text-align: center;">No transactions found</p>';
                 return;
             }
 
-            const tokenTxs = txs.filter(isTokenTx);
+            const tokenTxs = txs.filter(isTokenTransfer);
             const tokenSymbols = Array.from(new Set(
                 tokenTxs.map(getAssetSymbol).filter(isValidTokenSymbol)
             ));
@@ -1178,17 +1187,13 @@
             const filtered = txs.filter(tx => {
                 const kind = getKind(tx);
                 const asset = getAssetSymbol(tx);
-                if (historyState.filter === 'thr') {
-                    return !isTokenTx(tx) && !isSwapTx(tx) && asset === 'THR';
-                }
-                if (historyState.filter === 'tokens') {
-                    return isTokenTx(tx) && isValidTokenSymbol(asset);
-                }
+                if (historyState.filter === 'thr') return isThrTransfer(tx);
+                if (historyState.filter === 'tokens') return isTokenTransfer(tx) && isValidTokenSymbol(asset);
                 if (historyState.filter === 'swaps') return isSwapTx(tx);
                 if (historyState.filter === 'l2e') return kind === 'l2e' || kind === 'l2e_reward';
-                if (historyState.filter === 'ai_credits') return kind === 'ai_credits' || kind === 'ai_credit';
-                if (historyState.filter === 'iot') return kind === 'iot' || kind === 'iot_parking' || kind === 'iot_parking_reservation' || kind === 'iot_autopilot';
-                if (historyState.filter === 'bridge') return kind === 'bridge';
+                if (historyState.filter === 'ai_credits') return isAiCreditsTx(tx);
+                if (historyState.filter === 'iot') return isIoTTx(tx);
+                if (historyState.filter === 'bridge') return isBridgeTx(tx);
                 if (historyState.filter === 'architect') return kind === 'architect' || kind === 'architect_job';
                 return true;
             }).filter(tx => {
@@ -1241,7 +1246,6 @@
             }
 
             html += filtered.map(tx => {
-                const kind = getKind(tx);
                 const isIncoming = tx.direction === 'in' || tx.to === walletAddress;
                 const isSwap = isSwapTx(tx);
                 const amountClass = isSwap ? 'swap' : (isIncoming ? 'incoming' : 'outgoing');

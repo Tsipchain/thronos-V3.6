@@ -1118,42 +1118,26 @@
             transactions: [],
         };
 
-        function canonicalKind(tx) {
-            const kind = String(tx.kind || tx.type || '').toLowerCase();
-            const map = {
-                'thr_transfer': 'thr',
-                'transfer': 'thr',
-                'token_transfer': 'token',
-                'token_mint': 'token',
-                'token_burn': 'token',
-                'pool_swap': 'swap',
-                'swap': 'swap',
-                'l2e': 'l2e',
-                'l2e_reward': 'l2e',
-                'ai_credit': 'ai_credits',
-                'ai_credits': 'ai_credits',
-                'iot': 'iot',
-                'iot_parking': 'iot',
-                'iot_parking_reservation': 'iot',
-                'iot_autopilot': 'iot',
-                'bridge': 'bridge',
-                'architect': 'architect',
-                'architect_job': 'architect',
-            };
-            if (map[kind]) return map[kind];
+        function normalizeKind(tx) {
+            return String(tx.kind || '').toLowerCase();
+        }
 
-            const asset = String(tx.asset_symbol || tx.asset || tx.symbol || tx.token_symbol || '').toUpperCase();
-            if (asset && asset !== 'THR' && asset !== 'TOKEN') return 'token';
-            return 'thr';
+        function isTokenTx(tx) {
+            return normalizeKind(tx) === 'token_transfer';
+        }
+
+        function sanitizeTokenSymbol(symbol) {
+            const sym = String(symbol || '').toUpperCase().trim();
+            if (!sym || sym === 'TOKEN' || sym === 'TKN' || sym === 'UNKNOWN') {
+                return '';
+            }
+            return sym;
         }
 
         function displayAsset(tx) {
-            if (canonicalKind(tx) === 'token') {
-                const sym = String(tx.asset_symbol || tx.asset || tx.symbol || tx.token_symbol || '').toUpperCase().trim();
-                if (!sym || sym === 'THR' || sym === 'TOKEN') {
-                    return '(unknown token)';
-                }
-                return sym;
+            if (isTokenTx(tx)) {
+                const sym = sanitizeTokenSymbol(tx.asset_symbol || tx.asset);
+                return sym || '(unknown token)';
             }
             return 'THR';
         }
@@ -1166,7 +1150,9 @@
 
         function setHistoryFilter(filter) {
             historyState.filter = filter;
-            historyState.selectedToken = '';
+            if (filter !== 'tokens') {
+                historyState.selectedToken = '';
+            }
             renderHistoryContent();
         }
 
@@ -1191,25 +1177,25 @@
 
             const tokenSymbols = Array.from(new Set(
                 txs
-                    .filter(tx => canonicalKind(tx) === 'token')
-                    .map(tx => displayAsset(tx))
-                    .filter(sym => sym && sym !== '(unknown token)' && sym !== 'TOKEN')
+                    .filter(tx => isTokenTx(tx))
+                    .map(tx => sanitizeTokenSymbol(tx.asset_symbol || tx.asset))
+                    .filter(sym => sym)
             ));
 
             const filtered = txs.filter(tx => {
-                const kind = canonicalKind(tx);
-                if (historyState.filter === 'thr') return kind === 'thr';
-                if (historyState.filter === 'tokens') return kind === 'token';
-                if (historyState.filter === 'swaps') return kind === 'swap';
-                if (historyState.filter === 'l2e') return kind === 'l2e';
-                if (historyState.filter === 'ai_credits') return kind === 'ai_credits';
-                if (historyState.filter === 'iot') return kind === 'iot';
+                const kind = normalizeKind(tx);
+                if (historyState.filter === 'thr') return kind === 'transfer' || kind === 'thr_transfer';
+                if (historyState.filter === 'tokens') return kind === 'token_transfer';
+                if (historyState.filter === 'swaps') return kind === 'swap' || kind === 'pool_swap';
+                if (historyState.filter === 'l2e') return kind === 'l2e' || kind === 'l2e_reward';
+                if (historyState.filter === 'ai_credits') return kind === 'ai_credits' || kind === 'ai_credit';
+                if (historyState.filter === 'iot') return kind === 'iot' || kind === 'iot_parking' || kind === 'iot_parking_reservation' || kind === 'iot_autopilot';
                 if (historyState.filter === 'bridge') return kind === 'bridge';
-                if (historyState.filter === 'architect') return kind === 'architect';
+                if (historyState.filter === 'architect') return kind === 'architect' || kind === 'architect_job';
                 return true;
             }).filter(tx => {
                 if (historyState.filter !== 'tokens' || !historyState.selectedToken) return true;
-                return displayAsset(tx) === historyState.selectedToken;
+                return sanitizeTokenSymbol(tx.asset_symbol || tx.asset) === historyState.selectedToken;
             });
 
             const tabs = [
@@ -1257,9 +1243,9 @@
             }
 
             html += filtered.map(tx => {
-                const kind = canonicalKind(tx);
+                const kind = normalizeKind(tx);
                 const isIncoming = tx.direction === 'in' || tx.to === walletAddress;
-                const isSwap = kind === 'swap';
+                const isSwap = kind === 'swap' || kind === 'pool_swap';
                 const amountClass = isSwap ? 'swap' : (isIncoming ? 'incoming' : 'outgoing');
                 const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
                 const status = tx.status || 'confirmed';

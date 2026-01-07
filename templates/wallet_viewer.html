@@ -198,31 +198,13 @@
       return num.toFixed(decimalPlaces);
     }
 
-    function canonicalKind(kindRaw) {
-        const k = (kindRaw || '').toLowerCase();
-        const map = {
-            'thr_transfer': 'thr_transfer',
-            'transfer': 'thr_transfer',
-            'pool_swap': 'swap',
-            'swap': 'swap',
-            'token_transfer': 'token_transfer',
-            'send_token': 'token_transfer',
-            'receive_token': 'token_transfer',
-            'ai_credit': 'ai_credits',
-            'ai_credits': 'ai_credits',
-            'credits_consume': 'ai_credits',
-            'service_payment': 'ai_credits',
-            'ai_knowledge': 'ai_credits',
-            'iot_parking': 'parking',
-            'iot_parking_reservation': 'parking',
-            'iot_autopilot': 'autopilot',
-        };
-        return map[k] || k || 'thr_transfer';
+    function normalizeKind(value) {
+        return String(value || '').toLowerCase();
     }
 
-    function normalizeAssetSymbol(value) {
+    function sanitizeTokenSymbol(value) {
         const symbol = String(value || '').trim().toUpperCase();
-        if (!symbol || symbol === 'TOKEN') return 'THR';
+        if (!symbol || symbol === 'TOKEN' || symbol === 'TKN' || symbol === 'UNKNOWN') return '';
         return symbol;
     }
 
@@ -244,10 +226,10 @@
       }
 
       const filtered = txs.filter(tx => {
-        const kind = canonicalKind(tx.kind || tx.type);
+        const kind = normalizeKind(tx.kind);
         if (currentFilter === 'tokens') return kind === 'token_transfer';
-        if (currentFilter === 'swaps') return kind === 'swap';
-        if (currentFilter === 'transfers') return kind !== 'swap' && kind !== 'token_transfer';
+        if (currentFilter === 'swaps') return kind === 'swap' || kind === 'pool_swap';
+        if (currentFilter === 'transfers') return kind === 'transfer' || kind === 'thr_transfer';
         return true;
       });
 
@@ -259,10 +241,13 @@
       let html = "";
       filtered.forEach(tx => {
         const isIncoming = tx.direction === 'in' || tx.to === currentAddress;
-        const isSwap = tx.direction === 'swap' || (tx.kind || tx.type) === 'swap';
+        const kind = normalizeKind(tx.kind);
+        const isSwap = tx.direction === 'swap' || kind === 'swap' || kind === 'pool_swap';
         const color = isSwap ? '#0ff' : (isIncoming ? '#0f0' : '#ff0');
         const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
-        const asset = normalizeAssetSymbol(tx.asset_symbol || tx.asset || tx.token_symbol || 'THR');
+        const isToken = kind === 'token_transfer';
+        const tokenSymbol = sanitizeTokenSymbol(tx.asset_symbol || tx.asset);
+        const asset = isToken ? (tokenSymbol || '(unknown token)') : 'THR';
         const decimals = tx.decimals || tokenDecimals;
         const formattedAmount = formatTokenAmount(tx.display_amount ?? tx.amount ?? 0, decimals);
         const label = (tx.category_label || tx.kind || tx.type || '').toString().toUpperCase();

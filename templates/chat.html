@@ -1296,6 +1296,9 @@
           try {
             const res = await fetch(API_SESSION_DETAIL(s.id), {
               method: "DELETE",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ wallet: walletInputEl.value.trim() || null }),
             });
             const payload = (await res.json().catch(() => ({}))) || {};
             if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
@@ -1563,7 +1566,7 @@
         const url = wallet
           ? `${API_SESSIONS}?wallet=${encodeURIComponent(wallet)}`
           : API_SESSIONS;
-        const res = await fetch(url);
+        const res = await fetch(url, { credentials: "include" });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
         aiSessions = (data.sessions || []).map((s) => {
@@ -1732,6 +1735,7 @@
         const res = await fetch(API_SESSION_CREATE, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          credentials: "include",
           body: JSON.stringify({
             title,
             wallet: wallet || null

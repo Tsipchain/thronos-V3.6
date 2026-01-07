@@ -50,3 +50,6 @@
     - Opening/closing the wallet history modal resets to a safe default (“All”) and category counts match `/api/tx_feed?wallet=...&debug_counts=1` output (no token misclassification).
 21. **Post-restart persistence**
     - Token transfers remain visible in Viewer Transfers and Wallet Tokens after a restart/redeploy using the persistent tx_ledger.
+22. **Claude routing**
+    - `/api/ai_models` lists Claude models as enabled only when Anthropic keys are present; otherwise they appear disabled.
+    - Selecting a Claude model returns a clear provider_error when misconfigured (no silent fallback/charges to GPT).

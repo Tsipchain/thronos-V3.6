@@ -552,6 +552,7 @@ AI_FREE_USAGE_FILE  = os.path.join(DATA_DIR, "ai_free_usage.json")
 # AI extra storage
 AI_FILES_DIR   = os.path.join(DATA_DIR, "ai_files")
 AI_CORPUS_FILE = os.path.join(DATA_DIR, "ai_offline_corpus.json")
+LAST_PROMPT_HASH: dict[str, str] = {}
 os.makedirs(AI_FILES_DIR, exist_ok=True)
 
 # NEW: αποθήκευση sessions (λίστα συνομιλιών)
@@ -1351,6 +1352,11 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
     tx_id = tx.get("tx_id") or tx.get("hash") or tx.get("id") or tx.get("bridge_id")
 
     amount_raw = tx.get("amount_raw")
+    if isinstance(amount_raw, str):
+        try:
+            amount_raw = float(amount_raw)
+        except Exception:
+            pass
     amount = float(tx.get("amount", 0.0) or 0.0)
     asset_symbol = (tx.get("token_symbol") or tx.get("symbol") or tx.get("asset") or "THR").upper()
     token_meta = _resolve_token_meta(asset_symbol)
@@ -1454,6 +1460,8 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
             "display_amount": amount_in,
             "asset_symbol": token_in,
         })
+        out_meta = _resolve_token_meta(token_out)
+        out_decimals = out_meta.get("decimals", decimals)
         norm["meta"].update({
             "pool_id": tx.get("pool_id"),
             "amount_in": amount_in,
@@ -1463,6 +1471,11 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
             "pair": f"{token_in}/{token_out}",
             "amount_out_raw": tx.get("amount_out_raw"),
         })
+        if tx.get("amount_out_raw") is not None:
+            try:
+                norm["meta"]["amount_out_display"] = float(tx.get("amount_out_raw")) / (10 ** out_decimals)
+            except Exception:
+                pass
         if tx.get("trader"):
             norm["from"] = tx.get("trader")
             norm["to"] = tx.get("trader")
@@ -1631,30 +1644,56 @@ def _base_token_catalog():
 
 def get_all_tokens():
     """Centralized catalog that returns base + custom tokens."""
-    catalog = _base_token_catalog()
+    catalog_map: dict[str, dict] = {}
 
-    custom_tokens = load_tokens()
-    for t in custom_tokens:
+    def _merge_token(entry: dict, source: str):
+        if not isinstance(entry, dict):
+            return
+        sym = (entry.get("symbol") or "").upper()
+        if not sym:
+            return
+        merged = catalog_map.get(sym, {})
+        merged.update(entry)
+        merged["symbol"] = sym
+        merged.setdefault("type", source)
+        catalog_map[sym] = merged
+
+    for base in _base_token_catalog():
+        _merge_token(base, base.get("type", "base"))
+
+    for t in load_tokens():
         logo_path = t.get("logo_path") or t.get("logo")
         if logo_path:
             t["logo_url"] = url_for("media", filename=logo_path, _external=False)
-        if t.get("symbol"):
-            catalog.append(t)
+        _merge_token(t, t.get("type", "custom"))
 
-    experimental = load_custom_tokens()
-    for symbol, meta in experimental.items():
-        token_id = meta.get("id")
+    for symbol, meta in load_custom_tokens().items():
         logo_path = meta.get("logo_path") or meta.get("logo")
-        catalog.append({
-            "symbol": symbol,
-            "name": meta.get("name", symbol),
-            "decimals": meta.get("decimals", 6),
-            "logo_url": url_for("media", filename=logo_path, _external=False) if logo_path else None,
-            "total_supply": meta.get("total_supply") or meta.get("initial_supply"),
-            "type": "experimental",
-            "token_id": token_id,
-        })
+        _merge_token(
+            {
+                "symbol": symbol,
+                "name": meta.get("name", symbol),
+                "decimals": meta.get("decimals", 6),
+                "logo_url": url_for("media", filename=logo_path, _external=False) if logo_path else None,
+                "total_supply": meta.get("total_supply") or meta.get("initial_supply"),
+                "type": meta.get("type", "experimental"),
+                "token_id": meta.get("id"),
+                "creator": meta.get("creator") or meta.get("owner"),
+                "created_at": meta.get("created_at"),
+            },
+            meta.get("source", "experimental"),
+        )
 
+    catalog: list[dict] = []
+    for sym, meta in catalog_map.items():
+        tok = meta.copy()
+        try:
+            tok["decimals"] = int(tok.get("decimals", 6))
+        except Exception:
+            tok["decimals"] = 6
+        catalog.append(tok)
+
+    catalog.sort(key=lambda t: t.get("symbol"))
     return catalog
 
 
@@ -2168,11 +2207,23 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
     if default_model_id not in callable_ids and callable_ids:
         default_model_id = callable_ids[0]
 
-    requested = (model_id or "").strip() or default_model_id or "auto"
+    requested_raw = (model_id or "").strip()
+    requested = requested_raw or default_model_id or "auto"
 
     fallback_notice = None
 
     if requested not in callable_ids and requested != "auto":
+        if requested_raw:
+            error_payload = {
+                "ok": False,
+                "status": "model_not_callable",
+                "error": f"Model '{requested_raw}' is disabled or not configured",
+                "requested_model": requested_raw,
+                "mode": normalized_mode,
+                "providers": provider_status,
+                "enabled_models": callable_ids,
+            }
+            return None, None, (jsonify(error_payload), 400)
         fallback_notice = f"Model '{requested}' not callable; using {default_model_id}" if default_model_id else None
         requested = default_model_id
 
@@ -5011,7 +5062,7 @@ def api_chat():
         return jsonify(error="AI Agent not available"), 503
 
     data = request.get_json() or {}
-    msg = (data.get("message") or "").strip()
+    msg = (data.get("message") or data.get("prompt") or data.get("text") or "").strip()
     wallet = (data.get("wallet") or "").strip()  # MOVED HERE - must be before attachments!
     session_id = (data.get("session_id") or "").strip() or None
     model_key = (data.get("model_id") or data.get("model") or data.get("model_key") or "").strip() or None
@@ -5136,6 +5187,22 @@ def api_chat():
             logger.warning(f"Skipped {len(files_skipped)} attachments: {', '.join(files_skipped)}")
 
     if not msg:
+        history_messages = data.get("messages") if isinstance(data.get("messages"), list) else []
+        for m in reversed(history_messages):
+            if not isinstance(m, dict):
+                continue
+            role = (m.get("role") or "").lower()
+            content_val = m.get("content")
+            if role == "user" and content_val:
+                msg = str(content_val).strip()
+                break
+
+    if not msg:
+        last_user = data.get("last_user_message")
+        if last_user:
+            msg = str(last_user).strip()
+
+    if not msg:
         return jsonify(error="Message required"), 400
 
     # --- FIX 8: Credits check (Chat billing mode) ---
@@ -5237,6 +5304,12 @@ def api_chat():
     # current user is explicitly labelled as "User" to distinguish it
     # from previous messages.  Any attachments have already been
     # appended to ``msg`` above.
+    session_key = session_id or "default"
+    try:
+        prompt_hash = hashlib.sha256(msg.encode()).hexdigest()
+        LAST_PROMPT_HASH[session_key] = prompt_hash
+    except Exception:
+        pass
     full_prompt = f"{context_str}User: {msg}" if context_str else msg
 
     # --- Κλήση στον ThronosAI provider ---
@@ -12240,7 +12313,8 @@ def api_chat_session_get(session_id):
     """
     # Handle DELETE
     if request.method == "DELETE":
-        wallet_in = request.args.get("wallet") or ""
+        payload = request.get_json(silent=True) or {}
+        wallet_in = payload.get("wallet") or request.args.get("wallet") or ""
         identity, guest_id = _current_actor_id(wallet_in)
 
         sessions = load_ai_sessions()
@@ -12734,6 +12808,7 @@ def api_ai_models():
                         "display_name": mi.display_name,
                         "provider": mi.provider,
                         "enabled": mi.enabled,
+                        "degraded": not mi.enabled,
                         "mode": mode,
                     }
                 )

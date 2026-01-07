@@ -1224,9 +1224,20 @@
 
             const filtered = txs.filter(tx => {
                 const kind = normalizeKind(tx);
-                if (historyState.filter === 'thr') return kind === 'transfer' || kind === 'thr_transfer';
-                if (historyState.filter === 'tokens') return kind === 'token_transfer';
+                const asset = tx.asset_symbol || tx.asset || tx.symbol || 'THR';
+
+                // THR filter: must be transfer/thr_transfer AND asset must be THR (not tokens)
+                if (historyState.filter === 'thr') {
+                    return (kind === 'transfer' || kind === 'thr_transfer') && asset === 'THR';
+                }
+
+                // Tokens filter: must be token_transfer AND asset must NOT be THR
+                if (historyState.filter === 'tokens') {
+                    return kind === 'token_transfer' && asset !== 'THR';
+                }
+
                 if (historyState.filter === 'swaps') return kind === 'swap' || kind === 'pool_swap';
+                if (historyState.filter === 'liquidity') return kind.startsWith('liquidity_') || kind === 'add_liquidity' || kind === 'remove_liquidity';
                 if (historyState.filter === 'l2e') return kind === 'l2e' || kind === 'l2e_reward';
                 if (historyState.filter === 'ai_credits') return kind === 'ai_credits' || kind === 'ai_credit';
                 if (historyState.filter === 'iot') return kind === 'iot' || kind === 'iot_parking' || kind === 'iot_parking_reservation' || kind === 'iot_autopilot';
@@ -1243,6 +1254,7 @@
                 { id: 'thr', label: 'THR' },
                 { id: 'tokens', label: 'Tokens' },
                 { id: 'swaps', label: 'Swaps' },
+                { id: 'liquidity', label: 'Liquidity' },
                 { id: 'l2e', label: 'L2E' },
                 { id: 'ai_credits', label: 'AI Credits' },
                 { id: 'architect', label: 'Architect' },
@@ -1287,28 +1299,65 @@
                 const kind = normalizeKind(tx);
                 const isIncoming = tx.direction === 'in' || tx.to === walletAddress;
                 const isSwap = kind === 'swap' || kind === 'pool_swap';
+                const isLiquidity = kind.startsWith('liquidity_') || kind === 'add_liquidity' || kind === 'remove_liquidity';
                 const amountClass = isSwap ? 'swap' : (isIncoming ? 'incoming' : 'outgoing');
                 const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
                 const status = tx.status || 'confirmed';
                 const asset = getAssetSymbol(tx);
                 const amountStr = displayAmount(tx);
 
+                // Fee information
+                const fee = tx.fee_burned || tx.fee || 0;
+                const feeDisplay = fee > 0 ? `<br><small style="color: var(--widget-muted);">Fee: ${fee} THR</small>` : '';
+
+                // Pool/liquidity specific info
+                let poolInfo = '';
+                if (isLiquidity) {
+                    const action = kind.includes('add') ? 'Add Liquidity' : 'Remove Liquidity';
+                    poolInfo = `<br><small style="color: #0ff;">${action}</small>`;
+                } else if (isSwap && tx.meta) {
+                    // Show swap details if available
+                    const fromAsset = tx.meta.from_asset || asset;
+                    const toAsset = tx.meta.to_asset || 'THR';
+                    poolInfo = `<br><small style="color: #0ff;">Swap: ${fromAsset} → ${toAsset}</small>`;
+                }
+
+                // Token price info (if available in meta)
+                const priceInfo = (tx.meta && tx.meta.token_price_thr)
+                    ? `<br><small style="color: var(--widget-muted);">Price: ${tx.meta.token_price_thr} THR per ${asset}</small>`
+                    : '';
+
                 return `
-                    <div class="tx-item">
+                    <div class="tx-item" style="cursor: pointer;" onclick="toggleTxDetails('${tx.tx_id}')">
                         <div class="tx-header">
                             <span class="tx-amount ${amountClass}">${sign}${amountStr} ${asset}</span>
                             <span class="tx-status ${status}">${status.toUpperCase()}</span>
                         </div>
-                        <div class="tx-details">
+                        <div class="tx-details" id="tx-${tx.tx_id}">
                             ${isSwap ? 'Trader: ' + (tx.from || walletAddress) : (isIncoming ? 'From: ' + (tx.from || '') : 'To: ' + (tx.to || ''))}<br>
-                            ${tx.timestamp || 'Unknown time'}<br>
-                            TXID: ${(tx.tx_id || 'pending').substring(0, 16)}...
+                            ${tx.timestamp || 'Unknown time'}${feeDisplay}${poolInfo}${priceInfo}<br>
+                            <small style="color: var(--widget-muted);">TXID: ${(tx.tx_id || 'pending').substring(0, 16)}...</small>
                         </div>
                     </div>
                 `;
             }).join('');
 
             container.innerHTML = html;
+        }
+
+        function toggleTxDetails(txId) {
+            const detailsEl = document.getElementById(`tx-${txId}`);
+            if (!detailsEl) return;
+
+            // Toggle expanded state
+            const isExpanded = detailsEl.style.maxHeight && detailsEl.style.maxHeight !== '0px';
+            if (isExpanded) {
+                detailsEl.style.maxHeight = '0px';
+                detailsEl.style.overflow = 'hidden';
+            } else {
+                detailsEl.style.maxHeight = 'none';
+                detailsEl.style.overflow = 'visible';
+            }
         }
 
         async function openHistoryModal() {

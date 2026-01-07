@@ -232,9 +232,20 @@
 
       const filtered = txs.filter(tx => {
         const kind = normalizeKind(tx.kind);
-        if (currentFilter === 'tokens') return kind === 'token_transfer';
+        const asset = tx.asset_symbol || tx.asset || tx.symbol || 'THR';
+
+        // Tokens filter: must be token_transfer AND asset must NOT be THR
+        if (currentFilter === 'tokens') {
+          return kind === 'token_transfer' && asset !== 'THR';
+        }
+
         if (currentFilter === 'swaps') return kind === 'swap' || kind === 'pool_swap';
-        if (currentFilter === 'transfers') return kind === 'transfer' || kind === 'thr_transfer';
+
+        // Transfers filter: must be transfer/thr_transfer AND asset must be THR (not tokens)
+        if (currentFilter === 'transfers') {
+          return (kind === 'transfer' || kind === 'thr_transfer') && asset === 'THR';
+        }
+
         return true;
       });
 

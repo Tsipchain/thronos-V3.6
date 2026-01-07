@@ -30,7 +30,7 @@ from __future__ import annotations
 # - Real Fiat Gateway (Stripe + Bank Withdrawals) (V5.0)
 # - Admin Withdrawal Panel (V5.1)
 
-import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile
+import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil
 from collections import Counter
 from decimal import Decimal, ROUND_DOWN
 import qrcode
@@ -9714,7 +9714,106 @@ def api_v1_get_course(course_id: str):
     course = next((c for c in courses if c.get("id") == course_id), None)
     if not course:
         return jsonify(error="course_not_found", course_id=course_id), 404
-    return jsonify(course=course), 200
+
+    course_payload = course.copy()
+    quiz = get_course_quiz(course_id)
+    if quiz:
+        safe_questions = []
+        for idx, q in enumerate(quiz.get("questions", []), start=1):
+            qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=idx)
+            if qtype not in {"multiple_choice", "true_false"}:
+                app.logger.warning("Unsupported quiz question type; forcing multiple_choice", extra={
+                    "course_id": course_id,
+                    "question_id": q.get("id") or idx,
+                    "type": qtype,
+                })
+                qtype = "multiple_choice"
+            safe_questions.append({
+                "id": q.get("id"),
+                "type": qtype,
+                "question": q.get("question"),
+                "options": q.get("options", []),
+            })
+        course_payload["quiz"] = {
+            "course_id": course_id,
+            "title": quiz.get("title", "Course Quiz"),
+            "passing_score": quiz.get("pass_score", 80),
+            "questions": safe_questions,
+        }
+
+    teacher = (request.args.get("teacher_thr") or "").strip()
+    auth_secret = (request.args.get("auth_secret") or "").strip()
+    passphrase = (request.args.get("passphrase") or "").strip()
+    if teacher and auth_secret and course.get("teacher") == teacher:
+        pledges = load_json(PLEDGE_CHAIN, [])
+        teacher_pledge = next((p for p in pledges if p.get("thr_address") == teacher), None)
+        if teacher_pledge:
+            stored_auth_hash = teacher_pledge.get("send_auth_hash")
+            if teacher_pledge.get("has_passphrase"):
+                auth_string = f"{auth_secret}:{passphrase}:auth"
+            else:
+                auth_string = f"{auth_secret}:auth"
+            if hashlib.sha256(auth_string.encode()).hexdigest() == stored_auth_hash:
+                course_payload["quiz_full"] = load_quizzes().get(course_id) or quiz
+
+    return jsonify(course=course_payload), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/delete", methods=["POST"])
+def api_v1_delete_course(course_id: str):
+    """Delete a course (teacher only)."""
+    data = request.get_json() or {}
+    teacher = (data.get("teacher_thr") or "").strip()
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+
+    if not teacher or not auth_secret:
+        return jsonify(status="error", message="Missing auth"), 400
+
+    courses = load_courses()
+    course = next((c for c in courses if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    if course.get("teacher") != teacher:
+        return jsonify(status="error", message="Not the course teacher"), 403
+
+    pledges = load_json(PLEDGE_CHAIN, [])
+    teacher_pledge = next((p for p in pledges if p.get("thr_address") == teacher), None)
+    if not teacher_pledge:
+        return jsonify(status="error", message="Teacher not pledged"), 404
+    stored_auth_hash = teacher_pledge.get("send_auth_hash")
+    if teacher_pledge.get("has_passphrase"):
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify(status="error", message="Invalid auth"), 403
+
+    courses = [c for c in courses if c.get("id") != course_id]
+    save_courses(courses)
+
+    quizzes = load_quizzes()
+    if course_id in quizzes:
+        del quizzes[course_id]
+        save_quizzes(quizzes)
+
+    enrollments_file = os.path.join(DATA_DIR, "course_enrollments.json")
+    enrollments = load_json(enrollments_file, {})
+    if course_id in enrollments:
+        del enrollments[course_id]
+        save_json(enrollments_file, enrollments)
+
+    quiz_attempts_file = os.path.join(DATA_DIR, "quiz_attempts.json")
+    quiz_attempts = load_json(quiz_attempts_file, {})
+    if course_id in quiz_attempts:
+        del quiz_attempts[course_id]
+        save_json(quiz_attempts_file, quiz_attempts)
+
+    course_media_dir = os.path.join(MEDIA_DIR, "courses", course_id)
+    if os.path.isdir(course_media_dir):
+        shutil.rmtree(course_media_dir, ignore_errors=True)
+
+    return jsonify(status="success", message="Course deleted"), 200
 
 
 @app.route("/api/v1/courses", methods=["POST"])
@@ -10215,6 +10314,21 @@ def save_quizzes(quizzes):
     save_json(QUIZZES_FILE, quizzes)
 
 
+def normalize_quiz_question_type(raw_type: str | None, *, course_id: str = "", question_id: int | None = None) -> str:
+    if not raw_type:
+        app.logger.warning("Missing quiz question type; defaulting to multiple_choice", extra={
+            "course_id": course_id,
+            "question_id": question_id,
+        })
+        return "multiple_choice"
+    normalized = str(raw_type).strip().lower()
+    if normalized in {"single", "mcq", "multiple_choice", "multiple-choice"}:
+        return "multiple_choice"
+    if normalized in {"tf", "true_false", "truefalse"}:
+        return "true_false"
+    return normalized
+
+
 def get_course_quiz(course_id: str):
     """Return normalized quiz payload from course metadata or quizzes.json."""
     courses = load_courses()
@@ -10225,11 +10339,20 @@ def get_course_quiz(course_id: str):
         normalized_questions = []
         for idx, q in enumerate(metadata_quiz.get("questions", []), start=1):
             options = q.get("options", [])
+            qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=idx)
+            if qtype not in {"multiple_choice", "true_false"}:
+                app.logger.warning("Unsupported quiz question type; forcing multiple_choice", extra={
+                    "course_id": course_id,
+                    "question_id": q.get("id") or idx,
+                    "type": qtype,
+                })
+                qtype = "multiple_choice"
             normalized_questions.append({
                 "id": q.get("id") or idx,
+                "type": qtype,
                 "question": q.get("text") or q.get("question"),
                 "options": options,
-                "correct_index": int(q.get("correct_index", 0)),
+                "correct": int(q.get("correct", q.get("correct_index", 0))),
             })
         return {
             "course_id": course_id,
@@ -10242,12 +10365,21 @@ def get_course_quiz(course_id: str):
     quiz = quizzes.get(course_id)
     if quiz:
         normalized_questions = []
-        for q in quiz.get("questions", []):
+        for idx, q in enumerate(quiz.get("questions", []), start=1):
+            qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=idx)
+            if qtype not in {"multiple_choice", "true_false"}:
+                app.logger.warning("Unsupported quiz question type; forcing multiple_choice", extra={
+                    "course_id": course_id,
+                    "question_id": q.get("id") or idx,
+                    "type": qtype,
+                })
+                qtype = "multiple_choice"
             normalized_questions.append({
                 "id": q.get("id"),
+                "type": qtype,
                 "question": q.get("question"),
                 "options": q.get("options", []),
-                "correct_index": int(q.get("correct", 0)),
+                "correct": int(q.get("correct", 0)),
             })
         return {
             "course_id": course_id,
@@ -10266,11 +10398,20 @@ def api_v1_get_quiz(course_id: str):
         return jsonify(quiz=None, message="No quiz for this course"), 200
 
     safe_questions = []
-    for q in quiz.get("questions", []):
+    for idx, q in enumerate(quiz.get("questions", []), start=1):
+        qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=idx)
+        if qtype not in {"multiple_choice", "true_false"}:
+            app.logger.warning("Unsupported quiz question type; forcing multiple_choice", extra={
+                "course_id": course_id,
+                "question_id": q.get("id") or idx,
+                "type": qtype,
+            })
+            qtype = "multiple_choice"
         safe_questions.append({
             "id": q.get("id"),
             "question": q.get("question"),
-            "options": q.get("options", [])
+            "options": q.get("options", []),
+            "type": qtype
         })
 
     return jsonify(quiz={
@@ -10279,6 +10420,97 @@ def api_v1_get_quiz(course_id: str):
         "passing_score": quiz.get("pass_score", 80),
         "questions": safe_questions
     }), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/quiz/edit", methods=["POST"])
+def api_v1_get_quiz_for_edit(course_id: str):
+    """Return the quiz for editing (includes correct answers). Teacher only."""
+    data = request.get_json() or {}
+    teacher = (data.get("teacher_thr") or "").strip()
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+
+    if not teacher or not auth_secret:
+        return jsonify(status="error", message="Missing auth"), 400
+
+    courses = load_courses()
+    course = next((c for c in courses if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    if course.get("teacher") != teacher:
+        return jsonify(status="error", message="Not the course teacher"), 403
+
+    pledges = load_json(PLEDGE_CHAIN, [])
+    teacher_pledge = next((p for p in pledges if p.get("thr_address") == teacher), None)
+    if not teacher_pledge:
+        return jsonify(status="error", message="Teacher not pledged"), 404
+    stored_auth_hash = teacher_pledge.get("send_auth_hash")
+    if teacher_pledge.get("has_passphrase"):
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify(status="error", message="Invalid auth"), 403
+
+    quiz = load_quizzes().get(course_id)
+    if quiz:
+        normalized_questions = []
+        for idx, q in enumerate(quiz.get("questions", []), start=1):
+            qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=idx)
+            if qtype not in {"multiple_choice", "true_false"}:
+                app.logger.warning("Unsupported quiz question type; forcing multiple_choice", extra={
+                    "course_id": course_id,
+                    "question_id": q.get("id") or idx,
+                    "type": qtype,
+                })
+                qtype = "multiple_choice"
+            normalized_questions.append({
+                "id": q.get("id"),
+                "type": qtype,
+                "question": q.get("question"),
+                "question_el": q.get("question_el"),
+                "options": q.get("options", []),
+                "options_el": q.get("options_el", q.get("options", [])),
+                "correct": q.get("correct", 0),
+            })
+        quiz_payload = quiz.copy()
+        quiz_payload["questions"] = normalized_questions
+        return jsonify(quiz=quiz_payload), 200
+
+    metadata_quiz = course.get("metadata", {}).get("quiz")
+    if not metadata_quiz:
+        return jsonify(quiz=None, message="No quiz for this course"), 200
+
+    normalized_questions = []
+    for idx, q in enumerate(metadata_quiz.get("questions", []), start=1):
+        options = q.get("options", [])
+        qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=idx)
+        if qtype not in {"multiple_choice", "true_false"}:
+            app.logger.warning("Unsupported quiz question type; forcing multiple_choice", extra={
+                "course_id": course_id,
+                "question_id": q.get("id") or idx,
+                "type": qtype,
+            })
+            qtype = "multiple_choice"
+        normalized_questions.append({
+            "id": q.get("id") or idx,
+            "type": qtype,
+            "question": q.get("text") or q.get("question"),
+            "question_el": q.get("question_el"),
+            "options": options,
+            "options_el": q.get("options_el", options),
+            "correct": int(q.get("correct", q.get("correct_index", 0))),
+        })
+
+    quiz_payload = {
+        "course_id": course_id,
+        "title": metadata_quiz.get("title") or (course.get("title") if course else "Course") + " Quiz",
+        "title_el": metadata_quiz.get("title_el", "Quiz Μαθήματος"),
+        "passing_score": metadata_quiz.get("pass_score", metadata_quiz.get("passing_score", 80)),
+        "questions": normalized_questions,
+    }
+
+    return jsonify(quiz=quiz_payload), 200
 
 
 @app.route("/api/v1/courses/<string:course_id>/quiz", methods=["POST"])
@@ -10314,10 +10546,10 @@ def api_v1_create_quiz(course_id: str):
     if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
         return jsonify(status="error", message="Invalid auth"), 403
 
-    # QUEST: Validate questions format (support multiple types)
+    # QUEST: Validate questions format (MCQ / True-False)
     validated_questions = []
     for i, q in enumerate(questions):
-        qtype = q.get("type", "single")  # Default to single choice
+        qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=i + 1)
         question_text = q.get("question")
 
         if not question_text:
@@ -10331,65 +10563,23 @@ def api_v1_create_quiz(course_id: str):
         }
 
         # Validate based on type
-        if qtype == "single":
-            # Single choice: requires options and correct index
+        if qtype == "multiple_choice":
             if not q.get("options") or q.get("correct") is None:
-                return jsonify(status="error", message=f"Question #{i+1}: single choice requires options and correct index"), 400
+                return jsonify(status="error", message=f"Question #{i+1}: multiple choice requires options and correct index"), 400
             base_question.update({
                 "options": q.get("options"),
                 "options_el": q.get("options_el", q.get("options")),
                 "correct": int(q.get("correct"))
             })
-
-        elif qtype == "multi":
-            # Multiple choice: requires options and correct indices (array)
-            if not q.get("options") or not q.get("correct_multiple"):
-                return jsonify(status="error", message=f"Question #{i+1}: multi choice requires options and correct_multiple array"), 400
-            base_question.update({
-                "options": q.get("options"),
-                "options_el": q.get("options_el", q.get("options")),
-                "correct_multiple": [int(idx) for idx in q.get("correct_multiple", [])]
-            })
-
-        elif qtype == "match":
-            # Matching: requires left items and right items
-            if not q.get("left_items") or not q.get("right_items"):
-                return jsonify(status="error", message=f"Question #{i+1}: match requires left_items and right_items"), 400
-            base_question.update({
-                "left_items": q.get("left_items"),
-                "right_items": q.get("right_items"),
-                "correct_pairs": q.get("correct_pairs", {})  # dict: {left_idx: right_idx}
-            })
-
-        elif qtype == "order":
-            # Ordering: requires items to be ordered
-            if not q.get("items"):
-                return jsonify(status="error", message=f"Question #{i+1}: order requires items array"), 400
-            base_question.update({
-                "items": q.get("items"),
-                "correct_order": q.get("correct_order", list(range(len(q.get("items", [])))))
-            })
-
-        elif qtype == "tf":
-            # True/False: just needs correct boolean
+        elif qtype == "true_false":
             if q.get("correct") is None:
-                return jsonify(status="error", message=f"Question #{i+1}: tf requires correct (0 or 1)"), 400
+                return jsonify(status="error", message=f"Question #{i+1}: true/false requires correct (0 or 1)"), 400
             base_question.update({
                 "options": ["False", "True"],
                 "correct": int(q.get("correct"))
             })
-
-        elif qtype == "short":
-            # Short answer: requires correct answer(s)
-            if not q.get("correct_answers"):
-                return jsonify(status="error", message=f"Question #{i+1}: short requires correct_answers array"), 400
-            base_question.update({
-                "correct_answers": q.get("correct_answers"),
-                "case_sensitive": q.get("case_sensitive", False)
-            })
-
         else:
-            return jsonify(status="error", message=f"Question #{i+1}: unknown type '{qtype}'"), 400
+            return jsonify(status="error", message=f"Question #{i+1}: unsupported type '{qtype}'"), 400
 
         validated_questions.append(base_question)
 
@@ -10451,52 +10641,33 @@ def api_v1_submit_quiz(course_id: str):
 
     for q in questions:
         qid = str(q.get("id"))
-        qtype = q.get("type", "single")
+        qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=q.get("id"))
         user_answer = answers.get(qid)
         is_correct = False
         correct_answer = None
 
+        if qtype not in {"multiple_choice", "true_false"}:
+            return jsonify(status="error", message=f"Unsupported question type '{qtype}'"), 400
+
+        if user_answer is None:
+            return jsonify(status="error", message=f"Missing answer for question {qid}"), 400
+
         # Deterministic grading per type
-        if qtype == "single" or qtype == "tf":
+        if qtype == "multiple_choice" or qtype == "true_false":
             # Single choice or True/False: compare index
             correct_answer = q.get("correct")
-            if user_answer is not None:
+            if qtype == "multiple_choice":
+                options = q.get("options", [])
+                if not isinstance(user_answer, int) and not (isinstance(user_answer, str) and user_answer.isdigit()):
+                    return jsonify(status="error", message=f"Invalid answer for question {qid}"), 400
+                answer_index = int(user_answer)
+                if answer_index < 0 or answer_index >= len(options):
+                    return jsonify(status="error", message=f"Answer out of range for question {qid}"), 400
+                is_correct = answer_index == correct_answer
+            else:
+                if user_answer not in (0, 1, "0", "1"):
+                    return jsonify(status="error", message=f"Invalid true/false answer for question {qid}"), 400
                 is_correct = int(user_answer) == correct_answer
-
-        elif qtype == "multi":
-            # Multiple choice: user must select all correct indices
-            correct_answer = sorted(q.get("correct_multiple", []))
-            if user_answer is not None:
-                user_selections = sorted([int(idx) for idx in user_answer] if isinstance(user_answer, list) else [int(user_answer)])
-                is_correct = user_selections == correct_answer
-
-        elif qtype == "match":
-            # Matching: user pairs must match correct pairs
-            correct_answer = q.get("correct_pairs", {})
-            if user_answer is not None:
-                # user_answer should be dict: {left_idx: right_idx}
-                user_pairs = {str(k): int(v) for k, v in (user_answer.items() if isinstance(user_answer, dict) else {})}
-                correct_pairs = {str(k): int(v) for k, v in correct_answer.items()}
-                is_correct = user_pairs == correct_pairs
-
-        elif qtype == "order":
-            # Ordering: user order must match correct order
-            correct_answer = q.get("correct_order", [])
-            if user_answer is not None:
-                user_order = [int(idx) for idx in user_answer] if isinstance(user_answer, list) else []
-                is_correct = user_order == correct_answer
-
-        elif qtype == "short":
-            # Short answer: case-sensitive or insensitive comparison
-            correct_answers = q.get("correct_answers", [])
-            case_sensitive = q.get("case_sensitive", False)
-            if user_answer is not None:
-                user_text = str(user_answer).strip()
-                if case_sensitive:
-                    is_correct = user_text in correct_answers
-                else:
-                    is_correct = user_text.lower() in [ans.lower() for ans in correct_answers]
-            correct_answer = correct_answers
 
         if is_correct:
             correct += 1

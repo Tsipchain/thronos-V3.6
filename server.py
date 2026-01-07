@@ -6433,6 +6433,7 @@ def wallet_data(thr_addr):
 
     category_labels = {
         "transfer": "Transfer",
+        "thr_transfer": "THR Transfer",
         "token_transfer": "Token Transfer",
         "swap": "Swap",
         "bridge": "Bridge",
@@ -6442,6 +6443,8 @@ def wallet_data(thr_addr):
         "autopilot": "Autopilot",
         "parking": "Parking",
         "music": "Music",
+        "mint": "Token Mint",
+        "burn": "Token Burn",
     }
 
     for norm in _tx_feed():
@@ -13558,6 +13561,182 @@ def api_music_offline_save():
             "ok": False,
             "mode": "degraded",
             "error": "Failed to save offline track. Storage temporarily unavailable."
+        }), 200
+
+@app.route("/api/music/offline/<wallet>", methods=["GET"])
+def api_music_get_offline(wallet):
+    """
+    PRIORITY 10: Get all offline tracks for a wallet.
+    Returns full track objects for offline playback.
+    """
+    try:
+        offline_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}_offline.json")
+        offline_data = load_json(offline_file, {"tracks": []})
+        track_ids = offline_data.get("tracks", [])
+
+        # Load music registry and get full track objects
+        registry = load_music_registry()
+        tracks = []
+        for track_id in track_ids:
+            track = next((t for t in registry["tracks"] if t["id"] == track_id), None)
+            if track:
+                tracks.append(enrich_track_media(track))
+
+        return jsonify({
+            "ok": True,
+            "status": "success",
+            "wallet": wallet,
+            "tracks": tracks,
+            "updated_at": offline_data.get("updated_at", "")
+        }), 200
+
+    except Exception as e:
+        app.logger.error(f"Failed to load offline tracks for {wallet}: {e}")
+        return jsonify({
+            "ok": False,
+            "mode": "degraded",
+            "error": "Failed to load offline tracks"
+        }), 200
+
+@app.route("/api/music/offline/<wallet>/<track_id>", methods=["DELETE"])
+def api_music_remove_offline(wallet, track_id):
+    """PRIORITY 10: Remove track from offline storage."""
+    try:
+        offline_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}_offline.json")
+        offline_data = load_json(offline_file, {"tracks": []})
+
+        if track_id in offline_data.get("tracks", []):
+            offline_data["tracks"].remove(track_id)
+            offline_data["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+            save_json(offline_file, offline_data)
+
+            return jsonify({
+                "ok": True,
+                "status": "success",
+                "message": "Track removed from offline storage"
+            }), 200
+        else:
+            return jsonify({
+                "ok": False,
+                "error": "Track not found in offline storage"
+            }), 404
+
+    except Exception as e:
+        app.logger.error(f"Failed to remove offline track {track_id}: {e}")
+        return jsonify({
+            "ok": False,
+            "mode": "degraded",
+            "error": "Failed to remove offline track"
+        }), 200
+
+@app.route("/api/music/playlists/<wallet>/<playlist_id>/add", methods=["POST"])
+def api_music_playlist_add_track(wallet, playlist_id):
+    """PRIORITY 10: Add track to playlist."""
+    data = request.get_json() or {}
+    track_id = data.get("track_id", "").strip()
+
+    if not track_id:
+        return jsonify({"ok": False, "error": "Missing track_id"}), 400
+
+    try:
+        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
+        playlists_data = load_json(playlist_file, {"playlists": []})
+
+        playlist = next((p for p in playlists_data["playlists"] if p["id"] == playlist_id), None)
+        if not playlist:
+            return jsonify({"ok": False, "error": "Playlist not found"}), 404
+
+        if track_id not in playlist.get("tracks", []):
+            playlist.setdefault("tracks", []).append(track_id)
+            playlist["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+            save_json(playlist_file, playlists_data)
+
+        return jsonify({
+            "ok": True,
+            "status": "success",
+            "message": "Track added to playlist"
+        }), 200
+
+    except Exception as e:
+        app.logger.error(f"Failed to add track to playlist: {e}")
+        return jsonify({
+            "ok": False,
+            "mode": "degraded",
+            "error": "Failed to add track to playlist"
+        }), 200
+
+@app.route("/api/music/playlists/<wallet>/<playlist_id>/remove", methods=["POST"])
+def api_music_playlist_remove_track(wallet, playlist_id):
+    """PRIORITY 10: Remove track from playlist."""
+    data = request.get_json() or {}
+    track_id = data.get("track_id", "").strip()
+
+    if not track_id:
+        return jsonify({"ok": False, "error": "Missing track_id"}), 400
+
+    try:
+        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
+        playlists_data = load_json(playlist_file, {"playlists": []})
+
+        playlist = next((p for p in playlists_data["playlists"] if p["id"] == playlist_id), None)
+        if not playlist:
+            return jsonify({"ok": False, "error": "Playlist not found"}), 404
+
+        if track_id in playlist.get("tracks", []):
+            playlist["tracks"].remove(track_id)
+            playlist["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+            save_json(playlist_file, playlists_data)
+
+        return jsonify({
+            "ok": True,
+            "status": "success",
+            "message": "Track removed from playlist"
+        }), 200
+
+    except Exception as e:
+        app.logger.error(f"Failed to remove track from playlist: {e}")
+        return jsonify({
+            "ok": False,
+            "mode": "degraded",
+            "error": "Failed to remove track from playlist"
+        }), 200
+
+@app.route("/api/music/playlists/<wallet>/<playlist_id>", methods=["GET"])
+def api_music_get_playlist_tracks(wallet, playlist_id):
+    """PRIORITY 10: Get full track objects for a playlist."""
+    try:
+        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
+        playlists_data = load_json(playlist_file, {"playlists": []})
+
+        playlist = next((p for p in playlists_data["playlists"] if p["id"] == playlist_id), None)
+        if not playlist:
+            return jsonify({"ok": False, "error": "Playlist not found"}), 404
+
+        track_ids = playlist.get("tracks", [])
+
+        # Load music registry and get full track objects
+        registry = load_music_registry()
+        tracks = []
+        for track_id in track_ids:
+            track = next((t for t in registry["tracks"] if t["id"] == track_id), None)
+            if track:
+                tracks.append(enrich_track_media(track))
+
+        return jsonify({
+            "ok": True,
+            "status": "success",
+            "playlist": {
+                **playlist,
+                "tracks": tracks
+            }
+        }), 200
+
+    except Exception as e:
+        app.logger.error(f"Failed to load playlist tracks: {e}")
+        return jsonify({
+            "ok": False,
+            "mode": "degraded",
+            "error": "Failed to load playlist tracks"
         }), 200
 
 

@@ -573,6 +573,12 @@
         <button class="music-tab" onclick="showMusicTab('my-profile')">
             👤 <span class="lang-el">Το Προφίλ μου</span><span class="lang-en">My Profile</span>
         </button>
+        <button class="music-tab" onclick="showMusicTab('playlists')">
+            📋 <span class="lang-el">Playlists</span><span class="lang-en">Playlists</span>
+        </button>
+        <button class="music-tab" onclick="showMusicTab('offline')">
+            📥 <span class="lang-el">Offline</span><span class="lang-en">Offline</span>
+        </button>
     </div>
 
     <!-- Discover Tab -->
@@ -700,6 +706,33 @@
         <h3 style="color: #ff6600; margin: 20px 0;"><span class="lang-el">Τα Τραγούδια μου</span><span class="lang-en">My Tracks</span></h3>
         <div id="myTracksGrid" class="tracks-grid"></div>
     </div>
+
+    <!-- Playlists Tab -->
+    <div id="playlists-tab" class="tab-content">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h3 style="color: #ff6600; margin: 0;"><span class="lang-el">Οι Playlists μου</span><span class="lang-en">My Playlists</span></h3>
+            <button class="form-submit" style="width: auto; padding: 10px 20px;" onclick="createNewPlaylist()">
+                ➕ <span class="lang-el">Νέα Playlist</span><span class="lang-en">New Playlist</span>
+            </button>
+        </div>
+        <div id="playlistsContainer"></div>
+    </div>
+
+    <!-- Offline Tab -->
+    <div id="offline-tab" class="tab-content">
+        <h3 style="color: #ff6600; margin-bottom: 20px;">
+            📥 <span class="lang-el">Τραγούδια Offline</span><span class="lang-en">Offline Tracks</span>
+        </h3>
+        <p style="color: #888; font-size: 13px; margin-bottom: 20px;">
+            <span class="lang-el">Αποθηκεύστε τραγούδια για offline ακρόαση. Προαιρετικά στείλτε 0.01 THR tip στον καλλιτέχνη!</span>
+            <span class="lang-en">Save tracks for offline listening. Optionally send 0.01 THR tip to the artist!</span>
+        </p>
+        <div id="offlineTracksGrid" class="tracks-grid"></div>
+        <div id="offlineEmpty" class="empty-state" style="display: none;">
+            <div class="empty-state-icon">📥</div>
+            <p><span class="lang-el">Δεν έχετε αποθηκευμένα τραγούδια για offline</span><span class="lang-en">No offline tracks saved yet</span></p>
+        </div>
+    </div>
 </div>
 
 <!-- Audio Player -->
@@ -736,6 +769,8 @@
 let allTracks = [];
 let currentTrack = null;
 let audioElement = null;
+let userPlaylists = [];
+let offlineTracks = [];
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -763,6 +798,8 @@ function showMusicTab(tabName) {
 
     if (tabName === 'trending') loadTrending();
     if (tabName === 'my-profile') loadMyProfile();
+    if (tabName === 'playlists') loadPlaylists();
+    if (tabName === 'offline') loadOfflineTracks();
 }
 
 async function loadTracks() {
@@ -804,17 +841,21 @@ function renderTracks(tracks, containerId) {
 
     container.innerHTML = tracks.map(track => `
         <div class="track-card ${currentTrack && currentTrack.id === track.id ? 'now-playing' : ''}"
-             data-track-id="${track.id}"
-             onclick="playTrack('${track.id}')">
-            <div class="track-cover">
+             data-track-id="${track.id}">
+            <div class="track-cover" onclick="playTrack('${track.id}')">
                 ${track.cover_path || track.cover_url
                     ? `<img src="${track.cover_path ? '/media/' + track.cover_path : track.cover_url}" alt="${track.title}" onerror="this.src='/static/img/logo.png'">`
                     : '🎵'}
                 <button class="track-play-btn" onclick="event.stopPropagation(); playTrack('${track.id}')">▶️</button>
             </div>
-            <div class="track-info">
-                <div class="track-title">${track.title}</div>
-                <div class="track-artist">${track.artist_name}</div>
+            <div class="track-info" onclick="playTrack('${track.id}')">
+                <div style="display: flex; justify-content: space-between; align-items: start;">
+                    <div style="flex: 1;">
+                        <div class="track-title">${track.title}</div>
+                        <div class="track-artist">${track.artist_name}</div>
+                    </div>
+                    <button class="player-btn" style="font-size: 16px; padding: 4px;" onclick="event.stopPropagation(); showTrackOptions('${track.id}')">⋮</button>
+                </div>
                 <div class="track-stats">
                     <span class="track-genre">${track.genre || 'Other'}</span>
                     <span>▶️ ${track.play_count || 0}</span>
@@ -1155,6 +1196,285 @@ function showMessage(elementId, message, type) {
     el.textContent = message;
     el.className = `message-box ${type}`;
     setTimeout(() => { el.className = 'message-box'; }, 5000);
+}
+
+// ========== PLAYLISTS & OFFLINE FUNCTIONALITY ==========
+
+async function loadPlaylists() {
+    const wallet = localStorage.getItem('thr_address');
+    if (!wallet) {
+        document.getElementById('playlistsContainer').innerHTML = `
+            <div class="empty-state">
+                <p><span class="lang-el">Συνδέστε το πορτοφόλι σας</span><span class="lang-en">Connect your wallet</span></p>
+            </div>
+        `;
+        return;
+    }
+
+    try {
+        const res = await fetch(`/api/music/playlists/${wallet}`);
+        const data = await res.json();
+
+        if (data.ok && data.playlists && data.playlists.length > 0) {
+            userPlaylists = data.playlists;
+            renderPlaylists();
+        } else {
+            document.getElementById('playlistsContainer').innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">📋</div>
+                    <p><span class="lang-el">Δεν έχετε playlists ακόμα</span><span class="lang-en">No playlists yet</span></p>
+                </div>
+            `;
+        }
+    } catch (e) {
+        console.error('Error loading playlists:', e);
+    }
+}
+
+function renderPlaylists() {
+    const container = document.getElementById('playlistsContainer');
+    container.innerHTML = userPlaylists.map(playlist => `
+        <div class="artist-profile" style="margin-bottom: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <h4 style="color: #ff6600; margin: 0;">${playlist.name}</h4>
+                <div>
+                    <button class="player-btn" style="font-size: 16px;" onclick="viewPlaylist('${playlist.id}')">▶️</button>
+                    <button class="player-btn" style="font-size: 16px;" onclick="deletePlaylist('${playlist.id}')">🗑️</button>
+                </div>
+            </div>
+            <p style="color: #888; font-size: 12px; margin: 10px 0 0 0;">
+                ${playlist.tracks ? playlist.tracks.length : 0} tracks · Created ${new Date(playlist.created_at).toLocaleDateString()}
+            </p>
+        </div>
+    `).join('');
+}
+
+async function createNewPlaylist() {
+    const wallet = localStorage.getItem('thr_address');
+    if (!wallet) {
+        alert('Please connect your wallet first!');
+        return;
+    }
+
+    const name = prompt('Enter playlist name:');
+    if (!name || !name.trim()) return;
+
+    try {
+        const res = await fetch(`/api/music/playlists/${wallet}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name.trim() })
+        });
+
+        const data = await res.json();
+        if (data.ok) {
+            alert('✅ Playlist created!');
+            loadPlaylists();
+        } else {
+            alert(`❌ Error: ${data.error}`);
+        }
+    } catch (e) {
+        alert(`❌ Error: ${e.message}`);
+    }
+}
+
+async function deletePlaylist(playlistId) {
+    if (!confirm('Are you sure you want to delete this playlist?')) return;
+
+    const wallet = localStorage.getItem('thr_address');
+    try {
+        const res = await fetch(`/api/music/playlists/${wallet}/${playlistId}`, {
+            method: 'DELETE'
+        });
+
+        const data = await res.json();
+        if (data.ok) {
+            alert('✅ Playlist deleted!');
+            loadPlaylists();
+        } else {
+            alert(`❌ Error: ${data.error}`);
+        }
+    } catch (e) {
+        alert(`❌ Error: ${e.message}`);
+    }
+}
+
+async function viewPlaylist(playlistId) {
+    const wallet = localStorage.getItem('thr_address');
+    try {
+        const res = await fetch(`/api/music/playlists/${wallet}/${playlistId}`);
+        const data = await res.json();
+
+        if (data.ok && data.playlist) {
+            const playlist = data.playlist;
+            const container = document.getElementById('playlistsContainer');
+
+            container.innerHTML = `
+                <button class="form-submit" style="width: auto; padding: 10px 20px; margin-bottom: 20px;" onclick="loadPlaylists()">
+                    ⬅️ <span class="lang-el">Πίσω</span><span class="lang-en">Back</span>
+                </button>
+                <h3 style="color: #ff6600; margin-bottom: 20px;">${playlist.name}</h3>
+                <div class="tracks-grid" id="playlistTracksGrid"></div>
+            `;
+
+            if (playlist.tracks && playlist.tracks.length > 0) {
+                renderTracks(playlist.tracks, 'playlistTracksGrid');
+            } else {
+                document.getElementById('playlistTracksGrid').innerHTML = `
+                    <div class="empty-state">
+                        <p><span class="lang-el">Άδεια playlist</span><span class="lang-en">Empty playlist</span></p>
+                    </div>
+                `;
+            }
+        }
+    } catch (e) {
+        console.error('Error viewing playlist:', e);
+    }
+}
+
+async function loadOfflineTracks() {
+    const wallet = localStorage.getItem('thr_address');
+    if (!wallet) {
+        document.getElementById('offlineTracksGrid').innerHTML = '';
+        document.getElementById('offlineEmpty').style.display = 'block';
+        return;
+    }
+
+    try {
+        const res = await fetch(`/api/music/offline/${wallet}`);
+        const data = await res.json();
+
+        if (data.ok && data.tracks && data.tracks.length > 0) {
+            offlineTracks = data.tracks;
+            document.getElementById('offlineEmpty').style.display = 'none';
+            renderTracks(data.tracks, 'offlineTracksGrid');
+        } else {
+            document.getElementById('offlineTracksGrid').innerHTML = '';
+            document.getElementById('offlineEmpty').style.display = 'block';
+        }
+    } catch (e) {
+        console.error('Error loading offline tracks:', e);
+    }
+}
+
+async function saveTrackOffline(trackId, sendTip = false) {
+    const wallet = localStorage.getItem('thr_address');
+    if (!wallet) {
+        alert('Please connect your wallet first!');
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/music/offline/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                wallet: wallet,
+                track_id: trackId,
+                send_tip: sendTip
+            })
+        });
+
+        const data = await res.json();
+        if (data.ok) {
+            const msg = data.tip_sent
+                ? `✅ Track saved offline with 0.01 THR tip sent to artist!`
+                : `✅ Track saved for offline listening!`;
+            alert(msg);
+            if (document.getElementById('offline-tab').classList.contains('active')) {
+                loadOfflineTracks();
+            }
+        } else {
+            alert(`❌ Error: ${data.error}`);
+        }
+    } catch (e) {
+        alert(`❌ Error: ${e.message}`);
+    }
+}
+
+async function removeTrackOffline(trackId) {
+    const wallet = localStorage.getItem('thr_address');
+    if (!confirm('Remove this track from offline storage?')) return;
+
+    try {
+        const res = await fetch(`/api/music/offline/${wallet}/${trackId}`, {
+            method: 'DELETE'
+        });
+
+        const data = await res.json();
+        if (data.ok) {
+            alert('✅ Track removed from offline storage!');
+            loadOfflineTracks();
+        } else {
+            alert(`❌ Error: ${data.error}`);
+        }
+    } catch (e) {
+        alert(`❌ Error: ${e.message}`);
+    }
+}
+
+async function showTrackOptions(trackId) {
+    const wallet = localStorage.getItem('thr_address');
+    if (!wallet) {
+        alert('Please connect your wallet first!');
+        return;
+    }
+
+    // Load playlists first
+    try {
+        const res = await fetch(`/api/music/playlists/${wallet}`);
+        const data = await res.json();
+        userPlaylists = data.ok ? data.playlists : [];
+    } catch (e) {
+        console.error('Error loading playlists:', e);
+    }
+
+    const options = [
+        '📥 Save for offline (no tip)',
+        '💰 Save for offline + 0.01 THR tip',
+        '📋 Add to playlist'
+    ];
+
+    const choice = prompt(`Select option for this track:\n${options.map((o, i) => `${i+1}. ${o}`).join('\n')}\n\nEnter number:`);
+
+    if (choice === '1') {
+        await saveTrackOffline(trackId, false);
+    } else if (choice === '2') {
+        await saveTrackOffline(trackId, true);
+    } else if (choice === '3') {
+        if (userPlaylists.length === 0) {
+            alert('You have no playlists. Create one first!');
+            return;
+        }
+
+        const playlistChoice = prompt(`Select playlist:\n${userPlaylists.map((p, i) => `${i+1}. ${p.name}`).join('\n')}\n\nEnter number:`);
+        const playlistIndex = parseInt(playlistChoice) - 1;
+
+        if (playlistIndex >= 0 && playlistIndex < userPlaylists.length) {
+            await addTrackToPlaylist(trackId, userPlaylists[playlistIndex].id);
+        }
+    }
+}
+
+async function addTrackToPlaylist(trackId, playlistId) {
+    const wallet = localStorage.getItem('thr_address');
+
+    try {
+        const res = await fetch(`/api/music/playlists/${wallet}/${playlistId}/add`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ track_id: trackId })
+        });
+
+        const data = await res.json();
+        if (data.ok) {
+            alert('✅ Track added to playlist!');
+        } else {
+            alert(`❌ Error: ${data.error}`);
+        }
+    } catch (e) {
+        alert(`❌ Error: ${e.message}`);
+    }
 }
 </script>
 {% endblock %}

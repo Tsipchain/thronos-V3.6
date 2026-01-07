@@ -2509,9 +2509,15 @@ function renderHistory() {
         const amountIn = Number.isFinite(Number(amountInRaw)) ? Number(amountInRaw) : 0;
         const amountOut = tx.amount_out ?? tx.amountOut ?? tx.output_amount ?? tx.received_amount;
         const amountOutNum = (amountOut !== undefined && Number.isFinite(Number(amountOut))) ? Number(amountOut) : null;
+
+        // Determine correct asset symbol for display
+        const displayAsset = txType === 'token'
+            ? (tx.asset_symbol || tx.asset || tx.symbol || 'TOKEN')
+            : (tx.symbol || tx.asset_symbol || tx.asset || 'THR');
+
         const amountDisplay = isSwap
             ? `${amountIn.toFixed(6)} ${tx.symbol_in || tx.from_symbol || tx.symbol || 'THR'}${amountOutNum !== null ? ` → ${amountOutNum.toFixed(6)} ${tx.symbol_out || tx.to_symbol || tx.target_symbol || tx.swap_out || ''}` : ''}`
-            : `${Number(amountInRaw || 0).toFixed(6)} ${tx.symbol || 'THR'}`;
+            : `${Number(amountInRaw || 0).toFixed(6)} ${displayAsset}`;
         const swapPair = isSwap ? (tx.pair || tx.route || `${(tx.swap_in || tx.from_symbol || tx.symbol || '?')}${tx.swap_out || tx.to_symbol || tx.target_symbol ? `/${tx.swap_out || tx.to_symbol || tx.target_symbol}` : ''}`) : '';
         const swapDirection = isSwap ? (tx.direction || tx.side || '') : '';
 

@@ -179,34 +179,43 @@
         backdrop-filter: blur(10px);
     }
 
-    /* Chain Tokens Widget (Footer) */
-    .chain-tokens-widget {
-        position: relative;
+    /* Chain Tokens Widget (Footer) — AUTO-HIDE FIXED FOOTER */
+    .chain-tokens-widget{
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 500;
         width: 100%;
-        margin-top: 60px;
-        background: linear-gradient(180deg, rgba(0, 20, 10, 0.85) 0%, rgba(0, 30, 15, 0.98) 100%);
+        background: linear-gradient(180deg, transparent 0%, rgba(0, 20, 10, 0.92) 20%, rgba(0, 30, 15, 0.98) 100%);
         border-top: 2px solid;
         border-image: linear-gradient(90deg, transparent, #00ff66, #ffd700, #00ff66, transparent) 1;
-        padding: 10px 20px;
         backdrop-filter: blur(10px);
+        padding: 10px 20px;
+        transform: translateY(100%);
+        opacity: 0;
+        pointer-events: none;
+        transition: transform 0.25s ease, opacity 0.25s ease;
     }
 
-    .chain-tokens-footer-meta {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
+    .chain-tokens-widget.is-visible{
+        transform: translateY(0);
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    .chain-tokens-footer-meta{
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
         gap: 16px;
         margin-top: 8px;
-        font-size: 11px;
-        opacity: 0.7;
-        width: 100%;
+        font-size: 12px;
+        opacity: 0.9;
     }
-
-    .chain-tokens-footer-meta .footer-version {
-        margin-left: auto;
-        font-size: 10px;
+    .chain-tokens-footer-meta .right{
+        text-align:right;
         white-space: nowrap;
-        opacity: 0.85;
     }
 
     /* Wallet Login Modal */
@@ -3443,10 +3452,8 @@ function closeTokenInfoModal(event) {
         </div>
     </div>
     <div class="chain-tokens-footer-meta">
-        <div>Thronos Network ® CopyRights 2023–2026</div>
-        <div class="footer-version">
-            <span id="buildCommit" title="Git commit hash">loading...</span>
-        </div>
+        <div class="left">Thronos Network ® CopyRights 2023-2026</div>
+        <div class="right" id="build-info">build: —</div>
     </div>
 </div>
 
@@ -3577,20 +3584,6 @@ function downloadCGMinerKit() {
             });
             scrollEl.innerHTML = html;
 
-            // FIX 1: Load build info for deployment verification
-            try {
-                const healthResp = await fetch('/api/health');
-                const health = await healthResp.json();
-                const buildCommitEl = document.getElementById('buildCommit');
-                if (buildCommitEl && health.build) {
-                    const displayText = health.build.build_id || health.build.git_commit || 'unknown';
-                    buildCommitEl.textContent = `build: ${displayText}`;
-                    buildCommitEl.title = `Build ID: ${health.build.build_id || 'N/A'}\nGit commit: ${health.build.git_commit || 'N/A'}\nDATA_DIR: ${health.build.DATA_DIR}\nNode: ${health.build.node_role}`;
-                }
-            } catch(e) {
-                console.log('Build info not available:', e);
-            }
-
         } catch(err) {
             console.error('Chain tokens widget error:', err);
         }
@@ -3605,9 +3598,51 @@ function downloadCGMinerKit() {
 
 </script>
 
+<script>
+(function(){
+  function setFooterVisible(v){
+    const el = document.querySelector(".chain-tokens-widget");
+    if(!el) return;
+    el.classList.toggle("is-visible", !!v);
+  }
+
+  async function hydrateBuild(){
+    try{
+      const out = document.getElementById("build-info");
+      if(!out) return;
+      const r = await fetch("/api/health", {cache:"no-store"});
+      const j = await r.json();
+      const build = j.build_id || j.build || j.git_commit || "—";
+      out.textContent = "build: " + build;
+    }catch(e){}
+  }
+
+  function initObserver(){
+    const sentinel = document.getElementById("footer-sentinel");
+    if(!sentinel) return;
+
+    setFooterVisible(false);
+
+    const obs = new IntersectionObserver((entries)=>{
+      const atBottom = entries.some(e => e.isIntersecting);
+      setFooterVisible(atBottom);
+    }, { threshold: 0 });
+
+    obs.observe(sentinel);
+  }
+
+  document.addEventListener("DOMContentLoaded", ()=>{
+    hydrateBuild();
+    initObserver();
+  });
+})();
+</script>
+
 <script src="{{ url_for('static', filename='wallet_sdk.js') }}"></script>
 
 {% block scripts %}{% endblock %}
+
+<div id="footer-sentinel" style="height:1px;"></div>
 
 </body>
 </html>

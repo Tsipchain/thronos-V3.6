@@ -27,3 +27,29 @@
    - Wallet history displays pool swaps/liquidity actions under the Swaps tab.
 10. **Menu and language**
     - Wallet and language selectors remain visible and clickable at common desktop widths.
+11. **TX ledger persistence**
+    - Restart the server and confirm `/api/tx_feed` and viewer/wallet history still display past transfers/swaps/token transfers.
+12. **Token + swap visibility**
+    - Perform a token transfer and confirm it appears under Viewer → Transfers and Wallet → Tokens; ensure swaps still render in their tab.
+13. **Modal click-through**
+    - Open and close wallet/login modals and verify tabs/buttons remain clickable (no hidden overlays intercepting clicks).
+14. **Music endpoints**
+    - `/api/music/status` responds with connected metadata; Viewer → Music shows status/empty-state messaging instead of “Not Connected”.
+15. **Session auth**
+    - PATCH/DELETE chat session rename/delete endpoints return 200 (no 403) and changes persist after refresh.
+16. **Token decimals + activity**
+    - Viewer → Tokens shows correct decimals/supply per token (HPNNIS/JAM/MAR/L2E/WBTC) with “(default)” only when registry is missing decimals.
+    - Token transfer amounts render with correct precision across Viewer Transfers and Wallet Tokens.
+17. **Transfers detail completeness**
+    - After a token transfer + swap, Viewer Transfers rows include asset/amount/from/to and swap pair details; Wallet history shows them under the correct tabs.
+18. **L2E numbers**
+    - Viewer → L2E cards/tables render numeric values (no NaN/undefined) even when courses have empty enrollments/completions.
+19. **Offline/Thrai retrieval**
+    - `/api/thrai/ask` responds using new prompts (no repetition of last answer) and can surface stored architect deliverables when queried.
+20. **Wallet filters**
+    - Opening/closing the wallet history modal resets to a safe default (“All”) and category counts match `/api/tx_feed?wallet=...&debug_counts=1` output (no token misclassification).
+21. **Post-restart persistence**
+    - Token transfers remain visible in Viewer Transfers and Wallet Tokens after a restart/redeploy using the persistent tx_ledger.
+22. **Claude routing**
+    - `/api/ai_models` lists Claude models as enabled only when Anthropic keys are present; otherwise they appear disabled.
+    - Selecting a Claude model returns a clear provider_error when misconfigured (no silent fallback/charges to GPT).

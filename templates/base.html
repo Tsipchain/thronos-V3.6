@@ -230,8 +230,9 @@
         align-items: center;
         justify-content: center;
         z-index: 3000;
+        pointer-events: none;
     }
-    .wallet-modal-overlay.active { display: flex; }
+    .wallet-modal-overlay.active { display: flex; pointer-events: auto; }
     .wallet-modal {
         background: #0a130e;
         border: 1px solid #0f0;
@@ -732,9 +733,11 @@
         z-index: 3000;
         align-items: center;
         justify-content: center;
+        pointer-events: none;
     }
     .send-modal.active {
         display: flex;
+        pointer-events: auto;
     }
     .send-modal-content {
         background: linear-gradient(135deg, #000000 0%, #071810 50%, #000000 100%);
@@ -2251,14 +2254,24 @@ let allTransactions = [];
 let currentHistoryFilter = 'all';
 let currentTokenFilter = null;
 
+function resetHistoryFilters() {
+    currentHistoryFilter = 'all';
+    currentTokenFilter = null;
+    const tokenIndexBar = document.getElementById('tokenIndexBar');
+    if (tokenIndexBar) tokenIndexBar.style.display = 'none';
+}
+
 function openWalletHistoryModal() {
     document.getElementById('walletHistoryModal').classList.add('active');
+    resetHistoryFilters();
+    filterHistory('all');
     loadWalletHistory();
 }
 
 function closeWalletHistoryModal(event) {
     if (!event || event.target.id === 'walletHistoryModal') {
         document.getElementById('walletHistoryModal').classList.remove('active');
+        resetHistoryFilters();
     }
 }
 
@@ -2287,33 +2300,27 @@ function filterHistory(filter, tokenSymbol = null) {
 }
 
 function getTxType(tx) {
-    const rawType = (tx.type || '').toUpperCase();
-    const note = (tx.note || tx.description || '').toUpperCase();
-    const symbol = (tx.symbol || tx.asset_symbol || 'THR').toUpperCase();
-    const meta = tx.metadata || tx.meta || {};
-    const category = (meta.category || '').toLowerCase();
-    const billingUnit = (meta.billing_unit || '').toLowerCase();
-    const sessionType = (meta.session_type || '').toLowerCase();
-    const featureTag = (meta.feature || '').toLowerCase();
+    const raw = (tx.kind || tx.type || '').toLowerCase();
+    const kindMap = {
+        'thr_transfer': 'thr',
+        'transfer': 'thr',
+        'token_transfer': 'token',
+        'swap': 'swap',
+        'pool_swap': 'swap',
+        'bridge': 'bridge',
+        'l2e': 'l2e',
+        'ai_credit': 'ai_credits',
+        'ai_credits': 'ai_credits',
+        'iot': 'iot',
+        'autopilot': 'iot',
+        'parking': 'iot',
+        'architect_job': 'architect',
+        'music': 'music',
+    };
+    if (kindMap[raw]) return kindMap[raw];
 
-    if (category) {
-        if (category.includes('architect')) return 'architect';
-        if (category.includes('credit') || category.includes('chat')) return 'ai_credits';
-        if (category.includes('swap') || category.includes('liquidity') || category.includes('pool')) return 'swap';
-    }
-
-    if (billingUnit === 'thr' || sessionType === 'architect') return 'architect';
-    if (billingUnit === 'credits' || sessionType === 'chat') return 'ai_credits';
-    if (featureTag === 'pools' || featureTag === 'swaps') return 'swap';
-
-    // Explicit classification rules (priority order)
-    if (rawType.startsWith('ARCHITECT')) return 'architect';
-    if (rawType.startsWith('CREDITS_') || rawType.startsWith('AI_') || rawType.includes('CHAT') || note.includes('AI TRANSFER')) return 'ai_credits';
-    if (rawType.startsWith('SWAP') || rawType.startsWith('DEX_') || rawType.startsWith('AMM_') || rawType.startsWith('LIQUIDITY_')) return 'swap';
-    if (rawType.startsWith('TOKEN_TRANSFER') || (symbol && symbol !== 'THR')) return 'token';
-    if (rawType.startsWith('L2E_') || rawType.includes('L2E') || rawType.includes('LEARN') || note.includes('L2E')) return 'l2e';
-    if (rawType.startsWith('IOT_') || rawType.includes('PARKING') || note.includes('IOT')) return 'iot';
-    if (rawType.startsWith('BRIDGE_') || rawType.includes('BRIDGE') || rawType.includes('DEPOSIT')) return 'bridge';
+    const asset = (tx.symbol || tx.asset || tx.asset_symbol || tx.token_symbol || 'THR').toUpperCase();
+    if (asset && asset !== 'THR') return 'token';
     return 'thr';
 }
 
@@ -2423,6 +2430,10 @@ function renderHistory() {
     const addr = walletSession.getAddress();
     const tokenIndexBar = document.getElementById('tokenIndexBar');
 
+    if (currentHistoryFilter !== 'token') {
+        currentTokenFilter = null;
+    }
+
     if (!allTransactions || allTransactions.length === 0) {
         content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions found</div>';
         return;
@@ -2520,16 +2531,22 @@ async function loadWalletHistory() {
     }
 
     try {
-        const response = await fetch(`/wallet_data/${encodeURIComponent(addr)}`);
-        const data = await response.json();
+        const [walletRes, feedRes] = await Promise.all([
+            fetch(`/wallet_data/${encodeURIComponent(addr)}`),
+            fetch(`/api/tx_feed?wallet=${encodeURIComponent(addr)}`)
+        ]);
 
-        if (!data.transactions || data.transactions.length === 0) {
+        const data = walletRes.ok ? await walletRes.json() : {};
+        const feed = feedRes.ok ? await feedRes.json() : [];
+
+        const transactions = Array.isArray(feed) && feed.length ? feed : (data.transactions || []);
+        if (!transactions || transactions.length === 0) {
             content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions found</div>';
             allTransactions = [];
             return;
         }
 
-        allTransactions = data.transactions;
+        allTransactions = transactions;
         renderHistory();
 
     } catch (error) {

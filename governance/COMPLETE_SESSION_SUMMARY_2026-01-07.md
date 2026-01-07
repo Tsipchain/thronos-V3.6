@@ -7,10 +7,10 @@
 
 ## 📊 Session Overview
 
-**Total Commits:** 7
+**Total Commits:** 9
 **Files Modified:** 5
 **New Files:** 3 documentation files
-**Lines Changed:** ~650 lines
+**Lines Changed:** ~660 lines
 
 ---
 
@@ -129,6 +129,63 @@ GET    /api/music/playlists/<wallet>/<playlist_id>
 
 ---
 
+### 8. **a73a1dd** - Enhance Tokens filter to show both transfers and swaps
+**Files:** `wallet_viewer.html`, `wallet_widget.html`
+
+**Problem:** Tokens filter only showed token_transfer transactions, missing token-related swaps
+
+**Solution:**
+- Enhanced filter logic to include both token transfers AND swaps involving tokens
+- Tokens filter now shows:
+  - Token transfers (kind: token_transfer with valid token symbols)
+  - Token swaps (kind: swap with token assets, excluding THR swaps)
+- Uses `isValidTokenSymbol()` to exclude generic placeholders
+- Provides comprehensive view of all token-related activity
+
+**Code Enhancement:**
+```javascript
+if (historyState.filter === 'tokens') {
+    // Show token transfers AND swaps involving tokens
+    const isTokenTx = isTokenTransfer(tx) && isValidTokenSymbol(asset);
+    const isTokenSwap = isSwapTx(tx) && asset !== 'THR' && isValidTokenSymbol(asset);
+    return isTokenTx || isTokenSwap;
+}
+```
+
+---
+
+### 9. **0fcea20** - Fix THR filter to validate both kind and asset symbol ⚠️ CRITICAL
+**Files:** `wallet_widget.html`, `wallet_viewer.html`
+
+**Problem:** Token transfers (7CEB, JAM, MAR) appearing in THR filter instead of Tokens filter
+
+**Root Cause:**
+- `isThrTransfer()` only checked `kind === 'thr_transfer'` without validating asset
+- Token transfers can have `kind: 'thr_transfer'` but `asset: '7CEB'` (the token being transferred)
+- This caused all token transfers to incorrectly show in THR filter
+
+**Solution:**
+- Modified `isThrTransfer()` to validate BOTH kind AND asset symbol
+- Now requires: kind='thr_transfer' AND asset='THR'
+- Token transfers properly categorized in Tokens filter
+- THR transfers properly isolated in THR filter
+
+**Critical Fix Applied:**
+```javascript
+const isThrTransfer = (tx) => {
+    // Must be thr_transfer kind AND THR asset (not tokens)
+    return getKind(tx) === 'thr_transfer' && getAssetSymbol(tx) === 'THR';
+};
+```
+
+**Impact:**
+- ✅ THR filter now shows ONLY actual THR transfers
+- ✅ Token transfers (7CEB, JAM, MAR, etc.) now appear in Tokens filter
+- ✅ Proper distinction between native currency and token transfers
+- ✅ Fees being in THR no longer causes miscategorization
+
+---
+
 ## 🎯 Summary of All Fixes
 
 ### Backend Changes (server.py)
@@ -143,12 +200,16 @@ GET    /api/music/playlists/<wallet>/<playlist_id>
 1. ✅ 9 comprehensive filter categories
 2. ✅ All transaction types properly categorized
 3. ✅ Consistent filter behavior
+4. ✅ Tokens filter shows both transfers AND swaps
+5. ✅ THR filter validates both kind and asset symbol
 
 **wallet_widget.html:**
 1. ✅ 9 filter categories in history modal
 2. ✅ Architect tab added
 3. ✅ Generic tokens filtered from display
 4. ✅ Clean token list (no "TOKEN" placeholders)
+5. ✅ Tokens filter shows both transfers AND swaps
+6. ✅ THR filter validates both kind and asset symbol
 
 **music.html:**
 1. ✅ Playlists tab with full CRUD
@@ -208,7 +269,8 @@ GET    /api/music/playlists/<wallet>/<playlist_id>
 - New features: 3 major (playlists, offline, filters)
 - New functions: 9
 - Filter categories: 9
-- Lines added: ~470
+- Lines added: ~480
+- Critical fixes: 2 (asset validation, comprehensive token filtering)
 
 **Documentation:**
 - Reports: 3
@@ -216,9 +278,9 @@ GET    /api/music/playlists/<wallet>/<playlist_id>
 
 **Total Impact:**
 - Files modified: 5
-- Lines added: ~650
+- Lines added: ~660
 - Features: 3 major
-- Bug fixes: 3
+- Bug fixes: 5 (categorization, filters, generic tokens, token filter logic, THR asset validation)
 - API endpoints: 5
 
 ---
@@ -234,7 +296,9 @@ GET    /api/music/playlists/<wallet>/<playlist_id>
 2. ✅ Missing filter categories in history modal
 3. ✅ Generic "TOKEN" placeholder display
 4. ✅ Music offline playlist system implementation
-5. ✅ Complete documentation
+5. ✅ Tokens filter comprehensive logic (transfers + swaps)
+6. ✅ THR filter asset validation (critical fix for token miscategorization)
+7. ✅ Complete documentation
 
 ---
 

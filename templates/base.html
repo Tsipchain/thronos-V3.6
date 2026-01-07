@@ -1568,6 +1568,9 @@
             <button class="history-tab-btn" data-filter="swap" onclick="filterHistory('swap')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
                 <span class="lang-el">Swaps</span><span class="lang-en">Swaps</span>
             </button>
+            <button class="history-tab-btn" data-filter="liquidity" onclick="filterHistory('liquidity')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                <span class="lang-el">Liquidity</span><span class="lang-en">Liquidity</span>
+            </button>
         </div>
 
         <div id="tokenIndexBar" style="display:none; margin: 0 4px 10px 4px;">
@@ -2299,10 +2302,24 @@ function filterHistory(filter, tokenSymbol = null) {
 
 function getTxType(tx) {
     const raw = (tx.kind || tx.type || '').toLowerCase();
+    const asset = (tx.asset_symbol || tx.asset || tx.symbol || 'THR').toUpperCase();
+
+    // THR transfers: must be transfer/thr_transfer AND asset must be THR
+    if ((raw === 'thr_transfer' || raw === 'transfer') && asset === 'THR') {
+        return 'thr';
+    }
+
+    // Token transfers: must be token_transfer AND asset must NOT be THR
+    if (raw === 'token_transfer' && asset !== 'THR') {
+        return 'token';
+    }
+
+    // Liquidity events
+    if (raw.startsWith('liquidity_') || raw === 'add_liquidity' || raw === 'remove_liquidity') {
+        return 'liquidity';
+    }
+
     const kindMap = {
-        'thr_transfer': 'thr',
-        'transfer': 'thr',
-        'token_transfer': 'token',
         'swap': 'swap',
         'pool_swap': 'swap',
         'bridge': 'bridge',
@@ -2313,6 +2330,7 @@ function getTxType(tx) {
         'autopilot': 'iot',
         'parking': 'iot',
         'architect_job': 'architect',
+        'architect': 'architect',
         'music': 'music',
     };
     if (kindMap[raw]) return kindMap[raw];
@@ -2483,8 +2501,10 @@ function renderHistory() {
                          txType === 'architect' ? 'Architect' :
                          txType === 'iot' ? 'IoT' :
                          txType === 'bridge' ? 'Bridge' :
-                         txType === 'swap' ? 'Swap' : '';
+                         txType === 'swap' ? 'Swap' :
+                         txType === 'liquidity' ? 'Liquidity' : '';
         const isSwap = txType === 'swap';
+        const isLiquidity = txType === 'liquidity';
         const amountInRaw = tx.amount_in ?? tx.amountIn ?? tx.input_amount ?? tx.amount ?? 0;
         const amountIn = Number.isFinite(Number(amountInRaw)) ? Number(amountInRaw) : 0;
         const amountOut = tx.amount_out ?? tx.amountOut ?? tx.output_amount ?? tx.received_amount;
@@ -2494,6 +2514,27 @@ function renderHistory() {
             : `${Number(amountInRaw || 0).toFixed(6)} ${tx.symbol || 'THR'}`;
         const swapPair = isSwap ? (tx.pair || tx.route || `${(tx.swap_in || tx.from_symbol || tx.symbol || '?')}${tx.swap_out || tx.to_symbol || tx.target_symbol ? `/${tx.swap_out || tx.to_symbol || tx.target_symbol}` : ''}`) : '';
         const swapDirection = isSwap ? (tx.direction || tx.side || '') : '';
+
+        // Fee information
+        const fee = tx.fee_burned || tx.fee || 0;
+        const feeDisplay = fee > 0 ? `<br><span style="font-size: 10px; opacity: 0.6;">${isGreek ? 'Κόστος:' : 'Fee:'} ${fee} THR</span>` : '';
+
+        // Pool/liquidity info
+        let poolInfo = '';
+        if (isLiquidity) {
+            const raw = (tx.kind || tx.type || '').toLowerCase();
+            const action = raw.includes('add') ? (isGreek ? 'Προσθήκη Ρευστότητας' : 'Add Liquidity') : (isGreek ? 'Αφαίρεση Ρευστότητας' : 'Remove Liquidity');
+            poolInfo = `<div style="font-size: 11px; color: #00bfff; opacity: 0.85; margin-top: 4px;">${action}</div>`;
+        } else if (isSwap && tx.meta) {
+            const fromAsset = tx.meta.from_asset || tx.symbol || 'THR';
+            const toAsset = tx.meta.to_asset || 'THR';
+            poolInfo = `<div style="font-size: 11px; color: #00bfff; opacity: 0.85; margin-top: 4px;">Swap: ${escapeHtml(fromAsset)} → ${escapeHtml(toAsset)}</div>`;
+        }
+
+        // Token price info
+        const priceInfo = (tx.meta && tx.meta.token_price_thr)
+            ? `<br><span style="font-size: 10px; opacity: 0.6;">${isGreek ? 'Τιμή:' : 'Price:'} ${tx.meta.token_price_thr} THR per ${tx.asset_symbol || tx.symbol}</span>`
+            : '';
 
         html += `
             <div style="background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 8px; padding: 12px;">
@@ -2507,9 +2548,10 @@ function renderHistory() {
                     <div style="font-weight: bold; color: #00ff66;">${amountDisplay}</div>
                 </div>
                 <div style="font-size: 11px; opacity: 0.7;">
-                    ${isSent ? (isGreek ? 'Προς:' : 'To:') : (isGreek ? 'Από:' : 'From:')} ${shortAddr}
+                    ${isSent ? (isGreek ? 'Προς:' : 'To:') : (isGreek ? 'Από:' : 'From:')} ${shortAddr}${feeDisplay}${priceInfo}
                 </div>
-                ${isSwap ? `<div style="font-size: 11px; opacity: 0.75; margin-top: 4px;">${isGreek ? 'Ζεύγος:' : 'Pair:'} ${escapeHtml(swapPair || 'Unknown pair')}${swapDirection ? ` • ${escapeHtml(swapDirection)}` : ''}</div>` : ''}
+                ${poolInfo}
+                ${isSwap && swapPair ? `<div style="font-size: 11px; opacity: 0.75; margin-top: 4px;">${isGreek ? 'Ζεύγος:' : 'Pair:'} ${escapeHtml(swapPair || 'Unknown pair')}${swapDirection ? ` • ${escapeHtml(swapDirection)}` : ''}</div>` : ''}
                 ${tx.timestamp ? `<div style="font-size: 10px; opacity: 0.5; margin-top: 4px;">${formatTxDate(tx.timestamp)}</div>` : ''}
             </div>
         `;

@@ -346,24 +346,111 @@
       </div>
       <div class="card">
         <h4>Platform Status</h4>
-        <div class="big" id="musicStatus" style="color: #ff9800;">Not Connected</div>
-        <div class="small muted">music data unavailable</div>
+        <div class="big" id="musicStatus" style="color: #ff9800;">Loading…</div>
+        <div class="small muted" id="musicStatusNote">checking endpoints</div>
       </div>
     </div>
-    <div style="text-align:center;padding:40px;color:#9fdfb4">
-      <p style="font-size:16px">🎵 Music Platform Status</p>
-      <p style="font-size:12px;opacity:0.7">
-        <strong style="color:#ff9800">Missing:</strong> /api/music/tracks endpoint, backend music registry, MUSIC_VOLUME env var<br>
-        <strong>To enable:</strong> Deploy music backend service and configure environment variables<br>
-        <strong>Current state:</strong> UI ready, backend integration pending
-      </p>
+    <div class="panel" style="margin-top:12px">
+      <table id="musicTable">
+        <thead>
+          <tr><th>Title</th><th>Artist</th><th>Genre</th><th>Plays</th></tr>
+        </thead>
+        <tbody id="musicBody"><tr><td colspan="4" style="text-align:center;color:#9fdfb4">Loading tracks…</td></tr></tbody>
+      </table>
     </div>
   </section>
 </div>
 
 <script>
 /* ===== Utilities ===== */
-const fmtN = (n) => (n==null?'—':Number(n).toLocaleString(undefined,{minimumFractionDigits:3,maximumFractionDigits:6}));
+const fmtN = (n) => {
+  if (n == null) return '—';
+  const num = Number(n);
+  if (!Number.isFinite(num)) return '0';
+  return num.toLocaleString(undefined,{minimumFractionDigits:3,maximumFractionDigits:6});
+};
+const canonicalKind = (kindRaw) => {
+  const k = (kindRaw || '').toLowerCase();
+  const map = {
+    'thr_transfer': 'thr_transfer',
+    'transfer': 'thr_transfer',
+    'pool_swap': 'swap',
+    'swap': 'swap',
+    'token_transfer': 'token_transfer',
+    'send_token': 'token_transfer',
+    'receive_token': 'token_transfer',
+    'ai_credit': 'ai_credits',
+    'ai_credits': 'ai_credits',
+    'credits_consume': 'ai_credits',
+    'service_payment': 'ai_credits',
+    'ai_knowledge': 'ai_credits',
+    'iot_parking': 'parking',
+    'iot_parking_reservation': 'parking',
+    'iot_autopilot': 'autopilot',
+  };
+  return map[k] || k || 'thr_transfer';
+};
+const CATEGORY_RULES = {
+  transfers: {
+    label: 'Transfers',
+    kinds: [
+      'thr_transfer',
+      'transfer',
+      'swap',
+      'bridge',
+      'coinbase',
+      'ai_credits',
+      'token_transfer',
+      'l2e',
+      'iot',
+      'autopilot',
+      'parking',
+      'music',
+    ],
+    predicate: (tx) => {
+      const kind = canonicalKind(tx?.kind || tx?.type);
+      if (kind === 'block') return false;
+      if (!tx?.from && !tx?.to) return false;
+      return true;
+    },
+  },
+  tokens: {
+    label: 'Tokens',
+    kinds: ['token_transfer'],
+    predicate: (tx) => canonicalKind(tx?.kind || tx?.type) === 'token_transfer',
+  },
+  thr: {
+    label: 'THR',
+    kinds: ['thr_transfer', 'transfer'],
+    predicate: (tx) => {
+      const kind = canonicalKind(tx?.kind || tx?.type);
+      const asset = (tx?.asset || tx?.asset_symbol || tx?.token_symbol || 'THR').toUpperCase();
+      return (kind === 'thr_transfer' || kind === 'transfer') && asset === 'THR';
+    },
+  },
+  other: {
+    label: 'Other/Unknown',
+    predicate: (tx) => {
+      const kind = canonicalKind(tx?.kind || tx?.type);
+      const known = new Set([
+        'thr_transfer',
+        'transfer',
+        'swap',
+        'pool_swap',
+        'bridge',
+        'coinbase',
+        'ai_credits',
+        'token_transfer',
+        'l2e',
+        'iot',
+        'autopilot',
+        'parking',
+        'music',
+      ]);
+      return !known.has(kind);
+    },
+  },
+};
 const short = s => (s && s.length>20 ? s.slice(0,20)+'…' : (s||'—'));
 const rel = ts => {
   if(!ts) return '—';
@@ -391,6 +478,7 @@ document.querySelectorAll('.tab').forEach(t=>{
     if(tab==='tokens') loadTokens();
     if(tab==='pools') loadPools();
     if(tab==='l2e') loadL2E();
+    if(tab==='music') loadMusic();
   };
 });
 
@@ -496,42 +584,50 @@ function renderTxs(list){
   const q = el('#q').value.trim().toLowerCase();
   const tb = tbody('#tblTxs');
   tb.innerHTML='';
+  const txList = list.filter(CATEGORY_RULES.transfers.predicate);
 
   // Calculate transfer statistics
   let totalVolume = 0;
   let uniqueAddresses = new Set();
   let swapCount = 0;
 
-  list.forEach(t => {
-    const asset = (t && t.token_symbol) ? String(t.token_symbol) : 'THR';
+  txList.forEach(t => {
+    const asset = (t && (t.asset || t.asset_symbol || t.token_symbol)) ? String(t.asset || t.asset_symbol || t.token_symbol) : 'THR';
+    const kind = canonicalKind(t && (t.kind || t.type));
     // Only count THR for volume (to avoid mixing token types)
     if(asset === 'THR') {
       totalVolume += (t.amount || 0);
     }
     if(t.from) uniqueAddresses.add(t.from);
     if(t.to) uniqueAddresses.add(t.to);
-    if(t.type === 'swap') swapCount++;
+    if(kind === 'swap') swapCount++;
   });
 
   // Update stats cards
-  el('#txsTotalCount').textContent = list.length.toLocaleString() + (swapCount > 0 ? ` (${swapCount} swaps)` : '');
+  el('#txsTotalCount').textContent = txList.length.toLocaleString() + (swapCount > 0 ? ` (${swapCount} swaps)` : '');
   el('#txsTotalVolume').textContent = fmtN(totalVolume) + ' THR';
   el('#txsUniqueAddresses').textContent = uniqueAddresses.size.toLocaleString();
-  el('#txsAvgSize').textContent = list.length > 0 ? fmtN(totalVolume / list.length) + ' THR' : '—';
+  el('#txsAvgSize').textContent = txList.length > 0 ? fmtN(totalVolume / txList.length) + ' THR' : '—';
 
   // Render transfers table
-  list.forEach(t=>{
-    const asset = (t && t.token_symbol) ? String(t.token_symbol) : 'THR';
+  txList.forEach(t=>{
+    const asset = (t && (t.asset || t.asset_symbol || t.token_symbol)) ? String(t.asset || t.asset_symbol || t.token_symbol) : 'THR';
+    const kind = canonicalKind(t && (t.kind || t.type));
     const match = !q || JSON.stringify(t).toLowerCase().includes(q);
     if(!match) return;
     const tr=document.createElement('tr');
 
     // Type badge styling
     let typeBadge = '<span class="badge b-legacy">transfer</span>';
-    if(t.type === 'swap') typeBadge = '<span class="badge b-hot">swap</span>';
-    else if(t.type === 'bridge') typeBadge = '<span class="badge" style="color:#f0f;background:#f0f30;border-color:#f0f">bridge</span>';
-    else if(t.type === 'coinbase') typeBadge = '<span class="badge b-stratum">coinbase</span>';
-    else if(t.type === 'service_payment') typeBadge = '<span class="badge" style="color:#0af;background:#0af30;border-color:#0af">service</span>';
+    if(kind === 'swap') typeBadge = '<span class="badge b-hot">swap</span>';
+    else if(kind === 'bridge') typeBadge = '<span class="badge" style="color:#f0f;background:#f0f30;border-color:#f0f">bridge</span>';
+    else if(kind === 'coinbase') typeBadge = '<span class="badge b-stratum">coinbase</span>';
+    else if(kind === 'ai_credits') typeBadge = '<span class="badge" style="color:#0af;background:#0af30;border-color:#0af">ai</span>';
+    else if(kind === 'token_transfer') typeBadge = '<span class="badge" style="color:#0f0;background:#0f03;border-color:#0f0">token</span>';
+    else if(kind === 'l2e') typeBadge = '<span class="badge" style="color:#ffd166;background:#ffd16622;border-color:#ffd166">l2e</span>';
+    else if(kind === 'iot' || kind === 'autopilot' || kind === 'parking') typeBadge = '<span class="badge" style="color:#0ff;background:#0ff1a;border-color:#0ff">iot</span>';
+    else if(kind === 'music') typeBadge = '<span class="badge" style="color:#ff9bf2;background:#ff9bf220;border-color:#ff9bf2">music</span>';
+    else if(CATEGORY_RULES.other.predicate(t)) typeBadge = '<span class="badge" style="color:#f7d6ff;background:#f7d6ff22;border-color:#f7d6ff">other</span>';
 
     const details = renderTxDetailsCell(t);
 
@@ -540,8 +636,8 @@ function renderTxs(list){
         <a class="hash" title="${t.tx_id}" onclick="copy('${t.tx_id}')">${short(t.tx_id)}</a>
       </td>
       <td>${typeBadge}</td>
-      <td class="mono"><a class="addr" onclick="copy('${t.from}')">${short(t.from)}</a></td>
-      <td class="mono"><a class="addr" onclick="copy('${t.to}')">${short(t.to)}</a></td>
+      <td class="mono"><a class="addr" onclick="copy('${t.from||''}')">${short(t.from||'—')}</a></td>
+      <td class="mono"><a class="addr" onclick="copy('${t.to||''}')">${short(t.to||'—')}</a></td>
       <td>${short(asset)}</td><td>${fmtN(t.amount)}</td>
       <td>${fmtN(t.fee_burned)}</td>
       <td>${details}</td>
@@ -639,7 +735,7 @@ async function reloadMempool(){
 
 async function reloadTxs(){
   try {
-    const r = await fetch('/api/transactions');
+    const r = await fetch('/api/tx_feed');
     if (!r.ok) throw new Error(`transactions ${r.status}`);
     const j = await r.json();
     CURRENT_TXS = Array.isArray(j) ? j : [];
@@ -758,6 +854,9 @@ async function loadTokens(){
       const tr = document.createElement('tr');
       const holdersCount = (t.holders_count !== undefined) ? t.holders_count : '—';
       const transfersCount = (t.transfers_count !== undefined) ? t.transfers_count : '—';
+      const decimalsLabel = (t.decimals !== undefined && t.decimals !== null)
+        ? `${t.decimals}${t.decimals_is_default ? ' (default)' : ''}`
+        : '6 (default)';
 
       // Prepare logo HTML
       const color = t.color || '#00ff66';
@@ -772,7 +871,7 @@ async function loadTokens(){
         <td class="mono">${fmtN(t.total_supply || t.supply || 0)}</td>
         <td class="mono k">${typeof holdersCount === 'number' ? holdersCount.toLocaleString() : holdersCount}</td>
         <td class="mono">${typeof transfersCount === 'number' ? transfersCount.toLocaleString() : transfersCount}</td>
-        <td>${t.decimals || 6}</td>
+        <td>${decimalsLabel}</td>
         <td class="mono"><a class="addr" onclick="copy('${t.creator||'—'}')">${short(t.creator||'—')}</a></td>
         <td class="muted">${rel(t.created_at||'')}</td>
       `;
@@ -834,9 +933,12 @@ async function loadL2E(){
     let totalDistributed = 0;
 
     courses.forEach(c => {
-      totalEnroll += (c.enrollments||[]).length;
-      totalComplete += (c.completions||[]).length;
-      totalDistributed += (c.completions||[]).length * (c.reward||0);
+      const enrollments = Array.isArray(c.enrollments) ? c.enrollments.length : 0;
+      const completions = Array.isArray(c.completions) ? c.completions.length : 0;
+      const reward = Number(c.reward || c.reward_l2e || 0) || 0;
+      totalEnroll += enrollments;
+      totalComplete += completions;
+      totalDistributed += completions * reward;
     });
 
     el('#l2eTotalEnrollments').textContent = totalEnroll;
@@ -854,19 +956,74 @@ async function loadL2E(){
 
     courses.forEach(c=>{
       const tr = document.createElement('tr');
+      const reward = Number(c.reward || c.reward_l2e || 0) || 0;
+      const price = Number(c.price_thr || c.price || 0) || 0;
+      const enrollments = Array.isArray(c.enrollments) ? c.enrollments.length : 0;
+      const completions = Array.isArray(c.completions) ? c.completions.length : 0;
       tr.innerHTML = `
         <td>${c.title||'Untitled'}</td>
         <td class="mono"><a class="addr" onclick="copy('${c.teacher||''}')">${short(c.teacher||'—')}</a></td>
-        <td>${fmtN(c.price||0)}</td>
-        <td class="k">${fmtN(c.reward||0)}</td>
-        <td>${(c.enrollments||[]).length}</td>
-        <td>${(c.completions||[]).length}</td>
+        <td>${fmtN(price)}</td>
+        <td class="k">${fmtN(reward)}</td>
+        <td>${enrollments}</td>
+        <td>${completions}</td>
       `;
       tb.appendChild(tr);
     });
   }catch(e){
     console.error('L2E load error:', e);
+    el('#l2eActiveCourses').textContent = '0';
+    el('#l2eTotalEnrollments').textContent = '0';
+    el('#l2eCompletions').textContent = '0';
+    el('#l2eTotalDistributed').textContent = '0 L2E';
     document.getElementById('l2eBody').innerHTML = '<tr><td colspan="6" style="text-align:center;color:#ff5577">Error loading courses</td></tr>';
+  }
+}
+
+async function loadMusic(){
+  try{
+    const statusR = await fetch('/api/music/status');
+    if(statusR.ok){
+      const statusJ = await statusR.json();
+      el('#musicTotalArtists').textContent = statusJ.artists ?? 0;
+      el('#musicTotalTracks').textContent = statusJ.tracks ?? 0;
+      el('#musicRoyaltiesPaid').textContent = `${(statusJ.royalties_thr ?? 0).toLocaleString()} THR`;
+      const connected = !!statusJ.connected;
+      el('#musicStatus').textContent = connected ? 'Online' : 'Degraded';
+      el('#musicStatus').style.color = connected ? '#16ff57' : '#ffd166';
+      const note = statusJ.status_note || (connected ? 'registry connected' : 'partial data');
+      el('#musicStatusNote').textContent = note;
+    }
+
+    const tracksR = await fetch('/api/music/tracks?limit=12');
+    const body = el('#musicBody');
+    body.innerHTML = '';
+    if(!tracksR.ok){
+      body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#ff5577">Unable to load tracks</td></tr>';
+      return;
+    }
+    const tracksJ = await tracksR.json();
+    const tracks = Array.isArray(tracksJ.tracks) ? tracksJ.tracks : [];
+    if(tracks.length === 0){
+      body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#9fdfb4">No tracks published yet</td></tr>';
+      return;
+    }
+    tracks.forEach(t => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="mono k">${t.title || '—'}</td>
+        <td class="mono">${t.artist_name || t.artist_address || '—'}</td>
+        <td>${t.genre || '—'}</td>
+        <td class="mono">${(t.play_count||0).toLocaleString()}</td>`;
+      body.appendChild(tr);
+    });
+  }catch(e){
+    console.error('Music load failed', e);
+    el('#musicStatus').textContent = 'Offline';
+    el('#musicStatus').style.color = '#ff9800';
+    el('#musicStatusNote').textContent = 'music endpoints unavailable';
+    const body = el('#musicBody');
+    body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#ff5577">Music service unavailable</td></tr>';
   }
 }
 </script>

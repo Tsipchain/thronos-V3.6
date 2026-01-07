@@ -203,35 +203,14 @@
       return num.toFixed(decimalPlaces);
     }
 
-    const getKind = (tx) => (tx.kind || tx.type || '').toLowerCase();
-    const isTokenTransfer = (tx) => getKind(tx) === 'token_transfer';
-    const getAssetSymbol = (tx) => {
-        const sym = (tx.asset_symbol || tx.asset || '').toUpperCase();
-        if (isTokenTransfer(tx)) {
-            return sym || 'UNKNOWN_TOKEN';
-        }
-        return sym || 'THR';
-    };
-    const isThrTransfer = (tx) => {
-        // Must be thr_transfer kind AND THR asset (not tokens)
-        return getKind(tx) === 'thr_transfer' && getAssetSymbol(tx) === 'THR';
-    };
-    const isSwapTx = (tx) => getKind(tx) === 'swap' || getKind(tx).startsWith('liquidity_') || getKind(tx).includes('pool');
-    const isBridgeTx = (tx) => getKind(tx).startsWith('bridge');
-    const isIoTTx = (tx) => getKind(tx).startsWith('iot') || getKind(tx).includes('parking') || getKind(tx) === 'autopilot';
-    const isAiCreditsTx = (tx) => getKind(tx).startsWith('ai') || getKind(tx).includes('credits');
-
-    function shouldExcludeTx(tx) {
-        const kind = getKind(tx);
-        const asset = getAssetSymbol(tx);
-        if (kind === 'block') return true;
-        if (!tx.from && !tx.to) return true;
-        if (tx.amount === 0 && asset === 'THR' && kind !== 'thr_transfer') return true;
-        return false;
+    function normalizeKind(value) {
+        return String(value || '').toLowerCase();
     }
 
-    function isValidTokenSymbol(symbol) {
-        return symbol && !['THR', 'TOKEN', 'UNKNOWN_TOKEN'].includes(symbol);
+    function sanitizeTokenSymbol(value) {
+        const symbol = String(value || '').trim().toUpperCase();
+        if (!symbol || symbol === 'TOKEN' || symbol === 'TKN' || symbol === 'UNKNOWN') return '';
+        return symbol;
     }
 
     let walletTxs = [];
@@ -252,21 +231,10 @@
       }
 
       const filtered = txs.filter(tx => {
-        const kind = getKind(tx);
-        const asset = getAssetSymbol(tx);
-        if (currentFilter === 'tokens') {
-          // Show token transfers AND swaps involving tokens
-          const isTokenTx = isTokenTransfer(tx) && isValidTokenSymbol(asset);
-          const isTokenSwap = isSwapTx(tx) && asset !== 'THR' && isValidTokenSymbol(asset);
-          return isTokenTx || isTokenSwap;
-        }
-        if (currentFilter === 'swaps') return isSwapTx(tx);
-        if (currentFilter === 'transfers') return isThrTransfer(tx);
-        if (currentFilter === 'bridge') return isBridgeTx(tx);
-        if (currentFilter === 'iot') return isIoTTx(tx);
-        if (currentFilter === 'ai_credits') return isAiCreditsTx(tx);
-        if (currentFilter === 'l2e') return kind === 'l2e' || kind === 'l2e_reward';
-        if (currentFilter === 'architect') return kind === 'architect' || kind === 'architect_job';
+        const kind = normalizeKind(tx.kind);
+        if (currentFilter === 'tokens') return kind === 'token_transfer';
+        if (currentFilter === 'swaps') return kind === 'swap' || kind === 'pool_swap';
+        if (currentFilter === 'transfers') return kind === 'transfer' || kind === 'thr_transfer';
         return true;
       });
 
@@ -278,11 +246,13 @@
       let html = "";
       filtered.forEach(tx => {
         const isIncoming = tx.direction === 'in' || tx.to === currentAddress;
-        const kind = getKind(tx);
-        const isSwap = tx.direction === 'swap' || isSwapTx(tx);
+        const kind = normalizeKind(tx.kind);
+        const isSwap = tx.direction === 'swap' || kind === 'swap' || kind === 'pool_swap';
         const color = isSwap ? '#0ff' : (isIncoming ? '#0f0' : '#ff0');
         const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
-        const asset = getAssetSymbol(tx);
+        const isToken = kind === 'token_transfer';
+        const tokenSymbol = sanitizeTokenSymbol(tx.asset_symbol || tx.asset || tx.symbol);
+        const asset = isToken ? (tokenSymbol || '(unknown token)') : 'THR';
         const decimals = tx.decimals || tokenDecimals;
         const formattedAmount = formatTokenAmount(tx.display_amount ?? tx.amount ?? 0, decimals);
         const label = (tx.category_label || tx.kind || tx.type || '').toString().toUpperCase();

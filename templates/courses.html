@@ -1278,7 +1278,8 @@ async function loadQuizForEdit(courseId) {
             const normalizedQuestion = {
                 ...q,
                 type: normalizedType,
-                options: normalizedType === 'true_false' ? ['False', 'True'] : (q.options || ['', '', '', ''])
+                options: normalizedType === 'true_false' ? ['False', 'True'] : (q.options || ['', '', '', '']),
+                correct: normalizedType === 'true_false' ? (q.correct === 1 ? 1 : 0) : (q.correct ?? 0)
             };
             addQuestion(normalizedQuestion);
         });
@@ -1290,6 +1291,7 @@ async function loadQuizForEdit(courseId) {
 function normalizeQuestionType(rawType) {
     const val = String(rawType || '').toLowerCase();
     if (val === 'true_false' || val === 'tf' || val === 'truefalse') return 'true_false';
+    if (val === 'multiple_choice' || val === 'mcq' || val === 'single' || val === 'multiple-choice') return 'multiple_choice';
     return 'multiple_choice';
 }
 
@@ -1300,13 +1302,6 @@ function addQuestion(existing = null) {
         question_el: existing?.question_el || '',
         options: existing?.options || ['', '', '', ''],
         correct: existing?.correct ?? 0,
-        correct_multiple: existing?.correct_multiple || [],
-        correct_answers: existing?.correct_answers || [],
-        case_sensitive: existing?.case_sensitive || false,
-        items: existing?.items || [],
-        left_items: existing?.left_items || [],
-        right_items: existing?.right_items || [],
-        correct_pairs: existing?.correct_pairs || {},
         type: normalizeQuestionType(existing?.type)
     };
 
@@ -1385,23 +1380,7 @@ function onQuestionTypeChange(idx, type) {
         quizQuestions[idx].options = (quizQuestions[idx].options || ['', '', '', '']).concat(['', '', '', '']).slice(0, 4);
         quizQuestions[idx].correct = Number(quizQuestions[idx].correct ?? 0);
     }
-    quizQuestions[idx].correct_multiple = [];
-    quizQuestions[idx].correct_answers = [];
-    quizQuestions[idx].case_sensitive = false;
-    quizQuestions[idx].items = [];
-    quizQuestions[idx].left_items = [];
-    quizQuestions[idx].right_items = [];
-    quizQuestions[idx].correct_pairs = {};
     renderQuestionFields(idx, normalized);
-}
-
-function toggleMultiCorrect(idx, optIdx, checked) {
-    quizQuestions[idx].correct_multiple = quizQuestions[idx].correct_multiple || [];
-    if (checked) {
-        if (!quizQuestions[idx].correct_multiple.includes(optIdx)) quizQuestions[idx].correct_multiple.push(optIdx);
-    } else {
-        quizQuestions[idx].correct_multiple = quizQuestions[idx].correct_multiple.filter(v => v !== optIdx);
-    }
 }
 
 async function saveQuiz() {
@@ -1417,6 +1396,10 @@ async function saveQuiz() {
             const options = (q.options || []).concat(['', '', '', '']).slice(0, 4);
             if (!options.every(o => o)) {
                 validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'συμπλήρωσε όλες τις επιλογές' : 'fill all options'}`);
+            }
+            const correctIndex = Number(q.correct ?? 0);
+            if (Number.isNaN(correctIndex) || correctIndex < 0 || correctIndex >= options.length) {
+                validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'λάθος σωστή επιλογή' : 'invalid correct option'}`);
             }
         }
         if (qType === 'true_false') {

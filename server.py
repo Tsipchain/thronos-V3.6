@@ -10234,7 +10234,7 @@ def normalize_quiz_question_type(raw_type: str | None, *, course_id: str = "", q
         })
         return "multiple_choice"
     normalized = str(raw_type).strip().lower()
-    if normalized in {"single", "mcq", "multiple_choice"}:
+    if normalized in {"single", "mcq", "multiple_choice", "multiple-choice"}:
         return "multiple_choice"
     if normalized in {"tf", "true_false", "truefalse"}:
         return "true_false"
@@ -10252,6 +10252,13 @@ def get_course_quiz(course_id: str):
         for idx, q in enumerate(metadata_quiz.get("questions", []), start=1):
             options = q.get("options", [])
             qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=idx)
+            if qtype not in {"multiple_choice", "true_false"}:
+                app.logger.warning("Unsupported quiz question type; forcing multiple_choice", extra={
+                    "course_id": course_id,
+                    "question_id": q.get("id") or idx,
+                    "type": qtype,
+                })
+                qtype = "multiple_choice"
             normalized_questions.append({
                 "id": q.get("id") or idx,
                 "type": qtype,
@@ -10272,19 +10279,19 @@ def get_course_quiz(course_id: str):
         normalized_questions = []
         for idx, q in enumerate(quiz.get("questions", []), start=1):
             qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=idx)
+            if qtype not in {"multiple_choice", "true_false"}:
+                app.logger.warning("Unsupported quiz question type; forcing multiple_choice", extra={
+                    "course_id": course_id,
+                    "question_id": q.get("id") or idx,
+                    "type": qtype,
+                })
+                qtype = "multiple_choice"
             normalized_questions.append({
                 "id": q.get("id"),
                 "type": qtype,
                 "question": q.get("question"),
                 "options": q.get("options", []),
                 "correct": int(q.get("correct", 0)),
-                "correct_multiple": q.get("correct_multiple", []),
-                "left_items": q.get("left_items"),
-                "right_items": q.get("right_items"),
-                "items": q.get("items"),
-                "correct_pairs": q.get("correct_pairs", {}),
-                "correct_answers": q.get("correct_answers", []),
-                "case_sensitive": q.get("case_sensitive", False),
             })
         return {
             "course_id": course_id,
@@ -10551,47 +10558,28 @@ def api_v1_submit_quiz(course_id: str):
         is_correct = False
         correct_answer = None
 
+        if qtype not in {"multiple_choice", "true_false"}:
+            return jsonify(status="error", message=f"Unsupported question type '{qtype}'"), 400
+
+        if user_answer is None:
+            return jsonify(status="error", message=f"Missing answer for question {qid}"), 400
+
         # Deterministic grading per type
         if qtype == "multiple_choice" or qtype == "true_false":
             # Single choice or True/False: compare index
             correct_answer = q.get("correct")
-            if user_answer is not None:
+            if qtype == "multiple_choice":
+                options = q.get("options", [])
+                if not isinstance(user_answer, int) and not (isinstance(user_answer, str) and user_answer.isdigit()):
+                    return jsonify(status="error", message=f"Invalid answer for question {qid}"), 400
+                answer_index = int(user_answer)
+                if answer_index < 0 or answer_index >= len(options):
+                    return jsonify(status="error", message=f"Answer out of range for question {qid}"), 400
+                is_correct = answer_index == correct_answer
+            else:
+                if user_answer not in (0, 1, "0", "1"):
+                    return jsonify(status="error", message=f"Invalid true/false answer for question {qid}"), 400
                 is_correct = int(user_answer) == correct_answer
-
-        elif qtype == "multi":
-            # Multiple choice: user must select all correct indices
-            correct_answer = sorted(q.get("correct_multiple", []))
-            if user_answer is not None:
-                user_selections = sorted([int(idx) for idx in user_answer] if isinstance(user_answer, list) else [int(user_answer)])
-                is_correct = user_selections == correct_answer
-
-        elif qtype == "match":
-            # Matching: user pairs must match correct pairs
-            correct_answer = q.get("correct_pairs", {})
-            if user_answer is not None:
-                # user_answer should be dict: {left_idx: right_idx}
-                user_pairs = {str(k): int(v) for k, v in (user_answer.items() if isinstance(user_answer, dict) else {})}
-                correct_pairs = {str(k): int(v) for k, v in correct_answer.items()}
-                is_correct = user_pairs == correct_pairs
-
-        elif qtype == "order":
-            # Ordering: user order must match correct order
-            correct_answer = q.get("correct_order", [])
-            if user_answer is not None:
-                user_order = [int(idx) for idx in user_answer] if isinstance(user_answer, list) else []
-                is_correct = user_order == correct_answer
-
-        elif qtype == "short":
-            # Short answer: case-sensitive or insensitive comparison
-            correct_answers = q.get("correct_answers", [])
-            case_sensitive = q.get("case_sensitive", False)
-            if user_answer is not None:
-                user_text = str(user_answer).strip()
-                if case_sensitive:
-                    is_correct = user_text in correct_answers
-                else:
-                    is_correct = user_text.lower() in [ans.lower() for ans in correct_answers]
-            correct_answer = correct_answers
 
         if is_correct:
             correct += 1

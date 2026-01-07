@@ -1127,11 +1127,11 @@
             }
             return sym || 'THR';
         };
-        const isThrTransfer = (tx) => getKind(tx) === 'thr_transfer' || (getKind(tx) === 'transfer' && getAssetSymbol(tx) === 'THR');
+        const isThrTransfer = (tx) => getKind(tx) === 'thr_transfer';
         const isSwapTx = (tx) => getKind(tx) === 'swap' || getKind(tx).startsWith('liquidity_') || getKind(tx).includes('pool');
-        const isBridgeTx = (tx) => getKind(tx).startsWith('bridge_');
-        const isIoTTx = (tx) => getKind(tx).startsWith('iot_') || getKind(tx).includes('parking');
-        const isAiCreditsTx = (tx) => getKind(tx).startsWith('ai_') || getKind(tx).includes('credits');
+        const isBridgeTx = (tx) => getKind(tx).startsWith('bridge');
+        const isIoTTx = (tx) => getKind(tx).startsWith('iot') || getKind(tx).includes('parking') || getKind(tx) === 'autopilot';
+        const isAiCreditsTx = (tx) => getKind(tx).startsWith('ai') || getKind(tx).includes('credits');
 
         function shouldExcludeTx(tx) {
             const kind = getKind(tx);

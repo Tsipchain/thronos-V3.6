@@ -6433,6 +6433,7 @@ def wallet_data(thr_addr):
 
     category_labels = {
         "transfer": "Transfer",
+        "thr_transfer": "THR Transfer",
         "token_transfer": "Token Transfer",
         "swap": "Swap",
         "bridge": "Bridge",
@@ -6442,6 +6443,8 @@ def wallet_data(thr_addr):
         "autopilot": "Autopilot",
         "parking": "Parking",
         "music": "Music",
+        "mint": "Token Mint",
+        "burn": "Token Burn",
     }
 
     for norm in _tx_feed():

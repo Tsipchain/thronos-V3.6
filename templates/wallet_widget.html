@@ -1139,7 +1139,10 @@
             }
             return sym || 'THR';
         };
-        const isThrTransfer = (tx) => getKind(tx) === 'thr_transfer';
+        const isThrTransfer = (tx) => {
+            // Must be thr_transfer kind AND THR asset (not tokens)
+            return getKind(tx) === 'thr_transfer' && getAssetSymbol(tx) === 'THR';
+        };
         const isSwapTx = (tx) => getKind(tx) === 'swap' || getKind(tx).startsWith('liquidity_') || getKind(tx).includes('pool');
         const isBridgeTx = (tx) => getKind(tx).startsWith('bridge');
         const isIoTTx = (tx) => getKind(tx).startsWith('iot') || getKind(tx).includes('parking') || getKind(tx) === 'autopilot';

@@ -251,7 +251,12 @@
       const filtered = txs.filter(tx => {
         const kind = getKind(tx);
         const asset = getAssetSymbol(tx);
-        if (currentFilter === 'tokens') return isTokenTransfer(tx) && isValidTokenSymbol(asset);
+        if (currentFilter === 'tokens') {
+          // Show token transfers AND swaps involving tokens
+          const isTokenTx = isTokenTransfer(tx) && isValidTokenSymbol(asset);
+          const isTokenSwap = isSwapTx(tx) && asset !== 'THR' && isValidTokenSymbol(asset);
+          return isTokenTx || isTokenSwap;
+        }
         if (currentFilter === 'swaps') return isSwapTx(tx);
         if (currentFilter === 'transfers') return isThrTransfer(tx);
         if (currentFilter === 'bridge') return isBridgeTx(tx);

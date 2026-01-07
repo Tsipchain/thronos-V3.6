@@ -1,55 +1,93 @@
 # Release Verification (OPS)
 
-1. **Check health endpoint**
-   - Open `/api/health` in the deployed environment.
-   - Confirm `build_id` and `git_commit` are present.
-2. **Verify footer build tag**
-   - Load any page (e.g., `/`).
-   - Ensure the footer shows the same `build_id` as `/api/health`.
-3. **Spot-check AI + wallet UI**
-   - Open the wallet history modal and confirm categories render.
-   - Trigger an AI chat request with an enabled model; confirm no errors and credits only deduct on successful calls.
-4. **AI provider status**
-   - Call `/api/ai/provider_status` and verify providers report `configured`/`library_loaded` without exposing secrets.
-5. **Chat session stability**
-   - Reset a chat session (clear messages) and refresh; session should remain listed with messages intact.
-   - Delete a chat session and confirm the UI switches to another session without "session not found" loops.
-6. **Provider debugging**
-   - Verify `/api/ai/provider_status` lists key sources checked and any last errors per provider.
-   - `/api/ai/provider_status` and `/api/ai_models` agree on enabled providers when `THRONOS_AI_MODE` is `hybrid` or `all`.
-7. **AI callability**
-   - Chat request with a concrete model (e.g., `gpt-4.1-mini`) either succeeds or returns structured JSON with `call_attempted:false` and no charges.
-8. **Session flows**
-   - Deleting a session returns `{ok:true}`; the UI should move to another session without loading the deleted id.
-   - Resetting/clearing messages must not prune the session; refreshing should still show it.
-9. **Pools + history**
-   - `/pools` shows non-zero TVL estimates using wallet USD logic.
-   - Wallet history displays pool swaps/liquidity actions under the Swaps tab.
-10. **Menu and language**
-    - Wallet and language selectors remain visible and clickable at common desktop widths.
-11. **TX ledger persistence**
-    - Restart the server and confirm `/api/tx_feed` and viewer/wallet history still display past transfers/swaps/token transfers.
-12. **Token + swap visibility**
-    - Perform a token transfer and confirm it appears under Viewer → Transfers and Wallet → Tokens; ensure swaps still render in their tab.
-13. **Modal click-through**
-    - Open and close wallet/login modals and verify tabs/buttons remain clickable (no hidden overlays intercepting clicks).
-14. **Music endpoints**
-    - `/api/music/status` responds with connected metadata; Viewer → Music shows status/empty-state messaging instead of “Not Connected”.
-15. **Session auth**
-    - PATCH/DELETE chat session rename/delete endpoints return 200 (no 403) and changes persist after refresh.
-16. **Token decimals + activity**
-    - Viewer → Tokens shows correct decimals/supply per token (HPNNIS/JAM/MAR/L2E/WBTC) with “(default)” only when registry is missing decimals.
-    - Token transfer amounts render with correct precision across Viewer Transfers and Wallet Tokens.
-17. **Transfers detail completeness**
-    - After a token transfer + swap, Viewer Transfers rows include asset/amount/from/to and swap pair details; Wallet history shows them under the correct tabs.
-18. **L2E numbers**
-    - Viewer → L2E cards/tables render numeric values (no NaN/undefined) even when courses have empty enrollments/completions.
-19. **Offline/Thrai retrieval**
-    - `/api/thrai/ask` responds using new prompts (no repetition of last answer) and can surface stored architect deliverables when queried.
-20. **Wallet filters**
-    - Opening/closing the wallet history modal resets to a safe default (“All”) and category counts match `/api/tx_feed?wallet=...&debug_counts=1` output (no token misclassification).
-21. **Post-restart persistence**
-    - Token transfers remain visible in Viewer Transfers and Wallet Tokens after a restart/redeploy using the persistent tx_ledger.
-22. **Claude routing**
-    - `/api/ai_models` lists Claude models as enabled only when Anthropic keys are present; otherwise they appear disabled.
-    - Selecting a Claude model returns a clear provider_error when misconfigured (no silent fallback/charges to GPT).
+## Build stamp διαθέσιμο
+1. Άνοιξε `/api/health` και επιβεβαίωσε ότι επιστρέφει `build_id` και `git_commit`.
+
+## Footer: build_id αντιστοίχιση + συμπεριφορά
+1. Άνοιξε `/` (ή οποιοδήποτε page).
+2. Κάνε scroll: το footer δεν πρέπει να κρύβει περιεχόμενο στη μέση της σελίδας.
+3. Πήγαινε στο τέλος της σελίδας: το footer εμφανίζεται.
+4. Επιβεβαίωσε ότι:
+   - Κάτω δεξιά εμφανίζεται `build: <id>` που ταιριάζει με `/api/health`.
+   - Υπάρχει το κείμενο “Thronos Network ® CopyRights 2023–2026”.
+
+## Wallet History: UI κατηγορίες
+1. Άνοιξε Wallet → “Ιστορικό Συναλλαγών”.
+2. Επιβεβαίωσε ότι οι καρτέλες/κατηγορίες φορτώνουν χωρίς σφάλματα.
+
+## Wallet History: reset φίλτρων
+1. Πάτα Tokens, THR, L2E, Swaps.
+2. Κλείσε το modal και άνοιξέ το ξανά.
+3. Αναμενόμενο: ξεκινά σε ασφαλές default (“All”) και δεν κρατά “μόλυνση”.
+
+## Token filter leakage test
+1. Πήγαινε Tokens view και ενεργοποίησε token chips.
+2. Γύρνα σε THR/L2E/Swaps.
+3. Αναμενόμενο: οι άλλες κατηγορίες δεν επηρεάζονται από token-only κατάσταση.
+
+## TX feed persistence
+1. Κάνε restart/redeploy.
+2. Άνοιξε `/api/tx_feed` και επιβεβαίωσε ότι προηγούμενες κινήσεις υπάρχουν.
+
+## Viewer/Wallet: ιστορικό μετά από restart
+1. Μετά από restart, Viewer → Transfers και Wallet History/Wallet Tokens δείχνουν παλιές μεταφορές.
+
+## Decimals sanity στον Viewer → Tokens
+1. Έλεγξε tokens: HPNNIS/JAM/MAR/L2E/WBTC.
+2. Αναμενόμενο: decimals σωστά ανά token, “default” μόνο όταν λείπει πραγματικά metadata.
+
+## Decimals sanity σε Transfer rows
+1. Κάνε 1 token transfer.
+2. Αναμενόμενο: Viewer → Transfers και Wallet → Tokens δείχνουν ίδιο ποσό/precision.
+
+## Swaps δεν εξαφανίζονται
+1. Αν υπάρχουν swaps/liquidity actions, εμφανίζονται στο Swaps tab.
+
+## AI provider status χωρίς διαρροές
+1. Κάλεσε `/api/ai/provider_status`.
+2. Αναμενόμενο: δείχνει κατάσταση (configured/library_loaded) και τελευταίο error per provider, χωρίς secrets.
+
+## Συνέπεια providers vs model list
+1. Σύγκρινε `/api/ai/provider_status` με `/api/ai_models` σε mode hybrid/all.
+2. Αναμενόμενο: δεν δηλώνει enabled μοντέλα από provider που είναι ουσιαστικά κλειστός.
+
+## AI request charging discipline
+1. Κάνε AI request με ενεργό μοντέλο.
+2. Αναμενόμενο: credits αφαιρούνται μόνο σε επιτυχημένη κλήση.
+
+## AI callability με explicit model
+1. Ζήτησε μοντέλο τύπου `gpt-4.1-mini`.
+2. Αναμενόμενο: είτε επιτυχία είτε structured response που δηλώνει ότι δεν έγινε attempt/χρέωση.
+
+## Claude enablement gating
+1. Αν δεν υπάρχουν Anthropic keys, τα Claude models εμφανίζονται disabled στο `/api/ai_models`.
+2. Αν υπάρχουν keys, εμφανίζονται enabled.
+
+## Claude selection behavior
+1. Διάλεξε Claude model από UI.
+2. Αναμενόμενο: ή απαντά Claude, ή επιστρέφεται καθαρό provider_error (χωρίς σιωπηλό fallback/charges).
+
+## Chat session: reset δεν “σβήνει” session
+1. Κάνε clear/reset messages και refresh.
+2. Αναμενόμενο: το session παραμένει διαθέσιμο.
+
+## Chat session: delete χωρίς 403
+1. Δοκίμασε delete session.
+2. Αναμενόμενο: 200 OK και UI περνά σε άλλο session χωρίς loop.
+
+## Rename/Delete persist
+1. Rename session, refresh.
+2. Αναμενόμενο: το νέο όνομα/κατάσταση κρατιέται.
+
+## Offline/Thrai: no repetition
+1. `/api/thrai/ask` σε διαδοχικά διαφορετικά prompts.
+2. Αναμενόμενο: διαφορετικές απαντήσεις (όχι επανάληψη προηγούμενου).
+
+## Offline/Thrai: prompt validation
+1. Στείλε κενό prompt.
+2. Αναμενόμενο: καθαρό validation error χωρίς να πειράζει το session/history.
+
+## Wallet counts debug sanity
+1. Άνοιξε `/api/tx_feed?wallet=...&debug_counts=1`.
+2. Σύγκρινε με wallet history category counts.
+3. Αναμενόμενο: οι αριθμοί συμφωνούν χωρίς λάθος ταξινόμηση τύπων.

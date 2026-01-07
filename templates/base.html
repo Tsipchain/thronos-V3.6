@@ -2335,7 +2335,7 @@ function getTxType(tx) {
     };
     if (kindMap[raw]) return kindMap[raw];
 
-    const asset = (tx.symbol || tx.asset || tx.asset_symbol || tx.token_symbol || 'THR').toUpperCase();
+    // Fallback: use already-declared asset variable from line 2305
     if (asset && asset !== 'THR') return 'token';
     return 'thr';
 }

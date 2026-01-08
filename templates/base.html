@@ -1986,8 +1986,12 @@ async function updateTokenPrices() {
         const data = await response.json();
         if (data.prices) {
             Object.keys(data.prices).forEach(symbol => {
-                if (TOKEN_REGISTRY[symbol]) {
-                    TOKEN_REGISTRY[symbol].priceUSD = data.prices[symbol];
+                if (!TOKEN_REGISTRY[symbol]) return;
+                const price = data.prices[symbol];
+                if (Number.isFinite(Number(price))) {
+                    TOKEN_REGISTRY[symbol].priceUSD = Number(price);
+                } else if (price === null) {
+                    TOKEN_REGISTRY[symbol].priceUSD = null;
                 }
             });
         }
@@ -2032,15 +2036,20 @@ function renderWalletBalances(data) {
 
     tokens.forEach(t => {
         const balance = Number(t.balance) || 0;
-        const tokenInfo = TOKEN_REGISTRY[t.symbol] || { priceUSD: 0 };
-        const valueUSD = balance * tokenInfo.priceUSD;
-        totalUSD += valueUSD;
+        const tokenInfo = TOKEN_REGISTRY[t.symbol] || { priceUSD: null };
+        const priceUSD = Number.isFinite(Number(tokenInfo.priceUSD)) ? Number(tokenInfo.priceUSD) : null;
+        if (priceUSD !== null) {
+            const valueUSD = balance * priceUSD;
+            totalUSD += valueUSD;
 
-        // Convert to THR value
-        if (t.symbol === 'THR') {
+            // Convert to THR value
+            if (t.symbol === 'THR') {
+                totalTHR += balance;
+            } else if (thrPrice > 0) {
+                totalTHR += valueUSD / thrPrice;
+            }
+        } else if (t.symbol === 'THR') {
             totalTHR += balance;
-        } else if (thrPrice > 0) {
-            totalTHR += valueUSD / thrPrice;
         }
     });
 
@@ -2065,10 +2074,11 @@ function renderWalletBalances(data) {
             name: symbol,
             color: '#00ff66',
             logo: null,
-            priceUSD: 0
+            priceUSD: null
         };
-        const valueUSD = balance * tokenInfo.priceUSD;
-        const valueTHR = symbol === 'THR' ? balance : (thrPrice > 0 ? valueUSD / thrPrice : 0);
+        const priceUSD = Number.isFinite(Number(tokenInfo.priceUSD)) ? Number(tokenInfo.priceUSD) : null;
+        const valueUSD = priceUSD !== null ? balance * priceUSD : null;
+        const valueTHR = symbol === 'THR' ? balance : (priceUSD !== null && thrPrice > 0 ? valueUSD / thrPrice : null);
 
         const logoHtml = tokenInfo.logo
             ? `<img src="${tokenInfo.logo}" alt="${symbol}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
@@ -2085,11 +2095,11 @@ function renderWalletBalances(data) {
                         ${escapeHtml(tokenInfo.name || symbol)}
                         <span class="wallet-token-symbol">${escapeHtml(symbol)}</span>
                     </div>
-                    ${symbol !== 'THR' ? `<div class="wallet-token-thr-value">≈ ${valueTHR.toFixed(2)} THR</div>` : ''}
+                    ${symbol !== 'THR' ? `<div class="wallet-token-thr-value">≈ ${valueTHR !== null ? valueTHR.toFixed(2) : '—'} THR</div>` : ''}
                 </div>
                 <div class="wallet-token-values">
                     <div class="wallet-token-balance">${formatBalance(balance)} ${symbol}</div>
-                    <div class="wallet-token-usd">≈ $${valueUSD.toFixed(2)}</div>
+                    <div class="wallet-token-usd">≈ ${valueUSD !== null ? `$${valueUSD.toFixed(2)}` : '—'}</div>
                 </div>
             </div>
         `;
@@ -2303,7 +2313,11 @@ function filterHistory(filter, tokenSymbol = null) {
         }
     });
 
-    renderHistory();
+    if (filter === 'liquidity') {
+        loadWalletHistory('liquidity');
+    } else {
+        renderHistory();
+    }
 }
 
 function getTxType(tx) {
@@ -2324,8 +2338,11 @@ function getTxType(tx) {
     if (raw.startsWith('liquidity_') ||
         raw === 'add_liquidity' ||
         raw === 'remove_liquidity' ||
+        raw === 'pool_create' ||
         raw === 'pool_add_liquidity' ||
-        raw === 'pool_remove_liquidity') {
+        raw === 'pool_remove_liquidity' ||
+        raw === 'pool_add' ||
+        raw === 'pool_remove') {
         return 'liquidity';
     }
 
@@ -2506,8 +2523,13 @@ function renderHistory() {
         const otherAddr = isSent ? tx.to : tx.from;
         const shortAddr = otherAddr ? `${otherAddr.slice(0, 8)}...${otherAddr.slice(-6)}` : 'N/A';
 
-        const statusBadge = tx.status === 'confirmed'
+        const statusValue = (tx.status || '').toLowerCase();
+        const isMined = statusValue === 'confirmed' || statusValue === 'mined';
+        const isRejected = statusValue === 'rejected' || statusValue === 'failed';
+        const statusBadge = isMined
             ? `<span style="background: #00ff0033; color: #00ff00; padding: 2px 6px; border-radius: 4px; font-size: 10px;">✓ ${isGreek ? 'Επιβεβαιώθηκε' : 'Confirmed'}</span>`
+            : isRejected
+            ? `<span style="background: #ff333333; color: #ff6666; padding: 2px 6px; border-radius: 4px; font-size: 10px;">✕ ${isGreek ? 'Απορρίφθηκε' : 'Rejected'}</span>`
             : `<span style="background: #ffff0033; color: #ffff00; padding: 2px 6px; border-radius: 4px; font-size: 10px;">⏳ ${isGreek ? 'Εκκρεμεί' : 'Pending'}</span>`;
 
         const txType = getTxType(tx);
@@ -2521,9 +2543,10 @@ function renderHistory() {
                          txType === 'gateway' ? 'Gateway' : '';
         const isSwap = txType === 'swap';
         const isLiquidity = txType === 'liquidity';
-        const amountInRaw = tx.amount_in ?? tx.amountIn ?? tx.input_amount ?? tx.amount ?? 0;
+        const poolEvent = tx.meta && tx.meta.pool_event ? tx.meta.pool_event : null;
+        const amountInRaw = poolEvent?.in_amount ?? tx.amount_in ?? tx.amountIn ?? tx.input_amount ?? tx.amount ?? 0;
         const amountIn = Number.isFinite(Number(amountInRaw)) ? Number(amountInRaw) : 0;
-        const amountOut = tx.amount_out ?? tx.amountOut ?? tx.output_amount ?? tx.received_amount;
+        const amountOut = poolEvent?.out_amount ?? tx.amount_out ?? tx.amountOut ?? tx.output_amount ?? tx.received_amount;
         const amountOutNum = (amountOut !== undefined && Number.isFinite(Number(amountOut))) ? Number(amountOut) : null;
 
         // Determine correct asset symbol for display
@@ -2531,17 +2554,32 @@ function renderHistory() {
             ? (tx.asset_symbol || tx.asset || tx.symbol || 'TOKEN')
             : (tx.symbol || tx.asset_symbol || tx.asset || 'THR');
 
+        const liquidityAmounts = isLiquidity
+            ? (tx.amounts || tx.meta?.amounts || [
+                { symbol: tx.symbol_in || tx.token_a || 'THR', amount: amountIn },
+                { symbol: tx.symbol_out || tx.token_b || '', amount: amountOutNum }
+            ]).filter(entry => entry && entry.symbol && Number.isFinite(Number(entry.amount)))
+            : [];
+        const liquiditySign = (tx.kind || tx.type || '').toLowerCase().includes('remove') ? '-' : '+';
+        const liquidityLines = isLiquidity
+            ? liquidityAmounts.map(entry => `${liquiditySign}${Number(entry.amount).toFixed(6)} ${entry.symbol}`)
+            : [];
         const amountDisplay = isSwap
-            ? `${amountIn.toFixed(6)} ${tx.symbol_in || tx.from_symbol || tx.symbol || 'THR'}${amountOutNum !== null ? ` → ${amountOutNum.toFixed(6)} ${tx.symbol_out || tx.to_symbol || tx.target_symbol || tx.swap_out || ''}` : ''}`
+            ? `${amountIn.toFixed(6)} ${poolEvent?.in_token || tx.symbol_in || tx.from_symbol || tx.symbol || 'THR'}${amountOutNum !== null ? ` → ${amountOutNum.toFixed(6)} ${poolEvent?.out_token || tx.symbol_out || tx.to_symbol || tx.target_symbol || tx.swap_out || ''}` : ''}`
             : isLiquidity
-            ? `${amountIn.toFixed(6)} ${tx.symbol_in || tx.token_a || 'THR'}${amountOutNum !== null ? ` + ${amountOutNum.toFixed(6)} ${tx.symbol_out || tx.token_b || ''}` : ''}`
+            ? (liquidityLines.length
+                ? `<div style="text-align:right;">${liquidityLines.map(line => `<div>${line}</div>`).join('')}</div>`
+                : `${amountIn.toFixed(6)} ${tx.symbol_in || tx.token_a || 'THR'}`)
             : `${Number(amountInRaw || 0).toFixed(6)} ${displayAsset}`;
-        const swapPair = isSwap ? (tx.pair || tx.route || `${(tx.swap_in || tx.from_symbol || tx.symbol || '?')}${tx.swap_out || tx.to_symbol || tx.target_symbol ? `/${tx.swap_out || tx.to_symbol || tx.target_symbol}` : ''}`) : '';
+        const swapPair = isSwap ? (tx.pair || tx.route || `${(poolEvent?.in_token || tx.swap_in || tx.from_symbol || tx.symbol || '?')}${poolEvent?.out_token || tx.swap_out || tx.to_symbol || tx.target_symbol ? `/${poolEvent?.out_token || tx.swap_out || tx.to_symbol || tx.target_symbol}` : ''}`) : '';
         const swapDirection = isSwap ? (tx.direction || tx.side || '') : '';
 
         // Fee information
         const fee = tx.fee_burned || tx.fee || 0;
         const feeDisplay = fee > 0 ? `<br><span style="font-size: 10px; opacity: 0.6;">${isGreek ? 'Κόστος:' : 'Fee:'} ${fee} THR</span>` : '';
+        const swapMeta = isSwap && poolEvent
+            ? `<br><span style="font-size: 10px; opacity: 0.6;">${isGreek ? 'Fee' : 'Fee'}: ${poolEvent.fee ?? fee} • ${isGreek ? 'Impact' : 'Impact'}: ${poolEvent.price_impact ?? tx.price_impact ?? '—'}%</span>`
+            : '';
 
         // Pool/liquidity info
         let poolInfo = '';
@@ -2572,7 +2610,7 @@ function renderHistory() {
                     <div style="font-weight: bold; color: #00ff66;">${amountDisplay}</div>
                 </div>
                 <div style="font-size: 11px; opacity: 0.7;">
-                    ${isSent ? (isGreek ? 'Προς:' : 'To:') : (isGreek ? 'Από:' : 'From:')} ${shortAddr}${feeDisplay}${priceInfo}
+                    ${isSent ? (isGreek ? 'Προς:' : 'To:') : (isGreek ? 'Από:' : 'From:')} ${shortAddr}${feeDisplay}${swapMeta}${priceInfo}
                 </div>
                 ${poolInfo}
                 ${isSwap && swapPair ? `<div style="font-size: 11px; opacity: 0.75; margin-top: 4px;">${isGreek ? 'Ζεύγος:' : 'Pair:'} ${escapeHtml(swapPair || 'Unknown pair')}${swapDirection ? ` • ${escapeHtml(swapDirection)}` : ''}</div>` : ''}
@@ -2585,7 +2623,7 @@ function renderHistory() {
     content.innerHTML = html;
 }
 
-async function loadWalletHistory() {
+async function loadWalletHistory(category = null) {
     const content = document.getElementById('historyContent');
     const addr = walletSession.getAddress();
 
@@ -2595,15 +2633,13 @@ async function loadWalletHistory() {
     }
 
     try {
-        const [walletRes, feedRes] = await Promise.all([
-            fetch(`/wallet_data/${encodeURIComponent(addr)}`),
-            fetch(`/api/tx_feed?wallet=${encodeURIComponent(addr)}`)
-        ]);
-
-        const data = walletRes.ok ? await walletRes.json() : {};
-        const feed = feedRes.ok ? await feedRes.json() : [];
-
-        const transactions = Array.isArray(feed) && feed.length ? feed : (data.transactions || []);
+        const params = new URLSearchParams({ wallet: addr });
+        if (category) {
+            params.set('category', category);
+        }
+        const historyRes = await fetch(`/api/history?${params.toString()}`);
+        const data = historyRes.ok ? await historyRes.json() : {};
+        const transactions = data.history || [];
         if (!transactions || transactions.length === 0) {
             content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions found</div>';
             allTransactions = [];
@@ -2612,6 +2648,7 @@ async function loadWalletHistory() {
 
         allTransactions = transactions;
         renderHistory();
+        startHistoryPendingPolling();
 
     } catch (error) {
         console.error('Failed to load history:', error);
@@ -2772,8 +2809,39 @@ function setMaxAmount() {
     document.getElementById('sendAmount').value = maxAmount.toFixed(6);
 }
 
+function generateClientTxId() {
+    if (crypto && typeof crypto.randomUUID === 'function') {
+        return `thr-${crypto.randomUUID()}`;
+    }
+    return `thr-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
 // Transaction status polling
 let txPollInterval = null;
+let historyPollInterval = null;
+
+async function refreshHistoryFromApi() {
+    const addr = walletSession.getAddress();
+    if (!addr) return;
+    try {
+        const response = await fetch(`/api/history?wallet=${encodeURIComponent(addr)}`);
+        const data = response.ok ? await response.json() : {};
+        if (Array.isArray(data.history)) {
+            allTransactions = data.history;
+            renderHistory();
+        }
+    } catch (error) {
+        console.error('Failed to refresh history:', error);
+    }
+}
+
+function startHistoryPendingPolling() {
+    if (historyPollInterval) {
+        clearInterval(historyPollInterval);
+    }
+    refreshHistoryFromApi();
+    historyPollInterval = setInterval(refreshHistoryFromApi, 10000);
+}
 
 async function pollTransactionStatus(txid, resultDiv) {
     let pollCount = 0;
@@ -2786,7 +2854,7 @@ async function pollTransactionStatus(txid, resultDiv) {
 
     const checkStatus = async () => {
         try {
-            const response = await fetch(`/api/tx/status?tx_id=${encodeURIComponent(txid)}`);
+            const response = await fetch(`/api/tx_status/${encodeURIComponent(txid)}`);
             const data = await response.json();
 
             const statusIndicator = document.getElementById('txStatusIndicator');
@@ -2796,7 +2864,8 @@ async function pollTransactionStatus(txid, resultDiv) {
                 return;
             }
 
-            if (data.status === 'confirmed' || data.confirmed) {
+            const status = (data.status || '').toLowerCase();
+            if (status === 'mined' || status === 'confirmed' || data.confirmed) {
                 statusIndicator.textContent = '✓ Confirmed!';
                 statusIndicator.style.color = '#00ff00';
                 clearInterval(txPollInterval);
@@ -2805,8 +2874,9 @@ async function pollTransactionStatus(txid, resultDiv) {
                 setTimeout(() => {
                     closeSendModal();
                 }, 2000);
-            } else if (data.status === 'failed') {
-                statusIndicator.textContent = '✕ Transaction failed';
+            } else if (status === 'rejected' || status === 'failed') {
+                const reason = data.reason ? ` (${data.reason})` : '';
+                statusIndicator.textContent = `✕ Transaction failed${reason}`;
                 statusIndicator.style.color = '#ff6666';
                 clearInterval(txPollInterval);
             } else {
@@ -2842,6 +2912,7 @@ async function submitSend() {
     const from = walletSession.getAddress();
     const secret = walletSession.getSendSeed();
     const resultDiv = document.getElementById('sendResult');
+    const clientTxId = generateClientTxId();
 
     if (!walletSession.isBound()) {
         resultDiv.className = 'send-result error';
@@ -2877,12 +2948,9 @@ async function submitSend() {
 
     try {
         // Calculate fee based on selected speed
-        let fee = 0;
-        if (selectedSpeed === 'slow') {
-            fee = amount * 0.0009; // 0.09%
-        } else {
-            fee = amount * 0.005; // 0.5%
-        }
+        const feeRate = selectedSpeed === 'slow' ? 0.0009 : 0.005;
+        let fee = Math.max(0.001, amount * feeRate);
+        fee = parseFloat(fee.toFixed(6));
 
         let response;
 
@@ -2893,7 +2961,9 @@ async function submitSend() {
                 to_thr: to,
                 amount: amount,
                 auth_secret: secret,
-                speed: selectedSpeed
+                speed: selectedSpeed,
+                tx_id: clientTxId,
+                expected_fee: fee
             };
             response = await fetch('/send_thr', {
                 method: 'POST',
@@ -2919,10 +2989,10 @@ async function submitSend() {
 
         const data = await response.json();
 
-        if (data.error || data.ok === false) {
+        if (data.accepted === false || data.status === 'rejected' || data.error || data.ok === false) {
             resultDiv.className = 'send-result error';
             // Check for specific error about THR balance for fees
-            let errorMsg = data.error || data.message || 'Transaction failed';
+            let errorMsg = data.reject_reason || data.error || data.message || 'Transaction failed';
             if (data.thr_balance !== undefined && data.fee_required !== undefined) {
                 errorMsg = `${errorMsg}. THR balance: ${data.thr_balance}, Fee required: ${data.fee_required} THR`;
             }
@@ -2931,7 +3001,7 @@ async function submitSend() {
         } else {
             // Show pending status with txid
             const actualFee = data.fee_burned || data.fee || fee;
-            const txid = data.tx_id || data.txid || 'pending';
+            const txid = data.tx_id || (data.tx && data.tx.tx_id) || data.txid || clientTxId || 'pending';
             const shortTxid = txid.length > 16 ? `${txid.slice(0, 8)}...${txid.slice(-8)}` : txid;
 
             resultDiv.className = 'send-result success';

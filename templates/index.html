@@ -714,8 +714,11 @@
     <div class="stats-grid">
         <div class="stat-card">
             <span class="stat-icon">⛓️</span>
-            <div class="stat-value" id="statBlocks"><span class="loading-spinner"></span></div>
-            <div class="stat-label">Blocks</div>
+            <div class="stat-value" id="statBlocks">
+                <div id="statChainHeight"><span class="loading-spinner"></span></div>
+                <div id="statIndexHeight" style="font-size: 12px; opacity: 0.7;"></div>
+            </div>
+            <div class="stat-label">Chain / Indexed</div>
         </div>
         <div class="stat-card">
             <span class="stat-icon">💰</span>
@@ -1017,18 +1020,28 @@
             const stats = dashboard.stats || {};
             const tip = dashboard.tip || {};
 
-            const blockCount = tip.block_count || stats.block_count || 0;
+            const chainHeight = dashboard.chain_tip_height ?? stats.block_count ?? 0;
+            const indexHeight = dashboard.index_tip_height ?? chainHeight ?? 0;
+            const indexLag = dashboard.index_lag ?? 0;
             const totalSupply = tip.total_supply || stats.total_supply || 0;
             const tokenCount = stats.token_count || 0;
             const poolCount = stats.pool_count || 0;
             const walletCount = stats.wallet_count || 0;
 
-            document.getElementById("statBlocks").textContent = blockCount.toLocaleString();
+            const chainEl = document.getElementById("statChainHeight");
+            const indexEl = document.getElementById("statIndexHeight");
+            if (chainEl) {
+                chainEl.textContent = `Chain: ${Number(chainHeight || 0).toLocaleString()}`;
+            }
+            if (indexEl) {
+                const indexing = indexLag > 0 ? " (Indexing…)" : "";
+                indexEl.textContent = `Indexed: ${Number(indexHeight || 0).toLocaleString()}${indexing}`;
+            }
             document.getElementById("statSupply").textContent = totalSupply.toFixed(2);
             document.getElementById("statWallets").textContent = walletCount.toLocaleString();
             document.getElementById("statTokens").textContent = tokenCount.toLocaleString();
             document.getElementById("statPools").textContent = poolCount.toLocaleString();
-            document.getElementById("statTxns").textContent = (blockCount * 2).toLocaleString();
+            document.getElementById("statTxns").textContent = (Number(chainHeight || 0) * 2).toLocaleString();
 
             window.__THR_STATS = { dashboard };
         } catch (e) {

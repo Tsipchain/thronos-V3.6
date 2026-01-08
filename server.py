@@ -50,6 +50,7 @@ import os
 import re
 import mimetypes
 import json
+import fcntl
 import requests
 from flask import Flask, request, jsonify, send_from_directory, render_template, url_for, send_file, Response
 
@@ -330,6 +331,7 @@ TX_LOG_FILE         = os.path.join(DATA_DIR, "tx_ledger.json")
 WITHDRAWALS_FILE    = os.path.join(DATA_DIR, "withdrawals.json") # NEW
 VOTING_FILE         = os.path.join(DATA_DIR, "voting.json") # Feature voting for Crypto Hunters
 PEERS_FILE          = os.path.join(DATA_DIR, "active_peers.json") # Heartbeat tracking
+INDEX_REBUILD_LOCK  = os.path.join(DATA_DIR, "index_rebuild.lock")
 
 # Active peers tracking (for replicas heartbeating to master)
 PEER_TTL_SECONDS = 60  # Peers expire after 60 seconds without heartbeat
@@ -983,6 +985,26 @@ def save_json(path, data):
                 os.remove(tmp_path)
         except Exception:
             pass
+
+
+def atomic_write_json(path: str, data) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    dir_name = os.path.dirname(path)
+    base_name = os.path.basename(path)
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile("w", delete=False, dir=dir_name, prefix=f".{base_name}.", suffix=".tmp", encoding="utf-8") as tmp:
+            json.dump(data, tmp, ensure_ascii=False, indent=2)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            tmp_path = tmp.name
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
 
 def _authorized_logging_request(req) -> bool:
@@ -4542,6 +4564,68 @@ def wallets_count():
                        if addr not in system_addresses and float(bal) > 0)
     return jsonify({"count": wallet_count})
 
+
+def _rebuild_index_from_chain() -> dict:
+    chain = load_json(CHAIN_FILE, [])
+    ledger = load_json(LEDGER_FILE, {})
+
+    tx_log = []
+    for raw in chain:
+        norm = _normalize_tx_for_display(raw)
+        if norm:
+            tx_log.append(norm)
+    tx_log.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    atomic_write_json(TX_LOG_FILE, tx_log)
+
+    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    block_count = HEIGHT_OFFSET + len(blocks)
+    total_supply = round(sum(float(v) for v in ledger.values()), 6)
+    if blocks:
+        last_block = blocks[-1]
+        summary = {
+            "height": HEIGHT_OFFSET + len(blocks) - 1,
+            "block_hash": last_block.get("block_hash") or last_block.get("tx_id"),
+            "timestamp": last_block.get("timestamp"),
+            "thr_address": last_block.get("thr_address"),
+            "type": "block",
+            "block_count": block_count,
+            "total_supply": total_supply,
+        }
+    else:
+        summary = {
+            "height": None,
+            "block_hash": None,
+            "timestamp": None,
+            "thr_address": None,
+            "type": "none",
+            "block_count": block_count,
+            "total_supply": total_supply,
+        }
+    atomic_write_json(LAST_BLOCK_FILE, summary)
+    return summary
+
+
+@app.route("/api/admin/reindex", methods=["POST"])
+def api_admin_reindex():
+    if NODE_ROLE != "master":
+        return jsonify({"error": "leader_only", "leader_url": LEADER_URL}), 409
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return jsonify({"error": "missing_auth"}), 401
+    token = auth_header.removeprefix("Bearer ").strip()
+    admin_key = os.getenv("ADMIN_KEY", ADMIN_SECRET)
+    if token != admin_key:
+        return jsonify({"error": "unauthorized"}), 403
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(INDEX_REBUILD_LOCK, "w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        summary = _rebuild_index_from_chain()
+        fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+    return jsonify({"ok": True, "new_index_tip_height": summary.get("height")}), 200
+
 # ─── PEERS & HEARTBEAT ─────────────────────────────────────────────────────
 
 def cleanup_expired_peers():
@@ -6748,6 +6832,7 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
             **{k: v for k, v in norm.items() if k not in {"parties"}},
             "kind": kind,
             "type": kind,
+            "category": kind,
             "category_label": category_labels.get(kind, norm.get("kind", "").title()),
             "asset_symbol": asset_symbol,
             "symbol": norm.get("token_symbol") or norm.get("asset") or "THR",
@@ -6789,9 +6874,12 @@ def wallet_data(thr_addr):
 @app.route("/api/history", methods=["GET"])
 def api_history():
     thr_addr = (request.args.get("wallet") or request.args.get("address") or "").strip()
+    category = (request.args.get("category") or "").strip().lower()
     if not thr_addr:
         return jsonify({"ok": False, "error": "Missing wallet address"}), 400
     history = build_wallet_history(thr_addr)
+    if category:
+        history = [entry for entry in history if (entry.get("category") or entry.get("kind") or "").lower() == category]
     return jsonify({"ok": True, "wallet": thr_addr, "history": history}), 200
 
 
@@ -6799,12 +6887,16 @@ def api_history():
 def api_dashboard():
     """Return the leader-driven dashboard data for index."""
     last_block = load_json(LAST_BLOCK_FILE, {})
+    chain = load_chain_cached()
+    chain_blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    chain_tip = chain_blocks[-1] if chain_blocks else {}
+    chain_tip_height = HEIGHT_OFFSET + len(chain_blocks) - 1 if chain_blocks else None
+    chain_tip_hash = chain_tip.get("block_hash") or chain_tip.get("tx_id")
+    chain_tip_timestamp = chain_tip.get("timestamp")
     blocks = get_blocks_for_viewer()
     recent_blocks = blocks[:5]
     recent_txs = _tx_feed(include_pending=True, include_bridge=True)[:8]
 
-    chain = load_chain_cached()
-    chain_blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
     block_count = HEIGHT_OFFSET + len(chain_blocks)
     total_supply = round(sum(float(v) for v in load_json(LEDGER_FILE, {}).values()), 6)
 
@@ -6827,6 +6919,14 @@ def api_dashboard():
         "wallet_count": wallet_count,
     }
 
+    index_tip_height = last_block.get("height")
+    index_tip_hash = last_block.get("block_hash")
+    index_tip_timestamp = last_block.get("timestamp")
+    if chain_tip_height is None or index_tip_height is None:
+        index_lag = 0
+    else:
+        index_lag = max(chain_tip_height - index_tip_height, 0)
+
     return jsonify({
         "ok": True,
         "tip": last_block,
@@ -6834,6 +6934,13 @@ def api_dashboard():
         "recent_blocks": recent_blocks,
         "recent_transactions": recent_txs,
         "recent_tokens": recent_tokens,
+        "chain_tip_height": chain_tip_height,
+        "chain_tip_hash": chain_tip_hash,
+        "chain_tip_timestamp": chain_tip_timestamp,
+        "index_tip_height": index_tip_height,
+        "index_tip_hash": index_tip_hash,
+        "index_tip_timestamp": index_tip_timestamp,
+        "index_lag": index_lag,
     }), 200
 
 def get_token_price_in_thr(symbol):

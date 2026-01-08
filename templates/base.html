@@ -2303,7 +2303,11 @@ function filterHistory(filter, tokenSymbol = null) {
         }
     });
 
-    renderHistory();
+    if (filter === 'liquidity') {
+        loadWalletHistory('liquidity');
+    } else {
+        renderHistory();
+    }
 }
 
 function getTxType(tx) {
@@ -2595,7 +2599,7 @@ function renderHistory() {
     content.innerHTML = html;
 }
 
-async function loadWalletHistory() {
+async function loadWalletHistory(category = null) {
     const content = document.getElementById('historyContent');
     const addr = walletSession.getAddress();
 
@@ -2605,7 +2609,11 @@ async function loadWalletHistory() {
     }
 
     try {
-        const historyRes = await fetch(`/api/history?wallet=${encodeURIComponent(addr)}`);
+        const params = new URLSearchParams({ wallet: addr });
+        if (category) {
+            params.set('category', category);
+        }
+        const historyRes = await fetch(`/api/history?${params.toString()}`);
         const data = historyRes.ok ? await historyRes.json() : {};
         const transactions = data.history || [];
         if (!transactions || transactions.length === 0) {

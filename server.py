@@ -11630,13 +11630,20 @@ def api_v1_add_liquidity():
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     tx_id = f"POOL-ADD-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
-        "type": "pool_add_liquidity",
+        "kind": "pool_add_liquidity",
+        "type": "pool_add_liquidity",  # Keep for backwards compatibility
         "pool_id": pool_id,
         "token_a": token_a,
         "token_b": token_b,
+        "symbol_in": token_a,
+        "symbol_out": token_b,
+        "amount_in": amt_a,
+        "amount_out": amt_b,
         "added_a": amt_a,
         "added_b": amt_b,
         "shares_minted": shares_minted,
+        "from": provider,
+        "to": f"pool_{pool_id[:8]}",
         "provider": provider,
         "timestamp": ts,
         "tx_id": tx_id,
@@ -11784,13 +11791,20 @@ def api_v1_remove_liquidity():
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     tx_id = f"POOL-REMOVE-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
-        "type": "pool_remove_liquidity",
+        "kind": "pool_remove_liquidity",
+        "type": "pool_remove_liquidity",  # Keep for backwards compatibility
         "pool_id": pool_id,
         "token_a": token_a,
         "token_b": token_b,
+        "symbol_in": token_a,
+        "symbol_out": token_b,
+        "amount_in": amt_a_return,
+        "amount_out": amt_b_return,
         "withdrawn_a": amt_a_return,
         "withdrawn_b": amt_b_return,
         "shares_burned": shares,
+        "from": f"pool_{pool_id[:8]}",
+        "to": provider,
         "provider": provider,
         "timestamp": ts,
         "tx_id": tx_id,

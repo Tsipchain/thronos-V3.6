@@ -180,10 +180,6 @@
 
 {% block scripts %}
 <script>
-(() => {
-if (window.__swapInitDone) return;
-window.__swapInitDone = true;
-
 const $ = (id) => document.getElementById(id);
 
 let tokenBalances = {};
@@ -429,11 +425,5 @@ async function doSwap() {
         $('swapBtn').textContent = "Swap";
     }
 }
-
-window.flipTokens = flipTokens;
-window.onTokenChange = onTokenChange;
-window.calcTo = calcTo;
-window.doSwap = doSwap;
-})();
 </script>
 {% endblock %}

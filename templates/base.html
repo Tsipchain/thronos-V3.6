@@ -1986,12 +1986,8 @@ async function updateTokenPrices() {
         const data = await response.json();
         if (data.prices) {
             Object.keys(data.prices).forEach(symbol => {
-                if (!TOKEN_REGISTRY[symbol]) return;
-                const price = data.prices[symbol];
-                if (Number.isFinite(Number(price))) {
-                    TOKEN_REGISTRY[symbol].priceUSD = Number(price);
-                } else if (price === null) {
-                    TOKEN_REGISTRY[symbol].priceUSD = null;
+                if (TOKEN_REGISTRY[symbol]) {
+                    TOKEN_REGISTRY[symbol].priceUSD = data.prices[symbol];
                 }
             });
         }
@@ -2036,20 +2032,15 @@ function renderWalletBalances(data) {
 
     tokens.forEach(t => {
         const balance = Number(t.balance) || 0;
-        const tokenInfo = TOKEN_REGISTRY[t.symbol] || { priceUSD: null };
-        const priceUSD = Number.isFinite(Number(tokenInfo.priceUSD)) ? Number(tokenInfo.priceUSD) : null;
-        if (priceUSD !== null) {
-            const valueUSD = balance * priceUSD;
-            totalUSD += valueUSD;
+        const tokenInfo = TOKEN_REGISTRY[t.symbol] || { priceUSD: 0 };
+        const valueUSD = balance * tokenInfo.priceUSD;
+        totalUSD += valueUSD;
 
-            // Convert to THR value
-            if (t.symbol === 'THR') {
-                totalTHR += balance;
-            } else if (thrPrice > 0) {
-                totalTHR += valueUSD / thrPrice;
-            }
-        } else if (t.symbol === 'THR') {
+        // Convert to THR value
+        if (t.symbol === 'THR') {
             totalTHR += balance;
+        } else if (thrPrice > 0) {
+            totalTHR += valueUSD / thrPrice;
         }
     });
 
@@ -2074,11 +2065,10 @@ function renderWalletBalances(data) {
             name: symbol,
             color: '#00ff66',
             logo: null,
-            priceUSD: null
+            priceUSD: 0
         };
-        const priceUSD = Number.isFinite(Number(tokenInfo.priceUSD)) ? Number(tokenInfo.priceUSD) : null;
-        const valueUSD = priceUSD !== null ? balance * priceUSD : null;
-        const valueTHR = symbol === 'THR' ? balance : (priceUSD !== null && thrPrice > 0 ? valueUSD / thrPrice : null);
+        const valueUSD = balance * tokenInfo.priceUSD;
+        const valueTHR = symbol === 'THR' ? balance : (thrPrice > 0 ? valueUSD / thrPrice : 0);
 
         const logoHtml = tokenInfo.logo
             ? `<img src="${tokenInfo.logo}" alt="${symbol}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
@@ -2095,11 +2085,11 @@ function renderWalletBalances(data) {
                         ${escapeHtml(tokenInfo.name || symbol)}
                         <span class="wallet-token-symbol">${escapeHtml(symbol)}</span>
                     </div>
-                    ${symbol !== 'THR' ? `<div class="wallet-token-thr-value">≈ ${valueTHR !== null ? valueTHR.toFixed(2) : '—'} THR</div>` : ''}
+                    ${symbol !== 'THR' ? `<div class="wallet-token-thr-value">≈ ${valueTHR.toFixed(2)} THR</div>` : ''}
                 </div>
                 <div class="wallet-token-values">
                     <div class="wallet-token-balance">${formatBalance(balance)} ${symbol}</div>
-                    <div class="wallet-token-usd">≈ ${valueUSD !== null ? `$${valueUSD.toFixed(2)}` : '—'}</div>
+                    <div class="wallet-token-usd">≈ $${valueUSD.toFixed(2)}</div>
                 </div>
             </div>
         `;
@@ -2340,9 +2330,7 @@ function getTxType(tx) {
         raw === 'remove_liquidity' ||
         raw === 'pool_create' ||
         raw === 'pool_add_liquidity' ||
-        raw === 'pool_remove_liquidity' ||
-        raw === 'pool_add' ||
-        raw === 'pool_remove') {
+        raw === 'pool_remove_liquidity') {
         return 'liquidity';
     }
 
@@ -2554,22 +2542,10 @@ function renderHistory() {
             ? (tx.asset_symbol || tx.asset || tx.symbol || 'TOKEN')
             : (tx.symbol || tx.asset_symbol || tx.asset || 'THR');
 
-        const liquidityAmounts = isLiquidity
-            ? (tx.amounts || tx.meta?.amounts || [
-                { symbol: tx.symbol_in || tx.token_a || 'THR', amount: amountIn },
-                { symbol: tx.symbol_out || tx.token_b || '', amount: amountOutNum }
-            ]).filter(entry => entry && entry.symbol && Number.isFinite(Number(entry.amount)))
-            : [];
-        const liquiditySign = (tx.kind || tx.type || '').toLowerCase().includes('remove') ? '-' : '+';
-        const liquidityLines = isLiquidity
-            ? liquidityAmounts.map(entry => `${liquiditySign}${Number(entry.amount).toFixed(6)} ${entry.symbol}`)
-            : [];
         const amountDisplay = isSwap
             ? `${amountIn.toFixed(6)} ${poolEvent?.in_token || tx.symbol_in || tx.from_symbol || tx.symbol || 'THR'}${amountOutNum !== null ? ` → ${amountOutNum.toFixed(6)} ${poolEvent?.out_token || tx.symbol_out || tx.to_symbol || tx.target_symbol || tx.swap_out || ''}` : ''}`
             : isLiquidity
-            ? (liquidityLines.length
-                ? `<div style="text-align:right;">${liquidityLines.map(line => `<div>${line}</div>`).join('')}</div>`
-                : `${amountIn.toFixed(6)} ${tx.symbol_in || tx.token_a || 'THR'}`)
+            ? `${amountIn.toFixed(6)} ${tx.symbol_in || tx.token_a || 'THR'}${amountOutNum !== null ? ` + ${amountOutNum.toFixed(6)} ${tx.symbol_out || tx.token_b || ''}` : ''}`
             : `${Number(amountInRaw || 0).toFixed(6)} ${displayAsset}`;
         const swapPair = isSwap ? (tx.pair || tx.route || `${(poolEvent?.in_token || tx.swap_in || tx.from_symbol || tx.symbol || '?')}${poolEvent?.out_token || tx.swap_out || tx.to_symbol || tx.target_symbol ? `/${poolEvent?.out_token || tx.swap_out || tx.to_symbol || tx.target_symbol}` : ''}`) : '';
         const swapDirection = isSwap ? (tx.direction || tx.side || '') : '';

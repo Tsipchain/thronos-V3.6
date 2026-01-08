@@ -1037,9 +1037,9 @@
             const chainHeight = dashboard.chain_tip_height ?? 0;
             const indexHeight = dashboard.index_tip_height ?? 0;
             const indexLag = dashboard.index_lag ?? 0;
-            const totalSupply = stats.total_supply_thr ?? stats.total_supply ?? tip.total_supply ?? 0;
-            const circulatingSupply = stats.circulating_supply_thr ?? null;
-            const lockedSupply = stats.locked_in_pools_thr ?? null;
+            const totalSupply = stats.total_supply ?? stats.total_supply_thr ?? tip.total_supply ?? 0;
+            const circulatingSupply = stats.circulating_supply ?? stats.circulating_supply_thr ?? null;
+            const lockedSupply = stats.pool_locked_thr ?? stats.locked_in_pools_thr ?? null;
             const tokenCount = stats.token_count || 0;
             const poolCount = stats.pool_count || 0;
             const walletCount = stats.wallet_count || 0;

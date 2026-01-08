@@ -1535,13 +1535,22 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         else:
             amount_in = float(event_payload.get("outA", tx.get("amount_in", tx.get("withdrawn_a", 0.0))) or 0.0)
             amount_out = float(event_payload.get("outB", tx.get("amount_out", tx.get("withdrawn_b", 0.0))) or 0.0)
+        token_in = _sanitize_asset_symbol(tx.get("symbol_in") or tx.get("token_a") or event_payload.get("tokenA") or "THR")
+        token_in2 = _sanitize_asset_symbol(tx.get("symbol_in2") or tx.get("token_b") or event_payload.get("tokenB") or "TOKEN")
+        amounts = tx.get("amounts") or event_payload.get("amounts") or [
+            {"symbol": token_in, "amount": amount_in},
+            {"symbol": token_in2, "amount": amount_out},
+        ]
         norm["amount"] = amount_in
         norm["amount_out"] = amount_out
         norm["meta"].update({
             "amount_in": amount_in,
             "amount_out": amount_out,
-            "token_in": tx.get("token_a"),
-            "token_out": tx.get("token_b"),
+            "token_in": token_in,
+            "token_out": token_in2,
+            "amounts": amounts,
+            "pair": event_payload.get("pair") or f"{token_in}/{token_in2}",
+            "reserves": event_payload.get("reserves"),
         })
 
     # Bridge transfers
@@ -3582,6 +3591,12 @@ def media(filename):
     safe_name = filename.lstrip("/..")
     return send_from_directory(MEDIA_DIR, safe_name)
 
+@app.route("/media/static/<path:filename>")
+def media_static(filename):
+    """Serve legacy /media/static paths from the data volume."""
+    safe_name = filename.lstrip("/..")
+    return send_from_directory(os.path.join(MEDIA_DIR, "static"), safe_name)
+
 @app.route("/viewer")
 def viewer():
     return render_template(
@@ -4672,11 +4687,20 @@ def api_admin_reindex():
         return jsonify({"error": "leader_only", "leader_url": LEADER_URL}), 409
 
     auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
+    token = ""
+    if auth_header.startswith("Bearer "):
+        token = auth_header.removeprefix("Bearer ").strip()
+    if not token:
+        token = (request.headers.get("X-Admin-Secret") or "").strip()
+    if not token:
         return jsonify({"error": "missing_auth"}), 401
-    token = auth_header.removeprefix("Bearer ").strip()
-    admin_key = os.getenv("ADMIN_KEY", ADMIN_SECRET)
-    if token != admin_key:
+    admin_candidates = {
+        os.getenv("ADMIN_KEY", "").strip(),
+        os.getenv("ADMIN_SECRET", "").strip(),
+        ADMIN_SECRET,
+    }
+    admin_candidates.discard("")
+    if token not in admin_candidates:
         return jsonify({"error": "unauthorized"}), 403
 
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -6837,6 +6861,9 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
         "token_transfer": "Token Transfer",
         "swap": "Swap",
         "bridge": "Bridge",
+        "liquidity": "Liquidity",
+        "pool_add": "Add Liquidity",
+        "pool_remove": "Remove Liquidity",
         "l2e": "Learn-to-Earn Reward",
         "ai_credits": "AI Credits",
         "iot": "IoT",
@@ -6852,7 +6879,13 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
         if thr_addr not in parties and thr_addr not in {norm.get("from"), norm.get("to")}:  # type: ignore[arg-type]
             continue
 
-        kind = _canonical_kind(norm.get("kind") or norm.get("type") or "") or "thr_transfer"
+        raw_type = (norm.get("type") or norm.get("kind") or "").lower()
+        if raw_type == "pool_add_liquidity":
+            kind = "pool_add"
+        elif raw_type == "pool_remove_liquidity":
+            kind = "pool_remove"
+        else:
+            kind = _canonical_kind(norm.get("kind") or norm.get("type") or "") or "thr_transfer"
         direction = "out"
         if thr_addr == norm.get("to"):
             direction = "in"
@@ -6889,18 +6922,20 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
             status = resolved.get("status") or status
             reject_reason = resolved.get("reason") or reject_reason
 
+        category_value = "liquidity" if raw_type in {"pool_add_liquidity", "pool_remove_liquidity", "pool_create"} else kind
         history.append({
             **{k: v for k, v in norm.items() if k not in {"parties"}},
             "kind": kind,
             "type": kind,
-            "category": kind,
-            "category_label": category_labels.get(kind, norm.get("kind", "").title()),
+            "category": category_value,
+            "category_label": category_labels.get(category_value, norm.get("kind", "").title()),
             "asset_symbol": asset_symbol,
             "symbol": norm.get("token_symbol") or norm.get("asset") or "THR",
             "symbol_in": norm.get("meta", {}).get("token_in") or norm.get("token_symbol"),
             "symbol_out": token_out_symbol,
             "amount_in": display_amount,
             "amount_out": display_amount_out,
+            "amounts": norm.get("meta", {}).get("amounts") or norm.get("amounts"),
             "fee_burned": norm.get("fee_burned", 0.0),
             "status": status,
             "reject_reason": reject_reason,
@@ -6977,6 +7012,9 @@ def api_dashboard():
     stats = {
         "block_count": block_count,
         "total_supply": total_supply,
+        "circulating_supply": supply_metrics["circulating_supply_thr"],
+        "pool_locked_thr": supply_metrics["locked_in_pools_thr"],
+        "fee_burned_total": supply_metrics["burned_total_thr"],
         "total_supply_thr": supply_metrics["total_supply_thr"],
         "circulating_supply_thr": supply_metrics["circulating_supply_thr"],
         "locked_in_pools_thr": supply_metrics["locked_in_pools_thr"],
@@ -7013,7 +7051,7 @@ def api_dashboard():
 def get_token_price_in_thr(symbol):
     """
     Calculate token price in THR from liquidity pool reserves.
-    Returns price as THR per 1 unit of token, or 1.0 if no pool exists.
+    Returns price as THR per 1 unit of token, or None if no pool exists.
     """
     if symbol == "THR":
         return 1.0
@@ -7040,8 +7078,8 @@ def get_token_price_in_thr(symbol):
             # Price of TOKEN in THR = reserves_b / reserves_a
             return reserves_b / reserves_a
 
-    # No pool found, return 1.0 as fallback
-    return 1.0
+    # No pool found
+    return None
 
 @app.route("/api/wallet/tokens/<thr_addr>")
 def api_wallet_tokens(thr_addr):
@@ -7094,6 +7132,9 @@ def api_token_prices():
 
             # Get price in THR from liquidity pools
             price_in_thr = get_token_price_in_thr(symbol)
+            if price_in_thr is None:
+                prices[symbol] = None
+                continue
 
             # Convert to USD
             price_in_usd = price_in_thr * thr_to_usd
@@ -12406,11 +12447,17 @@ def api_v1_add_liquidity():
         "token_a": token_a,
         "token_b": token_b,
         "symbol_in": token_a,
+        "symbol_in2": token_b,
         "symbol_out": token_b,
         "amount_in": amt_a,
+        "amount_in2": amt_b,
         "amount_out": amt_b,
         "added_a": amt_a,
         "added_b": amt_b,
+        "amounts": [
+            {"symbol": token_a, "amount": amt_a},
+            {"symbol": token_b, "amount": amt_b},
+        ],
         "shares_minted": shares_minted,
         "from": provider,
         "to": f"pool_{pool_id[:8]}",
@@ -12426,6 +12473,15 @@ def api_v1_add_liquidity():
             "tokenB": token_b,
             "amountB": amt_b,
             "lp_minted": shares_minted,
+            "pair": f"{token_a}/{token_b}",
+            "reserves": {
+                "tokenA": pool["reserves_a"],
+                "tokenB": pool["reserves_b"],
+            },
+            "amounts": [
+                {"symbol": token_a, "amount": amt_a},
+                {"symbol": token_b, "amount": amt_b},
+            ],
         },
     }
     chain.append(tx)
@@ -12575,11 +12631,17 @@ def api_v1_remove_liquidity():
         "token_a": token_a,
         "token_b": token_b,
         "symbol_in": token_a,
+        "symbol_in2": token_b,
         "symbol_out": token_b,
         "amount_in": amt_a_return,
+        "amount_in2": amt_b_return,
         "amount_out": amt_b_return,
         "withdrawn_a": amt_a_return,
         "withdrawn_b": amt_b_return,
+        "amounts": [
+            {"symbol": token_a, "amount": amt_a_return},
+            {"symbol": token_b, "amount": amt_b_return},
+        ],
         "shares_burned": shares,
         "from": f"pool_{pool_id[:8]}",
         "to": provider,
@@ -12593,6 +12655,15 @@ def api_v1_remove_liquidity():
             "lp_burned": shares,
             "outA": amt_a_return,
             "outB": amt_b_return,
+            "pair": f"{token_a}/{token_b}",
+            "reserves": {
+                "tokenA": pool["reserves_a"],
+                "tokenB": pool["reserves_b"],
+            },
+            "amounts": [
+                {"symbol": token_a, "amount": amt_a_return},
+                {"symbol": token_b, "amount": amt_b_return},
+            ],
         },
     }
     chain.append(tx)

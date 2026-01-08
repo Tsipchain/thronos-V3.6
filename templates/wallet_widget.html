@@ -965,9 +965,9 @@
             });
 
             // Calculate total balance using dynamic prices from pools
-            const totalTHR = allTokens.reduce((sum, t) => {
-                return sum + (t.value_in_thr || 0);
-            }, 0);
+            const pricedTokens = allTokens.filter(t => t.value_in_thr !== null && t.value_in_thr !== undefined);
+            const totalTHR = pricedTokens.reduce((sum, t) => sum + Number(t.value_in_thr || 0), 0);
+            const totalTHRDisplay = pricedTokens.length ? `${totalTHR.toFixed(2)} THR` : '—';
 
             let html = `
                 <div class="widget-header">
@@ -979,7 +979,7 @@
                 ${!compactMode ? `
                 <div class="total-value">
                     <div class="total-label">${t('totalPortfolio')}</div>
-                    <div class="total-amount">${totalTHR.toFixed(2)} THR</div>
+                    <div class="total-amount">${totalTHRDisplay}</div>
                 </div>
                 ` : ''}
 
@@ -1080,7 +1080,9 @@
             document.getElementById('modalTokenName').textContent = token.name;
             document.getElementById('modalTokenBalance').textContent = token.balance.toFixed(token.decimals);
             document.getElementById('modalTokenDecimals').textContent = token.decimals;
-            document.getElementById('modalTokenValueTHR').textContent = (token.value_in_thr || 0).toFixed(6) + ' THR';
+            document.getElementById('modalTokenValueTHR').textContent = token.value_in_thr != null
+                ? `${Number(token.value_in_thr).toFixed(6)} THR`
+                : '—';
             document.getElementById('modalTokenColorBox').style.backgroundColor = token.color;
 
             modal.classList.add('active');

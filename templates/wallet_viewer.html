@@ -317,7 +317,7 @@
       try {
         currentFilter = 'all';
         const [walletRes, feedRes] = await Promise.all([
-          fetch(`/wallet_data/${addr}`),
+          fetch(`/api/balances?address=${encodeURIComponent(addr)}&show_zero=true`),
           fetch(`/api/tx_feed?wallet=${encodeURIComponent(addr)}`)
         ]);
 
@@ -325,11 +325,11 @@
         const data = await walletRes.json();
         const feed = feedRes.ok ? await feedRes.json() : [];
 
-        const balance = parseFloat(data.balance);
-        tokenDecimals = data.token_decimals || 6;  // Get decimals from response or default to 6
+        const balance = parseFloat(data.balances?.THR ?? 0);
+        tokenDecimals = 6;
 
         const normalizedFeed = Array.isArray(feed) ? feed : [];
-        walletTxs = (normalizedFeed.length ? normalizedFeed : (data.transactions || [])).map(tx => ({
+        walletTxs = (normalizedFeed.length ? normalizedFeed : []).map(tx => ({
           ...tx,
           kind: (tx.kind || tx.type || 'transfer').toLowerCase(),
           direction: tx.direction || (tx.to === addr ? 'in' : (tx.from === addr ? 'out' : tx.direction)),

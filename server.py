@@ -1322,6 +1322,13 @@ def _canonical_kind(kind_raw: str) -> str:
         "ai_knowledge": "ai_credits",
         "ai_credit": "ai_credits",
         "ai_credits": "ai_credits",
+        "ai_credits_earned": "ai_credits",
+        "ai_credits_spent": "ai_credits",
+        "ai_credits_refund": "ai_credits",
+        "ai_job_created": "architect_ai_jobs",
+        "ai_job_progress": "architect_ai_jobs",
+        "ai_job_completed": "architect_ai_jobs",
+        "ai_job_reward": "architect_ai_jobs",
         "iot": "iot",
         "iot_parking": "parking",
         "iot_parking_reservation": "parking",
@@ -1586,10 +1593,34 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         norm["display_amount"] = amount or tx.get("reward", 0)
 
     # AI credits / services
-    if tx_type_raw in ("credits_consume", "service_payment", "ai_knowledge", "ai_credit", "ai_credits"):
+    if tx_type_raw in ("credits_consume", "service_payment", "ai_knowledge", "ai_credit", "ai_credits", "ai_credits_earned", "ai_credits_spent", "ai_credits_refund"):
         norm["kind"] = norm["type"] = "ai_credits"
         norm["asset"] = norm.get("token_symbol") or asset_symbol
         norm["display_amount"] = amount
+        norm["meta"].update({
+            "credits_delta": tx.get("credits_delta", amount),
+            "session_id": tx.get("session_id"),
+            "reason": tx.get("reason"),
+            "model": tx.get("model"),
+            "tokens_used": tx.get("tokens_used"),
+            "job_id": tx.get("job_id"),
+            "message_id": tx.get("message_id"),
+        })
+
+    if tx_type_raw in ("ai_job_created", "ai_job_progress", "ai_job_completed", "ai_job_reward"):
+        norm["kind"] = norm["type"] = tx_type_raw
+        norm["meta"].update({
+            "job_id": tx.get("job_id"),
+            "files_count": tx.get("files_count"),
+            "bytes_total": tx.get("bytes_total") or tx.get("bytes"),
+            "bytes_done": tx.get("bytes_done"),
+            "pct": tx.get("pct"),
+            "reward_thr": tx.get("reward_thr"),
+            "pricing_meta": tx.get("pricing_meta"),
+            "client_address": tx.get("client_address"),
+            "artifacts": tx.get("artifacts"),
+            "file_hash": tx.get("file_hash"),
+        })
 
     # Coinbase fallback id
     if not tx_id and tx_type_raw == "coinbase":

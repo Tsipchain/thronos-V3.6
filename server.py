@@ -1608,6 +1608,25 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
     return norm
 
 
+def _apply_legacy_ai_job_backfill(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        return raw
+    meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
+    note = (raw.get("note") or raw.get("description") or "").lower()
+    tx_id = str(raw.get("tx_id") or "")
+    has_job_id = bool(meta.get("job_id") or raw.get("job_id"))
+    is_architect = bool(meta.get("architect") is True)
+    is_ai_prefixed = tx_id.startswith("AI-")
+    is_ai_wallet = raw.get("to") == AI_WALLET_ADDRESS and "architect" in note
+    if has_job_id or is_architect or is_ai_prefixed or is_ai_wallet:
+        meta = {**meta}
+        if raw.get("job_id") and not meta.get("job_id"):
+            meta["job_id"] = raw.get("job_id")
+        meta.setdefault("architect", True)
+        raw = {**raw, "meta": meta}
+    return raw
+
+
 def _seed_tx_log_from_chain() -> list[dict]:
     """Ensure the tx ledger contains legacy chain entries (deduped)."""
 
@@ -1617,6 +1636,7 @@ def _seed_tx_log_from_chain() -> list[dict]:
 
     updated = False
     for raw in chain:
+        raw = _apply_legacy_ai_job_backfill(raw)
         norm = _normalize_tx_for_display(raw)
         if not norm:
             continue
@@ -4674,6 +4694,7 @@ def _rebuild_index_from_chain() -> dict:
 
     tx_log = []
     for raw in chain:
+        raw = _apply_legacy_ai_job_backfill(raw)
         norm = _normalize_tx_for_display(raw)
         if norm:
             tx_log.append(norm)
@@ -7158,6 +7179,25 @@ def api_wallet_tokens(thr_addr):
         "total_tokens": len(tokens),
         "total_value_usd": total_value_usd,
         "last_updated": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    }), 200
+
+
+@app.route("/api/balances", methods=["GET"])
+def api_balances():
+    address = (request.args.get("address") or request.args.get("wallet") or "").strip()
+    if not address:
+        return jsonify({"ok": False, "error": "Missing address"}), 400
+    balances = get_wallet_balances(address)
+    show_zero = request.args.get("show_zero", "true").lower() == "true"
+    tokens = balances.get("tokens", [])
+    if not show_zero:
+        tokens = [t for t in tokens if t.get("balance", 0) > 0]
+    return jsonify({
+        "ok": True,
+        "address": address,
+        "balances": balances.get("token_balances", {}),
+        "tokens": tokens,
+        "last_updated": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
     }), 200
 
 

@@ -1941,7 +1941,7 @@ async function loadWalletBalances(force = false) {
         // Update token prices before loading balances
         await updateTokenPrices();
 
-        const response = await fetch(`/api/wallet/tokens/${wallet}?show_zero=false`);
+        const response = await fetch(`/api/balances?address=${encodeURIComponent(wallet)}&show_zero=false`);
         if (!response.ok) throw new Error('Failed to load wallet data');
 
         const data = await response.json();
@@ -2314,8 +2314,8 @@ function filterHistory(filter, tokenSymbol = null) {
         }
     });
 
-    if (filter === 'liquidity') {
-        loadWalletHistory('liquidity');
+    if (filter === 'liquidity' || filter === 'architect_ai_jobs' || filter === 'ai_credits') {
+        loadWalletHistory(filter);
     } else {
         renderHistory();
     }
@@ -2420,6 +2420,15 @@ function formatTxDate(timestamp) {
     } catch (e) {
         return timestamp ? String(timestamp) : '';
     }
+}
+
+function formatBytes(value) {
+    const bytes = Number(value);
+    if (!Number.isFinite(bytes)) return '';
+    if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+    if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(2)} KB`;
+    return `${bytes.toFixed(0)} B`;
 }
 
 function buildTokenIndexData() {
@@ -2566,6 +2575,7 @@ function renderHistory() {
                          txType === 'gateway' ? 'Gateway' : '';
         const isSwap = txType === 'swaps';
         const isLiquidity = txType === 'liquidity';
+        const meta = tx.meta || {};
         const poolEvent = tx.meta && tx.meta.pool_event ? tx.meta.pool_event : null;
         const amountInRaw = poolEvent?.in_amount ?? tx.amount_in ?? tx.amountIn ?? tx.input_amount ?? tx.amount ?? 0;
         const amountIn = Number.isFinite(Number(amountInRaw)) ? Number(amountInRaw) : 0;
@@ -2612,10 +2622,34 @@ function renderHistory() {
             const poolId = tx.meta?.pool_id || tx.pool_id;
             poolInfo = `<div style="font-size: 11px; color: #00bfff; opacity: 0.85; margin-top: 4px;">${action}${poolId ? ` • Pool ${escapeHtml(poolId)}` : ''}</div>`;
         } else if (isSwap && tx.meta) {
-            const fromAsset = tx.meta.from_asset || tx.symbol || 'THR';
-            const toAsset = tx.meta.to_asset || 'THR';
+            const fromAsset = meta.from_asset || tx.symbol || 'THR';
+            const toAsset = meta.to_asset || 'THR';
             poolInfo = `<div style="font-size: 11px; color: #00bfff; opacity: 0.85; margin-top: 4px;">Swap: ${escapeHtml(fromAsset)} → ${escapeHtml(toAsset)}</div>`;
         }
+
+        const detailLines = [];
+        if (txType === 'architect_ai_jobs') {
+            if (meta.job_id) detailLines.push(`Job: ${escapeHtml(meta.job_id)}`);
+            if (meta.files_count != null) detailLines.push(`Files: ${meta.files_count}`);
+            if (meta.bytes_total != null) detailLines.push(`Size: ${formatBytes(meta.bytes_total)}`);
+            if (meta.reward_thr != null) detailLines.push(`Reward: ${Number(meta.reward_thr).toFixed(6)} THR`);
+            if (meta.pct != null) detailLines.push(`Progress: ${Number(meta.pct).toFixed(1)}%`);
+            if (meta.bytes_done != null && meta.bytes_total) {
+                detailLines.push(`Progress: ${formatBytes(meta.bytes_done)} / ${formatBytes(meta.bytes_total)}`);
+            }
+            if ((tx.kind || '').toLowerCase().startsWith('ai_job_')) {
+                detailLines.push(`Status: ${(tx.kind || '').replace(/_/g, ' ')}`);
+            }
+        }
+        if (txType === 'ai_credits') {
+            if (meta.credits_delta != null) detailLines.push(`Credits: ${Number(meta.credits_delta).toFixed(2)}`);
+            if (meta.session_id) detailLines.push(`Session: ${escapeHtml(meta.session_id)}`);
+            if (meta.reason) detailLines.push(`Reason: ${escapeHtml(meta.reason)}`);
+            if (meta.tokens_used != null) detailLines.push(`Tokens: ${meta.tokens_used}`);
+        }
+        const detailInfo = detailLines.length
+            ? `<div style="font-size: 11px; color: #9adf9a; opacity: 0.9; margin-top: 4px;">${detailLines.join(' • ')}</div>`
+            : '';
 
         // Token price info
         const priceInfo = (tx.meta && tx.meta.token_price_thr)
@@ -2637,6 +2671,7 @@ function renderHistory() {
                     ${isSent ? (isGreek ? 'Προς:' : 'To:') : (isGreek ? 'Από:' : 'From:')} ${shortAddr}${feeDisplay}${swapMeta}${priceInfo}
                 </div>
                 ${poolInfo}
+                ${detailInfo}
                 ${isSwap && swapPair ? `<div style="font-size: 11px; opacity: 0.75; margin-top: 4px;">${isGreek ? 'Ζεύγος:' : 'Pair:'} ${escapeHtml(swapPair || 'Unknown pair')}${swapDirection ? ` • ${escapeHtml(swapDirection)}` : ''}</div>` : ''}
                 ${tx.timestamp ? `<div style="font-size: 10px; opacity: 0.5; margin-top: 4px;">${formatTxDate(tx.timestamp)}</div>` : ''}
             </div>
@@ -2761,7 +2796,7 @@ async function loadTokenBalances() {
     if (!wallet) return;
 
     try {
-        const response = await fetch(`/api/wallet/tokens/${wallet}?show_zero=true`);
+        const response = await fetch(`/api/balances?address=${encodeURIComponent(wallet)}&show_zero=true`);
         const data = await response.json();
         if (data.tokens) {
             // Update balances map

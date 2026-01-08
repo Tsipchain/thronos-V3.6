@@ -937,7 +937,7 @@
             const widget = document.getElementById('walletWidget');
 
             try {
-                const response = await fetch(`/api/wallet/tokens/${walletAddress}?show_zero=${showZero}`);
+                const response = await fetch(`/api/balances?address=${encodeURIComponent(walletAddress)}&show_zero=${showZero}`);
                 if (!response.ok) throw new Error('Failed to load wallet data');
 
                 const data = await response.json();

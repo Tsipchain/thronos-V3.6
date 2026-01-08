@@ -496,11 +496,9 @@ function renderBlocks(list){
   // Calculate mining statistics
   let totalRewards = 0;
   let totalBurned = 0;
-  let maxHeight = 0;
   let validBlocks = 0;
 
   list.forEach(b => {
-    if(b.index !== undefined && b.index > maxHeight) maxHeight = b.index;
     const reward = (b.reward_to_miner || 0) + (b.reward_to_ai || 0);
     const burned = b.fee_burned || 0;
     if(reward > 0 || burned > 0) validBlocks++;
@@ -509,7 +507,6 @@ function renderBlocks(list){
   });
 
   // Update stats cards
-  el('#blocksTotalCount').textContent = maxHeight.toLocaleString();
   el('#blocksTotalRewards').textContent = fmtN(totalRewards) + ' THR';
   el('#blocksTotalBurned').textContent = fmtN(totalBurned) + ' THR';
   el('#blocksAvgReward').textContent = validBlocks > 0 ? fmtN(totalRewards / validBlocks) + ' THR' : '—';
@@ -721,6 +718,22 @@ async function reloadBlocks(){
     if (!Array.isArray(CURRENT_BLOCKS)) CURRENT_BLOCKS = [];
   }
   renderBlocks(CURRENT_BLOCKS);
+  loadChainTip();
+}
+
+async function loadChainTip(){
+  try {
+    const r = await fetch('/api/dashboard');
+    if (!r.ok) throw new Error(`dashboard ${r.status}`);
+    const j = await r.json();
+    const height = j.chain_tip_height ?? null;
+    if (height !== null && height !== undefined) {
+      el('#blocksTotalCount').textContent = Number(height).toLocaleString();
+    }
+  } catch (e) {
+    console.error('Failed to load chain tip:', e);
+    el('#blocksTotalCount').textContent = '—';
+  }
 }
 async function reloadMempool(){
   try {
@@ -752,6 +765,7 @@ let CURRENT_TXS    = BOOT_TXS || [];
 
 renderBlocks(CURRENT_BLOCKS);
 renderTxs(CURRENT_TXS);
+loadChainTip();
 
 el('#q').addEventListener('input', ()=>{
   renderBlocks(CURRENT_BLOCKS);

@@ -878,6 +878,11 @@ function renderPools(pools, containerId) {
         const tvlUSD = pool.tvl_usd || 0;
         const tvlBTC = pool.tvl_btc || 0;
         const feeTier = calculateFeeTier(tvlUSD, tvlBTC);
+        const reserveA = Number(pool.reserves_a || pool.reserve_a || 0);
+        const reserveB = Number(pool.reserves_b || pool.reserve_b || 0);
+        const hasLiquidity = reserveA > 0 && reserveB > 0;
+        const priceAToB = hasLiquidity ? (reserveB / reserveA) : null;
+        const priceBToA = hasLiquidity ? (reserveA / reserveB) : null;
 
         // Get logos
         const logoA = getTokenLogo(pool.token_a);
@@ -900,11 +905,11 @@ function renderPools(pools, containerId) {
             <div class="pool-stats">
                 <div class="pool-stat">
                     <div class="pool-stat-label">Reserve ${pool.token_a}</div>
-                    <div class="pool-stat-value">${(pool.reserves_a || pool.reserve_a || 0).toFixed(6)}</div>
+                    <div class="pool-stat-value">${hasLiquidity ? reserveA.toFixed(6) : '—'}</div>
                 </div>
                 <div class="pool-stat">
                     <div class="pool-stat-label">Reserve ${pool.token_b}</div>
-                    <div class="pool-stat-value">${(pool.reserves_b || pool.reserve_b || 0).toFixed(6)}</div>
+                    <div class="pool-stat-value">${hasLiquidity ? reserveB.toFixed(6) : '—'}</div>
                 </div>
                 <div class="pool-stat">
                     <div class="pool-stat-label">Total Shares</div>
@@ -912,7 +917,15 @@ function renderPools(pools, containerId) {
                 </div>
                 <div class="pool-stat">
                     <div class="pool-stat-label">TVL (est)</div>
-                    <div class="pool-stat-value">$${tvlUSD.toFixed(2)}</div>
+                    <div class="pool-stat-value">${hasLiquidity ? `$${tvlUSD.toFixed(2)}` : '—'}</div>
+                </div>
+                <div class="pool-stat">
+                    <div class="pool-stat-label">Price ${pool.token_a} → ${pool.token_b}</div>
+                    <div class="pool-stat-value">${hasLiquidity ? priceAToB.toFixed(6) : '—'}</div>
+                </div>
+                <div class="pool-stat">
+                    <div class="pool-stat-label">Price ${pool.token_b} → ${pool.token_a}</div>
+                    <div class="pool-stat-value">${hasLiquidity ? priceBToA.toFixed(6) : '—'}</div>
                 </div>
             </div>
             <div class="pool-actions">

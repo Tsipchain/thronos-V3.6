@@ -169,6 +169,18 @@
         letter-spacing: 1px;
     }
 
+    .indexing-badge {
+        display: inline-block;
+        margin-top: 4px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        border: 1px solid #ffd700;
+        color: #ffd700;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
     /* ─── Features Grid ────────────────────────────────────────── */
     .features-section {
         margin-bottom: 40px;
@@ -714,12 +726,17 @@
     <div class="stats-grid">
         <div class="stat-card">
             <span class="stat-icon">⛓️</span>
-            <div class="stat-value" id="statBlocks"><span class="loading-spinner"></span></div>
-            <div class="stat-label">Blocks</div>
+            <div class="stat-value" id="statBlocks">
+                <div id="statChainHeight"><span class="loading-spinner"></span></div>
+                <div id="statIndexHeight" style="font-size: 12px; opacity: 0.7;"></div>
+                <div id="statIndexBadge" class="indexing-badge" style="display: none;">Indexing…</div>
+            </div>
+            <div class="stat-label">Chain / Indexed</div>
         </div>
         <div class="stat-card">
             <span class="stat-icon">💰</span>
             <div class="stat-value" id="statSupply"><span class="loading-spinner"></span></div>
+            <div class="stat-label" id="statSupplyMeta" style="margin-top: 6px; font-size: 0.75em; text-transform: none; letter-spacing: 0;"></div>
             <div class="stat-label">THR Supply</div>
         </div>
         <div class="stat-card">
@@ -1013,28 +1030,45 @@
     // ─── Load Network Stats ───────────────────────────────────────
     async function loadNetworkStats() {
         try {
-            const [lastBlock, netStats, tokensRes, poolsRes, walletsRes] = await Promise.all([
-                fetch("/last_block").then(r => r.json()).catch(() => ({})),
-                fetch("/api/network_stats").then(r => r.json()).catch(() => ({})),
-                fetch("/api/tokens/list").then(r => r.json()).catch(() => ({ tokens: [] })),
-                fetch("/api/v1/pools").then(r => r.json()).catch(() => ({ pools: [] })),
-                fetch("/api/v1/wallets/count").then(r => r.json()).catch(() => ({ count: 0 }))
-            ]);
+            const dashboard = await fetch("/api/dashboard").then(r => r.json()).catch(() => ({}));
+            const stats = dashboard.stats || {};
+            const tip = dashboard.tip || {};
 
-            const blockCount = lastBlock.block_count || netStats.block_count || 0;
-            const totalSupply = lastBlock.total_supply || netStats.total_supply || 0;
-            const tokenCount = tokensRes.tokens ? tokensRes.tokens.length : 0;
-            const poolCount = poolsRes.pools ? poolsRes.pools.length : 0;
-            const walletCount = walletsRes.count || 0;
+            const chainHeight = dashboard.chain_tip_height ?? 0;
+            const indexHeight = dashboard.index_tip_height ?? 0;
+            const indexLag = dashboard.index_lag ?? 0;
+            const totalSupply = stats.total_supply_thr ?? stats.total_supply ?? tip.total_supply ?? 0;
+            const circulatingSupply = stats.circulating_supply_thr ?? null;
+            const lockedSupply = stats.locked_in_pools_thr ?? null;
+            const tokenCount = stats.token_count || 0;
+            const poolCount = stats.pool_count || 0;
+            const walletCount = stats.wallet_count || 0;
 
-            document.getElementById("statBlocks").textContent = blockCount.toLocaleString();
+            const chainEl = document.getElementById("statChainHeight");
+            const indexEl = document.getElementById("statIndexHeight");
+            const indexBadge = document.getElementById("statIndexBadge");
+            if (chainEl) {
+                chainEl.textContent = `Chain: ${Number(chainHeight || 0).toLocaleString()}`;
+            }
+            if (indexEl) {
+                indexEl.textContent = `Indexed: ${Number(indexHeight || 0).toLocaleString()}`;
+            }
+            if (indexBadge) {
+                indexBadge.style.display = indexLag > 0 ? "inline-block" : "none";
+            }
             document.getElementById("statSupply").textContent = totalSupply.toFixed(2);
+            const supplyMeta = document.getElementById("statSupplyMeta");
+            if (supplyMeta && circulatingSupply !== null && lockedSupply !== null) {
+                supplyMeta.textContent = `Circulating: ${Number(circulatingSupply).toFixed(2)} · Locked: ${Number(lockedSupply).toFixed(2)}`;
+            } else if (supplyMeta) {
+                supplyMeta.textContent = "";
+            }
             document.getElementById("statWallets").textContent = walletCount.toLocaleString();
             document.getElementById("statTokens").textContent = tokenCount.toLocaleString();
             document.getElementById("statPools").textContent = poolCount.toLocaleString();
-            document.getElementById("statTxns").textContent = (blockCount * 2).toLocaleString();
+            document.getElementById("statTxns").textContent = (Number(chainHeight || 0) * 2).toLocaleString();
 
-            window.__THR_STATS = { lastBlock, netStats };
+            window.__THR_STATS = { dashboard };
         } catch (e) {
             console.error("Failed to load stats:", e);
             document.querySelectorAll('.stat-value').forEach(el => {
@@ -1050,10 +1084,9 @@
         const activityList = document.getElementById("activityList");
 
         try {
-            const [lastBlock, tokensRes] = await Promise.all([
-                fetch("/last_block").then(r => r.json()).catch(() => null),
-                fetch("/api/tokens/list").then(r => r.json()).catch(() => ({ tokens: [] }))
-            ]);
+            const dashboard = await fetch("/api/dashboard").then(r => r.json()).catch(() => ({}));
+            const lastBlock = dashboard.tip || null;
+            const tokensRes = { tokens: dashboard.recent_tokens || [] };
 
             const activities = [];
 

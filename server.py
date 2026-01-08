@@ -1894,6 +1894,8 @@ def get_wallet_balances(wallet: str):
             prices_cache[symbol] = get_token_price_in_thr(symbol)
         return prices_cache[symbol]
 
+    wbtc_price = price_for("WBTC")
+    l2e_price = price_for("L2E")
     tokens = [
         {
             "symbol": "THR",
@@ -1918,8 +1920,8 @@ def get_wallet_balances(wallet: str):
             "color": "#f7931a",
             "chain": "Thronos",
             "type": "wrapped",
-            "price_in_thr": price_for("WBTC"),
-            "value_in_thr": round(wbtc_balance * price_for("WBTC"), 6),
+            "price_in_thr": wbtc_price,
+            "value_in_thr": round(wbtc_balance * wbtc_price, 6) if wbtc_price is not None else None,
         },
         {
             "symbol": "L2E",
@@ -1931,8 +1933,8 @@ def get_wallet_balances(wallet: str):
             "color": "#00ccff",
             "chain": "Thronos",
             "type": "reward",
-            "price_in_thr": price_for("L2E"),
-            "value_in_thr": round(l2e_balance * price_for("L2E"), 6),
+            "price_in_thr": l2e_price,
+            "value_in_thr": round(l2e_balance * l2e_price, 6) if l2e_price is not None else None,
         },
     ]
 
@@ -1957,6 +1959,7 @@ def get_wallet_balances(wallet: str):
         else:
             logo_url = None
 
+        token_price = price_for(symbol)
         tokens.append({
             "symbol": symbol,
             "name": token_data.get("name", symbol),
@@ -1969,8 +1972,8 @@ def get_wallet_balances(wallet: str):
             "type": "experimental",
             "token_id": token_id,
             "creator": token_data.get("creator", ""),
-            "price_in_thr": price_for(symbol),
-            "value_in_thr": round(token_balance * price_for(symbol), 6),
+            "price_in_thr": token_price,
+            "value_in_thr": round(token_balance * token_price, 6) if token_price is not None else None,
         })
 
     token_balances = {
@@ -3598,6 +3601,9 @@ def media_static(filename):
     static_root = os.path.join(MEDIA_DIR, "static")
     if os.path.exists(os.path.join(static_root, safe_name)):
         return send_from_directory(static_root, safe_name)
+    data_static_root = os.path.join(DATA_DIR, "static")
+    if os.path.exists(os.path.join(data_static_root, safe_name)):
+        return send_from_directory(data_static_root, safe_name)
     return send_from_directory(MEDIA_DIR, safe_name)
 
 @app.route("/viewer")

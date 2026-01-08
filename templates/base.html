@@ -2183,7 +2183,7 @@ function formatBalance(num) {
 let selectedSpeed = 'fast';
 let selectedNetwork = 'thronos';
 let selectedToken = 'THR';
-let tokenBalances = {};
+var tokenBalances = window.tokenBalances || (window.tokenBalances = {});
 
 function openSendModal() {
     document.getElementById('sendModal').classList.add('active');

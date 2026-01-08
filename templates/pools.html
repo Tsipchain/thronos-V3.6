@@ -1154,7 +1154,7 @@ async function loadTokenOptions() {
 }
 
 async function getWalletBalanceMap(wallet) {
-    const res = await fetch(`/api/wallet/tokens/${wallet}?show_zero=true`);
+    const res = await fetch(`/api/balances?address=${encodeURIComponent(wallet)}&show_zero=true`);
     if (!res.ok) {
         throw new Error('Wallet not connected');
     }

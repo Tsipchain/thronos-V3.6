@@ -145,9 +145,7 @@
         </div>
         <div class="token-row">
             <input type="number" id="amountFrom" class="amount-input" placeholder="0.0" oninput="calcTo()">
-            <div class="token-select">
-                <span id="symbolFrom">THR</span>
-            </div>
+            <select id="symbolFrom" class="token-select" onchange="onTokenChange()"></select>
         </div>
     </div>
 
@@ -164,9 +162,7 @@
         </div>
         <div class="token-row">
             <input type="number" id="amountTo" class="amount-input" placeholder="0.0" readonly>
-            <div class="token-select">
-                <span id="symbolTo">wBTC</span>
-            </div>
+            <select id="symbolTo" class="token-select" onchange="onTokenChange()"></select>
         </div>
     </div>
 
@@ -184,13 +180,16 @@
 
 {% block scripts %}
 <script>
+(() => {
+if (window.__swapInitDone) return;
+window.__swapInitDone = true;
+
 const $ = (id) => document.getElementById(id);
 
-let isThrToBtc = true;
-const RATE = 0.0001; // 1 THR = 0.0001 BTC
-
-let balanceTHR = 0;
-let balanceBTC = 0;
+let swapTokenBalances = {};
+let availableTokens = [];
+let poolPairs = [];
+let latestQuote = null;
 
 document.addEventListener('DOMContentLoaded', async () => {
     const addr = walletSession.getAddress();
@@ -199,69 +198,182 @@ document.addEventListener('DOMContentLoaded', async () => {
         $('swapBtn').disabled = true;
         $('swapBtn').textContent = "Connect Wallet";
     } else {
-        await loadBalances(addr);
+        await Promise.all([loadBalances(addr), loadSwapCatalog()]);
+        setDefaultTokens();
+        calcTo();
     }
 });
 
 async function loadBalances(addr) {
     try {
-        const res = await fetch(`/wallet_data/${addr}`);
+        const res = await fetch(`/api/wallet/tokens/${addr}?show_zero=true`);
         const data = await res.json();
-        
-        balanceTHR = parseFloat(data.balance || 0);
-        balanceBTC = parseFloat(data.wbtc_balance || 0); // New field
-        
+        swapTokenBalances = {};
+        if (data.tokens) {
+            data.tokens.forEach(t => {
+                swapTokenBalances[t.symbol] = Number(t.balance || 0);
+            });
+        }
         updateBalanceDisplays();
     } catch (e) {
         console.error("Load balance error:", e);
     }
 }
 
+async function loadSwapCatalog() {
+    const [poolsRes, tokensRes] = await Promise.all([
+        fetch('/api/v1/pools').then(r => r.json()).catch(() => ({ pools: [] })),
+        fetch('/api/v1/tokens').then(r => r.json()).catch(() => ({ tokens: [] })),
+    ]);
+    const registry = new Map((tokensRes.tokens || []).map(t => [t.symbol, t]));
+    const poolTokens = new Set();
+    poolPairs = [];
+    (poolsRes.pools || []).forEach(pool => {
+        if (pool.token_a) poolTokens.add(pool.token_a.toUpperCase());
+        if (pool.token_b) poolTokens.add(pool.token_b.toUpperCase());
+        if (pool.token_a && pool.token_b) {
+            poolPairs.push([pool.token_a.toUpperCase(), pool.token_b.toUpperCase()]);
+        }
+    });
+    availableTokens = Array.from(poolTokens).filter(sym => registry.has(sym));
+    availableTokens.sort();
+
+    const selectFrom = $('symbolFrom');
+    const selectTo = $('symbolTo');
+    selectFrom.innerHTML = '';
+    selectTo.innerHTML = '';
+    availableTokens.forEach(sym => {
+        const optFrom = document.createElement('option');
+        optFrom.value = sym;
+        optFrom.textContent = sym;
+        selectFrom.appendChild(optFrom);
+
+        const optTo = document.createElement('option');
+        optTo.value = sym;
+        optTo.textContent = sym;
+        selectTo.appendChild(optTo);
+    });
+}
+
+function setDefaultTokens() {
+    const selectFrom = $('symbolFrom');
+    const selectTo = $('symbolTo');
+    if (availableTokens.includes('THR')) {
+        selectFrom.value = 'THR';
+    }
+    const fallbackTo = availableTokens.find(sym => sym !== selectFrom.value);
+    if (fallbackTo) {
+        selectTo.value = fallbackTo;
+    }
+    updateBalanceDisplays();
+    refreshToOptions();
+}
+
 function updateBalanceDisplays() {
-    if (isThrToBtc) {
-        $('balanceFrom').textContent = balanceTHR.toFixed(6);
-        $('balanceTo').textContent = balanceBTC.toFixed(8);
-        $('symbolFrom').textContent = "THR";
-        $('symbolTo').textContent = "wBTC";
-        $('rateDisplay').textContent = "1 THR = 0.0001 wBTC";
-    } else {
-        $('balanceFrom').textContent = balanceBTC.toFixed(8);
-        $('balanceTo').textContent = balanceTHR.toFixed(6);
-        $('symbolFrom').textContent = "wBTC";
-        $('symbolTo').textContent = "THR";
-        $('rateDisplay').textContent = "1 wBTC = 10000 THR";
+    const fromSymbol = $('symbolFrom').value;
+    const toSymbol = $('symbolTo').value;
+    const fromBal = swapTokenBalances[fromSymbol] || 0;
+    const toBal = swapTokenBalances[toSymbol] || 0;
+    $('balanceFrom').textContent = fromBal.toFixed(6);
+    $('balanceTo').textContent = toBal.toFixed(6);
+}
+
+function canRoute(fromToken, toToken) {
+    if (fromToken === toToken) return false;
+    const direct = poolPairs.some(pair =>
+        (pair[0] === fromToken && pair[1] === toToken) || (pair[1] === fromToken && pair[0] === toToken)
+    );
+    if (direct) return true;
+    const hasFromThr = poolPairs.some(pair =>
+        (pair[0] === fromToken && pair[1] === 'THR') || (pair[1] === fromToken && pair[0] === 'THR')
+    );
+    const hasToThr = poolPairs.some(pair =>
+        (pair[0] === toToken && pair[1] === 'THR') || (pair[1] === toToken && pair[0] === 'THR')
+    );
+    return hasFromThr && hasToThr;
+}
+
+function refreshToOptions() {
+    const selectTo = $('symbolTo');
+    const fromToken = $('symbolFrom').value;
+    const previous = selectTo.value;
+    selectTo.innerHTML = '';
+    availableTokens.forEach(sym => {
+        if (sym === fromToken) return;
+        if (!canRoute(fromToken, sym)) return;
+        const opt = document.createElement('option');
+        opt.value = sym;
+        opt.textContent = sym;
+        selectTo.appendChild(opt);
+    });
+    if (previous && Array.from(selectTo.options).some(o => o.value === previous)) {
+        selectTo.value = previous;
+    } else if (selectTo.options.length > 0) {
+        selectTo.value = selectTo.options[0].value;
     }
 }
 
 function flipTokens() {
-    isThrToBtc = !isThrToBtc;
-    
-    // Swap amounts visually
-    const fromVal = $('amountFrom').value;
+    const selectFrom = $('symbolFrom');
+    const selectTo = $('symbolTo');
+    const fromVal = selectFrom.value;
+    selectFrom.value = selectTo.value;
+    selectTo.value = fromVal;
+    const amtFrom = $('amountFrom').value;
     $('amountFrom').value = $('amountTo').value;
-    // Recalculate 'To' based on new 'From'
-    calcTo();
-    
+    $('amountTo').value = amtFrom;
     updateBalanceDisplays();
+    refreshToOptions();
+    calcTo();
 }
 
-function calcTo() {
+function onTokenChange() {
+    updateBalanceDisplays();
+    refreshToOptions();
+    calcTo();
+}
+
+async function calcTo() {
     const fromVal = parseFloat($('amountFrom').value) || 0;
-    let toVal = 0;
-    
-    if (isThrToBtc) {
-        toVal = fromVal * RATE;
-    } else {
-        toVal = fromVal / RATE;
+    const tokenIn = $('symbolFrom').value;
+    const tokenOut = $('symbolTo').value;
+    latestQuote = null;
+    if (!fromVal || !tokenIn || !tokenOut || tokenIn === tokenOut) {
+        $('amountTo').value = '';
+        $('rateDisplay').textContent = '—';
+        $('swapBtn').disabled = true;
+        return;
     }
-    
-    $('amountTo').value = toVal > 0 ? (isThrToBtc ? toVal.toFixed(8) : toVal.toFixed(6)) : '';
+    try {
+        const res = await fetch(`/api/swap/quote?token_in=${encodeURIComponent(tokenIn)}&token_out=${encodeURIComponent(tokenOut)}&amount_in=${encodeURIComponent(fromVal)}`);
+        const data = await res.json();
+        if (data.status !== 'success') {
+            $('amountTo').value = '';
+            $('rateDisplay').textContent = '—';
+            $('swapBtn').disabled = true;
+            $('swapResult').textContent = data.message || 'No liquidity';
+            return;
+        }
+        latestQuote = data;
+        $('amountTo').value = Number(data.amount_out).toFixed(6);
+        const rate = data.amount_out / fromVal;
+        $('rateDisplay').textContent = rate ? `1 ${tokenIn} = ${rate.toFixed(6)} ${tokenOut}` : '—';
+        $('swapBtn').disabled = false;
+        $('swapResult').textContent = '';
+    } catch (e) {
+        $('amountTo').value = '';
+        $('rateDisplay').textContent = '—';
+        $('swapBtn').disabled = true;
+        console.error('Quote error', e);
+    }
 }
 
 async function doSwap() {
     const addr = walletSession.getAddress();
     const secret = walletSession.getSendSeed();
     const amount = parseFloat($('amountFrom').value);
+    const tokenIn = $('symbolFrom').value;
+    const tokenOut = $('symbolTo').value;
 
     if (!addr || !secret || !walletSession.isBound()) {
         alert("Wallet not connected");
@@ -274,20 +386,26 @@ async function doSwap() {
         alert("Enter a valid amount.");
         return;
     }
+    if (!latestQuote || latestQuote.status !== 'success') {
+        alert("No valid quote available.");
+        return;
+    }
     
     $('swapBtn').disabled = true;
     $('swapBtn').innerHTML = '<span class="spinner"></span> Swapping...';
     $('swapResult').textContent = "";
     
     try {
-        const res = await fetch('/api/swap', {
+        const res = await fetch('/api/swap/execute', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
-                wallet: addr,
-                secret: secret,
-                amount: amount,
-                direction: isThrToBtc ? 'THR_TO_BTC' : 'BTC_TO_THR'
+                trader_thr: addr,
+                auth_secret: secret,
+                token_in: tokenIn,
+                token_out: tokenOut,
+                amount_in: amount,
+                min_amount_out: latestQuote.amount_out
             })
         });
         
@@ -311,5 +429,11 @@ async function doSwap() {
         $('swapBtn').textContent = "Swap";
     }
 }
+
+window.flipTokens = flipTokens;
+window.onTokenChange = onTokenChange;
+window.calcTo = calcTo;
+window.doSwap = doSwap;
+})();
 </script>
 {% endblock %}

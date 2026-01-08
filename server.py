@@ -51,7 +51,7 @@ import re
 import mimetypes
 import json
 import requests
-from flask import Flask, request, jsonify, send_from_directory, render_template, url_for, send_file
+from flask import Flask, request, jsonify, send_from_directory, render_template, url_for, send_file, Response
 
 try:
     from flask_cors import CORS
@@ -308,6 +308,7 @@ PROVIDER_HEALTH_TTL = 300  # seconds
 # Node role: "master" or "replica"
 NODE_ROLE = os.getenv("NODE_ROLE", "master").lower()
 MASTER_INTERNAL_URL = os.getenv("MASTER_NODE_URL", "http://localhost:5000")
+LEADER_URL = os.getenv("LEADER_URL", MASTER_INTERNAL_URL)
 # Replica external URL - used for heartbeat registration (e.g., Railway URL)
 REPLICA_EXTERNAL_URL = os.getenv("REPLICA_EXTERNAL_URL", os.getenv("RAILWAY_PUBLIC_DOMAIN", ""))
 
@@ -1392,6 +1393,9 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
     kind = _canonical_kind(tx_type_raw)
 
     meta: dict[str, Any] = {}
+    reject_reason = tx.get("reject_reason") or tx.get("reason")
+    if reject_reason:
+        meta["reject_reason"] = reject_reason
 
     norm = {
         "tx_id": tx_id or "",  # will be filled later if missing
@@ -1414,6 +1418,7 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         "token_symbol": asset_symbol,
         "asset": asset_symbol,
         "meta": meta,
+        "reject_reason": reject_reason,
         "parties": sorted(parties),
         "decimals": decimals,
         "decimals_is_default": token_meta.get("decimals_is_default", False),
@@ -1941,6 +1946,15 @@ def calculate_dynamic_fee(amount: float) -> float:
     else:
         fee_rate = 0.005   # 0.5%
 
+    fee = amount * fee_rate
+    return round(max(MIN_FEE, fee), 6)
+
+def calculate_fixed_burn_fee(amount: float, speed: str = "fast") -> float:
+    """Calculate the fixed burn fee for THR sends."""
+    if speed == "slow":
+        fee_rate = 0.0009  # 0.09%
+    else:
+        fee_rate = FEE_RATE  # fixed 0.5%
     fee = amount * fee_rate
     return round(max(MIN_FEE, fee), 6)
 
@@ -3204,25 +3218,137 @@ def decode_iot_steganography(image_path):
         return None
 
 
-# ─── WRITE PROTECTION FOR REPLICA NODES ───────────────────────────────────
+# ─── LEADER-ONLY WRITES (REPLICA FORWARDING) ──────────────────────────────
 @app.before_request
-def block_writes_on_replica():
+def forward_writes_to_leader():
     """
-    Replica nodes are read-only. Block all write operations (POST, PUT, DELETE)
-    except for heartbeat endpoint.
+    Non-leader nodes must forward critical state-changing requests to the leader.
     """
-    if NODE_ROLE == "replica":
-        # Allow heartbeat from replica to master
-        if request.path == "/api/peers/heartbeat":
-            return None
-        # Block all write operations
-        if request.method in ["POST", "PUT", "DELETE", "PATCH"]:
-            return jsonify({
-                "error": "Write operations not allowed on replica node",
-                "node_role": "replica",
-                "hint": "Direct writes to master node"
-            }), 403
-    return None
+    if NODE_ROLE == "master":
+        return None
+
+    if request.method not in ["POST", "PUT", "DELETE", "PATCH"]:
+        return None
+
+    guarded_prefixes = (
+        "/send",
+        "/api/wallet/send",
+        "/api/swap",
+        "/api/bridge",
+        "/submit_block",
+    )
+    if not request.path.startswith(guarded_prefixes):
+        return None
+
+    target_url = f"{MASTER_INTERNAL_URL.rstrip('/')}{request.path}"
+    headers = {k: v for k, v in request.headers if k.lower() not in {"host", "content-length"}}
+    data = request.get_data()
+
+    try:
+        upstream = requests.request(
+            method=request.method,
+            url=target_url,
+            params=request.args,
+            data=data,
+            headers=headers,
+            timeout=15
+        )
+    except requests.RequestException as exc:
+        return jsonify({
+            "error": "leader_unavailable",
+            "message": "Leader node unavailable for write operation",
+            "detail": str(exc),
+            "node_role": NODE_ROLE,
+            "leader_url": MASTER_INTERNAL_URL
+        }), 503
+
+    excluded_headers = {"content-encoding", "content-length", "transfer-encoding", "connection"}
+    response = Response(upstream.content, status=upstream.status_code)
+    for key, value in upstream.headers.items():
+        if key.lower() not in excluded_headers:
+            response.headers[key] = value
+    response.headers["X-Forwarded-To-Leader"] = "true"
+    response.headers["X-Thronos-Leader"] = "1"
+    return response
+
+
+@app.before_request
+def forward_reads_to_leader():
+    """
+    Non-leader nodes must proxy chain-dependent reads to the leader.
+    """
+    if NODE_ROLE == "master":
+        return None
+
+    if request.method != "GET":
+        return None
+
+    guarded_prefixes = (
+        "/api/network_stats",
+        "/api/network_live",
+        "/api/blocks",
+        "/api/tx_feed",
+        "/api/history",
+        "/api/dashboard",
+        "/api/v1/status",
+        "/api/v1/block",
+        "/api/v1/blockhash",
+        "/last_block",
+        "/last_block_hash",
+        "/token_chart",
+    )
+    if not request.path.startswith(guarded_prefixes):
+        return None
+
+    target_url = f"{LEADER_URL.rstrip('/')}{request.path}"
+    headers = {k: v for k, v in request.headers if k.lower() not in {"host", "content-length"}}
+
+    try:
+        upstream = requests.request(
+            method="GET",
+            url=target_url,
+            params=request.args,
+            headers=headers,
+            timeout=15
+        )
+    except requests.RequestException as exc:
+        return jsonify({
+            "error": "leader_unavailable",
+            "message": "Leader node unavailable for read operation",
+            "detail": str(exc),
+            "node_role": NODE_ROLE,
+            "leader_url": LEADER_URL
+        }), 503
+
+    excluded_headers = {"content-encoding", "content-length", "transfer-encoding", "connection"}
+    response = Response(upstream.content, status=upstream.status_code)
+    for key, value in upstream.headers.items():
+        if key.lower() not in excluded_headers:
+            response.headers[key] = value
+    response.headers["X-Forwarded-To-Leader"] = "true"
+    response.headers["X-Thronos-Leader"] = "1"
+    return response
+
+
+@app.after_request
+def add_node_headers(response):
+    response.headers["X-Thronos-Node"] = NODE_ROLE
+    response.headers["X-Thronos-Node-URL"] = request.host_url.rstrip("/")
+    if "X-Thronos-Leader" not in response.headers:
+        response.headers["X-Thronos-Leader"] = "1" if NODE_ROLE == "master" else "0"
+    if request.path.startswith("/api/") and request.path != "/api/whoami":
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.route("/api/whoami", methods=["GET"])
+def api_whoami():
+    return jsonify({
+        "node_role": NODE_ROLE,
+        "node_url": request.host_url.rstrip("/"),
+        "master_url": MASTER_INTERNAL_URL,
+        "leader_url": LEADER_URL,
+    }), 200
 
 
 # ─── BASIC PAGES ───────────────────────────────────
@@ -6424,13 +6550,9 @@ def pledge_submit():
     ),200
 
 
-@app.route("/wallet_data/<thr_addr>")
-def wallet_data(thr_addr):
-    """QUEST A+B: Enhanced wallet data with categorized history"""
-    balances = get_wallet_balances(thr_addr)
-    # QUEST B: Categorize transactions with labels
+def build_wallet_history(thr_addr: str) -> list[dict]:
+    """Return canonical wallet history with normalized status."""
     history = []
-
     category_labels = {
         "transfer": "Transfer",
         "thr_transfer": "THR Transfer",
@@ -6452,7 +6574,6 @@ def wallet_data(thr_addr):
         if thr_addr not in parties and thr_addr not in {norm.get("from"), norm.get("to")}:  # type: ignore[arg-type]
             continue
 
-        status = norm.get("status", "confirmed")
         kind = _canonical_kind(norm.get("kind") or norm.get("type") or "") or "thr_transfer"
         direction = "out"
         if thr_addr == norm.get("to"):
@@ -6482,6 +6603,14 @@ def wallet_data(thr_addr):
             except Exception:
                 pass
 
+        tx_id = norm.get("tx_id")
+        status = norm.get("status", "confirmed")
+        reject_reason = norm.get("reject_reason")
+        if tx_id:
+            resolved = _resolve_tx_status(tx_id)
+            status = resolved.get("status") or status
+            reject_reason = resolved.get("reason") or reject_reason
+
         history.append({
             **{k: v for k, v in norm.items() if k not in {"parties"}},
             "kind": kind,
@@ -6495,6 +6624,7 @@ def wallet_data(thr_addr):
             "amount_out": display_amount_out,
             "fee_burned": norm.get("fee_burned", 0.0),
             "status": status,
+            "reject_reason": reject_reason,
             "timestamp": norm.get("timestamp"),
             "note": norm.get("note"),
             "explorer_link": f"/explorer?tx_id={norm.get('tx_id', '')}",
@@ -6505,6 +6635,14 @@ def wallet_data(thr_addr):
         })
 
     history.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    return history
+
+
+@app.route("/wallet_data/<thr_addr>")
+def wallet_data(thr_addr):
+    """QUEST A+B: Enhanced wallet data with categorized history"""
+    balances = get_wallet_balances(thr_addr)
+    history = build_wallet_history(thr_addr)
 
     return jsonify(
         balance=balances["thr"],
@@ -6513,6 +6651,57 @@ def wallet_data(thr_addr):
         tokens=balances["tokens"],  # QUEST A: Include all tokens
         transactions=history,
     ), 200
+
+
+@app.route("/api/history", methods=["GET"])
+def api_history():
+    thr_addr = (request.args.get("wallet") or request.args.get("address") or "").strip()
+    if not thr_addr:
+        return jsonify({"ok": False, "error": "Missing wallet address"}), 400
+    history = build_wallet_history(thr_addr)
+    return jsonify({"ok": True, "wallet": thr_addr, "history": history}), 200
+
+
+@app.route("/api/dashboard", methods=["GET"])
+def api_dashboard():
+    """Return the leader-driven dashboard data for index."""
+    last_block = load_json(LAST_BLOCK_FILE, {})
+    blocks = get_blocks_for_viewer()
+    recent_blocks = blocks[:5]
+    recent_txs = _tx_feed(include_pending=True, include_bridge=True)[:8]
+
+    chain = load_chain_cached()
+    chain_blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    block_count = HEIGHT_OFFSET + len(chain_blocks)
+    total_supply = round(sum(float(v) for v in load_json(LEDGER_FILE, {}).values()), 6)
+
+    tokens = load_custom_tokens()
+    token_list = list(tokens.values())
+    token_list.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+    recent_tokens = token_list[:3]
+
+    pools = load_pools()
+    ledger = load_json(LEDGER_FILE, {})
+    system_addresses = {BURN_ADDRESS, AI_WALLET_ADDRESS, "GENESIS", "SYSTEM"}
+    wallet_count = sum(1 for addr, bal in ledger.items()
+                       if addr not in system_addresses and float(bal) > 0)
+
+    stats = {
+        "block_count": block_count,
+        "total_supply": total_supply,
+        "token_count": len(token_list),
+        "pool_count": len(pools),
+        "wallet_count": wallet_count,
+    }
+
+    return jsonify({
+        "ok": True,
+        "tip": last_block,
+        "stats": stats,
+        "recent_blocks": recent_blocks,
+        "recent_transactions": recent_txs,
+        "recent_tokens": recent_tokens,
+    }), 200
 
 def get_token_price_in_thr(symbol):
     """
@@ -6687,6 +6876,63 @@ def api_tx_status():
         "error": "Transaction not found",
         "tx_id": tx_id
     }), 404
+
+
+def _resolve_tx_status(tx_id: str) -> dict:
+    chain = load_chain_cached()
+    for tx in chain:
+        if isinstance(tx, dict) and tx.get("tx_id") == tx_id:
+            status = tx.get("status") or "confirmed"
+            return {
+                "status": "mined" if status in {"confirmed", "mined"} else status,
+                "block_height": tx.get("height") or tx.get("block_height") or tx.get("block"),
+                "reason": tx.get("reject_reason") or tx.get("reason")
+            }
+
+    mempool = load_mempool()
+    for tx in mempool:
+        if isinstance(tx, dict) and tx.get("tx_id") == tx_id:
+            return {
+                "status": "pending",
+                "block_height": None,
+                "reason": None
+            }
+
+    tx_log = load_tx_log()
+    for tx in tx_log:
+        if isinstance(tx, dict) and tx.get("tx_id") == tx_id:
+            status = tx.get("status") or ""
+            if status:
+                mapped = "mined" if status in {"confirmed", "mined"} else status
+            else:
+                mapped = "pending"
+            return {
+                "status": mapped,
+                "block_height": tx.get("height") or tx.get("block_height") or tx.get("block"),
+                "reason": tx.get("reject_reason") or (tx.get("meta") or {}).get("reject_reason")
+            }
+
+    return {
+        "status": "rejected",
+        "block_height": None,
+        "reason": "not_found"
+    }
+
+
+@app.route("/api/tx_status/<tx_id>", methods=["GET"])
+def api_tx_status_v2(tx_id: str):
+    tx_id = (tx_id or "").strip()
+    if not tx_id:
+        return jsonify({"ok": False, "error": "Missing tx_id"}), 400
+
+    status_payload = _resolve_tx_status(tx_id)
+    return jsonify({
+        "ok": True,
+        "tx_id": tx_id,
+        "status": status_payload["status"],
+        "block_height": status_payload["block_height"],
+        "reason": status_payload["reason"]
+    }), 200
 
 @app.route("/widget/wallet")
 def wallet_widget():
@@ -7491,66 +7737,94 @@ def api_wallet_send():
         # Native THR send
         from flask import g
         g.internal_call = True
-        return send_thr_internal(from_addr, to_addr, amount, secret, passphrase, speed)
+        tx_id = (data.get("tx_id") or data.get("client_tx_id") or "").strip()
+        expected_fee = data.get("expected_fee")
+        return send_thr_internal(from_addr, to_addr, amount, secret, passphrase, speed, tx_id=tx_id, expected_fee=expected_fee)
     else:
         # Custom token transfer (fee paid in THR)
         return transfer_custom_token(token, from_addr, to_addr, amount, secret, passphrase, speed)
 
 
-def send_thr_internal(from_thr, to_thr, amount_raw, auth_secret, passphrase="", speed="fast"):
+def _reject_tx(tx_id: str | None, reason: str, status_code: int = 400, payload: dict | None = None):
+    tx = payload.copy() if payload else {}
+    tx.update({
+        "tx_id": tx_id,
+        "status": "rejected",
+        "reject_reason": reason,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    })
+    persist_normalized_tx(tx, status_override="rejected")
+    return jsonify({
+        "accepted": False,
+        "status": "rejected",
+        "tx_id": tx_id,
+        "reject_reason": reason
+    }), status_code
+
+
+def send_thr_internal(from_thr, to_thr, amount_raw, auth_secret, passphrase="", speed="fast", tx_id: str | None = None, expected_fee: float | None = None):
     """Internal THR send function for unified API."""
     if not validate_thr_address(from_thr):
-        return jsonify(error="invalid_from_address", message="Invalid THR address format"), 400
+        return _reject_tx(tx_id, "invalid_from_address", 400, {"from": from_thr, "to": to_thr, "amount": amount_raw})
     if not validate_thr_address(to_thr):
-        return jsonify(error="invalid_to_address", message="Invalid THR address format"), 400
+        return _reject_tx(tx_id, "invalid_to_address", 400, {"from": from_thr, "to": to_thr, "amount": amount_raw})
 
     valid, error_msg = validate_amount(amount_raw)
     if not valid:
-        return jsonify(error="invalid_amount", message=error_msg), 400
+        return _reject_tx(tx_id, f"invalid_amount:{error_msg}", 400, {"from": from_thr, "to": to_thr, "amount": amount_raw})
 
     try:
         amount = float(amount_raw)
     except (TypeError, ValueError):
-        return jsonify(error="invalid_amount"), 400
+        return _reject_tx(tx_id, "invalid_amount", 400, {"from": from_thr, "to": to_thr, "amount": amount_raw})
 
     if not auth_secret:
-        return jsonify(error="missing_auth_secret"), 400
+        return _reject_tx(tx_id, "missing_auth_secret", 400, {"from": from_thr, "to": to_thr, "amount": amount})
 
     pledges = load_json(PLEDGE_CHAIN, [])
     sender_pledge = next((p for p in pledges if p.get("thr_address") == from_thr), None)
     if not sender_pledge:
-        return jsonify(error="unknown_sender_thr"), 404
+        return _reject_tx(tx_id, "unknown_sender_thr", 404, {"from": from_thr, "to": to_thr, "amount": amount})
 
     stored_auth_hash = sender_pledge.get("send_auth_hash")
     if not stored_auth_hash:
-        return jsonify(error="send_not_enabled_for_this_thr"), 400
+        return _reject_tx(tx_id, "send_not_enabled_for_this_thr", 400, {"from": from_thr, "to": to_thr, "amount": amount})
 
     if sender_pledge.get("has_passphrase"):
         if not passphrase:
-            return jsonify(error="passphrase_required"), 400
+            return _reject_tx(tx_id, "passphrase_required", 400, {"from": from_thr, "to": to_thr, "amount": amount})
         auth_string = f"{auth_secret}:{passphrase}:auth"
     else:
         auth_string = f"{auth_secret}:auth"
 
     if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify(error="invalid_auth"), 403
+        return _reject_tx(tx_id, "invalid_auth", 403, {"from": from_thr, "to": to_thr, "amount": amount})
 
-    if speed == "slow":
-        fee = round(amount * 0.0009, 6)
-    else:
-        fee = calculate_dynamic_fee(amount)
+    fee = calculate_fixed_burn_fee(amount, speed)
+    if expected_fee is not None:
+        try:
+            expected_fee_value = float(expected_fee)
+        except (TypeError, ValueError):
+            return _reject_tx(tx_id, "invalid_expected_fee", 400, {"from": from_thr, "to": to_thr, "amount": amount})
+        if round(expected_fee_value, 6) != round(fee, 6):
+            return _reject_tx(
+                tx_id,
+                f"fee_mismatch:expected_{round(expected_fee_value, 6)}_got_{round(fee, 6)}",
+                400,
+                {"from": from_thr, "to": to_thr, "amount": amount, "fee_burned": fee}
+            )
 
     total_cost = amount + fee
     ledger = load_json(LEDGER_FILE, {})
     sender_balance = float(ledger.get(from_thr, 0.0))
 
     if sender_balance < total_cost:
-        return jsonify(
-            error="insufficient_balance",
-            balance=round(sender_balance, 6),
-            required=total_cost,
-            fee=fee
-        ), 400
+        return _reject_tx(
+            tx_id,
+            "insufficient_balance",
+            400,
+            {"from": from_thr, "to": to_thr, "amount": amount, "fee_burned": fee}
+        )
 
     ledger[from_thr] = round(sender_balance - total_cost, 6)
     ledger[to_thr] = round(float(ledger.get(to_thr, 0.0)) + amount, 6)
@@ -7564,7 +7838,9 @@ def send_thr_internal(from_thr, to_thr, amount_raw, auth_secret, passphrase="", 
         "to": to_thr,
         "amount": round(amount, 6),
         "fee_burned": fee,
-        "speed": speed
+        "speed": speed,
+        "tx_id": tx_id or f"TX-{int(time.time())}-{secrets.token_hex(4)}",
+        "status": "confirmed"
     }
     chain = load_json(CHAIN_FILE, [])
     chain.append(tx)
@@ -7573,8 +7849,10 @@ def send_thr_internal(from_thr, to_thr, amount_raw, auth_secret, passphrase="", 
 
     return jsonify({
         "ok": True,
+        "accepted": True,
         "status": "confirmed",
         "tx": tx,
+        "tx_id": tx.get("tx_id"),
         "new_balance": ledger[from_thr],
         "fee": fee
     }), 200
@@ -7824,49 +8102,57 @@ def send_thr():
     auth_secret=(data.get("auth_secret") or "").strip()
     passphrase=(data.get("passphrase") or "").strip()
     speed=(data.get("speed") or "fast").strip().lower()  # New: slow or fast
+    tx_id=(data.get("tx_id") or data.get("client_tx_id") or "").strip() or None
+    expected_fee=data.get("expected_fee")
 
     # Validate THR addresses
     if not validate_thr_address(from_thr):
-        return jsonify(error="invalid_from_address", message="Invalid THR address format"),400
+        return _reject_tx(tx_id, "invalid_from_address", 400, {"from": from_thr, "to": to_thr, "amount": amount_raw})
     if not validate_thr_address(to_thr):
-        return jsonify(error="invalid_to_address", message="Invalid THR address format"),400
+        return _reject_tx(tx_id, "invalid_to_address", 400, {"from": from_thr, "to": to_thr, "amount": amount_raw})
 
     # Validate amount
     valid, error_msg = validate_amount(amount_raw)
     if not valid:
-        return jsonify(error="invalid_amount", message=error_msg),400
+        return _reject_tx(tx_id, f"invalid_amount:{error_msg}", 400, {"from": from_thr, "to": to_thr, "amount": amount_raw})
 
     try:
         amount=float(amount_raw)
     except (TypeError,ValueError):
-        return jsonify(error="invalid_amount"),400
+        return _reject_tx(tx_id, "invalid_amount", 400, {"from": from_thr, "to": to_thr, "amount": amount_raw})
     if not auth_secret:
-        return jsonify(error="missing_auth_secret"),400
+        return _reject_tx(tx_id, "missing_auth_secret", 400, {"from": from_thr, "to": to_thr, "amount": amount})
     pledges=load_json(PLEDGE_CHAIN,[])
     sender_pledge=next((p for p in pledges if p.get("thr_address")==from_thr),None)
     if not sender_pledge:
-        return jsonify(error="unknown_sender_thr"),404
+        return _reject_tx(tx_id, "unknown_sender_thr", 404, {"from": from_thr, "to": to_thr, "amount": amount})
     stored_auth_hash=sender_pledge.get("send_auth_hash")
     if not stored_auth_hash:
-        return jsonify(error="send_not_enabled_for_this_thr"),400
+        return _reject_tx(tx_id, "send_not_enabled_for_this_thr", 400, {"from": from_thr, "to": to_thr, "amount": amount})
     if sender_pledge.get("has_passphrase"):
         if not passphrase:
-            return jsonify(error="passphrase_required"),400
+            return _reject_tx(tx_id, "passphrase_required", 400, {"from": from_thr, "to": to_thr, "amount": amount})
         auth_string=f"{auth_secret}:{passphrase}:auth"
     else:
         auth_string=f"{auth_secret}:auth"
     if hashlib.sha256(auth_string.encode()).hexdigest()!=stored_auth_hash:
-        return jsonify(error="invalid_auth"),403
+        return _reject_tx(tx_id, "invalid_auth", 403, {"from": from_thr, "to": to_thr, "amount": amount})
 
     # --- Fee Calculation Based on Speed ---
-    if speed == "slow":
-        # Slow transactions: 0.09% fee
-        fee = round(amount * 0.0009, 6)
-        confirmation_policy = "SLOW"
-    else:
-        # Fast transactions: Use dynamic fee calculation
-        fee = calculate_dynamic_fee(amount)
-        confirmation_policy = "FAST"
+    fee = calculate_fixed_burn_fee(amount, speed)
+    confirmation_policy = "SLOW" if speed == "slow" else "FAST"
+    if expected_fee is not None:
+        try:
+            expected_fee_value = float(expected_fee)
+        except (TypeError, ValueError):
+            return _reject_tx(tx_id, "invalid_expected_fee", 400, {"from": from_thr, "to": to_thr, "amount": amount})
+        if round(expected_fee_value, 6) != round(fee, 6):
+            return _reject_tx(
+                tx_id,
+                f"fee_mismatch:expected_{round(expected_fee_value, 6)}_got_{round(fee, 6)}",
+                400,
+                {"from": from_thr, "to": to_thr, "amount": amount, "fee_burned": fee}
+            )
 
     total_cost = amount + fee
 
@@ -7874,12 +8160,12 @@ def send_thr():
     sender_balance=float(ledger.get(from_thr,0.0))
 
     if sender_balance<total_cost:
-        return jsonify(
-            error="insufficient_balance",
-            balance=round(sender_balance,6),
-            required=total_cost,
-            fee=fee
-        ),400
+        return _reject_tx(
+            tx_id,
+            "insufficient_balance",
+            400,
+            {"from": from_thr, "to": to_thr, "amount": amount, "fee_burned": fee}
+        )
     ledger[from_thr]=round(sender_balance-total_cost,6)
     save_json(LEDGER_FILE,ledger)
     chain=load_json(CHAIN_FILE,[])
@@ -7891,7 +8177,7 @@ def send_thr():
         "to":to_thr,
         "amount":round(amount,6),
         "fee_burned":fee,
-        "tx_id":f"TX-{len(chain)}-{int(time.time())}",
+        "tx_id":tx_id or f"TX-{int(time.time())}-{secrets.token_hex(4)}",
         "thr_address":from_thr,
         "status":"pending",
         "confirmation_policy": confirmation_policy,
@@ -7909,7 +8195,14 @@ def send_thr():
         broadcast_tx(tx)
     except Exception:
         pass
-    return jsonify(status="pending", tx=tx, new_balance_from=ledger[from_thr], fee_burned=fee), 200
+    return jsonify(
+        accepted=True,
+        status="pending",
+        tx=tx,
+        tx_id=tx.get("tx_id"),
+        new_balance_from=ledger[from_thr],
+        fee_burned=fee
+    ), 200
 
 # ─── SEND CUSTOM TOKENS API ────────────────────────────────────
 @app.route("/api/send_token", methods=["POST"])

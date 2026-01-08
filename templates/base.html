@@ -1941,7 +1941,7 @@ async function loadWalletBalances(force = false) {
         // Update token prices before loading balances
         await updateTokenPrices();
 
-        const response = await fetch(`/api/wallet/tokens/${wallet}?show_zero=false`);
+        const response = await fetch(`/api/balances?address=${encodeURIComponent(wallet)}&show_zero=false`);
         if (!response.ok) throw new Error('Failed to load wallet data');
 
         const data = await response.json();
@@ -2796,7 +2796,7 @@ async function loadTokenBalances() {
     if (!wallet) return;
 
     try {
-        const response = await fetch(`/api/wallet/tokens/${wallet}?show_zero=true`);
+        const response = await fetch(`/api/balances?address=${encodeURIComponent(wallet)}&show_zero=true`);
         const data = await response.json();
         if (data.tokens) {
             // Update balances map

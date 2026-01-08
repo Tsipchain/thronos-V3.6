@@ -7182,6 +7182,25 @@ def api_wallet_tokens(thr_addr):
     }), 200
 
 
+@app.route("/api/balances", methods=["GET"])
+def api_balances():
+    address = (request.args.get("address") or request.args.get("wallet") or "").strip()
+    if not address:
+        return jsonify({"ok": False, "error": "Missing address"}), 400
+    balances = get_wallet_balances(address)
+    show_zero = request.args.get("show_zero", "true").lower() == "true"
+    tokens = balances.get("tokens", [])
+    if not show_zero:
+        tokens = [t for t in tokens if t.get("balance", 0) > 0]
+    return jsonify({
+        "ok": True,
+        "address": address,
+        "balances": balances.get("token_balances", {}),
+        "tokens": tokens,
+        "last_updated": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+    }), 200
+
+
 @app.route("/api/token/prices", methods=["GET"])
 def api_token_prices():
     """

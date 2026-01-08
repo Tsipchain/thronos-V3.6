@@ -206,7 +206,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 async function loadBalances(addr) {
     try {
-        const res = await fetch(`/api/wallet/tokens/${addr}?show_zero=true`);
+        const res = await fetch(`/api/balances?address=${encodeURIComponent(addr)}&show_zero=true`);
         const data = await res.json();
         swapTokenBalances = {};
         if (data.tokens) {

@@ -2587,13 +2587,15 @@ function renderHistory() {
             ? (tx.asset_symbol || tx.asset || tx.symbol || 'TOKEN')
             : (tx.symbol || tx.asset_symbol || tx.asset || 'THR');
 
+        const liquiditySubtype = (tx.subtype || tx.meta?.subtype || '').toLowerCase();
+        const isLiquidityRemove = liquiditySubtype === 'remove_liq' || (tx.kind || tx.type || '').toLowerCase().includes('remove');
+        const liquiditySign = isLiquidityRemove ? '+' : '-';
         const liquidityAmounts = isLiquidity
             ? (tx.amounts || tx.meta?.amounts || [
                 { symbol: tx.symbol_in || tx.token_a || 'THR', amount: amountIn },
                 { symbol: tx.symbol_out || tx.token_b || '', amount: amountOutNum }
             ]).filter(entry => entry && entry.symbol && Number.isFinite(Number(entry.amount)))
             : [];
-        const liquiditySign = (tx.kind || tx.type || '').toLowerCase().includes('remove') ? '-' : '+';
         const liquidityLines = isLiquidity
             ? liquidityAmounts.map(entry => `${liquiditySign}${Number(entry.amount).toFixed(6)} ${entry.symbol}`)
             : [];
@@ -2617,8 +2619,7 @@ function renderHistory() {
         // Pool/liquidity info
         let poolInfo = '';
         if (isLiquidity) {
-            const raw = (tx.kind || tx.type || '').toLowerCase();
-            const action = raw.includes('add') ? (isGreek ? 'Προσθήκη Ρευστότητας' : 'Add Liquidity') : (isGreek ? 'Αφαίρεση Ρευστότητας' : 'Remove Liquidity');
+            const action = isLiquidityRemove ? (isGreek ? 'Αφαίρεση Ρευστότητας' : 'Remove Liquidity') : (isGreek ? 'Προσθήκη Ρευστότητας' : 'Add Liquidity');
             const poolId = meta.pool_id || tx.pool_id;
             poolInfo = `<div style="font-size: 11px; color: #00bfff; opacity: 0.85; margin-top: 4px;">${action}${poolId ? ` • Pool ${escapeHtml(poolId)}` : ''}</div>`;
         } else if (isSwap && tx.meta) {

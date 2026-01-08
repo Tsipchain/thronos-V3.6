@@ -1504,7 +1504,7 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         norm.update({
             "kind": "swap",
             "type": "swap",
-            "subtype": tx_type_raw,
+            "subtype": "swap",
             "token_symbol": token_in,
             "asset": token_in,
             "amount": amount_in,
@@ -1532,6 +1532,9 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
                 {"symbol": token_in, "amount": amount_in},
                 {"symbol": token_out, "amount": amount_out},
             ],
+            "fee": event_payload.get("fee", tx.get("fee")),
+            "price_impact": event_payload.get("price_impact", tx.get("price_impact")),
+            "reserves_after": event_payload.get("reserves_after"),
         })
         if tx.get("amount_out_raw") is not None:
             try:
@@ -1561,6 +1564,7 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         norm["amount"] = amount_in
         norm["amount_out"] = amount_out
         norm["amounts"] = amounts
+        norm["subtype"] = "add_liq" if tx_type_raw == "pool_add_liquidity" else "remove_liq"
         norm["meta"].update({
             "pool_id": tx.get("pool_id"),
             "amount_in": amount_in,
@@ -1573,6 +1577,7 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
             "amounts": amounts,
             "pair": event_payload.get("pair") or f"{token_in}/{token_in2}",
             "reserves": event_payload.get("reserves"),
+            "reserves_after": event_payload.get("reserves_after"),
         })
 
     # Bridge transfers
@@ -1989,6 +1994,13 @@ def get_wallet_balances(wallet: str):
 
     wbtc_price = price_for("WBTC")
     l2e_price = price_for("L2E")
+    try:
+        btc_data = fetch_btc_price()
+        btc_usd = float(btc_data.get("usd") or btc_data.get("eur") or 0)
+    except Exception:
+        btc_usd = 0.0
+    thr_usd = btc_usd * 0.0001 if btc_usd else None
+    wbtc_price_thr = wbtc_price
     tokens = [
         {
             "symbol": "THR",
@@ -2002,6 +2014,8 @@ def get_wallet_balances(wallet: str):
             "type": "native",
             "price_in_thr": 1.0,
             "value_in_thr": thr_balance,
+            "value_wbtc": round(thr_balance / wbtc_price_thr, 8) if wbtc_price_thr else None,
+            "value_usd": round(thr_balance * thr_usd, 6) if thr_usd else None,
         },
         {
             "symbol": "WBTC",
@@ -2015,6 +2029,8 @@ def get_wallet_balances(wallet: str):
             "type": "wrapped",
             "price_in_thr": wbtc_price,
             "value_in_thr": round(wbtc_balance * wbtc_price, 6) if wbtc_price is not None else None,
+            "value_wbtc": wbtc_balance,
+            "value_usd": round(wbtc_balance * btc_usd, 6) if btc_usd else None,
         },
         {
             "symbol": "L2E",
@@ -2028,6 +2044,8 @@ def get_wallet_balances(wallet: str):
             "type": "reward",
             "price_in_thr": l2e_price,
             "value_in_thr": round(l2e_balance * l2e_price, 6) if l2e_price is not None else None,
+            "value_wbtc": round(l2e_balance * l2e_price / wbtc_price_thr, 8) if (l2e_price and wbtc_price_thr) else None,
+            "value_usd": round(l2e_balance * l2e_price * thr_usd, 6) if (l2e_price and thr_usd) else None,
         },
     ]
 
@@ -2053,6 +2071,7 @@ def get_wallet_balances(wallet: str):
             logo_url = None
 
         token_price = price_for(symbol)
+        value_in_thr = round(token_balance * token_price, 6) if token_price is not None else None
         tokens.append({
             "symbol": symbol,
             "name": token_data.get("name", symbol),
@@ -2066,7 +2085,9 @@ def get_wallet_balances(wallet: str):
             "token_id": token_id,
             "creator": token_data.get("creator", ""),
             "price_in_thr": token_price,
-            "value_in_thr": round(token_balance * token_price, 6) if token_price is not None else None,
+            "value_in_thr": value_in_thr,
+            "value_wbtc": round(value_in_thr / wbtc_price_thr, 8) if (value_in_thr is not None and wbtc_price_thr) else None,
+            "value_usd": round(value_in_thr * thr_usd, 6) if (value_in_thr is not None and thr_usd) else None,
         })
 
     token_balances = {
@@ -9249,6 +9270,7 @@ def api_swap_execute():
         "tx_id": tx_id,
         "status": "confirmed",
         "event_type": "SWAP",
+        "subtype": "swap",
         "pool_event": {
             "in_token": token_in,
             "in_amount": amount_in,
@@ -9256,6 +9278,10 @@ def api_swap_execute():
             "out_amount": running_in,
             "fee": total_fee,
             "price_impact": round(total_price_impact, 4),
+            "reserves_after": {
+                "tokenA": pool["reserves_a"],
+                "tokenB": pool["reserves_b"],
+            },
         },
         "route": swap_trace,
     }
@@ -12080,8 +12106,13 @@ def api_v1_get_pools():
         try:
             reserves_a = float(pool.get("reserves_a", 0))
             reserves_b = float(pool.get("reserves_b", 0))
+            if reserves_a > 0 and reserves_b > 0:
+                pool["price_a_to_b"] = round(reserves_b / reserves_a, 6)
+                pool["price_b_to_a"] = round(reserves_a / reserves_b, 6)
             price_a_thr = get_token_price_in_thr(pool.get("token_a", "THR"))
             price_b_thr = get_token_price_in_thr(pool.get("token_b", "THR"))
+            if price_a_thr is None or price_b_thr is None:
+                continue
             tvl_thr = (reserves_a * price_a_thr) + (reserves_b * price_b_thr)
             pool["tvl_thr"] = round(tvl_thr, 6)
             pool["tvl_btc"] = round(tvl_thr * 0.0001, 8)
@@ -12623,6 +12654,7 @@ def api_v1_add_liquidity():
         "status": "confirmed",
         "metadata": {"feature": "pools", "billing_unit": "thr"},
         "event_type": "ADD_LIQ",
+        "subtype": "add_liq",
         "pool_event": {
             "tokenA": token_a,
             "amountA": amt_a,
@@ -12631,6 +12663,10 @@ def api_v1_add_liquidity():
             "lp_minted": shares_minted,
             "pair": f"{token_a}/{token_b}",
             "reserves": {
+                "tokenA": pool["reserves_a"],
+                "tokenB": pool["reserves_b"],
+            },
+            "reserves_after": {
                 "tokenA": pool["reserves_a"],
                 "tokenB": pool["reserves_b"],
             },
@@ -12807,12 +12843,17 @@ def api_v1_remove_liquidity():
         "status": "confirmed",
         "metadata": {"feature": "pools", "billing_unit": "thr"},
         "event_type": "REMOVE_LIQ",
+        "subtype": "remove_liq",
         "pool_event": {
             "lp_burned": shares,
             "outA": amt_a_return,
             "outB": amt_b_return,
             "pair": f"{token_a}/{token_b}",
             "reserves": {
+                "tokenA": pool["reserves_a"],
+                "tokenB": pool["reserves_b"],
+            },
+            "reserves_after": {
                 "tokenA": pool["reserves_a"],
                 "tokenB": pool["reserves_b"],
             },
@@ -13028,6 +13069,7 @@ def api_v1_pool_swap():
         "status": "confirmed",
         "metadata": {"feature": "pools", "billing_unit": "thr"},
         "event_type": "SWAP",
+        "subtype": "swap",
         "pool_event": {
             "in_token": token_in,
             "in_amount": amount_in,
@@ -13035,7 +13077,15 @@ def api_v1_pool_swap():
             "out_amount": amount_out,
             "fee": fee_amount,
             "price_impact": round(price_impact, 4),
+            "reserves_after": {
+                "tokenA": pool["reserves_a"],
+                "tokenB": pool["reserves_b"],
+            },
         },
+        "amounts": [
+            {"symbol": token_in, "amount": amount_in},
+            {"symbol": token_out, "amount": amount_out},
+        ],
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)

@@ -1013,19 +1013,15 @@
     // ─── Load Network Stats ───────────────────────────────────────
     async function loadNetworkStats() {
         try {
-            const [lastBlock, netStats, tokensRes, poolsRes, walletsRes] = await Promise.all([
-                fetch("/last_block").then(r => r.json()).catch(() => ({})),
-                fetch("/api/network_stats").then(r => r.json()).catch(() => ({})),
-                fetch("/api/tokens/list").then(r => r.json()).catch(() => ({ tokens: [] })),
-                fetch("/api/v1/pools").then(r => r.json()).catch(() => ({ pools: [] })),
-                fetch("/api/v1/wallets/count").then(r => r.json()).catch(() => ({ count: 0 }))
-            ]);
+            const dashboard = await fetch("/api/dashboard").then(r => r.json()).catch(() => ({}));
+            const stats = dashboard.stats || {};
+            const tip = dashboard.tip || {};
 
-            const blockCount = lastBlock.block_count || netStats.block_count || 0;
-            const totalSupply = lastBlock.total_supply || netStats.total_supply || 0;
-            const tokenCount = tokensRes.tokens ? tokensRes.tokens.length : 0;
-            const poolCount = poolsRes.pools ? poolsRes.pools.length : 0;
-            const walletCount = walletsRes.count || 0;
+            const blockCount = tip.block_count || stats.block_count || 0;
+            const totalSupply = tip.total_supply || stats.total_supply || 0;
+            const tokenCount = stats.token_count || 0;
+            const poolCount = stats.pool_count || 0;
+            const walletCount = stats.wallet_count || 0;
 
             document.getElementById("statBlocks").textContent = blockCount.toLocaleString();
             document.getElementById("statSupply").textContent = totalSupply.toFixed(2);
@@ -1034,7 +1030,7 @@
             document.getElementById("statPools").textContent = poolCount.toLocaleString();
             document.getElementById("statTxns").textContent = (blockCount * 2).toLocaleString();
 
-            window.__THR_STATS = { lastBlock, netStats };
+            window.__THR_STATS = { dashboard };
         } catch (e) {
             console.error("Failed to load stats:", e);
             document.querySelectorAll('.stat-value').forEach(el => {
@@ -1050,10 +1046,9 @@
         const activityList = document.getElementById("activityList");
 
         try {
-            const [lastBlock, tokensRes] = await Promise.all([
-                fetch("/last_block").then(r => r.json()).catch(() => null),
-                fetch("/api/tokens/list").then(r => r.json()).catch(() => ({ tokens: [] }))
-            ]);
+            const dashboard = await fetch("/api/dashboard").then(r => r.json()).catch(() => ({}));
+            const lastBlock = dashboard.tip || null;
+            const tokensRes = { tokens: dashboard.recent_tokens || [] };
 
             const activities = [];
 

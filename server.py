@@ -6865,22 +6865,21 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
     """Return canonical wallet history with normalized status."""
     history = []
     category_labels = {
-        "transfer": "Transfer",
-        "thr_transfer": "THR Transfer",
-        "token_transfer": "Token Transfer",
-        "swap": "Swap",
+        "thr": "THR",
+        "tokens": "Tokens",
+        "swaps": "Swaps",
         "bridge": "Bridge",
         "liquidity": "Liquidity",
-        "pool_add": "Add Liquidity",
-        "pool_remove": "Remove Liquidity",
         "l2e": "Learn-to-Earn Reward",
         "ai_credits": "AI Credits",
+        "architect_ai_jobs": "Architect / AI Jobs",
         "iot": "IoT",
         "autopilot": "Autopilot",
         "parking": "Parking",
         "music": "Music",
         "mint": "Token Mint",
         "burn": "Token Burn",
+        "gateway": "Gateway",
     }
 
     for norm in _tx_feed():
@@ -6931,7 +6930,37 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
             status = resolved.get("status") or status
             reject_reason = resolved.get("reason") or reject_reason
 
-        category_value = "liquidity" if raw_type in {"pool_add_liquidity", "pool_remove_liquidity", "pool_create"} else kind
+        meta = norm.get("meta") or {}
+        meta_reason = str(meta.get("reason") or "").lower()
+        is_architect_meta = bool(meta.get("job_id") or meta.get("architect") is True)
+        is_chat_meta = bool(meta.get("session_id") or meta_reason == "chat")
+        category_value = "liquidity" if raw_type in {"pool_add_liquidity", "pool_remove_liquidity", "pool_create"} else None
+        if category_value is None:
+            if is_architect_meta or kind in {"architect", "architect_job", "ai_job_created", "ai_job_progress", "ai_job_completed", "ai_job_reward"}:
+                category_value = "architect_ai_jobs"
+            elif is_chat_meta or kind in {"ai_credits_earned", "ai_credits_spent"}:
+                category_value = "ai_credits"
+            else:
+                category_map = {
+                    "thr_transfer": "thr",
+                    "token_transfer": "tokens",
+                    "swap": "swaps",
+                    "bridge": "bridge",
+                    "l2e": "l2e",
+                    "ai_credits": "ai_credits",
+                    "iot": "iot",
+                    "autopilot": "iot",
+                    "parking": "iot",
+                    "liquidity": "liquidity",
+                    "mint": "tokens",
+                    "burn": "tokens",
+                    "fiat_onramp": "gateway",
+                    "fiat_offramp": "gateway",
+                    "gateway": "gateway",
+                    "onramp": "gateway",
+                    "offramp": "gateway",
+                }
+                category_value = category_map.get(kind, kind)
         history.append({
             **{k: v for k, v in norm.items() if k not in {"parties"}},
             "kind": kind,

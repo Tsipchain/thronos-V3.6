@@ -1555,17 +1555,17 @@
                 <span class="lang-el">Όλα</span><span class="lang-en">All</span>
             </button>
             <button class="history-tab-btn" data-filter="thr" onclick="filterHistory('thr')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">THR</button>
-            <button class="history-tab-btn" data-filter="token" onclick="filterHistory('token')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+            <button class="history-tab-btn" data-filter="tokens" onclick="filterHistory('tokens')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
                 <span class="lang-el">Tokens</span><span class="lang-en">Tokens</span>
             </button>
             <button class="history-tab-btn" data-filter="l2e" onclick="filterHistory('l2e')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">L2E</button>
             <button class="history-tab-btn" data-filter="ai_credits" onclick="filterHistory('ai_credits')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">AI Credits (Chat)</button>
-            <button class="history-tab-btn" data-filter="architect" onclick="filterHistory('architect')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">Architect / AI Jobs</button>
+            <button class="history-tab-btn" data-filter="architect_ai_jobs" onclick="filterHistory('architect_ai_jobs')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">Architect / AI Jobs</button>
             <button class="history-tab-btn" data-filter="iot" onclick="filterHistory('iot')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">IoT</button>
             <button class="history-tab-btn" data-filter="bridge" onclick="filterHistory('bridge')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
                 <span class="lang-el">Bridge</span><span class="lang-en">Bridge</span>
             </button>
-            <button class="history-tab-btn" data-filter="swap" onclick="filterHistory('swap')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+            <button class="history-tab-btn" data-filter="swaps" onclick="filterHistory('swaps')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
                 <span class="lang-el">Swaps</span><span class="lang-en">Swaps</span>
             </button>
             <button class="history-tab-btn" data-filter="liquidity" onclick="filterHistory('liquidity')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
@@ -2295,7 +2295,7 @@ function closeWalletHistoryModal(event) {
 
 function filterHistory(filter, tokenSymbol = null) {
     currentHistoryFilter = filter;
-    if (filter !== 'token') {
+    if (filter !== 'tokens') {
         currentTokenFilter = null;
     } else if (tokenSymbol) {
         currentTokenFilter = tokenSymbol;
@@ -2322,6 +2322,22 @@ function filterHistory(filter, tokenSymbol = null) {
 }
 
 function getTxType(tx) {
+    const category = (tx.category || '').toLowerCase();
+    if ([
+        'thr',
+        'tokens',
+        'l2e',
+        'ai_credits',
+        'architect_ai_jobs',
+        'iot',
+        'bridge',
+        'swaps',
+        'liquidity',
+        'gateway',
+    ].includes(category)) {
+        return category;
+    }
+
     const raw = (tx.kind || tx.type || '').toLowerCase();
     const asset = (tx.asset_symbol || tx.asset || tx.symbol || 'THR').toUpperCase();
 
@@ -2332,7 +2348,7 @@ function getTxType(tx) {
 
     // Token transfers: must be token_transfer AND asset must NOT be THR
     if (raw === 'token_transfer' && asset !== 'THR') {
-        return 'token';
+        return 'tokens';
     }
 
     // Liquidity events
@@ -2348,17 +2364,23 @@ function getTxType(tx) {
     }
 
     const kindMap = {
-        'swap': 'swap',
-        'pool_swap': 'swap',
+        'swap': 'swaps',
+        'pool_swap': 'swaps',
         'bridge': 'bridge',
         'l2e': 'l2e',
         'ai_credit': 'ai_credits',
         'ai_credits': 'ai_credits',
+        'ai_credits_earned': 'ai_credits',
+        'ai_credits_spent': 'ai_credits',
         'iot': 'iot',
         'autopilot': 'iot',
         'parking': 'iot',
-        'architect_job': 'architect',
-        'architect': 'architect',
+        'architect_job': 'architect_ai_jobs',
+        'architect': 'architect_ai_jobs',
+        'ai_job_created': 'architect_ai_jobs',
+        'ai_job_progress': 'architect_ai_jobs',
+        'ai_job_completed': 'architect_ai_jobs',
+        'ai_job_reward': 'architect_ai_jobs',
         'music': 'music',
         'fiat_onramp': 'gateway',
         'fiat_offramp': 'gateway',
@@ -2369,7 +2391,7 @@ function getTxType(tx) {
     if (kindMap[raw]) return kindMap[raw];
 
     // Fallback: use already-declared asset variable from line 2305
-    if (asset && asset !== 'THR') return 'token';
+    if (asset && asset !== 'THR') return 'tokens';
     return 'thr';
 }
 
@@ -2403,7 +2425,7 @@ function formatTxDate(timestamp) {
 function buildTokenIndexData() {
     const counts = {};
     allTransactions.forEach(tx => {
-        if (getTxType(tx) === 'token') {
+        if (getTxType(tx) === 'tokens') {
             const sym = (tx.symbol || '').toUpperCase() || 'TOKEN';
             counts[sym] = (counts[sym] || 0) + 1;
         }
@@ -2443,7 +2465,7 @@ function renderTokenIndex() {
             ? 'background:rgba(0,255,102,0.25); border-color:rgba(0,255,102,0.6); color:#00ff66;'
             : 'background:rgba(0,255,102,0.08); border-color:rgba(0,255,102,0.25); color:#00ff66;';
 
-        html += `<button class="history-tab-btn" style="flex:0 0 auto; min-width:70px; padding:6px 8px; display:flex; align-items:center; gap:6px; ${chipStyle}" onclick="filterHistory('token','${token.symbol}')">`;
+        html += `<button class="history-tab-btn" style="flex:0 0 auto; min-width:70px; padding:6px 8px; display:flex; align-items:center; gap:6px; ${chipStyle}" onclick="filterHistory('tokens','${token.symbol}')">`;
         html += `<span style="width:20px; height:20px; border-radius:50%; background: rgba(0,255,102,0.15); display:flex; align-items:center; justify-content:center; font-weight:bold;">${escapeHtml(token.symbol[0] || '?')}</span>`;
         html += `<span style="font-size:11px;">${escapeHtml(token.symbol)}</span>${badge}`;
         html += `</button>`;
@@ -2455,7 +2477,7 @@ function renderTokenIndex() {
 
 function clearTokenFilter() {
     currentTokenFilter = null;
-    filterHistory('token');
+    filterHistory('tokens');
 }
 
 function shareTokenFilter() {
@@ -2479,7 +2501,7 @@ function renderHistory() {
     const addr = walletSession.getAddress();
     const tokenIndexBar = document.getElementById('tokenIndexBar');
 
-    if (currentHistoryFilter !== 'token') {
+    if (currentHistoryFilter !== 'tokens') {
         currentTokenFilter = null;
     }
 
@@ -2488,7 +2510,7 @@ function renderHistory() {
         return;
     }
 
-    if (currentHistoryFilter === 'token') {
+    if (currentHistoryFilter === 'tokens') {
         const hasTokens = renderTokenIndex();
         if (tokenIndexBar) tokenIndexBar.style.display = hasTokens ? 'block' : 'none';
     } else if (tokenIndexBar) {
@@ -2501,7 +2523,7 @@ function renderHistory() {
         filtered = allTransactions.filter(tx => getTxType(tx) === currentHistoryFilter);
     }
 
-    if (currentHistoryFilter === 'token' && currentTokenFilter) {
+    if (currentHistoryFilter === 'tokens' && currentTokenFilter) {
         filtered = filtered.filter(tx => (tx.symbol || '').toUpperCase() === currentTokenFilter.toUpperCase());
     }
 
@@ -2536,13 +2558,13 @@ function renderHistory() {
         const txType = getTxType(tx);
         const typeLabel = txType === 'l2e' ? 'L2E' :
                          txType === 'ai_credits' ? 'AI Credits' :
-                         txType === 'architect' ? 'Architect' :
+                         txType === 'architect_ai_jobs' ? 'Architect / AI Jobs' :
                          txType === 'iot' ? 'IoT' :
                          txType === 'bridge' ? 'Bridge' :
-                         txType === 'swap' ? 'Swap' :
+                         txType === 'swaps' ? 'Swaps' :
                          txType === 'liquidity' ? 'Liquidity' :
                          txType === 'gateway' ? 'Gateway' : '';
-        const isSwap = txType === 'swap';
+        const isSwap = txType === 'swaps';
         const isLiquidity = txType === 'liquidity';
         const poolEvent = tx.meta && tx.meta.pool_event ? tx.meta.pool_event : null;
         const amountInRaw = poolEvent?.in_amount ?? tx.amount_in ?? tx.amountIn ?? tx.input_amount ?? tx.amount ?? 0;
@@ -2551,7 +2573,7 @@ function renderHistory() {
         const amountOutNum = (amountOut !== undefined && Number.isFinite(Number(amountOut))) ? Number(amountOut) : null;
 
         // Determine correct asset symbol for display
-        const displayAsset = txType === 'token'
+        const displayAsset = txType === 'tokens'
             ? (tx.asset_symbol || tx.asset || tx.symbol || 'TOKEN')
             : (tx.symbol || tx.asset_symbol || tx.asset || 'THR');
 

@@ -150,6 +150,21 @@
     // --- Logic ---
     const $ = (id) => document.getElementById(id);
 
+    // Fallback: avoid crashing history render if helper is missing
+    window.shouldExcludeTx = window.shouldExcludeTx || function (tx) {
+        if (!tx) return true;
+
+        // Keep it conservative: don't hide real user txs.
+        // Hide only obvious housekeeping/noise entries if any:
+        const kind = String(tx.kind || tx.type || "").toLowerCase();
+        const amt = Number(tx.display_amount ?? tx.amount ?? 0);
+
+        // Example: hide "block" rows with 0 and no note (optional)
+        if (kind === "block" && amt === 0 && !tx.note) return true;
+
+        return false;
+    };
+
     function checkConnection() {
         const addr = localStorage.getItem('thr_address');
         if (addr) {
@@ -257,7 +272,7 @@
       const btns = document.querySelectorAll('.tx-filter-btn');
       btns.forEach(btn => btn.classList.toggle('active', btn.dataset.filter === currentFilter));
 
-      const txs = (walletTxs || []).filter(tx => !shouldExcludeTx(tx));
+      const txs = (walletTxs || []).filter(tx => !window.shouldExcludeTx(tx));
       if (!txs.length) {
         div.innerHTML = '<p style="color:#666;">No transactions found.</p>';
         return;

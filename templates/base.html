@@ -1938,6 +1938,9 @@ async function loadWalletBalances(force = false) {
     }
 
     try {
+        // Update token prices before loading balances
+        await updateTokenPrices();
+
         const response = await fetch(`/api/wallet/tokens/${wallet}?show_zero=false`);
         if (!response.ok) throw new Error('Failed to load wallet data');
 
@@ -3229,6 +3232,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const savedLang = getCurrentLang();
     setLanguage(savedLang);
     updateHeaderWalletUi();
+
+    // Update token prices every 30 seconds
+    updateTokenPrices();  // Initial update
+    setInterval(updateTokenPrices, 30000);
+
+    // Refresh wallet balances every 60 seconds if wallet is open
+    setInterval(() => {
+        if (walletSession.isBound() && isWalletOpen()) {
+            loadWalletBalances(true);
+        }
+    }, 60000);
 });
 
 // ─── TOKEN INFO MODAL FUNCTIONS ───────────────────────────

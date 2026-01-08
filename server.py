@@ -6571,6 +6571,59 @@ def api_wallet_tokens(thr_addr):
     }), 200
 
 
+@app.route("/api/token/prices", methods=["GET"])
+def api_token_prices():
+    """
+    Get current prices for all tokens in THR and USD.
+    Calculates prices from liquidity pool reserves.
+    """
+    try:
+        # Load all tokens
+        tokens_data = load_json(CUSTOM_TOKENS_FILE, {})
+        all_tokens = tokens_data.get("tokens", [])
+
+        # THR to USD price (fixed at 0.0001 BTC, assuming BTC = $42,000)
+        thr_to_usd = 0.0042  # 0.0001 * 42000
+
+        prices = {}
+
+        # THR price
+        prices["THR"] = thr_to_usd
+
+        # Calculate prices for other tokens from pools
+        for token in all_tokens:
+            symbol = token.get("symbol", "")
+            if not symbol or symbol == "THR":
+                continue
+
+            # Get price in THR from liquidity pools
+            price_in_thr = get_token_price_in_thr(symbol)
+
+            # Convert to USD
+            price_in_usd = price_in_thr * thr_to_usd
+
+            prices[symbol] = price_in_usd
+
+        # Add WBTC
+        prices["WBTC"] = 98500.0  # Approximate BTC price
+
+        return jsonify({
+            "ok": True,
+            "prices": prices,
+            "base_currency": "USD",
+            "thr_usd_rate": thr_to_usd,
+            "last_updated": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error fetching token prices: {e}")
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "prices": {"THR": 0.0042}  # Fallback
+        }), 500
+
+
 @app.route("/api/balance/<thr_addr>", methods=["GET"])
 def api_balance_alias(thr_addr: str):
     """Compatibility alias that exposes a consolidated balance snapshot."""

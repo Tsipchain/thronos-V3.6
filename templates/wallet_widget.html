@@ -937,7 +937,7 @@
             const widget = document.getElementById('walletWidget');
 
             try {
-                const response = await fetch(`/api/wallet/tokens/${walletAddress}?show_zero=${showZero}`);
+                const response = await fetch(`/api/balances?address=${encodeURIComponent(walletAddress)}&show_zero=${showZero}`);
                 if (!response.ok) throw new Error('Failed to load wallet data');
 
                 const data = await response.json();
@@ -1134,6 +1134,43 @@
             return String(tx.kind || '').toLowerCase();
         }
 
+        function normalizeCategory(tx) {
+            return String(tx.category || '').toLowerCase();
+        }
+
+        function getCanonicalCategory(tx) {
+            const category = normalizeCategory(tx);
+            if (category) {
+                return category;
+            }
+            const kind = normalizeKind(tx);
+            const map = {
+                transfer: 'thr',
+                thr_transfer: 'thr',
+                token_transfer: 'tokens',
+                swap: 'swaps',
+                pool_swap: 'swaps',
+                bridge: 'bridge',
+                l2e: 'l2e',
+                l2e_reward: 'l2e',
+                ai_credit: 'ai_credits',
+                ai_credits: 'ai_credits',
+                ai_credits_earned: 'ai_credits',
+                ai_credits_spent: 'ai_credits',
+                architect: 'architect_ai_jobs',
+                architect_job: 'architect_ai_jobs',
+                ai_job_created: 'architect_ai_jobs',
+                ai_job_progress: 'architect_ai_jobs',
+                ai_job_completed: 'architect_ai_jobs',
+                ai_job_reward: 'architect_ai_jobs',
+                iot: 'iot',
+                iot_parking: 'iot',
+                iot_parking_reservation: 'iot',
+                iot_autopilot: 'iot',
+            };
+            return map[kind] || kind;
+        }
+
         function isTokenTx(tx) {
             return normalizeKind(tx) === 'token_transfer';
         }
@@ -1223,15 +1260,15 @@
             ));
 
             const filtered = txs.filter(tx => {
-                const kind = normalizeKind(tx);
-                if (historyState.filter === 'thr') return kind === 'transfer' || kind === 'thr_transfer';
-                if (historyState.filter === 'tokens') return kind === 'token_transfer';
-                if (historyState.filter === 'swaps') return kind === 'swap' || kind === 'pool_swap';
-                if (historyState.filter === 'l2e') return kind === 'l2e' || kind === 'l2e_reward';
-                if (historyState.filter === 'ai_credits') return kind === 'ai_credits' || kind === 'ai_credit';
-                if (historyState.filter === 'iot') return kind === 'iot' || kind === 'iot_parking' || kind === 'iot_parking_reservation' || kind === 'iot_autopilot';
-                if (historyState.filter === 'bridge') return kind === 'bridge';
-                if (historyState.filter === 'architect') return kind === 'architect' || kind === 'architect_job';
+                const category = getCanonicalCategory(tx);
+                if (historyState.filter === 'thr') return category === 'thr';
+                if (historyState.filter === 'tokens') return category === 'tokens';
+                if (historyState.filter === 'swaps') return category === 'swaps';
+                if (historyState.filter === 'l2e') return category === 'l2e';
+                if (historyState.filter === 'ai_credits') return category === 'ai_credits';
+                if (historyState.filter === 'iot') return category === 'iot';
+                if (historyState.filter === 'bridge') return category === 'bridge';
+                if (historyState.filter === 'architect_ai_jobs') return category === 'architect_ai_jobs';
                 return true;
             }).filter(tx => {
                 if (historyState.filter !== 'tokens' || !historyState.selectedToken) return true;
@@ -1245,7 +1282,7 @@
                 { id: 'swaps', label: 'Swaps' },
                 { id: 'l2e', label: 'L2E' },
                 { id: 'ai_credits', label: 'AI Credits' },
-                { id: 'architect', label: 'Architect' },
+                { id: 'architect_ai_jobs', label: 'Architect / AI Jobs' },
                 { id: 'bridge', label: 'Bridge' },
                 { id: 'iot', label: 'IoT' },
             ];

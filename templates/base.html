@@ -2324,6 +2324,7 @@ function getTxType(tx) {
     if (raw.startsWith('liquidity_') ||
         raw === 'add_liquidity' ||
         raw === 'remove_liquidity' ||
+        raw === 'pool_create' ||
         raw === 'pool_add_liquidity' ||
         raw === 'pool_remove_liquidity') {
         return 'liquidity';
@@ -2526,9 +2527,10 @@ function renderHistory() {
                          txType === 'gateway' ? 'Gateway' : '';
         const isSwap = txType === 'swap';
         const isLiquidity = txType === 'liquidity';
-        const amountInRaw = tx.amount_in ?? tx.amountIn ?? tx.input_amount ?? tx.amount ?? 0;
+        const poolEvent = tx.meta && tx.meta.pool_event ? tx.meta.pool_event : null;
+        const amountInRaw = poolEvent?.in_amount ?? tx.amount_in ?? tx.amountIn ?? tx.input_amount ?? tx.amount ?? 0;
         const amountIn = Number.isFinite(Number(amountInRaw)) ? Number(amountInRaw) : 0;
-        const amountOut = tx.amount_out ?? tx.amountOut ?? tx.output_amount ?? tx.received_amount;
+        const amountOut = poolEvent?.out_amount ?? tx.amount_out ?? tx.amountOut ?? tx.output_amount ?? tx.received_amount;
         const amountOutNum = (amountOut !== undefined && Number.isFinite(Number(amountOut))) ? Number(amountOut) : null;
 
         // Determine correct asset symbol for display
@@ -2537,16 +2539,19 @@ function renderHistory() {
             : (tx.symbol || tx.asset_symbol || tx.asset || 'THR');
 
         const amountDisplay = isSwap
-            ? `${amountIn.toFixed(6)} ${tx.symbol_in || tx.from_symbol || tx.symbol || 'THR'}${amountOutNum !== null ? ` → ${amountOutNum.toFixed(6)} ${tx.symbol_out || tx.to_symbol || tx.target_symbol || tx.swap_out || ''}` : ''}`
+            ? `${amountIn.toFixed(6)} ${poolEvent?.in_token || tx.symbol_in || tx.from_symbol || tx.symbol || 'THR'}${amountOutNum !== null ? ` → ${amountOutNum.toFixed(6)} ${poolEvent?.out_token || tx.symbol_out || tx.to_symbol || tx.target_symbol || tx.swap_out || ''}` : ''}`
             : isLiquidity
             ? `${amountIn.toFixed(6)} ${tx.symbol_in || tx.token_a || 'THR'}${amountOutNum !== null ? ` + ${amountOutNum.toFixed(6)} ${tx.symbol_out || tx.token_b || ''}` : ''}`
             : `${Number(amountInRaw || 0).toFixed(6)} ${displayAsset}`;
-        const swapPair = isSwap ? (tx.pair || tx.route || `${(tx.swap_in || tx.from_symbol || tx.symbol || '?')}${tx.swap_out || tx.to_symbol || tx.target_symbol ? `/${tx.swap_out || tx.to_symbol || tx.target_symbol}` : ''}`) : '';
+        const swapPair = isSwap ? (tx.pair || tx.route || `${(poolEvent?.in_token || tx.swap_in || tx.from_symbol || tx.symbol || '?')}${poolEvent?.out_token || tx.swap_out || tx.to_symbol || tx.target_symbol ? `/${poolEvent?.out_token || tx.swap_out || tx.to_symbol || tx.target_symbol}` : ''}`) : '';
         const swapDirection = isSwap ? (tx.direction || tx.side || '') : '';
 
         // Fee information
         const fee = tx.fee_burned || tx.fee || 0;
         const feeDisplay = fee > 0 ? `<br><span style="font-size: 10px; opacity: 0.6;">${isGreek ? 'Κόστος:' : 'Fee:'} ${fee} THR</span>` : '';
+        const swapMeta = isSwap && poolEvent
+            ? `<br><span style="font-size: 10px; opacity: 0.6;">${isGreek ? 'Fee' : 'Fee'}: ${poolEvent.fee ?? fee} • ${isGreek ? 'Impact' : 'Impact'}: ${poolEvent.price_impact ?? tx.price_impact ?? '—'}%</span>`
+            : '';
 
         // Pool/liquidity info
         let poolInfo = '';
@@ -2577,7 +2582,7 @@ function renderHistory() {
                     <div style="font-weight: bold; color: #00ff66;">${amountDisplay}</div>
                 </div>
                 <div style="font-size: 11px; opacity: 0.7;">
-                    ${isSent ? (isGreek ? 'Προς:' : 'To:') : (isGreek ? 'Από:' : 'From:')} ${shortAddr}${feeDisplay}${priceInfo}
+                    ${isSent ? (isGreek ? 'Προς:' : 'To:') : (isGreek ? 'Από:' : 'From:')} ${shortAddr}${feeDisplay}${swapMeta}${priceInfo}
                 </div>
                 ${poolInfo}
                 ${isSwap && swapPair ? `<div style="font-size: 11px; opacity: 0.75; margin-top: 4px;">${isGreek ? 'Ζεύγος:' : 'Pair:'} ${escapeHtml(swapPair || 'Unknown pair')}${swapDirection ? ` • ${escapeHtml(swapDirection)}` : ''}</div>` : ''}

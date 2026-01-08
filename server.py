@@ -1502,6 +1502,10 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
             "asset": token_in,
             "amount": amount_in,
             "amount_out": amount_out,
+            "amounts": [
+                {"symbol": token_in, "amount": amount_in},
+                {"symbol": token_out, "amount": amount_out},
+            ],
             "token_out": token_out,
             "note": norm.get("note") or f"Swap {amount_in:.6f} {token_in} → {amount_out:.6f} {token_out}",
             "display_amount": amount_in,
@@ -1517,6 +1521,10 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
             "token_out": token_out,
             "pair": f"{token_in}/{token_out}",
             "amount_out_raw": tx.get("amount_out_raw"),
+            "amounts": [
+                {"symbol": token_in, "amount": amount_in},
+                {"symbol": token_out, "amount": amount_out},
+            ],
         })
         if tx.get("amount_out_raw") is not None:
             try:
@@ -1532,9 +1540,11 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         if tx_type_raw == "pool_add_liquidity":
             amount_in = float(event_payload.get("amountA", tx.get("amount_in", tx.get("added_a", 0.0))) or 0.0)
             amount_out = float(event_payload.get("amountB", tx.get("amount_out", tx.get("added_b", 0.0))) or 0.0)
+            shares = float(event_payload.get("lp_minted", tx.get("shares_minted", 0.0)) or 0.0)
         else:
             amount_in = float(event_payload.get("outA", tx.get("amount_in", tx.get("withdrawn_a", 0.0))) or 0.0)
             amount_out = float(event_payload.get("outB", tx.get("amount_out", tx.get("withdrawn_b", 0.0))) or 0.0)
+            shares = float(event_payload.get("lp_burned", tx.get("shares_burned", 0.0)) or 0.0)
         token_in = _sanitize_asset_symbol(tx.get("symbol_in") or tx.get("token_a") or event_payload.get("tokenA") or "THR")
         token_in2 = _sanitize_asset_symbol(tx.get("symbol_in2") or tx.get("token_b") or event_payload.get("tokenB") or "TOKEN")
         amounts = tx.get("amounts") or event_payload.get("amounts") or [
@@ -1543,9 +1553,14 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         ]
         norm["amount"] = amount_in
         norm["amount_out"] = amount_out
+        norm["amounts"] = amounts
         norm["meta"].update({
+            "pool_id": tx.get("pool_id"),
             "amount_in": amount_in,
             "amount_out": amount_out,
+            "amount_a": amount_in,
+            "amount_b": amount_out,
+            "shares": shares,
             "token_in": token_in,
             "token_out": token_in2,
             "amounts": amounts,
@@ -1593,6 +1608,25 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
     return norm
 
 
+def _apply_legacy_ai_job_backfill(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        return raw
+    meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
+    note = (raw.get("note") or raw.get("description") or "").lower()
+    tx_id = str(raw.get("tx_id") or "")
+    has_job_id = bool(meta.get("job_id") or raw.get("job_id"))
+    is_architect = bool(meta.get("architect") is True)
+    is_ai_prefixed = tx_id.startswith("AI-")
+    is_ai_wallet = raw.get("to") == AI_WALLET_ADDRESS and "architect" in note
+    if has_job_id or is_architect or is_ai_prefixed or is_ai_wallet:
+        meta = {**meta}
+        if raw.get("job_id") and not meta.get("job_id"):
+            meta["job_id"] = raw.get("job_id")
+        meta.setdefault("architect", True)
+        raw = {**raw, "meta": meta}
+    return raw
+
+
 def _seed_tx_log_from_chain() -> list[dict]:
     """Ensure the tx ledger contains legacy chain entries (deduped)."""
 
@@ -1602,6 +1636,7 @@ def _seed_tx_log_from_chain() -> list[dict]:
 
     updated = False
     for raw in chain:
+        raw = _apply_legacy_ai_job_backfill(raw)
         norm = _normalize_tx_for_display(raw)
         if not norm:
             continue
@@ -3604,6 +3639,9 @@ def media_static(filename):
     data_static_root = os.path.join(DATA_DIR, "static")
     if os.path.exists(os.path.join(data_static_root, safe_name)):
         return send_from_directory(data_static_root, safe_name)
+    placeholder_dir = os.path.join(STATIC_DIR, "img")
+    if os.path.exists(os.path.join(placeholder_dir, "logo.png")):
+        return send_from_directory(placeholder_dir, "logo.png")
     return send_from_directory(MEDIA_DIR, safe_name)
 
 @app.route("/viewer")
@@ -4656,6 +4694,7 @@ def _rebuild_index_from_chain() -> dict:
 
     tx_log = []
     for raw in chain:
+        raw = _apply_legacy_ai_job_backfill(raw)
         norm = _normalize_tx_for_display(raw)
         if norm:
             tx_log.append(norm)
@@ -6865,22 +6904,21 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
     """Return canonical wallet history with normalized status."""
     history = []
     category_labels = {
-        "transfer": "Transfer",
-        "thr_transfer": "THR Transfer",
-        "token_transfer": "Token Transfer",
-        "swap": "Swap",
+        "thr": "THR",
+        "tokens": "Tokens",
+        "swaps": "Swaps",
         "bridge": "Bridge",
         "liquidity": "Liquidity",
-        "pool_add": "Add Liquidity",
-        "pool_remove": "Remove Liquidity",
         "l2e": "Learn-to-Earn Reward",
         "ai_credits": "AI Credits",
+        "architect_ai_jobs": "Architect / AI Jobs",
         "iot": "IoT",
         "autopilot": "Autopilot",
         "parking": "Parking",
         "music": "Music",
         "mint": "Token Mint",
         "burn": "Token Burn",
+        "gateway": "Gateway",
     }
 
     for norm in _tx_feed():
@@ -6931,7 +6969,37 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
             status = resolved.get("status") or status
             reject_reason = resolved.get("reason") or reject_reason
 
-        category_value = "liquidity" if raw_type in {"pool_add_liquidity", "pool_remove_liquidity", "pool_create"} else kind
+        meta = norm.get("meta") or {}
+        meta_reason = str(meta.get("reason") or "").lower()
+        is_architect_meta = bool(meta.get("job_id") or meta.get("architect") is True)
+        is_chat_meta = bool(meta.get("session_id") or meta_reason == "chat")
+        category_value = "liquidity" if raw_type in {"pool_add_liquidity", "pool_remove_liquidity", "pool_create"} else None
+        if category_value is None:
+            if is_architect_meta or kind in {"architect", "architect_job", "ai_job_created", "ai_job_progress", "ai_job_completed", "ai_job_reward"}:
+                category_value = "architect_ai_jobs"
+            elif is_chat_meta or kind in {"ai_credits_earned", "ai_credits_spent"}:
+                category_value = "ai_credits"
+            else:
+                category_map = {
+                    "thr_transfer": "thr",
+                    "token_transfer": "tokens",
+                    "swap": "swaps",
+                    "bridge": "bridge",
+                    "l2e": "l2e",
+                    "ai_credits": "ai_credits",
+                    "iot": "iot",
+                    "autopilot": "iot",
+                    "parking": "iot",
+                    "liquidity": "liquidity",
+                    "mint": "tokens",
+                    "burn": "tokens",
+                    "fiat_onramp": "gateway",
+                    "fiat_offramp": "gateway",
+                    "gateway": "gateway",
+                    "onramp": "gateway",
+                    "offramp": "gateway",
+                }
+                category_value = category_map.get(kind, kind)
         history.append({
             **{k: v for k, v in norm.items() if k not in {"parties"}},
             "kind": kind,

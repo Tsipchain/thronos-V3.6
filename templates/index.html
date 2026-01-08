@@ -169,6 +169,18 @@
         letter-spacing: 1px;
     }
 
+    .indexing-badge {
+        display: inline-block;
+        margin-top: 4px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        border: 1px solid #ffd700;
+        color: #ffd700;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
     /* ─── Features Grid ────────────────────────────────────────── */
     .features-section {
         margin-bottom: 40px;
@@ -717,12 +729,14 @@
             <div class="stat-value" id="statBlocks">
                 <div id="statChainHeight"><span class="loading-spinner"></span></div>
                 <div id="statIndexHeight" style="font-size: 12px; opacity: 0.7;"></div>
+                <div id="statIndexBadge" class="indexing-badge" style="display: none;">Indexing…</div>
             </div>
             <div class="stat-label">Chain / Indexed</div>
         </div>
         <div class="stat-card">
             <span class="stat-icon">💰</span>
             <div class="stat-value" id="statSupply"><span class="loading-spinner"></span></div>
+            <div class="stat-label" id="statSupplyMeta" style="margin-top: 6px; font-size: 0.75em; text-transform: none; letter-spacing: 0;"></div>
             <div class="stat-label">THR Supply</div>
         </div>
         <div class="stat-card">
@@ -1020,24 +1034,35 @@
             const stats = dashboard.stats || {};
             const tip = dashboard.tip || {};
 
-            const chainHeight = dashboard.chain_tip_height ?? stats.block_count ?? 0;
-            const indexHeight = dashboard.index_tip_height ?? chainHeight ?? 0;
+            const chainHeight = dashboard.chain_tip_height ?? 0;
+            const indexHeight = dashboard.index_tip_height ?? 0;
             const indexLag = dashboard.index_lag ?? 0;
-            const totalSupply = tip.total_supply || stats.total_supply || 0;
+            const totalSupply = stats.total_supply_thr ?? stats.total_supply ?? tip.total_supply ?? 0;
+            const circulatingSupply = stats.circulating_supply_thr ?? null;
+            const lockedSupply = stats.locked_in_pools_thr ?? null;
             const tokenCount = stats.token_count || 0;
             const poolCount = stats.pool_count || 0;
             const walletCount = stats.wallet_count || 0;
 
             const chainEl = document.getElementById("statChainHeight");
             const indexEl = document.getElementById("statIndexHeight");
+            const indexBadge = document.getElementById("statIndexBadge");
             if (chainEl) {
                 chainEl.textContent = `Chain: ${Number(chainHeight || 0).toLocaleString()}`;
             }
             if (indexEl) {
-                const indexing = indexLag > 0 ? " (Indexing…)" : "";
-                indexEl.textContent = `Indexed: ${Number(indexHeight || 0).toLocaleString()}${indexing}`;
+                indexEl.textContent = `Indexed: ${Number(indexHeight || 0).toLocaleString()}`;
+            }
+            if (indexBadge) {
+                indexBadge.style.display = indexLag > 0 ? "inline-block" : "none";
             }
             document.getElementById("statSupply").textContent = totalSupply.toFixed(2);
+            const supplyMeta = document.getElementById("statSupplyMeta");
+            if (supplyMeta && circulatingSupply !== null && lockedSupply !== null) {
+                supplyMeta.textContent = `Circulating: ${Number(circulatingSupply).toFixed(2)} · Locked: ${Number(lockedSupply).toFixed(2)}`;
+            } else if (supplyMeta) {
+                supplyMeta.textContent = "";
+            }
             document.getElementById("statWallets").textContent = walletCount.toLocaleString();
             document.getElementById("statTokens").textContent = tokenCount.toLocaleString();
             document.getElementById("statPools").textContent = poolCount.toLocaleString();

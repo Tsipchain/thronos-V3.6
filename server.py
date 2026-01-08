@@ -2971,6 +2971,68 @@ def recompute_height_offset_from_ledger():
     )
 
 
+def compute_thr_supply_metrics(chain: list | None = None, pools: list | None = None) -> dict:
+    """Compute THR supply metrics from chain events and pools."""
+    if chain is None:
+        chain = load_json(CHAIN_FILE, [])
+    if pools is None:
+        pools = load_pools()
+
+    minted_from_blocks = sum(
+        float(block.get("reward", 0.0))
+        for block in chain
+        if isinstance(block, dict) and block.get("reward") is not None
+    )
+    minted_from_admin = 0.0
+    burned_from_fees = 0.0
+    burned_from_events = 0.0
+
+    for tx in chain:
+        if not isinstance(tx, dict) or tx.get("reward") is not None:
+            continue
+        tx_type = (tx.get("type") or "").lower()
+        if tx_type in {"mint", "coinbase", "reward"}:
+            minted_from_admin += float(tx.get("amount", 0.0) or 0.0)
+        burned_from_fees += float(tx.get("fee_burned", 0.0) or tx.get("fee", 0.0) or 0.0)
+        if tx_type in {"burn", "thr_burn"}:
+            burned_from_events += float(tx.get("amount", 0.0) or 0.0)
+        burned_from_events += float(tx.get("burn_amount", 0.0) or tx.get("burned_thr", 0.0) or 0.0)
+
+    burned_from_blocks = sum(
+        float((block.get("reward_split") or {}).get("burn", block.get("pool_fee", 0.0)) or 0.0)
+        for block in chain
+        if isinstance(block, dict) and block.get("reward") is not None
+    )
+
+    minted_total_thr = minted_from_blocks + minted_from_admin
+    burned_total_thr = burned_from_blocks + burned_from_fees + burned_from_events
+    total_supply_thr = max(round(minted_total_thr - burned_total_thr, 6), 0.0)
+
+    locked_in_pools_thr = 0.0
+    for pool in pools:
+        if not isinstance(pool, dict):
+            continue
+        token_a = (pool.get("token_a") or "").upper()
+        token_b = (pool.get("token_b") or "").upper()
+        reserves_a = float(pool.get("reserves_a", 0.0) or 0.0)
+        reserves_b = float(pool.get("reserves_b", 0.0) or 0.0)
+        if token_a == "THR":
+            locked_in_pools_thr += reserves_a
+        if token_b == "THR":
+            locked_in_pools_thr += reserves_b
+
+    other_locked = 0.0
+    circulating_supply_thr = round(total_supply_thr - locked_in_pools_thr - other_locked, 6)
+
+    return {
+        "minted_total_thr": round(minted_total_thr, 6),
+        "burned_total_thr": round(burned_total_thr, 6),
+        "total_supply_thr": total_supply_thr,
+        "locked_in_pools_thr": round(locked_in_pools_thr, 6),
+        "circulating_supply_thr": circulating_supply_thr,
+    }
+
+
 def update_last_block(entry, is_block=True):
     """
     Γράφει last_block.json αλλά πλέον κρατά και:
@@ -2979,12 +3041,11 @@ def update_last_block(entry, is_block=True):
     ώστε η αρχική σελίδα να ξέρει ΠΟΣΑ block και ΠΟΣΟ supply έχουμε.
     """
     chain  = load_json(CHAIN_FILE, [])
-    ledger = load_json(LEDGER_FILE, {})
-
     blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
     block_count = HEIGHT_OFFSET + len(blocks)
 
-    total_supply = round(sum(float(v) for v in ledger.values()), 6)
+    supply_metrics = compute_thr_supply_metrics(chain=chain)
+    total_supply = supply_metrics["total_supply_thr"]
 
     # Build the summary for the last block or transaction.  When
     # ``is_block`` is False (e.g. for a transaction update), we want to
@@ -4567,7 +4628,7 @@ def wallets_count():
 
 def _rebuild_index_from_chain() -> dict:
     chain = load_json(CHAIN_FILE, [])
-    ledger = load_json(LEDGER_FILE, {})
+    supply_metrics = compute_thr_supply_metrics(chain=chain)
 
     tx_log = []
     for raw in chain:
@@ -4579,7 +4640,7 @@ def _rebuild_index_from_chain() -> dict:
 
     blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
     block_count = HEIGHT_OFFSET + len(blocks)
-    total_supply = round(sum(float(v) for v in ledger.values()), 6)
+    total_supply = supply_metrics["total_supply_thr"]
     if blocks:
         last_block = blocks[-1]
         summary = {
@@ -6898,14 +6959,16 @@ def api_dashboard():
     recent_txs = _tx_feed(include_pending=True, include_bridge=True)[:8]
 
     block_count = HEIGHT_OFFSET + len(chain_blocks)
-    total_supply = round(sum(float(v) for v in load_json(LEDGER_FILE, {}).values()), 6)
+
+    pools = load_pools()
+    supply_metrics = compute_thr_supply_metrics(chain=chain, pools=pools)
+    total_supply = supply_metrics["total_supply_thr"]
 
     tokens = load_custom_tokens()
     token_list = list(tokens.values())
     token_list.sort(key=lambda t: t.get("created_at", ""), reverse=True)
     recent_tokens = token_list[:3]
 
-    pools = load_pools()
     ledger = load_json(LEDGER_FILE, {})
     system_addresses = {BURN_ADDRESS, AI_WALLET_ADDRESS, "GENESIS", "SYSTEM"}
     wallet_count = sum(1 for addr, bal in ledger.items()
@@ -6914,6 +6977,10 @@ def api_dashboard():
     stats = {
         "block_count": block_count,
         "total_supply": total_supply,
+        "total_supply_thr": supply_metrics["total_supply_thr"],
+        "circulating_supply_thr": supply_metrics["circulating_supply_thr"],
+        "locked_in_pools_thr": supply_metrics["locked_in_pools_thr"],
+        "burned_total_thr": supply_metrics["burned_total_thr"],
         "token_count": len(token_list),
         "pool_count": len(pools),
         "wallet_count": wallet_count,

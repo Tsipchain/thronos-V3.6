@@ -129,12 +129,12 @@
       <h3><span class="lang-el">Ιστορικό Συναλλαγών</span><span class="lang-en">Transaction History</span></h3>
       <div class="tx-filters">
         <button class="tx-filter-btn active" data-filter="all" onclick="renderTxHistory('all')">All</button>
-        <button class="tx-filter-btn" data-filter="transfers" onclick="renderTxHistory('transfers')">THR</button>
+        <button class="tx-filter-btn" data-filter="thr" onclick="renderTxHistory('thr')">THR</button>
         <button class="tx-filter-btn" data-filter="tokens" onclick="renderTxHistory('tokens')">Tokens</button>
         <button class="tx-filter-btn" data-filter="swaps" onclick="renderTxHistory('swaps')">Swaps</button>
         <button class="tx-filter-btn" data-filter="l2e" onclick="renderTxHistory('l2e')">L2E</button>
         <button class="tx-filter-btn" data-filter="ai_credits" onclick="renderTxHistory('ai_credits')">AI Credits</button>
-        <button class="tx-filter-btn" data-filter="architect" onclick="renderTxHistory('architect')">Architect</button>
+        <button class="tx-filter-btn" data-filter="architect_ai_jobs" onclick="renderTxHistory('architect_ai_jobs')">Architect</button>
         <button class="tx-filter-btn" data-filter="bridge" onclick="renderTxHistory('bridge')">Bridge</button>
         <button class="tx-filter-btn" data-filter="iot" onclick="renderTxHistory('iot')">IoT</button>
       </div>
@@ -207,6 +207,39 @@
         return String(value || '').toLowerCase();
     }
 
+    function normalizeCategory(value) {
+        return String(value || '').toLowerCase();
+    }
+
+    function getCanonicalCategory(tx) {
+        const category = normalizeCategory(tx.category);
+        if (category) return category;
+        const kind = normalizeKind(tx.kind);
+        const map = {
+            transfer: 'thr',
+            thr_transfer: 'thr',
+            token_transfer: 'tokens',
+            swap: 'swaps',
+            pool_swap: 'swaps',
+            bridge: 'bridge',
+            l2e: 'l2e',
+            ai_credit: 'ai_credits',
+            ai_credits: 'ai_credits',
+            ai_credits_earned: 'ai_credits',
+            ai_credits_spent: 'ai_credits',
+            architect: 'architect_ai_jobs',
+            architect_job: 'architect_ai_jobs',
+            ai_job_created: 'architect_ai_jobs',
+            ai_job_progress: 'architect_ai_jobs',
+            ai_job_completed: 'architect_ai_jobs',
+            ai_job_reward: 'architect_ai_jobs',
+            iot: 'iot',
+            iot_parking: 'iot',
+            iot_parking_reservation: 'iot',
+            iot_autopilot: 'iot',
+        };
+        return map[kind] || kind;
+    }
     function sanitizeTokenSymbol(value) {
         const symbol = String(value || '').trim().toUpperCase();
         if (!symbol || symbol === 'TOKEN' || symbol === 'TKN' || symbol === 'UNKNOWN') return '';
@@ -231,10 +264,15 @@
       }
 
       const filtered = txs.filter(tx => {
-        const kind = normalizeKind(tx.kind);
-        if (currentFilter === 'tokens') return kind === 'token_transfer';
-        if (currentFilter === 'swaps') return kind === 'swap' || kind === 'pool_swap';
-        if (currentFilter === 'transfers') return kind === 'transfer' || kind === 'thr_transfer';
+        const category = getCanonicalCategory(tx);
+        if (currentFilter === 'tokens') return category === 'tokens';
+        if (currentFilter === 'swaps') return category === 'swaps';
+        if (currentFilter === 'thr') return category === 'thr';
+        if (currentFilter === 'l2e') return category === 'l2e';
+        if (currentFilter === 'ai_credits') return category === 'ai_credits';
+        if (currentFilter === 'architect_ai_jobs') return category === 'architect_ai_jobs';
+        if (currentFilter === 'bridge') return category === 'bridge';
+        if (currentFilter === 'iot') return category === 'iot';
         return true;
       });
 
@@ -279,7 +317,7 @@
       try {
         currentFilter = 'all';
         const [walletRes, feedRes] = await Promise.all([
-          fetch(`/wallet_data/${addr}`),
+          fetch(`/api/balances?address=${encodeURIComponent(addr)}&show_zero=true`),
           fetch(`/api/tx_feed?wallet=${encodeURIComponent(addr)}`)
         ]);
 
@@ -287,11 +325,11 @@
         const data = await walletRes.json();
         const feed = feedRes.ok ? await feedRes.json() : [];
 
-        const balance = parseFloat(data.balance);
-        tokenDecimals = data.token_decimals || 6;  // Get decimals from response or default to 6
+        const balance = parseFloat(data.balances?.THR ?? 0);
+        tokenDecimals = 6;
 
         const normalizedFeed = Array.isArray(feed) ? feed : [];
-        walletTxs = (normalizedFeed.length ? normalizedFeed : (data.transactions || [])).map(tx => ({
+        walletTxs = (normalizedFeed.length ? normalizedFeed : []).map(tx => ({
           ...tx,
           kind: (tx.kind || tx.type || 'transfer').toLowerCase(),
           direction: tx.direction || (tx.to === addr ? 'in' : (tx.from === addr ? 'out' : tx.direction)),

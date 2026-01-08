@@ -1658,6 +1658,32 @@ def _apply_legacy_ai_job_backfill(raw: dict) -> dict:
     return raw
 
 
+def _apply_legacy_liquidity_backfill(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        return raw
+    raw_type = (raw.get("type") or raw.get("kind") or "").lower()
+    if raw_type not in {"pool_add_liquidity", "pool_remove_liquidity"}:
+        return raw
+    meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
+    if raw.get("amounts") or meta.get("amounts"):
+        return raw
+    token_a = _sanitize_asset_symbol(raw.get("token_a") or raw.get("symbol_in") or meta.get("tokenA") or "THR")
+    token_b = _sanitize_asset_symbol(raw.get("token_b") or raw.get("symbol_in2") or meta.get("tokenB") or "TOKEN")
+    if raw_type == "pool_add_liquidity":
+        amount_a = float(raw.get("added_a") or raw.get("amount_in") or meta.get("amountA") or 0.0)
+        amount_b = float(raw.get("added_b") or raw.get("amount_in2") or meta.get("amountB") or 0.0)
+    else:
+        amount_a = float(raw.get("withdrawn_a") or raw.get("amount_in") or meta.get("outA") or 0.0)
+        amount_b = float(raw.get("withdrawn_b") or raw.get("amount_in2") or meta.get("outB") or 0.0)
+    amounts = [
+        {"symbol": token_a, "amount": amount_a},
+        {"symbol": token_b, "amount": amount_b},
+    ]
+    meta = {**meta, "amounts": amounts, "tokenA": token_a, "tokenB": token_b}
+    raw = {**raw, "amounts": amounts, "meta": meta}
+    return raw
+
+
 def _seed_tx_log_from_chain() -> list[dict]:
     """Ensure the tx ledger contains legacy chain entries (deduped)."""
 
@@ -1668,6 +1694,7 @@ def _seed_tx_log_from_chain() -> list[dict]:
     updated = False
     for raw in chain:
         raw = _apply_legacy_ai_job_backfill(raw)
+        raw = _apply_legacy_liquidity_backfill(raw)
         norm = _normalize_tx_for_display(raw)
         if not norm:
             continue
@@ -4726,6 +4753,7 @@ def _rebuild_index_from_chain() -> dict:
     tx_log = []
     for raw in chain:
         raw = _apply_legacy_ai_job_backfill(raw)
+        raw = _apply_legacy_liquidity_backfill(raw)
         norm = _normalize_tx_for_display(raw)
         if norm:
             tx_log.append(norm)
@@ -7223,10 +7251,11 @@ def api_balances():
     tokens = balances.get("tokens", [])
     if not show_zero:
         tokens = [t for t in tokens if t.get("balance", 0) > 0]
+    balances_map = {t.get("symbol"): t.get("balance", 0) for t in tokens if t.get("symbol")}
     return jsonify({
         "ok": True,
         "address": address,
-        "balances": balances.get("token_balances", {}),
+        "balances": balances_map,
         "tokens": tokens,
         "last_updated": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
     }), 200

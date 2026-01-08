@@ -727,6 +727,16 @@
                 </div>
                 <div class="token-info-stat">
                     <div class="token-info-stat-label">
+                        <span class="lang-el">Τιμή (THR)</span>
+                        <span class="lang-en">Rate (THR)</span>
+                        <span class="lang-ja">レート (THR)</span>
+                        <span class="lang-ru">Курс (THR)</span>
+                        <span class="lang-es">Tasa (THR)</span>
+                    </div>
+                    <div class="token-info-stat-value" id="modalTokenRateTHR"></div>
+                </div>
+                <div class="token-info-stat">
+                    <div class="token-info-stat-label">
                         <span class="lang-el">Χρώμα Token</span>
                         <span class="lang-en">Token Color</span>
                         <span class="lang-ja">トークンカラー</span>
@@ -1032,6 +1042,10 @@
             tokensToShow.forEach(token => {
                 // N5 FIX: Use logo_url from API response (includes /static prefix from resolve_token_logo)
                 const logoUrl = token.logo_url || '';
+                const valueInThr = token.value_in_thr != null ? Number(token.value_in_thr) : null;
+                const priceInThr = token.price_in_thr != null ? Number(token.price_in_thr) : null;
+                const valueDisplay = valueInThr != null ? `≈ ${valueInThr.toFixed(4)} THR` : '—';
+                const rateDisplay = priceInThr != null ? `Rate: ${priceInThr.toFixed(6)} THR` : 'Rate: —';
                 const tokenDiv = document.createElement('div');
                 tokenDiv.className = 'token-item';
                 tokenDiv.onclick = () => showTokenInfo(token);
@@ -1048,7 +1062,7 @@
                         <div class="balance-amount" style="color: ${token.color};">
                             ${token.balance.toFixed(token.decimals)}
                         </div>
-                        ${!compactMode ? '<div class="balance-usd">~$0.00</div>' : ''}
+                        ${!compactMode ? `<div class="balance-usd">${valueDisplay}</div><div class="balance-usd">${rateDisplay}</div>` : ''}
                     </div>
                 `;
                 container.appendChild(tokenDiv);
@@ -1082,6 +1096,9 @@
             document.getElementById('modalTokenDecimals').textContent = token.decimals;
             document.getElementById('modalTokenValueTHR').textContent = token.value_in_thr != null
                 ? `${Number(token.value_in_thr).toFixed(6)} THR`
+                : '—';
+            document.getElementById('modalTokenRateTHR').textContent = token.price_in_thr != null
+                ? `${Number(token.price_in_thr).toFixed(6)} THR`
                 : '—';
             document.getElementById('modalTokenColorBox').style.backgroundColor = token.color;
 

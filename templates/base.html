@@ -2619,7 +2619,7 @@ function renderHistory() {
         if (isLiquidity) {
             const raw = (tx.kind || tx.type || '').toLowerCase();
             const action = raw.includes('add') ? (isGreek ? 'Προσθήκη Ρευστότητας' : 'Add Liquidity') : (isGreek ? 'Αφαίρεση Ρευστότητας' : 'Remove Liquidity');
-            const poolId = meta.pool_id || tx.pool_id;
+            const poolId = tx.meta?.pool_id || tx.pool_id;
             poolInfo = `<div style="font-size: 11px; color: #00bfff; opacity: 0.85; margin-top: 4px;">${action}${poolId ? ` • Pool ${escapeHtml(poolId)}` : ''}</div>`;
         } else if (isSwap && tx.meta) {
             const fromAsset = meta.from_asset || tx.symbol || 'THR';

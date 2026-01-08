@@ -51,7 +51,7 @@ import re
 import mimetypes
 import json
 import requests
-from flask import Flask, request, jsonify, send_from_directory, render_template, url_for, send_file
+from flask import Flask, request, jsonify, send_from_directory, render_template, url_for, send_file, Response
 
 try:
     from flask_cors import CORS
@@ -308,6 +308,7 @@ PROVIDER_HEALTH_TTL = 300  # seconds
 # Node role: "master" or "replica"
 NODE_ROLE = os.getenv("NODE_ROLE", "master").lower()
 MASTER_INTERNAL_URL = os.getenv("MASTER_NODE_URL", "http://localhost:5000")
+LEADER_URL = os.getenv("LEADER_URL", MASTER_INTERNAL_URL)
 # Replica external URL - used for heartbeat registration (e.g., Railway URL)
 REPLICA_EXTERNAL_URL = os.getenv("REPLICA_EXTERNAL_URL", os.getenv("RAILWAY_PUBLIC_DOMAIN", ""))
 
@@ -1307,6 +1308,9 @@ def _canonical_kind(kind_raw: str) -> str:
         "token_burn": "burn",
         "music_offline_tip": "music",
         "music_tip": "music",
+        "pool_create": "liquidity",
+        "pool_add_liquidity": "liquidity",
+        "pool_remove_liquidity": "liquidity",
     }
     kind = (kind_raw or "thr_transfer").lower()
     return lookup.get(kind, kind or "thr_transfer")
@@ -1392,6 +1396,13 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
     kind = _canonical_kind(tx_type_raw)
 
     meta: dict[str, Any] = {}
+    reject_reason = tx.get("reject_reason") or tx.get("reason")
+    if reject_reason:
+        meta["reject_reason"] = reject_reason
+    pool_event = tx.get("pool_event") or tx.get("event") if isinstance(tx.get("pool_event") or tx.get("event"), dict) else None
+    if pool_event:
+        meta["pool_event"] = pool_event
+        meta["event_type"] = tx.get("event_type")
 
     norm = {
         "tx_id": tx_id or "",  # will be filled later if missing
@@ -1414,6 +1425,7 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         "token_symbol": asset_symbol,
         "asset": asset_symbol,
         "meta": meta,
+        "reject_reason": reject_reason,
         "parties": sorted(parties),
         "decimals": decimals,
         "decimals_is_default": token_meta.get("decimals_is_default", False),
@@ -1454,10 +1466,11 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
 
     # Swap / pool swap
     if tx_type_raw in ("pool_swap", "swap"):
-        amount_in = float(tx.get("amount_in", tx.get("amount", 0.0)) or 0.0)
-        amount_out = float(tx.get("amount_out", tx.get("received_amount", 0.0)) or 0.0)
-        token_in = _sanitize_asset_symbol(tx.get("token_in") or tx.get("token_symbol") or tx.get("symbol") or "THR")
-        token_out = _sanitize_asset_symbol(tx.get("token_out") or tx.get("to_symbol") or "WBTC")
+        event_payload = meta.get("pool_event") or {}
+        amount_in = float(event_payload.get("in_amount", tx.get("amount_in", tx.get("amount", 0.0))) or 0.0)
+        amount_out = float(event_payload.get("out_amount", tx.get("amount_out", tx.get("received_amount", 0.0))) or 0.0)
+        token_in = _sanitize_asset_symbol(event_payload.get("in_token") or tx.get("token_in") or tx.get("token_symbol") or tx.get("symbol") or "THR")
+        token_out = _sanitize_asset_symbol(event_payload.get("out_token") or tx.get("token_out") or tx.get("to_symbol") or "WBTC")
 
         norm.update({
             "kind": "swap",
@@ -1491,6 +1504,23 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         if tx.get("trader"):
             norm["from"] = tx.get("trader")
             norm["to"] = tx.get("trader")
+
+    if tx_type_raw in ("pool_add_liquidity", "pool_remove_liquidity"):
+        event_payload = meta.get("pool_event") or {}
+        if tx_type_raw == "pool_add_liquidity":
+            amount_in = float(event_payload.get("amountA", tx.get("amount_in", tx.get("added_a", 0.0))) or 0.0)
+            amount_out = float(event_payload.get("amountB", tx.get("amount_out", tx.get("added_b", 0.0))) or 0.0)
+        else:
+            amount_in = float(event_payload.get("outA", tx.get("amount_in", tx.get("withdrawn_a", 0.0))) or 0.0)
+            amount_out = float(event_payload.get("outB", tx.get("amount_out", tx.get("withdrawn_b", 0.0))) or 0.0)
+        norm["amount"] = amount_in
+        norm["amount_out"] = amount_out
+        norm["meta"].update({
+            "amount_in": amount_in,
+            "amount_out": amount_out,
+            "token_in": tx.get("token_a"),
+            "token_out": tx.get("token_b"),
+        })
 
     # Bridge transfers
     if tx_type_raw.startswith("bridge") or tx_type_raw == "bridge":
@@ -1612,6 +1642,113 @@ def save_pools(pools):
 
 def get_all_pools():
     return load_pools()
+
+
+SWAP_BLOCKED_SYMBOLS = {"GENESIS", "SYSTEM", "BURN"}
+
+
+def is_swap_symbol_allowed(symbol: str) -> bool:
+    sym = _sanitize_asset_symbol(symbol)
+    if not sym or sym in SWAP_BLOCKED_SYMBOLS:
+        return False
+    return any(tok.get("symbol") == sym for tok in get_all_tokens())
+
+
+def get_pool_for_pair(token_a: str, token_b: str) -> tuple[dict | None, bool]:
+    token_a = _sanitize_asset_symbol(token_a)
+    token_b = _sanitize_asset_symbol(token_b)
+    pools = load_pools()
+    for pool in pools:
+        a = _sanitize_asset_symbol(pool.get("token_a"))
+        b = _sanitize_asset_symbol(pool.get("token_b"))
+        if a == token_a and b == token_b:
+            return pool, True
+        if a == token_b and b == token_a:
+            return pool, False
+    return None, True
+
+
+def pool_fee_bps(pool: dict) -> int:
+    try:
+        return int(pool.get("fee_bps", 30))
+    except Exception:
+        return 30
+
+
+def compute_swap_out(amount_in: float, reserve_in: float, reserve_out: float, fee_bps: int) -> tuple[float, float, float]:
+    if reserve_in <= 0 or reserve_out <= 0:
+        return 0.0, 0.0, 0.0
+    fee_rate = max(0.0, 1 - (fee_bps / 10000))
+    amount_in_with_fee = amount_in * fee_rate
+    amount_out = (reserve_out * amount_in_with_fee) / (reserve_in + amount_in_with_fee)
+    price_before = reserve_out / reserve_in if reserve_in else 0.0
+    price_after = (reserve_out - amount_out) / (reserve_in + amount_in) if reserve_in else 0.0
+    price_impact = abs(price_after - price_before) / price_before * 100 if price_before > 0 else 0.0
+    fee_amount = amount_in * (1 - fee_rate)
+    return amount_out, fee_amount, price_impact
+
+
+def quote_swap_route(token_in: str, token_out: str, amount_in: float) -> tuple[dict | None, str | None]:
+    token_in = _sanitize_asset_symbol(token_in)
+    token_out = _sanitize_asset_symbol(token_out)
+    if token_in == token_out:
+        return None, "cannot_swap_same_token"
+
+    pool, direct_order = get_pool_for_pair(token_in, token_out)
+    if pool:
+        reserves_a = float(pool.get("reserves_a", 0))
+        reserves_b = float(pool.get("reserves_b", 0))
+        fee_bps = pool_fee_bps(pool)
+        if direct_order:
+            reserve_in, reserve_out = reserves_a, reserves_b
+            in_token, out_token = pool.get("token_a"), pool.get("token_b")
+        else:
+            reserve_in, reserve_out = reserves_b, reserves_a
+            in_token, out_token = pool.get("token_b"), pool.get("token_a")
+        amount_out, fee_amount, price_impact = compute_swap_out(amount_in, reserve_in, reserve_out, fee_bps)
+        if amount_out <= 0:
+            return None, "no_liquidity"
+        return {
+            "route": [{"pool_id": pool.get("id"), "in_token": in_token, "out_token": out_token}],
+            "amount_out": amount_out,
+            "fee": fee_amount,
+            "fee_bps": fee_bps,
+            "price_impact": price_impact,
+        }, None
+
+    if token_in != "THR" and token_out != "THR":
+        first_pool, _ = get_pool_for_pair(token_in, "THR")
+        second_pool, _ = get_pool_for_pair("THR", token_out)
+        if not first_pool or not second_pool:
+            return None, "no_liquidity"
+
+        first_fee = pool_fee_bps(first_pool)
+        second_fee = pool_fee_bps(second_pool)
+
+        first_order = first_pool.get("token_a") == token_in
+        first_reserve_in = float(first_pool.get("reserves_a" if first_order else "reserves_b", 0))
+        first_reserve_out = float(first_pool.get("reserves_b" if first_order else "reserves_a", 0))
+        first_out, first_fee_amt, first_impact = compute_swap_out(amount_in, first_reserve_in, first_reserve_out, first_fee)
+
+        second_order = second_pool.get("token_a") == "THR"
+        second_reserve_in = float(second_pool.get("reserves_a" if second_order else "reserves_b", 0))
+        second_reserve_out = float(second_pool.get("reserves_b" if second_order else "reserves_a", 0))
+        second_out, second_fee_amt, second_impact = compute_swap_out(first_out, second_reserve_in, second_reserve_out, second_fee)
+
+        if second_out <= 0:
+            return None, "no_liquidity"
+        return {
+            "route": [
+                {"pool_id": first_pool.get("id"), "in_token": token_in, "out_token": "THR"},
+                {"pool_id": second_pool.get("id"), "in_token": "THR", "out_token": token_out},
+            ],
+            "amount_out": second_out,
+            "fee": first_fee_amt + second_fee_amt,
+            "fee_bps": first_fee + second_fee,
+            "price_impact": first_impact + second_impact,
+        }, None
+
+    return None, "no_liquidity"
 
 
 def _base_token_catalog():
@@ -1941,6 +2078,15 @@ def calculate_dynamic_fee(amount: float) -> float:
     else:
         fee_rate = 0.005   # 0.5%
 
+    fee = amount * fee_rate
+    return round(max(MIN_FEE, fee), 6)
+
+def calculate_fixed_burn_fee(amount: float, speed: str = "fast") -> float:
+    """Calculate the fixed burn fee for THR sends."""
+    if speed == "slow":
+        fee_rate = 0.0009  # 0.09%
+    else:
+        fee_rate = FEE_RATE  # fixed 0.5%
     fee = amount * fee_rate
     return round(max(MIN_FEE, fee), 6)
 
@@ -3204,25 +3350,138 @@ def decode_iot_steganography(image_path):
         return None
 
 
-# ─── WRITE PROTECTION FOR REPLICA NODES ───────────────────────────────────
+# ─── LEADER-ONLY WRITES (REPLICA FORWARDING) ──────────────────────────────
 @app.before_request
-def block_writes_on_replica():
+def forward_writes_to_leader():
     """
-    Replica nodes are read-only. Block all write operations (POST, PUT, DELETE)
-    except for heartbeat endpoint.
+    Non-leader nodes must forward critical state-changing requests to the leader.
     """
-    if NODE_ROLE == "replica":
-        # Allow heartbeat from replica to master
-        if request.path == "/api/peers/heartbeat":
-            return None
-        # Block all write operations
-        if request.method in ["POST", "PUT", "DELETE", "PATCH"]:
-            return jsonify({
-                "error": "Write operations not allowed on replica node",
-                "node_role": "replica",
-                "hint": "Direct writes to master node"
-            }), 403
-    return None
+    if NODE_ROLE == "master":
+        return None
+
+    if request.method not in ["POST", "PUT", "DELETE", "PATCH"]:
+        return None
+
+    guarded_prefixes = (
+        "/send",
+        "/api/wallet/send",
+        "/api/swap",
+        "/api/bridge",
+        "/submit_block",
+    )
+    if not request.path.startswith(guarded_prefixes):
+        return None
+
+    target_url = f"{MASTER_INTERNAL_URL.rstrip('/')}{request.path}"
+    headers = {k: v for k, v in request.headers if k.lower() not in {"host", "content-length"}}
+    data = request.get_data()
+
+    try:
+        upstream = requests.request(
+            method=request.method,
+            url=target_url,
+            params=request.args,
+            data=data,
+            headers=headers,
+            timeout=15
+        )
+    except requests.RequestException as exc:
+        return jsonify({
+            "error": "leader_unavailable",
+            "message": "Leader node unavailable for write operation",
+            "detail": str(exc),
+            "node_role": NODE_ROLE,
+            "leader_url": MASTER_INTERNAL_URL
+        }), 503
+
+    excluded_headers = {"content-encoding", "content-length", "transfer-encoding", "connection"}
+    response = Response(upstream.content, status=upstream.status_code)
+    for key, value in upstream.headers.items():
+        if key.lower() not in excluded_headers:
+            response.headers[key] = value
+    response.headers["X-Forwarded-To-Leader"] = "true"
+    response.headers["X-Thronos-Leader"] = "1"
+    return response
+
+
+@app.before_request
+def forward_reads_to_leader():
+    """
+    Non-leader nodes must proxy chain-dependent reads to the leader.
+    """
+    if NODE_ROLE == "master":
+        return None
+
+    if request.method != "GET":
+        return None
+
+    guarded_prefixes = (
+        "/api/network_stats",
+        "/api/network_live",
+        "/api/blocks",
+        "/api/tx_feed",
+        "/api/history",
+        "/api/dashboard",
+        "/api/swap/quote",
+        "/api/v1/status",
+        "/api/v1/block",
+        "/api/v1/blockhash",
+        "/last_block",
+        "/last_block_hash",
+        "/token_chart",
+    )
+    if not request.path.startswith(guarded_prefixes):
+        return None
+
+    target_url = f"{LEADER_URL.rstrip('/')}{request.path}"
+    headers = {k: v for k, v in request.headers if k.lower() not in {"host", "content-length"}}
+
+    try:
+        upstream = requests.request(
+            method="GET",
+            url=target_url,
+            params=request.args,
+            headers=headers,
+            timeout=15
+        )
+    except requests.RequestException as exc:
+        return jsonify({
+            "error": "leader_unavailable",
+            "message": "Leader node unavailable for read operation",
+            "detail": str(exc),
+            "node_role": NODE_ROLE,
+            "leader_url": LEADER_URL
+        }), 503
+
+    excluded_headers = {"content-encoding", "content-length", "transfer-encoding", "connection"}
+    response = Response(upstream.content, status=upstream.status_code)
+    for key, value in upstream.headers.items():
+        if key.lower() not in excluded_headers:
+            response.headers[key] = value
+    response.headers["X-Forwarded-To-Leader"] = "true"
+    response.headers["X-Thronos-Leader"] = "1"
+    return response
+
+
+@app.after_request
+def add_node_headers(response):
+    response.headers["X-Thronos-Node"] = NODE_ROLE
+    response.headers["X-Thronos-Node-URL"] = request.host_url.rstrip("/")
+    if "X-Thronos-Leader" not in response.headers:
+        response.headers["X-Thronos-Leader"] = "1" if NODE_ROLE == "master" else "0"
+    if request.path.startswith("/api/") and request.path != "/api/whoami":
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.route("/api/whoami", methods=["GET"])
+def api_whoami():
+    return jsonify({
+        "node_role": NODE_ROLE,
+        "node_url": request.host_url.rstrip("/"),
+        "master_url": MASTER_INTERNAL_URL,
+        "leader_url": LEADER_URL,
+    }), 200
 
 
 # ─── BASIC PAGES ───────────────────────────────────
@@ -6424,13 +6683,9 @@ def pledge_submit():
     ),200
 
 
-@app.route("/wallet_data/<thr_addr>")
-def wallet_data(thr_addr):
-    """QUEST A+B: Enhanced wallet data with categorized history"""
-    balances = get_wallet_balances(thr_addr)
-    # QUEST B: Categorize transactions with labels
+def build_wallet_history(thr_addr: str) -> list[dict]:
+    """Return canonical wallet history with normalized status."""
     history = []
-
     category_labels = {
         "transfer": "Transfer",
         "thr_transfer": "THR Transfer",
@@ -6452,7 +6707,6 @@ def wallet_data(thr_addr):
         if thr_addr not in parties and thr_addr not in {norm.get("from"), norm.get("to")}:  # type: ignore[arg-type]
             continue
 
-        status = norm.get("status", "confirmed")
         kind = _canonical_kind(norm.get("kind") or norm.get("type") or "") or "thr_transfer"
         direction = "out"
         if thr_addr == norm.get("to"):
@@ -6482,6 +6736,14 @@ def wallet_data(thr_addr):
             except Exception:
                 pass
 
+        tx_id = norm.get("tx_id")
+        status = norm.get("status", "confirmed")
+        reject_reason = norm.get("reject_reason")
+        if tx_id:
+            resolved = _resolve_tx_status(tx_id)
+            status = resolved.get("status") or status
+            reject_reason = resolved.get("reason") or reject_reason
+
         history.append({
             **{k: v for k, v in norm.items() if k not in {"parties"}},
             "kind": kind,
@@ -6495,6 +6757,7 @@ def wallet_data(thr_addr):
             "amount_out": display_amount_out,
             "fee_burned": norm.get("fee_burned", 0.0),
             "status": status,
+            "reject_reason": reject_reason,
             "timestamp": norm.get("timestamp"),
             "note": norm.get("note"),
             "explorer_link": f"/explorer?tx_id={norm.get('tx_id', '')}",
@@ -6505,6 +6768,14 @@ def wallet_data(thr_addr):
         })
 
     history.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    return history
+
+
+@app.route("/wallet_data/<thr_addr>")
+def wallet_data(thr_addr):
+    """QUEST A+B: Enhanced wallet data with categorized history"""
+    balances = get_wallet_balances(thr_addr)
+    history = build_wallet_history(thr_addr)
 
     return jsonify(
         balance=balances["thr"],
@@ -6513,6 +6784,57 @@ def wallet_data(thr_addr):
         tokens=balances["tokens"],  # QUEST A: Include all tokens
         transactions=history,
     ), 200
+
+
+@app.route("/api/history", methods=["GET"])
+def api_history():
+    thr_addr = (request.args.get("wallet") or request.args.get("address") or "").strip()
+    if not thr_addr:
+        return jsonify({"ok": False, "error": "Missing wallet address"}), 400
+    history = build_wallet_history(thr_addr)
+    return jsonify({"ok": True, "wallet": thr_addr, "history": history}), 200
+
+
+@app.route("/api/dashboard", methods=["GET"])
+def api_dashboard():
+    """Return the leader-driven dashboard data for index."""
+    last_block = load_json(LAST_BLOCK_FILE, {})
+    blocks = get_blocks_for_viewer()
+    recent_blocks = blocks[:5]
+    recent_txs = _tx_feed(include_pending=True, include_bridge=True)[:8]
+
+    chain = load_chain_cached()
+    chain_blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    block_count = HEIGHT_OFFSET + len(chain_blocks)
+    total_supply = round(sum(float(v) for v in load_json(LEDGER_FILE, {}).values()), 6)
+
+    tokens = load_custom_tokens()
+    token_list = list(tokens.values())
+    token_list.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+    recent_tokens = token_list[:3]
+
+    pools = load_pools()
+    ledger = load_json(LEDGER_FILE, {})
+    system_addresses = {BURN_ADDRESS, AI_WALLET_ADDRESS, "GENESIS", "SYSTEM"}
+    wallet_count = sum(1 for addr, bal in ledger.items()
+                       if addr not in system_addresses and float(bal) > 0)
+
+    stats = {
+        "block_count": block_count,
+        "total_supply": total_supply,
+        "token_count": len(token_list),
+        "pool_count": len(pools),
+        "wallet_count": wallet_count,
+    }
+
+    return jsonify({
+        "ok": True,
+        "tip": last_block,
+        "stats": stats,
+        "recent_blocks": recent_blocks,
+        "recent_transactions": recent_txs,
+        "recent_tokens": recent_tokens,
+    }), 200
 
 def get_token_price_in_thr(symbol):
     """
@@ -6687,6 +7009,63 @@ def api_tx_status():
         "error": "Transaction not found",
         "tx_id": tx_id
     }), 404
+
+
+def _resolve_tx_status(tx_id: str) -> dict:
+    chain = load_chain_cached()
+    for tx in chain:
+        if isinstance(tx, dict) and tx.get("tx_id") == tx_id:
+            status = tx.get("status") or "confirmed"
+            return {
+                "status": "mined" if status in {"confirmed", "mined"} else status,
+                "block_height": tx.get("height") or tx.get("block_height") or tx.get("block"),
+                "reason": tx.get("reject_reason") or tx.get("reason")
+            }
+
+    mempool = load_mempool()
+    for tx in mempool:
+        if isinstance(tx, dict) and tx.get("tx_id") == tx_id:
+            return {
+                "status": "pending",
+                "block_height": None,
+                "reason": None
+            }
+
+    tx_log = load_tx_log()
+    for tx in tx_log:
+        if isinstance(tx, dict) and tx.get("tx_id") == tx_id:
+            status = tx.get("status") or ""
+            if status:
+                mapped = "mined" if status in {"confirmed", "mined"} else status
+            else:
+                mapped = "pending"
+            return {
+                "status": mapped,
+                "block_height": tx.get("height") or tx.get("block_height") or tx.get("block"),
+                "reason": tx.get("reject_reason") or (tx.get("meta") or {}).get("reject_reason")
+            }
+
+    return {
+        "status": "rejected",
+        "block_height": None,
+        "reason": "not_found"
+    }
+
+
+@app.route("/api/tx_status/<tx_id>", methods=["GET"])
+def api_tx_status_v2(tx_id: str):
+    tx_id = (tx_id or "").strip()
+    if not tx_id:
+        return jsonify({"ok": False, "error": "Missing tx_id"}), 400
+
+    status_payload = _resolve_tx_status(tx_id)
+    return jsonify({
+        "ok": True,
+        "tx_id": tx_id,
+        "status": status_payload["status"],
+        "block_height": status_payload["block_height"],
+        "reason": status_payload["reason"]
+    }), 200
 
 @app.route("/widget/wallet")
 def wallet_widget():
@@ -7491,66 +7870,94 @@ def api_wallet_send():
         # Native THR send
         from flask import g
         g.internal_call = True
-        return send_thr_internal(from_addr, to_addr, amount, secret, passphrase, speed)
+        tx_id = (data.get("tx_id") or data.get("client_tx_id") or "").strip()
+        expected_fee = data.get("expected_fee")
+        return send_thr_internal(from_addr, to_addr, amount, secret, passphrase, speed, tx_id=tx_id, expected_fee=expected_fee)
     else:
         # Custom token transfer (fee paid in THR)
         return transfer_custom_token(token, from_addr, to_addr, amount, secret, passphrase, speed)
 
 
-def send_thr_internal(from_thr, to_thr, amount_raw, auth_secret, passphrase="", speed="fast"):
+def _reject_tx(tx_id: str | None, reason: str, status_code: int = 400, payload: dict | None = None):
+    tx = payload.copy() if payload else {}
+    tx.update({
+        "tx_id": tx_id,
+        "status": "rejected",
+        "reject_reason": reason,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    })
+    persist_normalized_tx(tx, status_override="rejected")
+    return jsonify({
+        "accepted": False,
+        "status": "rejected",
+        "tx_id": tx_id,
+        "reject_reason": reason
+    }), status_code
+
+
+def send_thr_internal(from_thr, to_thr, amount_raw, auth_secret, passphrase="", speed="fast", tx_id: str | None = None, expected_fee: float | None = None):
     """Internal THR send function for unified API."""
     if not validate_thr_address(from_thr):
-        return jsonify(error="invalid_from_address", message="Invalid THR address format"), 400
+        return _reject_tx(tx_id, "invalid_from_address", 400, {"from": from_thr, "to": to_thr, "amount": amount_raw})
     if not validate_thr_address(to_thr):
-        return jsonify(error="invalid_to_address", message="Invalid THR address format"), 400
+        return _reject_tx(tx_id, "invalid_to_address", 400, {"from": from_thr, "to": to_thr, "amount": amount_raw})
 
     valid, error_msg = validate_amount(amount_raw)
     if not valid:
-        return jsonify(error="invalid_amount", message=error_msg), 400
+        return _reject_tx(tx_id, f"invalid_amount:{error_msg}", 400, {"from": from_thr, "to": to_thr, "amount": amount_raw})
 
     try:
         amount = float(amount_raw)
     except (TypeError, ValueError):
-        return jsonify(error="invalid_amount"), 400
+        return _reject_tx(tx_id, "invalid_amount", 400, {"from": from_thr, "to": to_thr, "amount": amount_raw})
 
     if not auth_secret:
-        return jsonify(error="missing_auth_secret"), 400
+        return _reject_tx(tx_id, "missing_auth_secret", 400, {"from": from_thr, "to": to_thr, "amount": amount})
 
     pledges = load_json(PLEDGE_CHAIN, [])
     sender_pledge = next((p for p in pledges if p.get("thr_address") == from_thr), None)
     if not sender_pledge:
-        return jsonify(error="unknown_sender_thr"), 404
+        return _reject_tx(tx_id, "unknown_sender_thr", 404, {"from": from_thr, "to": to_thr, "amount": amount})
 
     stored_auth_hash = sender_pledge.get("send_auth_hash")
     if not stored_auth_hash:
-        return jsonify(error="send_not_enabled_for_this_thr"), 400
+        return _reject_tx(tx_id, "send_not_enabled_for_this_thr", 400, {"from": from_thr, "to": to_thr, "amount": amount})
 
     if sender_pledge.get("has_passphrase"):
         if not passphrase:
-            return jsonify(error="passphrase_required"), 400
+            return _reject_tx(tx_id, "passphrase_required", 400, {"from": from_thr, "to": to_thr, "amount": amount})
         auth_string = f"{auth_secret}:{passphrase}:auth"
     else:
         auth_string = f"{auth_secret}:auth"
 
     if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify(error="invalid_auth"), 403
+        return _reject_tx(tx_id, "invalid_auth", 403, {"from": from_thr, "to": to_thr, "amount": amount})
 
-    if speed == "slow":
-        fee = round(amount * 0.0009, 6)
-    else:
-        fee = calculate_dynamic_fee(amount)
+    fee = calculate_fixed_burn_fee(amount, speed)
+    if expected_fee is not None:
+        try:
+            expected_fee_value = float(expected_fee)
+        except (TypeError, ValueError):
+            return _reject_tx(tx_id, "invalid_expected_fee", 400, {"from": from_thr, "to": to_thr, "amount": amount})
+        if round(expected_fee_value, 6) != round(fee, 6):
+            return _reject_tx(
+                tx_id,
+                f"fee_mismatch:expected_{round(expected_fee_value, 6)}_got_{round(fee, 6)}",
+                400,
+                {"from": from_thr, "to": to_thr, "amount": amount, "fee_burned": fee}
+            )
 
     total_cost = amount + fee
     ledger = load_json(LEDGER_FILE, {})
     sender_balance = float(ledger.get(from_thr, 0.0))
 
     if sender_balance < total_cost:
-        return jsonify(
-            error="insufficient_balance",
-            balance=round(sender_balance, 6),
-            required=total_cost,
-            fee=fee
-        ), 400
+        return _reject_tx(
+            tx_id,
+            "insufficient_balance",
+            400,
+            {"from": from_thr, "to": to_thr, "amount": amount, "fee_burned": fee}
+        )
 
     ledger[from_thr] = round(sender_balance - total_cost, 6)
     ledger[to_thr] = round(float(ledger.get(to_thr, 0.0)) + amount, 6)
@@ -7564,7 +7971,9 @@ def send_thr_internal(from_thr, to_thr, amount_raw, auth_secret, passphrase="", 
         "to": to_thr,
         "amount": round(amount, 6),
         "fee_burned": fee,
-        "speed": speed
+        "speed": speed,
+        "tx_id": tx_id or f"TX-{int(time.time())}-{secrets.token_hex(4)}",
+        "status": "confirmed"
     }
     chain = load_json(CHAIN_FILE, [])
     chain.append(tx)
@@ -7573,8 +7982,10 @@ def send_thr_internal(from_thr, to_thr, amount_raw, auth_secret, passphrase="", 
 
     return jsonify({
         "ok": True,
+        "accepted": True,
         "status": "confirmed",
         "tx": tx,
+        "tx_id": tx.get("tx_id"),
         "new_balance": ledger[from_thr],
         "fee": fee
     }), 200
@@ -7824,49 +8235,57 @@ def send_thr():
     auth_secret=(data.get("auth_secret") or "").strip()
     passphrase=(data.get("passphrase") or "").strip()
     speed=(data.get("speed") or "fast").strip().lower()  # New: slow or fast
+    tx_id=(data.get("tx_id") or data.get("client_tx_id") or "").strip() or None
+    expected_fee=data.get("expected_fee")
 
     # Validate THR addresses
     if not validate_thr_address(from_thr):
-        return jsonify(error="invalid_from_address", message="Invalid THR address format"),400
+        return _reject_tx(tx_id, "invalid_from_address", 400, {"from": from_thr, "to": to_thr, "amount": amount_raw})
     if not validate_thr_address(to_thr):
-        return jsonify(error="invalid_to_address", message="Invalid THR address format"),400
+        return _reject_tx(tx_id, "invalid_to_address", 400, {"from": from_thr, "to": to_thr, "amount": amount_raw})
 
     # Validate amount
     valid, error_msg = validate_amount(amount_raw)
     if not valid:
-        return jsonify(error="invalid_amount", message=error_msg),400
+        return _reject_tx(tx_id, f"invalid_amount:{error_msg}", 400, {"from": from_thr, "to": to_thr, "amount": amount_raw})
 
     try:
         amount=float(amount_raw)
     except (TypeError,ValueError):
-        return jsonify(error="invalid_amount"),400
+        return _reject_tx(tx_id, "invalid_amount", 400, {"from": from_thr, "to": to_thr, "amount": amount_raw})
     if not auth_secret:
-        return jsonify(error="missing_auth_secret"),400
+        return _reject_tx(tx_id, "missing_auth_secret", 400, {"from": from_thr, "to": to_thr, "amount": amount})
     pledges=load_json(PLEDGE_CHAIN,[])
     sender_pledge=next((p for p in pledges if p.get("thr_address")==from_thr),None)
     if not sender_pledge:
-        return jsonify(error="unknown_sender_thr"),404
+        return _reject_tx(tx_id, "unknown_sender_thr", 404, {"from": from_thr, "to": to_thr, "amount": amount})
     stored_auth_hash=sender_pledge.get("send_auth_hash")
     if not stored_auth_hash:
-        return jsonify(error="send_not_enabled_for_this_thr"),400
+        return _reject_tx(tx_id, "send_not_enabled_for_this_thr", 400, {"from": from_thr, "to": to_thr, "amount": amount})
     if sender_pledge.get("has_passphrase"):
         if not passphrase:
-            return jsonify(error="passphrase_required"),400
+            return _reject_tx(tx_id, "passphrase_required", 400, {"from": from_thr, "to": to_thr, "amount": amount})
         auth_string=f"{auth_secret}:{passphrase}:auth"
     else:
         auth_string=f"{auth_secret}:auth"
     if hashlib.sha256(auth_string.encode()).hexdigest()!=stored_auth_hash:
-        return jsonify(error="invalid_auth"),403
+        return _reject_tx(tx_id, "invalid_auth", 403, {"from": from_thr, "to": to_thr, "amount": amount})
 
     # --- Fee Calculation Based on Speed ---
-    if speed == "slow":
-        # Slow transactions: 0.09% fee
-        fee = round(amount * 0.0009, 6)
-        confirmation_policy = "SLOW"
-    else:
-        # Fast transactions: Use dynamic fee calculation
-        fee = calculate_dynamic_fee(amount)
-        confirmation_policy = "FAST"
+    fee = calculate_fixed_burn_fee(amount, speed)
+    confirmation_policy = "SLOW" if speed == "slow" else "FAST"
+    if expected_fee is not None:
+        try:
+            expected_fee_value = float(expected_fee)
+        except (TypeError, ValueError):
+            return _reject_tx(tx_id, "invalid_expected_fee", 400, {"from": from_thr, "to": to_thr, "amount": amount})
+        if round(expected_fee_value, 6) != round(fee, 6):
+            return _reject_tx(
+                tx_id,
+                f"fee_mismatch:expected_{round(expected_fee_value, 6)}_got_{round(fee, 6)}",
+                400,
+                {"from": from_thr, "to": to_thr, "amount": amount, "fee_burned": fee}
+            )
 
     total_cost = amount + fee
 
@@ -7874,12 +8293,12 @@ def send_thr():
     sender_balance=float(ledger.get(from_thr,0.0))
 
     if sender_balance<total_cost:
-        return jsonify(
-            error="insufficient_balance",
-            balance=round(sender_balance,6),
-            required=total_cost,
-            fee=fee
-        ),400
+        return _reject_tx(
+            tx_id,
+            "insufficient_balance",
+            400,
+            {"from": from_thr, "to": to_thr, "amount": amount, "fee_burned": fee}
+        )
     ledger[from_thr]=round(sender_balance-total_cost,6)
     save_json(LEDGER_FILE,ledger)
     chain=load_json(CHAIN_FILE,[])
@@ -7891,7 +8310,7 @@ def send_thr():
         "to":to_thr,
         "amount":round(amount,6),
         "fee_burned":fee,
-        "tx_id":f"TX-{len(chain)}-{int(time.time())}",
+        "tx_id":tx_id or f"TX-{int(time.time())}-{secrets.token_hex(4)}",
         "thr_address":from_thr,
         "status":"pending",
         "confirmation_policy": confirmation_policy,
@@ -7909,7 +8328,14 @@ def send_thr():
         broadcast_tx(tx)
     except Exception:
         pass
-    return jsonify(status="pending", tx=tx, new_balance_from=ledger[from_thr], fee_burned=fee), 200
+    return jsonify(
+        accepted=True,
+        status="pending",
+        tx=tx,
+        tx_id=tx.get("tx_id"),
+        new_balance_from=ledger[from_thr],
+        fee_burned=fee
+    ), 200
 
 # ─── SEND CUSTOM TOKENS API ────────────────────────────────────
 @app.route("/api/send_token", methods=["POST"])
@@ -8266,116 +8692,216 @@ def api_prices_convert():
 # ─── SWAP API ──────────────────────────────────────
 @app.route("/api/swap", methods=["POST"])
 def api_swap():
-    data = request.get_json() or {}
-    wallet = data.get("wallet")
-    secret = data.get("secret")
-    
+    return jsonify(status="error", message="Use /api/swap/quote or /api/swap/execute"), 410
+
+
+@app.route("/api/swap/quote", methods=["GET"])
+def api_swap_quote():
+    token_in = (request.args.get("token_in") or "").upper().strip()
+    token_out = (request.args.get("token_out") or "").upper().strip()
+    amount_raw = request.args.get("amount_in", "0")
     try:
-        amount = float(data.get("amount", 0))
-    except (ValueError, TypeError):
+        amount_in = float(amount_raw)
+    except (TypeError, ValueError):
         return jsonify(status="error", message="Invalid amount"), 400
-        
-    direction = data.get("direction") # THR_TO_BTC or BTC_TO_THR
-    
-    if not wallet or not secret or amount <= 0:
+
+    if not token_in or not token_out:
+        return jsonify(status="error", message="token_in and token_out required"), 400
+    if amount_in <= 0:
+        return jsonify(status="error", message="amount_in must be positive"), 400
+    if not is_swap_symbol_allowed(token_in) or not is_swap_symbol_allowed(token_out):
+        return jsonify(status="error", message="Unsupported token"), 400
+
+    quote, err = quote_swap_route(token_in, token_out, amount_in)
+    if err:
+        return jsonify(status="error", message=err), 400
+
+    return jsonify({
+        "status": "success",
+        "token_in": token_in,
+        "token_out": token_out,
+        "amount_in": amount_in,
+        "amount_out": quote["amount_out"],
+        "fee": quote["fee"],
+        "fee_bps": quote["fee_bps"],
+        "price_impact": round(quote["price_impact"], 4),
+        "route": quote["route"],
+    }), 200
+
+
+@app.route("/api/swap/execute", methods=["POST"])
+def api_swap_execute():
+    data = request.get_json() or {}
+    token_in = (data.get("token_in") or "").upper().strip()
+    token_out = (data.get("token_out") or "").upper().strip()
+    trader = (data.get("trader_thr") or "").strip()
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+    min_amount_out_raw = data.get("min_amount_out", 0)
+    try:
+        amount_in = float(data.get("amount_in", 0))
+        min_amount_out = float(min_amount_out_raw)
+    except (TypeError, ValueError):
+        return jsonify(status="error", message="Invalid amounts"), 400
+
+    if not token_in or not token_out or amount_in <= 0:
         return jsonify(status="error", message="Invalid input"), 400
+    if not trader or not auth_secret:
+        return jsonify(status="error", message="Missing trader or auth_secret"), 400
+    if not is_swap_symbol_allowed(token_in) or not is_swap_symbol_allowed(token_out):
+        return jsonify(status="error", message="Unsupported token"), 400
 
-    # Verify Auth (Reusing logic from send_thr)
-    pledges=load_json(PLEDGE_CHAIN,[])
-    sender_pledge=next((p for p in pledges if p.get("thr_address")==wallet),None)
-    if not sender_pledge:
-        return jsonify(status="error", message="Unknown wallet"), 404
-    
-    stored_auth_hash=sender_pledge.get("send_auth_hash")
-    
-    # Try both auth methods (with and without passphrase) if possible, 
-    # but here we only have 'secret'. 
-    # If user has passphrase, this simple swap UI might fail. 
-    # For now, we assume standard auth.
-    auth_string=f"{secret}:auth" 
-    
-    if hashlib.sha256(auth_string.encode()).hexdigest()!=stored_auth_hash:
-        return jsonify(status="error", message="Invalid secret (or passphrase required)"), 403
+    quote, err = quote_swap_route(token_in, token_out, amount_in)
+    if err:
+        return jsonify(status="error", message=err), 400
+    if quote["amount_out"] < min_amount_out:
+        return jsonify(status="error", message="Slippage too high", expected_minimum=min_amount_out, actual_output=quote["amount_out"]), 400
 
-    ledger = load_json(LEDGER_FILE, {})
-    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
-    chain = load_json(CHAIN_FILE, [])
-
-    RATE = 0.0001 # 1 THR = 0.0001 BTC
-    SWAP_FEE_PERCENT = 0.003 # 0.3% fee (like Uniswap)
-
-    tx_id = f"SWAP-{int(time.time())}-{secrets.token_hex(4)}"
-    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-
-    if direction == "THR_TO_BTC":
-        # Burn THR, Mint wBTC
-        thr_bal = float(ledger.get(wallet, 0.0))
-        if thr_bal < amount:
-            return jsonify(status="error", message="Insufficient THR"), 400
-
-        btc_out = amount * RATE
-        # Apply 0.3% fee
-        fee_amount = btc_out * SWAP_FEE_PERCENT
-        btc_out_after_fee = btc_out - fee_amount
-
-        ledger[wallet] = round(thr_bal - amount, 6)
-        wbtc_ledger[wallet] = round(float(wbtc_ledger.get(wallet, 0.0)) + btc_out_after_fee, 8)
-        
-        # Log TX
-        tx = {
-            "type": "swap",
-            "from": wallet,
-            "to": SWAP_POOL_ADDRESS,
-            "amount_in": amount,
-            "token_in": "THR",
-            "amount_out": btc_out_after_fee,
-            "fee": fee_amount,
-            "fee_percent": SWAP_FEE_PERCENT,
-            "token_out": "wBTC",
-            "tx_id": tx_id,
-            "timestamp": ts,
-            "status": "confirmed" # Instant swap
-        }
-
-    elif direction == "BTC_TO_THR":
-        # Burn wBTC, Mint THR
-        wbtc_bal = float(wbtc_ledger.get(wallet, 0.0))
-        if wbtc_bal < amount:
-            return jsonify(status="error", message="Insufficient wBTC"), 400
-
-        thr_out = amount / RATE
-        # Apply 0.3% fee
-        fee_amount = thr_out * SWAP_FEE_PERCENT
-        thr_out_after_fee = thr_out - fee_amount
-
-        wbtc_ledger[wallet] = round(wbtc_bal - amount, 8)
-        ledger[wallet] = round(float(ledger.get(wallet, 0.0)) + thr_out_after_fee, 6)
-
-        tx = {
-            "type": "swap",
-            "from": wallet,
-            "to": SWAP_POOL_ADDRESS,
-            "amount_in": amount,
-            "token_in": "wBTC",
-            "amount_out": thr_out_after_fee,
-            "fee": fee_amount,
-            "fee_percent": SWAP_FEE_PERCENT,
-            "token_out": "THR",
-            "tx_id": tx_id,
-            "timestamp": ts,
-            "status": "confirmed"
-        }
+    pledges = load_json(PLEDGE_CHAIN, [])
+    trader_pledge = next((p for p in pledges if p.get("thr_address") == trader), None)
+    if not trader_pledge:
+        return jsonify(status="error", message="Trader has not pledged"), 404
+    stored_auth_hash = trader_pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return jsonify(status="error", message="Trader send not enabled"), 400
+    if trader_pledge.get("has_passphrase"):
+        if not passphrase:
+            return jsonify(status="error", message="Passphrase required"), 400
+        auth_string = f"{auth_secret}:{passphrase}:auth"
     else:
-        return jsonify(status="error", message="Invalid direction"), 400
+        auth_string = f"{auth_secret}:auth"
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify(status="error", message="Invalid auth"), 403
 
-    save_json(LEDGER_FILE, ledger)
+    thr_ledger = load_json(LEDGER_FILE, {})
+    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+    token_balances = load_token_balances()
+    pools = load_pools()
+
+    def get_balance(sym):
+        if sym == "THR":
+            return float(thr_ledger.get(trader, 0.0))
+        if sym == "WBTC":
+            return float(wbtc_ledger.get(trader, 0.0))
+        return float(token_balances.get(sym, {}).get(trader, 0.0))
+
+    if get_balance(token_in) < amount_in:
+        return jsonify(status="error", message=f"Insufficient {token_in} balance"), 400
+
+    def deduct(sym, amt):
+        if sym == "THR":
+            thr_ledger[trader] = round(float(thr_ledger.get(trader, 0.0)) - amt, 6)
+        elif sym == "WBTC":
+            wbtc_ledger[trader] = round(float(wbtc_ledger.get(trader, 0.0)) - amt, 8)
+        else:
+            token_balances.setdefault(sym, {})
+            token_balances[sym][trader] = round(float(token_balances[sym].get(trader, 0.0)) - amt, 6)
+
+    def credit(sym, amt):
+        if sym == "THR":
+            thr_ledger[trader] = round(float(thr_ledger.get(trader, 0.0)) + amt, 6)
+        elif sym == "WBTC":
+            wbtc_ledger[trader] = round(float(wbtc_ledger.get(trader, 0.0)) + amt, 8)
+        else:
+            token_balances.setdefault(sym, {})
+            token_balances[sym][trader] = round(float(token_balances[sym].get(trader, 0.0)) + amt, 6)
+
+    def apply_pool_swap(pool_id: str, in_token: str, out_token: str, amt_in: float) -> tuple[float, float, float]:
+        pool = next((p for p in pools if p.get("id") == pool_id), None)
+        if not pool:
+            return 0.0, 0.0, 0.0
+        a = _sanitize_asset_symbol(pool.get("token_a"))
+        b = _sanitize_asset_symbol(pool.get("token_b"))
+        reserves_a = float(pool.get("reserves_a", 0))
+        reserves_b = float(pool.get("reserves_b", 0))
+        fee_bps = pool_fee_bps(pool)
+        if in_token == a and out_token == b:
+            reserve_in, reserve_out = reserves_a, reserves_b
+            is_a_to_b = True
+        elif in_token == b and out_token == a:
+            reserve_in, reserve_out = reserves_b, reserves_a
+            is_a_to_b = False
+        else:
+            return 0.0, 0.0, 0.0
+        amt_out, fee_amount, price_impact = compute_swap_out(amt_in, reserve_in, reserve_out, fee_bps)
+        if amt_out <= 0:
+            return 0.0, 0.0, 0.0
+        if is_a_to_b:
+            pool["reserves_a"] = round(reserves_a + amt_in, 6)
+            pool["reserves_b"] = round(reserves_b - amt_out, 6)
+        else:
+            pool["reserves_b"] = round(reserves_b + amt_in, 6)
+            pool["reserves_a"] = round(reserves_a - amt_out, 6)
+        return amt_out, fee_amount, price_impact
+
+    swap_trace = []
+    running_in = amount_in
+    total_fee = 0.0
+    total_price_impact = 0.0
+    for leg in quote["route"]:
+        out_amount, fee_amount, price_impact = apply_pool_swap(leg["pool_id"], leg["in_token"], leg["out_token"], running_in)
+        if out_amount <= 0:
+            return jsonify(status="error", message="Swap failed due to liquidity"), 400
+        swap_trace.append({
+            "pool_id": leg["pool_id"],
+            "in_token": leg["in_token"],
+            "in_amount": running_in,
+            "out_token": leg["out_token"],
+            "out_amount": out_amount,
+            "fee": fee_amount,
+            "price_impact": round(price_impact, 4),
+        })
+        total_fee += fee_amount
+        total_price_impact += price_impact
+        running_in = out_amount
+
+    deduct(token_in, amount_in)
+    credit(token_out, running_in)
+    save_json(LEDGER_FILE, thr_ledger)
     save_json(WBTC_LEDGER_FILE, wbtc_ledger)
-    
+    save_token_balances(token_balances)
+    save_pools(pools)
+
+    chain = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx_id = f"SWAP-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "pool_swap",
+        "token_in": token_in,
+        "token_out": token_out,
+        "amount_in": amount_in,
+        "amount_out": running_in,
+        "fee": total_fee,
+        "price_impact": round(total_price_impact, 4),
+        "trader": trader,
+        "timestamp": ts,
+        "tx_id": tx_id,
+        "status": "confirmed",
+        "event_type": "SWAP",
+        "pool_event": {
+            "in_token": token_in,
+            "in_amount": amount_in,
+            "out_token": token_out,
+            "out_amount": running_in,
+            "fee": total_fee,
+            "price_impact": round(total_price_impact, 4),
+        },
+        "route": swap_trace,
+    }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
     update_last_block(tx, is_block=False)
-    
-    return jsonify(status="success", tx_id=tx_id), 200
+    persist_normalized_tx(tx)
+
+    return jsonify(
+        status="success",
+        amount_in=amount_in,
+        amount_out=running_in,
+        fee=total_fee,
+        price_impact=f"{total_price_impact:.2f}%",
+        tx_id=tx_id,
+        route=swap_trace,
+    ), 200
 
 # ─── Token Balances API (NEW) ─────────────────────────────────────
 #
@@ -11334,6 +11860,7 @@ def api_v1_create_pool():
     provider = (data.get("provider_thr") or "").strip()
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
+    fee_bps = data.get("fee_bps", 30)
 
     # Basic validation
     try:
@@ -11347,6 +11874,12 @@ def api_v1_create_pool():
         return jsonify(status="error", message="Amounts must be positive"), 400
     if not provider or not auth_secret:
         return jsonify(status="error", message="Missing provider or auth_secret"), 400
+    try:
+        fee_bps_int = int(fee_bps)
+    except (TypeError, ValueError):
+        return jsonify(status="error", message="Invalid fee_bps"), 400
+    if fee_bps_int < 0 or fee_bps_int > 1000:
+        return jsonify(status="error", message="fee_bps out of range"), 400
     # Validate provider send rights
     pledges = load_json(PLEDGE_CHAIN, [])
     provider_pledge = next((p for p in pledges if p.get("thr_address") == provider), None)
@@ -11465,6 +11998,7 @@ def api_v1_create_pool():
         shares = (amt_a_float * amt_b_float) ** 0.5
     except Exception:
         shares = min(amt_a_float, amt_b_float)
+    lp_symbol = f"LP-{token_a}-{token_b}"
     new_pool = {
         "id": pool_id,
         "token_a": token_a,
@@ -11472,6 +12006,8 @@ def api_v1_create_pool():
         "reserves_a": round(amt_a_float, state_a["decimals"]),
         "reserves_b": round(amt_b_float, state_b["decimals"]),
         "total_shares": round(shares, 6),
+        "fee_bps": fee_bps_int,
+        "lp_symbol": lp_symbol,
         "providers": {
             provider: round(shares, 6)
         }
@@ -11492,7 +12028,14 @@ def api_v1_create_pool():
         "provider": provider,
         "timestamp": ts,
         "tx_id": tx_id,
-        "status": "confirmed"
+        "status": "confirmed",
+        "event_type": "POOL_CREATE",
+        "pool_event": {
+            "tokenA": token_a,
+            "tokenB": token_b,
+            "fee_bps": fee_bps_int,
+            "lp_symbol": lp_symbol,
+        },
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
@@ -11702,6 +12245,14 @@ def api_v1_add_liquidity():
         "tx_id": tx_id,
         "status": "confirmed",
         "metadata": {"feature": "pools", "billing_unit": "thr"},
+        "event_type": "ADD_LIQ",
+        "pool_event": {
+            "tokenA": token_a,
+            "amountA": amt_a,
+            "tokenB": token_b,
+            "amountB": amt_b,
+            "lp_minted": shares_minted,
+        },
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
@@ -11863,6 +12414,12 @@ def api_v1_remove_liquidity():
         "tx_id": tx_id,
         "status": "confirmed",
         "metadata": {"feature": "pools", "billing_unit": "thr"},
+        "event_type": "REMOVE_LIQ",
+        "pool_event": {
+            "lp_burned": shares,
+            "outA": amt_a_return,
+            "outB": amt_b_return,
+        },
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
@@ -11975,13 +12532,8 @@ def api_v1_pool_swap():
             pool_tokens=f"{token_a}/{token_b}"
         ), 400
 
-    # Calculate swap using constant product formula with 0.3% fee
-    # Formula: amount_out = (reserve_out * amount_in * 0.997) / (reserve_in + amount_in * 0.997)
-    # 0.3% fee goes to liquidity providers
-    FEE = 0.997  # 1 - 0.003 (0.3% fee)
-
-    amount_in_with_fee = amount_in * FEE
-    amount_out = (reserve_out * amount_in_with_fee) / (reserve_in + amount_in_with_fee)
+    fee_bps = pool_fee_bps(pool)
+    amount_out, fee_amount, price_impact = compute_swap_out(amount_in, reserve_in, reserve_out, fee_bps)
 
     # Slippage protection
     if amount_out < min_amount_out:
@@ -12050,9 +12602,6 @@ def api_v1_pool_swap():
 
     save_pools(pools)
 
-    # Calculate fee earned by LPs (stays in pool)
-    fee_amount = amount_in * (1 - FEE)  # 0.3% of input
-
     # Calculate price impact
     price_before = reserve_out / reserve_in if reserve_in > 0 else 0
     price_after = float(pool["reserves_b"] if is_a_to_b else pool["reserves_a"]) / float(pool["reserves_a"] if is_a_to_b else pool["reserves_b"])
@@ -12070,13 +12619,22 @@ def api_v1_pool_swap():
         "amount_in": amount_in,
         "amount_out": amount_out,
         "fee": fee_amount,
-        "fee_percent": 0.003,
+        "fee_bps": fee_bps,
         "price_impact": round(price_impact, 4),
         "trader": trader,
         "timestamp": ts,
         "tx_id": tx_id,
         "status": "confirmed",
         "metadata": {"feature": "pools", "billing_unit": "thr"},
+        "event_type": "SWAP",
+        "pool_event": {
+            "in_token": token_in,
+            "in_amount": amount_in,
+            "out_token": token_out,
+            "out_amount": amount_out,
+            "fee": fee_amount,
+            "price_impact": round(price_impact, 4),
+        },
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)

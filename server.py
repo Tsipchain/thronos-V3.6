@@ -1502,6 +1502,10 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
             "asset": token_in,
             "amount": amount_in,
             "amount_out": amount_out,
+            "amounts": [
+                {"symbol": token_in, "amount": amount_in},
+                {"symbol": token_out, "amount": amount_out},
+            ],
             "token_out": token_out,
             "note": norm.get("note") or f"Swap {amount_in:.6f} {token_in} → {amount_out:.6f} {token_out}",
             "display_amount": amount_in,
@@ -1517,6 +1521,10 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
             "token_out": token_out,
             "pair": f"{token_in}/{token_out}",
             "amount_out_raw": tx.get("amount_out_raw"),
+            "amounts": [
+                {"symbol": token_in, "amount": amount_in},
+                {"symbol": token_out, "amount": amount_out},
+            ],
         })
         if tx.get("amount_out_raw") is not None:
             try:
@@ -1532,9 +1540,11 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         if tx_type_raw == "pool_add_liquidity":
             amount_in = float(event_payload.get("amountA", tx.get("amount_in", tx.get("added_a", 0.0))) or 0.0)
             amount_out = float(event_payload.get("amountB", tx.get("amount_out", tx.get("added_b", 0.0))) or 0.0)
+            shares = float(event_payload.get("lp_minted", tx.get("shares_minted", 0.0)) or 0.0)
         else:
             amount_in = float(event_payload.get("outA", tx.get("amount_in", tx.get("withdrawn_a", 0.0))) or 0.0)
             amount_out = float(event_payload.get("outB", tx.get("amount_out", tx.get("withdrawn_b", 0.0))) or 0.0)
+            shares = float(event_payload.get("lp_burned", tx.get("shares_burned", 0.0)) or 0.0)
         token_in = _sanitize_asset_symbol(tx.get("symbol_in") or tx.get("token_a") or event_payload.get("tokenA") or "THR")
         token_in2 = _sanitize_asset_symbol(tx.get("symbol_in2") or tx.get("token_b") or event_payload.get("tokenB") or "TOKEN")
         amounts = tx.get("amounts") or event_payload.get("amounts") or [
@@ -1543,9 +1553,14 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         ]
         norm["amount"] = amount_in
         norm["amount_out"] = amount_out
+        norm["amounts"] = amounts
         norm["meta"].update({
+            "pool_id": tx.get("pool_id"),
             "amount_in": amount_in,
             "amount_out": amount_out,
+            "amount_a": amount_in,
+            "amount_b": amount_out,
+            "shares": shares,
             "token_in": token_in,
             "token_out": token_in2,
             "amounts": amounts,
@@ -3604,6 +3619,9 @@ def media_static(filename):
     data_static_root = os.path.join(DATA_DIR, "static")
     if os.path.exists(os.path.join(data_static_root, safe_name)):
         return send_from_directory(data_static_root, safe_name)
+    placeholder_dir = os.path.join(STATIC_DIR, "img")
+    if os.path.exists(os.path.join(placeholder_dir, "logo.png")):
+        return send_from_directory(placeholder_dir, "logo.png")
     return send_from_directory(MEDIA_DIR, safe_name)
 
 @app.route("/viewer")

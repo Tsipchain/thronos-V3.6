@@ -1866,7 +1866,7 @@ function disconnectWallet() {
     showWalletLoginForm();
     updateWalletUI();
     walletBalancesLoaded = false;
-    tokenBalances = {};
+    window.tokenBalances = {};
 }
 
 // Forget Device Function (full wipe)
@@ -1876,7 +1876,7 @@ function forgetDeviceAction() {
         updateWalletUI();
         updateHeaderWalletUi();
         walletBalancesLoaded = false;
-        tokenBalances = {};
+        window.tokenBalances = {};
         if (typeof updateHeroButton === 'function') {
             updateHeroButton('');
         }
@@ -2183,7 +2183,7 @@ function formatBalance(num) {
 let selectedSpeed = 'fast';
 let selectedNetwork = 'thronos';
 let selectedToken = 'THR';
-var tokenBalances = window.tokenBalances || (window.tokenBalances = {});
+window.tokenBalances = window.tokenBalances || {};
 
 function openSendModal() {
     document.getElementById('sendModal').classList.add('active');
@@ -2609,7 +2609,8 @@ function renderHistory() {
         if (isLiquidity) {
             const raw = (tx.kind || tx.type || '').toLowerCase();
             const action = raw.includes('add') ? (isGreek ? 'Προσθήκη Ρευστότητας' : 'Add Liquidity') : (isGreek ? 'Αφαίρεση Ρευστότητας' : 'Remove Liquidity');
-            poolInfo = `<div style="font-size: 11px; color: #00bfff; opacity: 0.85; margin-top: 4px;">${action}</div>`;
+            const poolId = tx.meta?.pool_id || tx.pool_id;
+            poolInfo = `<div style="font-size: 11px; color: #00bfff; opacity: 0.85; margin-top: 4px;">${action}${poolId ? ` • Pool ${escapeHtml(poolId)}` : ''}</div>`;
         } else if (isSwap && tx.meta) {
             const fromAsset = tx.meta.from_asset || tx.symbol || 'THR';
             const toAsset = tx.meta.to_asset || 'THR';
@@ -2765,7 +2766,7 @@ async function loadTokenBalances() {
         if (data.tokens) {
             // Update balances map
             data.tokens.forEach(t => {
-                tokenBalances[t.symbol] = t.balance;
+                window.tokenBalances[t.symbol] = t.balance;
             });
 
             // Ensure token selector has *all* tokens that appear in balances (not only registry tokens)
@@ -2820,12 +2821,12 @@ async function loadCustomTokens() {
 function updateTokenInfo() {
     const select = document.getElementById('sendToken');
     selectedToken = select.value;
-    const balance = tokenBalances[selectedToken] || 0;
+    const balance = window.tokenBalances[selectedToken] || 0;
     document.getElementById('availableBalance').textContent = balance.toFixed(6) + ' ' + selectedToken;
 }
 
 function setMaxAmount() {
-    const balance = tokenBalances[selectedToken] || 0;
+    const balance = window.tokenBalances[selectedToken] || 0;
     // Reserve a small amount for fees
     const feeReserve = selectedSpeed === 'slow' ? balance * 0.001 : balance * 0.006;
     const maxAmount = Math.max(0, balance - feeReserve);
@@ -2959,7 +2960,7 @@ async function submitSend() {
     }
 
     // Validate balance
-    const balance = tokenBalances[token] || 0;
+    const balance = window.tokenBalances[token] || 0;
     if (amount > balance) {
         resultDiv.className = 'send-result error';
         resultDiv.textContent = `Insufficient ${token} balance`;
@@ -3039,7 +3040,7 @@ async function submitSend() {
 
             // Reset wallet balances to reload
             walletBalancesLoaded = false;
-            tokenBalances = {};
+            window.tokenBalances = {};
 
             // Reload balances
             setTimeout(() => {

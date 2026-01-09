@@ -408,10 +408,15 @@ async function doSwap() {
                 min_amount_out: latestQuote.amount_out
             })
         });
-        
-        const data = await res.json();
-        
-        if (data.status === 'success') {
+        const rawText = await res.text();
+        let data = {};
+        try {
+            data = rawText ? JSON.parse(rawText) : {};
+        } catch (e) {
+            data = { status: 'error', message: rawText || `HTTP ${res.status}` };
+        }
+
+        if (res.ok && data.status === 'success') {
             $('swapResult').style.color = '#0f0';
             $('swapResult').textContent = `✅ Swap Successful!\nTXID: ${data.tx_id}`;
             await loadBalances(addr); // Refresh UI
@@ -419,7 +424,8 @@ async function doSwap() {
             $('amountTo').value = '';
         } else {
             $('swapResult').style.color = '#f00';
-            $('swapResult').textContent = `❌ Error: ${data.message || 'Unknown error'}`;
+            const statusLine = res.status ? `HTTP ${res.status}` : 'Error';
+            $('swapResult').textContent = `❌ ${statusLine}: ${data.message || rawText || 'Unknown error'}`;
         }
     } catch (e) {
         $('swapResult').style.color = '#f00';

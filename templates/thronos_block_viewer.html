@@ -454,12 +454,34 @@ const CATEGORY_RULES = {
 const short = s => (s && s.length>20 ? s.slice(0,20)+'…' : (s||'—'));
 const rel = ts => {
   if(!ts) return '—';
-  const t = new Date(ts.replace(' UTC','')+'Z').getTime();
-  const d = (Date.now()-t)/1000;
-  if (d<90) return 'just now';
-  if (d<3600) return Math.round(d/60)+'m ago';
-  if (d<86400) return Math.round(d/3600)+'h ago';
-  return new Date(t).toISOString().replace('T',' ').slice(0,19)+' UTC';
+
+  // PR-3: Enhanced timestamp parsing - support ISO, "YYYY-MM-DD HH:MM:SS UTC", else raw
+  let t;
+  try {
+    // Try ISO format first
+    if (ts.includes('T') || ts.includes('Z')) {
+      t = new Date(ts).getTime();
+    }
+    // Try "YYYY-MM-DD HH:MM:SS UTC" format
+    else if (ts.includes(' UTC')) {
+      t = new Date(ts.replace(' UTC', '') + 'Z').getTime();
+    }
+    // Try parsing as-is
+    else {
+      t = new Date(ts).getTime();
+    }
+
+    // If parsing failed, return raw
+    if (!t || isNaN(t)) return ts;
+  } catch {
+    return ts; // Return raw on parse failure
+  }
+
+  const d = (Date.now() - t) / 1000;
+  if (d < 90) return 'just now';
+  if (d < 3600) return Math.round(d / 60) + 'm ago';
+  if (d < 86400) return Math.round(d / 3600) + 'h ago';
+  return new Date(t).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
 };
 const copy = (txt)=>{ navigator.clipboard.writeText(txt||''); };
 const el = (sel)=>document.querySelector(sel);
@@ -490,7 +512,33 @@ const BOOT_TXS    = {{ (transactions or [])|tojson }};
 function renderBlocks(list){
   const q = el('#q').value.trim().toLowerCase();
   const tb = tbody('#tblBlocks');
+
+  // PR-3: Clear table before render (already present)
   tb.innerHTML='';
+
+  // PR-3: Dedupe by block.hash (keep last occurrence)
+  const seen = new Map();
+  const deduped = [];
+  list.forEach(b => {
+    if (b && b.hash) {
+      seen.set(b.hash, b); // Overwrites duplicates, keeping last
+    }
+  });
+  seen.forEach(b => deduped.push(b));
+
+  // Optional: also dedupe by index if hash is missing
+  const finalList = [];
+  const seenIndexes = new Set();
+  deduped.forEach(b => {
+    const idx = b.index;
+    if (idx !== null && idx !== undefined && !seenIndexes.has(idx)) {
+      seenIndexes.add(idx);
+      finalList.push(b);
+    } else if (idx === null || idx === undefined) {
+      finalList.push(b); // Keep blocks without index
+    }
+  });
+
   let hot=false;
 
   // Calculate mining statistics
@@ -498,7 +546,7 @@ function renderBlocks(list){
   let totalBurned = 0;
   let validBlocks = 0;
 
-  list.forEach(b => {
+  finalList.forEach(b => {
     const reward = (b.reward_to_miner || 0) + (b.reward_to_ai || 0);
     const burned = b.fee_burned || 0;
     if(reward > 0 || burned > 0) validBlocks++;
@@ -512,7 +560,7 @@ function renderBlocks(list){
   el('#blocksAvgReward').textContent = validBlocks > 0 ? fmtN(totalRewards / validBlocks) + ' THR' : '—';
 
   // Render blocks table
-  list.forEach(b=>{
+  finalList.forEach(b=>{
     const match = !q || JSON.stringify(b).toLowerCase().includes(q);
     if(!match) return;
     const tr=document.createElement('tr');

@@ -3433,8 +3433,34 @@ def get_blocks_for_viewer():
             "transactions": block_txs,
             "timestamp": b.get("timestamp","")
         })
-    blocks.sort(key=lambda x: x["index"], reverse=True)
-    return blocks
+
+    # PR-3: Dedupe blocks by hash before returning (keep last occurrence)
+    seen_hashes = {}
+    deduped = []
+    for b in blocks:
+        h = b.get("hash")
+        if h:
+            seen_hashes[h] = b  # Overwrites earlier duplicates
+        else:
+            deduped.append(b)  # Keep blocks without hash
+
+    # Add deduplicated blocks back
+    deduped.extend(seen_hashes.values())
+
+    # PR-3: Also dedupe by index (optional, if hash-based dedupe isn't enough)
+    seen_indexes = {}
+    final_blocks = []
+    for b in deduped:
+        idx = b.get("index")
+        if idx is not None:
+            if idx not in seen_indexes:
+                seen_indexes[idx] = b
+                final_blocks.append(b)
+        else:
+            final_blocks.append(b)
+
+    final_blocks.sort(key=lambda x: x["index"], reverse=True)
+    return final_blocks
 
 def _tx_feed(include_pending: bool = True, include_bridge: bool = True) -> list[dict]:
     """Return normalized tx records from the shared ledger plus optional extras."""
@@ -4820,7 +4846,15 @@ def _rebuild_index_from_chain() -> dict:
     tx_log.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
     atomic_write_json(TX_LOG_FILE, tx_log)
 
-    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    # PR-3: Defensively dedupe blocks by hash before building indexes (keep last occurrence)
+    raw_blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+    seen_hashes = {}
+    for b in raw_blocks:
+        h = b.get("block_hash")
+        if h:
+            seen_hashes[h] = b  # Overwrites duplicates, keeping last
+
+    blocks = list(seen_hashes.values()) if seen_hashes else raw_blocks
     block_count = HEIGHT_OFFSET + len(blocks)
     total_supply = supply_metrics["total_supply_thr"]
     if blocks:
@@ -9998,6 +10032,13 @@ def submit_block():
         "target":current_target,
         "is_stratum":is_stratum
     }
+
+    # PR-3: Append guard - reject duplicate/stale blocks
+    # Check if there's already a block at this height or later
+    tip_height = blocks[-1].get("height", -1) if blocks else -1
+    if height <= tip_height:
+        return jsonify(error=f"Duplicate/stale block: height {height} <= tip {tip_height}"), 400
+
     chain.append(new_block)
 
     # include mempool TXs

@@ -4,6 +4,12 @@
 
 {% block styles %}
 <style>
+    /* Remove double border-bottom */
+    h1, h2, h3 {
+        border-bottom: none;
+        padding-bottom: 0;
+    }
+
     .wallet-card {
         background: #111;
         border: 1px solid #0f0;
@@ -21,8 +27,8 @@
         width: 100%;
         box-sizing: border-box;
     }
-    button { 
-        cursor: pointer; 
+    button {
+        cursor: pointer;
         font-weight: bold;
         background: #0f0;
         color: #000;
@@ -35,7 +41,7 @@
     button.secondary:hover {
         background: #111;
     }
-    
+
     .tx {
         margin-top: 10px;
         border-bottom: 1px dashed #333;
@@ -61,7 +67,7 @@
         font-size: 0.9em;
     }
     .hidden { display: none; }
-    
+
     .balance-large {
         font-size: 2em;
         font-weight: bold;

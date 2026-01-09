@@ -114,16 +114,21 @@
               </div>
               <button class="secondary" style="width:auto; padding:5px 10px;" onclick="disconnectWallet()">❌ <span class="lang-el">Αποσύνδεση</span><span class="lang-en">Disconnect</span></button>
           </div>
-          
+
           <div class="balance-large">
-              <span id="balance">0</span> THR
+              <span class="lang-el">Συνολική Αξία</span><span class="lang-en">Total Value</span>: <span id="totalValue">—</span> THR
           </div>
-          <div class="btc-val">≈ <span id="btcValue">0.0000</span> BTC</div>
-          
+          <div class="btc-val">≈ <span id="totalUSD">—</span> USD</div>
+
           <div style="margin-top:20px; display:flex; gap:10px;">
               <button onclick="window.location.href='/send'">📤 <span class="lang-el">Αποστολή</span><span class="lang-en">Send</span></button>
               <button class="secondary" onclick="refreshWallet()">🔄 <span class="lang-el">Ανανέωση</span><span class="lang-en">Refresh</span></button>
           </div>
+      </div>
+
+      <h3><span class="lang-el">Τα Tokens μου</span><span class="lang-en">My Tokens</span></h3>
+      <div id="tokensList" class="wallet-card">
+          <span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span>
       </div>
 
       <h3><span class="lang-el">Ιστορικό Συναλλαγών</span><span class="lang-en">Transaction History</span></h3>
@@ -332,7 +337,7 @@
       try {
         currentFilter = 'all';
         const [walletRes, feedRes] = await Promise.all([
-          fetch(`/api/balances?address=${encodeURIComponent(addr)}&show_zero=true`),
+          fetch(`/api/balances?address=${encodeURIComponent(addr)}&show_zero=false`),
           fetch(`/api/tx_feed?wallet=${encodeURIComponent(addr)}`)
         ]);
 
@@ -340,8 +345,20 @@
         const data = await walletRes.json();
         const feed = feedRes.ok ? await feedRes.json() : [];
 
-        const balance = parseFloat(data.balances?.THR ?? 0);
-        tokenDecimals = 6;
+        // Store tokens globally
+        const tokens = data.tokens || [];
+
+        // Calculate total portfolio value from tokens with valid prices
+        const pricedTokens = tokens.filter(t => t.value_in_thr !== null && t.value_in_thr !== undefined);
+        const totalTHR = pricedTokens.reduce((sum, t) => sum + Number(t.value_in_thr || 0), 0);
+        const totalUSD = pricedTokens.reduce((sum, t) => sum + Number(t.value_usd || 0), 0);
+
+        // Display total values with "—" if no priced tokens
+        $('totalValue').textContent = pricedTokens.length > 0 ? totalTHR.toFixed(4) : '—';
+        $('totalUSD').textContent = pricedTokens.length > 0 && totalUSD > 0 ? `$${totalUSD.toFixed(2)}` : '—';
+
+        // Render tokens list
+        renderTokensList(tokens);
 
         const normalizedFeed = Array.isArray(feed) ? feed : [];
         walletTxs = (normalizedFeed.length ? normalizedFeed : []).map(tx => ({
@@ -350,16 +367,54 @@
           direction: tx.direction || (tx.to === addr ? 'in' : (tx.from === addr ? 'out' : tx.direction)),
         }));
 
-        $('balance').textContent = formatTokenAmount(balance, tokenDecimals);
-
-        // Calculate BTC value (Fixed rate: 1 THR = 0.0001 BTC)
-        const btcVal = (balance * 0.0001).toFixed(8);
-        $('btcValue').textContent = btcVal;
         renderTxHistory(currentFilter);
       } catch (e) {
         console.error(e);
         $('txHistory').textContent = "Error loading data.";
+        $('tokensList').innerHTML = '<p style="color:#f00;">Error loading tokens.</p>';
       }
+    }
+
+    function renderTokensList(tokens) {
+      const div = $('tokensList');
+      if (!tokens || tokens.length === 0) {
+        div.innerHTML = '<p style="color:#666;">No tokens found.</p>';
+        return;
+      }
+
+      let html = '<div style="display:flex; flex-direction:column; gap:10px;">';
+      tokens.forEach(token => {
+        const balance = token.balance.toFixed(token.decimals || 6);
+        const valueInThr = token.value_in_thr !== null && token.value_in_thr !== undefined
+          ? `${Number(token.value_in_thr).toFixed(4)} THR`
+          : '—';
+        const valueUSD = token.value_usd !== null && token.value_usd !== undefined
+          ? `$${Number(token.value_usd).toFixed(2)}`
+          : '—';
+        const priceInThr = token.price_in_thr !== null && token.price_in_thr !== undefined
+          ? `${Number(token.price_in_thr).toFixed(6)} THR`
+          : '—';
+
+        html += `
+          <div style="display:flex; align-items:center; gap:12px; padding:12px; border:1px solid #0f0; border-radius:8px; background:#111;">
+            <div style="flex:0 0 40px;">
+              ${token.logo_url ? `<img src="${token.logo_url}" alt="${token.symbol}" style="width:40px; height:40px; border-radius:50%;" onerror="this.style.display='none';">` : `<div style="width:40px; height:40px; border-radius:50%; background:#000; border:2px solid ${token.color || '#0f0'}; display:flex; align-items:center; justify-content:center; font-weight:bold;">${token.symbol[0]}</div>`}
+            </div>
+            <div style="flex:1;">
+              <div style="font-weight:bold; font-size:1.1em;">${token.symbol}</div>
+              <div style="font-size:0.85em; color:#9f9;">${token.name}</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-weight:bold; font-family:monospace; font-size:1.1em;">${balance}</div>
+              <div style="font-size:0.85em; color:#9f9;">≈ ${valueInThr}</div>
+              <div style="font-size:0.75em; color:#9f9;">${valueUSD}</div>
+              <div style="font-size:0.75em; color:#666;">Price: ${priceInThr}</div>
+            </div>
+          </div>
+        `;
+      });
+      html += '</div>';
+      div.innerHTML = html;
     }
 
     // Init

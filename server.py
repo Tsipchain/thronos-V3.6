@@ -9327,8 +9327,17 @@ def api_swap_execute():
     chain = load_json(CHAIN_FILE, [])
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     tx_id = f"SWAP-{int(time.time())}-{secrets.token_hex(4)}"
+
+    # For single-hop, pool_id is first pool; for multi-hop, include all pools in route
+    primary_pool_id = swap_trace[0]["pool_id"] if swap_trace else None
+
+    # PR-2 Critical: Validate required pool_event fields before writing TX
+    if not primary_pool_id or not token_in or not token_out or amount_in <= 0 or running_in <= 0:
+        return jsonify(status="error", message="Invalid pool_event data; swap aborted"), 400
+
     tx = {
         "type": "pool_swap",
+        "kind": "swap",
         "token_in": token_in,
         "token_out": token_out,
         "amount_in": amount_in,
@@ -9341,17 +9350,16 @@ def api_swap_execute():
         "status": "confirmed",
         "event_type": "SWAP",
         "subtype": "swap",
+        "pool_id": primary_pool_id,
         "pool_event": {
             "in_token": token_in,
             "in_amount": amount_in,
             "out_token": token_out,
             "out_amount": running_in,
+            "pool_id": primary_pool_id,
             "fee": total_fee,
             "price_impact": round(total_price_impact, 4),
-            "reserves_after": {
-                "tokenA": pool["reserves_a"],
-                "tokenB": pool["reserves_b"],
-            },
+            "route": swap_trace,  # Include full route for multi-hop transparency
         },
         "route": swap_trace,
     }

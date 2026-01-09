@@ -1369,6 +1369,11 @@ def _canonical_kind(kind_raw: str) -> str:
         "token_burn": "burn",
         "music_offline_tip": "music",
         "music_tip": "music",
+        "music_track_add": "music",  # PR-5: Music/Playlists canonical kinds
+        "playlist_create": "music",  # PR-5: Music/Playlists canonical kinds
+        "playlist_add_track": "music",  # PR-5: Music/Playlists canonical kinds
+        "playlist_remove_track": "music",  # PR-5: Music/Playlists canonical kinds
+        "playlist_reorder": "music",  # PR-5: Music/Playlists canonical kinds
         "pool_create": "liquidity",
         "pool_add_liquidity": "liquidity",
         "pool_remove_liquidity": "liquidity",
@@ -15146,6 +15151,281 @@ def api_music_get_playlist_tracks(wallet, playlist_id):
             "mode": "degraded",
             "error": "Failed to load playlist tracks"
         }), 200
+
+
+# ─── PR-5: Music/Playlists On-Chain Integration ─────────────────────────────
+
+@app.route("/api/music/library", methods=["GET"])
+def api_music_library():
+    """
+    PR-5: Get music library for address (chain-derived).
+    Returns all music_track_add transactions for this address.
+    """
+    address = (request.args.get("address") or "").strip()
+    if not address:
+        return jsonify({"ok": False, "error": "address required"}), 400
+
+    try:
+        chain = load_json(CHAIN_FILE, [])
+        library = []
+
+        for tx in chain:
+            if not isinstance(tx, dict):
+                continue
+
+            tx_type = (tx.get("type") or tx.get("kind") or "").lower()
+            if tx_type == "music_track_add":
+                meta = tx.get("meta") or {}
+                # Only include tracks added by this address
+                if tx.get("from") == address or meta.get("added_by") == address:
+                    library.append({
+                        "track_id": meta.get("track_id") or tx.get("tx_id"),
+                        "title": meta.get("title", "Unknown"),
+                        "artist": meta.get("artist", "Unknown"),
+                        "album": meta.get("album"),
+                        "duration": meta.get("duration"),
+                        "source_url": meta.get("source_url"),
+                        "ipfs_cid": meta.get("ipfs_cid"),
+                        "cover_url": meta.get("cover_url"),
+                        "added_by": meta.get("added_by") or tx.get("from"),
+                        "added_at": tx.get("timestamp"),
+                        "tx_id": tx.get("tx_id"),
+                    })
+
+        return jsonify({
+            "ok": True,
+            "address": address,
+            "library": library,
+            "total": len(library)
+        }), 200
+
+    except Exception as e:
+        app.logger.error(f"Failed to load music library for {address}: {e}")
+        return jsonify({"ok": False, "error": "Failed to load library"}), 500
+
+
+@app.route("/api/music/playlists", methods=["GET"])
+def api_music_playlists_chain():
+    """
+    PR-5: Get playlists for address (chain-derived).
+    Returns playlists built from on-chain transactions:
+    - playlist_create
+    - playlist_add_track
+    - playlist_remove_track
+    - playlist_reorder
+    """
+    address = (request.args.get("address") or "").strip()
+    if not address:
+        return jsonify({"ok": False, "error": "address required"}), 400
+
+    try:
+        chain = load_json(CHAIN_FILE, [])
+        playlists_map = {}
+
+        for tx in chain:
+            if not isinstance(tx, dict):
+                continue
+
+            tx_type = (tx.get("type") or tx.get("kind") or "").lower()
+            meta = tx.get("meta") or {}
+
+            # Filter by owner
+            owner = tx.get("from") or meta.get("owner")
+            if owner != address:
+                continue
+
+            playlist_id = meta.get("playlist_id")
+            if not playlist_id:
+                continue
+
+            # Process different playlist operations
+            if tx_type == "playlist_create":
+                playlists_map[playlist_id] = {
+                    "playlist_id": playlist_id,
+                    "name": meta.get("name", "Untitled Playlist"),
+                    "owner": owner,
+                    "visibility": meta.get("visibility", "private"),
+                    "track_ids": [],
+                    "created_at": tx.get("timestamp"),
+                    "updated_at": tx.get("timestamp"),
+                }
+
+            elif tx_type == "playlist_add_track":
+                if playlist_id not in playlists_map:
+                    # Playlist doesn't exist, skip
+                    continue
+                track_id = meta.get("track_id")
+                if track_id and track_id not in playlists_map[playlist_id]["track_ids"]:
+                    position = meta.get("position")
+                    if position is not None:
+                        playlists_map[playlist_id]["track_ids"].insert(position, track_id)
+                    else:
+                        playlists_map[playlist_id]["track_ids"].append(track_id)
+                    playlists_map[playlist_id]["updated_at"] = tx.get("timestamp")
+
+            elif tx_type == "playlist_remove_track":
+                if playlist_id not in playlists_map:
+                    continue
+                track_id = meta.get("track_id")
+                if track_id in playlists_map[playlist_id]["track_ids"]:
+                    playlists_map[playlist_id]["track_ids"].remove(track_id)
+                    playlists_map[playlist_id]["updated_at"] = tx.get("timestamp")
+
+            elif tx_type == "playlist_reorder":
+                if playlist_id not in playlists_map:
+                    continue
+                new_order = meta.get("track_ids")
+                if isinstance(new_order, list):
+                    playlists_map[playlist_id]["track_ids"] = new_order
+                    playlists_map[playlist_id]["updated_at"] = tx.get("timestamp")
+
+        playlists = list(playlists_map.values())
+
+        return jsonify({
+            "ok": True,
+            "address": address,
+            "playlists": playlists,
+            "total": len(playlists)
+        }), 200
+
+    except Exception as e:
+        app.logger.error(f"Failed to load playlists for {address}: {e}")
+        return jsonify({"ok": False, "error": "Failed to load playlists"}), 500
+
+
+@app.route("/api/music/playlist/update", methods=["POST"])
+def api_music_playlist_update():
+    """
+    PR-5: Update playlist (writes on-chain transaction).
+    Actions: create, add_track, remove_track, reorder
+    """
+    data = request.get_json() or {}
+    address = data.get("address", "").strip()
+    action = data.get("action", "").strip()
+
+    if not address or not action:
+        return jsonify({"ok": False, "error": "address and action required"}), 400
+
+    try:
+        chain = load_json(CHAIN_FILE, [])
+        ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+        # Action: create
+        if action == "create":
+            name = data.get("name", "").strip()
+            if not name:
+                return jsonify({"ok": False, "error": "name required for create action"}), 400
+
+            playlist_id = f"pl_{int(time.time())}_{secrets.token_hex(4)}"
+            tx_id = f"PLAYLIST-CREATE-{int(time.time())}-{secrets.token_hex(4)}"
+
+            tx = {
+                "type": "playlist_create",
+                "kind": "music",
+                "from": address,
+                "timestamp": ts,
+                "tx_id": tx_id,
+                "status": "confirmed",
+                "meta": {
+                    "playlist_id": playlist_id,
+                    "name": name,
+                    "owner": address,
+                    "visibility": data.get("visibility", "private"),
+                }
+            }
+            chain.append(tx)
+            save_json(CHAIN_FILE, chain)
+
+            return jsonify({"ok": True, "tx_id": tx_id, "playlist_id": playlist_id}), 200
+
+        # Action: add_track
+        elif action == "add_track":
+            playlist_id = data.get("playlist_id", "").strip()
+            track_id = data.get("track_id", "").strip()
+
+            if not playlist_id or not track_id:
+                return jsonify({"ok": False, "error": "playlist_id and track_id required"}), 400
+
+            tx_id = f"PLAYLIST-ADD-{int(time.time())}-{secrets.token_hex(4)}"
+
+            tx = {
+                "type": "playlist_add_track",
+                "kind": "music",
+                "from": address,
+                "timestamp": ts,
+                "tx_id": tx_id,
+                "status": "confirmed",
+                "meta": {
+                    "playlist_id": playlist_id,
+                    "track_id": track_id,
+                    "position": data.get("position"),
+                }
+            }
+            chain.append(tx)
+            save_json(CHAIN_FILE, chain)
+
+            return jsonify({"ok": True, "tx_id": tx_id}), 200
+
+        # Action: remove_track
+        elif action == "remove_track":
+            playlist_id = data.get("playlist_id", "").strip()
+            track_id = data.get("track_id", "").strip()
+
+            if not playlist_id or not track_id:
+                return jsonify({"ok": False, "error": "playlist_id and track_id required"}), 400
+
+            tx_id = f"PLAYLIST-REMOVE-{int(time.time())}-{secrets.token_hex(4)}"
+
+            tx = {
+                "type": "playlist_remove_track",
+                "kind": "music",
+                "from": address,
+                "timestamp": ts,
+                "tx_id": tx_id,
+                "status": "confirmed",
+                "meta": {
+                    "playlist_id": playlist_id,
+                    "track_id": track_id,
+                }
+            }
+            chain.append(tx)
+            save_json(CHAIN_FILE, chain)
+
+            return jsonify({"ok": True, "tx_id": tx_id}), 200
+
+        # Action: reorder
+        elif action == "reorder":
+            playlist_id = data.get("playlist_id", "").strip()
+            track_ids = data.get("track_ids")
+
+            if not playlist_id or not isinstance(track_ids, list):
+                return jsonify({"ok": False, "error": "playlist_id and track_ids array required"}), 400
+
+            tx_id = f"PLAYLIST-REORDER-{int(time.time())}-{secrets.token_hex(4)}"
+
+            tx = {
+                "type": "playlist_reorder",
+                "kind": "music",
+                "from": address,
+                "timestamp": ts,
+                "tx_id": tx_id,
+                "status": "confirmed",
+                "meta": {
+                    "playlist_id": playlist_id,
+                    "track_ids": track_ids,
+                }
+            }
+            chain.append(tx)
+            save_json(CHAIN_FILE, chain)
+
+            return jsonify({"ok": True, "tx_id": tx_id}), 200
+
+        else:
+            return jsonify({"ok": False, "error": f"Invalid action: {action}"}), 400
+
+    except Exception as e:
+        app.logger.error(f"Failed to update playlist: {e}")
+        return jsonify({"ok": False, "error": "Failed to update playlist"}), 500
 
 
 # ─── Token Explorer, NFT & Governance Pages ─────────────────────────────────

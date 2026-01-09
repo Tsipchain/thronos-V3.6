@@ -269,6 +269,36 @@ app = Flask(__name__)
 
 
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+# ─── API ERROR HANDLERS ────────────────────────────────────────────────
+def _api_error_response(status_code: int, message: str):
+    if request.path.startswith("/api/"):
+        return jsonify({"ok": False, "error": message, "status": status_code}), status_code
+    return None
+
+
+@app.errorhandler(404)
+def handle_404(error):
+    resp = _api_error_response(404, "not_found")
+    if resp:
+        return resp
+    return error
+
+
+@app.errorhandler(405)
+def handle_405(error):
+    resp = _api_error_response(405, "method_not_allowed")
+    if resp:
+        return resp
+    return error
+
+
+@app.errorhandler(500)
+def handle_500(error):
+    resp = _api_error_response(500, "server_error")
+    if resp:
+        return resp
+    return error
+
 # ─── EVM INTEGRATION ────────────────────────────────────────────────────
 
 
@@ -1322,6 +1352,13 @@ def _canonical_kind(kind_raw: str) -> str:
         "ai_knowledge": "ai_credits",
         "ai_credit": "ai_credits",
         "ai_credits": "ai_credits",
+        "ai_credits_earned": "ai_credits",
+        "ai_credits_spent": "ai_credits",
+        "ai_credits_refund": "ai_credits",
+        "ai_job_created": "architect_ai_jobs",
+        "ai_job_progress": "architect_ai_jobs",
+        "ai_job_completed": "architect_ai_jobs",
+        "ai_job_reward": "architect_ai_jobs",
         "iot": "iot",
         "iot_parking": "parking",
         "iot_parking_reservation": "parking",
@@ -1333,6 +1370,8 @@ def _canonical_kind(kind_raw: str) -> str:
         "pool_create": "liquidity",
         "pool_add_liquidity": "liquidity",
         "pool_remove_liquidity": "liquidity",
+        "liquidity_add": "liquidity",
+        "liquidity_remove": "liquidity",
     }
     kind = (kind_raw or "thr_transfer").lower()
     return lookup.get(kind, kind or "thr_transfer")
@@ -1497,12 +1536,18 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         norm.update({
             "kind": "swap",
             "type": "swap",
-            "subtype": tx_type_raw,
+            "subtype": "swap",
             "token_symbol": token_in,
             "asset": token_in,
             "amount": amount_in,
             "amount_out": amount_out,
+            "amounts": [
+                {"symbol": token_in, "amount": amount_in},
+                {"symbol": token_out, "amount": amount_out},
+            ],
             "token_out": token_out,
+            "symbol_in": token_in,
+            "symbol_out": token_out,
             "note": norm.get("note") or f"Swap {amount_in:.6f} {token_in} → {amount_out:.6f} {token_out}",
             "display_amount": amount_in,
             "asset_symbol": token_in,
@@ -1517,6 +1562,15 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
             "token_out": token_out,
             "pair": f"{token_in}/{token_out}",
             "amount_out_raw": tx.get("amount_out_raw"),
+            "amounts": [
+                {"symbol": token_in, "amount": amount_in},
+                {"symbol": token_out, "amount": amount_out},
+            ],
+            "fee": event_payload.get("fee", tx.get("fee")),
+            "price_impact": event_payload.get("price_impact", tx.get("price_impact")),
+            "reserves_after": event_payload.get("reserves_after"),
+            "symbol_in": token_in,
+            "symbol_out": token_out,
         })
         if tx.get("amount_out_raw") is not None:
             try:
@@ -1527,14 +1581,16 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
             norm["from"] = tx.get("trader")
             norm["to"] = tx.get("trader")
 
-    if tx_type_raw in ("pool_add_liquidity", "pool_remove_liquidity"):
+    if tx_type_raw in ("pool_add_liquidity", "pool_remove_liquidity", "liquidity_add", "liquidity_remove"):
         event_payload = meta.get("pool_event") or {}
-        if tx_type_raw == "pool_add_liquidity":
+        if tx_type_raw in ("pool_add_liquidity", "liquidity_add"):
             amount_in = float(event_payload.get("amountA", tx.get("amount_in", tx.get("added_a", 0.0))) or 0.0)
             amount_out = float(event_payload.get("amountB", tx.get("amount_out", tx.get("added_b", 0.0))) or 0.0)
+            shares = float(event_payload.get("lp_minted", tx.get("shares_minted", 0.0)) or 0.0)
         else:
             amount_in = float(event_payload.get("outA", tx.get("amount_in", tx.get("withdrawn_a", 0.0))) or 0.0)
             amount_out = float(event_payload.get("outB", tx.get("amount_out", tx.get("withdrawn_b", 0.0))) or 0.0)
+            shares = float(event_payload.get("lp_burned", tx.get("shares_burned", 0.0)) or 0.0)
         token_in = _sanitize_asset_symbol(tx.get("symbol_in") or tx.get("token_a") or event_payload.get("tokenA") or "THR")
         token_in2 = _sanitize_asset_symbol(tx.get("symbol_in2") or tx.get("token_b") or event_payload.get("tokenB") or "TOKEN")
         amounts = tx.get("amounts") or event_payload.get("amounts") or [
@@ -1543,14 +1599,21 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         ]
         norm["amount"] = amount_in
         norm["amount_out"] = amount_out
+        norm["amounts"] = amounts
+        norm["subtype"] = "add_liq" if tx_type_raw in ("pool_add_liquidity", "liquidity_add") else "remove_liq"
         norm["meta"].update({
+            "pool_id": tx.get("pool_id"),
             "amount_in": amount_in,
             "amount_out": amount_out,
+            "amount_a": amount_in,
+            "amount_b": amount_out,
+            "shares": shares,
             "token_in": token_in,
             "token_out": token_in2,
             "amounts": amounts,
             "pair": event_payload.get("pair") or f"{token_in}/{token_in2}",
             "reserves": event_payload.get("reserves"),
+            "reserves_after": event_payload.get("reserves_after"),
         })
 
     # Bridge transfers
@@ -1571,10 +1634,34 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         norm["display_amount"] = amount or tx.get("reward", 0)
 
     # AI credits / services
-    if tx_type_raw in ("credits_consume", "service_payment", "ai_knowledge", "ai_credit", "ai_credits"):
+    if tx_type_raw in ("credits_consume", "service_payment", "ai_knowledge", "ai_credit", "ai_credits", "ai_credits_earned", "ai_credits_spent", "ai_credits_refund"):
         norm["kind"] = norm["type"] = "ai_credits"
         norm["asset"] = norm.get("token_symbol") or asset_symbol
         norm["display_amount"] = amount
+        norm["meta"].update({
+            "credits_delta": tx.get("credits_delta", amount),
+            "session_id": tx.get("session_id"),
+            "reason": tx.get("reason"),
+            "model": tx.get("model"),
+            "tokens_used": tx.get("tokens_used"),
+            "job_id": tx.get("job_id"),
+            "message_id": tx.get("message_id"),
+        })
+
+    if tx_type_raw in ("ai_job_created", "ai_job_progress", "ai_job_completed", "ai_job_reward"):
+        norm["kind"] = norm["type"] = tx_type_raw
+        norm["meta"].update({
+            "job_id": tx.get("job_id"),
+            "files_count": tx.get("files_count"),
+            "bytes_total": tx.get("bytes_total") or tx.get("bytes"),
+            "bytes_done": tx.get("bytes_done"),
+            "pct": tx.get("pct"),
+            "reward_thr": tx.get("reward_thr"),
+            "pricing_meta": tx.get("pricing_meta"),
+            "client_address": tx.get("client_address"),
+            "artifacts": tx.get("artifacts"),
+            "file_hash": tx.get("file_hash"),
+        })
 
     # Coinbase fallback id
     if not tx_id and tx_type_raw == "coinbase":
@@ -1593,6 +1680,54 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
     return norm
 
 
+def _apply_legacy_ai_job_backfill(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        return raw
+    meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
+    note = (raw.get("note") or raw.get("description") or "").lower()
+    tx_id = str(raw.get("tx_id") or "")
+    raw_type = (raw.get("type") or raw.get("kind") or "").lower()
+    has_job_id = bool(meta.get("job_id") or raw.get("job_id"))
+    is_architect = bool(meta.get("architect") is True)
+    is_ai_prefixed = tx_id.startswith("AI-")
+    is_ai_wallet = raw.get("to") == AI_WALLET_ADDRESS and "architect" in note
+    if has_job_id or is_architect or is_ai_prefixed or is_ai_wallet:
+        meta = {**meta}
+        if raw.get("job_id") and not meta.get("job_id"):
+            meta["job_id"] = raw.get("job_id")
+        meta.setdefault("architect", True)
+        if raw_type not in {"ai_job_created", "ai_job_progress", "ai_job_completed", "ai_job_reward"}:
+            raw = {**raw, "type": "ai_job_reward", "kind": "ai_job_reward"}
+        raw = {**raw, "meta": meta}
+    return raw
+
+
+def _apply_legacy_liquidity_backfill(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        return raw
+    raw_type = (raw.get("type") or raw.get("kind") or "").lower()
+    if raw_type not in {"pool_add_liquidity", "pool_remove_liquidity", "liquidity_add", "liquidity_remove"}:
+        return raw
+    meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
+    if raw.get("amounts") or meta.get("amounts"):
+        return raw
+    token_a = _sanitize_asset_symbol(raw.get("token_a") or raw.get("symbol_in") or meta.get("tokenA") or "THR")
+    token_b = _sanitize_asset_symbol(raw.get("token_b") or raw.get("symbol_in2") or meta.get("tokenB") or "TOKEN")
+    if raw_type in ("pool_add_liquidity", "liquidity_add"):
+        amount_a = float(raw.get("added_a") or raw.get("amount_in") or meta.get("amountA") or 0.0)
+        amount_b = float(raw.get("added_b") or raw.get("amount_in2") or meta.get("amountB") or 0.0)
+    else:
+        amount_a = float(raw.get("withdrawn_a") or raw.get("amount_in") or meta.get("outA") or 0.0)
+        amount_b = float(raw.get("withdrawn_b") or raw.get("amount_in2") or meta.get("outB") or 0.0)
+    amounts = [
+        {"symbol": token_a, "amount": amount_a},
+        {"symbol": token_b, "amount": amount_b},
+    ]
+    meta = {**meta, "amounts": amounts, "tokenA": token_a, "tokenB": token_b}
+    raw = {**raw, "amounts": amounts, "meta": meta}
+    return raw
+
+
 def _seed_tx_log_from_chain() -> list[dict]:
     """Ensure the tx ledger contains legacy chain entries (deduped)."""
 
@@ -1602,6 +1737,8 @@ def _seed_tx_log_from_chain() -> list[dict]:
 
     updated = False
     for raw in chain:
+        raw = _apply_legacy_ai_job_backfill(raw)
+        raw = _apply_legacy_liquidity_backfill(raw)
         norm = _normalize_tx_for_display(raw)
         if not norm:
             continue
@@ -1896,6 +2033,13 @@ def get_wallet_balances(wallet: str):
 
     wbtc_price = price_for("WBTC")
     l2e_price = price_for("L2E")
+    try:
+        btc_data = fetch_btc_price()
+        btc_usd = float(btc_data.get("usd") or btc_data.get("eur") or 0)
+    except Exception:
+        btc_usd = 0.0
+    thr_usd = btc_usd * 0.0001 if btc_usd else None
+    wbtc_price_thr = wbtc_price
     tokens = [
         {
             "symbol": "THR",
@@ -1909,6 +2053,8 @@ def get_wallet_balances(wallet: str):
             "type": "native",
             "price_in_thr": 1.0,
             "value_in_thr": thr_balance,
+            "value_wbtc": round(thr_balance / wbtc_price_thr, 8) if wbtc_price_thr else None,
+            "value_usd": round(thr_balance * thr_usd, 6) if thr_usd else None,
         },
         {
             "symbol": "WBTC",
@@ -1922,6 +2068,8 @@ def get_wallet_balances(wallet: str):
             "type": "wrapped",
             "price_in_thr": wbtc_price,
             "value_in_thr": round(wbtc_balance * wbtc_price, 6) if wbtc_price is not None else None,
+            "value_wbtc": wbtc_balance,
+            "value_usd": round(wbtc_balance * btc_usd, 6) if btc_usd else None,
         },
         {
             "symbol": "L2E",
@@ -1935,6 +2083,8 @@ def get_wallet_balances(wallet: str):
             "type": "reward",
             "price_in_thr": l2e_price,
             "value_in_thr": round(l2e_balance * l2e_price, 6) if l2e_price is not None else None,
+            "value_wbtc": round(l2e_balance * l2e_price / wbtc_price_thr, 8) if (l2e_price and wbtc_price_thr) else None,
+            "value_usd": round(l2e_balance * l2e_price * thr_usd, 6) if (l2e_price and thr_usd) else None,
         },
     ]
 
@@ -1960,6 +2110,7 @@ def get_wallet_balances(wallet: str):
             logo_url = None
 
         token_price = price_for(symbol)
+        value_in_thr = round(token_balance * token_price, 6) if token_price is not None else None
         tokens.append({
             "symbol": symbol,
             "name": token_data.get("name", symbol),
@@ -1973,7 +2124,9 @@ def get_wallet_balances(wallet: str):
             "token_id": token_id,
             "creator": token_data.get("creator", ""),
             "price_in_thr": token_price,
-            "value_in_thr": round(token_balance * token_price, 6) if token_price is not None else None,
+            "value_in_thr": value_in_thr,
+            "value_wbtc": round(value_in_thr / wbtc_price_thr, 8) if (value_in_thr is not None and wbtc_price_thr) else None,
+            "value_usd": round(value_in_thr * thr_usd, 6) if (value_in_thr is not None and thr_usd) else None,
         })
 
     token_balances = {
@@ -3604,6 +3757,9 @@ def media_static(filename):
     data_static_root = os.path.join(DATA_DIR, "static")
     if os.path.exists(os.path.join(data_static_root, safe_name)):
         return send_from_directory(data_static_root, safe_name)
+    placeholder_dir = os.path.join(STATIC_DIR, "img")
+    if os.path.exists(os.path.join(placeholder_dir, "logo.png")):
+        return send_from_directory(placeholder_dir, "logo.png")
     return send_from_directory(MEDIA_DIR, safe_name)
 
 @app.route("/viewer")
@@ -4656,6 +4812,8 @@ def _rebuild_index_from_chain() -> dict:
 
     tx_log = []
     for raw in chain:
+        raw = _apply_legacy_ai_job_backfill(raw)
+        raw = _apply_legacy_liquidity_backfill(raw)
         norm = _normalize_tx_for_display(raw)
         if norm:
             tx_log.append(norm)
@@ -6865,22 +7023,21 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
     """Return canonical wallet history with normalized status."""
     history = []
     category_labels = {
-        "transfer": "Transfer",
-        "thr_transfer": "THR Transfer",
-        "token_transfer": "Token Transfer",
-        "swap": "Swap",
+        "thr": "THR",
+        "tokens": "Tokens",
+        "swaps": "Swaps",
         "bridge": "Bridge",
         "liquidity": "Liquidity",
-        "pool_add": "Add Liquidity",
-        "pool_remove": "Remove Liquidity",
         "l2e": "Learn-to-Earn Reward",
         "ai_credits": "AI Credits",
+        "architect_ai_jobs": "Architect / AI Jobs",
         "iot": "IoT",
         "autopilot": "Autopilot",
         "parking": "Parking",
         "music": "Music",
         "mint": "Token Mint",
         "burn": "Token Burn",
+        "gateway": "Gateway",
     }
 
     for norm in _tx_feed():
@@ -6931,7 +7088,61 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
             status = resolved.get("status") or status
             reject_reason = resolved.get("reason") or reject_reason
 
-        category_value = "liquidity" if raw_type in {"pool_add_liquidity", "pool_remove_liquidity", "pool_create"} else kind
+        meta = norm.get("meta") or {}
+        meta_reason = str(meta.get("reason") or "").lower()
+        is_architect_meta = bool(meta.get("job_id") or meta.get("architect") is True)
+        is_chat_meta = bool(meta.get("session_id") or meta_reason == "chat")
+        category_value = "liquidity" if raw_type in {"pool_add_liquidity", "pool_remove_liquidity", "pool_create"} else None
+        if category_value is None:
+            if is_architect_meta or kind in {"architect", "architect_job", "ai_job_created", "ai_job_progress", "ai_job_completed", "ai_job_reward"}:
+                category_value = "architect_ai_jobs"
+            elif is_chat_meta or kind in {"ai_credits_earned", "ai_credits_spent"}:
+                category_value = "ai_credits"
+            else:
+                category_map = {
+                    "thr_transfer": "thr",
+                    "token_transfer": "tokens",
+                    "swap": "swaps",
+                    "bridge": "bridge",
+                    "l2e": "l2e",
+                    "ai_credits": "ai_credits",
+                    "iot": "iot",
+                    "autopilot": "iot",
+                    "parking": "iot",
+                    "liquidity": "liquidity",
+                    "mint": "tokens",
+                    "burn": "tokens",
+                    "fiat_onramp": "gateway",
+                    "fiat_offramp": "gateway",
+                    "gateway": "gateway",
+                    "onramp": "gateway",
+                    "offramp": "gateway",
+                }
+                category_value = category_map.get(kind, kind)
+        amounts = norm.get("meta", {}).get("amounts") or norm.get("amounts")
+        subtype = norm.get("subtype") or norm.get("meta", {}).get("subtype")
+        if category_value == "liquidity":
+            subtype = subtype or ("add" if raw_type in {"pool_add_liquidity", "liquidity_add"} else "remove")
+            kind = "liquidity"
+        if category_value == "swaps":
+            subtype = subtype or "swap"
+            kind = "swap"
+
+        if amounts and category_value == "liquidity":
+            signed_amounts = []
+            sign = -1 if subtype in {"add", "add_liq"} else 1
+            for entry in amounts:
+                if not isinstance(entry, dict):
+                    continue
+                symbol = entry.get("symbol")
+                amount_val = entry.get("amount")
+                try:
+                    amount_val = float(amount_val) * sign
+                except Exception:
+                    pass
+                signed_amounts.append({**entry, "symbol": symbol, "amount": amount_val})
+            amounts = signed_amounts
+
         history.append({
             **{k: v for k, v in norm.items() if k not in {"parties"}},
             "kind": kind,
@@ -6944,7 +7155,8 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
             "symbol_out": token_out_symbol,
             "amount_in": display_amount,
             "amount_out": display_amount_out,
-            "amounts": norm.get("meta", {}).get("amounts") or norm.get("amounts"),
+            "amounts": amounts,
+            "subtype": subtype,
             "fee_burned": norm.get("fee_burned", 0.0),
             "status": status,
             "reject_reason": reject_reason,
@@ -7111,6 +7323,26 @@ def api_wallet_tokens(thr_addr):
         "total_tokens": len(tokens),
         "total_value_usd": total_value_usd,
         "last_updated": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    }), 200
+
+
+@app.route("/api/balances", methods=["GET"])
+def api_balances():
+    address = (request.args.get("address") or request.args.get("wallet") or "").strip()
+    if not address:
+        return jsonify({"ok": False, "error": "Missing address"}), 400
+    balances = get_wallet_balances(address)
+    show_zero = request.args.get("show_zero", "true").lower() == "true"
+    tokens = balances.get("tokens", [])
+    if not show_zero:
+        tokens = [t for t in tokens if t.get("balance", 0) > 0]
+    balances_map = {t.get("symbol"): t.get("balance", 0) for t in tokens if t.get("symbol")}
+    return jsonify({
+        "ok": True,
+        "address": address,
+        "balances": balances_map,
+        "tokens": tokens,
+        "last_updated": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
     }), 200
 
 
@@ -8919,11 +9151,12 @@ def api_swap():
     return jsonify(status="error", message="Use /api/swap/quote or /api/swap/execute"), 410
 
 
-@app.route("/api/swap/quote", methods=["GET"])
+@app.route("/api/swap/quote", methods=["GET", "POST"])
 def api_swap_quote():
-    token_in = (request.args.get("token_in") or "").upper().strip()
-    token_out = (request.args.get("token_out") or "").upper().strip()
-    amount_raw = request.args.get("amount_in", "0")
+    payload = request.get_json(silent=True) if request.method == "POST" else None
+    token_in = ((payload or {}).get("token_in") or request.args.get("token_in") or "").upper().strip()
+    token_out = ((payload or {}).get("token_out") or request.args.get("token_out") or "").upper().strip()
+    amount_raw = (payload or {}).get("amount_in") or request.args.get("amount_in", "0")
     try:
         amount_in = float(amount_raw)
     except (TypeError, ValueError):
@@ -8950,23 +9183,28 @@ def api_swap_quote():
         "fee_bps": quote["fee_bps"],
         "price_impact": round(quote["price_impact"], 4),
         "route": quote["route"],
+        "price_in_thr_in": get_token_price_in_thr(token_in),
+        "price_in_thr_out": get_token_price_in_thr(token_out),
     }), 200
 
 
 @app.route("/api/swap/execute", methods=["POST"])
 def api_swap_execute():
-    data = request.get_json() or {}
-    token_in = (data.get("token_in") or "").upper().strip()
-    token_out = (data.get("token_out") or "").upper().strip()
-    trader = (data.get("trader_thr") or "").strip()
-    auth_secret = (data.get("auth_secret") or "").strip()
-    passphrase = (data.get("passphrase") or "").strip()
-    min_amount_out_raw = data.get("min_amount_out", 0)
     try:
-        amount_in = float(data.get("amount_in", 0))
-        min_amount_out = float(min_amount_out_raw)
-    except (TypeError, ValueError):
-        return jsonify(status="error", message="Invalid amounts"), 400
+        data = request.get_json() or {}
+        token_in = (data.get("token_in") or "").upper().strip()
+        token_out = (data.get("token_out") or "").upper().strip()
+        trader = (data.get("trader_thr") or "").strip()
+        auth_secret = (data.get("auth_secret") or "").strip()
+        passphrase = (data.get("passphrase") or "").strip()
+        min_amount_out_raw = data.get("min_amount_out", 0)
+        try:
+            amount_in = float(data.get("amount_in", 0))
+            min_amount_out = float(min_amount_out_raw)
+        except (TypeError, ValueError):
+            return jsonify(status="error", message="Invalid amounts"), 400
+    except Exception as exc:
+        return jsonify(status="error", message=str(exc)), 500
 
     if not token_in or not token_out or amount_in <= 0:
         return jsonify(status="error", message="Invalid input"), 400
@@ -9102,6 +9340,7 @@ def api_swap_execute():
         "tx_id": tx_id,
         "status": "confirmed",
         "event_type": "SWAP",
+        "subtype": "swap",
         "pool_event": {
             "in_token": token_in,
             "in_amount": amount_in,
@@ -9109,6 +9348,10 @@ def api_swap_execute():
             "out_amount": running_in,
             "fee": total_fee,
             "price_impact": round(total_price_impact, 4),
+            "reserves_after": {
+                "tokenA": pool["reserves_a"],
+                "tokenB": pool["reserves_b"],
+            },
         },
         "route": swap_trace,
     }
@@ -11933,8 +12176,13 @@ def api_v1_get_pools():
         try:
             reserves_a = float(pool.get("reserves_a", 0))
             reserves_b = float(pool.get("reserves_b", 0))
+            if reserves_a > 0 and reserves_b > 0:
+                pool["price_a_to_b"] = round(reserves_b / reserves_a, 6)
+                pool["price_b_to_a"] = round(reserves_a / reserves_b, 6)
             price_a_thr = get_token_price_in_thr(pool.get("token_a", "THR"))
             price_b_thr = get_token_price_in_thr(pool.get("token_b", "THR"))
+            if price_a_thr is None or price_b_thr is None:
+                continue
             tvl_thr = (reserves_a * price_a_thr) + (reserves_b * price_b_thr)
             pool["tvl_thr"] = round(tvl_thr, 6)
             pool["tvl_btc"] = round(tvl_thr * 0.0001, 8)
@@ -12450,8 +12698,8 @@ def api_v1_add_liquidity():
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     tx_id = f"POOL-ADD-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
-        "kind": "pool_add_liquidity",
-        "type": "pool_add_liquidity",  # Keep for backwards compatibility
+        "kind": "liquidity_add",
+        "type": "liquidity_add",  # Keep for backwards compatibility
         "pool_id": pool_id,
         "token_a": token_a,
         "token_b": token_b,
@@ -12476,6 +12724,7 @@ def api_v1_add_liquidity():
         "status": "confirmed",
         "metadata": {"feature": "pools", "billing_unit": "thr"},
         "event_type": "ADD_LIQ",
+        "subtype": "add_liq",
         "pool_event": {
             "tokenA": token_a,
             "amountA": amt_a,
@@ -12484,6 +12733,10 @@ def api_v1_add_liquidity():
             "lp_minted": shares_minted,
             "pair": f"{token_a}/{token_b}",
             "reserves": {
+                "tokenA": pool["reserves_a"],
+                "tokenB": pool["reserves_b"],
+            },
+            "reserves_after": {
                 "tokenA": pool["reserves_a"],
                 "tokenB": pool["reserves_b"],
             },
@@ -12634,8 +12887,8 @@ def api_v1_remove_liquidity():
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     tx_id = f"POOL-REMOVE-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
-        "kind": "pool_remove_liquidity",
-        "type": "pool_remove_liquidity",  # Keep for backwards compatibility
+        "kind": "liquidity_remove",
+        "type": "liquidity_remove",  # Keep for backwards compatibility
         "pool_id": pool_id,
         "token_a": token_a,
         "token_b": token_b,
@@ -12660,12 +12913,17 @@ def api_v1_remove_liquidity():
         "status": "confirmed",
         "metadata": {"feature": "pools", "billing_unit": "thr"},
         "event_type": "REMOVE_LIQ",
+        "subtype": "remove_liq",
         "pool_event": {
             "lp_burned": shares,
             "outA": amt_a_return,
             "outB": amt_b_return,
             "pair": f"{token_a}/{token_b}",
             "reserves": {
+                "tokenA": pool["reserves_a"],
+                "tokenB": pool["reserves_b"],
+            },
+            "reserves_after": {
                 "tokenA": pool["reserves_a"],
                 "tokenB": pool["reserves_b"],
             },
@@ -12881,6 +13139,7 @@ def api_v1_pool_swap():
         "status": "confirmed",
         "metadata": {"feature": "pools", "billing_unit": "thr"},
         "event_type": "SWAP",
+        "subtype": "swap",
         "pool_event": {
             "in_token": token_in,
             "in_amount": amount_in,
@@ -12888,7 +13147,15 @@ def api_v1_pool_swap():
             "out_amount": amount_out,
             "fee": fee_amount,
             "price_impact": round(price_impact, 4),
+            "reserves_after": {
+                "tokenA": pool["reserves_a"],
+                "tokenB": pool["reserves_b"],
+            },
         },
+        "amounts": [
+            {"symbol": token_in, "amount": amount_in},
+            {"symbol": token_out, "amount": amount_out},
+        ],
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)

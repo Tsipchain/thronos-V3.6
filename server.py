@@ -1359,6 +1359,8 @@ def _canonical_kind(kind_raw: str) -> str:
         "ai_job_progress": "architect_ai_jobs",
         "ai_job_completed": "architect_ai_jobs",
         "ai_job_reward": "architect_ai_jobs",
+        "architect_payment": "architect_ai_jobs",  # PR-4: Normalize architect taxonomy
+        "architect_ai_jobs": "architect_ai_jobs",  # PR-4: Normalize architect taxonomy
         "iot": "iot",
         "iot_parking": "parking",
         "iot_parking_reservation": "parking",
@@ -7128,7 +7130,8 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
         is_chat_meta = bool(meta.get("session_id") or meta_reason == "chat")
         category_value = "liquidity" if raw_type in {"pool_add_liquidity", "pool_remove_liquidity", "pool_create"} else None
         if category_value is None:
-            if is_architect_meta or kind in {"architect", "architect_job", "ai_job_created", "ai_job_progress", "ai_job_completed", "ai_job_reward"}:
+            # PR-4: Normalize architect taxonomy - any tx with architect-related kind gets architect_ai_jobs category
+            if is_architect_meta or kind in {"architect", "architect_job", "architect_payment", "architect_ai_jobs", "ai_job_created", "ai_job_progress", "ai_job_completed", "ai_job_reward"}:
                 category_value = "architect_ai_jobs"
             elif is_chat_meta or kind in {"ai_credits_earned", "ai_credits_spent"}:
                 category_value = "ai_credits"
@@ -7305,36 +7308,75 @@ def api_dashboard():
 
 def get_token_price_in_thr(symbol):
     """
+    PR-4: Multi-hop pricing graph.
     Calculate token price in THR from liquidity pool reserves.
-    Returns price as THR per 1 unit of token, or None if no pool exists.
+    Returns price as THR per 1 unit of token, or None if no route exists.
+
+    Uses BFS to find shortest path from token to THR through pools.
+    If direct pool exists, uses it (1 hop).
+    Otherwise, routes through intermediary tokens (e.g., LOUMIDIS -> JAM -> THR).
     """
     if symbol == "THR":
         return 1.0
 
     pools = load_pools()
 
-    # Find pool with THR and the token
+    # Build adjacency graph: token -> [(neighbor_token, exchange_rate, pool_liquidity), ...]
+    graph = {}
     for pool in pools:
         token_a = pool.get("token_a", "")
         token_b = pool.get("token_b", "")
         reserves_a = float(pool.get("reserves_a", 0))
         reserves_b = float(pool.get("reserves_b", 0))
 
-        if reserves_a <= 0 or reserves_b <= 0:
+        if not token_a or not token_b or reserves_a <= 0 or reserves_b <= 0:
             continue
 
-        # Pool is THR/TOKEN
-        if token_a == "THR" and token_b == symbol:
-            # Price of TOKEN in THR = reserves_a / reserves_b
-            return reserves_a / reserves_b
+        # Exchange rate A -> B: how much B you get per 1 unit of A
+        rate_a_to_b = reserves_b / reserves_a
+        rate_b_to_a = reserves_a / reserves_b
 
-        # Pool is TOKEN/THR
-        if token_a == symbol and token_b == "THR":
-            # Price of TOKEN in THR = reserves_b / reserves_a
-            return reserves_b / reserves_a
+        # Liquidity metric: geometric mean of reserves (for path preference)
+        liquidity = (reserves_a * reserves_b) ** 0.5
 
-    # No pool found
-    return None
+        graph.setdefault(token_a, []).append((token_b, rate_a_to_b, liquidity))
+        graph.setdefault(token_b, []).append((token_a, rate_b_to_a, liquidity))
+
+    # BFS to find shortest path from symbol to THR
+    if symbol not in graph:
+        return None
+
+    from collections import deque
+    queue = deque([(symbol, 1.0, 0, 0.0)])  # (current_token, cumulative_price_in_thr, hops, total_liquidity)
+    visited = {symbol}
+    best_price = None
+    best_hops = float('inf')
+    best_liquidity = 0
+
+    while queue:
+        current, price, hops, liquidity = queue.popleft()
+
+        if current == "THR":
+            # Found a path to THR
+            # Prefer: fewer hops, then higher liquidity
+            if hops < best_hops or (hops == best_hops and liquidity > best_liquidity):
+                best_price = price
+                best_hops = hops
+                best_liquidity = liquidity
+            continue
+
+        # Explore neighbors
+        for neighbor, rate, pool_liq in graph.get(current, []):
+            if neighbor not in visited:
+                visited.add(neighbor)
+                new_price = price * rate
+                new_hops = hops + 1
+                new_liquidity = liquidity + pool_liq
+                # Limit to 3 hops to avoid excessive routes
+                if new_hops <= 3:
+                    queue.append((neighbor, new_price, new_hops, new_liquidity))
+
+    return best_price
 
 @app.route("/api/wallet/tokens/<thr_addr>")
 def api_wallet_tokens(thr_addr):

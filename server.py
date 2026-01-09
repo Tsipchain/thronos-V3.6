@@ -15196,6 +15196,18 @@ def api_music_library():
         chain = load_json(CHAIN_FILE, [])
         library = []
 
+        # PR-5b: Build set of deleted track IDs
+        deleted_tracks = set()
+        for tx in chain:
+            if not isinstance(tx, dict):
+                continue
+            tx_type = (tx.get("type") or tx.get("kind") or "").lower()
+            if tx_type == "music_track_delete":
+                meta = tx.get("meta") or {}
+                track_id = meta.get("track_id")
+                if track_id:
+                    deleted_tracks.add(track_id)
+
         for tx in chain:
             if not isinstance(tx, dict):
                 continue
@@ -15203,10 +15215,16 @@ def api_music_library():
             tx_type = (tx.get("type") or tx.get("kind") or "").lower()
             if tx_type == "music_track_add":
                 meta = tx.get("meta") or {}
+                track_id = meta.get("track_id") or tx.get("tx_id")
+
+                # PR-5b: Skip deleted tracks
+                if track_id in deleted_tracks:
+                    continue
+
                 # Only include tracks added by this address
                 if tx.get("from") == address or meta.get("added_by") == address:
                     library.append({
-                        "track_id": meta.get("track_id") or tx.get("tx_id"),
+                        "track_id": track_id,
                         "title": meta.get("title", "Unknown"),
                         "artist": meta.get("artist", "Unknown"),
                         "album": meta.get("album"),
@@ -15440,6 +15458,71 @@ def api_music_playlist_update():
                 "meta": {
                     "playlist_id": playlist_id,
                     "track_ids": track_ids,
+                }
+            }
+            chain.append(tx)
+            save_json(CHAIN_FILE, chain)
+
+            return jsonify({"ok": True, "tx_id": tx_id}), 200
+
+        # PR-5b: Action: track_delete (artist can delete track if not in playlists)
+        elif action == "track_delete":
+            track_id = data.get("track_id", "").strip()
+
+            if not track_id:
+                return jsonify({"ok": False, "error": "track_id required"}), 400
+
+            # Check if track is referenced in any playlists
+            referenced_playlists = []
+            for tx in chain:
+                if not isinstance(tx, dict):
+                    continue
+
+                tx_type = (tx.get("type") or tx.get("kind") or "").lower()
+
+                # Check playlist_add_track transactions
+                if tx_type == "playlist_add_track":
+                    meta = tx.get("meta") or {}
+                    if meta.get("track_id") == track_id:
+                        playlist_id = meta.get("playlist_id")
+                        # Check if track was later removed from this playlist
+                        removed = False
+                        for later_tx in chain:
+                            if not isinstance(later_tx, dict):
+                                continue
+                            later_type = (later_tx.get("type") or later_tx.get("kind") or "").lower()
+                            if later_type == "playlist_remove_track":
+                                later_meta = later_tx.get("meta") or {}
+                                if (later_meta.get("playlist_id") == playlist_id and
+                                    later_meta.get("track_id") == track_id):
+                                    removed = True
+                                    break
+
+                        if not removed and playlist_id not in referenced_playlists:
+                            referenced_playlists.append(playlist_id)
+
+            # If track is in playlists, return error with list
+            if referenced_playlists:
+                return jsonify({
+                    "ok": False,
+                    "error": "TRACK_IN_PLAYLISTS",
+                    "message": "Track is used in playlists. Remove from playlists first.",
+                    "playlists": referenced_playlists
+                }), 400
+
+            # Track is not referenced, proceed with deletion
+            tx_id = f"TRACK-DELETE-{int(time.time())}-{secrets.token_hex(4)}"
+
+            tx = {
+                "type": "music_track_delete",
+                "kind": "music",
+                "from": address,
+                "timestamp": ts,
+                "tx_id": tx_id,
+                "status": "confirmed",
+                "meta": {
+                    "track_id": track_id,
+                    "deleted_by": address,
                 }
             }
             chain.append(tx)

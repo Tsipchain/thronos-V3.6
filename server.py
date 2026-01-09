@@ -269,6 +269,33 @@ app = Flask(__name__)
 
 
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+
+# ─── TEMPLATE CONTEXT PROCESSOR ────────────────────────────────────────────
+@app.context_processor
+def inject_build_id():
+    """PR-5a: Inject build_id for cache-busting static assets"""
+    # Compute build_id from git commit + file mtime
+    git_commit = "unknown"
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            cwd=os.path.dirname(os.path.abspath(__file__))
+        )
+        if result.returncode == 0:
+            git_commit = result.stdout.strip()
+    except Exception:
+        pass
+
+    build_time = os.path.getmtime(__file__) if os.path.exists(__file__) else None
+    build_id = f"{git_commit}"
+    if build_time:
+        build_id += f"-{int(build_time)}"
+
+    return dict(build_id=build_id)
+
 # ─── API ERROR HANDLERS ────────────────────────────────────────────────
 def _api_error_response(status_code: int, message: str):
     if request.path.startswith("/api/"):

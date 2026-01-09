@@ -1877,7 +1877,17 @@ function normalizeLang(lang) {
 }
 
 function getCurrentLang() {
-    return normalizeLang(localStorage.getItem('lang') || DEFAULT_LANG);
+    // PR-5a: Use thr_lang key for consistency, migrate from old 'lang' key
+    let savedLang = localStorage.getItem('thr_lang');
+    if (!savedLang) {
+        // Migrate from old key
+        savedLang = localStorage.getItem('lang');
+        if (savedLang) {
+            localStorage.setItem('thr_lang', savedLang);
+            localStorage.removeItem('lang');
+        }
+    }
+    return normalizeLang(savedLang || DEFAULT_LANG);
 }
 
 function isGreekLang(lang) {
@@ -1893,7 +1903,8 @@ function toggleLanguage() {
 
 function setLanguage(lang) {
     const normalizedLang = normalizeLang(lang);
-    localStorage.setItem('lang', normalizedLang);
+    // PR-5a: Use thr_lang key for consistency
+    localStorage.setItem('thr_lang', normalizedLang);
 
     const allClasses = Object.values(LANGUAGE_CLASS_MAP);
     allClasses.forEach(cls => {
@@ -2031,6 +2042,8 @@ function updateWalletUI() {
 let walletBalancesLoaded = false;
 
 async function loadWalletBalances(force = false) {
+    // PR-5a: Guard to prevent multiple simultaneous loads
+    if (window.__walletLoadInProgress && !force) return;
     if (walletBalancesLoaded && !force) return; // Only load once
 
     if (!walletSession.isBound()) {
@@ -2038,6 +2051,8 @@ async function loadWalletBalances(force = false) {
         showWalletLoginForm();
         return;
     }
+
+    window.__walletLoadInProgress = true;
 
     const wallet = walletSession.getAddress();
     if (!wallet) {
@@ -2064,10 +2079,12 @@ async function loadWalletBalances(force = false) {
         // Update token prices before loading balances
         await updateTokenPrices();
 
-        const response = await fetch(`/api/balances?address=${encodeURIComponent(wallet)}&show_zero=false`);
-        if (!response.ok) throw new Error('Failed to load wallet data');
+        // PR-5a: Use fetchJSONOnce for request coalescing
+        const url = `/api/balances?address=${encodeURIComponent(wallet)}&show_zero=false`;
+        const data = await (window.FetchUtils?.fetchJSONOnce
+            ? window.FetchUtils.fetchJSONOnce(url)
+            : fetch(url).then(r => r.json()));
 
-        const data = await response.json();
         renderWalletBalances(data);
         walletBalancesLoaded = true;
     } catch (error) {
@@ -2077,6 +2094,9 @@ async function loadWalletBalances(force = false) {
                 Failed to load balances
             </div>
         `;
+    } finally {
+        // PR-5a: Clear load guard
+        window.__walletLoadInProgress = false;
     }
 }
 
@@ -3625,9 +3645,9 @@ document.addEventListener('DOMContentLoaded', () => {
     updateTokenPrices();  // Initial update
     setInterval(updateTokenPrices, 30000);
 
-    // Refresh wallet balances every 60 seconds if wallet is open
+    // PR-5a: Refresh wallet balances every 60 seconds if wallet is open and page is visible
     setInterval(() => {
-        if (walletSession.isBound() && isWalletOpen()) {
+        if (!document.hidden && walletSession.isBound() && isWalletOpen()) {
             loadWalletBalances(true);
         }
     }, 60000);
@@ -4078,8 +4098,20 @@ function downloadCGMinerKit() {
 })();
 </script>
 
-<script src="{{ url_for('static', filename='wallet_sdk.js') }}"></script>
-<script src="{{ url_for('static', filename='music_module.js') }}"></script>
+<script src="{{ url_for('static', filename='fetch_utils.js') }}?v={{ build_id }}"></script>
+<script src="{{ url_for('static', filename='wallet_sdk.js') }}?v={{ build_id }}"></script>
+<script src="{{ url_for('static', filename='wallet_auth.js') }}?v={{ build_id }}"></script>
+<script src="{{ url_for('static', filename='music_module.js') }}?v={{ build_id }}"></script>
+
+<script>
+// PR-5a: Init guard to prevent double initialization
+window.__walletWidgetInit = window.__walletWidgetInit || false;
+
+// PR-5a: Verify MusicModule loaded
+if (typeof MusicModule === 'undefined') {
+    console.warn('[Wallet Widget] MusicModule not loaded - check script path/caching');
+}
+</script>
 
 {% block scripts %}{% endblock %}
 

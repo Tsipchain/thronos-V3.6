@@ -2021,48 +2021,14 @@ function renderWalletBalances(data) {
     const lang = getCurrentLang();
     const isGreek = isGreekLang(lang);
 
-    const tokensArr = Array.isArray(data?.tokens)
-        ? data.tokens
-        : (data?.balances ? Object.entries(data.balances).map(([symbol, balance]) => ({ symbol, balance })) : []);
+    // PR-1b: Use tokens[] from API directly (wallet viewer parity)
+    const tokens = Array.isArray(data?.tokens) ? data.tokens : [];
 
-    // Sort: THR first, then non-zero by value, then alphabetically
-    const tokens = [...tokensArr].sort((a, b) => {
-        const az = String(a.symbol || '');
-        const bz = String(b.symbol || '');
-        if (az === 'THR') return -1;
-        if (bz === 'THR') return 1;
-        const an = (Number(a.balance) || 0) > 0 ? 0 : 1;
-        const bn = (Number(b.balance) || 0) > 0 ? 0 : 1;
-        if (an !== bn) return an - bn;
-        return az.localeCompare(bz);
-    });
-
-    // Calculate portfolio totals
-    const thrPrice = TOKEN_REGISTRY['THR']?.priceUSD || 0.0042;
-    const btcPrice = TOKEN_REGISTRY['WBTC']?.priceUSD || 98500;
-    let totalUSD = 0;
-    let totalTHR = 0;
-
-    tokens.forEach(t => {
-        const balance = Number(t.balance) || 0;
-        const tokenInfo = TOKEN_REGISTRY[t.symbol] || { priceUSD: null };
-        const priceUSD = Number.isFinite(Number(tokenInfo.priceUSD)) ? Number(tokenInfo.priceUSD) : null;
-        if (priceUSD !== null) {
-            const valueUSD = balance * priceUSD;
-            totalUSD += valueUSD;
-
-            // Convert to THR value
-            if (t.symbol === 'THR') {
-                totalTHR += balance;
-            } else if (thrPrice > 0) {
-                totalTHR += valueUSD / thrPrice;
-            }
-        } else if (t.symbol === 'THR') {
-            totalTHR += balance;
-        }
-    });
-
-    const totalBTC = btcPrice > 0 ? totalUSD / btcPrice : 0;
+    // PR-1b: Calculate portfolio totals from API value fields (like wallet_viewer)
+    const pricedTokens = tokens.filter(t => t.value_in_thr !== null && t.value_in_thr !== undefined);
+    const totalTHR = pricedTokens.reduce((sum, t) => sum + Number(t.value_in_thr || 0), 0);
+    const totalUSD = pricedTokens.reduce((sum, t) => sum + Number(t.value_usd || 0), 0);
+    const totalBTC = pricedTokens.reduce((sum, t) => sum + Number(t.value_wbtc || 0), 0);
 
     // Labels
     const portfolioLabel = isGreek ? 'Συνολική Αξία' : 'Portfolio Value';
@@ -2075,41 +2041,43 @@ function renderWalletBalances(data) {
     const historyLabel = isGreek ? 'Ιστορικό' : 'History';
     const noTokensLabel = isGreek ? 'Δεν βρέθηκαν tokens' : 'No tokens found';
 
-    // Render token rows with logos and values
+    // PR-1b: Render token rows using API data directly (null → "—" like wallet_viewer)
     const tokenRows = tokens.filter(t => Number(t.balance) > 0).map(t => {
         const balance = Number(t.balance) || 0;
+        const decimals = t.decimals || 6;
         const symbol = t.symbol;
-        const registryInfo = TOKEN_REGISTRY[symbol] || {};
-        const tokenInfo = {
-            name: t.name || registryInfo.name || symbol,
-            color: t.color || registryInfo.color || '#00ff66',
-            logo: t.logo_url || t.logo || registryInfo.logo || null,
-            priceUSD: registryInfo.priceUSD ?? null,
-        };
-        const priceUSD = Number.isFinite(Number(tokenInfo.priceUSD)) ? Number(tokenInfo.priceUSD) : null;
-        const valueUSD = priceUSD !== null ? balance * priceUSD : null;
-        const valueTHR = symbol === 'THR' ? balance : (priceUSD !== null && thrPrice > 0 ? valueUSD / thrPrice : null);
+        const name = t.name || symbol;
+        const color = t.color || '#00ff66';
+        const logo = t.logo_url || t.logo;
 
-        const logoHtml = tokenInfo.logo
-            ? `<img src="${tokenInfo.logo}" alt="${symbol}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-               <span style="display:none; color:${tokenInfo.color}; font-weight:bold;">${symbol[0]}</span>`
-            : `<span style="color:${tokenInfo.color}; font-weight:bold;">${symbol[0]}</span>`;
+        // PR-1b: Use API value fields, display "—" for null
+        const valueInThr = t.value_in_thr !== null && t.value_in_thr !== undefined
+            ? Number(t.value_in_thr).toFixed(4) + ' THR'
+            : '—';
+        const valueUSD = t.value_usd !== null && t.value_usd !== undefined
+            ? `$${Number(t.value_usd).toFixed(2)}`
+            : '—';
+
+        const logoHtml = logo
+            ? `<img src="${logo}" alt="${symbol}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+               <span style="display:none; color:${color}; font-weight:bold;">${symbol[0]}</span>`
+            : `<span style="color:${color}; font-weight:bold;">${symbol[0]}</span>`;
 
         return `
             <div class="wallet-token-item" onclick="openTokenInfoModal('${symbol}')" style="cursor: pointer;" title="Click for token details">
-                <div class="wallet-token-logo" style="border-color: ${tokenInfo.color}; background: linear-gradient(135deg, ${tokenInfo.color}22 0%, ${tokenInfo.color}11 100%);">
+                <div class="wallet-token-logo" style="border-color: ${color}; background: linear-gradient(135deg, ${color}22 0%, ${color}11 100%);">
                     ${logoHtml}
                 </div>
                 <div class="wallet-token-info">
                     <div class="wallet-token-name">
-                        ${escapeHtml(tokenInfo.name || symbol)}
+                        ${escapeHtml(name)}
                         <span class="wallet-token-symbol">${escapeHtml(symbol)}</span>
                     </div>
-                    ${symbol !== 'THR' ? `<div class="wallet-token-thr-value">≈ ${valueTHR !== null ? valueTHR.toFixed(2) : '—'} THR</div>` : ''}
+                    ${symbol !== 'THR' ? `<div class="wallet-token-thr-value">≈ ${valueInThr}</div>` : ''}
                 </div>
                 <div class="wallet-token-values">
-                    <div class="wallet-token-balance">${formatBalance(balance)} ${symbol}</div>
-                    <div class="wallet-token-usd">≈ ${valueUSD !== null ? `$${valueUSD.toFixed(2)}` : '—'}</div>
+                    <div class="wallet-token-balance">${balance.toFixed(decimals)} ${symbol}</div>
+                    <div class="wallet-token-usd">≈ ${valueUSD}</div>
                 </div>
             </div>
         `;
@@ -2129,13 +2097,13 @@ function renderWalletBalances(data) {
             <button class="wallet-popup-copy-btn" onclick="copyToClipboard('${escapeHtml(wallet)}'); this.textContent='✓'; setTimeout(()=>this.textContent='Copy', 1500);">Copy</button>
         </div>
 
-        <!-- Portfolio Summary -->
+        <!-- Portfolio Summary - PR-1b: Show "—" for nulls -->
         <div class="wallet-portfolio-summary">
             <div class="wallet-portfolio-label">${portfolioLabel}</div>
-            <div class="wallet-portfolio-value">${formatBalance(totalTHR)} THR</div>
-            <div class="wallet-portfolio-usd">≈ $${totalUSD.toFixed(2)} USD</div>
+            <div class="wallet-portfolio-value">${pricedTokens.length > 0 ? totalTHR.toFixed(4) : '—'} THR</div>
+            <div class="wallet-portfolio-usd">≈ ${pricedTokens.length > 0 && totalUSD > 0 ? `$${totalUSD.toFixed(2)}` : '—'} USD</div>
             <div class="wallet-portfolio-btc">
-                <span style="font-size: 14px;">₿</span> ${totalBTC.toFixed(8)} BTC
+                <span style="font-size: 14px;">₿</span> ${pricedTokens.length > 0 && totalBTC > 0 ? totalBTC.toFixed(8) : '—'} BTC
             </div>
         </div>
 

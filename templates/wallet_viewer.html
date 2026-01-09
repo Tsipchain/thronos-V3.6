@@ -86,6 +86,102 @@
         0%, 100% { filter: drop-shadow(0 0 8px #ff6600); }
         50% { filter: drop-shadow(0 0 16px #ff9900) drop-shadow(0 0 24px #ff6600); }
     }
+
+    /* PR-5: Tabs for wallet sections */
+    .wallet-tabs {
+        display: flex;
+        gap: 8px;
+        margin: 20px 0 12px 0;
+        border-bottom: 2px solid #0f0;
+    }
+    .wallet-tab-btn {
+        padding: 10px 20px;
+        background: transparent;
+        border: none;
+        border-bottom: 3px solid transparent;
+        color: #0f0;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 600;
+        font-family: monospace;
+        transition: all 0.2s;
+    }
+    .wallet-tab-btn:hover {
+        background: #111;
+        color: #0c0;
+    }
+    .wallet-tab-btn.active {
+        color: #0f0;
+        border-bottom-color: #0f0;
+        background: #111;
+    }
+    .wallet-tab-content {
+        display: none;
+    }
+    .wallet-tab-content.active {
+        display: block;
+    }
+
+    /* PR-5: Music section styles */
+    .music-section {
+        margin-bottom: 20px;
+    }
+    .music-section-title {
+        font-size: 14px;
+        color: #0f0;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 10px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid #333;
+    }
+    .music-track-item, .music-playlist-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px;
+        background: #111;
+        border: 1px solid #0f0;
+        border-radius: 6px;
+        margin-bottom: 8px;
+        transition: all 0.2s;
+        cursor: pointer;
+    }
+    .music-track-item:hover, .music-playlist-item:hover {
+        background: #1a1a1a;
+        border-color: #0c0;
+        transform: translateX(-2px);
+    }
+    .music-track-info, .music-playlist-info {
+        flex: 1;
+        min-width: 0;
+    }
+    .music-track-title, .music-playlist-name {
+        font-size: 14px;
+        font-weight: 600;
+        color: #e6ffe5;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .music-track-artist {
+        font-size: 12px;
+        color: #9f9;
+        opacity: 0.8;
+        margin-top: 2px;
+    }
+    .music-playlist-count {
+        font-size: 12px;
+        color: #9f9;
+        opacity: 0.8;
+        margin-top: 2px;
+    }
+    .music-empty {
+        text-align: center;
+        padding: 40px;
+        color: #666;
+        font-size: 14px;
+    }
 </style>
 {% endblock %}
 
@@ -132,13 +228,31 @@
           </div>
       </div>
 
-      <h3><span class="lang-el">Τα Tokens μου</span><span class="lang-en">My Tokens</span></h3>
-      <div id="tokensList" class="wallet-card">
-          <span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span>
+      <!-- PR-5: Tabs for Tokens, History, and Music -->
+      <div class="wallet-tabs">
+          <button class="wallet-tab-btn active" data-tab="tokens" onclick="switchWalletViewerTab('tokens')">
+              💰 <span class="lang-el">Tokens</span><span class="lang-en">Tokens</span>
+          </button>
+          <button class="wallet-tab-btn" data-tab="history" onclick="switchWalletViewerTab('history')">
+              📜 <span class="lang-el">Ιστορικό</span><span class="lang-en">History</span>
+          </button>
+          <button class="wallet-tab-btn" data-tab="music" onclick="switchWalletViewerTab('music')">
+              🎵 <span class="lang-el">Μουσική</span><span class="lang-en">Music</span>
+          </button>
       </div>
 
-      <h3><span class="lang-el">Ιστορικό Συναλλαγών</span><span class="lang-en">Transaction History</span></h3>
-      <div class="tx-filters">
+      <!-- Tokens Tab -->
+      <div class="wallet-tab-content active" id="tokensTabContent">
+          <h3><span class="lang-el">Τα Tokens μου</span><span class="lang-en">My Tokens</span></h3>
+          <div id="tokensList" class="wallet-card">
+              <span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span>
+          </div>
+      </div>
+
+      <!-- History Tab -->
+      <div class="wallet-tab-content" id="historyTabContent">
+          <h3><span class="lang-el">Ιστορικό Συναλλαγών</span><span class="lang-en">Transaction History</span></h3>
+          <div class="tx-filters">
         <button class="tx-filter-btn active" data-filter="all" onclick="renderTxHistory('all')">All</button>
         <button class="tx-filter-btn" data-filter="thr" onclick="renderTxHistory('thr')">THR</button>
         <button class="tx-filter-btn" data-filter="tokens" onclick="renderTxHistory('tokens')">Tokens</button>
@@ -151,6 +265,15 @@
       </div>
       <div id="txHistory" class="wallet-card">
           <span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span>
+      </div>
+      </div>
+
+      <!-- Music Tab -->
+      <div class="wallet-tab-content" id="musicTabContent">
+          <h3><span class="lang-el">Μουσική</span><span class="lang-en">Music</span></h3>
+          <div class="wallet-card">
+              <span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span>
+          </div>
       </div>
   </div>
 
@@ -423,7 +546,144 @@
       div.innerHTML = html;
     }
 
+    // PR-5: Tab Switching for Wallet Viewer
+    function switchWalletViewerTab(tabName) {
+        // Update tab buttons
+        const tabBtns = document.querySelectorAll('.wallet-tab-btn');
+        tabBtns.forEach(btn => {
+            if (btn.dataset.tab === tabName) {
+                btn.classList.add('active');
+            } else {
+                btn.classList.remove('active');
+            }
+        });
+
+        // Update tab content
+        const tabContents = document.querySelectorAll('.wallet-tab-content');
+        tabContents.forEach(content => {
+            content.classList.remove('active');
+        });
+
+        const activeContent = document.getElementById(`${tabName}TabContent`);
+        if (activeContent) {
+            activeContent.classList.add('active');
+        }
+
+        // Load music when switching to music tab
+        if (tabName === 'music') {
+            loadViewerMusicTab();
+        }
+    }
+
+    // PR-5: Load and render music tab
+    let viewerMusicModuleInitialized = false;
+
+    async function loadViewerMusicTab() {
+        const musicContent = document.getElementById('musicTabContent');
+        if (!musicContent) return;
+
+        const wallet = currentAddress || localStorage.getItem('thr_address');
+        if (!wallet) {
+            musicContent.innerHTML = '<div class="wallet-card"><div class="music-empty">Please connect your wallet to view music.</div></div>';
+            return;
+        }
+
+        // Security: Check if wallet is unlocked (has send_secret)
+        const secret = localStorage.getItem('thr_secret');
+        if (!secret) {
+            musicContent.innerHTML = '<div class="wallet-card"><div class="music-empty">Unlock your wallet to view music.</div></div>';
+            return;
+        }
+
+        try {
+            // Check if MusicModule is available
+            if (typeof MusicModule === 'undefined') {
+                musicContent.innerHTML = '<div class="wallet-card"><div class="music-empty">Music module not available.</div></div>';
+                return;
+            }
+
+            // Show loading
+            musicContent.innerHTML = `
+                <div class="wallet-card">
+                    <div style="text-align:center; padding:20px; color:#0f0;">
+                        <div style="display:inline-block; width:20px; height:20px; border:2px solid rgba(0,255,0,0.2); border-top:2px solid #0f0; border-radius:50%; animation:spin 1s linear infinite;"></div>
+                        <div style="margin-top:10px;">Loading music...</div>
+                    </div>
+                </div>
+            `;
+
+            // Initialize MusicModule with address
+            await MusicModule.init(wallet);
+
+            // Render music content
+            renderViewerMusicTab();
+        } catch (error) {
+            console.error('[Wallet Viewer] Failed to load music:', error);
+            musicContent.innerHTML = `<div class="wallet-card"><div class="music-empty" style="color: #ff6666;">Error loading music: ${error.message}</div></div>`;
+        }
+    }
+
+    function renderViewerMusicTab() {
+        const musicContent = document.getElementById('musicTabContent');
+        if (!musicContent) return;
+
+        const library = MusicModule.getLibrary();
+        const playlists = MusicModule.getPlaylists();
+
+        // Render library tracks
+        const libraryHtml = library.length > 0
+            ? library.map(track => `
+                <div class="music-track-item">
+                    <div class="music-track-info">
+                        <div class="music-track-title">${escapeHtml(track.title || 'Untitled')}</div>
+                        <div class="music-track-artist">${escapeHtml(track.artist || 'Unknown Artist')}</div>
+                    </div>
+                    <div style="font-size: 11px; color: #666;">${escapeHtml(track.duration || '')}</div>
+                </div>
+            `).join('')
+            : `<div class="music-empty">No tracks found</div>`;
+
+        // Render playlists
+        const playlistsHtml = playlists.length > 0
+            ? playlists.map(playlist => {
+                const trackCount = (playlist.tracks || []).length;
+                return `
+                    <div class="music-playlist-item">
+                        <div class="music-playlist-info">
+                            <div class="music-playlist-name">${escapeHtml(playlist.name || 'Untitled Playlist')}</div>
+                            <div class="music-playlist-count">${trackCount} tracks</div>
+                        </div>
+                    </div>
+                `;
+            }).join('')
+            : `<div class="music-empty">No playlists found</div>`;
+
+        const html = `
+            <div class="wallet-card">
+                <div class="music-section">
+                    <div class="music-section-title">Library</div>
+                    ${libraryHtml}
+                </div>
+                <div class="music-section">
+                    <div class="music-section-title">Playlists</div>
+                    ${playlistsHtml}
+                </div>
+            </div>
+        `;
+
+        musicContent.innerHTML = html;
+    }
+
+    // Helper function to escape HTML
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
     // Init
     document.addEventListener('DOMContentLoaded', checkConnection);
 </script>
+
+<script src="{{ url_for('static', filename='music_module.js') }}"></script>
 {% endblock %}

@@ -495,6 +495,120 @@
         gap: 8px;
     }
 
+    /* PR-5: Wallet Tabs */
+    .wallet-tabs {
+        display: flex;
+        gap: 4px;
+        margin-bottom: 12px;
+        border-bottom: 1px solid rgba(0, 255, 102, 0.15);
+    }
+    .wallet-tab-btn {
+        flex: 1;
+        padding: 8px 12px;
+        background: transparent;
+        border: none;
+        border-bottom: 2px solid transparent;
+        color: #56ff9a;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        transition: all 0.2s;
+        font-family: "Courier New", monospace;
+    }
+    .wallet-tab-btn:hover {
+        background: rgba(0, 255, 102, 0.08);
+        color: #00ff66;
+    }
+    .wallet-tab-btn.active {
+        color: #00ff66;
+        border-bottom-color: #00ff66;
+        background: rgba(0, 255, 102, 0.1);
+    }
+    .wallet-tab-content {
+        display: none;
+    }
+    .wallet-tab-content.active {
+        display: block;
+    }
+
+    /* PR-5: Music Tab Styles */
+    .music-section {
+        margin-bottom: 16px;
+    }
+    .music-section-title {
+        font-size: 10px;
+        color: #56ff9a;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 8px;
+        padding-bottom: 4px;
+        border-bottom: 1px solid rgba(0, 255, 102, 0.1);
+    }
+    .music-track-item, .music-playlist-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px;
+        background: linear-gradient(135deg, rgba(26, 59, 46, 0.15) 0%, rgba(0, 255, 102, 0.03) 100%);
+        border-radius: 6px;
+        border: 1px solid rgba(0, 255, 102, 0.1);
+        margin-bottom: 4px;
+        transition: all 0.2s;
+        cursor: pointer;
+    }
+    .music-track-item:hover, .music-playlist-item:hover {
+        background: linear-gradient(135deg, rgba(26, 59, 46, 0.25) 0%, rgba(0, 255, 102, 0.06) 100%);
+        border-color: rgba(0, 255, 102, 0.2);
+        transform: translateX(-2px);
+    }
+    .music-track-info, .music-playlist-info {
+        flex: 1;
+        min-width: 0;
+    }
+    .music-track-title, .music-playlist-name {
+        font-size: 11px;
+        font-weight: 600;
+        color: #e6ffe5;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .music-track-artist {
+        font-size: 9px;
+        color: #56ff9a;
+        opacity: 0.8;
+    }
+    .music-playlist-count {
+        font-size: 9px;
+        color: #56ff9a;
+        opacity: 0.8;
+    }
+    .music-empty {
+        text-align: center;
+        padding: 20px;
+        color: #666;
+        font-size: 10px;
+    }
+    .music-create-btn {
+        width: 100%;
+        padding: 8px;
+        background: linear-gradient(135deg, rgba(0, 255, 102, 0.1) 0%, rgba(0, 255, 102, 0.2) 100%);
+        border: 1px solid rgba(0, 255, 102, 0.3);
+        color: #00ff66;
+        cursor: pointer;
+        font-size: 10px;
+        font-weight: 600;
+        border-radius: 6px;
+        transition: all 0.2s;
+        font-family: "Courier New", monospace;
+    }
+    .music-create-btn:hover {
+        background: linear-gradient(135deg, rgba(0, 255, 102, 0.2) 0%, rgba(0, 255, 102, 0.3) 100%);
+        border-color: #00ff66;
+    }
+
     .wallet-popup-login label {
         display: block;
         margin-top: 10px;
@@ -2085,6 +2199,10 @@ function renderWalletBalances(data) {
 
     const shortAddr = wallet ? `${wallet.slice(0, 8)}...${wallet.slice(-6)}` : '';
 
+    // PR-5: Tab labels
+    const balancesTabLabel = isGreek ? 'Υπόλοιπα' : 'Balances';
+    const musicTabLabel = isGreek ? 'Μουσική' : 'Music';
+
     const html = `
         <div class="wallet-popup-header">
             <span class="lang-el">Thronos Wallet</span>
@@ -2097,48 +2215,70 @@ function renderWalletBalances(data) {
             <button class="wallet-popup-copy-btn" onclick="copyToClipboard('${escapeHtml(wallet)}'); this.textContent='✓'; setTimeout(()=>this.textContent='Copy', 1500);">Copy</button>
         </div>
 
-        <!-- Portfolio Summary - PR-1b: Show "—" for nulls -->
-        <div class="wallet-portfolio-summary">
-            <div class="wallet-portfolio-label">${portfolioLabel}</div>
-            <div class="wallet-portfolio-value">${pricedTokens.length > 0 ? totalTHR.toFixed(4) : '—'} THR</div>
-            <div class="wallet-portfolio-usd">≈ ${pricedTokens.length > 0 && totalUSD > 0 ? `$${totalUSD.toFixed(2)}` : '—'} USD</div>
-            <div class="wallet-portfolio-btc">
-                <span style="font-size: 14px;">₿</span> ${pricedTokens.length > 0 && totalBTC > 0 ? totalBTC.toFixed(8) : '—'} BTC
+        <!-- PR-5: Tabs -->
+        <div class="wallet-tabs">
+            <button class="wallet-tab-btn active" data-tab="balances" onclick="switchWalletTab('balances')">
+                💰 ${balancesTabLabel}
+            </button>
+            <button class="wallet-tab-btn" data-tab="music" onclick="switchWalletTab('music')">
+                🎵 ${musicTabLabel}
+            </button>
+        </div>
+
+        <!-- Balances Tab Content -->
+        <div class="wallet-tab-content active" id="balancesTabContent">
+            <!-- Portfolio Summary - PR-1b: Show "—" for nulls -->
+            <div class="wallet-portfolio-summary">
+                <div class="wallet-portfolio-label">${portfolioLabel}</div>
+                <div class="wallet-portfolio-value">${pricedTokens.length > 0 ? totalTHR.toFixed(4) : '—'} THR</div>
+                <div class="wallet-portfolio-usd">≈ ${pricedTokens.length > 0 && totalUSD > 0 ? `$${totalUSD.toFixed(2)}` : '—'} USD</div>
+                <div class="wallet-portfolio-btc">
+                    <span style="font-size: 14px;">₿</span> ${pricedTokens.length > 0 && totalBTC > 0 ? totalBTC.toFixed(8) : '—'} BTC
+                </div>
+            </div>
+
+            <!-- Token List -->
+            <div style="font-size: 11px; color: #56ff9a; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">${assetsLabel}</div>
+            <div class="wallet-token-list">
+                ${tokenRows || `<div style="text-align: center; opacity: 0.6; padding: 20px;">${noTokensLabel}</div>`}
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="wallet-quick-actions">
+                <a href="javascript:void(0)" class="wallet-quick-btn" onclick="openSendModal()">
+                    <span class="wallet-quick-btn-icon">💸</span>
+                    <span class="wallet-quick-btn-label">${sendLabel}</span>
+                </a>
+                <a href="javascript:void(0)" class="wallet-quick-btn" onclick="openReceiveModal()">
+                    <span class="wallet-quick-btn-icon">📥</span>
+                    <span class="wallet-quick-btn-label">${receiveLabel}</span>
+                </a>
+                <a href="/swap" class="wallet-quick-btn">
+                    <span class="wallet-quick-btn-icon">🔄</span>
+                    <span class="wallet-quick-btn-label">${swapLabel}</span>
+                </a>
+                <a href="/bridge" class="wallet-quick-btn">
+                    <span class="wallet-quick-btn-icon">🌉</span>
+                    <span class="wallet-quick-btn-label">${bridgeLabel}</span>
+                </a>
+                <a href="/pledge" class="wallet-quick-btn">
+                    <span class="wallet-quick-btn-icon">🔥</span>
+                    <span class="wallet-quick-btn-label">${pledgeLabel}</span>
+                </a>
+                <a href="javascript:void(0)" class="wallet-quick-btn" onclick="openWalletHistoryModal()">
+                    <span class="wallet-quick-btn-icon">📜</span>
+                    <span class="wallet-quick-btn-label">${historyLabel}</span>
+                </a>
             </div>
         </div>
 
-        <!-- Token List -->
-        <div style="font-size: 11px; color: #56ff9a; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">${assetsLabel}</div>
-        <div class="wallet-token-list">
-            ${tokenRows || `<div style="text-align: center; opacity: 0.6; padding: 20px;">${noTokensLabel}</div>`}
-        </div>
-
-        <!-- Quick Actions -->
-        <div class="wallet-quick-actions">
-            <a href="javascript:void(0)" class="wallet-quick-btn" onclick="openSendModal()">
-                <span class="wallet-quick-btn-icon">💸</span>
-                <span class="wallet-quick-btn-label">${sendLabel}</span>
-            </a>
-            <a href="javascript:void(0)" class="wallet-quick-btn" onclick="openReceiveModal()">
-                <span class="wallet-quick-btn-icon">📥</span>
-                <span class="wallet-quick-btn-label">${receiveLabel}</span>
-            </a>
-            <a href="/swap" class="wallet-quick-btn">
-                <span class="wallet-quick-btn-icon">🔄</span>
-                <span class="wallet-quick-btn-label">${swapLabel}</span>
-            </a>
-            <a href="/bridge" class="wallet-quick-btn">
-                <span class="wallet-quick-btn-icon">🌉</span>
-                <span class="wallet-quick-btn-label">${bridgeLabel}</span>
-            </a>
-            <a href="/pledge" class="wallet-quick-btn">
-                <span class="wallet-quick-btn-icon">🔥</span>
-                <span class="wallet-quick-btn-label">${pledgeLabel}</span>
-            </a>
-            <a href="javascript:void(0)" class="wallet-quick-btn" onclick="openWalletHistoryModal()">
-                <span class="wallet-quick-btn-icon">📜</span>
-                <span class="wallet-quick-btn-label">${historyLabel}</span>
-            </a>
+        <!-- Music Tab Content -->
+        <div class="wallet-tab-content" id="musicTabContent">
+            <div class="wallet-popup-loading">
+                <div class="wallet-popup-spinner"></div>
+                <span class="lang-el">Φόρτωση μουσικής...</span>
+                <span class="lang-en">Loading music...</span>
+            </div>
         </div>
     `;
 
@@ -2147,6 +2287,147 @@ function renderWalletBalances(data) {
     // Apply language after render
     const savedLang = getCurrentLang();
     setLanguage(savedLang);
+}
+
+// PR-5: Wallet Tab Switching
+function switchWalletTab(tabName) {
+    // Update tab buttons
+    const tabBtns = document.querySelectorAll('.wallet-tab-btn');
+    tabBtns.forEach(btn => {
+        if (btn.dataset.tab === tabName) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
+        }
+    });
+
+    // Update tab content
+    const tabContents = document.querySelectorAll('.wallet-tab-content');
+    tabContents.forEach(content => {
+        content.classList.remove('active');
+    });
+
+    const activeContent = document.getElementById(`${tabName}TabContent`);
+    if (activeContent) {
+        activeContent.classList.add('active');
+    }
+
+    // Load music when switching to music tab
+    if (tabName === 'music') {
+        loadMusicTab();
+    }
+}
+
+// PR-5: Load and render music tab
+let musicModuleInitialized = false;
+
+async function loadMusicTab() {
+    const musicContent = document.getElementById('musicTabContent');
+    if (!musicContent) return;
+
+    const wallet = walletSession.getAddress();
+    if (!wallet) {
+        musicContent.innerHTML = '<div class="music-empty">Please connect your wallet to view music.</div>';
+        return;
+    }
+
+    // Security: Check if wallet is unlocked (has send_secret)
+    const secret = localStorage.getItem('thr_secret');
+    if (!secret) {
+        const lang = getCurrentLang();
+        const isGreek = isGreekLang(lang);
+        const unlockMsg = isGreek ? 'Ξεκλειδώστε το πορτοφόλι σας για να δείτε τη μουσική.' : 'Unlock your wallet to view music.';
+        musicContent.innerHTML = `<div class="music-empty">${unlockMsg}</div>`;
+        return;
+    }
+
+    try {
+        // Initialize MusicModule if not already done
+        if (!musicModuleInitialized || typeof MusicModule === 'undefined') {
+            musicContent.innerHTML = '<div class="music-empty">Music module not available.</div>';
+            return;
+        }
+
+        // Show loading
+        musicContent.innerHTML = `
+            <div class="wallet-popup-loading">
+                <div class="wallet-popup-spinner"></div>
+                Loading music...
+            </div>
+        `;
+
+        // Initialize MusicModule with address
+        await MusicModule.init(wallet);
+
+        // Render music content
+        renderMusicTab();
+    } catch (error) {
+        console.error('[Wallet] Failed to load music:', error);
+        musicContent.innerHTML = `<div class="music-empty" style="color: #ff6666;">Error loading music: ${error.message}</div>`;
+    }
+}
+
+function renderMusicTab() {
+    const musicContent = document.getElementById('musicTabContent');
+    if (!musicContent) return;
+
+    const library = MusicModule.getLibrary();
+    const playlists = MusicModule.getPlaylists();
+
+    const lang = getCurrentLang();
+    const isGreek = isGreekLang(lang);
+
+    const libraryLabel = isGreek ? 'Βιβλιοθήκη' : 'Library';
+    const playlistsLabel = isGreek ? 'Λίστες Αναπαραγωγής' : 'Playlists';
+    const noTracksLabel = isGreek ? 'Δεν βρέθηκαν κομμάτια' : 'No tracks found';
+    const noPlaylistsLabel = isGreek ? 'Δεν βρέθηκαν λίστες' : 'No playlists found';
+
+    // Render library tracks
+    const libraryHtml = library.length > 0
+        ? library.map(track => `
+            <div class="music-track-item">
+                <div class="music-track-info">
+                    <div class="music-track-title">${escapeHtml(track.title || 'Untitled')}</div>
+                    <div class="music-track-artist">${escapeHtml(track.artist || 'Unknown Artist')}</div>
+                </div>
+                <div style="font-size: 9px; color: #666;">${escapeHtml(track.duration || '')}</div>
+            </div>
+        `).join('')
+        : `<div class="music-empty">${noTracksLabel}</div>`;
+
+    // Render playlists
+    const playlistsHtml = playlists.length > 0
+        ? playlists.map(playlist => {
+            const trackCount = (playlist.tracks || []).length;
+            const countLabel = isGreek ? `${trackCount} κομμάτια` : `${trackCount} tracks`;
+            return `
+                <div class="music-playlist-item">
+                    <div class="music-playlist-info">
+                        <div class="music-playlist-name">${escapeHtml(playlist.name || 'Untitled Playlist')}</div>
+                        <div class="music-playlist-count">${countLabel}</div>
+                    </div>
+                </div>
+            `;
+        }).join('')
+        : `<div class="music-empty">${noPlaylistsLabel}</div>`;
+
+    const html = `
+        <div class="music-section">
+            <div class="music-section-title">${libraryLabel}</div>
+            ${libraryHtml}
+        </div>
+        <div class="music-section">
+            <div class="music-section-title">${playlistsLabel}</div>
+            ${playlistsHtml}
+        </div>
+    `;
+
+    musicContent.innerHTML = html;
+}
+
+// PR-5: Check if MusicModule is available
+if (typeof MusicModule !== 'undefined') {
+    musicModuleInitialized = true;
 }
 
 function formatBalance(num) {
@@ -3798,6 +4079,7 @@ function downloadCGMinerKit() {
 </script>
 
 <script src="{{ url_for('static', filename='wallet_sdk.js') }}"></script>
+<script src="{{ url_for('static', filename='music_module.js') }}"></script>
 
 {% block scripts %}{% endblock %}
 

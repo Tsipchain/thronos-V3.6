@@ -685,5 +685,13 @@
     document.addEventListener('DOMContentLoaded', checkConnection);
 </script>
 
-<script src="{{ url_for('static', filename='music_module.js') }}"></script>
+<script src="{{ url_for('static', filename='wallet_auth.js') }}?v={{ build_id }}"></script>
+<script src="{{ url_for('static', filename='music_module.js') }}?v={{ build_id }}"></script>
+
+<script>
+// PR-5a: Verify MusicModule loaded
+if (typeof MusicModule === 'undefined') {
+    console.warn('[Wallet Viewer] MusicModule not loaded - check script path/caching');
+}
+</script>
 {% endblock %}

@@ -2246,6 +2246,9 @@ function renderWalletBalances(data) {
             <button class="wallet-tab-btn" data-tab="music" onclick="switchWalletTab('music')">
                 🎵 ${musicTabLabel}
             </button>
+            <button class="wallet-tab-btn" data-tab="offline" onclick="switchWalletTab('offline')">
+                📥 ${isGreek ? 'Offline' : 'Offline'}
+            </button>
         </div>
 
         <!-- Balances Tab Content -->
@@ -2303,6 +2306,15 @@ function renderWalletBalances(data) {
                 <span class="lang-en">Loading music...</span>
             </div>
         </div>
+
+        <!-- Offline Tab Content -->
+        <div class="wallet-tab-content" id="offlineTabContent">
+            <div class="wallet-popup-loading">
+                <div class="wallet-popup-spinner"></div>
+                <span class="lang-el">Φόρτωση offline...</span>
+                <span class="lang-en">Loading offline...</span>
+            </div>
+        </div>
     `;
 
     content.innerHTML = html;
@@ -2338,6 +2350,11 @@ function switchWalletTab(tabName) {
     // Load music when switching to music tab
     if (tabName === 'music') {
         loadMusicTab();
+    }
+
+    // Load offline when switching to offline tab
+    if (tabName === 'offline') {
+        loadOfflineTab();
     }
 }
 
@@ -2537,6 +2554,90 @@ async function createPlaylistFromWallet() {
         const musicContent = document.getElementById('musicTabContent');
         if (musicContent) renderMusicTab();
     }
+}
+
+// PR-5c: Load and render offline tab
+async function loadOfflineTab() {
+    const offlineContent = document.getElementById('offlineTabContent');
+    if (!offlineContent) return;
+
+    const wallet = walletSession.getAddress();
+    if (!wallet) {
+        offlineContent.innerHTML = '<div class="music-empty">Please connect your wallet to view offline tracks.</div>';
+        return;
+    }
+
+    try {
+        // Show loading
+        offlineContent.innerHTML = `
+            <div class="wallet-popup-loading">
+                <div class="wallet-popup-spinner"></div>
+                Loading offline tracks...
+            </div>
+        `;
+
+        // Fetch offline tracks
+        const res = await fetch(`/api/music/offline/${encodeURIComponent(wallet)}`);
+        const data = await res.json();
+
+        if (data.ok && data.tracks && data.tracks.length > 0) {
+            renderOfflineTab(data.tracks);
+        } else {
+            const lang = getCurrentLang();
+            const isGreek = isGreekLang(lang);
+            const emptyMsg = isGreek
+                ? 'Δεν έχετε αποθηκευμένα offline τραγούδια. Πηγαίνετε στο /music για να αποθηκεύσετε!'
+                : 'No offline tracks saved. Go to /music to save tracks!';
+            offlineContent.innerHTML = `
+                <div class="music-empty">
+                    <div style="font-size: 48px; margin-bottom: 16px;">📥</div>
+                    <div style="margin-bottom: 16px;">${emptyMsg}</div>
+                    <a href="/music#offline" style="color: #0f0; text-decoration: underline; cursor: pointer;">
+                        ${isGreek ? 'Άνοιγμα Music' : 'Open Music'}
+                    </a>
+                </div>
+            `;
+        }
+    } catch (error) {
+        console.error('[Wallet] Failed to load offline tracks:', error);
+        offlineContent.innerHTML = `<div class="music-empty" style="color: #ff6666;">Error loading offline tracks: ${error.message}</div>`;
+    }
+}
+
+function renderOfflineTab(tracks) {
+    const offlineContent = document.getElementById('offlineTabContent');
+    if (!offlineContent) return;
+
+    const lang = getCurrentLang();
+    const isGreek = isGreekLang(lang);
+
+    const tracksHtml = tracks.map(track => `
+        <div class="music-track-item" data-track-id="${track.id || track.track_id}">
+            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+                <button onclick="event.stopPropagation(); window.open('/music#offline', '_blank');" style="background: rgba(0,255,102,0.15); border: 1px solid rgba(0,255,102,0.3); color: #0f0; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 14px;">▶️</button>
+                <div class="music-track-info" style="flex: 1;">
+                    <div class="music-track-title">${escapeHtml(track.title || 'Untitled')}</div>
+                    <div class="music-track-artist">${escapeHtml(track.artist || track.artist_name || 'Unknown Artist')}</div>
+                    <div style="font-size: 9px; color: #888; margin-top: 2px;">
+                        ${track.tipped ? '💰 Tipped' : '📥 Saved'}
+                    </div>
+                </div>
+            </div>
+            <div style="font-size: 9px; color: #666;">${escapeHtml(track.duration || '')}</div>
+        </div>
+    `).join('');
+
+    const totalLabel = isGreek ? `${tracks.length} αποθηκευμένα` : `${tracks.length} saved`;
+
+    offlineContent.innerHTML = `
+        <div style="margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid rgba(0,255,102,0.2);">
+            <div style="color: #0f0; font-size: 12px; font-weight: 600;">📥 ${isGreek ? 'Offline Τραγούδια' : 'Offline Tracks'}</div>
+            <div style="color: #888; font-size: 10px; margin-top: 4px;">${totalLabel}</div>
+        </div>
+        <div style="max-height: 300px; overflow-y: auto;">
+            ${tracksHtml}
+        </div>
+    `;
 }
 
 function formatBalance(num) {

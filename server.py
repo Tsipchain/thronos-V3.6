@@ -3824,10 +3824,24 @@ def media_static(filename):
 
 @app.route("/viewer")
 def viewer():
+    # PR-5g: Performance optimization - limit to recent blocks/txs
+    # Viewer page loads much faster with pagination
+    limit = request.args.get('limit', type=int, default=50)
+    limit = min(limit, 200)  # Cap at 200 for safety
+
+    all_blocks = get_blocks_for_viewer()
+    recent_blocks = all_blocks[-limit:] if len(all_blocks) > limit else all_blocks
+
+    all_txs = _tx_feed()
+    recent_txs = all_txs[:limit] if len(all_txs) > limit else all_txs
+
     return render_template(
         "thronos_block_viewer.html",
-        blocks=get_blocks_for_viewer(),
-        transactions=_tx_feed(),
+        blocks=recent_blocks,
+        transactions=recent_txs,
+        total_blocks=len(all_blocks),
+        total_txs=len(all_txs),
+        showing_limit=limit
     )
 
 @app.route("/wallet")

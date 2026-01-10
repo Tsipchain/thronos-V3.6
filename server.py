@@ -14699,6 +14699,34 @@ def api_v1_music_play(track_id):
                 registry["artists"][artist_address]["total_earnings"] = \
                     float(registry["artists"][artist_address].get("total_earnings", 0)) + PLAY_ROYALTY
 
+            # PR-5g: Record play royalty as on-chain transaction for wallet history
+            chain = load_json(CHAIN_FILE, [])
+            tx = {
+                "type": "music",
+                "kind": "music",
+                "category": "music",
+                "from": AI_WALLET_ADDRESS,
+                "to": artist_address,
+                "amount": PLAY_ROYALTY,
+                "track_id": track_id,
+                "track_title": track.get("title", "Untitled"),
+                "artist_name": track.get("artist_name", "Unknown Artist"),
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+                "tx_id": f"MUSIC-PLAY-{int(time.time())}-{secrets.token_hex(4)}",
+                "status": "confirmed",
+                "note": f"Music Pool Earnings: {track.get('title', 'Untitled')} (Play #{len(registry['plays'].get(track_id, []))})",
+                "meta": {
+                    "track_id": track_id,
+                    "track_title": track.get("title"),
+                    "play_number": len(registry["plays"].get(track_id, [])),
+                    "royalty_type": "play_reward",
+                    "pool_source": "AI_WALLET"
+                }
+            }
+            chain.append(tx)
+            save_json(CHAIN_FILE, chain)
+            update_last_block(tx, is_block=False)
+
             play["royalty_paid"] = PLAY_ROYALTY
     except Exception as e:
         logger.warning(f"Royalty payment failed: {e}")

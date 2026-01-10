@@ -97,6 +97,52 @@
         },
 
         /**
+         * PR-5g: Auto-lock timer
+         */
+        _autoLockTimer: null,
+        _autoLockTimeout: 5 * 60 * 1000, // 5 minutes default
+
+        /**
+         * Start auto-lock timer
+         */
+        startAutoLock(timeoutMs = null) {
+            this.stopAutoLock(); // Clear any existing timer
+
+            const timeout = timeoutMs || this._autoLockTimeout;
+
+            this._autoLockTimer = setTimeout(() => {
+                console.log('[WalletAuth] Auto-locking wallet after inactivity');
+                this.lock();
+
+                // Show notification if in browser
+                if (typeof showToast === 'function') {
+                    showToast('Wallet locked due to inactivity');
+                }
+            }, timeout);
+
+            console.log(`[WalletAuth] Auto-lock timer started (${timeout / 1000}s)`);
+        },
+
+        /**
+         * Stop auto-lock timer
+         */
+        stopAutoLock() {
+            if (this._autoLockTimer) {
+                clearTimeout(this._autoLockTimer);
+                this._autoLockTimer = null;
+            }
+        },
+
+        /**
+         * Reset auto-lock timer (call on user activity)
+         */
+        resetAutoLock() {
+            if (this.isUnlocked()) {
+                this.startAutoLock();
+            }
+        },
+
+        /**
          * Lock wallet (clear session secret)
          */
         lock() {
@@ -106,5 +152,38 @@
 
     // Export to window
     window.WalletAuth = WalletAuth;
+
+    // PR-5g: Setup auto-lock on page load
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initAutoLock);
+    } else {
+        initAutoLock();
+    }
+
+    function initAutoLock() {
+        // Start auto-lock if wallet is unlocked
+        if (WalletAuth.isUnlocked()) {
+            WalletAuth.startAutoLock();
+        }
+
+        // Reset timer on user activity
+        const activityEvents = ['mousedown', 'keypress', 'scroll', 'touchstart', 'click'];
+        activityEvents.forEach(eventType => {
+            document.addEventListener(eventType, () => {
+                WalletAuth.resetAutoLock();
+            }, { passive: true });
+        });
+
+        // Also reset on wallet operations
+        const originalRequire = WalletAuth.requireUnlockedWallet;
+        WalletAuth.requireUnlockedWallet = async function() {
+            const result = await originalRequire.call(this);
+            // Start auto-lock after successful unlock
+            WalletAuth.startAutoLock();
+            return result;
+        };
+
+        console.log('[WalletAuth] Auto-lock initialized');
+    }
 
 })(window);

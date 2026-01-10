@@ -2448,11 +2448,13 @@ function renderMusicTab() {
 
     // Render library tracks
     const libraryHtml = library.length > 0
-        ? library.map(track => `
+        ? library.map(track => {
+            const trackIdSafe = (track.id || track.track_id || '').toString().replace(/'/g, "\\'");
+            return `
             <div class="music-track-item" data-track-id="${track.id || track.track_id}">
                 <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
-                    <button onclick="event.stopPropagation(); window.open('/music', '_blank');" style="background: rgba(0,255,102,0.15); border: 1px solid rgba(0,255,102,0.3); color: #0f0; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 14px;">▶️</button>
-                    <div class="music-track-info" style="flex: 1;">
+                    <button onclick="event.stopPropagation(); playWalletTrack('${trackIdSafe}', false);" style="background: rgba(0,255,102,0.15); border: 1px solid rgba(0,255,102,0.3); color: #0f0; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 14px;">▶️</button>
+                    <div class="music-track-info" style="flex: 1; cursor: pointer;" onclick="playWalletTrack('${trackIdSafe}', false);">
                         <div class="music-track-title">${escapeHtml(track.title || 'Untitled')}</div>
                         <div class="music-track-artist">${escapeHtml(track.artist || track.artist_name || 'Unknown Artist')}</div>
                         <div style="font-size: 9px; color: #888; margin-top: 2px;">
@@ -2461,9 +2463,10 @@ function renderMusicTab() {
                         </div>
                     </div>
                 </div>
-                <button onclick="event.stopPropagation(); alert('Open /music to manage this track');" style="background: none; border: none; color: #0f0; font-size: 16px; cursor: pointer; padding: 4px;">⋮</button>
+                <button onclick="event.stopPropagation(); window.open('/music', '_blank');" title="Open in music page" style="background: none; border: none; color: #0f0; font-size: 16px; cursor: pointer; padding: 4px;">⋮</button>
             </div>
-        `).join('')
+            `;
+        }).join('')
         : `<div class="music-empty">${noTracksLabel}</div>`;
 
     // Render playlists
@@ -2507,6 +2510,54 @@ function renderMusicTab() {
     `;
 
     musicContent.innerHTML = html;
+}
+
+// PR-5g: Play track from wallet widget (online or offline)
+async function playWalletTrack(trackId, isOffline = false) {
+    if (typeof GlobalMusicPlayer === 'undefined') {
+        console.error('[Wallet] GlobalMusicPlayer not available');
+        alert('Music player not available');
+        return;
+    }
+
+    try {
+        let track = null;
+
+        if (isOffline) {
+            // Get offline track data
+            const wallet = walletSession.getAddress();
+            if (!wallet) return;
+
+            const res = await fetch(`/api/music/offline/${encodeURIComponent(wallet)}`);
+            const data = await res.json();
+
+            if (data.ok && data.tracks) {
+                track = data.tracks.find(t => (t.id || t.track_id) === trackId);
+            }
+        } else {
+            // Get online track from library
+            const library = MusicModule.getLibrary();
+            track = library.find(t => (t.id || t.track_id) === trackId);
+        }
+
+        if (!track) {
+            console.error('[Wallet] Track not found:', trackId);
+            return;
+        }
+
+        // Play track using GlobalMusicPlayer
+        GlobalMusicPlayer.playTrack(track);
+
+        const lang = getCurrentLang();
+        const isGreek = isGreekLang(lang);
+        const msg = isGreek
+            ? `Παίζει: ${track.title || 'Untitled'}`
+            : `Now playing: ${track.title || 'Untitled'}`;
+        showToast(msg);
+
+    } catch (error) {
+        console.error('[Wallet] Failed to play track:', error);
+    }
 }
 
 // PR-5c: Create playlist from wallet popup
@@ -2688,11 +2739,13 @@ function renderOfflineTab(tracks) {
     const lang = getCurrentLang();
     const isGreek = isGreekLang(lang);
 
-    const tracksHtml = tracks.map(track => `
+    const tracksHtml = tracks.map(track => {
+        const trackIdSafe = (track.id || track.track_id || '').toString().replace(/'/g, "\\'");
+        return `
         <div class="music-track-item" data-track-id="${track.id || track.track_id}">
             <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
-                <button onclick="event.stopPropagation(); window.open('/music#offline', '_blank');" style="background: rgba(0,255,102,0.15); border: 1px solid rgba(0,255,102,0.3); color: #0f0; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 14px;">▶️</button>
-                <div class="music-track-info" style="flex: 1;">
+                <button onclick="event.stopPropagation(); playWalletTrack('${trackIdSafe}', true);" style="background: rgba(0,255,102,0.15); border: 1px solid rgba(0,255,102,0.3); color: #0f0; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 14px;">▶️</button>
+                <div class="music-track-info" style="flex: 1;" onclick="playWalletTrack('${trackIdSafe}', true);" style="cursor: pointer;">
                     <div class="music-track-title">${escapeHtml(track.title || 'Untitled')}</div>
                     <div class="music-track-artist">${escapeHtml(track.artist || track.artist_name || 'Unknown Artist')}</div>
                     <div style="font-size: 9px; color: #888; margin-top: 2px;">
@@ -2702,7 +2755,8 @@ function renderOfflineTab(tracks) {
             </div>
             <div style="font-size: 9px; color: #666;">${escapeHtml(track.duration || '')}</div>
         </div>
-    `).join('');
+        `;
+    }).join('');
 
     const totalLabel = isGreek ? `${tracks.length} αποθηκευμένα` : `${tracks.length} saved`;
 

@@ -4319,6 +4319,622 @@ if (typeof MusicModule === 'undefined') {
 
 {% block scripts %}{% endblock %}
 
+<!-- PR-5e: Background Music Player -->
+<div id="globalMusicPlayer" class="global-music-player" style="display: none;">
+    <audio id="globalAudioElement"></audio>
+    <div class="global-player-bar">
+        <div class="global-player-track-info">
+            <div class="global-player-cover" id="globalPlayerCover">🎵</div>
+            <div class="global-player-text">
+                <div class="global-player-title" id="globalPlayerTitle">-</div>
+                <div class="global-player-artist" id="globalPlayerArtist">-</div>
+            </div>
+        </div>
+        <div class="global-player-controls">
+            <button class="global-player-btn" onclick="GlobalMusicPlayer.previous()" title="Previous">⏮️</button>
+            <button class="global-player-btn global-player-btn-play" onclick="GlobalMusicPlayer.togglePlay()" id="globalPlayPauseBtn" title="Play/Pause">▶️</button>
+            <button class="global-player-btn" onclick="GlobalMusicPlayer.next()" title="Next">⏭️</button>
+        </div>
+        <div class="global-player-extra">
+            <button class="global-player-btn" onclick="GlobalMusicPlayer.toggleShuffle()" id="globalShuffleBtn" title="Shuffle">🔀</button>
+            <button class="global-player-btn" onclick="GlobalMusicPlayer.toggleRepeat()" id="globalRepeatBtn" title="Repeat">🔁</button>
+            <button class="global-player-btn" onclick="GlobalMusicPlayer.toggleQueue()" title="Queue">📋</button>
+            <button class="global-player-btn" onclick="GlobalMusicPlayer.close()" title="Close">✖</button>
+        </div>
+    </div>
+    <div class="global-player-progress-bar" onclick="GlobalMusicPlayer.seekTo(event)">
+        <div class="global-player-progress-fill" id="globalProgressFill"></div>
+    </div>
+    <div class="global-player-queue" id="globalPlayerQueue" style="display: none;">
+        <div class="global-player-queue-header">
+            <span class="lang-el">Ουρά Αναπαραγωγής</span><span class="lang-en">Play Queue</span>
+            <span id="globalQueueCount">(0)</span>
+        </div>
+        <div class="global-player-queue-list" id="globalQueueList"></div>
+    </div>
+</div>
+
+<style>
+.global-music-player {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(135deg, rgba(10, 10, 10, 0.98) 0%, rgba(40, 20, 10, 0.98) 100%);
+    border-top: 2px solid #ff6600;
+    box-shadow: 0 -4px 20px rgba(255, 102, 0, 0.3);
+    z-index: 10000;
+    font-family: "Courier New", monospace;
+}
+
+.global-player-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 20px;
+    flex-wrap: wrap;
+}
+
+.global-player-track-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+    min-width: 200px;
+}
+
+.global-player-cover {
+    width: 48px;
+    height: 48px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, #ff6600 0%, #00ff66 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    overflow: hidden;
+}
+
+.global-player-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.global-player-text {
+    flex: 1;
+    min-width: 0;
+}
+
+.global-player-title {
+    color: #ff6600;
+    font-weight: bold;
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.global-player-artist {
+    color: #56ff9a;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.global-player-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.global-player-extra {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.global-player-btn {
+    background: rgba(255, 102, 0, 0.1);
+    border: 1px solid #ff6600;
+    color: #ff6600;
+    padding: 8px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 16px;
+    transition: all 0.3s;
+    font-family: "Courier New", monospace;
+}
+
+.global-player-btn:hover {
+    background: rgba(255, 102, 0, 0.3);
+    transform: scale(1.05);
+}
+
+.global-player-btn-play {
+    font-size: 20px;
+    padding: 10px 16px;
+}
+
+.global-player-btn.active {
+    background: rgba(255, 102, 0, 0.4);
+    border-color: #00ff66;
+    color: #00ff66;
+}
+
+.global-player-progress-bar {
+    height: 4px;
+    background: rgba(255, 102, 0, 0.2);
+    cursor: pointer;
+    position: relative;
+}
+
+.global-player-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #ff6600 0%, #00ff66 100%);
+    width: 0%;
+    transition: width 0.1s;
+}
+
+.global-player-queue {
+    border-top: 1px solid #3a2a1e;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.global-player-queue-header {
+    padding: 12px 20px;
+    background: rgba(255, 102, 0, 0.1);
+    color: #ff6600;
+    font-weight: bold;
+    font-size: 14px;
+    border-bottom: 1px solid #3a2a1e;
+}
+
+.global-player-queue-list {
+    padding: 8px;
+}
+
+.global-queue-item {
+    padding: 8px 12px;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid #3a2a1e;
+    border-radius: 6px;
+    margin-bottom: 6px;
+    cursor: pointer;
+    transition: all 0.3s;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.global-queue-item:hover {
+    border-color: #ff6600;
+    background: rgba(255, 102, 0, 0.1);
+}
+
+.global-queue-item.active {
+    border-color: #00ff66;
+    background: rgba(0, 255, 102, 0.1);
+}
+
+.global-queue-item-title {
+    color: #56ff9a;
+    font-size: 13px;
+    flex: 1;
+}
+
+.global-queue-item-artist {
+    color: #888;
+    font-size: 11px;
+}
+
+.global-queue-item-remove {
+    background: none;
+    border: none;
+    color: #f00;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 4px 8px;
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+    .global-player-bar {
+        padding: 8px 12px;
+        gap: 8px;
+    }
+
+    .global-player-extra {
+        flex-wrap: wrap;
+    }
+
+    .global-player-btn {
+        padding: 6px 10px;
+        font-size: 14px;
+    }
+}
+</style>
+
+<script>
+// PR-5e: Global Background Music Player
+window.GlobalMusicPlayer = (function() {
+    'use strict';
+
+    let audio = null;
+    let queue = [];
+    let currentIndex = -1;
+    let shuffle = false;
+    let repeat = 'none'; // 'none', 'one', 'all'
+    let isPlaying = false;
+
+    function init() {
+        audio = document.getElementById('globalAudioElement');
+        if (!audio) {
+            console.error('[GlobalMusicPlayer] Audio element not found');
+            return;
+        }
+
+        // Event listeners
+        audio.addEventListener('timeupdate', updateProgress);
+        audio.addEventListener('ended', handleTrackEnd);
+        audio.addEventListener('loadedmetadata', () => {
+            console.log('[GlobalMusicPlayer] Track loaded:', queue[currentIndex]?.title);
+        });
+        audio.addEventListener('error', (e) => {
+            console.error('[GlobalMusicPlayer] Audio error:', e);
+        });
+
+        // Try to restore queue from sessionStorage
+        restoreState();
+
+        console.log('[GlobalMusicPlayer] Initialized');
+    }
+
+    function saveState() {
+        try {
+            sessionStorage.setItem('gmp_queue', JSON.stringify(queue));
+            sessionStorage.setItem('gmp_index', currentIndex);
+            sessionStorage.setItem('gmp_shuffle', shuffle);
+            sessionStorage.setItem('gmp_repeat', repeat);
+        } catch (e) {
+            console.error('[GlobalMusicPlayer] Failed to save state:', e);
+        }
+    }
+
+    function restoreState() {
+        try {
+            const savedQueue = sessionStorage.getItem('gmp_queue');
+            const savedIndex = sessionStorage.getItem('gmp_index');
+            const savedShuffle = sessionStorage.getItem('gmp_shuffle');
+            const savedRepeat = sessionStorage.getItem('gmp_repeat');
+
+            if (savedQueue) queue = JSON.parse(savedQueue);
+            if (savedIndex) currentIndex = parseInt(savedIndex);
+            if (savedShuffle) shuffle = savedShuffle === 'true';
+            if (savedRepeat) repeat = savedRepeat;
+
+            updateUI();
+        } catch (e) {
+            console.error('[GlobalMusicPlayer] Failed to restore state:', e);
+        }
+    }
+
+    function playTrack(track) {
+        if (!track || !track.audio_url) {
+            console.error('[GlobalMusicPlayer] Invalid track:', track);
+            return;
+        }
+
+        queue = [track];
+        currentIndex = 0;
+        loadAndPlay();
+    }
+
+    function playQueue(tracks, startIndex = 0) {
+        if (!tracks || tracks.length === 0) {
+            console.error('[GlobalMusicPlayer] No tracks to play');
+            return;
+        }
+
+        queue = tracks;
+        currentIndex = startIndex;
+        loadAndPlay();
+    }
+
+    function addToQueue(track) {
+        if (!track || !track.audio_url) {
+            console.error('[GlobalMusicPlayer] Invalid track');
+            return;
+        }
+
+        queue.push(track);
+        saveState();
+        updateQueueUI();
+
+        // If nothing playing, start
+        if (currentIndex === -1) {
+            currentIndex = queue.length - 1;
+            loadAndPlay();
+        }
+    }
+
+    function loadAndPlay() {
+        if (currentIndex < 0 || currentIndex >= queue.length) {
+            console.error('[GlobalMusicPlayer] Invalid index:', currentIndex);
+            return;
+        }
+
+        const track = queue[currentIndex];
+        audio.src = track.audio_url;
+        audio.play().then(() => {
+            isPlaying = true;
+            updateUI();
+            show();
+
+            // Record play
+            const wallet = localStorage.getItem('thr_address');
+            if (track.id) {
+                fetch(`/api/v1/music/play/${track.id}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ listener_address: wallet || '' })
+                }).catch(e => console.error('[GlobalMusicPlayer] Failed to record play:', e));
+            }
+        }).catch(e => {
+            console.error('[GlobalMusicPlayer] Play failed:', e);
+            isPlaying = false;
+            updateUI();
+        });
+
+        saveState();
+    }
+
+    function togglePlay() {
+        if (!audio || currentIndex === -1) return;
+
+        if (audio.paused) {
+            audio.play().then(() => {
+                isPlaying = true;
+                updateUI();
+            });
+        } else {
+            audio.pause();
+            isPlaying = false;
+            updateUI();
+        }
+    }
+
+    function next() {
+        if (queue.length === 0) return;
+
+        if (shuffle) {
+            currentIndex = Math.floor(Math.random() * queue.length);
+        } else {
+            currentIndex++;
+            if (currentIndex >= queue.length) {
+                if (repeat === 'all') {
+                    currentIndex = 0;
+                } else {
+                    currentIndex = queue.length - 1;
+                    audio.pause();
+                    isPlaying = false;
+                    updateUI();
+                    return;
+                }
+            }
+        }
+
+        loadAndPlay();
+    }
+
+    function previous() {
+        if (queue.length === 0) return;
+
+        // If track has played > 3 seconds, restart it
+        if (audio.currentTime > 3) {
+            audio.currentTime = 0;
+            return;
+        }
+
+        currentIndex--;
+        if (currentIndex < 0) {
+            currentIndex = repeat === 'all' ? queue.length - 1 : 0;
+        }
+
+        loadAndPlay();
+    }
+
+    function handleTrackEnd() {
+        if (repeat === 'one') {
+            audio.currentTime = 0;
+            audio.play();
+        } else {
+            next();
+        }
+    }
+
+    function toggleShuffle() {
+        shuffle = !shuffle;
+        updateUI();
+        saveState();
+    }
+
+    function toggleRepeat() {
+        const modes = ['none', 'one', 'all'];
+        const currentIdx = modes.indexOf(repeat);
+        repeat = modes[(currentIdx + 1) % modes.length];
+        updateUI();
+        saveState();
+    }
+
+    function toggleQueue() {
+        const queueEl = document.getElementById('globalPlayerQueue');
+        if (queueEl) {
+            queueEl.style.display = queueEl.style.display === 'none' ? 'block' : 'none';
+            if (queueEl.style.display === 'block') {
+                updateQueueUI();
+            }
+        }
+    }
+
+    function updateProgress() {
+        if (!audio || !audio.duration) return;
+        const progress = (audio.currentTime / audio.duration) * 100;
+        const fillEl = document.getElementById('globalProgressFill');
+        if (fillEl) fillEl.style.width = progress + '%';
+    }
+
+    function seekTo(e) {
+        if (!audio || !audio.duration) return;
+        const bar = e.currentTarget;
+        const rect = bar.getBoundingClientRect();
+        const percent = (e.clientX - rect.left) / rect.width;
+        audio.currentTime = percent * audio.duration;
+    }
+
+    function updateUI() {
+        const playerEl = document.getElementById('globalMusicPlayer');
+        const playBtn = document.getElementById('globalPlayPauseBtn');
+        const shuffleBtn = document.getElementById('globalShuffleBtn');
+        const repeatBtn = document.getElementById('globalRepeatBtn');
+        const titleEl = document.getElementById('globalPlayerTitle');
+        const artistEl = document.getElementById('globalPlayerArtist');
+        const coverEl = document.getElementById('globalPlayerCover');
+
+        if (currentIndex >= 0 && currentIndex < queue.length) {
+            const track = queue[currentIndex];
+
+            if (titleEl) titleEl.textContent = track.title || 'Unknown';
+            if (artistEl) artistEl.textContent = track.artist_name || track.artist || 'Unknown Artist';
+
+            if (coverEl) {
+                const coverSrc = track.cover_path ? `/media/${track.cover_path}` : track.cover_url;
+                coverEl.innerHTML = coverSrc
+                    ? `<img src="${coverSrc}" onerror="this.parentElement.innerHTML='🎵'">`
+                    : '🎵';
+            }
+        }
+
+        if (playBtn) {
+            playBtn.textContent = isPlaying ? '⏸️' : '▶️';
+        }
+
+        if (shuffleBtn) {
+            shuffleBtn.classList.toggle('active', shuffle);
+        }
+
+        if (repeatBtn) {
+            repeatBtn.classList.toggle('active', repeat !== 'none');
+            repeatBtn.textContent = repeat === 'one' ? '🔂' : '🔁';
+        }
+
+        updateQueueUI();
+    }
+
+    function updateQueueUI() {
+        const queueListEl = document.getElementById('globalQueueList');
+        const queueCountEl = document.getElementById('globalQueueCount');
+
+        if (queueCountEl) {
+            queueCountEl.textContent = `(${queue.length})`;
+        }
+
+        if (!queueListEl) return;
+
+        queueListEl.innerHTML = queue.map((track, idx) => `
+            <div class="global-queue-item ${idx === currentIndex ? 'active' : ''}" onclick="GlobalMusicPlayer.playQueueIndex(${idx})">
+                <div>
+                    <div class="global-queue-item-title">${track.title || 'Unknown'}</div>
+                    <div class="global-queue-item-artist">${track.artist_name || track.artist || 'Unknown Artist'}</div>
+                </div>
+                <button class="global-queue-item-remove" onclick="event.stopPropagation(); GlobalMusicPlayer.removeFromQueue(${idx})">✖</button>
+            </div>
+        `).join('');
+    }
+
+    function playQueueIndex(idx) {
+        if (idx >= 0 && idx < queue.length) {
+            currentIndex = idx;
+            loadAndPlay();
+        }
+    }
+
+    function removeFromQueue(idx) {
+        if (idx < 0 || idx >= queue.length) return;
+
+        queue.splice(idx, 1);
+
+        if (idx === currentIndex) {
+            if (queue.length === 0) {
+                close();
+            } else {
+                currentIndex = Math.min(currentIndex, queue.length - 1);
+                loadAndPlay();
+            }
+        } else if (idx < currentIndex) {
+            currentIndex--;
+        }
+
+        saveState();
+        updateQueueUI();
+    }
+
+    function show() {
+        const playerEl = document.getElementById('globalMusicPlayer');
+        if (playerEl) {
+            playerEl.style.display = 'block';
+        }
+    }
+
+    function close() {
+        const playerEl = document.getElementById('globalMusicPlayer');
+        if (playerEl) {
+            playerEl.style.display = 'none';
+        }
+
+        if (audio) {
+            audio.pause();
+            audio.src = '';
+        }
+
+        queue = [];
+        currentIndex = -1;
+        isPlaying = false;
+
+        saveState();
+    }
+
+    // Initialize on DOMContentLoaded
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+
+    return {
+        playTrack,
+        playQueue,
+        addToQueue,
+        togglePlay,
+        next,
+        previous,
+        toggleShuffle,
+        toggleRepeat,
+        toggleQueue,
+        seekTo,
+        playQueueIndex,
+        removeFromQueue,
+        show,
+        close,
+        getCurrentTrack: () => queue[currentIndex],
+        getQueue: () => queue,
+        isPlaying: () => isPlaying
+    };
+})();
+</script>
+
 <div id="footer-sentinel" style="height:1px;"></div>
 
 </body>

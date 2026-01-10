@@ -917,6 +917,13 @@ async function playTrack(trackId) {
         card.classList.add('now-playing');
     });
 
+    // PR-5e: Use GlobalMusicPlayer instead of local player
+    if (typeof GlobalMusicPlayer !== 'undefined') {
+        GlobalMusicPlayer.playTrack(track);
+        return;
+    }
+
+    // Fallback to local player if GlobalMusicPlayer not available
     // Record play
     const wallet = localStorage.getItem('thr_address');
     fetch(`/api/v1/music/play/${trackId}`, {
@@ -1272,14 +1279,22 @@ function renderPlaylists() {
     container.innerHTML = userPlaylists.map(playlist => `
         <div class="artist-profile" style="margin-bottom: 20px;">
             <div style="display: flex; justify-content: space-between; align-items: center;">
-                <h4 style="color: #ff6600; margin: 0;">${playlist.name}</h4>
-                <div>
-                    <button class="player-btn" style="font-size: 16px;" onclick="viewPlaylist('${playlist.id}')">▶️</button>
-                    <button class="player-btn" style="font-size: 16px;" onclick="deletePlaylist('${playlist.id}')">🗑️</button>
+                <h4 style="color: #ff6600; margin: 0; cursor: pointer;" onclick="viewPlaylist('${playlist.playlist_id || playlist.id}')">${playlist.name}</h4>
+                <div style="display: flex; gap: 8px;">
+                    <button class="player-btn" style="font-size: 14px;" onclick="event.stopPropagation(); playPlaylist('${playlist.playlist_id || playlist.id}', false)" title="Play">
+                        ▶️ <span class="lang-el">Παίξε</span><span class="lang-en">Play</span>
+                    </button>
+                    <button class="player-btn" style="font-size: 14px;" onclick="event.stopPropagation(); playPlaylist('${playlist.playlist_id || playlist.id}', true)" title="Shuffle">
+                        🔀 <span class="lang-el">Τυχαίο</span><span class="lang-en">Shuffle</span>
+                    </button>
+                    <button class="player-btn" style="font-size: 14px;" onclick="event.stopPropagation(); viewPlaylist('${playlist.playlist_id || playlist.id}')" title="View">
+                        👁️
+                    </button>
+                    <button class="player-btn" style="font-size: 14px;" onclick="deletePlaylist('${playlist.playlist_id || playlist.id}')">🗑️</button>
                 </div>
             </div>
             <p style="color: #888; font-size: 12px; margin: 10px 0 0 0;">
-                ${playlist.tracks ? playlist.tracks.length : 0} tracks · Created ${new Date(playlist.created_at).toLocaleDateString()}
+                ${playlist.tracks ? playlist.tracks.length : 0} <span class="lang-el">κομμάτια</span><span class="lang-en">tracks</span> · Created ${new Date(playlist.created_at).toLocaleDateString()}
             </p>
         </div>
     `).join('');
@@ -1383,6 +1398,43 @@ async function viewPlaylist(playlistId) {
     }
 }
 
+// PR-5e: Play playlist using GlobalMusicPlayer
+async function playPlaylist(playlistId, shuffleMode = false) {
+    const playlist = userPlaylists.find(p => (p.playlist_id || p.id) === playlistId);
+
+    if (!playlist || !playlist.tracks || playlist.tracks.length === 0) {
+        alert(localStorage.getItem('lang') === 'en'
+            ? 'This playlist is empty!'
+            : 'Αυτή η playlist είναι άδεια!');
+        return;
+    }
+
+    // Use GlobalMusicPlayer if available
+    if (typeof GlobalMusicPlayer !== 'undefined') {
+        const tracks = playlist.tracks;
+
+        // Enable shuffle if requested
+        if (shuffleMode && !GlobalMusicPlayer.isPlaying()) {
+            GlobalMusicPlayer.toggleShuffle();
+        }
+
+        GlobalMusicPlayer.playQueue(tracks, 0);
+
+        const msg = localStorage.getItem('lang') === 'en'
+            ? `Playing "${playlist.name}" (${tracks.length} tracks)${shuffleMode ? ' in shuffle mode' : ''}`
+            : `Παίζει "${playlist.name}" (${tracks.length} κομμάτια)${shuffleMode ? ' σε τυχαία σειρά' : ''}`;
+
+        // Show toast notification
+        const toast = document.createElement('div');
+        toast.style.cssText = 'position:fixed; bottom:80px; left:50%; transform:translateX(-50%); background:#0f0; color:#000; padding:12px 24px; border-radius:8px; z-index:10001; font-family:monospace; font-weight:bold;';
+        toast.textContent = `✅ ${msg}`;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+    } else {
+        console.warn('[Music] GlobalMusicPlayer not available');
+    }
+}
+
 async function loadOfflineTracks() {
     const wallet = localStorage.getItem('thr_address');
     if (!wallet) {
@@ -1482,6 +1534,25 @@ async function showTrackOptions(trackId) {
         userPlaylists = [];
     }
 
+    // PR-5d: Check if track can be deleted (user is artist AND no plays AND no tips)
+    const track = allTracks.find(t => t.id === trackId);
+    const canDelete = track &&
+                      track.artist_address === wallet &&
+                      (track.play_count || 0) === 0 &&
+                      (track.tips_total || 0) === 0;
+
+    // PR-5d: Build delete button if allowed
+    const deleteButton = canDelete ? `
+        <hr style="border:1px solid #333; margin:16px 0;">
+        <button onclick="deleteTrack('${trackId}'); this.closest('[style*=fixed]').remove();" style="width:100%; padding:12px; background:#600; color:#f00; border:1px solid #f00; border-radius:6px; cursor:pointer; font-family:monospace;">
+            🗑️ <span class="lang-el">Διαγραφή Τραγουδιού</span><span class="lang-en">Delete Track</span>
+        </button>
+        <p style="color:#888; font-size:11px; margin:8px 0 0 0; text-align:center;">
+            <span class="lang-el">Μόνο για κομμάτια χωρίς plays/tips</span>
+            <span class="lang-en">Only for tracks with no plays/tips</span>
+        </p>
+    ` : '';
+
     // PR-5c: Build dropdown HTML
     const playlistOptions = userPlaylists.length > 0
         ? userPlaylists.map(p => `<option value="${p.playlist_id}">${p.name} (${(p.tracks || []).length} tracks)</option>`).join('')
@@ -1505,6 +1576,7 @@ async function showTrackOptions(trackId) {
                 <button onclick="addTrackToPlaylistUI('${trackId}', document.getElementById('playlistSelect').value); this.closest('[style*=fixed]').remove();" style="width:100%; padding:12px; background:#0f0; color:#000; border:none; border-radius:6px; cursor:pointer; font-weight:bold; font-family:monospace;" ${userPlaylists.length === 0 ? 'disabled' : ''}>
                     ✅ Add to Playlist
                 </button>
+                ${deleteButton}
                 <button onclick="this.closest('[style*=fixed]').remove();" style="width:100%; padding:8px; margin-top:8px; background:transparent; color:#999; border:1px solid #333; border-radius:6px; cursor:pointer; font-family:monospace;">
                     ✖ Cancel
                 </button>
@@ -1543,6 +1615,80 @@ async function addTrackToPlaylistUI(trackId, playlistId) {
             alert('✅ Track added to playlist!');
         } else {
             alert(`❌ Error: ${data.error || 'Failed to add track'}`);
+        }
+    } catch (e) {
+        if (e.code === 'WALLET_NOT_CONNECTED') {
+            alert('❌ Please connect your wallet first!');
+        } else if (e.code === 'WALLET_LOCKED') {
+            alert('❌ Wallet is locked. Please unlock with your PIN.');
+        } else {
+            alert(`❌ Error: ${e.message}`);
+        }
+    }
+}
+
+// PR-5d: Delete track (artists only, no plays/tips)
+async function deleteTrack(trackId) {
+    const track = allTracks.find(t => t.id === trackId);
+    if (!track) {
+        alert('❌ Track not found');
+        return;
+    }
+
+    // Confirmation prompt
+    const confirmMsg = localStorage.getItem('lang') === 'en'
+        ? `Are you sure you want to delete "${track.title}"?\n\nThis action cannot be undone!`
+        : `Είστε σίγουροι ότι θέλετε να διαγράψετε το "${track.title}";\n\nΑυτή η ενέργεια δεν μπορεί να αναιρεθεί!`;
+
+    if (!confirm(confirmMsg)) {
+        return;
+    }
+
+    try {
+        // PR-5d: Use WalletAuth for PIN-based unlock
+        const { address, authSecret } = await window.WalletAuth.requireUnlockedWallet();
+
+        const res = await fetch('/api/music/playlist/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                address: address,
+                action: 'track_delete',
+                track_id: trackId,
+                auth_secret: authSecret
+            })
+        });
+
+        const data = await res.json();
+        if (data.ok) {
+            alert('✅ Track deleted successfully!');
+            // Reload the current tab to reflect changes
+            const activeTab = document.querySelector('.music-tab.active');
+            if (activeTab) {
+                const tabName = activeTab.getAttribute('onclick').match(/'([^']+)'/)[1];
+                showMusicTab(tabName);
+            }
+        } else {
+            // Handle specific error cases
+            let errorMsg = data.error || 'Failed to delete track';
+            if (data.error === 'TRACK_HAS_PLAYS') {
+                errorMsg = localStorage.getItem('lang') === 'en'
+                    ? `Cannot delete: Track has ${data.play_count} plays. Only tracks with no engagement can be deleted.`
+                    : `Δεν μπορεί να διαγραφεί: Το κομμάτι έχει ${data.play_count} αναπαραγωγές. Μόνο κομμάτια χωρίς engagement μπορούν να διαγραφούν.`;
+            } else if (data.error === 'TRACK_HAS_TIPS') {
+                errorMsg = localStorage.getItem('lang') === 'en'
+                    ? `Cannot delete: Track has ${data.tips_total} THR in tips. Tipped tracks are encrypted and retained for IoT miner rewards.`
+                    : `Δεν μπορεί να διαγραφεί: Το κομμάτι έχει ${data.tips_total} THR σε tips. Τα κομμάτια με tips κρυπτογραφούνται και διατηρούνται για ανταμοιβές IoT miners.`;
+            } else if (data.error === 'TRACK_IN_PLAYLISTS') {
+                errorMsg = localStorage.getItem('lang') === 'en'
+                    ? 'Cannot delete: Track is in playlists. Remove from playlists first.'
+                    : 'Δεν μπορεί να διαγραφεί: Το κομμάτι είναι σε playlists. Αφαιρέστε από τις playlists πρώτα.';
+            } else if (data.error === 'UNAUTHORIZED') {
+                errorMsg = localStorage.getItem('lang') === 'en'
+                    ? 'You can only delete your own tracks.'
+                    : 'Μπορείτε να διαγράψετε μόνο τα δικά σας κομμάτια.';
+            }
+            alert(`❌ ${errorMsg}`);
         }
     } catch (e) {
         if (e.code === 'WALLET_NOT_CONNECTED') {

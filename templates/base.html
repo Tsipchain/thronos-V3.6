@@ -39,8 +39,10 @@
     
     /* Navigation Bar */
     .navbar {
-      background: #111;
-      border-bottom: 1px solid #0f0;
+      background: rgba(17, 17, 17, 0.85);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border-bottom: 1px solid rgba(0, 255, 0, 0.3);
       padding: 40px 0 0 0;
       margin-bottom: 30px;
       display: flex;
@@ -79,7 +81,7 @@
     }
 
     .nav-link:hover {
-      background-color: #222;
+      background-color: rgba(34, 34, 34, 0.6);
       text-decoration: none;
     }
     .thr-logo-icon {
@@ -2469,13 +2471,18 @@ function renderMusicTab() {
         ? playlists.map(playlist => {
             const trackCount = (playlist.track_ids || playlist.tracks || []).length;
             const countLabel = isGreek ? `${trackCount} κομμάτια` : `${trackCount} tracks`;
+            const playlistIdSafe = (playlist.playlist_id || playlist.id || '').replace(/'/g, "\\'");
             return `
                 <div class="music-playlist-item" data-playlist-id="${playlist.playlist_id || playlist.id}">
-                    <div class="music-playlist-info" style="flex: 1;">
+                    <div class="music-playlist-info" style="flex: 1; cursor: pointer;" onclick="playWalletPlaylist('${playlistIdSafe}')">
                         <div class="music-playlist-name">${escapeHtml(playlist.name || 'Untitled Playlist')}</div>
                         <div class="music-playlist-count">${countLabel}</div>
                     </div>
-                    <button onclick="event.stopPropagation(); window.open('/music#playlists', '_blank');" style="background: rgba(0,255,102,0.15); border: 1px solid rgba(0,255,102,0.3); color: #0f0; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">▶️</button>
+                    <div style="display: flex; gap: 4px;">
+                        <button onclick="event.stopPropagation(); playWalletPlaylist('${playlistIdSafe}', false)" title="${isGreek ? 'Παίξε' : 'Play'}" style="background: rgba(0,255,102,0.15); border: 1px solid rgba(0,255,102,0.3); color: #0f0; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">▶️</button>
+                        <button onclick="event.stopPropagation(); playWalletPlaylist('${playlistIdSafe}', true)" title="${isGreek ? 'Τυχαίο' : 'Shuffle'}" style="background: rgba(0,255,102,0.15); border: 1px solid rgba(0,255,102,0.3); color: #0f0; padding: 4px 6px; border-radius: 4px; cursor: pointer; font-size: 12px;">🔀</button>
+                        <button onclick="event.stopPropagation(); window.open('/music#playlists', '_blank');" title="${isGreek ? 'Άνοιγμα' : 'Open'}" style="background: rgba(0,255,102,0.15); border: 1px solid rgba(0,255,102,0.3); color: #0f0; padding: 4px 6px; border-radius: 4px; cursor: pointer; font-size: 12px;">👁️</button>
+                    </div>
                 </div>
             `;
         }).join('')
@@ -2553,6 +2560,76 @@ async function createPlaylistFromWallet() {
         }
         const musicContent = document.getElementById('musicTabContent');
         if (musicContent) renderMusicTab();
+    }
+}
+
+// PR-5e: Play playlist from wallet widget using GlobalMusicPlayer
+async function playWalletPlaylist(playlistId, shuffleMode = false) {
+    try {
+        // Get playlist from MusicModule
+        const playlists = MusicModule.getPlaylists();
+        const playlist = playlists.find(p => (p.playlist_id || p.id) === playlistId);
+
+        if (!playlist) {
+            console.error('[Wallet] Playlist not found:', playlistId);
+            return;
+        }
+
+        // Get full track data if only IDs are available
+        let tracks = playlist.tracks || [];
+        if (tracks.length === 0 && playlist.track_ids && playlist.track_ids.length > 0) {
+            // Fetch full playlist data
+            const wallet = walletSession.getAddress();
+            const res = await fetch(`/api/music/playlists?address=${encodeURIComponent(wallet)}`);
+            const data = await res.json();
+            if (data.ok && data.playlists) {
+                const fullPlaylist = data.playlists.find(p => (p.playlist_id || p.id) === playlistId);
+                if (fullPlaylist && fullPlaylist.tracks) {
+                    tracks = fullPlaylist.tracks;
+                }
+            }
+        }
+
+        if (tracks.length === 0) {
+            const lang = getCurrentLang();
+            const isGreek = isGreekLang(lang);
+            alert(isGreek ? 'Η playlist είναι άδεια!' : 'Playlist is empty!');
+            return;
+        }
+
+        // Use GlobalMusicPlayer
+        if (typeof GlobalMusicPlayer !== 'undefined') {
+            // Enable shuffle if requested
+            if (shuffleMode) {
+                GlobalMusicPlayer.toggleShuffle();
+            }
+
+            GlobalMusicPlayer.playQueue(tracks, 0);
+
+            const lang = getCurrentLang();
+            const isGreek = isGreekLang(lang);
+            const msg = isGreek
+                ? `Παίζει "${playlist.name}" (${tracks.length} κομμάτια)${shuffleMode ? ' σε τυχαία σειρά' : ''}`
+                : `Playing "${playlist.name}" (${tracks.length} tracks)${shuffleMode ? ' in shuffle mode' : ''}`;
+
+            // Show toast notification
+            const toast = document.createElement('div');
+            toast.style.cssText = 'position:fixed; bottom:80px; left:50%; transform:translateX(-50%); background:#0f0; color:#000; padding:12px 24px; border-radius:8px; z-index:10001; font-family:monospace; font-weight:bold;';
+            toast.textContent = `✅ ${msg}`;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+
+            // Close wallet popup if open
+            const popup = document.getElementById('walletBalancePopup');
+            if (popup && popup.style.display === 'block') {
+                popup.style.display = 'none';
+            }
+        } else {
+            console.warn('[Wallet] GlobalMusicPlayer not available');
+        }
+    } catch (e) {
+        console.error('[Wallet] Failed to play playlist:', e);
+        alert(`❌ Error: ${e.message}`);
     }
 }
 
@@ -3857,6 +3934,45 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 60000);
 });
 
+// PR-5g: Listen for language changes and refresh wallet content
+window.addEventListener('langChanged', (e) => {
+    console.log('[Wallet] Language changed to:', e.detail.lang);
+
+    // Refresh wallet popup if open
+    if (isWalletOpen() && walletSession.isBound()) {
+        const activeTab = document.querySelector('.wallet-popup-tab.active');
+        if (!activeTab) return;
+
+        const tabName = activeTab.getAttribute('onclick')?.match(/showWalletTab\('([^']+)'/)?.[1];
+        if (!tabName) return;
+
+        // Re-render the active tab to update language
+        switch (tabName) {
+            case 'overview':
+                loadWalletBalances(true);
+                break;
+            case 'send':
+                showWalletTab('send');
+                break;
+            case 'receive':
+                showWalletTab('receive');
+                break;
+            case 'history':
+                loadHistoryTab();
+                break;
+            case 'music':
+                loadMusicTab();
+                break;
+            case 'offline':
+                loadOfflineTab();
+                break;
+        }
+    }
+
+    // Refresh header wallet UI
+    updateHeaderWalletUi();
+});
+
 // ─── TOKEN INFO MODAL FUNCTIONS ───────────────────────────
 let tokenInfoCache = {};
 
@@ -4673,6 +4789,9 @@ window.GlobalMusicPlayer = (function() {
             updateUI();
             show();
 
+            // PR-5f: Update MediaSession API for CarPlay/Android Auto support
+            updateMediaSession(track);
+
             // Record play
             const wallet = localStorage.getItem('thr_address');
             if (track.id) {
@@ -4691,6 +4810,75 @@ window.GlobalMusicPlayer = (function() {
         saveState();
     }
 
+    // PR-5f: MediaSession API for CarPlay/Android Auto/Background playback
+    function updateMediaSession(track) {
+        if (!('mediaSession' in navigator)) {
+            return; // MediaSession API not supported
+        }
+
+        try {
+            const coverUrl = track.cover_path
+                ? `${window.location.origin}/media/${track.cover_path}`
+                : track.cover_url;
+
+            navigator.mediaSession.metadata = new MediaMetadata({
+                title: track.title || 'Unknown Track',
+                artist: track.artist_name || track.artist || 'Unknown Artist',
+                album: track.album || 'Thronos Music',
+                artwork: coverUrl ? [
+                    { src: coverUrl, sizes: '96x96', type: 'image/png' },
+                    { src: coverUrl, sizes: '128x128', type: 'image/png' },
+                    { src: coverUrl, sizes: '192x192', type: 'image/png' },
+                    { src: coverUrl, sizes: '256x256', type: 'image/png' },
+                    { src: coverUrl, sizes: '384x384', type: 'image/png' },
+                    { src: coverUrl, sizes: '512x512', type: 'image/png' }
+                ] : []
+            });
+
+            // Set up action handlers for CarPlay/Android Auto
+            navigator.mediaSession.setActionHandler('play', () => {
+                audio.play();
+                isPlaying = true;
+                updateUI();
+            });
+
+            navigator.mediaSession.setActionHandler('pause', () => {
+                audio.pause();
+                isPlaying = false;
+                updateUI();
+            });
+
+            navigator.mediaSession.setActionHandler('previoustrack', () => {
+                previous();
+            });
+
+            navigator.mediaSession.setActionHandler('nexttrack', () => {
+                next();
+            });
+
+            navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+                audio.currentTime = Math.max(0, audio.currentTime - (details.seekOffset || 10));
+            });
+
+            navigator.mediaSession.setActionHandler('seekforward', (details) => {
+                audio.currentTime = Math.min(audio.duration, audio.currentTime + (details.seekOffset || 10));
+            });
+
+            navigator.mediaSession.setActionHandler('seekto', (details) => {
+                if (details.seekTime !== null) {
+                    audio.currentTime = details.seekTime;
+                }
+            });
+
+            // Update playback state
+            navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+
+            console.log('[GlobalMusicPlayer] MediaSession updated for CarPlay/Android Auto');
+        } catch (e) {
+            console.error('[GlobalMusicPlayer] MediaSession error:', e);
+        }
+    }
+
     function togglePlay() {
         if (!audio || currentIndex === -1) return;
 
@@ -4698,11 +4886,19 @@ window.GlobalMusicPlayer = (function() {
             audio.play().then(() => {
                 isPlaying = true;
                 updateUI();
+                // PR-5f: Update MediaSession state
+                if ('mediaSession' in navigator) {
+                    navigator.mediaSession.playbackState = 'playing';
+                }
             });
         } else {
             audio.pause();
             isPlaying = false;
             updateUI();
+            // PR-5f: Update MediaSession state
+            if ('mediaSession' in navigator) {
+                navigator.mediaSession.playbackState = 'paused';
+            }
         }
     }
 

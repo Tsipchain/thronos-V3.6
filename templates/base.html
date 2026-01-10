@@ -137,7 +137,7 @@
         right: 12px;
         display: flex;
         gap: 10px;
-        z-index: 3400;
+        z-index: 3700;
         flex-wrap: wrap;
         max-width: 360px;
         justify-content: flex-end;
@@ -184,7 +184,7 @@
         min-width: 300px;
         max-width: 360px;
         box-shadow: 0 0 30px rgba(0, 255, 102, 0.3), 0 0 15px rgba(255, 215, 0, 0.2);
-        z-index: 3300;
+        z-index: 3800;
         color: #e6ffe5;
         backdrop-filter: blur(10px);
         pointer-events: auto;
@@ -1131,7 +1131,7 @@
         background: #0a130e;
         min-width: 140px;
         box-shadow: 0 4px 20px rgba(0, 255, 102, 0.3);
-        z-index: 3100;
+        z-index: 3800;
         border: 1px solid #00ff66;
         border-radius: 8px;
         overflow: hidden;
@@ -2448,11 +2448,13 @@ function renderMusicTab() {
 
     // Render library tracks
     const libraryHtml = library.length > 0
-        ? library.map(track => `
+        ? library.map(track => {
+            const trackIdSafe = (track.id || track.track_id || '').toString().replace(/'/g, "\\'");
+            return `
             <div class="music-track-item" data-track-id="${track.id || track.track_id}">
                 <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
-                    <button onclick="event.stopPropagation(); window.open('/music', '_blank');" style="background: rgba(0,255,102,0.15); border: 1px solid rgba(0,255,102,0.3); color: #0f0; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 14px;">▶️</button>
-                    <div class="music-track-info" style="flex: 1;">
+                    <button onclick="event.stopPropagation(); playWalletTrack('${trackIdSafe}', false);" style="background: rgba(0,255,102,0.15); border: 1px solid rgba(0,255,102,0.3); color: #0f0; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 14px;">▶️</button>
+                    <div class="music-track-info" style="flex: 1; cursor: pointer;" onclick="playWalletTrack('${trackIdSafe}', false);">
                         <div class="music-track-title">${escapeHtml(track.title || 'Untitled')}</div>
                         <div class="music-track-artist">${escapeHtml(track.artist || track.artist_name || 'Unknown Artist')}</div>
                         <div style="font-size: 9px; color: #888; margin-top: 2px;">
@@ -2461,9 +2463,10 @@ function renderMusicTab() {
                         </div>
                     </div>
                 </div>
-                <button onclick="event.stopPropagation(); alert('Open /music to manage this track');" style="background: none; border: none; color: #0f0; font-size: 16px; cursor: pointer; padding: 4px;">⋮</button>
+                <button onclick="event.stopPropagation(); window.open('/music', '_blank');" title="Open in music page" style="background: none; border: none; color: #0f0; font-size: 16px; cursor: pointer; padding: 4px;">⋮</button>
             </div>
-        `).join('')
+            `;
+        }).join('')
         : `<div class="music-empty">${noTracksLabel}</div>`;
 
     // Render playlists
@@ -2507,6 +2510,54 @@ function renderMusicTab() {
     `;
 
     musicContent.innerHTML = html;
+}
+
+// PR-5g: Play track from wallet widget (online or offline)
+async function playWalletTrack(trackId, isOffline = false) {
+    if (typeof GlobalMusicPlayer === 'undefined') {
+        console.error('[Wallet] GlobalMusicPlayer not available');
+        alert('Music player not available');
+        return;
+    }
+
+    try {
+        let track = null;
+
+        if (isOffline) {
+            // Get offline track data
+            const wallet = walletSession.getAddress();
+            if (!wallet) return;
+
+            const res = await fetch(`/api/music/offline/${encodeURIComponent(wallet)}`);
+            const data = await res.json();
+
+            if (data.ok && data.tracks) {
+                track = data.tracks.find(t => (t.id || t.track_id) === trackId);
+            }
+        } else {
+            // Get online track from library
+            const library = MusicModule.getLibrary();
+            track = library.find(t => (t.id || t.track_id) === trackId);
+        }
+
+        if (!track) {
+            console.error('[Wallet] Track not found:', trackId);
+            return;
+        }
+
+        // Play track using GlobalMusicPlayer
+        GlobalMusicPlayer.playTrack(track);
+
+        const lang = getCurrentLang();
+        const isGreek = isGreekLang(lang);
+        const msg = isGreek
+            ? `Παίζει: ${track.title || 'Untitled'}`
+            : `Now playing: ${track.title || 'Untitled'}`;
+        showToast(msg);
+
+    } catch (error) {
+        console.error('[Wallet] Failed to play track:', error);
+    }
 }
 
 // PR-5c: Create playlist from wallet popup
@@ -2688,11 +2739,13 @@ function renderOfflineTab(tracks) {
     const lang = getCurrentLang();
     const isGreek = isGreekLang(lang);
 
-    const tracksHtml = tracks.map(track => `
+    const tracksHtml = tracks.map(track => {
+        const trackIdSafe = (track.id || track.track_id || '').toString().replace(/'/g, "\\'");
+        return `
         <div class="music-track-item" data-track-id="${track.id || track.track_id}">
             <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
-                <button onclick="event.stopPropagation(); window.open('/music#offline', '_blank');" style="background: rgba(0,255,102,0.15); border: 1px solid rgba(0,255,102,0.3); color: #0f0; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 14px;">▶️</button>
-                <div class="music-track-info" style="flex: 1;">
+                <button onclick="event.stopPropagation(); playWalletTrack('${trackIdSafe}', true);" style="background: rgba(0,255,102,0.15); border: 1px solid rgba(0,255,102,0.3); color: #0f0; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 14px;">▶️</button>
+                <div class="music-track-info" style="flex: 1;" onclick="playWalletTrack('${trackIdSafe}', true);" style="cursor: pointer;">
                     <div class="music-track-title">${escapeHtml(track.title || 'Untitled')}</div>
                     <div class="music-track-artist">${escapeHtml(track.artist || track.artist_name || 'Unknown Artist')}</div>
                     <div style="font-size: 9px; color: #888; margin-top: 2px;">
@@ -2702,7 +2755,8 @@ function renderOfflineTab(tracks) {
             </div>
             <div style="font-size: 9px; color: #666;">${escapeHtml(track.duration || '')}</div>
         </div>
-    `).join('');
+        `;
+    }).join('');
 
     const totalLabel = isGreek ? `${tracks.length} αποθηκευμένα` : `${tracks.length} saved`;
 
@@ -3206,6 +3260,16 @@ function renderHistory() {
             if (meta.session_id) detailLines.push(`Session: ${escapeHtml(meta.session_id)}`);
             if (meta.reason) detailLines.push(`Reason: ${escapeHtml(meta.reason)}`);
             if (meta.tokens_used != null) detailLines.push(`Tokens: ${meta.tokens_used}`);
+        }
+        // PR-5g: IoT purchase details
+        if (txType === 'iot') {
+            if (tx.pack_name) detailLines.push(`${escapeHtml(tx.pack_name)}`);
+            else if (tx.pack_id) detailLines.push(`Pack: ${escapeHtml(tx.pack_id)}`);
+            if (tx.fiat_amount && tx.currency) {
+                const currSymbol = tx.currency === 'EUR' ? '€' : tx.currency === 'USD' ? '$' : tx.currency;
+                detailLines.push(`${currSymbol}${Number(tx.fiat_amount).toFixed(2)}`);
+            }
+            if (meta.payment_status) detailLines.push(`Payment: ${escapeHtml(meta.payment_status)}`);
         }
         const detailInfo = detailLines.length
             ? `<div style="font-size: 11px; color: #9adf9a; opacity: 0.9; margin-top: 4px;">${detailLines.join(' • ')}</div>`
@@ -4714,6 +4778,8 @@ window.GlobalMusicPlayer = (function() {
             sessionStorage.setItem('gmp_index', currentIndex);
             sessionStorage.setItem('gmp_shuffle', shuffle);
             sessionStorage.setItem('gmp_repeat', repeat);
+            sessionStorage.setItem('gmp_position', audio ? audio.currentTime : 0);
+            sessionStorage.setItem('gmp_playing', isPlaying);
         } catch (e) {
             console.error('[GlobalMusicPlayer] Failed to save state:', e);
         }
@@ -4725,16 +4791,56 @@ window.GlobalMusicPlayer = (function() {
             const savedIndex = sessionStorage.getItem('gmp_index');
             const savedShuffle = sessionStorage.getItem('gmp_shuffle');
             const savedRepeat = sessionStorage.getItem('gmp_repeat');
+            const savedPosition = sessionStorage.getItem('gmp_position');
+            const savedPlaying = sessionStorage.getItem('gmp_playing');
 
             if (savedQueue) queue = JSON.parse(savedQueue);
             if (savedIndex) currentIndex = parseInt(savedIndex);
             if (savedShuffle) shuffle = savedShuffle === 'true';
             if (savedRepeat) repeat = savedRepeat;
 
-            updateUI();
+            // Restore playback position if there's a valid queue
+            if (queue.length > 0 && currentIndex >= 0 && currentIndex < queue.length) {
+                const track = queue[currentIndex];
+                audio.src = track.audio_url;
+
+                // Restore position
+                if (savedPosition) {
+                    audio.currentTime = parseFloat(savedPosition);
+                }
+
+                // Auto-resume if was playing
+                if (savedPlaying === 'true') {
+                    audio.play().then(() => {
+                        isPlaying = true;
+                        updateUI();
+                        show();
+                        updateMediaSession(track);
+                    }).catch(e => {
+                        console.log('[GlobalMusicPlayer] Auto-resume blocked (user interaction required)');
+                        isPlaying = false;
+                        updateUI();
+                    });
+                } else {
+                    updateUI();
+                }
+
+                show();
+            } else {
+                updateUI();
+            }
         } catch (e) {
             console.error('[GlobalMusicPlayer] Failed to restore state:', e);
         }
+    }
+
+    // Save position periodically
+    if (audio) {
+        setInterval(() => {
+            if (audio && !audio.paused) {
+                sessionStorage.setItem('gmp_position', audio.currentTime);
+            }
+        }, 5000); // Every 5 seconds
     }
 
     function playTrack(track) {

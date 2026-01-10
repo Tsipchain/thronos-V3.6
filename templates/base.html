@@ -2430,12 +2430,19 @@ function renderMusicTab() {
     // Render library tracks
     const libraryHtml = library.length > 0
         ? library.map(track => `
-            <div class="music-track-item">
-                <div class="music-track-info">
-                    <div class="music-track-title">${escapeHtml(track.title || 'Untitled')}</div>
-                    <div class="music-track-artist">${escapeHtml(track.artist || 'Unknown Artist')}</div>
+            <div class="music-track-item" data-track-id="${track.id || track.track_id}">
+                <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+                    <button onclick="event.stopPropagation(); window.open('/music', '_blank');" style="background: rgba(0,255,102,0.15); border: 1px solid rgba(0,255,102,0.3); color: #0f0; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 14px;">▶️</button>
+                    <div class="music-track-info" style="flex: 1;">
+                        <div class="music-track-title">${escapeHtml(track.title || 'Untitled')}</div>
+                        <div class="music-track-artist">${escapeHtml(track.artist || track.artist_name || 'Unknown Artist')}</div>
+                        <div style="font-size: 9px; color: #888; margin-top: 2px;">
+                            <span>▶️ ${track.play_count || 0}</span> •
+                            <span>💰 ${(track.tips_total || 0).toFixed(2)} THR</span>
+                        </div>
+                    </div>
                 </div>
-                <div style="font-size: 9px; color: #666;">${escapeHtml(track.duration || '')}</div>
+                <button onclick="event.stopPropagation(); alert('Open /music to manage this track');" style="background: none; border: none; color: #0f0; font-size: 16px; cursor: pointer; padding: 4px;">⋮</button>
             </div>
         `).join('')
         : `<div class="music-empty">${noTracksLabel}</div>`;
@@ -2443,14 +2450,15 @@ function renderMusicTab() {
     // Render playlists
     const playlistsHtml = playlists.length > 0
         ? playlists.map(playlist => {
-            const trackCount = (playlist.tracks || []).length;
+            const trackCount = (playlist.track_ids || playlist.tracks || []).length;
             const countLabel = isGreek ? `${trackCount} κομμάτια` : `${trackCount} tracks`;
             return `
-                <div class="music-playlist-item">
-                    <div class="music-playlist-info">
+                <div class="music-playlist-item" data-playlist-id="${playlist.playlist_id || playlist.id}">
+                    <div class="music-playlist-info" style="flex: 1;">
                         <div class="music-playlist-name">${escapeHtml(playlist.name || 'Untitled Playlist')}</div>
                         <div class="music-playlist-count">${countLabel}</div>
                     </div>
+                    <button onclick="event.stopPropagation(); window.open('/music#playlists', '_blank');" style="background: rgba(0,255,102,0.15); border: 1px solid rgba(0,255,102,0.3); color: #0f0; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">▶️</button>
                 </div>
             `;
         }).join('')

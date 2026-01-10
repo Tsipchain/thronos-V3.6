@@ -865,6 +865,39 @@ function renderTracks(tracks, containerId) {
         </div>
     `).join('');
 
+    // PR-5c: Add double-click (desktop) and long-press (mobile) for track options modal
+    container.querySelectorAll('.track-card').forEach(card => {
+        const trackId = card.dataset.trackId;
+        let longPressTimer = null;
+
+        // Double-click for desktop
+        card.addEventListener('dblclick', (e) => {
+            e.preventDefault();
+            showTrackOptions(trackId);
+        });
+
+        // Long-press for mobile
+        card.addEventListener('touchstart', (e) => {
+            longPressTimer = setTimeout(() => {
+                showTrackOptions(trackId);
+            }, 500); // 500ms long press
+        });
+
+        card.addEventListener('touchend', () => {
+            if (longPressTimer) {
+                clearTimeout(longPressTimer);
+                longPressTimer = null;
+            }
+        });
+
+        card.addEventListener('touchmove', () => {
+            if (longPressTimer) {
+                clearTimeout(longPressTimer);
+                longPressTimer = null;
+            }
+        });
+    });
+
     // Re-apply language
     const savedLang = localStorage.getItem('lang') || 'el';
     setLanguage(savedLang);

@@ -4714,6 +4714,8 @@ window.GlobalMusicPlayer = (function() {
             sessionStorage.setItem('gmp_index', currentIndex);
             sessionStorage.setItem('gmp_shuffle', shuffle);
             sessionStorage.setItem('gmp_repeat', repeat);
+            sessionStorage.setItem('gmp_position', audio ? audio.currentTime : 0);
+            sessionStorage.setItem('gmp_playing', isPlaying);
         } catch (e) {
             console.error('[GlobalMusicPlayer] Failed to save state:', e);
         }
@@ -4725,16 +4727,56 @@ window.GlobalMusicPlayer = (function() {
             const savedIndex = sessionStorage.getItem('gmp_index');
             const savedShuffle = sessionStorage.getItem('gmp_shuffle');
             const savedRepeat = sessionStorage.getItem('gmp_repeat');
+            const savedPosition = sessionStorage.getItem('gmp_position');
+            const savedPlaying = sessionStorage.getItem('gmp_playing');
 
             if (savedQueue) queue = JSON.parse(savedQueue);
             if (savedIndex) currentIndex = parseInt(savedIndex);
             if (savedShuffle) shuffle = savedShuffle === 'true';
             if (savedRepeat) repeat = savedRepeat;
 
-            updateUI();
+            // Restore playback position if there's a valid queue
+            if (queue.length > 0 && currentIndex >= 0 && currentIndex < queue.length) {
+                const track = queue[currentIndex];
+                audio.src = track.audio_url;
+
+                // Restore position
+                if (savedPosition) {
+                    audio.currentTime = parseFloat(savedPosition);
+                }
+
+                // Auto-resume if was playing
+                if (savedPlaying === 'true') {
+                    audio.play().then(() => {
+                        isPlaying = true;
+                        updateUI();
+                        show();
+                        updateMediaSession(track);
+                    }).catch(e => {
+                        console.log('[GlobalMusicPlayer] Auto-resume blocked (user interaction required)');
+                        isPlaying = false;
+                        updateUI();
+                    });
+                } else {
+                    updateUI();
+                }
+
+                show();
+            } else {
+                updateUI();
+            }
         } catch (e) {
             console.error('[GlobalMusicPlayer] Failed to restore state:', e);
         }
+    }
+
+    // Save position periodically
+    if (audio) {
+        setInterval(() => {
+            if (audio && !audio.paused) {
+                sessionStorage.setItem('gmp_position', audio.currentTime);
+            }
+        }, 5000); // Every 5 seconds
     }
 
     function playTrack(track) {

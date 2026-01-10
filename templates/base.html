@@ -3235,12 +3235,27 @@ function renderHistory() {
         }
 
         const detailLines = [];
-        // PR-5c: Music tip details
+        // PR-5c/5g: Music transaction details (tips + pool earnings)
         if (txType === 'music') {
+            const royaltyType = meta.royalty_type || '';
+            const isPoolEarning = royaltyType === 'play_reward' || tx.from === 'AI_WALLET';
+
             if (tx.track_title) detailLines.push(`Track: "${escapeHtml(tx.track_title)}"`);
             else if (tx.track_id) detailLines.push(`Track ID: ${escapeHtml(tx.track_id)}`);
-            const tipLabel = isSent ? (isGreek ? 'Tip για καλλιτέχνη' : 'Tip to artist') : (isGreek ? 'Tip από fan' : 'Tip from fan');
-            detailLines.push(tipLabel);
+
+            if (isPoolEarning) {
+                // Music pool earnings from plays
+                const playNum = meta.play_number || '';
+                const earnLabel = isGreek ? '🎵 Κέρδη από Plays' : '🎵 Pool Earnings';
+                detailLines.push(earnLabel);
+                if (playNum) detailLines.push(`Play #${playNum}`);
+            } else {
+                // Direct tip from fan
+                const tipLabel = isSent
+                    ? (isGreek ? '💝 Tip για καλλιτέχνη' : '💝 Tip to artist')
+                    : (isGreek ? '💝 Tip από fan' : '💝 Tip from fan');
+                detailLines.push(tipLabel);
+            }
         }
         if (txType === 'architect_ai_jobs') {
             if (meta.job_id) detailLines.push(`Job: ${escapeHtml(meta.job_id)}`);

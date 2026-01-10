@@ -9738,20 +9738,20 @@ def stripe_webhook():
     if event['type'] == 'checkout.session.completed':
         session = event['data']['object']
         metadata = session.get('metadata', {})
-        
+
         if metadata.get('type') == 'buy_thr':
             wallet = metadata.get('wallet')
             amount_paid_cents = session.get('amount_total', 0)
             fiat_amount = amount_paid_cents / 100.0
-            
+
             # Rate: 1 THR = $10
             thr_amount = fiat_amount / 10.0
-            
+
             # Mint/Send THR
             ledger = load_json(LEDGER_FILE, {})
             ledger[wallet] = round(float(ledger.get(wallet, 0.0)) + thr_amount, 6)
             save_json(LEDGER_FILE, ledger)
-            
+
             chain = load_json(CHAIN_FILE, [])
             tx = {
                 "type": "fiat_buy",
@@ -9769,6 +9769,52 @@ def stripe_webhook():
             save_json(CHAIN_FILE, chain)
             update_last_block(tx, is_block=False)
             print(f"💰 Stripe Payment: {fiat_amount} USD -> {thr_amount} THR to {wallet}")
+
+        elif metadata.get('type') == 'iot_pack':
+            # PR-5g: IoT pack purchase transaction
+            wallet = metadata.get('wallet')
+            pack_id = metadata.get('pack_id')
+            amount_paid_cents = session.get('amount_total', 0)
+            fiat_amount = amount_paid_cents / 100.0
+            price_eur = metadata.get('price_eur', str(fiat_amount))
+
+            # Pack names for transaction description
+            PACK_NAMES = {
+                "starter_vehicle": "Starter Vehicle Pack - OBD-II Node",
+                "smart_home": "Smart Home Bundle - Gateway + Sensors",
+                "industrial": "Industrial Pro Pack - Gateway + Sensors + PLC Kit"
+            }
+            pack_name = PACK_NAMES.get(pack_id, f"IoT Pack: {pack_id}")
+
+            # Record IoT purchase transaction on-chain
+            chain = load_json(CHAIN_FILE, [])
+            tx = {
+                "type": "iot",
+                "kind": "iot",
+                "category": "iot",
+                "from": wallet,
+                "to": "IOT_HARDWARE_FULFILLMENT",
+                "amount": 0,  # No THR transfer, fiat purchase
+                "fiat_amount": fiat_amount,
+                "currency": "EUR",
+                "pack_id": pack_id,
+                "pack_name": pack_name,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+                "tx_id": f"IOT-{int(time.time())}-{secrets.token_hex(4)}",
+                "status": "confirmed",
+                "stripe_id": session.get('id'),
+                "note": f"IoT Hardware Purchase: {pack_name} (€{fiat_amount})",
+                "meta": {
+                    "pack_id": pack_id,
+                    "price_eur": price_eur,
+                    "session_id": session.get('id'),
+                    "payment_status": session.get('payment_status')
+                }
+            }
+            chain.append(tx)
+            save_json(CHAIN_FILE, chain)
+            update_last_block(tx, is_block=False)
+            print(f"🔌 IoT Purchase: {pack_name} (€{fiat_amount}) for wallet {wallet}")
 
     return jsonify(status="success"), 200
 

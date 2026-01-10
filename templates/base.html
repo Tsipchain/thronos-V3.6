@@ -3207,6 +3207,16 @@ function renderHistory() {
             if (meta.reason) detailLines.push(`Reason: ${escapeHtml(meta.reason)}`);
             if (meta.tokens_used != null) detailLines.push(`Tokens: ${meta.tokens_used}`);
         }
+        // PR-5g: IoT purchase details
+        if (txType === 'iot') {
+            if (tx.pack_name) detailLines.push(`${escapeHtml(tx.pack_name)}`);
+            else if (tx.pack_id) detailLines.push(`Pack: ${escapeHtml(tx.pack_id)}`);
+            if (tx.fiat_amount && tx.currency) {
+                const currSymbol = tx.currency === 'EUR' ? '€' : tx.currency === 'USD' ? '$' : tx.currency;
+                detailLines.push(`${currSymbol}${Number(tx.fiat_amount).toFixed(2)}`);
+            }
+            if (meta.payment_status) detailLines.push(`Payment: ${escapeHtml(meta.payment_status)}`);
+        }
         const detailInfo = detailLines.length
             ? `<div style="font-size: 11px; color: #9adf9a; opacity: 0.9; margin-top: 4px;">${detailLines.join(' • ')}</div>`
             : '';

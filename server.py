@@ -9934,6 +9934,47 @@ def stripe_webhook():
 
     return jsonify(status="success"), 200
 
+@app.route("/api/gateway/buy_revolut", methods=["POST"])
+def api_gateway_buy_revolut():
+    """
+    PR-5g: Revolut Pay gateway for buying THR
+    TODO: Add Revolut Merchant API integration when keys are available
+    """
+    data = request.get_json() or {}
+    wallet = (data.get("wallet") or "").strip()
+    amount_usd = float(data.get("amount_usd", 0))
+
+    if not wallet or amount_usd <= 0:
+        return jsonify({"error": "Invalid parameters"}), 400
+
+    # Check if Revolut API is configured
+    REVOLUT_API_KEY = os.getenv("REVOLUT_API_KEY")
+    REVOLUT_MERCHANT_ID = os.getenv("REVOLUT_MERCHANT_ID")
+
+    if not REVOLUT_API_KEY or not REVOLUT_MERCHANT_ID:
+        return jsonify({
+            "error": "NOT_CONFIGURED",
+            "message": "Revolut Pay is not configured yet. Please use Stripe."
+        }), 503
+
+    # TODO: Create Revolut payment order
+    # revolut_order = create_revolut_order(
+    #     amount=amount_usd,
+    #     currency='USD',
+    #     merchant_customer_ext_ref=wallet,
+    #     description=f'Buy THR - {amount_usd / 10.0} THR'
+    # )
+    #
+    # return jsonify({
+    #     "url": revolut_order['checkout_url'],
+    #     "order_id": revolut_order['id']
+    # }), 200
+
+    return jsonify({
+        "error": "NOT_CONFIGURED",
+        "message": "Revolut Pay integration coming soon!"
+    }), 503
+
 @app.route("/api/gateway/sell", methods=["POST"])
 def api_gateway_sell():
     """

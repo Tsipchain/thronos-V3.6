@@ -1415,6 +1415,7 @@ async function removeTrackOffline(trackId) {
     }
 }
 
+// PR-5c: Show dropdown UI instead of prompts
 async function showTrackOptions(trackId) {
     const wallet = localStorage.getItem('thr_address');
     if (!wallet) {
@@ -1424,36 +1425,83 @@ async function showTrackOptions(trackId) {
 
     // Load playlists first
     try {
-        const res = await fetch(`/api/music/playlists/${wallet}`);
+        const res = await fetch(`/api/music/playlists?address=${encodeURIComponent(wallet)}`);
         const data = await res.json();
-        userPlaylists = data.ok ? data.playlists : [];
+        userPlaylists = data.ok ? data.playlists || [] : [];
     } catch (e) {
         console.error('Error loading playlists:', e);
+        userPlaylists = [];
     }
 
-    const options = [
-        '📥 Save for offline (no tip)',
-        '💰 Save for offline + 0.01 THR tip',
-        '📋 Add to playlist'
-    ];
+    // PR-5c: Build dropdown HTML
+    const playlistOptions = userPlaylists.length > 0
+        ? userPlaylists.map(p => `<option value="${p.playlist_id}">${p.name} (${(p.tracks || []).length} tracks)</option>`).join('')
+        : '<option value="">No playlists available</option>';
 
-    const choice = prompt(`Select option for this track:\n${options.map((o, i) => `${i+1}. ${o}`).join('\n')}\n\nEnter number:`);
+    const dropdownHtml = `
+        <div style="position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:9999; display:flex; align-items:center; justify-content:center;" onclick="this.remove()">
+            <div style="background:#000; border:2px solid #0f0; border-radius:12px; padding:24px; max-width:400px; width:90%;" onclick="event.stopPropagation()">
+                <h3 style="color:#0f0; margin:0 0 16px 0;">Track Options</h3>
+                <button onclick="saveTrackOffline('${trackId}', false); this.closest('[style*=fixed]').remove();" style="width:100%; padding:12px; margin-bottom:8px; background:#111; color:#0f0; border:1px solid #0f0; border-radius:6px; cursor:pointer; font-family:monospace;">
+                    📥 Save for offline (no tip)
+                </button>
+                <button onclick="saveTrackOffline('${trackId}', true); this.closest('[style*=fixed]').remove();" style="width:100%; padding:12px; margin-bottom:16px; background:#111; color:#0f0; border:1px solid #0f0; border-radius:6px; cursor:pointer; font-family:monospace;">
+                    💰 Save for offline + 0.01 THR tip
+                </button>
+                <hr style="border:1px solid #333; margin:16px 0;">
+                <label style="display:block; color:#0f0; margin-bottom:8px; font-size:14px;">📋 Add to Playlist:</label>
+                <select id="playlistSelect" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #0f0; border-radius:6px; margin-bottom:12px; font-family:monospace;">
+                    ${playlistOptions}
+                </select>
+                <button onclick="addTrackToPlaylistUI('${trackId}', document.getElementById('playlistSelect').value); this.closest('[style*=fixed]').remove();" style="width:100%; padding:12px; background:#0f0; color:#000; border:none; border-radius:6px; cursor:pointer; font-weight:bold; font-family:monospace;" ${userPlaylists.length === 0 ? 'disabled' : ''}>
+                    ✅ Add to Playlist
+                </button>
+                <button onclick="this.closest('[style*=fixed]').remove();" style="width:100%; padding:8px; margin-top:8px; background:transparent; color:#999; border:1px solid #333; border-radius:6px; cursor:pointer; font-family:monospace;">
+                    ✖ Cancel
+                </button>
+            </div>
+        </div>
+    `;
 
-    if (choice === '1') {
-        await saveTrackOffline(trackId, false);
-    } else if (choice === '2') {
-        await saveTrackOffline(trackId, true);
-    } else if (choice === '3') {
-        if (userPlaylists.length === 0) {
-            alert('You have no playlists. Create one first!');
-            return;
+    document.body.insertAdjacentHTML('beforeend', dropdownHtml);
+}
+
+// PR-5c: Add track to playlist using new endpoint
+async function addTrackToPlaylistUI(trackId, playlistId) {
+    if (!playlistId) {
+        alert('Please select a playlist');
+        return;
+    }
+
+    try {
+        // PR-5c: Use WalletAuth for PIN-based unlock
+        const { address, authSecret } = await window.WalletAuth.requireUnlockedWallet();
+
+        const res = await fetch('/api/music/playlist/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                address: address,
+                action: 'add_track',
+                playlist_id: playlistId,
+                track_id: trackId,
+                auth_secret: authSecret
+            })
+        });
+
+        const data = await res.json();
+        if (data.ok) {
+            alert('✅ Track added to playlist!');
+        } else {
+            alert(`❌ Error: ${data.error || 'Failed to add track'}`);
         }
-
-        const playlistChoice = prompt(`Select playlist:\n${userPlaylists.map((p, i) => `${i+1}. ${p.name}`).join('\n')}\n\nEnter number:`);
-        const playlistIndex = parseInt(playlistChoice) - 1;
-
-        if (playlistIndex >= 0 && playlistIndex < userPlaylists.length) {
-            await addTrackToPlaylist(trackId, userPlaylists[playlistIndex].id);
+    } catch (e) {
+        if (e.code === 'WALLET_NOT_CONNECTED') {
+            alert('❌ Please connect your wallet first!');
+        } else if (e.code === 'WALLET_LOCKED') {
+            alert('❌ Wallet is locked. Please unlock with your PIN.');
+        } else {
+            alert(`❌ Error: ${e.message}`);
         }
     }
 }

@@ -39,8 +39,10 @@
     
     /* Navigation Bar */
     .navbar {
-      background: #111;
-      border-bottom: 1px solid #0f0;
+      background: rgba(17, 17, 17, 0.85);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border-bottom: 1px solid rgba(0, 255, 0, 0.3);
       padding: 40px 0 0 0;
       margin-bottom: 30px;
       display: flex;
@@ -79,7 +81,7 @@
     }
 
     .nav-link:hover {
-      background-color: #222;
+      background-color: rgba(34, 34, 34, 0.6);
       text-decoration: none;
     }
     .thr-logo-icon {
@@ -3930,6 +3932,45 @@ document.addEventListener('DOMContentLoaded', () => {
             loadWalletBalances(true);
         }
     }, 60000);
+});
+
+// PR-5g: Listen for language changes and refresh wallet content
+window.addEventListener('langChanged', (e) => {
+    console.log('[Wallet] Language changed to:', e.detail.lang);
+
+    // Refresh wallet popup if open
+    if (isWalletOpen() && walletSession.isBound()) {
+        const activeTab = document.querySelector('.wallet-popup-tab.active');
+        if (!activeTab) return;
+
+        const tabName = activeTab.getAttribute('onclick')?.match(/showWalletTab\('([^']+)'/)?.[1];
+        if (!tabName) return;
+
+        // Re-render the active tab to update language
+        switch (tabName) {
+            case 'overview':
+                loadWalletBalances(true);
+                break;
+            case 'send':
+                showWalletTab('send');
+                break;
+            case 'receive':
+                showWalletTab('receive');
+                break;
+            case 'history':
+                loadHistoryTab();
+                break;
+            case 'music':
+                loadMusicTab();
+                break;
+            case 'offline':
+                loadOfflineTab();
+                break;
+        }
+    }
+
+    // Refresh header wallet UI
+    updateHeaderWalletUi();
 });
 
 // ─── TOKEN INFO MODAL FUNCTIONS ───────────────────────────

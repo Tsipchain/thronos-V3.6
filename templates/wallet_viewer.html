@@ -596,9 +596,29 @@
         }
 
         try {
-            // Check if MusicModule is available
+            // PR-5c: Wait for MusicModule to load if needed
             if (typeof MusicModule === 'undefined') {
-                musicContent.innerHTML = '<div class="wallet-card"><div class="music-empty">Music module not available.</div></div>';
+                // Show loading while waiting
+                musicContent.innerHTML = `
+                    <div class="wallet-card">
+                        <div style="text-align:center; padding:20px; color:#0f0;">
+                            <div style="display:inline-block; width:20px; height:20px; border:2px solid rgba(0,255,0,0.2); border-top:2px solid #0f0; border-radius:50%; animation:spin 1s linear infinite;"></div>
+                            <div style="margin-top:10px;">Loading music module...</div>
+                        </div>
+                    </div>
+                `;
+
+                // Wait for MusicModule to load (retry up to 10 times)
+                let retries = 0;
+                const checkModule = setInterval(() => {
+                    if (typeof MusicModule !== 'undefined') {
+                        clearInterval(checkModule);
+                        loadViewerMusicTab(); // Retry
+                    } else if (++retries >= 10) {
+                        clearInterval(checkModule);
+                        musicContent.innerHTML = '<div class="wallet-card"><div class="music-empty">Music module failed to load. Please refresh.</div></div>';
+                    }
+                }, 100);
                 return;
             }
 

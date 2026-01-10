@@ -1697,6 +1697,9 @@
             <button class="history-tab-btn" data-filter="gateway" onclick="filterHistory('gateway')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
                 <span class="lang-el">Gateway</span><span class="lang-en">Gateway</span>
             </button>
+            <button class="history-tab-btn" data-filter="music" onclick="filterHistory('music')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                🎵 <span class="lang-el">Μουσική</span><span class="lang-en">Music</span>
+            </button>
         </div>
 
         <div id="tokenIndexBar" style="display:none; margin: 0 4px 10px 4px;">
@@ -2690,12 +2693,18 @@ function getTxType(tx) {
         'swaps',
         'liquidity',
         'gateway',
+        'music',
     ].includes(category)) {
         return category;
     }
 
     const raw = (tx.kind || tx.type || '').toLowerCase();
     const asset = (tx.asset_symbol || tx.asset || tx.symbol || 'THR').toUpperCase();
+
+    // PR-5c: Music tips
+    if (raw === 'music_tip' || raw.includes('music')) {
+        return 'music';
+    }
 
     // THR transfers: must be transfer/thr_transfer AND asset must be THR
     if ((raw === 'thr_transfer' || raw === 'transfer') && asset === 'THR') {
@@ -2928,7 +2937,8 @@ function renderHistory() {
                          txType === 'bridge' ? 'Bridge' :
                          txType === 'swaps' ? 'Swaps' :
                          txType === 'liquidity' ? 'Liquidity' :
-                         txType === 'gateway' ? 'Gateway' : '';
+                         txType === 'gateway' ? 'Gateway' :
+                         txType === 'music' ? '🎵 Music Tip' : '';
         const isSwap = txType === 'swaps';
         const isLiquidity = txType === 'liquidity';
         const meta = tx.meta || {};
@@ -2985,6 +2995,13 @@ function renderHistory() {
         }
 
         const detailLines = [];
+        // PR-5c: Music tip details
+        if (txType === 'music') {
+            if (tx.track_title) detailLines.push(`Track: "${escapeHtml(tx.track_title)}"`);
+            else if (tx.track_id) detailLines.push(`Track ID: ${escapeHtml(tx.track_id)}`);
+            const tipLabel = isSent ? (isGreek ? 'Tip για καλλιτέχνη' : 'Tip to artist') : (isGreek ? 'Tip από fan' : 'Tip from fan');
+            detailLines.push(tipLabel);
+        }
         if (txType === 'architect_ai_jobs') {
             if (meta.job_id) detailLines.push(`Job: ${escapeHtml(meta.job_id)}`);
             if (meta.files_count != null) detailLines.push(`Files: ${meta.files_count}`);

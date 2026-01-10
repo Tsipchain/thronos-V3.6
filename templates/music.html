@@ -954,27 +954,22 @@ function formatTime(seconds) {
 }
 
 async function tipArtist() {
+    // PR-5a: Use WalletAuth for PIN-based unlock (no auth_secret prompt)
     if (!currentTrack) return;
-
-    const wallet = localStorage.getItem('thr_address');
-    if (!wallet) {
-        alert('Please connect your wallet first!');
-        return;
-    }
 
     const amount = prompt('Enter tip amount in THR:', '1');
     if (!amount || isNaN(amount) || parseFloat(amount) <= 0) return;
 
-    const authSecret = prompt('Enter your auth secret:');
-    if (!authSecret) return;
-
     try {
+        // PR-5a: Require unlocked wallet (PIN if locked)
+        const { address, authSecret } = await window.WalletAuth.requireUnlockedWallet();
+
         const res = await fetch('/api/v1/music/tip', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 track_id: currentTrack.id,
-                from_address: wallet,
+                from_address: address,
                 amount: parseFloat(amount),
                 auth_secret: authSecret,
                 passphrase: ''
@@ -988,7 +983,14 @@ async function tipArtist() {
             alert(`❌ Error: ${data.message}`);
         }
     } catch (e) {
-        alert(`❌ Error: ${e.message}`);
+        // PR-5a: Handle wallet auth errors
+        if (e.code === 'WALLET_NOT_CONNECTED') {
+            alert('❌ Please connect your wallet first!');
+        } else if (e.code === 'WALLET_LOCKED') {
+            alert('❌ Wallet is locked. Please unlock with your PIN.');
+        } else {
+            alert(`❌ Error: ${e.message}`);
+        }
     }
 }
 
@@ -1477,4 +1479,7 @@ async function addTrackToPlaylist(trackId, playlistId) {
     }
 }
 </script>
+
+<!-- PR-5a: Wallet authentication helper for PIN-based unlock -->
+<script src="{{ url_for('static', filename='wallet_auth.js') }}?v={{ build_id }}"></script>
 {% endblock %}

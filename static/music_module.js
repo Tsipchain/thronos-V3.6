@@ -2,10 +2,14 @@
 // Used by both wallet widget and full wallet page
 // Implements offline-first architecture with localStorage caching
 
-const MusicModule = (function() {
-    'use strict';
+// PR-5a: Guard against duplicate loading
+if (typeof window.MusicModule !== 'undefined') {
+    console.log('[MusicModule] Already loaded, skipping redeclaration');
+} else {
+    window.MusicModule = (function() {
+        'use strict';
 
-    // Private state
+        // Private state
     let currentAddress = null;
     let library = [];
     let playlists = [];
@@ -267,22 +271,23 @@ const MusicModule = (function() {
         return library.find(t => t.track_id === trackId);
     }
 
-    // Public API
-    return {
-        init,
-        refresh,
-        getLibrary,
-        getPlaylists,
-        getPlaylist,
-        getTrack,
-        createPlaylist,
-        addTrackToPlaylist,
-        removeTrackFromPlaylist,
-        reorderPlaylist
-    };
-})();
+        // Public API
+        return {
+            init,
+            refresh,
+            getLibrary,
+            getPlaylists,
+            getPlaylist,
+            getTrack,
+            createPlaylist,
+            addTrackToPlaylist,
+            removeTrackFromPlaylist,
+            reorderPlaylist
+        };
+    })();
 
-// Export for module systems (optional)
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = MusicModule;
+    // Export for module systems (optional)
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = window.MusicModule;
+    }
 }

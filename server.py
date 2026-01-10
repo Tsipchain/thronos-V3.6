@@ -15326,6 +15326,19 @@ def api_music_playlists_chain():
 
         playlists = list(playlists_map.values())
 
+        # PR-5c: Populate playlists with full track objects
+        registry = load_music_registry()
+        all_tracks = registry.get("tracks", [])
+
+        for playlist in playlists:
+            track_ids = playlist.get("track_ids", [])
+            full_tracks = []
+            for track_id in track_ids:
+                track = next((t for t in all_tracks if t.get("id") == track_id), None)
+                if track:
+                    full_tracks.append(track)
+            playlist["tracks"] = full_tracks
+
         return jsonify({
             "ok": True,
             "address": address,

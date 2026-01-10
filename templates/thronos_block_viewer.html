@@ -126,6 +126,10 @@
       </thead>
       <tbody></tbody>
     </table>
+    <div style="margin-top:12px;text-align:center;">
+      <button class="btn" id="btnLoadMoreBlocks" style="padding:10px 20px;">Load More Blocks</button>
+      <span class="muted small" id="blocksShowing" style="margin-left:12px;"></span>
+    </div>
     <div class="hint">Tip: κλικ στο hash/διεύθυνση για αντιγραφή. | Mining stats updated with each block.</div>
   </section>
 
@@ -168,7 +172,11 @@
       </thead>
       <tbody></tbody>
     </table>
-    <button class="btn" id="btnRefreshTxs" style="margin-top:8px">Refresh Transfers</button>
+    <div style="margin-top:12px;display:flex;gap:12px;align-items:center;">
+      <button class="btn" id="btnRefreshTxs">Refresh Transfers</button>
+      <button class="btn" id="btnLoadMoreTxs">Load More Transactions</button>
+      <span class="muted small" id="txsShowing"></span>
+    </div>
   </section>
 
   <!-- Mempool -->
@@ -815,14 +823,146 @@ renderBlocks(CURRENT_BLOCKS);
 renderTxs(CURRENT_TXS);
 loadChainTip();
 
+// PR-5g: Search functionality
+let searchTimeout = null;
 el('#q').addEventListener('input', ()=>{
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(performSearch, 500); // Debounce 500ms
+});
+el('#q').addEventListener('keypress', (e)=>{
+  if(e.key === 'Enter') {
+    e.preventDefault();
+    performSearch();
+  }
+});
+
+async function performSearch() {
+  const query = el('#q').value.trim();
+  if(!query) {
+    renderBlocks(CURRENT_BLOCKS);
+    renderTxs(CURRENT_TXS);
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/viewer/search?q=${encodeURIComponent(query)}`);
+    const data = await res.json();
+
+    if(data.ok) {
+      // Show search results
+      if(data.blocks_found > 0 || data.txs_found > 0) {
+        renderBlocks(data.blocks);
+        renderTxs(data.transactions);
+
+        // Show result count
+        const tipBadge = el('#tipBadge');
+        tipBadge.textContent = `Found: ${data.blocks_found} blocks, ${data.txs_found} txs`;
+        tipBadge.style.display = 'block';
+      } else {
+        renderBlocks([]);
+        renderTxs([]);
+        const tipBadge = el('#tipBadge');
+        tipBadge.textContent = 'No results found';
+        tipBadge.style.display = 'block';
+      }
+    }
+  } catch(e) {
+    console.error('Search failed:', e);
+  }
+}
+
+el('#clearBtn').onclick=()=>{
+  el('#q').value='';
+  el('#tipBadge').style.display = 'none';
   renderBlocks(CURRENT_BLOCKS);
   renderTxs(CURRENT_TXS);
-});
-el('#clearBtn').onclick=()=>{ el('#q').value=''; renderBlocks(CURRENT_BLOCKS); renderTxs(CURRENT_TXS); };
+};
 el('#refreshBtn').onclick=reloadBlocks;
 el('#btnLoadMempool')?.addEventListener('click', reloadMempool);
 el('#btnRefreshTxs')?.addEventListener('click', reloadTxs);
+
+// PR-5g: Load More functionality
+let blocksOffset = {{ showing_limit }};
+let txsOffset = {{ showing_limit }};
+const totalBlocks = {{ total_blocks }};
+const totalTxs = {{ total_txs }};
+
+async function loadMoreBlocks() {
+  const btn = el('#btnLoadMoreBlocks');
+  const originalText = btn.textContent;
+  btn.textContent = 'Loading...';
+  btn.disabled = true;
+
+  try {
+    const res = await fetch(`/api/viewer/load_more?type=blocks&offset=${blocksOffset}&limit=50`);
+    const data = await res.json();
+
+    if(data.ok && data.blocks.length > 0) {
+      // Append to current blocks
+      CURRENT_BLOCKS = [...data.blocks, ...CURRENT_BLOCKS];
+      renderBlocks(CURRENT_BLOCKS);
+
+      blocksOffset += data.blocks.length;
+
+      // Update showing label
+      el('#blocksShowing').textContent = `Showing ${blocksOffset} of ${totalBlocks}`;
+
+      // Hide button if no more
+      if(!data.has_more) {
+        btn.style.display = 'none';
+      }
+    }
+  } catch(e) {
+    console.error('Load more blocks failed:', e);
+  } finally {
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
+}
+
+async function loadMoreTxs() {
+  const btn = el('#btnLoadMoreTxs');
+  const originalText = btn.textContent;
+  btn.textContent = 'Loading...';
+  btn.disabled = true;
+
+  try {
+    const res = await fetch(`/api/viewer/load_more?type=txs&offset=${txsOffset}&limit=50`);
+    const data = await res.json();
+
+    if(data.ok && data.transactions.length > 0) {
+      // Append to current transactions
+      CURRENT_TXS = [...CURRENT_TXS, ...data.transactions];
+      renderTxs(CURRENT_TXS);
+
+      txsOffset += data.transactions.length;
+
+      // Update showing label
+      el('#txsShowing').textContent = `Showing ${txsOffset} of ${totalTxs}`;
+
+      // Hide button if no more
+      if(!data.has_more) {
+        btn.style.display = 'none';
+      }
+    }
+  } catch(e) {
+    console.error('Load more txs failed:', e);
+  } finally {
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
+}
+
+el('#btnLoadMoreBlocks')?.addEventListener('click', loadMoreBlocks);
+el('#btnLoadMoreTxs')?.addEventListener('click', loadMoreTxs);
+
+// Initialize showing labels
+el('#blocksShowing').textContent = `Showing ${blocksOffset} of ${totalBlocks}`;
+el('#txsShowing').textContent = `Showing ${txsOffset} of ${totalTxs}`;
+
+// Hide load more buttons if showing all
+if(blocksOffset >= totalBlocks) el('#btnLoadMoreBlocks').style.display = 'none';
+if(txsOffset >= totalTxs) el('#btnLoadMoreTxs').style.display = 'none';
 
 // live refresh ticker
 setInterval(()=>{

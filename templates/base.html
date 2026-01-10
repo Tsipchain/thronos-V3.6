@@ -4849,13 +4849,23 @@ window.GlobalMusicPlayer = (function() {
         }
     }
 
-    // Save position periodically
-    if (audio) {
-        setInterval(() => {
-            if (audio && !audio.paused) {
+    // Save position periodically (only when actually playing)
+    let positionSaveInterval = null;
+
+    function startPositionSaving() {
+        if (positionSaveInterval) return; // Already running
+        positionSaveInterval = setInterval(() => {
+            if (audio && !audio.paused && isPlaying) {
                 sessionStorage.setItem('gmp_position', audio.currentTime);
             }
-        }, 5000); // Every 5 seconds
+        }, 10000); // Every 10 seconds (reduced frequency)
+    }
+
+    function stopPositionSaving() {
+        if (positionSaveInterval) {
+            clearInterval(positionSaveInterval);
+            positionSaveInterval = null;
+        }
     }
 
     function playTrack(track) {
@@ -4912,6 +4922,9 @@ window.GlobalMusicPlayer = (function() {
 
             // PR-5f: Update MediaSession API for CarPlay/Android Auto support
             updateMediaSession(track);
+
+            // PR-5g: Start periodic position saving
+            startPositionSaving();
 
             // Record play
             const wallet = localStorage.getItem('thr_address');
@@ -5007,6 +5020,7 @@ window.GlobalMusicPlayer = (function() {
             audio.play().then(() => {
                 isPlaying = true;
                 updateUI();
+                startPositionSaving(); // Resume position saving
                 // PR-5f: Update MediaSession state
                 if ('mediaSession' in navigator) {
                     navigator.mediaSession.playbackState = 'playing';
@@ -5015,7 +5029,9 @@ window.GlobalMusicPlayer = (function() {
         } else {
             audio.pause();
             isPlaying = false;
+            stopPositionSaving(); // Stop position saving when paused
             updateUI();
+            saveState(); // Save final state on pause
             // PR-5f: Update MediaSession state
             if ('mediaSession' in navigator) {
                 navigator.mediaSession.playbackState = 'paused';

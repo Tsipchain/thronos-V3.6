@@ -3824,11 +3824,127 @@ def media_static(filename):
 
 @app.route("/viewer")
 def viewer():
+    # PR-5g: Performance optimization - limit to recent blocks/txs
+    # Viewer page loads much faster with pagination
+    limit = request.args.get('limit', type=int, default=50)
+    limit = min(limit, 200)  # Cap at 200 for safety
+
+    all_blocks = get_blocks_for_viewer()
+    recent_blocks = all_blocks[-limit:] if len(all_blocks) > limit else all_blocks
+
+    all_txs = _tx_feed()
+    recent_txs = all_txs[:limit] if len(all_txs) > limit else all_txs
+
     return render_template(
         "thronos_block_viewer.html",
-        blocks=get_blocks_for_viewer(),
-        transactions=_tx_feed(),
+        blocks=recent_blocks,
+        transactions=recent_txs,
+        total_blocks=len(all_blocks),
+        total_txs=len(all_txs),
+        showing_limit=limit
     )
+
+@app.route("/api/viewer/search", methods=["GET"])
+def api_viewer_search():
+    """
+    PR-5g: Search blocks and transactions by hash, tx_id, address, or height
+    """
+    query = (request.args.get("q") or "").strip()
+    search_type = (request.args.get("type") or "all").lower()  # all, blocks, txs
+    limit = min(request.args.get("limit", type=int, default=100), 500)
+
+    if not query:
+        return jsonify({"ok": False, "error": "Query required"}), 400
+
+    results = {
+        "query": query,
+        "blocks": [],
+        "transactions": []
+    }
+
+    # Search in blocks
+    if search_type in ["all", "blocks"]:
+        all_blocks = get_blocks_for_viewer()
+        query_lower = query.lower()
+
+        # Search by height (exact match)
+        if query.isdigit():
+            height = int(query)
+            matching_blocks = [b for b in all_blocks if b.get("index") == height]
+            results["blocks"].extend(matching_blocks[:limit])
+
+        # Search by hash (partial match)
+        if len(results["blocks"]) < limit:
+            hash_matches = [b for b in all_blocks if query_lower in (b.get("hash") or "").lower()]
+            for block in hash_matches:
+                if block not in results["blocks"] and len(results["blocks"]) < limit:
+                    results["blocks"].append(block)
+
+    # Search in transactions
+    if search_type in ["all", "txs"]:
+        all_txs = _tx_feed()
+        query_lower = query.lower()
+
+        for tx in all_txs:
+            if len(results["transactions"]) >= limit:
+                break
+
+            # Search by tx_id
+            if query_lower in (tx.get("tx_id") or "").lower():
+                results["transactions"].append(tx)
+                continue
+
+            # Search by address (from or to)
+            from_addr = (tx.get("from") or "").lower()
+            to_addr = (tx.get("to") or "").lower()
+            if query_lower in from_addr or query_lower in to_addr:
+                results["transactions"].append(tx)
+                continue
+
+    return jsonify({
+        "ok": True,
+        **results,
+        "blocks_found": len(results["blocks"]),
+        "txs_found": len(results["transactions"])
+    }), 200
+
+@app.route("/api/viewer/load_more", methods=["GET"])
+def api_viewer_load_more():
+    """
+    PR-5g: Load more blocks or transactions with pagination
+    """
+    data_type = request.args.get("type", "blocks")  # blocks or txs
+    offset = request.args.get("offset", type=int, default=0)
+    limit = min(request.args.get("limit", type=int, default=50), 200)
+
+    if data_type == "blocks":
+        all_blocks = get_blocks_for_viewer()
+        # Return blocks in reverse order (newest first) with offset
+        start = max(0, len(all_blocks) - offset - limit)
+        end = len(all_blocks) - offset
+        blocks = all_blocks[start:end][::-1]  # Reverse to show newest first
+
+        return jsonify({
+            "ok": True,
+            "blocks": blocks,
+            "total": len(all_blocks),
+            "offset": offset,
+            "has_more": start > 0
+        }), 200
+
+    elif data_type == "txs":
+        all_txs = _tx_feed()
+        txs = all_txs[offset:offset + limit]
+
+        return jsonify({
+            "ok": True,
+            "transactions": txs,
+            "total": len(all_txs),
+            "offset": offset,
+            "has_more": offset + limit < len(all_txs)
+        }), 200
+
+    return jsonify({"ok": False, "error": "Invalid type"}), 400
 
 @app.route("/wallet")
 def wallet_page():
@@ -9817,6 +9933,47 @@ def stripe_webhook():
             print(f"🔌 IoT Purchase: {pack_name} (€{fiat_amount}) for wallet {wallet}")
 
     return jsonify(status="success"), 200
+
+@app.route("/api/gateway/buy_revolut", methods=["POST"])
+def api_gateway_buy_revolut():
+    """
+    PR-5g: Revolut Pay gateway for buying THR
+    TODO: Add Revolut Merchant API integration when keys are available
+    """
+    data = request.get_json() or {}
+    wallet = (data.get("wallet") or "").strip()
+    amount_usd = float(data.get("amount_usd", 0))
+
+    if not wallet or amount_usd <= 0:
+        return jsonify({"error": "Invalid parameters"}), 400
+
+    # Check if Revolut API is configured
+    REVOLUT_API_KEY = os.getenv("REVOLUT_API_KEY")
+    REVOLUT_MERCHANT_ID = os.getenv("REVOLUT_MERCHANT_ID")
+
+    if not REVOLUT_API_KEY or not REVOLUT_MERCHANT_ID:
+        return jsonify({
+            "error": "NOT_CONFIGURED",
+            "message": "Revolut Pay is not configured yet. Please use Stripe."
+        }), 503
+
+    # TODO: Create Revolut payment order
+    # revolut_order = create_revolut_order(
+    #     amount=amount_usd,
+    #     currency='USD',
+    #     merchant_customer_ext_ref=wallet,
+    #     description=f'Buy THR - {amount_usd / 10.0} THR'
+    # )
+    #
+    # return jsonify({
+    #     "url": revolut_order['checkout_url'],
+    #     "order_id": revolut_order['id']
+    # }), 200
+
+    return jsonify({
+        "error": "NOT_CONFIGURED",
+        "message": "Revolut Pay integration coming soon!"
+    }), 503
 
 @app.route("/api/gateway/sell", methods=["POST"])
 def api_gateway_sell():

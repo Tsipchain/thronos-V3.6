@@ -184,7 +184,15 @@
             </div>
         </div>
         
-        <button id="btnBuy" class="action-btn btn-buy" onclick="doBuy()">Pay with Card 💳</button>
+        <!-- PR-5g: Dual Payment Gateway -->
+        <div style="display: flex; gap: 12px; margin-bottom: 12px;">
+            <button id="btnBuyStripe" class="action-btn btn-buy" onclick="doBuy('stripe')" style="flex: 1;">
+                Pay with Card 💳
+            </button>
+            <button id="btnBuyRevolut" class="action-btn btn-buy" onclick="doBuy('revolut')" style="flex: 1; background: linear-gradient(135deg, #0078ff 0%, #00c8ff 100%);">
+                Revolut Pay 🚀
+            </button>
+        </div>
         <div id="buyStatus" class="status-msg"></div>
     </div>
 
@@ -310,40 +318,78 @@ function calcSell() {
     $('sellFiat').value = fiat > 0 ? fiat.toFixed(2) : '';
 }
 
-async function doBuy() {
+// PR-5g: Dual gateway support (Stripe + Revolut)
+async function doBuy(gateway = 'stripe') {
     const addr = localStorage.getItem('thr_address');
     const fiatAmount = parseFloat($('buyFiat').value);
-    
+
     if (!addr) return alert("Connect wallet first.");
     if (!fiatAmount || fiatAmount <= 0) return alert("Enter valid amount.");
-    
-    $('btnBuy').disabled = true;
-    $('btnBuy').innerHTML = '<span class="spinner"></span> Redirecting to Stripe...';
+
+    const btnId = gateway === 'revolut' ? 'btnBuyRevolut' : 'btnBuyStripe';
+    const btn = $(btnId);
+    btn.disabled = true;
     $('buyStatus').style.display = 'none';
-    
-    try {
-        const res = await fetch('/api/gateway/create-checkout-session', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                wallet: addr,
-                fiat_amount: fiatAmount
-            })
-        });
-        const data = await res.json();
-        
-        if (data.id) {
-            // Redirect to Stripe
-            stripe.redirectToCheckout({ sessionId: data.id });
-        } else {
-            throw new Error(data.error || "Failed to create session");
+
+    if (gateway === 'stripe') {
+        btn.innerHTML = '<span class="spinner"></span> Redirecting to Stripe...';
+
+        try {
+            const res = await fetch('/api/gateway/create-checkout-session', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    wallet: addr,
+                    fiat_amount: fiatAmount
+                })
+            });
+            const data = await res.json();
+
+            if (data.id) {
+                stripe.redirectToCheckout({ sessionId: data.id });
+            } else {
+                throw new Error(data.error || "Failed to create session");
+            }
+        } catch (e) {
+            $('buyStatus').className = 'status-msg status-error';
+            $('buyStatus').textContent = `❌ Error: ${e.message}`;
+            $('buyStatus').style.display = 'block';
+            btn.disabled = false;
+            btn.innerHTML = "Pay with Card 💳";
         }
-    } catch (e) {
-        $('buyStatus').className = 'status-msg status-error';
-        $('buyStatus').textContent = `❌ Error: ${e.message}`;
-        $('buyStatus').style.display = 'block';
-        $('btnBuy').disabled = false;
-        $('btnBuy').textContent = "Pay with Card 💳";
+
+    } else if (gateway === 'revolut') {
+        btn.innerHTML = '<span class="spinner"></span> Opening Revolut...';
+
+        try {
+            const res = await fetch('/api/gateway/buy_revolut', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    amount_usd: fiatAmount,
+                    wallet: addr
+                })
+            });
+            const data = await res.json();
+
+            if (data.url) {
+                window.location.href = data.url;
+            } else if (data.error === 'NOT_CONFIGURED') {
+                $('buyStatus').className = 'status-msg status-error';
+                $('buyStatus').textContent = '⏳ Revolut Pay coming soon! Use Stripe for now.';
+                $('buyStatus').style.display = 'block';
+                btn.disabled = false;
+                btn.innerHTML = 'Revolut Pay 🚀';
+            } else {
+                throw new Error(data.error || "Revolut payment failed");
+            }
+        } catch (e) {
+            $('buyStatus').className = 'status-msg status-error';
+            $('buyStatus').textContent = `❌ Error: ${e.message}`;
+            $('buyStatus').style.display = 'block';
+            btn.disabled = false;
+            btn.innerHTML = 'Revolut Pay 🚀';
+        }
     }
 }
 

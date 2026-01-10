@@ -1214,7 +1214,8 @@ async function loadPlaylists() {
     }
 
     try {
-        const res = await fetch(`/api/music/playlists/${wallet}`);
+        // PR-5c: Use chain-based API
+        const res = await fetch(`/api/music/playlists?address=${encodeURIComponent(wallet)}`);
         const data = await res.json();
 
         if (data.ok && data.playlists && data.playlists.length > 0) {
@@ -1262,10 +1263,18 @@ async function createNewPlaylist() {
     if (!name || !name.trim()) return;
 
     try {
-        const res = await fetch(`/api/music/playlists/${wallet}`, {
+        // PR-5c: Use chain-based API with PIN-based auth
+        const { address, authSecret } = await window.WalletAuth.requireUnlockedWallet();
+
+        const res = await fetch('/api/music/playlist/update', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: name.trim() })
+            body: JSON.stringify({
+                address: address,
+                action: 'create',
+                name: name.trim(),
+                auth_secret: authSecret
+            })
         });
 
         const data = await res.json();
@@ -1276,7 +1285,14 @@ async function createNewPlaylist() {
             alert(`❌ Error: ${data.error}`);
         }
     } catch (e) {
-        alert(`❌ Error: ${e.message}`);
+        // PR-5c: Handle wallet auth errors
+        if (e.code === 'WALLET_NOT_CONNECTED') {
+            alert('❌ Please connect your wallet first!');
+        } else if (e.code === 'WALLET_LOCKED') {
+            alert('❌ Wallet is locked. Please unlock with your PIN.');
+        } else {
+            alert(`❌ Error: ${e.message}`);
+        }
     }
 }
 

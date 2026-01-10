@@ -15485,6 +15485,45 @@ def api_music_playlist_update():
             if not track_id:
                 return jsonify({"ok": False, "error": "track_id required"}), 400
 
+            # PR-5d: Validate track can be deleted (no plays, no tips)
+            registry = load_music_registry()
+            track = next((t for t in registry.get("tracks", []) if t.get("id") == track_id), None)
+
+            if not track:
+                return jsonify({
+                    "ok": False,
+                    "error": "TRACK_NOT_FOUND",
+                    "message": "Track not found"
+                }), 404
+
+            # Only artist can delete their own track
+            if track.get("artist_address") != address:
+                return jsonify({
+                    "ok": False,
+                    "error": "UNAUTHORIZED",
+                    "message": "You can only delete your own tracks"
+                }), 403
+
+            # Check play count
+            play_count = len(registry.get("plays", {}).get(track_id, []))
+            if play_count > 0:
+                return jsonify({
+                    "ok": False,
+                    "error": "TRACK_HAS_PLAYS",
+                    "message": f"Cannot delete track with {play_count} plays. Only tracks with no engagement can be deleted.",
+                    "play_count": play_count
+                }), 400
+
+            # Check tips total
+            tips_total = float(track.get("tips_total", 0))
+            if tips_total > 0:
+                return jsonify({
+                    "ok": False,
+                    "error": "TRACK_HAS_TIPS",
+                    "message": f"Cannot delete track with {tips_total} THR in tips. Tipped tracks are encrypted and retained for IoT miner rewards.",
+                    "tips_total": tips_total
+                }), 400
+
             # Check if track is referenced in any playlists
             referenced_playlists = []
             for tx in chain:

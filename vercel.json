@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "https://thrchain.up.railway.app/$1"
+    }
+  ]
+}

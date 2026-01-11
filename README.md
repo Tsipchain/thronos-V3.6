@@ -84,15 +84,22 @@ DATA_DIR=/app/data
 ### Write Protection
 
 Replica nodes are protected from accidentally writing to critical chain files:
-- `ledger.json`
-- `wbtc_ledger.json`
-- `phantom_tx_chain.json`
-- `pledge_chain.json`
-- `mempool.json`
-- `last_block.json`
-- `tx_ledger.json`
+- `ledger.json` - THR wallet balances
+- `wbtc_ledger.json` - Wrapped BTC balances
+- `phantom_tx_chain.json` - Transaction chain
+- `pledge_chain.json` - Pledge contracts
+- `mempool.json` - Pending transactions
+- `last_block.json` - Latest block summary
+- `tx_ledger.json` - Transaction log
+- `voting.json` - Governance voting state
+- `ai_agent_credentials.json` - AI wallet credentials
 
 Any write attempt to these files from a replica node will raise a `PermissionError`.
+
+**Startup Guards:**
+- `ensure_ai_wallet()` - Skipped on replica nodes
+- `initialize_voting()` - Skipped on replica nodes
+- `prune_empty_sessions()` - Skipped on replica nodes
 
 ### Deployment on Railway
 

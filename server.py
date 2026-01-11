@@ -363,12 +363,25 @@ MODEL_REFRESH_INTERVAL_SECONDS = float(os.getenv("MODEL_REFRESH_INTERVAL_SECONDS
 PROVIDER_HEALTH_CACHE: dict = {}
 PROVIDER_HEALTH_TTL = 300  # seconds
 
+# ─── PR-182: Multi-Node Role Configuration ────────────────────────────────
 # Node role: "master" or "replica"
 NODE_ROLE = os.getenv("NODE_ROLE", "master").lower()
+# Read-only mode for replica nodes
+READ_ONLY = os.getenv("READ_ONLY", "0" if NODE_ROLE == "master" else "1") == "1"
+# Leader flag for consensus
+IS_LEADER = os.getenv("IS_LEADER", "1" if NODE_ROLE == "master" else "0") == "1"
+# Scheduler enabled flag
+SCHEDULER_ENABLED = os.getenv("SCHEDULER_ENABLED", "1") == "1"
+# AI mode: "production" (user-facing) or "worker" (background tasks)
+THRONOS_AI_MODE = os.getenv("THRONOS_AI_MODE", "production" if NODE_ROLE == "master" else "worker").lower()
+
 MASTER_INTERNAL_URL = os.getenv("MASTER_NODE_URL", "http://localhost:5000")
 LEADER_URL = os.getenv("LEADER_URL", MASTER_INTERNAL_URL)
 # Replica external URL - used for heartbeat registration (e.g., Railway URL)
 REPLICA_EXTERNAL_URL = os.getenv("REPLICA_EXTERNAL_URL", os.getenv("RAILWAY_PUBLIC_DOMAIN", ""))
+
+# Admin secret for cross-node API calls
+ADMIN_SECRET = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
 
 LEDGER_FILE         = os.path.join(DATA_DIR, "ledger.json")
 WBTC_LEDGER_FILE    = os.path.join(DATA_DIR, "wbtc_ledger.json")
@@ -625,10 +638,52 @@ AI_FILES_INDEX = os.path.join(DATA_DIR, "ai_files_index.json")
 # This ensures all chat sessions persist across Railway deploys
 SESSIONS_DIR = AI_SESSIONS_DIR
 
-ADMIN_SECRET   = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
+# ─── PR-183: BTC Environment Variable Semantics ────────────────────────────────
+# BTC_PLEDGE_VAULT: Address where all BTC pledges land
+BTC_PLEDGE_VAULT = os.getenv("BTC_PLEDGE_VAULT", "1QFeDPwEF8yEgPEfP79hpc8pHytXMz9oEQ")
 
-BTC_RECEIVER  = "1QFeDPwEF8yEgPEfP79hpc8pHytXMz9oEQ"
+# BTC_HOT_WALLET: Hot wallet used as source for BTC withdrawals in bridge-out flows
+BTC_HOT_WALLET = os.getenv("BTC_HOT_WALLET", "1QFeDPwEF8yEgPEfP79hpc8pHytXMz9oEQ")
+
+# BTC_TREASURY: Address where bridge/protocol fees are sent
+BTC_TREASURY = os.getenv("BTC_TREASURY", "3KUGVJQ5tJWKY7GDVgwLjJ7EBzVWatD9nF")
+
+# BTC network fee for transactions
+BTC_NETWORK_FEE = float(os.getenv("BTC_NETWORK_FEE", "0.0002"))
+
+# Min/Max BTC withdrawal limits
+MIN_BTC_WITHDRAWAL = float(os.getenv("MIN_BTC_WITHDRAWAL", "0.001"))
+MAX_BTC_WITHDRAWAL = float(os.getenv("MAX_BTC_WITHDRAWAL", "0.5"))
+
+# Withdrawal fee as percentage (0.5 = 0.5%, factor = value / 100.0)
+WITHDRAWAL_FEE_PERCENT = float(os.getenv("WITHDRAWAL_FEE_PERCENT", "0.5"))
+
+# THR per 1 BTC exchange rate
+THR_BTC_RATE = float(os.getenv("THR_BTC_RATE", "33333.33"))  # 1 BTC = 33,333.33 THR
+
+# BTC RPC configuration
+BTC_RPC_URL = os.getenv("BTC_RPC_URL", "")
+BTC_RPC_USER = os.getenv("BTC_RPC_USER", "")
+BTC_RPC_PASSWORD = os.getenv("BTC_RPC_PASSWORD", "")
+
+# Legacy - kept for backward compatibility
+BTC_RECEIVER  = BTC_PLEDGE_VAULT
 MIN_AMOUNT    = 0.00001
+
+# ─── PR-184: Multi-Chain RPC Configuration ─────────────────────────────────
+# EVM-compatible chains
+ETH_RPC_URL = os.getenv("ETH_RPC_URL", "https://eth.llamarpc.com")
+BSC_RPC_URL = os.getenv("BSC_RPC_URL", "https://bsc-dataseed.binance.org")
+POLYGON_RPC_URL = os.getenv("POLYGON_RPC_URL", "https://polygon-rpc.com")
+ARBITRUM_RPC_URL = os.getenv("ARBITRUM_RPC_URL", "https://arb1.arbitrum.io/rpc")
+OPTIMISM_RPC_URL = os.getenv("OPTIMISM_RPC_URL", "https://mainnet.optimism.io")
+
+# Other chains
+SOLANA_RPC_URL = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
+XRP_RPC_URL = os.getenv("XRP_RPC_URL", os.getenv("XRPL_RPC_URL", "https://xrplcluster.com"))
+
+# User profile storage file
+USER_PROFILES_FILE = os.path.join(DATA_DIR, "user_profiles.json")
 
 CONTRACTS_DIR = os.path.join(DATA_DIR, "contracts")
 os.makedirs(CONTRACTS_DIR, exist_ok=True)
@@ -1062,6 +1117,43 @@ def atomic_write_json(path: str, data) -> None:
                 os.remove(tmp_path)
             except Exception:
                 pass
+
+
+# ─── PR-182: Write Protection for Replica Nodes ────────────────────────────────
+def _is_chain_file(path: str) -> bool:
+    """Check if a file is a critical chain/ledger file that replicas shouldn't write."""
+    critical_files = [
+        LEDGER_FILE,
+        WBTC_LEDGER_FILE,
+        CHAIN_FILE,
+        PLEDGE_CHAIN,
+        MEMPOOL_FILE,
+        LAST_BLOCK_FILE,
+        TX_LOG_FILE,
+    ]
+    return any(path == f for f in critical_files)
+
+
+def _enforce_write_protection(path: str):
+    """Raise an error if a replica node tries to write to chain files."""
+    if READ_ONLY and _is_chain_file(path):
+        raise PermissionError(
+            f"[REPLICA] Node is in READ_ONLY mode. Cannot write to {path}. "
+            f"Use MASTER_NODE_URL API instead."
+        )
+
+
+# Wrap save_json and atomic_write_json with write protection
+_original_save_json = save_json
+_original_atomic_write_json = atomic_write_json
+
+def save_json(path, data):
+    _enforce_write_protection(path)
+    return _original_save_json(path, data)
+
+def atomic_write_json(path: str, data) -> None:
+    _enforce_write_protection(path)
+    return _original_atomic_write_json(path, data)
 
 
 def _authorized_logging_request(req) -> bool:
@@ -5849,6 +5941,14 @@ def api_chat():
     - Αν έχει wallet αλλά 0 credits, δεν προχωρά σε κλήση AI
     - Κάθε μήνυμα γράφεται στο ai_offline_corpus.json με session_id
     """
+    # PR-182: Enforce THRONOS_AI_MODE - worker nodes don't serve user-facing AI
+    if THRONOS_AI_MODE == "worker":
+        return jsonify({
+            "ok": False,
+            "error": "AI chat is disabled on worker nodes",
+            "message": "This node is configured for background tasks only. Please use the master node."
+        }), 403
+
     if not ai_agent:
         return jsonify(error="AI Agent not available"), 503
 
@@ -10765,19 +10865,39 @@ def api_v1_receive_block():
     return jsonify(status="added"), 201
 
 # ─── SCHEDULER ─────────────────────────────────────
-# Only start scheduler on MASTER nodes (replicas are read-only)
-if NODE_ROLE == "master":
-    print(f"[SCHEDULER] Starting as MASTER node")
+# PR-182: Start scheduler based on NODE_ROLE and SCHEDULER_ENABLED
+# - Master nodes: run chain maintenance jobs (minting, mempool, aggregator)
+# - Replica nodes: can run worker jobs if SCHEDULER_ENABLED=1 (e.g., BTC watcher)
+if NODE_ROLE == "master" and SCHEDULER_ENABLED:
+    print(f"[SCHEDULER] Starting as MASTER node (SCHEDULER_ENABLED={SCHEDULER_ENABLED})")
     scheduler=BackgroundScheduler(daemon=True)
     scheduler.add_job(mint_first_blocks, "interval", minutes=1)
     scheduler.add_job(confirm_mempool_if_stuck, "interval", seconds=45)
     scheduler.add_job(aggregator_step, "interval", seconds=10)
     scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30)  # NEW
     scheduler.start()
-    print(f"[SCHEDULER] All jobs started")
+    print(f"[SCHEDULER] All master jobs started")
+elif NODE_ROLE == "replica" and SCHEDULER_ENABLED:
+    print(f"[SCHEDULER] Starting as REPLICA node with worker jobs (SCHEDULER_ENABLED={SCHEDULER_ENABLED})")
+    scheduler=BackgroundScheduler(daemon=True)
+
+    # PR-183: Add BTC pledge watcher for replica nodes
+    try:
+        from btc_pledge_watcher import watch_btc_pledges
+        # Run every 60 seconds to check for new BTC pledges
+        scheduler.add_job(watch_btc_pledges, "interval", seconds=60, id="btc_pledge_watcher")
+        print(f"[SCHEDULER] Added BTC pledge watcher job (every 60s)")
+    except ImportError as e:
+        print(f"[SCHEDULER] BTC pledge watcher not available: {e}")
+
+    scheduler.start()
+    print(f"[SCHEDULER] Replica scheduler started with worker jobs")
 else:
-    print(f"[SCHEDULER] Running as REPLICA - scheduler disabled")
+    print(f"[SCHEDULER] Scheduler disabled (NODE_ROLE={NODE_ROLE}, SCHEDULER_ENABLED={SCHEDULER_ENABLED})")
     scheduler = None
+
+# Start heartbeat sender for replica nodes (independent of scheduler)
+if NODE_ROLE == "replica":
 
     # Start heartbeat sender for replica nodes
     import threading
@@ -10890,6 +11010,479 @@ def admin_mint():
     except Exception:
         pass
     return jsonify(status="success", tx_id=tx_id, thr_address=thr_addr, new_balance=ledger[thr_addr]), 201
+
+
+# ─── PR-183: BTC PLEDGE & WALLET ACTIVATION ENDPOINTS ───────────────────────────
+@app.route("/api/btc/pledge", methods=["POST"])
+def api_btc_pledge():
+    """
+    Create a BTC pledge transaction (called by BTC watcher on Node 2)
+
+    Requires ADMIN_SECRET for authentication.
+
+    Expected payload:
+    {
+        "secret": "ADMIN_SECRET",
+        "type": "btc_pledge",
+        "thr_address": "THR...",
+        "btc_address": "1...",
+        "btc_amount": 0.1,
+        "thr_amount": 3333.33,
+        "btc_txid": "abc123...",
+        "kyc_verified": true/false,
+        "whitelisted_admin": true/false,
+        "timestamp": 1234567890
+    }
+    """
+    data = request.get_json() or {}
+    secret = data.get("secret")
+
+    if secret != ADMIN_SECRET:
+        return jsonify(ok=False, error="Unauthorized"), 403
+
+    # Validate required fields
+    thr_address = data.get("thr_address")
+    btc_address = data.get("btc_address")
+    btc_amount = data.get("btc_amount", 0)
+    thr_amount = data.get("thr_amount", 0)
+    btc_txid = data.get("btc_txid")
+
+    if not all([thr_address, btc_address, btc_txid]):
+        return jsonify(ok=False, error="Missing required fields"), 400
+
+    if btc_amount <= 0 or thr_amount <= 0:
+        return jsonify(ok=False, error="Invalid amounts"), 400
+
+    # Credit THR to the user's wallet
+    ledger = load_json(LEDGER_FILE, {})
+    current_balance = float(ledger.get(thr_address, 0.0))
+    new_balance = round(current_balance + thr_amount, 6)
+    ledger[thr_address] = new_balance
+    save_json(LEDGER_FILE, ledger)
+
+    # Create pledge transaction on the chain
+    chain = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx_id = f"BTC_PLEDGE-{int(time.time())}-{secrets.token_hex(4)}"
+
+    tx = {
+        "type": "btc_pledge",
+        "tx_id": tx_id,
+        "from": btc_address,
+        "to": thr_address,
+        "thr_address": thr_address,
+        "btc_address": btc_address,
+        "btc_amount": round(btc_amount, 8),
+        "thr_amount": round(thr_amount, 6),
+        "btc_txid": btc_txid,
+        "kyc_verified": data.get("kyc_verified", False),
+        "whitelisted_admin": data.get("whitelisted_admin", False),
+        "timestamp": ts,
+        "status": "confirmed"
+    }
+
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+
+    # Update last_block summary
+    update_last_block(tx, is_block=False)
+
+    # Broadcast to peers
+    try:
+        broadcast_tx(tx)
+    except Exception:
+        pass
+
+    return jsonify(
+        ok=True,
+        tx_id=tx_id,
+        thr_address=thr_address,
+        new_balance=new_balance,
+        btc_txid=btc_txid
+    ), 201
+
+
+@app.route("/api/wallet/activate", methods=["POST"])
+def api_wallet_activate():
+    """
+    Activate a wallet for a KYC-verified user
+
+    Requires ADMIN_SECRET for authentication.
+
+    Expected payload:
+    {
+        "secret": "ADMIN_SECRET",
+        "thr_address": "THR...",
+        "btc_address": "1..."
+    }
+    """
+    data = request.get_json() or {}
+    secret = data.get("secret")
+
+    if secret != ADMIN_SECRET:
+        return jsonify(ok=False, error="Unauthorized"), 403
+
+    thr_address = data.get("thr_address")
+    btc_address = data.get("btc_address")
+
+    if not thr_address:
+        return jsonify(ok=False, error="Missing thr_address"), 400
+
+    # For now, just ensure the wallet exists in the ledger
+    ledger = load_json(LEDGER_FILE, {})
+    if thr_address not in ledger:
+        ledger[thr_address] = 0.0
+        save_json(LEDGER_FILE, ledger)
+
+    return jsonify(
+        ok=True,
+        thr_address=thr_address,
+        btc_address=btc_address,
+        status="activated"
+    ), 200
+
+
+# ─── PR-184: MULTI-CHAIN WALLET API ────────────────────────────────────────
+try:
+    from multichain_wallet import (
+        get_user_profile,
+        save_user_profile,
+        aggregate_user_balances,
+        preview_native_tx,
+        broadcast_native_tx
+    )
+
+    @app.route("/api/wallet/profile", methods=["GET"])
+    def api_wallet_profile():
+        """
+        Get user wallet profile with all chain addresses
+
+        Query params:
+        - user_id: User identifier
+        """
+        user_id = request.args.get("user_id") or request.cookies.get("user_id")
+
+        if not user_id:
+            return jsonify(ok=False, error="Missing user_id"), 400
+
+        profile = get_user_profile(user_id)
+
+        if not profile:
+            return jsonify(ok=False, error="Profile not found"), 404
+
+        # Remove sensitive fields if any
+        safe_profile = {
+            "user_id": profile.get("user_id"),
+            "kyc_id": profile.get("kyc_id"),
+            "is_kyc_verified": profile.get("is_kyc_verified", False),
+            "is_whitelisted_admin": profile.get("is_whitelisted_admin", False),
+            "thr_address": profile.get("thr_address"),
+            "btc_address": profile.get("btc_address"),
+            "btc_pledge_address": profile.get("btc_pledge_address"),
+            "evm_address": profile.get("evm_address"),
+            "sol_address": profile.get("sol_address"),
+            "xrp_address": profile.get("xrp_address"),
+        }
+
+        return jsonify(ok=True, profile=safe_profile), 200
+
+
+    @app.route("/api/wallet/profile", methods=["POST"])
+    def api_wallet_profile_update():
+        """
+        Create or update user wallet profile
+
+        Requires authentication (user_id from session/cookies)
+
+        Body:
+        {
+            "user_id": "user123",
+            "thr_address": "THR...",
+            "btc_address": "1...",
+            "evm_address": "0x...",
+            "sol_address": "...",
+            "xrp_address": "r..."
+        }
+        """
+        data = request.get_json() or {}
+        user_id = data.get("user_id") or request.cookies.get("user_id")
+
+        if not user_id:
+            return jsonify(ok=False, error="Missing user_id"), 400
+
+        # Update profile
+        profile = save_user_profile(user_id, data)
+
+        return jsonify(ok=True, profile=profile), 200
+
+
+    @app.route("/api/wallet/balances", methods=["GET"])
+    def api_wallet_balances():
+        """
+        Get aggregated balances across all chains
+
+        Query params:
+        - user_id: User identifier
+        """
+        user_id = request.args.get("user_id") or request.cookies.get("user_id")
+
+        if not user_id:
+            return jsonify(ok=False, error="Missing user_id"), 400
+
+        # Load Thronos ledgers
+        ledger = load_json(LEDGER_FILE, {})
+        wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+
+        # Aggregate balances
+        balances = aggregate_user_balances(user_id, ledger, wbtc_ledger)
+
+        if "error" in balances:
+            return jsonify(ok=False, error=balances["error"]), 404
+
+        return jsonify(ok=True, **balances), 200
+
+
+    @app.route("/api/wallet/native_tx_preview", methods=["POST"])
+    def api_wallet_native_tx_preview():
+        """
+        Preview a native transaction (unsigned)
+
+        Body:
+        {
+            "chain": "eth|bsc|btc|sol|xrp",
+            "from_address": "0x...",
+            "to_address": "0x...",
+            "amount": 1.5
+        }
+        """
+        data = request.get_json() or {}
+
+        chain = data.get("chain")
+        from_address = data.get("from_address")
+        to_address = data.get("to_address")
+        amount = data.get("amount", 0)
+
+        if not all([chain, from_address, to_address]):
+            return jsonify(ok=False, error="Missing required fields"), 400
+
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error="Invalid amount"), 400
+
+        # Preview transaction
+        preview = preview_native_tx(chain, from_address, to_address, amount)
+
+        return jsonify(ok=preview["is_valid"], **preview), 200
+
+
+    @app.route("/api/wallet/native_tx_broadcast", methods=["POST"])
+    def api_wallet_native_tx_broadcast():
+        """
+        Broadcast a signed native transaction
+
+        Body:
+        {
+            "chain": "eth|bsc|btc|sol|xrp",
+            "signed_tx": "0x..." or base64 encoded
+        }
+        """
+        data = request.get_json() or {}
+
+        chain = data.get("chain")
+        signed_tx = data.get("signed_tx")
+
+        if not all([chain, signed_tx]):
+            return jsonify(ok=False, error="Missing required fields"), 400
+
+        # Broadcast transaction
+        result = broadcast_native_tx(chain, signed_tx)
+
+        return jsonify(ok=result["success"], **result), 200 if result["success"] else 400
+
+
+    @app.route("/api/bridge/in", methods=["POST"])
+    def api_bridge_in():
+        """
+        Start a bridge-in flow (native asset -> wrapped asset)
+
+        Body:
+        {
+            "chain": "btc|eth|bsc|sol|xrp",
+            "asset": "BTC|ETH|USDC",
+            "amount": 0.1,
+            "user_id": "user123"
+        }
+
+        Returns:
+        - Deposit address where user should send funds
+        - Expected wrapped token amount
+        - Bridge transaction ID for tracking
+        """
+        data = request.get_json() or {}
+
+        chain = data.get("chain")
+        asset = data.get("asset")
+        amount = data.get("amount", 0)
+        user_id = data.get("user_id")
+
+        if not all([chain, asset, user_id]):
+            return jsonify(ok=False, error="Missing required fields"), 400
+
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error="Invalid amount"), 400
+
+        # Get user profile
+        profile = get_user_profile(user_id)
+        if not profile:
+            return jsonify(ok=False, error="User profile not found"), 404
+
+        # Determine deposit address based on chain
+        deposit_address = None
+        if chain.lower() == "btc":
+            deposit_address = BTC_PLEDGE_VAULT
+        elif chain.lower() in ["eth", "bsc", "polygon"]:
+            # Would use a multi-chain bridge contract
+            deposit_address = profile.get("evm_address")
+        else:
+            return jsonify(ok=False, error=f"Bridge-in not supported for {chain}"), 400
+
+        # Calculate expected wrapped amount
+        # This is simplified - in production, use actual exchange rates
+        wrapped_amount = amount * THR_BTC_RATE if chain.lower() == "btc" else amount
+
+        # Create pending bridge record
+        bridge_id = f"BRIDGE_IN_{int(time.time())}_{secrets.token_hex(4)}"
+
+        pending_bridge = {
+            "bridge_id": bridge_id,
+            "type": "bridge_in",
+            "chain": chain,
+            "asset": asset,
+            "amount": amount,
+            "wrapped_amount": wrapped_amount,
+            "user_id": user_id,
+            "thr_address": profile.get("thr_address"),
+            "deposit_address": deposit_address,
+            "status": "pending",
+            "created_at": int(time.time())
+        }
+
+        # Save to pending bridges file
+        # (In production, use a proper database)
+
+        return jsonify(
+            ok=True,
+            bridge_id=bridge_id,
+            deposit_address=deposit_address,
+            expected_wrapped_amount=wrapped_amount,
+            instructions=f"Send {amount} {asset} to {deposit_address}",
+            status="pending"
+        ), 200
+
+
+    @app.route("/api/bridge/out", methods=["POST"])
+    def api_bridge_out():
+        """
+        Start a bridge-out flow (wrapped asset -> native asset)
+
+        Body:
+        {
+            "chain": "btc|eth|bsc|sol|xrp",
+            "asset": "BTC|ETH|USDC",
+            "amount": 0.1,
+            "destination_address": "1...",
+            "user_id": "user123"
+        }
+
+        Returns:
+        - Bridge transaction ID
+        - Expected fee breakdown
+        - Estimated time to completion
+        """
+        data = request.get_json() or {}
+
+        chain = data.get("chain")
+        asset = data.get("asset")
+        amount = data.get("amount", 0)
+        destination_address = data.get("destination_address")
+        user_id = data.get("user_id")
+
+        if not all([chain, asset, destination_address, user_id]):
+            return jsonify(ok=False, error="Missing required fields"), 400
+
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error="Invalid amount"), 400
+
+        # Get user profile
+        profile = get_user_profile(user_id)
+        if not profile:
+            return jsonify(ok=False, error="User profile not found"), 404
+
+        thr_address = profile.get("thr_address")
+
+        # Check if user has enough wrapped tokens
+        if chain.lower() == "btc":
+            wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+            wbtc_balance = float(wbtc_ledger.get(thr_address, 0.0))
+
+            if wbtc_balance < amount:
+                return jsonify(ok=False, error="Insufficient wBTC balance"), 400
+
+            # Calculate fees using btc_bridge_out module
+            from btc_bridge_out import calculate_bridge_out_fees
+
+            fees = calculate_bridge_out_fees(amount)
+
+            if not fees["is_valid"]:
+                return jsonify(ok=False, error=fees["error"]), 400
+
+            # Burn wBTC from user's account
+            wbtc_ledger[thr_address] = round(wbtc_balance - amount, 8)
+            save_json(WBTC_LEDGER_FILE, wbtc_ledger)
+
+            # Create pending withdrawal record
+            bridge_id = f"BRIDGE_OUT_{int(time.time())}_{secrets.token_hex(4)}"
+
+            # Record burn transaction on chain
+            chain_data = load_json(CHAIN_FILE, [])
+            ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+            burn_tx = {
+                "type": "wbtc_burn",
+                "tx_id": f"BURN_{int(time.time())}_{secrets.token_hex(4)}",
+                "from": thr_address,
+                "to": "burn",
+                "amount": amount,
+                "bridge_id": bridge_id,
+                "destination_chain": chain,
+                "destination_address": destination_address,
+                "timestamp": ts,
+                "status": "confirmed"
+            }
+
+            chain_data.append(burn_tx)
+            save_json(CHAIN_FILE, chain_data)
+
+            return jsonify(
+                ok=True,
+                bridge_id=bridge_id,
+                burn_tx_id=burn_tx["tx_id"],
+                fee_breakdown=fees,
+                destination_address=destination_address,
+                status="pending_withdrawal",
+                estimated_time="10-60 minutes"
+            ), 200
+
+        else:
+            return jsonify(ok=False, error=f"Bridge-out not supported for {chain}"), 400
+
+except ImportError as e:
+    print(f"[WALLET] Multi-chain wallet module not available: {e}")
 
 
 # ─── L2E API ────────────────────────────────────────────────────────
@@ -14180,6 +14773,14 @@ def api_ai_session_delete_v2():
 # Add /api/ai/chat as alias to /api/chat (for backward compatibility)
 @app.route("/api/ai/providers/chat", methods=["POST"])
 def api_ai_provider_chat():
+    # PR-182: Enforce THRONOS_AI_MODE - worker nodes don't serve user-facing AI
+    if THRONOS_AI_MODE == "worker":
+        return jsonify({
+            "ok": False,
+            "error": "AI chat is disabled on worker nodes",
+            "message": "This node is configured for background tasks only. Please use the master node."
+        }), 403
+
     data = request.get_json(silent=True) or {}
     messages = data.get("messages") or []
     prompt = (data.get("prompt") or data.get("message") or "").strip()

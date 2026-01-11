@@ -511,6 +511,166 @@ NODE_ROLE=replica python server.py
 
 ---
 
+## Blockchain Viewer & Explorer API
+
+ThronosChain provides comprehensive APIs for viewing blocks, transactions, and mining statistics with proper categorization and filtering.
+
+### Transaction Categories
+
+All transactions are automatically categorized into the following types:
+- `token_transfer` - Normal THR/token sends
+- `music_tip` - Tips to artists (music streaming)
+- `ai_reward` - AI-related rewards/payments
+- `iot_telemetry` - IoT device data/GPS telemetry
+- `bridge` - Bridge in/out transactions
+- `pledge` - BTC/fiat pledges
+- `mining` - Block mining rewards
+- `swap` - Token swaps
+- `liquidity` - Pool adds/removes
+- `other` - Everything else
+
+### API Endpoints
+
+#### Get Blocks (Paginated)
+```bash
+GET /api/blocks?offset=0&limit=100&from_height=1&to_height=1000
+
+Response:
+{
+  "ok": true,
+  "blocks": [...],
+  "total": 21000,
+  "offset": 0,
+  "limit": 100,
+  "has_more": true,
+  "min_height": 1,
+  "max_height": 21000
+}
+```
+
+#### Get Transfers with Statistics
+```bash
+GET /api/transfers?offset=0&limit=100&type=music_tip&address=THR...
+
+Response:
+{
+  "ok": true,
+  "transfers": [...],
+  "total": 500,
+  "offset": 0,
+  "limit": 100,
+  "has_more": true,
+  "stats": {
+    "total_transfers": 500,
+    "unique_addresses": 150,
+    "period": "all_time",  // or "24h" if total > 10,000
+    "use_time_filter": false,
+    "by_category": {
+      "token_transfer": 300,
+      "music_tip": 100,
+      "ai_reward": 50,
+      "bridge": 30,
+      "pledge": 20
+    }
+  }
+}
+```
+
+**Adaptive Statistics:**
+- If total transfers < 10,000: Returns all-time statistics
+- If total transfers ≥ 10,000: Returns last 24h statistics with indicator
+- This ensures fast response times on large networks
+
+**Filter Parameters:**
+- `type`: Filter by category (e.g., `music_tip`, `ai_reward`, `iot_telemetry`)
+- `address`: Filter by sender or receiver address
+- `stats_only=true`: Return only statistics (no transaction list)
+
+#### Get Mining Statistics
+```bash
+GET /api/wallet/mining_stats?address=THR...
+
+Response:
+{
+  "ok": true,
+  "address": "THR...",
+  "blocks_mined": 42,
+  "total_block_reward": 21.5,
+  "total_pool_burn": 0.5,
+  "total_ai_share": 2.1,
+  "last_block_height": 21000,
+  "last_block_time": "2026-01-11 12:00:00 UTC",
+  "recent_blocks": [
+    {
+      "height": 21000,
+      "hash": "abc123...",
+      "reward": 0.5,
+      "fee_burned": 0.01,
+      "timestamp": "2026-01-11 12:00:00 UTC",
+      "is_stratum": true
+    },
+    ...
+  ]
+}
+```
+
+### Viewer Features
+
+**Blocks Tab:**
+- Shows all blocks from genesis (height 1) to tip
+- Proper pagination with "Load More"
+- No artificial limits (previously stopped at ~17k)
+- Displays:
+  - Block height
+  - Block hash
+  - Miner reward
+  - Fees burned
+  - AI share
+  - Timestamp
+  - Mining type (Stratum vs CPU)
+
+**Transfers Tab:**
+- Adaptive statistics (all-time or 24h depending on network size)
+- Category breakdown (music tips, AI rewards, IoT, etc.)
+- Filter by transaction type
+- Filter by address
+- Shows unique addresses count
+
+**Mining History:**
+- Per-wallet mining statistics
+- Total blocks mined
+- Total rewards earned
+- Recent blocks list
+- Links to block details
+
+### IoT & AI Integration
+
+The transaction categorization system is designed to support:
+
+1. **Hard Miners (ASICs/GPUs):**
+   - Do heavy PoW computation
+   - Get base block rewards
+   - Transactions tagged as `mining`
+
+2. **Music & AI Tips:**
+   - Users tip artists while streaming music
+   - Part of tips reserved for AI training pool
+   - Transactions tagged as `music_tip` and `ai_reward`
+
+3. **IoT Miners:**
+   - Devices (cars, mobile) send GPS/telemetry
+   - Store AI-related blocks and tips
+   - Receive share of AI pool for telemetry
+   - Transactions tagged as `iot_telemetry`
+
+This categorization enables:
+- Clear separation of value streams
+- Transparent reward distribution
+- AI autopilot training data collection
+- Fair compensation for all participants
+
+---
+
 ## License
 
 MIT License - see LICENSE file for details

@@ -4058,6 +4058,335 @@ def api_viewer_load_more():
 
     return jsonify({"ok": False, "error": "Invalid type"}), 400
 
+
+# ─── VIEWER IMPROVEMENTS (Issue: Fix blocks table & transfer stats) ────────────────
+
+@app.route("/api/blocks", methods=["GET"])
+def api_blocks():
+    """
+    Get blocks with proper pagination (newest first).
+
+    Query params:
+    - offset: Starting index (default 0)
+    - limit: Number of blocks to return (default 100, max 500)
+    - from_height: Optional starting height
+    - to_height: Optional ending height
+
+    Returns blocks in descending order (newest first).
+    """
+    offset = request.args.get("offset", type=int, default=0)
+    limit = min(request.args.get("limit", type=int, default=100), 500)
+    from_height = request.args.get("from_height", type=int)
+    to_height = request.args.get("to_height", type=int)
+
+    # Get all blocks
+    all_blocks = get_blocks_for_viewer()
+    total = len(all_blocks)
+
+    # Filter by height range if specified
+    if from_height is not None or to_height is not None:
+        filtered = []
+        for b in all_blocks:
+            h = b.get("index")
+            if h is None:
+                continue
+            if from_height is not None and h < from_height:
+                continue
+            if to_height is not None and h > to_height:
+                continue
+            filtered.append(b)
+        all_blocks = filtered
+        total = len(all_blocks)
+
+    # Apply pagination (blocks are already sorted newest first)
+    blocks = all_blocks[offset:offset + limit]
+
+    # Get min/max heights
+    min_height = min((b.get("index", 0) for b in all_blocks), default=0)
+    max_height = max((b.get("index", 0) for b in all_blocks), default=0)
+
+    return jsonify({
+        "ok": True,
+        "blocks": blocks,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + limit < total,
+        "min_height": min_height,
+        "max_height": max_height
+    }), 200
+
+
+def _categorize_transaction(tx: dict) -> str:
+    """
+    Categorize a transaction into a specific type for filtering and statistics.
+
+    Categories:
+    - token_transfer: Normal THR/token sends
+    - music_tip: Tips to artists
+    - ai_reward: AI-related rewards/payments
+    - iot_telemetry: IoT device data/GPS
+    - bridge: Bridge in/out transactions
+    - pledge: BTC/fiat pledges
+    - mining: Block mining rewards
+    - swap: Token swaps
+    - liquidity: Pool adds/removes
+    - other: Everything else
+    """
+    tx_type = tx.get("type") or tx.get("kind") or ""
+    tx_type_lower = tx_type.lower()
+
+    # Music tips
+    if "music" in tx_type_lower or "tip" in tx_type_lower:
+        return "music_tip"
+
+    # AI rewards
+    if "ai" in tx_type_lower or tx_type in ["ai_reward", "ai_job_reward", "ai_job_completed"]:
+        return "ai_reward"
+
+    # IoT telemetry
+    if "iot" in tx_type_lower or "telemetry" in tx_type_lower or "gps" in tx_type_lower:
+        return "iot_telemetry"
+
+    # Bridge operations
+    if "bridge" in tx_type_lower or tx_type in ["bridge", "bridge_in", "bridge_out", "wbtc_burn"]:
+        return "bridge"
+
+    # Pledges
+    if "pledge" in tx_type_lower or tx_type in ["pledge", "btc_pledge"]:
+        return "pledge"
+
+    # Mining rewards
+    if tx_type in ["coinbase", "mint", "mining_reward"]:
+        return "mining"
+
+    # Swaps
+    if "swap" in tx_type_lower:
+        return "swap"
+
+    # Liquidity
+    if "liquidity" in tx_type_lower or "pool" in tx_type_lower:
+        return "liquidity"
+
+    # Token operations
+    if tx_type in ["token_transfer", "token_create", "token_mint", "token_burn"]:
+        return "token_transfer"
+
+    # Default to token_transfer for transfers
+    if tx_type in ["transfer", "send"]:
+        return "token_transfer"
+
+    return "other"
+
+
+@app.route("/api/transfers", methods=["GET"])
+def api_transfers():
+    """
+    Get transfers with filtering and statistics.
+
+    Query params:
+    - offset: Starting index (default 0)
+    - limit: Number of transfers (default 100, max 500)
+    - type: Filter by category (optional)
+    - address: Filter by from/to address (optional)
+    - stats_only: If true, return only statistics (default false)
+
+    Returns adaptive statistics:
+    - If total transfers < 10,000: all-time stats
+    - Else: last 24h stats with indicator
+    """
+    offset = request.args.get("offset", type=int, default=0)
+    limit = min(request.args.get("limit", type=int, default=100), 500)
+    tx_type = request.args.get("type", "").lower()
+    address = request.args.get("address", "").strip()
+    stats_only = request.args.get("stats_only", "false").lower() == "true"
+
+    # Get all transactions
+    all_txs = _tx_feed(include_pending=True, include_bridge=True)
+
+    # Categorize transactions
+    for tx in all_txs:
+        if "category" not in tx:
+            tx["category"] = _categorize_transaction(tx)
+
+    total_txs = len(all_txs)
+
+    # Determine time window for statistics
+    use_time_filter = total_txs >= 10000
+    if use_time_filter:
+        # Last 24 hours
+        now = time.time()
+        cutoff_time = now - (24 * 3600)
+        stats_txs = [tx for tx in all_txs if _parse_timestamp(tx.get("timestamp", "")) >= cutoff_time]
+        stats_period = "24h"
+    else:
+        # All time
+        stats_txs = all_txs
+        stats_period = "all_time"
+
+    # Compute statistics by category
+    category_counts = {}
+    for tx in stats_txs:
+        cat = tx.get("category", "other")
+        category_counts[cat] = category_counts.get(cat, 0) + 1
+
+    # Get unique addresses from stats period
+    unique_addresses = set()
+    for tx in stats_txs:
+        from_addr = tx.get("from", "")
+        to_addr = tx.get("to", "")
+        if from_addr:
+            unique_addresses.add(from_addr)
+        if to_addr:
+            unique_addresses.add(to_addr)
+
+    stats = {
+        "total_transfers": len(stats_txs),
+        "unique_addresses": len(unique_addresses),
+        "period": stats_period,
+        "by_category": category_counts,
+        "use_time_filter": use_time_filter
+    }
+
+    if stats_only:
+        return jsonify({
+            "ok": True,
+            "stats": stats
+        }), 200
+
+    # Filter transactions
+    filtered_txs = all_txs
+
+    # Filter by type/category
+    if tx_type:
+        filtered_txs = [tx for tx in filtered_txs if tx.get("category", "").lower() == tx_type]
+
+    # Filter by address
+    if address:
+        filtered_txs = [
+            tx for tx in filtered_txs
+            if address.lower() in (tx.get("from") or "").lower()
+            or address.lower() in (tx.get("to") or "").lower()
+        ]
+
+    total_filtered = len(filtered_txs)
+
+    # Apply pagination
+    transfers = filtered_txs[offset:offset + limit]
+
+    return jsonify({
+        "ok": True,
+        "transfers": transfers,
+        "total": total_filtered,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + limit < total_filtered,
+        "stats": stats
+    }), 200
+
+
+def _parse_timestamp(ts_str: str) -> float:
+    """Parse a timestamp string to Unix timestamp."""
+    if not ts_str:
+        return 0.0
+    try:
+        # Try ISO format first
+        if "T" in ts_str or "Z" in ts_str:
+            dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            return dt.timestamp()
+        # Try "%Y-%m-%d %H:%M:%S UTC" format
+        dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S UTC")
+        return dt.timestamp()
+    except:
+        return 0.0
+
+
+@app.route("/api/wallet/mining_stats", methods=["GET"])
+def api_wallet_mining_stats():
+    """
+    Get mining statistics for a specific wallet address.
+
+    Query params:
+    - address: THR address of the miner
+
+    Returns:
+    - blocks_mined: Total blocks mined
+    - total_block_reward: Total THR from block rewards
+    - total_pool_burn: Total THR burned from this miner's blocks
+    - total_ai_share: Total AI share from these blocks
+    - last_block_height: Height of last mined block
+    - last_block_time: Timestamp of last mined block
+    - recent_blocks: List of last 10 mined blocks
+    """
+    address = request.args.get("address", "").strip()
+
+    if not address:
+        return jsonify({"ok": False, "error": "Address required"}), 400
+
+    # Get all blocks
+    all_blocks = get_blocks_for_viewer()
+
+    # Filter blocks mined by this address
+    mined_blocks = []
+    total_block_reward = 0.0
+    total_pool_burn = 0.0
+    total_ai_share = 0.0
+
+    for block in all_blocks:
+        # Check miner address (stored in transactions within the block)
+        block_txs = block.get("transactions", [])
+        miner_addr = None
+
+        # Find coinbase/mining reward transaction
+        for tx in block_txs:
+            if tx.get("type") in ["coinbase", "mining_reward", "mint"]:
+                miner_addr = tx.get("to") or tx.get("thr_address")
+                break
+
+        # If no miner found in txs, check block metadata
+        if not miner_addr:
+            # Some blocks might have miner_address field
+            miner_addr = block.get("miner_address") or block.get("miner_thr_address")
+
+        if miner_addr and miner_addr.lower() == address.lower():
+            mined_blocks.append(block)
+            total_block_reward += float(block.get("reward_to_miner", 0.0))
+            total_pool_burn += float(block.get("fee_burned", 0.0))
+            total_ai_share += float(block.get("reward_to_ai", 0.0))
+
+    # Sort by height descending
+    mined_blocks.sort(key=lambda b: b.get("index", 0), reverse=True)
+
+    # Get last block info
+    last_block = mined_blocks[0] if mined_blocks else {}
+    last_block_height = last_block.get("index")
+    last_block_time = last_block.get("timestamp")
+
+    # Get recent 10 blocks
+    recent_blocks = []
+    for block in mined_blocks[:10]:
+        recent_blocks.append({
+            "height": block.get("index"),
+            "hash": block.get("hash"),
+            "reward": block.get("reward_to_miner", 0.0),
+            "fee_burned": block.get("fee_burned", 0.0),
+            "timestamp": block.get("timestamp"),
+            "is_stratum": block.get("is_stratum", False)
+        })
+
+    return jsonify({
+        "ok": True,
+        "address": address,
+        "blocks_mined": len(mined_blocks),
+        "total_block_reward": round(total_block_reward, 6),
+        "total_pool_burn": round(total_pool_burn, 6),
+        "total_ai_share": round(total_ai_share, 6),
+        "last_block_height": last_block_height,
+        "last_block_time": last_block_time,
+        "recent_blocks": recent_blocks
+    }), 200
+
+
 @app.route("/wallet")
 def wallet_page():
     thr_addr = request.args.get("address")

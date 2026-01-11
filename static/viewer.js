@@ -14,6 +14,7 @@
   // ===== State =====
   let currentBlocksOffset = 0;
   let currentTransfersOffset = 0;
+  let transfersCursor = null;
   let dashboardStats = null;
 
   // ===== Utility Functions =====
@@ -71,7 +72,7 @@
         el('stat-avg-reward').textContent = formatTHR(avgReward);
       }
 
-      // Also update old IDs for compatibility
+      // Also update old IDs for compatibility (blocks tab)
       if (el('blocksTotalCount')) {
         el('blocksTotalCount').textContent = formatNumber(dashboardStats.block_count);
       }
@@ -170,6 +171,171 @@
     }
   }
 
+  // ===== Transfers Tab =====
+  async function loadTransfersStats() {
+    try {
+      const response = await fetch(`${API_BASE}/api/dashboard`);
+      if (!response.ok) throw new Error(`Dashboard API error: ${response.status}`);
+
+      const data = await response.json();
+      if (!data.ok) throw new Error('Dashboard returned ok=false');
+
+      const stats = data.stats;
+
+      // Update transfers tab counters
+      if (el('txsTotalCount')) {
+        el('txsTotalCount').textContent = formatNumber(stats.total_transfers || 0);
+      }
+      if (el('txsUniqueAddresses')) {
+        el('txsUniqueAddresses').textContent = formatNumber(stats.unique_addresses || 0);
+      }
+      if (el('stat-total-transfers')) {
+        el('stat-total-transfers').textContent = formatNumber(stats.total_transfers || 0);
+      }
+      if (el('stat-unique-addresses')) {
+        el('stat-unique-addresses').textContent = formatNumber(stats.unique_addresses || 0);
+      }
+
+      return stats;
+    } catch (error) {
+      console.error('[Viewer] Failed to load transfers stats:', error);
+      return null;
+    }
+  }
+
+  async function loadTransfers(limit = 50, cursor = null) {
+    try {
+      let url = `${API_BASE}/api/transfers?limit=${limit}`;
+      if (cursor) {
+        url += `&cursor=${encodeURIComponent(cursor)}`;
+      }
+
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Transfers API error: ${response.status}`);
+
+      const data = await response.json();
+      if (!data.ok) throw new Error('Transfers returned ok=false');
+
+      return data;
+    } catch (error) {
+      console.error('[Viewer] Failed to load transfers:', error);
+      return { ok: false, transfers: [], items: [], has_more: false, cursor: null };
+    }
+  }
+
+  function renderTransfers(transfers, append = false) {
+    const tbody = el('transfers-tbody') || el('transfersTableBody');
+    if (!tbody) return;
+
+    if (!append) {
+      tbody.innerHTML = '';
+    }
+
+    if (!transfers || transfers.length === 0) {
+      if (!append) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;">No transfers found</td></tr>';
+      }
+      return;
+    }
+
+    transfers.forEach(tx => {
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td><code>${truncateHash(tx.tx_id || tx.id)}</code></td>
+        <td>${tx.type || tx.kind || '—'}</td>
+        <td><code>${truncateHash(tx.from || '—')}</code></td>
+        <td><code>${truncateHash(tx.to || '—')}</code></td>
+        <td>${tx.asset_symbol || tx.asset || tx.symbol || 'THR'}</td>
+        <td>${formatTHR(tx.amount || 0)}</td>
+        <td>${formatTHR(tx.fee || 0)}</td>
+        <td>${formatTimestamp(tx.timestamp)}</td>
+      `;
+      tbody.appendChild(row);
+    });
+  }
+
+  async function handleLoadMoreTransfers() {
+    const loadMoreBtn = el('load-more-transfers') || el('btnLoadMoreTxs');
+    if (loadMoreBtn) {
+      loadMoreBtn.disabled = true;
+      loadMoreBtn.textContent = 'Loading...';
+    }
+
+    const data = await loadTransfers(50, transfersCursor);
+
+    // Support both 'transfers' and 'items' response keys
+    const items = data.transfers || data.items || [];
+    renderTransfers(items, true);
+
+    // Update cursor for next page
+    transfersCursor = data.cursor || data.next_cursor || null;
+
+    if (loadMoreBtn) {
+      loadMoreBtn.disabled = !data.has_more && !transfersCursor;
+      loadMoreBtn.textContent = (data.has_more || transfersCursor) ? 'Load More Transfers' : 'All Transfers Loaded';
+    }
+  }
+
+  async function handleRefreshTransfers() {
+    const refreshBtn = el('refresh-transfers') || el('btnRefreshTxs');
+    if (refreshBtn) {
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = 'Refreshing...';
+    }
+
+    // Reset cursor
+    transfersCursor = null;
+    currentTransfersOffset = 0;
+
+    // Reload stats
+    await loadTransfersStats();
+
+    // Reload transfers from beginning
+    const data = await loadTransfers(50, null);
+    const items = data.transfers || data.items || [];
+    renderTransfers(items, false);
+
+    // Update cursor
+    transfersCursor = data.cursor || data.next_cursor || null;
+
+    const loadMoreBtn = el('load-more-transfers') || el('btnLoadMoreTxs');
+    if (loadMoreBtn) {
+      loadMoreBtn.disabled = !data.has_more && !transfersCursor;
+      loadMoreBtn.textContent = (data.has_more || transfersCursor) ? 'Load More Transfers' : 'All Transfers Loaded';
+    }
+
+    if (refreshBtn) {
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = 'Refresh Transfers';
+    }
+  }
+
+  async function initTransfersTab() {
+    // Load stats first
+    await loadTransfersStats();
+
+    // Load initial transfers
+    const data = await loadTransfers(50, null);
+    const items = data.transfers || data.items || [];
+    renderTransfers(items, false);
+
+    // Update cursor
+    transfersCursor = data.cursor || data.next_cursor || null;
+
+    // Setup buttons
+    const loadMoreBtn = el('load-more-transfers') || el('btnLoadMoreTxs');
+    if (loadMoreBtn) {
+      loadMoreBtn.disabled = !data.has_more && !transfersCursor;
+      loadMoreBtn.textContent = (data.has_more || transfersCursor) ? 'Load More Transfers' : 'All Transfers Loaded';
+      loadMoreBtn.onclick = handleLoadMoreTransfers;
+    }
+
+    const refreshBtn = el('refresh-transfers') || el('btnRefreshTxs');
+    if (refreshBtn) {
+      refreshBtn.onclick = handleRefreshTransfers;
+    }
+  }
+
   // ===== Initialization =====
   function init() {
     console.log('[Viewer] Initializing...');
@@ -177,7 +343,7 @@
     // Load dashboard stats first
     loadStats();
 
-    // Initialize blocks tab
+    // Initialize blocks tab by default
     initBlocksTab();
 
     console.log('[Viewer] Initialized');
@@ -196,7 +362,13 @@
     loadBlocks,
     renderBlocks,
     handleLoadMoreBlocks,
-    initBlocksTab
+    initBlocksTab,
+    loadTransfersStats,
+    loadTransfers,
+    renderTransfers,
+    handleLoadMoreTransfers,
+    handleRefreshTransfers,
+    initTransfersTab
   };
 
 })();

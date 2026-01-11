@@ -71,7 +71,23 @@ async function loadDashboardStats() {
 
     dashboardStats = data.stats;
 
-    // Update global counters
+    // Update blocks section counters
+    if (el('blocksTotalCount')) {
+      el('blocksTotalCount').textContent = formatNumber(dashboardStats.block_count);
+    }
+    if (el('blocksTotalRewards')) {
+      el('blocksTotalRewards').textContent = formatTHR(dashboardStats.total_rewards_thr || 0);
+    }
+    if (el('blocksTotalBurned')) {
+      el('blocksTotalBurned').textContent = formatTHR(dashboardStats.burned_total_thr || 0);
+    }
+    if (el('blocksAvgReward')) {
+      const avgReward = dashboardStats.block_count > 0 ?
+        (dashboardStats.total_rewards_thr || 0) / dashboardStats.block_count : 0;
+      el('blocksAvgReward').textContent = formatTHR(avgReward);
+    }
+
+    // Update global counters (if they exist elsewhere on the page)
     if (el('totalBlocks')) {
       el('totalBlocks').textContent = formatNumber(dashboardStats.block_count);
     }
@@ -136,7 +152,7 @@ function renderBlocks(blocks, append = false) {
 }
 
 async function loadMoreBlocks() {
-  const loadMoreBtn = el('loadMoreBlocks');
+  const loadMoreBtn = el('btnLoadMoreBlocks');
   if (loadMoreBtn) {
     loadMoreBtn.disabled = true;
     loadMoreBtn.textContent = 'Loading...';
@@ -149,7 +165,7 @@ async function loadMoreBlocks() {
 
   if (loadMoreBtn) {
     loadMoreBtn.disabled = !data.has_more;
-    loadMoreBtn.textContent = data.has_more ? 'Load More' : 'All Blocks Loaded';
+    loadMoreBtn.textContent = data.has_more ? 'Load More Blocks' : 'All Blocks Loaded';
   }
 
   // Update counter if available
@@ -162,20 +178,18 @@ async function initBlocksTab() {
   const data = await loadBlocks(0, 100);
   renderBlocks(data.blocks, false);
 
-  const loadMoreBtn = el('loadMoreBlocks');
+  const loadMoreBtn = el('btnLoadMoreBlocks');
   if (loadMoreBtn) {
     loadMoreBtn.disabled = !data.has_more;
-    loadMoreBtn.textContent = data.has_more ? 'Load More' : 'All Blocks Loaded';
+    loadMoreBtn.textContent = data.has_more ? 'Load More Blocks' : 'All Blocks Loaded';
     loadMoreBtn.onclick = loadMoreBlocks;
   }
 
-  // Update block count
+  // Update block count (if there's a separate counter for current view)
   if (el('blocksCount')) {
     el('blocksCount').textContent = formatNumber(data.total);
   }
-  if (el('blocksTotalCount')) {
-    el('blocksTotalCount').textContent = formatNumber(data.total);
-  }
+  // Note: blocksTotalCount is updated from dashboard stats, not blocks API
 }
 
 // ===== Transfers Tab =====
@@ -307,7 +321,7 @@ async function filterByCategory(category) {
 }
 
 async function loadMoreTransfers() {
-  const loadMoreBtn = el('loadMoreTransfers');
+  const loadMoreBtn = el('btnLoadMoreTxs');
   if (loadMoreBtn) {
     loadMoreBtn.disabled = true;
     loadMoreBtn.textContent = 'Loading...';
@@ -320,7 +334,7 @@ async function loadMoreTransfers() {
 
   if (loadMoreBtn) {
     loadMoreBtn.disabled = !data.has_more;
-    loadMoreBtn.textContent = data.has_more ? 'Load More' : 'All Transfers Loaded';
+    loadMoreBtn.textContent = data.has_more ? 'Load More Transactions' : 'All Transfers Loaded';
   }
 }
 
@@ -330,10 +344,10 @@ async function initTransfersTab() {
   renderTransferStats(data.stats);
   renderCategoryFilters(data.stats);
 
-  const loadMoreBtn = el('loadMoreTransfers');
+  const loadMoreBtn = el('btnLoadMoreTxs');
   if (loadMoreBtn) {
     loadMoreBtn.disabled = !data.has_more;
-    loadMoreBtn.textContent = data.has_more ? 'Load More' : 'All Transfers Loaded';
+    loadMoreBtn.textContent = data.has_more ? 'Load More Transactions' : 'All Transfers Loaded';
     loadMoreBtn.onclick = loadMoreTransfers;
   }
 }

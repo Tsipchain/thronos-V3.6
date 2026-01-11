@@ -1514,14 +1514,30 @@
         <!-- Network Selection -->
         <div class="send-form-group">
             <label class="send-form-label"><span class="lang-el">Δίκτυο</span><span class="lang-en">Network</span></label>
-            <div class="send-network-options">
+            <div class="send-network-options" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px;">
                 <div class="send-network-option selected" data-network="thronos" onclick="selectNetwork('thronos')">
                     <img src="{{ url_for('static', filename='img/thronos-token.png') }}" alt="THR" style="width: 20px; height: 20px; border-radius: 50%;">
                     <span>Thronos Chain</span>
                 </div>
                 <div class="send-network-option" data-network="bitcoin" onclick="selectNetwork('bitcoin')">
                     <span style="font-size: 18px;">₿</span>
-                    <span>Bitcoin (Bridge)</span>
+                    <span>Bitcoin</span>
+                </div>
+                <div class="send-network-option" data-network="ethereum" onclick="selectNetwork('ethereum')">
+                    <span style="font-size: 18px;">Ξ</span>
+                    <span>Ethereum</span>
+                </div>
+                <div class="send-network-option" data-network="bnb" onclick="selectNetwork('bnb')">
+                    <span style="font-size: 18px;">🔶</span>
+                    <span>BNB Chain</span>
+                </div>
+                <div class="send-network-option" data-network="xrp" onclick="selectNetwork('xrp')">
+                    <span style="font-size: 18px;">◆</span>
+                    <span>XRP Ledger</span>
+                </div>
+                <div class="send-network-option" data-network="solana" onclick="selectNetwork('solana')">
+                    <span style="font-size: 18px;">◎</span>
+                    <span>Solana</span>
                     <span class="coming-soon-badge"><span class="lang-el">Σύντομα</span><span class="lang-en">Soon</span></span>
                 </div>
             </div>
@@ -3426,22 +3442,147 @@ function selectSpeed(speed) {
 }
 
 function selectNetwork(network) {
-    if (network === 'bitcoin') {
-        openBridgeModal();
+    // Prevent selection of disabled networks
+    if (network === 'solana') {
+        showToast('Solana support coming soon!');
         return;
     }
+
     selectedNetwork = network;
     document.querySelectorAll('.send-network-option').forEach(opt => {
         opt.classList.remove('selected');
     });
-    document.querySelector(`[data-network="${network}"]`).classList.add('selected');
+    const selectedOpt = document.querySelector(`[data-network="${network}"]`);
+    if (selectedOpt) selectedOpt.classList.add('selected');
 
     // Update recipient placeholder based on network
     const toInput = document.getElementById('sendTo');
+    const placeholders = {
+        'thronos': 'THR...',
+        'bitcoin': 'bc1... or 1... or 3...',
+        'ethereum': '0x...',
+        'bnb': '0x...',
+        'xrp': 'r...',
+        'solana': ''
+    };
+    toInput.placeholder = placeholders[network] || 'Address...';
+
+    // Update token list based on network
+    updateTokenListForNetwork(network);
+}
+
+function updateTokenListForNetwork(network) {
+    const select = document.getElementById('sendToken');
+    if (!select) return;
+
+    // Clear current options
+    select.innerHTML = '';
+
     if (network === 'thronos') {
-        toInput.placeholder = 'THR...';
+        // Show all Thronos tokens (existing behavior)
+        const thrOption = document.createElement('option');
+        thrOption.value = 'THR';
+        thrOption.textContent = 'THR - Thronos';
+        thrOption.setAttribute('data-color', '#ff6600');
+        select.appendChild(thrOption);
+
+        const wbtcOption = document.createElement('option');
+        wbtcOption.value = 'WBTC';
+        wbtcOption.textContent = 'WBTC - Wrapped Bitcoin';
+        wbtcOption.setAttribute('data-color', '#f7931a');
+        select.appendChild(wbtcOption);
+
+        const l2eOption = document.createElement('option');
+        l2eOption.value = 'L2E';
+        l2eOption.textContent = 'L2E - Learn-to-Earn';
+        l2eOption.setAttribute('data-color', '#00bfff');
+        select.appendChild(l2eOption);
     } else {
-        toInput.placeholder = 'bc1... or 1... or 3...';
+        // For external networks, show native tokens only
+        const networkTokens = {
+            'bitcoin': { symbol: 'BTC', name: 'Bitcoin', color: '#f7931a' },
+            'ethereum': { symbol: 'ETH', name: 'Ethereum', color: '#627eea' },
+            'bnb': { symbol: 'BNB', name: 'BNB', color: '#f3ba2f' },
+            'xrp': { symbol: 'XRP', name: 'XRP', color: '#00aae4' }
+        };
+
+        const token = networkTokens[network];
+        if (token) {
+            const option = document.createElement('option');
+            option.value = token.symbol;
+            option.textContent = `${token.symbol} - ${token.name}`;
+            option.setAttribute('data-color', token.color);
+            select.appendChild(option);
+        }
+    }
+
+    updateTokenInfo();
+}
+
+function anyModalOpen() {
+    const modals = ['sendModal', 'receiveModal', 'walletHistoryModal', 'bridgeModal', 'musicModal'];
+    return modals.some(id => {
+        const modal = document.getElementById(id);
+        return modal && modal.classList.contains('active');
+    });
+}
+
+async function submitCrossChainSend(network, to, amount, token, from, secret, resultDiv) {
+    resultDiv.style.display = 'block';
+    resultDiv.className = 'send-result';
+    resultDiv.textContent = `Processing ${network.toUpperCase()} send...`;
+
+    try {
+        // Prepare cross-chain send request
+        const payload = {
+            network: network,
+            from_thr_address: from,
+            to_external_address: to,
+            amount: amount,
+            token: token,
+            auth_secret: secret,
+            speed: selectedSpeed || 'fast'
+        };
+
+        const response = await fetch('/api/bridge/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+
+        if (data.ok || data.accepted) {
+            resultDiv.className = 'send-result success';
+            const txId = data.tx_id || data.txid || data.transaction_id || '—';
+            resultDiv.innerHTML = `
+                ✅ Cross-chain send initiated!<br>
+                <small>Network: ${network.toUpperCase()}</small><br>
+                <small>TX ID: ${txId.substring(0, 16)}...</small><br>
+                <small>Status: ${data.status || 'Pending'}</small>
+            `;
+
+            // Refresh balances after delay
+            setTimeout(() => {
+                loadWalletBalances(true);
+                loadTokenBalances();
+            }, 2000);
+
+            // Auto-close after 5 seconds
+            setTimeout(() => {
+                closeSendModal();
+                resultDiv.style.display = 'none';
+                resultDiv.textContent = '';
+            }, 5000);
+        } else {
+            resultDiv.className = 'send-result error';
+            const errorMsg = data.error || data.reject_reason || data.message || 'Cross-chain send failed';
+            resultDiv.textContent = `❌ Error: ${errorMsg}`;
+        }
+    } catch (error) {
+        console.error('Cross-chain send error:', error);
+        resultDiv.className = 'send-result error';
+        resultDiv.textContent = `❌ Network error: ${error.message || 'Failed to send'}`;
     }
 }
 
@@ -3660,6 +3801,14 @@ async function submitSend() {
     if(!walletSession.requirePin('send tokens')) return;
 
     try {
+        // Check if this is a cross-chain send
+        const network = selectedNetwork || 'thronos';
+
+        if (network !== 'thronos') {
+            // Cross-chain send via bridge
+            return await submitCrossChainSend(network, to, amount, token, from, secret, resultDiv);
+        }
+
         // Calculate fee based on selected speed
         const feeRate = selectedSpeed === 'slow' ? 0.0009 : 0.005;
         let fee = Math.max(0.001, amount * feeRate);
@@ -4020,9 +4169,9 @@ document.addEventListener('DOMContentLoaded', () => {
     updateTokenPrices();  // Initial update
     setInterval(updateTokenPrices, 30000);
 
-    // PR-5a: Refresh wallet balances every 60 seconds if wallet is open and page is visible
+    // PR-5a: Refresh wallet balances every 60 seconds if wallet is open, page is visible, and no modals are open
     setInterval(() => {
-        if (!document.hidden && walletSession.isBound() && isWalletOpen()) {
+        if (!document.hidden && walletSession.isBound() && isWalletOpen() && !anyModalOpen()) {
             loadWalletBalances(true);
         }
     }, 60000);

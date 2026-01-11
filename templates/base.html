@@ -1666,6 +1666,55 @@
 </div>
 
 <!-- Wallet History Modal -->
+<div class="send-modal" id="walletHistoryModal" onclick="if(event.target.id === 'walletHistoryModal') window.WalletHistory && window.WalletHistory.closeWalletHistoryModal && window.WalletHistory.closeWalletHistoryModal()">
+    <div class="send-modal-content" onclick="event.stopPropagation()">
+        <div class="send-modal-header">
+            📜
+            <span class="lang-el">Ιστορικό Συναλλαγών</span>
+            <span class="lang-en">Transaction History</span>
+        </div>
+
+        <!-- Summary Cards -->
+        <div id="walletSummary" class="mb-3"></div>
+
+        <!-- Category Tabs -->
+        <div id="walletHistoryCategoryTabs" class="mb-3" style="display: flex; gap: 6px; flex-wrap: wrap;">
+            <button class="btn btn-sm btn-outline-primary" onclick="window.WalletHistory && window.WalletHistory.filterWalletHistoryByCategory && window.WalletHistory.filterWalletHistoryByCategory(null)">All</button>
+            <button class="btn btn-sm btn-outline-primary" onclick="window.WalletHistory && window.WalletHistory.filterWalletHistoryByCategory && window.WalletHistory.filterWalletHistoryByCategory('mining')">Mining</button>
+            <button class="btn btn-sm btn-outline-primary" onclick="window.WalletHistory && window.WalletHistory.filterWalletHistoryByCategory && window.WalletHistory.filterWalletHistoryByCategory('ai_reward')">AI Rewards</button>
+            <button class="btn btn-sm btn-outline-primary" onclick="window.WalletHistory && window.WalletHistory.filterWalletHistoryByCategory && window.WalletHistory.filterWalletHistoryByCategory('music_tip')">Music</button>
+            <button class="btn btn-sm btn-outline-primary" onclick="window.WalletHistory && window.WalletHistory.filterWalletHistoryByCategory && window.WalletHistory.filterWalletHistoryByCategory('iot_telemetry')">IoT</button>
+            <button class="btn btn-sm btn-outline-primary" onclick="window.WalletHistory && window.WalletHistory.filterWalletHistoryByCategory && window.WalletHistory.filterWalletHistoryByCategory('bridge')">Bridge</button>
+        </div>
+
+        <!-- Transaction History Table -->
+        <div style="max-height: 400px; overflow-y: auto;">
+            <table class="table table-sm table-dark">
+                <thead>
+                    <tr>
+                        <th>TX ID</th>
+                        <th>Category</th>
+                        <th>Direction</th>
+                        <th>From</th>
+                        <th>To</th>
+                        <th>Amount</th>
+                    </tr>
+                </thead>
+                <tbody id="walletHistoryTableBody">
+                    <tr><td colspan="6" class="text-center">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div style="margin-top:10px;text-align:right;">
+            <button class="send-modal-btn" onclick="window.WalletHistory && window.WalletHistory.closeWalletHistoryModal && window.WalletHistory.closeWalletHistoryModal()">
+                <span class="lang-el">Κλείσιμο</span>
+                <span class="lang-en">Close</span>
+            </button>
+        </div>
+    </div>
+</div>
+
 <!-- Bridge Modal -->
 <div class="send-modal" id="bridgeModal" onclick="closeBridgeModal(event)">
     <div class="send-modal-content" onclick="event.stopPropagation()">
@@ -2230,7 +2279,7 @@ function renderWalletBalances(data) {
                     <span class="wallet-quick-btn-icon">🔥</span>
                     <span class="wallet-quick-btn-label">${pledgeLabel}</span>
                 </a>
-                <a href="javascript:void(0)" class="wallet-quick-btn" onclick="showWalletTab('history')">
+                <a href="javascript:void(0)" class="wallet-quick-btn" onclick="if(window.WalletHistory && window.WalletHistory.openWalletHistoryModal) window.WalletHistory.openWalletHistoryModal(walletSession.getAddress())">
                     <span class="wallet-quick-btn-icon">📜</span>
                     <span class="wallet-quick-btn-label">${historyLabel}</span>
                 </a>
@@ -5180,6 +5229,13 @@ window.GlobalMusicPlayer = (function() {
 </script>
 
 <div id="footer-sentinel" style="height:1px;"></div>
+
+<!-- Wallet History Module -->
+<script>
+// Set API base URL for wallet_history.js
+window.TH_API_BASE_URL = window.TH_API_BASE_URL || window.location.origin;
+</script>
+<script src="{{ url_for('static', filename='wallet_history.js') }}"></script>
 
 </body>
 </html>

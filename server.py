@@ -4025,24 +4025,16 @@ def media_static(filename):
 
 @app.route("/viewer")
 def viewer():
-    # PR-5g: Performance optimization - limit to recent blocks/txs
-    # Viewer page loads much faster with pagination
-    limit = request.args.get('limit', type=int, default=50)
-    limit = min(limit, 200)  # Cap at 200 for safety
-
-    all_blocks = get_blocks_for_viewer()
-    recent_blocks = all_blocks[-limit:] if len(all_blocks) > limit else all_blocks
-
-    all_txs = _tx_feed()
-    recent_txs = all_txs[:limit] if len(all_txs) > limit else all_txs
+    """
+    Blockchain viewer with client-side pagination.
+    Data is fetched via /api/blocks and /api/transfers for consistency.
+    """
+    # Pass API base URL for frontend configuration
+    api_base_url = os.getenv("API_BASE_URL", request.host_url.rstrip('/'))
 
     return render_template(
         "thronos_block_viewer.html",
-        blocks=recent_blocks,
-        transactions=recent_txs,
-        total_blocks=len(all_blocks),
-        total_txs=len(all_txs),
-        showing_limit=limit
+        api_base_url=api_base_url
     )
 
 @app.route("/api/viewer/search", methods=["GET"])

@@ -950,6 +950,283 @@ All transactions are automatically categorized for filtering and analytics:
 
 ---
 
+## Base Wallet & Bridge API Contract
+
+### Overview
+
+The Thronos base wallet is designed as a universal interface that works across:
+- Web browsers (desktop/mobile)
+- Mobile native apps (Android/iOS via WebView or native)
+- IoT devices (future integration)
+
+All wallet implementations use the same backend API contract, ensuring consistency across platforms.
+
+### API Base Configuration
+
+**Environment Variable:**
+```bash
+API_BASE_URL=https://thrchain.up.railway.app
+```
+
+**Frontend Configuration:**
+All wallet frontends should read the API base from a single configuration point:
+
+```javascript
+// Set in HTML template
+window.TH_API_BASE_URL = "{{ api_base_url }}";
+
+// Or via environment detection
+const API_BASE = window.TH_API_BASE_URL ||
+                 window.location.origin;
+```
+
+**Deployment URLs:**
+- **Master Node:** https://thrchain.up.railway.app
+- **Replica Node:** https://node-2.up.railway.app (read-only)
+- **Gateway:** https://thronoschain.vercel.app (proxies to master)
+
+### Core Wallet Endpoints
+
+#### 1. Wallet Balance & Info
+
+```bash
+GET /api/wallet/profile?address=THR...
+```
+
+Returns wallet profile with all chain balances.
+
+#### 2. Wallet History
+
+```bash
+GET /api/wallet/history?address=THR...&category=<filter>
+```
+
+**Category Filters:**
+- `mining` - Mining rewards
+- `ai_reward` - AI pool distributions
+- `music_tip` - Music tips sent/received
+- `iot_telemetry` - IoT data submissions
+- `bridge` - Cross-chain operations
+- `pledge` - BTC pledges
+- `token_transfer` - Standard transfers
+- `swap` - Token swaps
+- `liquidity` - Pool operations
+
+**Response:**
+```json
+{
+  "ok": true,
+  "address": "THR...",
+  "transactions": [...],
+  "summary": {
+    "total_mining": 150.5,
+    "total_ai_rewards": 45.2,
+    "total_music_tips_sent": 0.0,
+    "total_music_tips_received": 80.0,
+    "total_iot_rewards": 0.0,
+    "total_sent": 100.0,
+    "total_received": 275.7,
+    "mining_count": 50,
+    "ai_reward_count": 25,
+    "music_tip_count": 10,
+    "iot_count": 15
+  }
+}
+```
+
+#### 3. Mining Statistics
+
+```bash
+GET /api/wallet/mining_stats?address=THR...
+```
+
+Returns blocks mined, rewards earned, recent blocks list.
+
+#### 4. Send Transaction
+
+```bash
+POST /api/wallet/send
+Content-Type: application/json
+
+{
+  "from_address": "THR...",
+  "to_address": "THR...",
+  "amount": 100.0,
+  "auth_secret": "...",
+  "passphrase": "..." // optional
+}
+```
+
+### Cross-Chain Bridge API Contract
+
+#### Bridge Transaction Types
+
+All bridge operations create transactions with:
+- `type`: "bridge" or "bridge_in" / "bridge_out"
+- `category`: "bridge"
+- Chain identifiers: "BTC", "ETH", "BNB", "XRP", "SOL"
+
+#### 1. Bridge In (External → Thronos)
+
+**Endpoint:** `POST /api/btc/pledge` (BTC example)
+
+```json
+{
+  "secret": "ADMIN_SECRET",
+  "thr_address": "THR...",
+  "btc_amount": 0.001,
+  "btc_txid": "abc123..."
+}
+```
+
+Creates internal "bridge_in" transaction crediting THR.
+
+#### 2. Bridge Out (Thronos → External)
+
+**Endpoint:** `POST /api/bridge/btc/out` (future)
+
+```json
+{
+  "from_address": "THR...",
+  "btc_address": "bc1...",
+  "amount": 100.0,  // THR amount
+  "auth_secret": "..."
+}
+```
+
+Creates internal "bridge_out" transaction, queues withdrawal.
+
+#### 3. Bridge Status
+
+```bash
+GET /api/wallet/balances?address=THR...
+```
+
+Returns all chain balances (native THR + external chain balances).
+
+### Supported Chains
+
+| Chain | Symbol | RPC Config | Status |
+|-------|--------|------------|--------|
+| Thronos | THR | Built-in | ✅ Active |
+| Bitcoin | BTC | `BTC_RPC_URL` | ✅ Active |
+| Ethereum | ETH | `ETH_RPC_URL` | 🔄 Planned |
+| BNB Chain | BNB | `BSC_RPC_URL` | 🔄 Planned |
+| Solana | SOL | `SOLANA_RPC_URL` | 🔄 Planned |
+| XRP Ledger | XRP | `XRP_RPC_URL` | 🔄 Planned |
+
+### IoT Telemetry API
+
+#### Submit IoT Data
+
+```bash
+POST /api/iot/telemetry
+Content-Type: application/json
+
+{
+  "address": "THR...",
+  "device_id": "car-123",
+  "route_hash": "sha256_of_gps_path",
+  "samples": 150
+}
+```
+
+Creates `iot_telemetry` transaction, earns AI pool rewards.
+
+#### Enable IoT Mining (Frontend)
+
+```javascript
+// UI toggle in wallet
+const enableIoTMining = async () => {
+  // Request location permissions
+  if (!navigator.geolocation) {
+    alert('Geolocation not supported');
+    return;
+  }
+
+  // Start GPS tracking
+  const watchId = navigator.geolocation.watchPosition(
+    position => collectGPSData(position),
+    error => console.error('GPS error:', error),
+    { enableHighAccuracy: true }
+  );
+
+  // Periodically submit telemetry
+  setInterval(() => submitTelemetry(), 60000); // Every minute
+};
+
+const submitTelemetry = async () => {
+  const payload = {
+    address: currentWallet,
+    device_id: deviceId,
+    route_hash: hashGPSPath(gpsBuffer),
+    samples: gpsBuffer.length
+  };
+
+  await fetch(`${API_BASE}/api/iot/telemetry`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+};
+```
+
+### Transaction Categories Reference
+
+All transactions in wallet history are categorized for filtering:
+
+```javascript
+const CATEGORY_LABELS = {
+  'token_transfer': 'THR Transfer',
+  'music_tip': 'Music Tips',
+  'ai_reward': 'AI Rewards',
+  'iot_telemetry': 'IoT Telemetry',
+  'bridge': 'Cross-Chain Bridge',
+  'pledge': 'BTC Pledge',
+  'mining': 'Mining Rewards',
+  'swap': 'Token Swap',
+  'liquidity': 'Liquidity Pool',
+  'other': 'Other'
+};
+```
+
+### Mobile Wallet Integration
+
+**WebView (React Native / Flutter):**
+```javascript
+// Inject API base from native code
+window.TH_API_BASE_URL = Platform.OS === 'android'
+  ? 'https://thrchain.up.railway.app'
+  : 'https://thrchain.up.railway.app';
+
+// All API calls use this base
+const response = await fetch(`${window.TH_API_BASE_URL}/api/wallet/history?address=${addr}`);
+```
+
+**Native Implementation:**
+- Android: Use Retrofit/OkHttp with same API endpoints
+- iOS: Use URLSession with same API endpoints
+- Ensure all network calls include proper error handling
+- Cache responses when appropriate (blocks, transfers)
+
+### Security Considerations
+
+**Authentication:**
+- `auth_secret` and optional `passphrase` required for sends
+- Never send raw private keys to server
+- Sign transactions client-side when possible
+
+**Rate Limiting:**
+- Dashboard: 10 req/min per IP
+- Wallet history: 60 req/min per IP
+- IoT telemetry: 120 req/min per address
+
+**CORS:**
+- Production: Only allow thronos domains
+- Development: `CORS_ORIGINS=*` for testing
+
+---
+
 ## License
 
 MIT License - see LICENSE file for details

@@ -3346,13 +3346,13 @@ async function loadWalletHistory(category = null) {
     }
 
     try {
-        const params = new URLSearchParams({ wallet: addr });
+        const params = new URLSearchParams({ address: addr });
         if (category) {
             params.set('category', category);
         }
-        const historyRes = await fetch(`/api/history?${params.toString()}`);
+        const historyRes = await fetch(`/api/wallet/history?${params.toString()}`);
         const data = historyRes.ok ? await historyRes.json() : {};
-        const transactions = data.history || [];
+        const transactions = data.transactions || [];
         if (!transactions || transactions.length === 0) {
             content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions found</div>';
             allTransactions = [];

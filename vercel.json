@@ -5,6 +5,6 @@
     { "source": "/api/:path*", "destination": "https://thrchain.up.railway.app/api/:path*" },
     { "source": "/viewer", "destination": "https://thrchain.up.railway.app/viewer" },
     { "source": "/wallet", "destination": "https://thrchain.up.railway.app/wallet" },
-    { "source": "/:path*", "destination": "https://thrchain.up.railway.app/:path*" }
+    { "source": "/(.*)", "destination": "https://thrchain.up.railway.app/$1" }
   ]
 }

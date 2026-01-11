@@ -3184,7 +3184,8 @@ function renderHistory() {
             : `<span style="background: #ffff0033; color: #ffff00; padding: 2px 6px; border-radius: 4px; font-size: 10px;">⏳ ${isGreek ? 'Εκκρεμεί' : 'Pending'}</span>`;
 
         const txType = getTxType(tx);
-        const typeLabel = txType === 'l2e' ? 'L2E' :
+        const typeLabel = txType === 'mining' ? '⛏️ Mining' :
+                         txType === 'l2e' ? 'L2E' :
                          txType === 'ai_credits' ? 'AI Credits' :
                          txType === 'architect_ai_jobs' ? 'Architect / AI Jobs' :
                          txType === 'iot' ? 'IoT' :
@@ -3345,13 +3346,13 @@ async function loadWalletHistory(category = null) {
     }
 
     try {
-        const params = new URLSearchParams({ wallet: addr });
+        const params = new URLSearchParams({ address: addr });
         if (category) {
             params.set('category', category);
         }
-        const historyRes = await fetch(`/api/history?${params.toString()}`);
+        const historyRes = await fetch(`/api/wallet/history?${params.toString()}`);
         const data = historyRes.ok ? await historyRes.json() : {};
-        const transactions = data.history || [];
+        const transactions = data.transactions || [];
         if (!transactions || transactions.length === 0) {
             content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions found</div>';
             allTransactions = [];

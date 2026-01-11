@@ -1609,15 +1609,46 @@
             <span class="lang-ru">Получить токены</span>
         </div>
 
+        <!-- Network Selection for Receive -->
+        <div class="send-form-group">
+            <label class="send-form-label"><span class="lang-el">Δίκτυο</span><span class="lang-en">Network</span></label>
+            <div class="send-network-options" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 6px;">
+                <div class="send-network-option selected" data-network="thronos" onclick="selectReceiveNetwork('thronos')">
+                    <img src="{{ url_for('static', filename='img/thronos-token.png') }}" alt="THR" style="width: 18px; height: 18px; border-radius: 50%;">
+                    <span style="font-size: 11px;">Thronos</span>
+                </div>
+                <div class="send-network-option" data-network="bitcoin" onclick="selectReceiveNetwork('bitcoin')">
+                    <span style="font-size: 16px;">₿</span>
+                    <span style="font-size: 11px;">Bitcoin</span>
+                </div>
+                <div class="send-network-option" data-network="ethereum" onclick="selectReceiveNetwork('ethereum')">
+                    <span style="font-size: 16px;">Ξ</span>
+                    <span style="font-size: 11px;">Ethereum</span>
+                </div>
+                <div class="send-network-option" data-network="bnb" onclick="selectReceiveNetwork('bnb')">
+                    <span style="font-size: 16px;">🔶</span>
+                    <span style="font-size: 11px;">BNB</span>
+                </div>
+                <div class="send-network-option" data-network="xrp" onclick="selectReceiveNetwork('xrp')">
+                    <span style="font-size: 16px;">◆</span>
+                    <span style="font-size: 11px;">XRP</span>
+                </div>
+            </div>
+        </div>
+
         <div id="receiveContent">
             <div class="send-form-group">
                 <label class="send-form-label">
-                    <span class="lang-el">Διεύθυνση Πορτοφολιού</span>
-                    <span class="lang-en">Wallet Address</span>
-                    <span class="lang-ja">ウォレットアドレス</span>
-                    <span class="lang-es">Dirección de cartera</span>
-                    <span class="lang-ru">Адрес кошелька</span>
+                    <span class="lang-el">Διεύθυνση Κατάθεσης</span>
+                    <span class="lang-en">Deposit Address</span>
+                    <span class="lang-ja">入金アドレス</span>
+                    <span class="lang-es">Dirección de depósito</span>
+                    <span class="lang-ru">Адрес депозита</span>
                 </label>
+                <div id="receiveNetworkLabel" style="font-size: 11px; color: #00bfff; margin-bottom: 6px;">
+                    <span class="lang-el">Δίκτυο: Thronos Chain</span>
+                    <span class="lang-en">Network: Thronos Chain</span>
+                </div>
                 <div style="display:flex;align-items:center;gap:8px;word-break:break-all;">
                     <code id="receiveAddress" style="font-size:13px;">—</code>
                     <button class="send-modal-btn" style="padding:6px 10px;" onclick="copyReceiveAddress()">📋
@@ -2836,8 +2867,43 @@ function closeReceiveModal(event) {
     }
 }
 
-function updateReceiveModal() {
-    const addr = walletSession.getAddress() || '';
+let selectedReceiveNetwork = 'thronos';
+
+async function selectReceiveNetwork(network) {
+    selectedReceiveNetwork = network;
+
+    // Update UI selection
+    const modal = document.getElementById('receiveModal');
+    if (modal) {
+        modal.querySelectorAll('.send-network-option').forEach(opt => {
+            opt.classList.remove('selected');
+        });
+        const selectedOpt = modal.querySelector(`[data-network="${network}"]`);
+        if (selectedOpt) selectedOpt.classList.add('selected');
+    }
+
+    // Update network label
+    const networkLabel = document.getElementById('receiveNetworkLabel');
+    const networkNames = {
+        'thronos': 'Thronos Chain',
+        'bitcoin': 'Bitcoin Network',
+        'ethereum': 'Ethereum Network',
+        'bnb': 'BNB Chain',
+        'xrp': 'XRP Ledger'
+    };
+    if (networkLabel) {
+        const name = networkNames[network] || network;
+        networkLabel.querySelector('.lang-el').textContent = `Δίκτυο: ${name}`;
+        networkLabel.querySelector('.lang-en').textContent = `Network: ${name}`;
+    }
+
+    // Load address for selected network
+    await updateReceiveModal();
+}
+
+async function updateReceiveModal() {
+    const network = selectedReceiveNetwork || 'thronos';
+    const thrAddr = walletSession.getAddress() || '';
     const addrEl = document.getElementById('receiveAddress');
     const qrEl = document.getElementById('receiveQr');
     const audioEl = document.getElementById('receiveAudio');
@@ -2845,7 +2911,7 @@ function updateReceiveModal() {
     const emptyEl = document.getElementById('receiveEmpty');
     const hintEl = document.getElementById('receiveQrHint');
 
-    if (!addr) {
+    if (!thrAddr) {
         if (addrEl) addrEl.textContent = '—';
         if (qrEl) qrEl.style.display = 'none';
         if (audioEl) audioEl.removeAttribute('src');
@@ -2855,27 +2921,71 @@ function updateReceiveModal() {
         return;
     }
 
-    const qrUrl = `/api/wallet/qr/${encodeURIComponent(addr)}`;
-    const audioUrl = `/api/wallet/audio/${encodeURIComponent(addr)}`;
+    if (network === 'thronos') {
+        // Show Thronos address (existing behavior)
+        const addr = thrAddr;
+        const qrUrl = `/api/wallet/qr/${encodeURIComponent(addr)}`;
+        const audioUrl = `/api/wallet/audio/${encodeURIComponent(addr)}`;
 
-    if (addrEl) addrEl.textContent = addr;
-    if (qrEl) {
-        qrEl.src = qrUrl;
-        qrEl.style.display = 'inline';
+        if (addrEl) addrEl.textContent = addr;
+        if (qrEl) {
+            qrEl.src = qrUrl;
+            qrEl.style.display = 'inline';
+        }
+        if (audioEl) {
+            audioEl.src = audioUrl;
+            audioEl.load();
+        }
+        if (dlEl) dlEl.href = audioUrl;
+        if (emptyEl) emptyEl.style.display = 'none';
+        if (hintEl) hintEl.style.display = 'block';
+    } else {
+        // Load cross-chain deposit address from bridge API
+        try {
+            const response = await fetch(`/api/bridge/deposit?network=${network}&thr_address=${encodeURIComponent(thrAddr)}`);
+            const data = await response.json();
+
+            if (data.ok && data.deposit_address) {
+                const depositAddr = data.deposit_address;
+
+                if (addrEl) addrEl.textContent = depositAddr;
+                if (qrEl) {
+                    // Try to get QR for deposit address
+                    qrEl.src = `/api/bridge/qr?network=${network}&address=${encodeURIComponent(depositAddr)}`;
+                    qrEl.style.display = 'inline';
+                    qrEl.onerror = () => { qrEl.style.display = 'none'; };
+                }
+                if (audioEl) audioEl.removeAttribute('src');
+                if (dlEl) dlEl.removeAttribute('href');
+                if (emptyEl) emptyEl.style.display = 'none';
+                if (hintEl) {
+                    hintEl.style.display = 'block';
+                    hintEl.querySelector('.lang-el').textContent = `Κατάθεση ${network.toUpperCase()} σε αυτή τη διεύθυνση για να λάβετε WBTC/tokens στο Thronos.`;
+                    hintEl.querySelector('.lang-en').textContent = `Deposit ${network.toUpperCase()} to this address to receive WBTC/tokens on Thronos.`;
+                }
+            } else {
+                throw new Error(data.error || 'Failed to get deposit address');
+            }
+        } catch (error) {
+            console.error(`Failed to load ${network} deposit address:`, error);
+            if (addrEl) addrEl.textContent = 'Error loading deposit address';
+            if (qrEl) qrEl.style.display = 'none';
+            if (hintEl) {
+                hintEl.style.display = 'block';
+                hintEl.querySelector('.lang-el').textContent = 'Σφάλμα φόρτωσης διεύθυνσης κατάθεσης.';
+                hintEl.querySelector('.lang-en').textContent = 'Error loading deposit address.';
+            }
+        }
     }
-    if (audioEl) {
-        audioEl.src = audioUrl;
-        audioEl.load();
-    }
-    if (dlEl) dlEl.href = audioUrl;
-    if (emptyEl) emptyEl.style.display = 'none';
-    if (hintEl) hintEl.style.display = 'block';
 }
 
 function copyReceiveAddress() {
-    const addr = walletSession.getAddress();
-    if (!addr) return;
+    const addrEl = document.getElementById('receiveAddress');
+    const addr = addrEl ? addrEl.textContent : '';
+    if (!addr || addr === '—' || addr.includes('Error')) return;
     copyToClipboard(addr);
+    const network = selectedReceiveNetwork || 'thronos';
+    showToast(`${network.toUpperCase()} address copied!`);
 }
 
 function playReceiveAudio() {

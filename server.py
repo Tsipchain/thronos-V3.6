@@ -5838,9 +5838,8 @@ def _list_api_routes():
 def api_mempool():
     return jsonify(load_mempool()), 200
 
-@app.route("/api/blocks")
-def api_blocks():
-    return jsonify(get_blocks_for_viewer()), 200
+# NOTE: /api/blocks is now defined earlier with pagination support (line ~4153)
+# Old simple endpoint removed to avoid duplicate route error
 
 @app.route("/api/tx_feed")
 def api_tx_feed():
@@ -8081,8 +8080,25 @@ def api_dashboard():
     wallet_count = sum(1 for addr, bal in ledger.items()
                        if addr not in system_addresses and float(bal) > 0)
 
+    # Get all transactions for consistency with /api/transfers
+    all_txs = _tx_feed(include_pending=True, include_bridge=True)
+    total_transfers = len(all_txs)
+
+    # Count unique addresses from all transactions
+    unique_addrs = set()
+    for tx in all_txs:
+        from_addr = tx.get("from", "")
+        to_addr = tx.get("to", "")
+        if from_addr:
+            unique_addrs.add(from_addr)
+        if to_addr:
+            unique_addrs.add(to_addr)
+    unique_addresses = len(unique_addrs)
+
     stats = {
         "block_count": block_count,
+        "total_transfers": total_transfers,
+        "unique_addresses": unique_addresses,
         "total_supply": total_supply,
         "circulating_supply": supply_metrics["circulating_supply_thr"],
         "pool_locked_thr": supply_metrics["locked_in_pools_thr"],

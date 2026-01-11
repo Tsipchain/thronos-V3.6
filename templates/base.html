@@ -4819,28 +4819,42 @@ window.GlobalMusicPlayer = (function() {
                 const track = queue[currentIndex];
                 audio.src = track.audio_url;
 
-                // Restore position
-                if (savedPosition) {
-                    audio.currentTime = parseFloat(savedPosition);
-                }
+                // CRITICAL FIX: Wait for metadata before setting position
+                audio.addEventListener('loadedmetadata', function onMetadataLoaded() {
+                    // Restore position
+                    if (savedPosition) {
+                        const position = parseFloat(savedPosition);
+                        audio.currentTime = position;
+                        console.log(`[GlobalMusicPlayer] Restored position: ${position}s`);
+                    }
 
-                // Auto-resume if was playing
-                if (savedPlaying === 'true') {
-                    audio.play().then(() => {
-                        isPlaying = true;
+                    // Auto-resume if was playing
+                    if (savedPlaying === 'true') {
+                        audio.play().then(() => {
+                            isPlaying = true;
+                            updateUI();
+                            show();
+                            updateMediaSession(track);
+                            startPositionSaving();
+                            console.log('[GlobalMusicPlayer] Auto-resumed playback');
+                        }).catch(e => {
+                            console.log('[GlobalMusicPlayer] Auto-resume blocked (user interaction required)');
+                            isPlaying = false;
+                            updateUI();
+                            show(); // Still show player, just paused
+                        });
+                    } else {
                         updateUI();
-                        show();
-                        updateMediaSession(track);
-                    }).catch(e => {
-                        console.log('[GlobalMusicPlayer] Auto-resume blocked (user interaction required)');
-                        isPlaying = false;
-                        updateUI();
-                    });
-                } else {
-                    updateUI();
-                }
+                        show(); // Show player in paused state
+                    }
 
-                show();
+                    // Remove listener after first load
+                    audio.removeEventListener('loadedmetadata', onMetadataLoaded);
+                }, { once: true });
+
+                // Start loading the track
+                audio.load();
+
             } else {
                 updateUI();
             }

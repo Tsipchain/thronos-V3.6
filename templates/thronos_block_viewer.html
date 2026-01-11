@@ -505,6 +505,7 @@ document.querySelectorAll('.tab').forEach(t=>{
       el('#view-'+name).style.display = (name===tab)?'block':'none';
     });
     // Load data for the selected tab
+    if(tab==='txs' && window.THROnosViewer) window.THROnosViewer.initTransfersTab();
     if(tab==='tokens') loadTokens();
     if(tab==='pools') loadPools();
     if(tab==='l2e') loadL2E();

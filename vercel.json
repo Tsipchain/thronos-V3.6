@@ -1,5 +1,7 @@
 {
   "version": 2,
+  "buildCommand": "",
+  "outputDirectory": ".",
   "rewrites": [
     { "source": "/api/:path*", "destination": "https://thrchain.up.railway.app/api/:path*" },
     { "source": "/viewer", "destination": "https://thrchain.up.railway.app/viewer" },

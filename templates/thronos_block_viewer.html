@@ -882,8 +882,8 @@ el('#btnLoadMempool')?.addEventListener('click', reloadMempool);
 el('#btnRefreshTxs')?.addEventListener('click', reloadTxs);
 
 // PR-5g: Load More functionality
-let blocksOffset = {{ showing_limit }};
-let txsOffset = {{ showing_limit }};
+let blocksOffset = {{ blocks_showing_limit }};
+let txsOffset = {{ txs_showing_limit }};
 const totalBlocks = {{ total_blocks }};
 const totalTxs = {{ total_txs }};
 

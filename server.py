@@ -8095,6 +8095,7 @@ def api_dashboard():
         "circulating_supply_thr": supply_metrics["circulating_supply_thr"],
         "locked_in_pools_thr": supply_metrics["locked_in_pools_thr"],
         "burned_total_thr": supply_metrics["burned_total_thr"],
+        "total_rewards_thr": supply_metrics["minted_total_thr"],
         "token_count": len(token_list),
         "pool_count": len(pools),
         "wallet_count": wallet_count,

@@ -2157,62 +2157,129 @@ async function loadWalletBalances(force = false) {
 }
 
 // Token logos and prices registry
+// IMPORTANT: This registry contains BOTH external L1 assets and Thronos-native tokens
+// - External assets: used for bridge UI and external balance display only
+// - Thronos-native: get prices from AMM pools (dynamic pricing)
 const TOKEN_REGISTRY = {
+    // === THRONOS-NATIVE TOKENS (AMM POOL-BASED PRICING) ===
     'THR': {
         name: 'Thronos',
         color: '#ff6600',
         logo: '/static/img/thronos-token.png',
-        priceUSD: 0.0042,  // Default price, updated from API
-        network: 'thronos'
-    },
-    'BTC': {
-        name: 'Bitcoin',
-        color: '#f7931a',
-        logo: '/static/img/btc-logo.png',
-        priceUSD: 98500,
-        network: 'bitcoin'
-    },
-    'WBTC': {
-        name: 'Wrapped Bitcoin',
-        color: '#f7931a',
-        logo: '/static/img/wbtc-logo.png',
-        priceUSD: 98500,
-        network: 'thronos'
-    },
-    'ETH': {
-        name: 'Ethereum',
-        color: '#627eea',
-        logo: '/static/img/eth-logo.png',
-        priceUSD: 3800,
-        network: 'ethereum'
-    },
-    'BNB': {
-        name: 'BNB',
-        color: '#f3ba2f',
-        logo: '/static/img/bnb-logo.png',
-        priceUSD: 650,
-        network: 'bnb'
-    },
-    'XRP': {
-        name: 'XRP',
-        color: '#00aae4',
-        logo: '/static/img/xrp-logo.png',
-        priceUSD: 2.5,
-        network: 'xrp'
-    },
-    'SOL': {
-        name: 'Solana',
-        color: '#14f195',
-        logo: '/static/img/sol-logo.png',
-        priceUSD: 190,
-        network: 'solana'
+        network: 'thronos',
+        decimals: 6,
+        price_source: 'pool',  // Get price from AMM pools, NOT from here
+        priceUSD: null,  // Will be fetched from /api/token/prices (pool-based)
+        price_in_thr: 1.0  // THR is the base currency
     },
     'L2E': {
         name: 'Learn-to-Earn',
         color: '#00bfff',
         logo: '/static/img/l2e-logo.png',
-        priceUSD: 0.001,
-        network: 'thronos'
+        network: 'thronos',
+        decimals: 6,
+        price_source: 'pool',  // Get price from AMM pools
+        priceUSD: null,
+        price_in_thr: null  // Will be calculated from pools
+    },
+    'WBTC': {
+        name: 'Wrapped Bitcoin',
+        color: '#f7931a',
+        logo: '/static/img/wbtc-logo.png',
+        network: 'thronos',
+        decimals: 8,
+        price_source: 'pool',  // Get price from AMM pools (THR/wBTC pair)
+        priceUSD: null,
+        price_in_thr: null  // Will be calculated from pools
+    },
+    'WETH': {
+        name: 'Wrapped Ethereum',
+        color: '#627eea',
+        logo: '/static/img/weth-logo.png',
+        network: 'thronos',
+        decimals: 18,
+        price_source: 'pool',
+        priceUSD: null,
+        price_in_thr: null
+    },
+    'WBNB': {
+        name: 'Wrapped BNB',
+        color: '#f3ba2f',
+        logo: '/static/img/wbnb-logo.png',
+        network: 'thronos',
+        decimals: 18,
+        price_source: 'pool',
+        priceUSD: null,
+        price_in_thr: null
+    },
+    'WXRP': {
+        name: 'Wrapped XRP',
+        color: '#00aae4',
+        logo: '/static/img/wxrp-logo.png',
+        network: 'thronos',
+        decimals: 6,
+        price_source: 'pool',
+        priceUSD: null,
+        price_in_thr: null
+    },
+
+    // === EXTERNAL L1 ASSETS (BRIDGE ONLY - NOT FOR AMM) ===
+    // These are displayed for bridge UI and external balance view
+    // They do NOT participate in AMM pools directly
+    'BTC': {
+        name: 'Bitcoin',
+        color: '#f7931a',
+        logo: '/static/img/btc-logo.png',
+        network: 'bitcoin',
+        decimals: 8,
+        price_source: 'oracle',  // Get from Gemini/external oracle
+        priceUSD: 98500,  // Fallback price (will be updated from /api/token/prices)
+        price_in_thr: null,  // Calculated from priceUSD / THR_price
+        tradeable: false  // Not tradeable in AMM (use WBTC instead)
+    },
+    'ETH': {
+        name: 'Ethereum',
+        color: '#627eea',
+        logo: '/static/img/eth-logo.png',
+        network: 'ethereum',
+        decimals: 18,
+        price_source: 'oracle',
+        priceUSD: 3800,
+        price_in_thr: null,
+        tradeable: false
+    },
+    'BNB': {
+        name: 'BNB',
+        color: '#f3ba2f',
+        logo: '/static/img/bnb-logo.png',
+        network: 'bnb',
+        decimals: 18,
+        price_source: 'oracle',
+        priceUSD: 650,
+        price_in_thr: null,
+        tradeable: false
+    },
+    'XRP': {
+        name: 'XRP',
+        color: '#00aae4',
+        logo: '/static/img/xrp-logo.png',
+        network: 'xrp',
+        decimals: 6,
+        price_source: 'oracle',
+        priceUSD: 2.5,
+        price_in_thr: null,
+        tradeable: false
+    },
+    'SOL': {
+        name: 'Solana',
+        color: '#14f195',
+        logo: '/static/img/sol-logo.png',
+        network: 'solana',
+        decimals: 9,
+        price_source: 'oracle',
+        priceUSD: 190,
+        price_in_thr: null,
+        tradeable: false
     }
 };
 

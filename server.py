@@ -3826,14 +3826,17 @@ def media_static(filename):
 def viewer():
     # PR-5g: Performance optimization - limit to recent blocks/txs
     # Viewer page loads much faster with pagination
-    limit = request.args.get('limit', type=int, default=50)
-    limit = min(limit, 200)  # Cap at 200 for safety
+    # Separate limits for blocks vs transactions (txs need higher limit)
+    blocks_limit = request.args.get('blocks_limit', type=int, default=50)
+    txs_limit = request.args.get('txs_limit', type=int, default=200)  # Higher for transfers
+    blocks_limit = min(blocks_limit, 200)
+    txs_limit = min(txs_limit, 500)
 
     all_blocks = get_blocks_for_viewer()
-    recent_blocks = all_blocks[-limit:] if len(all_blocks) > limit else all_blocks
+    recent_blocks = all_blocks[-blocks_limit:] if len(all_blocks) > blocks_limit else all_blocks
 
     all_txs = _tx_feed()
-    recent_txs = all_txs[:limit] if len(all_txs) > limit else all_txs
+    recent_txs = all_txs[:txs_limit] if len(all_txs) > txs_limit else all_txs
 
     return render_template(
         "thronos_block_viewer.html",
@@ -3841,7 +3844,8 @@ def viewer():
         transactions=recent_txs,
         total_blocks=len(all_blocks),
         total_txs=len(all_txs),
-        showing_limit=limit
+        blocks_showing_limit=blocks_limit,
+        txs_showing_limit=txs_limit
     )
 
 @app.route("/api/viewer/search", methods=["GET"])

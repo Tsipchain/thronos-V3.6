@@ -2157,9 +2157,11 @@ async function loadWalletBalances(force = false) {
 }
 
 // Token logos and prices registry
-// IMPORTANT: This registry contains BOTH external L1 assets and Thronos-native tokens
-// - External assets: used for bridge UI and external balance display only
-// - Thronos-native: get prices from AMM pools (dynamic pricing)
+// ARCHITECTURE:
+// - BTC: ONLY pledge asset (BTC ↔ THR peg)
+// - THR: Priced via peg+pool aggregator (floor = 0.0001 BTC, actual = max(floor, pool_median))
+// - L2E + wrapped tokens: Pool-based pricing (AMM)
+// - External L1 (ETH, BNB, XRP, SOL): Oracle pricing, bridge only (NO pledge)
 const TOKEN_REGISTRY = {
     // === THRONOS-NATIVE TOKENS (AMM POOL-BASED PRICING) ===
     'THR': {
@@ -2168,9 +2170,10 @@ const TOKEN_REGISTRY = {
         logo: '/static/img/thronos-token.png',
         network: 'thronos',
         decimals: 6,
-        price_source: 'pool',  // Get price from AMM pools, NOT from here
-        priceUSD: null,  // Will be fetched from /api/token/prices (pool-based)
-        price_in_thr: 1.0  // THR is the base currency
+        price_source: 'peg+pool',  // Aggregator: max(peg_floor_from_btc, pool_median)
+        priceUSD: null,  // Calculated: thr_peg_in_btc * btc_usd OR pool-based
+        price_in_thr: 1.0,  // THR is the base currency
+        peg_floor_btc: 0.0001  // 1 THR = 0.0001 BTC (floor from pledge)
     },
     'L2E': {
         name: 'Learn-to-Earn',
@@ -2178,9 +2181,10 @@ const TOKEN_REGISTRY = {
         logo: '/static/img/l2e-logo.png',
         network: 'thronos',
         decimals: 6,
-        price_source: 'pool',  // Get price from AMM pools
+        category: 'education',  // L2E category for Learn-to-Earn flow
+        price_source: 'pool',  // Get price from L2E/THR pool
         priceUSD: null,
-        price_in_thr: null  // Will be calculated from pools
+        price_in_thr: null  // Will be calculated from L2E/THR pool
     },
     'WBTC': {
         name: 'Wrapped Bitcoin',
@@ -2188,7 +2192,8 @@ const TOKEN_REGISTRY = {
         logo: '/static/img/wbtc-logo.png',
         network: 'thronos',
         decimals: 8,
-        price_source: 'pool',  // Get price from AMM pools (THR/wBTC pair)
+        wrapped_of: 'BTC',  // Wrapped version of BTC
+        price_source: 'pool',  // Get price from THR/wBTC pool
         priceUSD: null,
         price_in_thr: null  // Will be calculated from pools
     },
@@ -2198,6 +2203,7 @@ const TOKEN_REGISTRY = {
         logo: '/static/img/weth-logo.png',
         network: 'thronos',
         decimals: 18,
+        wrapped_of: 'ETH',
         price_source: 'pool',
         priceUSD: null,
         price_in_thr: null
@@ -2208,6 +2214,7 @@ const TOKEN_REGISTRY = {
         logo: '/static/img/wbnb-logo.png',
         network: 'thronos',
         decimals: 18,
+        wrapped_of: 'BNB',
         price_source: 'pool',
         priceUSD: null,
         price_in_thr: null
@@ -2218,14 +2225,14 @@ const TOKEN_REGISTRY = {
         logo: '/static/img/wxrp-logo.png',
         network: 'thronos',
         decimals: 6,
+        wrapped_of: 'XRP',
         price_source: 'pool',
         priceUSD: null,
         price_in_thr: null
     },
 
-    // === EXTERNAL L1 ASSETS (BRIDGE ONLY - NOT FOR AMM) ===
-    // These are displayed for bridge UI and external balance view
-    // They do NOT participate in AMM pools directly
+    // === EXTERNAL L1 ASSETS ===
+    // BTC: ONLY pledge asset (gives THR addresses, establishes peg)
     'BTC': {
         name: 'Bitcoin',
         color: '#f7931a',
@@ -2235,8 +2242,11 @@ const TOKEN_REGISTRY = {
         price_source: 'oracle',  // Get from Gemini/external oracle
         priceUSD: 98500,  // Fallback price (will be updated from /api/token/prices)
         price_in_thr: null,  // Calculated from priceUSD / THR_price
+        is_pledge_asset: true,  // ONLY BTC is pledge asset
         tradeable: false  // Not tradeable in AMM (use WBTC instead)
     },
+
+    // Guest chains: Bridge only (NO pledge, NO THR address generation)
     'ETH': {
         name: 'Ethereum',
         color: '#627eea',
@@ -2246,6 +2256,7 @@ const TOKEN_REGISTRY = {
         price_source: 'oracle',
         priceUSD: 3800,
         price_in_thr: null,
+        is_pledge_asset: false,  // Guest chain - bridge only
         tradeable: false
     },
     'BNB': {
@@ -2257,6 +2268,7 @@ const TOKEN_REGISTRY = {
         price_source: 'oracle',
         priceUSD: 650,
         price_in_thr: null,
+        is_pledge_asset: false,  // Guest chain - bridge only
         tradeable: false
     },
     'XRP': {
@@ -2268,6 +2280,7 @@ const TOKEN_REGISTRY = {
         price_source: 'oracle',
         priceUSD: 2.5,
         price_in_thr: null,
+        is_pledge_asset: false,  // Guest chain - bridge only
         tradeable: false
     },
     'SOL': {
@@ -2279,6 +2292,7 @@ const TOKEN_REGISTRY = {
         price_source: 'oracle',
         priceUSD: 190,
         price_in_thr: null,
+        is_pledge_asset: false,  // Guest chain - bridge only
         tradeable: false
     }
 };

@@ -1680,6 +1680,9 @@
                 <span class="lang-el">Όλα</span><span class="lang-en">All</span>
             </button>
             <button class="history-tab-btn" data-filter="thr" onclick="filterHistory('thr')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">THR</button>
+            <button class="history-tab-btn" data-filter="mining" onclick="filterHistory('mining')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                ⛏️ <span class="lang-el">Mining</span><span class="lang-en">Mining</span>
+            </button>
             <button class="history-tab-btn" data-filter="tokens" onclick="filterHistory('tokens')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
                 <span class="lang-el">Tokens</span><span class="lang-en">Tokens</span>
             </button>
@@ -2924,6 +2927,7 @@ function getTxType(tx) {
     const category = (tx.category || '').toLowerCase();
     if ([
         'thr',
+        'mining',
         'tokens',
         'l2e',
         'ai_credits',
@@ -2940,6 +2944,11 @@ function getTxType(tx) {
 
     const raw = (tx.kind || tx.type || '').toLowerCase();
     const asset = (tx.asset_symbol || tx.asset || tx.symbol || 'THR').toUpperCase();
+
+    // Mining rewards
+    if (raw === 'mining' || raw === 'block_reward' || raw === 'mining_reward' || raw.includes('mined')) {
+        return 'mining';
+    }
 
     // PR-5c: Music tips
     if (raw === 'music_tip' || raw.includes('music')) {
@@ -2969,9 +2978,14 @@ function getTxType(tx) {
     }
 
     const kindMap = {
+        'mining': 'mining',
+        'block_reward': 'mining',
+        'mining_reward': 'mining',
         'swap': 'swaps',
         'pool_swap': 'swaps',
         'bridge': 'bridge',
+        'bridge_in': 'bridge',
+        'bridge_out': 'bridge',
         'l2e': 'l2e',
         'ai_credit': 'ai_credits',
         'ai_credits': 'ai_credits',

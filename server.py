@@ -1130,6 +1130,8 @@ def _is_chain_file(path: str) -> bool:
         MEMPOOL_FILE,
         LAST_BLOCK_FILE,
         TX_LOG_FILE,
+        VOTING_FILE,  # Voting state is part of chain governance
+        AI_CREDS_FILE,  # AI wallet credentials
     ]
     return any(path == f for f in critical_files)
 
@@ -2296,6 +2298,11 @@ def save_voting(voting_data):
 
 def initialize_voting():
     """Initialize default voting polls for Crypto Hunters features."""
+    # PR-182 FIX: Skip on replica/read-only nodes
+    if READ_ONLY or NODE_ROLE != "master":
+        print(f"[VOTING] Skipping initialization on {NODE_ROLE} node (READ_ONLY={READ_ONLY})")
+        return {}
+
     voting_data = load_voting()
 
     # Only initialize if no polls exist
@@ -3694,9 +3701,18 @@ def get_transactions_for_viewer():
 
 
 def ensure_ai_wallet():
+    """
+    Ensure the AI agent wallet exists on the main chain.
+    This MUST ONLY run on the master node with write access.
+    """
+    # PR-182 FIX: Skip on replica/read-only nodes
+    if READ_ONLY or NODE_ROLE != "master":
+        print(f"[AI_WALLET] Skipping initialization on {NODE_ROLE} node (READ_ONLY={READ_ONLY})")
+        return
+
     pledges = load_json(PLEDGE_CHAIN, [])
     ai_pledge = next((p for p in pledges if p.get("thr_address")==AI_WALLET_ADDRESS), None)
-    if ai_pledge: 
+    if ai_pledge:
         print(f"🤖 AI Wallet {AI_WALLET_ADDRESS} ready.")
         return
     print(f"🤖 Initializing AI Agent Wallet: {AI_WALLET_ADDRESS}")
@@ -14098,7 +14114,8 @@ def api_v1_pool_swap():
     ), 200
 
 
-# Run AI Wallet Check on Startup
+# PR-182 FIX: Run AI Wallet Check on Startup (master only)
+# NOTE: Guards are inside ensure_ai_wallet() and recompute_height_offset_from_ledger()
 ensure_ai_wallet()
 recompute_height_offset_from_ledger()  # <-- Initialize offset
 
@@ -16944,21 +16961,28 @@ def api_pytheia_advice():
 print("✓ AI Session fixes loaded - supports guest mode and file uploads")
 print("✓ Token Explorer, NFT Marketplace and Governance pages loaded")
 print("✓ Decent Music Platform loaded - artist registration, uploads, and royalties")
+
 # --- Startup hooks ---
+# PR-182: Initialization functions have internal guards for replica nodes
 refresh_model_catalog(force=True)
 _start_model_scheduler()
-ensure_ai_wallet()
-recompute_height_offset_from_ledger()
-initialize_voting()  # Initialize voting polls
-try:  # Best-effort cleanup to avoid startup failures
-    prune_result = prune_empty_sessions()
-    logger.info(
-        "Pruned empty sessions on startup: deleted=%s kept=%s",
-        prune_result.get("deleted"),
-        prune_result.get("kept"),
-    )
-except Exception as exc:  # pragma: no cover - defensive
-    logger.warning(f"Startup session prune skipped: {exc}")
+ensure_ai_wallet()  # Has internal guard for READ_ONLY/replica nodes
+recompute_height_offset_from_ledger()  # Read-only, safe on all nodes
+initialize_voting()  # Has internal guard for READ_ONLY/replica nodes
+
+# PR-182 FIX: Only prune sessions on master node (modifies AI_SESSIONS_FILE)
+if not READ_ONLY and NODE_ROLE == "master":
+    try:  # Best-effort cleanup to avoid startup failures
+        prune_result = prune_empty_sessions()
+        logger.info(
+            "Pruned empty sessions on startup: deleted=%s kept=%s",
+            prune_result.get("deleted"),
+            prune_result.get("kept"),
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(f"Startup session prune skipped: {exc}")
+else:
+    logger.info(f"[STARTUP] Skipping session prune on {NODE_ROLE} node (READ_ONLY={READ_ONLY})")
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 13311))

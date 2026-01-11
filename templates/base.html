@@ -2135,7 +2135,8 @@ async function loadWalletBalances(force = false) {
         await updateTokenPrices();
 
         // PR-5a: Use fetchJSONOnce for request coalescing
-        const url = `/api/balances?address=${encodeURIComponent(wallet)}&show_zero=false`;
+        // Show all tokens including zero balances for multi-chain assets
+        const url = `/api/balances?address=${encodeURIComponent(wallet)}&show_zero=true`;
         const data = await (window.FetchUtils?.fetchJSONOnce
             ? window.FetchUtils.fetchJSONOnce(url)
             : fetch(url).then(r => r.json()));
@@ -2156,24 +2157,143 @@ async function loadWalletBalances(force = false) {
 }
 
 // Token logos and prices registry
+// ARCHITECTURE:
+// - BTC: ONLY pledge asset (BTC ↔ THR peg)
+// - THR: Priced via peg+pool aggregator (floor = 0.0001 BTC, actual = max(floor, pool_median))
+// - L2E + wrapped tokens: Pool-based pricing (AMM)
+// - External L1 (ETH, BNB, XRP, SOL): Oracle pricing, bridge only (NO pledge)
 const TOKEN_REGISTRY = {
+    // === THRONOS-NATIVE TOKENS (AMM POOL-BASED PRICING) ===
     'THR': {
         name: 'Thronos',
         color: '#ff6600',
         logo: '/static/img/thronos-token.png',
-        priceUSD: 0.0042  // Default price, updated from API
-    },
-    'WBTC': {
-        name: 'Wrapped Bitcoin',
-        color: '#f7931a',
-        logo: '/static/img/wbtc-logo.png',
-        priceUSD: 98500  // Approximate BTC price
+        network: 'thronos',
+        decimals: 6,
+        price_source: 'peg+pool',  // Aggregator: max(peg_floor_from_btc, pool_median)
+        priceUSD: null,  // Calculated: thr_peg_in_btc * btc_usd OR pool-based
+        price_in_thr: 1.0,  // THR is the base currency
+        peg_floor_btc: 0.0001  // 1 THR = 0.0001 BTC (floor from pledge)
     },
     'L2E': {
         name: 'Learn-to-Earn',
         color: '#00bfff',
         logo: '/static/img/l2e-logo.png',
-        priceUSD: 0.001
+        network: 'thronos',
+        decimals: 6,
+        category: 'education',  // L2E category for Learn-to-Earn flow
+        price_source: 'pool',  // Get price from L2E/THR pool
+        priceUSD: null,
+        price_in_thr: null  // Will be calculated from L2E/THR pool
+    },
+    'WBTC': {
+        name: 'Wrapped Bitcoin',
+        color: '#f7931a',
+        logo: '/static/img/wbtc-logo.png',
+        network: 'thronos',
+        decimals: 8,
+        wrapped_of: 'BTC',  // Wrapped version of BTC
+        price_source: 'pool',  // Get price from THR/wBTC pool
+        priceUSD: null,
+        price_in_thr: null  // Will be calculated from pools
+    },
+    'WETH': {
+        name: 'Wrapped Ethereum',
+        color: '#627eea',
+        logo: '/static/img/weth-logo.png',
+        network: 'thronos',
+        decimals: 18,
+        wrapped_of: 'ETH',
+        price_source: 'pool',
+        priceUSD: null,
+        price_in_thr: null
+    },
+    'WBNB': {
+        name: 'Wrapped BNB',
+        color: '#f3ba2f',
+        logo: '/static/img/wbnb-logo.png',
+        network: 'thronos',
+        decimals: 18,
+        wrapped_of: 'BNB',
+        price_source: 'pool',
+        priceUSD: null,
+        price_in_thr: null
+    },
+    'WXRP': {
+        name: 'Wrapped XRP',
+        color: '#00aae4',
+        logo: '/static/img/wxrp-logo.png',
+        network: 'thronos',
+        decimals: 6,
+        wrapped_of: 'XRP',
+        price_source: 'pool',
+        priceUSD: null,
+        price_in_thr: null
+    },
+
+    // === EXTERNAL L1 ASSETS ===
+    // BTC: ONLY pledge asset (gives THR addresses, establishes peg)
+    'BTC': {
+        name: 'Bitcoin',
+        color: '#f7931a',
+        logo: '/static/img/btc-logo.png',
+        network: 'bitcoin',
+        decimals: 8,
+        price_source: 'oracle',  // Get from Gemini/external oracle
+        priceUSD: 98500,  // Fallback price (will be updated from /api/token/prices)
+        price_in_thr: null,  // Calculated from priceUSD / THR_price
+        is_pledge_asset: true,  // ONLY BTC is pledge asset
+        tradeable: false  // Not tradeable in AMM (use WBTC instead)
+    },
+
+    // Guest chains: Bridge only (NO pledge, NO THR address generation)
+    'ETH': {
+        name: 'Ethereum',
+        color: '#627eea',
+        logo: '/static/img/eth-logo.png',
+        network: 'ethereum',
+        decimals: 18,
+        price_source: 'oracle',
+        priceUSD: 3800,
+        price_in_thr: null,
+        is_pledge_asset: false,  // Guest chain - bridge only
+        tradeable: false
+    },
+    'BNB': {
+        name: 'BNB',
+        color: '#f3ba2f',
+        logo: '/static/img/bnb-logo.png',
+        network: 'bnb',
+        decimals: 18,
+        price_source: 'oracle',
+        priceUSD: 650,
+        price_in_thr: null,
+        is_pledge_asset: false,  // Guest chain - bridge only
+        tradeable: false
+    },
+    'XRP': {
+        name: 'XRP',
+        color: '#00aae4',
+        logo: '/static/img/xrp-logo.png',
+        network: 'xrp',
+        decimals: 6,
+        price_source: 'oracle',
+        priceUSD: 2.5,
+        price_in_thr: null,
+        is_pledge_asset: false,  // Guest chain - bridge only
+        tradeable: false
+    },
+    'SOL': {
+        name: 'Solana',
+        color: '#14f195',
+        logo: '/static/img/sol-logo.png',
+        network: 'solana',
+        decimals: 9,
+        price_source: 'oracle',
+        priceUSD: 190,
+        price_in_thr: null,
+        is_pledge_asset: false,  // Guest chain - bridge only
+        tradeable: false
     }
 };
 
@@ -3112,6 +3232,10 @@ function getTxType(tx) {
         'bridge': 'bridge',
         'bridge_in': 'bridge',
         'bridge_out': 'bridge',
+        'bridge_deposit': 'bridge',
+        'bridge_withdraw': 'bridge',
+        'crosschain': 'bridge',
+        'cross_chain': 'bridge',
         'l2e': 'l2e',
         'ai_credit': 'ai_credits',
         'ai_credits': 'ai_credits',
@@ -3135,7 +3259,18 @@ function getTxType(tx) {
     };
     if (kindMap[raw]) return kindMap[raw];
 
-    // Fallback: use already-declared asset variable from line 2305
+    // Multi-chain assets detection
+    const multiChainAssets = ['BTC', 'WBTC', 'ETH', 'BNB', 'XRP', 'SOL'];
+    if (multiChainAssets.includes(asset)) {
+        // If it's a bridge-related transaction, keep it as bridge
+        if (raw.includes('bridge') || raw.includes('deposit') || raw.includes('withdraw') || raw.includes('crosschain')) {
+            return 'bridge';
+        }
+        // Otherwise it's a token transfer
+        return 'tokens';
+    }
+
+    // Fallback: use already-declared asset variable
     if (asset && asset !== 'THR') return 'tokens';
     return 'thr';
 }

@@ -2135,7 +2135,8 @@ async function loadWalletBalances(force = false) {
         await updateTokenPrices();
 
         // PR-5a: Use fetchJSONOnce for request coalescing
-        const url = `/api/balances?address=${encodeURIComponent(wallet)}&show_zero=false`;
+        // Show all tokens including zero balances for multi-chain assets
+        const url = `/api/balances?address=${encodeURIComponent(wallet)}&show_zero=true`;
         const data = await (window.FetchUtils?.fetchJSONOnce
             ? window.FetchUtils.fetchJSONOnce(url)
             : fetch(url).then(r => r.json()));
@@ -2161,19 +2162,57 @@ const TOKEN_REGISTRY = {
         name: 'Thronos',
         color: '#ff6600',
         logo: '/static/img/thronos-token.png',
-        priceUSD: 0.0042  // Default price, updated from API
+        priceUSD: 0.0042,  // Default price, updated from API
+        network: 'thronos'
+    },
+    'BTC': {
+        name: 'Bitcoin',
+        color: '#f7931a',
+        logo: '/static/img/btc-logo.png',
+        priceUSD: 98500,
+        network: 'bitcoin'
     },
     'WBTC': {
         name: 'Wrapped Bitcoin',
         color: '#f7931a',
         logo: '/static/img/wbtc-logo.png',
-        priceUSD: 98500  // Approximate BTC price
+        priceUSD: 98500,
+        network: 'thronos'
+    },
+    'ETH': {
+        name: 'Ethereum',
+        color: '#627eea',
+        logo: '/static/img/eth-logo.png',
+        priceUSD: 3800,
+        network: 'ethereum'
+    },
+    'BNB': {
+        name: 'BNB',
+        color: '#f3ba2f',
+        logo: '/static/img/bnb-logo.png',
+        priceUSD: 650,
+        network: 'bnb'
+    },
+    'XRP': {
+        name: 'XRP',
+        color: '#00aae4',
+        logo: '/static/img/xrp-logo.png',
+        priceUSD: 2.5,
+        network: 'xrp'
+    },
+    'SOL': {
+        name: 'Solana',
+        color: '#14f195',
+        logo: '/static/img/sol-logo.png',
+        priceUSD: 190,
+        network: 'solana'
     },
     'L2E': {
         name: 'Learn-to-Earn',
         color: '#00bfff',
         logo: '/static/img/l2e-logo.png',
-        priceUSD: 0.001
+        priceUSD: 0.001,
+        network: 'thronos'
     }
 };
 
@@ -3112,6 +3151,10 @@ function getTxType(tx) {
         'bridge': 'bridge',
         'bridge_in': 'bridge',
         'bridge_out': 'bridge',
+        'bridge_deposit': 'bridge',
+        'bridge_withdraw': 'bridge',
+        'crosschain': 'bridge',
+        'cross_chain': 'bridge',
         'l2e': 'l2e',
         'ai_credit': 'ai_credits',
         'ai_credits': 'ai_credits',
@@ -3135,7 +3178,18 @@ function getTxType(tx) {
     };
     if (kindMap[raw]) return kindMap[raw];
 
-    // Fallback: use already-declared asset variable from line 2305
+    // Multi-chain assets detection
+    const multiChainAssets = ['BTC', 'WBTC', 'ETH', 'BNB', 'XRP', 'SOL'];
+    if (multiChainAssets.includes(asset)) {
+        // If it's a bridge-related transaction, keep it as bridge
+        if (raw.includes('bridge') || raw.includes('deposit') || raw.includes('withdraw') || raw.includes('crosschain')) {
+            return 'bridge';
+        }
+        // Otherwise it's a token transfer
+        return 'tokens';
+    }
+
+    // Fallback: use already-declared asset variable
     if (asset && asset !== 'THR') return 'tokens';
     return 'thr';
 }

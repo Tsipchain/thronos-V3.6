@@ -881,11 +881,11 @@ el('#refreshBtn').onclick=reloadBlocks;
 el('#btnLoadMempool')?.addEventListener('click', reloadMempool);
 el('#btnRefreshTxs')?.addEventListener('click', reloadTxs);
 
-// PR-5g: Load More functionality
-let blocksOffset = {{ blocks_showing_limit }};
-let txsOffset = {{ txs_showing_limit }};
-const totalBlocks = {{ total_blocks }};
-const totalTxs = {{ total_txs }};
+// PR-5g: Load More functionality (legacy - now handled by viewer.js)
+let blocksOffset = 0;
+let txsOffset = 0;
+const totalBlocks = 0;
+const totalTxs = 0;
 
 async function loadMoreBlocks() {
   const btn = el('#btnLoadMoreBlocks');
@@ -1229,5 +1229,13 @@ async function loadMusic(){
   }
 }
 </script>
+
+<!-- New Viewer.js Integration -->
+<script>
+// Set API base URL for new viewer.js
+window.TH_API_BASE_URL = "{{ api_base_url if api_base_url else '' }}";
+</script>
+<script src="{{ url_for('static', filename='viewer.js') }}"></script>
+
 </body>
 </html>

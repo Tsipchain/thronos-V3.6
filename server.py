@@ -410,6 +410,7 @@ active_peers = {}  # {peer_id: {"last_seen": timestamp, "url": replica_url}}
 # AI commerce
 AI_PACKS_FILE       = os.path.join(DATA_DIR, "ai_packs.json")
 AI_CREDITS_FILE     = os.path.join(DATA_DIR, "ai_credits.json")
+AI_POOL_FILE        = os.path.join(DATA_DIR, "ai_pool.json")  # Phase 4: AI rewards pool
 
 # Register optional EVM routes (if module exists)
 if register_evm_routes is not None:
@@ -1132,6 +1133,7 @@ def _is_chain_file(path: str) -> bool:
         TX_LOG_FILE,
         VOTING_FILE,  # Voting state is part of chain governance
         AI_CREDS_FILE,  # AI wallet credentials
+        AI_POOL_FILE,  # Phase 4: AI rewards pool state
     ]
     return any(path == f for f in critical_files)
 
@@ -1203,6 +1205,97 @@ def append_ai_interaction(entry: dict) -> None:
     os.makedirs(os.path.dirname(AI_INTERACTIONS_FILE), exist_ok=True)
     with open(AI_INTERACTIONS_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+# ─── Phase 4: AI Pool Management ───────────────────────────────────────────────
+def get_ai_pool_state() -> dict:
+    """Get current AI pool state."""
+    return load_json(AI_POOL_FILE, {
+        "ai_pool_balance": 0.0,
+        "total_music_tips": 0.0,
+        "total_ai_distributed": 0.0,
+        "last_distribution_time": None,
+        "total_music_tips_count": 0,
+        "total_ai_rewards_count": 0
+    })
+
+
+def save_ai_pool_state(pool_state: dict):
+    """Save AI pool state (master only)."""
+    save_json(AI_POOL_FILE, pool_state)
+
+
+def credit_ai_pool(amount: float, music_tip_amount: float = 0):
+    """Add THR to the AI pool (called when music tips are received)."""
+    if READ_ONLY or NODE_ROLE != "master":
+        logger.warning(f"[AI_POOL] Skipping credit on {NODE_ROLE} node")
+        return
+
+    pool = get_ai_pool_state()
+    pool["ai_pool_balance"] = round(float(pool.get("ai_pool_balance", 0)) + amount, 6)
+    if music_tip_amount > 0:
+        pool["total_music_tips"] = round(float(pool.get("total_music_tips", 0)) + music_tip_amount, 6)
+        pool["total_music_tips_count"] = int(pool.get("total_music_tips_count", 0)) + 1
+
+    save_json(AI_POOL_FILE, pool)
+    logger.info(f"[AI_POOL] Added {amount} THR from music tip (total pool: {pool['ai_pool_balance']} THR)")
+
+
+def _debit_ai_pool(amount: float) -> bool:
+    """Deduct from AI pool balance. Returns True if successful."""
+    if READ_ONLY or NODE_ROLE != "master":
+        return False
+
+    pool = get_ai_pool_state()
+    balance = float(pool.get("ai_pool_balance", 0))
+    if balance < amount:
+        return False
+
+    pool["ai_pool_balance"] = round(balance - amount, 6)
+    pool["total_ai_distributed"] = round(float(pool.get("total_ai_distributed", 0)) + amount, 6)
+    pool["last_distribution_time"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    pool["total_ai_rewards_count"] = int(pool.get("total_ai_rewards_count", 0)) + 1
+    save_json(AI_POOL_FILE, pool)
+    return True
+
+
+def _distribute_ai_pool_to_address(address: str, amount: float, category: str, details: dict = None) -> str:
+    """
+    Credit an address from the AI pool and create an ai_reward transaction.
+    Returns the tx_id.
+    """
+    if amount <= 0:
+        return None
+
+    # Debit from pool first
+    if not _debit_ai_pool(amount):
+        logger.warning(f"[AI_POOL] Insufficient balance to distribute {amount} THR")
+        return None
+
+    # Credit wallet
+    ledger = load_json(LEDGER_FILE, {})
+    ledger[address] = round(float(ledger.get(address, 0)) + amount, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    # Create ai_reward transaction
+    chain = load_json(CHAIN_FILE, [])
+    tx_id = f"AI-REWARD-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "ai_reward",
+        "to": address,
+        "amount": amount,
+        "category": category,  # "mining" or "iot_telemetry"
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "tx_id": tx_id,
+        "status": "confirmed"
+    }
+    if details:
+        tx["details"] = details
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+
+    logger.info(f"[AI_POOL] Distributed {amount} THR to {address} (category: {category})")
+    return tx_id
 
 
 def _sha256_hex(value: str) -> str:
@@ -4380,6 +4473,130 @@ def api_wallet_mining_stats():
         "last_block_height": last_block_height,
         "last_block_time": last_block_time,
         "recent_blocks": recent_blocks
+    }), 200
+
+
+@app.route("/api/wallet/history", methods=["GET"])
+def api_wallet_history():
+    """
+    Get wallet transaction history with category grouping and summaries (Phase 4).
+
+    Query params:
+    - address: THR address
+    - category: Optional filter (mining, ai_reward, music_tip, iot_telemetry, etc.)
+
+    Returns:
+    - transactions: List of transactions
+    - summary: Category breakdown with totals
+    """
+    address = request.args.get("address", "").strip()
+    category_filter = request.args.get("category", "").strip().lower()
+
+    if not address:
+        return jsonify({"ok": False, "error": "Address required"}), 400
+
+    # Get all transactions
+    chain = load_json(CHAIN_FILE, [])
+    blocks = get_blocks_for_viewer()
+
+    # Collect transactions involving this address
+    wallet_txs = []
+
+    # 1. Regular chain transactions
+    for tx in chain:
+        if not isinstance(tx, dict):
+            continue
+
+        tx_from = tx.get("from") or tx.get("sender")
+        tx_to = tx.get("to") or tx.get("recipient")
+        tx_address = tx.get("address")  # For IoT telemetry
+
+        if address.lower() in [str(tx_from).lower(), str(tx_to).lower(), str(tx_address).lower()]:
+            tx_copy = dict(tx)
+            tx_copy["category"] = _categorize_transaction(tx)
+
+            # Determine direction
+            if tx_to and tx_to.lower() == address.lower():
+                tx_copy["direction"] = "received"
+            elif tx_from and tx_from.lower() == address.lower():
+                tx_copy["direction"] = "sent"
+            else:
+                tx_copy["direction"] = "related"
+
+            wallet_txs.append(tx_copy)
+
+    # 2. Block mining rewards
+    for block in blocks:
+        block_txs = block.get("transactions", [])
+        for tx in block_txs:
+            if tx.get("type") in ["coinbase", "mining_reward", "mint"]:
+                miner_addr = tx.get("to") or tx.get("thr_address")
+                if miner_addr and miner_addr.lower() == address.lower():
+                    tx_copy = dict(tx)
+                    tx_copy["category"] = "mining"
+                    tx_copy["direction"] = "received"
+                    tx_copy["block_height"] = block.get("index")
+                    wallet_txs.append(tx_copy)
+
+    # Apply category filter
+    if category_filter:
+        wallet_txs = [tx for tx in wallet_txs if tx.get("category", "").lower() == category_filter]
+
+    # Calculate category summaries
+    summary = {
+        "total_mining": 0.0,
+        "total_ai_rewards": 0.0,
+        "total_music_tips_sent": 0.0,
+        "total_music_tips_received": 0.0,
+        "total_iot_rewards": 0.0,
+        "total_sent": 0.0,
+        "total_received": 0.0,
+        "mining_count": 0,
+        "ai_reward_count": 0,
+        "music_tip_count": 0,
+        "iot_count": 0
+    }
+
+    for tx in wallet_txs:
+        category = tx.get("category", "other")
+        direction = tx.get("direction", "related")
+        amount = float(tx.get("amount", 0))
+
+        if category == "mining":
+            summary["total_mining"] += amount
+            summary["mining_count"] += 1
+        elif category == "ai_reward":
+            summary["total_ai_rewards"] += amount
+            summary["ai_reward_count"] += 1
+        elif category == "music_tip":
+            if direction == "sent":
+                summary["total_music_tips_sent"] += amount
+            elif direction == "received":
+                summary["total_music_tips_received"] += amount
+            summary["music_tip_count"] += 1
+        elif category == "iot_telemetry":
+            # IoT txs represent work done, rewards come via ai_reward
+            summary["iot_count"] += 1
+
+        if direction == "received":
+            summary["total_received"] += amount
+        elif direction == "sent":
+            summary["total_sent"] += amount
+
+    # Round summary values
+    for key in summary:
+        if isinstance(summary[key], float):
+            summary[key] = round(summary[key], 6)
+
+    # Sort by timestamp descending
+    wallet_txs.sort(key=lambda t: _parse_timestamp(t.get("timestamp", "")), reverse=True)
+
+    return jsonify({
+        "ok": True,
+        "address": address,
+        "transactions": wallet_txs,
+        "summary": summary,
+        "total_transactions": len(wallet_txs)
     }), 200
 
 
@@ -11013,6 +11230,114 @@ def ai_knowledge_watcher():
     except Exception as e:
         print("[AI-KNOWLEDGE WATCHER] error:", e)
 
+
+# ─── Phase 4: AI REWARDS DISTRIBUTION ─────────────────────────────────────────
+def distribute_ai_rewards_step():
+    """
+    Periodically distribute AI pool funds to miners and IoT contributors.
+
+    Economics:
+    - Miners get Y% of pool (pro-rata by blocks mined in last N blocks)
+    - IoT miners get (100-Y)% (pro-rata by telemetry samples in last M minutes)
+
+    For now, use simple defaults:
+    - MINER_SHARE = 60% (configurable via env)
+    - IOT_SHARE = 40%
+    - LOOKBACK_BLOCKS = 100 (last 100 blocks for miner rewards)
+    - LOOKBACK_MINUTES = 60 (last 60 minutes for IoT rewards)
+    - MIN_POOL_BALANCE = 10 THR (only distribute if pool >= 10 THR)
+    """
+    if READ_ONLY or NODE_ROLE != "master":
+        return  # Only master distributes
+
+    try:
+        # Configuration
+        MINER_SHARE = float(os.getenv("AI_POOL_MINER_SHARE", "0.60"))  # 60%
+        IOT_SHARE = 1.0 - MINER_SHARE
+        LOOKBACK_BLOCKS = int(os.getenv("AI_POOL_LOOKBACK_BLOCKS", "100"))
+        LOOKBACK_MINUTES = int(os.getenv("AI_POOL_LOOKBACK_MINUTES", "60"))
+        MIN_POOL_BALANCE = float(os.getenv("AI_POOL_MIN_BALANCE", "10.0"))
+        DISTRIBUTION_PERCENTAGE = float(os.getenv("AI_POOL_DISTRIBUTION_PCT", "0.10"))  # Distribute 10% of pool each time
+
+        pool = get_ai_pool_state()
+        balance = float(pool.get("ai_pool_balance", 0))
+
+        if balance < MIN_POOL_BALANCE:
+            logger.debug(f"[AI_POOL] Balance {balance} below minimum {MIN_POOL_BALANCE}, skipping distribution")
+            return
+
+        # Calculate distribution amount
+        distribution_amount = round(balance * DISTRIBUTION_PERCENTAGE, 6)
+        miner_pool = round(distribution_amount * MINER_SHARE, 6)
+        iot_pool = round(distribution_amount * IOT_SHARE, 6)
+
+        logger.info(f"[AI_POOL] Distributing {distribution_amount} THR (miners: {miner_pool}, IoT: {iot_pool})")
+
+        # === MINER REWARDS ===
+        # Get recent blocks and count per miner
+        blocks = get_blocks_for_viewer()
+        recent_blocks = blocks[-LOOKBACK_BLOCKS:] if len(blocks) > LOOKBACK_BLOCKS else blocks
+
+        miner_blocks = {}
+        for block in recent_blocks:
+            miner = block.get("miner") or block.get("miner_address")
+            if miner:
+                miner_blocks[miner] = miner_blocks.get(miner, 0) + 1
+
+        total_blocks_counted = sum(miner_blocks.values())
+
+        if miner_blocks and total_blocks_counted > 0 and miner_pool > 0:
+            for miner_address, block_count in miner_blocks.items():
+                reward = round((block_count / total_blocks_counted) * miner_pool, 6)
+                if reward > 0:
+                    _distribute_ai_pool_to_address(
+                        address=miner_address,
+                        amount=reward,
+                        category="mining",
+                        details={"blocks_mined": block_count, "lookback_blocks": LOOKBACK_BLOCKS}
+                    )
+            logger.info(f"[AI_POOL] Distributed {miner_pool} THR to {len(miner_blocks)} miners")
+        else:
+            logger.info(f"[AI_POOL] No miners found in last {LOOKBACK_BLOCKS} blocks")
+
+        # === IOT REWARDS ===
+        # Get recent IoT telemetry transactions
+        chain = load_json(CHAIN_FILE, [])
+        now = time.time()
+        cutoff_time = now - (LOOKBACK_MINUTES * 60)
+
+        iot_samples = {}
+        for tx in chain:
+            if tx.get("type") == "iot_telemetry":
+                tx_time = _parse_timestamp(tx.get("timestamp"))
+                if tx_time >= cutoff_time:
+                    address = tx.get("address")
+                    samples = int(tx.get("samples", 0))
+                    if address and samples > 0:
+                        iot_samples[address] = iot_samples.get(address, 0) + samples
+
+        total_samples = sum(iot_samples.values())
+
+        if iot_samples and total_samples > 0 and iot_pool > 0:
+            for iot_address, sample_count in iot_samples.items():
+                reward = round((sample_count / total_samples) * iot_pool, 6)
+                if reward > 0:
+                    _distribute_ai_pool_to_address(
+                        address=iot_address,
+                        amount=reward,
+                        category="iot_telemetry",
+                        details={"samples_contributed": sample_count, "lookback_minutes": LOOKBACK_MINUTES}
+                    )
+            logger.info(f"[AI_POOL] Distributed {iot_pool} THR to {len(iot_samples)} IoT miners")
+        else:
+            logger.info(f"[AI_POOL] No IoT telemetry found in last {LOOKBACK_MINUTES} minutes")
+
+        logger.info(f"[AI_POOL] Distribution complete. Remaining balance: {get_ai_pool_state().get('ai_pool_balance', 0)} THR")
+
+    except Exception as e:
+        logger.error(f"[AI_POOL] Distribution error: {e}", exc_info=True)
+
+
 # ─── CRYPTO HUNTERS P2E API (NEW) ──────────────────
 @app.route("/game")
 def game_page():
@@ -11220,8 +11545,9 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED:
     scheduler.add_job(confirm_mempool_if_stuck, "interval", seconds=45)
     scheduler.add_job(aggregator_step, "interval", seconds=10)
     scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30)  # NEW
+    scheduler.add_job(distribute_ai_rewards_step, "interval", minutes=int(os.getenv("AI_POOL_DISTRIBUTION_INTERVAL", "30")))  # Phase 4: AI rewards distribution
     scheduler.start()
-    print(f"[SCHEDULER] All master jobs started")
+    print(f"[SCHEDULER] All master jobs started (including AI rewards distribution)")
 elif NODE_ROLE == "replica" and SCHEDULER_ENABLED:
     print(f"[SCHEDULER] Starting as REPLICA node with worker jobs (SCHEDULER_ENABLED={SCHEDULER_ENABLED})")
     scheduler=BackgroundScheduler(daemon=True)
@@ -15884,27 +16210,35 @@ def api_v1_music_tip():
     if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
         return jsonify({"status": "error", "message": "Invalid auth"}), 403
 
-    # Transfer THR
+    # Transfer THR with 10% to AI pool (Phase 4)
+    AI_POOL_PERCENTAGE = 0.10  # 10% of music tips go to AI pool
     ledger = load_json(LEDGER_FILE, {})
     sender_balance = float(ledger.get(from_address, 0))
 
     if sender_balance < amount:
         return jsonify({"status": "error", "message": "Insufficient balance"}), 400
 
+    # Split: 10% to AI pool, 90% to artist
+    ai_pool_amount = round(amount * AI_POOL_PERCENTAGE, 6)
+    artist_amount = round(amount - ai_pool_amount, 6)
+
     ledger[from_address] = round(sender_balance - amount, 6)
-    ledger[artist_address] = round(float(ledger.get(artist_address, 0)) + amount, 6)
+    ledger[artist_address] = round(float(ledger.get(artist_address, 0)) + artist_amount, 6)
     save_json(LEDGER_FILE, ledger)
 
-    # Update track tips
+    # Credit AI pool
+    credit_ai_pool(ai_pool_amount, music_tip_amount=amount)
+
+    # Update track tips (total amount including AI pool portion)
     for t in registry["tracks"]:
         if t["id"] == track_id:
             t["tips_total"] = float(t.get("tips_total", 0)) + amount
             break
 
-    # Update artist earnings
+    # Update artist earnings (only their portion after AI pool cut)
     if artist_address in registry["artists"]:
         registry["artists"][artist_address]["total_earnings"] = \
-            float(registry["artists"][artist_address].get("total_earnings", 0)) + amount
+            float(registry["artists"][artist_address].get("total_earnings", 0)) + artist_amount
 
     save_music_registry(registry)
 
@@ -15918,6 +16252,8 @@ def api_v1_music_tip():
         "from": from_address,
         "to": artist_address,
         "amount": amount,
+        "artist_amount": artist_amount,  # Amount after AI pool cut
+        "ai_pool_amount": ai_pool_amount,  # Amount contributed to AI pool
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
         "tx_id": tx_id,
         "status": "confirmed"
@@ -15925,12 +16261,14 @@ def api_v1_music_tip():
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
 
-    logger.info(f"Music tip: {amount} THR from {from_address} to {artist_address} for track {track_id}")
+    logger.info(f"Music tip: {amount} THR from {from_address} to {artist_address} for track {track_id} (artist: {artist_amount}, AI pool: {ai_pool_amount})")
 
     return jsonify({
         "status": "success",
         "tx_id": tx_id,
         "amount": amount,
+        "artist_amount": artist_amount,
+        "ai_pool_amount": ai_pool_amount,
         "new_balance": ledger[from_address]
     }), 200
 
@@ -17283,6 +17621,142 @@ def api_pytheia_advice():
         "url": governance_url,
         "message": "PYTHEIA advice posted to governance successfully"
     }), 201
+
+
+# ─── Phase 4: IoT, AI Pool & Governance APIs ────────────────────────────────────
+
+@app.route("/api/iot/telemetry", methods=["POST"])
+def api_iot_telemetry():
+    """
+    Submit IoT telemetry data for rewards eligibility.
+    Expected JSON:
+    {
+      "address": "THR...",
+      "device_id": "optional_device_identifier",
+      "route_hash": "hash_of_gps_path",
+      "samples": <int>,
+      "auth_secret": "..."  # Optional: for authentication
+    }
+    """
+    data = request.get_json() or {}
+    address = (data.get("address") or "").strip()
+    device_id = (data.get("device_id") or "").strip()
+    route_hash = (data.get("route_hash") or "").strip()
+    samples = int(data.get("samples", 0))
+
+    if not address or not route_hash or samples <= 0:
+        return jsonify({"ok": False, "error": "Missing required fields: address, route_hash, samples"}), 400
+
+    # Verify address exists in ledger or pledges
+    ledger = load_json(LEDGER_FILE, {})
+    pledges = load_json(PLEDGE_CHAIN, [])
+
+    address_exists = address in ledger or any(p.get("thr_address") == address for p in pledges)
+    if not address_exists:
+        return jsonify({"ok": False, "error": "Address not found in system"}), 404
+
+    # Create IoT telemetry transaction
+    chain = load_json(CHAIN_FILE, [])
+    tx_id = f"IOT-TELEM-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "iot_telemetry",
+        "address": address,
+        "device_id": device_id,
+        "route_hash": route_hash,
+        "samples": samples,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "tx_id": tx_id,
+        "status": "confirmed"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+
+    logger.info(f"[IOT] Telemetry recorded: {address} - {samples} samples (route: {route_hash[:16]}...)")
+
+    return jsonify({
+        "ok": True,
+        "tx_id": tx_id,
+        "message": f"Telemetry recorded: {samples} samples"
+    }), 201
+
+
+@app.route("/api/ai_pool/status", methods=["GET"])
+def api_ai_pool_status():
+    """
+    Get current AI pool status.
+    Returns:
+    {
+      "ai_pool_balance": <float>,
+      "total_music_tips": <float>,
+      "total_ai_distributed": <float>,
+      "last_distribution_time": "<iso8601>",
+      "total_music_tips_count": <int>,
+      "total_ai_rewards_count": <int>
+    }
+    """
+    pool = get_ai_pool_state()
+    return jsonify({
+        "ok": True,
+        "pool": pool
+    }), 200
+
+
+@app.route("/api/governance/ai_overview", methods=["GET"])
+def api_governance_ai_overview():
+    """
+    Governance overview for Pytheia AI auditor.
+    Provides aggregated statistics about AI pool, IoT activity, and network health.
+    Safe to serve from replica nodes (read-only).
+    """
+    # AI pool state
+    pool = get_ai_pool_state()
+
+    # Count recent IoT telemetry (last 24h)
+    chain = load_json(CHAIN_FILE, [])
+    now = time.time()
+    cutoff_24h = now - (24 * 3600)
+
+    iot_txs_24h = 0
+    music_tips_24h = 0
+    music_tips_amount_24h = 0.0
+
+    for tx in chain:
+        tx_time = _parse_timestamp(tx.get("timestamp"))
+        if tx_time >= cutoff_24h:
+            if tx.get("type") == "iot_telemetry":
+                iot_txs_24h += 1
+            elif tx.get("type") == "music_tip":
+                music_tips_24h += 1
+                music_tips_amount_24h += float(tx.get("amount", 0))
+
+    # Estimate online miners (blocks mined in last hour)
+    blocks = get_blocks_for_viewer()
+    cutoff_1h = now - 3600
+    recent_miners = set()
+
+    for block in blocks:
+        block_time = block.get("timestamp", 0)
+        if isinstance(block_time, str):
+            block_time = _parse_timestamp(block_time)
+        if block_time >= cutoff_1h:
+            miner = block.get("miner") or block.get("miner_address")
+            if miner:
+                recent_miners.add(miner)
+
+    return jsonify({
+        "ok": True,
+        "overview": {
+            "ai_pool_balance": pool.get("ai_pool_balance", 0),
+            "total_ai_rewards": pool.get("total_ai_distributed", 0),
+            "iot_telemetry_txs_last_24h": iot_txs_24h,
+            "music_tips_last_24h": music_tips_24h,
+            "music_tips_amount_last_24h": music_tips_amount_24h,
+            "miners_online_estimate": len(recent_miners),
+            "last_distribution_time": pool.get("last_distribution_time"),
+            "node_role": NODE_ROLE,
+            "read_only": READ_ONLY
+        }
+    }), 200
 
 
 # ... ΤΕΛΟΣ όλων των routes / helpers ...

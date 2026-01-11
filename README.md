@@ -671,6 +671,285 @@ This categorization enables:
 
 ---
 
+## Phase 4: IoT Miners, AI Tips Pool & Governance
+
+### Overview
+
+Phase 4 introduces a comprehensive rewards ecosystem that distributes value from music tips to both traditional miners and IoT contributors:
+
+- **AI Tips Pool**: 10% of all music tips go into a shared reward pool
+- **Dual Mining Rewards**: Pool distributed to both ASIC/GPU miners and IoT device operators
+- **IoT Telemetry**: Devices earn rewards for contributing GPS/sensor data
+- **Governance Integration**: Pytheia AI auditor can query chain metrics for automated proposals
+
+### AI Tips Pool Economics
+
+**Music Tip Flow:**
+```
+User Tips Artist 100 THR
+├─ 90 THR → Artist (direct payment)
+└─ 10 THR → AI Pool (shared rewards)
+```
+
+**Distribution Schedule:**
+- Runs every 30 minutes (configurable via `AI_POOL_DISTRIBUTION_INTERVAL`)
+- Only distributes when pool balance ≥ 10 THR (configurable via `AI_POOL_MIN_BALANCE`)
+- Each distribution: 10% of current pool balance (configurable via `AI_POOL_DISTRIBUTION_PCT`)
+
+**Reward Allocation:**
+- 60% to Hard Miners (pro-rata by blocks mined in last 100 blocks)
+- 40% to IoT Miners (pro-rata by telemetry samples in last 60 minutes)
+
+### Environment Variables
+
+**AI Pool Configuration:**
+```bash
+# Distribution schedule
+AI_POOL_DISTRIBUTION_INTERVAL=30          # Minutes between distributions
+
+# Pool thresholds
+AI_POOL_MIN_BALANCE=10.0                  # Minimum THR before distributing
+AI_POOL_DISTRIBUTION_PCT=0.10             # Percentage of pool to distribute each time
+
+# Reward split
+AI_POOL_MINER_SHARE=0.60                  # 60% to hard miners
+# IoT share is automatically (1 - MINER_SHARE) = 40%
+
+# Lookback windows
+AI_POOL_LOOKBACK_BLOCKS=100               # Blocks to consider for miner rewards
+AI_POOL_LOOKBACK_MINUTES=60               # Minutes to consider for IoT rewards
+```
+
+### IoT Telemetry API
+
+**Submit Telemetry Data:**
+
+Devices POST GPS/sensor data to earn eligibility for AI pool rewards.
+
+```bash
+POST /api/iot/telemetry
+Content-Type: application/json
+
+{
+  "address": "THR...",                    # Your THR wallet address
+  "device_id": "car-123",                 # Optional device identifier
+  "route_hash": "sha256_hash_of_path",    # Hash of GPS coordinates
+  "samples": 150                          # Number of data points collected
+}
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "tx_id": "IOT-TELEM-1736611200-abc123",
+  "message": "Telemetry recorded: 150 samples"
+}
+```
+
+**Transaction Schema:**
+```json
+{
+  "type": "iot_telemetry",
+  "address": "THR...",
+  "device_id": "car-123",
+  "route_hash": "sha256...",
+  "samples": 150,
+  "timestamp": "2026-01-11 12:00:00 UTC",
+  "tx_id": "IOT-TELEM-...",
+  "status": "confirmed"
+}
+```
+
+### AI Pool Monitoring
+
+**Get Pool Status:**
+
+```bash
+GET /api/ai_pool/status
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "pool": {
+    "ai_pool_balance": 125.5,
+    "total_music_tips": 2450.0,
+    "total_ai_distributed": 85.3,
+    "last_distribution_time": "2026-01-11 12:30:00 UTC",
+    "total_music_tips_count": 543,
+    "total_ai_rewards_count": 128
+  }
+}
+```
+
+### Wallet History with Categories
+
+**Get Categorized Wallet History:**
+
+```bash
+GET /api/wallet/history?address=THR...&category=ai_reward
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "address": "THR...",
+  "total_transactions": 250,
+  "summary": {
+    "total_mining": 150.5,
+    "total_ai_rewards": 45.2,
+    "total_music_tips_sent": 0.0,
+    "total_music_tips_received": 80.0,
+    "total_iot_rewards": 0.0,
+    "total_sent": 100.0,
+    "total_received": 275.7,
+    "mining_count": 50,
+    "ai_reward_count": 25,
+    "music_tip_count": 10,
+    "iot_count": 15
+  },
+  "transactions": [
+    {
+      "type": "ai_reward",
+      "category": "mining",
+      "to": "THR...",
+      "amount": 1.5,
+      "direction": "received",
+      "timestamp": "2026-01-11 12:00:00 UTC",
+      "details": {
+        "blocks_mined": 3,
+        "lookback_blocks": 100
+      }
+    },
+    ...
+  ]
+}
+```
+
+**Category Filters:**
+- `mining` - Mining rewards from blocks
+- `ai_reward` - Rewards from AI pool distribution
+- `music_tip` - Tips to/from artists
+- `iot_telemetry` - IoT data submissions
+- `bridge` - Cross-chain bridge transactions
+- `pledge` - BTC pledge deposits
+- `swap` - Token swaps
+- `liquidity` - Liquidity operations
+- `token_transfer` - Standard THR transfers
+
+### Governance Integration (Pytheia)
+
+**AI Governance Overview:**
+
+Pytheia AI auditor can query aggregated chain metrics for automated governance proposals.
+
+```bash
+GET /api/governance/ai_overview
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "overview": {
+    "ai_pool_balance": 125.5,
+    "total_ai_rewards": 85.3,
+    "iot_telemetry_txs_last_24h": 45,
+    "music_tips_last_24h": 12,
+    "music_tips_amount_last_24h": 234.5,
+    "miners_online_estimate": 8,
+    "last_distribution_time": "2026-01-11 12:30:00 UTC",
+    "node_role": "master",
+    "read_only": false
+  }
+}
+```
+
+**Use Cases:**
+- Monitor AI pool health and trigger alerts if balance too low/high
+- Detect anomalies in tipping patterns
+- Propose parameter adjustments based on network activity
+- Generate reports for community governance votes
+
+**Safety:**
+- Endpoint is read-only and safe to call from replica nodes
+- No authentication required (public metrics)
+- All write operations (distributions) happen only on master nodes
+
+### Transaction Categories
+
+All transactions are automatically categorized for filtering and analytics:
+
+| Category | Description | Examples |
+|----------|-------------|----------|
+| `token_transfer` | Standard THR transfers | Wallet-to-wallet sends |
+| `music_tip` | Tips to artists | Music platform tips |
+| `ai_reward` | AI pool distributions | Miner/IoT rewards |
+| `iot_telemetry` | IoT data submissions | GPS, sensor data |
+| `bridge` | Cross-chain operations | BTC ↔ THR bridge |
+| `pledge` | BTC pledge deposits | BTC → THR conversions |
+| `mining` | Block mining rewards | PoW coinbase txs |
+| `swap` | Token swaps | DEX trades |
+| `liquidity` | Pool operations | Add/remove liquidity |
+| `other` | Uncategorized | Miscellaneous |
+
+### Reward Flow Example
+
+**Scenario:** A music listener tips an artist 100 THR
+
+1. **Music Tip Transaction:**
+   - Listener balance: -100 THR
+   - Artist receives: 90 THR (90%)
+   - AI Pool receives: 10 THR (10%)
+   - Transaction type: `music_tip`
+
+2. **AI Pool Accumulation:**
+   - Pool balance grows with each tip
+   - Scheduler monitors pool every 30 minutes
+
+3. **Distribution Trigger:**
+   - Pool balance reaches 125 THR
+   - Distribution amount: 12.5 THR (10% of pool)
+   - Miner allocation: 7.5 THR (60%)
+   - IoT allocation: 5.0 THR (40%)
+
+4. **Miner Rewards:**
+   - Last 100 blocks analyzed
+   - Miner A: 30 blocks → 3.75 THR
+   - Miner B: 20 blocks → 2.5 THR
+   - Miner C: 10 blocks → 1.25 THR
+   - Transaction type: `ai_reward` (category: `mining`)
+
+5. **IoT Rewards:**
+   - Last 60 minutes of telemetry analyzed
+   - Device A: 300 samples → 3.0 THR
+   - Device B: 200 samples → 2.0 THR
+   - Transaction type: `ai_reward` (category: `iot_telemetry`)
+
+### Multi-Node Considerations
+
+**Master Node:**
+- Handles all AI pool writes
+- Runs distribution scheduler
+- Records music tip contributions
+- Creates ai_reward transactions
+
+**Replica Nodes:**
+- Can serve `/api/ai_pool/status` (read-only)
+- Can serve `/api/governance/ai_overview` (read-only)
+- Can serve `/api/wallet/history` (read-only)
+- Cannot modify AI pool state
+
+**Write Protection:**
+- `ai_pool.json` added to critical files list
+- Replica nodes will skip AI pool credits/debits
+- Only master node runs `distribute_ai_rewards_step`
+
+---
+
 ## License
 
 MIT License - see LICENSE file for details

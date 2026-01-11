@@ -1666,7 +1666,7 @@
 </div>
 
 <!-- Wallet History Modal -->
-<div class="send-modal" id="walletHistoryModal" onclick="if(event.target.id === 'walletHistoryModal') window.WalletHistory && window.WalletHistory.closeWalletHistoryModal && window.WalletHistory.closeWalletHistoryModal()">
+<div class="send-modal" id="walletHistoryModal" onclick="closeWalletHistoryModal(event)">
     <div class="send-modal-content" onclick="event.stopPropagation()">
         <div class="send-modal-header">
             📜
@@ -1674,40 +1674,54 @@
             <span class="lang-en">Transaction History</span>
         </div>
 
-        <!-- Summary Cards -->
-        <div id="walletSummary" class="mb-3"></div>
-
-        <!-- Category Tabs -->
-        <div id="walletHistoryCategoryTabs" class="mb-3" style="display: flex; gap: 6px; flex-wrap: wrap;">
-            <button class="btn btn-sm btn-outline-primary" onclick="window.WalletHistory && window.WalletHistory.filterWalletHistoryByCategory && window.WalletHistory.filterWalletHistoryByCategory(null)">All</button>
-            <button class="btn btn-sm btn-outline-primary" onclick="window.WalletHistory && window.WalletHistory.filterWalletHistoryByCategory && window.WalletHistory.filterWalletHistoryByCategory('mining')">Mining</button>
-            <button class="btn btn-sm btn-outline-primary" onclick="window.WalletHistory && window.WalletHistory.filterWalletHistoryByCategory && window.WalletHistory.filterWalletHistoryByCategory('ai_reward')">AI Rewards</button>
-            <button class="btn btn-sm btn-outline-primary" onclick="window.WalletHistory && window.WalletHistory.filterWalletHistoryByCategory && window.WalletHistory.filterWalletHistoryByCategory('music_tip')">Music</button>
-            <button class="btn btn-sm btn-outline-primary" onclick="window.WalletHistory && window.WalletHistory.filterWalletHistoryByCategory && window.WalletHistory.filterWalletHistoryByCategory('iot_telemetry')">IoT</button>
-            <button class="btn btn-sm btn-outline-primary" onclick="window.WalletHistory && window.WalletHistory.filterWalletHistoryByCategory && window.WalletHistory.filterWalletHistoryByCategory('bridge')">Bridge</button>
+        <!-- History Tabs -->
+        <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; padding: 0 4px;">
+            <button class="history-tab-btn active" data-filter="all" onclick="filterHistory('all')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.2); border: 1px solid rgba(0,255,102,0.4); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                <span class="lang-el">Όλα</span><span class="lang-en">All</span>
+            </button>
+            <button class="history-tab-btn" data-filter="thr" onclick="filterHistory('thr')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">THR</button>
+            <button class="history-tab-btn" data-filter="tokens" onclick="filterHistory('tokens')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                <span class="lang-el">Tokens</span><span class="lang-en">Tokens</span>
+            </button>
+            <button class="history-tab-btn" data-filter="l2e" onclick="filterHistory('l2e')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">L2E</button>
+            <button class="history-tab-btn" data-filter="ai_credits" onclick="filterHistory('ai_credits')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">AI Credits (Chat)</button>
+            <button class="history-tab-btn" data-filter="architect_ai_jobs" onclick="filterHistory('architect_ai_jobs')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">Architect / AI Jobs</button>
+            <button class="history-tab-btn" data-filter="iot" onclick="filterHistory('iot')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">IoT</button>
+            <button class="history-tab-btn" data-filter="bridge" onclick="filterHistory('bridge')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                <span class="lang-el">Bridge</span><span class="lang-en">Bridge</span>
+            </button>
+            <button class="history-tab-btn" data-filter="swaps" onclick="filterHistory('swaps')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                <span class="lang-el">Swaps</span><span class="lang-en">Swaps</span>
+            </button>
+            <button class="history-tab-btn" data-filter="liquidity" onclick="filterHistory('liquidity')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                <span class="lang-el">Liquidity</span><span class="lang-en">Liquidity</span>
+            </button>
+            <button class="history-tab-btn" data-filter="gateway" onclick="filterHistory('gateway')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                <span class="lang-el">Gateway</span><span class="lang-en">Gateway</span>
+            </button>
+            <button class="history-tab-btn" data-filter="music" onclick="filterHistory('music')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                🎵 <span class="lang-el">Μουσική</span><span class="lang-en">Music</span>
+            </button>
         </div>
 
-        <!-- Transaction History Table -->
-        <div style="max-height: 400px; overflow-y: auto;">
-            <table class="table table-sm table-dark">
-                <thead>
-                    <tr>
-                        <th>TX ID</th>
-                        <th>Category</th>
-                        <th>Direction</th>
-                        <th>From</th>
-                        <th>To</th>
-                        <th>Amount</th>
-                    </tr>
-                </thead>
-                <tbody id="walletHistoryTableBody">
-                    <tr><td colspan="6" class="text-center">Loading...</td></tr>
-                </tbody>
-            </table>
+        <div id="tokenIndexBar" style="display:none; margin: 0 4px 10px 4px;">
+            <div style="display:flex; align-items:center; gap:6px; overflow-x:auto; padding-bottom:6px; scrollbar-width: thin;" id="tokenIndexScroll"></div>
+            <div style="display:flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 4px;">
+                <button class="history-tab-btn" style="flex:0 0 auto; min-width: 80px; padding: 6px 8px;" onclick="clearTokenFilter()">All Tokens</button>
+                <button class="history-tab-btn" style="flex:0 0 auto; min-width: 80px; padding: 6px 8px;" onclick="shareTokenFilter()">Share / Copy</button>
+            </div>
+        </div>
+
+        <div id="historyContent" style="max-height: 500px; overflow-y: auto;">
+            <div class="wallet-popup-loading">
+                <div class="wallet-popup-spinner"></div>
+                <span class="lang-el">Φόρτωση ιστορικού...</span>
+                <span class="lang-en">Loading history...</span>
+            </div>
         </div>
 
         <div style="margin-top:10px;text-align:right;">
-            <button class="send-modal-btn" onclick="window.WalletHistory && window.WalletHistory.closeWalletHistoryModal && window.WalletHistory.closeWalletHistoryModal()">
+            <button class="send-modal-btn" onclick="closeWalletHistoryModal()">
                 <span class="lang-el">Κλείσιμο</span>
                 <span class="lang-en">Close</span>
             </button>
@@ -2279,7 +2293,7 @@ function renderWalletBalances(data) {
                     <span class="wallet-quick-btn-icon">🔥</span>
                     <span class="wallet-quick-btn-label">${pledgeLabel}</span>
                 </a>
-                <a href="javascript:void(0)" class="wallet-quick-btn" onclick="if(window.WalletHistory && window.WalletHistory.openWalletHistoryModal) window.WalletHistory.openWalletHistoryModal(walletSession.getAddress())">
+                <a href="javascript:void(0)" class="wallet-quick-btn" onclick="openWalletHistoryModal()">
                     <span class="wallet-quick-btn-icon">📜</span>
                     <span class="wallet-quick-btn-label">${historyLabel}</span>
                 </a>
@@ -2864,7 +2878,47 @@ function resetHistoryFilters() {
     if (tokenIndexBar) tokenIndexBar.style.display = 'none';
 }
 
-// Wallet History Modal functions removed - now using wallet tab 'history' instead
+function openWalletHistoryModal() {
+    document.getElementById('walletHistoryModal').classList.add('active');
+    resetHistoryFilters();
+    filterHistory('all');
+    loadWalletHistory();
+}
+
+function closeWalletHistoryModal(event) {
+    if (!event || event.target.id === 'walletHistoryModal') {
+        document.getElementById('walletHistoryModal').classList.remove('active');
+        resetHistoryFilters();
+    }
+}
+
+function filterHistory(filter, tokenSymbol = null) {
+    currentHistoryFilter = filter;
+    if (filter !== 'tokens') {
+        currentTokenFilter = null;
+    } else if (tokenSymbol) {
+        currentTokenFilter = tokenSymbol;
+    }
+
+    // Update tab button styles
+    document.querySelectorAll('.history-tab-btn').forEach(btn => {
+        if (btn.dataset.filter === filter) {
+            btn.style.background = 'rgba(0,255,102,0.2)';
+            btn.style.borderColor = 'rgba(0,255,102,0.4)';
+            btn.classList.add('active');
+        } else {
+            btn.style.background = 'rgba(0,255,102,0.05)';
+            btn.style.borderColor = 'rgba(0,255,102,0.2)';
+            btn.classList.remove('active');
+        }
+    });
+
+    if (filter === 'liquidity' || filter === 'architect_ai_jobs' || filter === 'ai_credits') {
+        loadWalletHistory(filter);
+    } else {
+        renderHistory();
+    }
+}
 
 function getTxType(tx) {
     const category = (tx.category || '').toLowerCase();
@@ -5229,13 +5283,6 @@ window.GlobalMusicPlayer = (function() {
 </script>
 
 <div id="footer-sentinel" style="height:1px;"></div>
-
-<!-- Wallet History Module -->
-<script>
-// Set API base URL for wallet_history.js
-window.TH_API_BASE_URL = window.TH_API_BASE_URL || window.location.origin;
-</script>
-<script src="{{ url_for('static', filename='wallet_history.js') }}"></script>
 
 </body>
 </html>

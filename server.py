@@ -6284,6 +6284,243 @@ def api_bridge_burn():
         "new_balance": wbtc_ledger[wallet]
     }), 200
 
+# ─── Bridge TX Helpers ───────────────────────────────────────────────
+
+def create_canonical_bridge_tx(
+    kind: str,  # "bridge_deposit" or "bridge_withdraw"
+    network: str,  # "bitcoin", "ethereum", "bnb", "xrp"
+    wrapped_token: str,  # "WBTC", "WETH", "WBNB", "WXRP"
+    amount: float,
+    thr_address: str,
+    external_address: str,
+    external_txid: str | None = None,
+    fee_burned: float = 0.0,
+    status: str = "confirmed"
+) -> dict:
+    """
+    Create a canonical bridge transaction in the normalized schema.
+
+    This ensures all bridge transactions (deposit/withdraw) follow a consistent
+    format and appear correctly in:
+    - /api/wallet/history (Wallet History Modal)
+    - /api/tx_feed (Viewer Transfers Tab)
+    - /api/dashboard (Global Stats)
+
+    Schema:
+    {
+        "tx_id": "BRIDGE-{NETWORK}-{TIMESTAMP}-{RANDOM}",
+        "kind": "bridge_deposit" | "bridge_withdraw",
+        "asset": "WBTC" | "WETH" | "WBNB" | "WXRP",
+        "amount": float,
+        "from_address": "THR..." | "external_placeholder",
+        "to_address": "THR..." | "external_placeholder",
+        "fee_burned": float,
+        "network": "bitcoin" | "ethereum" | "bnb" | "xrp",
+        "status": "confirmed" | "pending" | "failed",
+        "meta": {
+            "external_txid": "...",
+            "external_address": "...",
+            "direction": "in" | "out",
+            "network_name": "Bitcoin" | "Ethereum" | ...
+        },
+        "timestamp": "YYYY-MM-DD HH:MM:SS UTC"
+    }
+    """
+    tx_id = f"BRIDGE-{network.upper()}-{int(time.time())}-{secrets.token_hex(4)}"
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+    # Determine direction and addresses
+    if kind == "bridge_deposit":
+        # External → Thronos (deposit)
+        from_address = f"{network}_external"  # Placeholder for external network
+        to_address = thr_address
+        direction = "in"
+    elif kind == "bridge_withdraw":
+        # Thronos → External (withdraw)
+        from_address = thr_address
+        to_address = f"{network}_external"  # Placeholder for external network
+        direction = "out"
+    else:
+        raise ValueError(f"Invalid bridge kind: {kind}")
+
+    # Network display names
+    network_names = {
+        "bitcoin": "Bitcoin",
+        "ethereum": "Ethereum",
+        "bnb": "BNB Chain",
+        "xrp": "XRP Ledger",
+        "solana": "Solana"
+    }
+
+    tx = {
+        "tx_id": tx_id,
+        "kind": kind,
+        "asset": wrapped_token,
+        "amount": amount,
+        "from_address": from_address,
+        "to_address": to_address,
+        "from": from_address,  # Alias for compatibility
+        "to": to_address,      # Alias for compatibility
+        "fee_burned": fee_burned,
+        "fee": fee_burned,     # Alias for compatibility
+        "network": network,
+        "status": status,
+        "meta": {
+            "external_txid": external_txid or "",
+            "external_address": external_address,
+            "direction": direction,
+            "network_name": network_names.get(network, network.upper()),
+            "thr_address": thr_address
+        },
+        "timestamp": timestamp,
+        # Compatibility aliases
+        "type": kind,
+        "symbol": wrapped_token,
+        "asset_symbol": wrapped_token,
+        "token_symbol": wrapped_token
+    }
+
+    return tx
+
+
+def persist_bridge_tx(
+    kind: str,
+    network: str,
+    wrapped_token: str,
+    amount: float,
+    thr_address: str,
+    external_address: str,
+    external_txid: str | None = None,
+    fee_burned: float = 0.0,
+    status: str = "confirmed"
+):
+    """
+    Create and persist a canonical bridge transaction to all required logs.
+
+    This function:
+    1. Creates canonical bridge TX
+    2. Persists to TX log (for /api/wallet/history)
+    3. Adds to chain file (for blocks/viewer)
+    4. Returns the TX for further processing
+    """
+    tx = create_canonical_bridge_tx(
+        kind=kind,
+        network=network,
+        wrapped_token=wrapped_token,
+        amount=amount,
+        thr_address=thr_address,
+        external_address=external_address,
+        external_txid=external_txid,
+        fee_burned=fee_burned,
+        status=status
+    )
+
+    # Persist to normalized TX log
+    persist_normalized_tx(tx)
+
+    # Add to chain file for blocks/viewer
+    chain = load_json(CHAIN_FILE, [])
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+
+    # Update last block
+    update_last_block(tx, is_block=False)
+
+    app.logger.info(f"🌉 Bridge TX Persisted: {tx['tx_id']} | {kind} | {amount} {wrapped_token} | {network}")
+
+    return tx
+
+
+def process_bridge_deposit(
+    network: str,
+    thr_address: str,
+    amount: float,
+    external_txid: str,
+    external_address: str
+) -> dict:
+    """
+    Process a confirmed bridge deposit from external network.
+
+    Called by watcher when it detects a confirmed deposit on:
+    - Bitcoin (BTC_RPC_URL)
+    - Ethereum (ETH_RPC_URL)
+    - BNB Chain (BSC_RPC_URL)
+    - XRP Ledger (XRP_RPC_URL)
+
+    Flow:
+    1. Mint wrapped tokens to user's THR address
+    2. Create canonical bridge TX (deposit)
+    3. Update deposit tracking
+    4. Return TX for confirmation
+
+    Example usage (from watcher):
+        tx = process_bridge_deposit(
+            network="bitcoin",
+            thr_address="THR...",
+            amount=0.001,
+            external_txid="abc123...",
+            external_address="bc1q..."
+        )
+    """
+    # Map network to wrapped token and ledger
+    network_config = {
+        "bitcoin": {"wrapped_token": "WBTC", "ledger_file": WBTC_LEDGER_FILE},
+        "ethereum": {"wrapped_token": "WETH", "ledger_file": os.path.join(DATA_DIR, "weth_ledger.json")},
+        "bnb": {"wrapped_token": "WBNB", "ledger_file": os.path.join(DATA_DIR, "wbnb_ledger.json")},
+        "xrp": {"wrapped_token": "WXRP", "ledger_file": os.path.join(DATA_DIR, "wxrp_ledger.json")}
+    }
+
+    if network not in network_config:
+        raise ValueError(f"Unsupported network: {network}")
+
+    config = network_config[network]
+    wrapped_token = config["wrapped_token"]
+    ledger_file = config["ledger_file"]
+
+    # Mint wrapped tokens (1:1 mapping)
+    wrapped_ledger = load_json(ledger_file, {})
+    current_balance = float(wrapped_ledger.get(thr_address, 0))
+    wrapped_ledger[thr_address] = round(current_balance + amount, 8)
+    save_json(ledger_file, wrapped_ledger)
+
+    # Create canonical bridge TX
+    tx = persist_bridge_tx(
+        kind="bridge_deposit",
+        network=network,
+        wrapped_token=wrapped_token,
+        amount=amount,
+        thr_address=thr_address,
+        external_address=external_address,
+        external_txid=external_txid,
+        fee_burned=0.0,
+        status="confirmed"
+    )
+
+    # Update deposit tracking
+    deposits_file = os.path.join(DATA_DIR, "bridge_deposits.json")
+    deposits = load_json(deposits_file, {})
+    tracking_key = f"{thr_address}:{network}"
+
+    if tracking_key in deposits:
+        deposits[tracking_key]["total_deposited"] = round(
+            deposits[tracking_key].get("total_deposited", 0) + amount, 8
+        )
+        deposits[tracking_key]["deposits"].append({
+            "tx_id": tx["tx_id"],
+            "external_txid": external_txid,
+            "amount": amount,
+            "timestamp": tx["timestamp"],
+            "status": "confirmed"
+        })
+        save_json(deposits_file, deposits)
+
+    app.logger.info(f"🌉 Bridge Deposit Processed: {external_txid[:16]}... → {thr_address} | {amount} {wrapped_token} | {network}")
+
+    return tx
+
+
+# ─── Bridge Endpoints ────────────────────────────────────────────────
+
 @app.route("/api/bridge/deposit", methods=["GET"])
 def api_bridge_deposit():
     """
@@ -6509,31 +6746,24 @@ def api_bridge_withdraw():
     wrapped_ledger[wallet] = round(current_balance - amount, 8)
     save_json(ledger_file, wrapped_ledger)
 
-    # Create BRIDGE_WITHDRAW_REQUEST transaction
-    chain = load_json(CHAIN_FILE, [])
-    tx = {
-        "type": "BRIDGE_WITHDRAW_REQUEST",
-        "request_id": request_id,
-        "from": wallet,
-        "to": destination,
-        "network": network,
-        "wrapped_token": wrapped_token,
-        "wrapped_amount": amount,
-        "native_amount": amount,  # 1:1 mapping for wrapped tokens
-        "native_symbol": config["native_symbol"],
-        "destination_address": destination,
-        "status": "pending_operator",
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-        "tx_id": f"BRIDGE-{network.upper()}-{len(chain)}-{int(time.time())}"
-    }
-    chain.append(tx)
-    save_json(CHAIN_FILE, chain)
-    update_last_block(tx, is_block=False)
+    # Create canonical bridge TX (appears in wallet history + viewer)
+    tx = persist_bridge_tx(
+        kind="bridge_withdraw",
+        network=network,
+        wrapped_token=wrapped_token,
+        amount=amount,
+        thr_address=wallet,
+        external_address=destination,
+        external_txid=None,  # Will be filled when operator processes
+        fee_burned=0.0,      # No fee for bridge withdrawals
+        status="pending"     # Operator will process within 24h
+    )
 
-    # Log to watcher ledger for bridge history
+    # Log to watcher ledger for bridge operator tracking
     watcher_txs = load_json(WATCHER_LEDGER_FILE, [])
     watcher_txs.append({
         "request_id": request_id,
+        "tx_id": tx["tx_id"],
         "from_address": wallet,
         "to_address": destination,
         "network": network,
@@ -6547,12 +6777,11 @@ def api_bridge_withdraw():
     })
     save_json(WATCHER_LEDGER_FILE, watcher_txs)
 
-    app.logger.info(f"🌉 Bridge Withdraw Request: {wallet} → {destination} ({network.upper()}) | {amount} {wrapped_token} | ID: {request_id}")
-
     return jsonify({
         "ok": True,
         "status": "success",
         "request_id": request_id,
+        "tx_id": tx["tx_id"],  # Canonical TX ID
         "message": f"Withdrawal request created. {amount} {wrapped_token} will be sent to {destination}. Operator will process within 24h.",
         "wrapped_burned": amount,
         "wrapped_token": wrapped_token,

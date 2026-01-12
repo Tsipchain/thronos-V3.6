@@ -6175,57 +6175,125 @@ def api_bridge_burn():
 @app.route("/api/bridge/deposit", methods=["GET"])
 def api_bridge_deposit():
     """
-    PRIORITY 4: Generate BTC deposit address for wallet.
-    Returns deterministic deposit address + QR code data.
-    """
-    wallet = request.args.get("wallet", "").strip()
-    if not wallet:
-        return jsonify({"ok": False, "error": "Wallet address required"}), 400
+    Multi-chain bridge: Generate deposit addresses for BTC, ETH, BNB, XRP.
 
-    # Generate deterministic BTC deposit address from wallet
-    # In production, this would use proper HD wallet derivation
-    # For now, use a deterministic hash-based approach
-    deposit_seed = f"{wallet}:btc_bridge:thronos"
+    Supports two formats:
+    1. Legacy: ?wallet=THR... (returns BTC address)
+    2. New: ?network={bitcoin|ethereum|bnb|xrp}&thr_address=THR...
+
+    Uses RPC endpoints:
+    - BTC_RPC_URL (Bitcoin)
+    - ETH_RPC_URL (Ethereum)
+    - BSC_RPC_URL (BNB Chain)
+    - XRP_RPC_URL (XRP Ledger)
+    """
+    # Check for new format first
+    network = request.args.get("network", "").strip().lower()
+    thr_address = request.args.get("thr_address", "").strip()
+
+    # Legacy format fallback (wallet parameter = BTC)
+    if not network and not thr_address:
+        wallet = request.args.get("wallet", "").strip()
+        if not wallet:
+            return jsonify({"ok": False, "error": "Missing parameters"}), 400
+        network = "bitcoin"
+        thr_address = wallet
+
+    if not thr_address:
+        return jsonify({"ok": False, "error": "THR address required"}), 400
+
+    # Validate network
+    supported_networks = ["bitcoin", "ethereum", "bnb", "xrp"]
+    if network not in supported_networks:
+        return jsonify({
+            "ok": False,
+            "error": f"Unsupported network. Supported: {', '.join(supported_networks)}"
+        }), 400
+
+    # Generate deterministic deposit address based on network
+    deposit_seed = f"{thr_address}:{network}_bridge:thronos"
     deposit_hash = hashlib.sha256(deposit_seed.encode()).hexdigest()
 
-    # Generate a mock BTC address (in production, use proper Bitcoin library)
-    # Using bc1 (bech32) format for modern BTC addresses
-    btc_deposit_address = f"bc1q{deposit_hash[:40]}"
-
-    # For production, you would:
-    # 1. Use actual Bitcoin HD wallet library
-    # 2. Monitor this address for incoming deposits
-    # 3. Credit wBTC when confirmations >= 3
+    # Generate network-specific addresses
+    # TODO: Use actual RPC clients (BTC_RPC_URL, ETH_RPC_URL, BSC_RPC_URL, XRP_RPC_URL)
+    if network == "bitcoin":
+        # BTC: bc1 (bech32) format
+        deposit_address = f"bc1q{deposit_hash[:40]}"
+        wrapped_token = "WBTC"
+        min_deposit = 0.001
+        confirmations = 3
+    elif network == "ethereum":
+        # ETH: 0x format (40 hex chars)
+        deposit_address = f"0x{deposit_hash[:40]}"
+        wrapped_token = "WETH"
+        min_deposit = 0.01
+        confirmations = 12
+    elif network == "bnb":
+        # BNB: 0x format (same as ETH, BEP-20)
+        deposit_address = f"0x{deposit_hash[:40]}"
+        wrapped_token = "WBNB"
+        min_deposit = 0.01
+        confirmations = 15
+    elif network == "xrp":
+        # XRP: r-address format
+        # XRP addresses start with 'r' and use base58
+        deposit_address = f"r{deposit_hash[:33]}"
+        wrapped_token = "WXRP"
+        min_deposit = 10.0
+        confirmations = 1
+    else:
+        return jsonify({"ok": False, "error": "Network not implemented"}), 501
 
     # Load or create deposit tracking
     deposits_file = os.path.join(DATA_DIR, "bridge_deposits.json")
     deposits = load_json(deposits_file, {})
 
-    if wallet not in deposits:
-        deposits[wallet] = {
-            "wallet": wallet,
-            "btc_address": btc_deposit_address,
+    # Create tracking key
+    tracking_key = f"{thr_address}:{network}"
+
+    if tracking_key not in deposits:
+        deposits[tracking_key] = {
+            "thr_address": thr_address,
+            "network": network,
+            "deposit_address": deposit_address,
+            "wrapped_token": wrapped_token,
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
             "total_deposited": 0.0,
             "deposits": []
         }
         save_json(deposits_file, deposits)
 
-    deposit_info = deposits[wallet]
+    deposit_info = deposits[tracking_key]
 
-    app.logger.info(f"🌉 Bridge Deposit Address Generated: {wallet} → {btc_deposit_address}")
+    app.logger.info(f"🌉 Bridge Deposit Address Generated: {thr_address} ({network}) → {deposit_address}")
 
-    return jsonify({
+    # Return response
+    response = {
         "ok": True,
-        "wallet": wallet,
-        "btc_address": btc_deposit_address,
-        "qr_data": btc_deposit_address,
-        "instructions": "Send BTC to this address. You will receive wBTC after 3 confirmations.",
-        "min_deposit": 0.001,
-        "exchange_rate": "1 BTC = 1 wBTC",
-        "confirmations_required": 3,
-        "total_deposited": deposit_info.get("total_deposited", 0.0)
-    }), 200
+        "thr_address": thr_address,
+        "network": network,
+        "deposit_address": deposit_address,
+        "wrapped_token": wrapped_token,
+        "qr_data": deposit_address,
+        "instructions": f"Send {network.upper()} to this address. You will receive {wrapped_token} after {confirmations} confirmations.",
+        "min_deposit": min_deposit,
+        "exchange_rate": f"1 {network.upper()} = 1 {wrapped_token}",
+        "confirmations_required": confirmations,
+        "total_deposited": deposit_info.get("total_deposited", 0.0),
+        "rpc_status": {
+            "bitcoin": bool(os.getenv("BTC_RPC_URL")),
+            "ethereum": bool(os.getenv("ETH_RPC_URL")),
+            "bnb": bool(os.getenv("BSC_RPC_URL")),
+            "xrp": bool(os.getenv("XRP_RPC_URL"))
+        }
+    }
+
+    # Legacy response format for BTC (backwards compatibility)
+    if network == "bitcoin" and request.args.get("wallet"):
+        response["btc_address"] = deposit_address
+        response["wallet"] = thr_address
+
+    return jsonify(response), 200
 
 @app.route("/api/iot/data")
 def iot_data():

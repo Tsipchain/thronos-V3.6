@@ -4594,8 +4594,120 @@ def api_wallet_history():
 
 @app.route("/wallet")
 def wallet_page():
+    """
+    Lightweight wallet viewer - standalone page (doesn't extend base.html).
+    Use: /wallet?address=THR...
+    """
     thr_addr = request.args.get("address")
-    return render_template("wallet_viewer.html", thr_address=thr_addr)
+    return render_template("wallet_viewer_standalone.html", thr_address=thr_addr)
+
+
+@app.route("/api/v2/wallet/history", methods=["GET"])
+def api_v2_wallet_history():
+    """
+    MICROSERVICE ENDPOINT FOR NODE 3
+
+    Optimized wallet history API - lightweight, cacheable, fast.
+    Designed to be deployed on Node 3 to offload main server.
+
+    Query params:
+    - address: THR address (required)
+    - limit: Max transactions to return (default: 100)
+    - offset: Skip first N transactions (default: 0)
+    - category: Filter by category (optional)
+    - from_date: ISO timestamp filter (optional)
+    - to_date: ISO timestamp filter (optional)
+
+    Response:
+    {
+        "ok": true,
+        "address": "THR...",
+        "transactions": [...],
+        "total": 1234,
+        "limit": 100,
+        "offset": 0,
+        "has_more": true
+    }
+    """
+    address = request.args.get("address", "").strip()
+    limit = min(int(request.args.get("limit", 100)), 500)  # Max 500
+    offset = int(request.args.get("offset", 0))
+    category_filter = request.args.get("category", "").strip().lower()
+    from_date = request.args.get("from_date", "").strip()
+    to_date = request.args.get("to_date", "").strip()
+
+    if not address:
+        return jsonify({"ok": False, "error": "Address required"}), 400
+
+    # Get all transactions (use existing logic from /api/wallet/history)
+    chain = load_json(CHAIN_FILE, [])
+    blocks = get_blocks_for_viewer()
+
+    wallet_txs = []
+
+    # Collect chain transactions
+    for tx in chain:
+        if not isinstance(tx, dict):
+            continue
+
+        tx_from = tx.get("from") or tx.get("sender")
+        tx_to = tx.get("to") or tx.get("recipient")
+        tx_address = tx.get("address")
+
+        if address.lower() in [str(tx_from).lower(), str(tx_to).lower(), str(tx_address).lower()]:
+            tx_copy = dict(tx)
+            tx_copy["category"] = _categorize_transaction(tx)
+
+            if tx_to and tx_to.lower() == address.lower():
+                tx_copy["direction"] = "received"
+            elif tx_from and tx_from.lower() == address.lower():
+                tx_copy["direction"] = "sent"
+            else:
+                tx_copy["direction"] = "related"
+
+            wallet_txs.append(tx_copy)
+
+    # Add mining rewards
+    for block in blocks:
+        for tx in block.get("transactions", []):
+            if tx.get("type") in ["coinbase", "mining_reward", "mint"]:
+                miner_addr = tx.get("to") or tx.get("thr_address")
+                if miner_addr and miner_addr.lower() == address.lower():
+                    tx_copy = dict(tx)
+                    tx_copy["category"] = "mining"
+                    tx_copy["direction"] = "received"
+                    tx_copy["block_height"] = block.get("index")
+                    wallet_txs.append(tx_copy)
+
+    # Apply filters
+    if category_filter:
+        wallet_txs = [tx for tx in wallet_txs if tx.get("category", "").lower() == category_filter]
+
+    if from_date:
+        wallet_txs = [tx for tx in wallet_txs if tx.get("timestamp", "") >= from_date]
+
+    if to_date:
+        wallet_txs = [tx for tx in wallet_txs if tx.get("timestamp", "") <= to_date]
+
+    # Sort by timestamp descending
+    wallet_txs.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+
+    # Pagination
+    total = len(wallet_txs)
+    paginated_txs = wallet_txs[offset:offset + limit]
+    has_more = (offset + limit) < total
+
+    return jsonify({
+        "ok": True,
+        "address": address,
+        "transactions": paginated_txs,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": has_more,
+        "endpoint": "v2",
+        "node": "microservice-optimized"
+    }), 200
 
 
 @app.route("/api/wallet/qr/<thr_addr>")

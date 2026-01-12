@@ -139,15 +139,20 @@
             }
 
             try {
-                // Load balances
-                const balRes = await fetch(`/api/wallet/balances?address=${encodeURIComponent(thrAddress)}`);
+                // Load balances and wallet status in parallel
+                const [balRes, statusRes] = await Promise.all([
+                    fetch(`/api/wallet/balances?address=${encodeURIComponent(thrAddress)}`),
+                    fetch(`/api/wallet/status?address=${encodeURIComponent(thrAddress)}`)
+                ]);
+
                 const balData = await balRes.json();
+                const statusData = await statusRes.json();
 
                 if (!balRes.ok || !balData.balances) {
                     throw new Error('Failed to load balances');
                 }
 
-                displayWalletInfo(balData);
+                displayWalletInfo(balData, statusData);
                 document.getElementById('walletTabs').style.display = 'flex';
                 displayBalances(balData.balances);
 
@@ -158,12 +163,26 @@
             }
         }
 
-        function displayWalletInfo(data) {
+        function displayWalletInfo(data, statusData) {
             const bal = data.balances;
+
+            // Generate pledge status badge
+            let pledgeBadge = '';
+            if (statusData && statusData.ok) {
+                if (statusData.pledge_mode === 'whitelist') {
+                    pledgeBadge = `<br><small>🌟 Access: <span style="color: #ffd700; font-weight: bold;">Whitelist (No BTC pledge required)</span></small>`;
+                } else if (statusData.pledge_mode === 'btc_pledge') {
+                    pledgeBadge = `<br><small>✅ Access: <span style="color: #0c0; font-weight: bold;">BTC Pledge Active</span></small>`;
+                } else {
+                    pledgeBadge = `<br><small>❌ Access: <span style="color: #f00;">No Pledge</span></small>`;
+                }
+            }
+
             document.getElementById('walletInfo').innerHTML = `
                 <strong>Address:</strong> <code>${thrAddress}</code><br>
                 <div class="balance-large">${parseFloat(bal.THR || 0).toFixed(6)} THR</div>
                 <small>Status: <span style="color: #0c0;">Active</span></small>
+                ${pledgeBadge}
             `;
         }
 

@@ -1,24 +1,11 @@
 {
+  "version": 2,
+  "buildCommand": "",
   "rewrites": [
-    {
-      "source": "/api/v2/wallet/:path*",
-      "destination": "https://node3.thrchain.railway.app/api/v2/wallet/:path*"
-    },
-    {
-      "source": "/api/:path*",
-      "destination": "https://thrchain.up.railway.app/api/:path*"
-    },
-    {
-      "source": "/viewer",
-      "destination": "https://thrchain.up.railway.app/viewer"
-    },
-    {
-      "source": "/wallet",
-      "destination": "https://thrchain.up.railway.app/wallet"
-    },
-    {
-      "source": "/(.*)",
-      "destination": "https://thrchain.up.railway.app/$1"
-    }
+    { "source": "/api/:path*", "destination": "https://thrchain.up.railway.app/api/:path*" },
+    { "source": "/viewer", "destination": "https://thrchain.up.railway.app/viewer" },
+    { "source": "/wallet", "destination": "https://thrchain.up.railway.app/wallet" },
+    { "source": "/(.*)", "destination": "https://thrchain.up.railway.app/$1" }
   ]
 }
+

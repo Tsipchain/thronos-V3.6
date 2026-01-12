@@ -389,6 +389,7 @@ CHAIN_FILE          = os.path.join(DATA_DIR, "phantom_tx_chain.json")
 PLEDGE_CHAIN        = os.path.join(DATA_DIR, "pledge_chain.json")
 LAST_BLOCK_FILE     = os.path.join(DATA_DIR, "last_block.json")
 WHITELIST_FILE      = os.path.join(DATA_DIR, "free_pledge_whitelist.json")
+WHITELIST_WALLETS_FILE = os.path.join(DATA_DIR, "whitelist_wallets.json")
 AI_CREDS_FILE       = os.path.join(DATA_DIR, "ai_agent_credentials.json")
 AI_BLOCK_LOG_FILE   = os.path.join(DATA_DIR, "ai_block_log.json")
 AI_INTERACTIONS_FILE = os.path.join(DATA_DIR, "ai_interactions.jsonl")
@@ -1118,6 +1119,75 @@ def atomic_write_json(path: str, data) -> None:
                 os.remove(tmp_path)
             except Exception:
                 pass
+
+
+# ─── Whitelist Wallet System ───────────────────────────────────────────────────
+def load_whitelist_wallets() -> list:
+    """
+    Load whitelist wallets from file or env variable.
+    Returns list of THR addresses.
+    """
+    # First check env variable
+    env_whitelist = os.getenv("THRONOS_WHITELIST_WALLETS", "")
+    if env_whitelist:
+        # Parse comma-separated THR addresses from env
+        addresses = [addr.strip() for addr in env_whitelist.split(",") if addr.strip()]
+        return addresses
+
+    # Otherwise load from file
+    return load_json(WHITELIST_WALLETS_FILE, [])
+
+
+def is_wallet_whitelisted(thr_address: str) -> bool:
+    """Check if a THR address is in the whitelist."""
+    if not thr_address:
+        return False
+    whitelist = load_whitelist_wallets()
+    return thr_address in whitelist
+
+
+def get_wallet_pledge_mode(thr_address: str) -> str:
+    """
+    Get pledge mode for a THR address.
+    Returns: "btc_pledge" | "whitelist" | "none"
+    """
+    if not thr_address:
+        return "none"
+
+    # Check if wallet is whitelisted
+    if is_wallet_whitelisted(thr_address):
+        return "whitelist"
+
+    # Check if wallet has BTC pledge
+    pledges = load_json(PLEDGE_CHAIN, [])
+    pledge = next((p for p in pledges if p.get("thr_address") == thr_address), None)
+
+    if pledge and pledge.get("send_auth_hash"):
+        return "btc_pledge"
+
+    return "none"
+
+
+def has_pledge_access(thr_address: str) -> bool:
+    """
+    Check if wallet has pledge access (either whitelist or BTC pledge).
+    Returns True if pledge_mode != "none"
+    """
+    mode = get_wallet_pledge_mode(thr_address)
+    return mode != "none"
+
+
+def get_pledge_for_auth(thr_address: str) -> dict | None:
+    """
+    Get pledge object for authentication purposes.
+    Returns pledge object only if wallet has BTC pledge.
+    Returns None if wallet is whitelisted or has no access.
+    """
+    if not thr_address:
+        return None
+
+    pledges = load_json(PLEDGE_CHAIN, [])
+    return next((p for p in pledges if p.get("thr_address") == thr_address), None)
 
 
 # ─── PR-182: Write Protection for Replica Nodes ────────────────────────────────
@@ -6221,6 +6291,10 @@ def api_bridge_burn():
     if wbtc_amount <= 0:
         return jsonify({"ok": False, "error": "Invalid amount"}), 400
 
+    # Check pledge access (whitelist or BTC pledge)
+    if not has_pledge_access(wallet):
+        return jsonify({"ok": False, "error": "No pledge access"}), 403
+
     # Load wBTC ledger
     wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
     current_balance = float(wbtc_ledger.get(wallet, 0))
@@ -6676,6 +6750,10 @@ def api_bridge_withdraw():
 
     if amount <= 0:
         return jsonify({"ok": False, "error": "Invalid amount"}), 400
+
+    # Check pledge access (whitelist or BTC pledge)
+    if not has_pledge_access(wallet):
+        return jsonify({"ok": False, "error": "No pledge access"}), 403
 
     # Validate network and get wrapped token details
     supported_networks = ["bitcoin", "ethereum", "bnb", "xrp"]
@@ -9825,27 +9903,40 @@ def send_thr_internal(from_thr, to_thr, amount_raw, auth_secret, passphrase="", 
     except (TypeError, ValueError):
         return _reject_tx(tx_id, "invalid_amount", 400, {"from": from_thr, "to": to_thr, "amount": amount_raw})
 
-    if not auth_secret:
-        return _reject_tx(tx_id, "missing_auth_secret", 400, {"from": from_thr, "to": to_thr, "amount": amount})
+    # Check pledge access (whitelist or BTC pledge)
+    if not has_pledge_access(from_thr):
+        return _reject_tx(tx_id, "no_pledge_access", 403, {"from": from_thr, "to": to_thr, "amount": amount})
 
-    pledges = load_json(PLEDGE_CHAIN, [])
-    sender_pledge = next((p for p in pledges if p.get("thr_address") == from_thr), None)
-    if not sender_pledge:
-        return _reject_tx(tx_id, "unknown_sender_thr", 404, {"from": from_thr, "to": to_thr, "amount": amount})
+    pledge_mode = get_wallet_pledge_mode(from_thr)
 
-    stored_auth_hash = sender_pledge.get("send_auth_hash")
-    if not stored_auth_hash:
-        return _reject_tx(tx_id, "send_not_enabled_for_this_thr", 400, {"from": from_thr, "to": to_thr, "amount": amount})
+    # Whitelist wallets don't need auth_secret
+    if pledge_mode == "whitelist":
+        # Whitelisted - no auth needed
+        pass
+    elif pledge_mode == "btc_pledge":
+        # BTC pledge - verify auth_secret
+        if not auth_secret:
+            return _reject_tx(tx_id, "missing_auth_secret", 400, {"from": from_thr, "to": to_thr, "amount": amount})
 
-    if sender_pledge.get("has_passphrase"):
-        if not passphrase:
-            return _reject_tx(tx_id, "passphrase_required", 400, {"from": from_thr, "to": to_thr, "amount": amount})
-        auth_string = f"{auth_secret}:{passphrase}:auth"
+        sender_pledge = get_pledge_for_auth(from_thr)
+        if not sender_pledge:
+            return _reject_tx(tx_id, "unknown_sender_thr", 404, {"from": from_thr, "to": to_thr, "amount": amount})
+
+        stored_auth_hash = sender_pledge.get("send_auth_hash")
+        if not stored_auth_hash:
+            return _reject_tx(tx_id, "send_not_enabled_for_this_thr", 400, {"from": from_thr, "to": to_thr, "amount": amount})
+
+        if sender_pledge.get("has_passphrase"):
+            if not passphrase:
+                return _reject_tx(tx_id, "passphrase_required", 400, {"from": from_thr, "to": to_thr, "amount": amount})
+            auth_string = f"{auth_secret}:{passphrase}:auth"
+        else:
+            auth_string = f"{auth_secret}:auth"
+
+        if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+            return _reject_tx(tx_id, "invalid_auth", 403, {"from": from_thr, "to": to_thr, "amount": amount})
     else:
-        auth_string = f"{auth_secret}:auth"
-
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return _reject_tx(tx_id, "invalid_auth", 403, {"from": from_thr, "to": to_thr, "amount": amount})
+        return _reject_tx(tx_id, "no_pledge_access", 403, {"from": from_thr, "to": to_thr, "amount": amount})
 
     fee = calculate_fixed_burn_fee(amount, speed)
     if expected_fee is not None:
@@ -10167,23 +10258,41 @@ def send_thr():
         amount=float(amount_raw)
     except (TypeError,ValueError):
         return _reject_tx(tx_id, "invalid_amount", 400, {"from": from_thr, "to": to_thr, "amount": amount_raw})
-    if not auth_secret:
-        return _reject_tx(tx_id, "missing_auth_secret", 400, {"from": from_thr, "to": to_thr, "amount": amount})
-    pledges=load_json(PLEDGE_CHAIN,[])
-    sender_pledge=next((p for p in pledges if p.get("thr_address")==from_thr),None)
-    if not sender_pledge:
-        return _reject_tx(tx_id, "unknown_sender_thr", 404, {"from": from_thr, "to": to_thr, "amount": amount})
-    stored_auth_hash=sender_pledge.get("send_auth_hash")
-    if not stored_auth_hash:
-        return _reject_tx(tx_id, "send_not_enabled_for_this_thr", 400, {"from": from_thr, "to": to_thr, "amount": amount})
-    if sender_pledge.get("has_passphrase"):
-        if not passphrase:
-            return _reject_tx(tx_id, "passphrase_required", 400, {"from": from_thr, "to": to_thr, "amount": amount})
-        auth_string=f"{auth_secret}:{passphrase}:auth"
+
+    # Check pledge access (whitelist or BTC pledge)
+    if not has_pledge_access(from_thr):
+        return _reject_tx(tx_id, "no_pledge_access", 403, {"from": from_thr, "to": to_thr, "amount": amount})
+
+    pledge_mode = get_wallet_pledge_mode(from_thr)
+
+    # Whitelist wallets don't need auth_secret
+    if pledge_mode == "whitelist":
+        # Whitelisted - no auth needed
+        pass
+    elif pledge_mode == "btc_pledge":
+        # BTC pledge - verify auth_secret
+        if not auth_secret:
+            return _reject_tx(tx_id, "missing_auth_secret", 400, {"from": from_thr, "to": to_thr, "amount": amount})
+
+        sender_pledge = get_pledge_for_auth(from_thr)
+        if not sender_pledge:
+            return _reject_tx(tx_id, "unknown_sender_thr", 404, {"from": from_thr, "to": to_thr, "amount": amount})
+
+        stored_auth_hash = sender_pledge.get("send_auth_hash")
+        if not stored_auth_hash:
+            return _reject_tx(tx_id, "send_not_enabled_for_this_thr", 400, {"from": from_thr, "to": to_thr, "amount": amount})
+
+        if sender_pledge.get("has_passphrase"):
+            if not passphrase:
+                return _reject_tx(tx_id, "passphrase_required", 400, {"from": from_thr, "to": to_thr, "amount": amount})
+            auth_string = f"{auth_secret}:{passphrase}:auth"
+        else:
+            auth_string = f"{auth_secret}:auth"
+
+        if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+            return _reject_tx(tx_id, "invalid_auth", 403, {"from": from_thr, "to": to_thr, "amount": amount})
     else:
-        auth_string=f"{auth_secret}:auth"
-    if hashlib.sha256(auth_string.encode()).hexdigest()!=stored_auth_hash:
-        return _reject_tx(tx_id, "invalid_auth", 403, {"from": from_thr, "to": to_thr, "amount": amount})
+        return _reject_tx(tx_id, "no_pledge_access", 403, {"from": from_thr, "to": to_thr, "amount": amount})
 
     # --- Fee Calculation Based on Speed ---
     fee = calculate_fixed_burn_fee(amount, speed)
@@ -10294,28 +10403,40 @@ def send_token():
     except (TypeError, ValueError):
         return jsonify(error="invalid_amount"), 400
 
-    if not auth_secret:
-        return jsonify(error="missing_auth_secret"), 400
+    # Check pledge access (whitelist or BTC pledge)
+    if not has_pledge_access(from_thr):
+        return jsonify(error="no_pledge_access"), 403
 
-    # Authenticate sender
-    pledges = load_json(PLEDGE_CHAIN, [])
-    sender_pledge = next((p for p in pledges if p.get("thr_address") == from_thr), None)
-    if not sender_pledge:
-        return jsonify(error="unknown_sender_thr"), 404
+    pledge_mode = get_wallet_pledge_mode(from_thr)
 
-    stored_auth_hash = sender_pledge.get("send_auth_hash")
-    if not stored_auth_hash:
-        return jsonify(error="send_not_enabled_for_this_thr"), 400
+    # Whitelist wallets don't need auth_secret
+    if pledge_mode == "whitelist":
+        # Whitelisted - no auth needed
+        pass
+    elif pledge_mode == "btc_pledge":
+        # BTC pledge - verify auth_secret
+        if not auth_secret:
+            return jsonify(error="missing_auth_secret"), 400
 
-    if sender_pledge.get("has_passphrase"):
-        if not passphrase:
-            return jsonify(error="passphrase_required"), 400
-        auth_string = f"{auth_secret}:{passphrase}:auth"
+        sender_pledge = get_pledge_for_auth(from_thr)
+        if not sender_pledge:
+            return jsonify(error="unknown_sender_thr"), 404
+
+        stored_auth_hash = sender_pledge.get("send_auth_hash")
+        if not stored_auth_hash:
+            return jsonify(error="send_not_enabled_for_this_thr"), 400
+
+        if sender_pledge.get("has_passphrase"):
+            if not passphrase:
+                return jsonify(error="passphrase_required"), 400
+            auth_string = f"{auth_secret}:{passphrase}:auth"
+        else:
+            auth_string = f"{auth_secret}:auth"
+
+        if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+            return jsonify(error="invalid_auth"), 403
     else:
-        auth_string = f"{auth_secret}:auth"
-
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify(error="invalid_auth"), 403
+        return jsonify(error="no_pledge_access"), 403
 
     # Calculate fee (same as THR transfers)
     if speed == "slow":
@@ -12385,6 +12506,44 @@ def api_wallet_activate():
     ), 200
 
 
+@app.route("/api/wallet/status", methods=["GET"])
+def api_wallet_status():
+    """
+    Get wallet pledge status and access level.
+
+    Query params:
+      - address: THR address to check
+
+    Returns:
+    {
+      "ok": true,
+      "address": "THR...",
+      "is_whitelisted": bool,
+      "pledge_mode": "btc_pledge" | "whitelist" | "none",
+      "has_pledge_access": bool
+    }
+    """
+    thr_address = request.args.get("address", "").strip()
+
+    if not thr_address:
+        return jsonify(ok=False, error="Missing address parameter"), 400
+
+    if not validate_thr_address(thr_address):
+        return jsonify(ok=False, error="Invalid THR address"), 400
+
+    is_whitelisted = is_wallet_whitelisted(thr_address)
+    pledge_mode = get_wallet_pledge_mode(thr_address)
+    has_access = has_pledge_access(thr_address)
+
+    return jsonify(
+        ok=True,
+        address=thr_address,
+        is_whitelisted=is_whitelisted,
+        pledge_mode=pledge_mode,
+        has_pledge_access=has_access
+    ), 200
+
+
 # ─── PR-184: MULTI-CHAIN WALLET API ────────────────────────────────────────
 try:
     from multichain_wallet import (
@@ -12822,24 +12981,41 @@ def send_l2e():
         return jsonify(error="missing_from_or_to"), 400
     if amount <= 0:
         return jsonify(error="amount_must_be_positive"), 400
-    if not auth_secret:
-        return jsonify(error="missing_auth_secret"), 400
-    # Validate the sender's pledge and auth hash from the THR pledge registry
-    pledges = load_json(PLEDGE_CHAIN, [])
-    sender_pledge = next((p for p in pledges if p.get("thr_address") == from_thr), None)
-    if not sender_pledge:
-        return jsonify(error="unknown_sender_thr"), 404
-    stored_auth_hash = sender_pledge.get("send_auth_hash")
-    if not stored_auth_hash:
-        return jsonify(error="send_not_enabled_for_this_thr"), 400
-    if sender_pledge.get("has_passphrase"):
-        if not passphrase:
-            return jsonify(error="passphrase_required"), 400
-        auth_string = f"{auth_secret}:{passphrase}:auth"
+
+    # Check pledge access (whitelist or BTC pledge)
+    if not has_pledge_access(from_thr):
+        return jsonify(error="no_pledge_access"), 403
+
+    pledge_mode = get_wallet_pledge_mode(from_thr)
+
+    # Whitelist wallets don't need auth_secret
+    if pledge_mode == "whitelist":
+        # Whitelisted - no auth needed
+        pass
+    elif pledge_mode == "btc_pledge":
+        # BTC pledge - verify auth_secret
+        if not auth_secret:
+            return jsonify(error="missing_auth_secret"), 400
+
+        sender_pledge = get_pledge_for_auth(from_thr)
+        if not sender_pledge:
+            return jsonify(error="unknown_sender_thr"), 404
+
+        stored_auth_hash = sender_pledge.get("send_auth_hash")
+        if not stored_auth_hash:
+            return jsonify(error="send_not_enabled_for_this_thr"), 400
+
+        if sender_pledge.get("has_passphrase"):
+            if not passphrase:
+                return jsonify(error="passphrase_required"), 400
+            auth_string = f"{auth_secret}:{passphrase}:auth"
+        else:
+            auth_string = f"{auth_secret}:auth"
+
+        if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+            return jsonify(error="invalid_auth"), 403
     else:
-        auth_string = f"{auth_secret}:auth"
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify(error="invalid_auth"), 403
+        return jsonify(error="no_pledge_access"), 403
     # Update L2E ledger balances
     ledger = load_json(L2E_LEDGER_FILE, {})
     sender_balance = float(ledger.get(from_thr, 0.0))
@@ -14514,22 +14690,41 @@ def api_v1_create_pool():
         return jsonify(status="error", message="Invalid fee_bps"), 400
     if fee_bps_int < 0 or fee_bps_int > 1000:
         return jsonify(status="error", message="fee_bps out of range"), 400
-    # Validate provider send rights
-    pledges = load_json(PLEDGE_CHAIN, [])
-    provider_pledge = next((p for p in pledges if p.get("thr_address") == provider), None)
-    if not provider_pledge:
-        return jsonify(status="error", message="Provider has not pledged"), 404
-    stored_auth_hash = provider_pledge.get("send_auth_hash")
-    if not stored_auth_hash:
-        return jsonify(status="error", message="Provider send not enabled"), 400
-    if provider_pledge.get("has_passphrase"):
-        if not passphrase:
-            return jsonify(status="error", message="Passphrase required"), 400
-        auth_string = f"{auth_secret}:{passphrase}:auth"
+
+    # Check pledge access (whitelist or BTC pledge)
+    if not has_pledge_access(provider):
+        return jsonify(status="error", message="Provider has no pledge access"), 403
+
+    pledge_mode = get_wallet_pledge_mode(provider)
+
+    # Whitelist wallets don't need auth_secret
+    if pledge_mode == "whitelist":
+        # Whitelisted - no auth needed
+        pass
+    elif pledge_mode == "btc_pledge":
+        # BTC pledge - verify auth_secret
+        if not auth_secret:
+            return jsonify(status="error", message="Missing auth_secret"), 400
+
+        provider_pledge = get_pledge_for_auth(provider)
+        if not provider_pledge:
+            return jsonify(status="error", message="Provider has not pledged"), 404
+
+        stored_auth_hash = provider_pledge.get("send_auth_hash")
+        if not stored_auth_hash:
+            return jsonify(status="error", message="Provider send not enabled"), 400
+
+        if provider_pledge.get("has_passphrase"):
+            if not passphrase:
+                return jsonify(status="error", message="Passphrase required"), 400
+            auth_string = f"{auth_secret}:{passphrase}:auth"
+        else:
+            auth_string = f"{auth_secret}:auth"
+
+        if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+            return jsonify(status="error", message="Invalid auth"), 403
     else:
-        auth_string = f"{auth_secret}:auth"
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify(status="error", message="Invalid auth"), 403
+        return jsonify(status="error", message="Provider has no pledge access"), 403
     wallet_snapshot = get_wallet_balances(provider)
     tokens_by_symbol = {t.get("symbol"): t for t in wallet_snapshot.get("tokens", [])}
 
@@ -14716,28 +14911,43 @@ def api_v1_add_liquidity():
     if not pool_id or amt_a <= 0 or amt_b <= 0:
         return jsonify(status="error", message="Invalid input"), 400
 
-    if not provider or not auth_secret:
-        return jsonify(status="error", message="Missing provider or auth_secret"), 400
+    if not provider:
+        return jsonify(status="error", message="Missing provider"), 400
 
-    # Authenticate
-    pledges = load_json(PLEDGE_CHAIN, [])
-    provider_pledge = next((p for p in pledges if p.get("thr_address") == provider), None)
-    if not provider_pledge:
-        return jsonify(status="error", message="Provider has not pledged"), 404
+    # Check pledge access (whitelist or BTC pledge)
+    if not has_pledge_access(provider):
+        return jsonify(status="error", message="Provider has no pledge access"), 403
 
-    stored_auth_hash = provider_pledge.get("send_auth_hash")
-    if not stored_auth_hash:
-        return jsonify(status="error", message="Provider send not enabled"), 400
+    pledge_mode = get_wallet_pledge_mode(provider)
 
-    if provider_pledge.get("has_passphrase"):
-        if not passphrase:
-            return jsonify(status="error", message="Passphrase required"), 400
-        auth_string = f"{auth_secret}:{passphrase}:auth"
+    # Whitelist wallets don't need auth_secret
+    if pledge_mode == "whitelist":
+        # Whitelisted - no auth needed
+        pass
+    elif pledge_mode == "btc_pledge":
+        # BTC pledge - verify auth_secret
+        if not auth_secret:
+            return jsonify(status="error", message="Missing auth_secret"), 400
+
+        provider_pledge = get_pledge_for_auth(provider)
+        if not provider_pledge:
+            return jsonify(status="error", message="Provider has not pledged"), 404
+
+        stored_auth_hash = provider_pledge.get("send_auth_hash")
+        if not stored_auth_hash:
+            return jsonify(status="error", message="Provider send not enabled"), 400
+
+        if provider_pledge.get("has_passphrase"):
+            if not passphrase:
+                return jsonify(status="error", message="Passphrase required"), 400
+            auth_string = f"{auth_secret}:{passphrase}:auth"
+        else:
+            auth_string = f"{auth_secret}:auth"
+
+        if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+            return jsonify(status="error", message="Invalid auth"), 403
     else:
-        auth_string = f"{auth_secret}:auth"
-
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify(status="error", message="Invalid auth"), 403
+        return jsonify(status="error", message="Provider has no pledge access"), 403
 
     # Load pool
     pools = load_pools()
@@ -14961,28 +15171,43 @@ def api_v1_remove_liquidity():
     if not pool_id or shares <= 0:
         return jsonify(status="error", message="Invalid input"), 400
 
-    if not provider or not auth_secret:
-        return jsonify(status="error", message="Missing provider or auth_secret"), 400
+    if not provider:
+        return jsonify(status="error", message="Missing provider"), 400
 
-    # Authenticate
-    pledges = load_json(PLEDGE_CHAIN, [])
-    provider_pledge = next((p for p in pledges if p.get("thr_address") == provider), None)
-    if not provider_pledge:
-        return jsonify(status="error", message="Provider has not pledged"), 404
+    # Check pledge access (whitelist or BTC pledge)
+    if not has_pledge_access(provider):
+        return jsonify(status="error", message="Provider has no pledge access"), 403
 
-    stored_auth_hash = provider_pledge.get("send_auth_hash")
-    if not stored_auth_hash:
-        return jsonify(status="error", message="Provider send not enabled"), 400
+    pledge_mode = get_wallet_pledge_mode(provider)
 
-    if provider_pledge.get("has_passphrase"):
-        if not passphrase:
-            return jsonify(status="error", message="Passphrase required"), 400
-        auth_string = f"{auth_secret}:{passphrase}:auth"
+    # Whitelist wallets don't need auth_secret
+    if pledge_mode == "whitelist":
+        # Whitelisted - no auth needed
+        pass
+    elif pledge_mode == "btc_pledge":
+        # BTC pledge - verify auth_secret
+        if not auth_secret:
+            return jsonify(status="error", message="Missing auth_secret"), 400
+
+        provider_pledge = get_pledge_for_auth(provider)
+        if not provider_pledge:
+            return jsonify(status="error", message="Provider has not pledged"), 404
+
+        stored_auth_hash = provider_pledge.get("send_auth_hash")
+        if not stored_auth_hash:
+            return jsonify(status="error", message="Provider send not enabled"), 400
+
+        if provider_pledge.get("has_passphrase"):
+            if not passphrase:
+                return jsonify(status="error", message="Passphrase required"), 400
+            auth_string = f"{auth_secret}:{passphrase}:auth"
+        else:
+            auth_string = f"{auth_secret}:auth"
+
+        if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+            return jsonify(status="error", message="Invalid auth"), 403
     else:
-        auth_string = f"{auth_secret}:auth"
-
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify(status="error", message="Invalid auth"), 403
+        return jsonify(status="error", message="Provider has no pledge access"), 403
 
     # Load pool
     pools = load_pools()
@@ -15156,28 +15381,43 @@ def api_v1_pool_swap():
     if token_in == token_out:
         return jsonify(status="error", message="Cannot swap same token"), 400
 
-    if not trader or not auth_secret:
-        return jsonify(status="error", message="Missing trader or auth_secret"), 400
+    if not trader:
+        return jsonify(status="error", message="Missing trader"), 400
 
-    # Authenticate
-    pledges = load_json(PLEDGE_CHAIN, [])
-    trader_pledge = next((p for p in pledges if p.get("thr_address") == trader), None)
-    if not trader_pledge:
-        return jsonify(status="error", message="Trader has not pledged"), 404
+    # Check pledge access (whitelist or BTC pledge)
+    if not has_pledge_access(trader):
+        return jsonify(status="error", message="Trader has no pledge access"), 403
 
-    stored_auth_hash = trader_pledge.get("send_auth_hash")
-    if not stored_auth_hash:
-        return jsonify(status="error", message="Trader send not enabled"), 400
+    pledge_mode = get_wallet_pledge_mode(trader)
 
-    if trader_pledge.get("has_passphrase"):
-        if not passphrase:
-            return jsonify(status="error", message="Passphrase required"), 400
-        auth_string = f"{auth_secret}:{passphrase}:auth"
+    # Whitelist wallets don't need auth_secret
+    if pledge_mode == "whitelist":
+        # Whitelisted - no auth needed
+        pass
+    elif pledge_mode == "btc_pledge":
+        # BTC pledge - verify auth_secret
+        if not auth_secret:
+            return jsonify(status="error", message="Missing auth_secret"), 400
+
+        trader_pledge = get_pledge_for_auth(trader)
+        if not trader_pledge:
+            return jsonify(status="error", message="Trader has not pledged"), 404
+
+        stored_auth_hash = trader_pledge.get("send_auth_hash")
+        if not stored_auth_hash:
+            return jsonify(status="error", message="Trader send not enabled"), 400
+
+        if trader_pledge.get("has_passphrase"):
+            if not passphrase:
+                return jsonify(status="error", message="Passphrase required"), 400
+            auth_string = f"{auth_secret}:{passphrase}:auth"
+        else:
+            auth_string = f"{auth_secret}:auth"
+
+        if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+            return jsonify(status="error", message="Invalid auth"), 403
     else:
-        auth_string = f"{auth_secret}:auth"
-
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify(status="error", message="Invalid auth"), 403
+        return jsonify(status="error", message="Trader has no pledge access"), 403
 
     # Load pool
     pools = load_pools()

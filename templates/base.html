@@ -3062,38 +3062,83 @@ async function updateReceiveModal() {
     } else {
         // Load cross-chain deposit address from bridge API
         try {
-            const response = await fetch(`/api/bridge/deposit?network=${network}&thr_address=${encodeURIComponent(thrAddr)}`);
-            const data = await response.json();
+            let response, data;
 
-            if (data.ok && data.deposit_address) {
-                const depositAddr = data.deposit_address;
+            if (network === 'bitcoin') {
+                // BTC bridge already has working endpoint
+                response = await fetch(`/api/bridge/deposit?wallet=${encodeURIComponent(thrAddr)}`);
+                data = await response.json();
 
-                if (addrEl) addrEl.textContent = depositAddr;
-                if (qrEl) {
-                    // Try to get QR for deposit address
-                    qrEl.src = `/api/bridge/qr?network=${network}&address=${encodeURIComponent(depositAddr)}`;
-                    qrEl.style.display = 'inline';
-                    qrEl.onerror = () => { qrEl.style.display = 'none'; };
-                }
-                if (audioEl) audioEl.removeAttribute('src');
-                if (dlEl) dlEl.removeAttribute('href');
-                if (emptyEl) emptyEl.style.display = 'none';
-                if (hintEl) {
-                    hintEl.style.display = 'block';
-                    hintEl.querySelector('.lang-el').textContent = `Κατάθεση ${network.toUpperCase()} σε αυτή τη διεύθυνση για να λάβετε WBTC/tokens στο Thronos.`;
-                    hintEl.querySelector('.lang-en').textContent = `Deposit ${network.toUpperCase()} to this address to receive WBTC/tokens on Thronos.`;
+                if (data.ok && data.btc_address) {
+                    const depositAddr = data.btc_address;
+
+                    if (addrEl) addrEl.textContent = depositAddr;
+                    if (qrEl) {
+                        qrEl.src = `/api/wallet/qr/${encodeURIComponent(depositAddr)}`;
+                        qrEl.style.display = 'inline';
+                        qrEl.onerror = () => { qrEl.style.display = 'none'; };
+                    }
+                    if (audioEl) audioEl.removeAttribute('src');
+                    if (dlEl) dlEl.removeAttribute('href');
+                    if (emptyEl) emptyEl.style.display = 'none';
+                    if (hintEl) {
+                        hintEl.style.display = 'block';
+                        hintEl.querySelector('.lang-el').textContent = 'Κατάθεση BTC σε αυτή τη διεύθυνση για να λάβετε WBTC στο Thronos.';
+                        hintEl.querySelector('.lang-en').textContent = 'Deposit BTC to this address to receive WBTC on Thronos.';
+                    }
+                    return; // Success, exit early
                 }
             } else {
-                throw new Error(data.error || 'Failed to get deposit address');
+                // Other networks: Use new unified endpoint (when implemented)
+                response = await fetch(`/api/bridge/deposit?network=${network}&thr_address=${encodeURIComponent(thrAddr)}`);
+                data = await response.json();
+
+                if (data.ok && data.deposit_address) {
+                    const depositAddr = data.deposit_address;
+
+                    if (addrEl) addrEl.textContent = depositAddr;
+                    if (qrEl) {
+                        qrEl.src = `/api/bridge/qr?network=${network}&address=${encodeURIComponent(depositAddr)}`;
+                        qrEl.style.display = 'inline';
+                        qrEl.onerror = () => { qrEl.style.display = 'none'; };
+                    }
+                    if (audioEl) audioEl.removeAttribute('src');
+                    if (dlEl) dlEl.removeAttribute('href');
+                    if (emptyEl) emptyEl.style.display = 'none';
+                    if (hintEl) {
+                        hintEl.style.display = 'block';
+                        const wrapped = network === 'ethereum' ? 'WETH' : network === 'bnb' ? 'WBNB' : network === 'xrp' ? 'WXRP' : 'tokens';
+                        hintEl.querySelector('.lang-el').textContent = `Κατάθεση ${network.toUpperCase()} σε αυτή τη διεύθυνση για να λάβετε ${wrapped} στο Thronos.`;
+                        hintEl.querySelector('.lang-en').textContent = `Deposit ${network.toUpperCase()} to this address to receive ${wrapped} on Thronos.`;
+                    }
+                    return; // Success, exit early
+                }
             }
+
+            // If we reach here, endpoint failed - show helpful error
+            throw new Error(data?.error || 'Endpoint not implemented yet');
+
         } catch (error) {
             console.error(`Failed to load ${network} deposit address:`, error);
-            if (addrEl) addrEl.textContent = 'Error loading deposit address';
-            if (qrEl) qrEl.style.display = 'none';
-            if (hintEl) {
-                hintEl.style.display = 'block';
-                hintEl.querySelector('.lang-el').textContent = 'Σφάλμα φόρτωσης διεύθυνσης κατάθεσης.';
-                hintEl.querySelector('.lang-en').textContent = 'Error loading deposit address.';
+
+            // Show friendly message for non-BTC networks
+            if (network !== 'bitcoin') {
+                if (addrEl) addrEl.textContent = `${network.toUpperCase()} bridge coming soon`;
+                if (qrEl) qrEl.style.display = 'none';
+                if (hintEl) {
+                    hintEl.style.display = 'block';
+                    hintEl.querySelector('.lang-el').textContent = `Το ${network.toUpperCase()} bridge θα είναι διαθέσιμο σύντομα. Backend endpoint: /api/bridge/deposit?network=${network}&thr_address=...`;
+                    hintEl.querySelector('.lang-en').textContent = `${network.toUpperCase()} bridge coming soon. Backend endpoint needed: /api/bridge/deposit?network=${network}&thr_address=...`;
+                }
+            } else {
+                // BTC should work - show actual error
+                if (addrEl) addrEl.textContent = 'Error loading BTC deposit address';
+                if (qrEl) qrEl.style.display = 'none';
+                if (hintEl) {
+                    hintEl.style.display = 'block';
+                    hintEl.querySelector('.lang-el').textContent = 'Σφάλμα φόρτωσης διεύθυνσης κατάθεσης BTC.';
+                    hintEl.querySelector('.lang-en').textContent = 'Error loading BTC deposit address.';
+                }
             }
         }
     }

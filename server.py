@@ -6295,6 +6295,160 @@ def api_bridge_deposit():
 
     return jsonify(response), 200
 
+@app.route("/api/bridge/withdraw", methods=["POST"])
+def api_bridge_withdraw():
+    """
+    Multi-chain bridge: Withdraw (burn wrapped tokens, send to external chain).
+
+    Supports: BTC, ETH, BNB, XRP
+    Request body:
+    {
+        "wallet": "THR...",           # THR address (sender)
+        "network": "bitcoin|ethereum|bnb|xrp",
+        "destination": "0x...",       # External address on target network
+        "amount": 0.01                # Amount to withdraw
+    }
+
+    Flow:
+    1. Validate wrapped token balance (WBTC, WETH, WBNB, WXRP)
+    2. Burn wrapped tokens from wallet
+    3. Create withdrawal request transaction
+    4. Log to watcher ledger (operator will process)
+    """
+    data = request.get_json() or {}
+    wallet = (data.get("wallet") or "").strip()
+    network = (data.get("network") or "").strip().lower()
+    destination = (data.get("destination") or data.get("destination_address") or "").strip()
+    amount = float(data.get("amount", 0))
+
+    # Validate inputs
+    if not wallet or not network or not destination:
+        return jsonify({"ok": False, "error": "Missing required parameters"}), 400
+
+    if amount <= 0:
+        return jsonify({"ok": False, "error": "Invalid amount"}), 400
+
+    # Validate network and get wrapped token details
+    supported_networks = ["bitcoin", "ethereum", "bnb", "xrp"]
+    if network not in supported_networks:
+        return jsonify({
+            "ok": False,
+            "error": f"Unsupported network. Supported: {', '.join(supported_networks)}"
+        }), 400
+
+    # Map network to wrapped token
+    network_config = {
+        "bitcoin": {
+            "wrapped_token": "WBTC",
+            "ledger_file": WBTC_LEDGER_FILE,
+            "address_prefixes": ['1', '3', 'bc1'],
+            "min_length": 26,
+            "native_symbol": "BTC"
+        },
+        "ethereum": {
+            "wrapped_token": "WETH",
+            "ledger_file": os.path.join(DATA_DIR, "weth_ledger.json"),
+            "address_prefixes": ['0x'],
+            "min_length": 42,
+            "native_symbol": "ETH"
+        },
+        "bnb": {
+            "wrapped_token": "WBNB",
+            "ledger_file": os.path.join(DATA_DIR, "wbnb_ledger.json"),
+            "address_prefixes": ['0x'],
+            "min_length": 42,
+            "native_symbol": "BNB"
+        },
+        "xrp": {
+            "wrapped_token": "WXRP",
+            "ledger_file": os.path.join(DATA_DIR, "wxrp_ledger.json"),
+            "address_prefixes": ['r'],
+            "min_length": 25,
+            "native_symbol": "XRP"
+        }
+    }
+
+    config = network_config[network]
+    wrapped_token = config["wrapped_token"]
+    ledger_file = config["ledger_file"]
+
+    # Validate destination address format
+    valid_prefix = any(destination.startswith(p) for p in config["address_prefixes"])
+    if not valid_prefix or len(destination) < config["min_length"]:
+        return jsonify({
+            "ok": False,
+            "error": f"Invalid {network.upper()} address format"
+        }), 400
+
+    # Load wrapped token ledger
+    wrapped_ledger = load_json(ledger_file, {})
+    current_balance = float(wrapped_ledger.get(wallet, 0))
+
+    if current_balance < amount:
+        return jsonify({
+            "ok": False,
+            "error": f"Insufficient {wrapped_token} balance. You have {current_balance}, need {amount}"
+        }), 400
+
+    # Generate withdrawal request ID
+    request_id = f"bridge_withdraw_{network}_{int(time.time())}_{secrets.token_hex(4)}"
+
+    # Burn wrapped tokens
+    wrapped_ledger[wallet] = round(current_balance - amount, 8)
+    save_json(ledger_file, wrapped_ledger)
+
+    # Create BRIDGE_WITHDRAW_REQUEST transaction
+    chain = load_json(CHAIN_FILE, [])
+    tx = {
+        "type": "BRIDGE_WITHDRAW_REQUEST",
+        "request_id": request_id,
+        "from": wallet,
+        "to": destination,
+        "network": network,
+        "wrapped_token": wrapped_token,
+        "wrapped_amount": amount,
+        "native_amount": amount,  # 1:1 mapping for wrapped tokens
+        "native_symbol": config["native_symbol"],
+        "destination_address": destination,
+        "status": "pending_operator",
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "tx_id": f"BRIDGE-{network.upper()}-{len(chain)}-{int(time.time())}"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+
+    # Log to watcher ledger for bridge history
+    watcher_txs = load_json(WATCHER_LEDGER_FILE, [])
+    watcher_txs.append({
+        "request_id": request_id,
+        "from_address": wallet,
+        "to_address": destination,
+        "network": network,
+        "wrapped_token": wrapped_token,
+        "wrapped_amount": amount,
+        "native_amount": amount,
+        "native_symbol": config["native_symbol"],
+        "status": "pending_operator",
+        "timestamp": tx["timestamp"],
+        "direction": "withdraw"
+    })
+    save_json(WATCHER_LEDGER_FILE, watcher_txs)
+
+    app.logger.info(f"🌉 Bridge Withdraw Request: {wallet} → {destination} ({network.upper()}) | {amount} {wrapped_token} | ID: {request_id}")
+
+    return jsonify({
+        "ok": True,
+        "status": "success",
+        "request_id": request_id,
+        "message": f"Withdrawal request created. {amount} {wrapped_token} will be sent to {destination}. Operator will process within 24h.",
+        "wrapped_burned": amount,
+        "wrapped_token": wrapped_token,
+        "network": network,
+        "destination": destination,
+        "new_balance": wrapped_ledger[wallet]
+    }), 200
+
 @app.route("/api/iot/data")
 def iot_data():
     data = load_json(IOT_DATA_FILE, [])

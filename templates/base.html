@@ -3062,38 +3062,83 @@ async function updateReceiveModal() {
     } else {
         // Load cross-chain deposit address from bridge API
         try {
-            const response = await fetch(`/api/bridge/deposit?network=${network}&thr_address=${encodeURIComponent(thrAddr)}`);
-            const data = await response.json();
+            let response, data;
 
-            if (data.ok && data.deposit_address) {
-                const depositAddr = data.deposit_address;
+            if (network === 'bitcoin') {
+                // BTC bridge already has working endpoint
+                response = await fetch(`/api/bridge/deposit?wallet=${encodeURIComponent(thrAddr)}`);
+                data = await response.json();
 
-                if (addrEl) addrEl.textContent = depositAddr;
-                if (qrEl) {
-                    // Try to get QR for deposit address
-                    qrEl.src = `/api/bridge/qr?network=${network}&address=${encodeURIComponent(depositAddr)}`;
-                    qrEl.style.display = 'inline';
-                    qrEl.onerror = () => { qrEl.style.display = 'none'; };
-                }
-                if (audioEl) audioEl.removeAttribute('src');
-                if (dlEl) dlEl.removeAttribute('href');
-                if (emptyEl) emptyEl.style.display = 'none';
-                if (hintEl) {
-                    hintEl.style.display = 'block';
-                    hintEl.querySelector('.lang-el').textContent = `Κατάθεση ${network.toUpperCase()} σε αυτή τη διεύθυνση για να λάβετε WBTC/tokens στο Thronos.`;
-                    hintEl.querySelector('.lang-en').textContent = `Deposit ${network.toUpperCase()} to this address to receive WBTC/tokens on Thronos.`;
+                if (data.ok && data.btc_address) {
+                    const depositAddr = data.btc_address;
+
+                    if (addrEl) addrEl.textContent = depositAddr;
+                    if (qrEl) {
+                        qrEl.src = `/api/wallet/qr/${encodeURIComponent(depositAddr)}`;
+                        qrEl.style.display = 'inline';
+                        qrEl.onerror = () => { qrEl.style.display = 'none'; };
+                    }
+                    if (audioEl) audioEl.removeAttribute('src');
+                    if (dlEl) dlEl.removeAttribute('href');
+                    if (emptyEl) emptyEl.style.display = 'none';
+                    if (hintEl) {
+                        hintEl.style.display = 'block';
+                        hintEl.querySelector('.lang-el').textContent = 'Κατάθεση BTC σε αυτή τη διεύθυνση για να λάβετε WBTC στο Thronos.';
+                        hintEl.querySelector('.lang-en').textContent = 'Deposit BTC to this address to receive WBTC on Thronos.';
+                    }
+                    return; // Success, exit early
                 }
             } else {
-                throw new Error(data.error || 'Failed to get deposit address');
+                // Other networks: Use new unified endpoint (when implemented)
+                response = await fetch(`/api/bridge/deposit?network=${network}&thr_address=${encodeURIComponent(thrAddr)}`);
+                data = await response.json();
+
+                if (data.ok && data.deposit_address) {
+                    const depositAddr = data.deposit_address;
+
+                    if (addrEl) addrEl.textContent = depositAddr;
+                    if (qrEl) {
+                        qrEl.src = `/api/bridge/qr?network=${network}&address=${encodeURIComponent(depositAddr)}`;
+                        qrEl.style.display = 'inline';
+                        qrEl.onerror = () => { qrEl.style.display = 'none'; };
+                    }
+                    if (audioEl) audioEl.removeAttribute('src');
+                    if (dlEl) dlEl.removeAttribute('href');
+                    if (emptyEl) emptyEl.style.display = 'none';
+                    if (hintEl) {
+                        hintEl.style.display = 'block';
+                        const wrapped = network === 'ethereum' ? 'WETH' : network === 'bnb' ? 'WBNB' : network === 'xrp' ? 'WXRP' : 'tokens';
+                        hintEl.querySelector('.lang-el').textContent = `Κατάθεση ${network.toUpperCase()} σε αυτή τη διεύθυνση για να λάβετε ${wrapped} στο Thronos.`;
+                        hintEl.querySelector('.lang-en').textContent = `Deposit ${network.toUpperCase()} to this address to receive ${wrapped} on Thronos.`;
+                    }
+                    return; // Success, exit early
+                }
             }
+
+            // If we reach here, endpoint failed - show helpful error
+            throw new Error(data?.error || 'Endpoint not implemented yet');
+
         } catch (error) {
             console.error(`Failed to load ${network} deposit address:`, error);
-            if (addrEl) addrEl.textContent = 'Error loading deposit address';
-            if (qrEl) qrEl.style.display = 'none';
-            if (hintEl) {
-                hintEl.style.display = 'block';
-                hintEl.querySelector('.lang-el').textContent = 'Σφάλμα φόρτωσης διεύθυνσης κατάθεσης.';
-                hintEl.querySelector('.lang-en').textContent = 'Error loading deposit address.';
+
+            // Show friendly message for non-BTC networks
+            if (network !== 'bitcoin') {
+                if (addrEl) addrEl.textContent = `${network.toUpperCase()} bridge coming soon`;
+                if (qrEl) qrEl.style.display = 'none';
+                if (hintEl) {
+                    hintEl.style.display = 'block';
+                    hintEl.querySelector('.lang-el').textContent = `Το ${network.toUpperCase()} bridge θα είναι διαθέσιμο σύντομα. Backend endpoint: /api/bridge/deposit?network=${network}&thr_address=...`;
+                    hintEl.querySelector('.lang-en').textContent = `${network.toUpperCase()} bridge coming soon. Backend endpoint needed: /api/bridge/deposit?network=${network}&thr_address=...`;
+                }
+            } else {
+                // BTC should work - show actual error
+                if (addrEl) addrEl.textContent = 'Error loading BTC deposit address';
+                if (qrEl) qrEl.style.display = 'none';
+                if (hintEl) {
+                    hintEl.style.display = 'block';
+                    hintEl.querySelector('.lang-el').textContent = 'Σφάλμα φόρτωσης διεύθυνσης κατάθεσης BTC.';
+                    hintEl.querySelector('.lang-en').textContent = 'Error loading BTC deposit address.';
+                }
             }
         }
     }
@@ -3775,21 +3820,18 @@ function anyModalOpen() {
 async function submitCrossChainSend(network, to, amount, token, from, secret, resultDiv) {
     resultDiv.style.display = 'block';
     resultDiv.className = 'send-result';
-    resultDiv.textContent = `Processing ${network.toUpperCase()} send...`;
+    resultDiv.textContent = `Processing ${network.toUpperCase()} withdrawal...`;
 
     try {
-        // Prepare cross-chain send request
+        // Prepare cross-chain withdraw request (burns wrapped token, sends to external chain)
         const payload = {
-            network: network,
-            from_thr_address: from,
-            to_external_address: to,
-            amount: amount,
-            token: token,
-            auth_secret: secret,
-            speed: selectedSpeed || 'fast'
+            wallet: from,               // THR address
+            network: network,           // bitcoin, ethereum, bnb, xrp
+            destination: to,            // External address
+            amount: amount              // Amount to withdraw
         };
 
-        const response = await fetch('/api/bridge/send', {
+        const response = await fetch('/api/bridge/withdraw', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -3797,14 +3839,17 @@ async function submitCrossChainSend(network, to, amount, token, from, secret, re
 
         const data = await response.json();
 
-        if (data.ok || data.accepted) {
+        if (data.ok || data.status === 'success') {
             resultDiv.className = 'send-result success';
-            const txId = data.tx_id || data.txid || data.transaction_id || '—';
+            const requestId = data.request_id || '—';
+            const wrappedToken = data.wrapped_token || token;
             resultDiv.innerHTML = `
-                ✅ Cross-chain send initiated!<br>
+                ✅ Bridge withdrawal initiated!<br>
+                <small>Burned: ${amount} ${wrappedToken}</small><br>
                 <small>Network: ${network.toUpperCase()}</small><br>
-                <small>TX ID: ${txId.substring(0, 16)}...</small><br>
-                <small>Status: ${data.status || 'Pending'}</small>
+                <small>To: ${to.substring(0, 12)}...</small><br>
+                <small>Request ID: ${requestId.substring(0, 20)}...</small><br>
+                <small style="color: #ffa500;">⏳ Operator will process within 24h</small>
             `;
 
             // Refresh balances after delay
@@ -3813,21 +3858,21 @@ async function submitCrossChainSend(network, to, amount, token, from, secret, re
                 loadTokenBalances();
             }, 2000);
 
-            // Auto-close after 5 seconds
+            // Auto-close after 8 seconds (longer to read operator message)
             setTimeout(() => {
                 closeSendModal();
                 resultDiv.style.display = 'none';
                 resultDiv.textContent = '';
-            }, 5000);
+            }, 8000);
         } else {
             resultDiv.className = 'send-result error';
-            const errorMsg = data.error || data.reject_reason || data.message || 'Cross-chain send failed';
+            const errorMsg = data.error || data.message || 'Withdrawal failed';
             resultDiv.textContent = `❌ Error: ${errorMsg}`;
         }
     } catch (error) {
-        console.error('Cross-chain send error:', error);
+        console.error('Bridge withdraw error:', error);
         resultDiv.className = 'send-result error';
-        resultDiv.textContent = `❌ Network error: ${error.message || 'Failed to send'}`;
+        resultDiv.textContent = `❌ Network error: ${error.message || 'Failed to withdraw'}`;
     }
 }
 

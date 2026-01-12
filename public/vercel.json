@@ -1,19 +1,24 @@
 {
   "rewrites": [
     {
-      "source": "/(.*)",
-      "destination": "/index.html"
-    }
-  ],
-  "headers": [
+      "source": "/api/v2/wallet/:path*",
+      "destination": "https://node3.thrchain.railway.app/api/v2/wallet/:path*"
+    },
     {
-      "source": "/service-worker.js",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=0, must-revalidate"
-        }
-      ]
+      "source": "/api/:path*",
+      "destination": "https://thrchain.up.railway.app/api/:path*"
+    },
+    {
+      "source": "/viewer",
+      "destination": "https://thrchain.up.railway.app/viewer"
+    },
+    {
+      "source": "/wallet",
+      "destination": "https://thrchain.up.railway.app/wallet"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "https://thrchain.up.railway.app/$1"
     }
   ]
 }

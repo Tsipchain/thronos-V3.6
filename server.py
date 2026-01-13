@@ -3753,6 +3753,13 @@ def get_last_block_snapshot() -> dict:
     if LAST_BLOCK_SNAPSHOT:
         return LAST_BLOCK_SNAPSHOT
     snapshot = load_json(LAST_BLOCK_FILE, {})
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    if not snapshot or (snapshot.get("block_hash") is None and snapshot.get("height") is None):
+        try:
+            snapshot = _rebuild_index_from_chain()
+        except Exception as exc:
+            logger.error("Failed to rebuild last block snapshot: %s", exc)
     if isinstance(snapshot, dict):
         LAST_BLOCK_SNAPSHOT.update(snapshot)
     return LAST_BLOCK_SNAPSHOT

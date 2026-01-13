@@ -31,6 +31,7 @@ from __future__ import annotations
 # - Admin Withdrawal Panel (V5.1)
 
 import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil
+import sys
 from collections import Counter
 from decimal import Decimal, ROUND_DOWN
 import qrcode
@@ -374,6 +375,11 @@ IS_LEADER = os.getenv("IS_LEADER", "1" if NODE_ROLE == "master" else "0") == "1"
 SCHEDULER_ENABLED = os.getenv("SCHEDULER_ENABLED", "1") == "1"
 # AI mode: "production" (user-facing) or "worker" (background tasks)
 THRONOS_AI_MODE = os.getenv("THRONOS_AI_MODE", "production" if NODE_ROLE == "master" else "worker").lower()
+MINING_WHITELIST_ONLY = os.getenv("MINING_WHITELIST_ONLY", "0").lower() in ("1", "true", "yes")
+MINING_WATCHDOG_WINDOW_SECONDS = int(os.getenv("MINING_WATCHDOG_WINDOW_SECONDS", "60"))
+MINING_WATCHDOG_MAX_INVALID = int(os.getenv("MINING_WATCHDOG_MAX_INVALID", "12"))
+MINING_WATCHDOG_MAX_REQUESTS = int(os.getenv("MINING_WATCHDOG_MAX_REQUESTS", "60"))
+MINING_WATCHDOG_BAN_SECONDS = int(os.getenv("MINING_WATCHDOG_BAN_SECONDS", "300"))
 
 MASTER_INTERNAL_URL = os.getenv("MASTER_NODE_URL", "http://localhost:5000")
 LEADER_URL = os.getenv("LEADER_URL", MASTER_INTERNAL_URL)
@@ -779,8 +785,36 @@ if stripe:
 # Πόσα blocks "έχουν ήδη γίνει" πριν ξεκινήσει το τρέχον chain αρχείο
 HEIGHT_OFFSET = 0
 
+class AttributesLevelFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        attributes = getattr(record, "attributes", None)
+        if not isinstance(attributes, dict):
+            attributes = {}
+            record.attributes = attributes
+        attributes["level"] = record.levelname.lower()
+        return True
+
+
 logging.basicConfig(level=logging.INFO)
+root_logger = logging.getLogger()
+for handler in root_logger.handlers:
+    handler.addFilter(AttributesLevelFilter())
+
 logger = logging.getLogger("thronos")
+
+scheduler_logger = logging.getLogger("apscheduler")
+scheduler_logger.setLevel(logging.INFO)
+if not scheduler_logger.handlers:
+    scheduler_handler = logging.StreamHandler(sys.stdout)
+    scheduler_handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+    scheduler_handler.addFilter(AttributesLevelFilter())
+    scheduler_logger.addHandler(scheduler_handler)
+else:
+    for handler in scheduler_logger.handlers:
+        handler.addFilter(AttributesLevelFilter())
+        if handler.formatter is None:
+            handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+scheduler_logger.propagate = False
 
 # Security warnings for production deployments
 if ADMIN_SECRET == "CHANGE_ME_NOW":
@@ -1175,6 +1209,32 @@ def has_pledge_access(thr_address: str) -> bool:
     """
     mode = get_wallet_pledge_mode(thr_address)
     return mode != "none"
+
+
+def get_mining_whitelist_entry(thr_address: str) -> dict | None:
+    """Return mining whitelist entry, supporting legacy string lists."""
+    if not thr_address:
+        return None
+
+    entries = load_json(WHITELIST_WALLETS_FILE, [])
+    if isinstance(entries, list):
+        for entry in entries:
+            if isinstance(entry, str):
+                if entry == thr_address:
+                    return {"address": entry, "active": True, "pledge_ok": True}
+                continue
+            if isinstance(entry, dict):
+                address = entry.get("address") or entry.get("thr_address")
+                if address == thr_address:
+                    active = entry.get("active", True)
+                    pledge_ok = entry.get("pledge_ok", has_pledge_access(thr_address))
+                    return {
+                        "address": address,
+                        "active": active,
+                        "pledge_ok": pledge_ok,
+                    }
+
+    return None
 
 
 def get_pledge_for_auth(thr_address: str) -> dict | None:
@@ -4294,6 +4354,10 @@ def _categorize_transaction(tx: dict) -> str:
     # AI rewards
     if "ai" in tx_type_lower or tx_type in ["ai_reward", "ai_job_reward", "ai_job_completed"]:
         return "ai_reward"
+
+    # Learn-to-earn rewards
+    if "l2e" in tx_type_lower or tx_type in ["l2e_reward", "l2e"]:
+        return "l2e"
 
     # IoT telemetry
     if "iot" in tx_type_lower or "telemetry" in tx_type_lower or "gps" in tx_type_lower:
@@ -11587,6 +11651,63 @@ def aggregator_step():
         save_mempool(pool)
 
 
+# ─── MINING WATCHDOG ───────────────────────────────
+MINING_WATCHDOG_STATE = {
+    "requests": {},
+    "invalid": {},
+    "banned": {},
+}
+
+
+def _prune_watchdog_samples(samples: list[float], now: float, window: int) -> list[float]:
+    return [ts for ts in samples if now - ts <= window]
+
+
+def _mining_watchdog_key(thr_address: str) -> str:
+    remote = request.remote_addr or "unknown"
+    return f"{thr_address}:{remote}"
+
+
+def _mining_watchdog_is_banned(key: str, now: float) -> bool:
+    banned_until = MINING_WATCHDOG_STATE["banned"].get(key)
+    if not banned_until:
+        return False
+    if now >= banned_until:
+        MINING_WATCHDOG_STATE["banned"].pop(key, None)
+        return False
+    return True
+
+
+def _mining_watchdog_ban(key: str, now: float) -> None:
+    MINING_WATCHDOG_STATE["banned"][key] = now + MINING_WATCHDOG_BAN_SECONDS
+
+
+def _mining_watchdog_register_request(key: str, now: float) -> bool:
+    if MINING_WATCHDOG_MAX_REQUESTS <= 0:
+        return False
+    samples = MINING_WATCHDOG_STATE["requests"].get(key, [])
+    samples.append(now)
+    samples = _prune_watchdog_samples(samples, now, MINING_WATCHDOG_WINDOW_SECONDS)
+    MINING_WATCHDOG_STATE["requests"][key] = samples
+    if len(samples) > MINING_WATCHDOG_MAX_REQUESTS:
+        _mining_watchdog_ban(key, now)
+        return True
+    return False
+
+
+def _mining_watchdog_register_invalid(key: str, now: float) -> bool:
+    if MINING_WATCHDOG_MAX_INVALID <= 0:
+        return False
+    samples = MINING_WATCHDOG_STATE["invalid"].get(key, [])
+    samples.append(now)
+    samples = _prune_watchdog_samples(samples, now, MINING_WATCHDOG_WINDOW_SECONDS)
+    MINING_WATCHDOG_STATE["invalid"][key] = samples
+    if len(samples) > MINING_WATCHDOG_MAX_INVALID:
+        _mining_watchdog_ban(key, now)
+        return True
+    return False
+
+
 # ─── MINING ENDPOINT ───────────────────────────────
 @app.route("/submit_block", methods=["POST"])
 def submit_block():
@@ -11595,6 +11716,25 @@ def submit_block():
     nonce = data.get("nonce")
     if not thr_address or nonce is None:
         return jsonify(error="Missing mining data"),400
+    now = time.time()
+    miner_key = _mining_watchdog_key(thr_address)
+
+    if MINING_WHITELIST_ONLY:
+        entry = get_mining_whitelist_entry(thr_address)
+        if not entry or not entry.get("active", False):
+            logger.warning("Mining rejected thr_address=%s reason=not_whitelisted", thr_address)
+            return jsonify(error="Mining not whitelisted", reason="not_whitelisted"), 403
+        if not entry.get("pledge_ok", False):
+            logger.warning("Mining rejected thr_address=%s reason=missing_pledge", thr_address)
+            return jsonify(error="Mining pledge missing", reason="missing_pledge"), 403
+
+    if _mining_watchdog_is_banned(miner_key, now):
+        logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+        return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
+
+    if _mining_watchdog_register_request(miner_key, now):
+        logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+        return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
     chain=load_json(CHAIN_FILE,[])
     
     server_last_hash = ""
@@ -11614,8 +11754,14 @@ def submit_block():
         nbits=data.get("nbits")
         version=data.get("version",1)
         if not all([merkle_root, prev_hash, time_val, nbits]):
+            if _mining_watchdog_register_invalid(miner_key, now):
+                logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+                return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
             return jsonify(error="Missing Stratum fields"),400
         if prev_hash!=server_last_hash:
+            if _mining_watchdog_register_invalid(miner_key, now):
+                logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+                return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
             return jsonify(error="Stale block (prev_hash mismatch)"),400
         try:
             header  = struct.pack("<I",version)
@@ -11626,18 +11772,30 @@ def submit_block():
             header += struct.pack("<I",nonce)
             pow_hash = sha256d(header)[::-1].hex()
         except Exception as e:
+            if _mining_watchdog_register_invalid(miner_key, now):
+                logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+                return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
             return jsonify(error=f"Header construction failed: {e}"),400
     else:
         pow_hash=data.get("pow_hash")
         prev_hash=data.get("prev_hash")
         if prev_hash!=server_last_hash:
+            if _mining_watchdog_register_invalid(miner_key, now):
+                logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+                return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
             return jsonify(error="Stale block (prev_hash mismatch)"),400
         check=hashlib.sha256((prev_hash+thr_address).encode()+str(nonce).encode()).hexdigest()
         if check!=pow_hash:
+            if _mining_watchdog_register_invalid(miner_key, now):
+                logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+                return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
             return jsonify(error="Invalid hash calculation"),400
             
     current_target = get_mining_target()
     if int(pow_hash, 16) > current_target:
+        if _mining_watchdog_register_invalid(miner_key, now):
+            logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+            return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
         return jsonify(error=f"Insufficient difficulty. Target: {hex(current_target)}"), 400
 
     # Reward split με σωστό height (blocks + offset)

@@ -149,14 +149,14 @@ def notify_clients():
             pass
 
 
-def refresh_job_from_server():
+def refresh_job_from_server(force=False):
     global current_job, last_prev_hash
     last_block = get_mining_info()
     if not last_block:
         return
     prev_hash = last_block.get("block_hash") or last_block.get("last_hash", "0" * 64)
     with lock:
-        if prev_hash != last_prev_hash:
+        if force or prev_hash != last_prev_hash:
             current_job = _build_job(last_block)
             last_prev_hash = prev_hash
             print(f"[STRATUM] Job refresh: PrevHash={prev_hash[:8]}...")
@@ -311,11 +311,11 @@ def handle_client(conn, addr):
                                     if r.status_code == 200:
                                         print("✅ Block Accepted!")
                                         response = {"id": msg_id, "result": True, "error": None}
-                                        refresh_job_from_server()
+                                        refresh_job_from_server(force=True)
                                     else:
                                         if res_json.get("error") == "stale_block":
                                             print(f"[STRATUM] Stale share: job={job_id_sub} submitted_height={res_json.get('submitted_height')} tip_height={res_json.get('tip_height')}")
-                                            refresh_job_from_server()
+                                            refresh_job_from_server(force=True)
                                             response = {"id": msg_id, "result": False, "error": [21, "Stale Job", None]}
                                         else:
                                             print(f"❌ Block Rejected: {res_json.get('error')}")

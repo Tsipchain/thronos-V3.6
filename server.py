@@ -31,6 +31,7 @@ from __future__ import annotations
 # - Admin Withdrawal Panel (V5.1)
 
 import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil
+import sys
 from collections import Counter
 from decimal import Decimal, ROUND_DOWN
 import qrcode
@@ -363,6 +364,14 @@ MODEL_REFRESH_INTERVAL_SECONDS = float(os.getenv("MODEL_REFRESH_INTERVAL_SECONDS
 PROVIDER_HEALTH_CACHE: dict = {}
 PROVIDER_HEALTH_TTL = 300  # seconds
 
+# Lightweight caches for hot endpoints
+MINING_INFO_CACHE: dict = {"ts": 0.0, "data": None}
+LAST_HASH_CACHE: dict = {"ts": 0.0, "data": None}
+MEMPOOL_COUNT_CACHE: dict = {"ts": 0.0, "count": 0}
+BALANCE_CACHE: dict = {}
+BALANCE_CACHE_TTL = float(os.getenv("BALANCE_CACHE_TTL_SECONDS", "10"))
+LAST_BLOCK_SNAPSHOT: dict = {}
+
 # ─── PR-182: Multi-Node Role Configuration ────────────────────────────────
 # Node role: "master" or "replica"
 NODE_ROLE = os.getenv("NODE_ROLE", "master").lower()
@@ -374,6 +383,21 @@ IS_LEADER = os.getenv("IS_LEADER", "1" if NODE_ROLE == "master" else "0") == "1"
 SCHEDULER_ENABLED = os.getenv("SCHEDULER_ENABLED", "1") == "1"
 # AI mode: "production" (user-facing) or "worker" (background tasks)
 THRONOS_AI_MODE = os.getenv("THRONOS_AI_MODE", "production" if NODE_ROLE == "master" else "worker").lower()
+MINING_WHITELIST_ONLY = os.getenv("MINING_WHITELIST_ONLY", "0").lower() in ("1", "true", "yes")
+MINING_WATCHDOG_WINDOW_SECONDS = int(os.getenv("MINING_WATCHDOG_WINDOW_SECONDS", "60"))
+MINING_WATCHDOG_MAX_INVALID = int(os.getenv("MINING_WATCHDOG_MAX_INVALID", "12"))
+MINING_WATCHDOG_MAX_REQUESTS = int(os.getenv("MINING_WATCHDOG_MAX_REQUESTS", "60"))
+MINING_WATCHDOG_BAN_SECONDS = int(os.getenv("MINING_WATCHDOG_BAN_SECONDS", "300"))
+HEARTBEAT_ENABLED = os.getenv("HEARTBEAT_ENABLED", "1").lower() in ("1", "true", "yes")
+HEARTBEAT_LOG_ERRORS = os.getenv("HEARTBEAT_LOG_ERRORS", "0").lower() in ("1", "true", "yes")
+
+if NODE_ROLE == "replica" and not READ_ONLY:
+    logger.warning("[CONFIG] Forcing READ_ONLY=1 on replica node")
+    READ_ONLY = True
+
+if NODE_ROLE != "master" and SCHEDULER_ENABLED:
+    logger.warning("[CONFIG] Disabling SCHEDULER_ENABLED on non-master node")
+    SCHEDULER_ENABLED = False
 
 MASTER_INTERNAL_URL = os.getenv("MASTER_NODE_URL", "http://localhost:5000")
 LEADER_URL = os.getenv("LEADER_URL", MASTER_INTERNAL_URL)
@@ -779,8 +803,36 @@ if stripe:
 # Πόσα blocks "έχουν ήδη γίνει" πριν ξεκινήσει το τρέχον chain αρχείο
 HEIGHT_OFFSET = 0
 
+class AttributesLevelFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        attributes = getattr(record, "attributes", None)
+        if not isinstance(attributes, dict):
+            attributes = {}
+            record.attributes = attributes
+        attributes["level"] = record.levelname.lower()
+        return True
+
+
 logging.basicConfig(level=logging.INFO)
+root_logger = logging.getLogger()
+for handler in root_logger.handlers:
+    handler.addFilter(AttributesLevelFilter())
+
 logger = logging.getLogger("thronos")
+
+scheduler_logger = logging.getLogger("apscheduler")
+scheduler_logger.setLevel(logging.INFO)
+if not scheduler_logger.handlers:
+    scheduler_handler = logging.StreamHandler(sys.stdout)
+    scheduler_handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+    scheduler_handler.addFilter(AttributesLevelFilter())
+    scheduler_logger.addHandler(scheduler_handler)
+else:
+    for handler in scheduler_logger.handlers:
+        handler.addFilter(AttributesLevelFilter())
+        if handler.formatter is None:
+            handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+scheduler_logger.propagate = False
 
 # Security warnings for production deployments
 if ADMIN_SECRET == "CHANGE_ME_NOW":
@@ -1175,6 +1227,40 @@ def has_pledge_access(thr_address: str) -> bool:
     """
     mode = get_wallet_pledge_mode(thr_address)
     return mode != "none"
+
+
+def has_btc_pledge(thr_address: str) -> bool:
+    if not thr_address:
+        return False
+    pledges = load_json(PLEDGE_CHAIN, [])
+    pledge = next((p for p in pledges if p.get("thr_address") == thr_address), None)
+    return bool(pledge and pledge.get("send_auth_hash"))
+
+
+def get_mining_whitelist_entry(thr_address: str) -> dict | None:
+    """Return mining whitelist entry, supporting legacy string lists."""
+    if not thr_address:
+        return None
+
+    entries = load_json(WHITELIST_WALLETS_FILE, [])
+    if isinstance(entries, list):
+        for entry in entries:
+            if isinstance(entry, str):
+                if entry == thr_address:
+                    return {"address": entry, "active": True, "pledge_ok": has_btc_pledge(thr_address)}
+                continue
+            if isinstance(entry, dict):
+                address = entry.get("address") or entry.get("thr_address")
+                if address == thr_address:
+                    active = entry.get("active", True)
+                    pledge_ok = entry.get("pledge_ok", has_btc_pledge(thr_address))
+                    return {
+                        "address": address,
+                        "active": active,
+                        "pledge_ok": pledge_ok,
+                    }
+
+    return None
 
 
 def get_pledge_for_auth(thr_address: str) -> dict | None:
@@ -1601,6 +1687,15 @@ def save_mempool(pool):
     save_json(MEMPOOL_FILE, pool)
 
 
+def get_mempool_len_cached() -> int:
+    now = time.time()
+    if now - MEMPOOL_COUNT_CACHE.get("ts", 0.0) < 2.0:
+        return int(MEMPOOL_COUNT_CACHE.get("count", 0))
+    count = len(load_mempool())
+    MEMPOOL_COUNT_CACHE.update({"ts": now, "count": count})
+    return count
+
+
 def load_tx_log():
     """Load the normalized transaction ledger (persistent across resets)."""
     return load_json(TX_LOG_FILE, [])
@@ -1629,6 +1724,11 @@ def _canonical_kind(kind_raw: str) -> str:
         "bridge": "bridge",
         "bridge_withdraw_request": "bridge",
         "bridge_deposit_detected": "bridge",
+        "bridge_deposit": "bridge",
+        "bridge_withdraw": "bridge",
+        "bridge_in": "bridge",
+        "bridge_out": "bridge",
+        "crosschain": "bridge",
         "l2e_reward": "l2e",
         "l2e": "l2e",
         "credits_consume": "ai_credits",
@@ -2438,6 +2538,16 @@ def get_wallet_balances(wallet: str):
         "token_balances": token_balances,
         "tokens": tokens,
     }
+
+
+def get_wallet_balances_cached(wallet: str) -> dict:
+    now = time.time()
+    entry = BALANCE_CACHE.get(wallet)
+    if entry and now - entry.get("ts", 0.0) < BALANCE_CACHE_TTL:
+        return entry["data"]
+    data = get_wallet_balances(wallet)
+    BALANCE_CACHE[wallet] = {"ts": now, "data": data}
+    return data
 
 def load_attest_store():
     return load_json(ATTEST_STORE_FILE, {})
@@ -3533,6 +3643,25 @@ def update_last_block(entry, is_block=True):
             summary["timestamp"] = existing.get("timestamp")
             summary["thr_address"] = existing.get("thr_address")
     save_json(LAST_BLOCK_FILE, summary)
+    LAST_BLOCK_SNAPSHOT.clear()
+    LAST_BLOCK_SNAPSHOT.update(summary)
+    LAST_HASH_CACHE.update({
+        "ts": time.time(),
+        "data": {
+            "last_hash": summary.get("block_hash") or "0" * 64,
+            "height": summary.get("height") if summary.get("height") is not None else -1,
+            "timestamp": summary.get("timestamp"),
+        },
+    })
+
+
+def get_last_block_snapshot() -> dict:
+    if LAST_BLOCK_SNAPSHOT:
+        return LAST_BLOCK_SNAPSHOT
+    snapshot = load_json(LAST_BLOCK_FILE, {})
+    if isinstance(snapshot, dict):
+        LAST_BLOCK_SNAPSHOT.update(snapshot)
+    return LAST_BLOCK_SNAPSHOT
 
 def verify_btc_payment(btc_address, min_amount=MIN_AMOUNT):
     try:
@@ -4295,12 +4424,16 @@ def _categorize_transaction(tx: dict) -> str:
     if "ai" in tx_type_lower or tx_type in ["ai_reward", "ai_job_reward", "ai_job_completed"]:
         return "ai_reward"
 
+    # Learn-to-earn rewards
+    if "l2e" in tx_type_lower or tx_type in ["l2e_reward", "l2e"]:
+        return "l2e"
+
     # IoT telemetry
     if "iot" in tx_type_lower or "telemetry" in tx_type_lower or "gps" in tx_type_lower:
         return "iot_telemetry"
 
     # Bridge operations
-    if "bridge" in tx_type_lower or tx_type in ["bridge", "bridge_in", "bridge_out", "wbtc_burn"]:
+    if "bridge" in tx_type_lower or tx_type in ["bridge", "bridge_in", "bridge_out", "bridge_deposit", "bridge_withdraw", "crosschain", "wbtc_burn"]:
         return "bridge"
 
     # Pledges
@@ -5713,44 +5846,75 @@ def api_last_block():
 
 @app.route("/last_block_hash")
 def last_block_hash():
-    chain = load_chain_cached()
-    blocks = get_reward_blocks()
-    if blocks:
-        last = blocks[-1]
-        global_height = HEIGHT_OFFSET + len(blocks) - 1
-        return jsonify(
-            last_hash=last.get("block_hash", ""),
-            height=global_height,
-            timestamp=last.get("timestamp"),
-        )
-    return jsonify(last_hash="0"*64, height=-1, timestamp=None)
+    start = time.time()
+    now = time.time()
+    cached = LAST_HASH_CACHE.get("data")
+    if cached and now - LAST_HASH_CACHE.get("ts", 0.0) < 2.0:
+        logger.debug("last_hash handler took %.3fs", time.time() - start)
+        return jsonify(cached)
+
+    last = get_last_block_snapshot()
+    last_hash = last.get("block_hash") or "0" * 64
+    height = last.get("height")
+    timestamp = last.get("timestamp")
+    payload = {
+        "last_hash": last_hash,
+        "height": height if height is not None else -1,
+        "timestamp": timestamp,
+    }
+    LAST_HASH_CACHE.update({"ts": now, "data": payload})
+    logger.debug("last_hash handler took %.3fs", time.time() - start)
+    return jsonify(payload)
 
 @app.route("/mining_info")
 def mining_info():
+    start = time.time()
+    now = time.time()
+    cached = MINING_INFO_CACHE.get("data")
+    if cached and now - MINING_INFO_CACHE.get("ts", 0.0) < 2.0:
+        logger.debug("mining_info handler took %.3fs", time.time() - start)
+        return jsonify(cached), 200
+
     target = get_mining_target()
-    nbits  = target_to_bits(target)
+    nbits = target_to_bits(target)
 
-    chain  = load_chain_cached()
-    blocks = get_reward_blocks()
+    last_block = get_last_block_snapshot()
+    last_hash = last_block.get("block_hash") or "0" * 64
+    block_count = last_block.get("block_count")
+    if block_count is not None:
+        local_height = max(int(block_count) - HEIGHT_OFFSET, 0)
+        global_height = int(block_count)
+    else:
+        blocks = get_reward_blocks()
+        local_height = len(blocks)
+        global_height = HEIGHT_OFFSET + local_height
+    reward = calculate_reward(global_height)
+    mempool_len = get_mempool_len_cached()
 
-    last_hash = blocks[-1].get("block_hash", "") if blocks else "0" * 64
-
-    local_height   = len(blocks)               # πόσα blocks έχουμε στο αρχείο
-    global_height  = HEIGHT_OFFSET + local_height  # block height με το offset
-    reward         = calculate_reward(global_height)
-
-    mempool_len = len(load_mempool())
-
-    return jsonify({
-        "target":        hex(target),
-        "nbits":         hex(nbits),
+    payload = {
+        "target": hex(target),
+        "nbits": hex(nbits),
         "difficulty_int": int(INITIAL_TARGET // target),
-        "reward":        reward,
-        "height":        global_height,
-        "local_height":  local_height,
-        "last_hash":     last_hash,
-        "mempool":       mempool_len,
-    }), 200
+        "reward": reward,
+        "height": global_height,
+        "local_height": local_height,
+        "last_hash": last_hash,
+        "mempool": mempool_len,
+    }
+    MINING_INFO_CACHE.update({"ts": now, "data": payload})
+    logger.debug("mining_info handler took %.3fs", time.time() - start)
+    return jsonify(payload), 200
+
+
+@app.route("/api/mining/info")
+@app.route("/api/mining_info")
+def api_mining_info():
+    return mining_info()
+
+
+@app.route("/api/last_hash")
+def api_last_hash():
+    return last_block_hash()
 
 @app.route("/api/network_stats")
 def network_stats():
@@ -6006,7 +6170,10 @@ def _list_api_routes():
 
 @app.route("/api/mempool")
 def api_mempool():
-    return jsonify(load_mempool()), 200
+    start = time.time()
+    mempool = load_mempool()
+    logger.debug("mempool handler took %.3fs", time.time() - start)
+    return jsonify(mempool), 200
 
 # NOTE: /api/blocks is now defined earlier with pagination support (line ~4153)
 # Old simple endpoint removed to avoid duplicate route error
@@ -6130,6 +6297,18 @@ def api_health():
         "time": datetime.utcnow().isoformat(timespec="seconds") + "Z",
         "build": build_info,
         "env_present": env_present
+    }), 200
+
+
+@app.route("/api/replica_health")
+def api_replica_health():
+    return jsonify({
+        "ok": True,
+        "node_role": NODE_ROLE,
+        "read_only": READ_ONLY,
+        "scheduler_enabled": SCHEDULER_ENABLED,
+        "heartbeat_enabled": HEARTBEAT_ENABLED,
+        "master_url": MASTER_INTERNAL_URL,
     }), 200
 
 
@@ -8844,7 +9023,7 @@ def api_wallet_tokens(thr_addr):
     Returns all token balances for a wallet with metadata (logos, names, etc.)
     Perfect for wallet widgets and balance displays
     """
-    balances = get_wallet_balances(thr_addr)
+    balances = get_wallet_balances_cached(thr_addr)
     tokens = balances["tokens"]
 
     show_zero = request.args.get("show_zero", "true").lower() == "true"
@@ -8867,7 +9046,7 @@ def api_balances():
     address = (request.args.get("address") or request.args.get("wallet") or "").strip()
     if not address:
         return jsonify({"ok": False, "error": "Missing address"}), 400
-    balances = get_wallet_balances(address)
+    balances = get_wallet_balances_cached(address)
     show_zero = request.args.get("show_zero", "true").lower() == "true"
     tokens = balances.get("tokens", [])
     if not show_zero:
@@ -8941,7 +9120,7 @@ def api_token_prices():
 @app.route("/api/balance/<thr_addr>", methods=["GET"])
 def api_balance_alias(thr_addr: str):
     """Compatibility alias that exposes a consolidated balance snapshot."""
-    balances = get_wallet_balances(thr_addr)
+    balances = get_wallet_balances_cached(thr_addr)
 
     mempool_pending = [
         tx for tx in load_mempool()
@@ -11587,23 +11766,100 @@ def aggregator_step():
         save_mempool(pool)
 
 
+# ─── MINING WATCHDOG ───────────────────────────────
+MINING_WATCHDOG_STATE = {
+    "requests": {},
+    "invalid": {},
+    "banned": {},
+}
+
+
+def _prune_watchdog_samples(samples: list[float], now: float, window: int) -> list[float]:
+    return [ts for ts in samples if now - ts <= window]
+
+
+def _mining_watchdog_key(thr_address: str) -> str:
+    remote = request.remote_addr or "unknown"
+    return f"{thr_address}:{remote}"
+
+
+def _mining_watchdog_is_banned(key: str, now: float) -> bool:
+    banned_until = MINING_WATCHDOG_STATE["banned"].get(key)
+    if not banned_until:
+        return False
+    if now >= banned_until:
+        MINING_WATCHDOG_STATE["banned"].pop(key, None)
+        return False
+    return True
+
+
+def _mining_watchdog_ban(key: str, now: float) -> None:
+    MINING_WATCHDOG_STATE["banned"][key] = now + MINING_WATCHDOG_BAN_SECONDS
+
+
+def _mining_watchdog_register_request(key: str, now: float) -> bool:
+    if MINING_WATCHDOG_MAX_REQUESTS <= 0:
+        return False
+    samples = MINING_WATCHDOG_STATE["requests"].get(key, [])
+    samples.append(now)
+    samples = _prune_watchdog_samples(samples, now, MINING_WATCHDOG_WINDOW_SECONDS)
+    MINING_WATCHDOG_STATE["requests"][key] = samples
+    if len(samples) > MINING_WATCHDOG_MAX_REQUESTS:
+        _mining_watchdog_ban(key, now)
+        return True
+    return False
+
+
+def _mining_watchdog_register_invalid(key: str, now: float) -> bool:
+    if MINING_WATCHDOG_MAX_INVALID <= 0:
+        return False
+    samples = MINING_WATCHDOG_STATE["invalid"].get(key, [])
+    samples.append(now)
+    samples = _prune_watchdog_samples(samples, now, MINING_WATCHDOG_WINDOW_SECONDS)
+    MINING_WATCHDOG_STATE["invalid"][key] = samples
+    if len(samples) > MINING_WATCHDOG_MAX_INVALID:
+        _mining_watchdog_ban(key, now)
+        return True
+    return False
+
+
 # ─── MINING ENDPOINT ───────────────────────────────
 @app.route("/submit_block", methods=["POST"])
+@app.route("/api/submit_block", methods=["POST"])
 def submit_block():
+    start = time.time()
     data = request.get_json() or {}
     thr_address = data.get("thr_address")
     nonce = data.get("nonce")
     if not thr_address or nonce is None:
+        logger.debug("submit_block handler took %.3fs", time.time() - start)
         return jsonify(error="Missing mining data"),400
-    chain=load_json(CHAIN_FILE,[])
-    
-    server_last_hash = ""
-    blocks=[b for b in chain if isinstance(b,dict) and b.get("reward") is not None]
-    if blocks:
-        server_last_hash = blocks[-1].get("block_hash","")
-    else:
-        server_last_hash = "0"*64
-        
+    now = time.time()
+    miner_key = _mining_watchdog_key(thr_address)
+
+    if MINING_WHITELIST_ONLY:
+        entry = get_mining_whitelist_entry(thr_address)
+        if not entry or not entry.get("active", False):
+            logger.warning("Mining rejected thr_address=%s reason=not_whitelisted", thr_address)
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            return jsonify(error="Mining not whitelisted", reason="not_whitelisted"), 403
+        if not entry.get("pledge_ok", False):
+            logger.warning("Mining rejected thr_address=%s reason=missing_pledge", thr_address)
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            return jsonify(error="Mining pledge missing", reason="missing_pledge"), 403
+
+    if _mining_watchdog_is_banned(miner_key, now):
+        logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+        logger.debug("submit_block handler took %.3fs", time.time() - start)
+        return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
+
+    if _mining_watchdog_register_request(miner_key, now):
+        logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+        logger.debug("submit_block handler took %.3fs", time.time() - start)
+        return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
+    last_block = get_last_block_snapshot()
+    server_last_hash = last_block.get("block_hash") or "0"*64
+
     is_stratum = "merkle_root" in data
     pow_hash=""
     prev_hash=""
@@ -11614,8 +11870,16 @@ def submit_block():
         nbits=data.get("nbits")
         version=data.get("version",1)
         if not all([merkle_root, prev_hash, time_val, nbits]):
+            if _mining_watchdog_register_invalid(miner_key, now):
+                logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+                logger.debug("submit_block handler took %.3fs", time.time() - start)
+                return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
             return jsonify(error="Missing Stratum fields"),400
         if prev_hash!=server_last_hash:
+            if _mining_watchdog_register_invalid(miner_key, now):
+                logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+                logger.debug("submit_block handler took %.3fs", time.time() - start)
+                return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
             return jsonify(error="Stale block (prev_hash mismatch)"),400
         try:
             header  = struct.pack("<I",version)
@@ -11626,23 +11890,47 @@ def submit_block():
             header += struct.pack("<I",nonce)
             pow_hash = sha256d(header)[::-1].hex()
         except Exception as e:
+            if _mining_watchdog_register_invalid(miner_key, now):
+                logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+                logger.debug("submit_block handler took %.3fs", time.time() - start)
+                return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
             return jsonify(error=f"Header construction failed: {e}"),400
     else:
         pow_hash=data.get("pow_hash")
         prev_hash=data.get("prev_hash")
         if prev_hash!=server_last_hash:
+            if _mining_watchdog_register_invalid(miner_key, now):
+                logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+                logger.debug("submit_block handler took %.3fs", time.time() - start)
+                return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
             return jsonify(error="Stale block (prev_hash mismatch)"),400
         check=hashlib.sha256((prev_hash+thr_address).encode()+str(nonce).encode()).hexdigest()
         if check!=pow_hash:
+            if _mining_watchdog_register_invalid(miner_key, now):
+                logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+                logger.debug("submit_block handler took %.3fs", time.time() - start)
+                return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
             return jsonify(error="Invalid hash calculation"),400
             
     current_target = get_mining_target()
     if int(pow_hash, 16) > current_target:
+        if _mining_watchdog_register_invalid(miner_key, now):
+            logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
         return jsonify(error=f"Insufficient difficulty. Target: {hex(current_target)}"), 400
 
+    chain=load_json(CHAIN_FILE,[])
+
     # Reward split με σωστό height (blocks + offset)
-    local_height  = len(blocks)
-    height        = HEIGHT_OFFSET + local_height
+    block_count = last_block.get("block_count")
+    if block_count is not None:
+        local_height = max(int(block_count) - HEIGHT_OFFSET, 0)
+        height = int(block_count)
+    else:
+        blocks=[b for b in chain if isinstance(b,dict) and b.get("reward") is not None]
+        local_height  = len(blocks)
+        height        = HEIGHT_OFFSET + local_height
     total_reward  = calculate_reward(height)
     
     miner_share=round(total_reward*0.80,6)
@@ -11667,8 +11955,10 @@ def submit_block():
 
     # PR-3: Append guard - reject duplicate/stale blocks
     # Check if there's already a block at this height or later
+    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
     tip_height = blocks[-1].get("height", -1) if blocks else -1
     if height <= tip_height:
+        logger.debug("submit_block handler took %.3fs", time.time() - start)
         return jsonify(error=f"Duplicate/stale block: height {height} <= tip {tip_height}"), 400
 
     chain.append(new_block)
@@ -11728,6 +12018,7 @@ def submit_block():
     except Exception:
         pass
     print(f"⛏️ Miner {thr_address} found block #{height}! R={total_reward} (m/a/b: {miner_share}/{ai_share}/{burn_share}) | TXs: {len(included)} | Stratum={is_stratum}")
+    logger.debug("submit_block handler took %.3fs", time.time() - start)
     return jsonify(status="accepted", height=height, reward=miner_share, tx_included=len(included)), 200
 
 
@@ -12261,7 +12552,7 @@ else:
     scheduler = None
 
 # Start heartbeat sender for replica nodes (independent of scheduler)
-if NODE_ROLE == "replica":
+if NODE_ROLE == "replica" and HEARTBEAT_ENABLED:
 
     # Start heartbeat sender for replica nodes
     import threading
@@ -12304,11 +12595,14 @@ if NODE_ROLE == "replica":
                 else:
                     print(f"[HEARTBEAT] Failed: {response.status_code} - {response.text}")
             except requests.exceptions.ConnectionError as e:
-                print(f"[HEARTBEAT] Connection error to master (will retry): {e}")
+                if HEARTBEAT_LOG_ERRORS:
+                    print(f"[HEARTBEAT] Connection error to master (will retry): {e}")
             except requests.exceptions.Timeout:
-                print(f"[HEARTBEAT] Timeout connecting to master (will retry)")
+                if HEARTBEAT_LOG_ERRORS:
+                    print(f"[HEARTBEAT] Timeout connecting to master (will retry)")
             except Exception as e:
-                print(f"[HEARTBEAT] Error sending to master: {e}")
+                if HEARTBEAT_LOG_ERRORS:
+                    print(f"[HEARTBEAT] Error sending to master: {e}")
 
             # Send heartbeat every 30 seconds (TTL is 60s)
             time.sleep(30)

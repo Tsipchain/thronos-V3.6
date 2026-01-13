@@ -12,12 +12,15 @@ import os
 THRONOS_SERVER = os.getenv("THRONOS_SERVER", "http://localhost:3333")
 STRATUM_PORT = int(os.getenv("STRATUM_PORT", "3334"))
 POLL_INTERVAL = 1.0
+SHARE_TARGET_MULTIPLIER = float(os.getenv("SHARE_TARGET_MULTIPLIER", "16"))
+MAX_TARGET = int("f" * 64, 16)
 
 # Global State
 current_job = None
 job_id_counter = 0
 clients = []
 lock = threading.Lock()
+last_prev_hash = None
 
 def sha256d(data):
     return hashlib.sha256(hashlib.sha256(data).digest()).digest()
@@ -34,7 +37,7 @@ def reverse_bytes(h):
     return bytes_to_hex(b[::-1])
 
 class Job:
-    def __init__(self, job_id, prev_hash, coinb1, coinb2, merkle_branch, version, nbits, ntime, clean_jobs):
+    def __init__(self, job_id, prev_hash, coinb1, coinb2, merkle_branch, version, nbits, ntime, clean_jobs, height, block_target):
         self.job_id = job_id
         self.prev_hash = prev_hash
         self.coinb1 = coinb1
@@ -44,77 +47,75 @@ class Job:
         self.nbits = nbits
         self.ntime = ntime
         self.clean_jobs = clean_jobs
+        self.height = height
+        self.block_target = block_target
 
 def get_mining_info():
     try:
-        r1 = requests.get(f"{THRONOS_SERVER}/last_block_hash", timeout=2)
+        r1 = requests.get(f"{THRONOS_SERVER}/api/last_block_hash", timeout=2)
         last_block = r1.json()
-        
-        r2 = requests.get(f"{THRONOS_SERVER}/mining_info", timeout=2)
-        info = r2.json()
-        
-        return last_block, info
+        return last_block
     except Exception as e:
         print(f"Error fetching mining info: {e}")
-        return None, None
+        return None
+
+
+def _build_job(last_block):
+    global job_id_counter
+    prev_hash = last_block.get("block_hash") or last_block.get("last_hash", "0" * 64)
+    tip_height = last_block.get("height")
+    target_hex = last_block.get("target")
+    block_target = int(target_hex, 16) if isinstance(target_hex, str) else MAX_TARGET
+    job_id_counter += 1
+    job_id = hex(job_id_counter)[2:]
+
+    prev_hash_be = reverse_bytes(prev_hash)
+
+    coinb1 = "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0403"
+    coinb2 = "ffffffff0100f2052a010000001976a914123456789012345678901234567890123456789088ac00000000"
+
+    merkle_branch = []
+    version = "00000001"
+    nbits_hex = (last_block.get("nbits") or "1d00ffff").replace("0x", "")
+    nbits_hex = nbits_hex.zfill(8)
+    nbits_be = reverse_bytes(nbits_hex)
+
+    ntime = int(time.time())
+    ntime_hex = hex(ntime)[2:].zfill(8)
+    ntime_be = reverse_bytes(ntime_hex)
+
+    clean_jobs = True
+
+    return Job(
+        job_id,
+        prev_hash_be,
+        coinb1,
+        coinb2,
+        merkle_branch,
+        version,
+        nbits_be,
+        ntime_be,
+        clean_jobs,
+        tip_height,
+        block_target,
+    )
 
 def job_updater():
-    global current_job, job_id_counter
-    
-    last_prev_hash = None
+    global current_job, last_prev_hash
     
     print(f"Stratum Proxy listening on 0.0.0.0:{STRATUM_PORT}")
     print(f"Connected to Thronos Server at {THRONOS_SERVER}")
     
     while True:
-        last_block, info = get_mining_info()
-        
-        if last_block and info:
-            prev_hash = last_block.get("last_hash", "0"*64)
-            
-            # Check if new block
+        last_block = get_mining_info()
+        if last_block:
+            prev_hash = last_block.get("block_hash") or last_block.get("last_hash", "0" * 64)
             if prev_hash != last_prev_hash:
                 with lock:
-                    job_id_counter += 1
-                    job_id = hex(job_id_counter)[2:]
-                    
-                    # Stratum expects prev_hash in Big Endian (swapped 32-bit words usually, but standard stratum is just LE reversed? 
-                    # Actually, standard Stratum documentation says prevhash is BE.
-                    # Thronos server returns prev_hash as hex string (likely BE from explorer view, but let's assume standard hex).
-                    # We need to send it in the format the miner expects. 
-                    # Usually miners expect it byte-swapped.
-                    # Let's try sending it byte-reversed.
-                    prev_hash_be = reverse_bytes(prev_hash)
-                    
-                    # Coinbase generation
-                    # We create a dummy coinbase. The miner will append extranonce1 + extranonce2.
-                    # Thronos doesn't validate the coinbase content strictly, just the merkle root.
-                    # Coinb1: Version(4) + InputCount(1) + Input(Dummy)
-                    coinb1 = "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0403" 
-                    # Coinb2: Sequence(4) + OutputCount(1) + Output(Dummy) + LockTime(4)
-                    coinb2 = "ffffffff0100f2052a010000001976a914123456789012345678901234567890123456789088ac00000000"
-                    
-                    merkle_branch = [] # No other txs
-                    version = "00000001" # Version 1
-                    
-                    # nbits from server is hex string "0x..."
-                    nbits_hex = info.get("nbits", "1d00ffff").replace("0x", "")
-                    # Ensure 8 chars
-                    nbits_hex = nbits_hex.zfill(8)
-                    # Stratum usually wants it BE
-                    nbits_be = reverse_bytes(nbits_hex)
-                    
-                    ntime = int(time.time())
-                    ntime_hex = hex(ntime)[2:].zfill(8)
-                    ntime_be = reverse_bytes(ntime_hex)
-                    
-                    clean_jobs = True
-                    
-                    current_job = Job(job_id, prev_hash_be, coinb1, coinb2, merkle_branch, version, nbits_be, ntime_be, clean_jobs)
+                    current_job = _build_job(last_block)
                     last_prev_hash = prev_hash
-                    
-                    print(f"New Job #{job_id}: PrevHash={prev_hash[:8]}... nBits={nbits_hex}")
-                    
+                    nbits_hex = (last_block.get("nbits") or "1d00ffff").replace("0x", "").zfill(8)
+                    print(f"New Job #{current_job.job_id}: PrevHash={prev_hash[:8]}... nBits={nbits_hex}")
                     notify_clients()
                     
         time.sleep(POLL_INTERVAL)
@@ -146,6 +147,20 @@ def notify_clients():
             c.sendall(msg.encode())
         except:
             pass
+
+
+def refresh_job_from_server(force=False):
+    global current_job, last_prev_hash
+    last_block = get_mining_info()
+    if not last_block:
+        return
+    prev_hash = last_block.get("block_hash") or last_block.get("last_hash", "0" * 64)
+    with lock:
+        if force or prev_hash != last_prev_hash:
+            current_job = _build_job(last_block)
+            last_prev_hash = prev_hash
+            print(f"[STRATUM] Job refresh: PrevHash={prev_hash[:8]}...")
+            notify_clients()
 
 def handle_client(conn, addr):
     print(f"Client connected: {addr}")
@@ -259,32 +274,58 @@ def handle_client(conn, addr):
                         # current_job.prev_hash is BE (reversed). We need to reverse it back to LE/Server format.
                         prev_hash_server = reverse_bytes(current_job.prev_hash)
                         
-                        payload = {
-                            "thr_address": thr_address,
-                            "nonce": nonce_int,
-                            "merkle_root": merkle_root_hex,
-                            "prev_hash": prev_hash_server,
-                            "time": ntime_int,
-                            "nbits": nbits_int,
-                            "version": 1,
-                            "pow_hash": "00" # Placeholder, server calculates it
-                        }
-                        
-                        print(f"Submitting share: Nonce={nonce_int} Merkle={merkle_root_hex[:8]}")
-                        
-                        try:
-                            r = requests.post(f"{THRONOS_SERVER}/submit_block", json=payload, timeout=5)
-                            res_json = r.json()
-                            
-                            if r.status_code == 200:
-                                print("✅ Share Accepted!")
-                                response = {"id": msg_id, "result": True, "error": None}
+                        header  = struct.pack("<I", 1)
+                        header += bytes.fromhex(prev_hash_server)[::-1]
+                        header += bytes.fromhex(merkle_root_hex)[::-1]
+                        header += struct.pack("<I", ntime_int)
+                        header += struct.pack("<I", nbits_int)
+                        header += struct.pack("<I", nonce_int)
+                        pow_hash_hex = sha256d(header)[::-1].hex()
+                        pow_int = int(pow_hash_hex, 16)
+
+                        block_target = current_job.block_target or MAX_TARGET
+                        share_target = min(int(block_target * SHARE_TARGET_MULTIPLIER), MAX_TARGET)
+
+                        if pow_int > share_target:
+                            response = {"id": msg_id, "result": False, "error": [23, "low_difficulty_share", None]}
+                            print(f"[STRATUM] Low difficulty share job={job_id_sub} hash={pow_hash_hex[:12]}...")
+                        else:
+                            payload = {
+                                "thr_address": thr_address,
+                                "nonce": nonce_int,
+                                "merkle_root": merkle_root_hex,
+                                "prev_hash": prev_hash_server,
+                                "time": ntime_int,
+                                "nbits": nbits_int,
+                                "version": 1,
+                                "pow_hash": pow_hash_hex,
+                            }
+                            if current_job.height is not None:
+                                payload["height"] = int(current_job.height) + 1
+
+                            if pow_int <= block_target:
+                                print(f"Submitting block candidate: Nonce={nonce_int} Merkle={merkle_root_hex[:8]}")
+                                try:
+                                    r = requests.post(f"{THRONOS_SERVER}/submit_block", json=payload, timeout=5)
+                                    res_json = r.json()
+                                    if r.status_code == 200:
+                                        print("✅ Block Accepted!")
+                                        response = {"id": msg_id, "result": True, "error": None}
+                                        refresh_job_from_server(force=True)
+                                    else:
+                                        if res_json.get("error") == "stale_block":
+                                            print(f"[STRATUM] Stale share: job={job_id_sub} submitted_height={res_json.get('submitted_height')} tip_height={res_json.get('tip_height')}")
+                                            refresh_job_from_server(force=True)
+                                            response = {"id": msg_id, "result": False, "error": [21, "Stale Job", None]}
+                                        else:
+                                            print(f"❌ Block Rejected: {res_json.get('error')}")
+                                            response = {"id": msg_id, "result": False, "error": [20, res_json.get('error'), None]}
+                                except Exception as e:
+                                    print(f"Submission Error: {e}")
+                                    response = {"id": msg_id, "result": False, "error": [21, "Server Error", None]}
                             else:
-                                print(f"❌ Share Rejected: {res_json.get('error')}")
-                                response = {"id": msg_id, "result": False, "error": [20, res_json.get('error'), None]}
-                        except Exception as e:
-                            print(f"Submission Error: {e}")
-                            response = {"id": msg_id, "result": False, "error": [21, "Server Error", None]}
+                                print(f"[STRATUM] Share accepted (not block) job={job_id_sub} hash={pow_hash_hex[:12]}...")
+                                response = {"id": msg_id, "result": True, "error": None}
                     else:
                         response = {"id": msg_id, "result": False, "error": [21, "Stale Job", None]}
             

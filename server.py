@@ -371,6 +371,7 @@ MEMPOOL_COUNT_CACHE: dict = {"ts": 0.0, "count": 0}
 BALANCE_CACHE: dict = {}
 BALANCE_CACHE_TTL = float(os.getenv("BALANCE_CACHE_TTL_SECONDS", "10"))
 LAST_BLOCK_SNAPSHOT: dict = {}
+MINING_LAST_HASH_CACHE: dict = {"ts": 0.0, "data": None}
 
 # ─── PR-182: Multi-Node Role Configuration ────────────────────────────────
 # Node role: "master" or "replica"
@@ -401,6 +402,7 @@ if NODE_ROLE != "master" and SCHEDULER_ENABLED:
 
 MASTER_INTERNAL_URL = os.getenv("MASTER_NODE_URL", "http://localhost:5000")
 LEADER_URL = os.getenv("LEADER_URL", MASTER_INTERNAL_URL)
+MINING_RPC_REPLICA = os.getenv("MINING_RPC_REPLICA", "").strip()
 # Replica external URL - used for heartbeat registration (e.g., Railway URL)
 REPLICA_EXTERNAL_URL = os.getenv("REPLICA_EXTERNAL_URL", os.getenv("RAILWAY_PUBLIC_DOMAIN", ""))
 
@@ -1237,8 +1239,7 @@ def has_pledge_access(thr_address: str) -> bool:
     Check if wallet has pledge access (either whitelist or BTC pledge).
     Returns True if pledge_mode != "none"
     """
-    mode = get_wallet_pledge_mode(thr_address)
-    return mode != "none"
+    return get_effective_pledge_state(thr_address)["effective_pledge_ok"]
 
 
 def has_btc_pledge(thr_address: str) -> bool:
@@ -1283,11 +1284,9 @@ def get_mining_whitelist_entry(thr_address: str) -> dict | None:
                     active = entry.get("active", True)
                     pledge_ok = entry.get("pledge_ok", has_btc_pledge(thr_address))
                     role = (entry.get("role") or "").lower()
-                    whitelist_legacy = bool(
-                        entry.get("whitelist_legacy")
-                        or entry.get("grandfathered")
-                        or role in ("whitelist_legacy", "grandfathered", "legacy_whitelist")
-                    )
+                    whitelist_legacy = entry.get("whitelist_legacy")
+                    if whitelist_legacy is None:
+                        whitelist_legacy = True
                     return {
                         "address": address,
                         "active": active,
@@ -1302,7 +1301,55 @@ def get_mining_whitelist_entry(thr_address: str) -> dict | None:
 def _whitelist_allows_no_pledge(entry: dict | None) -> bool:
     if not entry:
         return False
+    if not entry.get("active", True) or entry.get("banned", False):
+        return False
     return bool(entry.get("whitelist_legacy") or entry.get("grandfathered"))
+
+
+def get_effective_pledge_state(thr_address: str) -> dict:
+    entry = get_mining_whitelist_entry(thr_address)
+    pledge_ok = has_btc_pledge(thr_address)
+    whitelist_active = bool(entry and entry.get("active", True) and not entry.get("banned", False))
+    whitelist_legacy = bool(whitelist_active and _whitelist_allows_no_pledge(entry))
+    effective_pledge_ok = pledge_ok or whitelist_legacy
+    if whitelist_active:
+        pledge_mode = "whitelist"
+    elif pledge_ok:
+        pledge_mode = "btc_pledge"
+    else:
+        pledge_mode = "none"
+    return {
+        "pledge_ok": pledge_ok,
+        "whitelist_active": whitelist_active,
+        "whitelist_legacy": whitelist_legacy,
+        "effective_pledge_ok": effective_pledge_ok,
+        "pledge_mode": pledge_mode,
+    }
+
+
+def validate_effective_auth(thr_address: str, auth_secret: str, passphrase: str) -> tuple[bool, dict, str | None]:
+    state = get_effective_pledge_state(thr_address)
+    if not state["effective_pledge_ok"]:
+        return False, state, "no_effective_pledge"
+    if state["pledge_mode"] == "whitelist":
+        return True, state, None
+    if not auth_secret:
+        return False, state, "missing_auth_secret"
+    pledge = get_pledge_for_auth(thr_address)
+    if not pledge:
+        return False, state, "missing_pledge"
+    stored_auth_hash = pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return False, state, "send_not_enabled"
+    if pledge.get("has_passphrase"):
+        if not passphrase:
+            return False, state, "passphrase_required"
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return False, state, "invalid_auth"
+    return True, state, None
 
 
 def get_pledge_for_auth(thr_address: str) -> dict | None:
@@ -5895,22 +5942,42 @@ def api_last_block():
 def last_block_hash():
     start = time.time()
     now = time.time()
-    cached = LAST_HASH_CACHE.get("data")
-    if cached and now - LAST_HASH_CACHE.get("ts", 0.0) < 2.0:
-        logger.debug("last_hash handler took %.3fs", time.time() - start)
+    cached = MINING_LAST_HASH_CACHE.get("data")
+    if cached and now - MINING_LAST_HASH_CACHE.get("ts", 0.0) < 1.0:
+        logger.info("mining.last_block_hash ms=%s source=cache", int((time.time() - start) * 1000))
         return jsonify(cached)
 
-    last = get_last_block_snapshot()
-    last_hash = last.get("block_hash") or "0" * 64
-    height = last.get("height")
-    timestamp = last.get("timestamp")
-    payload = {
-        "last_hash": last_hash,
-        "height": height if height is not None else -1,
-        "timestamp": timestamp,
-    }
-    LAST_HASH_CACHE.update({"ts": now, "data": payload})
-    logger.debug("last_hash handler took %.3fs", time.time() - start)
+    payload = None
+    source = "local"
+    if MINING_RPC_REPLICA and NODE_ROLE == "master":
+        try:
+            replica_url = MINING_RPC_REPLICA.rstrip("/")
+            resp = requests.get(f"{replica_url}/api/last_block_hash", timeout=0.4)
+            if resp.ok:
+                payload = resp.json()
+                payload["source"] = "replica"
+                source = "replica"
+        except Exception:
+            payload = None
+
+    if payload is None:
+        last = get_last_block_snapshot()
+        last_hash = last.get("block_hash") or "0" * 64
+        height = last.get("height")
+        timestamp = last.get("timestamp")
+        target = get_mining_target()
+        nbits = target_to_bits(target)
+        payload = {
+            "block_hash": last_hash,
+            "last_hash": last_hash,
+            "height": height if height is not None else -1,
+            "timestamp": timestamp,
+            "target": hex(target),
+            "nbits": hex(nbits),
+        }
+
+    MINING_LAST_HASH_CACHE.update({"ts": now, "data": payload})
+    logger.info("mining.last_block_hash", extra={"ms": int((time.time() - start) * 1000), "source": source})
     return jsonify(payload)
 
 @app.route("/mining_info")
@@ -5961,6 +6028,10 @@ def api_mining_info():
 
 @app.route("/api/last_hash")
 def api_last_hash():
+    return last_block_hash()
+
+@app.route("/api/last_block_hash")
+def api_last_block_hash():
     return last_block_hash()
 
 @app.route("/api/network_stats")
@@ -9741,24 +9812,20 @@ def api_token_transfer():
         return jsonify({"ok": False, "error": "This token is not transferable"}), 403
 
     # Auth: same logic as /api/wallet/send for custom tokens
-    pledges = load_json(PLEDGE_CHAIN, [])
-    sender_pledge = next((p for p in pledges if p.get("thr_address") == from_thr), None)
-    if not sender_pledge:
-        return jsonify({"ok": False, "error": "Sender address not found"}), 404
-
-    stored_auth_hash = sender_pledge.get("send_auth_hash")
-    if not stored_auth_hash:
-        return jsonify({"ok": False, "error": "Send not enabled for this address"}), 400
-
-    if sender_pledge.get("has_passphrase"):
-        if not passphrase:
+    ok, _, error_key = validate_effective_auth(from_thr, auth_secret, passphrase)
+    if not ok:
+        if error_key == "no_effective_pledge":
+            return jsonify({"ok": False, "error": "Sender has no effective pledge access"}), 403
+        if error_key == "missing_auth_secret":
+            return jsonify({"ok": False, "error": "Authentication secret required"}), 400
+        if error_key == "missing_pledge":
+            return jsonify({"ok": False, "error": "Sender address not found"}), 404
+        if error_key == "send_not_enabled":
+            return jsonify({"ok": False, "error": "Send not enabled for this address"}), 400
+        if error_key == "passphrase_required":
             return jsonify({"ok": False, "error": "Passphrase required"}), 400
-        auth_string = f"{auth_secret}:{passphrase}:auth"
-    else:
-        auth_string = f"{auth_secret}:auth"
-
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify({"ok": False, "error": "Invalid authentication"}), 403
+        if error_key == "invalid_auth":
+            return jsonify({"ok": False, "error": "Invalid authentication"}), 403
 
     # Ledger update
     token_id = token.get("id") or token.get("token_id") or symbol
@@ -9860,8 +9927,6 @@ def api_token_burn():
         return jsonify({"ok": False, "error": "Address required"}), 400
     if amount <= 0:
         return jsonify({"ok": False, "error": "Amount must be positive"}), 400
-    if not auth_secret:
-        return jsonify({"ok": False, "error": "Authentication secret required"}), 400
 
     # Get token and check if it exists
     tokens = load_custom_tokens()
@@ -9878,24 +9943,20 @@ def api_token_burn():
         }), 403
 
     # Validate sender's pledge and auth
-    pledges = load_json(PLEDGE_CHAIN, [])
-    sender_pledge = next((p for p in pledges if p.get("thr_address") == from_thr), None)
-    if not sender_pledge:
-        return jsonify({"ok": False, "error": "Address not found in pledge registry"}), 404
-
-    stored_auth_hash = sender_pledge.get("send_auth_hash")
-    if not stored_auth_hash:
-        return jsonify({"ok": False, "error": "Send not enabled for this address"}), 400
-
-    if sender_pledge.get("has_passphrase"):
-        if not passphrase:
+    ok, _, error_key = validate_effective_auth(from_thr, auth_secret, passphrase)
+    if not ok:
+        if error_key == "no_effective_pledge":
+            return jsonify({"ok": False, "error": "Address has no effective pledge access"}), 403
+        if error_key == "missing_auth_secret":
+            return jsonify({"ok": False, "error": "Authentication secret required"}), 400
+        if error_key == "missing_pledge":
+            return jsonify({"ok": False, "error": "Address not found in pledge registry"}), 404
+        if error_key == "send_not_enabled":
+            return jsonify({"ok": False, "error": "Send not enabled for this address"}), 400
+        if error_key == "passphrase_required":
             return jsonify({"ok": False, "error": "Passphrase required"}), 400
-        auth_string = f"{auth_secret}:{passphrase}:auth"
-    else:
-        auth_string = f"{auth_secret}:auth"
-
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify({"ok": False, "error": "Invalid authentication"}), 403
+        if error_key == "invalid_auth":
+            return jsonify({"ok": False, "error": "Invalid authentication"}), 403
 
     # Update token ledger - burn tokens
     ledger = load_custom_token_ledger(token["id"])
@@ -9971,8 +10032,6 @@ def api_token_mint():
         return jsonify({"ok": False, "error": "Creator and recipient addresses required"}), 400
     if amount <= 0:
         return jsonify({"ok": False, "error": "Amount must be positive"}), 400
-    if not auth_secret:
-        return jsonify({"ok": False, "error": "Authentication secret required"}), 400
 
     # Get token and check if it exists
     tokens = load_custom_tokens()
@@ -10009,24 +10068,20 @@ def api_token_mint():
             }), 400
 
     # Validate creator's pledge and auth
-    pledges = load_json(PLEDGE_CHAIN, [])
-    creator_pledge = next((p for p in pledges if p.get("thr_address") == creator), None)
-    if not creator_pledge:
-        return jsonify({"ok": False, "error": "Creator address not found in pledge registry"}), 404
-
-    stored_auth_hash = creator_pledge.get("send_auth_hash")
-    if not stored_auth_hash:
-        return jsonify({"ok": False, "error": "Send not enabled for creator address"}), 400
-
-    if creator_pledge.get("has_passphrase"):
-        if not passphrase:
+    ok, _, error_key = validate_effective_auth(creator, auth_secret, passphrase)
+    if not ok:
+        if error_key == "no_effective_pledge":
+            return jsonify({"ok": False, "error": "Creator has no effective pledge access"}), 403
+        if error_key == "missing_auth_secret":
+            return jsonify({"ok": False, "error": "Authentication secret required"}), 400
+        if error_key == "missing_pledge":
+            return jsonify({"ok": False, "error": "Creator address not found in pledge registry"}), 404
+        if error_key == "send_not_enabled":
+            return jsonify({"ok": False, "error": "Send not enabled for creator address"}), 400
+        if error_key == "passphrase_required":
             return jsonify({"ok": False, "error": "Passphrase required"}), 400
-        auth_string = f"{auth_secret}:{passphrase}:auth"
-    else:
-        auth_string = f"{auth_secret}:auth"
-
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify({"ok": False, "error": "Invalid authentication"}), 403
+        if error_key == "invalid_auth":
+            return jsonify({"ok": False, "error": "Invalid authentication"}), 403
 
     # Mint tokens - add to recipient balance
     ledger = load_custom_token_ledger(token["id"])
@@ -10239,8 +10294,6 @@ def transfer_custom_token(symbol, from_thr, to_thr, amount_raw, auth_secret, pas
         return jsonify({"ok": False, "error": "From and to addresses required"}), 400
     if amount <= 0:
         return jsonify({"ok": False, "error": "Amount must be positive"}), 400
-    if not auth_secret:
-        return jsonify({"ok": False, "error": "Authentication secret required"}), 400
 
     tokens = load_custom_tokens()
     token = tokens.get(symbol)
@@ -10250,24 +10303,20 @@ def transfer_custom_token(symbol, from_thr, to_thr, amount_raw, auth_secret, pas
     if not token.get("transferable", True):
         return jsonify({"ok": False, "error": "This token is not transferable"}), 403
 
-    pledges = load_json(PLEDGE_CHAIN, [])
-    sender_pledge = next((p for p in pledges if p.get("thr_address") == from_thr), None)
-    if not sender_pledge:
-        return jsonify({"ok": False, "error": "Sender address not found"}), 404
-
-    stored_auth_hash = sender_pledge.get("send_auth_hash")
-    if not stored_auth_hash:
-        return jsonify({"ok": False, "error": "Send not enabled for this address"}), 400
-
-    if sender_pledge.get("has_passphrase"):
-        if not passphrase:
+    ok, _, error_key = validate_effective_auth(from_thr, auth_secret, passphrase)
+    if not ok:
+        if error_key == "no_effective_pledge":
+            return jsonify({"ok": False, "error": "Sender has no effective pledge access"}), 403
+        if error_key == "missing_auth_secret":
+            return jsonify({"ok": False, "error": "Authentication secret required"}), 400
+        if error_key == "missing_pledge":
+            return jsonify({"ok": False, "error": "Sender address not found"}), 404
+        if error_key == "send_not_enabled":
+            return jsonify({"ok": False, "error": "Send not enabled for this address"}), 400
+        if error_key == "passphrase_required":
             return jsonify({"ok": False, "error": "Passphrase required"}), 400
-        auth_string = f"{auth_secret}:{passphrase}:auth"
-    else:
-        auth_string = f"{auth_secret}:auth"
-
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify({"ok": False, "error": "Invalid authentication"}), 403
+        if error_key == "invalid_auth":
+            return jsonify({"ok": False, "error": "Invalid authentication"}), 403
 
     # Check custom token balance
     token_ledger = load_custom_token_ledger(token["id"])
@@ -11013,8 +11062,8 @@ def api_swap_execute():
 
     if not token_in or not token_out or amount_in <= 0:
         return jsonify(status="error", message="Invalid input"), 400
-    if not trader or not auth_secret:
-        return jsonify(status="error", message="Missing trader or auth_secret"), 400
+    if not trader:
+        return jsonify(status="error", message="Missing trader"), 400
     if not is_swap_symbol_allowed(token_in) or not is_swap_symbol_allowed(token_out):
         return jsonify(status="error", message="Unsupported token"), 400
 
@@ -11024,21 +11073,20 @@ def api_swap_execute():
     if quote["amount_out"] < min_amount_out:
         return jsonify(status="error", message="Slippage too high", expected_minimum=min_amount_out, actual_output=quote["amount_out"]), 400
 
-    pledges = load_json(PLEDGE_CHAIN, [])
-    trader_pledge = next((p for p in pledges if p.get("thr_address") == trader), None)
-    if not trader_pledge:
-        return jsonify(status="error", message="Trader has not pledged"), 404
-    stored_auth_hash = trader_pledge.get("send_auth_hash")
-    if not stored_auth_hash:
-        return jsonify(status="error", message="Trader send not enabled"), 400
-    if trader_pledge.get("has_passphrase"):
-        if not passphrase:
+    ok, _, error_key = validate_effective_auth(trader, auth_secret, passphrase)
+    if not ok:
+        if error_key == "no_effective_pledge":
+            return jsonify(status="error", message="Trader has no effective pledge access"), 403
+        if error_key == "missing_auth_secret":
+            return jsonify(status="error", message="Missing auth_secret"), 400
+        if error_key == "missing_pledge":
+            return jsonify(status="error", message="Trader has not pledged"), 404
+        if error_key == "send_not_enabled":
+            return jsonify(status="error", message="Trader send not enabled"), 400
+        if error_key == "passphrase_required":
             return jsonify(status="error", message="Passphrase required"), 400
-        auth_string = f"{auth_secret}:{passphrase}:auth"
-    else:
-        auth_string = f"{auth_secret}:auth"
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify(status="error", message="Invalid auth"), 403
+        if error_key == "invalid_auth":
+            return jsonify(status="error", message="Invalid auth"), 403
 
     thr_ledger = load_json(LEDGER_FILE, {})
     wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
@@ -11883,6 +11931,7 @@ def submit_block():
         return jsonify(error="Missing mining data"),400
     now = time.time()
     miner_key = _mining_watchdog_key(thr_address)
+    submitted_height = data.get("height") or data.get("submitted_height")
 
     entry = get_mining_whitelist_entry(thr_address)
     if MINING_WHITELIST_ONLY:
@@ -11895,9 +11944,9 @@ def submit_block():
             logger.debug("submit_block handler took %.3fs", time.time() - start)
             return jsonify(error="Mining not active", reason="inactive_or_banned"), 403
         if not (entry.get("pledge_ok", False) or _whitelist_allows_no_pledge(entry)):
-            logger.info("Mining rejected thr_address=%s reason=missing_pledge", thr_address)
+            logger.info("Mining rejected thr_address=%s reason=no_effective_pledge", thr_address)
             logger.debug("submit_block handler took %.3fs", time.time() - start)
-            return jsonify(error="Mining pledge missing", reason="missing_pledge"), 403
+            return jsonify(error="Mining pledge missing", reason="no_effective_pledge"), 403
     else:
         if entry and (not entry.get("active", True) or entry.get("banned", False)):
             logger.info("Mining rejected thr_address=%s reason=banned", thr_address)
@@ -11915,6 +11964,13 @@ def submit_block():
         return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
     last_block = get_last_block_snapshot()
     server_last_hash = last_block.get("block_hash") or "0"*64
+    tip_height = last_block.get("height")
+
+    if submitted_height is not None:
+        try:
+            submitted_height = int(submitted_height)
+        except (TypeError, ValueError):
+            submitted_height = None
 
     is_stratum = "merkle_root" in data
     pow_hash=""
@@ -11931,12 +11987,27 @@ def submit_block():
                 logger.debug("submit_block handler took %.3fs", time.time() - start)
                 return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
             return jsonify(error="Missing Stratum fields"),400
-        if prev_hash!=server_last_hash:
-            if _mining_watchdog_register_invalid(miner_key, now):
-                logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
-                logger.debug("submit_block handler took %.3fs", time.time() - start)
-                return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
-            return jsonify(error="Stale block (prev_hash mismatch)"),400
+        if prev_hash != server_last_hash or (
+            submitted_height is not None
+            and tip_height is not None
+            and submitted_height != int(tip_height) + 1
+        ):
+            reason = "prev_mismatch" if prev_hash != server_last_hash else "stale_height"
+            logger.info("mining.stale_block %s", json.dumps({
+                "submitted_height": submitted_height,
+                "tip_height": tip_height,
+                "tip_hash": server_last_hash,
+                "prev_hash": prev_hash,
+                "reason": reason,
+            }))
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            return jsonify(
+                error="stale_block",
+                submitted_height=submitted_height,
+                tip_height=tip_height,
+                tip_hash=server_last_hash,
+                reason=reason,
+            ), 409
         try:
             header  = struct.pack("<I",version)
             header += bytes.fromhex(prev_hash)[::-1]
@@ -11954,12 +12025,27 @@ def submit_block():
     else:
         pow_hash=data.get("pow_hash")
         prev_hash=data.get("prev_hash")
-        if prev_hash!=server_last_hash:
-            if _mining_watchdog_register_invalid(miner_key, now):
-                logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
-                logger.debug("submit_block handler took %.3fs", time.time() - start)
-                return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
-            return jsonify(error="Stale block (prev_hash mismatch)"),400
+        if prev_hash != server_last_hash or (
+            submitted_height is not None
+            and tip_height is not None
+            and submitted_height != int(tip_height) + 1
+        ):
+            reason = "prev_mismatch" if prev_hash != server_last_hash else "stale_height"
+            logger.info("mining.stale_block %s", json.dumps({
+                "submitted_height": submitted_height,
+                "tip_height": tip_height,
+                "tip_hash": server_last_hash,
+                "prev_hash": prev_hash,
+                "reason": reason,
+            }))
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            return jsonify(
+                error="stale_block",
+                submitted_height=submitted_height,
+                tip_height=tip_height,
+                tip_hash=server_last_hash,
+                reason=reason,
+            ), 409
         check=hashlib.sha256((prev_hash+thr_address).encode()+str(nonce).encode()).hexdigest()
         if check!=pow_hash:
             if _mining_watchdog_register_invalid(miner_key, now):
@@ -11980,7 +12066,10 @@ def submit_block():
 
     # Reward split με σωστό height (blocks + offset)
     block_count = last_block.get("block_count")
-    if block_count is not None:
+    if submitted_height is not None:
+        height = int(submitted_height)
+        local_height = max(height - HEIGHT_OFFSET, 0)
+    elif block_count is not None:
         local_height = max(int(block_count) - HEIGHT_OFFSET, 0)
         height = int(block_count)
     else:
@@ -12012,10 +12101,17 @@ def submit_block():
     # PR-3: Append guard - reject duplicate/stale blocks
     # Check if there's already a block at this height or later
     blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
-    tip_height = blocks[-1].get("height", -1) if blocks else -1
-    if height <= tip_height:
+    chain_tip_height = blocks[-1].get("height", -1) if blocks else -1
+    if height <= chain_tip_height:
+        logger.info("mining.stale_block %s", json.dumps({
+            "submitted_height": height,
+            "tip_height": chain_tip_height,
+            "tip_hash": server_last_hash,
+            "prev_hash": prev_hash,
+            "reason": "stale_height",
+        }))
         logger.debug("submit_block handler took %.3fs", time.time() - start)
-        return jsonify(error=f"Duplicate/stale block: height {height} <= tip {tip_height}"), 400
+        return jsonify(error="stale_block", submitted_height=height, tip_height=chain_tip_height, reason="stale_height"), 409
 
     chain.append(new_block)
 
@@ -12881,16 +12977,19 @@ def api_wallet_status():
     if not validate_thr_address(thr_address):
         return jsonify(ok=False, error="Invalid THR address"), 400
 
-    is_whitelisted = is_wallet_whitelisted(thr_address)
-    pledge_mode = get_wallet_pledge_mode(thr_address)
-    has_access = has_pledge_access(thr_address)
+    access_state = get_effective_pledge_state(thr_address)
+    is_whitelisted = access_state["whitelist_active"]
+    pledge_mode = access_state["pledge_mode"]
+    has_access = access_state["effective_pledge_ok"]
 
     return jsonify(
         ok=True,
         address=thr_address,
         is_whitelisted=is_whitelisted,
+        is_whitelist_legacy=access_state["whitelist_legacy"],
         pledge_mode=pledge_mode,
-        has_pledge_access=has_access
+        has_pledge_access=has_access,
+        effective_pledge_ok=access_state["effective_pledge_ok"]
     ), 200
 
 
@@ -13501,8 +13600,8 @@ def api_v1_delete_course(course_id: str):
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
 
-    if not teacher or not auth_secret:
-        return jsonify(status="error", message="Missing auth"), 400
+    if not teacher:
+        return jsonify(status="error", message="Missing teacher"), 400
 
     courses = load_courses()
     course = next((c for c in courses if c.get("id") == course_id), None)
@@ -13511,17 +13610,20 @@ def api_v1_delete_course(course_id: str):
     if course.get("teacher") != teacher:
         return jsonify(status="error", message="Not the course teacher"), 403
 
-    pledges = load_json(PLEDGE_CHAIN, [])
-    teacher_pledge = next((p for p in pledges if p.get("thr_address") == teacher), None)
-    if not teacher_pledge:
-        return jsonify(status="error", message="Teacher not pledged"), 404
-    stored_auth_hash = teacher_pledge.get("send_auth_hash")
-    if teacher_pledge.get("has_passphrase"):
-        auth_string = f"{auth_secret}:{passphrase}:auth"
-    else:
-        auth_string = f"{auth_secret}:auth"
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify(status="error", message="Invalid auth"), 403
+    ok, _, error_key = validate_effective_auth(teacher, auth_secret, passphrase)
+    if not ok:
+        if error_key == "no_effective_pledge":
+            return jsonify(status="error", message="Teacher has no effective pledge access"), 403
+        if error_key == "missing_auth_secret":
+            return jsonify(status="error", message="Missing auth_secret"), 400
+        if error_key == "missing_pledge":
+            return jsonify(status="error", message="Teacher not pledged"), 404
+        if error_key == "send_not_enabled":
+            return jsonify(status="error", message="Teacher send not enabled"), 400
+        if error_key == "passphrase_required":
+            return jsonify(status="error", message="Passphrase required"), 400
+        if error_key == "invalid_auth":
+            return jsonify(status="error", message="Invalid auth"), 403
 
     courses = [c for c in courses if c.get("id") != course_id]
     save_courses(courses)
@@ -13596,21 +13698,20 @@ def api_v1_create_course():
         return jsonify(status="error", message="Missing or invalid fields"), 400
 
     # Authenticate teacher
-    pledges = load_json(PLEDGE_CHAIN, [])
-    teacher_pledge = next((p for p in pledges if p.get("thr_address") == teacher), None)
-    if not teacher_pledge:
-        return jsonify(status="error", message="Teacher not found or has not pledged"), 404
-    stored_auth_hash = teacher_pledge.get("send_auth_hash")
-    if not stored_auth_hash:
-        return jsonify(status="error", message="Teacher send not enabled"), 400
-    if teacher_pledge.get("has_passphrase"):
-        if not passphrase:
+    ok, _, error_key = validate_effective_auth(teacher, auth_secret, passphrase)
+    if not ok:
+        if error_key == "no_effective_pledge":
+            return jsonify(status="error", message="Teacher has no effective pledge access"), 403
+        if error_key == "missing_auth_secret":
+            return jsonify(status="error", message="Missing auth_secret"), 400
+        if error_key == "missing_pledge":
+            return jsonify(status="error", message="Teacher not found or has not pledged"), 404
+        if error_key == "send_not_enabled":
+            return jsonify(status="error", message="Teacher send not enabled"), 400
+        if error_key == "passphrase_required":
             return jsonify(status="error", message="Passphrase required"), 400
-        auth_string = f"{auth_secret}:{passphrase}:auth"
-    else:
-        auth_string = f"{auth_secret}:auth"
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify(status="error", message="Invalid auth"), 403
+        if error_key == "invalid_auth":
+            return jsonify(status="error", message="Invalid auth"), 403
 
     courses = load_courses()
     course_id = str(uuid.uuid4())
@@ -13734,8 +13835,8 @@ def api_v1_enroll_course(course_id: str):
     student = (data.get("student_thr") or "").strip()
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
-    if not student or not auth_secret:
-        return jsonify(status="error", message="Missing student or auth_secret"), 400
+    if not student:
+        return jsonify(status="error", message="Missing student"), 400
     # Fetch the course
     courses = load_courses()
     course = next((c for c in courses if c.get("id") == course_id), None)
@@ -13744,21 +13845,20 @@ def api_v1_enroll_course(course_id: str):
     if student in course.get("students", []):
         return jsonify(status="success", message="Already enrolled"), 200
     # Validate student's pledge and auth
-    pledges = load_json(PLEDGE_CHAIN, [])
-    student_pledge = next((p for p in pledges if p.get("thr_address") == student), None)
-    if not student_pledge:
-        return jsonify(status="error", message="Student has not pledged"), 404
-    stored_auth_hash = student_pledge.get("send_auth_hash")
-    if not stored_auth_hash:
-        return jsonify(status="error", message="Student send not enabled"), 400
-    if student_pledge.get("has_passphrase"):
-        if not passphrase:
+    ok, _, error_key = validate_effective_auth(student, auth_secret, passphrase)
+    if not ok:
+        if error_key == "no_effective_pledge":
+            return jsonify(status="error", message="Student has no effective pledge access"), 403
+        if error_key == "missing_auth_secret":
+            return jsonify(status="error", message="Missing auth_secret"), 400
+        if error_key == "missing_pledge":
+            return jsonify(status="error", message="Student has not pledged"), 404
+        if error_key == "send_not_enabled":
+            return jsonify(status="error", message="Student send not enabled"), 400
+        if error_key == "passphrase_required":
             return jsonify(status="error", message="Passphrase required"), 400
-        auth_string = f"{auth_secret}:{passphrase}:auth"
-    else:
-        auth_string = f"{auth_secret}:auth"
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify(status="error", message="Invalid auth"), 403
+        if error_key == "invalid_auth":
+            return jsonify(status="error", message="Invalid auth"), 403
     # Determine cost and fee
     price = float(course.get("price_thr", 0.0))
     fee = calculate_dynamic_fee(price)
@@ -13849,7 +13949,7 @@ def api_v1_complete_course(course_id: str):
     teacher = (data.get("teacher_thr") or "").strip()
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
-    if not student or not teacher or not auth_secret:
+    if not student or not teacher:
         return jsonify(status="error", message="Missing required fields"), 400
     # Fetch course
     courses = load_courses()
@@ -13859,21 +13959,20 @@ def api_v1_complete_course(course_id: str):
     if course.get("teacher") != teacher:
         return jsonify(status="error", message="Teacher mismatch"), 403
     # Authenticate teacher
-    pledges = load_json(PLEDGE_CHAIN, [])
-    teacher_pledge = next((p for p in pledges if p.get("thr_address") == teacher), None)
-    if not teacher_pledge:
-        return jsonify(status="error", message="Teacher has not pledged"), 404
-    stored_auth_hash = teacher_pledge.get("send_auth_hash")
-    if not stored_auth_hash:
-        return jsonify(status="error", message="Teacher send not enabled"), 400
-    if teacher_pledge.get("has_passphrase"):
-        if not passphrase:
+    ok, _, error_key = validate_effective_auth(teacher, auth_secret, passphrase)
+    if not ok:
+        if error_key == "no_effective_pledge":
+            return jsonify(status="error", message="Teacher has no effective pledge access"), 403
+        if error_key == "missing_auth_secret":
+            return jsonify(status="error", message="Missing auth_secret"), 400
+        if error_key == "missing_pledge":
+            return jsonify(status="error", message="Teacher has not pledged"), 404
+        if error_key == "send_not_enabled":
+            return jsonify(status="error", message="Teacher send not enabled"), 400
+        if error_key == "passphrase_required":
             return jsonify(status="error", message="Passphrase required"), 400
-        auth_string = f"{auth_secret}:{passphrase}:auth"
-    else:
-        auth_string = f"{auth_secret}:auth"
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify(status="error", message="Invalid auth"), 403
+        if error_key == "invalid_auth":
+            return jsonify(status="error", message="Invalid auth"), 403
     # Check enrollment and completion status
     if student not in course.get("students", []):
         return jsonify(status="error", message="Student not enrolled"), 400
@@ -14164,8 +14263,8 @@ def api_v1_get_quiz_for_edit(course_id: str):
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
 
-    if not teacher or not auth_secret:
-        return jsonify(status="error", message="Missing auth"), 400
+    if not teacher:
+        return jsonify(status="error", message="Missing teacher"), 400
 
     courses = load_courses()
     course = next((c for c in courses if c.get("id") == course_id), None)
@@ -14174,17 +14273,20 @@ def api_v1_get_quiz_for_edit(course_id: str):
     if course.get("teacher") != teacher:
         return jsonify(status="error", message="Not the course teacher"), 403
 
-    pledges = load_json(PLEDGE_CHAIN, [])
-    teacher_pledge = next((p for p in pledges if p.get("thr_address") == teacher), None)
-    if not teacher_pledge:
-        return jsonify(status="error", message="Teacher not pledged"), 404
-    stored_auth_hash = teacher_pledge.get("send_auth_hash")
-    if teacher_pledge.get("has_passphrase"):
-        auth_string = f"{auth_secret}:{passphrase}:auth"
-    else:
-        auth_string = f"{auth_secret}:auth"
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify(status="error", message="Invalid auth"), 403
+    ok, _, error_key = validate_effective_auth(teacher, auth_secret, passphrase)
+    if not ok:
+        if error_key == "no_effective_pledge":
+            return jsonify(status="error", message="Teacher has no effective pledge access"), 403
+        if error_key == "missing_auth_secret":
+            return jsonify(status="error", message="Missing auth_secret"), 400
+        if error_key == "missing_pledge":
+            return jsonify(status="error", message="Teacher not pledged"), 404
+        if error_key == "send_not_enabled":
+            return jsonify(status="error", message="Teacher send not enabled"), 400
+        if error_key == "passphrase_required":
+            return jsonify(status="error", message="Passphrase required"), 400
+        if error_key == "invalid_auth":
+            return jsonify(status="error", message="Invalid auth"), 403
 
     quiz = load_quizzes().get(course_id)
     if quiz:
@@ -14256,8 +14358,8 @@ def api_v1_create_quiz(course_id: str):
     passphrase = (data.get("passphrase") or "").strip()
     questions = data.get("questions", [])
 
-    if not teacher or not auth_secret:
-        return jsonify(status="error", message="Missing auth"), 400
+    if not teacher:
+        return jsonify(status="error", message="Missing teacher"), 400
 
     # Verify course exists and teacher owns it
     courses = load_courses()
@@ -14268,17 +14370,20 @@ def api_v1_create_quiz(course_id: str):
         return jsonify(status="error", message="Not the course teacher"), 403
 
     # Authenticate teacher
-    pledges = load_json(PLEDGE_CHAIN, [])
-    teacher_pledge = next((p for p in pledges if p.get("thr_address") == teacher), None)
-    if not teacher_pledge:
-        return jsonify(status="error", message="Teacher not pledged"), 404
-    stored_auth_hash = teacher_pledge.get("send_auth_hash")
-    if teacher_pledge.get("has_passphrase"):
-        auth_string = f"{auth_secret}:{passphrase}:auth"
-    else:
-        auth_string = f"{auth_secret}:auth"
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify(status="error", message="Invalid auth"), 403
+    ok, _, error_key = validate_effective_auth(teacher, auth_secret, passphrase)
+    if not ok:
+        if error_key == "no_effective_pledge":
+            return jsonify(status="error", message="Teacher has no effective pledge access"), 403
+        if error_key == "missing_auth_secret":
+            return jsonify(status="error", message="Missing auth_secret"), 400
+        if error_key == "missing_pledge":
+            return jsonify(status="error", message="Teacher not pledged"), 404
+        if error_key == "send_not_enabled":
+            return jsonify(status="error", message="Teacher send not enabled"), 400
+        if error_key == "passphrase_required":
+            return jsonify(status="error", message="Passphrase required"), 400
+        if error_key == "invalid_auth":
+            return jsonify(status="error", message="Invalid auth"), 403
 
     # QUEST: Validate questions format (MCQ / True-False)
     validated_questions = []
@@ -14774,8 +14879,8 @@ def api_v1_create_token():
         return jsonify(status="error", message="Invalid total_supply"), 400
     if not name or not symbol or total_supply <= 0:
         return jsonify(status="error", message="Missing or invalid fields"), 400
-    if not creator or not auth_secret:
-        return jsonify(status="error", message="Missing creator or auth_secret"), 400
+    if not creator:
+        return jsonify(status="error", message="Missing creator"), 400
     if len(symbol) > 8 or not symbol.isalnum():
         return jsonify(status="error", message="Symbol must be 1‑8 alphanumeric chars"), 400
     if symbol in ("THR", "WBTC"):
@@ -14791,21 +14896,20 @@ def api_v1_create_token():
     if any(t.get("symbol") == symbol for t in tokens):
         return jsonify(status="error", message="Token symbol already exists"), 400
     # Authenticate creator via pledge send auth
-    pledges = load_json(PLEDGE_CHAIN, [])
-    creator_pledge = next((p for p in pledges if p.get("thr_address") == creator), None)
-    if not creator_pledge:
-        return jsonify(status="error", message="Creator has not pledged"), 404
-    stored_auth_hash = creator_pledge.get("send_auth_hash")
-    if not stored_auth_hash:
-        return jsonify(status="error", message="Creator send not enabled"), 400
-    if creator_pledge.get("has_passphrase"):
-        if not passphrase:
+    ok, _, error_key = validate_effective_auth(creator, auth_secret, passphrase)
+    if not ok:
+        if error_key == "no_effective_pledge":
+            return jsonify(status="error", message="Creator has no effective pledge access"), 403
+        if error_key == "missing_auth_secret":
+            return jsonify(status="error", message="Missing auth_secret"), 400
+        if error_key == "missing_pledge":
+            return jsonify(status="error", message="Creator has not pledged"), 404
+        if error_key == "send_not_enabled":
+            return jsonify(status="error", message="Creator send not enabled"), 400
+        if error_key == "passphrase_required":
             return jsonify(status="error", message="Passphrase required"), 400
-        auth_string = f"{auth_secret}:{passphrase}:auth"
-    else:
-        auth_string = f"{auth_secret}:auth"
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify(status="error", message="Invalid auth"), 403
+        if error_key == "invalid_auth":
+            return jsonify(status="error", message="Invalid auth"), 403
     # Create token
     token_id = str(uuid.uuid4())
     new_token = {
@@ -15032,8 +15136,8 @@ def api_v1_create_pool():
         return jsonify(status="error", message="Token symbols must be distinct"), 400
     if amt_a <= 0 or amt_b <= 0:
         return jsonify(status="error", message="Amounts must be positive"), 400
-    if not provider or not auth_secret:
-        return jsonify(status="error", message="Missing provider or auth_secret"), 400
+    if not provider:
+        return jsonify(status="error", message="Missing provider"), 400
     try:
         fee_bps_int = int(fee_bps)
     except (TypeError, ValueError):
@@ -17354,23 +17458,20 @@ def api_v1_music_tip():
     artist_address = track["artist_address"]
 
     # Verify auth
-    pledges = load_json(PLEDGE_CHAIN, [])
-    sender_pledge = next((p for p in pledges if p.get("thr_address") == from_address), None)
-
-    if not sender_pledge:
-        return jsonify({"status": "error", "message": "Sender has not pledged"}), 400
-
-    stored_auth_hash = sender_pledge.get("send_auth_hash")
-    if not stored_auth_hash:
-        return jsonify({"status": "error", "message": "Send not enabled"}), 400
-
-    if sender_pledge.get("has_passphrase"):
-        auth_string = f"{auth_secret}:{passphrase}:auth"
-    else:
-        auth_string = f"{auth_secret}:auth"
-
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify({"status": "error", "message": "Invalid auth"}), 403
+    ok, _, error_key = validate_effective_auth(from_address, auth_secret, passphrase)
+    if not ok:
+        if error_key == "no_effective_pledge":
+            return jsonify({"status": "error", "message": "Sender has no effective pledge access"}), 403
+        if error_key == "missing_auth_secret":
+            return jsonify({"status": "error", "message": "Missing auth_secret"}), 400
+        if error_key == "missing_pledge":
+            return jsonify({"status": "error", "message": "Sender has not pledged"}), 400
+        if error_key == "send_not_enabled":
+            return jsonify({"status": "error", "message": "Send not enabled"}), 400
+        if error_key == "passphrase_required":
+            return jsonify({"status": "error", "message": "Passphrase required"}), 400
+        if error_key == "invalid_auth":
+            return jsonify({"status": "error", "message": "Invalid auth"}), 403
 
     # Transfer THR with 10% to AI pool (Phase 4)
     AI_POOL_PERCENTAGE = 0.10  # 10% of music tips go to AI pool
@@ -18458,24 +18559,27 @@ def api_v1_governance_vote():
     if not proposal_id or not voter or vote not in ("for", "against", "abstain"):
         return jsonify({"status": "error", "message": "Invalid vote data"}), 400
 
-    if not auth_secret:
-        return jsonify({"status": "error", "message": "auth_secret required for voting"}), 400
-
     # PRIORITY 2: Authenticate voter (log rejection reason)
-    pledges = load_json(PLEDGE_CHAIN, [])
-    voter_pledge = next((p for p in pledges if p.get("thr_address") == voter), None)
-    if not voter_pledge:
-        app.logger.warning(f"Vote rejected: auth_failed (not_pledged) | proposal={proposal_id} voter={voter}")
-        return jsonify({"status": "error", "message": "Voter not pledged", "reason": "auth_failed"}), 404
-
-    stored_auth_hash = voter_pledge.get("send_auth_hash")
-    if voter_pledge.get("has_passphrase"):
-        auth_string = f"{auth_secret}:{passphrase}:auth"
-    else:
-        auth_string = f"{auth_secret}:auth"
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        app.logger.warning(f"Vote rejected: auth_failed (invalid_auth) | proposal={proposal_id} voter={voter}")
-        return jsonify({"status": "error", "message": "Invalid auth", "reason": "auth_failed"}), 403
+    ok, _, error_key = validate_effective_auth(voter, auth_secret, passphrase)
+    if not ok:
+        if error_key == "no_effective_pledge":
+            app.logger.warning(f"Vote rejected: auth_failed (no_effective_pledge) | proposal={proposal_id} voter={voter}")
+            return jsonify({"status": "error", "message": "Voter has no effective pledge access", "reason": "auth_failed"}), 403
+        if error_key == "missing_auth_secret":
+            app.logger.warning(f"Vote rejected: auth_failed (missing_auth_secret) | proposal={proposal_id} voter={voter}")
+            return jsonify({"status": "error", "message": "auth_secret required for voting", "reason": "auth_failed"}), 400
+        if error_key == "missing_pledge":
+            app.logger.warning(f"Vote rejected: auth_failed (not_pledged) | proposal={proposal_id} voter={voter}")
+            return jsonify({"status": "error", "message": "Voter not pledged", "reason": "auth_failed"}), 404
+        if error_key == "send_not_enabled":
+            app.logger.warning(f"Vote rejected: auth_failed (send_not_enabled) | proposal={proposal_id} voter={voter}")
+            return jsonify({"status": "error", "message": "Voter send not enabled", "reason": "auth_failed"}), 400
+        if error_key == "passphrase_required":
+            app.logger.warning(f"Vote rejected: auth_failed (passphrase_required) | proposal={proposal_id} voter={voter}")
+            return jsonify({"status": "error", "message": "Passphrase required", "reason": "auth_failed"}), 400
+        if error_key == "invalid_auth":
+            app.logger.warning(f"Vote rejected: auth_failed (invalid_auth) | proposal={proposal_id} voter={voter}")
+            return jsonify({"status": "error", "message": "Invalid auth", "reason": "auth_failed"}), 403
 
     # Load governance
     gov = load_governance()
@@ -18602,18 +18706,20 @@ def api_v1_governance_finalize():
         return jsonify({"status": "error", "message": "proposal_id and operator required"}), 400
 
     # Authenticate operator
-    pledges = load_json(PLEDGE_CHAIN, [])
-    operator_pledge = next((p for p in pledges if p.get("thr_address") == operator), None)
-    if not operator_pledge:
-        return jsonify({"status": "error", "message": "Operator not pledged"}), 404
-
-    stored_auth_hash = operator_pledge.get("send_auth_hash")
-    if operator_pledge.get("has_passphrase"):
-        auth_string = f"{auth_secret}:{passphrase}:auth"
-    else:
-        auth_string = f"{auth_secret}:auth"
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return jsonify({"status": "error", "message": "Invalid auth"}), 403
+    ok, _, error_key = validate_effective_auth(operator, auth_secret, passphrase)
+    if not ok:
+        if error_key == "no_effective_pledge":
+            return jsonify({"status": "error", "message": "Operator has no effective pledge access"}), 403
+        if error_key == "missing_auth_secret":
+            return jsonify({"status": "error", "message": "Missing auth_secret"}), 400
+        if error_key == "missing_pledge":
+            return jsonify({"status": "error", "message": "Operator not pledged"}), 404
+        if error_key == "send_not_enabled":
+            return jsonify({"status": "error", "message": "Operator send not enabled"}), 400
+        if error_key == "passphrase_required":
+            return jsonify({"status": "error", "message": "Passphrase required"}), 400
+        if error_key == "invalid_auth":
+            return jsonify({"status": "error", "message": "Invalid auth"}), 403
 
     # Verify operator status
     OPERATORS = os.getenv("GOVERNANCE_OPERATORS", "").split(",")

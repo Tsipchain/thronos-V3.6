@@ -1179,15 +1179,27 @@ def load_whitelist_wallets() -> list:
     Load whitelist wallets from file or env variable.
     Returns list of THR addresses.
     """
-    # First check env variable
     env_whitelist = os.getenv("THRONOS_WHITELIST_WALLETS", "")
     if env_whitelist:
-        # Parse comma-separated THR addresses from env
         addresses = [addr.strip() for addr in env_whitelist.split(",") if addr.strip()]
         return addresses
 
-    # Otherwise load from file
-    return load_json(WHITELIST_WALLETS_FILE, [])
+    entries = load_json(WHITELIST_WALLETS_FILE, [])
+    if not isinstance(entries, list):
+        return []
+
+    addresses = []
+    for entry in entries:
+        if isinstance(entry, str):
+            addresses.append(entry)
+            continue
+        if isinstance(entry, dict):
+            address = entry.get("address") or entry.get("thr_address")
+            if not address:
+                continue
+            if entry.get("active", True) and not entry.get("banned", False):
+                addresses.append(address)
+    return addresses
 
 
 def is_wallet_whitelisted(thr_address: str) -> bool:
@@ -1242,25 +1254,55 @@ def get_mining_whitelist_entry(thr_address: str) -> dict | None:
     if not thr_address:
         return None
 
+    env_whitelist = os.getenv("THRONOS_WHITELIST_WALLETS", "")
+    if env_whitelist:
+        addresses = [addr.strip() for addr in env_whitelist.split(",") if addr.strip()]
+        if thr_address in addresses:
+            return {
+                "address": thr_address,
+                "active": True,
+                "pledge_ok": has_btc_pledge(thr_address),
+                "whitelist_legacy": True,
+            }
+
     entries = load_json(WHITELIST_WALLETS_FILE, [])
     if isinstance(entries, list):
         for entry in entries:
             if isinstance(entry, str):
                 if entry == thr_address:
-                    return {"address": entry, "active": True, "pledge_ok": has_btc_pledge(thr_address)}
+                    return {
+                        "address": entry,
+                        "active": True,
+                        "pledge_ok": has_btc_pledge(thr_address),
+                        "whitelist_legacy": True,
+                    }
                 continue
             if isinstance(entry, dict):
                 address = entry.get("address") or entry.get("thr_address")
                 if address == thr_address:
                     active = entry.get("active", True)
                     pledge_ok = entry.get("pledge_ok", has_btc_pledge(thr_address))
+                    role = (entry.get("role") or "").lower()
+                    whitelist_legacy = bool(
+                        entry.get("whitelist_legacy")
+                        or entry.get("grandfathered")
+                        or role in ("whitelist_legacy", "grandfathered", "legacy_whitelist")
+                    )
                     return {
                         "address": address,
                         "active": active,
                         "pledge_ok": pledge_ok,
+                        "whitelist_legacy": whitelist_legacy,
+                        "banned": entry.get("banned", False),
                     }
 
     return None
+
+
+def _whitelist_allows_no_pledge(entry: dict | None) -> bool:
+    if not entry:
+        return False
+    return bool(entry.get("whitelist_legacy") or entry.get("grandfathered"))
 
 
 def get_pledge_for_auth(thr_address: str) -> dict | None:
@@ -2542,11 +2584,16 @@ def get_wallet_balances(wallet: str):
 
 def get_wallet_balances_cached(wallet: str) -> dict:
     now = time.time()
+    tip_hash = (get_last_block_snapshot().get("block_hash") or "").strip()
     entry = BALANCE_CACHE.get(wallet)
-    if entry and now - entry.get("ts", 0.0) < BALANCE_CACHE_TTL:
+    if (
+        entry
+        and entry.get("tip_hash") == tip_hash
+        and now - entry.get("ts", 0.0) < BALANCE_CACHE_TTL
+    ):
         return entry["data"]
     data = get_wallet_balances(wallet)
-    BALANCE_CACHE[wallet] = {"ts": now, "data": data}
+    BALANCE_CACHE[wallet] = {"ts": now, "data": data, "tip_hash": tip_hash}
     return data
 
 def load_attest_store():
@@ -11837,24 +11884,33 @@ def submit_block():
     now = time.time()
     miner_key = _mining_watchdog_key(thr_address)
 
+    entry = get_mining_whitelist_entry(thr_address)
     if MINING_WHITELIST_ONLY:
-        entry = get_mining_whitelist_entry(thr_address)
-        if not entry or not entry.get("active", False):
-            logger.warning("Mining rejected thr_address=%s reason=not_whitelisted", thr_address)
+        if not entry:
+            logger.info("Mining rejected thr_address=%s reason=not_whitelisted", thr_address)
             logger.debug("submit_block handler took %.3fs", time.time() - start)
             return jsonify(error="Mining not whitelisted", reason="not_whitelisted"), 403
-        if not entry.get("pledge_ok", False):
-            logger.warning("Mining rejected thr_address=%s reason=missing_pledge", thr_address)
+        if not entry.get("active", True) or entry.get("banned", False):
+            logger.info("Mining rejected thr_address=%s reason=inactive_or_banned", thr_address)
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            return jsonify(error="Mining not active", reason="inactive_or_banned"), 403
+        if not (entry.get("pledge_ok", False) or _whitelist_allows_no_pledge(entry)):
+            logger.info("Mining rejected thr_address=%s reason=missing_pledge", thr_address)
             logger.debug("submit_block handler took %.3fs", time.time() - start)
             return jsonify(error="Mining pledge missing", reason="missing_pledge"), 403
+    else:
+        if entry and (not entry.get("active", True) or entry.get("banned", False)):
+            logger.info("Mining rejected thr_address=%s reason=banned", thr_address)
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            return jsonify(error="Mining banned", reason="banned"), 403
 
     if _mining_watchdog_is_banned(miner_key, now):
-        logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+        logger.info("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
         logger.debug("submit_block handler took %.3fs", time.time() - start)
         return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
 
     if _mining_watchdog_register_request(miner_key, now):
-        logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+        logger.info("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
         logger.debug("submit_block handler took %.3fs", time.time() - start)
         return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
     last_block = get_last_block_snapshot()

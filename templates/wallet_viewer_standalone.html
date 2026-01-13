@@ -141,7 +141,7 @@
             try {
                 // Load balances and wallet status in parallel
                 const [balRes, statusRes] = await Promise.all([
-                    fetch(`/api/wallet/balances?address=${encodeURIComponent(thrAddress)}`),
+                    fetch(`/api/balances?address=${encodeURIComponent(thrAddress)}&show_zero=true`),
                     fetch(`/api/wallet/status?address=${encodeURIComponent(thrAddress)}`)
                 ]);
 

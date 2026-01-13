@@ -376,7 +376,6 @@ MINING_LAST_HASH_CACHE: dict = {"ts": 0.0, "data": None}
 # ─── PR-182: Multi-Node Role Configuration ────────────────────────────────
 # Node role: "master" or "replica"
 NODE_ROLE = os.getenv("NODE_ROLE", "master").lower()
-WALLET_NODE = NODE_ROLE == "wallet"
 # Read-only mode for replica nodes
 READ_ONLY = os.getenv("READ_ONLY", "0" if NODE_ROLE == "master" else "1") == "1"
 # Leader flag for consensus
@@ -1409,13 +1408,6 @@ def atomic_write_json(path: str, data) -> None:
 def _authorized_logging_request(req) -> bool:
     key = req.headers.get("X-API-Key") or req.args.get("api_key") or ""
     return str(key) == str(AI_LOG_API_KEY)
-
-
-def _reject_wallet_node(action: str):
-    if WALLET_NODE:
-        logger.warning("[WALLET_NODE] blocked action=%s", action)
-        return jsonify({"ok": False, "error": "wallet_node_forbidden", "action": action}), 403
-    return None
 
 
 def _load_jsonl(path: str) -> list:
@@ -8987,9 +8979,6 @@ def api_history():
 @app.route("/api/dashboard", methods=["GET"])
 def api_dashboard():
     """Return the leader-driven dashboard data for index."""
-    blocked = _reject_wallet_node("dashboard")
-    if blocked:
-        return blocked
     last_block = load_json(LAST_BLOCK_FILE, {})
     chain = load_chain_cached()
     chain_blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
@@ -10141,9 +10130,6 @@ def api_wallet_send():
     Unified send endpoint for wallet extensions (Chrome, Firefox, Brave).
     Routes to the appropriate handler based on token type.
     """
-    blocked = _reject_wallet_node("wallet_send")
-    if blocked:
-        return blocked
     data = request.get_json() or {}
     token = (data.get("token") or "THR").upper()
     from_addr = (data.get("from") or data.get("from_thr") or "").strip()
@@ -10523,9 +10509,6 @@ def api_tokens_stats():
 @app.route("/send_thr", methods=["POST"])
 def send_thr():
     data = request.get_json() or {}
-    blocked = _reject_wallet_node("send_thr")
-    if blocked:
-        return blocked
     from_thr=(data.get("from_thr") or "").strip()
     to_thr=(data.get("to_thr") or "").strip()
     amount_raw=data.get("amount",0)
@@ -10670,9 +10653,6 @@ def send_token():
     }
     """
     data = request.get_json() or {}
-    blocked = _reject_wallet_node("send_token")
-    if blocked:
-        return blocked
     token_symbol = (data.get("token_symbol") or "").upper().strip()
     from_thr = (data.get("from_thr") or "").strip()
     to_thr = (data.get("to_thr") or "").strip()

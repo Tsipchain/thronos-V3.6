@@ -364,6 +364,13 @@ MODEL_REFRESH_INTERVAL_SECONDS = float(os.getenv("MODEL_REFRESH_INTERVAL_SECONDS
 PROVIDER_HEALTH_CACHE: dict = {}
 PROVIDER_HEALTH_TTL = 300  # seconds
 
+# Lightweight caches for hot endpoints
+MINING_INFO_CACHE: dict = {"ts": 0.0, "data": None}
+LAST_HASH_CACHE: dict = {"ts": 0.0, "data": None}
+MEMPOOL_COUNT_CACHE: dict = {"ts": 0.0, "count": 0}
+BALANCE_CACHE: dict = {}
+BALANCE_CACHE_TTL = float(os.getenv("BALANCE_CACHE_TTL_SECONDS", "10"))
+
 # ─── PR-182: Multi-Node Role Configuration ────────────────────────────────
 # Node role: "master" or "replica"
 NODE_ROLE = os.getenv("NODE_ROLE", "master").lower()
@@ -1679,6 +1686,15 @@ def save_mempool(pool):
     save_json(MEMPOOL_FILE, pool)
 
 
+def get_mempool_len_cached() -> int:
+    now = time.time()
+    if now - MEMPOOL_COUNT_CACHE.get("ts", 0.0) < 2.0:
+        return int(MEMPOOL_COUNT_CACHE.get("count", 0))
+    count = len(load_mempool())
+    MEMPOOL_COUNT_CACHE.update({"ts": now, "count": count})
+    return count
+
+
 def load_tx_log():
     """Load the normalized transaction ledger (persistent across resets)."""
     return load_json(TX_LOG_FILE, [])
@@ -2521,6 +2537,16 @@ def get_wallet_balances(wallet: str):
         "token_balances": token_balances,
         "tokens": tokens,
     }
+
+
+def get_wallet_balances_cached(wallet: str) -> dict:
+    now = time.time()
+    entry = BALANCE_CACHE.get(wallet)
+    if entry and now - entry.get("ts", 0.0) < BALANCE_CACHE_TTL:
+        return entry["data"]
+    data = get_wallet_balances(wallet)
+    BALANCE_CACHE[wallet] = {"ts": now, "data": data}
+    return data
 
 def load_attest_store():
     return load_json(ATTEST_STORE_FILE, {})
@@ -5800,44 +5826,79 @@ def api_last_block():
 
 @app.route("/last_block_hash")
 def last_block_hash():
-    chain = load_chain_cached()
-    blocks = get_reward_blocks()
-    if blocks:
-        last = blocks[-1]
-        global_height = HEIGHT_OFFSET + len(blocks) - 1
-        return jsonify(
-            last_hash=last.get("block_hash", ""),
-            height=global_height,
-            timestamp=last.get("timestamp"),
-        )
-    return jsonify(last_hash="0"*64, height=-1, timestamp=None)
+    start = time.time()
+    now = time.time()
+    cached = LAST_HASH_CACHE.get("data")
+    if cached and now - LAST_HASH_CACHE.get("ts", 0.0) < 2.0:
+        logger.debug("last_hash handler took %.3fs", time.time() - start)
+        return jsonify(cached)
+
+    last = load_json(LAST_BLOCK_FILE, {})
+    last_hash = last.get("block_hash") or "0" * 64
+    height = last.get("height")
+    timestamp = last.get("timestamp")
+    payload = {
+        "last_hash": last_hash,
+        "height": height if height is not None else -1,
+        "timestamp": timestamp,
+    }
+    LAST_HASH_CACHE.update({"ts": now, "data": payload})
+    logger.debug("last_hash handler took %.3fs", time.time() - start)
+    return jsonify(payload)
 
 @app.route("/mining_info")
 def mining_info():
+    start = time.time()
+    now = time.time()
+    cached = MINING_INFO_CACHE.get("data")
+    if cached and now - MINING_INFO_CACHE.get("ts", 0.0) < 2.0:
+        logger.debug("mining_info handler took %.3fs", time.time() - start)
+        return jsonify(cached), 200
+
     target = get_mining_target()
-    nbits  = target_to_bits(target)
+    nbits = target_to_bits(target)
 
-    chain  = load_chain_cached()
-    blocks = get_reward_blocks()
+    last_block = load_json(LAST_BLOCK_FILE, {})
+    last_hash = last_block.get("block_hash") or "0" * 64
+    block_count = last_block.get("block_count")
+    if block_count is not None:
+        local_height = max(int(block_count) - HEIGHT_OFFSET, 0)
+        global_height = int(block_count)
+    else:
+        blocks = get_reward_blocks()
+        local_height = len(blocks)
+        global_height = HEIGHT_OFFSET + local_height
+    reward = calculate_reward(global_height)
+    mempool_len = get_mempool_len_cached()
 
-    last_hash = blocks[-1].get("block_hash", "") if blocks else "0" * 64
-
-    local_height   = len(blocks)               # πόσα blocks έχουμε στο αρχείο
-    global_height  = HEIGHT_OFFSET + local_height  # block height με το offset
-    reward         = calculate_reward(global_height)
-
-    mempool_len = len(load_mempool())
-
-    return jsonify({
-        "target":        hex(target),
-        "nbits":         hex(nbits),
+    payload = {
+        "target": hex(target),
+        "nbits": hex(nbits),
         "difficulty_int": int(INITIAL_TARGET // target),
-        "reward":        reward,
-        "height":        global_height,
-        "local_height":  local_height,
-        "last_hash":     last_hash,
-        "mempool":       mempool_len,
-    }), 200
+        "reward": reward,
+        "height": global_height,
+        "local_height": local_height,
+        "last_hash": last_hash,
+        "mempool": mempool_len,
+    }
+    MINING_INFO_CACHE.update({"ts": now, "data": payload})
+    logger.debug("mining_info handler took %.3fs", time.time() - start)
+    return jsonify(payload), 200
+
+
+@app.route("/api/mining/info")
+def api_mining_info():
+    return mining_info()
+
+
+@app.route("/api/mining_info")
+def api_mining_info_legacy():
+    return mining_info()
+
+
+@app.route("/api/last_hash")
+def api_last_hash():
+    return last_block_hash()
 
 
 @app.route("/api/mining/info")
@@ -8953,7 +9014,7 @@ def api_wallet_tokens(thr_addr):
     Returns all token balances for a wallet with metadata (logos, names, etc.)
     Perfect for wallet widgets and balance displays
     """
-    balances = get_wallet_balances(thr_addr)
+    balances = get_wallet_balances_cached(thr_addr)
     tokens = balances["tokens"]
 
     show_zero = request.args.get("show_zero", "true").lower() == "true"
@@ -8976,7 +9037,7 @@ def api_balances():
     address = (request.args.get("address") or request.args.get("wallet") or "").strip()
     if not address:
         return jsonify({"ok": False, "error": "Missing address"}), 400
-    balances = get_wallet_balances(address)
+    balances = get_wallet_balances_cached(address)
     show_zero = request.args.get("show_zero", "true").lower() == "true"
     tokens = balances.get("tokens", [])
     if not show_zero:
@@ -9050,7 +9111,7 @@ def api_token_prices():
 @app.route("/api/balance/<thr_addr>", methods=["GET"])
 def api_balance_alias(thr_addr: str):
     """Compatibility alias that exposes a consolidated balance snapshot."""
-    balances = get_wallet_balances(thr_addr)
+    balances = get_wallet_balances_cached(thr_addr)
 
     mempool_pending = [
         tx for tx in load_mempool()

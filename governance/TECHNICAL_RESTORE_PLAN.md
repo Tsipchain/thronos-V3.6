@@ -53,6 +53,7 @@
 - Σε `add_url_rule`, να δοθούν διακριτά endpoint names ή να μετονομαστούν view functions.
   - [x] Προστέθηκαν τα `/api/mining/info` και `/api/last_hash` ως aliases των σταθερών endpoints.
   - [x] Προστέθηκε `/api/replica_health` για debugging replica node health.
+  - [x] Προστέθηκε legacy alias `/api/mining_info` για CPU miners.
 
 ### 2) Επικαιροποίηση AI modules
 
@@ -91,7 +92,7 @@
 
 - Ενιαίος gateway που προωθεί RPC calls ανά `network`/`method`.
 - Επιβεβαίωση ότι το explorer χρησιμοποιεί τα σωστά endpoints.
-  - [ ] Έλεγχος ότι οι health/mempool/mining endpoints απαντούν σταθερά κάτω από το απαιτούμενο SLA.
+  - [x] Προστέθηκαν μικρά caches + timing logs για mining/last_hash endpoints (απομένει SLA verification).
   - [ ] Επιβεβαίωση ότι viewer filters (Bridge / Tokens / Swaps / L2E) βασίζονται στο canonical tagging χωρίς αλλαγές στα AMM endpoints.
 
 ### 8) IoT subsystem
@@ -153,3 +154,5 @@
 
 - Προστέθηκε `/api/replica_health` για γρήγορο replica debugging.
 - Το pledge UI εμφανίζει πλέον ξεκάθαρα το BTC-only pledge μήνυμα.
+- Προστέθηκε cache 10s για wallet balances ώστε να μειωθεί το “Loading balances…” latency.
+- Προστέθηκαν timing logs & caches στα mining endpoints για αποφυγή timeouts (μένει SLA μέτρηση).

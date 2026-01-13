@@ -474,6 +474,7 @@ class ThronosAI:
         self._init_gemini()
         self._init_openai()
         self._init_anthropic()
+        self._governance_context = self._load_governance_context()
 
     # ─── Provider init ──────────────────────────────────────────────────────
 
@@ -535,7 +536,8 @@ class ThronosAI:
 
     def _system_prompt(self, lang: Optional[str]) -> str:
         directive = self._language_directive(lang)
-        return f"""You are Thronos Autonomous AI. Answer concisely and in production-ready code when needed. {directive}
+        governance_context = self._governance_context or ""
+        base_prompt = f"""You are Thronos Autonomous AI. Answer concisely and in production-ready code when needed. {directive}
 
 **FILE GENERATION CAPABILITY:**
 When users ask you to create, edit, or generate files, use this format:
@@ -550,6 +552,37 @@ Examples:
 - Configuration: [[FILE:config.json]] {...} [[/FILE]]
 
 Multiple files can be created in one response. Always describe what you're creating before the file block."""
+        if governance_context:
+            return base_prompt + f"\n\n**Governance context (authoritative):**\n{governance_context}"
+        return base_prompt
+
+    def _load_governance_context(self) -> str:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        governance_dir = os.path.join(base_dir, "governance")
+        if not os.path.isdir(governance_dir):
+            return ""
+        docs = []
+        total_chars = 0
+        max_total_chars = 12000
+        max_file_chars = 2000
+        for name in sorted(os.listdir(governance_dir)):
+            if not name.endswith(".md"):
+                continue
+            path = os.path.join(governance_dir, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except Exception:
+                continue
+            snippet = content.strip()
+            if len(snippet) > max_file_chars:
+                snippet = snippet[:max_file_chars] + "\n...[truncated]..."
+            entry = f"[governance/{name}]\n{snippet}"
+            docs.append(entry)
+            total_chars += len(entry)
+            if total_chars >= max_total_chars:
+                break
+        return "\n\n".join(docs)
 
     # ─── History storage ────────────────────────────────────────────────────
 

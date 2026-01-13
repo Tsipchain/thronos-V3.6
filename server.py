@@ -380,6 +380,16 @@ MINING_WATCHDOG_WINDOW_SECONDS = int(os.getenv("MINING_WATCHDOG_WINDOW_SECONDS",
 MINING_WATCHDOG_MAX_INVALID = int(os.getenv("MINING_WATCHDOG_MAX_INVALID", "12"))
 MINING_WATCHDOG_MAX_REQUESTS = int(os.getenv("MINING_WATCHDOG_MAX_REQUESTS", "60"))
 MINING_WATCHDOG_BAN_SECONDS = int(os.getenv("MINING_WATCHDOG_BAN_SECONDS", "300"))
+HEARTBEAT_ENABLED = os.getenv("HEARTBEAT_ENABLED", "1").lower() in ("1", "true", "yes")
+HEARTBEAT_LOG_ERRORS = os.getenv("HEARTBEAT_LOG_ERRORS", "0").lower() in ("1", "true", "yes")
+
+if NODE_ROLE == "replica" and not READ_ONLY:
+    logger.warning("[CONFIG] Forcing READ_ONLY=1 on replica node")
+    READ_ONLY = True
+
+if NODE_ROLE != "master" and SCHEDULER_ENABLED:
+    logger.warning("[CONFIG] Disabling SCHEDULER_ENABLED on non-master node")
+    SCHEDULER_ENABLED = False
 
 MASTER_INTERNAL_URL = os.getenv("MASTER_NODE_URL", "http://localhost:5000")
 LEADER_URL = os.getenv("LEADER_URL", MASTER_INTERNAL_URL)
@@ -1211,6 +1221,14 @@ def has_pledge_access(thr_address: str) -> bool:
     return mode != "none"
 
 
+def has_btc_pledge(thr_address: str) -> bool:
+    if not thr_address:
+        return False
+    pledges = load_json(PLEDGE_CHAIN, [])
+    pledge = next((p for p in pledges if p.get("thr_address") == thr_address), None)
+    return bool(pledge and pledge.get("send_auth_hash"))
+
+
 def get_mining_whitelist_entry(thr_address: str) -> dict | None:
     """Return mining whitelist entry, supporting legacy string lists."""
     if not thr_address:
@@ -1221,13 +1239,13 @@ def get_mining_whitelist_entry(thr_address: str) -> dict | None:
         for entry in entries:
             if isinstance(entry, str):
                 if entry == thr_address:
-                    return {"address": entry, "active": True, "pledge_ok": True}
+                    return {"address": entry, "active": True, "pledge_ok": has_btc_pledge(thr_address)}
                 continue
             if isinstance(entry, dict):
                 address = entry.get("address") or entry.get("thr_address")
                 if address == thr_address:
                     active = entry.get("active", True)
-                    pledge_ok = entry.get("pledge_ok", has_pledge_access(thr_address))
+                    pledge_ok = entry.get("pledge_ok", has_btc_pledge(thr_address))
                     return {
                         "address": address,
                         "active": active,
@@ -1689,6 +1707,11 @@ def _canonical_kind(kind_raw: str) -> str:
         "bridge": "bridge",
         "bridge_withdraw_request": "bridge",
         "bridge_deposit_detected": "bridge",
+        "bridge_deposit": "bridge",
+        "bridge_withdraw": "bridge",
+        "bridge_in": "bridge",
+        "bridge_out": "bridge",
+        "crosschain": "bridge",
         "l2e_reward": "l2e",
         "l2e": "l2e",
         "credits_consume": "ai_credits",
@@ -4364,7 +4387,7 @@ def _categorize_transaction(tx: dict) -> str:
         return "iot_telemetry"
 
     # Bridge operations
-    if "bridge" in tx_type_lower or tx_type in ["bridge", "bridge_in", "bridge_out", "wbtc_burn"]:
+    if "bridge" in tx_type_lower or tx_type in ["bridge", "bridge_in", "bridge_out", "bridge_deposit", "bridge_withdraw", "crosschain", "wbtc_burn"]:
         return "bridge"
 
     # Pledges
@@ -5816,6 +5839,16 @@ def mining_info():
         "mempool":       mempool_len,
     }), 200
 
+
+@app.route("/api/mining/info")
+def api_mining_info():
+    return mining_info()
+
+
+@app.route("/api/last_hash")
+def api_last_hash():
+    return last_block_hash()
+
 @app.route("/api/network_stats")
 def network_stats():
     pledges = load_json(PLEDGE_CHAIN, [])
@@ -6194,6 +6227,18 @@ def api_health():
         "time": datetime.utcnow().isoformat(timespec="seconds") + "Z",
         "build": build_info,
         "env_present": env_present
+    }), 200
+
+
+@app.route("/api/replica_health")
+def api_replica_health():
+    return jsonify({
+        "ok": True,
+        "node_role": NODE_ROLE,
+        "read_only": READ_ONLY,
+        "scheduler_enabled": SCHEDULER_ENABLED,
+        "heartbeat_enabled": HEARTBEAT_ENABLED,
+        "master_url": MASTER_INTERNAL_URL,
     }), 200
 
 
@@ -12419,7 +12464,7 @@ else:
     scheduler = None
 
 # Start heartbeat sender for replica nodes (independent of scheduler)
-if NODE_ROLE == "replica":
+if NODE_ROLE == "replica" and HEARTBEAT_ENABLED:
 
     # Start heartbeat sender for replica nodes
     import threading
@@ -12462,11 +12507,14 @@ if NODE_ROLE == "replica":
                 else:
                     print(f"[HEARTBEAT] Failed: {response.status_code} - {response.text}")
             except requests.exceptions.ConnectionError as e:
-                print(f"[HEARTBEAT] Connection error to master (will retry): {e}")
+                if HEARTBEAT_LOG_ERRORS:
+                    print(f"[HEARTBEAT] Connection error to master (will retry): {e}")
             except requests.exceptions.Timeout:
-                print(f"[HEARTBEAT] Timeout connecting to master (will retry)")
+                if HEARTBEAT_LOG_ERRORS:
+                    print(f"[HEARTBEAT] Timeout connecting to master (will retry)")
             except Exception as e:
-                print(f"[HEARTBEAT] Error sending to master: {e}")
+                if HEARTBEAT_LOG_ERRORS:
+                    print(f"[HEARTBEAT] Error sending to master: {e}")
 
             # Send heartbeat every 30 seconds (TTL is 60s)
             time.sleep(30)

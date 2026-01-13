@@ -1,4 +1,5 @@
 # Τεχνική Περίληψη – Αλλαγές, Προβλήματα & Πλάνο Αποκατάστασης
+**Tags:** #backend-restore #rpc #mining-whitelist #watchdog #node-roles #scheduler
 
 ## Πρόσφατες αλλαγές (τελευταίες 8 ημέρες)
 
@@ -50,6 +51,8 @@
 
 - Επαναφορά/μετονομασία routes ώστε κάθε Flask endpoint να έχει μοναδικό όνομα.
 - Σε `add_url_rule`, να δοθούν διακριτά endpoint names ή να μετονομαστούν view functions.
+  - [x] Προστέθηκαν τα `/api/mining/info` και `/api/last_hash` ως aliases των σταθερών endpoints.
+  - [x] Προστέθηκε `/api/replica_health` για debugging replica node health.
 
 ### 2) Επικαιροποίηση AI modules
 
@@ -61,11 +64,14 @@
 
 - Επιβεβαίωση whitelist πριν από συναλλαγές.
 - Ορθότητα προσθήκης/διαγραφής διευθύνσεων και συμμόρφωση AML.
+  - [x] Mining whitelist απαιτεί `active` + `pledge_ok` όταν `MINING_WHITELIST_ONLY=1`.
 
 ### 4) Ανάκτηση nodes
 
 - Διασφάλιση επικοινωνίας master/replica (RPC routing, heartbeat).
 - Επαλήθευση ότι replicas κάνουν μόνο read και ο master κρατά έλεγχο.
+  - [x] Replica heartbeat logs σιωπούν timeouts εκτός αν `HEARTBEAT_LOG_ERRORS=1`.
+  - [x] Replica nodes επιβάλλουν `READ_ONLY=1` και απενεργοποιούν scheduler όταν δεν είναι master.
 
 ### 5) Restoration multi-chain wallet
 
@@ -78,11 +84,15 @@
 - Επαναφορά pledge πολλαπλών assets (ETH, BNB, BTC).
 - Σύνδεση σε staking pools ή bridge contracts (lock/burn).
 - Επανέλεγχος ERC-20 / BEP-20 pledge ροών.
+  - [x] Το pledge UI τονίζει ότι το pledge είναι BTC-only → THR (άλλα chains μόνο bridge/balances).
+  - [ ] Διασφάλιση ότι pledge/mining μένουν BTC-only → THR χωρίς να επηρεάζονται από άλλα chains (backend verification).
 
 ### 7) RPC routing & explorer
 
 - Ενιαίος gateway που προωθεί RPC calls ανά `network`/`method`.
 - Επιβεβαίωση ότι το explorer χρησιμοποιεί τα σωστά endpoints.
+  - [ ] Έλεγχος ότι οι health/mempool/mining endpoints απαντούν σταθερά κάτω από το απαιτούμενο SLA.
+  - [ ] Επιβεβαίωση ότι viewer filters (Bridge / Tokens / Swaps / L2E) βασίζονται στο canonical tagging χωρίς αλλαγές στα AMM endpoints.
 
 ### 8) IoT subsystem
 
@@ -128,3 +138,18 @@
 - Άμεση αντιμετώπιση με rollback όπου χρειάζεται.
 - Επαναφορά προηγούμενων σταθερών commits.
 - Κάλυψη κάθε αποκατάστασης με unit/integration tests.
+
+## 3. Εκπαίδευση Πυθίας / Architect
+
+- [x] Ο loader διαβάζει όλα τα `governance/*.md` (συμπεριλαμβανομένου του παρόντος).
+- [x] Προσθήκη/επιβεβαίωση blueprint tags για εύκολη εύρεση:
+  - `#backend-restore`, `#mining-whitelist`, `#watchdog`, `#rpc`
+- [ ] Self-test:
+  - Ρώτησε τον Architect στο `/chat` ή `/architect`:
+    - «Ποια είναι η πολιτική mining whitelist και ποιος ο ρόλος του node 2;»
+  - Επιβεβαίωσε ότι απαντά με βάση το παρόν plan.
+
+## Notes
+
+- Προστέθηκε `/api/replica_health` για γρήγορο replica debugging.
+- Το pledge UI εμφανίζει πλέον ξεκάθαρα το BTC-only pledge μήνυμα.

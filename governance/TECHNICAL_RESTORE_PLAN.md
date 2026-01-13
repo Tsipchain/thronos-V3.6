@@ -93,6 +93,7 @@
 - Ενιαίος gateway που προωθεί RPC calls ανά `network`/`method`.
 - Επιβεβαίωση ότι το explorer χρησιμοποιεί τα σωστά endpoints.
   - [x] Προστέθηκαν μικρά caches + timing logs για mining/last_hash endpoints (απομένει SLA verification).
+  - [x] Προστέθηκε fast path και timing logs στο submit_block ώστε να μειωθούν mining timeouts.
   - [ ] Επιβεβαίωση ότι viewer filters (Bridge / Tokens / Swaps / L2E) βασίζονται στο canonical tagging χωρίς αλλαγές στα AMM endpoints.
 
 ### 8) IoT subsystem

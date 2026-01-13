@@ -370,6 +370,7 @@ LAST_HASH_CACHE: dict = {"ts": 0.0, "data": None}
 MEMPOOL_COUNT_CACHE: dict = {"ts": 0.0, "count": 0}
 BALANCE_CACHE: dict = {}
 BALANCE_CACHE_TTL = float(os.getenv("BALANCE_CACHE_TTL_SECONDS", "10"))
+LAST_BLOCK_SNAPSHOT: dict = {}
 
 # ─── PR-182: Multi-Node Role Configuration ────────────────────────────────
 # Node role: "master" or "replica"
@@ -3642,6 +3643,25 @@ def update_last_block(entry, is_block=True):
             summary["timestamp"] = existing.get("timestamp")
             summary["thr_address"] = existing.get("thr_address")
     save_json(LAST_BLOCK_FILE, summary)
+    LAST_BLOCK_SNAPSHOT.clear()
+    LAST_BLOCK_SNAPSHOT.update(summary)
+    LAST_HASH_CACHE.update({
+        "ts": time.time(),
+        "data": {
+            "last_hash": summary.get("block_hash") or "0" * 64,
+            "height": summary.get("height") if summary.get("height") is not None else -1,
+            "timestamp": summary.get("timestamp"),
+        },
+    })
+
+
+def get_last_block_snapshot() -> dict:
+    if LAST_BLOCK_SNAPSHOT:
+        return LAST_BLOCK_SNAPSHOT
+    snapshot = load_json(LAST_BLOCK_FILE, {})
+    if isinstance(snapshot, dict):
+        LAST_BLOCK_SNAPSHOT.update(snapshot)
+    return LAST_BLOCK_SNAPSHOT
 
 def verify_btc_payment(btc_address, min_amount=MIN_AMOUNT):
     try:
@@ -5833,7 +5853,7 @@ def last_block_hash():
         logger.debug("last_hash handler took %.3fs", time.time() - start)
         return jsonify(cached)
 
-    last = load_json(LAST_BLOCK_FILE, {})
+    last = get_last_block_snapshot()
     last_hash = last.get("block_hash") or "0" * 64
     height = last.get("height")
     timestamp = last.get("timestamp")
@@ -5858,7 +5878,7 @@ def mining_info():
     target = get_mining_target()
     nbits = target_to_bits(target)
 
-    last_block = load_json(LAST_BLOCK_FILE, {})
+    last_block = get_last_block_snapshot()
     last_hash = last_block.get("block_hash") or "0" * 64
     block_count = last_block.get("block_count")
     if block_count is not None:
@@ -5886,7 +5906,7 @@ def mining_info():
     return jsonify(payload), 200
 
 
-
+@app.route("/api/mining/info")
 @app.route("/api/mining_info")
 def api_mining_info():
     return mining_info()
@@ -6150,7 +6170,10 @@ def _list_api_routes():
 
 @app.route("/api/mempool")
 def api_mempool():
-    return jsonify(load_mempool()), 200
+    start = time.time()
+    mempool = load_mempool()
+    logger.debug("mempool handler took %.3fs", time.time() - start)
+    return jsonify(mempool), 200
 
 # NOTE: /api/blocks is now defined earlier with pagination support (line ~4153)
 # Old simple endpoint removed to avoid duplicate route error
@@ -11802,11 +11825,14 @@ def _mining_watchdog_register_invalid(key: str, now: float) -> bool:
 
 # ─── MINING ENDPOINT ───────────────────────────────
 @app.route("/submit_block", methods=["POST"])
+@app.route("/api/submit_block", methods=["POST"])
 def submit_block():
+    start = time.time()
     data = request.get_json() or {}
     thr_address = data.get("thr_address")
     nonce = data.get("nonce")
     if not thr_address or nonce is None:
+        logger.debug("submit_block handler took %.3fs", time.time() - start)
         return jsonify(error="Missing mining data"),400
     now = time.time()
     miner_key = _mining_watchdog_key(thr_address)
@@ -11815,27 +11841,25 @@ def submit_block():
         entry = get_mining_whitelist_entry(thr_address)
         if not entry or not entry.get("active", False):
             logger.warning("Mining rejected thr_address=%s reason=not_whitelisted", thr_address)
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
             return jsonify(error="Mining not whitelisted", reason="not_whitelisted"), 403
         if not entry.get("pledge_ok", False):
             logger.warning("Mining rejected thr_address=%s reason=missing_pledge", thr_address)
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
             return jsonify(error="Mining pledge missing", reason="missing_pledge"), 403
 
     if _mining_watchdog_is_banned(miner_key, now):
         logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+        logger.debug("submit_block handler took %.3fs", time.time() - start)
         return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
 
     if _mining_watchdog_register_request(miner_key, now):
         logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+        logger.debug("submit_block handler took %.3fs", time.time() - start)
         return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
-    chain=load_json(CHAIN_FILE,[])
-    
-    server_last_hash = ""
-    blocks=[b for b in chain if isinstance(b,dict) and b.get("reward") is not None]
-    if blocks:
-        server_last_hash = blocks[-1].get("block_hash","")
-    else:
-        server_last_hash = "0"*64
-        
+    last_block = get_last_block_snapshot()
+    server_last_hash = last_block.get("block_hash") or "0"*64
+
     is_stratum = "merkle_root" in data
     pow_hash=""
     prev_hash=""
@@ -11848,11 +11872,13 @@ def submit_block():
         if not all([merkle_root, prev_hash, time_val, nbits]):
             if _mining_watchdog_register_invalid(miner_key, now):
                 logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+                logger.debug("submit_block handler took %.3fs", time.time() - start)
                 return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
             return jsonify(error="Missing Stratum fields"),400
         if prev_hash!=server_last_hash:
             if _mining_watchdog_register_invalid(miner_key, now):
                 logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+                logger.debug("submit_block handler took %.3fs", time.time() - start)
                 return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
             return jsonify(error="Stale block (prev_hash mismatch)"),400
         try:
@@ -11866,6 +11892,7 @@ def submit_block():
         except Exception as e:
             if _mining_watchdog_register_invalid(miner_key, now):
                 logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+                logger.debug("submit_block handler took %.3fs", time.time() - start)
                 return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
             return jsonify(error=f"Header construction failed: {e}"),400
     else:
@@ -11874,12 +11901,14 @@ def submit_block():
         if prev_hash!=server_last_hash:
             if _mining_watchdog_register_invalid(miner_key, now):
                 logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+                logger.debug("submit_block handler took %.3fs", time.time() - start)
                 return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
             return jsonify(error="Stale block (prev_hash mismatch)"),400
         check=hashlib.sha256((prev_hash+thr_address).encode()+str(nonce).encode()).hexdigest()
         if check!=pow_hash:
             if _mining_watchdog_register_invalid(miner_key, now):
                 logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+                logger.debug("submit_block handler took %.3fs", time.time() - start)
                 return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
             return jsonify(error="Invalid hash calculation"),400
             
@@ -11887,12 +11916,21 @@ def submit_block():
     if int(pow_hash, 16) > current_target:
         if _mining_watchdog_register_invalid(miner_key, now):
             logger.warning("Mining rejected thr_address=%s reason=banned_by_watchdog", thr_address)
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
             return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
         return jsonify(error=f"Insufficient difficulty. Target: {hex(current_target)}"), 400
 
+    chain=load_json(CHAIN_FILE,[])
+
     # Reward split με σωστό height (blocks + offset)
-    local_height  = len(blocks)
-    height        = HEIGHT_OFFSET + local_height
+    block_count = last_block.get("block_count")
+    if block_count is not None:
+        local_height = max(int(block_count) - HEIGHT_OFFSET, 0)
+        height = int(block_count)
+    else:
+        blocks=[b for b in chain if isinstance(b,dict) and b.get("reward") is not None]
+        local_height  = len(blocks)
+        height        = HEIGHT_OFFSET + local_height
     total_reward  = calculate_reward(height)
     
     miner_share=round(total_reward*0.80,6)
@@ -11917,8 +11955,10 @@ def submit_block():
 
     # PR-3: Append guard - reject duplicate/stale blocks
     # Check if there's already a block at this height or later
+    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
     tip_height = blocks[-1].get("height", -1) if blocks else -1
     if height <= tip_height:
+        logger.debug("submit_block handler took %.3fs", time.time() - start)
         return jsonify(error=f"Duplicate/stale block: height {height} <= tip {tip_height}"), 400
 
     chain.append(new_block)
@@ -11978,6 +12018,7 @@ def submit_block():
     except Exception:
         pass
     print(f"⛏️ Miner {thr_address} found block #{height}! R={total_reward} (m/a/b: {miner_share}/{ai_share}/{burn_share}) | TXs: {len(included)} | Stratum={is_stratum}")
+    logger.debug("submit_block handler took %.3fs", time.time() - start)
     return jsonify(status="accepted", height=height, reward=miner_share, tx_included=len(included)), 200
 
 

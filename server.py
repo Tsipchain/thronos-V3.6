@@ -5977,7 +5977,7 @@ def last_block_hash():
         }
 
     MINING_LAST_HASH_CACHE.update({"ts": now, "data": payload})
-    logger.info("mining.last_block_hash", extra={"ms": int((time.time() - start) * 1000), "source": source})
+    logger.info("mining.last_block_hash ms=%s source=%s", int((time.time() - start) * 1000), source)
     return jsonify(payload)
 
 @app.route("/mining_info")

@@ -18,10 +18,13 @@ SERVER_URL = "https://thrchain.up.railway.app" # Update if your server URL is di
 def get_last_hash():
     """Fetches the last block hash from the Thronos server."""
     try:
-        r = requests.get(f"{SERVER_URL}/last_block_hash", timeout=10)
+        r = requests.get(f"{SERVER_URL}/api/last_block_hash", timeout=5)
         r.raise_for_status()
         data = r.json()
-        return data.get("last_hash", "0" * 64)
+        return {
+            "last_hash": data.get("block_hash") or data.get("last_hash", "0" * 64),
+            "height": data.get("height"),
+        }
     except requests.exceptions.RequestException as e:
         print(f"❌ Connection error fetching last hash: {e}")
         return None
@@ -39,7 +42,7 @@ def get_mining_info():
         print(f"❌ Error fetching mining info: {e}")
         return None
 
-def mine_block(last_hash):
+def mine_block(last_hash_info):
     """
     CPU mining with dynamic difficulty:
     - Fetches target from server
@@ -56,6 +59,8 @@ def mine_block(last_hash):
     reward = info.get("reward", 0)
     
     print(f"⛏️  Starting mining for {THR_ADDRESS}")
+    last_hash = last_hash_info.get("last_hash") if isinstance(last_hash_info, dict) else last_hash_info
+    tip_height = last_hash_info.get("height") if isinstance(last_hash_info, dict) else None
     print(f"   Last Hash: {last_hash[:16]}...")
     print(f"   Target:    {target_hex[:16]}... (Diff: ~{difficulty})")
     print(f"   Reward:    {reward} THR")
@@ -67,7 +72,8 @@ def mine_block(last_hash):
     while True:
         # Refresh info every 30 seconds or if block found elsewhere
         if time.time() - start > 30:
-             current_server_hash = get_last_hash()
+             current_server_info = get_last_hash()
+             current_server_hash = current_server_info.get("last_hash") if current_server_info else None
              if current_server_hash and current_server_hash != last_hash:
                  print("🔄 New block found on network. Restarting mining...")
                  return None
@@ -100,6 +106,8 @@ def mine_block(last_hash):
                 "pow_hash": h_hex,
                 "prev_hash": last_hash,
             }
+            if tip_height is not None:
+                block["height"] = int(tip_height) + 1
             return block
 
         nonce += 1
@@ -135,9 +143,9 @@ if __name__ == "__main__":
     print(f"📡 Server: {SERVER_URL}")
     
     while True:
-        last_hash = get_last_hash()
-        if last_hash:
-            mined_block = mine_block(last_hash)
+        last_hash_info = get_last_hash()
+        if last_hash_info:
+            mined_block = mine_block(last_hash_info)
             if mined_block:
                 submit_block(mined_block)
             

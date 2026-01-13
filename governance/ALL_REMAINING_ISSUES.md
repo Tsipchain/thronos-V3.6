@@ -519,4 +519,29 @@ if __name__ == "__main__":
 
 ---
 
+## 4. Τι να ζητήσεις ρητά από τον Codex μετά τις διορθώσεις backend
+
+### Mining whitelist behavior (ρητή οδηγία)
+
+- Αν `MINING_WHITELIST_ONLY` είναι ενεργό:
+  - Δέχεσαι μόνο διευθύνσεις που είναι **active** στη whitelist **και** έχουν `pledge_ok = true`.
+- Αν είναι κλειστό:
+  - Άφησε mining ελεύθερα όπως πριν, αλλά άσε τον watchdog να κόβει μόνο ξεκάθαρα κακόβουλα patterns (invalid shares, spam).
+
+### Watchdog (scope)
+
+- Να μην μπλοκάρει miners απλά επειδή δεν έχουν pledge.
+- Να μπλοκάρει μόνο:
+  - Υπερβολικά invalid nonces.
+  - DDoS / flood συμπεριφορές.
+
+### Logging (rejection reasons)
+
+- Όταν κόβεται miner, να γράφει ρητά στην ίδια γραμμή log:
+  - `reason=not_whitelisted`
+  - `reason=missing_pledge`
+  - `reason=banned_by_watchdog`
+
+---
+
 **End of Comprehensive Report**

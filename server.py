@@ -31,6 +31,7 @@ from __future__ import annotations
 # - Admin Withdrawal Panel (V5.1)
 
 import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil
+import sys
 from collections import Counter
 from decimal import Decimal, ROUND_DOWN
 import qrcode
@@ -779,8 +780,36 @@ if stripe:
 # Πόσα blocks "έχουν ήδη γίνει" πριν ξεκινήσει το τρέχον chain αρχείο
 HEIGHT_OFFSET = 0
 
+class AttributesLevelFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        attributes = getattr(record, "attributes", None)
+        if not isinstance(attributes, dict):
+            attributes = {}
+            record.attributes = attributes
+        attributes["level"] = record.levelname.lower()
+        return True
+
+
 logging.basicConfig(level=logging.INFO)
+root_logger = logging.getLogger()
+for handler in root_logger.handlers:
+    handler.addFilter(AttributesLevelFilter())
+
 logger = logging.getLogger("thronos")
+
+scheduler_logger = logging.getLogger("apscheduler")
+scheduler_logger.setLevel(logging.INFO)
+if not scheduler_logger.handlers:
+    scheduler_handler = logging.StreamHandler(sys.stdout)
+    scheduler_handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+    scheduler_handler.addFilter(AttributesLevelFilter())
+    scheduler_logger.addHandler(scheduler_handler)
+else:
+    for handler in scheduler_logger.handlers:
+        handler.addFilter(AttributesLevelFilter())
+        if handler.formatter is None:
+            handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+scheduler_logger.propagate = False
 
 # Security warnings for production deployments
 if ADMIN_SECRET == "CHANGE_ME_NOW":

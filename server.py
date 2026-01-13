@@ -5900,6 +5900,16 @@ def api_mining_info_legacy():
 def api_last_hash():
     return last_block_hash()
 
+
+@app.route("/api/mining/info")
+def api_mining_info():
+    return mining_info()
+
+
+@app.route("/api/last_hash")
+def api_last_hash():
+    return last_block_hash()
+
 @app.route("/api/network_stats")
 def network_stats():
     pledges = load_json(PLEDGE_CHAIN, [])

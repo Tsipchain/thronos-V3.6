@@ -5886,7 +5886,7 @@ def mining_info():
     return jsonify(payload), 200
 
 
-@app.route("/api/mining/info")
+
 @app.route("/api/mining_info")
 def api_mining_info():
     return mining_info()

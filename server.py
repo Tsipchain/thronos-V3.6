@@ -5954,34 +5954,21 @@ def last_block_hash():
         logger.info("mining.last_block_hash ms=%s source=cache", int((time.time() - start) * 1000))
         return jsonify(cached)
 
-    payload = None
     source = "local"
-    if MINING_RPC_REPLICA and NODE_ROLE == "master":
-        try:
-            replica_url = MINING_RPC_REPLICA.rstrip("/")
-            resp = requests.get(f"{replica_url}/api/last_block_hash", timeout=0.4)
-            if resp.ok:
-                payload = resp.json()
-                payload["source"] = "replica"
-                source = "replica"
-        except Exception:
-            payload = None
-
-    if payload is None:
-        last = get_last_block_snapshot()
-        last_hash = last.get("block_hash") or "0" * 64
-        height = last.get("height")
-        timestamp = last.get("timestamp")
-        target = get_mining_target()
-        nbits = target_to_bits(target)
-        payload = {
-            "block_hash": last_hash,
-            "last_hash": last_hash,
-            "height": height if height is not None else -1,
-            "timestamp": timestamp,
-            "target": hex(target),
-            "nbits": hex(nbits),
-        }
+    last = get_last_block_snapshot()
+    last_hash = last.get("block_hash") or "0" * 64
+    height = last.get("height")
+    timestamp = last.get("timestamp")
+    target = get_mining_target()
+    nbits = target_to_bits(target)
+    payload = {
+        "block_hash": last_hash,
+        "last_hash": last_hash,
+        "height": height if height is not None else -1,
+        "timestamp": timestamp,
+        "target": hex(target),
+        "nbits": hex(nbits),
+    }
 
     MINING_LAST_HASH_CACHE.update({"ts": now, "data": payload})
     logger.info("mining.last_block_hash ms=%s source=%s", int((time.time() - start) * 1000), source)

@@ -19063,11 +19063,7 @@ else:
     logger.info(f"[STARTUP] Skipping session prune on {NODE_ROLE} node (READ_ONLY={READ_ONLY})")
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 13311))
     host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", 3333))
     app.run(host=host, port=port)
-
-if __name__ == "__main__":
-    port=int(os.getenv("PORT",3333))
-    app.run(host="0.0.0.0", port=port)
 # === AI Session API Fixes (append to end of server.py) ===========================

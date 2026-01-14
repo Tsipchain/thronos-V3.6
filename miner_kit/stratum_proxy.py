@@ -250,6 +250,9 @@ def handle_client(conn, addr):
                 if len(params) >= 5:
                     if current_job and time.time() - current_job.fetched_at > JOB_STALE_SECONDS:
                         refresh_job_from_server(force=True)
+                        response = {"id": msg_id, "result": False, "error": [21, "Stale Job", None]}
+                        conn.sendall((json.dumps(response) + "\n").encode())
+                        continue
                     job_id_sub = params[1]
                     extranonce2 = params[2]
                     ntime_hex = params[3]

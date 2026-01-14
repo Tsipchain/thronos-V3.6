@@ -3753,6 +3753,13 @@ def get_last_block_snapshot() -> dict:
     if LAST_BLOCK_SNAPSHOT:
         return LAST_BLOCK_SNAPSHOT
     snapshot = load_json(LAST_BLOCK_FILE, {})
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    if not snapshot or (snapshot.get("block_hash") is None and snapshot.get("height") is None):
+        try:
+            snapshot = _rebuild_index_from_chain()
+        except Exception as exc:
+            logger.error("Failed to rebuild last block snapshot: %s", exc)
     if isinstance(snapshot, dict):
         LAST_BLOCK_SNAPSHOT.update(snapshot)
     return LAST_BLOCK_SNAPSHOT
@@ -5947,34 +5954,21 @@ def last_block_hash():
         logger.info("mining.last_block_hash ms=%s source=cache", int((time.time() - start) * 1000))
         return jsonify(cached)
 
-    payload = None
     source = "local"
-    if MINING_RPC_REPLICA and NODE_ROLE == "master":
-        try:
-            replica_url = MINING_RPC_REPLICA.rstrip("/")
-            resp = requests.get(f"{replica_url}/api/last_block_hash", timeout=0.4)
-            if resp.ok:
-                payload = resp.json()
-                payload["source"] = "replica"
-                source = "replica"
-        except Exception:
-            payload = None
-
-    if payload is None:
-        last = get_last_block_snapshot()
-        last_hash = last.get("block_hash") or "0" * 64
-        height = last.get("height")
-        timestamp = last.get("timestamp")
-        target = get_mining_target()
-        nbits = target_to_bits(target)
-        payload = {
-            "block_hash": last_hash,
-            "last_hash": last_hash,
-            "height": height if height is not None else -1,
-            "timestamp": timestamp,
-            "target": hex(target),
-            "nbits": hex(nbits),
-        }
+    last = get_last_block_snapshot()
+    last_hash = last.get("block_hash") or "0" * 64
+    height = last.get("height")
+    timestamp = last.get("timestamp")
+    target = get_mining_target()
+    nbits = target_to_bits(target)
+    payload = {
+        "block_hash": last_hash,
+        "last_hash": last_hash,
+        "height": height if height is not None else -1,
+        "timestamp": timestamp,
+        "target": hex(target),
+        "nbits": hex(nbits),
+    }
 
     MINING_LAST_HASH_CACHE.update({"ts": now, "data": payload})
     logger.info("mining.last_block_hash ms=%s source=%s", int((time.time() - start) * 1000), source)
@@ -19056,11 +19050,7 @@ else:
     logger.info(f"[STARTUP] Skipping session prune on {NODE_ROLE} node (READ_ONLY={READ_ONLY})")
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 13311))
     host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", 3333))
     app.run(host=host, port=port)
-
-if __name__ == "__main__":
-    port=int(os.getenv("PORT",3333))
-    app.run(host="0.0.0.0", port=port)
 # === AI Session API Fixes (append to end of server.py) ===========================

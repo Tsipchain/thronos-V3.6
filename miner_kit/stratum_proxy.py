@@ -7,6 +7,7 @@ import struct
 import binascii
 import hashlib
 import os
+import random
 
 # Configuration
 THRONOS_SERVER = os.getenv("THRONOS_SERVER", "http://localhost:3333")
@@ -14,6 +15,7 @@ STRATUM_PORT = int(os.getenv("STRATUM_PORT", "3334"))
 POLL_INTERVAL = 1.0
 SHARE_TARGET_MULTIPLIER = float(os.getenv("SHARE_TARGET_MULTIPLIER", "16"))
 MAX_TARGET = int("f" * 64, 16)
+JOB_STALE_SECONDS = float(os.getenv("JOB_STALE_SECONDS", "10"))
 
 # Global State
 current_job = None
@@ -37,7 +39,21 @@ def reverse_bytes(h):
     return bytes_to_hex(b[::-1])
 
 class Job:
-    def __init__(self, job_id, prev_hash, coinb1, coinb2, merkle_branch, version, nbits, ntime, clean_jobs, height, block_target):
+    def __init__(
+        self,
+        job_id,
+        prev_hash,
+        coinb1,
+        coinb2,
+        merkle_branch,
+        version,
+        nbits,
+        ntime,
+        clean_jobs,
+        height,
+        block_target,
+        fetched_at,
+    ):
         self.job_id = job_id
         self.prev_hash = prev_hash
         self.coinb1 = coinb1
@@ -49,6 +65,7 @@ class Job:
         self.clean_jobs = clean_jobs
         self.height = height
         self.block_target = block_target
+        self.fetched_at = fetched_at
 
 def get_mining_info():
     try:
@@ -98,6 +115,7 @@ def _build_job(last_block):
         clean_jobs,
         tip_height,
         block_target,
+        time.time(),
     )
 
 def job_updater():
@@ -230,6 +248,8 @@ def handle_client(conn, addr):
             elif method == "mining.submit":
                 # params: worker_name, job_id, extranonce2, ntime, nonce
                 if len(params) >= 5:
+                    if current_job and time.time() - current_job.fetched_at > JOB_STALE_SECONDS:
+                        refresh_job_from_server(force=True)
                     job_id_sub = params[1]
                     extranonce2 = params[2]
                     ntime_hex = params[3]
@@ -338,8 +358,6 @@ def handle_client(conn, addr):
         conn.close()
         if conn in clients:
             clients.remove(conn)
-
-import random
 
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

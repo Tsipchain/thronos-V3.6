@@ -5,17 +5,31 @@ set -e
 DATA_DIR=${DATA_DIR:-./data}
 mkdir -p "$DATA_DIR/contracts"
 
-echo "=== Starting Stratum engine on TCP port 3333 ==="
-python stratum_engine.py &
+# Reserve the public web port for the Flask app and keep Stratum separate
+PORT=${PORT:-8000}
+STRATUM_PORT=${STRATUM_PORT:-3333}
+export PORT STRATUM_PORT
+
+echo "=== Starting Stratum engine on TCP port ${STRATUM_PORT} ==="
+python3 stratum_engine.py &
 STRATUM_PID=$!
 
-echo "=== Starting MicroMiner demonstration ==="
-python micro_miner.py &
-MINER_PID=$!
+MINER_PID=""
+if [[ "${ENABLE_MICRO_MINER:-false}" == "true" ]]; then
+  echo "=== Starting MicroMiner demonstration ==="
+  python3 micro_miner.py &
+  MINER_PID=$!
+else
+  echo "=== Skipping MicroMiner demonstration (set ENABLE_MICRO_MINER=true to enable) ==="
+fi
 
-echo "=== Starting Flask app on HTTP port ${PORT:-8000} ==="
+echo "=== Starting Flask app on HTTP port ${PORT} ==="
 # server.py is configured to read PORT env var
-python server.py
+python3 server.py
 
 echo "=== Shutting down background services ==="
-kill $STRATUM_PID $MINER_PID || true
+if [[ -n "$MINER_PID" ]]; then
+  kill $STRATUM_PID $MINER_PID || true
+else
+  kill $STRATUM_PID || true
+fi

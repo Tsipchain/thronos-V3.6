@@ -10,8 +10,11 @@ import os
 import random
 
 # Configuration
-THRONOS_SERVER = os.getenv("THRONOS_SERVER", "http://localhost:3333")
 STRATUM_PORT = int(os.getenv("STRATUM_PORT", "3334"))
+DEFAULT_HTTP_PORT = os.getenv("PORT", "8000")
+if str(DEFAULT_HTTP_PORT) == str(STRATUM_PORT):
+    DEFAULT_HTTP_PORT = "8000"
+THRONOS_SERVER = os.getenv("THRONOS_SERVER", "https://thrchain.up.railway.app")
 POLL_INTERVAL = 1.0
 SHARE_TARGET_MULTIPLIER = float(os.getenv("SHARE_TARGET_MULTIPLIER", "16"))
 MAX_TARGET = int("f" * 64, 16)
@@ -23,6 +26,7 @@ job_id_counter = 0
 clients = []
 lock = threading.Lock()
 last_prev_hash = None
+last_block_cache = None
 
 def sha256d(data):
     return hashlib.sha256(hashlib.sha256(data).digest()).digest()
@@ -68,13 +72,18 @@ class Job:
         self.fetched_at = fetched_at
 
 def get_mining_info():
+    global last_block_cache
     try:
         r1 = requests.get(f"{THRONOS_SERVER}/api/last_block_hash", timeout=2)
+        r1.raise_for_status()
         last_block = r1.json()
+        last_block_cache = last_block
         return last_block
     except Exception as e:
         print(f"Error fetching mining info: {e}")
-        return None
+        if last_block_cache:
+            print("Using cached mining info.")
+        return last_block_cache
 
 
 def _build_job(last_block):

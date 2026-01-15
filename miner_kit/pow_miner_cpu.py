@@ -6,6 +6,7 @@
 # 3. Run:  python pow_miner_cpu.py
 
 import hashlib
+import os
 import time
 import requests
 import json
@@ -13,7 +14,9 @@ import sys
 
 # Configuration
 THR_ADDRESS = "THR_PUT_YOUR_ADDRESS_HERE"  # Replace with your actual THR address
-SERVER_URL = "https://thrchain.up.railway.app" # Update if your server URL is different
+SERVER_URL = os.getenv("THRONOS_SERVER_URL", os.getenv("THRONOS_SERVER", "https://thrchain.up.railway.app"))
+SUBMIT_RETRIES = int(os.getenv("THRONOS_SUBMIT_RETRIES", "3"))
+SUBMIT_RETRY_DELAY = float(os.getenv("THRONOS_SUBMIT_RETRY_DELAY", "2"))
 
 def get_last_hash():
     """Fetches the last block hash from the Thronos server."""
@@ -115,20 +118,32 @@ def mine_block(last_hash_info):
 
 def submit_block(block):
     """Submits the mined block to the server."""
-    try:
-        r = requests.post(f"{SERVER_URL}/submit_block", json=block, timeout=10)
-        if r.status_code == 200:
-            print(f"📬 Submission successful: {r.json()}")
-            return True
-        else:
+    attempts = max(1, SUBMIT_RETRIES)
+    delay = max(0.5, SUBMIT_RETRY_DELAY)
+    for attempt in range(1, attempts + 1):
+        try:
+            r = requests.post(f"{SERVER_URL}/submit_block", json=block, timeout=10)
+            if r.status_code == 200:
+                print(f"📬 Submission successful: {r.json()}")
+                return True
+            if r.status_code in {429, 500, 502, 503, 504}:
+                print(f"⏳ Node busy (HTTP {r.status_code}). Retrying {attempt}/{attempts}...")
+                if attempt < attempts:
+                    time.sleep(delay)
+                    delay *= 1.5
+                    continue
             print(f"⚠️ Submission failed: {r.status_code} - {r.text}")
             return False
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Connection error submitting block: {e}")
-        return False
-    except Exception as e:
-        print(f"❌ Error submitting block: {e}")
-        return False
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Connection error submitting block: {e}")
+            if attempt < attempts:
+                time.sleep(delay)
+                delay *= 1.5
+                continue
+            return False
+        except Exception as e:
+            print(f"❌ Error submitting block: {e}")
+            return False
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:

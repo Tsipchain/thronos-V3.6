@@ -1089,6 +1089,17 @@ async function loadQuizForModal(courseId) {
                     <label class="option-label">
                         <input type="radio" name="q${q.id}" value="1">${currentLang === 'el' ? 'Σωστό' : 'True'}
                     </label>`;
+            } else if (qType === 'multi_select') {
+                body = (options || []).map((opt, optIdx) => `
+                    <label class="option-label">
+                        <input type="checkbox" name="q${q.id}" value="${optIdx}">
+                        ${escapeHtml(opt)}
+                    </label>
+                `).join('');
+            } else if (qType === 'short_answer') {
+                body = `
+                    <input class="input-field" name="q${q.id}" placeholder="${currentLang === 'el' ? 'Γράψε την απάντηση' : 'Type your answer'}" style="width: 100%;">
+                `;
             } else {
                 body = (options || []).map((opt, optIdx) => `
                     <label class="option-label">
@@ -1148,6 +1159,22 @@ async function submitQuiz() {
             const selected = document.querySelector(`input[name="q${q.id}"]:checked`);
             if (selected) {
                 answers[q.id] = parseInt(selected.value);
+            } else {
+                unansweredQuestions.push(idx + 1);
+            }
+        } else if (qType === 'multi_select') {
+            const selected = Array.from(document.querySelectorAll(`input[name="q${q.id}"]:checked`))
+                .map(el => parseInt(el.value));
+            if (selected.length > 0) {
+                answers[q.id] = selected;
+            } else {
+                unansweredQuestions.push(idx + 1);
+            }
+        } else if (qType === 'short_answer') {
+            const input = document.querySelector(`input[name="q${q.id}"]`);
+            const value = input ? input.value.trim() : '';
+            if (value) {
+                answers[q.id] = value;
             } else {
                 unansweredQuestions.push(idx + 1);
             }
@@ -1278,8 +1305,15 @@ async function loadQuizForEdit(courseId) {
             const normalizedQuestion = {
                 ...q,
                 type: normalizedType,
-                options: normalizedType === 'true_false' ? ['False', 'True'] : (q.options || ['', '', '', '']),
-                correct: normalizedType === 'true_false' ? (q.correct === 1 ? 1 : 0) : (q.correct ?? 0)
+                options: normalizedType === 'true_false'
+                    ? ['False', 'True']
+                    : (normalizedType === 'short_answer' ? [] : (q.options || ['', '', '', ''])),
+                correct: normalizedType === 'multi_select'
+                    ? (Array.isArray(q.correct) ? q.correct : [])
+                    : (normalizedType === 'true_false' ? (q.correct === 1 ? 1 : 0) : (q.correct ?? 0)),
+                correct_text: normalizedType === 'short_answer'
+                    ? (Array.isArray(q.correct_text) ? q.correct_text.join(', ') : (q.correct_text || q.correct || ''))
+                    : ''
             };
             addQuestion(normalizedQuestion);
         });
@@ -1292,6 +1326,8 @@ function normalizeQuestionType(rawType) {
     const val = String(rawType || '').toLowerCase();
     if (val === 'true_false' || val === 'tf' || val === 'truefalse') return 'true_false';
     if (val === 'multiple_choice' || val === 'mcq' || val === 'single' || val === 'multiple-choice') return 'multiple_choice';
+    if (val === 'multi_select' || val === 'multi-select' || val === 'checkbox' || val === 'multi') return 'multi_select';
+    if (val === 'short_answer' || val === 'short' || val === 'text') return 'short_answer';
     return 'multiple_choice';
 }
 
@@ -1302,6 +1338,7 @@ function addQuestion(existing = null) {
         question_el: existing?.question_el || '',
         options: existing?.options || ['', '', '', ''],
         correct: existing?.correct ?? 0,
+        correct_text: existing?.correct_text || '',
         type: normalizeQuestionType(existing?.type)
     };
 
@@ -1328,6 +1365,8 @@ function addQuestion(existing = null) {
             <select class="input-field" onchange="onQuestionTypeChange(${idx}, this.value)">
                 <option value="multiple_choice" ${questionType === 'multiple_choice' ? 'selected' : ''}>Multiple choice</option>
                 <option value="true_false" ${questionType === 'true_false' ? 'selected' : ''}>True / False</option>
+                <option value="multi_select" ${questionType === 'multi_select' ? 'selected' : ''}>Multi-select</option>
+                <option value="short_answer" ${questionType === 'short_answer' ? 'selected' : ''}>Short answer</option>
             </select>
         </div>
         <div id="q-${idx}-fields"></div>
@@ -1366,6 +1405,26 @@ function renderQuestionFields(idx, type) {
                 <label><input type="radio" name="correct-${idx}" value="0" ${correctValue === 0 ? 'checked' : ''} onchange="quizQuestions[${idx}].correct=0"> ${currentLang === 'el' ? 'Λάθος' : 'False'}</label>
                 <label><input type="radio" name="correct-${idx}" value="1" ${correctValue === 1 ? 'checked' : ''} onchange="quizQuestions[${idx}].correct=1"> ${currentLang === 'el' ? 'Σωστό' : 'True'}</label>
             </div>`;
+    } else if (type === 'multi_select') {
+        const correctValues = Array.isArray(question.correct) ? question.correct : [];
+        html = `
+            <div style="font-size: 0.9em; opacity: 0.7; margin-bottom: 8px;">${currentLang === 'el' ? 'Επιλογές (πολλαπλές σωστές)' : 'Options (multiple correct)'}:</div>
+            ${[0,1,2,3].map(i => `
+                <div style="display: flex; gap: 10px; margin-bottom: 8px; align-items:center;">
+                    <input type="checkbox" value="${i}" ${correctValues.includes(i) ? 'checked' : ''} onchange="toggleMultiSelect(${idx}, ${i}, this.checked)">
+                    <input class="input-field" placeholder="Option ${i + 1}" value="${escapeAttr(optionValues[i] || '')}" onchange="quizQuestions[${idx}].options[${i}] = this.value" style="flex: 1;">
+                </div>`).join('')}
+        `;
+        quizQuestions[idx].options = quizQuestions[idx].options || ['', '', '', ''];
+        quizQuestions[idx].correct = correctValues;
+    } else if (type === 'short_answer') {
+        const answerValue = escapeAttr(question.correct_text || '');
+        html = `
+            <div style="font-size: 0.9em; opacity: 0.7; margin-bottom: 8px;">
+                ${currentLang === 'el' ? 'Σωστή απάντηση (διαχωρίστε με κόμμα για πολλαπλές)' : 'Correct answer (comma-separated for multiple)'}:
+            </div>
+            <input class="input-field" placeholder="${currentLang === 'el' ? 'Σωστή απάντηση' : 'Correct answer'}" value="${answerValue}" onchange="quizQuestions[${idx}].correct_text = this.value" style="width: 100%;">
+        `;
     }
     container.innerHTML = html;
     quizQuestions[idx].type = type;
@@ -1376,11 +1435,31 @@ function onQuestionTypeChange(idx, type) {
     if (normalized === 'true_false') {
         quizQuestions[idx].options = ['False', 'True'];
         quizQuestions[idx].correct = 0;
+        quizQuestions[idx].correct_text = '';
+    } else if (normalized === 'multi_select') {
+        quizQuestions[idx].options = (quizQuestions[idx].options || ['', '', '', '']).concat(['', '', '', '']).slice(0, 4);
+        quizQuestions[idx].correct = [];
+        quizQuestions[idx].correct_text = '';
+    } else if (normalized === 'short_answer') {
+        quizQuestions[idx].options = [];
+        quizQuestions[idx].correct = 0;
+        quizQuestions[idx].correct_text = quizQuestions[idx].correct_text || '';
     } else {
         quizQuestions[idx].options = (quizQuestions[idx].options || ['', '', '', '']).concat(['', '', '', '']).slice(0, 4);
         quizQuestions[idx].correct = Number(quizQuestions[idx].correct ?? 0);
+        quizQuestions[idx].correct_text = '';
     }
     renderQuestionFields(idx, normalized);
+}
+
+function toggleMultiSelect(idx, optionIndex, isChecked) {
+    const question = quizQuestions[idx];
+    if (!question) return;
+    const current = Array.isArray(question.correct) ? question.correct : [];
+    const next = isChecked
+        ? Array.from(new Set([...current, optionIndex]))
+        : current.filter(value => value !== optionIndex);
+    question.correct = next;
 }
 
 async function saveQuiz() {
@@ -1402,9 +1481,25 @@ async function saveQuiz() {
                 validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'λάθος σωστή επιλογή' : 'invalid correct option'}`);
             }
         }
+        if (qType === 'multi_select') {
+            const options = (q.options || []).concat(['', '', '', '']).slice(0, 4);
+            const correctValues = Array.isArray(q.correct) ? q.correct : [];
+            if (!options.every(o => o)) {
+                validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'συμπλήρωσε όλες τις επιλογές' : 'fill all options'}`);
+            }
+            if (correctValues.length === 0) {
+                validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'επίλεξε τουλάχιστον μία σωστή' : 'select at least one correct option'}`);
+            }
+        }
         if (qType === 'true_false') {
             if (q.correct !== 0 && q.correct !== 1) {
                 validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'επέλεξε σωστό True/False' : 'select correct True/False'}`);
+            }
+        }
+        if (qType === 'short_answer') {
+            const correctText = (q.correct_text || '').trim();
+            if (!correctText) {
+                validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'γράψε σωστή απάντηση' : 'enter correct answer'}`);
             }
         }
         return { ...q, type: qType };

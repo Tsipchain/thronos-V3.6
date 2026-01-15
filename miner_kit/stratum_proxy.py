@@ -74,7 +74,7 @@ class Job:
 def get_mining_info():
     global last_block_cache
     try:
-        r1 = requests.get(f"{THRONOS_SERVER}/api/last_block_hash", timeout=2)
+        r1 = requests.get(f"{THRONOS_SERVER}/api/last_block_hash", timeout=5)
         r1.raise_for_status()
         last_block = r1.json()
         last_block_cache = last_block

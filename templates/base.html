@@ -2141,9 +2141,28 @@ async function loadWalletBalances(force = false) {
         // PR-5a: Use fetchJSONOnce for request coalescing
         // Show all tokens including zero balances for multi-chain assets
         const url = `/api/balances?address=${encodeURIComponent(wallet)}&show_zero=true`;
-        const data = await (window.FetchUtils?.fetchJSONOnce
-            ? window.FetchUtils.fetchJSONOnce(url)
-            : fetch(url).then(r => r.json()));
+        let data = null;
+        const fetchWithFailover = async () => {
+            const response = await fetch(url, { cache: "no-store" });
+            const text = await response.text();
+            const trimmed = text.trim();
+            if (trimmed.startsWith("A") || trimmed.includes("An error")) {
+                const fallbackBase = "https://node-2.up.railway.app";
+                const fallbackResp = await fetch(`${fallbackBase}${url}`, { cache: "no-store" });
+                const fallbackText = await fallbackResp.text();
+                return JSON.parse(fallbackText);
+            }
+            return JSON.parse(text);
+        };
+        try {
+            data = await fetchWithFailover();
+        } catch (fetchError) {
+            if (window.FetchUtils?.fetchJSONOnce) {
+                data = await window.FetchUtils.fetchJSONOnce(url);
+            } else {
+                throw fetchError;
+            }
+        }
 
         renderWalletBalances(data);
         walletBalancesLoaded = true;

@@ -14,13 +14,22 @@ echo "=== Starting Stratum engine on TCP port ${STRATUM_PORT} ==="
 python3 stratum_engine.py &
 STRATUM_PID=$!
 
-echo "=== Starting MicroMiner demonstration ==="
-python3 micro_miner.py &
-MINER_PID=$!
+MINER_PID=""
+if [[ "${ENABLE_MICRO_MINER:-false}" == "true" ]]; then
+  echo "=== Starting MicroMiner demonstration ==="
+  python3 micro_miner.py &
+  MINER_PID=$!
+else
+  echo "=== Skipping MicroMiner demonstration (set ENABLE_MICRO_MINER=true to enable) ==="
+fi
 
 echo "=== Starting Flask app on HTTP port ${PORT} ==="
 # server.py is configured to read PORT env var
 python3 server.py
 
 echo "=== Shutting down background services ==="
-kill $STRATUM_PID $MINER_PID || true
+if [[ -n "$MINER_PID" ]]; then
+  kill $STRATUM_PID $MINER_PID || true
+else
+  kill $STRATUM_PID || true
+fi

@@ -295,7 +295,42 @@ def inject_build_id():
     if build_time:
         build_id += f"-{int(build_time)}"
 
-    return dict(build_id=build_id)
+    default_origin = request.host_url.rstrip("/") if request else ""
+    node1_rpc_url = os.getenv("NODE1_RPC_URL", default_origin)
+    node2_rpc_url = os.getenv("NODE2_RPC_URL", node1_rpc_url)
+
+    return dict(
+        build_id=build_id,
+        node1_rpc_url=node1_rpc_url,
+        node2_rpc_url=node2_rpc_url,
+    )
+
+
+def _replica_sync_pending() -> bool:
+    if NODE_ROLE != "replica":
+        return False
+    last_block = load_json(LAST_BLOCK_FILE, {})
+    block_hash = last_block.get("block_hash")
+    height = last_block.get("height")
+    chain = load_json(CHAIN_FILE, [])
+    if block_hash:
+        return False
+    if height not in (None, -1):
+        return False
+    return not bool(chain)
+
+
+@app.before_request
+def replica_sync_guard():
+    if NODE_ROLE != "replica":
+        return None
+    if not request.path.startswith("/api/"):
+        return None
+    if request.method.upper() != "GET":
+        return None
+    if not _replica_sync_pending():
+        return None
+    return jsonify({"status": "syncing", "progress": 99}), 200
 
 # ─── API ERROR HANDLERS ────────────────────────────────────────────────
 def _api_error_response(status_code: int, message: str):
@@ -5951,7 +5986,7 @@ def last_block_hash():
     now = time.time()
     cached = MINING_LAST_HASH_CACHE.get("data")
     if cached and now - MINING_LAST_HASH_CACHE.get("ts", 0.0) < 1.0:
-        logger.info("mining.last_block_hash ms=%s source=cache", int((time.time() - start) * 1000))
+        logger.debug("mining.last_block_hash ms=%s source=cache", int((time.time() - start) * 1000))
         return jsonify(cached)
 
     source = "local"
@@ -5971,7 +6006,7 @@ def last_block_hash():
     }
 
     MINING_LAST_HASH_CACHE.update({"ts": now, "data": payload})
-    logger.info("mining.last_block_hash ms=%s source=%s", int((time.time() - start) * 1000), source)
+    logger.debug("mining.last_block_hash ms=%s source=%s", int((time.time() - start) * 1000), source)
     return jsonify(payload)
 
 @app.route("/mining_info")
@@ -13546,9 +13581,10 @@ def api_v1_get_course(course_id: str):
     quiz = get_course_quiz(course_id)
     if quiz:
         safe_questions = []
+        allowed_types = {"multiple_choice", "true_false", "multi_select", "short_answer"}
         for idx, q in enumerate(quiz.get("questions", []), start=1):
             qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=idx)
-            if qtype not in {"multiple_choice", "true_false"}:
+            if qtype not in allowed_types:
                 app.logger.warning("Unsupported quiz question type; forcing multiple_choice", extra={
                     "course_id": course_id,
                     "question_id": q.get("id") or idx,
@@ -14153,6 +14189,10 @@ def normalize_quiz_question_type(raw_type: str | None, *, course_id: str = "", q
         return "multiple_choice"
     if normalized in {"tf", "true_false", "truefalse"}:
         return "true_false"
+    if normalized in {"multi_select", "multi-select", "checkbox", "multi"}:
+        return "multi_select"
+    if normalized in {"short_answer", "short", "text", "free_text"}:
+        return "short_answer"
     return normalized
 
 
@@ -14164,23 +14204,38 @@ def get_course_quiz(course_id: str):
 
     if metadata_quiz:
         normalized_questions = []
+        allowed_types = {"multiple_choice", "true_false", "multi_select", "short_answer"}
         for idx, q in enumerate(metadata_quiz.get("questions", []), start=1):
             options = q.get("options", [])
             qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=idx)
-            if qtype not in {"multiple_choice", "true_false"}:
+            if qtype not in allowed_types:
                 app.logger.warning("Unsupported quiz question type; forcing multiple_choice", extra={
                     "course_id": course_id,
                     "question_id": q.get("id") or idx,
                     "type": qtype,
                 })
                 qtype = "multiple_choice"
-            normalized_questions.append({
+            normalized = {
                 "id": q.get("id") or idx,
                 "type": qtype,
                 "question": q.get("text") or q.get("question"),
                 "options": options,
-                "correct": int(q.get("correct", q.get("correct_index", 0))),
-            })
+            }
+            if qtype == "multi_select":
+                raw_correct = q.get("correct") or q.get("correct_indexes") or q.get("correct_indices") or []
+                if isinstance(raw_correct, (int, str)):
+                    raw_correct = [raw_correct]
+                normalized["correct"] = [int(x) for x in raw_correct if str(x).isdigit()]
+            elif qtype == "short_answer":
+                raw_text = q.get("correct_text") or q.get("correct_answers") or q.get("correct") or ""
+                if isinstance(raw_text, str):
+                    texts = [t.strip() for t in raw_text.split(",") if t.strip()]
+                else:
+                    texts = [str(t).strip() for t in raw_text if str(t).strip()]
+                normalized["correct_text"] = texts
+            else:
+                normalized["correct"] = int(q.get("correct", q.get("correct_index", 0)))
+            normalized_questions.append(normalized)
         return {
             "course_id": course_id,
             "title": metadata_quiz.get("title") or (course.get("title") if course else "Course") + " Quiz",
@@ -14192,22 +14247,37 @@ def get_course_quiz(course_id: str):
     quiz = quizzes.get(course_id)
     if quiz:
         normalized_questions = []
+        allowed_types = {"multiple_choice", "true_false", "multi_select", "short_answer"}
         for idx, q in enumerate(quiz.get("questions", []), start=1):
             qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=idx)
-            if qtype not in {"multiple_choice", "true_false"}:
+            if qtype not in allowed_types:
                 app.logger.warning("Unsupported quiz question type; forcing multiple_choice", extra={
                     "course_id": course_id,
                     "question_id": q.get("id") or idx,
                     "type": qtype,
                 })
                 qtype = "multiple_choice"
-            normalized_questions.append({
+            normalized = {
                 "id": q.get("id"),
                 "type": qtype,
                 "question": q.get("question"),
                 "options": q.get("options", []),
-                "correct": int(q.get("correct", 0)),
-            })
+            }
+            if qtype == "multi_select":
+                raw_correct = q.get("correct") or q.get("correct_indexes") or q.get("correct_indices") or []
+                if isinstance(raw_correct, (int, str)):
+                    raw_correct = [raw_correct]
+                normalized["correct"] = [int(x) for x in raw_correct if str(x).isdigit()]
+            elif qtype == "short_answer":
+                raw_text = q.get("correct_text") or q.get("correct_answers") or q.get("correct") or ""
+                if isinstance(raw_text, str):
+                    texts = [t.strip() for t in raw_text.split(",") if t.strip()]
+                else:
+                    texts = [str(t).strip() for t in raw_text if str(t).strip()]
+                normalized["correct_text"] = texts
+            else:
+                normalized["correct"] = int(q.get("correct", 0))
+            normalized_questions.append(normalized)
         return {
             "course_id": course_id,
             "title": quiz.get("title", "Course Quiz"),
@@ -14225,9 +14295,10 @@ def api_v1_get_quiz(course_id: str):
         return jsonify(quiz=None, message="No quiz for this course"), 200
 
     safe_questions = []
+    allowed_types = {"multiple_choice", "true_false", "multi_select", "short_answer"}
     for idx, q in enumerate(quiz.get("questions", []), start=1):
         qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=idx)
-        if qtype not in {"multiple_choice", "true_false"}:
+        if qtype not in allowed_types:
             app.logger.warning("Unsupported quiz question type; forcing multiple_choice", extra={
                 "course_id": course_id,
                 "question_id": q.get("id") or idx,
@@ -14285,24 +14356,38 @@ def api_v1_get_quiz_for_edit(course_id: str):
     quiz = load_quizzes().get(course_id)
     if quiz:
         normalized_questions = []
+        allowed_types = {"multiple_choice", "true_false", "multi_select", "short_answer"}
         for idx, q in enumerate(quiz.get("questions", []), start=1):
             qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=idx)
-            if qtype not in {"multiple_choice", "true_false"}:
+            if qtype not in allowed_types:
                 app.logger.warning("Unsupported quiz question type; forcing multiple_choice", extra={
                     "course_id": course_id,
                     "question_id": q.get("id") or idx,
                     "type": qtype,
                 })
                 qtype = "multiple_choice"
-            normalized_questions.append({
+            normalized = {
                 "id": q.get("id"),
                 "type": qtype,
                 "question": q.get("question"),
                 "question_el": q.get("question_el"),
                 "options": q.get("options", []),
                 "options_el": q.get("options_el", q.get("options", [])),
-                "correct": q.get("correct", 0),
-            })
+            }
+            if qtype == "multi_select":
+                raw_correct = q.get("correct") or q.get("correct_indexes") or q.get("correct_indices") or []
+                if isinstance(raw_correct, (int, str)):
+                    raw_correct = [raw_correct]
+                normalized["correct"] = [int(x) for x in raw_correct if str(x).isdigit()]
+            elif qtype == "short_answer":
+                raw_text = q.get("correct_text") or q.get("correct_answers") or q.get("correct") or ""
+                if isinstance(raw_text, str):
+                    normalized["correct_text"] = [t.strip() for t in raw_text.split(",") if t.strip()]
+                else:
+                    normalized["correct_text"] = [str(t).strip() for t in raw_text if str(t).strip()]
+            else:
+                normalized["correct"] = q.get("correct", 0)
+            normalized_questions.append(normalized)
         quiz_payload = quiz.copy()
         quiz_payload["questions"] = normalized_questions
         return jsonify(quiz=quiz_payload), 200
@@ -14312,25 +14397,39 @@ def api_v1_get_quiz_for_edit(course_id: str):
         return jsonify(quiz=None, message="No quiz for this course"), 200
 
     normalized_questions = []
+    allowed_types = {"multiple_choice", "true_false", "multi_select", "short_answer"}
     for idx, q in enumerate(metadata_quiz.get("questions", []), start=1):
         options = q.get("options", [])
         qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=idx)
-        if qtype not in {"multiple_choice", "true_false"}:
+        if qtype not in allowed_types:
             app.logger.warning("Unsupported quiz question type; forcing multiple_choice", extra={
                 "course_id": course_id,
                 "question_id": q.get("id") or idx,
                 "type": qtype,
             })
             qtype = "multiple_choice"
-        normalized_questions.append({
+        normalized = {
             "id": q.get("id") or idx,
             "type": qtype,
             "question": q.get("text") or q.get("question"),
             "question_el": q.get("question_el"),
             "options": options,
             "options_el": q.get("options_el", options),
-            "correct": int(q.get("correct", q.get("correct_index", 0))),
-        })
+        }
+        if qtype == "multi_select":
+            raw_correct = q.get("correct") or q.get("correct_indexes") or q.get("correct_indices") or []
+            if isinstance(raw_correct, (int, str)):
+                raw_correct = [raw_correct]
+            normalized["correct"] = [int(x) for x in raw_correct if str(x).isdigit()]
+        elif qtype == "short_answer":
+            raw_text = q.get("correct_text") or q.get("correct_answers") or q.get("correct") or ""
+            if isinstance(raw_text, str):
+                normalized["correct_text"] = [t.strip() for t in raw_text.split(",") if t.strip()]
+            else:
+                normalized["correct_text"] = [str(t).strip() for t in raw_text if str(t).strip()]
+        else:
+            normalized["correct"] = int(q.get("correct", q.get("correct_index", 0)))
+        normalized_questions.append(normalized)
 
     quiz_payload = {
         "course_id": course_id,
@@ -14411,6 +14510,31 @@ def api_v1_create_quiz(course_id: str):
                 "options": ["False", "True"],
                 "correct": int(q.get("correct"))
             })
+        elif qtype == "multi_select":
+            options = q.get("options") or []
+            raw_correct = q.get("correct") or q.get("correct_indexes") or q.get("correct_indices") or []
+            if isinstance(raw_correct, (int, str)):
+                raw_correct = [raw_correct]
+            correct_values = [int(x) for x in raw_correct if str(x).isdigit()]
+            if not options or not correct_values:
+                return jsonify(status="error", message=f"Question #{i+1}: multi-select requires options and correct indices"), 400
+            base_question.update({
+                "options": options,
+                "options_el": q.get("options_el", options),
+                "correct": sorted(set(correct_values)),
+            })
+        elif qtype == "short_answer":
+            raw_text = q.get("correct_text") or q.get("correct_answers") or q.get("correct") or ""
+            if isinstance(raw_text, str):
+                texts = [t.strip() for t in raw_text.split(",") if t.strip()]
+            else:
+                texts = [str(t).strip() for t in raw_text if str(t).strip()]
+            if not texts:
+                return jsonify(status="error", message=f"Question #{i+1}: short answer requires expected text"), 400
+            base_question.update({
+                "options": [],
+                "correct_text": texts,
+            })
         else:
             return jsonify(status="error", message=f"Question #{i+1}: unsupported type '{qtype}'"), 400
 
@@ -14479,7 +14603,7 @@ def api_v1_submit_quiz(course_id: str):
         is_correct = False
         correct_answer = None
 
-        if qtype not in {"multiple_choice", "true_false"}:
+        if qtype not in {"multiple_choice", "true_false", "multi_select", "short_answer"}:
             return jsonify(status="error", message=f"Unsupported question type '{qtype}'"), 400
 
         if user_answer is None:
@@ -14501,6 +14625,39 @@ def api_v1_submit_quiz(course_id: str):
                 if user_answer not in (0, 1, "0", "1"):
                     return jsonify(status="error", message=f"Invalid true/false answer for question {qid}"), 400
                 is_correct = int(user_answer) == correct_answer
+        elif qtype == "multi_select":
+            options = q.get("options", [])
+            correct_answer = sorted(set(q.get("correct") or []))
+            if isinstance(user_answer, str):
+                try:
+                    user_answer = json.loads(user_answer)
+                except Exception:
+                    user_answer = [user_answer]
+            if not isinstance(user_answer, list):
+                return jsonify(status="error", message=f"Invalid multi-select answer for question {qid}"), 400
+            try:
+                chosen = sorted({int(x) for x in user_answer if str(x).isdigit()})
+            except Exception:
+                return jsonify(status="error", message=f"Invalid multi-select answer for question {qid}"), 400
+            if not options:
+                return jsonify(status="error", message=f"Invalid options for question {qid}"), 400
+            if any(idx < 0 or idx >= len(options) for idx in chosen):
+                return jsonify(status="error", message=f"Answer out of range for question {qid}"), 400
+            is_correct = chosen == correct_answer
+        elif qtype == "short_answer":
+            raw_expected = q.get("correct_text") or q.get("correct_answers") or q.get("correct") or []
+            if isinstance(raw_expected, str):
+                expected = [t.strip().lower() for t in raw_expected.split(",") if t.strip()]
+            else:
+                expected = [str(t).strip().lower() for t in raw_expected if str(t).strip()]
+            correct_answer = expected
+            if isinstance(user_answer, str):
+                user_value = user_answer.strip().lower()
+            else:
+                user_value = str(user_answer).strip().lower()
+            if not user_value:
+                return jsonify(status="error", message=f"Invalid short answer for question {qid}"), 400
+            is_correct = user_value in expected
 
         if is_correct:
             correct += 1
@@ -19051,6 +19208,6 @@ else:
 
 if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
-    port = int(os.getenv("PORT", 3333))
+    port = int(os.getenv("PORT", 8000))
     app.run(host=host, port=port)
 # === AI Session API Fixes (append to end of server.py) ===========================

@@ -10,6 +10,32 @@
     // In-flight request tracking
     const inflightRequests = new Map();
 
+    const nativeFetch = window.fetch.bind(window);
+    const node1Base = (window.TH_NODE1_RPC_URL || window.location.origin || '').replace(/\/$/, '');
+    const node2Base = (window.TH_NODE2_RPC_URL || node1Base || window.location.origin || '').replace(/\/$/, '');
+
+    function shouldRouteRpc(url) {
+        if (typeof url !== 'string') return false;
+        if (!url.startsWith('/api/')) return false;
+        return true;
+    }
+
+    function resolveRpcUrl(url, method) {
+        if (!shouldRouteRpc(url)) return url;
+        const upper = (method || 'GET').toUpperCase();
+        const base = (upper === 'GET' || upper === 'HEAD') ? node2Base : node1Base;
+        if (!base) return url;
+        return `${base}${url}`;
+    }
+
+    function smartFetch(url, opts = {}) {
+        if (typeof url === 'string') {
+            const resolved = resolveRpcUrl(url, opts.method);
+            return nativeFetch(resolved, opts);
+        }
+        return nativeFetch(url, opts);
+    }
+
     /**
      * Fetch JSON with automatic coalescing of identical requests
      * @param {string} url - The URL to fetch
@@ -18,7 +44,8 @@
      */
     async function fetchJSONOnce(url, opts = {}) {
         const method = opts.method || 'GET';
-        const key = `${method}:${url}`;
+        const resolvedUrl = resolveRpcUrl(url, method);
+        const key = `${method}:${resolvedUrl}`;
 
         // Return existing in-flight request if any
         if (inflightRequests.has(key)) {
@@ -26,7 +53,7 @@
         }
 
         // Create new request
-        const promise = fetch(url, opts)
+        const promise = smartFetch(resolvedUrl, opts)
             .then(response => response.json())
             .finally(() => {
                 // Clean up after request completes
@@ -117,8 +144,14 @@
     // Export to window
     window.FetchUtils = {
         fetchJSONOnce,
+        smartFetch,
         VisibilityGatedInterval,
         isPopupVisible
     };
+
+    if (!window.__thronosSmartFetchInstalled) {
+        window.fetch = smartFetch;
+        window.__thronosSmartFetchInstalled = true;
+    }
 
 })(window);

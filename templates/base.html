@@ -5,6 +5,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="cgminer-kit-url" content="{{ CGMINER_KIT_URL if CGMINER_KIT_URL is defined else '' }}">
+  <script>
+    window.TH_NODE1_RPC_URL = "{{ node1_rpc_url }}";
+    window.TH_NODE2_RPC_URL = "{{ node2_rpc_url }}";
+  </script>
 <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/thronos-token.png') }}">
   <link rel="shortcut icon" type="image/png" href="{{ url_for('static', filename='img/thronos-token.png') }}">
   <script src="{{ url_for('static', filename='wallet_session.js') }}"></script>
@@ -2137,9 +2141,28 @@ async function loadWalletBalances(force = false) {
         // PR-5a: Use fetchJSONOnce for request coalescing
         // Show all tokens including zero balances for multi-chain assets
         const url = `/api/balances?address=${encodeURIComponent(wallet)}&show_zero=true`;
-        const data = await (window.FetchUtils?.fetchJSONOnce
-            ? window.FetchUtils.fetchJSONOnce(url)
-            : fetch(url).then(r => r.json()));
+        let data = null;
+        const fetchWithFailover = async () => {
+            const response = await fetch(url, { cache: "no-store" });
+            const text = await response.text();
+            const trimmed = text.trim();
+            if (trimmed.startsWith("A") || trimmed.includes("An error")) {
+                const fallbackBase = "https://node-2.up.railway.app";
+                const fallbackResp = await fetch(`${fallbackBase}${url}`, { cache: "no-store" });
+                const fallbackText = await fallbackResp.text();
+                return JSON.parse(fallbackText);
+            }
+            return JSON.parse(text);
+        };
+        try {
+            data = await fetchWithFailover();
+        } catch (fetchError) {
+            if (window.FetchUtils?.fetchJSONOnce) {
+                data = await window.FetchUtils.fetchJSONOnce(url);
+            } else {
+                throw fetchError;
+            }
+        }
 
         renderWalletBalances(data);
         walletBalancesLoaded = true;

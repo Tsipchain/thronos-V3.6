@@ -10,7 +10,8 @@ import os
 import random
 
 # Configuration
-THRONOS_SERVER = os.getenv("THRONOS_SERVER", "http://localhost:3333")
+DEFAULT_HTTP_PORT = os.getenv("PORT", "8000")
+THRONOS_SERVER = os.getenv("THRONOS_SERVER", f"http://localhost:{DEFAULT_HTTP_PORT}")
 STRATUM_PORT = int(os.getenv("STRATUM_PORT", "3334"))
 POLL_INTERVAL = 1.0
 SHARE_TARGET_MULTIPLIER = float(os.getenv("SHARE_TARGET_MULTIPLIER", "16"))

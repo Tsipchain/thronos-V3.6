@@ -26,7 +26,7 @@ def _module_available(module_name: str) -> bool:
         return False
 
 try:
-    import google.generativeai as genai
+    import google.genai as genai
 except Exception:
     genai = None
 
@@ -421,4 +421,3 @@ def get_model_for_provider(
 
     # 5) Αν φτάσαμε εδώ, γύρνα στο global default per mode
     return get_default_model_for_mode(mode or "chat")
-

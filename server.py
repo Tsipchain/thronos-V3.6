@@ -295,7 +295,42 @@ def inject_build_id():
     if build_time:
         build_id += f"-{int(build_time)}"
 
-    return dict(build_id=build_id)
+    default_origin = request.host_url.rstrip("/") if request else ""
+    node1_rpc_url = os.getenv("NODE1_RPC_URL", default_origin)
+    node2_rpc_url = os.getenv("NODE2_RPC_URL", node1_rpc_url)
+
+    return dict(
+        build_id=build_id,
+        node1_rpc_url=node1_rpc_url,
+        node2_rpc_url=node2_rpc_url,
+    )
+
+
+def _replica_sync_pending() -> bool:
+    if NODE_ROLE != "replica":
+        return False
+    last_block = load_json(LAST_BLOCK_FILE, {})
+    block_hash = last_block.get("block_hash")
+    height = last_block.get("height")
+    chain = load_json(CHAIN_FILE, [])
+    if block_hash:
+        return False
+    if height not in (None, -1):
+        return False
+    return not bool(chain)
+
+
+@app.before_request
+def replica_sync_guard():
+    if NODE_ROLE != "replica":
+        return None
+    if not request.path.startswith("/api/"):
+        return None
+    if request.method.upper() != "GET":
+        return None
+    if not _replica_sync_pending():
+        return None
+    return jsonify({"status": "syncing", "progress": 99}), 200
 
 # ─── API ERROR HANDLERS ────────────────────────────────────────────────
 def _api_error_response(status_code: int, message: str):
@@ -5951,7 +5986,7 @@ def last_block_hash():
     now = time.time()
     cached = MINING_LAST_HASH_CACHE.get("data")
     if cached and now - MINING_LAST_HASH_CACHE.get("ts", 0.0) < 1.0:
-        logger.info("mining.last_block_hash ms=%s source=cache", int((time.time() - start) * 1000))
+        logger.debug("mining.last_block_hash ms=%s source=cache", int((time.time() - start) * 1000))
         return jsonify(cached)
 
     source = "local"
@@ -5971,7 +6006,7 @@ def last_block_hash():
     }
 
     MINING_LAST_HASH_CACHE.update({"ts": now, "data": payload})
-    logger.info("mining.last_block_hash ms=%s source=%s", int((time.time() - start) * 1000), source)
+    logger.debug("mining.last_block_hash ms=%s source=%s", int((time.time() - start) * 1000), source)
     return jsonify(payload)
 
 @app.route("/mining_info")

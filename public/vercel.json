@@ -1,11 +1,8 @@
 {
   "version": 2,
-  "buildCommand": "",
   "rewrites": [
     { "source": "/api/:path*", "destination": "https://thrchain.up.railway.app/api/:path*" },
     { "source": "/viewer", "destination": "https://thrchain.up.railway.app/viewer" },
-    { "source": "/wallet", "destination": "https://thrchain.up.railway.app/wallet" },
-    { "source": "/(.*)", "destination": "https://thrchain.up.railway.app/$1" }
+    { "source": "/wallet", "destination": "https://thrchain.up.railway.app/wallet" }
   ]
 }
-

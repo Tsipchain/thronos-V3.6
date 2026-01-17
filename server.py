@@ -2621,8 +2621,54 @@ def api_train2earn_contributions(thr_addr: str):
     contributions = load_json(t2e_file, [])
     
     user_contributions = [
-        c for c in contributions 
+        c for c in contributions
         if c.get("contributor") == thr_addr
+    ]
+
+    return jsonify({
+        "contributor": thr_addr,
+        "contributions": user_contributions,
+        "total": len(user_contributions)
+    }), 200
+
+
+def _base_token_catalog():
+    """Return metadata for the core Thronos tokens with supply details."""
+    ledger = load_json(LEDGER_FILE, {})
+    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
+
+    def supply_of(ledger_map):
+        try:
+            return round(sum(float(v) for v in ledger_map.values()), 6)
+        except Exception:
+            return 0.0
+
+    return [
+        {
+            "symbol": "THR",
+            "name": "Thronos",
+            "decimals": 6,
+            "logo_url": url_for("static", filename="img/thronos-token.png", _external=False),
+            "total_supply": supply_of(ledger),
+            "type": "native",
+        },
+        {
+            "symbol": "WBTC",
+            "name": "Wrapped Bitcoin",
+            "decimals": 8,
+            "logo_url": url_for("static", filename="img/wbtc-logo.png", _external=False),
+            "total_supply": supply_of(wbtc_ledger),
+            "type": "wrapped",
+        },
+        {
+            "symbol": "L2E",
+            "name": "Learn-to-Earn",
+            "decimals": 6,
+            "logo_url": url_for("static", filename="img/l2e-logo.png", _external=False),
+            "total_supply": supply_of(l2e_ledger),
+            "type": "reward",
+        },
     ]
 
 

@@ -4,6 +4,12 @@
 
 {% block styles %}
 <style>
+    /* Remove double border-bottom */
+    h1, h2, h3 {
+        border-bottom: none;
+        padding-bottom: 0;
+    }
+
     .wallet-card {
         background: #111;
         border: 1px solid #0f0;
@@ -21,8 +27,8 @@
         width: 100%;
         box-sizing: border-box;
     }
-    button { 
-        cursor: pointer; 
+    button {
+        cursor: pointer;
         font-weight: bold;
         background: #0f0;
         color: #000;
@@ -35,18 +41,33 @@
     button.secondary:hover {
         background: #111;
     }
-    
+
     .tx {
         margin-top: 10px;
         border-bottom: 1px dashed #333;
         padding: 10px 0;
     }
+    .tx-filters {
+        display:flex;
+        gap:8px;
+        flex-wrap:wrap;
+        margin-bottom:8px;
+    }
+    .tx-filter-btn {
+        padding:6px 10px;
+        border:1px solid #0f0;
+        background:#000;
+        color:#0f0;
+        cursor:pointer;
+        border-radius:6px;
+    }
+    .tx-filter-btn.active { background:#0f0; color:#000; }
     .btc-val {
         color: #ff0;
         font-size: 0.9em;
     }
     .hidden { display: none; }
-    
+
     .balance-large {
         font-size: 2em;
         font-weight: bold;
@@ -64,6 +85,102 @@
     @keyframes glow {
         0%, 100% { filter: drop-shadow(0 0 8px #ff6600); }
         50% { filter: drop-shadow(0 0 16px #ff9900) drop-shadow(0 0 24px #ff6600); }
+    }
+
+    /* PR-5: Tabs for wallet sections */
+    .wallet-tabs {
+        display: flex;
+        gap: 8px;
+        margin: 20px 0 12px 0;
+        border-bottom: 2px solid #0f0;
+    }
+    .wallet-tab-btn {
+        padding: 10px 20px;
+        background: transparent;
+        border: none;
+        border-bottom: 3px solid transparent;
+        color: #0f0;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 600;
+        font-family: monospace;
+        transition: all 0.2s;
+    }
+    .wallet-tab-btn:hover {
+        background: #111;
+        color: #0c0;
+    }
+    .wallet-tab-btn.active {
+        color: #0f0;
+        border-bottom-color: #0f0;
+        background: #111;
+    }
+    .wallet-tab-content {
+        display: none;
+    }
+    .wallet-tab-content.active {
+        display: block;
+    }
+
+    /* PR-5: Music section styles */
+    .music-section {
+        margin-bottom: 20px;
+    }
+    .music-section-title {
+        font-size: 14px;
+        color: #0f0;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 10px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid #333;
+    }
+    .music-track-item, .music-playlist-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px;
+        background: #111;
+        border: 1px solid #0f0;
+        border-radius: 6px;
+        margin-bottom: 8px;
+        transition: all 0.2s;
+        cursor: pointer;
+    }
+    .music-track-item:hover, .music-playlist-item:hover {
+        background: #1a1a1a;
+        border-color: #0c0;
+        transform: translateX(-2px);
+    }
+    .music-track-info, .music-playlist-info {
+        flex: 1;
+        min-width: 0;
+    }
+    .music-track-title, .music-playlist-name {
+        font-size: 14px;
+        font-weight: 600;
+        color: #e6ffe5;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .music-track-artist {
+        font-size: 12px;
+        color: #9f9;
+        opacity: 0.8;
+        margin-top: 2px;
+    }
+    .music-playlist-count {
+        font-size: 12px;
+        color: #9f9;
+        opacity: 0.8;
+        margin-top: 2px;
+    }
+    .music-empty {
+        text-align: center;
+        padding: 40px;
+        color: #666;
+        font-size: 14px;
     }
 </style>
 {% endblock %}
@@ -99,21 +216,64 @@
               </div>
               <button class="secondary" style="width:auto; padding:5px 10px;" onclick="disconnectWallet()">❌ <span class="lang-el">Αποσύνδεση</span><span class="lang-en">Disconnect</span></button>
           </div>
-          
+
           <div class="balance-large">
-              <span id="balance">0</span> THR
+              <span class="lang-el">Συνολική Αξία</span><span class="lang-en">Total Value</span>: <span id="totalValue">—</span> THR
           </div>
-          <div class="btc-val">≈ <span id="btcValue">0.0000</span> BTC</div>
-          
+          <div class="btc-val">≈ <span id="totalUSD">—</span> USD</div>
+
           <div style="margin-top:20px; display:flex; gap:10px;">
               <button onclick="window.location.href='/send'">📤 <span class="lang-el">Αποστολή</span><span class="lang-en">Send</span></button>
               <button class="secondary" onclick="refreshWallet()">🔄 <span class="lang-el">Ανανέωση</span><span class="lang-en">Refresh</span></button>
           </div>
       </div>
 
-      <h3><span class="lang-el">Ιστορικό Συναλλαγών</span><span class="lang-en">Transaction History</span></h3>
+      <!-- PR-5: Tabs for Tokens, History, and Music -->
+      <div class="wallet-tabs">
+          <button class="wallet-tab-btn active" data-tab="tokens" onclick="switchWalletViewerTab('tokens')">
+              💰 <span class="lang-el">Tokens</span><span class="lang-en">Tokens</span>
+          </button>
+          <button class="wallet-tab-btn" data-tab="history" onclick="switchWalletViewerTab('history')">
+              📜 <span class="lang-el">Ιστορικό</span><span class="lang-en">History</span>
+          </button>
+          <button class="wallet-tab-btn" data-tab="music" onclick="switchWalletViewerTab('music')">
+              🎵 <span class="lang-el">Μουσική</span><span class="lang-en">Music</span>
+          </button>
+      </div>
+
+      <!-- Tokens Tab -->
+      <div class="wallet-tab-content active" id="tokensTabContent">
+          <h3><span class="lang-el">Τα Tokens μου</span><span class="lang-en">My Tokens</span></h3>
+          <div id="tokensList" class="wallet-card">
+              <span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span>
+          </div>
+      </div>
+
+      <!-- History Tab -->
+      <div class="wallet-tab-content" id="historyTabContent">
+          <h3><span class="lang-el">Ιστορικό Συναλλαγών</span><span class="lang-en">Transaction History</span></h3>
+          <div class="tx-filters">
+        <button class="tx-filter-btn active" data-filter="all" onclick="renderTxHistory('all')">All</button>
+        <button class="tx-filter-btn" data-filter="thr" onclick="renderTxHistory('thr')">THR</button>
+        <button class="tx-filter-btn" data-filter="tokens" onclick="renderTxHistory('tokens')">Tokens</button>
+        <button class="tx-filter-btn" data-filter="swaps" onclick="renderTxHistory('swaps')">Swaps</button>
+        <button class="tx-filter-btn" data-filter="l2e" onclick="renderTxHistory('l2e')">L2E</button>
+        <button class="tx-filter-btn" data-filter="ai_credits" onclick="renderTxHistory('ai_credits')">AI Credits</button>
+        <button class="tx-filter-btn" data-filter="architect_ai_jobs" onclick="renderTxHistory('architect_ai_jobs')">Architect</button>
+        <button class="tx-filter-btn" data-filter="bridge" onclick="renderTxHistory('bridge')">Bridge</button>
+        <button class="tx-filter-btn" data-filter="iot" onclick="renderTxHistory('iot')">IoT</button>
+      </div>
       <div id="txHistory" class="wallet-card">
           <span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span>
+      </div>
+      </div>
+
+      <!-- Music Tab -->
+      <div class="wallet-tab-content" id="musicTabContent">
+          <h3><span class="lang-el">Μουσική</span><span class="lang-en">Music</span></h3>
+          <div class="wallet-card">
+              <span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span>
+          </div>
       </div>
   </div>
 
@@ -124,12 +284,28 @@
     // --- Logic ---
     const $ = (id) => document.getElementById(id);
 
+    // Fallback: avoid crashing history render if helper is missing
+    window.shouldExcludeTx = window.shouldExcludeTx || function (tx) {
+        if (!tx) return true;
+
+        // Keep it conservative: don't hide real user txs.
+        // Hide only obvious housekeeping/noise entries if any:
+        const kind = String(tx.kind || tx.type || "").toLowerCase();
+        const amt = Number(tx.display_amount ?? tx.amount ?? 0);
+
+        // Example: hide "block" rows with 0 and no note (optional)
+        if (kind === "block" && amt === 0 && !tx.note) return true;
+
+        return false;
+    };
+
     function checkConnection() {
         const addr = localStorage.getItem('thr_address');
         if (addr) {
             $('connectSection').classList.add('hidden');
             $('dashboardSection').classList.remove('hidden');
             $('displayAddress').textContent = addr;
+            currentAddress = addr;
             loadWalletData(addr);
         } else {
             $('connectSection').classList.remove('hidden');
@@ -150,7 +326,8 @@
         if (secret) {
             localStorage.setItem('thr_secret', secret);
         }
-        
+
+        currentAddress = addr;
         checkConnection();
     }
 
@@ -167,52 +344,435 @@
         if (addr) loadWalletData(addr);
     }
 
-    async function loadWalletData(addr) {
-      try {
-        const res = await fetch(`/wallet_data/${addr}`);
-        if (!res.ok) throw new Error("Server returned " + res.status);
-        const data = await res.json();
-        
-        const balance = parseFloat(data.balance);
-        $('balance').textContent = balance;
-        
-        // Calculate BTC value (Fixed rate: 1 THR = 0.0001 BTC)
-        const btcVal = (balance * 0.0001).toFixed(8);
-        $('btcValue').textContent = btcVal;
+    // FIX 4C: Format token amounts with proper decimals and no scientific notation
+    function formatTokenAmount(amount, decimals) {
+      const decimalPlaces = decimals || 6;
+      const num = parseFloat(amount) || 0;
+      // Prevent scientific notation by using toFixed
+      return num.toFixed(decimalPlaces);
+    }
 
-        const div = $('txHistory');
-        if (!data.transactions || !data.transactions.length) {
-          div.innerHTML = '<p style="color:#666;">No transactions found.</p>';
-        } else {
-          let html = "";
-          const txs = data.transactions.reverse(); 
-          
-          txs.forEach(tx => {
-            const isIncoming = tx.to === addr;
-            const color = isIncoming ? '#0f0' : '#ff0';
-            const sign = isIncoming ? '+' : '-';
-            
-            html += `
+    function normalizeKind(value) {
+        return String(value || '').toLowerCase();
+    }
+
+    function normalizeCategory(value) {
+        return String(value || '').toLowerCase();
+    }
+
+    function getCanonicalCategory(tx) {
+        const category = normalizeCategory(tx.category);
+        if (category) return category;
+        const kind = normalizeKind(tx.kind);
+        const map = {
+            transfer: 'thr',
+            thr_transfer: 'thr',
+            token_transfer: 'tokens',
+            swap: 'swaps',
+            pool_swap: 'swaps',
+            bridge: 'bridge',
+            l2e: 'l2e',
+            ai_credit: 'ai_credits',
+            ai_credits: 'ai_credits',
+            ai_credits_earned: 'ai_credits',
+            ai_credits_spent: 'ai_credits',
+            architect: 'architect_ai_jobs',
+            architect_job: 'architect_ai_jobs',
+            ai_job_created: 'architect_ai_jobs',
+            ai_job_progress: 'architect_ai_jobs',
+            ai_job_completed: 'architect_ai_jobs',
+            ai_job_reward: 'architect_ai_jobs',
+            iot: 'iot',
+            iot_parking: 'iot',
+            iot_parking_reservation: 'iot',
+            iot_autopilot: 'iot',
+        };
+        return map[kind] || kind;
+    }
+    function sanitizeTokenSymbol(value) {
+        const symbol = String(value || '').trim().toUpperCase();
+        if (!symbol || symbol === 'TOKEN' || symbol === 'TKN' || symbol === 'UNKNOWN') return '';
+        return symbol;
+    }
+
+    let walletTxs = [];
+    let currentFilter = 'all';
+    let currentAddress = '';
+    let tokenDecimals = 6;
+
+    function renderTxHistory(filter) {
+      if (filter) currentFilter = filter;
+      const div = $('txHistory');
+      const btns = document.querySelectorAll('.tx-filter-btn');
+      btns.forEach(btn => btn.classList.toggle('active', btn.dataset.filter === currentFilter));
+
+      const txs = (walletTxs || []).filter(tx => !window.shouldExcludeTx(tx));
+      if (!txs.length) {
+        div.innerHTML = '<p style="color:#666;">No transactions found.</p>';
+        return;
+      }
+
+      const filtered = txs.filter(tx => {
+        const category = getCanonicalCategory(tx);
+        if (currentFilter === 'tokens') return category === 'tokens';
+        if (currentFilter === 'swaps') return category === 'swaps';
+        if (currentFilter === 'thr') return category === 'thr';
+        if (currentFilter === 'l2e') return category === 'l2e';
+        if (currentFilter === 'ai_credits') return category === 'ai_credits';
+        if (currentFilter === 'architect_ai_jobs') return category === 'architect_ai_jobs';
+        if (currentFilter === 'bridge') return category === 'bridge';
+        if (currentFilter === 'iot') return category === 'iot';
+        return true;
+      });
+
+      if (!filtered.length) {
+        div.innerHTML = '<p style="color:#666;">No transactions match this filter.</p>';
+        return;
+      }
+
+      let html = "";
+      filtered.forEach(tx => {
+        const isIncoming = tx.direction === 'in' || tx.to === currentAddress;
+        const kind = normalizeKind(tx.kind);
+        const isSwap = tx.direction === 'swap' || kind === 'swap' || kind === 'pool_swap';
+        const color = isSwap ? '#0ff' : (isIncoming ? '#0f0' : '#ff0');
+        const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
+        const isToken = kind === 'token_transfer';
+        const tokenSymbol = sanitizeTokenSymbol(tx.asset_symbol || tx.asset || tx.symbol);
+        const asset = isToken ? (tokenSymbol || '(unknown token)') : 'THR';
+        const decimals = tx.decimals || tokenDecimals;
+        const formattedAmount = formatTokenAmount(tx.display_amount ?? tx.amount ?? 0, decimals);
+        const label = (tx.category_label || tx.kind || tx.type || '').toString().toUpperCase();
+
+        html += `
             <div class="tx">
-              <div style="display:flex; justify-content:space-between;">
-                  <span style="color:#fff;">${tx.timestamp}</span>
-                  <span style="color:${color}; font-weight:bold;">${sign} ${tx.amount ?? 0} THR</span>
+              <div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">
+                  <span style="color:#fff;">${tx.timestamp || ''}</span>
+                  <span style="color:${color}; font-weight:bold;">${sign} ${formattedAmount} ${asset}</span>
               </div>
+              <div style="font-size:0.85em; color:#9adf9a; margin-top:4px;">${label}</div>
               <div style="font-size:0.8em; color:#888; margin-top:4px;">
-                  ${isIncoming ? 'From: ' + tx.from : 'To: ' + tx.to}
-                  <br>TXID: ${tx.tx_id || 'pending'}
+                  ${isSwap ? `Trader: ${tx.from || tx.trader || currentAddress}` : (isIncoming ? 'From: ' + (tx.from || '') : 'To: ' + (tx.to || ''))}
+                  <br>TXID: ${(tx.tx_id || 'pending')}
+                  ${tx.amount_out ? `<br>Output: ${formatTokenAmount(tx.amount_out, decimals)} ${(tx.token_out || asset)}` : ''}
               </div>
             </div>`;
-          });
-          div.innerHTML = html;
-        }
+      });
+
+      div.innerHTML = html;
+    }
+
+    async function loadWalletData(addr) {
+      try {
+        currentFilter = 'all';
+        const [walletRes, feedRes] = await Promise.all([
+          fetch(`/api/balances?address=${encodeURIComponent(addr)}&show_zero=false`),
+          fetch(`/api/tx_feed?wallet=${encodeURIComponent(addr)}`)
+        ]);
+
+        if (!walletRes.ok) throw new Error("Server returned " + walletRes.status);
+        const data = await walletRes.json();
+        const feed = feedRes.ok ? await feedRes.json() : [];
+
+        // Store tokens globally
+        const tokens = data.tokens || [];
+
+        // Calculate total portfolio value from tokens with valid prices
+        const pricedTokens = tokens.filter(t => t.value_in_thr !== null && t.value_in_thr !== undefined);
+        const totalTHR = pricedTokens.reduce((sum, t) => sum + Number(t.value_in_thr || 0), 0);
+        const totalUSD = pricedTokens.reduce((sum, t) => sum + Number(t.value_usd || 0), 0);
+
+        // Display total values with "—" if no priced tokens
+        $('totalValue').textContent = pricedTokens.length > 0 ? totalTHR.toFixed(4) : '—';
+        $('totalUSD').textContent = pricedTokens.length > 0 && totalUSD > 0 ? `$${totalUSD.toFixed(2)}` : '—';
+
+        // Render tokens list
+        renderTokensList(tokens);
+
+        const normalizedFeed = Array.isArray(feed) ? feed : [];
+        walletTxs = (normalizedFeed.length ? normalizedFeed : []).map(tx => ({
+          ...tx,
+          kind: (tx.kind || tx.type || 'transfer').toLowerCase(),
+          direction: tx.direction || (tx.to === addr ? 'in' : (tx.from === addr ? 'out' : tx.direction)),
+        }));
+
+        renderTxHistory(currentFilter);
       } catch (e) {
         console.error(e);
         $('txHistory').textContent = "Error loading data.";
+        $('tokensList').innerHTML = '<p style="color:#f00;">Error loading tokens.</p>';
       }
+    }
+
+    function renderTokensList(tokens) {
+      const div = $('tokensList');
+      if (!tokens || tokens.length === 0) {
+        div.innerHTML = '<p style="color:#666;">No tokens found.</p>';
+        return;
+      }
+
+      let html = '<div style="display:flex; flex-direction:column; gap:10px;">';
+      tokens.forEach(token => {
+        const balance = token.balance.toFixed(token.decimals || 6);
+        const valueInThr = token.value_in_thr !== null && token.value_in_thr !== undefined
+          ? `${Number(token.value_in_thr).toFixed(4)} THR`
+          : '—';
+        const valueUSD = token.value_usd !== null && token.value_usd !== undefined
+          ? `$${Number(token.value_usd).toFixed(2)}`
+          : '—';
+        const priceInThr = token.price_in_thr !== null && token.price_in_thr !== undefined
+          ? `${Number(token.price_in_thr).toFixed(6)} THR`
+          : '—';
+
+        html += `
+          <div style="display:flex; align-items:center; gap:12px; padding:12px; border:1px solid #0f0; border-radius:8px; background:#111;">
+            <div style="flex:0 0 40px;">
+              ${token.logo_url ? `<img src="${token.logo_url}" alt="${token.symbol}" style="width:40px; height:40px; border-radius:50%;" onerror="this.style.display='none';">` : `<div style="width:40px; height:40px; border-radius:50%; background:#000; border:2px solid ${token.color || '#0f0'}; display:flex; align-items:center; justify-content:center; font-weight:bold;">${token.symbol[0]}</div>`}
+            </div>
+            <div style="flex:1;">
+              <div style="font-weight:bold; font-size:1.1em;">${token.symbol}</div>
+              <div style="font-size:0.85em; color:#9f9;">${token.name}</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-weight:bold; font-family:monospace; font-size:1.1em;">${balance}</div>
+              <div style="font-size:0.85em; color:#9f9;">≈ ${valueInThr}</div>
+              <div style="font-size:0.75em; color:#9f9;">${valueUSD}</div>
+              <div style="font-size:0.75em; color:#666;">Price: ${priceInThr}</div>
+            </div>
+          </div>
+        `;
+      });
+      html += '</div>';
+      div.innerHTML = html;
+    }
+
+    // PR-5: Tab Switching for Wallet Viewer
+    function switchWalletViewerTab(tabName) {
+        // Update tab buttons
+        const tabBtns = document.querySelectorAll('.wallet-tab-btn');
+        tabBtns.forEach(btn => {
+            if (btn.dataset.tab === tabName) {
+                btn.classList.add('active');
+            } else {
+                btn.classList.remove('active');
+            }
+        });
+
+        // Update tab content
+        const tabContents = document.querySelectorAll('.wallet-tab-content');
+        tabContents.forEach(content => {
+            content.classList.remove('active');
+        });
+
+        const activeContent = document.getElementById(`${tabName}TabContent`);
+        if (activeContent) {
+            activeContent.classList.add('active');
+        }
+
+        // Load music when switching to music tab
+        if (tabName === 'music') {
+            loadViewerMusicTab();
+        }
+    }
+
+    // PR-5: Load and render music tab
+    let viewerMusicModuleInitialized = false;
+
+    async function loadViewerMusicTab() {
+        const musicContent = document.getElementById('musicTabContent');
+        if (!musicContent) return;
+
+        const wallet = currentAddress || localStorage.getItem('thr_address');
+        if (!wallet) {
+            musicContent.innerHTML = '<div class="wallet-card"><div class="music-empty">Please connect your wallet to view music.</div></div>';
+            return;
+        }
+
+        // Security: Check if wallet is unlocked (has send_secret)
+        const secret = localStorage.getItem('thr_secret');
+        if (!secret) {
+            musicContent.innerHTML = '<div class="wallet-card"><div class="music-empty">Unlock your wallet to view music.</div></div>';
+            return;
+        }
+
+        try {
+            // PR-5c: Wait for MusicModule to load if needed
+            if (typeof MusicModule === 'undefined') {
+                // Show loading while waiting
+                musicContent.innerHTML = `
+                    <div class="wallet-card">
+                        <div style="text-align:center; padding:20px; color:#0f0;">
+                            <div style="display:inline-block; width:20px; height:20px; border:2px solid rgba(0,255,0,0.2); border-top:2px solid #0f0; border-radius:50%; animation:spin 1s linear infinite;"></div>
+                            <div style="margin-top:10px;">Loading music module...</div>
+                        </div>
+                    </div>
+                `;
+
+                // Wait for MusicModule to load (retry up to 10 times)
+                let retries = 0;
+                const checkModule = setInterval(() => {
+                    if (typeof MusicModule !== 'undefined') {
+                        clearInterval(checkModule);
+                        loadViewerMusicTab(); // Retry
+                    } else if (++retries >= 10) {
+                        clearInterval(checkModule);
+                        musicContent.innerHTML = '<div class="wallet-card"><div class="music-empty">Music module failed to load. Please refresh.</div></div>';
+                    }
+                }, 100);
+                return;
+            }
+
+            // Show loading
+            musicContent.innerHTML = `
+                <div class="wallet-card">
+                    <div style="text-align:center; padding:20px; color:#0f0;">
+                        <div style="display:inline-block; width:20px; height:20px; border:2px solid rgba(0,255,0,0.2); border-top:2px solid #0f0; border-radius:50%; animation:spin 1s linear infinite;"></div>
+                        <div style="margin-top:10px;">Loading music...</div>
+                    </div>
+                </div>
+            `;
+
+            // Initialize MusicModule with address
+            await MusicModule.init(wallet);
+
+            // Render music content
+            renderViewerMusicTab();
+        } catch (error) {
+            console.error('[Wallet Viewer] Failed to load music:', error);
+            musicContent.innerHTML = `<div class="wallet-card"><div class="music-empty" style="color: #ff6666;">Error loading music: ${error.message}</div></div>`;
+        }
+    }
+
+    // PR-5c: Create playlist from wallet music tab
+    async function viewerCreatePlaylist() {
+        const name = prompt('Enter playlist name:');
+        if (!name || !name.trim()) return;
+
+        try {
+            // Use WalletAuth for PIN-based unlock
+            const { address, authSecret } = await window.WalletAuth.requireUnlockedWallet();
+
+            // Show loading
+            const musicContent = document.getElementById('musicTabContent');
+            if (musicContent) {
+                musicContent.innerHTML = `
+                    <div class="wallet-card">
+                        <div style="text-align:center; padding:20px; color:#0f0;">
+                            <div style="display:inline-block; width:20px; height:20px; border:2px solid rgba(0,255,0,0.2); border-top:2px solid #0f0; border-radius:50%; animation:spin 1s linear infinite;"></div>
+                            <div style="margin-top:10px;">Creating playlist...</div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Create via API
+            const res = await fetch('/api/music/playlist/update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    address: address,
+                    action: 'create',
+                    name: name.trim(),
+                    auth_secret: authSecret
+                })
+            });
+
+            const data = await res.json();
+            if (data.ok) {
+                // Refresh music tab
+                await MusicModule.init(address);
+                renderViewerMusicTab();
+                alert('✅ Playlist created!');
+            } else {
+                alert(`❌ Error: ${data.error}`);
+                renderViewerMusicTab();
+            }
+        } catch (e) {
+            if (e.code === 'WALLET_NOT_CONNECTED') {
+                alert('❌ Please connect your wallet first!');
+            } else if (e.code === 'WALLET_LOCKED') {
+                alert('❌ Wallet is locked. Please unlock with your PIN.');
+            } else {
+                alert(`❌ Error: ${e.message}`);
+            }
+            renderViewerMusicTab();
+        }
+    }
+
+    function renderViewerMusicTab() {
+        const musicContent = document.getElementById('musicTabContent');
+        if (!musicContent) return;
+
+        const library = MusicModule.getLibrary();
+        const playlists = MusicModule.getPlaylists();
+
+        // Render library tracks
+        const libraryHtml = library.length > 0
+            ? library.map(track => `
+                <div class="music-track-item">
+                    <div class="music-track-info">
+                        <div class="music-track-title">${escapeHtml(track.title || 'Untitled')}</div>
+                        <div class="music-track-artist">${escapeHtml(track.artist || 'Unknown Artist')}</div>
+                    </div>
+                    <div style="font-size: 11px; color: #666;">${escapeHtml(track.duration || '')}</div>
+                </div>
+            `).join('')
+            : `<div class="music-empty">No tracks found</div>`;
+
+        // Render playlists
+        const playlistsHtml = playlists.length > 0
+            ? playlists.map(playlist => {
+                const trackCount = (playlist.tracks || []).length;
+                return `
+                    <div class="music-playlist-item">
+                        <div class="music-playlist-info">
+                            <div class="music-playlist-name">${escapeHtml(playlist.name || 'Untitled Playlist')}</div>
+                            <div class="music-playlist-count">${trackCount} tracks</div>
+                        </div>
+                    </div>
+                `;
+            }).join('')
+            : `<div class="music-empty">No playlists found</div>`;
+
+        const html = `
+            <div class="wallet-card">
+                <div class="music-section">
+                    <div class="music-section-title">Library</div>
+                    ${libraryHtml}
+                </div>
+                <div class="music-section">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                        <div class="music-section-title" style="margin: 0;">Playlists</div>
+                        <button onclick="viewerCreatePlaylist()" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 500;">
+                            ➕ Νέα Playlist
+                        </button>
+                    </div>
+                    ${playlistsHtml}
+                </div>
+            </div>
+        `;
+
+        musicContent.innerHTML = html;
+    }
+
+    // Helper function to escape HTML
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 
     // Init
     document.addEventListener('DOMContentLoaded', checkConnection);
+</script>
+
+<script src="{{ url_for('static', filename='wallet_auth.js') }}?v={{ build_id }}"></script>
+<script src="{{ url_for('static', filename='music_module.js') }}?v={{ build_id }}"></script>
+
+<script>
+// PR-5a: Verify MusicModule loaded
+if (typeof MusicModule === 'undefined') {
+    console.warn('[Wallet Viewer] MusicModule not loaded - check script path/caching');
+}
 </script>
 {% endblock %}

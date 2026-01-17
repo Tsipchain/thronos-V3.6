@@ -402,6 +402,181 @@
         font-size: 12px;
         opacity: 0.7;
     }
+
+    /* My Pools Enhanced Styles */
+    .my-pools-summary {
+        background: linear-gradient(135deg, rgba(0, 255, 102, 0.1) 0%, rgba(255, 215, 0, 0.1) 100%);
+        border: 1px solid #00ff66;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 25px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 20px;
+    }
+
+    .summary-stat {
+        text-align: center;
+    }
+
+    .summary-stat-label {
+        font-size: 11px;
+        color: #56ff9a;
+        text-transform: uppercase;
+        margin-bottom: 5px;
+    }
+
+    .summary-stat-value {
+        font-size: 22px;
+        font-weight: bold;
+        color: #00ff66;
+    }
+
+    .position-card {
+        background: linear-gradient(135deg, rgba(10, 10, 10, 0.9) 0%, rgba(26, 59, 46, 0.2) 100%);
+        border: 1px solid #1a3b2e;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 15px;
+    }
+
+    .position-card:hover {
+        border-color: #00ff66;
+        box-shadow: 0 0 15px rgba(0, 255, 102, 0.2);
+    }
+
+    .position-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 15px;
+    }
+
+    .position-pair {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 18px;
+        font-weight: bold;
+        color: #00ff66;
+    }
+
+    .position-share-badge {
+        background: rgba(255, 215, 0, 0.2);
+        color: #ffd700;
+        padding: 4px 10px;
+        border-radius: 20px;
+        font-size: 12px;
+    }
+
+    .position-details {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-bottom: 15px;
+    }
+
+    .position-detail {
+        background: rgba(0, 0, 0, 0.3);
+        padding: 10px;
+        border-radius: 8px;
+    }
+
+    .position-detail-label {
+        font-size: 10px;
+        color: #888;
+        margin-bottom: 4px;
+    }
+
+    .position-detail-value {
+        font-size: 14px;
+        color: #00ff66;
+        font-weight: 600;
+    }
+
+    .position-actions {
+        display: flex;
+        gap: 10px;
+    }
+
+    .position-action-btn {
+        flex: 1;
+        padding: 10px;
+        border: 1px solid #1a3b2e;
+        background: transparent;
+        color: #56ff9a;
+        border-radius: 8px;
+        cursor: pointer;
+        font-family: "Courier New", monospace;
+        transition: all 0.3s;
+    }
+
+    .position-action-btn:hover {
+        background: rgba(0, 255, 102, 0.1);
+        border-color: #00ff66;
+    }
+
+    /* Referral Section */
+    .referral-section {
+        background: linear-gradient(135deg, rgba(255, 215, 0, 0.1) 0%, rgba(0, 255, 102, 0.1) 100%);
+        border: 1px dashed #ffd700;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 25px;
+    }
+
+    .referral-title {
+        font-size: 16px;
+        color: #ffd700;
+        margin-bottom: 10px;
+        font-weight: bold;
+    }
+
+    .referral-link-box {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 10px;
+    }
+
+    .referral-link-input {
+        flex: 1;
+        background: rgba(0, 0, 0, 0.5);
+        border: 1px solid #1a3b2e;
+        padding: 10px 15px;
+        border-radius: 8px;
+        color: #00ff66;
+        font-family: "Courier New", monospace;
+        font-size: 12px;
+    }
+
+    .copy-btn {
+        padding: 10px 20px;
+        background: linear-gradient(135deg, #ffd700 0%, #ffed4e 100%);
+        border: none;
+        border-radius: 8px;
+        color: #000;
+        cursor: pointer;
+        font-weight: bold;
+        transition: all 0.3s;
+    }
+
+    .copy-btn:hover {
+        transform: scale(1.05);
+        box-shadow: 0 0 15px rgba(255, 215, 0, 0.4);
+    }
+
+    .referral-stats {
+        display: flex;
+        gap: 20px;
+        font-size: 12px;
+        color: #56ff9a;
+    }
+
+    .referral-stat {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+    }
 </style>
 {% endblock %}
 
@@ -480,7 +655,61 @@
 
     <!-- My Pools Tab -->
     <div id="my-pools-tab" class="tab-content">
-        <div id="myPoolsGrid" class="pools-grid"></div>
+        <!-- Referral Section -->
+        <div id="referralSection" class="referral-section" style="display: none;">
+            <div class="referral-title">
+                🔗 <span class="lang-el">Προσκάλεσε φίλους & κέρδισε</span>
+                <span class="lang-en">Invite Friends & Earn</span>
+            </div>
+            <p style="font-size: 12px; color: #56ff9a; margin-bottom: 15px;">
+                <span class="lang-el">Κέρδισε 0.5% bonus shares για κάθε νέο liquidity provider που φέρνεις!</span>
+                <span class="lang-en">Earn 0.5% bonus shares for every new liquidity provider you bring!</span>
+            </p>
+            <div class="referral-link-box">
+                <input type="text" id="referralLinkInput" class="referral-link-input" readonly>
+                <button class="copy-btn" onclick="copyReferralLink()">
+                    📋 <span class="lang-el">Αντιγραφή</span><span class="lang-en">Copy</span>
+                </button>
+            </div>
+            <div class="referral-stats">
+                <div class="referral-stat">
+                    <span>👥</span>
+                    <span class="lang-el">Referrals:</span><span class="lang-en">Referrals:</span>
+                    <strong id="referralCount">0</strong>
+                </div>
+                <div class="referral-stat">
+                    <span>🎁</span>
+                    <span class="lang-el">Bonus κερδισμένο:</span><span class="lang-en">Bonus earned:</span>
+                    <strong id="referralBonus">0.00</strong> <span>shares</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Portfolio Summary -->
+        <div id="portfolioSummary" class="my-pools-summary" style="display: none;">
+            <div class="summary-stat">
+                <div class="summary-stat-label">
+                    <span class="lang-el">Συνολικές Θέσεις</span><span class="lang-en">Total Positions</span>
+                </div>
+                <div class="summary-stat-value" id="totalPositions">0</div>
+            </div>
+            <div class="summary-stat">
+                <div class="summary-stat-label">
+                    <span class="lang-el">Αξία σε THR</span><span class="lang-en">Value in THR</span>
+                </div>
+                <div class="summary-stat-value" id="totalValueThr">0.00</div>
+            </div>
+            <div class="summary-stat">
+                <div class="summary-stat-label">
+                    <span class="lang-el">Αξία σε USD</span><span class="lang-en">Value in USD</span>
+                </div>
+                <div class="summary-stat-value" id="totalValueUsd">$0.00</div>
+            </div>
+        </div>
+
+        <!-- Positions List -->
+        <div id="myPositionsList"></div>
+
         <div id="myPoolsEmpty" class="empty-state">
             <div class="empty-state-icon">💧</div>
             <div class="empty-state-text">
@@ -649,6 +878,11 @@ function renderPools(pools, containerId) {
         const tvlUSD = pool.tvl_usd || 0;
         const tvlBTC = pool.tvl_btc || 0;
         const feeTier = calculateFeeTier(tvlUSD, tvlBTC);
+        const reserveA = Number(pool.reserves_a || pool.reserve_a || 0);
+        const reserveB = Number(pool.reserves_b || pool.reserve_b || 0);
+        const hasLiquidity = reserveA > 0 && reserveB > 0;
+        const priceAToB = hasLiquidity ? (reserveB / reserveA) : null;
+        const priceBToA = hasLiquidity ? (reserveA / reserveB) : null;
 
         // Get logos
         const logoA = getTokenLogo(pool.token_a);
@@ -671,11 +905,11 @@ function renderPools(pools, containerId) {
             <div class="pool-stats">
                 <div class="pool-stat">
                     <div class="pool-stat-label">Reserve ${pool.token_a}</div>
-                    <div class="pool-stat-value">${(pool.reserves_a || pool.reserve_a || 0).toFixed(6)}</div>
+                    <div class="pool-stat-value">${hasLiquidity ? reserveA.toFixed(6) : '—'}</div>
                 </div>
                 <div class="pool-stat">
                     <div class="pool-stat-label">Reserve ${pool.token_b}</div>
-                    <div class="pool-stat-value">${(pool.reserves_b || pool.reserve_b || 0).toFixed(6)}</div>
+                    <div class="pool-stat-value">${hasLiquidity ? reserveB.toFixed(6) : '—'}</div>
                 </div>
                 <div class="pool-stat">
                     <div class="pool-stat-label">Total Shares</div>
@@ -683,7 +917,15 @@ function renderPools(pools, containerId) {
                 </div>
                 <div class="pool-stat">
                     <div class="pool-stat-label">TVL (est)</div>
-                    <div class="pool-stat-value">$${tvlUSD.toFixed(2)}</div>
+                    <div class="pool-stat-value">${hasLiquidity ? `$${tvlUSD.toFixed(2)}` : '—'}</div>
+                </div>
+                <div class="pool-stat">
+                    <div class="pool-stat-label">Price ${pool.token_a} → ${pool.token_b}</div>
+                    <div class="pool-stat-value">${hasLiquidity ? priceAToB.toFixed(6) : '—'}</div>
+                </div>
+                <div class="pool-stat">
+                    <div class="pool-stat-label">Price ${pool.token_b} → ${pool.token_a}</div>
+                    <div class="pool-stat-value">${hasLiquidity ? priceBToA.toFixed(6) : '—'}</div>
                 </div>
             </div>
             <div class="pool-actions">
@@ -703,24 +945,156 @@ function renderPools(pools, containerId) {
     setLanguage(savedLang);
 }
 
-// Render my pools
-function renderMyPools() {
-    const wallet = localStorage.getItem('thr_address');
-    if (!wallet) {
+// Render my pools - Enhanced version with positions
+async function renderMyPools() {
+    const wallet = walletSession.getAddress();
+    if (!wallet || !walletSession.isBound()) {
         document.getElementById('myPoolsEmpty').style.display = 'block';
-        document.getElementById('myPoolsGrid').style.display = 'none';
+        document.getElementById('portfolioSummary').style.display = 'none';
+        document.getElementById('referralSection').style.display = 'none';
+        document.getElementById('myPositionsList').innerHTML = '';
         return;
     }
 
-    const myPools = allPools.filter(pool => pool.provider_thr === wallet || (Array.isArray(pool.providers) && pool.providers.includes(wallet)));
+    // Setup referral link
+    document.getElementById('referralSection').style.display = 'block';
+    const baseUrl = window.location.origin;
+    document.getElementById('referralLinkInput').value = `${baseUrl}/pools?ref=${wallet}`;
 
-    if (myPools.length > 0) {
-        document.getElementById('myPoolsEmpty').style.display = 'none';
-        document.getElementById('myPoolsGrid').style.display = 'grid';
-        renderPools(myPools, 'myPoolsGrid');
-    } else {
-        document.getElementById('myPoolsEmpty').style.display = 'block';
-        document.getElementById('myPoolsGrid').style.display = 'none';
+    try {
+        // Fetch positions from API
+        const res = await fetch(`/api/v1/pools/positions/${wallet}`);
+        const data = await res.json();
+
+        if (data.status === 'success' && data.positions.length > 0) {
+            document.getElementById('myPoolsEmpty').style.display = 'none';
+            document.getElementById('portfolioSummary').style.display = 'grid';
+
+            // Update summary
+            document.getElementById('totalPositions').textContent = data.total_pools;
+            document.getElementById('totalValueThr').textContent = data.total_value_thr.toFixed(2);
+            document.getElementById('totalValueUsd').textContent = `$${data.total_value_usd.toFixed(2)}`;
+
+            // Calculate referral stats
+            let totalReferrals = 0;
+            let totalBonus = 0;
+            data.positions.forEach(p => {
+                if (p.referral_count) {
+                    totalReferrals += p.referral_count;
+                    totalBonus += p.referral_bonus_earned || 0;
+                }
+            });
+            document.getElementById('referralCount').textContent = totalReferrals;
+            document.getElementById('referralBonus').textContent = totalBonus.toFixed(4);
+
+            // Render position cards
+            const container = document.getElementById('myPositionsList');
+            container.innerHTML = '';
+
+            data.positions.forEach(pos => {
+                const logoA = getTokenLogo(pos.token_a);
+                const logoB = getTokenLogo(pos.token_b);
+                const lang = localStorage.getItem('lang') || 'el';
+                const isEl = lang === 'el' || lang === 'gr';
+
+                const card = document.createElement('div');
+                card.className = 'position-card';
+                card.innerHTML = `
+                    <div class="position-header">
+                        <div class="position-pair">
+                            ${logoA ? `<img src="${logoA}" style="width: 24px; height: 24px; border-radius: 50%;">` : ''}
+                            ${logoB ? `<img src="${logoB}" style="width: 24px; height: 24px; border-radius: 50%; margin-left: -8px;">` : ''}
+                            ${pos.token_a}/${pos.token_b}
+                        </div>
+                        <div class="position-share-badge">${pos.share_percent.toFixed(2)}% ${isEl ? 'του pool' : 'of pool'}</div>
+                    </div>
+                    <div class="position-details">
+                        <div class="position-detail">
+                            <div class="position-detail-label">${isEl ? 'Τα shares σου' : 'Your Shares'}</div>
+                            <div class="position-detail-value">${pos.user_shares.toFixed(4)}</div>
+                        </div>
+                        <div class="position-detail">
+                            <div class="position-detail-label">${isEl ? 'Συνολικά shares' : 'Total Shares'}</div>
+                            <div class="position-detail-value">${pos.total_shares.toFixed(4)}</div>
+                        </div>
+                        <div class="position-detail">
+                            <div class="position-detail-label">${pos.token_a} ${isEl ? 'Ποσό' : 'Amount'}</div>
+                            <div class="position-detail-value">${pos.token_a_amount.toFixed(6)}</div>
+                        </div>
+                        <div class="position-detail">
+                            <div class="position-detail-label">${pos.token_b} ${isEl ? 'Ποσό' : 'Amount'}</div>
+                            <div class="position-detail-value">${pos.token_b_amount.toFixed(6)}</div>
+                        </div>
+                        <div class="position-detail">
+                            <div class="position-detail-label">${isEl ? 'Αξία σε THR' : 'Value in THR'}</div>
+                            <div class="position-detail-value">${pos.value_thr.toFixed(2)} THR</div>
+                        </div>
+                        <div class="position-detail">
+                            <div class="position-detail-label">${isEl ? 'Αξία σε USD' : 'Value in USD'}</div>
+                            <div class="position-detail-value">$${pos.value_usd.toFixed(2)}</div>
+                        </div>
+                    </div>
+                    ${pos.referral_count ? `
+                        <div style="background: rgba(255, 215, 0, 0.1); padding: 8px; border-radius: 6px; margin-bottom: 10px; font-size: 11px; color: #ffd700;">
+                            🎁 ${pos.referral_count} referrals • +${pos.referral_bonus_earned?.toFixed(4) || '0'} bonus shares
+                        </div>
+                    ` : ''}
+                    <div class="position-actions">
+                        <button class="position-action-btn" onclick="addLiquidity('${pos.pool_id}')">
+                            ➕ ${isEl ? 'Προσθήκη' : 'Add More'}
+                        </button>
+                        <button class="position-action-btn" onclick="removeLiquidity('${pos.pool_id}')">
+                            ➖ ${isEl ? 'Αφαίρεση' : 'Remove'}
+                        </button>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        } else {
+            document.getElementById('myPoolsEmpty').style.display = 'block';
+            document.getElementById('portfolioSummary').style.display = 'none';
+            document.getElementById('myPositionsList').innerHTML = '';
+        }
+    } catch (error) {
+        console.error('Error loading positions:', error);
+        // Fallback to old method
+        const myPools = allPools.filter(pool =>
+            pool.provider_thr === wallet ||
+            (pool.providers && (typeof pool.providers === 'object' ? wallet in pool.providers : pool.providers.includes(wallet)))
+        );
+
+        if (myPools.length > 0) {
+            document.getElementById('myPoolsEmpty').style.display = 'none';
+            document.getElementById('portfolioSummary').style.display = 'none';
+            const container = document.getElementById('myPositionsList');
+            container.innerHTML = '<div class="pools-grid" id="fallbackPoolsGrid"></div>';
+            renderPools(myPools, 'fallbackPoolsGrid');
+        } else {
+            document.getElementById('myPoolsEmpty').style.display = 'block';
+            document.getElementById('portfolioSummary').style.display = 'none';
+        }
+    }
+}
+
+// Copy referral link
+function copyReferralLink() {
+    const input = document.getElementById('referralLinkInput');
+    input.select();
+    document.execCommand('copy');
+
+    const btn = event.target.closest('.copy-btn');
+    const oldText = btn.innerHTML;
+    btn.innerHTML = '✅';
+    setTimeout(() => { btn.innerHTML = oldText; }, 2000);
+}
+
+// Check for referral param on page load
+function checkReferralParam() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const ref = urlParams.get('ref');
+    if (ref) {
+        localStorage.setItem('pool_referrer', ref);
+        console.log('Referrer saved:', ref);
     }
 }
 
@@ -779,6 +1153,28 @@ async function loadTokenOptions() {
     }
 }
 
+async function getWalletBalanceMap(wallet) {
+    const res = await fetch(`/api/balances?address=${encodeURIComponent(wallet)}&show_zero=true`);
+    if (!res.ok) {
+        throw new Error('Wallet not connected');
+    }
+    const data = await res.json();
+    const balances = {};
+    const list = Array.isArray(data.tokens)
+        ? data.tokens
+        : (data.balances ? Object.entries(data.balances).map(([symbol, balance]) => ({ symbol, balance })) : []);
+    list.forEach(t => {
+        balances[t.symbol] = Number(t.balance) || 0;
+    });
+    if (typeof data.balance !== 'undefined' && typeof balances.THR === 'undefined') {
+        balances.THR = Number(data.balance) || 0;
+    }
+    if (typeof data.jam_balance !== 'undefined') {
+        balances.JAM = Number(data.jam_balance) || 0;
+    }
+    return balances;
+}
+
 // Submit create pool
 async function submitCreatePool(event) {
     event.preventDefault();
@@ -787,16 +1183,18 @@ async function submitCreatePool(event) {
     const tokenB = document.getElementById('poolTokenB').value;
     const amountA = parseFloat(document.getElementById('poolAmountA').value);
     const amountB = parseFloat(document.getElementById('poolAmountB').value);
-    const provider = localStorage.getItem('thr_address');
-    const secret = localStorage.getItem('thr_secret');
+    const provider = walletSession.getAddress();
+    const secret = walletSession.getSendSeed();
     const messageDiv = document.getElementById('createPoolMessage');
 
-    if (!provider || !secret) {
+    if (!provider || !secret || !walletSession.isBound()) {
         messageDiv.className = 'form-message error';
-        messageDiv.textContent = 'Please connect your wallet first';
+        messageDiv.textContent = 'Wallet not connected';
         messageDiv.style.display = 'block';
         return;
     }
+
+    if(!walletSession.requirePin('create pool')) return;
 
     if (tokenA === tokenB) {
         messageDiv.className = 'form-message error';
@@ -808,6 +1206,21 @@ async function submitCreatePool(event) {
     if (amountA <= 0 || amountB <= 0) {
         messageDiv.className = 'form-message error';
         messageDiv.textContent = 'Please enter positive amounts';
+        messageDiv.style.display = 'block';
+        return;
+    }
+
+    try {
+        const balances = await getWalletBalanceMap(provider);
+        if ((balances[tokenA] || 0) < amountA || (balances[tokenB] || 0) < amountB) {
+            messageDiv.className = 'form-message error';
+            messageDiv.textContent = 'Error: Insufficient balance';
+            messageDiv.style.display = 'block';
+            return;
+        }
+    } catch (err) {
+        messageDiv.className = 'form-message error';
+        messageDiv.textContent = err.message || 'Wallet not connected';
         messageDiv.style.display = 'block';
         return;
     }
@@ -870,9 +1283,9 @@ async function addLiquidity(poolId) {
         return;
     }
 
-    const wallet = localStorage.getItem('thr_address');
-    if (!wallet) {
-        alert('Please connect your wallet first!');
+    const wallet = walletSession.getAddress();
+    if (!wallet || !walletSession.isBound()) {
+        alert('Wallet not connected');
         return;
     }
 
@@ -883,10 +1296,26 @@ async function addLiquidity(poolId) {
     const amountB = prompt(`Enter amount of ${pool.token_b} to add:`);
     if (!amountB || isNaN(amountB) || parseFloat(amountB) <= 0) return;
 
-    const authSecret = prompt('Enter your auth secret:');
+    const authSecret = walletSession.getSendSeed() || prompt('Enter your auth secret:');
     if (!authSecret) return;
 
+    if(!walletSession.requirePin('add liquidity')) return;
+
     try {
+        const balances = await getWalletBalanceMap(wallet);
+        if ((balances[pool.token_a] || 0) < parseFloat(amountA) || (balances[pool.token_b] || 0) < parseFloat(amountB)) {
+            alert('Error: Insufficient balance');
+            return;
+        }
+    } catch (err) {
+        alert(err.message || 'Wallet not connected');
+        return;
+    }
+
+    try {
+        // Check for referrer in localStorage
+        const referrer = localStorage.getItem('pool_referrer') || '';
+
         const response = await fetch('/api/v1/pools/add_liquidity', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -896,14 +1325,19 @@ async function addLiquidity(poolId) {
                 amount_b: parseFloat(amountB),
                 provider_thr: wallet,
                 auth_secret: authSecret,
-                passphrase: ''
+                passphrase: '',
+                referrer: referrer  // Include referrer if available
             })
         });
 
         const data = await response.json();
 
         if (response.ok) {
-            alert(`✅ Liquidity added successfully!\n\nShares minted: ${data.shares_minted}\nYour total shares: ${data.provider_shares}`);
+            let msg = `✅ Liquidity added successfully!\n\nShares minted: ${data.shares_minted}\nYour total shares: ${data.provider_shares}`;
+            if (data.referral_bonus) {
+                msg += `\n\n🎁 Referral bonus: ${data.referrer} received ${data.referral_bonus} bonus shares!`;
+            }
+            alert(msg);
             loadPools(); // Reload pools
         } else {
             alert(`❌ Error: ${data.message || 'Failed to add liquidity'}`);
@@ -921,9 +1355,9 @@ async function removeLiquidity(poolId) {
         return;
     }
 
-    const wallet = localStorage.getItem('thr_address');
-    if (!wallet) {
-        alert('Please connect your wallet first!');
+    const wallet = walletSession.getAddress();
+    if (!wallet || !walletSession.isBound()) {
+        alert('Wallet not connected');
         return;
     }
 
@@ -942,8 +1376,10 @@ async function removeLiquidity(poolId) {
         return;
     }
 
-    const authSecret = prompt('Enter your auth secret:');
+    const authSecret = walletSession.getSendSeed() || prompt('Enter your auth secret:');
     if (!authSecret) return;
+
+    if(!walletSession.requirePin('remove liquidity')) return;
 
     try {
         const response = await fetch('/api/v1/pools/remove_liquidity', {
@@ -973,6 +1409,7 @@ async function removeLiquidity(poolId) {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
+    checkReferralParam(); // Check for referral param in URL
     loadTokenOptions();
     loadPools();
 });

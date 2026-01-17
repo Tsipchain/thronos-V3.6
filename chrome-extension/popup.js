@@ -18,24 +18,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupEventListeners();
 });
 
-// Load wallet from storage
+// Load wallet from storage (Promise-based to fix async race condition)
 async function loadWallet() {
-    chrome.storage.local.get(['thr_address', 'thr_secret'], (result) => {
-        if (result.thr_address && result.thr_secret) {
-            currentWallet = {
-                address: result.thr_address,
-                secret: result.thr_secret
-            };
-            showWalletConnected();
-            loadWalletData();
-        } else {
-            showNotConnected();
-        }
+    return new Promise((resolve) => {
+        chrome.storage.local.get(['thr_address', 'thr_secret'], (result) => {
+            if (result.thr_address && result.thr_secret) {
+                currentWallet = {
+                    address: result.thr_address,
+                    secret: result.thr_secret
+                };
+                showWalletConnected();
+                loadWalletData();
+            } else {
+                showNotConnected();
+            }
+            resolve();
+        });
     });
 }
 
 // Show wallet connected view
 function showWalletConnected() {
+    if (!currentWallet || !currentWallet.address) {
+        showNotConnected();
+        return;
+    }
+
     document.getElementById('notConnected').style.display = 'none';
     document.getElementById('walletConnected').style.display = 'flex';
 
@@ -274,6 +282,10 @@ function confirmImportWallet() {
 
 // Copy address
 function copyAddress() {
+    if (!currentWallet || !currentWallet.address) {
+        showToast('No wallet connected', 'error');
+        return;
+    }
     navigator.clipboard.writeText(currentWallet.address);
     showToast('Address copied!');
 }
@@ -292,9 +304,17 @@ function disconnectWallet() {
 
 // Send transaction
 async function sendTransaction() {
+    // Check wallet connection first
+    if (!currentWallet || !currentWallet.address || !currentWallet.secret) {
+        showToast('Wallet not connected', 'error');
+        return;
+    }
+
     const tokenSymbol = document.getElementById('sendToken').value;
     const to = document.getElementById('sendTo').value.trim();
     const amount = parseFloat(document.getElementById('sendAmount').value);
+    // Get speed from settings or default to 'fast'
+    const speed = document.getElementById('sendSpeed')?.value || 'fast';
 
     if (!tokenSymbol || !to || !amount) {
         showToast('Please fill all fields', 'error');
@@ -331,26 +351,40 @@ async function sendTransaction() {
                 to: to,
                 amount: amount,
                 token: tokenSymbol,
-                secret: currentWallet.secret
+                secret: currentWallet.secret,
+                speed: speed
             })
         });
 
-        if (!response.ok) throw new Error('Transaction failed');
-
         const result = await response.json();
 
-        showToast('Transaction sent successfully!', 'success');
+        // Handle errors properly
+        if (!response.ok || result.error || result.ok === false) {
+            let errorMsg = result.error || result.message || 'Transaction failed';
+            // Handle specific error for THR fees on custom tokens
+            if (result.thr_balance !== undefined && result.fee_required !== undefined) {
+                errorMsg = `Insufficient THR for fee. Need ${result.fee_required} THR, have ${result.thr_balance} THR`;
+            }
+            showToast(errorMsg, 'error');
+            return;
+        }
+
+        // Success - show fee info if available
+        const feeInfo = result.fee_burned || result.fee ? ` (Fee: ${(result.fee_burned || result.fee).toFixed(6)} THR)` : '';
+        showToast(`${amount} ${tokenSymbol} sent successfully!${feeInfo}`, 'success');
 
         // Clear form
         document.getElementById('sendToken').value = '';
         document.getElementById('sendTo').value = '';
         document.getElementById('sendAmount').value = '';
 
-        // Refresh wallet data
-        setTimeout(() => loadWalletData(), 2000);
+        // Refresh wallet data immediately then retry for confirmation
+        await loadWalletData();
+        // Additional refresh after short delay for blockchain propagation
+        setTimeout(() => loadWalletData(), 1000);
     } catch (error) {
         console.error('Error sending transaction:', error);
-        showToast('Transaction failed', 'error');
+        showToast('Transaction failed: ' + (error.message || 'Unknown error'), 'error');
     }
 }
 

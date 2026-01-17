@@ -88,6 +88,28 @@
 
   <!-- Blocks -->
   <section id="view-blocks" class="panel" style="margin-top:12px">
+    <div class="grid" style="margin-bottom:12px">
+      <div class="card">
+        <h4>Total Blocks Mined</h4>
+        <div class="big" id="blocksTotalCount">—</div>
+        <div class="small muted">blockchain height</div>
+      </div>
+      <div class="card">
+        <h4>Total Rewards Distributed</h4>
+        <div class="big" id="blocksTotalRewards">—</div>
+        <div class="small muted">to miners & AI agents</div>
+      </div>
+      <div class="card">
+        <h4>Total Fees Burned</h4>
+        <div class="big" id="blocksTotalBurned">—</div>
+        <div class="small muted">deflationary mechanism</div>
+      </div>
+      <div class="card">
+        <h4>Avg Block Reward</h4>
+        <div class="big" id="blocksAvgReward">—</div>
+        <div class="small muted">per block</div>
+      </div>
+    </div>
     <table id="tblBlocks">
       <thead>
         <tr>
@@ -102,27 +124,59 @@
           <th>Time</th>
         </tr>
       </thead>
-      <tbody></tbody>
+      <tbody id="blocksTableBody"></tbody>
     </table>
-    <div class="hint">Tip: κλικ στο hash/διεύθυνση για αντιγραφή.</div>
+    <div style="margin-top:12px;text-align:center;">
+      <button class="btn" id="btnLoadMoreBlocks" style="padding:10px 20px;">Load More Blocks</button>
+      <span class="muted small" id="blocksShowing" style="margin-left:12px;"></span>
+    </div>
+    <div class="hint">Tip: κλικ στο hash/διεύθυνση για αντιγραφή. | Mining stats updated with each block.</div>
   </section>
 
   <!-- Transfers -->
   <section id="view-txs" class="panel" style="display:none;margin-top:12px">
+    <div class="grid" style="margin-bottom:12px">
+      <div class="card">
+        <h4>Total Transfers</h4>
+        <div class="big" id="txsTotalCount">—</div>
+        <div class="small muted">all token transfers</div>
+      </div>
+      <div class="card">
+        <h4>Total Volume</h4>
+        <div class="big" id="txsTotalVolume">—</div>
+        <div class="small muted">THR transferred</div>
+      </div>
+      <div class="card">
+        <h4>Unique Addresses</h4>
+        <div class="big" id="txsUniqueAddresses">—</div>
+        <div class="small muted">active participants</div>
+      </div>
+      <div class="card">
+        <h4>Avg Transfer Size</h4>
+        <div class="big" id="txsAvgSize">—</div>
+        <div class="small muted">per transaction</div>
+      </div>
+    </div>
     <table id="tblTxs">
       <thead>
         <tr>
           <th>TX ID</th>
-          <th>Height</th>
+          <th>Type</th>
           <th>From</th>
           <th>To</th>
-          <th>Amount</th>
+          <th>Asset</th><th>Amount</th>
           <th>Fee</th>
+          <th>Details</th>
           <th>Timestamp</th>
         </tr>
       </thead>
-      <tbody></tbody>
+      <tbody id="transfersTableBody"></tbody>
     </table>
+    <div style="margin-top:12px;display:flex;gap:12px;align-items:center;">
+      <button class="btn" id="btnRefreshTxs">Refresh Transfers</button>
+      <button class="btn" id="btnLoadMoreTxs">Load More Transactions</button>
+      <span class="muted small" id="txsShowing"></span>
+    </div>
   </section>
 
   <!-- Mempool -->
@@ -135,7 +189,7 @@
     <table id="tblMempool" style="margin-top:8px">
       <thead>
         <tr>
-          <th>TX ID</th><th>From</th><th>To</th><th>Amount</th><th>Fee</th><th>Status</th><th>Queued</th>
+          <th>TX ID</th><th>From</th><th>To</th><th>Asset</th><th>Amount</th><th>Fee</th><th>Status</th><th>Queued</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -179,19 +233,43 @@
 
   <!-- Tokens -->
   <section id="view-tokens" class="panel" style="display:none;margin-top:12px">
+    <div class="grid" style="margin-bottom:12px">
+      <div class="card">
+        <h4>Total Tokens</h4>
+        <div class="big" id="tokensTotalCount">—</div>
+        <div class="small muted">unique tokens on chain</div>
+      </div>
+      <div class="card">
+        <h4>Total Holders</h4>
+        <div class="big" id="tokensTotalHolders">—</div>
+        <div class="small muted">unique addresses holding tokens</div>
+      </div>
+      <div class="card">
+        <h4>Total Transfers</h4>
+        <div class="big" id="tokensTotalTransfers">—</div>
+        <div class="small muted">token transactions</div>
+      </div>
+      <div class="card">
+        <h4>Active Tokens (24h)</h4>
+        <div class="big" id="tokensActive24h">—</div>
+        <div class="small muted">tokens with recent activity</div>
+      </div>
+    </div>
     <table id="tblTokens">
       <thead>
         <tr>
           <th>Symbol</th>
           <th>Name</th>
           <th>Total Supply</th>
+          <th>Holders</th>
+          <th>Transfers</th>
           <th>Decimals</th>
           <th>Creator</th>
           <th>Created</th>
         </tr>
       </thead>
       <tbody id="tokensBody">
-        <tr><td colspan="6" style="text-align:center">Loading tokens...</td></tr>
+        <tr><td colspan="8" style="text-align:center">Loading tokens...</td></tr>
       </tbody>
     </table>
   </section>
@@ -276,29 +354,142 @@
       </div>
       <div class="card">
         <h4>Platform Status</h4>
-        <div class="big" id="musicStatus">Coming Soon</div>
-        <div class="small muted">implementation pending</div>
+        <div class="big" id="musicStatus" style="color: #ff9800;">Loading…</div>
+        <div class="small muted" id="musicStatusNote">checking endpoints</div>
       </div>
     </div>
-    <div style="text-align:center;padding:40px;color:#9fdfb4">
-      <p style="font-size:16px">🎵 Music Platform Coming Soon</p>
-      <p style="font-size:12px;opacity:0.7">The decentralized music streaming and royalty distribution platform is currently under development.</p>
+    <div class="panel" style="margin-top:12px">
+      <table id="musicTable">
+        <thead>
+          <tr><th>Title</th><th>Artist</th><th>Genre</th><th>Plays</th></tr>
+        </thead>
+        <tbody id="musicBody"><tr><td colspan="4" style="text-align:center;color:#9fdfb4">Loading tracks…</td></tr></tbody>
+      </table>
     </div>
   </section>
 </div>
 
 <script>
 /* ===== Utilities ===== */
-const fmtN = (n) => (n==null?'—':Number(n).toLocaleString(undefined,{minimumFractionDigits:3,maximumFractionDigits:6}));
+const fmtN = (n) => {
+  if (n == null) return '—';
+  const num = Number(n);
+  if (!Number.isFinite(num)) return '0';
+  return num.toLocaleString(undefined,{minimumFractionDigits:3,maximumFractionDigits:6});
+};
+const canonicalKind = (kindRaw) => {
+  const k = (kindRaw || '').toLowerCase();
+  const map = {
+    'thr_transfer': 'thr_transfer',
+    'transfer': 'thr_transfer',
+    'pool_swap': 'swap',
+    'swap': 'swap',
+    'token_transfer': 'token_transfer',
+    'send_token': 'token_transfer',
+    'receive_token': 'token_transfer',
+    'ai_credit': 'ai_credits',
+    'ai_credits': 'ai_credits',
+    'credits_consume': 'ai_credits',
+    'service_payment': 'ai_credits',
+    'ai_knowledge': 'ai_credits',
+    'iot_parking': 'parking',
+    'iot_parking_reservation': 'parking',
+    'iot_autopilot': 'autopilot',
+  };
+  return map[k] || k || 'thr_transfer';
+};
+const CATEGORY_RULES = {
+  transfers: {
+    label: 'Transfers',
+    kinds: [
+      'thr_transfer',
+      'transfer',
+      'swap',
+      'bridge',
+      'coinbase',
+      'ai_credits',
+      'token_transfer',
+      'l2e',
+      'iot',
+      'autopilot',
+      'parking',
+      'music',
+    ],
+    predicate: (tx) => {
+      const kind = canonicalKind(tx?.kind || tx?.type);
+      if (kind === 'block') return false;
+      if (!tx?.from && !tx?.to) return false;
+      return true;
+    },
+  },
+  tokens: {
+    label: 'Tokens',
+    kinds: ['token_transfer'],
+    predicate: (tx) => canonicalKind(tx?.kind || tx?.type) === 'token_transfer',
+  },
+  thr: {
+    label: 'THR',
+    kinds: ['thr_transfer', 'transfer'],
+    predicate: (tx) => {
+      const kind = canonicalKind(tx?.kind || tx?.type);
+      const asset = (tx?.asset || tx?.asset_symbol || tx?.token_symbol || 'THR').toUpperCase();
+      return (kind === 'thr_transfer' || kind === 'transfer') && asset === 'THR';
+    },
+  },
+  other: {
+    label: 'Other/Unknown',
+    predicate: (tx) => {
+      const kind = canonicalKind(tx?.kind || tx?.type);
+      const known = new Set([
+        'thr_transfer',
+        'transfer',
+        'swap',
+        'pool_swap',
+        'bridge',
+        'coinbase',
+        'ai_credits',
+        'token_transfer',
+        'l2e',
+        'iot',
+        'autopilot',
+        'parking',
+        'music',
+      ]);
+      return !known.has(kind);
+    },
+  },
+};
 const short = s => (s && s.length>20 ? s.slice(0,20)+'…' : (s||'—'));
 const rel = ts => {
   if(!ts) return '—';
-  const t = new Date(ts.replace(' UTC','')+'Z').getTime();
-  const d = (Date.now()-t)/1000;
-  if (d<90) return 'just now';
-  if (d<3600) return Math.round(d/60)+'m ago';
-  if (d<86400) return Math.round(d/3600)+'h ago';
-  return new Date(t).toISOString().replace('T',' ').slice(0,19)+' UTC';
+
+  // PR-3: Enhanced timestamp parsing - support ISO, "YYYY-MM-DD HH:MM:SS UTC", else raw
+  let t;
+  try {
+    // Try ISO format first
+    if (ts.includes('T') || ts.includes('Z')) {
+      t = new Date(ts).getTime();
+    }
+    // Try "YYYY-MM-DD HH:MM:SS UTC" format
+    else if (ts.includes(' UTC')) {
+      t = new Date(ts.replace(' UTC', '') + 'Z').getTime();
+    }
+    // Try parsing as-is
+    else {
+      t = new Date(ts).getTime();
+    }
+
+    // If parsing failed, return raw
+    if (!t || isNaN(t)) return ts;
+  } catch {
+    return ts; // Return raw on parse failure
+  }
+
+  const d = (Date.now() - t) / 1000;
+  if (d < 90) return 'just now';
+  if (d < 3600) return Math.round(d / 60) + 'm ago';
+  if (d < 86400) return Math.round(d / 3600) + 'h ago';
+  return new Date(t).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
 };
 const copy = (txt)=>{ navigator.clipboard.writeText(txt||''); };
 const el = (sel)=>document.querySelector(sel);
@@ -314,9 +505,11 @@ document.querySelectorAll('.tab').forEach(t=>{
       el('#view-'+name).style.display = (name===tab)?'block':'none';
     });
     // Load data for the selected tab
+    if(tab==='txs' && window.THROnosViewer) window.THROnosViewer.initTransfersTab();
     if(tab==='tokens') loadTokens();
     if(tab==='pools') loadPools();
     if(tab==='l2e') loadL2E();
+    if(tab==='music') loadMusic();
   };
 });
 
@@ -328,9 +521,55 @@ const BOOT_TXS    = {{ (transactions or [])|tojson }};
 function renderBlocks(list){
   const q = el('#q').value.trim().toLowerCase();
   const tb = tbody('#tblBlocks');
+
+  // PR-3: Clear table before render (already present)
   tb.innerHTML='';
+
+  // PR-3: Dedupe by block.hash (keep last occurrence)
+  const seen = new Map();
+  const deduped = [];
+  list.forEach(b => {
+    if (b && b.hash) {
+      seen.set(b.hash, b); // Overwrites duplicates, keeping last
+    }
+  });
+  seen.forEach(b => deduped.push(b));
+
+  // Optional: also dedupe by index if hash is missing
+  const finalList = [];
+  const seenIndexes = new Set();
+  deduped.forEach(b => {
+    const idx = b.index;
+    if (idx !== null && idx !== undefined && !seenIndexes.has(idx)) {
+      seenIndexes.add(idx);
+      finalList.push(b);
+    } else if (idx === null || idx === undefined) {
+      finalList.push(b); // Keep blocks without index
+    }
+  });
+
   let hot=false;
-  list.forEach(b=>{
+
+  // Calculate mining statistics
+  let totalRewards = 0;
+  let totalBurned = 0;
+  let validBlocks = 0;
+
+  finalList.forEach(b => {
+    const reward = (b.reward_to_miner || 0) + (b.reward_to_ai || 0);
+    const burned = b.fee_burned || 0;
+    if(reward > 0 || burned > 0) validBlocks++;
+    totalRewards += reward;
+    totalBurned += burned;
+  });
+
+  // Update stats cards
+  el('#blocksTotalRewards').textContent = fmtN(totalRewards) + ' THR';
+  el('#blocksTotalBurned').textContent = fmtN(totalBurned) + ' THR';
+  el('#blocksAvgReward').textContent = validBlocks > 0 ? fmtN(totalRewards / validBlocks) + ' THR' : '—';
+
+  // Render blocks table
+  finalList.forEach(b=>{
     const match = !q || JSON.stringify(b).toLowerCase().includes(q);
     if(!match) return;
     const tr=document.createElement('tr');
@@ -363,23 +602,99 @@ function renderBlocks(list){
   el('#tipBadge').style.display = hot?'inline-block':'none';
 }
 
+function formatAiDetails(details){
+  const provider = details?.provider || 'unknown';
+  const model = details?.model || 'unknown';
+  const task = details?.task_type || 'unknown';
+  const pHash = (details?.prompt_hash || '').slice(0,8) || '—';
+  const rHash = (details?.response_hash || '').slice(0,8) || '—';
+  let summary = `AI TX · provider: ${provider} · model: ${model} · task: ${task} · hashes: ${pHash} / ${rHash}`;
+  const preview = (details?.preview || '').slice(0,80);
+  if(preview){
+    summary += `<div class="muted" style="font-size:11px">preview: ${preview}</div>`;
+  }
+  return summary;
+}
+
+function renderTxDetailsCell(t){
+  const d = t?.details;
+  if(d && typeof d === 'object'){
+    if(d.kind === 'ai_interaction'){
+      return formatAiDetails(d);
+    }
+    if(d.kind === 'ai_knowledge_legacy' || d.prompt_tail){
+      return '<span class="muted" style="font-size:11px">Legacy AI TX (prompt_tail truncated)</span>';
+    }
+  }
+
+  if(t?.type === 'ai_knowledge'){
+    return '<span class="muted" style="font-size:11px">Legacy AI TX (prompt_tail truncated)</span>';
+  }
+
+  return t?.note ? `<span class="muted" style="font-size:11px">${t.note}</span>` : '—';
+}
+
 function renderTxs(list){
   const q = el('#q').value.trim().toLowerCase();
   const tb = tbody('#tblTxs');
   tb.innerHTML='';
-  list.forEach(t=>{
+  const txList = list.filter(CATEGORY_RULES.transfers.predicate);
+
+  // Calculate transfer statistics
+  let totalVolume = 0;
+  let uniqueAddresses = new Set();
+  let swapCount = 0;
+
+  txList.forEach(t => {
+    const asset = (t && (t.asset || t.asset_symbol || t.token_symbol)) ? String(t.asset || t.asset_symbol || t.token_symbol) : 'THR';
+    const kind = canonicalKind(t && (t.kind || t.type));
+    // Only count THR for volume (to avoid mixing token types)
+    if(asset === 'THR') {
+      totalVolume += (t.amount || 0);
+    }
+    if(t.from) uniqueAddresses.add(t.from);
+    if(t.to) uniqueAddresses.add(t.to);
+    if(kind === 'swap') swapCount++;
+  });
+
+  // Update stats cards
+  el('#txsTotalCount').textContent = txList.length.toLocaleString() + (swapCount > 0 ? ` (${swapCount} swaps)` : '');
+  el('#txsTotalVolume').textContent = fmtN(totalVolume) + ' THR';
+  el('#txsUniqueAddresses').textContent = uniqueAddresses.size.toLocaleString();
+  el('#txsAvgSize').textContent = txList.length > 0 ? fmtN(totalVolume / txList.length) + ' THR' : '—';
+
+  // Render transfers table
+  txList.forEach(t=>{
+    const asset = (t && (t.asset || t.asset_symbol || t.token_symbol)) ? String(t.asset || t.asset_symbol || t.token_symbol) : 'THR';
+    const kind = canonicalKind(t && (t.kind || t.type));
     const match = !q || JSON.stringify(t).toLowerCase().includes(q);
     if(!match) return;
     const tr=document.createElement('tr');
+
+    // Type badge styling
+    let typeBadge = '<span class="badge b-legacy">transfer</span>';
+    if(kind === 'swap') typeBadge = '<span class="badge b-hot">swap</span>';
+    else if(kind === 'bridge') typeBadge = '<span class="badge" style="color:#f0f;background:#f0f30;border-color:#f0f">bridge</span>';
+    else if(kind === 'coinbase') typeBadge = '<span class="badge b-stratum">coinbase</span>';
+    else if(kind === 'ai_credits') typeBadge = '<span class="badge" style="color:#0af;background:#0af30;border-color:#0af">ai</span>';
+    else if(kind === 'token_transfer') typeBadge = '<span class="badge" style="color:#0f0;background:#0f03;border-color:#0f0">token</span>';
+    else if(kind === 'l2e') typeBadge = '<span class="badge" style="color:#ffd166;background:#ffd16622;border-color:#ffd166">l2e</span>';
+    else if(kind === 'iot' || kind === 'autopilot' || kind === 'parking') typeBadge = '<span class="badge" style="color:#0ff;background:#0ff1a;border-color:#0ff">iot</span>';
+    else if(kind === 'music') typeBadge = '<span class="badge" style="color:#ff9bf2;background:#ff9bf220;border-color:#ff9bf2">music</span>';
+    else if(CATEGORY_RULES.other.predicate(t)) typeBadge = '<span class="badge" style="color:#f7d6ff;background:#f7d6ff22;border-color:#f7d6ff">other</span>';
+
+    const details = renderTxDetailsCell(t);
+
     tr.innerHTML = `
       <td class="mono">
         <a class="hash" title="${t.tx_id}" onclick="copy('${t.tx_id}')">${short(t.tx_id)}</a>
       </td>
-      <td class="mono k">${t.height ?? '—'}</td>
-      <td class="mono"><a class="addr" onclick="copy('${t.from}')">${short(t.from)}</a></td>
-      <td class="mono"><a class="addr" onclick="copy('${t.to}')">${short(t.to)}</a></td>
-      <td>${fmtN(t.amount)}</td>
+      <td>${typeBadge}</td>
+      <td class="mono"><a class="addr" onclick="copy('${t.from||''}')">${short(t.from||'—')}</a></td>
+      <td class="mono"><a class="addr" onclick="copy('${t.to||''}')">${short(t.to||'—')}</a></td>
+      <td>${short(asset)}</td><td>${fmtN(t.amount)}</td>
       <td>${fmtN(t.fee_burned)}</td>
+      <td>${details}</td>
       <td class="muted">${rel(t.timestamp)}</td>
     `;
     tb.appendChild(tr);
@@ -391,6 +706,7 @@ function renderMempool(list){
   const tb = tbody('#tblMempool');
   tb.innerHTML='';
   list.forEach(t=>{
+    const asset = (t && t.token_symbol) ? String(t.token_symbol) : 'THR';
     const tr=document.createElement('tr');
     tr.innerHTML = `
       <td class="mono">
@@ -398,7 +714,7 @@ function renderMempool(list){
       </td>
       <td class="mono"><a class="addr" onclick="copy('${t.from||''}')">${short(t.from||'—')}</a></td>
       <td class="mono"><a class="addr" onclick="copy('${t.to||''}')">${short(t.to||'—')}</a></td>
-      <td>${fmtN(t.amount)}</td>
+      <td>${short(asset)}</td><td>${fmtN(t.amount)}</td>
       <td>${fmtN(t.fee_burned)}</td>
       <td>${t.status||'pending'}</td>
       <td class="muted">${rel(t.timestamp)}</td>
@@ -438,18 +754,66 @@ async function loadLive(){
     pushSpark(j.est_hashrate_hs||0);
   }catch(e){
     console.error('Live network stats update failed:', e);
+    el('#liveDiff').textContent = '—';
+    el('#liveABT').textContent = '—';
+    el('#liveHR').textContent = '—';
+    el('#liveMP').textContent = '0';
+    el('#liveMiners').textContent = '—';
+    el('#livePeers').textContent = '—';
   }
 }
 
 /* ===== Fetchers ===== */
 async function reloadBlocks(){
-  const r = await fetch('/api/blocks'); const j = await r.json();
-  CURRENT_BLOCKS = j;
+  try {
+    const r = await fetch('/api/blocks');
+    if (!r.ok) throw new Error(`blocks ${r.status}`);
+    const j = await r.json();
+    CURRENT_BLOCKS = Array.isArray(j) ? j : [];
+  } catch (e) {
+    console.error('Failed to reload blocks:', e);
+    if (!Array.isArray(CURRENT_BLOCKS)) CURRENT_BLOCKS = [];
+  }
   renderBlocks(CURRENT_BLOCKS);
+  loadChainTip();
+}
+
+async function loadChainTip(){
+  try {
+    const r = await fetch('/api/dashboard');
+    if (!r.ok) throw new Error(`dashboard ${r.status}`);
+    const j = await r.json();
+    const height = j.chain_tip_height ?? null;
+    if (height !== null && height !== undefined) {
+      el('#blocksTotalCount').textContent = Number(height).toLocaleString();
+    }
+  } catch (e) {
+    console.error('Failed to load chain tip:', e);
+    el('#blocksTotalCount').textContent = '—';
+  }
 }
 async function reloadMempool(){
-  const r = await fetch('/api/mempool'); const j = await r.json();
-  renderMempool(j);
+  try {
+    const r = await fetch('/api/mempool');
+    if (!r.ok) throw new Error(`mempool ${r.status}`);
+    const j = await r.json();
+    renderMempool(Array.isArray(j) ? j : []);
+  } catch (e) {
+    console.error('Failed to reload mempool:', e);
+  }
+}
+
+async function reloadTxs(){
+  try {
+    const r = await fetch('/api/tx_feed');
+    if (!r.ok) throw new Error(`transactions ${r.status}`);
+    const j = await r.json();
+    CURRENT_TXS = Array.isArray(j) ? j : [];
+  } catch (e) {
+    console.error('Failed to reload transactions:', e);
+    if (!Array.isArray(CURRENT_TXS)) CURRENT_TXS = [];
+  }
+  renderTxs(CURRENT_TXS);
 }
 
 /* ===== Wireup ===== */
@@ -458,14 +822,69 @@ let CURRENT_TXS    = BOOT_TXS || [];
 
 renderBlocks(CURRENT_BLOCKS);
 renderTxs(CURRENT_TXS);
+loadChainTip();
 
+// PR-5g: Search functionality
+let searchTimeout = null;
 el('#q').addEventListener('input', ()=>{
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(performSearch, 500); // Debounce 500ms
+});
+el('#q').addEventListener('keypress', (e)=>{
+  if(e.key === 'Enter') {
+    e.preventDefault();
+    performSearch();
+  }
+});
+
+async function performSearch() {
+  const query = el('#q').value.trim();
+  if(!query) {
+    renderBlocks(CURRENT_BLOCKS);
+    renderTxs(CURRENT_TXS);
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/viewer/search?q=${encodeURIComponent(query)}`);
+    const data = await res.json();
+
+    if(data.ok) {
+      // Show search results
+      if(data.blocks_found > 0 || data.txs_found > 0) {
+        renderBlocks(data.blocks);
+        renderTxs(data.transactions);
+
+        // Show result count
+        const tipBadge = el('#tipBadge');
+        tipBadge.textContent = `Found: ${data.blocks_found} blocks, ${data.txs_found} txs`;
+        tipBadge.style.display = 'block';
+      } else {
+        renderBlocks([]);
+        renderTxs([]);
+        const tipBadge = el('#tipBadge');
+        tipBadge.textContent = 'No results found';
+        tipBadge.style.display = 'block';
+      }
+    }
+  } catch(e) {
+    console.error('Search failed:', e);
+  }
+}
+
+el('#clearBtn').onclick=()=>{
+  el('#q').value='';
+  el('#tipBadge').style.display = 'none';
   renderBlocks(CURRENT_BLOCKS);
   renderTxs(CURRENT_TXS);
-});
-el('#clearBtn').onclick=()=>{ el('#q').value=''; renderBlocks(CURRENT_BLOCKS); renderTxs(CURRENT_TXS); };
+};
 el('#refreshBtn').onclick=reloadBlocks;
 el('#btnLoadMempool')?.addEventListener('click', reloadMempool);
+el('#btnRefreshTxs')?.addEventListener('click', reloadTxs);
+
+// PR-5g: Load More functionality - REMOVED (now handled by viewer.js)
+// Old load more functions removed to avoid conflicts with new viewer.js implementation
+// All blocks/transfers pagination is now managed by static/viewer.js
 
 // live refresh ticker
 setInterval(()=>{
@@ -487,33 +906,104 @@ if(!Array.isArray(CURRENT_TXS)) CURRENT_TXS=[];
 /* ===== New Tab Data Loaders ===== */
 async function loadTokens(){
   try{
-    const r = await fetch('/api/tokens/list');
-    const j = await r.json();
+    // Try to fetch comprehensive token stats first
+    let tokensData = [];
+    let totalHolders = 0;
+    let totalTransfers = 0;
+    let active24h = 0;
+
+    try {
+      const statsR = await fetch('/api/tokens/stats');
+      const statsJ = await statsR.json();
+      if(statsJ.ok && statsJ.tokens) {
+        tokensData = statsJ.tokens;
+        // Calculate aggregated stats
+        totalHolders = tokensData.reduce((sum, t) => sum + (t.holders_count || 0), 0);
+        totalTransfers = tokensData.reduce((sum, t) => sum + (t.transfers_count || 0), 0);
+        const day24ago = Date.now() - 24*3600*1000;
+        active24h = tokensData.filter(t => {
+          if(!t.last_transfer) return false;
+          try {
+            const ts = new Date(t.last_transfer.replace(' UTC','')+'Z').getTime();
+            return ts > day24ago;
+          } catch { return false; }
+        }).length;
+      }
+    } catch(e) {
+      console.log('Stats API not available, falling back to basic list');
+    }
+
+    // Fallback to basic token list if stats not available
+    if(tokensData.length === 0) {
+      const r = await fetch('/api/tokens/list');
+      const j = await r.json();
+      const tokens = j.tokens || {};
+      tokensData = Object.values(tokens).map(t => ({
+        symbol: t.symbol,
+        name: t.name,
+        total_supply: t.supply,
+        decimals: t.decimals,
+        creator: t.creator,
+        created_at: t.created_at,
+        holders_count: 0,
+        transfers_count: 0
+      }));
+    }
+
+    // Update stats cards
+    el('#tokensTotalCount').textContent = tokensData.length;
+    el('#tokensTotalHolders').textContent = totalHolders.toLocaleString();
+    el('#tokensTotalTransfers').textContent = totalTransfers.toLocaleString();
+    el('#tokensActive24h').textContent = active24h;
+
+    // Render tokens table
     const tb = document.getElementById('tokensBody');
     tb.innerHTML = '';
 
-    const tokens = j.tokens || {};
-    const tokensList = Object.values(tokens);
-
-    if(tokensList.length === 0) {
-      tb.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#9fdfb4">No custom tokens created yet</td></tr>';
+    if(tokensData.length === 0) {
+      tb.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#9fdfb4">No tokens found on chain</td></tr>';
       return;
     }
 
-    tokensList.forEach(t=>{
+    // Sort: THR first, then by holders count, then alphabetically
+    tokensData.sort((a, b) => {
+      if(a.symbol === 'THR') return -1;
+      if(b.symbol === 'THR') return 1;
+      const hDiff = (b.holders_count || 0) - (a.holders_count || 0);
+      if(hDiff !== 0) return hDiff;
+      return (a.symbol || '').localeCompare(b.symbol || '');
+    });
+
+    tokensData.forEach(t=>{
       const tr = document.createElement('tr');
+      const holdersCount = (t.holders_count !== undefined) ? t.holders_count : '—';
+      const transfersCount = (t.transfers_count !== undefined) ? t.transfers_count : '—';
+      const decimalsLabel = (t.decimals !== undefined && t.decimals !== null)
+        ? `${t.decimals}${t.decimals_is_default ? ' (default)' : ''}`
+        : '6 (default)';
+
+      // Prepare logo HTML
+      const color = t.color || '#00ff66';
+      const logoSrc = t.logo || (t.symbol === 'THR' ? '/static/img/thronos-token.png' : null);
+      const logoHtml = logoSrc
+        ? `<img src="${logoSrc}" alt="${t.symbol}" style="width:20px;height:20px;border-radius:50%;vertical-align:middle;margin-right:6px;" onerror="this.style.display='none';">`
+        : `<span style="display:inline-block;width:20px;height:20px;border-radius:50%;background:${color};color:#000;font-weight:bold;font-size:10px;text-align:center;line-height:20px;margin-right:6px;vertical-align:middle;">${(t.symbol || '?')[0]}</span>`;
+
       tr.innerHTML = `
-        <td class="mono k">${t.symbol}</td>
-        <td>${t.name}</td>
-        <td class="mono">${fmtN(t.supply||0)}</td>
-        <td>${t.decimals||6}</td>
+        <td class="mono k">${logoHtml}${t.symbol || '—'}</td>
+        <td>${t.name || '—'}</td>
+        <td class="mono">${fmtN(t.total_supply || t.supply || 0)}</td>
+        <td class="mono k">${typeof holdersCount === 'number' ? holdersCount.toLocaleString() : holdersCount}</td>
+        <td class="mono">${typeof transfersCount === 'number' ? transfersCount.toLocaleString() : transfersCount}</td>
+        <td>${decimalsLabel}</td>
         <td class="mono"><a class="addr" onclick="copy('${t.creator||'—'}')">${short(t.creator||'—')}</a></td>
         <td class="muted">${rel(t.created_at||'')}</td>
       `;
       tb.appendChild(tr);
     });
   }catch(e){
-    document.getElementById('tokensBody').innerHTML = '<tr><td colspan="6" style="text-align:center;color:#ff5577">Error loading tokens</td></tr>';
+    console.error('Token load error:', e);
+    document.getElementById('tokensBody').innerHTML = '<tr><td colspan="8" style="text-align:center;color:#ff5577">Error loading tokens</td></tr>';
   }
 }
 
@@ -567,9 +1057,12 @@ async function loadL2E(){
     let totalDistributed = 0;
 
     courses.forEach(c => {
-      totalEnroll += (c.enrollments||[]).length;
-      totalComplete += (c.completions||[]).length;
-      totalDistributed += (c.completions||[]).length * (c.reward||0);
+      const enrollments = Array.isArray(c.enrollments) ? c.enrollments.length : 0;
+      const completions = Array.isArray(c.completions) ? c.completions.length : 0;
+      const reward = Number(c.reward || c.reward_l2e || 0) || 0;
+      totalEnroll += enrollments;
+      totalComplete += completions;
+      totalDistributed += completions * reward;
     });
 
     el('#l2eTotalEnrollments').textContent = totalEnroll;
@@ -587,21 +1080,84 @@ async function loadL2E(){
 
     courses.forEach(c=>{
       const tr = document.createElement('tr');
+      const reward = Number(c.reward || c.reward_l2e || 0) || 0;
+      const price = Number(c.price_thr || c.price || 0) || 0;
+      const enrollments = Array.isArray(c.enrollments) ? c.enrollments.length : 0;
+      const completions = Array.isArray(c.completions) ? c.completions.length : 0;
       tr.innerHTML = `
         <td>${c.title||'Untitled'}</td>
         <td class="mono"><a class="addr" onclick="copy('${c.teacher||''}')">${short(c.teacher||'—')}</a></td>
-        <td>${fmtN(c.price||0)}</td>
-        <td class="k">${fmtN(c.reward||0)}</td>
-        <td>${(c.enrollments||[]).length}</td>
-        <td>${(c.completions||[]).length}</td>
+        <td>${fmtN(price)}</td>
+        <td class="k">${fmtN(reward)}</td>
+        <td>${enrollments}</td>
+        <td>${completions}</td>
       `;
       tb.appendChild(tr);
     });
   }catch(e){
     console.error('L2E load error:', e);
+    el('#l2eActiveCourses').textContent = '0';
+    el('#l2eTotalEnrollments').textContent = '0';
+    el('#l2eCompletions').textContent = '0';
+    el('#l2eTotalDistributed').textContent = '0 L2E';
     document.getElementById('l2eBody').innerHTML = '<tr><td colspan="6" style="text-align:center;color:#ff5577">Error loading courses</td></tr>';
   }
 }
+
+async function loadMusic(){
+  try{
+    const statusR = await fetch('/api/music/status');
+    if(statusR.ok){
+      const statusJ = await statusR.json();
+      el('#musicTotalArtists').textContent = statusJ.artists ?? 0;
+      el('#musicTotalTracks').textContent = statusJ.tracks ?? 0;
+      el('#musicRoyaltiesPaid').textContent = `${(statusJ.royalties_thr ?? 0).toLocaleString()} THR`;
+      const connected = !!statusJ.connected;
+      el('#musicStatus').textContent = connected ? 'Online' : 'Degraded';
+      el('#musicStatus').style.color = connected ? '#16ff57' : '#ffd166';
+      const note = statusJ.status_note || (connected ? 'registry connected' : 'partial data');
+      el('#musicStatusNote').textContent = note;
+    }
+
+    const tracksR = await fetch('/api/music/tracks?limit=12');
+    const body = el('#musicBody');
+    body.innerHTML = '';
+    if(!tracksR.ok){
+      body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#ff5577">Unable to load tracks</td></tr>';
+      return;
+    }
+    const tracksJ = await tracksR.json();
+    const tracks = Array.isArray(tracksJ.tracks) ? tracksJ.tracks : [];
+    if(tracks.length === 0){
+      body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#9fdfb4">No tracks published yet</td></tr>';
+      return;
+    }
+    tracks.forEach(t => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="mono k">${t.title || '—'}</td>
+        <td class="mono">${t.artist_name || t.artist_address || '—'}</td>
+        <td>${t.genre || '—'}</td>
+        <td class="mono">${(t.play_count||0).toLocaleString()}</td>`;
+      body.appendChild(tr);
+    });
+  }catch(e){
+    console.error('Music load failed', e);
+    el('#musicStatus').textContent = 'Offline';
+    el('#musicStatus').style.color = '#ff9800';
+    el('#musicStatusNote').textContent = 'music endpoints unavailable';
+    const body = el('#musicBody');
+    body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#ff5577">Music service unavailable</td></tr>';
+  }
+}
 </script>
+
+<!-- New Viewer.js Integration -->
+<script>
+// Set API base URL for new viewer.js
+window.TH_API_BASE_URL = "{{ api_base_url if api_base_url else '' }}";
+</script>
+<script src="{{ url_for('static', filename='viewer.js') }}"></script>
+
 </body>
 </html>

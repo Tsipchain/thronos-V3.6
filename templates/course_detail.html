@@ -1,0 +1,273 @@
+{% extends "base.html" %}
+{% block title %}Course{% endblock %}
+{% block content %}
+<div class="l2e-container" style="max-width: 900px; margin: 40px auto; color: #d7ffe6;">
+    <div id="courseHeader" class="panel" style="background:#07120b;border:1px solid #1a5a2f;border-radius:14px;padding:20px;">
+        <h1 id="courseTitle">Course</h1>
+        <p id="courseDesc"></p>
+        <div id="courseMedia" style="margin-top: 12px;"></div>
+        <div id="enrollNotice" style="margin-top: 12px; color: #ff9b5f;"></div>
+    </div>
+    <div class="panel" style="margin-top:20px;background:#050b07;border:1px solid #1a5a2f;border-radius:14px;padding:20px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+            <h3 style="margin:0;">📝 Quiz</h3>
+            <button id="startQuizBtn" class="btn-secondary" onclick="startQuiz()">Start Quiz</button>
+        </div>
+        <div id="quizMeta" style="margin:8px 0 14px;opacity:0.8;"></div>
+        <div id="quizArea">Connect your wallet and open the quiz.</div>
+        <button id="submitBtn" class="btn-primary" style="margin-top:15px; display:none;" onclick="submitQuiz()">Submit</button>
+    </div>
+    <div id="teacherDash" class="panel" style="margin-top:20px;display:none;background:#050b07;border:1px solid #1a5a2f;border-radius:14px;padding:20px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+            <h3 style="margin:0;">👩‍🏫 Teacher Dashboard</h3>
+            <button class="btn-secondary" id="refreshTeacher">Refresh</button>
+        </div>
+        <div id="teacherTable" style="margin-top:12px;overflow-x:auto;"></div>
+    </div>
+</div>
+<script>
+const courseId = "{{ course_id }}";
+let quizData = null;
+let courseData = null;
+let studentAddr = '';
+let isEnrolled = false;
+
+function setEnrollmentState() {
+    studentAddr = window.walletSession?.getAddress ? window.walletSession.getAddress() : '';
+    const secret = window.walletSession?.getSendSecret ? window.walletSession.getSendSecret() : '';
+    if (!studentAddr || !secret) {
+        document.getElementById('enrollNotice').textContent = 'Connect your wallet from the header to verify enrollment.';
+        isEnrolled = false;
+        toggleQuizAvailability();
+        return;
+    }
+
+    // QUEST: Tuition gating - check if student is enrolled AND has paid (if course has price)
+    const isInStudentsList = (courseData?.students || []).includes(studentAddr);
+    const coursePrice = parseFloat(courseData?.price_thr || 0);
+    const isTeacher = courseData?.teacher === studentAddr;
+    const isAdmin = false; // TODO: Add admin check if needed
+
+    // Teachers and admins bypass payment requirement
+    if (isTeacher || isAdmin) {
+        isEnrolled = true;
+        document.getElementById('enrollNotice').textContent = '';
+        renderMaterials(courseData);
+        toggleQuizAvailability();
+        return;
+    }
+
+    // For paid courses, verify enrollment payment
+    if (coursePrice > 0 && isInStudentsList) {
+        // Check if student has paid by verifying enrollment transaction
+        // If not in students list or price > 0 without payment, block access
+        isEnrolled = isInStudentsList; // Simple check - enrollment API already verifies payment
+    } else if (coursePrice === 0) {
+        // Free course - just check enrollment
+        isEnrolled = isInStudentsList;
+    } else {
+        // Not enrolled
+        isEnrolled = false;
+    }
+
+    if (!isEnrolled) {
+        const message = coursePrice > 0
+            ? `This course costs ${coursePrice} THR. Enroll to access content and quiz.`
+            : 'You must enroll in this course to view materials and take the quiz.';
+        document.getElementById('enrollNotice').textContent = message;
+    } else {
+        document.getElementById('enrollNotice').textContent = '';
+    }
+
+    renderMaterials(courseData);
+    toggleQuizAvailability();
+
+    // Teacher dashboard visibility
+    if (isTeacher) {
+        document.getElementById('teacherDash').style.display = 'block';
+        loadTeacherDashboard();
+    } else {
+        document.getElementById('teacherDash').style.display = 'none';
+    }
+}
+
+function renderMaterials(course){
+    const materials = course?.metadata?.materials || {};
+    const mediaBox = document.getElementById('courseMedia');
+    if(!isEnrolled){
+        mediaBox.innerHTML = '<div style="padding:10px;background:#0c1b11;border:1px solid #1a5a2f;border-radius:10px;">Enroll to access course materials.</div>';
+        return;
+    }
+    if(materials.type === 'pdf' && materials.slides_path){
+        const url = `/media/${materials.slides_path}`;
+        mediaBox.innerHTML = `<iframe src="${url}" style="width:100%;height:500px;border:1px solid #1a5a2f;border-radius:10px;"></iframe>`;
+        return;
+    }
+    if(materials.type === 'video' && materials.video_url){
+        const videoUrl = materials.video_url;
+        if(videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be')){
+            const embedUrl = videoUrl.replace('watch?v=', 'embed/').replace('youtu.be/', 'www.youtube.com/embed/');
+            mediaBox.innerHTML = `<div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;border-radius:10px;border:1px solid #1a5a2f;">
+                <iframe src="${embedUrl}" frameborder="0" allowfullscreen style="position:absolute;top:0;left:0;width:100%;height:100%;"></iframe>
+            </div>`;
+        } else {
+            mediaBox.innerHTML = `<video controls style="width:100%; max-height:400px;border-radius:10px;">
+                <source src="${videoUrl}" type="video/mp4">
+                Your browser does not support the video tag.
+            </video>`;
+        }
+        return;
+    }
+    if(materials.type === 'external' && materials.content_url){
+        mediaBox.innerHTML = `<a href="${materials.content_url}" target="_blank" class="btn-secondary">Open course material</a>`;
+        return;
+    }
+    mediaBox.innerHTML = '<div style="opacity:0.8;">No course materials configured yet.</div>';
+}
+
+function toggleQuizAvailability(){
+    const area = document.getElementById('quizArea');
+    const submitBtn = document.getElementById('submitBtn');
+    const startBtn = document.getElementById('startQuizBtn');
+    if(!isEnrolled){
+        area.textContent = 'Enroll in the course to unlock the quiz.';
+        submitBtn.style.display = 'none';
+        startBtn.disabled = true;
+        return;
+    }
+    startBtn.disabled = !quizData;
+    area.textContent = quizData ? 'Click "Start Quiz" to begin.' : 'No quiz available for this course yet.';
+}
+
+function renderCourse(course){
+    document.getElementById('courseTitle').textContent = course.title;
+    document.getElementById('courseDesc').textContent = course.description || '';
+    const cover = course.cover_path ? `/media/${course.cover_path}` : '/static/img/logo.png';
+    document.getElementById('courseHeader').insertAdjacentHTML('afterbegin', `<img src="${cover}" style="width:100%;max-height:240px;object-fit:cover;border-radius:10px;" onerror="this.src='/static/img/logo.png'">`);
+    renderMaterials(course);
+    if (studentAddr && course.teacher === studentAddr) {
+        document.getElementById('teacherDash').style.display = 'block';
+        loadTeacherDashboard();
+    }
+}
+
+async function loadCourse(){
+    const res = await fetch(`/api/v1/courses/${courseId}`);
+    const data = await res.json();
+    courseData = data.course;
+    if(!courseData){
+        document.getElementById('courseHeader').innerHTML = '<p>Course not found.</p>';
+        return;
+    }
+    renderCourse(courseData);
+    setEnrollmentState();
+}
+
+async function loadQuiz(){
+    const res = await fetch(`/api/v1/courses/${courseId}/quiz`);
+    const data = await res.json();
+    quizData = data.quiz;
+    const metaBox = document.getElementById('quizMeta');
+    if(!quizData){
+        metaBox.textContent = 'No quiz configured yet.';
+    } else {
+        metaBox.textContent = `Passing score: ${quizData.passing_score || quizData.pass_score || 80}%`;
+    }
+    toggleQuizAvailability();
+}
+
+async function loadTeacherDashboard(){
+    const table = document.getElementById('teacherTable');
+    if (!courseData || !studentAddr || courseData.teacher !== studentAddr) {
+        table.innerHTML = '<div style="opacity:0.7;">Teacher view only.</div>';
+        return;
+    }
+    table.innerHTML = '<div style="opacity:0.7;">Loading...</div>';
+    try {
+        const res = await fetch(`/api/v1/courses/${courseId}/teacher_dashboard?teacher=${studentAddr}`);
+        const data = await res.json();
+        if (data.status !== 'success') throw new Error(data.message || 'Failed');
+        if (!data.students || data.students.length === 0) {
+            table.innerHTML = '<div style="opacity:0.7;">No students yet.</div>';
+            return;
+        }
+        const rows = data.students.map(s => `
+            <tr>
+                <td>${s.student}</td>
+                <td>${s.tuition_paid ? '✅' : '⏳'}</td>
+                <td>${s.best_score || 0}%</td>
+                <td>${s.passed ? '✅' : '—'}</td>
+                <td>${s.reward_paid ? '✅' : '—'}</td>
+                <td>${s.reward_txid || '-'}</td>
+            </tr>`).join('');
+        table.innerHTML = `
+            <table style="width:100%;border-collapse:collapse;">
+                <thead>
+                    <tr>
+                        <th style="text-align:left;border-bottom:1px solid #1a5a2f;padding:6px;">Student</th>
+                        <th style="text-align:left;border-bottom:1px solid #1a5a2f;padding:6px;">Tuition</th>
+                        <th style="text-align:left;border-bottom:1px solid #1a5a2f;padding:6px;">Best Score</th>
+                        <th style="text-align:left;border-bottom:1px solid #1a5a2f;padding:6px;">Passed</th>
+                        <th style="text-align:left;border-bottom:1px solid #1a5a2f;padding:6px;">Reward Paid</th>
+                        <th style="text-align:left;border-bottom:1px solid #1a5a2f;padding:6px;">Reward TX</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+    } catch (e) {
+        table.innerHTML = `<div style="color:#ff6b6b;">${e.message}</div>`;
+    }
+}
+
+function startQuiz(){
+    setEnrollmentState();
+    if(!isEnrolled){
+        alert('You need to enroll first.');
+        return;
+    }
+    if(!quizData || !quizData.questions || quizData.questions.length === 0){
+        alert('No quiz available for this course.');
+        return;
+    }
+    const html = quizData.questions.map((q, idx)=>`<div style="margin-bottom:12px;padding:10px;border:1px solid #1a5a2f;border-radius:10px;">
+        <div style="font-weight:700;">#${idx+1} ${q.question}</div>
+        ${q.options.map((opt,i)=>`<label style="display:block;margin-left:10px;"><input type='radio' name='q${q.id}' value='${i}'> ${opt}</label>`).join('')}
+    </div>`).join('');
+    document.getElementById('quizArea').innerHTML = html;
+    document.getElementById('submitBtn').style.display='inline-block';
+}
+
+function submitQuiz(){
+    setEnrollmentState();
+    if(!studentAddr || !isEnrolled){
+        alert('Connect your wallet and enroll first.');
+        return;
+    }
+    const answers = {};
+    (quizData?.questions||[]).forEach(q=>{
+        const val = document.querySelector(`input[name='q${q.id}']:checked`);
+        if(val) answers[q.id] = parseInt(val.value, 10);
+    });
+    fetch('/api/l2e/submit_quiz', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({course_id: courseId, student_thr: studentAddr, answers})
+    }).then(r=>r.json()).then(res=>{
+        if(res.status === 'success'){
+            document.getElementById('quizArea').innerHTML = `<div style="padding:12px;border-radius:10px;background:${res.passed?'#0f3a1e':'#3a0f1e'};border:1px solid #1a5a2f;">Score: ${res.score}% (${res.passed?'passed':'failed'})</div>`;
+            document.getElementById('submitBtn').style.display='none';
+        }
+        alert(res.message || res.status || 'Submitted');
+    }).catch(e=>alert(e.message));
+}
+
+const refreshTeacherBtn = document.getElementById('refreshTeacher');
+if (refreshTeacherBtn) {
+    refreshTeacherBtn.onclick = loadTeacherDashboard;
+}
+
+loadCourse();
+loadQuiz();
+setEnrollmentState();
+</script>
+{% endblock %}

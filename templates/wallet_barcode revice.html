@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}👛 Thronos Wallet{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width:600px; margin:40px auto; text-align:center;">
+  <h2>📥 
+    <span class="lang-el">Λήψη THR</span>
+    <span class="lang-en">Receive THR</span>
+    <span class="lang-ja">THR 受け取り</span>
+    <span class="lang-es">Recibir THR</span>
+    <span class="lang-ru">Получить THR</span>
+  </h2>
+
+  {% if thr_address %}
+    <p>
+      <span class="lang-el">Η διεύθυνση πορτοφολιού σου:</span>
+      <span class="lang-en">Your Wallet Address:</span>
+      <span class="lang-ja">あなたのウォレットアドレス:</span>
+      <span class="lang-es">Tu dirección de cartera:</span>
+      <span class="lang-ru">Ваш адрес кошелька:</span>
+    </p>
+    <div style="font-weight:bold; margin-bottom: 15px;">
+      <code id="walletAddress">{{ thr_address }}</code>
+      <button onclick="copyAddress()" style="margin-left: 8px;">
+        📋 
+        <span class="lang-el">Αντιγραφή</span>
+        <span class="lang-en">Copy</span>
+        <span class="lang-ja">コピー</span>
+        <span class="lang-es">Copiar</span>
+        <span class="lang-ru">Копировать</span>
+      </button>
+    </div>
+    <div style="margin-bottom: 20px;">
+      <img src="{{ url_for('wallet_qr_code', thr_addr=thr_address) }}" alt="QR Code" style="max-width:200px; border:1px solid #0f0; border-radius:8px;">
+      <p style="font-size: 0.9em; color: #888;">
+        <span class="lang-el">Σκάναρε το QR για να λάβεις THR.</span>
+        <span class="lang-en">Scan this QR to receive THR.</span>
+        <span class="lang-ja">このQRをスキャンしてTHRを受け取る。</span>
+        <span class="lang-es">Escanea este QR para recibir THR.</span>
+        <span class="lang-ru">Сканируйте QR, чтобы получить THR.</span>
+      </p>
+    </div>
+    <div style="margin-bottom: 30px;">
+      <audio id="addrAudio" src="{{ url_for('wallet_audio', thr_addr=thr_address) }}"></audio>
+      <button onclick="document.getElementById('addrAudio').play()">
+        🔊 <span class="lang-el">Αναπαραγωγή Ήχου</span>
+        <span class="lang-en">Play Audio</span>
+        <span class="lang-ja">再生</span>
+        <span class="lang-es">Reproducir</span>
+        <span class="lang-ru">Воспроизвести</span>
+      </button>
+      <a href="{{ url_for('wallet_audio', thr_addr=thr_address) }}" download="ThronosAddress.wav" style="margin-left: 10px;">
+        ⬇️ <span class="lang-el">Λήψη Ήχου</span>
+        <span class="lang-en">Download WAV</span>
+        <span class="lang-ja">ダウンロード</span>
+        <span class="lang-es">Descargar</span>
+        <span class="lang-ru">Скачать</span>
+      </a>
+    </div>
+  {% else %}
+    <p style="color: #ffaa00;">
+      <span class="lang-el">Δεν βρέθηκε διεύθυνση πορτοφολιού.</span>
+      <span class="lang-en">No wallet address found.</span>
+      <span class="lang-ja">ウォレットアドレスが見つかりません。</span>
+      <span class="lang-es">No se encontró dirección de cartera.</span>
+      <span class="lang-ru">Адрес кошелька не найден.</span>
+    </p>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function copyAddress() {
+    var addrText = document.getElementById('walletAddress').innerText;
+    navigator.clipboard.writeText(addrText).then(() => {
+      alert("✅ " + addrText);
+    });
+  }
+</script>
+{% endblock %}

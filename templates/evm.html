@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Thronos EVM - Smart Contracts{% endblock %}
+{% block title %}🔧 Thronos EVM - Smart Contracts{% endblock %}
 
 {% block styles %}
 <style>
@@ -9,86 +9,151 @@
         margin: 0 auto;
         padding: 20px;
     }
+    .evm-header {
+        text-align: center;
+        margin-bottom: 30px;
+        padding: 30px;
+        background: linear-gradient(135deg, #0a1f14 0%, #071510 100%);
+        border: 1px solid #1a5a2f;
+        border-radius: 16px;
+    }
+    .evm-header h1 {
+        color: #3CFF7A;
+        margin: 0 0 10px 0;
+        font-size: 2.5em;
+        text-shadow: 0 0 20px rgba(60, 255, 122, 0.3);
+    }
+    .evm-header p {
+        opacity: 0.9;
+        color: #d7ffe6;
+    }
     .evm-section {
-        background: #111;
-        border: 1px solid #0f0;
+        background: #07120b;
+        border: 1px solid #1a5a2f;
+        border-radius: 14px;
         padding: 20px;
         margin-bottom: 20px;
     }
     .evm-section h2 {
-        color: #0f0;
+        color: #3CFF7A;
         margin-top: 0;
+        border-bottom: 1px solid #1a5a2f;
+        padding-bottom: 10px;
     }
     .form-group {
         margin-bottom: 15px;
     }
     .form-group label {
         display: block;
-        color: #0f0;
+        color: #3CFF7A;
         margin-bottom: 5px;
+        font-weight: bold;
     }
     .form-group input,
-    .form-group textarea {
+    .form-group textarea,
+    .form-group select {
         width: 100%;
-        background: #000;
-        color: #0f0;
-        border: 1px solid #0f0;
-        padding: 8px;
+        background: #050b07;
+        color: #d7ffe6;
+        border: 1px solid #1a5a2f;
+        border-radius: 8px;
+        padding: 12px;
         font-family: "Courier New", monospace;
     }
+    .form-group input:focus,
+    .form-group textarea:focus,
+    .form-group select:focus {
+        outline: none;
+        border-color: #3CFF7A;
+        box-shadow: 0 0 0 2px rgba(60, 255, 122, 0.1);
+    }
     .form-group textarea {
-        min-height: 100px;
+        min-height: 120px;
         font-size: 12px;
     }
     .btn-evm {
-        background: #0f0;
-        color: #000;
-        border: none;
-        padding: 10px 20px;
+        background: #06140b;
+        color: #3CFF7A;
+        border: 1px solid #3CFF7A;
+        padding: 12px 24px;
         cursor: pointer;
         font-weight: bold;
+        border-radius: 8px;
         margin-right: 10px;
+        transition: all 0.3s;
     }
     .btn-evm:hover {
-        background: #0c0;
+        background: #3CFF7A;
+        color: #000;
+        box-shadow: 0 0 15px rgba(60, 255, 122, 0.4);
+    }
+    .btn-secondary {
+        background: #050b07;
+        color: #d7ffe6;
+        border: 1px solid #1a5a2f;
+    }
+    .btn-secondary:hover {
+        border-color: #3CFF7A;
+        background: rgba(60, 255, 122, 0.1);
+        color: #3CFF7A;
     }
     .result-box {
-        background: #000;
-        border: 1px dashed #0f0;
+        background: #050b07;
+        border: 1px solid #1a5a2f;
+        border-radius: 8px;
         padding: 15px;
         margin-top: 15px;
         font-family: "Courier New", monospace;
         font-size: 12px;
         white-space: pre-wrap;
         word-break: break-all;
+        color: #d7ffe6;
+        max-height: 300px;
+        overflow-y: auto;
     }
     .contract-list {
         list-style: none;
         padding: 0;
     }
     .contract-item {
-        background: #000;
-        border: 1px solid #0f0;
-        padding: 10px;
+        background: #050b07;
+        border: 1px solid #1a5a2f;
+        border-radius: 8px;
+        padding: 15px;
         margin-bottom: 10px;
+        transition: all 0.3s;
     }
     .contract-item:hover {
-        background: #111;
+        border-color: #3CFF7A;
+        transform: translateY(-2px);
+    }
+    .contract-item .address {
+        color: #3CFF7A;
+        font-family: monospace;
+        font-size: 0.9em;
     }
     .tab-buttons {
+        display: flex;
+        gap: 10px;
         margin-bottom: 20px;
+        flex-wrap: wrap;
     }
     .tab-btn {
-        background: #222;
-        color: #0f0;
-        border: 1px solid #0f0;
-        padding: 10px 20px;
+        background: #050b07;
+        color: #d7ffe6;
+        border: 1px solid #1a5a2f;
+        padding: 12px 20px;
         cursor: pointer;
-        margin-right: 5px;
+        border-radius: 8px;
+        transition: all 0.3s;
+    }
+    .tab-btn:hover {
+        border-color: #3CFF7A;
     }
     .tab-btn.active {
-        background: #0f0;
+        background: #3CFF7A;
         color: #000;
+        border-color: #3CFF7A;
     }
     .tab-content {
         display: none;
@@ -96,78 +161,229 @@
     .tab-content.active {
         display: block;
     }
+    /* Template Cards */
+    .template-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 20px;
+    }
+    .template-card {
+        background: #050b07;
+        border: 1px solid #1a5a2f;
+        border-radius: 12px;
+        padding: 20px;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+    .template-card:hover {
+        border-color: #3CFF7A;
+        transform: translateY(-3px);
+        box-shadow: 0 5px 20px rgba(60, 255, 122, 0.2);
+    }
+    .template-card.selected {
+        border-color: #3CFF7A;
+        background: rgba(60, 255, 122, 0.1);
+    }
+    .template-card h3 {
+        color: #3CFF7A;
+        margin: 0 0 10px 0;
+        font-size: 1.2em;
+    }
+    .template-card p {
+        color: #d7ffe6;
+        opacity: 0.8;
+        font-size: 0.9em;
+        margin: 0;
+    }
+    .template-card .badge {
+        display: inline-block;
+        background: rgba(60, 255, 122, 0.2);
+        color: #3CFF7A;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 0.75em;
+        margin-top: 10px;
+    }
+    .code-preview {
+        background: #000;
+        border: 1px solid #1a5a2f;
+        border-radius: 8px;
+        padding: 15px;
+        font-family: monospace;
+        font-size: 11px;
+        color: #3CFF7A;
+        max-height: 400px;
+        overflow-y: auto;
+        white-space: pre;
+        margin-top: 15px;
+    }
+    .input-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 15px;
+    }
+    @media (max-width: 768px) {
+        .input-row { grid-template-columns: 1fr; }
+    }
+    .quick-links {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 20px;
+    }
+    .quick-link {
+        background: #050b07;
+        border: 1px solid #1a5a2f;
+        color: #d7ffe6;
+        padding: 8px 15px;
+        border-radius: 6px;
+        text-decoration: none;
+        font-size: 0.9em;
+        transition: all 0.3s;
+    }
+    .quick-link:hover {
+        border-color: #3CFF7A;
+        color: #3CFF7A;
+    }
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="evm-container">
-    <h1>🔧 <span class="lang-el">Thronos EVM - Έξυπνα Συμβόλαια</span><span class="lang-en">Thronos EVM - Smart Contracts</span></h1>
-    
-    <p>
-        <span class="lang-el">Αναπτύξτε και εκτελέστε έξυπνα συμβόλαια στο δίκτυο Thronos.</span>
-        <span class="lang-en">Deploy and execute smart contracts on the Thronos network.</span>
-    </p>
+    <!-- Header -->
+    <div class="evm-header">
+        <h1>🔧 Thronos EVM</h1>
+        <p>
+            <span class="lang-el">Αναπτύξτε και εκτελέστε έξυπνα συμβόλαια στο δίκτυο Thronos</span>
+            <span class="lang-en">Deploy and execute smart contracts on the Thronos network</span>
+        </p>
+        <div class="quick-links">
+            <a href="/tokens" class="quick-link">🪙 <span class="lang-el">Tokens</span><span class="lang-en">Tokens</span></a>
+            <a href="/pools" class="quick-link">💧 <span class="lang-el">Liquidity Pools</span><span class="lang-en">Liquidity Pools</span></a>
+            <a href="/playground" class="quick-link">🎮 <span class="lang-el">DApp Playground</span><span class="lang-en">DApp Playground</span></a>
+            <a href="/courses" class="quick-link">🎓 <span class="lang-el">Learn to Earn</span><span class="lang-en">Learn to Earn</span></a>
+        </div>
+    </div>
 
+    <!-- Tabs -->
     <div class="tab-buttons">
-        <button class="tab-btn active" onclick="showTab('deploy')">
-            <span class="lang-el">Ανάπτυξη</span><span class="lang-en">Deploy</span>
+        <button class="tab-btn active" onclick="showTab('templates')">
+            📋 <span class="lang-el">Πρότυπα</span><span class="lang-en">Templates</span>
+        </button>
+        <button class="tab-btn" onclick="showTab('deploy')">
+            🚀 <span class="lang-el">Ανάπτυξη</span><span class="lang-en">Deploy</span>
         </button>
         <button class="tab-btn" onclick="showTab('call')">
-            <span class="lang-el">Κλήση</span><span class="lang-en">Call</span>
+            📞 <span class="lang-el">Κλήση</span><span class="lang-en">Call</span>
         </button>
         <button class="tab-btn" onclick="showTab('contracts')">
-            <span class="lang-el">Συμβόλαια</span><span class="lang-en">Contracts</span>
+            📜 <span class="lang-el">Συμβόλαια</span><span class="lang-en">Contracts</span>
         </button>
-        <button class="tab-btn" onclick="window.location.href='/tokens'">
-            🪙 <span class="lang-el">Πειραματικά Tokens</span><span class="lang-en">Experimental Tokens</span>
-        </button>
-        <button class="tab-btn" onclick="window.location.href='/pools'">
-            💧 <span class="lang-el">Liquidity Pools</span><span class="lang-en">Liquidity Pools</span>
-        </button>
-        <button class="tab-btn" onclick="window.location.href='/playground'">
-            🎮 <span class="lang-el">DApp Playground</span><span class="lang-en">DApp Playground</span>
+        <button class="tab-btn" onclick="showTab('abi')">
+            🔧 <span class="lang-el">ABI Εργαλεία</span><span class="lang-en">ABI Tools</span>
         </button>
     </div>
 
-    <!-- Deploy Tab -->
-    <div id="deploy-tab" class="tab-content active">
+    <!-- Templates Tab -->
+    <div id="templates-tab" class="tab-content active">
         <div class="evm-section">
-            <h2><span class="lang-el">Ανάπτυξη Νέου Συμβολαίου</span><span class="lang-en">Deploy New Contract</span></h2>
-            
-            <div class="form-group">
-                <label><span class="lang-el">THR Διεύθυνση</span><span class="lang-en">THR Address</span>:</label>
-                <input type="text" id="deploy-address" placeholder="THR...">
+            <h2>📋 <span class="lang-el">Βιβλιοθήκη Προτύπων Συμβολαίων</span><span class="lang-en">Contract Template Library</span></h2>
+            <p style="margin-bottom: 20px; opacity: 0.8;">
+                <span class="lang-el">Επιλέξτε ένα πρότυπο για να ξεκινήσετε γρήγορα. Κάντε κλικ για να δείτε τον κώδικα.</span>
+                <span class="lang-en">Select a template to get started quickly. Click to view the code.</span>
+            </p>
+
+            <div class="template-grid">
+                <div class="template-card" onclick="selectTemplate('simple-token')">
+                    <h3>🪙 Simple Token</h3>
+                    <p><span class="lang-el">Βασικό ERC-20 token με mint/burn</span><span class="lang-en">Basic ERC-20 token with mint/burn</span></p>
+                    <span class="badge">ERC-20</span>
+                </div>
+
+                <div class="template-card" onclick="selectTemplate('nft')">
+                    <h3>🎨 NFT Collection</h3>
+                    <p><span class="lang-el">NFT συλλογή με metadata</span><span class="lang-en">NFT collection with metadata</span></p>
+                    <span class="badge">ERC-721</span>
+                </div>
+
+                <div class="template-card" onclick="selectTemplate('multisig')">
+                    <h3>🔐 Multi-Signature Wallet</h3>
+                    <p><span class="lang-el">Πορτοφόλι με πολλαπλές υπογραφές</span><span class="lang-en">Multi-signature wallet contract</span></p>
+                    <span class="badge">Security</span>
+                </div>
+
+                <div class="template-card" onclick="selectTemplate('staking')">
+                    <h3>💰 Staking Contract</h3>
+                    <p><span class="lang-el">Συμβόλαιο staking με ανταμοιβές</span><span class="lang-en">Staking contract with rewards</span></p>
+                    <span class="badge">DeFi</span>
+                </div>
+
+                <div class="template-card" onclick="selectTemplate('escrow')">
+                    <h3>🤝 Escrow</h3>
+                    <p><span class="lang-el">Ασφαλής μεσεγγύηση συναλλαγών</span><span class="lang-en">Secure transaction escrow</span></p>
+                    <span class="badge">Payments</span>
+                </div>
+
+                <div class="template-card" onclick="selectTemplate('voting')">
+                    <h3>🗳️ Voting System</h3>
+                    <p><span class="lang-el">Σύστημα ψηφοφορίας DAO</span><span class="lang-en">DAO voting system</span></p>
+                    <span class="badge">Governance</span>
+                </div>
             </div>
-            
-            <div class="form-group">
-                <label><span class="lang-el">Auth Secret</span><span class="lang-en">Auth Secret</span>:</label>
-                <input type="password" id="deploy-secret" placeholder="Your auth secret">
+
+            <div id="template-preview" style="display: none; margin-top: 20px;">
+                <h3 style="color: #3CFF7A; margin-bottom: 10px;">
+                    <span id="template-name"></span>
+                    <button class="btn-evm btn-secondary" style="float: right; padding: 8px 15px;" onclick="useTemplate()">
+                        <span class="lang-el">Χρήση Προτύπου</span><span class="lang-en">Use Template</span>
+                    </button>
+                </h3>
+                <div class="code-preview" id="template-code"></div>
             </div>
-            
-            <div class="form-group">
-                <label><span class="lang-el">Passphrase (προαιρετικό)</span><span class="lang-en">Passphrase (optional)</span>:</label>
-                <input type="password" id="deploy-passphrase" placeholder="Optional passphrase">
+        </div>
+    </div>
+
+    <!-- Deploy Tab -->
+    <div id="deploy-tab" class="tab-content">
+        <div class="evm-section">
+            <h2>🚀 <span class="lang-el">Ανάπτυξη Νέου Συμβολαίου</span><span class="lang-en">Deploy New Contract</span></h2>
+
+            <div class="input-row">
+                <div class="form-group">
+                    <label><span class="lang-el">THR Διεύθυνση</span><span class="lang-en">THR Address</span>:</label>
+                    <input type="text" id="deploy-address" placeholder="THR...">
+                </div>
+                <div class="form-group">
+                    <label>Auth Secret:</label>
+                    <input type="password" id="deploy-secret" placeholder="Your auth secret">
+                </div>
             </div>
-            
+
+            <div class="input-row">
+                <div class="form-group">
+                    <label><span class="lang-el">Passphrase (προαιρετικό)</span><span class="lang-en">Passphrase (optional)</span>:</label>
+                    <input type="password" id="deploy-passphrase" placeholder="Optional passphrase">
+                </div>
+                <div class="form-group">
+                    <label>Gas Limit:</label>
+                    <input type="number" id="deploy-gas" value="1000000">
+                </div>
+            </div>
+
             <div class="form-group">
                 <label><span class="lang-el">Bytecode (hex)</span><span class="lang-en">Bytecode (hex)</span>:</label>
-                <textarea id="deploy-bytecode" placeholder="0x6080604052..."></textarea>
+                <textarea id="deploy-bytecode" placeholder="0x6080604052..." rows="6"></textarea>
             </div>
-            
+
             <div class="form-group">
                 <label><span class="lang-el">Αξία (THR)</span><span class="lang-en">Value (THR)</span>:</label>
                 <input type="number" id="deploy-value" value="0" step="0.000001">
             </div>
-            
-            <div class="form-group">
-                <label><span class="lang-el">Gas Limit</span><span class="lang-en">Gas Limit</span>:</label>
-                <input type="number" id="deploy-gas" value="1000000">
-            </div>
-            
+
             <button class="btn-evm" onclick="deployContract()">
-                <span class="lang-el">🚀 Ανάπτυξη</span><span class="lang-en">🚀 Deploy</span>
+                🚀 <span class="lang-el">Ανάπτυξη</span><span class="lang-en">Deploy</span>
             </button>
-            
+
             <div id="deploy-result" class="result-box" style="display:none;"></div>
         </div>
     </div>
@@ -175,42 +391,44 @@
     <!-- Call Tab -->
     <div id="call-tab" class="tab-content">
         <div class="evm-section">
-            <h2><span class="lang-el">Κλήση Συμβολαίου</span><span class="lang-en">Call Contract</span></h2>
-            
-            <div class="form-group">
-                <label><span class="lang-el">THR Διεύθυνση</span><span class="lang-en">THR Address</span>:</label>
-                <input type="text" id="call-address" placeholder="THR...">
+            <h2>📞 <span class="lang-el">Κλήση Συμβολαίου</span><span class="lang-en">Call Contract</span></h2>
+
+            <div class="input-row">
+                <div class="form-group">
+                    <label><span class="lang-el">THR Διεύθυνση</span><span class="lang-en">THR Address</span>:</label>
+                    <input type="text" id="call-address" placeholder="THR...">
+                </div>
+                <div class="form-group">
+                    <label>Auth Secret:</label>
+                    <input type="password" id="call-secret" placeholder="Your auth secret">
+                </div>
             </div>
-            
-            <div class="form-group">
-                <label><span class="lang-el">Auth Secret</span><span class="lang-en">Auth Secret</span>:</label>
-                <input type="password" id="call-secret" placeholder="Your auth secret">
+
+            <div class="input-row">
+                <div class="form-group">
+                    <label><span class="lang-el">Passphrase (προαιρετικό)</span><span class="lang-en">Passphrase (optional)</span>:</label>
+                    <input type="password" id="call-passphrase" placeholder="Optional passphrase">
+                </div>
+                <div class="form-group">
+                    <label><span class="lang-el">Διεύθυνση Συμβολαίου</span><span class="lang-en">Contract Address</span>:</label>
+                    <input type="text" id="call-contract" placeholder="CONTRACT_...">
+                </div>
             </div>
-            
-            <div class="form-group">
-                <label><span class="lang-el">Passphrase (προαιρετικό)</span><span class="lang-en">Passphrase (optional)</span>:</label>
-                <input type="password" id="call-passphrase" placeholder="Optional passphrase">
-            </div>
-            
-            <div class="form-group">
-                <label><span class="lang-el">Διεύθυνση Συμβολαίου</span><span class="lang-en">Contract Address</span>:</label>
-                <input type="text" id="call-contract" placeholder="CONTRACT_...">
-            </div>
-            
+
             <div class="form-group">
                 <label><span class="lang-el">Call Data (hex)</span><span class="lang-en">Call Data (hex)</span>:</label>
-                <textarea id="call-data" placeholder="0x..."></textarea>
+                <textarea id="call-data" placeholder="0x..." rows="4"></textarea>
             </div>
-            
+
             <div class="form-group">
                 <label><span class="lang-el">Αξία (THR)</span><span class="lang-en">Value (THR)</span>:</label>
                 <input type="number" id="call-value" value="0" step="0.000001">
             </div>
-            
+
             <button class="btn-evm" onclick="callContract()">
-                <span class="lang-el">📞 Κλήση</span><span class="lang-en">📞 Call</span>
+                📞 <span class="lang-el">Κλήση</span><span class="lang-en">Call</span>
             </button>
-            
+
             <div id="call-result" class="result-box" style="display:none;"></div>
         </div>
     </div>
@@ -218,114 +436,573 @@
     <!-- Contracts Tab -->
     <div id="contracts-tab" class="tab-content">
         <div class="evm-section">
-            <h2><span class="lang-el">Πρόσφατα Συμβόλαια</span><span class="lang-en">Recent Contracts</span></h2>
+            <h2>📜 <span class="lang-el">Πρόσφατα Συμβόλαια</span><span class="lang-en">Recent Contracts</span></h2>
+            <button class="btn-evm btn-secondary" onclick="loadContracts()" style="margin-bottom: 15px;">
+                🔄 <span class="lang-el">Ανανέωση</span><span class="lang-en">Refresh</span>
+            </button>
             <ul id="contract-list" class="contract-list"></ul>
+        </div>
+    </div>
+
+    <!-- ABI Tools Tab -->
+    <div id="abi-tab" class="tab-content">
+        <div class="evm-section">
+            <h2>🔧 <span class="lang-el">ABI Εργαλεία</span><span class="lang-en">ABI Tools</span></h2>
+
+            <div class="form-group">
+                <label><span class="lang-el">Υπογραφή Συνάρτησης</span><span class="lang-en">Function Signature</span>:</label>
+                <input type="text" id="abi-signature" placeholder="transfer(address,uint256)">
+            </div>
+
+            <button class="btn-evm" onclick="encodeSignature()">
+                <span class="lang-el">Κωδικοποίηση</span><span class="lang-en">Encode</span>
+            </button>
+
+            <div id="abi-result" class="result-box" style="display:none;"></div>
+
+            <h3 style="color: #3CFF7A; margin-top: 30px;">
+                <span class="lang-el">Κοινές Συναρτήσεις</span><span class="lang-en">Common Functions</span>
+            </h3>
+            <div class="template-grid" style="margin-top: 15px;">
+                <div class="template-card" onclick="setSignature('transfer(address,uint256)')">
+                    <h3>transfer</h3>
+                    <p>transfer(address,uint256)</p>
+                    <span class="badge">0xa9059cbb</span>
+                </div>
+                <div class="template-card" onclick="setSignature('approve(address,uint256)')">
+                    <h3>approve</h3>
+                    <p>approve(address,uint256)</p>
+                    <span class="badge">0x095ea7b3</span>
+                </div>
+                <div class="template-card" onclick="setSignature('balanceOf(address)')">
+                    <h3>balanceOf</h3>
+                    <p>balanceOf(address)</p>
+                    <span class="badge">0x70a08231</span>
+                </div>
+                <div class="template-card" onclick="setSignature('totalSupply()')">
+                    <h3>totalSupply</h3>
+                    <p>totalSupply()</p>
+                    <span class="badge">0x18160ddd</span>
+                </div>
+            </div>
         </div>
     </div>
 </div>
 
 <script>
-// Simple tab switcher
+// Contract Templates
+const TEMPLATES = {
+    'simple-token': {
+        name: 'Simple Token (ERC-20)',
+        code: `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract SimpleToken {
+    string public name = "Thronos Token";
+    string public symbol = "THR20";
+    uint8 public decimals = 18;
+    uint256 public totalSupply;
+
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+
+    constructor(uint256 _initialSupply) {
+        totalSupply = _initialSupply * 10 ** decimals;
+        balanceOf[msg.sender] = totalSupply;
+    }
+
+    function transfer(address to, uint256 value) public returns (bool) {
+        require(balanceOf[msg.sender] >= value, "Insufficient balance");
+        balanceOf[msg.sender] -= value;
+        balanceOf[to] += value;
+        emit Transfer(msg.sender, to, value);
+        return true;
+    }
+
+    function approve(address spender, uint256 value) public returns (bool) {
+        allowance[msg.sender][spender] = value;
+        emit Approval(msg.sender, spender, value);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 value) public returns (bool) {
+        require(balanceOf[from] >= value, "Insufficient balance");
+        require(allowance[from][msg.sender] >= value, "Insufficient allowance");
+        balanceOf[from] -= value;
+        balanceOf[to] += value;
+        allowance[from][msg.sender] -= value;
+        emit Transfer(from, to, value);
+        return true;
+    }
+}`,
+        bytecode: '608060405234801561001057600080fd5b50...'
+    },
+    'nft': {
+        name: 'NFT Collection (ERC-721)',
+        code: `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract SimpleNFT {
+    string public name = "Thronos NFT";
+    string public symbol = "THRNFT";
+
+    uint256 private _tokenIdCounter;
+    mapping(uint256 => address) private _owners;
+    mapping(address => uint256) private _balances;
+    mapping(uint256 => string) private _tokenURIs;
+
+    event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
+
+    function mint(address to, string memory tokenURI) public returns (uint256) {
+        uint256 tokenId = _tokenIdCounter++;
+        _owners[tokenId] = to;
+        _balances[to] += 1;
+        _tokenURIs[tokenId] = tokenURI;
+        emit Transfer(address(0), to, tokenId);
+        return tokenId;
+    }
+
+    function ownerOf(uint256 tokenId) public view returns (address) {
+        return _owners[tokenId];
+    }
+
+    function balanceOf(address owner) public view returns (uint256) {
+        return _balances[owner];
+    }
+
+    function tokenURI(uint256 tokenId) public view returns (string memory) {
+        return _tokenURIs[tokenId];
+    }
+
+    function transfer(address to, uint256 tokenId) public {
+        require(_owners[tokenId] == msg.sender, "Not owner");
+        _owners[tokenId] = to;
+        _balances[msg.sender] -= 1;
+        _balances[to] += 1;
+        emit Transfer(msg.sender, to, tokenId);
+    }
+}`,
+        bytecode: '608060405234801561001057600080fd5b50...'
+    },
+    'multisig': {
+        name: 'Multi-Signature Wallet',
+        code: `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract MultiSigWallet {
+    address[] public owners;
+    uint256 public required;
+
+    struct Transaction {
+        address to;
+        uint256 value;
+        bytes data;
+        bool executed;
+        uint256 confirmations;
+    }
+
+    Transaction[] public transactions;
+    mapping(uint256 => mapping(address => bool)) public isConfirmed;
+
+    modifier onlyOwner() {
+        require(isOwner(msg.sender), "Not owner");
+        _;
+    }
+
+    constructor(address[] memory _owners, uint256 _required) {
+        owners = _owners;
+        required = _required;
+    }
+
+    function isOwner(address addr) public view returns (bool) {
+        for (uint i = 0; i < owners.length; i++) {
+            if (owners[i] == addr) return true;
+        }
+        return false;
+    }
+
+    function submitTransaction(address to, uint256 value, bytes memory data)
+        public onlyOwner returns (uint256) {
+        uint256 txIndex = transactions.length;
+        transactions.push(Transaction({
+            to: to,
+            value: value,
+            data: data,
+            executed: false,
+            confirmations: 0
+        }));
+        return txIndex;
+    }
+
+    function confirmTransaction(uint256 txIndex) public onlyOwner {
+        require(!isConfirmed[txIndex][msg.sender], "Already confirmed");
+        isConfirmed[txIndex][msg.sender] = true;
+        transactions[txIndex].confirmations += 1;
+    }
+
+    function executeTransaction(uint256 txIndex) public onlyOwner {
+        Transaction storage txn = transactions[txIndex];
+        require(txn.confirmations >= required, "Not enough confirmations");
+        require(!txn.executed, "Already executed");
+        txn.executed = true;
+        (bool success, ) = txn.to.call{value: txn.value}(txn.data);
+        require(success, "Transaction failed");
+    }
+
+    receive() external payable {}
+}`,
+        bytecode: '608060405234801561001057600080fd5b50...'
+    },
+    'staking': {
+        name: 'Staking Contract',
+        code: `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract StakingContract {
+    address public stakingToken;
+    uint256 public rewardRate = 100; // rewards per block
+
+    mapping(address => uint256) public stakedBalance;
+    mapping(address => uint256) public lastUpdateBlock;
+    mapping(address => uint256) public rewards;
+
+    event Staked(address indexed user, uint256 amount);
+    event Withdrawn(address indexed user, uint256 amount);
+    event RewardClaimed(address indexed user, uint256 amount);
+
+    constructor(address _stakingToken) {
+        stakingToken = _stakingToken;
+    }
+
+    function stake(uint256 amount) external {
+        updateReward(msg.sender);
+        stakedBalance[msg.sender] += amount;
+        emit Staked(msg.sender, amount);
+    }
+
+    function withdraw(uint256 amount) external {
+        updateReward(msg.sender);
+        stakedBalance[msg.sender] -= amount;
+        emit Withdrawn(msg.sender, amount);
+    }
+
+    function claimReward() external {
+        updateReward(msg.sender);
+        uint256 reward = rewards[msg.sender];
+        rewards[msg.sender] = 0;
+        emit RewardClaimed(msg.sender, reward);
+    }
+
+    function updateReward(address user) internal {
+        uint256 blocks = block.number - lastUpdateBlock[user];
+        rewards[user] += stakedBalance[user] * blocks * rewardRate / 1e18;
+        lastUpdateBlock[user] = block.number;
+    }
+
+    function pendingReward(address user) external view returns (uint256) {
+        uint256 blocks = block.number - lastUpdateBlock[user];
+        return rewards[user] + stakedBalance[user] * blocks * rewardRate / 1e18;
+    }
+}`,
+        bytecode: '608060405234801561001057600080fd5b50...'
+    },
+    'escrow': {
+        name: 'Escrow Contract',
+        code: `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Escrow {
+    address public arbiter;
+    address public buyer;
+    address public seller;
+    uint256 public amount;
+    bool public isReleased;
+    bool public isRefunded;
+
+    event Deposited(address indexed buyer, uint256 amount);
+    event Released(address indexed seller, uint256 amount);
+    event Refunded(address indexed buyer, uint256 amount);
+
+    constructor(address _arbiter, address _seller) {
+        arbiter = _arbiter;
+        seller = _seller;
+    }
+
+    function deposit() external payable {
+        require(buyer == address(0), "Already deposited");
+        buyer = msg.sender;
+        amount = msg.value;
+        emit Deposited(msg.sender, msg.value);
+    }
+
+    function release() external {
+        require(msg.sender == arbiter || msg.sender == buyer, "Not authorized");
+        require(!isReleased && !isRefunded, "Already processed");
+        isReleased = true;
+        payable(seller).transfer(amount);
+        emit Released(seller, amount);
+    }
+
+    function refund() external {
+        require(msg.sender == arbiter || msg.sender == seller, "Not authorized");
+        require(!isReleased && !isRefunded, "Already processed");
+        isRefunded = true;
+        payable(buyer).transfer(amount);
+        emit Refunded(buyer, amount);
+    }
+}`,
+        bytecode: '608060405234801561001057600080fd5b50...'
+    },
+    'voting': {
+        name: 'Voting System',
+        code: `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract VotingSystem {
+    struct Proposal {
+        string description;
+        uint256 voteCount;
+        uint256 endTime;
+        bool executed;
+    }
+
+    Proposal[] public proposals;
+    mapping(uint256 => mapping(address => bool)) public hasVoted;
+    mapping(address => uint256) public votingPower;
+
+    event ProposalCreated(uint256 indexed proposalId, string description);
+    event Voted(uint256 indexed proposalId, address indexed voter, uint256 power);
+    event ProposalExecuted(uint256 indexed proposalId);
+
+    function createProposal(string memory description, uint256 duration) external {
+        proposals.push(Proposal({
+            description: description,
+            voteCount: 0,
+            endTime: block.timestamp + duration,
+            executed: false
+        }));
+        emit ProposalCreated(proposals.length - 1, description);
+    }
+
+    function vote(uint256 proposalId) external {
+        Proposal storage proposal = proposals[proposalId];
+        require(block.timestamp < proposal.endTime, "Voting ended");
+        require(!hasVoted[proposalId][msg.sender], "Already voted");
+
+        hasVoted[proposalId][msg.sender] = true;
+        uint256 power = votingPower[msg.sender] > 0 ? votingPower[msg.sender] : 1;
+        proposal.voteCount += power;
+        emit Voted(proposalId, msg.sender, power);
+    }
+
+    function execute(uint256 proposalId) external {
+        Proposal storage proposal = proposals[proposalId];
+        require(block.timestamp >= proposal.endTime, "Voting not ended");
+        require(!proposal.executed, "Already executed");
+
+        proposal.executed = true;
+        emit ProposalExecuted(proposalId);
+    }
+
+    function setVotingPower(address user, uint256 power) external {
+        votingPower[user] = power;
+    }
+}`,
+        bytecode: '608060405234801561001057600080fd5b50...'
+    }
+};
+
+let selectedTemplate = null;
+
+// Tab switching
 function showTab(name) {
-    const tabs = ['deploy', 'call', 'contracts'];
+    const tabs = ['templates', 'deploy', 'call', 'contracts', 'abi'];
     tabs.forEach(tab => {
         document.getElementById(tab + '-tab').classList.remove('active');
-        document.querySelector('.tab-btn[onclick="showTab(\'' + tab + '\')"]').classList.remove('active');
     });
+    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
     document.getElementById(name + '-tab').classList.add('active');
-    document.querySelector('.tab-btn[onclick="showTab(\'' + name + '\')"]').classList.add('active');
-    if (name === 'contracts') {
-        loadContracts();
-    }
+    event.target.classList.add('active');
+
+    if (name === 'contracts') loadContracts();
+}
+
+// Template selection
+function selectTemplate(id) {
+    selectedTemplate = id;
+    const template = TEMPLATES[id];
+
+    document.querySelectorAll('.template-card').forEach(card => card.classList.remove('selected'));
+    event.target.closest('.template-card').classList.add('selected');
+
+    document.getElementById('template-name').textContent = template.name;
+    document.getElementById('template-code').textContent = template.code;
+    document.getElementById('template-preview').style.display = 'block';
+}
+
+function useTemplate() {
+    if (!selectedTemplate) return;
+    const template = TEMPLATES[selectedTemplate];
+    document.getElementById('deploy-bytecode').value = template.bytecode;
+    showTab('deploy');
+    document.querySelector('.tab-btn[onclick="showTab(\'deploy\')"]').classList.add('active');
 }
 
 // Deploy contract
 async function deployContract() {
     const address = document.getElementById('deploy-address').value.trim();
-    const secret = document.getElementById('deploy-secret').value.trim();
+    const secret = document.getElementById('deploy-secret').value.trim() || walletSession.getSendSeed();
     const passphrase = document.getElementById('deploy-passphrase').value.trim();
     const bytecode = document.getElementById('deploy-bytecode').value.trim();
     const value = parseFloat(document.getElementById('deploy-value').value) || 0;
     const gasLimit = parseInt(document.getElementById('deploy-gas').value) || 0;
+
+    if (!walletSession.isBound()) {
+        alert('Wallet not connected');
+        return;
+    }
+
+    if(!walletSession.requirePin('deploy contract')) return;
+
     if (!address || !secret || !bytecode) {
         alert('Missing required fields');
         return;
     }
-    const payload = {
-        deployer: address,
-        auth_secret: secret,
-        passphrase,
-        bytecode,
-        value,
-        gas_limit: gasLimit
-    };
+
     try {
         const res = await fetch('/api/evm/deploy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            body: JSON.stringify({
+                deployer: address,
+                auth_secret: secret,
+                passphrase,
+                bytecode,
+                value,
+                gas_limit: gasLimit
+            })
         });
         const data = await res.json();
         const box = document.getElementById('deploy-result');
         box.style.display = 'block';
         box.textContent = JSON.stringify(data, null, 2);
     } catch (err) {
-        alert('Deploy failed');
+        alert('Deploy failed: ' + err.message);
     }
 }
 
 // Call contract
 async function callContract() {
     const address = document.getElementById('call-address').value.trim();
-    const secret = document.getElementById('call-secret').value.trim();
+    const secret = document.getElementById('call-secret').value.trim() || walletSession.getSendSeed();
     const passphrase = document.getElementById('call-passphrase').value.trim();
     const contract = document.getElementById('call-contract').value.trim();
     const dataHex = document.getElementById('call-data').value.trim();
     const value = parseFloat(document.getElementById('call-value').value) || 0;
+
+    if (!walletSession.isBound()) {
+        alert('Wallet not connected');
+        return;
+    }
+
+    if(!walletSession.requirePin('execute call')) return;
+
     if (!address || !secret || !contract || !dataHex) {
         alert('Missing required fields');
         return;
     }
-    const payload = {
-        caller: address,
-        auth_secret: secret,
-        passphrase,
-        contract_address: contract,
-        data: dataHex,
-        value,
-        gas_limit: 100000
-    };
+
     try {
         const res = await fetch('/api/evm/call', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            body: JSON.stringify({
+                caller: address,
+                auth_secret: secret,
+                passphrase,
+                contract_address: contract,
+                data: dataHex,
+                value,
+                gas_limit: 100000
+            })
         });
         const data = await res.json();
         const box = document.getElementById('call-result');
         box.style.display = 'block';
         box.textContent = JSON.stringify(data, null, 2);
     } catch (err) {
-        alert('Call failed');
+        alert('Call failed: ' + err.message);
     }
 }
 
-// Load recent contracts
+// Load contracts
 async function loadContracts() {
     try {
         const res = await fetch('/api/evm/contracts');
         const data = await res.json();
         const list = document.getElementById('contract-list');
         list.innerHTML = '';
-        (data.contracts || []).forEach(item => {
+
+        if (!data.contracts || data.contracts.length === 0) {
+            list.innerHTML = '<li class="contract-item" style="text-align: center; opacity: 0.6;">No contracts deployed yet</li>';
+            return;
+        }
+
+        data.contracts.forEach(item => {
             const li = document.createElement('li');
             li.className = 'contract-item';
-            li.textContent = JSON.stringify(item);
+            li.innerHTML = `
+                <div class="address">${item.address || item}</div>
+                <div style="font-size: 0.85em; opacity: 0.7; margin-top: 5px;">
+                    Deployer: ${item.deployer || 'Unknown'}
+                </div>
+            `;
             list.appendChild(li);
         });
     } catch (err) {
         console.error('Failed to load contracts');
     }
+}
+
+// ABI Tools
+function setSignature(sig) {
+    document.getElementById('abi-signature').value = sig;
+    encodeSignature();
+}
+
+function encodeSignature() {
+    const sig = document.getElementById('abi-signature').value.trim();
+    if (!sig) return;
+
+    // Simple keccak256 simulation (first 4 bytes)
+    // In production, use a proper library
+    const encoder = new TextEncoder();
+    const data = encoder.encode(sig);
+
+    crypto.subtle.digest('SHA-256', data).then(hash => {
+        const hashArray = Array.from(new Uint8Array(hash));
+        const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        const selector = '0x' + hashHex.slice(0, 8);
+
+        const box = document.getElementById('abi-result');
+        box.style.display = 'block';
+        box.textContent = `Function Signature: ${sig}\nSelector (SHA-256 based): ${selector}\n\nNote: For EVM-compatible selector, use keccak256 hash.`;
+    });
+}
+
+// Auto-load wallet from localStorage
+const savedWallet = walletSession.getAddress();
+if (savedWallet) {
+    document.getElementById('deploy-address').value = savedWallet;
+    document.getElementById('call-address').value = savedWallet;
+}
+const savedSecret = walletSession.getSendSeed();
+if (savedSecret) {
+    if (!document.getElementById('deploy-secret').value) document.getElementById('deploy-secret').value = savedSecret;
+    if (!document.getElementById('call-secret').value) document.getElementById('call-secret').value = savedSecret;
 }
 </script>
 {% endblock %}

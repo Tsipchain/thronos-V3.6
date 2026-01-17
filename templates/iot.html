@@ -4,168 +4,881 @@
 
 {% block styles %}
 <style>
-    .iot-container {
+    /* Language support */
+    .lang-en, .lang-ja, .lang-ru, .lang-es { display: none; }
+    body.lang-en .lang-el { display: none; }
+    body.lang-en .lang-en { display: inline; }
+    body.lang-ja .lang-el { display: none; }
+    body.lang-ja .lang-ja { display: inline; }
+    body.lang-ru .lang-el { display: none; }
+    body.lang-ru .lang-ru { display: inline; }
+    body.lang-es .lang-el { display: none; }
+    body.lang-es .lang-es { display: inline; }
+
+    .hero-iot {
+        background: linear-gradient(135deg, #000 0%, #001a00 50%, #000 100%);
+        border: 2px solid;
+        border-image: linear-gradient(135deg, #00ff66 0%, #0099ff 100%) 1;
+        border-radius: 20px;
+        padding: 40px 30px;
+        text-align: center;
+        margin-bottom: 30px;
+    }
+
+    .hero-iot h1 {
+        font-size: 2.5em;
+        background: linear-gradient(135deg, #00ff66, #0099ff);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 15px;
+    }
+
+    .hero-iot p {
+        color: #888;
+        font-size: 1.1em;
+        max-width: 700px;
+        margin: 0 auto 20px;
+    }
+
+    .iot-section {
+        margin-bottom: 40px;
+    }
+
+    .iot-section h2 {
+        color: #00ff66;
+        margin-bottom: 20px;
+        font-size: 1.5em;
+        border-bottom: 1px solid #1a3b2e;
+        padding-bottom: 10px;
+    }
+
+    .tech-grid {
         display: grid;
-        grid-template-columns: 1fr;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
         gap: 20px;
     }
-    @media (min-width: 768px) {
-        .iot-container { grid-template-columns: 1fr 1fr; }
+
+    .tech-card {
+        background: linear-gradient(135deg, #0a0f0a 0%, #071810 100%);
+        border: 1px solid #1a3b2e;
+        border-radius: 16px;
+        padding: 25px;
+        transition: all 0.3s;
     }
-    
-    .panel {
-        background: #111;
-        border: 1px solid #0f0;
-        border-radius: 8px;
-        padding: 20px;
+
+    .tech-card:hover {
+        border-color: #00ff66;
+        transform: translateY(-5px);
+        box-shadow: 0 10px 30px rgba(0, 255, 102, 0.15);
     }
-    
+
+    .tech-card .icon {
+        font-size: 3em;
+        margin-bottom: 15px;
+    }
+
+    .tech-card h3 {
+        color: #00ff66;
+        margin-bottom: 10px;
+    }
+
+    .tech-card p {
+        color: #888;
+        font-size: 0.9em;
+        line-height: 1.6;
+    }
+
+    .tech-features {
+        list-style: none;
+        padding: 0;
+        margin: 15px 0 0 0;
+    }
+
+    .tech-features li {
+        padding: 5px 0;
+        color: #ccc;
+        font-size: 0.85em;
+        border-bottom: 1px solid #1a3b2e;
+    }
+
+    .tech-features li:last-child {
+        border-bottom: none;
+    }
+
+    .tech-features li::before {
+        content: '✓ ';
+        color: #00ff66;
+    }
+
+    /* Purchase Packs */
+    .packs-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 25px;
+        margin-top: 20px;
+    }
+
+    .pack-card {
+        background: linear-gradient(135deg, #0a0a0a 0%, #0a1a10 100%);
+        border: 2px solid #1a3b2e;
+        border-radius: 20px;
+        padding: 30px;
+        text-align: center;
+        position: relative;
+        transition: all 0.3s;
+    }
+
+    .pack-card.popular {
+        border-color: #ffd700;
+        box-shadow: 0 0 30px rgba(255, 215, 0, 0.2);
+    }
+
+    .pack-card.popular::before {
+        content: 'POPULAR';
+        position: absolute;
+        top: -12px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: linear-gradient(135deg, #ffd700, #ff9500);
+        color: #000;
+        padding: 5px 20px;
+        border-radius: 20px;
+        font-weight: bold;
+        font-size: 0.8em;
+    }
+
+    .pack-card:hover {
+        transform: translateY(-5px);
+        border-color: #00ff66;
+    }
+
+    .pack-icon {
+        font-size: 4em;
+        margin-bottom: 15px;
+    }
+
+    .pack-name {
+        font-size: 1.5em;
+        color: #00ff66;
+        margin-bottom: 10px;
+    }
+
+    .pack-price {
+        font-size: 2.5em;
+        color: #ffd700;
+        font-weight: bold;
+    }
+
+    .pack-price small {
+        font-size: 0.4em;
+        color: #888;
+    }
+
+    .pack-features {
+        list-style: none;
+        padding: 0;
+        margin: 20px 0;
+        text-align: left;
+    }
+
+    .pack-features li {
+        padding: 8px 0;
+        color: #ccc;
+        font-size: 0.9em;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .pack-features li::before {
+        content: '✓';
+        color: #00ff66;
+        font-weight: bold;
+    }
+
+    .pack-btn {
+        width: 100%;
+        padding: 14px;
+        background: linear-gradient(135deg, #00ff00 0%, #00ff66 100%);
+        border: none;
+        border-radius: 10px;
+        color: #000;
+        font-weight: bold;
+        font-size: 1em;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+
+    .pack-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 20px rgba(0, 255, 102, 0.4);
+    }
+
+    .pack-btn.enterprise {
+        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+        color: #fff;
+    }
+
+    /* Smart Parking */
     .parking-grid {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
         gap: 10px;
         margin-top: 15px;
     }
-    
+
     .spot {
         border: 2px solid #333;
         border-radius: 8px;
-        padding: 10px;
+        padding: 15px 10px;
         text-align: center;
         cursor: pointer;
         transition: all 0.2s;
-        position: relative;
     }
-    
-    .spot.free { border-color: #0f0; background: #001100; }
-    .spot.occupied { border-color: #f00; background: #110000; opacity: 0.7; cursor: not-allowed; }
-    .spot.reserved { border-color: #ff0; background: #111100; }
-    
-    .spot-id { font-weight: bold; font-size: 1.1em; }
-    .spot-status { font-size: 0.8em; margin-top: 5px; }
-    
-    .sensor-val { font-family: monospace; color: #0ff; }
-    
+
+    .spot.free { border-color: #0f0; background: rgba(0, 255, 0, 0.1); }
+    .spot.occupied { border-color: #f00; background: rgba(255, 0, 0, 0.1); opacity: 0.7; cursor: not-allowed; }
+    .spot.reserved { border-color: #ff0; background: rgba(255, 255, 0, 0.1); }
+
+    .spot-id { font-weight: bold; font-size: 1.1em; color: #fff; }
+    .spot-status { font-size: 0.7em; margin-top: 5px; color: #888; }
+
+    /* Vehicle Brands */
+    .vehicle-brands {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 15px;
+        justify-content: center;
+        margin: 20px 0;
+    }
+
+    .brand-badge {
+        background: rgba(0, 0, 0, 0.5);
+        border: 1px solid #1a3b2e;
+        border-radius: 10px;
+        padding: 10px 20px;
+        color: #888;
+        font-size: 0.9em;
+        transition: all 0.3s;
+    }
+
+    .brand-badge:hover {
+        border-color: #00ff66;
+        color: #00ff66;
+    }
+
+    .brand-badge.active {
+        border-color: #00ff66;
+        color: #00ff66;
+        background: rgba(0, 255, 102, 0.1);
+    }
+
+    /* Water Management */
+    .water-panel {
+        background: linear-gradient(135deg, #0a0f0a 0%, #001020 100%);
+        border: 1px solid #0099ff;
+        border-radius: 16px;
+        padding: 25px;
+    }
+
+    .water-level {
+        height: 30px;
+        background: #111;
+        border-radius: 15px;
+        overflow: hidden;
+        margin-top: 10px;
+        border: 1px solid #333;
+    }
+
+    .water-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #0066ff, #00ccff);
+        transition: width 1s;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        padding-right: 10px;
+        font-weight: bold;
+        color: #fff;
+        font-size: 0.8em;
+    }
+
+    /* Modal */
     .modal {
         display: none;
         position: fixed;
         top: 0; left: 0; width: 100%; height: 100%;
-        background: rgba(0,0,0,0.8);
-        z-index: 1000;
+        background: rgba(0,0,0,0.85);
+        backdrop-filter: blur(8px);
+        z-index: 3000;
         justify-content: center;
         align-items: center;
     }
+
     .modal-content {
-        background: #111;
-        border: 1px solid #0f0;
-        padding: 20px;
-        border-radius: 8px;
-        max-width: 400px;
+        background: linear-gradient(135deg, #0a0f0a 0%, #071810 100%);
+        border: 2px solid #00ff66;
+        padding: 30px;
+        border-radius: 20px;
+        max-width: 450px;
         width: 90%;
         text-align: center;
     }
-    
-    button.action-btn {
-        background: #0f0; color: #000; border: none;
-        padding: 8px 16px; font-weight: bold; cursor: pointer;
-        margin-top: 10px; width: 100%;
+
+    .stripe-secure {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        margin-top: 20px;
+        color: #888;
+        font-size: 0.85em;
     }
-    button.action-btn:disabled { background: #333; color: #666; }
-    
-    .water-level {
-        height: 20px;
-        background: #333;
-        border-radius: 10px;
-        overflow: hidden;
-        margin-top: 5px;
+
+    .stripe-secure img {
+        height: 24px;
     }
-    .water-fill {
-        height: 100%;
-        background: #00f;
-        width: 0%;
-        transition: width 1s;
+
+    .lang-toggle-iot {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        background: rgba(0, 255, 102, 0.2);
+        border: 1px solid #00ff66;
+        color: #00ff66;
+        padding: 10px 20px;
+        border-radius: 30px;
+        cursor: pointer;
+        z-index: 100;
+    }
+
+    .lang-toggle-iot:hover {
+        background: rgba(0, 255, 102, 0.3);
     }
 </style>
 {% endblock %}
 
 {% block content %}
 
-<h1>📡 <span class="lang-el">IoT & Έξυπνη Πόλη</span><span class="lang-en">IoT & Smart City</span></h1>
-
-<div id="walletWarning" style="color:#ffaa88; margin-bottom:15px; display:none; text-align:center;">
-    ⚠️ <a href="/wallet" style="color:#ffaa88; text-decoration:underline;">Connect Wallet</a> to interact with Smart City services.
+<div class="hero-iot">
+    <h1>📡
+        <span class="lang-el">IoT & Έξυπνη Πόλη</span>
+        <span class="lang-en">IoT & Smart City</span>
+        <span class="lang-ja">IoT ＆ スマートシティ</span>
+        <span class="lang-ru">IoT и Умный город</span>
+        <span class="lang-es">IoT y Ciudad Inteligente</span>
+    </h1>
+    <p>
+        <span class="lang-el">Συνδέστε οχήματα, αισθητήρες και έξυπνες συσκευές στο δίκτυο Thronos. Κερδίστε THR με κάθε αλληλεπίδραση.</span>
+        <span class="lang-en">Connect vehicles, sensors, and smart devices to the Thronos network. Earn THR with every interaction.</span>
+        <span class="lang-ja">車両、センサー、スマートデバイスをThronosネットワークに接続。すべてのインタラクションでTHRを獲得。</span>
+        <span class="lang-ru">Подключите транспортные средства, датчики и умные устройства к сети Thronos. Зарабатывайте THR с каждым взаимодействием.</span>
+        <span class="lang-es">Conecte vehículos, sensores y dispositivos inteligentes a la red Thronos. Gane THR con cada interacción.</span>
+    </p>
 </div>
 
-<div class="iot-container">
-    
-    <!-- SMART PARKING SECTION -->
-    <div class="panel">
-        <h2>🅿️ <span class="lang-el">Έξυπνο Πάρκινγκ</span><span class="lang-en">Smart Parking</span></h2>
-        <p class="lang-el">Κράτηση θέσης σε πραγματικό χρόνο με THR.</p>
-        <p class="lang-en">Real-time spot reservation with THR.</p>
-        
-        <div style="margin:10px 0; font-size:0.9em;">
-            <span style="color:#0f0">■ Free</span> &nbsp; 
-            <span style="color:#f00">■ Occupied</span> &nbsp; 
-            <span style="color:#ff0">■ Reserved</span>
+<!-- Supported Technologies -->
+<div class="iot-section">
+    <h2>🔌
+        <span class="lang-el">Υποστηριζόμενες Τεχνολογίες</span>
+        <span class="lang-en">Supported Technologies</span>
+        <span class="lang-ja">対応技術</span>
+        <span class="lang-ru">Поддерживаемые технологии</span>
+        <span class="lang-es">Tecnologías Compatibles</span>
+    </h2>
+
+    <div class="tech-grid">
+        <div class="tech-card">
+            <div class="icon">🚗</div>
+            <h3>
+                <span class="lang-el">Έξυπνα Οχήματα</span>
+                <span class="lang-en">Smart Vehicles</span>
+                <span class="lang-ja">スマートビークル</span>
+                <span class="lang-ru">Умные автомобили</span>
+                <span class="lang-es">Vehículos Inteligentes</span>
+            </h3>
+            <p>
+                <span class="lang-el">Σύνδεση με OBD-II, CAN bus και τελεματικά συστήματα για real-time tracking και rewards.</span>
+                <span class="lang-en">Connect via OBD-II, CAN bus and telematics systems for real-time tracking and rewards.</span>
+                <span class="lang-ja">OBD-II、CANバス、テレマティクスシステムで接続し、リアルタイム追跡と報酬を獲得。</span>
+                <span class="lang-ru">Подключение через OBD-II, CAN шину и телематику для отслеживания и наград.</span>
+                <span class="lang-es">Conexión vía OBD-II, CAN bus y telemática para seguimiento y recompensas en tiempo real.</span>
+            </p>
+            <ul class="tech-features">
+                <li>Renault Clio 2024</li>
+                <li>Tesla Model S/3/X/Y</li>
+                <li>BMW iX / i4</li>
+                <li>Mercedes EQS/EQE</li>
+                <li>VW ID.4 / ID.Buzz</li>
+                <li>Hyundai Ioniq 5/6</li>
+                <li>Toyota bZ4X</li>
+            </ul>
         </div>
 
-        <div class="parking-grid" id="parkingGrid">
-            <!-- Spots generated by JS -->
+        <div class="tech-card">
+            <div class="icon">🏠</div>
+            <h3>
+                <span class="lang-el">Έξυπνο Σπίτι</span>
+                <span class="lang-en">Smart Home</span>
+                <span class="lang-ja">スマートホーム</span>
+                <span class="lang-ru">Умный дом</span>
+                <span class="lang-es">Hogar Inteligente</span>
+            </h3>
+            <p>
+                <span class="lang-el">Αυτοματισμοί για ενεργειακή εξοικονόμηση και έξυπνη διαχείριση πόρων.</span>
+                <span class="lang-en">Automation for energy savings and smart resource management.</span>
+                <span class="lang-ja">省エネと賢いリソース管理のための自動化。</span>
+                <span class="lang-ru">Автоматизация для экономии энергии и умного управления ресурсами.</span>
+                <span class="lang-es">Automatización para ahorro de energía y gestión inteligente de recursos.</span>
+            </p>
+            <ul class="tech-features">
+                <li>Google Nest Hub</li>
+                <li>Amazon Echo / Alexa</li>
+                <li>Apple HomeKit</li>
+                <li>Philips Hue</li>
+                <li>Samsung SmartThings</li>
+                <li>IKEA Tradfri</li>
+            </ul>
+        </div>
+
+        <div class="tech-card">
+            <div class="icon">🏭</div>
+            <h3>
+                <span class="lang-el">Βιομηχανικά IoT</span>
+                <span class="lang-en">Industrial IoT</span>
+                <span class="lang-ja">産業用IoT</span>
+                <span class="lang-ru">Промышленный IoT</span>
+                <span class="lang-es">IoT Industrial</span>
+            </h3>
+            <p>
+                <span class="lang-el">Enterprise-grade αισθητήρες και PLC για βιομηχανικές εφαρμογές.</span>
+                <span class="lang-en">Enterprise-grade sensors and PLCs for industrial applications.</span>
+                <span class="lang-ja">産業用アプリケーション向けのエンタープライズグレードセンサーとPLC。</span>
+                <span class="lang-ru">Датчики и ПЛК промышленного класса для производственных приложений.</span>
+                <span class="lang-es">Sensores y PLCs de grado empresarial para aplicaciones industriales.</span>
+            </p>
+            <ul class="tech-features">
+                <li>Siemens SIMATIC</li>
+                <li>ABB Ability</li>
+                <li>Schneider Electric</li>
+                <li>Rockwell Automation</li>
+                <li>Honeywell Forge</li>
+            </ul>
+        </div>
+
+        <div class="tech-card">
+            <div class="icon">🌡️</div>
+            <h3>
+                <span class="lang-el">Περιβαλλοντικοί Αισθητήρες</span>
+                <span class="lang-en">Environmental Sensors</span>
+                <span class="lang-ja">環境センサー</span>
+                <span class="lang-ru">Экологические датчики</span>
+                <span class="lang-es">Sensores Ambientales</span>
+            </h3>
+            <p>
+                <span class="lang-el">Παρακολούθηση ποιότητας αέρα, νερού και περιβαλλοντικών συνθηκών.</span>
+                <span class="lang-en">Monitor air quality, water and environmental conditions.</span>
+                <span class="lang-ja">空気質、水質、環境条件を監視。</span>
+                <span class="lang-ru">Мониторинг качества воздуха, воды и условий окружающей среды.</span>
+                <span class="lang-es">Monitoreo de calidad del aire, agua y condiciones ambientales.</span>
+            </p>
+            <ul class="tech-features">
+                <li>CO2 / PM2.5 / PM10</li>
+                <li>Temperature & Humidity</li>
+                <li>Water Quality (pH, TDS)</li>
+                <li>Noise Level Monitoring</li>
+                <li>Solar Radiation</li>
+            </ul>
+        </div>
+
+        <div class="tech-card">
+            <div class="icon">⚡</div>
+            <h3>
+                <span class="lang-el">Ενέργεια & Grid</span>
+                <span class="lang-en">Energy & Grid</span>
+                <span class="lang-ja">エネルギー＆グリッド</span>
+                <span class="lang-ru">Энергия и сеть</span>
+                <span class="lang-es">Energía y Red</span>
+            </h3>
+            <p>
+                <span class="lang-el">Έξυπνοι μετρητές και διαχείριση ενεργειακού δικτύου.</span>
+                <span class="lang-en">Smart meters and energy grid management.</span>
+                <span class="lang-ja">スマートメーターとエネルギーグリッド管理。</span>
+                <span class="lang-ru">Умные счётчики и управление энергосетью.</span>
+                <span class="lang-es">Medidores inteligentes y gestión de red eléctrica.</span>
+            </p>
+            <ul class="tech-features">
+                <li>Smart Meters (P1/DSMR)</li>
+                <li>Solar Inverters</li>
+                <li>EV Charging Stations</li>
+                <li>Battery Storage</li>
+                <li>Grid Frequency Sensors</li>
+            </ul>
+        </div>
+
+        <div class="tech-card">
+            <div class="icon">🅿️</div>
+            <h3>
+                <span class="lang-el">Έξυπνο Πάρκινγκ</span>
+                <span class="lang-en">Smart Parking</span>
+                <span class="lang-ja">スマートパーキング</span>
+                <span class="lang-ru">Умная парковка</span>
+                <span class="lang-es">Estacionamiento Inteligente</span>
+            </h3>
+            <p>
+                <span class="lang-el">Real-time διαθεσιμότητα και κράτηση θέσεων με THR.</span>
+                <span class="lang-en">Real-time availability and spot reservation with THR.</span>
+                <span class="lang-ja">リアルタイムの空き状況とTHRでの予約。</span>
+                <span class="lang-ru">Доступность и бронирование мест в реальном времени с THR.</span>
+                <span class="lang-es">Disponibilidad en tiempo real y reserva de espacios con THR.</span>
+            </p>
+            <ul class="tech-features">
+                <li>Ultrasonic Sensors</li>
+                <li>Camera Detection (AI)</li>
+                <li>RFID/NFC Access</li>
+                <li>License Plate Recognition</li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+<!-- Supported Vehicle Brands -->
+<div class="iot-section">
+    <h2>🚘
+        <span class="lang-el">Συμβατές Μάρκες Οχημάτων</span>
+        <span class="lang-en">Compatible Vehicle Brands</span>
+        <span class="lang-ja">対応車両ブランド</span>
+        <span class="lang-ru">Совместимые марки авто</span>
+        <span class="lang-es">Marcas de Vehículos Compatibles</span>
+    </h2>
+
+    <div class="vehicle-brands">
+        <span class="brand-badge active">🇫🇷 Renault</span>
+        <span class="brand-badge active">🇺🇸 Tesla</span>
+        <span class="brand-badge">🇩🇪 BMW</span>
+        <span class="brand-badge">🇩🇪 Mercedes-Benz</span>
+        <span class="brand-badge">🇩🇪 Volkswagen</span>
+        <span class="brand-badge">🇩🇪 Audi</span>
+        <span class="brand-badge">🇰🇷 Hyundai</span>
+        <span class="brand-badge">🇰🇷 Kia</span>
+        <span class="brand-badge">🇯🇵 Toyota</span>
+        <span class="brand-badge">🇯🇵 Nissan</span>
+        <span class="brand-badge">🇯🇵 Honda</span>
+        <span class="brand-badge">🇺🇸 Ford</span>
+        <span class="brand-badge">🇺🇸 Chevrolet</span>
+        <span class="brand-badge">🇬🇧 Jaguar</span>
+        <span class="brand-badge">🇸🇪 Volvo</span>
+        <span class="brand-badge">🇨🇳 BYD</span>
+        <span class="brand-badge">🇨🇳 NIO</span>
+    </div>
+</div>
+
+<!-- IoT Node Packs for Purchase -->
+<div class="iot-section">
+    <h2>💳
+        <span class="lang-el">Αγορά IoT Node Packs</span>
+        <span class="lang-en">Purchase IoT Node Packs</span>
+        <span class="lang-ja">IoTノードパックを購入</span>
+        <span class="lang-ru">Купить пакеты IoT узлов</span>
+        <span class="lang-es">Comprar Paquetes de Nodos IoT</span>
+    </h2>
+
+    <div class="packs-grid">
+        <!-- QUEST E: Starter Pack with Fixed Revolut Link -->
+        <div class="pack-card">
+            <div class="pack-icon">🚗</div>
+            <div class="pack-name">
+                <span class="lang-el">Starter</span>
+                <span class="lang-en">Starter</span>
+                <span class="lang-ja">スターター</span>
+                <span class="lang-ru">Начальный</span>
+                <span class="lang-es">Inicial</span>
+            </div>
+            <div class="pack-price">€49<small>/one-time</small></div>
+            <ul class="pack-features">
+                <li>
+                    <span class="lang-el">1 OBD-II Thronos Node</span>
+                    <span class="lang-en">1 OBD-II Thronos Node</span>
+                    <span class="lang-ja">1 OBD-II Thronos ノード</span>
+                    <span class="lang-ru">1 OBD-II Thronos узел</span>
+                    <span class="lang-es">1 Nodo Thronos OBD-II</span>
+                </li>
+                <li>
+                    <span class="lang-el">Βασικά τελεμετρικά δεδομένα</span>
+                    <span class="lang-en">Basic telemetry data</span>
+                    <span class="lang-ja">基本的なテレメトリデータ</span>
+                    <span class="lang-ru">Базовая телеметрия</span>
+                    <span class="lang-es">Datos de telemetría básicos</span>
+                </li>
+                <li>
+                    <span class="lang-el">Έως 100 THR/μήνα rewards</span>
+                    <span class="lang-en">Up to 100 THR/month rewards</span>
+                    <span class="lang-ja">最大 100 THR/月 報酬</span>
+                    <span class="lang-ru">До 100 THR/мес наград</span>
+                    <span class="lang-es">Hasta 100 THR/mes recompensas</span>
+                </li>
+                <li>
+                    <span class="lang-el">Πρόσβαση σε mobile app</span>
+                    <span class="lang-en">Mobile app access</span>
+                    <span class="lang-ja">モバイルアプリアクセス</span>
+                    <span class="lang-ru">Доступ к мобильному приложению</span>
+                    <span class="lang-es">Acceso a app móvil</span>
+                </li>
+                <li>
+                    <span class="lang-el">Email υποστήριξη</span>
+                    <span class="lang-en">Email support</span>
+                    <span class="lang-ja">メールサポート</span>
+                    <span class="lang-ru">Поддержка по email</span>
+                    <span class="lang-es">Soporte por email</span>
+                </li>
+            </ul>
+            <button class="pack-btn" onclick="window.open('https://checkout.revolut.com/pay/ce48ebea-de80-4955-8d98-d4219eb337a6', '_blank')">
+                <span class="lang-el">Αγορά τώρα</span>
+                <span class="lang-en">Purchase Now</span>
+                <span class="lang-ja">今すぐ購入</span>
+                <span class="lang-ru">Купить сейчас</span>
+                <span class="lang-es">Comprar Ahora</span>
+            </button>
+        </div>
+
+        <!-- QUEST E: Smart Home Bundle with Fixed Revolut Link -->
+        <div class="pack-card popular">
+            <div class="pack-icon">🏠</div>
+            <div class="pack-name">
+                <span class="lang-el">Smart Home Bundle</span>
+                <span class="lang-en">Smart Home Bundle</span>
+                <span class="lang-ja">スマートホームバンドル</span>
+                <span class="lang-ru">Комплект умного дома</span>
+                <span class="lang-es">Paquete Casa Inteligente</span>
+            </div>
+            <div class="pack-price">€149<small>/one-time</small></div>
+            <ul class="pack-features">
+                <li>
+                    <span class="lang-el">1 Thronos Gateway Hub</span>
+                    <span class="lang-en">1 Thronos Gateway Hub</span>
+                    <span class="lang-ja">1 Thronos ゲートウェイハブ</span>
+                    <span class="lang-ru">1 Thronos шлюз</span>
+                    <span class="lang-es">1 Thronos Gateway Hub</span>
+                </li>
+                <li>
+                    <span class="lang-el">3 Αισθητήρες περιβάλλοντος</span>
+                    <span class="lang-en">3 Environmental Sensors</span>
+                    <span class="lang-ja">3 環境センサー</span>
+                    <span class="lang-ru">3 экологических датчика</span>
+                    <span class="lang-es">3 Sensores ambientales</span>
+                </li>
+                <li>
+                    <span class="lang-el">1 Smart Meter Interface</span>
+                    <span class="lang-en">1 Smart Meter Interface</span>
+                    <span class="lang-ja">1 スマートメーターインターフェース</span>
+                    <span class="lang-ru">1 интерфейс умного счётчика</span>
+                    <span class="lang-es">1 Interfaz medidor inteligente</span>
+                </li>
+                <li>
+                    <span class="lang-el">Έως 500 THR/μήνα rewards</span>
+                    <span class="lang-en">Up to 500 THR/month rewards</span>
+                    <span class="lang-ja">最大 500 THR/月 報酬</span>
+                    <span class="lang-ru">До 500 THR/мес наград</span>
+                    <span class="lang-es">Hasta 500 THR/mes recompensas</span>
+                </li>
+                <li>
+                    <span class="lang-el">Προτεραιότητα υποστήριξης</span>
+                    <span class="lang-en">Priority support</span>
+                    <span class="lang-ja">優先サポート</span>
+                    <span class="lang-ru">Приоритетная поддержка</span>
+                    <span class="lang-es">Soporte prioritario</span>
+                </li>
+                <li>
+                    <span class="lang-el">Πρόσβαση σε Dashboard</span>
+                    <span class="lang-en">Dashboard access</span>
+                    <span class="lang-ja">ダッシュボードアクセス</span>
+                    <span class="lang-ru">Доступ к панели</span>
+                    <span class="lang-es">Acceso al panel</span>
+                </li>
+            </ul>
+            <button class="pack-btn" onclick="window.open('https://checkout.revolut.com/pay/96eb426f-b342-47c2-9724-a8d3b3f1a186', '_blank')">
+                <span class="lang-el">Αγορά τώρα</span>
+                <span class="lang-en">Purchase Now</span>
+                <span class="lang-ja">今すぐ購入</span>
+                <span class="lang-ru">Купить сейчас</span>
+                <span class="lang-es">Comprar Ahora</span>
+            </button>
+        </div>
+
+        <!-- QUEST E: Install Pro with Fixed Revolut Link -->
+        <div class="pack-card">
+            <div class="pack-icon">🔧</div>
+            <div class="pack-name">
+                <span class="lang-el">Install Pro</span>
+                <span class="lang-en">Install Pro</span>
+                <span class="lang-ja">インストールプロ</span>
+                <span class="lang-ru">Установка Про</span>
+                <span class="lang-es">Instalación Pro</span>
+            </div>
+            <div class="pack-price">€499<small>/one-time</small></div>
+            <ul class="pack-features">
+                <li>
+                    <span class="lang-el">1 Industrial Gateway</span>
+                    <span class="lang-en">1 Industrial Gateway</span>
+                    <span class="lang-ja">1 産業用ゲートウェイ</span>
+                    <span class="lang-ru">1 промышленный шлюз</span>
+                    <span class="lang-es">1 Gateway Industrial</span>
+                </li>
+                <li>
+                    <span class="lang-el">10 Sensor Nodes</span>
+                    <span class="lang-en">10 Sensor Nodes</span>
+                    <span class="lang-ja">10 センサーノード</span>
+                    <span class="lang-ru">10 узлов датчиков</span>
+                    <span class="lang-es">10 Nodos de Sensores</span>
+                </li>
+                <li>
+                    <span class="lang-el">PLC Integration Kit</span>
+                    <span class="lang-en">PLC Integration Kit</span>
+                    <span class="lang-ja">PLC統合キット</span>
+                    <span class="lang-ru">Комплект интеграции ПЛК</span>
+                    <span class="lang-es">Kit Integración PLC</span>
+                </li>
+                <li>
+                    <span class="lang-el">Έως 2000 THR/μήνα rewards</span>
+                    <span class="lang-en">Up to 2000 THR/month rewards</span>
+                    <span class="lang-ja">最大 2000 THR/月 報酬</span>
+                    <span class="lang-ru">До 2000 THR/мес наград</span>
+                    <span class="lang-es">Hasta 2000 THR/mes recompensas</span>
+                </li>
+                <li>
+                    <span class="lang-el">24/7 Προτεραιότητα υποστήριξης</span>
+                    <span class="lang-en">24/7 Priority support</span>
+                    <span class="lang-ja">24/7 優先サポート</span>
+                    <span class="lang-ru">24/7 приоритетная поддержка</span>
+                    <span class="lang-es">Soporte prioritario 24/7</span>
+                </li>
+                <li>
+                    <span class="lang-el">Εγκατάσταση στη τοποθεσία</span>
+                    <span class="lang-en">On-site installation</span>
+                    <span class="lang-ja">現地設置</span>
+                    <span class="lang-ru">Установка на месте</span>
+                    <span class="lang-es">Instalación en sitio</span>
+                </li>
+            </ul>
+            <button class="pack-btn" onclick="window.open('https://checkout.revolut.com/pay/ed0bba5d-ef91-4ecc-bb50-95169a93f0bb', '_blank')">
+                <span class="lang-el">Αγορά τώρα</span>
+                <span class="lang-en">Purchase Now</span>
+                <span class="lang-ja">今すぐ購入</span>
+                <span class="lang-ru">Купить сейчас</span>
+                <span class="lang-es">Comprar Ahora</span>
+            </button>
+        </div>
+
+        <div class="pack-card">
+            <div class="pack-icon">🏢</div>
+            <div class="pack-name">Enterprise Fleet</div>
+            <div class="pack-price">Custom</div>
+            <ul class="pack-features">
+                <li>Unlimited vehicle nodes</li>
+                <li>Custom integration</li>
+                <li>White-label solution</li>
+                <li>SLA guarantee</li>
+                <li>Dedicated account manager</li>
+                <li>API access</li>
+            </ul>
+            <button class="pack-btn enterprise" onclick="contactEnterprise()">
+                <span class="lang-el">Επικοινωνία</span>
+                <span class="lang-en">Contact Sales</span>
+                <span class="lang-ja">お問い合わせ</span>
+                <span class="lang-ru">Связаться</span>
+                <span class="lang-es">Contactar Ventas</span>
+            </button>
         </div>
     </div>
 
-    <!-- SMART WATER / ENV SENSORS -->
-    <div class="panel">
-        <h2>💧 <span class="lang-el">Διαχείριση Υδάτων</span><span class="lang-en">Water Management</span></h2>
-        
-        <div style="margin-bottom:20px;">
-            <h3>Reservoir A (Main)</h3>
-            <div class="water-level"><div id="waterA" class="water-fill" style="width:75%"></div></div>
-            <div style="display:flex; justify-content:space-between; font-size:0.8em; margin-top:5px;">
-                <span>Level: <span id="lvlA" class="sensor-val">75%</span></span>
-                <span>Quality: <span class="sensor-val">Good (pH 7.2)</span></span>
-            </div>
-        </div>
+    <div class="stripe-secure">
+        <span>🔒
+            <span class="lang-el">Ασφαλείς πληρωμές με</span>
+            <span class="lang-en">Secure payments with</span>
+            <span class="lang-ja">安全な支払い</span>
+            <span class="lang-ru">Безопасные платежи</span>
+            <span class="lang-es">Pagos seguros con</span>
+        </span>
+        <strong style="color: #6366f1;">Stripe</strong>
+    </div>
+</div>
 
-        <div style="margin-bottom:20px;">
-            <h3>Reservoir B (Reserve)</h3>
-            <div class="water-level"><div id="waterB" class="water-fill" style="width:40%"></div></div>
-            <div style="display:flex; justify-content:space-between; font-size:0.8em; margin-top:5px;">
-                <span>Level: <span id="lvlB" class="sensor-val">40%</span></span>
-                <span>Quality: <span class="sensor-val">Excellent (pH 7.0)</span></span>
+<!-- Live Smart Parking Demo -->
+<div class="iot-section">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
+        <h2 style="margin: 0;">🅿️
+            <span class="lang-el">Ζωντανή Επίδειξη Πάρκινγκ</span>
+            <span class="lang-en">Live Parking Demo</span>
+            <span class="lang-ja">ライブ駐車デモ</span>
+            <span class="lang-ru">Демо парковки</span>
+            <span class="lang-es">Demo de Estacionamiento</span>
+        </h2>
+        <button onclick="window.location.href='/parking'" style="padding: 10px 20px; background: linear-gradient(135deg, #00ff00 0%, #00ff66 100%); border: none; border-radius: 10px; color: #000; font-weight: bold; cursor: pointer; transition: all 0.3s;">
+            🗺️ <span class="lang-el">Άνοιγμα Πλήρους Χάρτη</span><span class="lang-en">Open Full Map</span>
+        </button>
+    </div>
+
+    <div style="margin: 15px 0; font-size: 0.9em;">
+        <span style="color:#0f0">■ <span class="lang-el">Ελεύθερο</span><span class="lang-en">Free</span></span> &nbsp;
+        <span style="color:#f00">■ <span class="lang-el">Κατειλημμένο</span><span class="lang-en">Occupied</span></span> &nbsp;
+        <span style="color:#ff0">■ <span class="lang-el">Κρατημένο</span><span class="lang-en">Reserved</span></span>
+    </div>
+
+    <div class="parking-grid" id="parkingGrid"></div>
+</div>
+
+<!-- Water Management Panel -->
+<div class="iot-section">
+    <div class="water-panel">
+        <h2 style="color: #0099ff; margin-bottom: 20px;">💧
+            <span class="lang-el">Διαχείριση Υδάτων</span>
+            <span class="lang-en">Water Management</span>
+            <span class="lang-ja">水管理</span>
+            <span class="lang-ru">Управление водой</span>
+            <span class="lang-es">Gestión del Agua</span>
+        </h2>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px;">
+            <div>
+                <h4>Reservoir A (Main)</h4>
+                <div class="water-level"><div id="waterA" class="water-fill" style="width:75%">75%</div></div>
+                <p style="font-size: 0.8em; color: #888; margin-top: 8px;">Quality: Good (pH 7.2) | Temp: 18°C</p>
             </div>
-        </div>
-        
-        <hr style="border-color:#333; margin:15px 0;">
-        
-        <h3>🚗 Active Vehicle Nodes</h3>
-        <div id="vehicleList" style="max-height:200px; overflow-y:auto; font-size:0.8em;">
-            <div style="color:#666; font-style:italic;">Scanning for nodes...</div>
+            <div>
+                <h4>Reservoir B (Reserve)</h4>
+                <div class="water-level"><div id="waterB" class="water-fill" style="width:40%">40%</div></div>
+                <p style="font-size: 0.8em; color: #888; margin-top: 8px;">Quality: Excellent (pH 7.0) | Temp: 16°C</p>
+            </div>
         </div>
     </div>
 </div>
 
-<!-- REGISTER NODE SECTION -->
-<div class="panel" style="margin-top:20px;">
-    <h2>🔧 <span class="lang-el">Εγγραφή Κόμβου</span><span class="lang-en">Register Node</span></h2>
-    <form action="/register_node" method="POST" style="display:flex; gap:10px; flex-wrap:wrap;">
-        <input name="address" placeholder="Wallet Address (THR)" style="flex:1; padding:8px; background:#000; border:1px solid #0f0; color:#fff;">
-        <input name="secret" type="password" placeholder="Node Secret" style="flex:1; padding:8px; background:#000; border:1px solid #0f0; color:#fff;">
-        <button type="submit" class="action-btn" style="width:auto;">Download Kit (.zip)</button>
-    </form>
-</div>
+<!-- Language Toggle -->
+<button class="lang-toggle-iot" onclick="toggleLanguage()">🌐 GR</button>
 
-<!-- RESERVATION MODAL -->
+<!-- Reservation Modal -->
 <div id="reserveModal" class="modal">
     <div class="modal-content">
-        <h3>Reserve Spot <span id="modalSpotId"></span></h3>
-        <p>Cost: <strong>5 THR</strong> / hour</p>
-        <p style="font-size:0.8em; color:#888;">Funds will be deducted from your connected wallet.</p>
-        <div id="modalMsg" style="margin:10px 0; min-height:20px;"></div>
-        <div style="display:flex; gap:10px;">
-            <button class="action-btn" onclick="confirmReservation()">Confirm & Pay</button>
-            <button class="action-btn" style="background:#333; color:#fff;" onclick="closeModal()">Cancel</button>
+        <h3>🅿️
+            <span class="lang-el">Κράτηση Θέσης</span>
+            <span class="lang-en">Reserve Spot</span>
+        </h3>
+        <p id="modalSpotId" style="font-size: 1.5em; color: #00ff66;"></p>
+        <p>
+            <span class="lang-el">Κόστος:</span>
+            <span class="lang-en">Cost:</span>
+            <strong style="color: #ffd700;">5 THR</strong> / hour
+        </p>
+        <div id="modalMsg" style="margin: 15px 0; min-height: 20px;"></div>
+        <div style="display: flex; gap: 10px;">
+            <button class="pack-btn" onclick="confirmReservation()">
+                <span class="lang-el">Επιβεβαίωση</span>
+                <span class="lang-en">Confirm</span>
+            </button>
+            <button class="pack-btn" style="background: #333; color: #fff;" onclick="closeModal()">
+                <span class="lang-el">Ακύρωση</span>
+                <span class="lang-en">Cancel</span>
+            </button>
         </div>
     </div>
 </div>
@@ -176,12 +889,129 @@
 <script>
 const $ = (id) => document.getElementById(id);
 
-// --- Mock Data for Parking ---
-// In a real app, this would come from /api/iot/parking
+// Language (data-i18n with safe fallback)
+const LANG_SEQUENCE = ['gr', 'en', 'ja', 'es', 'ru'];
+const LANG_ALIAS = { el: 'gr' };
+const DEFAULT_LANG = 'en';
+let TRANSLATIONS_CACHE = null;
+
+function normalizeLang(lang) {
+    if (!lang) return DEFAULT_LANG;
+    const alias = LANG_ALIAS[lang];
+    const normalized = alias || lang;
+    return LANG_SEQUENCE.includes(normalized) ? normalized : DEFAULT_LANG;
+}
+
+function harvestTranslations() {
+    const store = {};
+    const langRegex = /lang-([a-z]+)/;
+    document.querySelectorAll('.lang-el, .lang-en, .lang-ja, .lang-ru, .lang-es').forEach((node) => {
+        const parent = node.parentElement;
+        if (!parent) return;
+        if (!parent.dataset.i18n) {
+            parent.dataset.i18n = `auto-i18n-${Object.keys(store).length}`;
+        }
+        const key = parent.dataset.i18n;
+        const match = node.className.match(langRegex);
+        const lang = normalizeLang(match && match[1]);
+        store[key] = store[key] || {};
+        store[key][lang] = node.textContent.trim();
+    });
+    document.querySelectorAll('[data-i18n]').forEach((node) => {
+        const key = node.dataset.i18n;
+        store[key] = store[key] || {};
+        const fallback = node.dataset.i18nDefault || node.textContent.trim();
+        if (!store[key][DEFAULT_LANG]) {
+            store[key][DEFAULT_LANG] = fallback;
+        }
+    });
+    return store;
+}
+
+function applyTranslations(langOverride) {
+    const lang = normalizeLang(langOverride || localStorage.getItem('lang'));
+    localStorage.setItem('lang', lang);
+    document.documentElement.lang = lang;
+
+    if (!TRANSLATIONS_CACHE) {
+        TRANSLATIONS_CACHE = harvestTranslations();
+    }
+
+    try {
+        document.querySelectorAll('[data-i18n]').forEach((node) => {
+            const key = node.dataset.i18n;
+            const table = TRANSLATIONS_CACHE[key] || {};
+            const fallback = table[DEFAULT_LANG] || node.dataset.i18nDefault || node.textContent;
+            const value = table[lang] || fallback || key;
+            if (node.dataset.i18nAttr === 'placeholder') {
+                node.placeholder = value;
+            } else {
+                node.textContent = value;
+            }
+        });
+    } catch (err) {
+        console.warn('translation apply failed', err);
+        document.querySelectorAll('[data-i18n]').forEach((node) => {
+            const fallback = node.dataset.i18nDefault || node.textContent;
+            if (node.dataset.i18nAttr === 'placeholder') {
+                node.placeholder = fallback;
+            } else {
+                node.textContent = fallback;
+            }
+        });
+    }
+
+    const btn = document.querySelector('.lang-toggle-iot');
+    if (btn) btn.textContent = '🌐 ' + lang.toUpperCase();
+}
+
+function toggleLanguage() {
+    const current = normalizeLang(localStorage.getItem('lang'));
+    const idx = LANG_SEQUENCE.indexOf(current);
+    const next = LANG_SEQUENCE[(idx + 1) % LANG_SEQUENCE.length];
+    applyTranslations(next);
+}
+
+// Stripe Purchase
+window.purchasePack = async function purchasePack(packId, price) {
+    const wallet = localStorage.getItem('thr_address');
+    if (!wallet) {
+        alert('Please connect your wallet first!');
+        window.location.href = '/';
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/stripe/create-checkout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                pack_id: packId,
+                price_cents: price * 100,
+                wallet: wallet
+            })
+        });
+        const data = await res.json();
+
+        if (data.url) {
+            window.location.href = data.url;
+        } else {
+            alert(data.error || 'Failed to create checkout session');
+        }
+    } catch (e) {
+        console.error('Purchase error:', e);
+        alert('Payment service unavailable. Please try again later.');
+    }
+}
+
+function contactEnterprise() {
+    window.location.href = 'mailto:enterprise@thronos.io?subject=Enterprise Fleet Inquiry';
+}
+
+// Parking Demo
 const SPOTS = Array.from({length: 12}, (_, i) => ({
     id: `P-${101+i}`,
-    status: Math.random() > 0.7 ? 'occupied' : 'free', // Random init
-    reservedBy: null
+    status: Math.random() > 0.65 ? 'occupied' : 'free'
 }));
 
 let selectedSpot = null;
@@ -189,7 +1019,7 @@ let selectedSpot = null;
 function renderParking() {
     const grid = $('parkingGrid');
     grid.innerHTML = '';
-    
+
     SPOTS.forEach(spot => {
         const div = document.createElement('div');
         div.className = `spot ${spot.status}`;
@@ -197,11 +1027,11 @@ function renderParking() {
             <div class="spot-id">${spot.id}</div>
             <div class="spot-status">${spot.status.toUpperCase()}</div>
         `;
-        
+
         if (spot.status === 'free') {
             div.onclick = () => openReserveModal(spot);
         }
-        
+
         grid.appendChild(div);
     });
 }
@@ -225,97 +1055,41 @@ function closeModal() {
 
 async function confirmReservation() {
     const wallet = localStorage.getItem('thr_address');
-    const secret = localStorage.getItem('thr_secret'); // Needed for signing
-    
-    if (!wallet || !secret) {
-        $('modalMsg').textContent = "❌ Wallet auth missing.";
-        return;
-    }
-    
+    if (!wallet || !selectedSpot) return;
+
     $('modalMsg').style.color = '#ff0';
-    $('modalMsg').textContent = "Processing payment...";
-    
-    // Simulate API call to pay and reserve
-    // In real implementation: POST /api/iot/reserve { spot, wallet, secret }
-    // Here we simulate via send_thr to a "PARKING_SERVICE" address
-    
-    try {
-        const res = await fetch('/send_thr', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                from_thr: wallet,
-                to_thr: "THR_PARKING_SERVICE", // Virtual service address
-                amount: 5,
-                auth_secret: secret
-            })
-        });
-        
-        const data = await res.json();
-        
-        if (data.status === 'pending' || data.status === 'confirmed') {
-            // Success
-            $('modalMsg').style.color = '#0f0';
-            $('modalMsg').textContent = "✅ Reserved!";
-            
-            // Update local state
-            const spotIdx = SPOTS.findIndex(s => s.id === selectedSpot.id);
-            if (spotIdx >= 0) {
-                SPOTS[spotIdx].status = 'reserved';
-                SPOTS[spotIdx].reservedBy = wallet;
-            }
-            renderParking();
-            
-            setTimeout(closeModal, 1500);
-        } else {
-            throw new Error(data.error || "Payment failed");
+    $('modalMsg').textContent = 'Processing...';
+
+    // Simulate reservation
+    setTimeout(() => {
+        const spotIdx = SPOTS.findIndex(s => s.id === selectedSpot.id);
+        if (spotIdx >= 0) {
+            SPOTS[spotIdx].status = 'reserved';
         }
-    } catch (e) {
-        $('modalMsg').style.color = '#f00';
-        $('modalMsg').textContent = "❌ Error: " + e.message;
-    }
+        $('modalMsg').style.color = '#0f0';
+        $('modalMsg').textContent = '✅ Reserved!';
+        renderParking();
+        setTimeout(closeModal, 1500);
+    }, 1000);
 }
 
-// --- IoT Data Polling ---
-async function fetchIoTData() {
-    try {
-        const res = await fetch('/api/iot/data');
-        const data = await res.json();
-        
-        const list = $('vehicleList');
-        if (data.length === 0) {
-            list.innerHTML = '<div style="color:#666;">No active vehicles.</div>';
-        } else {
-            list.innerHTML = data.map(v => `
-                <div style="border-bottom:1px solid #333; padding:5px 0;">
-                    <strong>${v.vehicle_id}</strong> 
-                    <span style="color:#0f0; font-size:0.9em;">${v.speed} km/h</span><br>
-                    <span style="color:#888; font-size:0.8em;">${v.timestamp}</span>
-                </div>
-            `).join('');
-        }
-        
-        // Simulate Water Sensor fluctuation
-        const lvlA = 70 + Math.random() * 10;
-        const lvlB = 35 + Math.random() * 10;
-        $('waterA').style.width = lvlA + '%';
-        $('lvlA').textContent = Math.round(lvlA) + '%';
-        $('waterB').style.width = lvlB + '%';
-        $('lvlB').textContent = Math.round(lvlB) + '%';
-        
-    } catch (e) {
-        console.error("IoT poll error", e);
-    }
+// Water Simulation
+function updateWater() {
+    const lvlA = 70 + Math.random() * 10;
+    const lvlB = 35 + Math.random() * 10;
+    $('waterA').style.width = lvlA + '%';
+    $('waterA').textContent = Math.round(lvlA) + '%';
+    $('waterB').style.width = lvlB + '%';
+    $('waterB').textContent = Math.round(lvlB) + '%';
 }
 
 // Init
 document.addEventListener('DOMContentLoaded', () => {
-    const wallet = localStorage.getItem('thr_address');
-    if (!wallet) $('walletWarning').style.display = 'block';
-    
+    applyTranslations();
     renderParking();
-    fetchIoTData();
-    setInterval(fetchIoTData, 5000);
+    applyTranslations();
+    updateWater();
+    setInterval(updateWater, 5000);
 });
 </script>
 {% endblock %}

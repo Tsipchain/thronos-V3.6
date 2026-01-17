@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>💼 Thronos Wallet Viewer</title>
+    <script>
+        window.TH_NODE1_RPC_URL = "{{ node1_rpc_url }}";
+        window.TH_NODE2_RPC_URL = "{{ node2_rpc_url }}";
+    </script>
+    <script src="{{ url_for('static', filename='fetch_utils.js') }}?v={{ build_id }}"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Courier New', monospace;
+            background: #000;
+            color: #0f0;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 {
+            color: #0f0;
+            border-bottom: 2px solid #0f0;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+        .wallet-card {
+            background: #111;
+            border: 1px solid #0f0;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+        .balance-large {
+            font-size: 2em;
+            font-weight: bold;
+            margin: 10px 0;
+            color: #0f0;
+        }
+        .tx-list { margin-top: 20px; }
+        .tx {
+            border-bottom: 1px dashed #333;
+            padding: 10px 0;
+            font-size: 0.9em;
+        }
+        .tx strong { color: #0c0; }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        .error {
+            background: #300;
+            border: 1px solid #f00;
+            color: #f00;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+        code {
+            background: #000;
+            padding: 2px 6px;
+            border: 1px solid #333;
+            border-radius: 3px;
+            color: #0ff;
+        }
+        button {
+            background: #0f0;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            cursor: pointer;
+            font-weight: bold;
+            font-family: monospace;
+            border-radius: 4px;
+            margin-right: 10px;
+        }
+        button:hover { background: #0c0; }
+        button.secondary {
+            background: #000;
+            color: #0f0;
+            border: 1px solid #0f0;
+        }
+        button.secondary:hover { background: #111; }
+        .tabs {
+            display: flex;
+            gap: 8px;
+            margin: 20px 0;
+            border-bottom: 2px solid #0f0;
+        }
+        .tab-btn {
+            padding: 10px 20px;
+            background: transparent;
+            border: none;
+            border-bottom: 3px solid transparent;
+            color: #0f0;
+            cursor: pointer;
+            font-family: monospace;
+            transition: all 0.2s;
+        }
+        .tab-btn:hover { background: #111; }
+        .tab-btn.active { border-bottom-color: #0f0; background: #111; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        a { color: #0ff; text-decoration: none; }
+        a:hover { color: #0f0; text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>💼 Thronos Wallet Viewer</h1>
+
+        <div class="wallet-card">
+            <div id="walletInfo">
+                <p class="loading">Loading wallet...</p>
+            </div>
+        </div>
+
+        <div class="tabs" id="walletTabs" style="display: none;">
+            <button class="tab-btn active" data-tab="balances">Balances</button>
+            <button class="tab-btn" data-tab="history">History</button>
+        </div>
+
+        <div id="balancesTab" class="tab-content active"></div>
+        <div id="historyTab" class="tab-content"></div>
+
+        <div style="margin-top: 40px; padding: 20px; border-top: 1px solid #333; text-align: center; color: #666;">
+            <a href="/">← Back to Home</a>
+        </div>
+    </div>
+
+    <script>
+        // Minimal standalone wallet viewer - works independently from base.html
+        const urlParams = new URLSearchParams(window.location.search);
+        const thrAddress = urlParams.get('address') || '{{ thr_address }}' || '';
+
+        async function loadWallet() {
+            if (!thrAddress || thrAddress === 'None') {
+                document.getElementById('walletInfo').innerHTML = `
+                    <div class="error">❌ No wallet address provided. Use: /wallet?address=THR...</div>
+                `;
+                return;
+            }
+
+            try {
+                // Load balances and wallet status in parallel
+                const [balRes, statusRes] = await Promise.all([
+                    fetch(`/api/balances?address=${encodeURIComponent(thrAddress)}&show_zero=true`),
+                    fetch(`/api/wallet/status?address=${encodeURIComponent(thrAddress)}`)
+                ]);
+
+                const balData = await balRes.json();
+                const statusData = await statusRes.json();
+
+                if (!balRes.ok || !balData.balances) {
+                    throw new Error('Failed to load balances');
+                }
+
+                displayWalletInfo(balData, statusData);
+                document.getElementById('walletTabs').style.display = 'flex';
+                displayBalances(balData.balances);
+
+            } catch (error) {
+                document.getElementById('walletInfo').innerHTML = `
+                    <div class="error">❌ Error loading wallet: ${error.message}</div>
+                `;
+            }
+        }
+
+        function displayWalletInfo(data, statusData) {
+            const bal = data.balances;
+
+            // Generate pledge status badge
+            let pledgeBadge = '';
+            if (statusData && statusData.ok) {
+                if (statusData.pledge_mode === 'whitelist') {
+                    pledgeBadge = `<br><small>🌟 Access: <span style="color: #ffd700; font-weight: bold;">Whitelist (No BTC pledge required)</span></small>`;
+                } else if (statusData.pledge_mode === 'btc_pledge') {
+                    pledgeBadge = `<br><small>✅ Access: <span style="color: #0c0; font-weight: bold;">BTC Pledge Active</span></small>`;
+                } else {
+                    pledgeBadge = `<br><small>❌ Access: <span style="color: #f00;">No Pledge</span></small>`;
+                }
+            }
+
+            document.getElementById('walletInfo').innerHTML = `
+                <strong>Address:</strong> <code>${thrAddress}</code><br>
+                <div class="balance-large">${parseFloat(bal.THR || 0).toFixed(6)} THR</div>
+                <small>Status: <span style="color: #0c0;">Active</span></small>
+                ${pledgeBadge}
+            `;
+        }
+
+        function displayBalances(balances) {
+            let html = '<div class="wallet-card"><h2>Token Balances</h2>';
+
+            const tokens = Object.entries(balances).sort((a, b) => {
+                if (a[0] === 'THR') return -1;
+                if (b[0] === 'THR') return 1;
+                return parseFloat(b[1]) - parseFloat(a[1]);
+            });
+
+            for (const [symbol, amount] of tokens) {
+                const amt = parseFloat(amount);
+                if (amt > 0 || symbol === 'THR') {
+                    html += `
+                        <div class="tx">
+                            <strong>${symbol}</strong>: ${amt.toFixed(6)}
+                        </div>
+                    `;
+                }
+            }
+
+            html += '</div>';
+            document.getElementById('balancesTab').innerHTML = html;
+        }
+
+        async function loadHistory() {
+            const tab = document.getElementById('historyTab');
+            tab.innerHTML = '<p class="loading">Loading history...</p>';
+
+            try {
+                // Use Node 3 API endpoint for wallet history (if available)
+                const histRes = await fetch(`/api/wallet/history?address=${encodeURIComponent(thrAddress)}&limit=50`);
+                const histData = await histRes.json();
+
+                if (!histRes.ok || !histData.history) {
+                    throw new Error('Failed to load history');
+                }
+
+                displayHistory(histData.history);
+            } catch (error) {
+                tab.innerHTML = `<div class="error">❌ Error loading history: ${error.message}</div>`;
+            }
+        }
+
+        function displayHistory(history) {
+            if (!history || history.length === 0) {
+                document.getElementById('historyTab').innerHTML = `
+                    <div class="wallet-card">
+                        <p style="color: #666; text-align: center; padding: 20px;">
+                            No transaction history found
+                        </p>
+                    </div>
+                `;
+                return;
+            }
+
+            let html = '<div class="wallet-card"><h2>Transaction History</h2><div class="tx-list">';
+
+            for (const tx of history) {
+                const date = new Date(tx.timestamp).toLocaleString();
+                const amount = parseFloat(tx.amount || 0).toFixed(6);
+                const fee = parseFloat(tx.fee || 0).toFixed(6);
+
+                html += `
+                    <div class="tx">
+                        <strong>${tx.type || tx.kind || 'TRANSFER'}</strong><br>
+                        ${tx.from ? `From: <code>${tx.from.substring(0, 16)}...</code><br>` : ''}
+                        ${tx.to ? `To: <code>${tx.to.substring(0, 16)}...</code><br>` : ''}
+                        Amount: ${amount} ${tx.asset || tx.symbol || 'THR'}
+                        ${fee > 0 ? ` | Fee: ${fee} THR` : ''}<br>
+                        <small style="color: #666;">${date}</small>
+                    </div>
+                `;
+            }
+
+            html += '</div></div>';
+            document.getElementById('historyTab').innerHTML = html;
+        }
+
+        // Tab switching
+        document.getElementById('walletTabs').addEventListener('click', (e) => {
+            if (e.target.classList.contains('tab-btn')) {
+                const targetTab = e.target.dataset.tab;
+
+                // Update tab buttons
+                document.querySelectorAll('.tab-btn').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.tab === targetTab);
+                });
+
+                // Update tab content
+                document.querySelectorAll('.tab-content').forEach(content => {
+                    content.classList.toggle('active', content.id === targetTab + 'Tab');
+                });
+
+                // Load history on first click
+                if (targetTab === 'history' && !document.getElementById('historyTab').innerHTML) {
+                    loadHistory();
+                }
+            }
+        });
+
+        // Initialize
+        loadWallet();
+    </script>
+</body>
+</html>

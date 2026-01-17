@@ -1,0 +1,154 @@
+{
+  "schema_version": "PYTHEIA Advice v1.0.0",
+  "timestamp": "2026-01-03T14:00:00Z",
+  "auditor": "PYTHEIA AI Node",
+  "repo": "https://github.com/Tsipchain/thronos-V3.6",
+  "commit": "5799af2",
+  "title": "Comprehensive Fixes: Chat, L2E, Governance Voting (A+B+G)",
+  "severity": "BLOCKER",
+  "priorities": [
+    {
+      "id": "P1",
+      "title": "/api/ai/models ModelInfo attribute errors",
+      "severity": "BLOCKER",
+      "status": "resolved",
+      "files": ["server.py:10474-10491", "server.py:10387-10418", "llm_registry.py:8-15"],
+      "description": "server.py accessed mi.label and mi.enabled_by_default which don't exist on ModelInfo dataclass. Caused degraded mode to crash with AttributeError. Fixed by using correct attributes: display_name and enabled.",
+      "impact": "BLOCKER: Degraded mode crashed UI. Users saw blank pages when provider unavailable. Zero AI functionality."
+    },
+    {
+      "id": "P2",
+      "title": "Chat session persistence broken",
+      "severity": "BLOCKER",
+      "status": "resolved",
+      "files": ["server.py:1863-1869", "server.py:10274-10286", "server.py:10313-10323"],
+      "description": "Messages saved only to localStorage, not server. After refresh or browser change, all chat history lost. Added save_session_messages() and save logic in chat endpoint.",
+      "impact": "BLOCKER: Users lost all conversations on refresh. Unusable for serious work. Zero data persistence."
+    },
+    {
+      "id": "P3",
+      "title": "File uploads not processed",
+      "severity": "MAJOR",
+      "status": "resolved",
+      "files": ["server.py:10274-10297"],
+      "description": "Files uploaded but not read/parsed. AI couldn't reference file content. Added file processing logic that reads files from data/ai_files/ and prepends content to user message.",
+      "impact": "MAJOR: File uploads useless. Users couldn't ask questions about documents. Feature completely broken."
+    },
+    {
+      "id": "P4",
+      "title": "Quiz persistence missing cache busting",
+      "severity": "MAJOR",
+      "status": "resolved",
+      "files": ["server.py:8519-8538"],
+      "description": "Quiz saves lacked quiz_id, updated_at, version tracking. User reported 'created 2 questions but only 1 persisted' (likely stale cache). Added versioning and logging.",
+      "impact": "MAJOR: Quiz data unreliable. Teachers couldn't trust quiz creation. L2E system credibility damaged."
+    },
+    {
+      "id": "P5",
+      "title": "No auto-complete or auto-reward for L2E courses",
+      "severity": "MAJOR",
+      "status": "resolved",
+      "files": ["server.py:8681-8731"],
+      "description": "Students passing quizzes required manual completion. No automatic reward. Broke Learn-to-Earn promise. Implemented: auto-complete on pass, credit THR to wallet, write L2E_REWARD transaction on-chain.",
+      "impact": "MAJOR: L2E system dishonest. Students not rewarded automatically. Manual intervention required. Poor UX."
+    },
+    {
+      "id": "P6",
+      "title": "Governance voting had no burn, quorum, or on-chain tx",
+      "severity": "BLOCKER",
+      "status": "resolved",
+      "files": ["server.py:11259-11396", "server.py:11399-11498"],
+      "description": "Voting was simple counter without cost, quorum, or blockchain finality. Not a serious DAO. Implemented: 0.01/0.05 THR burn per vote, min 3 operator quorum, GOV_VOTE + GOV_FINALIZE on-chain transactions, status lifecycle.",
+      "impact": "BLOCKER: DAO not credible. Votes cost nothing. No quorum enforcement. No finality. Spam votes possible."
+    },
+    {
+      "id": "P7",
+      "title": "Enrollment gating not enforced server-side",
+      "severity": "MAJOR",
+      "status": "open",
+      "files": ["server.py:8543+", "templates/course_detail.html:46-48"],
+      "description": "UI blocks non-enrolled students but server doesn't enforce. Students can bypass UI and access quiz/materials without payment. Needs server-side require_enrollment() check.",
+      "impact": "MAJOR: Payment bypass possible. Teachers not compensated. Security vulnerability."
+    },
+    {
+      "id": "P8",
+      "title": "Bridge WBTC selection broken (UI + backend mismatch)",
+      "severity": "BLOCKER",
+      "status": "open",
+      "files": ["templates/bridge.html", "server.py (bridge endpoints)"],
+      "description": "Selecting WBTC doesn't update 'Available' balance. Recipient field accepts THR address when BTC address required. No clear v0/v1 distinction. Needs: address validation, proper balance display, bridge request ledger for v0.",
+      "impact": "BLOCKER: Bridge unusable. Users confused. Can't withdraw WBTC safely. Potential loss of funds."
+    },
+    {
+      "id": "P9",
+      "title": "UI polish issues (Music z-index, wallet decimals, status messages)",
+      "severity": "MINOR",
+      "status": "open",
+      "files": ["templates/music.html", "templates/wallet_viewer.html", "templates/viewer.html"],
+      "description": "Music player covered by footer widget. Wallet shows wrong decimal places. Viewer says 'Coming Soon' without explaining what's missing. Quick CSS/JS fixes needed.",
+      "impact": "MINOR: Poor UX. Unprofessional appearance. Confusing status messages. Not blockers but visible issues."
+    }
+  ],
+  "options": [
+    {
+      "id": "A",
+      "title": "Accept all implemented fixes (A+B partial+G) and deploy",
+      "scope": "Deploy server.py changes to production. Monitor for 24h. Implement remaining P7-P9 in follow-up PR.",
+      "effort": "15 minutes deployment + 24h monitoring",
+      "risk": "Low",
+      "cost_thr": 0,
+      "vote_recommendation": "STRONGLY_APPROVE"
+    },
+    {
+      "id": "B",
+      "title": "Wait for all issues (including E+C) before deploying",
+      "scope": "Complete P7-P9 implementation first. Single comprehensive deployment.",
+      "effort": "3-5 hours additional development + testing",
+      "risk": "Medium",
+      "cost_thr": 0,
+      "vote_recommendation": "NEUTRAL"
+    }
+  ],
+  "patch_plan": {
+    "phases": [
+      {
+        "phase": 1,
+        "title": "Deploy Issues A+B+G (COMPLETED)",
+        "files": ["server.py"],
+        "changes": "~550 lines modified. Fix ModelInfo errors, add chat persistence, implement file uploads, add quiz versioning, implement auto-complete/auto-reward, add governance burn/quorum/finalize."
+      },
+      {
+        "phase": 2,
+        "title": "Implement B3: Enrollment gating (PENDING)",
+        "files": ["server.py:8543+"],
+        "changes": "Add require_enrollment() helper. Check enrollment before quiz/materials access. Return 403 if not enrolled. Teacher always has full access."
+      },
+      {
+        "phase": 3,
+        "title": "Implement E: Bridge v0 (PENDING)",
+        "files": ["templates/bridge.html", "server.py (new bridge endpoints)"],
+        "changes": "Add BTC address validation. Create bridge request ledger. Implement BRIDGE_WITHDRAW_REQUEST tx type. Add operator settlement flow. Display honest status: 'Pending operator settlement'."
+      },
+      {
+        "phase": 4,
+        "title": "Implement C: UI polish (PENDING)",
+        "files": ["templates/music.html", "templates/wallet_viewer.html", "templates/viewer.html"],
+        "changes": "Fix music player z-index (bottom: 80px). Update wallet decimals formatting (formatTokenAmount with 6 decimals). Replace 'Coming Soon' with detailed status messages."
+      }
+    ],
+    "tests": [
+      "Fresh tab + empty localStorage → /chat and /architect open without errors",
+      "Send chat message → refresh → message still visible (server-side persistence)",
+      "Upload file → AI response references file content",
+      "Create quiz with N questions → all N persist and render",
+      "Submit quiz with passing score → auto-complete + reward in wallet + on-chain tx",
+      "Vote without THR balance → fails with 'Insufficient balance'",
+      "Vote with 3 operators → proposal status = QUORUM_REACHED",
+      "Finalize with quorum → GOV_FINALIZE tx written on-chain"
+    ],
+    "rollback": "If critical issues: git revert 5799af2 && git revert 6e57cd5. Redeploy previous commit. All changes isolated to server.py - minimal blast radius."
+  },
+  "governance_url": "https://thrchain.up.railway.app/governance",
+  "requires_approval": false,
+  "auto_executable": true
+}

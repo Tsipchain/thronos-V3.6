@@ -6,6 +6,7 @@
 # 3. Run:  python pow_miner_cpu.py
 
 import hashlib
+import os
 import time
 import requests
 import json
@@ -13,15 +14,20 @@ import sys
 
 # Configuration
 THR_ADDRESS = "THR_PUT_YOUR_ADDRESS_HERE"  # Replace with your actual THR address
-SERVER_URL = "https://thrchain.up.railway.app" # Update if your server URL is different
+SERVER_URL = os.getenv("THRONOS_SERVER_URL", os.getenv("THRONOS_SERVER", "https://thrchain.up.railway.app"))
+SUBMIT_RETRIES = int(os.getenv("THRONOS_SUBMIT_RETRIES", "3"))
+SUBMIT_RETRY_DELAY = float(os.getenv("THRONOS_SUBMIT_RETRY_DELAY", "2"))
 
 def get_last_hash():
     """Fetches the last block hash from the Thronos server."""
     try:
-        r = requests.get(f"{SERVER_URL}/last_block_hash", timeout=10)
+        r = requests.get(f"{SERVER_URL}/api/last_block_hash", timeout=5)
         r.raise_for_status()
         data = r.json()
-        return data.get("last_hash", "0" * 64)
+        return {
+            "last_hash": data.get("block_hash") or data.get("last_hash", "0" * 64),
+            "height": data.get("height"),
+        }
     except requests.exceptions.RequestException as e:
         print(f"❌ Connection error fetching last hash: {e}")
         return None
@@ -39,7 +45,7 @@ def get_mining_info():
         print(f"❌ Error fetching mining info: {e}")
         return None
 
-def mine_block(last_hash):
+def mine_block(last_hash_info):
     """
     CPU mining with dynamic difficulty:
     - Fetches target from server
@@ -56,6 +62,8 @@ def mine_block(last_hash):
     reward = info.get("reward", 0)
     
     print(f"⛏️  Starting mining for {THR_ADDRESS}")
+    last_hash = last_hash_info.get("last_hash") if isinstance(last_hash_info, dict) else last_hash_info
+    tip_height = last_hash_info.get("height") if isinstance(last_hash_info, dict) else None
     print(f"   Last Hash: {last_hash[:16]}...")
     print(f"   Target:    {target_hex[:16]}... (Diff: ~{difficulty})")
     print(f"   Reward:    {reward} THR")
@@ -67,7 +75,8 @@ def mine_block(last_hash):
     while True:
         # Refresh info every 30 seconds or if block found elsewhere
         if time.time() - start > 30:
-             current_server_hash = get_last_hash()
+             current_server_info = get_last_hash()
+             current_server_hash = current_server_info.get("last_hash") if current_server_info else None
              if current_server_hash and current_server_hash != last_hash:
                  print("🔄 New block found on network. Restarting mining...")
                  return None
@@ -100,6 +109,8 @@ def mine_block(last_hash):
                 "pow_hash": h_hex,
                 "prev_hash": last_hash,
             }
+            if tip_height is not None:
+                block["height"] = int(tip_height) + 1
             return block
 
         nonce += 1
@@ -107,20 +118,32 @@ def mine_block(last_hash):
 
 def submit_block(block):
     """Submits the mined block to the server."""
-    try:
-        r = requests.post(f"{SERVER_URL}/submit_block", json=block, timeout=10)
-        if r.status_code == 200:
-            print(f"📬 Submission successful: {r.json()}")
-            return True
-        else:
+    attempts = max(1, SUBMIT_RETRIES)
+    delay = max(0.5, SUBMIT_RETRY_DELAY)
+    for attempt in range(1, attempts + 1):
+        try:
+            r = requests.post(f"{SERVER_URL}/submit_block", json=block, timeout=10)
+            if r.status_code == 200:
+                print(f"📬 Submission successful: {r.json()}")
+                return True
+            if r.status_code in {429, 500, 502, 503, 504}:
+                print(f"⏳ Node busy (HTTP {r.status_code}). Retrying {attempt}/{attempts}...")
+                if attempt < attempts:
+                    time.sleep(delay)
+                    delay *= 1.5
+                    continue
             print(f"⚠️ Submission failed: {r.status_code} - {r.text}")
             return False
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Connection error submitting block: {e}")
-        return False
-    except Exception as e:
-        print(f"❌ Error submitting block: {e}")
-        return False
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Connection error submitting block: {e}")
+            if attempt < attempts:
+                time.sleep(delay)
+                delay *= 1.5
+                continue
+            return False
+        except Exception as e:
+            print(f"❌ Error submitting block: {e}")
+            return False
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
@@ -135,9 +158,9 @@ if __name__ == "__main__":
     print(f"📡 Server: {SERVER_URL}")
     
     while True:
-        last_hash = get_last_hash()
-        if last_hash:
-            mined_block = mine_block(last_hash)
+        last_hash_info = get_last_hash()
+        if last_hash_info:
+            mined_block = mine_block(last_hash_info)
             if mined_block:
                 submit_block(mined_block)
             

@@ -33,6 +33,7 @@
         gap: 20px;
         justify-content: center;
         margin-top: 20px;
+        flex-wrap: wrap;
     }
     .stat-box {
         background: rgba(0, 0, 0, 0.3);
@@ -57,9 +58,7 @@
         margin-bottom: 30px;
     }
     @media (max-width: 768px) {
-        .l2e-grid {
-            grid-template-columns: 1fr;
-        }
+        .l2e-grid { grid-template-columns: 1fr; }
     }
     .panel {
         background: #07120b;
@@ -122,6 +121,29 @@
         border-color: #3CFF7A;
         background: rgba(60, 255, 122, 0.1);
     }
+    .btn-danger {
+        padding: 10px 16px;
+        border-radius: 8px;
+        border: 1px solid #ff6b6b;
+        background: #1a0f0f;
+        color: #ff6b6b;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+    .btn-danger:hover {
+        background: #ff6b6b;
+        color: #000;
+        box-shadow: 0 0 15px rgba(255, 107, 107, 0.4);
+    }
+    .btn-quiz {
+        background: #1a3a5f;
+        border-color: #5C9FFF;
+        color: #5C9FFF;
+    }
+    .btn-quiz:hover {
+        background: #5C9FFF;
+        color: #000;
+    }
     .course-card {
         border: 1px solid #123a22;
         border-radius: 12px;
@@ -182,16 +204,10 @@
         font-weight: bold;
         margin-left: 8px;
     }
-    .badge-enrolled {
-        background: rgba(60, 255, 122, 0.2);
-        color: #3CFF7A;
-        border: 1px solid #3CFF7A;
-    }
-    .badge-completed {
-        background: rgba(255, 215, 0, 0.2);
-        color: #ffd700;
-        border: 1px solid #ffd700;
-    }
+    .badge-enrolled { background: rgba(60, 255, 122, 0.2); color: #3CFF7A; border: 1px solid #3CFF7A; }
+    .badge-completed { background: rgba(255, 215, 0, 0.2); color: #ffd700; border: 1px solid #ffd700; }
+    .badge-quiz-passed { background: rgba(92, 159, 255, 0.2); color: #5C9FFF; border: 1px solid #5C9FFF; }
+    .badge-has-quiz { background: rgba(255, 165, 0, 0.2); color: #ffa500; border: 1px solid #ffa500; }
     .log-box {
         white-space: pre-wrap;
         margin-top: 12px;
@@ -199,22 +215,14 @@
         border: 1px solid #123a22;
         border-radius: 12px;
         padding: 12px;
-        min-height: 140px;
+        min-height: 100px;
         font-family: monospace;
         font-size: 12px;
-        max-height: 300px;
+        max-height: 200px;
         overflow-y: auto;
     }
-    .empty-state {
-        text-align: center;
-        padding: 40px;
-        opacity: 0.6;
-    }
-    .loading {
-        text-align: center;
-        padding: 20px;
-        color: #3CFF7A;
-    }
+    .empty-state { text-align: center; padding: 40px; opacity: 0.6; }
+    .loading { text-align: center; padding: 20px; color: #3CFF7A; }
     .error {
         color: #ff6b6b;
         background: rgba(255, 107, 107, 0.1);
@@ -223,6 +231,127 @@
         border: 1px solid rgba(255, 107, 107, 0.3);
         margin-top: 10px;
     }
+    /* Course Modal */
+    .modal {
+        display: none;
+        position: fixed;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        background: rgba(0, 0, 0, 0.9);
+        z-index: 1000;
+        overflow-y: auto;
+        padding: 20px;
+    }
+    .modal.active { display: flex; align-items: flex-start; justify-content: center; }
+    .modal-content {
+        background: #07120b;
+        border: 1px solid #1a5a2f;
+        border-radius: 16px;
+        padding: 30px;
+        max-width: 700px;
+        width: 100%;
+        margin: 20px auto;
+    }
+    .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+        padding-bottom: 15px;
+        border-bottom: 1px solid #1a5a2f;
+    }
+    .modal-header h2 { margin: 0; color: #3CFF7A; }
+    .modal-close {
+        background: none;
+        border: none;
+        color: #ff6b6b;
+        font-size: 24px;
+        cursor: pointer;
+    }
+    .modal-tabs {
+        display: flex;
+        gap: 10px;
+        margin: 10px 0 16px;
+        flex-wrap: wrap;
+    }
+    .modal-tab {
+        padding: 8px 14px;
+        border-radius: 8px;
+        border: 1px solid #1a5a2f;
+        background: #050b07;
+        color: #d7ffe6;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    .modal-tab.active {
+        border-color: #3CFF7A;
+        color: #000;
+        background: #3CFF7A;
+    }
+    .modal-section { display: none; }
+    .modal-section.active { display: block; }
+    .question-card {
+        background: #050b07;
+        border: 1px solid #1a5a2f;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 15px;
+    }
+    .question-text {
+        font-size: 1.1em;
+        margin-bottom: 15px;
+        color: #d7ffe6;
+    }
+    .question-number {
+        color: #3CFF7A;
+        font-weight: bold;
+        margin-right: 10px;
+    }
+    .option-label {
+        display: block;
+        padding: 12px 15px;
+        margin: 8px 0;
+        background: #06140b;
+        border: 1px solid #1a5a2f;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    .option-label:hover { border-color: #3CFF7A; background: rgba(60, 255, 122, 0.05); }
+    .option-label input { margin-right: 10px; }
+    .option-label.correct { background: rgba(60, 255, 122, 0.2); border-color: #3CFF7A; }
+    .option-label.incorrect { background: rgba(255, 107, 107, 0.2); border-color: #ff6b6b; }
+    .quiz-result {
+        text-align: center;
+        padding: 30px;
+        background: #050b07;
+        border-radius: 12px;
+        margin-top: 20px;
+    }
+    .quiz-score {
+        font-size: 3em;
+        font-weight: bold;
+        margin: 10px 0;
+    }
+    .quiz-score.passed { color: #3CFF7A; }
+    .quiz-score.failed { color: #ff6b6b; }
+    .tabs {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 20px;
+    }
+    .tab-btn {
+        padding: 10px 20px;
+        border: 1px solid #1a5a2f;
+        background: #050b07;
+        color: #d7ffe6;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+    .tab-btn.active { background: #3CFF7A; color: #000; border-color: #3CFF7A; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
 </style>
 {% endblock %}
 
@@ -231,18 +360,21 @@
     <!-- Header Section -->
     <div class="l2e-header">
         <h1>🎓 LEARN‑TO‑EARN</h1>
-        <p>Μάθε, πλήρωσε με THR, ολοκλήρωσε το course, κέρδισε L2E tokens</p>
+        <p>
+            <span class="lang-el">Μάθε, πλήρωσε με THR, ολοκλήρωσε το quiz, κέρδισε L2E tokens</span>
+            <span class="lang-en">Learn, pay with THR, complete the quiz, earn L2E tokens</span>
+        </p>
         <div class="l2e-stats">
             <div class="stat-box">
-                <div class="label">Total Courses</div>
+                <div class="label"><span class="lang-el">Συνολικά Μαθήματα</span><span class="lang-en">Total Courses</span></div>
                 <div class="value" id="totalCourses">0</div>
             </div>
             <div class="stat-box">
-                <div class="label">Total Students</div>
+                <div class="label"><span class="lang-el">Συνολικοί Μαθητές</span><span class="lang-en">Total Students</span></div>
                 <div class="value" id="totalStudents">0</div>
             </div>
             <div class="stat-box">
-                <div class="label">L2E Distributed</div>
+                <div class="label"><span class="lang-el">L2E Διανεμημένα</span><span class="lang-en">L2E Distributed</span></div>
                 <div class="value" id="totalL2E">0</div>
             </div>
         </div>
@@ -250,37 +382,148 @@
 
     <!-- Wallet Connection -->
     <div class="panel" style="margin-bottom: 20px;">
-        <h3>🔐 Wallet Connection</h3>
+        <h3>🔐 <span class="lang-el">Σύνδεση Πορτοφολιού</span><span class="lang-en">Wallet Connection</span></h3>
         <div class="input-group">
-            <input id="wallet" class="input-field" placeholder="THR wallet address (e.g., THR123...)" />
-            <input id="secret" class="input-field" type="password" placeholder="auth_secret" />
-            <input id="passphrase" class="input-field" type="password" placeholder="passphrase (optional)" />
-            <button id="connectBtn" class="btn-primary">Connect</button>
+            <input id="wallet" class="input-field" placeholder="THR wallet address" readonly />
+            <button id="connectBtn" class="btn-primary">
+                <span class="lang-el">Χρήση Wallet Widget</span><span class="lang-en">Use Wallet Widget</span>
+            </button>
         </div>
         <div id="walletStatus" style="margin-top: 10px; display: none;">
-            <span style="color: #3CFF7A;">✓ Connected:</span> <code id="connectedWallet"></code>
-            <span style="margin-left: 15px;">L2E Balance: <strong id="l2eBalance">0</strong></span>
+            <span style="color: #3CFF7A;">✓ <span class="lang-el">Συνδεδεμένο</span><span class="lang-en">Connected</span>:</span>
+            <code id="connectedWallet"></code>
+            <span style="margin-left: 15px;">L2E: <strong id="l2eBalance">0</strong></span>
+        </div>
+        <div id="walletWarning" style="margin-top: 10px; color: #ff6b6b; display: none;">
+            <span class="lang-el">Συνδέσου από το widget πορτοφολιού στο header.</span>
+            <span class="lang-en">Connect via the header wallet widget.</span>
         </div>
     </div>
 
-    <!-- Main Grid -->
-    <div class="l2e-grid">
-        <!-- Courses List -->
+    <!-- Tabs -->
+    <div class="tabs">
+        <button class="tab-btn active" onclick="showTab('courses')">
+            📚 <span class="lang-el">Μαθήματα</span><span class="lang-en">Courses</span>
+        </button>
+        <button class="tab-btn" onclick="showTab('create')">
+            ➕ <span class="lang-el">Δημιουργία</span><span class="lang-en">Create</span>
+        </button>
+        <button class="tab-btn" onclick="showTab('my-courses')">
+            📖 <span class="lang-el">Τα Μαθήματά μου</span><span class="lang-en">My Courses</span>
+        </button>
+    </div>
+
+    <!-- Courses Tab -->
+    <div id="courses-tab" class="tab-content active">
         <div class="panel">
-            <h3>📚 Available Courses</h3>
-            <button id="refresh" class="btn-secondary" style="width: 100%; margin-bottom: 15px;">🔄 Refresh Courses</button>
+            <h3>📚 <span class="lang-el">Διαθέσιμα Μαθήματα</span><span class="lang-en">Available Courses</span></h3>
+            <button id="refresh" class="btn-secondary" style="width: 100%; margin-bottom: 15px;">
+                🔄 <span class="lang-el">Ανανέωση</span><span class="lang-en">Refresh</span>
+            </button>
             <div id="courses"></div>
         </div>
+    </div>
 
-        <!-- Create Course -->
+    <!-- Create Course Tab -->
+    <div id="create-tab" class="tab-content">
         <div class="panel">
-            <h3>➕ Create Course (Teachers Only)</h3>
-            <input id="title" class="input-field" placeholder="Course Title (e.g., Blockchain Basics)" style="width: 100%; margin-bottom: 10px;" />
-            <input id="description" class="input-field" placeholder="Course Description (optional)" style="width: 100%; margin-bottom: 10px;" />
-            <input id="price" class="input-field" type="number" step="0.1" placeholder="Price in THR (e.g., 2.5)" style="width: 100%; margin-bottom: 10px;" />
-            <input id="reward" class="input-field" type="number" step="0.1" placeholder="L2E Reward (e.g., 10)" style="width: 100%; margin-bottom: 10px;" />
-            <button id="create" class="btn-primary" style="width: 100%;">Create Course</button>
-            <div class="log-box" id="log">Ready to create courses...</div>
+            <h3>➕ <span class="lang-el">Δημιουργία Μαθήματος (Εκπαιδευτές)</span><span class="lang-en">Create Course (Teachers Only)</span></h3>
+            <input id="title" class="input-field" placeholder="Course Title" style="width: 100%; margin-bottom: 10px;" />
+            <input id="titleEl" class="input-field" placeholder="Τίτλος Μαθήματος (Ελληνικά)" style="width: 100%; margin-bottom: 10px;" />
+            <input id="description" class="input-field" placeholder="Description (optional)" style="width: 100%; margin-bottom:10px;" />
+            <div class="input-group">
+                <input id="price" class="input-field" type="number" step="0.1" placeholder="Price in THR" />
+                <input id="reward" class="input-field" type="number" step="0.1" placeholder="L2E Reward" />
+            </div>
+            <div style="margin: 15px 0; padding: 12px; border:1px solid #1a5a2f; border-radius: 10px;">
+                <h4 style="margin-top:0;">📂 Course Content</h4>
+                <div style="display:flex; gap:10px; margin-bottom:10px; flex-wrap:wrap;">
+                    <label><input type="radio" name="contentType" value="pdf" checked> PDF Slides</label>
+                    <label><input type="radio" name="contentType" value="video"> Video</label>
+                    <label><input type="radio" name="contentType" value="external"> External Link</label>
+                </div>
+                <div id="pdfFields">
+                    <input id="slidesFile" type="file" accept="application/pdf" style="width:100%; margin-bottom:10px;" />
+                    <small style="opacity:0.8;">Upload slides as a PDF (saved under courses/&lt;course_id&gt;/slides.pdf).</small>
+                </div>
+                <div id="videoFields" style="display:none;">
+                    <input id="videoUrl" class="input-field" placeholder="YouTube or MP4 URL" style="width:100%;" />
+                </div>
+                <div id="externalFields" style="display:none;">
+                    <input id="contentUrl" class="input-field" placeholder="Content URL" style="width:100%;" />
+                </div>
+            </div>
+            <div style="margin: 15px 0; padding: 12px; border:1px solid #1a5a2f; border-radius: 10px;">
+                <h4 style="margin-top:0;">🧩 Quiz Builder</h4>
+                <div style="display:flex; gap:10px; margin-bottom:10px; align-items:center;">
+                    <label for="builderPassScore" style="white-space:nowrap;">Pass score (%)</label>
+                    <input id="builderPassScore" class="input-field" type="number" value="70" style="width:100px;" />
+                </div>
+                <div id="builderQuestions"></div>
+                <button type="button" class="btn-secondary" style="width:100%; margin-top:10px;" onclick="addBuilderQuestion()">➕ Add Question</button>
+            </div>
+            <button id="create" class="btn-primary" style="width: 100%;">
+                <span class="lang-el">Δημιουργία Μαθήματος</span><span class="lang-en">Create Course</span>
+            </button>
+            <div class="log-box" id="log"><span class="lang-el">Έτοιμο για δημιουργία μαθημάτων...</span><span class="lang-en">Ready to create courses...</span></div>
+        </div>
+    </div>
+    <!-- My Courses Tab -->
+    <div id="my-courses-tab" class="tab-content">
+        <div class="panel">
+            <h3>📖 <span class="lang-el">Τα Μαθήματά μου</span><span class="lang-en">My Courses</span></h3>
+            <div id="my-courses-list"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Course Modal -->
+<div id="courseModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 id="courseModalTitle">🎓 Course</h2>
+            <button class="modal-close" onclick="closeCourseModal()">×</button>
+        </div>
+        <div class="modal-tabs">
+            <button class="modal-tab active" data-tab="lesson" onclick="showCourseModalTab('lesson')">📘 <span class="lang-el">Μάθημα</span><span class="lang-en">Lesson</span></button>
+            <button class="modal-tab" data-tab="quiz" onclick="showCourseModalTab('quiz')">📝 <span class="lang-el">Quiz</span><span class="lang-en">Quiz</span></button>
+        </div>
+        <div id="courseModalLesson" class="modal-section active">
+            <div id="courseLessonContent"></div>
+            <div id="courseLessonActions" style="margin-top: 20px; text-align: center;"></div>
+        </div>
+        <div id="courseModalQuiz" class="modal-section">
+            <div id="quizContent"></div>
+            <div id="quizActions" style="margin-top: 20px; text-align: center;">
+                <button id="submitQuizBtn" class="btn-primary" onclick="submitQuiz()" style="min-width: 200px;">
+                    <span class="lang-el">Υποβολή Απαντήσεων</span><span class="lang-en">Submit Answers</span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Create Quiz Modal -->
+<div id="createQuizModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>📝 <span class="lang-el">Δημιουργία Quiz</span><span class="lang-en">Create Quiz</span></h2>
+            <button class="modal-close" onclick="closeCreateQuizModal()">×</button>
+        </div>
+        <div id="createQuizForm">
+            <input id="quizTitleInput" class="input-field" placeholder="Quiz Title" style="width: 100%; margin-bottom: 10px;" />
+            <input id="passingScore" class="input-field" type="number" value="80" placeholder="Passing Score (%)" style="width: 100%; margin-bottom: 20px;" />
+
+            <h4><span class="lang-el">Ερωτήσεις</span><span class="lang-en">Questions</span></h4>
+            <div id="questionsContainer"></div>
+
+            <button class="btn-secondary" style="width: 100%; margin: 10px 0;" onclick="addQuestion()">
+                ➕ <span class="lang-el">Προσθήκη Ερώτησης</span><span class="lang-en">Add Question</span>
+            </button>
+
+            <button class="btn-primary" style="width: 100%; margin-top: 20px;" onclick="saveQuiz()">
+                💾 <span class="lang-el">Αποθήκευση Quiz</span><span class="lang-en">Save Quiz</span>
+            </button>
         </div>
     </div>
 </div>
@@ -290,6 +533,13 @@ const $ = (id) => document.getElementById(id);
 let connectedWallet = null;
 let connectedSecret = null;
 let connectedPassphrase = null;
+let currentQuizCourseId = null;
+let currentQuizQuestions = [];
+let currentLang = localStorage.getItem('lang') || 'en';
+let builderQuestionCounter = 0;
+let coursesCache = [];
+let currentCourse = null;
+let lastLoadedQuizCourseId = null;
 
 // API Helpers
 async function apiGet(url) {
@@ -312,166 +562,278 @@ async function apiPost(url, body) {
 function log(message, isError = false) {
     const logBox = $("log");
     const timestamp = new Date().toLocaleTimeString();
-    const prefix = isError ? "❌ ERROR" : "✓";
+    const prefix = isError ? "❌" : "✓";
     logBox.textContent = `[${timestamp}] ${prefix} ${message}\n\n${logBox.textContent}`;
-    if (isError) {
-        logBox.style.color = "#ff6b6b";
-    } else {
-        logBox.style.color = "#d7ffe6";
+    logBox.style.color = isError ? "#ff6b6b" : "#d7ffe6";
+}
+
+function toggleContentFields() {
+    const type = (document.querySelector('input[name="contentType"]:checked') || {}).value || 'pdf';
+    $("pdfFields").style.display = type === 'pdf' ? 'block' : 'none';
+    $("videoFields").style.display = type === 'video' ? 'block' : 'none';
+    $("externalFields").style.display = type === 'external' ? 'block' : 'none';
+}
+
+function addBuilderQuestion() {
+    builderQuestionCounter += 1;
+    const idx = builderQuestionCounter;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'question-card builder-question';
+    wrapper.dataset.qid = idx;
+    wrapper.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <strong>Question #${idx}</strong>
+            <button type="button" onclick="this.closest('.builder-question').remove();" style="background:none;border:none;color:#ff6b6b;cursor:pointer;">✕</button>
+        </div>
+        <input class="input-field question-text" placeholder="Question text" style="width:100%; margin:8px 0;" />
+        ${['A','B','C','D'].map((label,i)=>`
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
+                <input type="radio" name="correct-${idx}" value="${i}" ${i===0?'checked':''}>
+                <input class="input-field option-input" placeholder="Option ${label}" style="flex:1;" />
+            </div>
+        `).join('')}
+    `;
+    $("builderQuestions").appendChild(wrapper);
+}
+
+function collectQuizBuilder() {
+    const passScore = parseInt($("builderPassScore").value || '70');
+    const questions = [];
+    document.querySelectorAll('.builder-question').forEach((el) => {
+        const text = el.querySelector('.question-text').value.trim();
+        const options = Array.from(el.querySelectorAll('.option-input')).map(i => i.value.trim());
+        const qid = el.dataset.qid;
+        const correctRadio = el.querySelector(`input[name="correct-${qid}"]:checked`);
+        const correctIndex = correctRadio ? parseInt(correctRadio.value) : 0;
+        if (text && options.every(Boolean)) {
+            questions.push({ id: questions.length + 1, text, options, correct_index: correctIndex });
+        }
+    });
+    return {
+        pass_score: isNaN(passScore) ? 70 : passScore,
+        questions
+    };
+}
+
+// Tab switching
+function showTab(name) {
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    $(name + '-tab').classList.add('active');
+    event.target.classList.add('active');
+    if (name === 'my-courses') loadMyCourses();
+}
+
+function syncWalletFromSession(showToast = true) {
+    const addr = (window.walletSession?.getAddress && window.walletSession.getAddress()) || '';
+    const secret = (window.walletSession?.getSendSecret && window.walletSession.getSendSecret()) || '';
+    if (!addr || !secret) {
+        $("walletWarning").style.display = "block";
+        $("walletStatus").style.display = "none";
+        if (showToast) log("Please connect via wallet widget", true);
+        return false;
     }
+
+    connectedWallet = addr;
+    connectedSecret = secret;
+    connectedPassphrase = '';
+    $("wallet").value = addr;
+    $("walletStatus").style.display = "block";
+    $("walletWarning").style.display = "none";
+    $("connectedWallet").textContent = addr.substring(0, 12) + '...';
+
+    apiGet(`/api/v1/l2e/balance/${addr}`).then(data => {
+        $("l2eBalance").textContent = data.l2e_balance || data.balance || 0;
+    }).catch(e => log(`Failed to load L2E balance: ${e.message}`, true));
+
+    if (showToast) log(`Connected wallet: ${addr}`);
+    refresh();
+    return true;
 }
 
 // Connect Wallet
-$("connectBtn").onclick = async () => {
-    const wallet = $("wallet").value.trim();
-    const secret = $("secret").value.trim();
-    const passphrase = $("passphrase").value.trim();
-    
-    if (!wallet) {
-        log("Please enter a wallet address", true);
-        return;
-    }
-    
-    connectedWallet = wallet;
-    connectedSecret = secret;
-    connectedPassphrase = passphrase;
-    
-    $("walletStatus").style.display = "block";
-    $("connectedWallet").textContent = wallet;
-    
-    // Load L2E balance
-    try {
-        const data = await apiGet(`/api/v1/l2e/balance/${wallet}`);
-        $("l2eBalance").textContent = data.l2e_balance || 0;
-    } catch (e) {
-        log(`Failed to load L2E balance: ${e.message}`, true);
-    }
-    
-    log(`Connected wallet: ${wallet}`);
-    await refresh();
-};
+$("connectBtn").onclick = () => syncWalletFromSession(true);
 
 // Create Course Card
 function courseCard(c) {
     const el = document.createElement("div");
     el.className = "course-card";
-    
+
     const isEnrolled = connectedWallet && (c.students || []).includes(connectedWallet);
     const isCompleted = connectedWallet && (c.completed || []).includes(connectedWallet);
+    const isQuizPassed = connectedWallet && (c.quiz_passed || []).includes(connectedWallet);
     const isTeacher = connectedWallet && c.teacher === connectedWallet;
-    
+    const hasQuiz = c.has_quiz;
+
     let badges = "";
-    if (isEnrolled) badges += '<span class="badge badge-enrolled">Enrolled</span>';
-    if (isCompleted) badges += '<span class="badge badge-completed">Completed</span>';
-    
+    if (isEnrolled) badges += `<span class="badge badge-enrolled">${currentLang === 'el' ? 'Εγγεγραμμένος' : 'Enrolled'}</span>`;
+    if (isQuizPassed) badges += `<span class="badge badge-quiz-passed">${currentLang === 'el' ? 'Quiz ✓' : 'Quiz ✓'}</span>`;
+    if (isCompleted) badges += `<span class="badge badge-completed">${currentLang === 'el' ? 'Ολοκληρώθηκε' : 'Completed'}</span>`;
+    if (hasQuiz) badges += `<span class="badge badge-has-quiz">📝 Quiz</span>`;
+
     el.innerHTML = `
         <div class="course-header">
             <div style="flex: 1;">
                 <div class="course-title">${escapeHtml(c.title)}${badges}</div>
-                <div class="course-meta">👨‍🏫 Teacher: <code>${escapeHtml(c.teacher.substring(0, 12))}...</code></div>
-                <div class="course-meta">💰 Price: <strong>${c.price_thr}</strong> THR · 🎁 Reward: <strong>${c.reward_l2e}</strong> L2E</div>
+                <div class="course-meta">👨‍🏫 ${currentLang === 'el' ? 'Εκπαιδευτής' : 'Teacher'}: <code>${escapeHtml(c.teacher.substring(0, 12))}...</code></div>
+                <div class="course-meta">💰 ${currentLang === 'el' ? 'Τιμή' : 'Price'}: <strong>${c.price_thr}</strong> THR · 🎁 ${currentLang === 'el' ? 'Ανταμοιβή' : 'Reward'}: <strong>${c.reward_l2e}</strong> L2E</div>
                 <div class="course-stats">
-                    <span>👥 ${(c.students || []).length} students</span>
-                    <span>✅ ${(c.completed || []).length} completed</span>
+                    <span>👥 ${(c.students || []).length} ${currentLang === 'el' ? 'μαθητές' : 'students'}</span>
+                    <span>✅ ${(c.completed || []).length} ${currentLang === 'el' ? 'ολοκλήρωσαν' : 'completed'}</span>
                 </div>
             </div>
             <div class="course-actions">
-                <button class="btn-enroll btn-primary" ${isEnrolled || !connectedWallet ? 'disabled' : ''}>
-                    ${isEnrolled ? '✓ Enrolled' : '📝 Enroll'}
-                </button>
-                <button class="btn-complete btn-secondary" ${!isTeacher || isCompleted ? 'disabled' : ''}>
-                    ${isCompleted ? '✓ Completed' : '✅ Complete'}
-                </button>
+                ${isEnrolled ? `
+                    <button class="btn-primary" onclick="openCourseModal('${c.id}', 'lesson')">
+                        🚀 ${currentLang === 'el' ? 'Άνοιγμα Μαθήματος' : 'Open course'}
+                    </button>
+                ` : `
+                    <button class="btn-enroll btn-primary" ${!connectedWallet ? 'disabled' : ''}>
+                        📝 ${currentLang === 'el' ? 'Εγγραφή' : 'Enroll'}
+                    </button>
+                `}
+                ${hasQuiz && isEnrolled ? `
+                    <button class="btn-quiz btn-secondary" onclick="openCourseModal('${c.id}', 'quiz')">
+                        📝 ${isQuizPassed ? (currentLang === 'el' ? 'Επανεξέταση' : 'Retake Quiz') : (currentLang === 'el' ? 'Κάνε Quiz' : 'Take Quiz')}
+                    </button>
+                ` : ''}
+                ${isTeacher ? `
+                    <button class="btn-secondary" onclick="openCreateQuiz('${c.id}')">
+                        ⚙️ ${currentLang === 'el' ? 'Quiz Ρυθμίσεις' : 'Quiz Settings'}
+                    </button>
+                    <button class="btn-complete btn-secondary">
+                        ✅ ${currentLang === 'el' ? 'Ολοκλήρωση' : 'Complete'}
+                    </button>
+                    <button class="btn-danger" onclick="deleteCourse('${c.id}')">
+                        🗑️ ${currentLang === 'el' ? 'Διαγραφή' : 'Delete'}
+                    </button>
+                ` : ''}
             </div>
         </div>
     `;
-    
+
     // Enroll button
-    el.querySelector(".btn-enroll").onclick = async () => {
-        if (!connectedWallet || !connectedSecret) {
-            log("Please connect wallet first", true);
-            return;
-        }
-        
-        try {
-            log(`Enrolling in "${c.title}"...`);
-            const result = await apiPost(`/api/v1/courses/${c.id}/enroll`, {
-                student_thr: connectedWallet,
-                auth_secret: connectedSecret,
-                passphrase: connectedPassphrase
-            });
-            
-            if (result.status === "success") {
-                log(`Successfully enrolled in "${c.title}"! TX: ${result.tx.tx_id}`);
-                await refresh();
-            } else {
-                log(`Enrollment failed: ${result.message || 'Unknown error'}`, true);
+    const enrollBtn = el.querySelector(".btn-enroll");
+    if (enrollBtn) {
+        enrollBtn.onclick = async () => {
+            if (!connectedWallet || !connectedSecret) {
+                log("Please connect wallet first", true);
+                return;
             }
-        } catch (e) {
-            log(`Enrollment error: ${e.message}`, true);
-        }
-    };
-    
+
+            try {
+                log(`Enrolling in "${c.title}"...`);
+                const result = await apiPost(`/api/v1/courses/${c.id}/enroll`, {
+                    student_thr: connectedWallet,
+                    auth_secret: connectedSecret,
+                    passphrase: connectedPassphrase
+                });
+
+                if (result.status === "success") {
+                    log(`Successfully enrolled in "${c.title}"! TX: ${result.tx.tx_id}`);
+                    await refresh();
+                } else {
+                    log(`Enrollment failed: ${result.message || 'Unknown error'}`, true);
+                }
+            } catch (e) {
+                log(`Enrollment error: ${e.message}`, true);
+            }
+        };
+    }
+
     // Complete button (for teachers)
-    el.querySelector(".btn-complete").onclick = async () => {
-        if (!connectedWallet || !connectedSecret) {
-            log("Please connect wallet first", true);
-            return;
-        }
-        
-        const studentAddr = prompt("Enter student's THR address to mark as completed:");
-        if (!studentAddr) return;
-        
-        try {
-            log(`Marking student ${studentAddr} as completed for "${c.title}"...`);
-            const result = await apiPost(`/api/v1/courses/${c.id}/complete`, {
-                student_thr: studentAddr,
-                teacher_thr: connectedWallet,
-                auth_secret: connectedSecret,
-                passphrase: connectedPassphrase
-            });
-            
-            if (result.status === "success") {
-                log(`Student completed! L2E reward distributed. TX: ${result.tx.tx_id}`);
-                await refresh();
-            } else {
-                log(`Completion failed: ${result.message || 'Unknown error'}`, true);
+    const completeBtn = el.querySelector(".btn-complete");
+    if (completeBtn) {
+        completeBtn.onclick = async () => {
+            const studentAddr = prompt(currentLang === 'el' ? "Εισάγετε THR διεύθυνση μαθητή:" : "Enter student's THR address:");
+            if (!studentAddr) return;
+
+            try {
+                log(`Marking student ${studentAddr} as completed...`);
+                const result = await apiPost(`/api/v1/courses/${c.id}/complete`, {
+                    student_thr: studentAddr,
+                    teacher_thr: connectedWallet,
+                    auth_secret: connectedSecret,
+                    passphrase: connectedPassphrase
+                });
+
+                if (result.status === "success") {
+                    log(`Student completed! L2E reward distributed. TX: ${result.tx.tx_id}`);
+                    await refresh();
+                } else {
+                    log(`Completion failed: ${result.message}`, true);
+                }
+            } catch (e) {
+                log(`Completion error: ${e.message}`, true);
             }
-        } catch (e) {
-            log(`Completion error: ${e.message}`, true);
-        }
-    };
-    
+        };
+    }
+
     return el;
 }
 
 // Refresh Courses
 async function refresh() {
     const box = $("courses");
-    box.innerHTML = '<div class="loading">Loading courses...</div>';
-    
+    box.innerHTML = `<div class="loading">${currentLang === 'el' ? 'Φόρτωση μαθημάτων...' : 'Loading courses...'}</div>`;
+
     try {
         const data = await apiGet("/api/v1/courses");
         const courses = data.courses || [];
-        
+
+        // Check which courses have quizzes
+        for (let c of courses) {
+            try {
+                const quizData = await apiGet(`/api/v1/courses/${c.id}/quiz`);
+                c.has_quiz = quizData.quiz && quizData.quiz.questions && quizData.quiz.questions.length > 0;
+            } catch (e) {
+                c.has_quiz = false;
+            }
+        }
+        coursesCache = courses;
+
         box.innerHTML = "";
-        
+
         if (courses.length === 0) {
-            box.innerHTML = '<div class="empty-state">No courses available yet.<br>Be the first to create one!</div>';
+            box.innerHTML = `<div class="empty-state">${currentLang === 'el' ? 'Δεν υπάρχουν μαθήματα ακόμα.' : 'No courses available yet.'}<br>${currentLang === 'el' ? 'Γίνε ο πρώτος που θα δημιουργήσει!' : 'Be the first to create one!'}</div>`;
         } else {
             courses.forEach(c => box.appendChild(courseCard(c)));
         }
-        
+
         // Update stats
         $("totalCourses").textContent = courses.length;
         const totalStudents = courses.reduce((sum, c) => sum + (c.students || []).length, 0);
         $("totalStudents").textContent = totalStudents;
         const totalL2E = courses.reduce((sum, c) => sum + (c.completed || []).length * c.reward_l2e, 0);
         $("totalL2E").textContent = totalL2E.toFixed(2);
-        
+
     } catch (e) {
-        box.innerHTML = `<div class="error">Failed to load courses: ${e.message}</div>`;
-        log(`Refresh error: ${e.message}`, true);
+        box.innerHTML = `<div class="error">${currentLang === 'el' ? 'Αποτυχία φόρτωσης' : 'Failed to load courses'}: ${e.message}</div>`;
+    }
+}
+
+// Load My Courses
+async function loadMyCourses() {
+    if (!connectedWallet) {
+        $("my-courses-list").innerHTML = `<div class="empty-state">${currentLang === 'el' ? 'Συνδέστε το πορτοφόλι σας' : 'Please connect your wallet'}</div>`;
+        return;
+    }
+
+    try {
+        const data = await apiGet("/api/v1/courses");
+        const courses = data.courses || [];
+        const myCourses = courses.filter(c => (c.students || []).includes(connectedWallet));
+
+        const box = $("my-courses-list");
+        box.innerHTML = "";
+
+        if (myCourses.length === 0) {
+            box.innerHTML = `<div class="empty-state">${currentLang === 'el' ? 'Δεν έχετε εγγραφεί σε κανένα μάθημα' : 'You are not enrolled in any courses'}</div>`;
+        } else {
+            myCourses.forEach(c => box.appendChild(courseCard(c)));
+        }
+    } catch (e) {
+        $("my-courses-list").innerHTML = `<div class="error">${e.message}</div>`;
     }
 }
 
@@ -481,41 +843,698 @@ $("create").onclick = async () => {
         log("Please connect wallet first", true);
         return;
     }
-    
+
     const title = $("title").value.trim();
     const price = parseFloat($("price").value || "0");
     const reward = parseFloat($("reward").value || "0");
-    
+    const description = $("description").value.trim();
+    const titleEl = $("titleEl").value.trim();
+    const contentType = (document.querySelector('input[name="contentType"]:checked') || {}).value || 'pdf';
+    const slidesFile = $("slidesFile").files[0];
+    const videoUrl = $("videoUrl").value.trim();
+    const contentUrl = $("contentUrl").value.trim();
+    const quizPayload = collectQuizBuilder();
+
     if (!title || price < 0 || reward <= 0) {
         log("Invalid input: Title required, price >= 0, reward > 0", true);
         return;
     }
-    
+
+    if (contentType === 'pdf' && !slidesFile) {
+        log("Please upload a slides PDF", true);
+        return;
+    }
+    if (contentType === 'video' && !videoUrl) {
+        log("Please provide a video URL", true);
+        return;
+    }
+    if (contentType === 'external' && !contentUrl) {
+        log("Please provide an external content URL", true);
+        return;
+    }
+
     try {
         log(`Creating course "${title}"...`);
-        const result = await apiPost("/api/v1/courses", {
-            title,
-            teacher: connectedWallet,
-            price_thr: price,
-            reward_l2e: reward,
-            auth_secret: connectedSecret,
-            passphrase: connectedPassphrase
-        });
-        
+        const formData = new FormData();
+        formData.append('title', title);
+        formData.append('title_el', titleEl);
+        formData.append('description', description);
+        formData.append('teacher', connectedWallet);
+        formData.append('price_thr', price);
+        formData.append('reward_l2e', reward);
+        formData.append('auth_secret', connectedSecret);
+        formData.append('passphrase', connectedPassphrase);
+        formData.append('content_type', contentType);
+        if (contentType === 'pdf' && slidesFile) formData.append('slides', slidesFile);
+        if (contentType === 'video') formData.append('video_url', videoUrl);
+        if (contentType === 'external') formData.append('content_url', contentUrl);
+        if (quizPayload.questions.length > 0) {
+            formData.append('quiz', JSON.stringify(quizPayload));
+        }
+
+        const response = await fetch("/api/v1/courses", { method: "POST", body: formData });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const result = await response.json();
+
         if (result.status === "success") {
-            log(`Course "${title}" created successfully! ID: ${result.course.id}`);
+            log(`Course "${title}" created! ID: ${result.course.id}`);
             $("title").value = "";
+            $("titleEl").value = "";
             $("description").value = "";
             $("price").value = "";
             $("reward").value = "";
+            $("slidesFile").value = "";
+            $("videoUrl").value = "";
+            $("contentUrl").value = "";
+            $("builderPassScore").value = "70";
+            $("builderQuestions").innerHTML = "";
+            builderQuestionCounter = 0;
+            addBuilderQuestion();
             await refresh();
         } else {
-            log(`Course creation failed: ${result.message || 'Unknown error'}`, true);
+            log(`Course creation failed: ${result.message}`, true);
         }
     } catch (e) {
         log(`Creation error: ${e.message}`, true);
     }
 };
+
+document.querySelectorAll('input[name="contentType"]').forEach(r => r.addEventListener('change', toggleContentFields));
+toggleContentFields();
+addBuilderQuestion();
+
+// Course Modal Functions
+async function openCourseModal(courseId, tab = 'lesson') {
+    currentQuizCourseId = courseId;
+    currentQuizQuestions = [];
+    lastLoadedQuizCourseId = null;
+    currentCourse = coursesCache.find(c => c.id === courseId) || null;
+    if (!currentCourse) {
+        try {
+            const data = await apiGet(`/api/v1/courses/${courseId}`);
+            currentCourse = data.course;
+        } catch (e) {
+            currentCourse = null;
+        }
+    }
+
+    if (currentCourse) {
+        $("courseModalTitle").textContent = `🎓 ${currentCourse.title}`;
+        if (currentCourse.has_quiz === undefined) {
+            try {
+                const quizData = await apiGet(`/api/v1/courses/${courseId}/quiz`);
+                currentCourse.has_quiz = quizData.quiz && quizData.quiz.questions && quizData.quiz.questions.length > 0;
+            } catch (e) {
+                currentCourse.has_quiz = false;
+            }
+        }
+    } else {
+        $("courseModalTitle").textContent = "🎓 Course";
+    }
+
+    renderCourseLesson(currentCourse);
+    if (tab === 'quiz') {
+        await loadQuizForModal(courseId);
+    }
+    await showCourseModalTab(tab);
+    $("courseModal").classList.add("active");
+}
+
+async function showCourseModalTab(tab) {
+    document.querySelectorAll('.modal-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === tab);
+    });
+    document.querySelectorAll('.modal-section').forEach(section => {
+        section.classList.toggle('active', section.id === `courseModal${tab.charAt(0).toUpperCase() + tab.slice(1)}`);
+    });
+    if (tab === 'quiz' && currentQuizCourseId) {
+        await loadQuizForModal(currentQuizCourseId);
+    }
+}
+
+function renderCourseLesson(course) {
+    const box = $("courseLessonContent");
+    const actions = $("courseLessonActions");
+    actions.innerHTML = "";
+
+    if (!course) {
+        box.innerHTML = `<div class="error">${currentLang === 'el' ? 'Το μάθημα δεν βρέθηκε' : 'Course not found'}</div>`;
+        return;
+    }
+
+    const isTeacher = connectedWallet && course.teacher === connectedWallet;
+    const isEnrolled = connectedWallet && (course.students || []).includes(connectedWallet);
+    const price = parseFloat(course.price_thr || 0);
+    const materials = course?.metadata?.materials || {};
+
+    let notice = '';
+    if (!connectedWallet) {
+        notice = currentLang === 'el' ? 'Συνδέστε το πορτοφόλι σας για να δείτε υλικό.' : 'Connect your wallet to view materials.';
+    } else if (!isEnrolled && !isTeacher) {
+        notice = price > 0
+            ? (currentLang === 'el' ? `Το μάθημα κοστίζει ${price} THR. Κάντε εγγραφή για πρόσβαση.` : `This course costs ${price} THR. Enroll to access.`)
+            : (currentLang === 'el' ? 'Κάντε εγγραφή για πρόσβαση στο υλικό.' : 'Enroll to access materials.');
+    }
+
+    let materialHtml = '';
+    if (!isEnrolled && !isTeacher) {
+        materialHtml = `<div style="padding:12px;border-radius:10px;border:1px solid #1a5a2f;background:#050b07;">${currentLang === 'el' ? 'Το υλικό είναι διαθέσιμο μετά την εγγραφή.' : 'Materials unlock after enrollment.'}</div>`;
+    } else if (materials.type === 'pdf' && materials.slides_path) {
+        materialHtml = `<a class="btn-secondary" href="/media/${materials.slides_path}" target="_blank">📄 ${currentLang === 'el' ? 'Άνοιγμα Διαφανειών' : 'Open Slides'}</a>`;
+    } else if (materials.type === 'video' && materials.video_url) {
+        materialHtml = `<a class="btn-secondary" href="${materials.video_url}" target="_blank">🎬 ${currentLang === 'el' ? 'Άνοιγμα Video' : 'Open Video'}</a>`;
+    } else if (materials.type === 'external' && materials.content_url) {
+        materialHtml = `<a class="btn-secondary" href="${materials.content_url}" target="_blank">🔗 ${currentLang === 'el' ? 'Άνοιγμα Υλικού' : 'Open Material'}</a>`;
+    } else {
+        materialHtml = `<div style="opacity:0.7;">${currentLang === 'el' ? 'Δεν υπάρχει υλικό ακόμη.' : 'No course materials configured yet.'}</div>`;
+    }
+
+    box.innerHTML = `
+        <div style="margin-bottom:10px;opacity:0.85;">${escapeHtml(course.description || '')}</div>
+        ${notice ? `<div style="margin-bottom:12px;color:#ff9b5f;">${notice}</div>` : ''}
+        <div>${materialHtml}</div>
+    `;
+
+    if (course.has_quiz) {
+        const canTakeQuiz = isTeacher || isEnrolled;
+        actions.innerHTML = `
+            <button class="btn-primary" onclick="showCourseModalTab('quiz')" ${canTakeQuiz ? '' : 'disabled'}>
+                📝 ${currentLang === 'el' ? 'Κάνε Quiz' : 'Take Quiz'}
+            </button>
+        `;
+    }
+}
+
+async function deleteCourse(courseId) {
+    if (!connectedWallet || !connectedSecret) {
+        log("Please connect wallet first", true);
+        return;
+    }
+
+    const confirmText = currentLang === 'el'
+        ? 'Είσαι σίγουρος ότι θέλεις να διαγράψεις αυτό το μάθημα;'
+        : 'Are you sure you want to delete this course?';
+
+    if (!confirm(confirmText)) return;
+
+    try {
+        const result = await apiPost(`/api/v1/courses/${courseId}/delete`, {
+            teacher_thr: connectedWallet,
+            auth_secret: connectedSecret,
+            passphrase: connectedPassphrase
+        });
+
+        if (result.status === "success") {
+            log(currentLang === 'el' ? 'Το μάθημα διαγράφηκε.' : 'Course deleted.');
+            closeCourseModal();
+            await refresh();
+        } else {
+            log(result.message || 'Delete failed', true);
+        }
+    } catch (e) {
+        log(`Delete error: ${e.message}`, true);
+    }
+}
+
+async function loadQuizForModal(courseId) {
+    if (lastLoadedQuizCourseId === courseId && currentQuizQuestions.length > 0) {
+        return;
+    }
+
+    try {
+        const data = await apiGet(`/api/v1/courses/${courseId}/quiz`);
+        if (!data.quiz || !data.quiz.questions || data.quiz.questions.length === 0) {
+            $("quizContent").innerHTML = `<div class="error">${currentLang === 'el' ? 'Δεν υπάρχει quiz για αυτό το μάθημα' : 'No quiz available for this course'}</div>`;
+            $("submitQuizBtn").style.display = "none";
+            return;
+        }
+
+        const quiz = data.quiz;
+        currentQuizQuestions = quiz.questions;
+        lastLoadedQuizCourseId = courseId;
+
+        let html = `<p style="margin-bottom: 20px; opacity: 0.8;">${currentLang === 'el' ? 'Βαθμολογία επιτυχίας' : 'Passing score'}: ${quiz.passing_score}%</p>`;
+
+        quiz.questions.forEach((q, idx) => {
+            const questionText = currentLang === 'el' ? (q.question_el || q.question) : q.question;
+            const options = currentLang === 'el' ? (q.options_el || q.options) : q.options;
+            const qType = normalizeQuestionType(q.type);
+
+            let body = '';
+            if (qType === 'true_false') {
+                body = `
+                    <label class="option-label">
+                        <input type="radio" name="q${q.id}" value="0">${currentLang === 'el' ? 'Λάθος' : 'False'}
+                    </label>
+                    <label class="option-label">
+                        <input type="radio" name="q${q.id}" value="1">${currentLang === 'el' ? 'Σωστό' : 'True'}
+                    </label>`;
+            } else if (qType === 'multi_select') {
+                body = (options || []).map((opt, optIdx) => `
+                    <label class="option-label">
+                        <input type="checkbox" name="q${q.id}" value="${optIdx}">
+                        ${escapeHtml(opt)}
+                    </label>
+                `).join('');
+            } else if (qType === 'short_answer') {
+                body = `
+                    <input class="input-field" name="q${q.id}" placeholder="${currentLang === 'el' ? 'Γράψε την απάντηση' : 'Type your answer'}" style="width: 100%;">
+                `;
+            } else {
+                body = (options || []).map((opt, optIdx) => `
+                    <label class="option-label">
+                        <input type="radio" name="q${q.id}" value="${optIdx}">
+                        ${escapeHtml(opt)}
+                    </label>
+                `).join('');
+            }
+
+            html += `
+                <div class="question-card">
+                    <div class="question-text">
+                        <span class="question-number">#${idx + 1}</span>
+                        ${escapeHtml(questionText)}
+                        <span style="font-size:12px;opacity:0.7;margin-left:8px;">(${qType.toUpperCase()})</span>
+                    </div>
+                    <div class="options">${body}</div>
+                </div>
+            `;
+        });
+
+        $("quizContent").innerHTML = html;
+        $("submitQuizBtn").style.display = "inline-block";
+
+    } catch (e) {
+        $("quizContent").innerHTML = `<div class="error">${e.message}</div>`;
+        $("submitQuizBtn").style.display = "none";
+    }
+}
+
+function closeCourseModal() {
+    $("courseModal").classList.remove("active");
+    currentQuizCourseId = null;
+    currentQuizQuestions = [];
+    currentCourse = null;
+    lastLoadedQuizCourseId = null;
+}
+
+async function submitQuiz() {
+    if (!connectedWallet) {
+        alert(currentLang === 'el' ? 'Συνδέστε το πορτοφόλι σας' : 'Please connect your wallet');
+        return;
+    }
+
+    // Reset previous highlights
+    document.querySelectorAll('.question-card').forEach(card => {
+        card.style.border = '1px solid #1a5a2f';
+    });
+
+    // Collect answers and track unanswered questions
+    const answers = {};
+    const unansweredQuestions = [];
+
+    currentQuizQuestions.forEach((q, idx) => {
+        const qType = normalizeQuestionType(q.type);
+        if (qType === 'multiple_choice' || qType === 'true_false') {
+            const selected = document.querySelector(`input[name="q${q.id}"]:checked`);
+            if (selected) {
+                answers[q.id] = parseInt(selected.value);
+            } else {
+                unansweredQuestions.push(idx + 1);
+            }
+        } else if (qType === 'multi_select') {
+            const selected = Array.from(document.querySelectorAll(`input[name="q${q.id}"]:checked`))
+                .map(el => parseInt(el.value));
+            if (selected.length > 0) {
+                answers[q.id] = selected;
+            } else {
+                unansweredQuestions.push(idx + 1);
+            }
+        } else if (qType === 'short_answer') {
+            const input = document.querySelector(`input[name="q${q.id}"]`);
+            const value = input ? input.value.trim() : '';
+            if (value) {
+                answers[q.id] = value;
+            } else {
+                unansweredQuestions.push(idx + 1);
+            }
+        }
+    });
+
+    if (unansweredQuestions.length > 0) {
+        // Highlight unanswered questions
+        unansweredQuestions.forEach(qNum => {
+            const questionCards = document.querySelectorAll('.question-card');
+            if (questionCards[qNum - 1]) {
+                questionCards[qNum - 1].style.border = '2px solid #ff6b6b';
+                questionCards[qNum - 1].style.boxShadow = '0 0 10px rgba(255, 107, 107, 0.3)';
+            }
+        });
+
+        // Scroll to first unanswered question
+        const firstUnanswered = document.querySelectorAll('.question-card')[unansweredQuestions[0] - 1];
+        if (firstUnanswered) {
+            firstUnanswered.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        const msg = currentLang === 'el'
+            ? `Απαντήστε σε όλες τις ερωτήσεις. Λείπουν: ${unansweredQuestions.join(', ')}`
+            : `Please answer all questions. Missing: ${unansweredQuestions.join(', ')}`;
+        alert(msg);
+        return;
+    }
+
+    try {
+        const result = await apiPost(`/api/v1/courses/${currentQuizCourseId}/quiz/submit`, {
+            student_thr: connectedWallet,
+            answers: answers
+        });
+
+        // Show results
+        const passedClass = result.passed ? 'passed' : 'failed';
+        const passedText = result.passed
+            ? (currentLang === 'el' ? '🎉 Πέρασες!' : '🎉 You Passed!')
+            : (currentLang === 'el' ? '😔 Δεν πέρασες' : '😔 You Failed');
+
+        let breakdown = '';
+        (result.results || []).forEach((row, i) => {
+            const qMeta = currentQuizQuestions.find(q => String(q.id) === String(row.question_id)) || {};
+            const label = currentLang === 'el' ? 'Σωστό' : 'Correct';
+            const wrong = currentLang === 'el' ? 'Λάθος' : 'Wrong';
+            breakdown += `
+                <div class="question-card" style="border:${row.correct ? '1px solid #1a5a2f' : '1px solid #5f1a1a'}">
+                    <div class="question-text"><span class="question-number">#${i + 1}</span> ${escapeHtml(qMeta.question || '')}</div>
+                    <div style="opacity:0.8;font-size:13px;">${row.correct ? label : wrong}</div>
+                    <div style="font-size:12px;opacity:0.7;">${currentLang === 'el' ? 'Απάντησή σου' : 'Your answer'}: ${JSON.stringify(row.your_answer)}</div>
+                    <div style="font-size:12px;opacity:0.7;">${currentLang === 'el' ? 'Σωστή απάντηση' : 'Correct answer'}: ${JSON.stringify(row.correct_answer)}</div>
+                </div>`;
+        });
+
+        const rewardStatus = result.reward_credited
+            ? (currentLang === 'el' ? `✅ Πληρωμή ανταμοιβής (${result.reward_amount} L2E)` : `✅ Reward paid (${result.reward_amount} L2E)`)
+            : (result.passed ? (currentLang === 'el' ? '⏳ Αναμονή ανταμοιβής' : '⏳ Reward pending') : (currentLang === 'el' ? 'Δεν πληροίς τις προϋποθέσεις' : 'Not eligible'));
+
+        $("quizContent").innerHTML = `
+            <div class="quiz-result">
+                <div class="quiz-score ${passedClass}">${result.score}%</div>
+                <div style="font-size: 1.5em; margin: 15px 0;">${passedText}</div>
+                <p>${currentLang === 'el' ? 'Σωστές απαντήσεις' : 'Correct answers'}: ${result.correct}/${result.total}</p>
+                <p>${currentLang === 'el' ? 'Βαθμολογία επιτυχίας' : 'Passing score'}: ${result.passing_score}%</p>
+                <p>${rewardStatus}</p>
+                <div style="margin-top:15px;">${breakdown}</div>
+            </div>
+        `;
+
+        $("submitQuizBtn").style.display = "none";
+
+        // Refresh courses to update badges
+        await refresh();
+
+    } catch (e) {
+        alert(`Error submitting quiz: ${e.message}`);
+    }
+}
+
+// Create Quiz Functions
+let quizQuestions = [];
+
+async function openCreateQuiz(courseId) {
+    currentQuizCourseId = courseId;
+    quizQuestions = [];
+    $("questionsContainer").innerHTML = "";
+    $("quizTitleInput").value = "";
+    $("passingScore").value = "80";
+    await loadQuizForEdit(courseId);
+    if (quizQuestions.filter(Boolean).length === 0) {
+        addQuestion();
+    }
+    $("createQuizModal").classList.add("active");
+}
+
+function closeCreateQuizModal() {
+    $("createQuizModal").classList.remove("active");
+    currentQuizCourseId = null;
+}
+
+async function loadQuizForEdit(courseId) {
+    if (!connectedWallet || !connectedSecret) return;
+
+    try {
+        const params = new URLSearchParams({
+            teacher_thr: connectedWallet,
+            auth_secret: connectedSecret,
+            passphrase: connectedPassphrase
+        });
+        let quiz = null;
+        const courseData = await apiGet(`/api/v1/courses/${courseId}?${params.toString()}`);
+        if (courseData.course && courseData.course.quiz_full) {
+            quiz = courseData.course.quiz_full;
+        } else {
+            const data = await apiPost(`/api/v1/courses/${courseId}/quiz/edit`, {
+                teacher_thr: connectedWallet,
+                auth_secret: connectedSecret,
+                passphrase: connectedPassphrase
+            });
+            quiz = data.quiz;
+        }
+        if (!quiz || !quiz.questions) return;
+        $("quizTitleInput").value = quiz.title || "";
+        $("passingScore").value = quiz.passing_score || quiz.pass_score || 80;
+        quiz.questions.forEach(q => {
+            const normalizedType = normalizeQuestionType(q.type);
+            const normalizedQuestion = {
+                ...q,
+                type: normalizedType,
+                options: normalizedType === 'true_false'
+                    ? ['False', 'True']
+                    : (normalizedType === 'short_answer' ? [] : (q.options || ['', '', '', ''])),
+                correct: normalizedType === 'multi_select'
+                    ? (Array.isArray(q.correct) ? q.correct : [])
+                    : (normalizedType === 'true_false' ? (q.correct === 1 ? 1 : 0) : (q.correct ?? 0)),
+                correct_text: normalizedType === 'short_answer'
+                    ? (Array.isArray(q.correct_text) ? q.correct_text.join(', ') : (q.correct_text || q.correct || ''))
+                    : ''
+            };
+            addQuestion(normalizedQuestion);
+        });
+    } catch (e) {
+        console.warn(`Failed to load quiz: ${e.message}`);
+    }
+}
+
+function normalizeQuestionType(rawType) {
+    const val = String(rawType || '').toLowerCase();
+    if (val === 'true_false' || val === 'tf' || val === 'truefalse') return 'true_false';
+    if (val === 'multiple_choice' || val === 'mcq' || val === 'single' || val === 'multiple-choice') return 'multiple_choice';
+    if (val === 'multi_select' || val === 'multi-select' || val === 'checkbox' || val === 'multi') return 'multi_select';
+    if (val === 'short_answer' || val === 'short' || val === 'text') return 'short_answer';
+    return 'multiple_choice';
+}
+
+function addQuestion(existing = null) {
+    const idx = quizQuestions.length;
+    const baseQuestion = {
+        question: existing?.question || '',
+        question_el: existing?.question_el || '',
+        options: existing?.options || ['', '', '', ''],
+        correct: existing?.correct ?? 0,
+        correct_text: existing?.correct_text || '',
+        type: normalizeQuestionType(existing?.type)
+    };
+
+    quizQuestions.push(baseQuestion);
+
+    const questionText = escapeAttr(baseQuestion.question || '');
+    const questionEl = escapeAttr(baseQuestion.question_el || '');
+    const questionType = baseQuestion.type || 'multiple_choice';
+
+    const div = document.createElement('div');
+    div.className = 'question-card';
+    div.id = `question-${idx}`;
+    div.innerHTML = `
+        <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+            <strong>${currentLang === 'el' ? 'Ερώτηση' : 'Question'} #${idx + 1}</strong>
+            <button type="button" onclick="removeQuestion(${idx})" style="background: none; border: none; color: #ff6b6b; cursor: pointer;">✕</button>
+        </div>
+        <input class="input-field" placeholder="${currentLang === 'el' ? 'Ερώτηση (Αγγλικά)' : 'Question (English)'}"
+               value="${questionText}" onchange="quizQuestions[${idx}].question = this.value" style="width: 100%; margin-bottom: 8px;">
+        <input class="input-field" placeholder="${currentLang === 'el' ? 'Ερώτηση (Ελληνικά)' : 'Question (Greek)'}"
+               value="${questionEl}" onchange="quizQuestions[${idx}].question_el = this.value" style="width: 100%; margin-bottom: 15px;">
+        <div style="margin-bottom:10px;">
+            <label style="font-size:12px;opacity:0.8;">${currentLang === 'el' ? 'Τύπος ερώτησης' : 'Question type'}</label>
+            <select class="input-field" onchange="onQuestionTypeChange(${idx}, this.value)">
+                <option value="multiple_choice" ${questionType === 'multiple_choice' ? 'selected' : ''}>Multiple choice</option>
+                <option value="true_false" ${questionType === 'true_false' ? 'selected' : ''}>True / False</option>
+                <option value="multi_select" ${questionType === 'multi_select' ? 'selected' : ''}>Multi-select</option>
+                <option value="short_answer" ${questionType === 'short_answer' ? 'selected' : ''}>Short answer</option>
+            </select>
+        </div>
+        <div id="q-${idx}-fields"></div>
+    `;
+
+    $("questionsContainer").appendChild(div);
+    renderQuestionFields(idx, questionType);
+}
+
+function removeQuestion(idx) {
+    const el = $(`question-${idx}`);
+    if (el) el.remove();
+    quizQuestions[idx] = null;
+}
+
+function renderQuestionFields(idx, type) {
+    const container = $(`q-${idx}-fields`);
+    if (!container) return;
+    const question = quizQuestions[idx] || {};
+    const optionValues = (question.options || []).concat(['', '', '', '']).slice(0, 4);
+    let html = '';
+    if (type === 'multiple_choice') {
+        html = `
+            <div style="font-size: 0.9em; opacity: 0.7; margin-bottom: 8px;">${currentLang === 'el' ? 'Επιλογές (επιλέξτε τη σωστή)' : 'Options (select the correct one)'}:</div>
+            ${[0,1,2,3].map(i => `
+                <div style="display: flex; gap: 10px; margin-bottom: 8px;">
+                    <input type="radio" name="correct-${idx}" value="${i}" ${Number(question.correct ?? 0) === i ? 'checked' : ''} onchange="quizQuestions[${idx}].correct=${i}">
+                    <input class="input-field" placeholder="Option ${i + 1}" value="${escapeAttr(optionValues[i] || '')}" onchange="quizQuestions[${idx}].options[${i}] = this.value" style="flex: 1;">
+                </div>`).join('')}
+        `;
+        quizQuestions[idx].options = quizQuestions[idx].options || ['', '', '', ''];
+    } else if (type === 'true_false') {
+        const correctValue = Number(question.correct ?? 0);
+        html = `
+            <div style="display:flex;gap:10px;align-items:center;">
+                <label><input type="radio" name="correct-${idx}" value="0" ${correctValue === 0 ? 'checked' : ''} onchange="quizQuestions[${idx}].correct=0"> ${currentLang === 'el' ? 'Λάθος' : 'False'}</label>
+                <label><input type="radio" name="correct-${idx}" value="1" ${correctValue === 1 ? 'checked' : ''} onchange="quizQuestions[${idx}].correct=1"> ${currentLang === 'el' ? 'Σωστό' : 'True'}</label>
+            </div>`;
+    } else if (type === 'multi_select') {
+        const correctValues = Array.isArray(question.correct) ? question.correct : [];
+        html = `
+            <div style="font-size: 0.9em; opacity: 0.7; margin-bottom: 8px;">${currentLang === 'el' ? 'Επιλογές (πολλαπλές σωστές)' : 'Options (multiple correct)'}:</div>
+            ${[0,1,2,3].map(i => `
+                <div style="display: flex; gap: 10px; margin-bottom: 8px; align-items:center;">
+                    <input type="checkbox" value="${i}" ${correctValues.includes(i) ? 'checked' : ''} onchange="toggleMultiSelect(${idx}, ${i}, this.checked)">
+                    <input class="input-field" placeholder="Option ${i + 1}" value="${escapeAttr(optionValues[i] || '')}" onchange="quizQuestions[${idx}].options[${i}] = this.value" style="flex: 1;">
+                </div>`).join('')}
+        `;
+        quizQuestions[idx].options = quizQuestions[idx].options || ['', '', '', ''];
+        quizQuestions[idx].correct = correctValues;
+    } else if (type === 'short_answer') {
+        const answerValue = escapeAttr(question.correct_text || '');
+        html = `
+            <div style="font-size: 0.9em; opacity: 0.7; margin-bottom: 8px;">
+                ${currentLang === 'el' ? 'Σωστή απάντηση (διαχωρίστε με κόμμα για πολλαπλές)' : 'Correct answer (comma-separated for multiple)'}:
+            </div>
+            <input class="input-field" placeholder="${currentLang === 'el' ? 'Σωστή απάντηση' : 'Correct answer'}" value="${answerValue}" onchange="quizQuestions[${idx}].correct_text = this.value" style="width: 100%;">
+        `;
+    }
+    container.innerHTML = html;
+    quizQuestions[idx].type = type;
+}
+
+function onQuestionTypeChange(idx, type) {
+    const normalized = normalizeQuestionType(type);
+    if (normalized === 'true_false') {
+        quizQuestions[idx].options = ['False', 'True'];
+        quizQuestions[idx].correct = 0;
+        quizQuestions[idx].correct_text = '';
+    } else if (normalized === 'multi_select') {
+        quizQuestions[idx].options = (quizQuestions[idx].options || ['', '', '', '']).concat(['', '', '', '']).slice(0, 4);
+        quizQuestions[idx].correct = [];
+        quizQuestions[idx].correct_text = '';
+    } else if (normalized === 'short_answer') {
+        quizQuestions[idx].options = [];
+        quizQuestions[idx].correct = 0;
+        quizQuestions[idx].correct_text = quizQuestions[idx].correct_text || '';
+    } else {
+        quizQuestions[idx].options = (quizQuestions[idx].options || ['', '', '', '']).concat(['', '', '', '']).slice(0, 4);
+        quizQuestions[idx].correct = Number(quizQuestions[idx].correct ?? 0);
+        quizQuestions[idx].correct_text = '';
+    }
+    renderQuestionFields(idx, normalized);
+}
+
+function toggleMultiSelect(idx, optionIndex, isChecked) {
+    const question = quizQuestions[idx];
+    if (!question) return;
+    const current = Array.isArray(question.correct) ? question.correct : [];
+    const next = isChecked
+        ? Array.from(new Set([...current, optionIndex]))
+        : current.filter(value => value !== optionIndex);
+    question.correct = next;
+}
+
+async function saveQuiz() {
+    if (!connectedWallet || !connectedSecret) {
+        alert(currentLang === 'el' ? 'Συνδέστε το πορτοφόλι σας' : 'Please connect your wallet');
+        return;
+    }
+
+    const validationErrors = [];
+    const validQuestions = quizQuestions.filter(q => q && q.question).map((q, idx) => {
+        const qType = normalizeQuestionType(q.type);
+        if (qType === 'multiple_choice') {
+            const options = (q.options || []).concat(['', '', '', '']).slice(0, 4);
+            if (!options.every(o => o)) {
+                validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'συμπλήρωσε όλες τις επιλογές' : 'fill all options'}`);
+            }
+            const correctIndex = Number(q.correct ?? 0);
+            if (Number.isNaN(correctIndex) || correctIndex < 0 || correctIndex >= options.length) {
+                validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'λάθος σωστή επιλογή' : 'invalid correct option'}`);
+            }
+        }
+        if (qType === 'multi_select') {
+            const options = (q.options || []).concat(['', '', '', '']).slice(0, 4);
+            const correctValues = Array.isArray(q.correct) ? q.correct : [];
+            if (!options.every(o => o)) {
+                validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'συμπλήρωσε όλες τις επιλογές' : 'fill all options'}`);
+            }
+            if (correctValues.length === 0) {
+                validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'επίλεξε τουλάχιστον μία σωστή' : 'select at least one correct option'}`);
+            }
+        }
+        if (qType === 'true_false') {
+            if (q.correct !== 0 && q.correct !== 1) {
+                validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'επέλεξε σωστό True/False' : 'select correct True/False'}`);
+            }
+        }
+        if (qType === 'short_answer') {
+            const correctText = (q.correct_text || '').trim();
+            if (!correctText) {
+                validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'γράψε σωστή απάντηση' : 'enter correct answer'}`);
+            }
+        }
+        return { ...q, type: qType };
+    });
+
+    if (validQuestions.length === 0 || validationErrors.length > 0) {
+        if (validationErrors.length > 0) {
+            alert(validationErrors.join('\n'));
+            return;
+        }
+        alert(currentLang === 'el' ? 'Προσθέστε τουλάχιστον μία ερώτηση' : 'Please add at least one question');
+        return;
+    }
+
+    try {
+        const result = await apiPost(`/api/v1/courses/${currentQuizCourseId}/quiz`, {
+            teacher_thr: connectedWallet,
+            auth_secret: connectedSecret,
+            passphrase: connectedPassphrase,
+            title: $("quizTitleInput").value || "Course Quiz",
+            passing_score: parseInt($("passingScore").value) || 80,
+            questions: validQuestions
+        });
+
+        if (result.status === "success") {
+            alert(currentLang === 'el' ? 'Quiz αποθηκεύτηκε!' : 'Quiz saved successfully!');
+            closeCreateQuizModal();
+            await refresh();
+        } else {
+            alert(`Error: ${result.message}`);
+        }
+    } catch (e) {
+        alert(`Error saving quiz: ${e.message}`);
+    }
+}
 
 // Utility
 function escapeHtml(str) {
@@ -524,16 +1543,15 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
+function escapeAttr(str) {
+    return escapeHtml(str).replace(/"/g, '&quot;');
+}
+
 // Auto-refresh
 $("refresh").onclick = refresh;
 
 // Initial load
+syncWalletFromSession(false);
 refresh().catch(e => log(`Initial load error: ${e.message}`, true));
-
-// Auto-load wallet from localStorage
-const savedWallet = localStorage.getItem('thr_address');
-if (savedWallet) {
-    $("wallet").value = savedWallet;
-}
 </script>
 {% endblock %}

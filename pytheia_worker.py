@@ -1,0 +1,467 @@
+#!/usr/bin/env python3
+"""
+PYTHEIA Worker (Node3) - Inline System Health Monitor
+
+This worker runs as a background process or APScheduler job within the same
+Railway service. It monitors system health, collects telemetry, generates
+PYTHEIA_ADVICE, and posts to /api/governance/pytheia/advice when thresholds
+are met.
+
+Key Features:
+- Health checks for /chat, /architect, /api/ai/models, /api/bridge/status, /tokens, /nft
+- Server-side error counter collection
+- Auto-generate PYTHEIA_ADVICE JSON
+- Auto-post to governance API
+- Rate limiting to prevent DAO spam
+- Status change detection to minimize noise
+
+Usage:
+  As standalone: python3 pytheia_worker.py
+  As scheduled job: Import and schedule via APScheduler in server.py
+"""
+
+import os
+import sys
+import time
+import json
+import logging
+import requests
+from datetime import datetime, timedelta
+from typing import Dict, List, Any, Optional
+from pathlib import Path
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - PYTHEIA - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('logs/pytheia_worker.log', mode='a')
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Configuration
+BASE_URL = os.getenv("PYTHEIA_BASE_URL", "http://localhost:5000")
+GOVERNANCE_API = f"{BASE_URL}/api/governance/pytheia/advice"
+CHECK_INTERVAL = int(os.getenv("PYTHEIA_CHECK_INTERVAL", "300"))  # 5 minutes default
+STATE_FILE = os.getenv("PYTHEIA_STATE_FILE", "data/pytheia_state.json")
+REPO_URL = "https://github.com/Tsipchain/thronos-V3.6"
+
+# Health check endpoints
+HEALTH_ENDPOINTS = [
+    {"path": "/chat", "name": "Chat Page", "expected_status": 200},
+    {"path": "/architect", "name": "Architect Page", "expected_status": 200},
+    {"path": "/api/ai/models", "name": "AI Models API", "expected_status": 200},
+    {"path": "/api/bridge/status", "name": "Bridge Status API", "expected_status": 200},
+    {"path": "/tokens", "name": "Tokens Page", "expected_status": 200},
+    {"path": "/nft", "name": "NFT Page", "expected_status": 200},
+    {"path": "/governance", "name": "Governance Page", "expected_status": 200},
+    {"path": "/wallet_viewer", "name": "Wallet Viewer", "expected_status": 200},
+]
+
+# Error thresholds
+THRESHOLDS = {
+    "consecutive_failures": 3,  # Trigger alert after 3 consecutive failures
+    "degraded_mode_duration": 600,  # 10 minutes
+    "error_rate_threshold": 0.15,  # 15% error rate
+    "min_post_interval": 3600,  # Don't post more than once per hour
+}
+
+
+class PYTHEIAWorker:
+    """PYTHEIA Worker for continuous system monitoring."""
+
+    def __init__(self):
+        self.state = self.load_state()
+        self.last_post_time = self.state.get("last_post_time", 0)
+        self.last_status = self.state.get("last_status", {})
+        self.consecutive_failures = self.state.get("consecutive_failures", {})
+
+    def load_state(self) -> Dict:
+        """Load persistent state from file."""
+        try:
+            if os.path.exists(STATE_FILE):
+                with open(STATE_FILE, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            logger.warning(f"Failed to load state: {e}")
+        return {}
+
+    def save_state(self):
+        """Save persistent state to file."""
+        try:
+            os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+            with open(STATE_FILE, 'w') as f:
+                json.dump({
+                    "last_post_time": self.last_post_time,
+                    "last_status": self.last_status,
+                    "consecutive_failures": self.consecutive_failures,
+                    "last_update": datetime.utcnow().isoformat()
+                }, f, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to save state: {e}")
+
+    def check_endpoint(self, endpoint: Dict) -> Dict[str, Any]:
+        """
+        Check a single endpoint health.
+
+        Returns:
+            {"name": str, "status": "ok"|"degraded"|"down", "status_code": int,
+             "response_time_ms": float, "error": str|None}
+        """
+        url = f"{BASE_URL}{endpoint['path']}"
+        start_time = time.time()
+        result = {
+            "name": endpoint["name"],
+            "path": endpoint["path"],
+            "status": "unknown",
+            "status_code": None,
+            "response_time_ms": None,
+            "error": None
+        }
+
+        try:
+            response = requests.get(url, timeout=10, allow_redirects=True)
+            response_time = (time.time() - start_time) * 1000
+            result["response_time_ms"] = round(response_time, 2)
+            result["status_code"] = response.status_code
+
+            if response.status_code == endpoint["expected_status"]:
+                # Additional check for degraded mode in API responses
+                if "/api/" in endpoint["path"]:
+                    try:
+                        data = response.json()
+                        if data.get("ok") == False or data.get("fallback_active") == True:
+                            result["status"] = "degraded"
+                            result["error"] = data.get("error_message", "Degraded mode active")
+                        else:
+                            result["status"] = "ok"
+                    except:
+                        result["status"] = "ok"  # HTML pages
+                else:
+                    result["status"] = "ok"
+            else:
+                result["status"] = "down"
+                result["error"] = f"HTTP {response.status_code}"
+
+        except requests.exceptions.Timeout:
+            result["status"] = "down"
+            result["error"] = "Timeout after 10s"
+        except requests.exceptions.ConnectionError:
+            result["status"] = "down"
+            result["error"] = "Connection refused"
+        except Exception as e:
+            result["status"] = "down"
+            result["error"] = str(e)
+
+        return result
+
+    def run_health_checks(self) -> Dict[str, Any]:
+        """
+        Run all health checks and return aggregated results.
+
+        Returns:
+            {"timestamp": str, "overall_status": str, "checks": [...],
+             "summary": {...}}
+        """
+        logger.info("Running health checks...")
+        checks = []
+        ok_count = 0
+        degraded_count = 0
+        down_count = 0
+
+        for endpoint in HEALTH_ENDPOINTS:
+            result = self.check_endpoint(endpoint)
+            checks.append(result)
+
+            if result["status"] == "ok":
+                ok_count += 1
+                self.consecutive_failures[endpoint["name"]] = 0
+            elif result["status"] == "degraded":
+                degraded_count += 1
+                self.consecutive_failures[endpoint["name"]] = self.consecutive_failures.get(endpoint["name"], 0) + 1
+            else:  # down
+                down_count += 1
+                self.consecutive_failures[endpoint["name"]] = self.consecutive_failures.get(endpoint["name"], 0) + 1
+
+            logger.info(f"  {endpoint['name']}: {result['status']} ({result.get('status_code', 'N/A')})")
+
+        # Determine overall status
+        if down_count >= len(HEALTH_ENDPOINTS) * 0.5:
+            overall_status = "critical"
+        elif down_count > 0 or degraded_count >= len(HEALTH_ENDPOINTS) * 0.3:
+            overall_status = "degraded"
+        else:
+            overall_status = "healthy"
+
+        return {
+            "timestamp": datetime.utcnow().isoformat(),
+            "overall_status": overall_status,
+            "checks": checks,
+            "summary": {
+                "total": len(HEALTH_ENDPOINTS),
+                "ok": ok_count,
+                "degraded": degraded_count,
+                "down": down_count
+            }
+        }
+
+    def should_post_advice(self, health_report: Dict) -> bool:
+        """
+        Determine if PYTHEIA_ADVICE should be posted based on thresholds.
+
+        Criteria:
+        - Overall status changed from last check
+        - Consecutive failures exceeded threshold
+        - Minimum time since last post elapsed
+        """
+        current_time = time.time()
+        current_status = health_report["overall_status"]
+        last_status = self.last_status.get("overall_status")
+
+        # Rate limiting: Don't post too frequently
+        if (current_time - self.last_post_time) < THRESHOLDS["min_post_interval"]:
+            logger.debug("Rate limit: Too soon since last post")
+            return False
+
+        # Status changed
+        if current_status != last_status:
+            logger.info(f"Status change detected: {last_status} -> {current_status}")
+            return True
+
+        # Check consecutive failures for critical endpoints
+        for name, count in self.consecutive_failures.items():
+            if count >= THRESHOLDS["consecutive_failures"]:
+                logger.warning(f"Consecutive failure threshold exceeded for {name}: {count}")
+                return True
+
+        # Degraded mode persisting
+        if current_status in ["degraded", "critical"]:
+            degraded_duration = self.state.get("degraded_since", current_time)
+            if (current_time - degraded_duration) > THRESHOLDS["degraded_mode_duration"]:
+                logger.warning("Degraded mode persisting beyond threshold")
+                return True
+
+        return False
+
+    def generate_pytheia_advice(self, health_report: Dict) -> Dict:
+        """
+        Generate PYTHEIA_ADVICE JSON from health report.
+
+        Returns schema-compliant PYTHEIA Advice v1.0.0 document.
+        """
+        current_status = health_report["overall_status"]
+        severity_map = {
+            "critical": "BLOCKER",
+            "degraded": "MAJOR",
+            "healthy": "INFO"
+        }
+        severity = severity_map.get(current_status, "MINOR")
+
+        # Build priorities from failed checks
+        priorities = []
+        priority_id = 1
+        for check in health_report["checks"]:
+            if check["status"] != "ok":
+                priorities.append({
+                    "id": f"P{priority_id}",
+                    "title": f"{check['name']} - {check['status'].upper()}",
+                    "severity": "BLOCKER" if check["status"] == "down" else "MAJOR",
+                    "status": "open",
+                    "files": [check["path"]],
+                    "description": f"{check['name']} endpoint is {check['status']}. Error: {check.get('error', 'N/A')}. Status code: {check.get('status_code', 'N/A')}.",
+                    "impact": f"Users cannot access {check['name']}. Service degradation detected."
+                })
+                priority_id += 1
+
+        if not priorities:
+            # No issues, create info priority
+            priorities.append({
+                "id": "P1",
+                "title": "All systems operational",
+                "severity": "INFO",
+                "status": "pass",
+                "files": [],
+                "description": "All monitored endpoints responding normally.",
+                "impact": "None. System healthy."
+            })
+
+        # Get current commit
+        try:
+            commit_hash = os.popen("git rev-parse HEAD").read().strip()[:7]
+        except:
+            commit_hash = "unknown"
+
+        # Build advice document
+        advice = {
+            "schema_version": "PYTHEIA Advice v1.0.0",
+            "timestamp": health_report["timestamp"],
+            "auditor": "PYTHEIA AI Node (Inline Worker)",
+            "repo": REPO_URL,
+            "commit": commit_hash,
+            "title": f"System Health Report - Status: {current_status.upper()}",
+            "severity": severity,
+            "priorities": priorities,
+            "options": [
+                {
+                    "id": "A",
+                    "title": "Auto-recovery attempt",
+                    "scope": "Restart affected services, clear caches, verify configuration",
+                    "effort": "5-10 minutes",
+                    "risk": "Low",
+                    "cost_thr": 0,
+                    "vote_recommendation": "APPROVE" if current_status == "degraded" else "STRONGLY_APPROVE"
+                },
+                {
+                    "id": "B",
+                    "title": "Manual investigation required",
+                    "scope": "Engineer review logs, diagnose root cause, apply targeted fix",
+                    "effort": "30-60 minutes",
+                    "risk": "Medium",
+                    "cost_thr": 0,
+                    "vote_recommendation": "NEUTRAL"
+                }
+            ],
+            "patch_plan": {
+                "phases": [
+                    {
+                        "phase": 1,
+                        "title": "Verify health check results",
+                        "files": [c["path"] for c in health_report["checks"] if c["status"] != "ok"],
+                        "changes": "Re-run health checks manually to confirm issues persist"
+                    },
+                    {
+                        "phase": 2,
+                        "title": "Review application logs",
+                        "files": ["logs/server.log", "logs/pytheia_worker.log"],
+                        "changes": "Check for error messages, stack traces, or warnings related to failing endpoints"
+                    },
+                    {
+                        "phase": 3,
+                        "title": "Apply recovery actions",
+                        "files": [],
+                        "changes": "Restart services if needed, clear caches, verify environment variables"
+                    }
+                ],
+                "tests": [
+                    "Re-run all health checks after recovery",
+                    "Verify affected endpoints return expected status codes",
+                    "Confirm degraded mode clears if applicable",
+                    "Monitor for 15 minutes to ensure stability"
+                ],
+                "rollback": "No code changes made. Recovery actions are non-destructive."
+            },
+            "governance_url": f"{BASE_URL}/governance",
+            "requires_approval": False,
+            "auto_executable": current_status == "healthy"
+        }
+
+        return advice
+
+    def post_pytheia_advice(self, advice: Dict) -> bool:
+        """
+        Post PYTHEIA_ADVICE to governance API.
+
+        Returns:
+            True if posted successfully, False otherwise
+        """
+        try:
+            logger.info(f"Posting PYTHEIA_ADVICE to {GOVERNANCE_API}...")
+            response = requests.post(
+                GOVERNANCE_API,
+                json=advice,
+                headers={"Content-Type": "application/json"},
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("status") == "success":
+                    logger.info(f"✓ PYTHEIA_ADVICE posted successfully: {data.get('post_id')}")
+                    self.last_post_time = time.time()
+                    self.save_state()
+                    return True
+                else:
+                    logger.error(f"API returned non-success status: {data}")
+                    return False
+            else:
+                logger.error(f"Failed to post PYTHEIA_ADVICE: HTTP {response.status_code}")
+                logger.error(f"Response: {response.text}")
+                return False
+
+        except Exception as e:
+            logger.exception(f"Exception posting PYTHEIA_ADVICE: {e}")
+            return False
+
+    def run_cycle(self):
+        """Run one monitoring cycle."""
+        logger.info("="*60)
+        logger.info("PYTHEIA Worker Cycle Starting")
+        logger.info("="*60)
+
+        # Run health checks
+        health_report = self.run_health_checks()
+        logger.info(f"Overall Status: {health_report['overall_status'].upper()}")
+        logger.info(f"Summary: {health_report['summary']}")
+
+        # Update state
+        self.last_status = {
+            "overall_status": health_report["overall_status"],
+            "timestamp": health_report["timestamp"]
+        }
+
+        # Determine if we should post advice
+        if self.should_post_advice(health_report):
+            logger.info("Threshold met - generating PYTHEIA_ADVICE...")
+            advice = self.generate_pytheia_advice(health_report)
+
+            # Save advice locally
+            advice_file = f"governance/pytheia_advice_{int(time.time())}.json"
+            try:
+                os.makedirs(os.path.dirname(advice_file), exist_ok=True)
+                with open(advice_file, 'w') as f:
+                    json.dump(advice, f, indent=2)
+                logger.info(f"PYTHEIA_ADVICE saved to {advice_file}")
+            except Exception as e:
+                logger.error(f"Failed to save advice file: {e}")
+
+            # Post to API
+            self.post_pytheia_advice(advice)
+        else:
+            logger.info("No significant changes - skipping PYTHEIA_ADVICE post")
+
+        # Save state
+        self.save_state()
+
+        logger.info("Cycle complete\n")
+
+    def run_forever(self):
+        """Run worker in continuous loop."""
+        logger.info("PYTHEIA Worker starting in continuous mode")
+        logger.info(f"Check interval: {CHECK_INTERVAL}s")
+        logger.info(f"Base URL: {BASE_URL}")
+
+        while True:
+            try:
+                self.run_cycle()
+            except Exception as e:
+                logger.exception(f"Cycle error: {e}")
+
+            logger.info(f"Sleeping for {CHECK_INTERVAL}s...")
+            time.sleep(CHECK_INTERVAL)
+
+
+def main():
+    """Main entry point."""
+    # Create logs directory
+    os.makedirs("logs", exist_ok=True)
+    os.makedirs("data", exist_ok=True)
+
+    # Start worker
+    worker = PYTHEIAWorker()
+    worker.run_forever()
+
+
+if __name__ == "__main__":
+    main()

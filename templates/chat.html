@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <title>Thronos Quantum Chat</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="{{ url_for('static', filename='wallet_session.js') }}"></script>
   <style>
     :root {
       --bg: #020712;
@@ -350,6 +351,22 @@
       font-size: 9px;
       letter-spacing: 0.14em;
       text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .session-status-pill.chat {
+      border-color: rgba(0, 200, 255, 0.4);
+      color: #9ed8ff;
+    }
+
+    .session-status-pill.architect {
+      border-color: rgba(255, 180, 90, 0.4);
+      color: #ffd7a0;
+    }
+
+    .session-hint {
+      margin: 6px 0 4px;
+      font-size: 11px;
       color: var(--muted);
     }
 
@@ -903,11 +920,18 @@
             <button class="btn-ghost" id="newSessionBtn">
               ◦ New
             </button>
-            <button class="btn-ghost btn-ghost-danger" id="renameSessionBtn">
+            <button class="btn-ghost" id="renameSessionBtn">
               ✎ Rename
+            </button>
+            <button class="btn-ghost btn-ghost-danger" id="deleteSelectedBtn">
+              🗑 Delete selected
+            </button>
+            <button class="btn-ghost" id="cleanSessionsBtn" style="display: none">
+              🧹 Clean empty sessions
             </button>
           </div>
         </div>
+        <div class="session-hint">Chat sessions burn AI Credits only. Architect sessions consume THR and return blueprints; session type is locked at creation.</div>
         <ul id="sessionsList" class="sessions-list"></ul>
       </section>
 
@@ -956,14 +980,7 @@
                   </label>
                   <input id="fileInput" type="file" multiple />
                   <select id="modelSelect" class="model-select">
-                    <option value="auto">🔀 Auto (Thronos chooses)</option>
-                    <option value="gpt-4o">🤖 GPT-4o (OpenAI)</option>
-                    <option value="gpt-4o-mini">🤖 GPT-4o Mini (OpenAI)</option>
-                    <option value="claude-sonnet-4">🧠 Claude Sonnet 4 (Anthropic)</option>
-                    <option value="gemini-2.0-flash">⚡ Gemini 2.0 Flash</option>
-                    <option value="gemini-2.0-flash-exp">⚡ Gemini 2.0 Flash Exp</option>
-                    <option value="gemini-2.5-flash">🚀 Gemini 2.5 Flash</option>
-                    <option value="gemini-2.5-pro">💎 Gemini 2.5 Pro</option>
+                    <option value="auto">Auto (Thronos chooses)</option>
                   </select>
                 </div>
                 <button id="sendBtn" class="send-btn">
@@ -1026,12 +1043,22 @@
   <script>
     // --- Endpoint constants ---
     const API_WALLET = "/api/ai/wallet";
-    const API_SESSIONS = "/api/ai/sessions";
-    const API_SESSION_MESSAGES = (id) => `/api/ai/sessions/${id}/messages`;
-    const API_CHAT = "/api/ai/chat";
+    const API_SESSIONS = "/api/chat/sessions";
+    const API_SESSION_DETAIL = (id) => `/api/chat/session/${id}`;
+    const API_SESSION_CREATE = "/api/chat/session/new";
+    const API_SESSION_MESSAGES = (id) => `/api/chat/session/${id}/messages`;
+    const API_CHAT = "/api/chat";
     const API_FILES = "/api/ai/files/upload";
     const API_TELEMETRY = "/api/ai/telemetry";
     const API_FEEDBACK = "/api/ai/feedback";
+    const API_MODELS = "/api/ai_models";
+    const API_SESSION_MODEL = (id) => `/api/ai_sessions/${id}/model`;
+    const API_HEALTH = "/api/ai/providers/health";
+    const ADMIN_SECRET_KEY = "thronos_admin_secret";
+    const ADMIN_MODE_KEY = "thronos_admin_mode";
+    const ACTIVE_SESSION_KEY = "thronos_ai_active_session";
+    const SESSION_CACHE_KEY = "thronos_ai_session_cache_v1";
+    const SELECTED_MODEL_KEY = "thronos_ai_selected_model_v1";
 
     // --- DOM refs ---
     let sessionsListEl,
@@ -1051,10 +1078,16 @@
       coreStatusEl,
       sessionTitleEl,
       sessionStatusTagEl,
+      cleanSessionsBtnEl,
       hashrateLabelEl,
       pendingTxsLabelEl,
       difficultyLabelEl,
       creditsLabelEl;
+
+    let sessionMessages = [];
+    let messagesBySession = {};
+    let defaultModelId = "auto";
+    let pendingModelSelection = null;
 
     function cacheDom() {
       sessionsListEl = document.getElementById("sessionsList");
@@ -1074,6 +1107,7 @@
       coreStatusEl = document.getElementById("coreStatus");
       sessionTitleEl = document.getElementById("sessionTitle");
       sessionStatusTagEl = document.getElementById("sessionStatusTag");
+      cleanSessionsBtnEl = document.getElementById("cleanSessionsBtn");
       hashrateLabelEl = document.getElementById("hashrateLabel");
       pendingTxsLabelEl = document.getElementById("pendingTxsLabel");
       difficultyLabelEl = document.getElementById("difficultyLabel");
@@ -1081,16 +1115,24 @@
     }
 
     // --- State ---
-    let currentSessionId = null;
-    let sessions = [];
+    let currentSessionId = localStorage.getItem(ACTIVE_SESSION_KEY) || null;
+    let aiSessions = [];
+    let selectedSessionIds = new Set();
     let pendingFiles = []; // { id, name, size }
     let receivedFiles = []; // for any AI-generated [[FILE:...]] blocks
-
+    let adminSecret = "";
+    let adminMode = false;
     // --- Utilities ---
     function setUploadStatus(text, mode = "") {
       uploadStatusEl.textContent = text || "";
       uploadStatusEl.classList.remove("ok", "error");
       if (mode) uploadStatusEl.classList.add(mode);
+    }
+
+    function sessionTypeLabel(meta = {}) {
+      const raw =
+        meta.session_type || (meta.meta && meta.meta.session_type) || "chat";
+      return String(raw || "chat").toUpperCase();
     }
 
     function setSessionStatus(text) {
@@ -1124,6 +1166,70 @@
       }, 50);
     }
 
+    function persistSessionCache() {
+      try {
+        const payload = {
+          sessions: aiSessions || [],
+          messagesBySession: messagesBySession || {},
+        };
+        localStorage.setItem(SESSION_CACHE_KEY, JSON.stringify(payload));
+      } catch (e) {
+        console.warn("persist cache failed", e);
+      }
+    }
+
+    function updateAdminControls() {
+      if (!cleanSessionsBtnEl) return;
+      const visible = !!adminSecret || adminMode;
+      cleanSessionsBtnEl.style.display = visible ? "inline-flex" : "none";
+    }
+
+    function initAdminAccess() {
+      const params = new URLSearchParams(window.location.search);
+      const querySecret = params.get("admin_secret") || params.get("secret");
+      if (querySecret) {
+        localStorage.setItem(ADMIN_SECRET_KEY, querySecret);
+      }
+      if (params.get("admin") === "1") {
+        localStorage.setItem(ADMIN_MODE_KEY, "1");
+      }
+
+      adminSecret =
+        localStorage.getItem(ADMIN_SECRET_KEY) || window.ADMIN_SECRET || "";
+      adminMode = localStorage.getItem(ADMIN_MODE_KEY) === "1";
+      updateAdminControls();
+    }
+
+    function hydrateSessionCache() {
+      try {
+        const raw = localStorage.getItem(SESSION_CACHE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        aiSessions = parsed.sessions || [];
+        messagesBySession = parsed.messagesBySession || {};
+        if (!currentSessionId && aiSessions.length) {
+          currentSessionId = aiSessions[0].id;
+        }
+        if (currentSessionId && messagesBySession[currentSessionId]) {
+          sessionMessages = messagesBySession[currentSessionId] || [];
+          renderSessions();
+          renderMessages(sessionMessages);
+        }
+      } catch (e) {
+        console.warn("hydrate cache failed", e);
+      }
+    }
+
+    function updateSessionMessageCount(sessionId) {
+      aiSessions = aiSessions.map((s) => {
+        if (s.id === sessionId) {
+          const count = (messagesBySession[sessionId] || []).length;
+          return { ...s, message_count: count };
+        }
+        return s;
+      });
+    }
+
     function escapeHtml(text) {
       return text
         .replace(/&/g, "&amp;")
@@ -1151,7 +1257,7 @@
 
     function renderSessions() {
       sessionsListEl.innerHTML = "";
-      sessions.forEach((s) => {
+      aiSessions.forEach((s) => {
         const li = document.createElement("li");
         li.className =
           "session-item" + (s.id === currentSessionId ? " active" : "");
@@ -1159,6 +1265,20 @@
 
         const nameRow = document.createElement("div");
         nameRow.className = "session-name-row";
+
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.className = "session-select";
+        checkbox.checked = selectedSessionIds.has(s.id);
+        checkbox.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (checkbox.checked) {
+            selectedSessionIds.add(s.id);
+          } else {
+            selectedSessionIds.delete(s.id);
+          }
+          updateDeleteSelectedButtonState();
+        });
 
         const nameSpan = document.createElement("div");
         nameSpan.className = "session-name";
@@ -1174,23 +1294,42 @@
           if (!confirm(`Delete "${s.title || 'Untitled session'}"?`)) return;
 
           try {
-            const res = await fetch(`/api/ai/sessions/${s.id}`, {
+            const res = await fetch(API_SESSION_DETAIL(s.id), {
               method: "DELETE",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ wallet: walletInputEl.value.trim() || null }),
             });
-            if (res.ok) {
-              // Remove from local array
-              sessions = sessions.filter(sess => sess.id !== s.id);
-              // If deleted current session, switch to first available
-              if (s.id === currentSessionId && sessions.length > 0) {
-                currentSessionId = sessions[0].id;
-                loadSessionMessages(currentSessionId);
-                sessionTitleEl.textContent = sessions[0].title || "Mesh session";
-              } else if (sessions.length === 0) {
-                // No sessions left, create new one
-                await createNewSession();
-              }
-              renderSessions();
+            const payload = (await res.json().catch(() => ({}))) || {};
+            if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+
+            const wasDeleted = payload.deleted !== false; // idempotent: deleted=false means already gone
+            if (!wasDeleted) {
+              setSessionStatus("Session already removed");
+              return;
             }
+
+            aiSessions = aiSessions.filter((sess) => sess.id !== s.id);
+            delete messagesBySession[s.id];
+
+            if (s.id === currentSessionId) {
+              currentSessionId = aiSessions.length ? aiSessions[0].id : null;
+              if (currentSessionId) {
+                localStorage.setItem(ACTIVE_SESSION_KEY, currentSessionId);
+                await loadSessionMessages(currentSessionId);
+                const active = aiSessions.find((x) => x.id === currentSessionId);
+                sessionTitleEl.textContent = (active && active.title) || "Mesh session";
+              } else {
+                localStorage.removeItem(ACTIVE_SESSION_KEY);
+                const created = await createSession();
+                if (created && created.id) {
+                  await loadSessionMessages(created.id);
+                }
+              }
+            }
+
+            persistSessionCache();
+            renderSessions();
           } catch (e) {
             console.error("Delete session error:", e);
             alert("Failed to delete session");
@@ -1198,11 +1337,12 @@
         });
 
         const statusPill = document.createElement("div");
-        statusPill.className = "session-status-pill";
-        statusPill.innerHTML = `<span>${(s.model || "auto").toUpperCase()}</span> · ${
-          s.created_at || ""
-        }`;
+        const sessionType = sessionTypeLabel(s);
+        statusPill.className = `session-status-pill ${sessionType === "ARCHITECT" ? "architect" : "chat"}`;
+        const badgeIcon = sessionType === "ARCHITECT" ? "🏗️" : "💬";
+        statusPill.innerHTML = `<span>${badgeIcon} ${sessionType}</span> · ${(s.model || "auto").toUpperCase()}`;
 
+        nameRow.appendChild(checkbox);
         nameRow.appendChild(nameSpan);
         nameRow.appendChild(deleteBtn);
 
@@ -1219,6 +1359,11 @@
         li.addEventListener("click", () => {
           if (s.id !== currentSessionId) {
             currentSessionId = s.id;
+            localStorage.setItem(ACTIVE_SESSION_KEY, currentSessionId);
+            const cachedMsgs = messagesBySession[s.id] || [];
+            if (cachedMsgs.length) {
+              renderMessages(cachedMsgs);
+            }
             loadSessionMessages(s.id);
             renderSessions();
             sessionTitleEl.textContent = s.title || "Mesh session";
@@ -1227,6 +1372,7 @@
 
         sessionsListEl.appendChild(li);
       });
+      updateDeleteSelectedButtonState();
     }
 
     function renderPendingFiles() {
@@ -1383,8 +1529,9 @@
     }
 
     function renderMessages(list) {
+      sessionMessages = list || [];
       messagesEl.innerHTML = "";
-      (list || []).forEach(appendMessage);
+      sessionMessages.forEach(appendMessage);
     }
 
     // --- API calls ---
@@ -1392,7 +1539,7 @@
     async function loadWallet() {
       try {
         // Read wallet from localStorage (same as other pages)
-        const w = localStorage.getItem('thr_address') || "";
+        const w = walletSession.getAddress() || "";
         walletInputEl.value = w;
 
         // Update wallet label with connection status
@@ -1414,81 +1561,279 @@
 
     async function loadSessions() {
       try {
+        setSessionStatus("Loading sessions…");
         const wallet = walletInputEl.value.trim();
-        const url = wallet ? `${API_SESSIONS}?wallet=${encodeURIComponent(wallet)}` : API_SESSIONS;
-        const res = await fetch(url);
+        const url = wallet
+          ? `${API_SESSIONS}?wallet=${encodeURIComponent(wallet)}`
+          : API_SESSIONS;
+        const res = await fetch(url, { credentials: "include" });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
-        sessions = data.sessions || [];
-        if (!currentSessionId && sessions.length) {
-          currentSessionId = sessions[0].id;
+        aiSessions = (data.sessions || []).map((s) => {
+          const count = (messagesBySession[s.id] || []).length;
+          return { ...s, message_count: count || s.message_count || 0 };
+        });
+
+        if (currentSessionId && !aiSessions.find((s) => s.id === currentSessionId)) {
+          currentSessionId = null;
         }
+
+        if (!aiSessions.length) {
+          await createSession("New mesh session");
+        }
+
+        if (!currentSessionId && aiSessions.length) {
+          currentSessionId = aiSessions[0].id;
+        }
+
+        if (!currentSessionId) {
+          setSessionStatus("Failed to prepare a session");
+          renderSessions();
+          return;
+        }
+
+        localStorage.setItem(ACTIVE_SESSION_KEY, currentSessionId);
         renderSessions();
-        if (currentSessionId) {
-          const s = sessions.find((x) => x.id === currentSessionId);
-          if (s) sessionTitleEl.textContent = s.title || "Mesh session";
-          loadSessionMessages(currentSessionId);
-        } else {
-          setSessionStatus("No sessions yet. Create a new one.");
-        }
+
+        const active = aiSessions.find((x) => x.id === currentSessionId);
+        if (active) sessionTitleEl.textContent = active.title || "Mesh session";
+        persistSessionCache();
+        await loadSessionMessages(currentSessionId);
       } catch (e) {
         console.error("loadSessions error", e);
         setSessionStatus("Failed to load sessions");
       }
     }
 
+    async function pruneSessions() {
+      if (!adminSecret && !adminMode) {
+        setSessionStatus("Admin secret required for cleanup");
+        return;
+      }
+
+      try {
+        setSessionStatus("Cleaning empty sessions…");
+        const url = adminSecret
+          ? `/api/admin/prune_sessions?secret=${encodeURIComponent(adminSecret)}`
+          : "/api/admin/prune_sessions";
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(adminSecret ? { "X-Admin-Secret": adminSecret } : {}),
+          },
+        });
+
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(`HTTP ${res.status}: ${errText}`);
+        }
+
+        const data = await res.json();
+        const deleted = data.deleted ?? 0;
+        const kept = data.kept ?? 0;
+        setSessionStatus(`Cleaned ${deleted} empty sessions (kept ${kept})`);
+        await loadSessions();
+      } catch (e) {
+        console.error("pruneSessions error", e);
+        setSessionStatus("Failed to clean sessions");
+      }
+    }
+
     async function loadSessionMessages(id) {
       setSessionStatus("Loading messages…");
       try {
-        const res = await fetch(API_SESSION_MESSAGES(id));
+        const wallet = walletInputEl.value.trim();
+        const url = wallet
+          ? `${API_SESSION_MESSAGES(id)}?wallet=${encodeURIComponent(wallet)}`
+          : API_SESSION_MESSAGES(id);
+        const res = await fetch(url);
+        if (res.status === 404) {
+          await handleMissingSession(id);
+          return;
+        }
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
-        renderMessages(data.messages || []);
-        setSessionStatus("Ready");
+        if (!data.session && (!data.messages || data.messages.length === 0)) {
+          await handleMissingSession(id);
+          return;
+        }
+        if (data.error && data.error.toLowerCase().includes('session not found')) {
+          await handleMissingSession(id);
+          return;
+        }
+        const msgs = data.messages || [];
+        const sessionMeta = data.session || {};
+        const sessionModel =
+          sessionMeta.selected_model_id ||
+          (sessionMeta.meta && sessionMeta.meta.selected_model_id) ||
+          defaultModelId;
+        pendingModelSelection = sessionModel || defaultModelId;
+        applyModelSelection(pendingModelSelection);
+        const sessionIdx = aiSessions.findIndex((s) => s.id === id);
+        if (sessionIdx >= 0) {
+          aiSessions[sessionIdx].selected_model_id = sessionModel;
+          aiSessions[sessionIdx].meta = { ...(aiSessions[sessionIdx].meta || {}), selected_model_id: sessionModel };
+        }
+        messagesBySession[id] = msgs;
+        renderMessages(msgs);
+        updateSessionMessageCount(id);
+        renderSessions();
+        persistSessionCache();
+        const sessionType = sessionTypeLabel(sessionMeta);
+        setSessionStatus(`${sessionType} session`);
       } catch (e) {
         console.error("loadSessionMessages error", e);
         setSessionStatus("Failed to load messages");
       }
     }
 
-    async function createSession() {
+    async function handleMissingSession(missingId = null) {
+      try {
+        if (missingId) {
+          aiSessions = aiSessions.filter((s) => s.id !== missingId);
+          if (currentSessionId === missingId) currentSessionId = null;
+          delete messagesBySession[missingId];
+          const stored = localStorage.getItem(ACTIVE_SESSION_KEY);
+          if (stored === missingId) localStorage.removeItem(ACTIVE_SESSION_KEY);
+        }
+
+        renderSessions();
+        persistSessionCache();
+
+        if (!aiSessions.length) {
+          const created = await createSession("New mesh session");
+          if (!created || !created.id) {
+            setSessionStatus("Failed to start new session");
+            return;
+          }
+        }
+
+        if (!currentSessionId && aiSessions.length) {
+          currentSessionId = aiSessions[0].id;
+        }
+
+        if (!currentSessionId) {
+          setSessionStatus("Failed to start new session");
+          return;
+        }
+
+        localStorage.setItem(ACTIVE_SESSION_KEY, currentSessionId);
+        const active = aiSessions.find((s) => s.id === currentSessionId);
+        if (active) sessionTitleEl.textContent = active.title || "Mesh session";
+
+        await loadSessionMessages(currentSessionId);
+      } catch (err) {
+        console.error("handleMissingSession", err);
+        setSessionStatus("Failed to start new session");
+      }
+    }
+
+    async function createSession(title = "New mesh session") {
       try {
         const wallet = walletInputEl.value.trim();
-        const res = await fetch(API_SESSIONS, {
+        const res = await fetch(API_SESSION_CREATE, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          credentials: "include",
           body: JSON.stringify({
-            title: "New mesh session",
+            title,
             wallet: wallet || null
           }),
         });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
-        currentSessionId = data.id;
-        await loadSessions();
+        const session = data.session || {};
+        const newId = data.id || session.id;
+        const nextSession = { ...session, id: newId || session.id, title: session.title || title };
+        if (!nextSession.id) return null;
+        currentSessionId = nextSession.id;
+        localStorage.setItem(ACTIVE_SESSION_KEY, currentSessionId);
+        const existingIdx = aiSessions.findIndex((s) => s.id === nextSession.id);
+        if (existingIdx >= 0) {
+          aiSessions[existingIdx] = { ...aiSessions[existingIdx], ...nextSession };
+        } else {
+          aiSessions.unshift(nextSession);
+        }
+        messagesBySession[nextSession.id] = messagesBySession[nextSession.id] || [];
+        updateSessionMessageCount(nextSession.id);
+        persistSessionCache();
+        renderSessions();
+        sessionTitleEl.textContent = nextSession.title || "Mesh session";
+        return nextSession;
       } catch (e) {
         console.error("createSession error", e);
         alert("Failed to create session. Check console for details.");
+        return null;
       }
     }
 
     async function renameSession() {
       if (!currentSessionId) return;
-      const s = sessions.find((x) => x.id === currentSessionId);
+      const s = aiSessions.find((x) => x.id === currentSessionId);
       const currentName = s ? s.title || "" : "";
       const newName = prompt("Rename session:", currentName);
       if (!newName || newName === currentName) return;
       try {
-        const res = await fetch(`${API_SESSIONS}/${currentSessionId}`, {
+        const res = await fetch(API_SESSION_DETAIL(currentSessionId), {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: newName }),
+          credentials: "include",
+          body: JSON.stringify({ title: newName, wallet: walletInputEl.value.trim() || null }),
         });
         if (!res.ok) throw new Error("HTTP " + res.status);
         await loadSessions();
       } catch (e) {
         console.error("renameSession error", e);
       }
+    }
+
+    function updateDeleteSelectedButtonState() {
+      const btn = document.getElementById("deleteSelectedBtn");
+      if (!btn) return;
+      const count = selectedSessionIds.size;
+      btn.disabled = count === 0;
+      btn.textContent =
+        count > 0
+          ? `🗑 Delete ${count} selected`
+          : "🗑 Delete selected";
+    }
+
+    async function deleteSelectedSessions() {
+      if (selectedSessionIds.size === 0) return;
+
+      const count = selectedSessionIds.size;
+      if (
+        !confirm(
+          `Delete ${count} selected session${count > 1 ? "s" : ""}? This cannot be undone.`
+        )
+      ) {
+        return;
+      }
+
+      const ids = Array.from(selectedSessionIds);
+      for (const id of ids) {
+        try {
+          const wallet = walletInputEl.value.trim();
+          const res = await fetch(`${API_SESSION_DETAIL(id)}${wallet ? `?wallet=${encodeURIComponent(wallet)}` : ''}`, {
+            method: "DELETE",
+            credentials: "include"
+          });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          aiSessions = aiSessions.filter((s) => s.id !== id);
+          if (currentSessionId === id) {
+            currentSessionId = null;
+            messagesEl.innerHTML = "";
+            sessionTitleEl.textContent = "Thronos Quantum Chat";
+          }
+        } catch (err) {
+          console.error("Failed to delete session", id, err);
+        }
+      }
+
+      selectedSessionIds.clear();
+      renderSessions();
+      updateDeleteSelectedButtonState();
     }
 
     async function uploadFiles(files) {
@@ -1511,8 +1856,20 @@
           method: "POST",
           body: form,
         });
-        if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
+
+        // FIX 1B: Handle degraded mode response (ok=false but HTTP 200)
+        if (!data.ok) {
+          const errorMsg = data.error || "Upload failed";
+          const hint = data.fallback_hint || "Please try again";
+          console.error("Upload degraded mode:", data);
+          setUploadStatus(`${errorMsg}. ${hint}`, "error");
+          if (data.mode === "degraded") {
+            showDegradedModeNotice(`File upload unavailable: ${data.error}`);
+          }
+          return;
+        }
+
         const uploaded = data.files || [];
         uploaded.forEach((f) => {
           pendingFiles.push({
@@ -1525,7 +1882,7 @@
         setUploadStatus("Files uploaded", "ok");
       } catch (e) {
         console.error("uploadFiles error", e);
-        setUploadStatus("Upload failed", "error");
+        setUploadStatus("Upload failed. Please try again", "error");
       }
     }
 
@@ -1546,6 +1903,121 @@
       }
     }
 
+    function showDegradedModeNotice(message) {
+      const noticeId = "degraded-mode-notice";
+      let notice = document.getElementById(noticeId);
+      if (!notice) {
+        notice = document.createElement("div");
+        notice.id = noticeId;
+        notice.style.cssText = "background: rgba(255, 75, 129, 0.15); border: 1px solid var(--danger); border-radius: 12px; padding: 10px 14px; margin: 8px 0 8px 0; font-size: 12px; color: var(--danger);";
+        const inputBlock = document.querySelector(".chat-input-block");
+        if (inputBlock) inputBlock.insertAdjacentElement("afterbegin", notice);
+      }
+      notice.innerHTML = `⚠️ <strong>Degraded Mode:</strong> ${message}. AUTO routing still available.`;
+    }
+
+    function hideDegradedModeNotice() {
+      const notice = document.getElementById("degraded-mode-notice");
+      if (notice) notice.remove();
+    }
+
+    function applyModelSelection(preferred) {
+      if (!modelSelectEl) return;
+      const target = preferred || pendingModelSelection || defaultModelId || "auto";
+      if (target && !modelSelectEl.querySelector(`option[value="${target}"]`)) {
+        const opt = document.createElement("option");
+        opt.value = target;
+        opt.textContent = target;
+        modelSelectEl.appendChild(opt);
+      }
+      modelSelectEl.value = target;
+      pendingModelSelection = target;
+      if (modelStatusEl) modelStatusEl.textContent = target || "auto";
+    }
+
+    async function loadModels() {
+      if (!modelSelectEl) return;
+
+      // Get previously selected model from localStorage first, then fall back to other sources
+      const previousValue = localStorage.getItem(SELECTED_MODEL_KEY) || modelSelectEl.value || pendingModelSelection || defaultModelId || "auto";
+      modelSelectEl.innerHTML = "";
+      const autoOpt = document.createElement("option");
+      autoOpt.value = "auto";
+      autoOpt.textContent = "Auto (Thronos chooses)";
+      modelSelectEl.appendChild(autoOpt);
+
+      try {
+        const res = await fetch(API_MODELS);
+
+        let data = null;
+        try {
+          data = await res.json();
+        } catch (e) {
+          console.error("Failed to parse models response", e);
+          hideDegradedModeNotice();
+          applyModelSelection(previousValue);
+          return;
+        }
+
+        const models = Array.isArray(data.models) ? data.models : [];
+        defaultModelId = data.default_model_id || "auto";
+
+        if (!models.length) {
+          autoOpt.textContent = "AUTO only (router available)";
+          applyModelSelection(defaultModelId);
+          return;
+        }
+
+        models.forEach((model) => {
+          const opt = document.createElement("option");
+          opt.value = model.id;
+          opt.textContent = model.label || model.id;
+          if (model.enabled === false) {
+            opt.disabled = true;
+            opt.textContent += " (disabled)";
+          }
+          modelSelectEl.appendChild(opt);
+        });
+
+        applyModelSelection(previousValue);
+      } catch (e) {
+        console.warn("model load failed", e);
+        autoOpt.textContent = "AUTO only (router available)";
+        applyModelSelection(defaultModelId);
+      }
+    }
+
+    async function persistModelSelection(modelId) {
+      if (!currentSessionId || !modelId) {
+        pendingModelSelection = modelId || defaultModelId;
+        return;
+      }
+
+      try {
+        const res = await fetch(API_SESSION_MODEL(currentSessionId), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model_id: modelId, wallet: walletInputEl.value.trim() || null }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+        const selected = data.selected_model_id || modelId;
+        applyModelSelection(selected);
+
+        const idx = aiSessions.findIndex((s) => s.id === currentSessionId);
+        if (idx >= 0) {
+          aiSessions[idx].selected_model_id = selected;
+          aiSessions[idx].meta = { ...(aiSessions[idx].meta || {}), selected_model_id: selected };
+        }
+        pendingModelSelection = selected;
+      } catch (e) {
+        console.warn("Failed to persist model selection", e);
+        applyModelSelection(modelId || defaultModelId);
+      }
+    }
+
     async function sendMessage() {
       const text = messageInputEl.value.trim();
       if (!text && !pendingFiles.length) return;
@@ -1558,19 +2030,32 @@
       setSessionStatus("Sending…");
       usageStatusEl.textContent = "";
 
-      const model = modelSelectEl.value || "auto";
+      const model = modelSelectEl.value || pendingModelSelection || defaultModelId || "auto";
       modelStatusEl.textContent = model;
+
+      const history = (sessionMessages || []).map((m) => ({
+        role: m.role,
+        content: m.content,
+      }));
+      history.push({ role: "user", content: text });
 
       const payload = {
         session_id: currentSessionId,
         wallet: wallet || null,
+        messages: history,
         message: text,
         attachments: pendingFiles.map((f) => f.id),
-        model_key: model,
+        model_id: model,
       };
 
       // optimistic render user message
-      appendMessage({ role: "user", content: text, model: "user" });
+      const userMessage = { role: "user", content: text, model: model };
+      sessionMessages.push(userMessage);
+      messagesBySession[currentSessionId] = sessionMessages.slice();
+      updateSessionMessageCount(currentSessionId);
+      persistSessionCache();
+      renderSessions();
+      appendMessage(userMessage);
 
       messageInputEl.value = "";
       pendingFiles = [];
@@ -1582,40 +2067,61 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        const data = await res.json();
 
-        // Handle no credits case
-        if (data.status === "no_credits") {
+        let data = null;
+        try {
+          data = await res.json();
+        } catch (e) {
+          // keep null
+        }
+
+        if (!res.ok || (data && (data.ok === false || data.error))) {
+          const errText = (data && (data.error || data.details)) || `HTTP ${res.status}`;
           appendMessage({
             role: "assistant",
-            content: data.response || "No AI credits available. Please purchase an AI pack to continue.",
+            content: `Provider error: ${errText}. Try another model or Auto.`,
             model: "system",
           });
-          setSessionStatus("Ready");
-          setSending(true);
+          setSessionStatus("Provider error");
           return;
         }
 
-        // AI reply - handle actual server response format
-        if (data.response) {
+        if (!data) {
           appendMessage({
             role: "assistant",
-            content: data.response,
+            content: "Provider error: empty response. Try another model or Auto.",
+            model: "system",
+          });
+          setSessionStatus("Provider error");
+          return;
+        }
+
+        const aiText = data.message || data.response || "";
+        if (aiText) {
+          const assistantMessage = {
+            role: "assistant",
+            content: aiText,
             model: data.model || model,
             files: (data.files || []).map((f) => ({
               file_id: f.id || f.file_id,
               name: f.name || f.filename,
             })),
-          });
+          };
+          sessionMessages.push(assistantMessage);
+          messagesBySession[currentSessionId] = sessionMessages.slice();
+          updateSessionMessageCount(currentSessionId);
+          persistSessionCache();
+          renderSessions();
+          appendMessage(assistantMessage);
         }
 
-        // Update credits display if available
-        if (data.credits !== undefined) {
+        if (data.usage) {
+          const u = data.usage;
+          usageStatusEl.textContent = `Usage: in ${u.input_tokens || 0} / out ${u.output_tokens || 0}`;
+        } else if (data.credits !== undefined) {
           usageStatusEl.textContent = `AI Credits: ${data.credits}`;
         }
 
-        // Update wallet if returned
         if (data.wallet) {
           walletInputEl.value = data.wallet;
           const w = data.wallet;
@@ -1627,7 +2133,7 @@
         console.error("sendMessage error", e);
         appendMessage({
           role: "assistant",
-          content: "Error: " + e.message,
+          content: "Provider error. Try another model or Auto.",
           model: "system",
         });
         setSessionStatus("Error sending message");
@@ -1640,10 +2146,17 @@
     function bindEvents() {
       document
         .getElementById("newSessionBtn")
-        .addEventListener("click", createSession);
+        .addEventListener("click", () => createSession());
       document
         .getElementById("renameSessionBtn")
         .addEventListener("click", renameSession);
+      document
+        .getElementById("deleteSelectedBtn")
+        .addEventListener("click", deleteSelectedSessions);
+
+      if (cleanSessionsBtnEl) {
+        cleanSessionsBtnEl.addEventListener("click", pruneSessions);
+      }
 
       fileInputEl.addEventListener("change", (e) => {
         const files = Array.from(e.target.files || []);
@@ -1653,9 +2166,23 @@
         fileInputEl.value = "";
       });
 
+      if (modelSelectEl) {
+        modelSelectEl.addEventListener("change", (e) => {
+          const selected = e.target.value || defaultModelId;
+          pendingModelSelection = selected;
+          persistModelSelection(selected);
+        });
+      }
+
       clearPendingBtnEl.addEventListener("click", () => {
         pendingFiles = [];
         renderPendingFiles();
+      });
+
+      window.addEventListener("storage", (e) => {
+        if (e.key === 'thr_address' || e.key === 'wallet_bound') {
+          loadWallet();
+        }
       });
 
       sendBtnEl.addEventListener("click", () => {
@@ -1668,12 +2195,23 @@
           sendMessage();
         }
       });
+
+      // Save selected model to localStorage when it changes
+      modelSelectEl.addEventListener("change", () => {
+        const selectedModel = modelSelectEl.value;
+        if (selectedModel) {
+          localStorage.setItem(SELECTED_MODEL_KEY, selectedModel);
+        }
+      });
     }
 
     // --- Init ---
     async function init() {
       cacheDom();
+      initAdminAccess();
+      hydrateSessionCache();
       bindEvents();
+      await loadModels();
       await loadWallet();
       await loadSessions();
       loadTelemetry();

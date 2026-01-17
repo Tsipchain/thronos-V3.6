@@ -1,0 +1,508 @@
+{% extends "base.html" %}
+
+{% block title %}🔍 Token Explorer - Thronos{% endblock %}
+
+{% block styles %}
+<style>
+    .explorer-container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+    }
+    .explorer-header {
+        text-align: center;
+        padding: 40px 30px;
+        background: linear-gradient(135deg, #071510 0%, #0a2518 100%);
+        border: 1px solid #1a5a2f;
+        border-radius: 16px;
+        margin-bottom: 30px;
+    }
+    .explorer-header h1 {
+        color: #3CFF7A;
+        font-size: 2.5em;
+        margin: 0;
+        text-shadow: 0 0 20px rgba(60, 255, 122, 0.3);
+    }
+    .explorer-header p {
+        color: #d7ffe6;
+        opacity: 0.9;
+        margin-top: 10px;
+    }
+    .search-box {
+        display: flex;
+        gap: 10px;
+        max-width: 600px;
+        margin: 20px auto 0;
+    }
+    .search-input {
+        flex: 1;
+        padding: 14px 20px;
+        border-radius: 10px;
+        border: 1px solid #1a5a2f;
+        background: #050b07;
+        color: #d7ffe6;
+        font-size: 1em;
+    }
+    .search-input:focus {
+        outline: none;
+        border-color: #3CFF7A;
+    }
+    .search-btn {
+        padding: 14px 25px;
+        border-radius: 10px;
+        border: 1px solid #3CFF7A;
+        background: #06140b;
+        color: #3CFF7A;
+        font-weight: bold;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+    .search-btn:hover {
+        background: #3CFF7A;
+        color: #000;
+    }
+    .stats-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 20px;
+        margin-bottom: 30px;
+    }
+    .stat-card {
+        background: #07120b;
+        border: 1px solid #1a5a2f;
+        border-radius: 12px;
+        padding: 20px;
+        text-align: center;
+    }
+    .stat-card .value {
+        color: #3CFF7A;
+        font-size: 2em;
+        font-weight: bold;
+    }
+    .stat-card .label {
+        color: #d7ffe6;
+        opacity: 0.8;
+        margin-top: 5px;
+    }
+    .section {
+        background: #07120b;
+        border: 1px solid #1a5a2f;
+        border-radius: 14px;
+        padding: 25px;
+        margin-bottom: 25px;
+    }
+    .section h2 {
+        color: #3CFF7A;
+        margin: 0 0 20px 0;
+        border-bottom: 1px solid #1a5a2f;
+        padding-bottom: 10px;
+    }
+    .token-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 20px;
+    }
+    .token-card {
+        background: #050b07;
+        border: 1px solid #1a5a2f;
+        border-radius: 12px;
+        padding: 20px;
+        transition: all 0.3s;
+        cursor: pointer;
+    }
+    .token-card:hover {
+        border-color: #3CFF7A;
+        transform: translateY(-3px);
+        box-shadow: 0 5px 20px rgba(60, 255, 122, 0.2);
+    }
+    .token-header {
+        display: flex;
+        align-items: center;
+        gap: 15px;
+        margin-bottom: 15px;
+    }
+    .token-logo {
+        width: 50px;
+        height: 50px;
+        border-radius: 50%;
+        background: #1a5a2f;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.5em;
+        overflow: hidden;
+    }
+    .token-logo img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+    .token-name {
+        flex: 1;
+    }
+    .token-name h3 {
+        color: #d7ffe6;
+        margin: 0;
+        font-size: 1.1em;
+    }
+    .token-name .symbol {
+        color: #3CFF7A;
+        font-size: 0.9em;
+    }
+    .token-stats {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+    }
+    .token-stat {
+        background: rgba(60, 255, 122, 0.05);
+        padding: 10px;
+        border-radius: 8px;
+    }
+    .token-stat .label {
+        font-size: 0.8em;
+        opacity: 0.7;
+        color: #d7ffe6;
+    }
+    .token-stat .value {
+        color: #3CFF7A;
+        font-weight: bold;
+    }
+    .holders-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+    .holders-table th, .holders-table td {
+        padding: 12px;
+        text-align: left;
+        border-bottom: 1px solid #1a5a2f;
+    }
+    .holders-table th {
+        color: #3CFF7A;
+        background: #050b07;
+    }
+    .holders-table tr:hover {
+        background: rgba(60, 255, 122, 0.05);
+    }
+    .address-link {
+        color: #5C9FFF;
+        text-decoration: none;
+        font-family: monospace;
+    }
+    .address-link:hover {
+        text-decoration: underline;
+    }
+    .tabs {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 20px;
+    }
+    .tab-btn {
+        padding: 10px 20px;
+        border: 1px solid #1a5a2f;
+        background: #050b07;
+        color: #d7ffe6;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+    .tab-btn.active {
+        background: #3CFF7A;
+        color: #000;
+        border-color: #3CFF7A;
+    }
+    .empty-state {
+        text-align: center;
+        padding: 40px;
+        opacity: 0.6;
+    }
+    .loading {
+        text-align: center;
+        padding: 30px;
+        color: #3CFF7A;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="explorer-container">
+    <!-- Header -->
+    <div class="explorer-header">
+        <h1>🔍 Token Explorer</h1>
+        <p>
+            <span class="lang-el">Εξερευνήστε όλα τα tokens και τα balances στο δίκτυο Thronos</span>
+            <span class="lang-en">Explore all tokens and balances on the Thronos network</span>
+            <span class="lang-ja">Thronosネットワーク上のすべてのトークンと残高を探索</span>
+            <span class="lang-ru">Исследуйте все токены и балансы в сети Thronos</span>
+            <span class="lang-es">Explora todos los tokens y saldos en la red Thronos</span>
+        </p>
+        <div class="search-box">
+            <input type="text" class="search-input" id="searchInput" placeholder="Search by token symbol or address...">
+            <button class="search-btn" onclick="search()">
+                🔍 <span class="lang-el">Αναζήτηση</span><span class="lang-en">Search</span><span class="lang-ja">検索</span><span class="lang-ru">Поиск</span><span class="lang-es">Buscar</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-row">
+        <div class="stat-card">
+            <div class="value" id="totalTokens">0</div>
+            <div class="label"><span class="lang-el">Συνολικά Tokens</span><span class="lang-en">Total Tokens</span><span class="lang-ja">トークン総数</span><span class="lang-ru">Всего токенов</span><span class="lang-es">Total Tokens</span></div>
+        </div>
+        <div class="stat-card">
+            <div class="value" id="totalHolders">0</div>
+            <div class="label"><span class="lang-el">Μοναδικοί Κάτοχοι</span><span class="lang-en">Unique Holders</span><span class="lang-ja">ユニークホルダー</span><span class="lang-ru">Уникальные держатели</span><span class="lang-es">Titulares Únicos</span></div>
+        </div>
+        <div class="stat-card">
+            <div class="value" id="totalPools">0</div>
+            <div class="label"><span class="lang-el">Liquidity Pools</span><span class="lang-en">Liquidity Pools</span><span class="lang-ja">流動性プール</span><span class="lang-ru">Пулы ликвидности</span><span class="lang-es">Pools de Liquidez</span></div>
+        </div>
+        <div class="stat-card">
+            <div class="value" id="totalVolume">0</div>
+            <div class="label"><span class="lang-el">24h Volume (THR)</span><span class="lang-en">24h Volume (THR)</span><span class="lang-ja">24時間取引量</span><span class="lang-ru">Объём за 24ч</span><span class="lang-es">Volumen 24h</span></div>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+        <button class="tab-btn active" onclick="showTab('tokens')">
+            🪙 Tokens
+        </button>
+        <button class="tab-btn" onclick="showTab('holders')">
+            👥 <span class="lang-el">Top Κάτοχοι</span><span class="lang-en">Top Holders</span><span class="lang-ja">トップホルダー</span><span class="lang-ru">Топ держатели</span><span class="lang-es">Top Titulares</span>
+        </button>
+        <button class="tab-btn" onclick="showTab('pools')">
+            💧 Pools
+        </button>
+    </div>
+
+    <!-- Tokens Tab -->
+    <div id="tokens-tab" class="section tab-content active">
+        <h2>🪙 <span class="lang-el">Όλα τα Tokens</span><span class="lang-en">All Tokens</span><span class="lang-ja">すべてのトークン</span><span class="lang-ru">Все токены</span><span class="lang-es">Todos los Tokens</span></h2>
+        <div id="tokensGrid" class="token-grid">
+            <div class="loading"><span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span><span class="lang-ja">読み込み中...</span><span class="lang-ru">Загрузка...</span><span class="lang-es">Cargando...</span></div>
+        </div>
+    </div>
+
+    <!-- Holders Tab -->
+    <div id="holders-tab" class="section tab-content" style="display: none;">
+        <h2>👥 <span class="lang-el">Top Κάτοχοι THR</span><span class="lang-en">Top THR Holders</span><span class="lang-ja">THRトップホルダー</span><span class="lang-ru">Топ держатели THR</span><span class="lang-es">Top Titulares THR</span></h2>
+        <table class="holders-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th><span class="lang-el">Διεύθυνση</span><span class="lang-en">Address</span><span class="lang-ja">アドレス</span><span class="lang-ru">Адрес</span><span class="lang-es">Dirección</span></th>
+                    <th><span class="lang-el">Υπόλοιπο</span><span class="lang-en">Balance</span><span class="lang-ja">残高</span><span class="lang-ru">Баланс</span><span class="lang-es">Saldo</span></th>
+                    <th><span class="lang-el">Ποσοστό</span><span class="lang-en">Percentage</span><span class="lang-ja">割合</span><span class="lang-ru">Процент</span><span class="lang-es">Porcentaje</span></th>
+                </tr>
+            </thead>
+            <tbody id="holdersTable">
+                <tr><td colspan="4" class="loading"><span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span><span class="lang-ja">読み込み中...</span><span class="lang-ru">Загрузка...</span><span class="lang-es">Cargando...</span></td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Pools Tab -->
+    <div id="pools-tab" class="section tab-content" style="display: none;">
+        <h2>💧 Liquidity Pools</h2>
+        <div id="poolsGrid" class="token-grid">
+            <div class="loading"><span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span><span class="lang-ja">読み込み中...</span><span class="lang-ru">Загрузка...</span><span class="lang-es">Cargando...</span></div>
+        </div>
+    </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let allTokens = [];
+let allPools = [];
+
+// Tab switching
+function showTab(name) {
+    document.querySelectorAll('.tab-content').forEach(t => t.style.display = 'none');
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    $(name + '-tab').style.display = 'block';
+    event.target.classList.add('active');
+}
+
+// Load all data
+async function loadData() {
+    try {
+        // Load tokens
+        const tokensRes = await fetch('/api/v1/tokens');
+        const tokensData = await tokensRes.json();
+        allTokens = tokensData.tokens || [];
+
+        // Load pools
+        const poolsRes = await fetch('/api/v1/pools');
+        const poolsData = await poolsRes.json();
+        allPools = poolsData.pools || [];
+
+        // Update stats
+        $('totalTokens').textContent = allTokens.length;
+        $('totalPools').textContent = allPools.length;
+
+        // Calculate unique holders
+        const holders = new Set();
+        allTokens.forEach(t => {
+            if (t.creator) holders.add(t.creator);
+        });
+        $('totalHolders').textContent = holders.size;
+
+        // Render
+        renderTokens(allTokens);
+        renderPools(allPools);
+        loadTopHolders();
+
+    } catch (e) {
+        console.error('Failed to load data:', e);
+    }
+}
+
+// Render tokens
+function renderTokens(tokens) {
+    const grid = $('tokensGrid');
+
+    if (!tokens || tokens.length === 0) {
+        grid.innerHTML = `<div class="empty-state">
+            <span class="lang-el">Δεν βρέθηκαν tokens</span>
+            <span class="lang-en">No tokens found</span>
+        </div>`;
+        return;
+    }
+
+    grid.innerHTML = tokens.map(t => `
+        <div class="token-card" onclick="viewToken('${t.symbol}')">
+            <div class="token-header">
+                <div class="token-logo">
+                    ${t.logo_url ? `<img src="${t.logo_url}" alt="${t.symbol}" onerror="this.parentElement.innerHTML='🪙'">` : '🪙'}
+                </div>
+                <div class="token-name">
+                    <h3>${escapeHtml(t.name || t.symbol)}</h3>
+                    <span class="symbol">${escapeHtml(t.symbol)}</span>
+                </div>
+            </div>
+            <div class="token-stats">
+                <div class="token-stat">
+                    <div class="label">Supply</div>
+                    <div class="value">${formatNumber(t.total_supply || 0)}</div>
+                </div>
+                <div class="token-stat">
+                    <div class="label">Decimals</div>
+                    <div class="value">${t.decimals || 8}</div>
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+// Render pools
+function renderPools(pools) {
+    const grid = $('poolsGrid');
+
+    if (!pools || pools.length === 0) {
+        grid.innerHTML = `<div class="empty-state">
+            <span class="lang-el">Δεν βρέθηκαν pools</span>
+            <span class="lang-en">No pools found</span>
+        </div>`;
+        return;
+    }
+
+    grid.innerHTML = pools.map(p => `
+        <div class="token-card" onclick="window.location.href='/pools'">
+            <div class="token-header">
+                <div class="token-logo">💧</div>
+                <div class="token-name">
+                    <h3>${escapeHtml(p.token_a)}/${escapeHtml(p.token_b)}</h3>
+                    <span class="symbol">Pool</span>
+                </div>
+            </div>
+            <div class="token-stats">
+                <div class="token-stat">
+                    <div class="label">${p.token_a}</div>
+                    <div class="value">${formatNumber(p.reserve_a || 0)}</div>
+                </div>
+                <div class="token-stat">
+                    <div class="label">${p.token_b}</div>
+                    <div class="value">${formatNumber(p.reserve_b || 0)}</div>
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+// Load top holders
+async function loadTopHolders() {
+    try {
+        const res = await fetch('/api/balances?limit=20');
+        const data = await res.json();
+        const holders = data.balances || [];
+
+        const tbody = $('holdersTable');
+
+        if (holders.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No holders found</td></tr>';
+            return;
+        }
+
+        const totalSupply = holders.reduce((sum, h) => sum + (h.balance || 0), 0);
+
+        tbody.innerHTML = holders.map((h, i) => `
+            <tr>
+                <td>${i + 1}</td>
+                <td><a href="/wallet?address=${h.address}" class="address-link">${h.address.substring(0, 16)}...</a></td>
+                <td>${formatNumber(h.balance || 0)} THR</td>
+                <td>${totalSupply > 0 ? ((h.balance / totalSupply) * 100).toFixed(2) : 0}%</td>
+            </tr>
+        `).join('');
+
+    } catch (e) {
+        $('holdersTable').innerHTML = '<tr><td colspan="4" class="empty-state">Failed to load holders</td></tr>';
+    }
+}
+
+// View token details
+function viewToken(symbol) {
+    window.location.href = `/tokens?symbol=${symbol}`;
+}
+
+// Search
+function search() {
+    const query = $('searchInput').value.toLowerCase().trim();
+    if (!query) {
+        renderTokens(allTokens);
+        return;
+    }
+
+    const filtered = allTokens.filter(t =>
+        (t.symbol && t.symbol.toLowerCase().includes(query)) ||
+        (t.name && t.name.toLowerCase().includes(query)) ||
+        (t.creator && t.creator.toLowerCase().includes(query))
+    );
+
+    renderTokens(filtered);
+}
+
+// Utilities
+function escapeHtml(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+function formatNumber(num) {
+    if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(2) + 'K';
+    return num.toFixed(2);
+}
+
+// Search on enter
+$('searchInput').addEventListener('keypress', e => {
+    if (e.key === 'Enter') search();
+});
+
+// Initial load
+loadData();
+</script>
+{% endblock %}

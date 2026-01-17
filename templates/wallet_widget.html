@@ -4,6 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Thronos Wallet Widget</title>
+    <script>
+        window.TH_NODE1_RPC_URL = "{{ node1_rpc_url }}";
+        window.TH_NODE2_RPC_URL = "{{ node2_rpc_url }}";
+    </script>
+    <script src="{{ url_for('static', filename='fetch_utils.js') }}?v={{ build_id }}"></script>
     <style>
         :root {
             --widget-bg: #050b0b;
@@ -26,14 +31,288 @@
             color: var(--widget-fg);
         }
 
+        /* Language toggle */
+        .lang-en, .lang-ja, .lang-ru, .lang-es { display: none; }
+        body.lang-en .lang-el { display: none; }
+        body.lang-en .lang-en { display: inline; }
+        body.lang-ja .lang-el { display: none; }
+        body.lang-ja .lang-ja { display: inline; }
+        body.lang-ru .lang-el { display: none; }
+        body.lang-ru .lang-ru { display: inline; }
+        body.lang-es .lang-el { display: none; }
+        body.lang-es .lang-es { display: inline; }
+
+        .lang-toggle {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 255, 102, 0.1);
+            border: 1px solid var(--widget-border);
+            color: var(--widget-accent);
+            padding: 6px 12px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 11px;
+            z-index: 100;
+        }
+
+        .lang-toggle:hover {
+            background: rgba(0, 255, 102, 0.2);
+        }
+
         .wallet-widget {
-            max-width: 400px;
+            max-width: 500px;
             margin: 0 auto;
             background: var(--widget-panel);
             border: 1px solid var(--widget-border);
             border-radius: 16px;
             padding: 20px;
             box-shadow: 0 0 30px rgba(0, 255, 102, 0.1);
+            position: relative;
+        }
+
+        /* Wallet Action Buttons */
+        .wallet-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .wallet-btn {
+            flex: 1;
+            padding: 10px;
+            background: rgba(0, 255, 102, 0.1);
+            border: 1px solid var(--widget-border);
+            color: var(--widget-accent);
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .wallet-btn:hover {
+            background: rgba(0, 255, 102, 0.2);
+            border-color: var(--widget-accent);
+        }
+
+        /* Modal Styles */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 5000;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+            pointer-events: auto;
+        }
+
+        .modal-content {
+            background: var(--widget-panel);
+            border: 2px solid var(--widget-accent);
+            border-radius: 16px;
+            padding: 25px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            position: relative;
+        }
+
+        .modal-close {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: none;
+            border: none;
+            color: var(--widget-muted);
+            font-size: 24px;
+            cursor: pointer;
+            padding: 5px 10px;
+        }
+
+        .modal-close:hover {
+            color: var(--widget-accent);
+        }
+
+        .modal-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--widget-accent);
+            margin-bottom: 20px;
+            padding-right: 30px;
+        }
+
+        /* Transaction History Styles */
+        .tx-item {
+            padding: 12px;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--widget-border);
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+
+        .tx-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .tx-amount {
+            font-weight: 700;
+            font-family: monospace;
+        }
+
+        .tx-amount.incoming {
+            color: var(--widget-accent);
+        }
+
+        .tx-amount.outgoing {
+            color: #ffd700;
+        }
+
+        .tx-details {
+            font-size: 11px;
+            color: var(--widget-muted);
+            word-break: break-all;
+        }
+
+        .tx-status {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        .tx-status.confirmed {
+            background: rgba(0, 255, 102, 0.2);
+            color: var(--widget-accent);
+        }
+
+        .tx-status.pending {
+            background: rgba(255, 215, 0, 0.2);
+            color: #ffd700;
+        }
+
+        /* Send Form Styles */
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 11px;
+            color: var(--widget-muted);
+            margin-bottom: 6px;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 10px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid var(--widget-border);
+            color: var(--widget-fg);
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 13px;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--widget-accent);
+            box-shadow: 0 0 10px rgba(0, 255, 102, 0.2);
+        }
+
+        .form-submit {
+            width: 100%;
+            padding: 12px;
+            background: var(--widget-accent);
+            color: var(--widget-bg);
+            border: none;
+            border-radius: 8px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .form-submit:hover {
+            background: var(--widget-muted);
+            transform: translateY(-1px);
+        }
+
+        .form-submit:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Bridge Tab Styles */
+        .wallet-tabs {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 20px;
+            border-bottom: 1px solid var(--widget-border);
+        }
+
+        .wallet-tab {
+            padding: 10px 15px;
+            background: transparent;
+            border: none;
+            color: var(--widget-muted);
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            border-bottom: 2px solid transparent;
+            transition: all 0.3s;
+        }
+
+        .wallet-tab.active {
+            color: var(--widget-accent);
+            border-bottom-color: var(--widget-accent);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .deposit-address {
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid var(--widget-border);
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 15px;
+            word-break: break-all;
+            font-family: monospace;
+            font-size: 12px;
+            text-align: center;
+        }
+
+        .copy-btn {
+            margin-top: 10px;
+            padding: 8px 16px;
+            background: rgba(0, 255, 102, 0.1);
+            border: 1px solid var(--widget-accent);
+            color: var(--widget-accent);
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+
+        .copy-btn:hover {
+            background: rgba(0, 255, 102, 0.2);
         }
 
         .widget-header {
@@ -79,12 +358,17 @@
             border: 1px solid var(--widget-border);
             border-radius: 12px;
             transition: all 0.2s ease;
+            cursor: pointer;
         }
 
         .token-item:hover {
             background: rgba(0, 255, 102, 0.08);
             border-color: var(--widget-accent);
             transform: translateY(-1px);
+        }
+
+        .token-item:active {
+            transform: scale(0.98);
         }
 
         .token-logo {
@@ -392,21 +676,21 @@
             color: var(--widget-fg);
             font-family: monospace;
         }
-
-        .token-item {
-            cursor: pointer;
-        }
-
-        .token-item:active {
-            transform: scale(0.98);
-        }
     </style>
 </head>
 <body>
+    <button class="lang-toggle" onclick="toggleLanguage()">🌐 GR</button>
+
     <div class="wallet-widget" id="walletWidget">
         <div class="loading">
             <div class="spinner"></div>
-            <p style="margin-top: 15px;">Loading wallet...</p>
+            <p style="margin-top: 15px;">
+                <span class="lang-el">Φόρτωση πορτοφολιού...</span>
+                <span class="lang-en">Loading wallet...</span>
+                <span class="lang-ja">ウォレットを読み込み中...</span>
+                <span class="lang-ru">Загрузка кошелька...</span>
+                <span class="lang-es">Cargando billetera...</span>
+            </p>
         </div>
     </div>
 
@@ -423,7 +707,13 @@
             </div>
             <div class="token-info-stats">
                 <div class="token-info-stat">
-                    <div class="token-info-stat-label">Your Balance</div>
+                    <div class="token-info-stat-label">
+                        <span class="lang-el">Υπόλοιπο</span>
+                        <span class="lang-en">Your Balance</span>
+                        <span class="lang-ja">残高</span>
+                        <span class="lang-ru">Ваш баланс</span>
+                        <span class="lang-es">Tu Saldo</span>
+                    </div>
                     <div class="token-info-stat-value" id="modalTokenBalance"></div>
                 </div>
                 <div class="token-info-stat">
@@ -431,11 +721,33 @@
                     <div class="token-info-stat-value" id="modalTokenDecimals"></div>
                 </div>
                 <div class="token-info-stat">
-                    <div class="token-info-stat-label">Value in THR</div>
+                    <div class="token-info-stat-label">
+                        <span class="lang-el">Αξία σε THR</span>
+                        <span class="lang-en">Value in THR</span>
+                        <span class="lang-ja">THRでの価値</span>
+                        <span class="lang-ru">Стоимость в THR</span>
+                        <span class="lang-es">Valor en THR</span>
+                    </div>
                     <div class="token-info-stat-value" id="modalTokenValueTHR"></div>
                 </div>
                 <div class="token-info-stat">
-                    <div class="token-info-stat-label">Token Color</div>
+                    <div class="token-info-stat-label">
+                        <span class="lang-el">Τιμή (THR)</span>
+                        <span class="lang-en">Rate (THR)</span>
+                        <span class="lang-ja">レート (THR)</span>
+                        <span class="lang-ru">Курс (THR)</span>
+                        <span class="lang-es">Tasa (THR)</span>
+                    </div>
+                    <div class="token-info-stat-value" id="modalTokenRateTHR"></div>
+                </div>
+                <div class="token-info-stat">
+                    <div class="token-info-stat-label">
+                        <span class="lang-el">Χρώμα Token</span>
+                        <span class="lang-en">Token Color</span>
+                        <span class="lang-ja">トークンカラー</span>
+                        <span class="lang-ru">Цвет токена</span>
+                        <span class="lang-es">Color del Token</span>
+                    </div>
                     <div class="token-info-stat-value" id="modalTokenColor">
                         <span id="modalTokenColorBox" style="display: inline-block; width: 20px; height: 20px; border-radius: 4px; vertical-align: middle; margin-left: 5px;"></span>
                     </div>
@@ -444,10 +756,184 @@
         </div>
     </div>
 
+    <!-- History Modal -->
+    <div class="modal-overlay" id="historyModal">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeHistoryModal()">×</button>
+            <div class="modal-title"><span class="lang-el">Ιστορικό Συναλλαγών</span><span class="lang-en">Transaction History</span></div>
+            <div id="historyContent">
+                <p style="color: var(--widget-muted);">Loading...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Send Modal -->
+    <div class="modal-overlay" id="sendModal">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeSendModal()">×</button>
+            <div class="modal-title"><span class="lang-el">Αποστολή Tokens</span><span class="lang-en">Send Tokens</span></div>
+            <form id="sendForm" onsubmit="handleSend(event)">
+                <div class="form-group">
+                    <label class="form-label"><span class="lang-el">Προς Διεύθυνση</span><span class="lang-en">To Address</span></label>
+                    <input type="text" class="form-input" id="sendToAddress" placeholder="THR..." required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label"><span class="lang-el">Ποσό</span><span class="lang-en">Amount</span></label>
+                    <input type="number" class="form-input" id="sendAmount" placeholder="0.0" step="0.000001" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label"><span class="lang-el">Token</span><span class="lang-en">Token</span></label>
+                    <select class="form-input" id="sendToken">
+                        <option value="THR">THR</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label"><span class="lang-el">Μυστικό Αποστολής</span><span class="lang-en">Send Secret</span></label>
+                    <input type="password" class="form-input" id="sendSecret" placeholder="auth_secret" required>
+                </div>
+                <div id="sendStatus" style="margin: 15px 0; min-height: 20px; color: var(--widget-muted); font-size: 12px;"></div>
+                <button type="submit" class="form-submit" id="sendSubmitBtn">
+                    <span class="lang-el">Αποστολή</span><span class="lang-en">Send</span>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Bridge Modal -->
+    <div class="modal-overlay" id="bridgeModal">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeBridgeModal()">×</button>
+            <div class="modal-title"><span class="lang-el">Bridge - Κατάθεση BTC</span><span class="lang-en">Bridge - BTC Deposit</span></div>
+            <div class="wallet-tabs">
+                <button class="wallet-tab active" onclick="switchBridgeTab('deposit')">
+                    <span class="lang-el">Κατάθεση</span><span class="lang-en">Deposit</span>
+                </button>
+                <button class="wallet-tab" onclick="switchBridgeTab('withdraw')">
+                    <span class="lang-el">Ανάληψη</span><span class="lang-en">Withdraw</span>
+                </button>
+            </div>
+            <div id="depositTab" class="tab-content active">
+                <p style="color: var(--widget-muted); font-size: 12px; margin-bottom: 15px;">
+                    <span class="lang-el">Στείλτε BTC στη διεύθυνση κατάθεσης για να λάβετε wBTC</span>
+                    <span class="lang-en">Send BTC to the deposit address to receive wBTC</span>
+                </p>
+                <div id="depositAddressContainer">
+                    <p style="color: var(--widget-muted);">Loading deposit address...</p>
+                </div>
+            </div>
+            <div id="withdrawTab" class="tab-content">
+                <p style="color: var(--widget-muted); font-size: 12px;">
+                    <span class="lang-el">Η λειτουργία ανάληψης είναι διαθέσιμη στο πλήρες Bridge interface</span>
+                    <span class="lang-en">Withdrawal function is available in the full Bridge interface</span>
+                </p>
+                <a href="/bridge" class="form-submit" style="display: block; text-align: center; text-decoration: none; margin-top: 15px;">
+                    <span class="lang-el">Άνοιγμα Bridge</span><span class="lang-en">Open Bridge</span>
+                </a>
+            </div>
+        </div>
+    </div>
+
     <script>
+        // Translations
+        const TRANSLATIONS = {
+            el: {
+                walletBalance: "💎 Υπόλοιπο Πορτοφολιού",
+                totalPortfolio: "Συνολικό Χαρτοφυλάκιο",
+                filterByToken: "Φίλτρο ανά Token",
+                allTokens: "Όλα τα Tokens",
+                lastUpdated: "Τελευταία ενημέρωση",
+                refresh: "🔄 Ανανέωση",
+                errorLoading: "Σφάλμα φόρτωσης πορτοφολιού",
+                retry: "Δοκιμάστε ξανά",
+                history: "Ιστορικό",
+                send: "Αποστολή",
+                bridge: "Bridge",
+                transactionHistory: "Ιστορικό Συναλλαγών",
+                sendTokens: "Αποστολή Tokens",
+                bridgeDeposit: "Bridge Κατάθεση"
+            },
+            en: {
+                walletBalance: "💎 Wallet Balance",
+                totalPortfolio: "Total Portfolio",
+                filterByToken: "Filter by Token",
+                allTokens: "All Tokens",
+                lastUpdated: "Last updated",
+                refresh: "🔄 Refresh",
+                errorLoading: "Error loading wallet",
+                retry: "Retry",
+                history: "History",
+                send: "Send",
+                bridge: "Bridge",
+                transactionHistory: "Transaction History",
+                sendTokens: "Send Tokens",
+                bridgeDeposit: "Bridge Deposit"
+            },
+            ja: {
+                walletBalance: "💎 ウォレット残高",
+                totalPortfolio: "総ポートフォリオ",
+                filterByToken: "トークンでフィルタ",
+                allTokens: "すべてのトークン",
+                lastUpdated: "最終更新",
+                refresh: "🔄 更新",
+                errorLoading: "ウォレット読み込みエラー",
+                retry: "再試行"
+            },
+            ru: {
+                walletBalance: "💎 Баланс кошелька",
+                totalPortfolio: "Общий портфель",
+                filterByToken: "Фильтр по токену",
+                allTokens: "Все токены",
+                lastUpdated: "Последнее обновление",
+                refresh: "🔄 Обновить",
+                errorLoading: "Ошибка загрузки кошелька",
+                retry: "Повторить"
+            },
+            es: {
+                walletBalance: "💎 Saldo de Billetera",
+                totalPortfolio: "Portafolio Total",
+                filterByToken: "Filtrar por Token",
+                allTokens: "Todos los Tokens",
+                lastUpdated: "Última actualización",
+                refresh: "🔄 Actualizar",
+                errorLoading: "Error al cargar billetera",
+                retry: "Reintentar"
+            }
+        };
+
+        window.LANG_SEQUENCE = window.LANG_SEQUENCE || ['gr', 'en', 'ja', 'es', 'ru'];
+        const LANG_CLASS_MAP = { 'gr': 'lang-el', 'en': 'lang-en', 'ja': 'lang-ja', 'es': 'lang-es', 'ru': 'lang-ru' };
+
+        function getLang() {
+            const lang = localStorage.getItem("lang") || "gr";
+            return lang === "gr" ? "el" : lang;
+        }
+
+        function t(key) {
+            const lang = getLang();
+            return TRANSLATIONS[lang]?.[key] || TRANSLATIONS.en[key] || key;
+        }
+
+        function toggleLanguage() {
+            const current = localStorage.getItem("lang") || "gr";
+            const idx = window.LANG_SEQUENCE.indexOf(current);
+            const next = window.LANG_SEQUENCE[(idx + 1) % window.LANG_SEQUENCE.length];
+            localStorage.setItem("lang", next);
+            applyLanguage();
+        }
+
+        function applyLanguage() {
+            const lang = localStorage.getItem("lang") || "gr";
+            document.body.className = LANG_CLASS_MAP[lang] || '';
+            document.querySelector('.lang-toggle').textContent = '🌐 ' + lang.toUpperCase();
+            // Re-render if data loaded
+            if (allTokens.length > 0) {
+                renderWallet({ address: walletAddress, tokens: allTokens, last_updated: lastUpdated });
+            }
+        }
+
         // Configuration - can be set via URL parameters or embedded config
         const urlParams = new URLSearchParams(window.location.search);
-        const walletAddress = urlParams.get('address') || 'THR79ca94a7eb70a6aa99d12d7fdb01446ef246301a';
+        let walletAddress = urlParams.get('address') || localStorage.getItem('thr_address') || 'THR79ca94a7eb70a6aa99d12d7fdb01446ef246301a';
         const compactMode = urlParams.get('compact') === 'true';
         const showZero = urlParams.get('show_zero') !== 'false';
         const autoRefresh = parseInt(urlParams.get('refresh') || '0');
@@ -457,11 +943,16 @@
             document.getElementById('walletWidget').classList.add('compact');
         }
 
+        // Store all tokens globally for filtering
+        let allTokens = [];
+        let selectedTokenFilter = 'all';
+        let lastUpdated = '';
+
         async function loadWalletData() {
             const widget = document.getElementById('walletWidget');
 
             try {
-                const response = await fetch(`/api/wallet/tokens/${walletAddress}?show_zero=${showZero}`);
+                const response = await fetch(`/api/balances?address=${encodeURIComponent(walletAddress)}&show_zero=${showZero}`);
                 if (!response.ok) throw new Error('Failed to load wallet data');
 
                 const data = await response.json();
@@ -469,63 +960,65 @@
             } catch (error) {
                 widget.innerHTML = `
                     <div class="error">
-                        <strong>Error loading wallet</strong>
+                        <strong>${t('errorLoading')}</strong>
                         <p>${error.message}</p>
-                        <button class="refresh-btn" onclick="loadWalletData()">Retry</button>
+                        <button class="refresh-btn" onclick="loadWalletData()">${t('retry')}</button>
                     </div>
                 `;
             }
         }
 
-        // Store all tokens globally for filtering
-        let allTokens = [];
-        let selectedTokenFilter = 'all';
-
         function renderWallet(data) {
             const widget = document.getElementById('walletWidget');
             allTokens = data.tokens || [];
+            lastUpdated = data.last_updated || '';
+
+            // Filter out invalid/generic tokens
+            const validTokensForDropdown = allTokens.filter(token => {
+                const sym = token.symbol.toUpperCase();
+                return sym !== 'TOKEN' && sym !== 'UNKNOWN_TOKEN' && sym !== 'UNKNOWN';
+            });
 
             // Calculate total balance using dynamic prices from pools
-            const totalTHR = allTokens.reduce((sum, t) => {
-                // Use value_in_thr from API (calculated from pool reserves)
-                return sum + (t.value_in_thr || 0);
-            }, 0);
+            const pricedTokens = allTokens.filter(t => t.value_in_thr !== null && t.value_in_thr !== undefined);
+            const totalTHR = pricedTokens.reduce((sum, t) => sum + Number(t.value_in_thr || 0), 0);
+            const totalTHRDisplay = pricedTokens.length ? `${totalTHR.toFixed(2)} THR` : '—';
 
             let html = `
                 <div class="widget-header">
-                    <div class="widget-title">
-                        💎 Wallet Balance
-                    </div>
+                    <div class="widget-title">${t('walletBalance')}</div>
                 </div>
 
                 <div class="wallet-address">${data.address.slice(0, 12)}...${data.address.slice(-8)}</div>
 
                 ${!compactMode ? `
                 <div class="total-value">
-                    <div class="total-label">Total Portfolio</div>
-                    <div class="total-amount">${totalTHR.toFixed(2)} THR</div>
+                    <div class="total-label">${t('totalPortfolio')}</div>
+                    <div class="total-amount">${totalTHRDisplay}</div>
                 </div>
                 ` : ''}
 
                 ${!compactMode ? `
                 <div class="token-selector">
-                    <label class="token-selector-label">Filter by Token</label>
+                    <label class="token-selector-label">${t('filterByToken')}</label>
                     <select class="token-selector-dropdown" id="tokenFilter" onchange="filterTokens()">
-                        <option value="all">All Tokens</option>
-                        ${allTokens.map(t => `<option value="${t.symbol}">${t.symbol} - ${t.name}</option>`).join('')}
+                        <option value="all">${t('allTokens')}</option>
+                        ${validTokensForDropdown.map(t => `<option value="${t.symbol}">${t.symbol} - ${t.name}</option>`).join('')}
                     </select>
                 </div>
                 ` : ''}
 
-                <div class="tokens-list" id="tokensList">
-            `;
+                <div class="tokens-list" id="tokensList"></div>
 
-            html += `</div>`;
-
-            html += `
                 <div class="widget-footer">
-                    <div class="last-updated">Last updated: ${data.last_updated}</div>
-                    <button class="refresh-btn" onclick="loadWalletData()">🔄 Refresh</button>
+                    <div class="last-updated">${t('lastUpdated')}: ${data.last_updated}</div>
+                    <button class="refresh-btn" onclick="loadWalletData()">${t('refresh')}</button>
+                </div>
+
+                <div class="wallet-actions">
+                    <button class="wallet-btn" onclick="openHistoryModal()">📜 ${t('history')}</button>
+                    <button class="wallet-btn" onclick="openSendModal()">📤 ${t('send')}</button>
+                    <button class="wallet-btn" onclick="openBridgeModal()">🌉 ${t('bridge')}</button>
                 </div>
             `;
 
@@ -539,20 +1032,32 @@
             const container = document.getElementById('tokensList');
             if (!container) return;
 
+            // Filter out invalid/generic tokens
+            const validTokens = allTokens.filter(token => {
+                const sym = token.symbol.toUpperCase();
+                return sym !== 'TOKEN' && sym !== 'UNKNOWN_TOKEN' && sym !== 'UNKNOWN';
+            });
+
             const tokensToShow = selectedTokenFilter === 'all'
-                ? allTokens
-                : allTokens.filter(t => t.symbol === selectedTokenFilter);
+                ? validTokens
+                : validTokens.filter(t => t.symbol === selectedTokenFilter);
 
             container.innerHTML = '';
 
             tokensToShow.forEach(token => {
+                // N5 FIX: Use logo_url from API response (includes /static prefix from resolve_token_logo)
+                const logoUrl = token.logo_url || '';
+                const valueInThr = token.value_in_thr != null ? Number(token.value_in_thr) : null;
+                const priceInThr = token.price_in_thr != null ? Number(token.price_in_thr) : null;
+                const valueDisplay = valueInThr != null ? `≈ ${valueInThr.toFixed(4)} THR` : '—';
+                const rateDisplay = priceInThr != null ? `Rate: ${priceInThr.toFixed(6)} THR` : 'Rate: —';
                 const tokenDiv = document.createElement('div');
                 tokenDiv.className = 'token-item';
                 tokenDiv.onclick = () => showTokenInfo(token);
                 tokenDiv.innerHTML = `
                     <div class="token-logo" style="border-color: ${token.color};">
-                        ${token.logo ? `<img src="${token.logo}" alt="${token.symbol}" onerror="this.style.display='none'; this.nextSibling.style.display='block';">` : ''}
-                        <span style="display: ${token.logo ? 'none' : 'block'}; color: ${token.color};">${token.symbol[0]}</span>
+                        ${logoUrl ? `<img src="${logoUrl}" alt="${token.symbol}" onerror="this.style.display='none'; this.nextSibling.style.display='block'; this.onerror=null; this.src='/static/img/logo.png';">` : ''}
+                        <span style="display: ${logoUrl ? 'none' : 'block'}; color: ${token.color};">${token.symbol[0]}</span>
                     </div>
                     <div class="token-info">
                         <div class="token-symbol">${token.symbol}</div>
@@ -562,7 +1067,7 @@
                         <div class="balance-amount" style="color: ${token.color};">
                             ${token.balance.toFixed(token.decimals)}
                         </div>
-                        ${!compactMode ? '<div class="balance-usd">~$0.00</div>' : ''}
+                        ${!compactMode ? `<div class="balance-usd">${valueDisplay}</div><div class="balance-usd">${rateDisplay}</div>` : ''}
                     </div>
                 `;
                 container.appendChild(tokenDiv);
@@ -578,11 +1083,13 @@
         function showTokenInfo(token) {
             const modal = document.getElementById('tokenInfoModal');
             const logoDiv = document.getElementById('modalTokenLogo');
+            // N5 FIX: Use logo_url from API response
+            const logoUrl = token.logo_url || '';
 
             // Set logo
             logoDiv.style.borderColor = token.color;
-            if (token.logo) {
-                logoDiv.innerHTML = `<img src="${token.logo}" alt="${token.symbol}">`;
+            if (logoUrl) {
+                logoDiv.innerHTML = `<img src="${logoUrl}" alt="${token.symbol}" onerror="this.src='/static/img/logo.png';">`;
             } else {
                 logoDiv.innerHTML = `<span style="color: ${token.color};">${token.symbol[0]}</span>`;
             }
@@ -592,7 +1099,12 @@
             document.getElementById('modalTokenName').textContent = token.name;
             document.getElementById('modalTokenBalance').textContent = token.balance.toFixed(token.decimals);
             document.getElementById('modalTokenDecimals').textContent = token.decimals;
-            document.getElementById('modalTokenValueTHR').textContent = (token.value_in_thr || 0).toFixed(6) + ' THR';
+            document.getElementById('modalTokenValueTHR').textContent = token.value_in_thr != null
+                ? `${Number(token.value_in_thr).toFixed(6)} THR`
+                : '—';
+            document.getElementById('modalTokenRateTHR').textContent = token.price_in_thr != null
+                ? `${Number(token.price_in_thr).toFixed(6)} THR`
+                : '—';
             document.getElementById('modalTokenColorBox').style.backgroundColor = token.color;
 
             modal.classList.add('active');
@@ -612,6 +1124,7 @@
         });
 
         // Initial load
+        applyLanguage();
         loadWalletData();
 
         // Auto-refresh if enabled
@@ -625,8 +1138,459 @@
             setAddress: (addr) => {
                 walletAddress = addr;
                 loadWalletData();
+            },
+            setLanguage: (lang) => {
+                localStorage.setItem("lang", lang);
+                applyLanguage();
             }
         };
+
+        // ========== QUEST: Wallet Widget Modals ==========
+
+        // History Modal
+        const historyState = {
+            filter: 'all',
+            selectedToken: '',
+            transactions: [],
+        };
+
+        function normalizeKind(tx) {
+            return String(tx.kind || '').toLowerCase();
+        }
+
+        function normalizeCategory(tx) {
+            return String(tx.category || '').toLowerCase();
+        }
+
+        function getCanonicalCategory(tx) {
+            const category = normalizeCategory(tx);
+            if (category) {
+                return category;
+            }
+            const kind = normalizeKind(tx);
+            const map = {
+                transfer: 'thr',
+                thr_transfer: 'thr',
+                token_transfer: 'tokens',
+                swap: 'swaps',
+                pool_swap: 'swaps',
+                bridge: 'bridge',
+                l2e: 'l2e',
+                l2e_reward: 'l2e',
+                ai_credit: 'ai_credits',
+                ai_credits: 'ai_credits',
+                ai_credits_earned: 'ai_credits',
+                ai_credits_spent: 'ai_credits',
+                architect: 'architect_ai_jobs',
+                architect_job: 'architect_ai_jobs',
+                ai_job_created: 'architect_ai_jobs',
+                ai_job_progress: 'architect_ai_jobs',
+                ai_job_completed: 'architect_ai_jobs',
+                ai_job_reward: 'architect_ai_jobs',
+                iot: 'iot',
+                iot_parking: 'iot',
+                iot_parking_reservation: 'iot',
+                iot_autopilot: 'iot',
+            };
+            return map[kind] || kind;
+        }
+
+        function isTokenTx(tx) {
+            return normalizeKind(tx) === 'token_transfer';
+        }
+
+        function sanitizeTokenSymbol(symbol) {
+            const sym = String(symbol || '').toUpperCase().trim();
+            if (!sym || sym === 'TOKEN' || sym === 'TKN' || sym === 'UNKNOWN') {
+                return '';
+            }
+            return sym;
+        }
+
+        function displayAsset(tx) {
+            if (isTokenTx(tx)) {
+                const sym = sanitizeTokenSymbol(tx.asset_symbol || tx.asset || tx.symbol);
+                return sym || '(unknown token)';
+            }
+            return sym || 'THR';
+        };
+        const isThrTransfer = (tx) => {
+            // Must be thr_transfer kind AND THR asset (not tokens)
+            return getKind(tx) === 'thr_transfer' && getAssetSymbol(tx) === 'THR';
+        };
+        const isSwapTx = (tx) => getKind(tx) === 'swap' || getKind(tx).startsWith('liquidity_') || getKind(tx).includes('pool');
+        const isBridgeTx = (tx) => getKind(tx).startsWith('bridge');
+        const isIoTTx = (tx) => getKind(tx).startsWith('iot') || getKind(tx).includes('parking') || getKind(tx) === 'autopilot';
+        const isAiCreditsTx = (tx) => getKind(tx).startsWith('ai') || getKind(tx).includes('credits');
+
+        function shouldExcludeTx(tx) {
+            const kind = getKind(tx);
+            const asset = getAssetSymbol(tx);
+            if (kind === 'block') return true;
+            if (!tx.from && !tx.to) return true;
+            if (tx.amount === 0 && asset === 'THR' && kind !== 'thr_transfer') return true;
+            return false;
+        }
+
+        function isValidTokenSymbol(symbol) {
+            return symbol && !['THR', 'TOKEN', 'UNKNOWN_TOKEN'].includes(symbol);
+        }
+
+        function displayAmount(tx) {
+            const amountVal = tx.display_amount ?? tx.amount ?? 0;
+            const decimals = Number.isFinite(Number(tx.decimals)) ? Number(tx.decimals) : 6;
+            return Number(amountVal || 0).toFixed(decimals);
+        }
+
+        function setHistoryFilter(filter) {
+            historyState.filter = filter;
+            if (filter !== 'tokens') {
+                historyState.selectedToken = '';
+            }
+            renderHistoryContent();
+        }
+
+        function setHistoryToken(token) {
+            historyState.selectedToken = token;
+            renderHistoryContent();
+        }
+
+        function resetHistoryState() {
+            historyState.filter = 'all';
+            historyState.selectedToken = '';
+        }
+
+        function renderHistoryContent() {
+            const container = document.getElementById('historyContent');
+            const txs = (historyState.transactions || []).filter(tx => !shouldExcludeTx(tx));
+
+            if (!txs.length) {
+                container.innerHTML = '<p style="color: var(--widget-muted); text-align: center;">No transactions found</p>';
+                return;
+            }
+
+            // Get all token-related transactions (transfers + swaps with tokens)
+            const tokenTxs = txs.filter(tx => {
+                const asset = getAssetSymbol(tx);
+                const isTokenTx = isTokenTransfer(tx) && isValidTokenSymbol(asset);
+                const isTokenSwap = isSwapTx(tx) && asset !== 'THR' && isValidTokenSymbol(asset);
+                return isTokenTx || isTokenSwap;
+            });
+            const tokenSymbols = Array.from(new Set(
+                txs
+                    .filter(tx => isTokenTx(tx))
+                    .map(tx => sanitizeTokenSymbol(tx.asset_symbol || tx.asset || tx.symbol))
+                    .filter(sym => sym)
+            ));
+
+            const filtered = txs.filter(tx => {
+                const category = getCanonicalCategory(tx);
+                if (historyState.filter === 'thr') return category === 'thr';
+                if (historyState.filter === 'tokens') return category === 'tokens';
+                if (historyState.filter === 'swaps') return category === 'swaps';
+                if (historyState.filter === 'l2e') return category === 'l2e';
+                if (historyState.filter === 'ai_credits') return category === 'ai_credits';
+                if (historyState.filter === 'iot') return category === 'iot';
+                if (historyState.filter === 'bridge') return category === 'bridge';
+                if (historyState.filter === 'architect_ai_jobs') return category === 'architect_ai_jobs';
+                return true;
+            }).filter(tx => {
+                if (historyState.filter !== 'tokens' || !historyState.selectedToken) return true;
+                return sanitizeTokenSymbol(tx.asset_symbol || tx.asset || tx.symbol) === historyState.selectedToken;
+            });
+
+            const tabs = [
+                { id: 'all', label: 'All' },
+                { id: 'thr', label: 'THR' },
+                { id: 'tokens', label: 'Tokens' },
+                { id: 'swaps', label: 'Swaps' },
+                { id: 'l2e', label: 'L2E' },
+                { id: 'ai_credits', label: 'AI Credits' },
+                { id: 'architect_ai_jobs', label: 'Architect / AI Jobs' },
+                { id: 'bridge', label: 'Bridge' },
+                { id: 'iot', label: 'IoT' },
+            ];
+
+            let html = `
+                <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;">
+                    ${tabs.map(tab => `
+                        <button class="wallet-btn" style="padding:6px 10px; font-size:11px; ${historyState.filter === tab.id ? 'border-color:#00ff66;' : ''}"
+                            onclick="setHistoryFilter('${tab.id}')">
+                            ${tab.label}
+                        </button>
+                    `).join('')}
+                </div>
+            `;
+
+            if (historyState.filter === 'tokens' && tokenSymbols.length) {
+                html += `
+                    <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;">
+                        <button class="wallet-btn" style="padding:5px 10px; font-size:11px; ${!historyState.selectedToken ? 'border-color:#00ff66;' : ''}"
+                            onclick="setHistoryToken('')">
+                            All Tokens
+                        </button>
+                        ${tokenSymbols.map(sym => `
+                            <button class="wallet-btn" style="padding:5px 10px; font-size:11px; ${historyState.selectedToken === sym ? 'border-color:#00ff66;' : ''}"
+                                onclick="setHistoryToken('${sym}')">
+                                ${sym}
+                            </button>
+                        `).join('')}
+                    </div>
+                `;
+            }
+
+            if (!filtered.length) {
+                container.innerHTML = html + '<p style="color: var(--widget-muted); text-align: center;">No transactions match this filter</p>';
+                return;
+            }
+
+            html += filtered.map(tx => {
+                const kind = normalizeKind(tx);
+                const isIncoming = tx.direction === 'in' || tx.to === walletAddress;
+                const isSwap = kind === 'swap' || kind === 'pool_swap';
+                const amountClass = isSwap ? 'swap' : (isIncoming ? 'incoming' : 'outgoing');
+                const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
+                const status = tx.status || 'confirmed';
+                const asset = getAssetSymbol(tx);
+                const amountStr = displayAmount(tx);
+
+                return `
+                    <div class="tx-item">
+                        <div class="tx-header">
+                            <span class="tx-amount ${amountClass}">${sign}${amountStr} ${asset}</span>
+                            <span class="tx-status ${status}">${status.toUpperCase()}</span>
+                        </div>
+                        <div class="tx-details">
+                            ${isSwap ? 'Trader: ' + (tx.from || walletAddress) : (isIncoming ? 'From: ' + (tx.from || '') : 'To: ' + (tx.to || ''))}<br>
+                            ${tx.timestamp || 'Unknown time'}<br>
+                            TXID: ${(tx.tx_id || 'pending').substring(0, 16)}...
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            container.innerHTML = html;
+        }
+
+        async function openHistoryModal() {
+            document.getElementById('historyModal').classList.add('active');
+            document.getElementById('historyContent').innerHTML = '<p style="color: var(--widget-muted);">Loading...</p>';
+            resetHistoryState();
+
+            try {
+                const res = await fetch(`/wallet_data/${walletAddress}`);
+                if (!res.ok) throw new Error('Failed to load history');
+                const data = await res.json();
+
+                historyState.transactions = (data.transactions || []).slice().reverse();
+                renderHistoryContent();
+            } catch (e) {
+                console.error('Error loading history:', e);
+                document.getElementById('historyContent').innerHTML = '<p style="color: #ff4444;">Error loading transaction history</p>';
+            }
+        }
+
+        function closeHistoryModal() {
+            document.getElementById('historyModal').classList.remove('active');
+            resetHistoryState();
+        }
+
+        // Send Modal with Pending TX Polling
+        let pendingTxId = null;
+        let pollInterval = null;
+
+        function openSendModal() {
+            document.getElementById('sendModal').classList.add('active');
+            document.getElementById('sendStatus').innerHTML = '';
+            document.getElementById('sendForm').reset();
+
+            // Populate token dropdown with available tokens
+            const selectElement = document.getElementById('sendToken');
+            selectElement.innerHTML = '<option value="THR">THR</option>';
+            allTokens.forEach(token => {
+                if (token.balance > 0) {
+                    selectElement.innerHTML += `<option value="${token.symbol}">${token.symbol} (${token.balance.toFixed(token.decimals)})</option>`;
+                }
+            });
+        }
+
+        function closeSendModal() {
+            document.getElementById('sendModal').classList.remove('active');
+            if (pollInterval) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+            }
+            pendingTxId = null;
+        }
+
+        async function handleSend(e) {
+            e.preventDefault();
+
+            const toAddress = document.getElementById('sendToAddress').value.trim();
+            const amount = parseFloat(document.getElementById('sendAmount').value);
+            const token = document.getElementById('sendToken').value;
+            const secret = document.getElementById('sendSecret').value.trim();
+
+            const submitBtn = document.getElementById('sendSubmitBtn');
+            const statusDiv = document.getElementById('sendStatus');
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Sending...';
+            statusDiv.innerHTML = '<span style="color: #ffd700;">⏳ Processing transaction...</span>';
+
+            try {
+                const res = await fetch('/send_tokens', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        from_address: walletAddress,
+                        to_address: toAddress,
+                        amount: amount,
+                        token: token,
+                        auth_secret: secret,
+                        passphrase: ''
+                    })
+                });
+
+                const data = await res.json();
+
+                if (data.tx_id || data.status === 'success') {
+                    pendingTxId = data.tx_id;
+                    statusDiv.innerHTML = `<span style="color: var(--widget-accent);">✅ Transaction submitted!<br>TXID: ${(pendingTxId || 'pending').substring(0, 16)}...</span>`;
+
+                    // Start polling for status
+                    if (pendingTxId) {
+                        pollTransactionStatus(pendingTxId, statusDiv);
+                    }
+
+                    // Reset form after 2 seconds
+                    setTimeout(() => {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = '<span class="lang-el">Αποστολή</span><span class="lang-en">Send</span>';
+                        loadWalletData(); // Refresh wallet data
+                    }, 2000);
+                } else {
+                    throw new Error(data.message || data.error || 'Transaction failed');
+                }
+            } catch (err) {
+                console.error('Send error:', err);
+                statusDiv.innerHTML = `<span style="color: #ff4444;">❌ Error: ${err.message}</span>`;
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<span class="lang-el">Αποστολή</span><span class="lang-en">Send</span>';
+            }
+        }
+
+        async function pollTransactionStatus(txId, statusDiv) {
+            if (pollInterval) clearInterval(pollInterval);
+
+            let attempts = 0;
+            const maxAttempts = 30; // Poll for up to 5 minutes (30 * 10s)
+
+            pollInterval = setInterval(async () => {
+                attempts++;
+
+                try {
+                    const res = await fetch(`/api/tx/status?tx_id=${encodeURIComponent(txId)}`);
+                    const data = await res.json();
+
+                    if (data.status === 'confirmed') {
+                        statusDiv.innerHTML = `<span style="color: var(--widget-accent);">✅ Transaction confirmed!<br>Block: ${data.block || 'N/A'}</span>`;
+                        clearInterval(pollInterval);
+                        pollInterval = null;
+                        loadWalletData(); // Refresh wallet
+                    } else if (data.status === 'failed') {
+                        statusDiv.innerHTML = `<span style="color: #ff4444;">❌ Transaction failed: ${data.message || 'Unknown error'}</span>`;
+                        clearInterval(pollInterval);
+                        pollInterval = null;
+                    } else if (attempts >= maxAttempts) {
+                        statusDiv.innerHTML += '<br><span style="color: #ffd700;">⏱️ Still pending. Check back later.</span>';
+                        clearInterval(pollInterval);
+                        pollInterval = null;
+                    }
+                } catch (err) {
+                    console.error('Poll error:', err);
+                    if (attempts >= maxAttempts) {
+                        clearInterval(pollInterval);
+                        pollInterval = null;
+                    }
+                }
+            }, 10000); // Poll every 10 seconds
+        }
+
+        // Bridge Modal
+        async function openBridgeModal() {
+            document.getElementById('bridgeModal').classList.add('active');
+            loadBridgeDeposit();
+        }
+
+        function closeBridgeModal() {
+            document.getElementById('bridgeModal').classList.remove('active');
+        }
+
+        function switchBridgeTab(tab) {
+            document.querySelectorAll('#bridgeModal .wallet-tab').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('#bridgeModal .tab-content').forEach(content => content.classList.remove('active'));
+
+            if (tab === 'deposit') {
+                document.querySelector('#bridgeModal .wallet-tab:first-child').classList.add('active');
+                document.getElementById('depositTab').classList.add('active');
+            } else {
+                document.querySelector('#bridgeModal .wallet-tab:last-child').classList.add('active');
+                document.getElementById('withdrawTab').classList.add('active');
+            }
+        }
+
+        async function loadBridgeDeposit() {
+            const container = document.getElementById('depositAddressContainer');
+            container.innerHTML = '<p style="color: var(--widget-muted);">Loading deposit address...</p>';
+
+            try {
+                const res = await fetch(`/api/bridge/deposit?wallet=${encodeURIComponent(walletAddress)}`);
+                if (!res.ok) throw new Error('Failed to load deposit address');
+                const data = await res.json();
+
+                if (data.ok && data.deposit_address) {
+                    container.innerHTML = `
+                        <div class="deposit-address">
+                            <div style="font-size: 11px; color: var(--widget-muted); margin-bottom: 8px;">
+                                <span class="lang-el">Διεύθυνση Κατάθεσης BTC</span>
+                                <span class="lang-en">BTC Deposit Address</span>
+                            </div>
+                            <div style="color: var(--widget-accent); font-weight: 600;">${data.deposit_address}</div>
+                        </div>
+                        <button class="copy-btn" onclick="copyDepositAddress('${data.deposit_address}')">
+                            📋 <span class="lang-el">Αντιγραφή</span><span class="lang-en">Copy</span>
+                        </button>
+                        <p style="color: var(--widget-muted); font-size: 11px; margin-top: 15px;">
+                            <span class="lang-el">⚠️ Στείλτε μόνο BTC σε αυτή τη διεύθυνση. Άλλα assets θα χαθούν.</span>
+                            <span class="lang-en">⚠️ Only send BTC to this address. Other assets will be lost.</span>
+                        </p>
+                    `;
+                } else {
+                    throw new Error(data.error || 'Invalid response');
+                }
+            } catch (err) {
+                console.error('Bridge deposit error:', err);
+                container.innerHTML = `<p style="color: #ff4444;">Error: ${err.message}</p>`;
+            }
+        }
+
+        function copyDepositAddress(address) {
+            navigator.clipboard.writeText(address).then(() => {
+                alert('✅ Address copied to clipboard!');
+            }).catch(() => {
+                prompt('Copy this address:', address);
+            });
+        }
+
+        // Close modals on background click
+        document.addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal-overlay')) {
+                closeHistoryModal();
+                closeSendModal();
+                closeBridgeModal();
+            }
+        });
     </script>
 </body>
 </html>

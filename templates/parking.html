@@ -1,0 +1,451 @@
+{% extends "base.html" %}
+
+{% block title %}🅿️ Smart Parking - Thronos{% endblock %}
+
+{% block styles %}
+<style>
+    .parking-container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+        padding-bottom: calc(var(--footer-safe, 110px) + 24px);
+    }
+
+    .parking-header {
+        text-align: center;
+        margin-bottom: 30px;
+    }
+
+    .parking-title {
+        font-size: 2.5em;
+        background: linear-gradient(135deg, #00ff66 0%, #0099ff 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 10px;
+    }
+
+    .parking-stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+        margin-bottom: 30px;
+    }
+
+    .stat-box {
+        background: linear-gradient(135deg, #0a0f0a 0%, #071810 100%);
+        border: 1px solid #1a3b2e;
+        border-radius: 12px;
+        padding: 20px;
+        text-align: center;
+    }
+
+    .stat-value {
+        font-size: 2em;
+        font-weight: bold;
+        margin-bottom: 5px;
+    }
+
+    .stat-value.free { color: #00ff66; }
+    .stat-value.occupied { color: #ff4444; }
+    .stat-value.reserved { color: #ffd700; }
+
+    .stat-label {
+        font-size: 0.9em;
+        color: #888;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    .parking-map {
+        background: linear-gradient(135deg, #0a0a0a 0%, #0a1a10 100%);
+        border: 2px solid #1a3b2e;
+        border-radius: 16px;
+        padding: 30px;
+        position: relative;
+        min-height: 500px;
+    }
+
+    .map-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        gap: 15px;
+        margin-top: 20px;
+    }
+
+    .parking-spot {
+        aspect-ratio: 1;
+        border: 2px solid;
+        border-radius: 12px;
+        padding: 15px;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.3s;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+    }
+
+    .parking-spot.free {
+        border-color: #00ff66;
+        background: rgba(0, 255, 102, 0.1);
+    }
+
+    .parking-spot.free:hover {
+        background: rgba(0, 255, 102, 0.2);
+        transform: scale(1.05);
+        box-shadow: 0 0 20px rgba(0, 255, 102, 0.3);
+    }
+
+    .parking-spot.occupied {
+        border-color: #ff4444;
+        background: rgba(255, 68, 68, 0.1);
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+    .parking-spot.reserved {
+        border-color: #ffd700;
+        background: rgba(255, 215, 0, 0.1);
+    }
+
+    .spot-id {
+        font-weight: bold;
+        font-size: 1.2em;
+        margin-bottom: 8px;
+    }
+
+    .spot-status {
+        font-size: 0.8em;
+        text-transform: uppercase;
+        opacity: 0.8;
+    }
+
+    .spot-icon {
+        font-size: 2em;
+        margin-bottom: 5px;
+    }
+
+    .legend {
+        display: flex;
+        gap: 20px;
+        justify-content: center;
+        margin-bottom: 20px;
+        flex-wrap: wrap;
+    }
+
+    .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.9em;
+    }
+
+    .legend-box {
+        width: 20px;
+        height: 20px;
+        border-radius: 4px;
+        border: 2px solid;
+    }
+
+    .legend-box.free {
+        border-color: #00ff66;
+        background: rgba(0, 255, 102, 0.2);
+    }
+
+    .legend-box.occupied {
+        border-color: #ff4444;
+        background: rgba(255, 68, 68, 0.2);
+    }
+
+    .legend-box.reserved {
+        border-color: #ffd700;
+        background: rgba(255, 215, 0, 0.2);
+    }
+
+    /* Modal */
+    .modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.85);
+        backdrop-filter: blur(8px);
+        z-index: 5000;
+        justify-content: center;
+        align-items: center;
+    }
+
+    .modal.active {
+        display: flex;
+    }
+
+    .modal-content {
+        background: linear-gradient(135deg, #0a0f0a 0%, #071810 100%);
+        border: 2px solid #00ff66;
+        padding: 30px;
+        border-radius: 20px;
+        max-width: 450px;
+        width: 90%;
+        text-align: center;
+    }
+
+    .modal-content h3 {
+        color: #00ff66;
+        margin-top: 0;
+    }
+
+    .modal-spot-id {
+        font-size: 2em;
+        color: #ffd700;
+        margin: 15px 0;
+    }
+
+    .modal-price {
+        font-size: 1.2em;
+        margin: 20px 0;
+    }
+
+    .modal-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 20px;
+    }
+
+    .btn {
+        flex: 1;
+        padding: 12px;
+        border-radius: 10px;
+        border: none;
+        font-weight: bold;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+
+    .btn-primary {
+        background: linear-gradient(135deg, #00ff00 0%, #00ff66 100%);
+        color: #000;
+    }
+
+    .btn-primary:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 20px rgba(0, 255, 102, 0.4);
+    }
+
+    .btn-secondary {
+        background: #333;
+        color: #fff;
+    }
+
+    .btn-secondary:hover {
+        background: #444;
+    }
+
+    .message {
+        margin-top: 15px;
+        padding: 10px;
+        border-radius: 8px;
+        font-size: 0.9em;
+    }
+
+    .message.success {
+        background: rgba(0, 255, 102, 0.2);
+        color: #00ff66;
+        border: 1px solid #00ff66;
+    }
+
+    .message.error {
+        background: rgba(255, 68, 68, 0.2);
+        color: #ff4444;
+        border: 1px solid #ff4444;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="parking-container">
+    <div class="parking-header">
+        <h1 class="parking-title">🅿️ Smart Parking</h1>
+        <p style="color: #888; font-size: 1.1em;">Real-time parking spot availability powered by Thronos IoT</p>
+    </div>
+
+    <div class="parking-stats">
+        <div class="stat-box">
+            <div class="stat-value free" id="freeCount">0</div>
+            <div class="stat-label">Free Spots</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-value occupied" id="occupiedCount">0</div>
+            <div class="stat-label">Occupied</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-value reserved" id="reservedCount">0</div>
+            <div class="stat-label">Reserved</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-value" style="color: #0099ff;" id="totalCount">0</div>
+            <div class="stat-label">Total Spots</div>
+        </div>
+    </div>
+
+    <div class="parking-map">
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-box free"></div>
+                <span>Free</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-box occupied"></div>
+                <span>Occupied</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-box reserved"></div>
+                <span>Reserved</span>
+            </div>
+        </div>
+
+        <div class="map-grid" id="parkingGrid"></div>
+    </div>
+</div>
+
+<!-- Reservation Modal -->
+<div id="reserveModal" class="modal">
+    <div class="modal-content">
+        <h3>🅿️ Reserve Parking Spot</h3>
+        <div class="modal-spot-id" id="modalSpotId">P-101</div>
+        <p>Cost: <strong style="color: #ffd700;">5 THR</strong> / hour</p>
+        <div id="modalMessage" class="message" style="display: none;"></div>
+        <div class="modal-actions">
+            <button class="btn btn-primary" onclick="confirmReservation()">Confirm</button>
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let parkingSpots = [];
+let selectedSpot = null;
+
+async function loadParkingData() {
+    try {
+        const res = await fetch('/api/iot/parking');
+        const data = await res.json();
+
+        parkingSpots = data.spots || [];
+        renderParkingMap();
+        updateStats();
+    } catch (e) {
+        console.error('Error loading parking data:', e);
+        document.getElementById('parkingGrid').innerHTML = '<p style="color: #ff4444;">Error loading parking data</p>';
+    }
+}
+
+function renderParkingMap() {
+    const grid = document.getElementById('parkingGrid');
+    grid.innerHTML = '';
+
+    parkingSpots.forEach(spot => {
+        const div = document.createElement('div');
+        div.className = `parking-spot ${spot.status}`;
+        div.innerHTML = `
+            <div class="spot-icon">${spot.status === 'free' ? '🅿️' : spot.status === 'occupied' ? '🚗' : '🔒'}</div>
+            <div class="spot-id">${spot.id}</div>
+            <div class="spot-status">${spot.status}</div>
+        `;
+
+        if (spot.status === 'free') {
+            div.onclick = () => openReserveModal(spot);
+        }
+
+        grid.appendChild(div);
+    });
+}
+
+function updateStats() {
+    const free = parkingSpots.filter(s => s.status === 'free').length;
+    const occupied = parkingSpots.filter(s => s.status === 'occupied').length;
+    const reserved = parkingSpots.filter(s => s.status === 'reserved').length;
+
+    document.getElementById('freeCount').textContent = free;
+    document.getElementById('occupiedCount').textContent = occupied;
+    document.getElementById('reservedCount').textContent = reserved;
+    document.getElementById('totalCount').textContent = parkingSpots.length;
+}
+
+function openReserveModal(spot) {
+    const wallet = localStorage.getItem('thr_address');
+    if (!wallet) {
+        alert('Please connect your wallet first!');
+        return;
+    }
+
+    selectedSpot = spot;
+    document.getElementById('modalSpotId').textContent = spot.id;
+    document.getElementById('modalMessage').style.display = 'none';
+    document.getElementById('reserveModal').classList.add('active');
+}
+
+function closeModal() {
+    document.getElementById('reserveModal').classList.remove('active');
+    selectedSpot = null;
+}
+
+async function confirmReservation() {
+    if (!selectedSpot) return;
+
+    const wallet = localStorage.getItem('thr_address');
+    if (!wallet) {
+        showMessage('Please connect your wallet', 'error');
+        return;
+    }
+
+    showMessage('Processing reservation...', 'success');
+
+    try {
+        // Simulate reservation (replace with actual API call)
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // Update spot status
+        const spotIndex = parkingSpots.findIndex(s => s.id === selectedSpot.id);
+        if (spotIndex >= 0) {
+            parkingSpots[spotIndex].status = 'reserved';
+        }
+
+        showMessage('✅ Spot reserved successfully!', 'success');
+        renderParkingMap();
+        updateStats();
+
+        setTimeout(() => {
+            closeModal();
+        }, 1500);
+    } catch (err) {
+        showMessage(`❌ Error: ${err.message}`, 'error');
+    }
+}
+
+function showMessage(text, type) {
+    const msgDiv = document.getElementById('modalMessage');
+    msgDiv.textContent = text;
+    msgDiv.className = `message ${type}`;
+    msgDiv.style.display = 'block';
+}
+
+// Init
+document.addEventListener('DOMContentLoaded', () => {
+    loadParkingData();
+    setInterval(loadParkingData, 30000); // Refresh every 30 seconds
+});
+
+// Close modal on background click
+document.addEventListener('click', (e) => {
+    if (e.target.id === 'reserveModal') {
+        closeModal();
+    }
+});
+</script>
+{% endblock %}

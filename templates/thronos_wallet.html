@@ -1,88 +1,222 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>Thronos Wallet</title>
-  <style>
-    body { font-family: monospace; background-color: #101010; color: #00ffcc; padding: 30px; }
-    input, button { padding: 6px; font-size: 1rem; }
-    .field { margin-bottom: 12px; }
-    .log { white-space: pre-wrap; background-color: #111; padding: 10px; border: 1px solid #00ffcc; margin-top: 15px; }
-  </style>
-</head>
-<body>
+{% extends "base.html" %}
 
-<div style="background:#000;padding:10px;border-bottom:1px solid #0f0;text-align:center;">
-  <a href="/" style="color:#0f0;margin:10px;">🏠 Home</a>
-  <a href="/pledge" style="color:#0f0;margin:10px;">🔥 Pledge</a>
-  <a href="/viewer" style="color:#0f0;margin:10px;">📦 Viewer</a>
-  <a href="/send" style="color:#0f0;margin:10px;">💸 Send</a>
-  <a href="/wallet" style="color:#0f0;margin:10px;">👛 Wallet</a>
-  <a href="/docs" style="color:#0f0;margin:10px;">📚 Docs</a>
-</div>
+{% block title %}💼 Thronos Wallet{% endblock %}
 
+{% block styles %}
+<style>
+    .wallet-card {
+        background: #111;
+        border: 1px solid #0f0;
+        padding: 20px;
+        margin-bottom: 20px;
+        border-radius: 4px;
+    }
+    input, button {
+        background: #000;
+        color: #0f0;
+        border: 1px solid #0f0;
+        padding: 10px;
+        margin: 5px 0;
+        font-family: monospace;
+        width: 100%;
+        box-sizing: border-box;
+    }
+    button { 
+        cursor: pointer; 
+        font-weight: bold;
+        background: #0f0;
+        color: #000;
+    }
+    button:hover { background: #0c0; }
+    button.secondary {
+        background: transparent;
+        color: #0f0;
+    }
+    button.secondary:hover {
+        background: #111;
+    }
+    
+    .tx {
+        margin-top: 10px;
+        border-bottom: 1px dashed #333;
+        padding: 10px 0;
+    }
+    .btc-val {
+        color: #ff0;
+        font-size: 0.9em;
+    }
+    .hidden { display: none; }
+    
+    .balance-large {
+        font-size: 2em;
+        font-weight: bold;
+        margin: 10px 0;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    .fire-icon-wallet {
+        width: 32px;
+        height: 32px;
+        filter: drop-shadow(0 0 8px #ff6600);
+        animation: glow 2s ease-in-out infinite;
+    }
+    @keyframes glow {
+        0%, 100% { filter: drop-shadow(0 0 8px #ff6600); }
+        50% { filter: drop-shadow(0 0 16px #ff9900) drop-shadow(0 0 24px #ff6600); }
+    }
+</style>
+{% endblock %}
 
-<h1>🔐 Thronos Wallet</h1>
+{% block content %}
+  <h1>💼 <span class="lang-el">Το Πορτοφόλι μου</span><span class="lang-en">My Wallet</span></h1>
 
-<div class="field">
-  <label>🔎 View Balance for Address:</label><br>
-  <input type="text" id="viewAddress" placeholder="Enter your THR address">
-  <button onclick="getBalance()">Check Balance</button>
-</div>
+  <!-- CONNECT SECTION -->
+  <div id="connectSection" class="wallet-card">
+      <h2><span class="lang-el">Σύνδεση Πορτοφολιού</span><span class="lang-en">Connect Wallet</span></h2>
+      <p><span class="lang-el">Εισάγετε τα στοιχεία σας για να συνδεθείτε. Τα κλειδιά αποθηκεύονται μόνο τοπικά (browser).</span><span class="lang-en">Enter your credentials to connect. Keys are stored locally in your browser.</span></p>
+      
+      <label><span class="lang-el">Διεύθυνση THR</span><span class="lang-en">THR Address</span></label>
+      <input type="text" id="inputAddress" placeholder="THR..." />
+      
+      <label><span class="lang-el">Μυστικό Αποστολής (Προαιρετικό για προβολή, Απαραίτητο για αποστολή)</span><span class="lang-en">Send Secret (Optional for view, Required for send)</span></label>
+      <input type="password" id="inputSecret" placeholder="auth_secret..." />
+      
+      <button onclick="connectWallet()">🔓 <span class="lang-el">Σύνδεση</span><span class="lang-en">Connect</span></button>
+      <p style="font-size:0.8em; color:#666;">
+          <span class="lang-el">Δεν έχετε πορτοφόλι;</span><span class="lang-en">Don't have a wallet?</span> 
+          <a href="/pledge">🔥 Pledge to create one</a>
+      </p>
+  </div>
 
-<div class="field">
-  <label>📤 Send THR</label><br>
-  From: <input type="text" id="from"><br>
-  To: <input type="text" id="to"><br>
-  Amount: <input type="number" id="amount" step="0.001"><br>
-  <button onclick="sendTHR()">Send</button>
-</div>
+  <!-- DASHBOARD SECTION -->
+  <div id="dashboardSection" class="hidden">
+      <div class="wallet-card">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+              <div style="display:flex; align-items:center; gap:10px;">
+                  <img src="{{ url_for('static', filename='img/thronos-token.png') }}" alt="🔥" class="fire-icon-wallet" />
+                  <strong><span id="displayAddress">THR...</span></strong>
+              </div>
+              <button class="secondary" style="width:auto; padding:5px 10px;" onclick="disconnectWallet()">❌ <span class="lang-el">Αποσύνδεση</span><span class="lang-en">Disconnect</span></button>
+          </div>
+          
+          <div class="balance-large">
+              <span id="balance">0</span> THR
+          </div>
+          <div class="btc-val">≈ <span id="btcValue">0.0000</span> BTC</div>
+          
+          <div style="margin-top:20px; display:flex; gap:10px;">
+              <button onclick="window.location.href='/send'">📤 <span class="lang-el">Αποστολή</span><span class="lang-en">Send</span></button>
+              <button class="secondary" onclick="refreshWallet()">🔄 <span class="lang-el">Ανανέωση</span><span class="lang-en">Refresh</span></button>
+              <button class="secondary" onclick="forgetDevice()" style="color:#ff4444; border-color:#ff4444;">🗑️ <span class="lang-el">Forget Device</span><span class="lang-en">Forget Device</span></button>
+          </div>
+      </div>
 
-<div class="log" id="result">🪐 Output will appear here...</div>
+      <h3><span class="lang-el">Ιστορικό Συναλλαγών</span><span class="lang-en">Transaction History</span></h3>
+      <div id="txHistory" class="wallet-card">
+          <span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span>
+      </div>
+  </div>
 
+{% endblock %}
+
+{% block scripts %}
 <script>
-  async function getBalance() {
-    const address = document.getElementById('viewAddress').value;
-    try {
-      const res = await fetch("/wallet_balance", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ thr_address: address })
-      });
-      const json = await res.json();
-      if (json.error) {
-        document.getElementById('result').textContent = `❌ Error: ${json.error}`;
-      } else {
-        document.getElementById('result').textContent =
-          `✅ Balance: ${json.balance} THR\n📜 Transactions: ${JSON.stringify(json.transactions, null, 2)}`;
-      }
-    } catch (err) {
-      document.getElementById('result').textContent = `❌ Request failed: ${err}`;
-    }
-  }
+    // --- Logic ---
+    const $ = (id) => document.getElementById(id);
 
-  async function sendTHR() {
-    const from = document.getElementById('from').value;
-    const to = document.getElementById('to').value;
-    const amount = document.getElementById('amount').value;
-    try {
-      const res = await fetch("/send_token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ from, to, amount })
-      });
-      const json = await res.json();
-      if (json.error) {
-        document.getElementById('result').textContent = `❌ Error: ${json.error}`;
-      } else {
-        document.getElementById('result').textContent =
-          `✅ Sent ${amount} THR!\n📄 TX: ${JSON.stringify(json, null, 2)}`;
-      }
-    } catch (err) {
-      document.getElementById('result').textContent = `❌ Request failed: ${err}`;
+    function checkConnection() {
+        const addr = walletSession.getAddress();
+        const bound = walletSession.isBound();
+        if (addr && bound) {
+            $('connectSection').classList.add('hidden');
+            $('dashboardSection').classList.remove('hidden');
+            $('displayAddress').textContent = addr;
+            loadWalletData(addr);
+        } else {
+            $('connectSection').classList.remove('hidden');
+            $('dashboardSection').classList.add('hidden');
+        }
     }
-  }
+
+    function connectWallet() {
+        const addr = $('inputAddress').value.trim();
+        const secret = $('inputSecret').value.trim();
+        
+        if (!addr) {
+            alert("Please enter a THR address.");
+            return;
+        }
+        
+        walletSession.saveSession({ address: addr, sendSeed: secret, bound: true });
+
+        checkConnection();
+    }
+
+    function disconnectWallet() {
+        // Disconnect only clears session, keeps credentials for PIN unlock
+        walletSession.disconnect();
+        window.location.reload();
+    }
+
+    function forgetDevice() {
+        if(confirm("This will remove ALL wallet data from this device. Continue?")) {
+            walletSession.forgetDevice();
+            window.location.reload();
+        }
+    }
+
+    async function refreshWallet() {
+        const addr = localStorage.getItem('thr_address');
+        if (addr) loadWalletData(addr);
+    }
+
+    async function loadWalletData(addr) {
+      try {
+        const res = await fetch(`/wallet_data/${addr}`);
+        if (!res.ok) throw new Error("Server returned " + res.status);
+        const data = await res.json();
+        
+        const balance = parseFloat(data.balance);
+        $('balance').textContent = balance;
+        
+        // Calculate BTC value (Fixed rate: 1 THR = 0.0001 BTC)
+        const btcVal = (balance * 0.0001).toFixed(8);
+        $('btcValue').textContent = btcVal;
+
+        const div = $('txHistory');
+        if (!data.transactions || !data.transactions.length) {
+          div.innerHTML = '<p style="color:#666;">No transactions found.</p>';
+        } else {
+          let html = "";
+          const txs = data.transactions.reverse(); 
+          
+          txs.forEach(tx => {
+            const isIncoming = tx.to === addr;
+            const color = isIncoming ? '#0f0' : '#ff0';
+            const sign = isIncoming ? '+' : '-';
+            
+            html += `
+            <div class="tx">
+              <div style="display:flex; justify-content:space-between;">
+                  <span style="color:#fff;">${tx.timestamp}</span>
+                  <span style="color:${color}; font-weight:bold;">${sign} ${tx.amount ?? 0} THR</span>
+              </div>
+              <div style="font-size:0.8em; color:#888; margin-top:4px;">
+                  ${isIncoming ? 'From: ' + tx.from : 'To: ' + tx.to}
+                  <br>TXID: ${tx.tx_id || 'pending'}
+              </div>
+            </div>`;
+          });
+          div.innerHTML = html;
+        }
+      } catch (e) {
+        console.error(e);
+        $('txHistory').textContent = "Error loading data.";
+      }
+    }
+
+    // Init
+    document.addEventListener('DOMContentLoaded', checkConnection);
 </script>
-
-</body>
-</html>
+{% endblock %}

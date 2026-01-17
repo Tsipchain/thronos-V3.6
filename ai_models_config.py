@@ -29,8 +29,8 @@ CURATED_MODELS: Dict[str, dict] = {
     },
     "google": {
         "models": [
-            {"id": "gemini-1.5-flash-latest", "label": "Gemini 1.5 Flash", "default": True},
-            {"id": "gemini-1.5-pro-latest", "label": "Gemini 1.5 Pro"},
+            {"id": "gemini-2.5-flash-latest", "label": "Gemini 2.5 Flash", "default": True},
+            {"id": "gemini-2.5-pro-latest", "label": "Gemini 2.5 Pro"},
         ],
     },
 }

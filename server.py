@@ -2371,106 +2371,258 @@ def compute_swap_out(amount_in: float, reserve_in: float, reserve_out: float, fe
     return amount_out, fee_amount, price_impact
 
 
-def quote_swap_route(token_in: str, token_out: str, amount_in: float) -> tuple[dict | None, str | None]:
-    token_in = _sanitize_asset_symbol(token_in)
-    token_out = _sanitize_asset_symbol(token_out)
-    if token_in == token_out:
-        return None, "cannot_swap_same_token"
+# Train-to-Earn API endpoints
+@app.route("/api/v1/train2earn/contribute", methods=["POST"])
+def api_train2earn_contribute():
+    """
+    Accept training data contributions from users.
+    Rewards contributors with T2E tokens based on contribution type.
+    """
+    data = request.get_json() or {}
+    contributor = (data.get("contributor") or "").strip()
+    contrib_type = (data.get("type") or "").strip()
+    content = data.get("content", {})
+    tags = data.get("tags", [])
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
 
-    pool, direct_order = get_pool_for_pair(token_in, token_out)
-    if pool:
-        reserves_a = float(pool.get("reserves_a", 0))
-        reserves_b = float(pool.get("reserves_b", 0))
-        fee_bps = pool_fee_bps(pool)
-        if direct_order:
-            reserve_in, reserve_out = reserves_a, reserves_b
-            in_token, out_token = pool.get("token_a"), pool.get("token_b")
-        else:
-            reserve_in, reserve_out = reserves_b, reserves_a
-            in_token, out_token = pool.get("token_b"), pool.get("token_a")
-        amount_out, fee_amount, price_impact = compute_swap_out(amount_in, reserve_in, reserve_out, fee_bps)
-        if amount_out <= 0:
-            return None, "no_liquidity"
-        return {
-            "route": [{"pool_id": pool.get("id"), "in_token": in_token, "out_token": out_token}],
-            "amount_out": amount_out,
-            "fee": fee_amount,
-            "fee_bps": fee_bps,
-            "price_impact": price_impact,
-        }, None
+    # Server-determined rewards based on contribution type (prevent client manipulation)
+    REWARD_MAP = {
+        'conversation': 5.0,
+        'code': 10.0,
+        'document': 15.0,
+        'qa': 8.0,
+        'dataset': 20.0
+    }
+    reward = float(REWARD_MAP.get(contrib_type, 5.0))
+    
+    if not contributor or not contrib_type or not content:
+        return jsonify(status="error", message="Missing required fields"), 400
+    
+    # Verify contributor authentication
+    pledges = load_json(PLEDGE_CHAIN, [])
+    contributor_pledge = next((p for p in pledges if p.get("thr_address") == contributor), None)
+    if not contributor_pledge:
+        return jsonify(status="error", message="Contributor not found"), 404
+    
+    stored_auth_hash = contributor_pledge.get("send_auth_hash")
+    if not stored_auth_hash:
+        return jsonify(status="error", message="Auth not enabled"), 400
+    
+    if contributor_pledge.get("has_passphrase"):
+        if not passphrase:
+            return jsonify(status="error", message="Passphrase required"), 400
+        auth_string = f"{auth_secret}:{passphrase}:auth"
+    else:
+        auth_string = f"{auth_secret}:auth"
+    
+    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
+        return jsonify(status="error", message="Invalid auth"), 403
+    
+    # Store contribution (simplified - in production, validate and process content)
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    contribution_id = f"T2E-{int(time.time())}-{secrets.token_hex(4)}"
+    
+    # Award T2E tokens (placeholder ledger - you may want a separate T2E ledger)
+    # For now, we'll use a simple file-based approach
+    t2e_file = os.path.join(DATA_DIR, "t2e_contributions.json")
+    contributions = load_json(t2e_file, [])
+    
+    contribution = {
+        "id": contribution_id,
+        "contributor": contributor,
+        "type": contrib_type,
+        "content_hash": hashlib.sha256(json.dumps(content).encode()).hexdigest(),
+        "tags": tags,
+        "reward_t2e": reward,
+        "timestamp": ts,
+        "status": "accepted"
+    }
+    
+    contributions.append(contribution)
+    save_json(t2e_file, contributions)
 
-    if token_in != "THR" and token_out != "THR":
-        first_pool, _ = get_pool_for_pair(token_in, "THR")
-        second_pool, _ = get_pool_for_pair("THR", token_out)
-        if not first_pool or not second_pool:
-            return None, "no_liquidity"
-
-        first_fee = pool_fee_bps(first_pool)
-        second_fee = pool_fee_bps(second_pool)
-
-        first_order = first_pool.get("token_a") == token_in
-        first_reserve_in = float(first_pool.get("reserves_a" if first_order else "reserves_b", 0))
-        first_reserve_out = float(first_pool.get("reserves_b" if first_order else "reserves_a", 0))
-        first_out, first_fee_amt, first_impact = compute_swap_out(amount_in, first_reserve_in, first_reserve_out, first_fee)
-
-        second_order = second_pool.get("token_a") == "THR"
-        second_reserve_in = float(second_pool.get("reserves_a" if second_order else "reserves_b", 0))
-        second_reserve_out = float(second_pool.get("reserves_b" if second_order else "reserves_a", 0))
-        second_out, second_fee_amt, second_impact = compute_swap_out(first_out, second_reserve_in, second_reserve_out, second_fee)
-
-        if second_out <= 0:
-            return None, "no_liquidity"
-        return {
-            "route": [
-                {"pool_id": first_pool.get("id"), "in_token": token_in, "out_token": "THR"},
-                {"pool_id": second_pool.get("id"), "in_token": "THR", "out_token": token_out},
-            ],
-            "amount_out": second_out,
-            "fee": first_fee_amt + second_fee_amt,
-            "fee_bps": first_fee + second_fee,
-            "price_impact": first_impact + second_impact,
-        }, None
-
-    return None, "no_liquidity"
-
-
-def _base_token_catalog():
-    """Return metadata for the core Thronos tokens with supply details."""
+    # --- Credit T2E tokens to contributor's ledger ---
     ledger = load_json(LEDGER_FILE, {})
-    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
-    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
+    current_balance = float(ledger.get(contributor, 0.0))
+    ledger[contributor] = round(current_balance + reward, 6)
+    save_json(LEDGER_FILE, ledger)
+    print(f"💎 T2E Reward: {contributor} earned {reward} T2E tokens (balance: {ledger[contributor]})")
 
-    def supply_of(ledger_map):
-        try:
-            return round(sum(float(v) for v in ledger_map.values()), 6)
-        except Exception:
-            return 0.0
+    # Log to AI corpus for training
+    try:
+        if contrib_type in ["conversation", "qa"]:
+            user_msg = content.get("user", "")
+            assistant_msg = content.get("assistant", "")
+            enqueue_offline_corpus(contributor, user_msg, assistant_msg, [], session_id=None)
+    except Exception as e:
+        print(f"T2E corpus logging error: {e}")
+    
+    return jsonify(status="success", tx_id=contribution_id, reward=reward), 200
 
-    return [
-        {
-            "symbol": "THR",
-            "name": "Thronos",
-            "decimals": 6,
-            "logo_url": url_for("static", filename="img/thronos-token.png", _external=False),
-            "total_supply": supply_of(ledger),
-            "type": "native",
-        },
-        {
-            "symbol": "WBTC",
-            "name": "Wrapped Bitcoin",
-            "decimals": 8,
-            "logo_url": url_for("static", filename="img/wbtc-logo.png", _external=False),
-            "total_supply": supply_of(wbtc_ledger),
-            "type": "wrapped",
-        },
-        {
-            "symbol": "L2E",
-            "name": "Learn-to-Earn",
-            "decimals": 6,
-            "logo_url": url_for("static", filename="img/l2e-logo.png", _external=False),
-            "total_supply": supply_of(l2e_ledger),
-            "type": "reward",
-        },
+@app.route("/api/t2e/balance/<thr_addr>", methods=["GET"])
+def api_t2e_balance(thr_addr: str):
+    """Get T2E balance and statistics for a wallet"""
+    try:
+        # Load T2E balances
+        t2e_balances_file = os.path.join(DATA_DIR, "t2e_balances.json")
+        t2e_balances = load_json(t2e_balances_file, {})
+        balance = float(t2e_balances.get(thr_addr, 0.0))
+
+        # Load project history
+        t2e_history_file = os.path.join(DATA_DIR, "architect_t2e_history.json")
+        t2e_history = load_json(t2e_history_file, {})
+        wallet_history = t2e_history.get(thr_addr, {
+            "projects_completed": 0,
+            "total_t2e_earned": 0.0,
+            "total_thr_spent": 0.0
+        })
+
+        # Calculate current multiplier
+        projects_completed = wallet_history.get("projects_completed", 0)
+        if projects_completed == 0:
+            multiplier = 1.0
+        elif projects_completed < 5:
+            multiplier = 1.0 + (projects_completed * 0.2)
+        elif projects_completed < 10:
+            multiplier = 2.0 + ((projects_completed - 5) * 0.2)
+        else:
+            multiplier = 3.0
+
+        return jsonify({
+            "wallet": thr_addr,
+            "balance": balance,
+            "projects_completed": projects_completed,
+            "multiplier": round(multiplier, 2),
+            "total_earned": wallet_history.get("total_t2e_earned", 0.0),
+            "total_thr_spent": wallet_history.get("total_thr_spent", 0.0),
+            "next_multiplier_at": 5 if projects_completed < 5 else (10 if projects_completed < 10 else "MAX")
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/architect_t2e_history/<thr_addr>", methods=["GET"])
+def api_architect_t2e_history(thr_addr: str):
+    """Get detailed T2E earning history for Architect projects"""
+    try:
+        # Find all architect transactions for this wallet
+        chain = load_json(CHAIN_FILE, [])
+        architect_txs = [
+            tx for tx in chain
+            if tx.get("type") == "architect_service" and tx.get("from") == thr_addr
+        ]
+
+        # Format history
+        history = []
+        for tx in architect_txs:
+            history.append({
+                "session_id": tx.get("session_id"),
+                "blueprint": tx.get("blueprint"),
+                "timestamp": tx.get("timestamp"),
+                "thr_spent": tx.get("amount", 0.0),
+                "files_count": tx.get("files_count", 0),
+                "total_kb": round(tx.get("total_bytes", 0) / 1024.0, 2)
+            })
+
+        return jsonify({
+            "wallet": thr_addr,
+            "projects": history,
+            "total_projects": len(history)
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/architect/complete_project", methods=["POST"])
+def api_architect_complete_project():
+    """
+    Mark an Architect project as complete and reward T2E tokens.
+    Called from chat.html when user finishes development.
+
+    Reward calculation:
+    - Base: 20 T2E tokens
+    - +5 T2E per file created
+    - +10 T2E per 10KB of code
+    """
+    data = request.get_json() or {}
+    wallet = (data.get("wallet") or "").strip()
+    session_id = (data.get("session_id") or "").strip()
+
+    if not wallet:
+        return jsonify(error="Wallet required"), 400
+
+    if not session_id:
+        return jsonify(error="Session ID required"), 400
+
+    # Find the architect transaction for this session
+    chain = load_json(CHAIN_FILE, [])
+    architect_tx = None
+    for tx in reversed(chain):
+        if tx.get("type") == "architect_service" and tx.get("session_id") == session_id:
+            architect_tx = tx
+            break
+
+    if not architect_tx:
+        return jsonify(error="Architect session not found"), 404
+
+    # Calculate T2E reward
+    base_reward = 20.0
+    files_count = architect_tx.get("files_count", 0)
+    total_bytes = architect_tx.get("total_bytes", 0)
+    total_kb = total_bytes / 1024.0
+
+    file_bonus = files_count * 5.0
+    size_bonus = (total_kb / 10.0) * 10.0
+
+    total_reward = round(base_reward + file_bonus + size_bonus, 2)
+
+    # Credit T2E tokens to ledger
+    ledger = load_json(LEDGER_FILE, {})
+    current_balance = float(ledger.get(wallet, 0.0))
+    ledger[wallet] = round(current_balance + total_reward, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    # Create T2E reward transaction
+    tx = {
+        "type": "t2e_architect_reward",
+        "to": wallet,
+        "amount": total_reward,
+        "fee": 0.0,
+        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "session_id": session_id,
+        "files_count": files_count,
+        "total_kb": round(total_kb, 2),
+        "reason": "Architect project completion"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+
+    print(f"🎓 T2E Architect Reward: {wallet} → {total_reward} THR ({files_count} files, {total_kb:.2f} KB)")
+
+    return jsonify({
+        "status": "rewarded",
+        "reward": total_reward,
+        "new_balance": ledger[wallet],
+        "breakdown": {
+            "base": base_reward,
+            "file_bonus": file_bonus,
+            "size_bonus": size_bonus
+        }
+    }), 200
+
+@app.route("/api/v1/train2earn/contributions/<thr_addr>", methods=["GET"])
+def api_train2earn_contributions(thr_addr: str):
+    """
+    Return contribution history for a specific contributor.
+    """
+    t2e_file = os.path.join(DATA_DIR, "t2e_contributions.json")
+    contributions = load_json(t2e_file, [])
+    
+    user_contributions = [
+        c for c in contributions 
+        if c.get("contributor") == thr_addr
     ]
 
 
@@ -2893,9 +3045,27 @@ def validate_btc_address(address: str) -> bool:
     if address.startswith("1") and 26 <= len(address) <= 35:
         return True
 
-    # P2SH (starts with 3)
-    if address.startswith("3") and 26 <= len(address) <= 35:
-        return True
+    # --- Wallet required for Architect (THR payment) ---
+    if not wallet:
+        return jsonify(
+            error="Wallet required. Architect charges in THR based on data volume.",
+            status="no_wallet"
+        ), 400
+
+    # Load blueprint
+    bp_path = os.path.join(DATA_DIR, "ai_blueprints", blueprint)
+    if not os.path.exists(bp_path):
+        # Fallback: try to find it in the list if passed as name only
+        bp_dir = os.path.join(DATA_DIR, "ai_blueprints")
+        found = False
+        if os.path.exists(bp_dir):
+            for f in os.listdir(bp_dir):
+                if f == blueprint:
+                    bp_path = os.path.join(bp_dir, f)
+                    found = True
+                    break
+        if not found:
+             return jsonify(error="Blueprint not found"), 404
 
     # Bech32 (starts with bc1)
     if address.startswith("bc1") and 42 <= len(address) <= 62:
@@ -2925,8 +3095,116 @@ def save_courses(courses):
     save_json(COURSES_FILE, courses)
 
 
-def load_enrollments():
-    return load_json(L2E_ENROLLMENTS_FILE, {})
+    # --- Calculate THR cost based on data volume ---
+    # Price: 0.001 THR per KB of generated code
+    total_bytes = sum(f.get("size", 0) for f in (files or []))
+    total_kb = total_bytes / 1024.0
+
+    # Minimum charge: 0.1 THR, then 0.001 THR/KB
+    thr_cost = max(0.1, round(total_kb * 0.001, 6))
+
+    # --- Check THR balance ---
+    ledger = load_json(LEDGER_FILE, {})
+    user_balance = float(ledger.get(wallet, 0.0))
+
+    if user_balance < thr_cost:
+        return jsonify(
+            error=f"Insufficient THR balance. Cost: {thr_cost} THR, Balance: {user_balance} THR",
+            status="insufficient_funds",
+            cost=thr_cost,
+            balance=user_balance
+        ), 402
+
+    # --- Deduct THR and credit AI_WALLET_ADDRESS ---
+    AI_WALLET = os.getenv("AI_WALLET_ADDRESS", "THR_AI_SERVICES_WALLET_00001")
+    ledger[wallet] = round(user_balance - thr_cost, 6)
+    ai_wallet_balance = float(ledger.get(AI_WALLET, 0.0))
+    ledger[AI_WALLET] = round(ai_wallet_balance + thr_cost, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    # --- Award T2E credits (inverse of THR payment!) ---
+    # Philosophy: User pays THR, gets T2E credits in exchange
+    # T2E credits increase with wallet's project count (multiplier)
+
+    # Load wallet's project history
+    t2e_history_file = os.path.join(DATA_DIR, "architect_t2e_history.json")
+    t2e_history = load_json(t2e_history_file, {})
+
+    wallet_history = t2e_history.get(wallet, {
+        "projects_completed": 0,
+        "total_t2e_earned": 0.0,
+        "total_thr_spent": 0.0
+    })
+
+    # Calculate T2E multiplier based on projects completed
+    projects_completed = wallet_history.get("projects_completed", 0)
+    if projects_completed == 0:
+        multiplier = 1.0
+    elif projects_completed < 5:
+        multiplier = 1.0 + (projects_completed * 0.2)  # 1.2, 1.4, 1.6, 1.8
+    elif projects_completed < 10:
+        multiplier = 2.0 + ((projects_completed - 5) * 0.2)  # 2.0-2.8
+    else:
+        multiplier = 3.0  # Cap at 3x for experienced users
+
+    # Calculate T2E reward: base on data volume + multiplier
+    base_t2e = round(total_kb * 0.01, 2)  # 0.01 T2E per KB
+    total_t2e = round(base_t2e * multiplier, 2)
+
+    # Award T2E to wallet (separate T2E balance tracking)
+    t2e_balances_file = os.path.join(DATA_DIR, "t2e_balances.json")
+    t2e_balances = load_json(t2e_balances_file, {})
+    current_t2e = float(t2e_balances.get(wallet, 0.0))
+    t2e_balances[wallet] = round(current_t2e + total_t2e, 6)
+    save_json(t2e_balances_file, t2e_balances)
+
+    # Update wallet history
+    wallet_history["projects_completed"] = projects_completed + 1
+    wallet_history["total_t2e_earned"] = round(wallet_history.get("total_t2e_earned", 0.0) + total_t2e, 6)
+    wallet_history["total_thr_spent"] = round(wallet_history.get("total_thr_spent", 0.0) + thr_cost, 6)
+    t2e_history[wallet] = wallet_history
+    save_json(t2e_history_file, t2e_history)
+
+    # --- Create blockchain transaction ---
+    chain = load_json(CHAIN_FILE, [])
+    tx = {
+        "type": "architect_service",
+        "from": wallet,
+        "to": AI_WALLET,
+        "amount": thr_cost,
+        "fee": 0.0,
+        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "blueprint": blueprint,
+        "files_count": len(files or []),
+        "total_bytes": total_bytes,
+        "session_id": session_id or "none"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+
+    print(f"🏗️  Architect: {wallet} → {thr_cost} THR | +{total_t2e} T2E ({multiplier:.1f}x, {projects_completed + 1} projects)")
+
+    return jsonify({
+        "status": status,
+        "quantum_key": quantum_key,
+        "blueprint": blueprint,
+        "response": cleaned,
+        "files": [
+            {
+                "filename": f.get("filename"),
+                "size": f.get("size")
+            } for f in (files or [])
+        ],
+        "session_id": session_id,
+        "cost_thr": thr_cost,
+        "earned_t2e": total_t2e,
+        "t2e_multiplier": round(multiplier, 2),
+        "projects_completed": projects_completed + 1,
+        "total_kb": round(total_kb, 2),
+        "files_count": len(files or []),
+        "redirect_to_chat": True  # Signal to redirect to chat.html for further development
+    }), 200
 
 
 def save_enrollments(enrollments):
@@ -3591,17 +3869,14 @@ def attach_uploaded_files_to_session(session_id: str, wallet: str, files: list):
     Link uploaded file metadata to a session, so the agent can see them.
     This only stores references (ids + names), not content.
     """
-    sessions = load_ai_sessions()
-    for s in sessions:
-        if s.get("id") == session_id and (not wallet or s.get("wallet") == wallet):
-            s.setdefault("uploaded_files", [])
-            # de-dup by id
-            existing = {f.get("id") for f in s.get("uploaded_files", []) if isinstance(f, dict)}
-            for fmeta in files:
-                if fmeta.get("id") not in existing:
-                    s["uploaded_files"].append(fmeta)
-            save_ai_sessions(sessions)
-            return
+    wallet = (request.args.get("wallet") or "").strip()
+    if not wallet:
+        # Guest mode - return remaining free messages
+        gid = get_or_set_guest_id()
+        remaining = guest_remaining_free_messages(gid)
+        resp = jsonify({"mode": "guest", "credits": remaining, "max_free_messages": GUEST_MAX_FREE_MESSAGES})
+        resp.set_cookie(GUEST_COOKIE_NAME, gid, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+        return resp, 200
 
 def sha256d(data: bytes) -> bytes:
     return hashlib.sha256(hashlib.sha256(data).digest()).digest()
@@ -19120,15 +19395,43 @@ def api_ai_pool_status():
     }), 200
 
 
-@app.route("/api/governance/ai_overview", methods=["GET"])
-def api_governance_ai_overview():
-    """
-    Governance overview for Pytheia AI auditor.
-    Provides aggregated statistics about AI pool, IoT activity, and network health.
-    Safe to serve from replica nodes (read-only).
-    """
-    # AI pool state
-    pool = get_ai_pool_state()
+        # --- If thumbs up, reward T2E and add to training corpus ---
+        if thumbs_up and thr_wallet:
+            # Award small T2E for helpful feedback
+            t2e_balances_file = os.path.join(DATA_DIR, "t2e_balances.json")
+            t2e_balances = load_json(t2e_balances_file, {})
+            current_t2e = float(t2e_balances.get(thr_wallet, 0.0))
+            reward_amount = 0.5  # 0.5 T2E per helpful response
+            t2e_balances[thr_wallet] = round(current_t2e + reward_amount, 6)
+            save_json(t2e_balances_file, t2e_balances)
+
+            # Add to AI training corpus (for future model fine-tuning)
+            try:
+                corpus_entry = {
+                    "type": "thumbs_up_feedback",
+                    "session_id": session_id,
+                    "message": message_text[:500],
+                    "wallet": thr_wallet,
+                    "timestamp": feedback_entry["timestamp"],
+                    "quality": "high"  # Marked as high quality for training
+                }
+                enqueue_offline_corpus(thr_wallet, "User Feedback (👍)", message_text, [], session_id=session_id)
+            except Exception as e:
+                print(f"Corpus logging error: {e}")
+
+            print(f"👍 Feedback reward: {thr_wallet} +{reward_amount} T2E (total: {t2e_balances[thr_wallet]})")
+
+            return jsonify({
+                "ok": True,
+                "message": "Feedback recorded",
+                "reward": reward_amount,
+                "total_t2e": t2e_balances[thr_wallet]
+            })
+
+        return jsonify({"ok": True, "message": "Feedback recorded"})
+    except Exception as e:
+        app.logger.exception("Feedback error")
+        return jsonify({"ok": False, "error": str(e)}), 500
 
     # Count recent IoT telemetry (last 24h)
     chain = load_json(CHAIN_FILE, [])

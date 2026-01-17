@@ -559,31 +559,27 @@ $("generate").onclick = async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ wallet, blueprint, spec, model_id: model })
     });
+    setStatus(true,"Architect: online");
+    $("out").textContent = j.response || "";
 
-    setStatus(true);
-    if (outEl) {
-      outEl.textContent = j.response || "No response received.";
-    }
-
-    if (filesEl && j.files && j.files.length) {
-      filesEl.style.display = "block";
-      filesEl.innerHTML = "<strong>📁 Generated Files:</strong><br>" + parseFiles(j.files);
+    let filesInfo = "";
+    if(j.files && j.files.length){
+      filesInfo = `Files: ${j.files_count}\nTotal: ${j.total_kb} KB\nCost: ${j.cost_thr} THR\n\n${parseFiles(j.files)}`;
     }
 
-    if (j.zip_url) {
-      enableDownloadBtn(j.zip_url);
-    } else {
-      resetDownloadBtn();
+    if(j.redirect_to_chat && j.session_id){
+      filesInfo += `\n\n✅ Architecture complete!\n👉 Continue development in Chat: /chat?session=${j.session_id}`;
+
+      // Auto-redirect option
+      if(confirm(`Architecture generated successfully!\n\nCost: ${j.cost_thr} THR\nFiles: ${j.files_count}\n\nContinue in Chat for further development?`)){
+        window.location.href = `/chat?session=${j.session_id}&from=architect`;
+      }
     }
-  } catch(e) {
-    setStatus(false);
-    if (outEl) {
-      outEl.textContent = "❌ Error: " + e.message;
-    }
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '🚀 <span class="lang-el">ΔΗΜΙΟΥΡΓΙΑ ΑΡΧΙΤΕΚΤΟΝΙΚΗΣ</span><span class="lang-en">GENERATE ARCHITECTURE</span><span class="lang-ja">アーキテクチャ生成</span><span class="lang-ru">СОЗДАТЬ АРХИТЕКТУРУ</span><span class="lang-es">GENERAR ARQUITECTURA</span>';
-    applyTranslations();
+
+    $("files").textContent = filesInfo;
+  }catch(e){
+    setStatus(false,"Architect: offline");
+    $("out").textContent = "Σφάλμα: " + e.message;
   }
 };
 

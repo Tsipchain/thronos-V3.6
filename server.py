@@ -1431,9 +1431,18 @@ def api_train2earn_contribute():
     contrib_type = (data.get("type") or "").strip()
     content = data.get("content", {})
     tags = data.get("tags", [])
-    reward = float(data.get("reward_t2e", 5.0))
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
+
+    # Server-determined rewards based on contribution type (prevent client manipulation)
+    REWARD_MAP = {
+        'conversation': 5.0,
+        'code': 10.0,
+        'document': 15.0,
+        'qa': 8.0,
+        'dataset': 20.0
+    }
+    reward = float(REWARD_MAP.get(contrib_type, 5.0))
     
     if not contributor or not contrib_type or not content:
         return jsonify(status="error", message="Missing required fields"), 400
@@ -1480,7 +1489,14 @@ def api_train2earn_contribute():
     
     contributions.append(contribution)
     save_json(t2e_file, contributions)
-    
+
+    # --- Credit T2E tokens to contributor's ledger ---
+    ledger = load_json(LEDGER_FILE, {})
+    current_balance = float(ledger.get(contributor, 0.0))
+    ledger[contributor] = round(current_balance + reward, 6)
+    save_json(LEDGER_FILE, ledger)
+    print(f"💎 T2E Reward: {contributor} earned {reward} T2E tokens (balance: {ledger[contributor]})")
+
     # Log to AI corpus for training
     try:
         if contrib_type in ["conversation", "qa"]:
@@ -1893,6 +1909,20 @@ def api_architect_generate():
     if not blueprint or not project_spec:
         return jsonify(error="Missing blueprint or spec"), 400
 
+    # --- Check AI Credits (Architect costs 1 credit per generation) ---
+    if wallet:
+        credits_map = load_ai_credits()
+        try:
+            credits_value = int(credits_map.get(wallet, 0) or 0)
+        except (TypeError, ValueError):
+            credits_value = 0
+
+        if credits_value <= 0:
+            return jsonify(
+                error="Insufficient Quantum credits. Purchase an AI pack to continue.",
+                status="no_credits"
+            ), 402
+
     # Load blueprint
     bp_path = os.path.join(DATA_DIR, "ai_blueprints", blueprint)
     if not os.path.exists(bp_path):
@@ -1965,6 +1995,18 @@ def api_architect_generate():
         enqueue_offline_corpus(wallet, title, full_text, files, session_id=session_id)
     except Exception as e:
         print("architect corpus error:", e)
+
+    # --- Deduct AI Credits ---
+    if wallet:
+        credits_map = load_ai_credits()
+        try:
+            before = int(credits_map.get(wallet, 0) or 0)
+        except (TypeError, ValueError):
+            before = 0
+        after = max(0, before - AI_CREDIT_COST_PER_MSG)
+        credits_map[wallet] = after
+        save_ai_credits(credits_map)
+        print(f"🏗️  Architect charged: {wallet} ({before} → {after} credits)")
 
     return jsonify({
         "status": status,
@@ -2723,16 +2765,10 @@ def api_ai_credits():
     """
     wallet = (request.args.get("wallet") or "").strip()
     if not wallet:
-        # no wallet => do not expose server-side sessions
-        gid = get_or_set_guest_id()
-        resp = jsonify({"sessions": [], "mode": "guest"})
-        resp.set_cookie(GUEST_COOKIE_NAME, gid, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
-        return resp, 200
-    if not wallet:
+        # Guest mode - return remaining free messages
         gid = get_or_set_guest_id()
         remaining = guest_remaining_free_messages(gid)
         resp = jsonify({"mode": "guest", "credits": remaining, "max_free_messages": GUEST_MAX_FREE_MESSAGES})
-        # set cookie so we can track remaining free questions
         resp.set_cookie(GUEST_COOKIE_NAME, gid, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
         return resp, 200
 

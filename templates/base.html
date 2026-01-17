@@ -424,6 +424,136 @@
         transform: translateY(-1px);
     }
 
+    /* Wallet History Modal */
+    .history-modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.9);
+        z-index: 10001;
+        align-items: center;
+        justify-content: center;
+    }
+    .history-modal.active {
+        display: flex;
+    }
+    .history-modal-content {
+        background: linear-gradient(135deg, #000000 0%, #071810 50%, #000000 100%);
+        border: 2px solid;
+        border-image: linear-gradient(135deg, #d4af37 0%, #00ff66 50%, #ffd700 100%) 1;
+        border-radius: 12px;
+        padding: 20px;
+        max-width: 800px;
+        width: 90%;
+        max-height: 80vh;
+        overflow-y: auto;
+        position: relative;
+    }
+    .history-modal-header {
+        font-size: 20px;
+        font-weight: 700;
+        background: linear-gradient(135deg, #ffd700 0%, #00ff66 50%, #ffed4e 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        margin-bottom: 20px;
+        padding-bottom: 10px;
+        border-bottom: 2px solid;
+        border-image: linear-gradient(90deg, transparent, #00ff66, transparent) 1;
+        text-align: center;
+    }
+    .history-modal-close {
+        position: absolute;
+        top: 15px;
+        right: 15px;
+        background: none;
+        border: none;
+        color: #56ff9a;
+        font-size: 28px;
+        cursor: pointer;
+        transition: color 0.3s;
+    }
+    .history-modal-close:hover {
+        color: #00ff66;
+    }
+    .history-tx-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+    .history-tx-item {
+        background: linear-gradient(135deg, rgba(26, 59, 46, 0.2) 0%, rgba(0, 255, 102, 0.05) 100%);
+        border: 1px solid rgba(0, 255, 102, 0.2);
+        border-radius: 8px;
+        padding: 12px;
+        transition: all 0.3s;
+    }
+    .history-tx-item:hover {
+        border-color: #00ff66;
+        box-shadow: 0 0 10px rgba(0, 255, 102, 0.2);
+    }
+    .history-tx-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+    }
+    .history-tx-id {
+        font-family: monospace;
+        font-size: 11px;
+        color: #56ff9a;
+        cursor: pointer;
+    }
+    .history-tx-id:hover {
+        color: #00ff66;
+    }
+    .history-tx-time {
+        font-size: 10px;
+        color: #56ff9a;
+        opacity: 0.7;
+    }
+    .history-tx-details {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 10px;
+        font-size: 11px;
+    }
+    .history-tx-detail {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+    }
+    .history-tx-label {
+        color: #56ff9a;
+        opacity: 0.8;
+        text-transform: uppercase;
+        font-size: 9px;
+        letter-spacing: 0.5px;
+    }
+    .history-tx-value {
+        color: #e6ffe5;
+        font-family: monospace;
+        font-weight: 600;
+    }
+    .history-tx-amount {
+        color: #ffd700;
+        font-weight: 700;
+    }
+    .history-loading {
+        text-align: center;
+        padding: 40px;
+        color: #56ff9a;
+    }
+    .history-empty {
+        text-align: center;
+        padding: 40px;
+        color: #56ff9a;
+        opacity: 0.7;
+    }
+
     /* Send Modal */
     .send-modal {
         display: none;
@@ -805,6 +935,22 @@
     </div>
 </div>
 
+<!-- Wallet History Modal -->
+<div class="history-modal" id="historyModal" onclick="closeHistoryModal(event)">
+    <div class="history-modal-content" onclick="event.stopPropagation()">
+        <button class="history-modal-close" onclick="closeHistoryModal()">×</button>
+        <div class="history-modal-header">
+            📜 <span class="lang-el">Ιστορικό Συναλλαγών</span><span class="lang-en">Transaction History</span>
+        </div>
+        <div id="historyContent">
+            <div class="history-loading">
+                <div class="wallet-popup-spinner"></div>
+                <p><span class="lang-el">Φόρτωση ιστορικού...</span><span class="lang-en">Loading history...</span></p>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="navbar">
   <ul class="nav-list">
     <li class="nav-item brand">
@@ -974,6 +1120,9 @@ function renderWalletBalances(data) {
             <button class="wallet-popup-btn" onclick="openSendModal(); event.stopPropagation();">
                 💸 <span class="lang-el">Αποστολή</span><span class="lang-en">Send</span>
             </button>
+            <button class="wallet-popup-btn" onclick="openHistoryModal(); event.stopPropagation();">
+                📜 <span class="lang-el">Ιστορικό</span><span class="lang-en">History</span>
+            </button>
         </div>
     `;
 
@@ -1002,6 +1151,115 @@ function openSendModal() {
 function closeSendModal(event) {
     if (!event || event.target.id === 'sendModal') {
         document.getElementById('sendModal').classList.remove('active');
+    }
+}
+
+// Wallet History Modal Functions
+function openHistoryModal() {
+    const wallet = localStorage.getItem('thr_address');
+    if (!wallet) {
+        alert(currentLang === 'el' ? 'Συνδέστε πορτοφόλι πρώτα' : 'Connect wallet first');
+        return;
+    }
+
+    const modal = document.getElementById('historyModal');
+    modal.classList.add('active');
+    loadWalletHistory(wallet);
+}
+
+function closeHistoryModal(event) {
+    if (!event || event.target.id === 'historyModal') {
+        document.getElementById('historyModal').classList.remove('active');
+    }
+}
+
+async function loadWalletHistory(wallet) {
+    const contentEl = document.getElementById('historyContent');
+    contentEl.innerHTML = `
+        <div class="history-loading">
+            <div class="wallet-popup-spinner"></div>
+            <p><span class="lang-el">Φόρτωση ιστορικού...</span><span class="lang-en">Loading history...</span></p>
+        </div>
+    `;
+
+    try {
+        const response = await fetch(`/api/v1/address/${wallet}/history`);
+        if (!response.ok) throw new Error('Failed to load history');
+
+        const data = await response.json();
+        const transactions = data.transactions || [];
+
+        if (transactions.length === 0) {
+            contentEl.innerHTML = `
+                <div class="history-empty">
+                    <p><span class="lang-el">Δεν βρέθηκαν συναλλαγές</span><span class="lang-en">No transactions found</span></p>
+                </div>
+            `;
+            return;
+        }
+
+        // Render transactions (most recent first)
+        const reversedTxs = transactions.slice().reverse();
+        let html = '<div class="history-tx-list">';
+
+        reversedTxs.forEach(tx => {
+            const isReceived = tx.to === wallet;
+            const direction = isReceived ? '📥' : '📤';
+            const directionText = isReceived
+                ? (currentLang === 'el' ? 'Λήψη' : 'Received')
+                : (currentLang === 'el' ? 'Αποστολή' : 'Sent');
+
+            const txId = tx.tx_id || tx.hash || 'N/A';
+            const amount = tx.amount || 0;
+            const fee = tx.fee || 0;
+            const timestamp = tx.timestamp || 'N/A';
+            const blockHeight = tx.block_height || tx.height || 'Pending';
+
+            html += `
+                <div class="history-tx-item">
+                    <div class="history-tx-header">
+                        <span class="history-tx-id" onclick="navigator.clipboard.writeText('${txId}')" title="${currentLang === 'el' ? 'Κλικ για αντιγραφή' : 'Click to copy'}">
+                            ${direction} ${txId.substring(0, 12)}...${txId.substring(txId.length - 8)}
+                        </span>
+                        <span class="history-tx-time">${timestamp}</span>
+                    </div>
+                    <div class="history-tx-details">
+                        <div class="history-tx-detail">
+                            <span class="history-tx-label">${currentLang === 'el' ? 'Τύπος' : 'Type'}</span>
+                            <span class="history-tx-value">${directionText}</span>
+                        </div>
+                        <div class="history-tx-detail">
+                            <span class="history-tx-label">${currentLang === 'el' ? 'Ποσό' : 'Amount'}</span>
+                            <span class="history-tx-value history-tx-amount">${Number(amount).toFixed(6)} THR</span>
+                        </div>
+                        <div class="history-tx-detail">
+                            <span class="history-tx-label">${currentLang === 'el' ? 'Χρέωση' : 'Fee'}</span>
+                            <span class="history-tx-value">${Number(fee).toFixed(6)} THR</span>
+                        </div>
+                        <div class="history-tx-detail">
+                            <span class="history-tx-label">${currentLang === 'el' ? 'Block' : 'Block'}</span>
+                            <span class="history-tx-value">${blockHeight}</span>
+                        </div>
+                        <div class="history-tx-detail">
+                            <span class="history-tx-label">${isReceived ? (currentLang === 'el' ? 'Από' : 'From') : (currentLang === 'el' ? 'Προς' : 'To')}</span>
+                            <span class="history-tx-value" style="font-size: 9px;">${isReceived ? (tx.from || 'N/A').substring(0, 16) : (tx.to || 'N/A').substring(0, 16)}...</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        });
+
+        html += '</div>';
+        contentEl.innerHTML = html;
+
+    } catch (error) {
+        console.error('History load error:', error);
+        contentEl.innerHTML = `
+            <div class="history-empty" style="color: #ff4d4d;">
+                <p><span class="lang-el">❌ Σφάλμα φόρτωσης ιστορικού</span><span class="lang-en">❌ Error loading history</span></p>
+                <p style="font-size: 11px;">${error.message}</p>
+            </div>
+        `;
     }
 }
 

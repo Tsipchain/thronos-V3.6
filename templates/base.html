@@ -424,136 +424,6 @@
         transform: translateY(-1px);
     }
 
-    /* Wallet History Modal */
-    .history-modal {
-        display: none;
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: rgba(0, 0, 0, 0.9);
-        z-index: 10001;
-        align-items: center;
-        justify-content: center;
-    }
-    .history-modal.active {
-        display: flex;
-    }
-    .history-modal-content {
-        background: linear-gradient(135deg, #000000 0%, #071810 50%, #000000 100%);
-        border: 2px solid;
-        border-image: linear-gradient(135deg, #d4af37 0%, #00ff66 50%, #ffd700 100%) 1;
-        border-radius: 12px;
-        padding: 20px;
-        max-width: 800px;
-        width: 90%;
-        max-height: 80vh;
-        overflow-y: auto;
-        position: relative;
-    }
-    .history-modal-header {
-        font-size: 20px;
-        font-weight: 700;
-        background: linear-gradient(135deg, #ffd700 0%, #00ff66 50%, #ffed4e 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        margin-bottom: 20px;
-        padding-bottom: 10px;
-        border-bottom: 2px solid;
-        border-image: linear-gradient(90deg, transparent, #00ff66, transparent) 1;
-        text-align: center;
-    }
-    .history-modal-close {
-        position: absolute;
-        top: 15px;
-        right: 15px;
-        background: none;
-        border: none;
-        color: #56ff9a;
-        font-size: 28px;
-        cursor: pointer;
-        transition: color 0.3s;
-    }
-    .history-modal-close:hover {
-        color: #00ff66;
-    }
-    .history-tx-list {
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-    }
-    .history-tx-item {
-        background: linear-gradient(135deg, rgba(26, 59, 46, 0.2) 0%, rgba(0, 255, 102, 0.05) 100%);
-        border: 1px solid rgba(0, 255, 102, 0.2);
-        border-radius: 8px;
-        padding: 12px;
-        transition: all 0.3s;
-    }
-    .history-tx-item:hover {
-        border-color: #00ff66;
-        box-shadow: 0 0 10px rgba(0, 255, 102, 0.2);
-    }
-    .history-tx-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 8px;
-    }
-    .history-tx-id {
-        font-family: monospace;
-        font-size: 11px;
-        color: #56ff9a;
-        cursor: pointer;
-    }
-    .history-tx-id:hover {
-        color: #00ff66;
-    }
-    .history-tx-time {
-        font-size: 10px;
-        color: #56ff9a;
-        opacity: 0.7;
-    }
-    .history-tx-details {
-        display: grid;
-        grid-template-columns: 1fr 1fr 1fr;
-        gap: 10px;
-        font-size: 11px;
-    }
-    .history-tx-detail {
-        display: flex;
-        flex-direction: column;
-        gap: 3px;
-    }
-    .history-tx-label {
-        color: #56ff9a;
-        opacity: 0.8;
-        text-transform: uppercase;
-        font-size: 9px;
-        letter-spacing: 0.5px;
-    }
-    .history-tx-value {
-        color: #e6ffe5;
-        font-family: monospace;
-        font-weight: 600;
-    }
-    .history-tx-amount {
-        color: #ffd700;
-        font-weight: 700;
-    }
-    .history-loading {
-        text-align: center;
-        padding: 40px;
-        color: #56ff9a;
-    }
-    .history-empty {
-        text-align: center;
-        padding: 40px;
-        color: #56ff9a;
-        opacity: 0.7;
-    }
-
     /* Send Modal */
     .send-modal {
         display: none;
@@ -936,17 +806,68 @@
 </div>
 
 <!-- Wallet History Modal -->
-<div class="history-modal" id="historyModal" onclick="closeHistoryModal(event)">
-    <div class="history-modal-content" onclick="event.stopPropagation()">
-        <button class="history-modal-close" onclick="closeHistoryModal()">×</button>
-        <div class="history-modal-header">
-            📜 <span class="lang-el">Ιστορικό Συναλλαγών</span><span class="lang-en">Transaction History</span>
+<div class="send-modal" id="walletHistoryModal" onclick="closeWalletHistoryModal(event)">
+    <div class="send-modal-content" onclick="event.stopPropagation()">
+        <div class="send-modal-header">
+            📜
+            <span class="lang-el">Ιστορικό Συναλλαγών</span>
+            <span class="lang-en">Transaction History</span>
         </div>
-        <div id="historyContent">
-            <div class="history-loading">
-                <div class="wallet-popup-spinner"></div>
-                <p><span class="lang-el">Φόρτωση ιστορικού...</span><span class="lang-en">Loading history...</span></p>
+
+        <!-- History Tabs -->
+        <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; padding: 0 4px;">
+            <button class="history-tab-btn active" data-filter="all" onclick="filterHistory('all')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.2); border: 1px solid rgba(0,255,102,0.4); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                <span class="lang-el">Όλα</span><span class="lang-en">All</span>
+            </button>
+            <button class="history-tab-btn" data-filter="thr" onclick="filterHistory('thr')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">THR</button>
+            <button class="history-tab-btn" data-filter="mining" onclick="filterHistory('mining')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                ⛏️ <span class="lang-el">Mining</span><span class="lang-en">Mining</span>
+            </button>
+            <button class="history-tab-btn" data-filter="tokens" onclick="filterHistory('tokens')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                <span class="lang-el">Tokens</span><span class="lang-en">Tokens</span>
+            </button>
+            <button class="history-tab-btn" data-filter="l2e" onclick="filterHistory('l2e')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">L2E</button>
+            <button class="history-tab-btn" data-filter="ai_credits" onclick="filterHistory('ai_credits')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">AI Credits (Chat)</button>
+            <button class="history-tab-btn" data-filter="architect_ai_jobs" onclick="filterHistory('architect_ai_jobs')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">Architect / AI Jobs</button>
+            <button class="history-tab-btn" data-filter="iot" onclick="filterHistory('iot')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">IoT</button>
+            <button class="history-tab-btn" data-filter="bridge" onclick="filterHistory('bridge')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                <span class="lang-el">Bridge</span><span class="lang-en">Bridge</span>
+            </button>
+            <button class="history-tab-btn" data-filter="swaps" onclick="filterHistory('swaps')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                <span class="lang-el">Swaps</span><span class="lang-en">Swaps</span>
+            </button>
+            <button class="history-tab-btn" data-filter="liquidity" onclick="filterHistory('liquidity')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                <span class="lang-el">Liquidity</span><span class="lang-en">Liquidity</span>
+            </button>
+            <button class="history-tab-btn" data-filter="gateway" onclick="filterHistory('gateway')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                <span class="lang-el">Gateway</span><span class="lang-en">Gateway</span>
+            </button>
+            <button class="history-tab-btn" data-filter="music" onclick="filterHistory('music')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                🎵 <span class="lang-el">Μουσική</span><span class="lang-en">Music</span>
+            </button>
+        </div>
+
+        <div id="tokenIndexBar" style="display:none; margin: 0 4px 10px 4px;">
+            <div style="display:flex; align-items:center; gap:6px; overflow-x:auto; padding-bottom:6px; scrollbar-width: thin;" id="tokenIndexScroll"></div>
+            <div style="display:flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 4px;">
+                <button class="history-tab-btn" style="flex:0 0 auto; min-width: 80px; padding: 6px 8px;" onclick="clearTokenFilter()">All Tokens</button>
+                <button class="history-tab-btn" style="flex:0 0 auto; min-width: 80px; padding: 6px 8px;" onclick="shareTokenFilter()">Share / Copy</button>
             </div>
+        </div>
+
+        <div id="historyContent" style="max-height: 500px; overflow-y: auto;">
+            <div class="wallet-popup-loading">
+                <div class="wallet-popup-spinner"></div>
+                <span class="lang-el">Φόρτωση ιστορικού...</span>
+                <span class="lang-en">Loading history...</span>
+            </div>
+        </div>
+
+        <div style="margin-top:10px;text-align:right;">
+            <button class="send-modal-btn" onclick="closeWalletHistoryModal()">
+                <span class="lang-el">Κλείσιμο</span>
+                <span class="lang-en">Close</span>
+            </button>
         </div>
     </div>
 </div>
@@ -1120,7 +1041,7 @@ function renderWalletBalances(data) {
             <button class="wallet-popup-btn" onclick="openSendModal(); event.stopPropagation();">
                 💸 <span class="lang-el">Αποστολή</span><span class="lang-en">Send</span>
             </button>
-            <button class="wallet-popup-btn" onclick="openHistoryModal(); event.stopPropagation();">
+            <button class="wallet-popup-btn" onclick="openWalletHistoryModal(); event.stopPropagation();">
                 📜 <span class="lang-el">Ιστορικό</span><span class="lang-en">History</span>
             </button>
         </div>
@@ -1155,113 +1076,568 @@ function closeSendModal(event) {
 }
 
 // Wallet History Modal Functions
-function openHistoryModal() {
-    const wallet = localStorage.getItem('thr_address');
-    if (!wallet) {
-        alert(currentLang === 'el' ? 'Συνδέστε πορτοφόλι πρώτα' : 'Connect wallet first');
+let allTransactions = [];
+let currentHistoryFilter = 'all';
+let currentTokenFilter = null;
+
+function resetHistoryFilters() {
+    currentHistoryFilter = 'all';
+    currentTokenFilter = null;
+    const tokenIndexBar = document.getElementById('tokenIndexBar');
+    if (tokenIndexBar) tokenIndexBar.style.display = 'none';
+}
+
+function openWalletHistoryModal() {
+    document.getElementById('walletHistoryModal').classList.add('active');
+    resetHistoryFilters();
+    filterHistory('all');
+    loadWalletHistory();
+}
+
+function closeWalletHistoryModal(event) {
+    if (!event || event.target.id === 'walletHistoryModal') {
+        document.getElementById('walletHistoryModal').classList.remove('active');
+        resetHistoryFilters();
+    }
+}
+
+function filterHistory(filter, tokenSymbol = null) {
+    currentHistoryFilter = filter;
+    if (filter !== 'tokens') {
+        currentTokenFilter = null;
+    } else if (tokenSymbol) {
+        currentTokenFilter = tokenSymbol;
+    }
+
+    // Update tab button styles
+    document.querySelectorAll('.history-tab-btn').forEach(btn => {
+        if (btn.dataset.filter === filter) {
+            btn.style.background = 'rgba(0,255,102,0.2)';
+            btn.style.borderColor = 'rgba(0,255,102,0.4)';
+            btn.classList.add('active');
+        } else {
+            btn.style.background = 'rgba(0,255,102,0.05)';
+            btn.style.borderColor = 'rgba(0,255,102,0.2)';
+            btn.classList.remove('active');
+        }
+    });
+
+    if (filter === 'liquidity' || filter === 'architect_ai_jobs' || filter === 'ai_credits') {
+        loadWalletHistory(filter);
+    } else {
+        renderHistory();
+    }
+}
+
+function getTxType(tx) {
+    const category = (tx.category || '').toLowerCase();
+    if ([
+        'thr',
+        'mining',
+        'tokens',
+        'l2e',
+        'ai_credits',
+        'architect_ai_jobs',
+        'iot',
+        'bridge',
+        'swaps',
+        'liquidity',
+        'gateway',
+        'music',
+    ].includes(category)) {
+        return category;
+    }
+
+    const raw = (tx.kind || tx.type || '').toLowerCase();
+    const asset = (tx.asset_symbol || tx.asset || tx.symbol || 'THR').toUpperCase();
+
+    // Mining rewards
+    if (raw === 'mining' || raw === 'block_reward' || raw === 'mining_reward' || raw.includes('mined')) {
+        return 'mining';
+    }
+
+    // PR-5c: Music tips
+    if (raw === 'music_tip' || raw.includes('music')) {
+        return 'music';
+    }
+
+    // THR transfers: must be transfer/thr_transfer AND asset must be THR
+    if ((raw === 'thr_transfer' || raw === 'transfer') && asset === 'THR') {
+        return 'thr';
+    }
+
+    // Token transfers: must be token_transfer AND asset must NOT be THR
+    if (raw === 'token_transfer' && asset !== 'THR') {
+        return 'tokens';
+    }
+
+    // Liquidity events
+    if (raw.startsWith('liquidity_') ||
+        raw === 'add_liquidity' ||
+        raw === 'remove_liquidity' ||
+        raw === 'pool_create' ||
+        raw === 'pool_add_liquidity' ||
+        raw === 'pool_remove_liquidity' ||
+        raw === 'pool_add' ||
+        raw === 'pool_remove') {
+        return 'liquidity';
+    }
+
+    const kindMap = {
+        'mining': 'mining',
+        'block_reward': 'mining',
+        'mining_reward': 'mining',
+        'swap': 'swaps',
+        'pool_swap': 'swaps',
+        'bridge': 'bridge',
+        'bridge_in': 'bridge',
+        'bridge_out': 'bridge',
+        'bridge_deposit': 'bridge',
+        'bridge_withdraw': 'bridge',
+        'crosschain': 'bridge',
+        'cross_chain': 'bridge',
+        'l2e': 'l2e',
+        'ai_credit': 'ai_credits',
+        'ai_credits': 'ai_credits',
+        'ai_credits_earned': 'ai_credits',
+        'ai_credits_spent': 'ai_credits',
+        'iot': 'iot',
+        'autopilot': 'iot',
+        'parking': 'iot',
+        'architect_job': 'architect_ai_jobs',
+        'architect': 'architect_ai_jobs',
+        'ai_job_created': 'architect_ai_jobs',
+        'ai_job_progress': 'architect_ai_jobs',
+        'ai_job_completed': 'architect_ai_jobs',
+        'ai_job_reward': 'architect_ai_jobs',
+        'music': 'music',
+        'fiat_onramp': 'gateway',
+        'fiat_offramp': 'gateway',
+        'gateway': 'gateway',
+        'onramp': 'gateway',
+        'offramp': 'gateway',
+    };
+    if (kindMap[raw]) return kindMap[raw];
+
+    // Multi-chain assets detection
+    const multiChainAssets = ['BTC', 'WBTC', 'ETH', 'BNB', 'XRP', 'SOL'];
+    if (multiChainAssets.includes(asset)) {
+        // If it's a bridge-related transaction, keep it as bridge
+        if (raw.includes('bridge') || raw.includes('deposit') || raw.includes('withdraw') || raw.includes('crosschain')) {
+            return 'bridge';
+        }
+        // Otherwise it's a token transfer
+        return 'tokens';
+    }
+
+    // Fallback: use already-declared asset variable
+    if (asset && asset !== 'THR') return 'tokens';
+    return 'thr';
+}
+
+function formatTxDate(timestamp) {
+    try {
+        let date;
+        if (typeof timestamp === 'number') {
+            // Unix timestamp (seconds or milliseconds)
+            date = timestamp > 10000000000 ? new Date(timestamp) : new Date(timestamp * 1000);
+        } else if (typeof timestamp === 'string') {
+            const numeric = Number(timestamp);
+            if (!Number.isNaN(numeric)) {
+                date = numeric > 10000000000 ? new Date(numeric) : new Date(numeric * 1000);
+            } else {
+                date = new Date(timestamp);
+            }
+        } else {
+            return '';
+        }
+
+        if (isNaN(date.getTime())) {
+            return timestamp ? String(timestamp) : '';
+        }
+
+        return date.toLocaleString();
+    } catch (e) {
+        return timestamp ? String(timestamp) : '';
+    }
+}
+
+function formatBytes(value) {
+    const bytes = Number(value);
+    if (!Number.isFinite(bytes)) return '';
+    if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+    if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(2)} KB`;
+    return `${bytes.toFixed(0)} B`;
+}
+
+function buildTokenIndexData() {
+    const counts = {};
+    allTransactions.forEach(tx => {
+        if (getTxType(tx) === 'tokens') {
+            const sym = (tx.symbol || '').toUpperCase() || 'TOKEN';
+            counts[sym] = (counts[sym] || 0) + 1;
+        }
+    });
+
+    const select = document.getElementById('sendToken');
+    if (select) {
+        Array.from(select.options).forEach(opt => {
+            const sym = (opt.value || '').toUpperCase();
+            if (sym && sym !== 'THR' && counts[sym] === undefined) {
+                counts[sym] = 0;
+            }
+        });
+    }
+
+    return Object.keys(counts)
+        .sort((a, b) => a.localeCompare(b))
+        .map(sym => ({ symbol: sym, count: counts[sym] }));
+}
+
+function renderTokenIndex() {
+    const scroll = document.getElementById('tokenIndexScroll');
+    const bar = document.getElementById('tokenIndexBar');
+    if (!scroll || !bar) return false;
+
+    const tokens = buildTokenIndexData();
+    if (!tokens || tokens.length === 0) {
+        scroll.innerHTML = '<div style="opacity:0.7; font-size:11px;">No tokens detected</div>';
+        return false;
+    }
+
+    let html = '';
+    tokens.forEach(token => {
+        const isActive = currentTokenFilter && currentTokenFilter.toUpperCase() === token.symbol;
+        const badge = `<span style="background:rgba(0,255,102,0.2); color:#00ff66; padding:1px 5px; border-radius:8px; font-size:9px;">${token.count}</span>`;
+        const chipStyle = isActive
+            ? 'background:rgba(0,255,102,0.25); border-color:rgba(0,255,102,0.6); color:#00ff66;'
+            : 'background:rgba(0,255,102,0.08); border-color:rgba(0,255,102,0.25); color:#00ff66;';
+
+        html += `<button class="history-tab-btn" style="flex:0 0 auto; min-width:70px; padding:6px 8px; display:flex; align-items:center; gap:6px; ${chipStyle}" onclick="filterHistory('tokens','${token.symbol}')">`;
+        html += `<span style="width:20px; height:20px; border-radius:50%; background: rgba(0,255,102,0.15); display:flex; align-items:center; justify-content:center; font-weight:bold;">${escapeHtml(token.symbol[0] || '?')}</span>`;
+        html += `<span style="font-size:11px;">${escapeHtml(token.symbol)}</span>${badge}`;
+        html += `</button>`;
+    });
+
+    scroll.innerHTML = html;
+    return true;
+}
+
+function clearTokenFilter() {
+    currentTokenFilter = null;
+    filterHistory('tokens');
+}
+
+function shareTokenFilter() {
+    const token = currentTokenFilter;
+    const text = token ? `#history=tokens&token=${encodeURIComponent(token)}` : '#history=tokens';
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => showToast('Copied to clipboard'));
+    } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        showToast('Copied to clipboard');
+    }
+}
+
+function renderHistory() {
+    const content = document.getElementById('historyContent');
+    const addr = walletSession.getAddress();
+    const tokenIndexBar = document.getElementById('tokenIndexBar');
+
+    if (currentHistoryFilter !== 'tokens') {
+        currentTokenFilter = null;
+    }
+
+    if (!allTransactions || allTransactions.length === 0) {
+        content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions found</div>';
         return;
     }
 
-    const modal = document.getElementById('historyModal');
-    modal.classList.add('active');
-    loadWalletHistory(wallet);
-}
-
-function closeHistoryModal(event) {
-    if (!event || event.target.id === 'historyModal') {
-        document.getElementById('historyModal').classList.remove('active');
+    if (currentHistoryFilter === 'tokens') {
+        const hasTokens = renderTokenIndex();
+        if (tokenIndexBar) tokenIndexBar.style.display = hasTokens ? 'block' : 'none';
+    } else if (tokenIndexBar) {
+        tokenIndexBar.style.display = 'none';
     }
+
+    // Filter transactions
+    let filtered = allTransactions;
+    if (currentHistoryFilter !== 'all') {
+        filtered = allTransactions.filter(tx => getTxType(tx) === currentHistoryFilter);
+    }
+
+    if (currentHistoryFilter === 'tokens' && currentTokenFilter) {
+        filtered = filtered.filter(tx => (tx.symbol || '').toUpperCase() === currentTokenFilter.toUpperCase());
+    }
+
+    if (filtered.length === 0) {
+        content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions in this category</div>';
+        return;
+    }
+
+    const lang = getCurrentLang();
+    const isGreek = isGreekLang(lang);
+
+    let html = '<div style="display: flex; flex-direction: column; gap: 10px;">';
+
+    filtered.slice(0, 50).forEach(tx => {
+        const isSent = tx.from === addr;
+        const direction = isSent ? (isGreek ? 'Αποστολή' : 'Sent') : (isGreek ? 'Λήψη' : 'Received');
+        const directionIcon = isSent ? '📤' : '📥';
+        const directionColor = isSent ? '#ff6666' : '#66ff66';
+
+        const otherAddr = isSent ? tx.to : tx.from;
+        const shortAddr = otherAddr ? `${otherAddr.slice(0, 8)}...${otherAddr.slice(-6)}` : 'N/A';
+
+        const statusValue = (tx.status || '').toLowerCase();
+        const isMined = statusValue === 'confirmed' || statusValue === 'mined';
+        const isRejected = statusValue === 'rejected' || statusValue === 'failed';
+        const statusBadge = isMined
+            ? `<span style="background: #00ff0033; color: #00ff00; padding: 2px 6px; border-radius: 4px; font-size: 10px;">✓ ${isGreek ? 'Επιβεβαιώθηκε' : 'Confirmed'}</span>`
+            : isRejected
+            ? `<span style="background: #ff333333; color: #ff6666; padding: 2px 6px; border-radius: 4px; font-size: 10px;">✕ ${isGreek ? 'Απορρίφθηκε' : 'Rejected'}</span>`
+            : `<span style="background: #ffff0033; color: #ffff00; padding: 2px 6px; border-radius: 4px; font-size: 10px;">⏳ ${isGreek ? 'Εκκρεμεί' : 'Pending'}</span>`;
+
+        const txType = getTxType(tx);
+        const typeLabel = txType === 'mining' ? '⛏️ Mining' :
+                         txType === 'l2e' ? 'L2E' :
+                         txType === 'ai_credits' ? 'AI Credits' :
+                         txType === 'architect_ai_jobs' ? 'Architect / AI Jobs' :
+                         txType === 'iot' ? 'IoT' :
+                         txType === 'bridge' ? 'Bridge' :
+                         txType === 'swaps' ? 'Swaps' :
+                         txType === 'liquidity' ? 'Liquidity' :
+                         txType === 'gateway' ? 'Gateway' :
+                         txType === 'music' ? '🎵 Music Tip' : '';
+        const isSwap = txType === 'swaps';
+        const isLiquidity = txType === 'liquidity';
+        const meta = tx.meta || {};
+        const poolEvent = tx.meta && tx.meta.pool_event ? tx.meta.pool_event : null;
+        const amountInRaw = poolEvent?.in_amount ?? tx.amount_in ?? tx.amountIn ?? tx.input_amount ?? tx.amount ?? 0;
+        const amountIn = Number.isFinite(Number(amountInRaw)) ? Number(amountInRaw) : 0;
+        const amountOut = poolEvent?.out_amount ?? tx.amount_out ?? tx.amountOut ?? tx.output_amount ?? tx.received_amount;
+        const amountOutNum = (amountOut !== undefined && Number.isFinite(Number(amountOut))) ? Number(amountOut) : null;
+
+        // Determine correct asset symbol for display
+        const displayAsset = txType === 'tokens'
+            ? (tx.asset_symbol || tx.asset || tx.symbol || 'TOKEN')
+            : (tx.symbol || tx.asset_symbol || tx.asset || 'THR');
+
+        const liquiditySubtype = (tx.subtype || tx.meta?.subtype || '').toLowerCase();
+        const isLiquidityRemove = liquiditySubtype === 'remove_liq' || (tx.kind || tx.type || '').toLowerCase().includes('remove');
+        const liquiditySign = isLiquidityRemove ? '+' : '-';
+        const liquidityAmounts = isLiquidity
+            ? (tx.amounts || tx.meta?.amounts || [
+                { symbol: tx.symbol_in || tx.token_a || 'THR', amount: amountIn },
+                { symbol: tx.symbol_out || tx.token_b || '', amount: amountOutNum }
+            ]).filter(entry => entry && entry.symbol && Number.isFinite(Number(entry.amount)))
+            : [];
+        const liquidityLines = isLiquidity
+            ? liquidityAmounts.map(entry => `${liquiditySign}${Number(entry.amount).toFixed(6)} ${entry.symbol}`)
+            : [];
+        const amountDisplay = isSwap
+            ? `${amountIn.toFixed(6)} ${poolEvent?.in_token || tx.symbol_in || tx.from_symbol || tx.symbol || 'THR'}${amountOutNum !== null ? ` → ${amountOutNum.toFixed(6)} ${poolEvent?.out_token || tx.symbol_out || tx.to_symbol || tx.target_symbol || tx.swap_out || ''}` : ''}`
+            : isLiquidity
+            ? (liquidityLines.length
+                ? `<div style="text-align:right;">${liquidityLines.map(line => `<div>${line}</div>`).join('')}</div>`
+                : `${amountIn.toFixed(6)} ${tx.symbol_in || tx.token_a || 'THR'}`)
+            : `${Number(amountInRaw || 0).toFixed(6)} ${displayAsset}`;
+        const swapPair = isSwap ? (tx.pair || tx.route || `${(poolEvent?.in_token || tx.swap_in || tx.from_symbol || tx.symbol || '?')}${poolEvent?.out_token || tx.swap_out || tx.to_symbol || tx.target_symbol ? `/${poolEvent?.out_token || tx.swap_out || tx.to_symbol || tx.target_symbol}` : ''}`) : '';
+        const swapDirection = isSwap ? (tx.direction || tx.side || '') : '';
+
+        // Fee information
+        const fee = tx.fee_burned || tx.fee || 0;
+        const feeDisplay = fee > 0 ? `<br><span style="font-size: 10px; opacity: 0.6;">${isGreek ? 'Κόστος:' : 'Fee:'} ${fee} THR</span>` : '';
+        const swapMeta = isSwap && poolEvent
+            ? `<br><span style="font-size: 10px; opacity: 0.6;">${isGreek ? 'Fee' : 'Fee'}: ${poolEvent.fee ?? fee} • ${isGreek ? 'Impact' : 'Impact'}: ${poolEvent.price_impact ?? tx.price_impact ?? '—'}%</span>`
+            : '';
+
+        // Pool/liquidity info
+        let poolInfo = '';
+        if (isLiquidity) {
+            const action = isLiquidityRemove ? (isGreek ? 'Αφαίρεση Ρευστότητας' : 'Remove Liquidity') : (isGreek ? 'Προσθήκη Ρευστότητας' : 'Add Liquidity');
+            const poolId = meta.pool_id || tx.pool_id;
+            poolInfo = `<div style="font-size: 11px; color: #00bfff; opacity: 0.85; margin-top: 4px;">${action}${poolId ? ` • Pool ${escapeHtml(poolId)}` : ''}</div>`;
+        } else if (isSwap && tx.meta) {
+            const fromAsset = meta.from_asset || tx.symbol || 'THR';
+            const toAsset = meta.to_asset || 'THR';
+            poolInfo = `<div style="font-size: 11px; color: #00bfff; opacity: 0.85; margin-top: 4px;">Swap: ${escapeHtml(fromAsset)} → ${escapeHtml(toAsset)}</div>`;
+        }
+
+        const detailLines = [];
+        // PR-5c/5g: Music transaction details (tips + pool earnings)
+        if (txType === 'music') {
+            const royaltyType = meta.royalty_type || '';
+            const isPoolEarning = royaltyType === 'play_reward' || tx.from === 'AI_WALLET';
+
+            if (tx.track_title) detailLines.push(`Track: "${escapeHtml(tx.track_title)}"`);
+            else if (tx.track_id) detailLines.push(`Track ID: ${escapeHtml(tx.track_id)}`);
+
+            if (isPoolEarning) {
+                // Music pool earnings from plays
+                const playNum = meta.play_number || '';
+                const earnLabel = isGreek ? '🎵 Κέρδη από Plays' : '🎵 Pool Earnings';
+                detailLines.push(earnLabel);
+                if (playNum) detailLines.push(`Play #${playNum}`);
+            } else {
+                // Direct tip from fan
+                const tipLabel = isSent
+                    ? (isGreek ? '💝 Tip για καλλιτέχνη' : '💝 Tip to artist')
+                    : (isGreek ? '💝 Tip από fan' : '💝 Tip from fan');
+                detailLines.push(tipLabel);
+            }
+        }
+        if (txType === 'architect_ai_jobs') {
+            if (meta.job_id) detailLines.push(`Job: ${escapeHtml(meta.job_id)}`);
+            if (meta.files_count != null) detailLines.push(`Files: ${meta.files_count}`);
+            if (meta.bytes_total != null) detailLines.push(`Size: ${formatBytes(meta.bytes_total)}`);
+            if (meta.reward_thr != null) detailLines.push(`Reward: ${Number(meta.reward_thr).toFixed(6)} THR`);
+            if (meta.pct != null) detailLines.push(`Progress: ${Number(meta.pct).toFixed(1)}%`);
+            if (meta.bytes_done != null && meta.bytes_total) {
+                detailLines.push(`Progress: ${formatBytes(meta.bytes_done)} / ${formatBytes(meta.bytes_total)}`);
+            }
+            if ((tx.kind || '').toLowerCase().startsWith('ai_job_')) {
+                detailLines.push(`Status: ${(tx.kind || '').replace(/_/g, ' ')}`);
+            }
+        }
+        if (txType === 'ai_credits') {
+            if (meta.credits_delta != null) detailLines.push(`Credits: ${Number(meta.credits_delta).toFixed(2)}`);
+            if (meta.session_id) detailLines.push(`Session: ${escapeHtml(meta.session_id)}`);
+            if (meta.reason) detailLines.push(`Reason: ${escapeHtml(meta.reason)}`);
+            if (meta.tokens_used != null) detailLines.push(`Tokens: ${meta.tokens_used}`);
+        }
+        // PR-5g: IoT purchase details
+        if (txType === 'iot') {
+            if (tx.pack_name) detailLines.push(`${escapeHtml(tx.pack_name)}`);
+            else if (tx.pack_id) detailLines.push(`Pack: ${escapeHtml(tx.pack_id)}`);
+            if (tx.fiat_amount && tx.currency) {
+                const currSymbol = tx.currency === 'EUR' ? '€' : tx.currency === 'USD' ? '$' : tx.currency;
+                detailLines.push(`${currSymbol}${Number(tx.fiat_amount).toFixed(2)}`);
+            }
+            if (meta.payment_status) detailLines.push(`Payment: ${escapeHtml(meta.payment_status)}`);
+        }
+        const detailInfo = detailLines.length
+            ? `<div style="font-size: 11px; color: #9adf9a; opacity: 0.9; margin-top: 4px;">${detailLines.join(' • ')}</div>`
+            : '';
+
+        // Token price info
+        const priceInfo = (tx.meta && tx.meta.token_price_thr)
+            ? `<br><span style="font-size: 10px; opacity: 0.6;">${isGreek ? 'Τιμή:' : 'Price:'} ${tx.meta.token_price_thr} THR per ${tx.asset_symbol || tx.symbol}</span>`
+            : '';
+
+        html += `
+            <div style="background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 8px; padding: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 20px;">${directionIcon}</span>
+                        <span style="color: ${directionColor}; font-weight: bold;">${direction}</span>
+                        ${typeLabel ? `<span style="background: rgba(0,191,255,0.2); color: #00bfff; padding: 2px 6px; border-radius: 4px; font-size: 10px;">${typeLabel}</span>` : ''}
+                        ${statusBadge}
+                    </div>
+                    <div style="font-weight: bold; color: #00ff66;">${amountDisplay}</div>
+                </div>
+                <div style="font-size: 11px; opacity: 0.7;">
+                    ${isSent ? (isGreek ? 'Προς:' : 'To:') : (isGreek ? 'Από:' : 'From:')} ${shortAddr}${feeDisplay}${swapMeta}${priceInfo}
+                </div>
+                ${poolInfo}
+                ${detailInfo}
+                ${isSwap && swapPair ? `<div style="font-size: 11px; opacity: 0.75; margin-top: 4px;">${isGreek ? 'Ζεύγος:' : 'Pair:'} ${escapeHtml(swapPair || 'Unknown pair')}${swapDirection ? ` • ${escapeHtml(swapDirection)}` : ''}</div>` : ''}
+                ${tx.timestamp ? `<div style="font-size: 10px; opacity: 0.5; margin-top: 4px;">${formatTxDate(tx.timestamp)}</div>` : ''}
+            </div>
+        `;
+    });
+
+    html += '</div>';
+    content.innerHTML = html;
 }
 
-async function loadWalletHistory(wallet) {
-    const contentEl = document.getElementById('historyContent');
-    contentEl.innerHTML = `
-        <div class="history-loading">
-            <div class="wallet-popup-spinner"></div>
-            <p><span class="lang-el">Φόρτωση ιστορικού...</span><span class="lang-en">Loading history...</span></p>
-        </div>
-    `;
+async function loadWalletHistory(category = null) {
+    const content = document.getElementById('historyContent');
+    const addr = walletSession.getAddress();
+
+    if (!addr) {
+        content.innerHTML = '<div class="send-result error" style="margin: 20px;">Connect wallet to view history</div>';
+        return;
+    }
 
     try {
-        const response = await fetch(`/api/v1/address/${wallet}/history`);
-        if (!response.ok) throw new Error('Failed to load history');
-
-        const data = await response.json();
+        const params = new URLSearchParams({ address: addr });
+        if (category) {
+            params.set('category', category);
+        }
+        const historyRes = await fetch(`/api/wallet/history?${params.toString()}`);
+        const data = historyRes.ok ? await historyRes.json() : {};
         const transactions = data.transactions || [];
-
-        if (transactions.length === 0) {
-            contentEl.innerHTML = `
-                <div class="history-empty">
-                    <p><span class="lang-el">Δεν βρέθηκαν συναλλαγές</span><span class="lang-en">No transactions found</span></p>
-                </div>
-            `;
+        if (!transactions || transactions.length === 0) {
+            content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions found</div>';
+            allTransactions = [];
             return;
         }
 
-        // Render transactions (most recent first)
-        const reversedTxs = transactions.slice().reverse();
-        let html = '<div class="history-tx-list">';
-
-        reversedTxs.forEach(tx => {
-            const isReceived = tx.to === wallet;
-            const direction = isReceived ? '📥' : '📤';
-            const directionText = isReceived
-                ? (currentLang === 'el' ? 'Λήψη' : 'Received')
-                : (currentLang === 'el' ? 'Αποστολή' : 'Sent');
-
-            const txId = tx.tx_id || tx.hash || 'N/A';
-            const amount = tx.amount || 0;
-            const fee = tx.fee || 0;
-            const timestamp = tx.timestamp || 'N/A';
-            const blockHeight = tx.block_height || tx.height || 'Pending';
-
-            html += `
-                <div class="history-tx-item">
-                    <div class="history-tx-header">
-                        <span class="history-tx-id" onclick="navigator.clipboard.writeText('${txId}')" title="${currentLang === 'el' ? 'Κλικ για αντιγραφή' : 'Click to copy'}">
-                            ${direction} ${txId.substring(0, 12)}...${txId.substring(txId.length - 8)}
-                        </span>
-                        <span class="history-tx-time">${timestamp}</span>
-                    </div>
-                    <div class="history-tx-details">
-                        <div class="history-tx-detail">
-                            <span class="history-tx-label">${currentLang === 'el' ? 'Τύπος' : 'Type'}</span>
-                            <span class="history-tx-value">${directionText}</span>
-                        </div>
-                        <div class="history-tx-detail">
-                            <span class="history-tx-label">${currentLang === 'el' ? 'Ποσό' : 'Amount'}</span>
-                            <span class="history-tx-value history-tx-amount">${Number(amount).toFixed(6)} THR</span>
-                        </div>
-                        <div class="history-tx-detail">
-                            <span class="history-tx-label">${currentLang === 'el' ? 'Χρέωση' : 'Fee'}</span>
-                            <span class="history-tx-value">${Number(fee).toFixed(6)} THR</span>
-                        </div>
-                        <div class="history-tx-detail">
-                            <span class="history-tx-label">${currentLang === 'el' ? 'Block' : 'Block'}</span>
-                            <span class="history-tx-value">${blockHeight}</span>
-                        </div>
-                        <div class="history-tx-detail">
-                            <span class="history-tx-label">${isReceived ? (currentLang === 'el' ? 'Από' : 'From') : (currentLang === 'el' ? 'Προς' : 'To')}</span>
-                            <span class="history-tx-value" style="font-size: 9px;">${isReceived ? (tx.from || 'N/A').substring(0, 16) : (tx.to || 'N/A').substring(0, 16)}...</span>
-                        </div>
-                    </div>
-                </div>
-            `;
-        });
-
-        html += '</div>';
-        contentEl.innerHTML = html;
+        allTransactions = transactions;
+        renderHistory();
+        startHistoryPendingPolling();
 
     } catch (error) {
-        console.error('History load error:', error);
-        contentEl.innerHTML = `
-            <div class="history-empty" style="color: #ff4d4d;">
-                <p><span class="lang-el">❌ Σφάλμα φόρτωσης ιστορικού</span><span class="lang-en">❌ Error loading history</span></p>
-                <p style="font-size: 11px;">${error.message}</p>
-            </div>
-        `;
+        console.error('Failed to load history:', error);
+        content.innerHTML = '<div class="send-result error" style="margin: 20px;">Failed to load transaction history</div>';
     }
 }
+
+// Bridge Modal Functions
+function openBridgeModal() {
+    document.getElementById('bridgeModal').classList.add('active');
+    loadBridgeDeposit();
+}
+
+function closeBridgeModal(event) {
+    if (!event || event.target.id === 'bridgeModal') {
+        document.getElementById('bridgeModal').classList.remove('active');
+    }
+}
+
+async function loadBridgeDeposit() {
+    const addr = walletSession.getAddress();
+    const depositEl = document.getElementById('bridgeDepositAddress');
+    const emptyEl = document.getElementById('bridgeEmpty');
+
+    if (!addr) {
+        if (depositEl) depositEl.textContent = '—';
+        if (emptyEl) emptyEl.style.display = 'block';
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/bridge/deposit?wallet=${encodeURIComponent(addr)}`);
+        const data = await response.json();
+
+        if (data.deposit_address) {
+            if (depositEl) depositEl.textContent = data.deposit_address;
+            if (emptyEl) emptyEl.style.display = 'none';
+        } else {
+            if (depositEl) depositEl.textContent = '—';
+            if (emptyEl) emptyEl.style.display = 'block';
+        }
+    } catch (error) {
+        console.error('Failed to load bridge deposit:', error);
+        if (depositEl) depositEl.textContent = 'Error loading address';
+        if (emptyEl) emptyEl.style.display = 'block';
+    }
+}
+
+function copyBridgeAddress() {
+    const addr = document.getElementById('bridgeDepositAddress').textContent;
+    if (addr && addr !== '—') {
+        copyToClipboard(addr);
+    }
+}
+
 
 function selectSpeed(speed) {
     selectedSpeed = speed;

@@ -1214,6 +1214,22 @@
             }
             return sym || 'THR';
         };
+
+        // Helper functions for transaction processing
+        function getKind(tx) {
+            return (tx.kind || tx.type || '').toLowerCase();
+        }
+
+        function getAssetSymbol(tx) {
+            return (tx.asset_symbol || tx.asset || tx.symbol || 'THR').toUpperCase();
+        }
+
+        function isTokenTransfer(tx) {
+            const kind = getKind(tx);
+            const asset = getAssetSymbol(tx);
+            return kind === 'token_transfer' && asset !== 'THR';
+        }
+
         const isThrTransfer = (tx) => {
             // Must be thr_transfer kind AND THR asset (not tokens)
             return getKind(tx) === 'thr_transfer' && getAssetSymbol(tx) === 'THR';
@@ -1439,16 +1455,17 @@
             statusDiv.innerHTML = '<span style="color: #ffd700;">⏳ Processing transaction...</span>';
 
             try {
-                const res = await fetch('/send_tokens', {
+                const res = await fetch('/api/wallet/send', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        from_address: walletAddress,
-                        to_address: toAddress,
+                        from: walletAddress,
+                        to: toAddress,
                         amount: amount,
                         token: token,
-                        auth_secret: secret,
-                        passphrase: ''
+                        secret: secret,
+                        passphrase: '',
+                        speed: 'fast'
                     })
                 });
 

@@ -2094,6 +2094,49 @@ def api_architect_generate():
     ledger[AI_WALLET] = round(ai_wallet_balance + thr_cost, 6)
     save_json(LEDGER_FILE, ledger)
 
+    # --- Award T2E credits (inverse of THR payment!) ---
+    # Philosophy: User pays THR, gets T2E credits in exchange
+    # T2E credits increase with wallet's project count (multiplier)
+
+    # Load wallet's project history
+    t2e_history_file = os.path.join(DATA_DIR, "architect_t2e_history.json")
+    t2e_history = load_json(t2e_history_file, {})
+
+    wallet_history = t2e_history.get(wallet, {
+        "projects_completed": 0,
+        "total_t2e_earned": 0.0,
+        "total_thr_spent": 0.0
+    })
+
+    # Calculate T2E multiplier based on projects completed
+    projects_completed = wallet_history.get("projects_completed", 0)
+    if projects_completed == 0:
+        multiplier = 1.0
+    elif projects_completed < 5:
+        multiplier = 1.0 + (projects_completed * 0.2)  # 1.2, 1.4, 1.6, 1.8
+    elif projects_completed < 10:
+        multiplier = 2.0 + ((projects_completed - 5) * 0.2)  # 2.0-2.8
+    else:
+        multiplier = 3.0  # Cap at 3x for experienced users
+
+    # Calculate T2E reward: base on data volume + multiplier
+    base_t2e = round(total_kb * 0.01, 2)  # 0.01 T2E per KB
+    total_t2e = round(base_t2e * multiplier, 2)
+
+    # Award T2E to wallet (separate T2E balance tracking)
+    t2e_balances_file = os.path.join(DATA_DIR, "t2e_balances.json")
+    t2e_balances = load_json(t2e_balances_file, {})
+    current_t2e = float(t2e_balances.get(wallet, 0.0))
+    t2e_balances[wallet] = round(current_t2e + total_t2e, 6)
+    save_json(t2e_balances_file, t2e_balances)
+
+    # Update wallet history
+    wallet_history["projects_completed"] = projects_completed + 1
+    wallet_history["total_t2e_earned"] = round(wallet_history.get("total_t2e_earned", 0.0) + total_t2e, 6)
+    wallet_history["total_thr_spent"] = round(wallet_history.get("total_thr_spent", 0.0) + thr_cost, 6)
+    t2e_history[wallet] = wallet_history
+    save_json(t2e_history_file, t2e_history)
+
     # --- Create blockchain transaction ---
     chain = load_json(CHAIN_FILE, [])
     tx = {
@@ -2112,7 +2155,7 @@ def api_architect_generate():
     save_json(CHAIN_FILE, chain)
     update_last_block(tx, is_block=False)
 
-    print(f"🏗️  Architect charged: {wallet} → {thr_cost} THR ({len(files)} files, {total_kb:.2f} KB)")
+    print(f"🏗️  Architect: {wallet} → {thr_cost} THR | +{total_t2e} T2E ({multiplier:.1f}x, {projects_completed + 1} projects)")
 
     return jsonify({
         "status": status,
@@ -2127,6 +2170,9 @@ def api_architect_generate():
         ],
         "session_id": session_id,
         "cost_thr": thr_cost,
+        "earned_t2e": total_t2e,
+        "t2e_multiplier": round(multiplier, 2),
+        "projects_completed": projects_completed + 1,
         "total_kb": round(total_kb, 2),
         "files_count": len(files or []),
         "redirect_to_chat": True  # Signal to redirect to chat.html for further development
@@ -7770,6 +7816,39 @@ def api_ai_feedback():
 
         # Save feedback
         save_json(feedback_file, feedback_list)
+
+        # --- If thumbs up, reward T2E and add to training corpus ---
+        if thumbs_up and thr_wallet:
+            # Award small T2E for helpful feedback
+            t2e_balances_file = os.path.join(DATA_DIR, "t2e_balances.json")
+            t2e_balances = load_json(t2e_balances_file, {})
+            current_t2e = float(t2e_balances.get(thr_wallet, 0.0))
+            reward_amount = 0.5  # 0.5 T2E per helpful response
+            t2e_balances[thr_wallet] = round(current_t2e + reward_amount, 6)
+            save_json(t2e_balances_file, t2e_balances)
+
+            # Add to AI training corpus (for future model fine-tuning)
+            try:
+                corpus_entry = {
+                    "type": "thumbs_up_feedback",
+                    "session_id": session_id,
+                    "message": message_text[:500],
+                    "wallet": thr_wallet,
+                    "timestamp": feedback_entry["timestamp"],
+                    "quality": "high"  # Marked as high quality for training
+                }
+                enqueue_offline_corpus(thr_wallet, "User Feedback (👍)", message_text, [], session_id=session_id)
+            except Exception as e:
+                print(f"Corpus logging error: {e}")
+
+            print(f"👍 Feedback reward: {thr_wallet} +{reward_amount} T2E (total: {t2e_balances[thr_wallet]})")
+
+            return jsonify({
+                "ok": True,
+                "message": "Feedback recorded",
+                "reward": reward_amount,
+                "total_t2e": t2e_balances[thr_wallet]
+            })
 
         return jsonify({"ok": True, "message": "Feedback recorded"})
     except Exception as e:

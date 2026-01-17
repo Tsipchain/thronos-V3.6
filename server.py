@@ -1508,6 +1508,80 @@ def api_train2earn_contribute():
     
     return jsonify(status="success", tx_id=contribution_id, reward=reward), 200
 
+@app.route("/api/t2e/balance/<thr_addr>", methods=["GET"])
+def api_t2e_balance(thr_addr: str):
+    """Get T2E balance and statistics for a wallet"""
+    try:
+        # Load T2E balances
+        t2e_balances_file = os.path.join(DATA_DIR, "t2e_balances.json")
+        t2e_balances = load_json(t2e_balances_file, {})
+        balance = float(t2e_balances.get(thr_addr, 0.0))
+
+        # Load project history
+        t2e_history_file = os.path.join(DATA_DIR, "architect_t2e_history.json")
+        t2e_history = load_json(t2e_history_file, {})
+        wallet_history = t2e_history.get(thr_addr, {
+            "projects_completed": 0,
+            "total_t2e_earned": 0.0,
+            "total_thr_spent": 0.0
+        })
+
+        # Calculate current multiplier
+        projects_completed = wallet_history.get("projects_completed", 0)
+        if projects_completed == 0:
+            multiplier = 1.0
+        elif projects_completed < 5:
+            multiplier = 1.0 + (projects_completed * 0.2)
+        elif projects_completed < 10:
+            multiplier = 2.0 + ((projects_completed - 5) * 0.2)
+        else:
+            multiplier = 3.0
+
+        return jsonify({
+            "wallet": thr_addr,
+            "balance": balance,
+            "projects_completed": projects_completed,
+            "multiplier": round(multiplier, 2),
+            "total_earned": wallet_history.get("total_t2e_earned", 0.0),
+            "total_thr_spent": wallet_history.get("total_thr_spent", 0.0),
+            "next_multiplier_at": 5 if projects_completed < 5 else (10 if projects_completed < 10 else "MAX")
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/architect_t2e_history/<thr_addr>", methods=["GET"])
+def api_architect_t2e_history(thr_addr: str):
+    """Get detailed T2E earning history for Architect projects"""
+    try:
+        # Find all architect transactions for this wallet
+        chain = load_json(CHAIN_FILE, [])
+        architect_txs = [
+            tx for tx in chain
+            if tx.get("type") == "architect_service" and tx.get("from") == thr_addr
+        ]
+
+        # Format history
+        history = []
+        for tx in architect_txs:
+            history.append({
+                "session_id": tx.get("session_id"),
+                "blueprint": tx.get("blueprint"),
+                "timestamp": tx.get("timestamp"),
+                "thr_spent": tx.get("amount", 0.0),
+                "files_count": tx.get("files_count", 0),
+                "total_kb": round(tx.get("total_bytes", 0) / 1024.0, 2)
+            })
+
+        return jsonify({
+            "wallet": thr_addr,
+            "projects": history,
+            "total_projects": len(history)
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/architect/complete_project", methods=["POST"])
 def api_architect_complete_project():
     """

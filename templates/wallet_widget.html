@@ -833,6 +833,135 @@
         </div>
     </div>
 
+    <!-- Music/Telemetry Modal -->
+    <div class="modal-overlay" id="musicTelemetryModal">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeMusicTelemetryModal()">×</button>
+            <div class="modal-title">🎵 <span class="lang-el">Μουσική & Τηλεμετρία</span><span class="lang-en">Music & Telemetry</span></div>
+
+            <!-- Tabs -->
+            <div class="wallet-tabs">
+                <button class="wallet-tab active" onclick="switchMusicTab('player')">
+                    <span class="lang-el">🎵 Player</span><span class="lang-en">🎵 Player</span>
+                </button>
+                <button class="wallet-tab" onclick="switchMusicTab('whisper')">
+                    <span class="lang-el">📡 WhisperNote</span><span class="lang-en">📡 WhisperNote</span>
+                </button>
+                <button class="wallet-tab" onclick="switchMusicTab('telemetry')">
+                    <span class="lang-el">🛰️ Telemetry</span><span class="lang-en">🛰️ Telemetry</span>
+                </button>
+            </div>
+
+            <!-- Music Player Tab -->
+            <div id="playerTab" class="tab-content active">
+                <p style="color: var(--widget-muted); font-size: 12px; margin-bottom: 15px;">
+                    <span class="lang-el">Αναπαραγωγή μουσικής και αποστολή tips σε καλλιτέχνες</span>
+                    <span class="lang-en">Play music and send tips to artists</span>
+                </p>
+                <div id="musicPlayerContent">
+                    <div style="text-align: center; padding: 20px;">
+                        <div style="font-size: 48px; margin-bottom: 10px;">🎵</div>
+                        <p style="color: var(--widget-muted);">
+                            <span class="lang-el">Δεν παίζει τίποτα αυτή τη στιγμή</span>
+                            <span class="lang-en">Nothing playing right now</span>
+                        </p>
+                        <a href="/music" class="form-submit" style="display: inline-block; text-decoration: none; margin-top: 15px; padding: 10px 20px;">
+                            <span class="lang-el">🎧 Περιήγηση Μουσικής</span><span class="lang-en">🎧 Browse Music</span>
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- WhisperNote Tab -->
+            <div id="whisperTab" class="tab-content">
+                <p style="color: var(--widget-muted); font-size: 12px; margin-bottom: 15px;">
+                    <span class="lang-el">Μετατροπή δεδομένων συναλλαγών σε ηχητικά σήματα</span>
+                    <span class="lang-en">Convert transaction data to audio signals</span>
+                </p>
+                <div class="form-group">
+                    <label class="form-label">
+                        <span class="lang-el">Δεδομένα Συναλλαγής (JSON)</span>
+                        <span class="lang-en">Transaction Data (JSON)</span>
+                    </label>
+                    <textarea class="form-input" id="whisperData" rows="4" placeholder='{"tx_id": "...", "amount": 100}'></textarea>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">
+                        <span class="lang-el">Συχνότητα Ήχου</span>
+                        <span class="lang-en">Audio Frequency</span>
+                    </label>
+                    <select class="form-input" id="whisperFreq">
+                        <option value="1000">1kHz (Low)</option>
+                        <option value="2000" selected>2kHz (Mid)</option>
+                        <option value="4000">4kHz (High)</option>
+                    </select>
+                </div>
+                <button class="form-submit" onclick="generateWhisperNote()">
+                    <span class="lang-el">🎵 Δημιουργία Ήχου</span>
+                    <span class="lang-en">🎵 Generate Audio</span>
+                </button>
+                <div id="whisperPlayer" style="display:none; margin-top: 15px;">
+                    <audio id="whisperAudio" controls style="width: 100%; margin-bottom: 10px;"></audio>
+                    <button class="wallet-btn" onclick="downloadWhisper()" style="width: 100%;">
+                        <span class="lang-el">💾 Κατέβασμα WAV</span>
+                        <span class="lang-en">💾 Download WAV</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Telemetry Tab -->
+            <div id="telemetryTab" class="tab-content">
+                <p style="color: var(--widget-muted); font-size: 12px; margin-bottom: 15px;">
+                    <span class="lang-el">GPS και τηλεμετρία οχήματος σε πραγματικό χρόνο</span>
+                    <span class="lang-en">Real-time GPS and vehicle telemetry</span>
+                </p>
+                <div id="telemetryData" style="background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 8px; padding: 15px;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 12px;">
+                        <div>
+                            <div style="color: var(--widget-muted);">
+                                <span class="lang-el">📍 Γεωγραφικό Πλάτος</span>
+                                <span class="lang-en">📍 Latitude</span>
+                            </div>
+                            <div style="color: var(--widget-accent); font-weight: bold;" id="telemetryLat">--</div>
+                        </div>
+                        <div>
+                            <div style="color: var(--widget-muted);">
+                                <span class="lang-el">📍 Γεωγραφικό Μήκος</span>
+                                <span class="lang-en">📍 Longitude</span>
+                            </div>
+                            <div style="color: var(--widget-accent); font-weight: bold;" id="telemetryLng">--</div>
+                        </div>
+                        <div>
+                            <div style="color: var(--widget-muted);">
+                                <span class="lang-el">🚗 Ταχύτητα</span>
+                                <span class="lang-en">🚗 Speed</span>
+                            </div>
+                            <div style="color: var(--widget-accent); font-weight: bold;" id="telemetrySpeed">-- km/h</div>
+                        </div>
+                        <div>
+                            <div style="color: var(--widget-muted);">
+                                <span class="lang-el">🧭 Κατεύθυνση</span>
+                                <span class="lang-en">🧭 Heading</span>
+                            </div>
+                            <div style="color: var(--widget-accent); font-weight: bold;" id="telemetryHeading">--°</div>
+                        </div>
+                    </div>
+                </div>
+                <button class="form-submit" onclick="requestTelemetry()" style="margin-top: 15px;">
+                    <span class="lang-el">🛰️ Ενεργοποίηση GPS</span>
+                    <span class="lang-en">🛰️ Enable GPS</span>
+                </button>
+                <p style="color: var(--widget-muted); font-size: 10px; margin-top: 10px; text-align: center;">
+                    <span class="lang-el">Πλήρης λειτουργικότητα διαθέσιμη στο IoT Dashboard</span>
+                    <span class="lang-en">Full functionality available in IoT Dashboard</span>
+                </p>
+                <a href="/iot" class="wallet-btn" style="display: block; text-align: center; text-decoration: none; margin-top: 10px;">
+                    <span class="lang-el">🚗 Άνοιγμα IoT</span><span class="lang-en">🚗 Open IoT</span>
+                </a>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Translations
         const TRANSLATIONS = {
@@ -1171,10 +1300,21 @@
             const map = {
                 transfer: 'thr',
                 thr_transfer: 'thr',
+                mining: 'mining',
+                block_reward: 'mining',
+                mining_reward: 'mining',
+                mined: 'mining',
                 token_transfer: 'tokens',
                 swap: 'swaps',
                 pool_swap: 'swaps',
+                liquidity_add: 'liquidity',
+                liquidity_remove: 'liquidity',
+                liquidity: 'liquidity',
+                pool_add: 'liquidity',
+                pool_remove: 'liquidity',
                 bridge: 'bridge',
+                bridge_deposit: 'bridge',
+                bridge_withdraw: 'bridge',
                 l2e: 'l2e',
                 l2e_reward: 'l2e',
                 ai_credit: 'ai_credits',
@@ -1191,6 +1331,13 @@
                 iot_parking: 'iot',
                 iot_parking_reservation: 'iot',
                 iot_autopilot: 'iot',
+                gateway: 'gateway',
+                gateway_deposit: 'gateway',
+                gateway_withdraw: 'gateway',
+                music: 'music',
+                music_tip: 'music',
+                music_purchase: 'music',
+                music_stream: 'music',
             };
             return map[kind] || kind;
         }
@@ -1214,6 +1361,22 @@
             }
             return sym || 'THR';
         };
+
+        // Helper functions for transaction processing
+        function getKind(tx) {
+            return (tx.kind || tx.type || '').toLowerCase();
+        }
+
+        function getAssetSymbol(tx) {
+            return (tx.asset_symbol || tx.asset || tx.symbol || 'THR').toUpperCase();
+        }
+
+        function isTokenTransfer(tx) {
+            const kind = getKind(tx);
+            const asset = getAssetSymbol(tx);
+            return kind === 'token_transfer' && asset !== 'THR';
+        }
+
         const isThrTransfer = (tx) => {
             // Must be thr_transfer kind AND THR asset (not tokens)
             return getKind(tx) === 'thr_transfer' && getAssetSymbol(tx) === 'THR';
@@ -1286,6 +1449,7 @@
             const filtered = txs.filter(tx => {
                 const category = getCanonicalCategory(tx);
                 if (historyState.filter === 'thr') return category === 'thr';
+                if (historyState.filter === 'mining') return category === 'mining';
                 if (historyState.filter === 'tokens') return category === 'tokens';
                 if (historyState.filter === 'swaps') return category === 'swaps';
                 if (historyState.filter === 'l2e') return category === 'l2e';
@@ -1293,6 +1457,9 @@
                 if (historyState.filter === 'iot') return category === 'iot';
                 if (historyState.filter === 'bridge') return category === 'bridge';
                 if (historyState.filter === 'architect_ai_jobs') return category === 'architect_ai_jobs';
+                if (historyState.filter === 'liquidity') return category === 'liquidity';
+                if (historyState.filter === 'gateway') return category === 'gateway';
+                if (historyState.filter === 'music') return category === 'music';
                 return true;
             }).filter(tx => {
                 if (historyState.filter !== 'tokens' || !historyState.selectedToken) return true;
@@ -1302,13 +1469,17 @@
             const tabs = [
                 { id: 'all', label: 'All' },
                 { id: 'thr', label: 'THR' },
+                { id: 'mining', label: '⛏️ Mining' },
                 { id: 'tokens', label: 'Tokens' },
-                { id: 'swaps', label: 'Swaps' },
                 { id: 'l2e', label: 'L2E' },
                 { id: 'ai_credits', label: 'AI Credits' },
                 { id: 'architect_ai_jobs', label: 'Architect / AI Jobs' },
-                { id: 'bridge', label: 'Bridge' },
                 { id: 'iot', label: 'IoT' },
+                { id: 'bridge', label: 'Bridge' },
+                { id: 'swaps', label: 'Swaps' },
+                { id: 'liquidity', label: 'Liquidity' },
+                { id: 'gateway', label: 'Gateway' },
+                { id: 'music', label: '🎵 Music' },
             ];
 
             let html = `
@@ -1439,16 +1610,17 @@
             statusDiv.innerHTML = '<span style="color: #ffd700;">⏳ Processing transaction...</span>';
 
             try {
-                const res = await fetch('/send_tokens', {
+                const res = await fetch('/api/wallet/send', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        from_address: walletAddress,
-                        to_address: toAddress,
+                        from: walletAddress,
+                        to: toAddress,
                         amount: amount,
                         token: token,
-                        auth_secret: secret,
-                        passphrase: ''
+                        secret: secret,
+                        passphrase: '',
+                        speed: 'fast'
                     })
                 });
 
@@ -1583,12 +1755,117 @@
             });
         }
 
+        // Music/Telemetry Modal Functions
+        function openMusicTelemetryModal() {
+            document.getElementById('musicTelemetryModal').classList.add('active');
+            switchMusicTab('player');
+        }
+
+        function closeMusicTelemetryModal() {
+            document.getElementById('musicTelemetryModal').classList.remove('active');
+        }
+
+        function switchMusicTab(tab) {
+            document.querySelectorAll('#musicTelemetryModal .wallet-tab').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('#musicTelemetryModal .tab-content').forEach(content => content.classList.remove('active'));
+
+            const tabs = { 'player': 0, 'whisper': 1, 'telemetry': 2 };
+            const index = tabs[tab] || 0;
+            document.querySelectorAll('#musicTelemetryModal .wallet-tab')[index].classList.add('active');
+
+            if (tab === 'player') {
+                document.getElementById('playerTab').classList.add('active');
+            } else if (tab === 'whisper') {
+                document.getElementById('whisperTab').classList.add('active');
+            } else if (tab === 'telemetry') {
+                document.getElementById('telemetryTab').classList.add('active');
+            }
+        }
+
+        function generateWhisperNote() {
+            const dataStr = document.getElementById('whisperData').value.trim();
+            const freq = parseInt(document.getElementById('whisperFreq').value);
+
+            if (!dataStr) {
+                alert('Please enter transaction data');
+                return;
+            }
+
+            try {
+                // Basic audio generation using Web Audio API
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const duration = 2; // 2 seconds
+                const sampleRate = audioContext.sampleRate;
+                const buffer = audioContext.createBuffer(1, duration * sampleRate, sampleRate);
+                const data = buffer.getChannelData(0);
+
+                // Generate sine wave at specified frequency
+                for (let i = 0; i < data.length; i++) {
+                    data[i] = Math.sin(2 * Math.PI * freq * i / sampleRate) * 0.3;
+                }
+
+                // Create audio source
+                const source = audioContext.createBufferSource();
+                source.buffer = buffer;
+                source.connect(audioContext.destination);
+
+                // Show player
+                document.getElementById('whisperPlayer').style.display = 'block';
+
+                // Play audio
+                source.start();
+
+                // Store buffer for download
+                window.whisperBuffer = buffer;
+
+                alert('✅ Audio generated! Press play to hear it.');
+            } catch (error) {
+                console.error('Audio generation error:', error);
+                alert('Error generating audio. Check console for details.');
+            }
+        }
+
+        function downloadWhisper() {
+            if (!window.whisperBuffer) {
+                alert('Please generate audio first');
+                return;
+            }
+            // WAV download would require additional encoding
+            alert('Download feature coming soon. Audio can be played from the player above.');
+        }
+
+        function requestTelemetry() {
+            if (!navigator.geolocation) {
+                alert('Geolocation is not supported by your browser');
+                return;
+            }
+
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    document.getElementById('telemetryLat').textContent = position.coords.latitude.toFixed(6);
+                    document.getElementById('telemetryLng').textContent = position.coords.longitude.toFixed(6);
+                    document.getElementById('telemetrySpeed').textContent = (position.coords.speed || 0).toFixed(1) + ' km/h';
+                    document.getElementById('telemetryHeading').textContent = (position.coords.heading || 0).toFixed(0) + '°';
+                },
+                (error) => {
+                    console.error('Geolocation error:', error);
+                    alert('Unable to retrieve location. Please enable GPS/location services.');
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: 10000,
+                    maximumAge: 0
+                }
+            );
+        }
+
         // Close modals on background click
         document.addEventListener('click', (e) => {
             if (e.target.classList.contains('modal-overlay')) {
                 closeHistoryModal();
                 closeSendModal();
                 closeBridgeModal();
+                closeMusicTelemetryModal();
             }
         });
     </script>

@@ -53,7 +53,7 @@ import mimetypes
 import json
 import fcntl
 import requests
-from flask import Flask, request, jsonify, send_from_directory, render_template, url_for, send_file, Response
+from flask import Flask, request, jsonify, send_from_directory, render_template, url_for, send_file, Response, make_response
 
 try:
     from flask_cors import CORS
@@ -100,6 +100,42 @@ from ai_interaction_ledger import compute_model_stats, create_ai_transfer_from_l
 
 app = Flask(__name__)
 CORS(app)
+
+# absolute path to /public folder next to server.py
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PUBLIC_DIR = os.path.join(BASE_DIR, "public")
+
+
+def _send_public_json(filename: str):
+    """
+    Serve JSON files from /public with strong no-cache headers
+    so Node3 always fetches the latest mapping.
+    """
+    if not os.path.exists(os.path.join(PUBLIC_DIR, filename)):
+        return jsonify({
+            "ok": False,
+            "error": f"Missing public file: {filename}",
+            "hint": "Ensure it exists under /public and is deployed to Railway."
+        }), 404
+
+    resp = make_response(send_from_directory(PUBLIC_DIR, filename, mimetype="application/json"))
+    # no-store so browser / CDN does not keep old versions
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+
+# Legacy route (keep /vercel.json for backward compatibility)
+@app.get("/vercel.json")
+def node3_manifest_legacy():
+    return _send_public_json("vercel.json")
+
+
+# Clear route name
+@app.get("/node3_manifest.json")
+def node3_manifest_v2():
+    return _send_public_json("node3_manifest.json")
 
 # FIX 9: Redirect old SESSIONS_DIR to volume-backed AI_SESSIONS_DIR (defined later at line 550)
 # This ensures all sessions persist across deployments
@@ -170,7 +206,7 @@ def load_history(session_id):
 
 @app.route('/static/<path:filename>', methods=['GET'])
 def serve_static(filename):
-    return send_from_directory("static", filename)
+    return send_from_directory(os.path.join(BASE_DIR, "static"), filename)
 
 if __name__ == '__main__':
     app.run(debug=True)
@@ -1078,18 +1114,19 @@ def refresh_model_catalog(force: bool = False) -> dict:
     if MODEL_CATALOG and not force and now - MODEL_CATALOG_LAST_REFRESH < MODEL_REFRESH_INTERVAL_SECONDS:
         return MODEL_CATALOG
 
+    openai_api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
     catalog = base_model_config()
     provider_keys = {
-        "openai": bool((os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip()),
+        "openai": bool((openai_api_key or os.getenv("OPENAI_KEY") or "").strip()),
         "anthropic": bool((os.getenv("ANTHROPIC_API_KEY") or "").strip()),
         "google": bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()),
     }
 
-    if provider_keys.get("openai"):
+    if openai_api_key:
         try:
             res = requests.get(
                 "https://api.openai.com/v1/models",
-                headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"},
+                headers={"Authorization": f"Bearer {openai_api_key}"},
                 timeout=8,
             )
             if res.status_code == 200:

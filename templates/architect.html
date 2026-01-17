@@ -116,7 +116,22 @@ $("generate").onclick = async ()=>{
     });
     setStatus(true,"Architect: online");
     $("out").textContent = j.response || "";
-    $("files").textContent = j.files && j.files.length ? ("Files:\n"+parseFiles(j.files)) : "";
+
+    let filesInfo = "";
+    if(j.files && j.files.length){
+      filesInfo = `Files: ${j.files_count}\nTotal: ${j.total_kb} KB\nCost: ${j.cost_thr} THR\n\n${parseFiles(j.files)}`;
+    }
+
+    if(j.redirect_to_chat && j.session_id){
+      filesInfo += `\n\n✅ Architecture complete!\n👉 Continue development in Chat: /chat?session=${j.session_id}`;
+
+      // Auto-redirect option
+      if(confirm(`Architecture generated successfully!\n\nCost: ${j.cost_thr} THR\nFiles: ${j.files_count}\n\nContinue in Chat for further development?`)){
+        window.location.href = `/chat?session=${j.session_id}&from=architect`;
+      }
+    }
+
+    $("files").textContent = filesInfo;
   }catch(e){
     setStatus(false,"Architect: offline");
     $("out").textContent = "Σφάλμα: " + e.message;

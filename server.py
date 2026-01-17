@@ -1508,6 +1508,84 @@ def api_train2earn_contribute():
     
     return jsonify(status="success", tx_id=contribution_id, reward=reward), 200
 
+@app.route("/api/architect/complete_project", methods=["POST"])
+def api_architect_complete_project():
+    """
+    Mark an Architect project as complete and reward T2E tokens.
+    Called from chat.html when user finishes development.
+
+    Reward calculation:
+    - Base: 20 T2E tokens
+    - +5 T2E per file created
+    - +10 T2E per 10KB of code
+    """
+    data = request.get_json() or {}
+    wallet = (data.get("wallet") or "").strip()
+    session_id = (data.get("session_id") or "").strip()
+
+    if not wallet:
+        return jsonify(error="Wallet required"), 400
+
+    if not session_id:
+        return jsonify(error="Session ID required"), 400
+
+    # Find the architect transaction for this session
+    chain = load_json(CHAIN_FILE, [])
+    architect_tx = None
+    for tx in reversed(chain):
+        if tx.get("type") == "architect_service" and tx.get("session_id") == session_id:
+            architect_tx = tx
+            break
+
+    if not architect_tx:
+        return jsonify(error="Architect session not found"), 404
+
+    # Calculate T2E reward
+    base_reward = 20.0
+    files_count = architect_tx.get("files_count", 0)
+    total_bytes = architect_tx.get("total_bytes", 0)
+    total_kb = total_bytes / 1024.0
+
+    file_bonus = files_count * 5.0
+    size_bonus = (total_kb / 10.0) * 10.0
+
+    total_reward = round(base_reward + file_bonus + size_bonus, 2)
+
+    # Credit T2E tokens to ledger
+    ledger = load_json(LEDGER_FILE, {})
+    current_balance = float(ledger.get(wallet, 0.0))
+    ledger[wallet] = round(current_balance + total_reward, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    # Create T2E reward transaction
+    tx = {
+        "type": "t2e_architect_reward",
+        "to": wallet,
+        "amount": total_reward,
+        "fee": 0.0,
+        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "session_id": session_id,
+        "files_count": files_count,
+        "total_kb": round(total_kb, 2),
+        "reason": "Architect project completion"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+
+    print(f"🎓 T2E Architect Reward: {wallet} → {total_reward} THR ({files_count} files, {total_kb:.2f} KB)")
+
+    return jsonify({
+        "status": "rewarded",
+        "reward": total_reward,
+        "new_balance": ledger[wallet],
+        "breakdown": {
+            "base": base_reward,
+            "file_bonus": file_bonus,
+            "size_bonus": size_bonus
+        }
+    }), 200
+
 @app.route("/api/v1/train2earn/contributions/<thr_addr>", methods=["GET"])
 def api_train2earn_contributions(thr_addr: str):
     """
@@ -1909,19 +1987,12 @@ def api_architect_generate():
     if not blueprint or not project_spec:
         return jsonify(error="Missing blueprint or spec"), 400
 
-    # --- Check AI Credits (Architect costs 1 credit per generation) ---
-    if wallet:
-        credits_map = load_ai_credits()
-        try:
-            credits_value = int(credits_map.get(wallet, 0) or 0)
-        except (TypeError, ValueError):
-            credits_value = 0
-
-        if credits_value <= 0:
-            return jsonify(
-                error="Insufficient Quantum credits. Purchase an AI pack to continue.",
-                status="no_credits"
-            ), 402
+    # --- Wallet required for Architect (THR payment) ---
+    if not wallet:
+        return jsonify(
+            error="Wallet required. Architect charges in THR based on data volume.",
+            status="no_wallet"
+        ), 400
 
     # Load blueprint
     bp_path = os.path.join(DATA_DIR, "ai_blueprints", blueprint)
@@ -1996,17 +2067,52 @@ def api_architect_generate():
     except Exception as e:
         print("architect corpus error:", e)
 
-    # --- Deduct AI Credits ---
-    if wallet:
-        credits_map = load_ai_credits()
-        try:
-            before = int(credits_map.get(wallet, 0) or 0)
-        except (TypeError, ValueError):
-            before = 0
-        after = max(0, before - AI_CREDIT_COST_PER_MSG)
-        credits_map[wallet] = after
-        save_ai_credits(credits_map)
-        print(f"🏗️  Architect charged: {wallet} ({before} → {after} credits)")
+    # --- Calculate THR cost based on data volume ---
+    # Price: 0.001 THR per KB of generated code
+    total_bytes = sum(f.get("size", 0) for f in (files or []))
+    total_kb = total_bytes / 1024.0
+
+    # Minimum charge: 0.1 THR, then 0.001 THR/KB
+    thr_cost = max(0.1, round(total_kb * 0.001, 6))
+
+    # --- Check THR balance ---
+    ledger = load_json(LEDGER_FILE, {})
+    user_balance = float(ledger.get(wallet, 0.0))
+
+    if user_balance < thr_cost:
+        return jsonify(
+            error=f"Insufficient THR balance. Cost: {thr_cost} THR, Balance: {user_balance} THR",
+            status="insufficient_funds",
+            cost=thr_cost,
+            balance=user_balance
+        ), 402
+
+    # --- Deduct THR and credit AI_WALLET_ADDRESS ---
+    AI_WALLET = os.getenv("AI_WALLET_ADDRESS", "THR_AI_SERVICES_WALLET_00001")
+    ledger[wallet] = round(user_balance - thr_cost, 6)
+    ai_wallet_balance = float(ledger.get(AI_WALLET, 0.0))
+    ledger[AI_WALLET] = round(ai_wallet_balance + thr_cost, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    # --- Create blockchain transaction ---
+    chain = load_json(CHAIN_FILE, [])
+    tx = {
+        "type": "architect_service",
+        "from": wallet,
+        "to": AI_WALLET,
+        "amount": thr_cost,
+        "fee": 0.0,
+        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "blueprint": blueprint,
+        "files_count": len(files or []),
+        "total_bytes": total_bytes,
+        "session_id": session_id or "none"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+
+    print(f"🏗️  Architect charged: {wallet} → {thr_cost} THR ({len(files)} files, {total_kb:.2f} KB)")
 
     return jsonify({
         "status": status,
@@ -2020,6 +2126,10 @@ def api_architect_generate():
             } for f in (files or [])
         ],
         "session_id": session_id,
+        "cost_thr": thr_cost,
+        "total_kb": round(total_kb, 2),
+        "files_count": len(files or []),
+        "redirect_to_chat": True  # Signal to redirect to chat.html for further development
     }), 200
 
 # ─── RECOVERY FLOW ─────────────────────────────────

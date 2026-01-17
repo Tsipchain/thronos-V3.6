@@ -15,6 +15,10 @@
 1. Άνοιξε Wallet → “Ιστορικό Συναλλαγών”.
 2. Επιβεβαίωσε ότι οι καρτέλες/κατηγορίες φορτώνουν χωρίς σφάλματα.
 
+## Wallet widget gate
+1. Wallet widget loads.
+2. Transaction categories visible.
+
 ## Wallet History: reset φίλτρων
 1. Πάτα Tokens, THR, L2E, Swaps.
 2. Κλείσε το modal και άνοιξέ το ξανά.

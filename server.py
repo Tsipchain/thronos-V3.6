@@ -206,7 +206,7 @@ def load_history(session_id):
 
 @app.route('/static/<path:filename>', methods=['GET'])
 def serve_static(filename):
-    return send_from_directory("static", filename)
+    return send_from_directory(os.path.join(BASE_DIR, "static"), filename)
 
 if __name__ == '__main__':
     app.run(debug=True)
@@ -1114,18 +1114,19 @@ def refresh_model_catalog(force: bool = False) -> dict:
     if MODEL_CATALOG and not force and now - MODEL_CATALOG_LAST_REFRESH < MODEL_REFRESH_INTERVAL_SECONDS:
         return MODEL_CATALOG
 
+    openai_api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
     catalog = base_model_config()
     provider_keys = {
-        "openai": bool((os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip()),
+        "openai": bool((openai_api_key or os.getenv("OPENAI_KEY") or "").strip()),
         "anthropic": bool((os.getenv("ANTHROPIC_API_KEY") or "").strip()),
         "google": bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()),
     }
 
-    if provider_keys.get("openai"):
+    if openai_api_key:
         try:
             res = requests.get(
                 "https://api.openai.com/v1/models",
-                headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"},
+                headers={"Authorization": f"Bearer {openai_api_key}"},
                 timeout=8,
             )
             if res.status_code == 200:

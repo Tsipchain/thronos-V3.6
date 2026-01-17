@@ -103,6 +103,13 @@ Uses `wallet_viewer_standalone.html` (does NOT extend base.html)
 2. Add environment variables above
 3. Set domain: `node3.thrchain.railway.app`
 
+### Vercel Project Settings (Root/Output)
+
+Set these in the Vercel dashboard so static assets resolve correctly:
+
+- **Root Directory**: `public`
+- **Output Directory**: `.`
+
 ### Step 2: Update Main Server (Node 1) Proxy
 
 Option A: **Vercel Proxy** (Recommended)

@@ -1227,39 +1227,12 @@
     }
 
     window.handleHeroWalletClick = function() {
-        // PR-XXX: Gracefully handle missing dependencies (SDK or modal function)
-        if (typeof walletSession === 'undefined' || !walletSession) {
-            console.warn('[WALLET] walletSession not available - SDK not loaded');
-            // Fallback: just try to open the modal
-            if (typeof openHeaderWalletModal === 'function') {
-                openHeaderWalletModal();
-            } else {
-                alert('⚠️ Wallet system is temporarily unavailable. Please refresh the page.');
-            }
-            return;
-        }
-
-        const addr = walletSession.getAddress();
-        const pin = walletSession.getPin();
-
-        // If device is already bound (has address + PIN), do PIN-only unlock
-        if (addr && pin) {
-            const entered = prompt('🔐 Enter PIN to unlock wallet');
-            if (entered === null) return; // User cancelled
-            if (entered === pin) {
-                walletSession.setBound(true);
-                window.location.reload();
-            } else {
-                alert('❌ Wrong PIN');
-            }
+        // Use canonical wallet header logic (same as header wallet button)
+        if (typeof openHeaderWalletModal === 'function') {
+            openHeaderWalletModal();
         } else {
-            // First-time or after "Forget Device" - show full modal
-            if (typeof openHeaderWalletModal === 'function') {
-                openHeaderWalletModal();
-            } else {
-                console.error('[WALLET] openHeaderWalletModal not defined');
-                alert('⚠️ Wallet modal not available. Please refresh the page.');
-            }
+            console.error('[WALLET] openHeaderWalletModal not defined');
+            alert('⚠️ Wallet system is temporarily unavailable. Please refresh the page.');
         }
     };
 

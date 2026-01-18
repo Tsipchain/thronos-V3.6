@@ -355,6 +355,130 @@
     .lang-toggle-iot:hover {
         background: rgba(0, 255, 102, 0.3);
     }
+
+    /* Music/Telemetry Modal Styles */
+    .tabs {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 20px;
+        flex-wrap: wrap;
+    }
+    .tab {
+        background: rgba(0,255,102,0.1);
+        border: 1px solid rgba(0,255,102,0.3);
+        color: #0f0;
+        padding: 8px 16px;
+        cursor: pointer;
+        border-radius: 4px;
+        font-size: 0.9em;
+        transition: all 0.2s;
+    }
+    .tab.active {
+        background: rgba(0,255,102,0.3);
+        border-color: #0f0;
+        font-weight: bold;
+    }
+    .tab:hover {
+        background: rgba(0,255,102,0.2);
+    }
+    .tab-content {
+        display: none;
+    }
+    .tab-content.active {
+        display: block;
+    }
+    .telemetry-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+        margin-top: 15px;
+    }
+    .sensor-card {
+        background: rgba(0,255,102,0.05);
+        border: 1px solid rgba(0,255,102,0.2);
+        padding: 15px;
+        border-radius: 6px;
+    }
+    .sensor-card h4 {
+        margin: 0 0 10px 0;
+        color: #0f0;
+    }
+    .sensor-value {
+        font-size: 1.5em;
+        font-weight: bold;
+        color: #0ff;
+        margin-bottom: 10px;
+    }
+    .gps-status {
+        margin: 15px 0;
+    }
+    .status-indicator {
+        display: inline-block;
+        padding: 8px 16px;
+        border-radius: 20px;
+        border: 2px solid #666;
+        background: #111;
+    }
+    .status-indicator.online {
+        border-color: #0f0;
+        background: rgba(0,255,0,0.1);
+    }
+    .status-indicator .pulse {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #666;
+        margin-right: 8px;
+    }
+    .status-indicator.online .pulse {
+        background: #0f0;
+        animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.3; }
+    }
+    .gps-map {
+        width: 100%;
+        height: 300px;
+        background: #000;
+        border: 1px solid #0f0;
+        margin: 15px 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #666;
+        font-family: monospace;
+    }
+    .telemetry-table {
+        width: 100%;
+        margin: 15px 0;
+    }
+    .telemetry-table td {
+        padding: 5px;
+        border-bottom: 1px solid #222;
+    }
+    .telemetry-table td:first-child {
+        color: #888;
+        width: 40%;
+    }
+    .telemetry-table td:last-child {
+        color: #0ff;
+        font-family: monospace;
+    }
+    .battery-bar {
+        width: 100%;
+        height: 20px;
+        background: #222;
+        border-radius: 10px;
+        overflow: hidden;
+    }
+    #battery-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #0f0, #ff0);
+        transition: width 0.5s;
+    }
 </style>
 {% endblock %}
 
@@ -853,6 +977,21 @@
     </div>
 </div>
 
+<!-- Music/Telemetry Transmitter -->
+<div class="iot-section">
+    <h2>🎵
+        <span class="lang-el">Πομπός Μουσικής/Τηλεμετρίας</span>
+        <span class="lang-en">Music/Telemetry Transmitter</span>
+    </h2>
+    <p class="lang-el">Μετάδοση δεδομένων blockchain μέσω ήχου, ραδιοσημάτων και GPS τηλεμετρίας για vehicle nodes.</p>
+    <p class="lang-en">Transmit blockchain data via audio, radio signals, and GPS telemetry for vehicle nodes.</p>
+
+    <button class="pack-btn" onclick="openMusicTelemetryModal()" style="margin-top: 15px;">
+        📡 <span class="lang-el">Άνοιγμα Πομπού</span>
+        <span class="lang-en">Open Transmitter</span>
+    </button>
+</div>
+
 <!-- Language Toggle -->
 <button class="lang-toggle-iot" onclick="toggleLanguage()">🌐 GR</button>
 
@@ -878,6 +1017,191 @@
             <button class="pack-btn" style="background: #333; color: #fff;" onclick="closeModal()">
                 <span class="lang-el">Ακύρωση</span>
                 <span class="lang-en">Cancel</span>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Music/Telemetry Modal -->
+<div id="musicTelemetryModal" class="modal">
+    <div class="modal-content" style="max-width: 800px; max-height: 90vh; overflow-y: auto;" onclick="event.stopPropagation()">
+        <h2>🎵
+            <span class="lang-el">Πομπός Μουσικής/Τηλεμετρίας</span>
+            <span class="lang-en">Music/Telemetry Transmitter</span>
+        </h2>
+
+        <!-- Tab Navigation -->
+        <div class="tabs">
+            <button class="tab active" onclick="switchMusicTab('whisper')">
+                🎵 <span class="lang-el">WhisperNote</span><span class="lang-en">WhisperNote</span>
+            </button>
+            <button class="tab" onclick="switchMusicTab('radio')">
+                📻 <span class="lang-el">RadioNode</span><span class="lang-en">RadioNode</span>
+            </button>
+            <button class="tab" onclick="switchMusicTab('gps')">
+                📍 <span class="lang-el">GPS</span><span class="lang-en">GPS Setup</span>
+            </button>
+            <button class="tab" onclick="switchMusicTab('telemetry')">
+                📊 <span class="lang-el">Τηλεμετρία</span><span class="lang-en">Live Telemetry</span>
+            </button>
+        </div>
+
+        <!-- WhisperNote Tab -->
+        <div id="whisper-tab" class="tab-content active">
+            <h3><span class="lang-el">Κωδικοποίηση Ήχου Συναλλαγών</span><span class="lang-en">Audio Transaction Encoding</span></h3>
+            <p style="font-size:0.9em;color:#888;">
+                <span class="lang-el">Μετατροπή δεδομένων blockchain σε ηχητικούς τόνους</span>
+                <span class="lang-en">Convert blockchain data to audio tones</span>
+            </p>
+
+            <label style="display:block;margin-top:10px;"><span class="lang-el">Δεδομένα Συναλλαγής:</span><span class="lang-en">Transaction Data:</span></label>
+            <textarea id="whisper-data" placeholder='{"to":"THR123...","amount":10}' style="width:100%; height:100px; background:#000; border:1px solid #0f0; color:#0f0; padding:8px; font-family:monospace;"></textarea>
+
+            <label style="display:block; margin-top:10px;"><span class="lang-el">Συχνότητα Ήχου:</span><span class="lang-en">Audio Frequency:</span></label>
+            <select id="whisper-freq" style="width:100%; padding:8px; background:#000; border:1px solid #0f0; color:#0f0;">
+                <option value="1000">1kHz (Low)</option>
+                <option value="2000" selected>2kHz (Mid)</option>
+                <option value="4000">4kHz (High)</option>
+            </select>
+
+            <button class="pack-btn" onclick="generateWhisperNote()" style="margin-top:15px;">
+                🎵 <span class="lang-el">Δημιουργία Ήχου</span><span class="lang-en">Generate Audio</span>
+            </button>
+
+            <div id="whisper-player" style="display:none; margin-top:15px;">
+                <audio id="whisper-audio" controls style="width:100%;"></audio>
+                <button class="pack-btn" onclick="downloadWhisper()" style="margin-top:10px;">
+                    💾 <span class="lang-el">Λήψη WAV</span><span class="lang-en">Download WAV</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- RadioNode Tab -->
+        <div id="radio-tab" class="tab-content">
+            <h3><span class="lang-el">Μετάδοση Σήματος RF</span><span class="lang-en">RF Signal Transmission</span></h3>
+            <p style="font-size:0.9em;color:#888;">
+                <span class="lang-el">Κωδικοποίηση δεδομένων για ραδιοφωνική μετάδοση</span>
+                <span class="lang-en">Encode data for radio broadcast</span>
+            </p>
+
+            <label style="display:block;margin-top:10px;"><span class="lang-el">Φορτίο:</span><span class="lang-en">Payload:</span></label>
+            <textarea id="radio-payload" placeholder="Enter message..." style="width:100%; height:80px; background:#000; border:1px solid #0f0; color:#0f0; padding:8px;"></textarea>
+
+            <label style="display:block; margin-top:10px;"><span class="lang-el">Ζώνη Συχνότητας:</span><span class="lang-en">Frequency Band:</span></label>
+            <select id="radio-band" style="width:100%; padding:8px; background:#000; border:1px solid #0f0; color:#0f0;">
+                <option value="433">433 MHz (ISM)</option>
+                <option value="868">868 MHz (EU)</option>
+                <option value="915">915 MHz (US)</option>
+            </select>
+
+            <label style="display:block; margin-top:10px;"><span class="lang-el">Διαμόρφωση:</span><span class="lang-en">Modulation:</span></label>
+            <select id="radio-mod" style="width:100%; padding:8px; background:#000; border:1px solid #0f0; color:#0f0;">
+                <option value="FSK">FSK (Frequency Shift)</option>
+                <option value="OOK">OOK (On-Off Keying)</option>
+                <option value="LoRa">LoRa (Long Range)</option>
+            </select>
+
+            <button class="pack-btn" onclick="encodeRadioSignal()" style="margin-top:15px;">
+                📻 <span class="lang-el">Κωδικοποίηση Σήματος</span><span class="lang-en">Encode Signal</span>
+            </button>
+
+            <div id="radio-output" style="margin-top:15px; padding:10px; background:#001100; border:1px solid #0f0; font-family:monospace; font-size:0.8em; display:none;"></div>
+        </div>
+
+        <!-- GPS Setup Tab -->
+        <div id="gps-tab" class="tab-content">
+            <h3><span class="lang-el">Ρύθμιση Τηλεμετρίας GPS</span><span class="lang-en">GPS Telemetry Setup</span></h3>
+            <p style="font-size:0.9em;color:#888;">
+                <span class="lang-el">Διαμόρφωση υπηρεσιών τοποθεσίας κόμβου οχήματος</span>
+                <span class="lang-en">Configure vehicle node location services</span>
+            </p>
+
+            <div class="gps-status">
+                <div id="gps-indicator" class="status-indicator">
+                    <span class="pulse"></span>
+                    GPS: <span id="gps-status-text"><span class="lang-el">Μη Συνδεδεμένο</span><span class="lang-en">Not Connected</span></span>
+                </div>
+            </div>
+
+            <button class="pack-btn" onclick="requestGPSAccess()">
+                📍 <span class="lang-el">Ενεργοποίηση GPS</span><span class="lang-en">Enable GPS</span>
+            </button>
+
+            <div id="gps-data" style="display:none;">
+                <h4><span class="lang-el">Τρέχουσα Θέση</span><span class="lang-en">Current Position</span></h4>
+                <table class="telemetry-table">
+                    <tr><td><span class="lang-el">Γεωγρ. Πλάτος:</span><span class="lang-en">Latitude:</span></td><td id="gps-lat">-</td></tr>
+                    <tr><td><span class="lang-el">Γεωγρ. Μήκος:</span><span class="lang-en">Longitude:</span></td><td id="gps-lon">-</td></tr>
+                    <tr><td><span class="lang-el">Υψόμετρο:</span><span class="lang-en">Altitude:</span></td><td id="gps-alt">-</td></tr>
+                    <tr><td><span class="lang-el">Ταχύτητα:</span><span class="lang-en">Speed:</span></td><td id="gps-speed">-</td></tr>
+                    <tr><td><span class="lang-el">Κατεύθυνση:</span><span class="lang-en">Heading:</span></td><td id="gps-heading">-</td></tr>
+                    <tr><td><span class="lang-el">Ακρίβεια:</span><span class="lang-en">Accuracy:</span></td><td id="gps-accuracy">-</td></tr>
+                </table>
+
+                <div class="gps-map" id="gps-map">
+                    <span style="color:#666;">📍 Map View (Lat: <span id="map-lat">-</span>, Lon: <span id="map-lon">-</span>)</span>
+                </div>
+
+                <button class="pack-btn" onclick="transmitGPSData()">
+                    📡 <span class="lang-el">Μετάδοση Θέσης</span><span class="lang-en">Transmit Position</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Live Telemetry Tab -->
+        <div id="telemetry-tab" class="tab-content">
+            <h3><span class="lang-el">Τηλεμετρία Οχήματος Πραγματικού Χρόνου</span><span class="lang-en">Live Vehicle Telemetry</span></h3>
+            <p style="font-size:0.9em;color:#888;">
+                <span class="lang-el">Ροή δεδομένων αισθητήρα σε πραγματικό χρόνο</span>
+                <span class="lang-en">Real-time sensor data streaming</span>
+            </p>
+
+            <div class="telemetry-grid">
+                <div class="sensor-card">
+                    <h4><span class="lang-el">Ταχύτητα</span><span class="lang-en">Speed</span></h4>
+                    <div class="sensor-value" id="telem-speed">0 km/h</div>
+                </div>
+
+                <div class="sensor-card">
+                    <h4><span class="lang-el">Μπαταρία</span><span class="lang-en">Battery</span></h4>
+                    <div class="sensor-value" id="telem-battery">100%</div>
+                    <div class="battery-bar">
+                        <div id="battery-fill" style="width:100%"></div>
+                    </div>
+                </div>
+
+                <div class="sensor-card">
+                    <h4><span class="lang-el">Lidar (Μπροστά)</span><span class="lang-en">Lidar (Front)</span></h4>
+                    <div class="sensor-value" id="telem-lidar">- m</div>
+                </div>
+
+                <div class="sensor-card">
+                    <h4><span class="lang-el">Απόκλιση Λωρίδας</span><span class="lang-en">Lane Deviation</span></h4>
+                    <div class="sensor-value" id="telem-lane">0.0 m</div>
+                </div>
+
+                <div class="sensor-card">
+                    <h4><span class="lang-el">AI Αυτόματος Πιλότος</span><span class="lang-en">AI Autopilot</span></h4>
+                    <div class="sensor-value" id="telem-mode"><span class="lang-el">ΧΕΙΡΟΚΙΝΗΤΟ</span><span class="lang-en">MANUAL</span></div>
+                    <button class="pack-btn" onclick="requestAutopilot()" style="font-size:0.9em;padding:10px;">
+                        🤖 <span class="lang-el">Ενεργοποίηση AI</span><span class="lang-en">Activate AI</span>
+                    </button>
+                </div>
+
+                <div class="sensor-card">
+                    <h4><span class="lang-el">Εγρήγορση Οδηγού</span><span class="lang-en">Driver Alertness</span></h4>
+                    <div class="sensor-value" id="telem-alert"><span class="lang-el">ΥΨΗΛΗ</span><span class="lang-en">HIGH</span></div>
+                </div>
+            </div>
+
+            <button class="pack-btn" onclick="toggleTelemetryStream()" id="telem-toggle" style="margin-top:15px;">
+                ▶️ <span class="lang-el">Έναρξη Ροής</span><span class="lang-en">Start Streaming</span>
+            </button>
+        </div>
+
+        <div style="margin-top:20px; text-align:right;">
+            <button class="pack-btn" style="background:#333; color:#fff;" onclick="closeMusicTelemetryModal()">
+                <span class="lang-el">Κλείσιμο</span><span class="lang-en">Close</span>
             </button>
         </div>
     </div>
@@ -1091,5 +1415,344 @@ document.addEventListener('DOMContentLoaded', () => {
     updateWater();
     setInterval(updateWater, 5000);
 });
+
+// --- Music/Telemetry Modal Functions ---
+
+function openMusicTelemetryModal() {
+    $('musicTelemetryModal').style.display = 'flex';
+}
+
+function closeMusicTelemetryModal() {
+    $('musicTelemetryModal').style.display = 'none';
+}
+
+// Close modal when clicking outside
+if ($('musicTelemetryModal')) {
+    $('musicTelemetryModal').onclick = function(e) {
+        if (e.target === this) {
+            closeMusicTelemetryModal();
+        }
+    };
+}
+
+function switchMusicTab(tabName) {
+    // Hide all tabs
+    document.querySelectorAll('#musicTelemetryModal .tab-content').forEach(tab => {
+        tab.classList.remove('active');
+    });
+    document.querySelectorAll('#musicTelemetryModal .tab').forEach(btn => {
+        btn.classList.remove('active');
+    });
+
+    // Show selected tab
+    $(`${tabName}-tab`).classList.add('active');
+    event.target.classList.add('active');
+}
+
+// --- WhisperNote Functions ---
+
+async function generateWhisperNote() {
+    const data = $('whisper-data').value;
+    const freq = parseInt($('whisper-freq').value);
+
+    if (!data) {
+        alert('Enter transaction data first');
+        return;
+    }
+
+    try {
+        const txData = JSON.parse(data);
+
+        // Convert JSON to binary
+        const binary = jsonToBinary(txData);
+
+        // Generate audio tones
+        const audioBuffer = await generateAudioFromBinary(binary, freq);
+
+        // Create audio element
+        const audioBlob = bufferToWav(audioBuffer);
+        const audioUrl = URL.createObjectURL(audioBlob);
+
+        const player = $('whisper-audio');
+        player.src = audioUrl;
+
+        $('whisper-player').style.display = 'block';
+
+        // Store for download
+        window.whisperBlob = audioBlob;
+
+    } catch (e) {
+        alert('Error encoding audio: ' + e.message);
+    }
+}
+
+function jsonToBinary(data) {
+    const json = JSON.stringify(data);
+    return json.split('').map(c =>
+        c.charCodeAt(0).toString(2).padStart(8, '0')
+    ).join('');
+}
+
+async function generateAudioFromBinary(binary, baseFreq) {
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const sampleRate = 44100;
+    const bitDuration = 0.1; // 100ms per bit
+    const totalSamples = Math.ceil(binary.length * bitDuration * sampleRate);
+
+    const audioBuffer = audioContext.createBuffer(1, totalSamples, sampleRate);
+    const channelData = audioBuffer.getChannelData(0);
+
+    let sampleIndex = 0;
+
+    for (let i = 0; i < binary.length; i++) {
+        const bit = binary[i];
+        // '1' = high freq, '0' = low freq
+        const freq = bit === '1' ? baseFreq : baseFreq / 2;
+        const samplesPerBit = Math.floor(bitDuration * sampleRate);
+
+        for (let j = 0; j < samplesPerBit; j++) {
+            const t = sampleIndex / sampleRate;
+            channelData[sampleIndex] = Math.sin(2 * Math.PI * freq * t) * 0.5;
+            sampleIndex++;
+        }
+    }
+
+    return audioBuffer;
+}
+
+function bufferToWav(audioBuffer) {
+    const numChannels = audioBuffer.numberOfChannels;
+    const sampleRate = audioBuffer.sampleRate;
+    const format = 1; // PCM
+    const bitDepth = 16;
+
+    const bytesPerSample = bitDepth / 8;
+    const blockAlign = numChannels * bytesPerSample;
+
+    const data = audioBuffer.getChannelData(0);
+    const dataLength = data.length * bytesPerSample;
+    const buffer = new ArrayBuffer(44 + dataLength);
+    const view = new DataView(buffer);
+
+    // WAV header
+    writeString(view, 0, 'RIFF');
+    view.setUint32(4, 36 + dataLength, true);
+    writeString(view, 8, 'WAVE');
+    writeString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, format, true);
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * blockAlign, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitDepth, true);
+    writeString(view, 36, 'data');
+    view.setUint32(40, dataLength, true);
+
+    // PCM samples
+    let offset = 44;
+    for (let i = 0; i < data.length; i++) {
+        const sample = Math.max(-1, Math.min(1, data[i]));
+        view.setInt16(offset, sample * 0x7FFF, true);
+        offset += 2;
+    }
+
+    return new Blob([buffer], { type: 'audio/wav' });
+}
+
+function writeString(view, offset, string) {
+    for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+    }
+}
+
+function downloadWhisper() {
+    if (!window.whisperBlob) return;
+
+    const url = URL.createObjectURL(window.whisperBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `whisper_tx_${Date.now()}.wav`;
+    a.click();
+}
+
+// --- RadioNode Functions ---
+
+function encodeRadioSignal() {
+    const payload = $('radio-payload').value;
+    const band = $('radio-band').value;
+    const mod = $('radio-mod').value;
+
+    if (!payload) {
+        alert('Enter payload first');
+        return;
+    }
+
+    // Convert payload to binary
+    const binary = payload.split('').map(c =>
+        c.charCodeAt(0).toString(2).padStart(8, '0')
+    ).join('');
+
+    const output = $('radio-output');
+    output.style.display = 'block';
+    output.innerHTML = `
+        <strong>RF Signal Encoded</strong><br>
+        Frequency: ${band} MHz<br>
+        Modulation: ${mod}<br>
+        Payload Length: ${payload.length} bytes<br>
+        Binary Length: ${binary.length} bits<br>
+        <br>
+        <strong>Binary Output:</strong><br>
+        <div style="word-break:break-all; max-height:100px; overflow-y:auto;">
+            ${binary.substring(0, 256)}${binary.length > 256 ? '...' : ''}
+        </div>
+        <br>
+        <em>⚠️ This is a simulation. Actual RF transmission requires hardware.</em>
+    `;
+}
+
+// --- GPS Functions ---
+
+let gpsWatchId = null;
+
+function requestGPSAccess() {
+    if (!navigator.geolocation) {
+        alert('GPS not supported by this browser');
+        return;
+    }
+
+    $('gps-status-text').innerHTML = '<span class="lang-el">Αίτημα...</span><span class="lang-en">Requesting...</span>';
+
+    navigator.geolocation.getCurrentPosition(
+        position => {
+            // Success
+            $('gps-indicator').classList.add('online');
+            $('gps-status-text').innerHTML = '<span class="lang-el">Συνδεδεμένο</span><span class="lang-en">Connected</span>';
+            $('gps-data').style.display = 'block';
+
+            updateGPSDisplay(position);
+
+            // Start watching position
+            gpsWatchId = navigator.geolocation.watchPosition(
+                updateGPSDisplay,
+                handleGPSError,
+                { enableHighAccuracy: true, maximumAge: 10000 }
+            );
+
+            applyTranslations();
+        },
+        handleGPSError
+    );
+}
+
+function handleGPSError(error) {
+    $('gps-status-text').textContent = `Error: ${error.message}`;
+    $('gps-indicator').classList.remove('online');
+}
+
+function updateGPSDisplay(position) {
+    const { latitude, longitude, altitude, speed, heading, accuracy } = position.coords;
+
+    $('gps-lat').textContent = latitude.toFixed(6);
+    $('gps-lon').textContent = longitude.toFixed(6);
+    $('gps-alt').textContent = altitude ? `${altitude.toFixed(1)} m` : 'N/A';
+    $('gps-speed').textContent = speed ? `${(speed * 3.6).toFixed(1)} km/h` : 'N/A';
+    $('gps-heading').textContent = heading ? `${heading.toFixed(0)}°` : 'N/A';
+    $('gps-accuracy').textContent = `${accuracy.toFixed(1)} m`;
+
+    $('map-lat').textContent = latitude.toFixed(4);
+    $('map-lon').textContent = longitude.toFixed(4);
+}
+
+async function transmitGPSData() {
+    const lat = $('gps-lat').textContent;
+    const lon = $('gps-lon').textContent;
+
+    if (lat === '-' || lon === '-') {
+        alert('GPS data not available');
+        return;
+    }
+
+    const wallet = localStorage.getItem('thr_address');
+    if (!wallet) {
+        alert('Connect wallet first');
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/iot/gps', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                address: wallet,
+                latitude: parseFloat(lat),
+                longitude: parseFloat(lon),
+                altitude: $('gps-alt').textContent,
+                speed: $('gps-speed').textContent,
+                heading: $('gps-heading').textContent,
+                timestamp: new Date().toISOString()
+            })
+        });
+
+        const data = await res.json();
+        if (data.ok) {
+            alert('✅ GPS data transmitted successfully!');
+        } else {
+            alert('❌ Error: ' + (data.error || 'Unknown error'));
+        }
+    } catch (e) {
+        alert('❌ Transmission failed: ' + e.message);
+    }
+}
+
+// --- Telemetry Functions ---
+
+let telemetryInterval = null;
+
+function toggleTelemetryStream() {
+    const btn = $('telem-toggle');
+
+    if (telemetryInterval) {
+        // Stop streaming
+        clearInterval(telemetryInterval);
+        telemetryInterval = null;
+        btn.innerHTML = '▶️ <span class="lang-el">Έναρξη Ροής</span><span class="lang-en">Start Streaming</span>';
+    } else {
+        // Start streaming
+        btn.innerHTML = '⏸️ <span class="lang-el">Παύση Ροής</span><span class="lang-en">Stop Streaming</span>';
+        simulateTelemetry();
+        telemetryInterval = setInterval(simulateTelemetry, 1000);
+    }
+    applyTranslations();
+}
+
+function simulateTelemetry() {
+    // Simulate sensor data (in real app, this would come from actual sensors)
+    const speed = Math.floor(Math.random() * 120);
+    const battery = Math.max(20, 100 - (Date.now() % 100000) / 1000);
+    const lidar = (Math.random() * 50 + 5).toFixed(1);
+    const lane = (Math.random() * 0.5 - 0.25).toFixed(2);
+
+    $('telem-speed').textContent = `${speed} km/h`;
+    $('telem-battery').textContent = `${Math.round(battery)}%`;
+    $('battery-fill').style.width = `${battery}%`;
+    $('telem-lidar').textContent = `${lidar} m`;
+    $('telem-lane').textContent = `${lane} m`;
+}
+
+function requestAutopilot() {
+    const current = $('telem-mode').textContent;
+    if (current.includes('MANUAL') || current.includes('ΧΕΙΡΟΚΙΝΗΤΟ')) {
+        if (confirm('Activate AI Autopilot? Ensure conditions are safe.')) {
+            $('telem-mode').innerHTML = '<span class="lang-el">AI ΑΥΤΟΜΑΤΟΣ ΠΙΛΟΤΟΣ</span><span class="lang-en">AI AUTOPILOT</span>';
+            $('telem-mode').style.color = '#0f0';
+            applyTranslations();
+        }
+    } else {
+        $('telem-mode').innerHTML = '<span class="lang-el">ΧΕΙΡΟΚΙΝΗΤΟ</span><span class="lang-en">MANUAL</span>';
+        $('telem-mode').style.color = '#0ff';
+        applyTranslations();
+    }
+}
 </script>
 {% endblock %}

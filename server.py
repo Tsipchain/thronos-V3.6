@@ -7648,6 +7648,60 @@ def api_iot_reserve():
     }), 200
 
 
+@app.route("/api/iot/gps", methods=["POST"])
+def api_iot_gps():
+    """
+    Receive and store GPS telemetry data from vehicle nodes.
+    Expected JSON: {
+        "address": "THR...",
+        "latitude": float,
+        "longitude": float,
+        "altitude": str,
+        "speed": str,
+        "heading": str,
+        "timestamp": "ISO8601"
+    }
+    """
+    data = request.get_json() or {}
+    address = data.get("address")
+    latitude = data.get("latitude")
+    longitude = data.get("longitude")
+
+    if not address or latitude is None or longitude is None:
+        return jsonify({"ok": False, "error": "Missing required fields (address, latitude, longitude)"}), 400
+
+    # Create GPS telemetry entry
+    gps_entry = {
+        "address": address,
+        "latitude": latitude,
+        "longitude": longitude,
+        "altitude": data.get("altitude", "N/A"),
+        "speed": data.get("speed", "N/A"),
+        "heading": data.get("heading", "N/A"),
+        "timestamp": data.get("timestamp", time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())),
+        "entry_id": f"GPS-{int(time.time())}-{secrets.token_hex(4)}"
+    }
+
+    # Store in GPS telemetry file
+    gps_file = os.path.join(DATA_DIR, "gps_telemetry.json")
+    gps_data = load_json(gps_file, [])
+    gps_data.append(gps_entry)
+
+    # Keep only last 1000 entries to prevent file bloat
+    if len(gps_data) > 1000:
+        gps_data = gps_data[-1000:]
+
+    save_json(gps_file, gps_data)
+
+    logger.info(f"📍 GPS Telemetry: {address} → ({latitude:.6f}, {longitude:.6f})")
+
+    return jsonify({
+        "ok": True,
+        "message": "GPS data recorded successfully",
+        "entry_id": gps_entry["entry_id"]
+    }), 200
+
+
 # ─── VOTING API (Crypto Hunters Feature Voting) ─────────────────────────────
 @app.route("/api/voting/polls", methods=["GET"])
 def api_voting_polls():

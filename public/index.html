@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Thronos Wallet SDK & Assets</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #0a0a0a;
+            color: #00ff66;
+        }
+        h1 {
+            border-bottom: 2px solid #00ff66;
+            padding-bottom: 10px;
+        }
+        .section {
+            margin: 30px 0;
+        }
+        .file-list {
+            list-style: none;
+            padding: 0;
+        }
+        .file-list li {
+            padding: 10px;
+            margin: 5px 0;
+            background: rgba(0, 255, 102, 0.1);
+            border-left: 3px solid #00ff66;
+        }
+        .file-list li a {
+            color: #00ff66;
+            text-decoration: none;
+        }
+        .file-list li a:hover {
+            text-decoration: underline;
+        }
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            background: rgba(0, 255, 102, 0.2);
+            border-radius: 3px;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔗 Thronos Wallet SDK & Static Assets</h1>
+
+    <div class="section">
+        <h2>📦 Wallet SDK Files</h2>
+        <ul class="file-list">
+            <li>
+                <a href="/static/wallet_sdk.js" target="_blank">/static/wallet_sdk.js</a>
+                <span class="badge">Main SDK</span>
+            </li>
+            <li>
+                <a href="/static/wallet_auth.js" target="_blank">/static/wallet_auth.js</a>
+                <span class="badge">Authentication</span>
+            </li>
+            <li>
+                <a href="/static/wallet_session.js" target="_blank">/static/wallet_session.js</a>
+                <span class="badge">Session Management</span>
+            </li>
+            <li>
+                <a href="/static/music_module.js" target="_blank">/static/music_module.js</a>
+                <span class="badge">Music Streaming</span>
+            </li>
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>🌐 API Endpoints</h2>
+        <p>This CDN node serves static assets only. All API requests are proxied to:</p>
+        <ul class="file-list">
+            <li>Write operations → <code>https://thrchain.up.railway.app</code></li>
+            <li>Read operations → <code>https://node-2.up.railway.app</code></li>
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>📖 Documentation</h2>
+        <ul class="file-list">
+            <li><a href="https://thrchain.up.railway.app" target="_blank">Main Chain Portal</a></li>
+            <li><a href="https://github.com/Tsipchain/thronos-V3.6" target="_blank">GitHub Repository</a></li>
+        </ul>
+    </div>
+
+    <footer style="margin-top: 50px; padding-top: 20px; border-top: 1px solid rgba(0,255,102,0.3); text-align: center; font-size: 14px; opacity: 0.7;">
+        Thronos Blockchain © 2026 | Node 3: Static CDN
+    </footer>
+</body>
+</html>

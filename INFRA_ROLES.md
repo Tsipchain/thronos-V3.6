@@ -30,24 +30,42 @@ The Thronos blockchain operates across multiple specialized nodes, each with dis
 
 **Environment Configuration**:
 ```bash
+# Node Identity
 NODE_ROLE=master
+NODE_NAME=node1-master
+THRONOS_ENV=production
+
+# Node Capabilities
 READ_ONLY=0
 IS_LEADER=1
 SCHEDULER_ENABLED=1
 ENABLE_CHAIN=1
-LEADER_URL=https://thrchain.up.railway.app
 
-# AI Core Proxy (ADD AFTER NODE 4 IS DEPLOYED)
+# Network Configuration
+DOMAIN_URL=https://thrchain.up.railway.app
+API_BASE_URL=https://thrchain.up.railway.app
+LEADER_URL=https://thrchain.up.railway.app
+REPLICA_EXTERNAL_URL=https://node-2.up.railway.app
+
+# AI Configuration
+THRONOS_AI_MODE=proxy
 AI_CORE_URL=https://thronos-v3-6.onrender.com
 
-# AI Provider Keys (OPTIONAL - for fallback if Node 4 fails)
-# Can be removed after confirming Node 4 works reliably
+# AI Provider Keys (for fallback when Node 4 is unavailable)
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 GOOGLE_API_KEY=...
-THRONOS_AI_MODE=production
 
-# Admin & Security
+# Cross-Chain RPC URLs (ONLY on Node 1, not on Node 2)
+BTC_RPC_URL=https://...
+BTC_HOT_WALLET=<btc-address>
+BTC_PLEDGE_VAULT=<btc-address>
+BSC_RPC_URL=https://bsc-dataseed.binance.org
+ETH_RPC_URL=https://eth-mainnet.alchemyapi.io/v2/...
+XRP_RPC_URL=https://s1.ripple.com:51234
+SOL_RPC_URL=https://api.mainnet-beta.solana.com
+
+# Security
 ADMIN_SECRET=<shared-secret>
 ```
 
@@ -78,17 +96,28 @@ ADMIN_SECRET=<shared-secret>
 
 **Environment Configuration**:
 ```bash
+# Node Identity
 NODE_ROLE=replica
+NODE_NAME=node2-replica
+THRONOS_ENV=production
+
+# Node Capabilities
 READ_ONLY=1
 IS_LEADER=0
 SCHEDULER_ENABLED=0
+ENABLE_CHAIN=1
+
+# Network Configuration
+DOMAIN_URL=https://node-2.up.railway.app
+API_BASE_URL=https://node-2.up.railway.app
 MASTER_NODE_URL=https://thrchain.up.railway.app
 REPLICA_EXTERNAL_URL=https://node-2.up.railway.app
 
-# Cross-Chain Configuration
+# Cross-Chain Configuration (read-only access for bridge monitoring)
+# Note: Only include if strictly needed for reads; never for writes
 BTC_RPC_URL=https://...
-BTC_HOT_WALLET=<btc-address>
-BTC_PLEDGE_VAULT=<btc-address>
+BTC_HOT_WALLET=<btc-address>  # Read-only monitoring
+BTC_PLEDGE_VAULT=<btc-address>  # Read-only monitoring
 BTC_TREASURY=<btc-address>
 BSC_RPC_URL=https://bsc-dataseed.binance.org
 ETH_RPC_URL=https://eth-mainnet.alchemyapi.io/v2/...
@@ -104,18 +133,17 @@ WITHDRAWAL_FEE_PERCENT=0.5
 HEARTBEAT_ENABLED=1
 HEARTBEAT_LOG_ERRORS=0
 
-# Admin Secret (shared with master)
+# Security
 ADMIN_SECRET=<shared-secret>
 
-# AI Keys (PRESENT BUT UNUSED - deferred to Node 4 in future)
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
-GOOGLE_API_KEY=...
+# NO AI KEYS ON REPLICA
+# Replica does not run AI jobs - all AI processing happens on Node 1 or Node 4
 ```
 
 **Important Notes**:
-- ⚠️ AI API keys are present for future Node 4 migration but **NOT USED** by Node 2
-- ⚠️ Node 2 does **NOT** initialize AI models or run model sync
+- ❌ **NO AI KEYS** - Node 2 should not have OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_API_KEY
+- ❌ Node 2 does **NOT** initialize AI models or run model sync
+- ✅ Cross-chain RPC URLs only for read operations (bridge monitoring)
 - ✅ Heartbeat failures log warnings but **DO NOT** crash the process
 
 ---
@@ -191,6 +219,13 @@ AI_CORE_ALLOWED_ORIGINS=https://thrchain.up.railway.app,https://node-2.up.railwa
 ADMIN_SECRET=<shared-secret>
 ```
 
+**Graceful Degradation**:
+⚠️ **IMPORTANT**: If Node 4 is down, only AI features degrade. Wallet, mining, and chain operations continue normally.
+- Node 1 has AI provider keys as fallback
+- AI chat/architect endpoints will use Node 1's local AI
+- Core blockchain functionality is NOT affected
+- This is by design - Node 4 is a passive optimization, not a critical dependency
+
 **Migration Plan**:
 1. Node 1 and Node 2 will call Node 4 via `AI_CORE_URL` for AI operations
 2. AI model sync moves from Node 1 to Node 4
@@ -237,6 +272,50 @@ ADMIN_SECRET=<shared-secret>
 │ • Governance AI  │
 └──────────────────┘
 ```
+
+---
+
+## Secrets Policy
+
+**CRITICAL SECURITY REQUIREMENT**: All secrets and sensitive credentials must be distributed according to this policy:
+
+### Secrets Distribution by Node
+
+**Node 1 (Master) - Full Secrets Access**:
+- ✅ AI Provider API Keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY)
+- ✅ Cross-Chain RPC URLs with authentication
+- ✅ BTC Hot Wallet Private Keys (for bridge operations)
+- ✅ ADMIN_SECRET (shared with all nodes)
+
+**Node 2 (Replica) - Minimal Secrets**:
+- ✅ ADMIN_SECRET only (shared with all nodes)
+- ✅ Cross-Chain RPC URLs (read-only, if needed for monitoring)
+- ❌ NO AI provider API keys
+- ❌ NO private keys for write operations
+
+**Node 3 (Vercel) - No Secrets**:
+- ❌ NO secrets whatsoever (public static site)
+- ✅ Only public environment variables (NEXT_PUBLIC_*)
+
+**Node 4 (AI Core) - AI Secrets Only**:
+- ✅ AI Provider API Keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY)
+- ✅ ADMIN_SECRET (shared with all nodes)
+- ❌ NO blockchain private keys
+- ❌ NO cross-chain RPC credentials
+
+### Summary
+
+**All secrets (AI keys, BTC hot wallets, etc.) live only on Node 1 and Node 4.**
+
+- Node 1: Blockchain secrets + AI fallback
+- Node 4: AI secrets only
+- Node 2: ADMIN_SECRET only
+- Node 3: No secrets
+
+This ensures:
+1. **Principle of Least Privilege**: Each node only has credentials needed for its role
+2. **Blast Radius Reduction**: Compromise of Node 2 or Node 3 does not expose AI keys or hot wallets
+3. **Clear Separation of Concerns**: AI operations isolated to Node 4, blockchain operations to Node 1
 
 ---
 

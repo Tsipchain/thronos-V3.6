@@ -13184,7 +13184,9 @@ else:
 
 # Start heartbeat sender for replica nodes (independent of scheduler)
 # AI Core nodes don't send heartbeats (they're not part of the chain cluster)
-if NODE_ROLE == "replica" and HEARTBEAT_ENABLED and ENABLE_CHAIN:
+# CRITICAL: Replica heartbeat is independent of ENABLE_CHAIN flag
+# ENABLE_CHAIN only controls blockchain operations, not heartbeat coordination
+if NODE_ROLE == "replica" and HEARTBEAT_ENABLED:
 
     # Start heartbeat sender for replica nodes
     import threading

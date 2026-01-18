@@ -480,6 +480,59 @@ REPLICA_EXTERNAL_URL = os.getenv("REPLICA_EXTERNAL_URL", os.getenv("RAILWAY_PUBL
 # Admin secret for cross-node API calls
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
 
+# AI Core configuration (for future Node 4)
+AI_CORE_URL = os.getenv("AI_CORE_URL", "").strip()
+
+# ─── Role-based helper functions ────────────────────────────────────────────
+def is_master() -> bool:
+    """Check if current node is master"""
+    return NODE_ROLE == "master"
+
+def is_replica() -> bool:
+    """Check if current node is replica"""
+    return NODE_ROLE == "replica"
+
+def is_ai_core() -> bool:
+    """Check if current node is AI core"""
+    return NODE_ROLE == "ai-core"
+
+def should_run_schedulers() -> bool:
+    """Check if schedulers should run on this node"""
+    return is_master() and SCHEDULER_ENABLED
+
+def should_sync_ai_models() -> bool:
+    """Check if AI model sync should run on this node"""
+    return is_master() and bool(os.getenv("OPENAI_API_KEY"))
+
+def call_ai_core(path: str, payload: dict, timeout: int = 30) -> dict:
+    """
+    Call AI core service for LLM operations (future Node 4).
+
+    Args:
+        path: API endpoint path (e.g., "/api/chat")
+        payload: Request payload
+        timeout: Request timeout in seconds
+
+    Returns:
+        Response JSON
+
+    Raises:
+        RuntimeError: If AI_CORE_URL not configured
+        requests.RequestException: If request fails
+    """
+    if not AI_CORE_URL:
+        raise RuntimeError("AI_CORE_URL not configured. Set AI_CORE_URL environment variable.")
+
+    url = f"{AI_CORE_URL.rstrip('/')}/{path.lstrip('/')}"
+    response = requests.post(url, json=payload, timeout=timeout, headers={
+        "X-Admin-Secret": ADMIN_SECRET,
+        "Content-Type": "application/json"
+    })
+    response.raise_for_status()
+    return response.json()
+
+# ─── End role-based helpers ─────────────────────────────────────────────────
+
 LEDGER_FILE         = os.path.join(DATA_DIR, "ledger.json")
 WBTC_LEDGER_FILE    = os.path.join(DATA_DIR, "wbtc_ledger.json")
 CHAIN_FILE          = os.path.join(DATA_DIR, "phantom_tx_chain.json")
@@ -1110,6 +1163,12 @@ def _infer_provider(model: str | None, explicit: str | None = None) -> str:
 
 def refresh_model_catalog(force: bool = False) -> dict:
     global MODEL_CATALOG, MODEL_CATALOG_LAST_REFRESH
+
+    # PR-XXX: Only sync AI models on master nodes (skip on replica/ai-core)
+    if not is_master():
+        app.logger.info(f"[AI] Skipping model catalog refresh on {NODE_ROLE} node")
+        return MODEL_CATALOG or base_model_config()
+
     now = time.time()
     if MODEL_CATALOG and not force and now - MODEL_CATALOG_LAST_REFRESH < MODEL_REFRESH_INTERVAL_SECONDS:
         return MODEL_CATALOG
@@ -1185,6 +1244,11 @@ def _check_provider_health(provider: str) -> str:
 
 
 def _start_model_scheduler():
+    # PR-XXX: Only run model scheduler on master nodes
+    if not is_master():
+        app.logger.info(f"[AI] Skipping model scheduler on {NODE_ROLE} node")
+        return
+
     enabled = (os.getenv("SCHEDULER_ENABLED", "true").lower() not in ("0", "false", "no"))
     if not enabled:
         app.logger.info("Model refresh scheduler disabled via SCHEDULER_ENABLED")
@@ -1199,7 +1263,7 @@ def _start_model_scheduler():
     scheduler = BackgroundScheduler()
     scheduler.add_job(_job, "interval", seconds=MODEL_REFRESH_INTERVAL_SECONDS, id="model_refresh", replace_existing=True)
     scheduler.start()
-    app.logger.info("Background scheduler started for model catalog refresh")
+    app.logger.info("[AI] Background scheduler started for model catalog refresh")
 
 
 # ─── HELPERS ───────────────────────────────────────
@@ -13081,14 +13145,20 @@ if NODE_ROLE == "replica" and HEARTBEAT_ENABLED:
         else:
             replica_url = f"http://{hostname}:{port}"
 
-        print(f"[HEARTBEAT] Replica URL configured as: {replica_url}")
+        heartbeat_url = f"{MASTER_INTERNAL_URL}/api/peers/heartbeat"
+        print(f"[HEARTBEAT] Starting replica heartbeat sender")
+        print(f"[HEARTBEAT] Replica URL: {replica_url}")
         print(f"[HEARTBEAT] Peer ID: {peer_id}")
-        print(f"[HEARTBEAT] Master URL: {MASTER_INTERNAL_URL}")
+        print(f"[HEARTBEAT] Master URL: {heartbeat_url}")
+        print(f"[HEARTBEAT] Interval: 30s (TTL: 60s)")
+
+        consecutive_failures = 0
+        max_consecutive_failures = 5
 
         while True:
             try:
                 response = requests.post(
-                    f"{MASTER_INTERNAL_URL}/api/peers/heartbeat",
+                    heartbeat_url,
                     json={
                         "peer_id": peer_id,
                         "url": replica_url,
@@ -13098,18 +13168,37 @@ if NODE_ROLE == "replica" and HEARTBEAT_ENABLED:
                     timeout=10
                 )
                 if response.status_code == 200:
-                    print(f"[HEARTBEAT] Sent to master: {response.json()}")
+                    data = response.json()
+                    active_peers = data.get("active_peers", "?")
+                    if consecutive_failures >= max_consecutive_failures:
+                        # Log recovery after sustained failures
+                        print(f"[HEARTBEAT] ✓ Reconnected to master after {consecutive_failures} failures (active_peers={active_peers})")
+                    elif consecutive_failures > 0 or HEARTBEAT_LOG_ERRORS:
+                        print(f"[HEARTBEAT] ✓ Master acknowledged (active_peers={active_peers})")
+                    consecutive_failures = 0
                 else:
-                    print(f"[HEARTBEAT] Failed: {response.status_code} - {response.text}")
+                    consecutive_failures += 1
+                    # Always log non-200 responses with status code and URL
+                    print(f"[HEARTBEAT] ⚠ Master returned {response.status_code} from {heartbeat_url}")
+                    if HEARTBEAT_LOG_ERRORS:
+                        print(f"[HEARTBEAT]   Response: {response.text[:200]}")
             except requests.exceptions.ConnectionError as e:
+                consecutive_failures += 1
+                # Log connection errors concisely with URL
+                print(f"[HEARTBEAT] ⚠ Connection failed to {heartbeat_url} (retry {consecutive_failures}/{max_consecutive_failures})")
                 if HEARTBEAT_LOG_ERRORS:
-                    print(f"[HEARTBEAT] Connection error to master (will retry): {e}")
+                    print(f"[HEARTBEAT]   Error: {e}")
             except requests.exceptions.Timeout:
-                if HEARTBEAT_LOG_ERRORS:
-                    print(f"[HEARTBEAT] Timeout connecting to master (will retry)")
+                consecutive_failures += 1
+                print(f"[HEARTBEAT] ⚠ Timeout connecting to {heartbeat_url} (retry {consecutive_failures}/{max_consecutive_failures})")
             except Exception as e:
-                if HEARTBEAT_LOG_ERRORS:
-                    print(f"[HEARTBEAT] Error sending to master: {e}")
+                consecutive_failures += 1
+                print(f"[HEARTBEAT] ⚠ Unexpected error (retry {consecutive_failures}/{max_consecutive_failures}): {e}")
+
+            # Mark as out of sync if too many failures, but don't crash
+            if consecutive_failures >= max_consecutive_failures:
+                print(f"[HEARTBEAT] ⚠ Replica marked as OUT OF SYNC after {consecutive_failures} consecutive failures")
+                print(f"[HEARTBEAT]   Master may be unavailable or URL incorrect: {heartbeat_url}")
 
             # Send heartbeat every 30 seconds (TTL is 60s)
             time.sleep(30)
@@ -19452,17 +19541,32 @@ print("✓ AI Session fixes loaded - supports guest mode and file uploads")
 print("✓ Token Explorer, NFT Marketplace and Governance pages loaded")
 print("✓ Decent Music Platform loaded - artist registration, uploads, and royalties")
 
-# --- Startup hooks ---
-# PR-182: Initialization functions have internal guards for replica nodes
-refresh_model_catalog(force=True)
-_start_model_scheduler()
+# ─── Startup hooks ────────────────────────────────────────────────────────────
+# PR-XXX: Role-based initialization with clear logging
+print(f"\n[STARTUP] Initializing {NODE_ROLE.upper()} node...")
+
+# AI model sync (master only)
+if is_master():
+    print("[STARTUP] Running AI model catalog sync (master node)...")
+    refresh_model_catalog(force=True)
+    _start_model_scheduler()
+else:
+    print(f"[STARTUP] Skipping AI model sync on {NODE_ROLE} node")
+
+# AI wallet initialization (master only)
 ensure_ai_wallet()  # Has internal guard for READ_ONLY/replica nodes
+
+# Blockchain height sync (all nodes)
+print("[STARTUP] Syncing blockchain height offset...")
 recompute_height_offset_from_ledger()  # Read-only, safe on all nodes
+
+# Voting system (master only)
 initialize_voting()  # Has internal guard for READ_ONLY/replica nodes
 
-# PR-182 FIX: Only prune sessions on master node (modifies AI_SESSIONS_FILE)
-if not READ_ONLY and NODE_ROLE == "master":
+# Session cleanup (master only)
+if is_master():
     try:  # Best-effort cleanup to avoid startup failures
+        print("[STARTUP] Pruning empty AI sessions...")
         prune_result = prune_empty_sessions()
         logger.info(
             "Pruned empty sessions on startup: deleted=%s kept=%s",
@@ -19472,7 +19576,9 @@ if not READ_ONLY and NODE_ROLE == "master":
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning(f"Startup session prune skipped: {exc}")
 else:
-    logger.info(f"[STARTUP] Skipping session prune on {NODE_ROLE} node (READ_ONLY={READ_ONLY})")
+    logger.info(f"[STARTUP] Skipping session prune on {NODE_ROLE} node")
+
+print(f"[STARTUP] {NODE_ROLE.upper()} node initialization complete.\n")
 
 if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")

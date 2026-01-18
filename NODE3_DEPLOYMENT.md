@@ -247,6 +247,68 @@ Node 3c ─┘
 ✅ **Primary Endpoint**: `/api/v2/wallet/history`
 ✅ **Benefits**: Offloads main server, faster responses, better caching
 ✅ **Deployment**: Railway service with dedicated domain
+
+---
+
+## Multi-Node Architecture
+
+For the complete multi-node architecture and environment variable specifications, see:
+
+📖 **[INFRA_ROLES.md](./INFRA_ROLES.md)** – Node roles, responsibilities, and configuration
+
+### Quick Reference: Node Environment Expectations
+
+**Node 1 (Master)** – `thrchain.up.railway.app`
+```bash
+NODE_ROLE=master
+READ_ONLY=0
+SCHEDULER_ENABLED=1
+OPENAI_API_KEY=sk-...        # AI provider keys
+ANTHROPIC_API_KEY=sk-ant-...
+GOOGLE_API_KEY=...
+```
+
+**Node 2 (Replica)** – `node-2.up.railway.app`
+```bash
+NODE_ROLE=replica
+READ_ONLY=1
+SCHEDULER_ENABLED=0           # No schedulers on replica
+MASTER_NODE_URL=https://thrchain.up.railway.app
+BTC_RPC_URL=...               # Cross-chain bridge config
+ETH_RPC_URL=...
+BSC_RPC_URL=...
+```
+
+**Node 3 (Static/SDK)** – `thrchain.vercel.app`
+```bash
+# Public-only environment (no secrets)
+NEXT_PUBLIC_API_BASE_URL=https://thrchain.up.railway.app
+```
+
+**Node 4 (Future AI Core)** – `TBD`
+```bash
+NODE_ROLE=ai-core
+OPENAI_API_KEY=sk-...         # AI keys moved from Node 1
+ANTHROPIC_API_KEY=sk-ant-...
+AI_CORE_PORT=8001
+```
+
+### Important Notes
+
+⚠️ **Node 2 Behavior**:
+- AI API keys are **PRESENT** in Node 2 env but **NOT USED** (reserved for future Node 4 migration)
+- Node 2 does **NOT** initialize AI models or run model sync
+- Heartbeat failures log warnings but **DO NOT** crash the process
+
+⚠️ **Node 3 Security**:
+- Never deploy secrets (API keys, ADMIN_SECRET) to Vercel
+- All assets served via CDN (no backend processing)
+
+✅ **Clean Separation**:
+- Node 1 = blockchain coordinator
+- Node 2 = cross-chain watchers (read-only)
+- Node 3 = static SDK/docs
+- Node 4 = AI core (future)
 ✅ **Proxy**: Vercel routes `/api/v2/wallet/*` → Node 3
 
 ---

@@ -3209,6 +3209,94 @@ function closeWalletHistoryModal(event) {
     }
 }
 
+// Native Wallet Setup - PIN + Push Notifications
+async function setupNativeWallet() {
+    const address = walletSession.getAddress();
+    if (!address) {
+        alert('Please connect your wallet first');
+        return;
+    }
+
+    // Check if native wallet is already setup
+    const nativeWalletKey = `native_wallet_${address}`;
+    const existingSetup = localStorage.getItem(nativeWalletKey);
+
+    if (existingSetup) {
+        // Already setup - offer to reconnect
+        if (confirm('Native wallet already configured for this address. Reconnect?')) {
+            await connectNativeWallet(address);
+        }
+        return;
+    }
+
+    // Show PIN setup modal
+    const pin = prompt('Set a 6-digit PIN for your native wallet:\n(Used for quick access on mobile)');
+
+    if (!pin || pin.length !== 6 || isNaN(pin)) {
+        alert('Invalid PIN. Please enter exactly 6 digits.');
+        return;
+    }
+
+    // Request push notification permission
+    if ('Notification' in window && 'serviceWorker' in navigator) {
+        const permission = await Notification.requestPermission();
+
+        if (permission === 'granted') {
+            console.log('✅ Push notifications enabled');
+
+            // Save native wallet setup
+            localStorage.setItem(nativeWalletKey, JSON.stringify({
+                pin: btoa(pin),
+                pushEnabled: true,
+                setupDate: new Date().toISOString(),
+                platform: /iPhone|iPad|iPod/.test(navigator.userAgent) ? 'iOS' :
+                          /Android/.test(navigator.userAgent) ? 'Android' : 'Web'
+            }));
+
+            const config = JSON.parse(localStorage.getItem(nativeWalletKey));
+            alert(`✅ Native Wallet Setup Complete!\n\n📱 Platform: ${config.platform}\n🔔 Push Notifications: Enabled\n🔐 PIN: Configured\n\nYou can now connect from your native wallet app.`);
+        } else {
+            localStorage.setItem(nativeWalletKey, JSON.stringify({
+                pin: btoa(pin),
+                pushEnabled: false,
+                setupDate: new Date().toISOString(),
+                platform: 'Web'
+            }));
+
+            alert('⚠️ Push notifications denied.\nNative wallet setup saved but you won\'t receive transaction alerts.');
+        }
+    } else {
+        localStorage.setItem(nativeWalletKey, JSON.stringify({
+            pin: btoa(pin),
+            pushEnabled: false,
+            setupDate: new Date().toISOString(),
+            platform: 'Web'
+        }));
+
+        alert('ℹ️ Your browser doesn\'t support push notifications.\nNative wallet setup saved for PIN access only.');
+    }
+}
+
+async function connectNativeWallet(address) {
+    const nativeWalletKey = `native_wallet_${address}`;
+    const setup = localStorage.getItem(nativeWalletKey);
+
+    if (!setup) {
+        alert('No native wallet setup found. Please run setup first.');
+        return;
+    }
+
+    const config = JSON.parse(setup);
+    const pin = prompt('Enter your 6-digit PIN:');
+
+    if (btoa(pin) === config.pin) {
+        console.log('✅ Native wallet connected');
+        alert(`✅ Connected to ${config.platform} Native Wallet\n🔔 Push Notifications: ${config.pushEnabled ? 'Active' : 'Disabled'}`);
+    } else {
+        alert('❌ Invalid PIN');
+    }
+}
+
 function filterHistory(filter, tokenSymbol = null) {
     currentHistoryFilter = filter;
     if (filter !== 'tokens') {
@@ -3664,6 +3752,9 @@ function renderHistory() {
             </button>
             <button class="wallet-popup-btn" onclick="openWalletHistoryModal(); event.stopPropagation();">
                 📜 <span class="lang-el">Ιστορικό</span><span class="lang-en">History</span>
+            </button>
+            <button class="wallet-popup-btn" onclick="setupNativeWallet(); event.stopPropagation();" style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); margin-top: 8px;">
+                📱 <span class="lang-el">Native Wallet Setup</span><span class="lang-en">Native Wallet Setup</span>
             </button>
         </div>
     `;

@@ -22,7 +22,8 @@ The Thronos blockchain operates across multiple specialized nodes, each with dis
 **Responsibilities**:
 - ✅ Write operations to blockchain (block minting, transaction confirmation)
 - ✅ Run all scheduler jobs (block production, AI rewards, aggregation)
-- ✅ AI model catalog sync and management
+- ✅ **Proxy AI requests to Node 4** (when AI_CORE_URL is set)
+- ✅ Fallback to local AI if Node 4 is unavailable
 - ✅ Initialize AI wallet and voting systems
 - ✅ Process mempool and execute smart contracts
 - ✅ Serve as heartbeat master for replica nodes
@@ -33,9 +34,14 @@ NODE_ROLE=master
 READ_ONLY=0
 IS_LEADER=1
 SCHEDULER_ENABLED=1
+ENABLE_CHAIN=1
 LEADER_URL=https://thrchain.up.railway.app
 
-# AI Provider Keys (Master only)
+# AI Core Proxy (ADD AFTER NODE 4 IS DEPLOYED)
+AI_CORE_URL=https://thronos-v3-6.onrender.com
+
+# AI Provider Keys (OPTIONAL - for fallback if Node 4 fails)
+# Can be removed after confirming Node 4 works reliably
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 GOOGLE_API_KEY=...
@@ -145,24 +151,34 @@ NEXT_PUBLIC_CHAIN_NAME=Thronos
 
 ---
 
-### Node 4 – AI Core (Future)
+### Node 4 – AI Core (Render)
 
-**URL**: `TBD` (not yet deployed)
+**URL**: `https://thronos-v3-6.onrender.com` (or your Render URL)
 **Role**: Centralized AI processing and LLM orchestration
+**Status**: ✅ **READY FOR DEPLOYMENT** (see [NODE4_DEPLOYMENT.md](./NODE4_DEPLOYMENT.md))
 
-**Planned Responsibilities**:
+**Responsibilities**:
 - ✅ AI model catalog management (OpenAI, Anthropic, Gemini)
-- ✅ AI risk scoring (anti-Ponzi watcher)
-- ✅ L2 game logic for Crypto Hunters
-- ✅ AI-driven governance helpers
-- ✅ Continuous learning and model fine-tuning
+- ✅ AI chat completions (`/api/ai/chat`)
+- ✅ AI Architect blueprint generation (`/api/architect_generate`)
+- ✅ AI models listing (`/api/ai_models`)
+- ✅ AI knowledge watcher scheduler
+- ✅ AI rewards pool distribution
+- ❌ **NO** blockchain operations (mining, mempool, peers)
+- ❌ **NO** heartbeats (not part of chain cluster)
 
-**Planned Environment Configuration**:
+**Environment Configuration**:
 ```bash
-NODE_ROLE=ai-core
+# Node Role
+NODE_ROLE=ai_core
+READ_ONLY=1
+SCHEDULER_ENABLED=1
+ENABLE_CHAIN=0              # Disable all blockchain functionality
+
+# AI Mode
 THRONOS_AI_MODE=production
 
-# AI Provider Keys (MOVED FROM NODE 1)
+# AI Provider Keys (ALL AI KEYS HERE)
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 GOOGLE_API_KEY=...

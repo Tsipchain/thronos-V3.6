@@ -10,9 +10,16 @@ PORT=${PORT:-8000}
 STRATUM_PORT=${STRATUM_PORT:-3333}
 export PORT STRATUM_PORT
 
-echo "=== Starting Stratum engine on TCP port ${STRATUM_PORT} ==="
-python3 stratum_engine.py &
-STRATUM_PID=$!
+# Only start Stratum on master node (replicas are read-only)
+NODE_ROLE=${NODE_ROLE:-master}
+if [[ "$NODE_ROLE" == "master" ]]; then
+  echo "=== Starting Stratum engine on TCP port ${STRATUM_PORT} ==="
+  python3 stratum_engine.py &
+  STRATUM_PID=$!
+else
+  echo "=== Skipping Stratum engine on $NODE_ROLE node (read-only) ==="
+  STRATUM_PID=""
+fi
 
 MINER_PID=""
 if [[ "${ENABLE_MICRO_MINER:-false}" == "true" ]]; then
@@ -28,8 +35,10 @@ echo "=== Starting Flask app on HTTP port ${PORT} ==="
 python3 server.py
 
 echo "=== Shutting down background services ==="
-if [[ -n "$MINER_PID" ]]; then
+if [[ -n "$STRATUM_PID" && -n "$MINER_PID" ]]; then
   kill $STRATUM_PID $MINER_PID || true
-else
+elif [[ -n "$STRATUM_PID" ]]; then
   kill $STRATUM_PID || true
+elif [[ -n "$MINER_PID" ]]; then
+  kill $MINER_PID || true
 fi

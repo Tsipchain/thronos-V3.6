@@ -6584,6 +6584,7 @@ def peers_heartbeat():
     """
     Replica nodes send heartbeat to master with their peer_id and URL.
     Master tracks active replicas with TTL of 60 seconds.
+    Fast response (<1-2s) with clear status information.
     """
     if NODE_ROLE != "master":
         return jsonify({"error": "Heartbeats only accepted on master node"}), 403
@@ -6604,8 +6605,22 @@ def peers_heartbeat():
 
     cleanup_expired_peers()
 
+    # Get current blockchain height (fast, no heavy operations)
+    try:
+        chain = load_json(CHAIN_FILE, [])
+        blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+        height = HEIGHT_OFFSET + len(blocks)
+    except:
+        height = 0
+
+    # Build peers list (peer_id -> url mapping)
+    peers_list = [{"peer_id": pid, "url": info.get("url", "unknown")} for pid, info in active_peers.items()]
+
     return jsonify({
-        "status": "ok",
+        "ok": True,
+        "role": NODE_ROLE,
+        "height": height,
+        "peers": peers_list,
         "peer_id": peer_id,
         "active_peers": len(active_peers),
         "ttl_seconds": PEER_TTL_SECONDS

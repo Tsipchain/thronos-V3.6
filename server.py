@@ -6605,22 +6605,12 @@ def peers_heartbeat():
 
     cleanup_expired_peers()
 
-    # Get current blockchain height (fast, no heavy operations)
-    try:
-        chain = load_json(CHAIN_FILE, [])
-        blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
-        height = HEIGHT_OFFSET + len(blocks)
-    except:
-        height = 0
-
-    # Build peers list (peer_id -> url mapping)
-    peers_list = [{"peer_id": pid, "url": info.get("url", "unknown")} for pid, info in active_peers.items()]
-
+    # Heartbeat should be FAST (<100ms) - no expensive operations
+    # Replica nodes call this every 30s, so we must not load CHAIN_FILE here
+    # (use /api/network_live or /api/network_stats for blockchain height)
     return jsonify({
         "ok": True,
         "role": NODE_ROLE,
-        "height": height,
-        "peers": peers_list,
         "peer_id": peer_id,
         "active_peers": len(active_peers),
         "ttl_seconds": PEER_TTL_SECONDS

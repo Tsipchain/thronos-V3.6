@@ -5356,11 +5356,10 @@ def api_wallet_history():
 @app.route("/wallet")
 def wallet_page():
     """
-    Lightweight wallet viewer - standalone page (doesn't extend base.html).
-    Use: /wallet?address=THR...
+    Full wallet dashboard page with wallet widget.
+    Extends base.html and uses walletSession for connection.
     """
-    thr_addr = request.args.get("address")
-    return render_template("wallet_viewer_standalone.html", thr_address=thr_addr)
+    return render_template("thronos_wallet.html")
 
 
 @app.route("/api/v2/wallet/history", methods=["GET"])

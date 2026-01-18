@@ -1227,13 +1227,8 @@
     }
 
     window.handleHeroWalletClick = function() {
-        // Use canonical wallet header logic (same as header wallet button)
-        if (typeof openHeaderWalletModal === 'function') {
-            openHeaderWalletModal();
-        } else {
-            console.error('[WALLET] openHeaderWalletModal not defined');
-            alert('⚠️ Wallet system is temporarily unavailable. Please refresh the page.');
-        }
+        // Use canonical wallet header modal (legacy system)
+        openHeaderWalletModal();
     };
 
     document.addEventListener('DOMContentLoaded', () => {

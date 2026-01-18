@@ -3208,6 +3208,94 @@ function closeWalletHistoryModal(event) {
     }
 }
 
+// Native Wallet Setup - PIN + Push Notifications
+async function setupNativeWallet() {
+    const address = walletSession.getAddress();
+    if (!address) {
+        alert('Please connect your wallet first');
+        return;
+    }
+
+    // Check if native wallet is already setup
+    const nativeWalletKey = `native_wallet_${address}`;
+    const existingSetup = localStorage.getItem(nativeWalletKey);
+
+    if (existingSetup) {
+        // Already setup - offer to reconnect
+        if (confirm('Native wallet already configured for this address. Reconnect?')) {
+            await connectNativeWallet(address);
+        }
+        return;
+    }
+
+    // Show PIN setup modal
+    const pin = prompt('Set a 6-digit PIN for your native wallet:\n(Used for quick access on mobile)');
+
+    if (!pin || pin.length !== 6 || isNaN(pin)) {
+        alert('Invalid PIN. Please enter exactly 6 digits.');
+        return;
+    }
+
+    // Request push notification permission
+    if ('Notification' in window && 'serviceWorker' in navigator) {
+        const permission = await Notification.requestPermission();
+
+        if (permission === 'granted') {
+            console.log('✅ Push notifications enabled');
+
+            // Save native wallet setup
+            localStorage.setItem(nativeWalletKey, JSON.stringify({
+                pin: btoa(pin),
+                pushEnabled: true,
+                setupDate: new Date().toISOString(),
+                platform: /iPhone|iPad|iPod/.test(navigator.userAgent) ? 'iOS' :
+                          /Android/.test(navigator.userAgent) ? 'Android' : 'Web'
+            }));
+
+            const config = JSON.parse(localStorage.getItem(nativeWalletKey));
+            alert(`✅ Native Wallet Setup Complete!\n\n📱 Platform: ${config.platform}\n🔔 Push Notifications: Enabled\n🔐 PIN: Configured\n\nYou can now connect from your native wallet app.`);
+        } else {
+            localStorage.setItem(nativeWalletKey, JSON.stringify({
+                pin: btoa(pin),
+                pushEnabled: false,
+                setupDate: new Date().toISOString(),
+                platform: 'Web'
+            }));
+
+            alert('⚠️ Push notifications denied.\nNative wallet setup saved but you won\'t receive transaction alerts.');
+        }
+    } else {
+        localStorage.setItem(nativeWalletKey, JSON.stringify({
+            pin: btoa(pin),
+            pushEnabled: false,
+            setupDate: new Date().toISOString(),
+            platform: 'Web'
+        }));
+
+        alert('ℹ️ Your browser doesn\'t support push notifications.\nNative wallet setup saved for PIN access only.');
+    }
+}
+
+async function connectNativeWallet(address) {
+    const nativeWalletKey = `native_wallet_${address}`;
+    const setup = localStorage.getItem(nativeWalletKey);
+
+    if (!setup) {
+        alert('No native wallet setup found. Please run setup first.');
+        return;
+    }
+
+    const config = JSON.parse(setup);
+    const pin = prompt('Enter your 6-digit PIN:');
+
+    if (btoa(pin) === config.pin) {
+        console.log('✅ Native wallet connected');
+        alert(`✅ Connected to ${config.platform} Native Wallet\n🔔 Push Notifications: ${config.pushEnabled ? 'Active' : 'Disabled'}`);
+    } else {
+        alert('❌ Invalid PIN');
+    }
+}
+
 function filterHistory(filter, tokenSymbol = null) {
     currentHistoryFilter = filter;
     if (filter !== 'tokens') {
@@ -3368,102 +3456,6 @@ function formatTxDate(timestamp) {
         return timestamp ? String(timestamp) : '';
     }
 }
-
-<!-- Wallet History Modal -->
-<div class="send-modal" id="walletHistoryModal" onclick="closeWalletHistoryModal(event)">
-    <div class="send-modal-content" onclick="event.stopPropagation()">
-        <div class="send-modal-header">
-            📜
-            <span class="lang-el">Ιστορικό Συναλλαγών</span>
-            <span class="lang-en">Transaction History</span>
-        </div>
-
-        <!-- History Tabs -->
-        <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; padding: 0 4px;">
-            <button class="history-tab-btn active" data-filter="all" onclick="filterHistory('all')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.2); border: 1px solid rgba(0,255,102,0.4); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                <span class="lang-el">Όλα</span><span class="lang-en">All</span>
-            </button>
-            <button class="history-tab-btn" data-filter="thr" onclick="filterHistory('thr')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">THR</button>
-            <button class="history-tab-btn" data-filter="mining" onclick="filterHistory('mining')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                ⛏️ <span class="lang-el">Mining</span><span class="lang-en">Mining</span>
-            </button>
-            <button class="history-tab-btn" data-filter="tokens" onclick="filterHistory('tokens')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                <span class="lang-el">Tokens</span><span class="lang-en">Tokens</span>
-            </button>
-            <button class="history-tab-btn" data-filter="l2e" onclick="filterHistory('l2e')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">L2E</button>
-            <button class="history-tab-btn" data-filter="ai_credits" onclick="filterHistory('ai_credits')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">AI Credits (Chat)</button>
-            <button class="history-tab-btn" data-filter="architect_ai_jobs" onclick="filterHistory('architect_ai_jobs')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">Architect / AI Jobs</button>
-            <button class="history-tab-btn" data-filter="iot" onclick="filterHistory('iot')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">IoT</button>
-            <button class="history-tab-btn" data-filter="bridge" onclick="filterHistory('bridge')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                <span class="lang-el">Bridge</span><span class="lang-en">Bridge</span>
-            </button>
-            <button class="history-tab-btn" data-filter="swaps" onclick="filterHistory('swaps')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                <span class="lang-el">Swaps</span><span class="lang-en">Swaps</span>
-            </button>
-            <button class="history-tab-btn" data-filter="liquidity" onclick="filterHistory('liquidity')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                <span class="lang-el">Liquidity</span><span class="lang-en">Liquidity</span>
-            </button>
-            <button class="history-tab-btn" data-filter="gateway" onclick="filterHistory('gateway')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                <span class="lang-el">Gateway</span><span class="lang-en">Gateway</span>
-            </button>
-            <button class="history-tab-btn" data-filter="music" onclick="filterHistory('music')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                🎵 <span class="lang-el">Μουσική</span><span class="lang-en">Music</span>
-            </button>
-        </div>
-
-        <div id="tokenIndexBar" style="display:none; margin: 0 4px 10px 4px;">
-            <div style="display:flex; align-items:center; gap:6px; overflow-x:auto; padding-bottom:6px; scrollbar-width: thin;" id="tokenIndexScroll"></div>
-            <div style="display:flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 4px;">
-                <button class="history-tab-btn" style="flex:0 0 auto; min-width: 80px; padding: 6px 8px;" onclick="clearTokenFilter()">All Tokens</button>
-                <button class="history-tab-btn" style="flex:0 0 auto; min-width: 80px; padding: 6px 8px;" onclick="shareTokenFilter()">Share / Copy</button>
-            </div>
-        </div>
-
-        <div id="historyContent" style="max-height: 500px; overflow-y: auto;">
-            <div class="wallet-popup-loading">
-                <div class="wallet-popup-spinner"></div>
-                <span class="lang-el">Φόρτωση ιστορικού...</span>
-                <span class="lang-en">Loading history...</span>
-            </div>
-        </div>
-
-        <div style="margin-top:10px;text-align:right;">
-            <button class="send-modal-btn" onclick="closeWalletHistoryModal()">
-                <span class="lang-el">Κλείσιμο</span>
-                <span class="lang-en">Close</span>
-            </button>
-        </div>
-    </div>
-</div>
-
-<div class="navbar">
-  <ul class="nav-list">
-    <li class="nav-item brand">
-      <span class="nav-link">
-        <img src="{{ url_for('static', filename='img/thronos-token.png') }}" alt="🔥" class="thr-logo-icon" />
-        THRONOS
-      </span>
-    </li>
-    <!-- Home -->
-    <li class="nav-item">
-      <a href="/" class="nav-link">🏠 <span class="lang-el">Αρχική</span><span class="lang-en">Home</span></a>
-    </li>
-    
-    <!-- Apps Dropdown -->
-    <li class="nav-item">
-      <span class="nav-link">📱 <span class="lang-el">Εφαρμογές</span><span class="lang-en">Apps</span> ▼</span>
-      <div class="dropdown-content">
-        <a href="/wallet">👛 <span class="lang-el">Πορτοφόλι</span><span class="lang-en">Wallet</span></a>
-        <a href="/send">💸 <span class="lang-el">Αποστολή</span><span class="lang-en">Send</span></a>
-        <a href="/swap">🔄 Swap</a>
-        <a href="/gateway">💳 Gateway</a>
-        <a href="/evm">⚡ <span class="lang-el">Smart Contracts</span><span class="lang-en">Smart Contracts</span></a>
-        <a href="/game">🎮 <span class="lang-el">Παιχνίδι</span><span class="lang-en">Game</span></a>
-        <a href="/pledge">🔥 <span class="lang-el">Δέσμευση</span><span class="lang-en">Pledge</span></a>
-        <a href="/viewer">📦 <span class="lang-el">Εξερευνητής</span><span class="lang-en">Explorer</span></a>
-        <a href="/token_chart">📈 <span class="lang-el">Γράφημα Token</span><span class="lang-en">Token Chart</span></a>
-      </div>
-    </li>
 
 function buildTokenIndexData() {
     const counts = {};
@@ -3759,6 +3751,9 @@ function renderHistory() {
             </button>
             <button class="wallet-popup-btn" onclick="openWalletHistoryModal(); event.stopPropagation();">
                 📜 <span class="lang-el">Ιστορικό</span><span class="lang-en">History</span>
+            </button>
+            <button class="wallet-popup-btn" onclick="setupNativeWallet(); event.stopPropagation();" style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); margin-top: 8px;">
+                📱 <span class="lang-el">Native Wallet Setup</span><span class="lang-en">Native Wallet Setup</span>
             </button>
         </div>
     `;

@@ -38,7 +38,7 @@ ENABLE_CHAIN=1
 LEADER_URL=https://thrchain.up.railway.app
 
 # AI Core Proxy (ADD AFTER NODE 4 IS DEPLOYED)
-AI_CORE_URL=https://thr-ai-core.onrender.com
+AI_CORE_URL=https://thronos-v3-6.onrender.com
 
 # AI Provider Keys (OPTIONAL - for fallback if Node 4 fails)
 # Can be removed after confirming Node 4 works reliably
@@ -153,7 +153,7 @@ NEXT_PUBLIC_CHAIN_NAME=Thronos
 
 ### Node 4 – AI Core (Render)
 
-**URL**: `https://thr-ai-core.onrender.com` (or your Render URL)
+**URL**: `https://thronos-v3-6.onrender.com` (or your Render URL)
 **Role**: Centralized AI processing and LLM orchestration
 **Status**: ✅ **READY FOR DEPLOYMENT** (see [NODE4_DEPLOYMENT.md](./NODE4_DEPLOYMENT.md))
 

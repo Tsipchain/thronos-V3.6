@@ -29,7 +29,7 @@ Node 4 is the **AI Core** – a dedicated service for all LLM operations (OpenAI
 4. Configure service:
 
 ```yaml
-Name: thr-ai-core
+Name: thronos-v3-6
 Branch: main
 Root Directory: . (leave blank)
 Runtime: Python 3
@@ -91,7 +91,7 @@ MODEL_REFRESH_INTERVAL_SECONDS=600
 After deployment, Render will give you a public URL like:
 
 ```
-https://thr-ai-core.onrender.com
+https://thronos-v3-6.onrender.com
 ```
 
 **Copy this URL** – you'll need it for Node 1 configuration.
@@ -105,7 +105,7 @@ Go to Railway dashboard → Node 1 service → Environment Variables
 Add:
 
 ```bash
-AI_CORE_URL=https://thr-ai-core.onrender.com
+AI_CORE_URL=https://thronos-v3-6.onrender.com
 ```
 
 **DO NOT change any other environment variables on Node 1.**
@@ -119,7 +119,7 @@ After adding `AI_CORE_URL`, Node 1 will automatically proxy AI requests to Node 
 If you want Node 2 to also proxy to Node 4 (instead of running local AI), add:
 
 ```bash
-AI_CORE_URL=https://thr-ai-core.onrender.com
+AI_CORE_URL=https://thronos-v3-6.onrender.com
 ```
 
 **Note**: Node 2 already has `THRONOS_AI_MODE=worker` so it doesn't serve user-facing AI. This is optional.
@@ -132,7 +132,7 @@ AI_CORE_URL=https://thr-ai-core.onrender.com
 
 Visit:
 ```
-https://thr-ai-core.onrender.com/api/ai/providers/health
+https://thronos-v3-6.onrender.com/api/ai/providers/health
 ```
 
 Expected response:
@@ -148,7 +148,7 @@ Expected response:
 
 Visit:
 ```
-https://thr-ai-core.onrender.com/api/ai_models
+https://thronos-v3-6.onrender.com/api/ai_models
 ```
 
 Expected response:
@@ -169,7 +169,7 @@ Look for API request to `/api/ai/chat`
 
 Check Node 1 logs (Railway) for:
 ```
-[AI_CORE] Proxying to https://thr-ai-core.onrender.com/api/ai/chat
+[AI_CORE] Proxying to https://thronos-v3-6.onrender.com/api/ai/chat
 [AI_CORE] Successfully proxied /api/ai/chat to Node 4
 ```
 
@@ -318,7 +318,7 @@ Or check Render logs for slow AI provider responses
 ```bash
 # On Railway (Node 1)
 echo $AI_CORE_URL
-# Should be: https://thr-ai-core.onrender.com
+# Should be: https://thronos-v3-6.onrender.com
 ```
 
 ### Problem: Node 4 scheduler errors

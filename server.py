@@ -483,6 +483,9 @@ ADMIN_SECRET = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
 # AI Core configuration (for future Node 4)
 AI_CORE_URL = os.getenv("AI_CORE_URL", "").strip()
 
+# Chain enable flag - AI core nodes don't need chain functionality
+ENABLE_CHAIN = os.getenv("ENABLE_CHAIN", "1") == "1"
+
 # ─── Role-based helper functions ────────────────────────────────────────────
 def is_master() -> bool:
     """Check if current node is master"""
@@ -494,42 +497,56 @@ def is_replica() -> bool:
 
 def is_ai_core() -> bool:
     """Check if current node is AI core"""
-    return NODE_ROLE == "ai-core"
+    return NODE_ROLE == "ai_core"
 
 def should_run_schedulers() -> bool:
-    """Check if schedulers should run on this node"""
-    return is_master() and SCHEDULER_ENABLED
+    """Check if schedulers should run on this node (master or ai_core)"""
+    return (is_master() or is_ai_core()) and SCHEDULER_ENABLED
 
 def should_sync_ai_models() -> bool:
-    """Check if AI model sync should run on this node"""
-    return is_master() and bool(os.getenv("OPENAI_API_KEY"))
+    """Check if AI model sync should run on this node (master or ai_core)"""
+    return (is_master() or is_ai_core()) and bool(os.getenv("OPENAI_API_KEY"))
 
-def call_ai_core(path: str, payload: dict, timeout: int = 30) -> dict:
+def call_ai_core(path: str, payload: dict, timeout: int = 60) -> dict | None:
     """
-    Call AI core service for LLM operations (future Node 4).
+    Call AI core service for LLM operations (Node 4).
 
     Args:
-        path: API endpoint path (e.g., "/api/chat")
+        path: API endpoint path (e.g., "/api/ai/chat")
         payload: Request payload
         timeout: Request timeout in seconds
 
     Returns:
-        Response JSON
+        Response JSON or None if call fails
 
     Raises:
-        RuntimeError: If AI_CORE_URL not configured
-        requests.RequestException: If request fails
+        Nothing - returns None on error for graceful fallback
     """
     if not AI_CORE_URL:
-        raise RuntimeError("AI_CORE_URL not configured. Set AI_CORE_URL environment variable.")
+        logger.warning("[AI_CORE] AI_CORE_URL not configured, cannot proxy to Node 4")
+        return None
 
     url = f"{AI_CORE_URL.rstrip('/')}/{path.lstrip('/')}"
-    response = requests.post(url, json=payload, timeout=timeout, headers={
-        "X-Admin-Secret": ADMIN_SECRET,
-        "Content-Type": "application/json"
-    })
-    response.raise_for_status()
-    return response.json()
+    try:
+        logger.info(f"[AI_CORE] Proxying to {url}")
+        response = requests.post(url, json=payload, timeout=timeout, headers={
+            "X-Admin-Secret": ADMIN_SECRET,
+            "Content-Type": "application/json"
+        })
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.Timeout:
+        logger.error(f"[AI_CORE] Timeout calling {url} (timeout={timeout}s)")
+        return None
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"[AI_CORE] Connection error to {url}: {e}")
+        return None
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"[AI_CORE] HTTP error from {url}: {e.response.status_code} - {e.response.text[:200]}")
+        return None
+    except Exception as e:
+        logger.exception(f"[AI_CORE] Unexpected error calling {url}: {e}")
+        return None
 
 # ─── End role-based helpers ─────────────────────────────────────────────────
 
@@ -5974,6 +5991,20 @@ def api_architect_generate():
     - Returns [[FILE:...]] blocks.
     - Writes files to AI_FILES_DIR.
     """
+    # ─── TASK 2: Proxy to Node 4 (AI Core) if configured ───
+    if not is_ai_core() and AI_CORE_URL:
+        try:
+            data = request.get_json(force=True) or {}
+            result = call_ai_core("/api/architect_generate", data, timeout=120)
+            if result:
+                logger.info("[AI_CORE] Successfully proxied /api/architect_generate to Node 4")
+                return jsonify(result), 200
+            else:
+                logger.warning("[AI_CORE] Node 4 call failed, falling back to local AI")
+        except Exception as e:
+            logger.exception(f"[AI_CORE] Error proxying to Node 4, falling back to local AI: {e}")
+
+    # ─── Local AI handling (fallback or when is_ai_core) ───
     if not ai_agent:
         return jsonify(error="AI Agent not available"), 503
 
@@ -7851,6 +7882,22 @@ def api_chat():
     - Αν έχει wallet αλλά 0 credits, δεν προχωρά σε κλήση AI
     - Κάθε μήνυμα γράφεται στο ai_offline_corpus.json με session_id
     """
+    # ─── TASK 2: Proxy to Node 4 (AI Core) if configured ───
+    # If we're on Node 1/2 and AI_CORE_URL is set, proxy to Node 4
+    # If Node 4 fails or is_ai_core(), fall back to local handling
+    if not is_ai_core() and AI_CORE_URL:
+        try:
+            data = request.get_json(force=True) or {}
+            result = call_ai_core("/api/ai/chat", data, timeout=90)
+            if result:
+                logger.info("[AI_CORE] Successfully proxied /api/ai/chat to Node 4")
+                return jsonify(result), 200
+            else:
+                logger.warning("[AI_CORE] Node 4 call failed, falling back to local AI")
+        except Exception as e:
+            logger.exception(f"[AI_CORE] Error proxying to Node 4, falling back to local AI: {e}")
+
+    # ─── Local AI handling (fallback or when is_ai_core) ───
     # PR-182: Enforce THRONOS_AI_MODE - worker nodes don't serve user-facing AI
     if THRONOS_AI_MODE == "worker":
         return jsonify({
@@ -13093,18 +13140,27 @@ def api_v1_receive_block():
 # PR-182: Start scheduler based on NODE_ROLE and SCHEDULER_ENABLED
 # - Master nodes: run chain maintenance jobs (minting, mempool, aggregator)
 # - Replica nodes: can run worker jobs if SCHEDULER_ENABLED=1 (e.g., BTC watcher)
-if NODE_ROLE == "master" and SCHEDULER_ENABLED:
-    print(f"[SCHEDULER] Starting as MASTER node (SCHEDULER_ENABLED={SCHEDULER_ENABLED})")
+# - AI Core nodes: run only AI-related jobs (NO chain jobs)
+if is_ai_core() and SCHEDULER_ENABLED:
+    print(f"[SCHEDULER] Starting as AI_CORE node (SCHEDULER_ENABLED={SCHEDULER_ENABLED})")
+    scheduler=BackgroundScheduler(daemon=True)
+    # AI Core only runs AI jobs (no chain, no mining, no mempool)
+    scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30)
+    scheduler.add_job(distribute_ai_rewards_step, "interval", minutes=int(os.getenv("AI_POOL_DISTRIBUTION_INTERVAL", "30")))
+    scheduler.start()
+    print(f"[SCHEDULER] AI Core jobs started (knowledge watcher, rewards distribution)")
+elif NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
+    print(f"[SCHEDULER] Starting as MASTER node (SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")
     scheduler=BackgroundScheduler(daemon=True)
     scheduler.add_job(mint_first_blocks, "interval", minutes=1)
     scheduler.add_job(confirm_mempool_if_stuck, "interval", seconds=45)
     scheduler.add_job(aggregator_step, "interval", seconds=10)
-    scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30)  # NEW
-    scheduler.add_job(distribute_ai_rewards_step, "interval", minutes=int(os.getenv("AI_POOL_DISTRIBUTION_INTERVAL", "30")))  # Phase 4: AI rewards distribution
+    scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30)
+    scheduler.add_job(distribute_ai_rewards_step, "interval", minutes=int(os.getenv("AI_POOL_DISTRIBUTION_INTERVAL", "30")))
     scheduler.start()
     print(f"[SCHEDULER] All master jobs started (including AI rewards distribution)")
-elif NODE_ROLE == "replica" and SCHEDULER_ENABLED:
-    print(f"[SCHEDULER] Starting as REPLICA node with worker jobs (SCHEDULER_ENABLED={SCHEDULER_ENABLED})")
+elif NODE_ROLE == "replica" and SCHEDULER_ENABLED and ENABLE_CHAIN:
+    print(f"[SCHEDULER] Starting as REPLICA node with worker jobs (SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")
     scheduler=BackgroundScheduler(daemon=True)
 
     # PR-183: Add BTC pledge watcher for replica nodes
@@ -13119,11 +13175,12 @@ elif NODE_ROLE == "replica" and SCHEDULER_ENABLED:
     scheduler.start()
     print(f"[SCHEDULER] Replica scheduler started with worker jobs")
 else:
-    print(f"[SCHEDULER] Scheduler disabled (NODE_ROLE={NODE_ROLE}, SCHEDULER_ENABLED={SCHEDULER_ENABLED})")
+    print(f"[SCHEDULER] Scheduler disabled (NODE_ROLE={NODE_ROLE}, SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")
     scheduler = None
 
 # Start heartbeat sender for replica nodes (independent of scheduler)
-if NODE_ROLE == "replica" and HEARTBEAT_ENABLED:
+# AI Core nodes don't send heartbeats (they're not part of the chain cluster)
+if NODE_ROLE == "replica" and HEARTBEAT_ENABLED and ENABLE_CHAIN:
 
     # Start heartbeat sender for replica nodes
     import threading
@@ -17551,6 +17608,21 @@ def api_ai_models():
     Δεν σκάει αν κάποιος provider δεν έχει API key – απλά τον μαρκάρει ως disabled.
     NEVER returns 500 - always returns 200 with degraded mode fallback if needed.
     """
+    # ─── TASK 2: Proxy to Node 4 (AI Core) if configured ───
+    if not is_ai_core() and AI_CORE_URL:
+        try:
+            # GET endpoint - pass query params as payload
+            params = {k: v for k, v in request.args.items()}
+            result = call_ai_core("/api/ai_models", params, timeout=30)
+            if result:
+                logger.info("[AI_CORE] Successfully proxied /api/ai_models to Node 4")
+                return jsonify(result), 200
+            else:
+                logger.warning("[AI_CORE] Node 4 call failed, falling back to local model list")
+        except Exception as e:
+            logger.exception(f"[AI_CORE] Error proxying to Node 4, falling back to local model list: {e}")
+
+    # ─── Local AI handling (fallback or when is_ai_core) ───
     try:
         _apply_env_flags(get_provider_status())
 

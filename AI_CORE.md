@@ -125,19 +125,21 @@ Node 4 (AI Core) will handle:
 
 ## Migration Plan
 
-### Phase 1: Preparation (Current)
+### Phase 1: Preparation
 
-**Status**: ✅ In Progress
+**Status**: ✅ **COMPLETE** (2026-01-18)
 
 - [x] Add `AI_CORE_URL` environment variable to server.py
 - [x] Create `call_ai_core()` helper function for HTTP calls to Node 4
-- [x] Add role-based guards to AI model sync (`is_master()` check)
+- [x] Add role-based guards: `is_ai_core()`, `should_run_schedulers()`, `should_sync_ai_models()`
+- [x] Add `ENABLE_CHAIN` flag to disable blockchain on AI Core
 - [x] Document AI Core architecture (this file)
 - [x] Update INFRA_ROLES.md with Node 4 specifications
+- [x] Create NODE4_DEPLOYMENT.md deployment guide
 
 ### Phase 2: Deploy Node 4 (Standalone)
 
-**Status**: ⏳ Planned
+**Status**: ✅ **READY FOR DEPLOYMENT** (see [NODE4_DEPLOYMENT.md](./NODE4_DEPLOYMENT.md))
 
 1. **Create AI Core Service**:
    ```bash

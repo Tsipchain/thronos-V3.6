@@ -5021,6 +5021,20 @@ function showWalletContentSection(){
 }
 
 function openHeaderWalletModal(){
+    // PR-XXX: Gracefully handle missing walletSession (SDK not loaded)
+    if (typeof walletSession === 'undefined' || !walletSession) {
+        console.warn('[WALLET] walletSession not available - SDK may not be loaded');
+        // Fallback: show modal via DOM (no SDK dependencies)
+        const overlay = document.querySelector('.wallet-modal-overlay, .wallet-widget-modal, #walletModal');
+        if (overlay) {
+            overlay.classList.add('active');
+            overlay.style.display = 'flex';
+        } else {
+            alert('⚠️ Wallet system is temporarily unavailable. Please refresh the page.');
+        }
+        return;
+    }
+
     const addr = walletSession.getAddress();
     const pin = walletSession.getPin();
 
@@ -5050,7 +5064,8 @@ function openHeaderWalletModal(){
     }
 }
 
-window.openHeaderWalletModal = openHeaderWalletModal;
+// PR-XXX: Expose robust global openHeaderWalletModal with fallback
+window.openHeaderWalletModal = window.openHeaderWalletModal || openHeaderWalletModal;
 
 function closeHeaderWalletModal(){
     setWalletOpen(false);

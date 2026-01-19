@@ -6744,11 +6744,15 @@ def api_health():
     """
     Lightweight health check with chain and version info.
     FIX 1: Extended with build info for deployment verification.
+    FIX 2: Removed expensive chain loading - health checks must be <100ms.
+
+    Railway/Vercel health checks run every 2-3 seconds. Loading CHAIN_FILE
+    (10MB+) on every check causes severe performance degradation and timeouts.
+    Clients needing chain height should use /api/network_live or /api/stats.
     """
-    try:
-        height = _current_chain_height()
-    except Exception:
-        height = 0
+    # CRITICAL: Do NOT load chain file in health check - causes timeouts
+    # height = _current_chain_height()  # REMOVED - too expensive
+    height = "N/A"  # Health check doesn't need exact height
 
     # CRITICAL FIX #3: Get git commit from env vars (Railway, Vercel, etc) or git command
     git_commit = "unknown"

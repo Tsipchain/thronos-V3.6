@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil
 import sys
+import atexit
+import signal
 from collections import Counter
 from decimal import Decimal, ROUND_DOWN
 import qrcode
@@ -81,6 +83,25 @@ except ImportError:
         return (name + ext) if name else "unnamed" + ext
 
 from apscheduler.schedulers.background import BackgroundScheduler
+
+# Global list to track all scheduler instances for proper shutdown
+_active_schedulers = []
+
+def _shutdown_all_schedulers():
+    """Gracefully shutdown all active schedulers to prevent job submission errors during worker exit."""
+    for scheduler in _active_schedulers:
+        try:
+            if scheduler and scheduler.running:
+                scheduler.shutdown(wait=False)
+                print(f"[SCHEDULER] Scheduler shut down gracefully")
+        except Exception as e:
+            print(f"[SCHEDULER] Error shutting down scheduler: {e}")
+    _active_schedulers.clear()
+
+# Register shutdown handlers to prevent "RuntimeError: cannot schedule new futures after shutdown"
+atexit.register(_shutdown_all_schedulers)
+signal.signal(signal.SIGTERM, lambda sig, frame: _shutdown_all_schedulers())
+signal.signal(signal.SIGINT, lambda sig, frame: _shutdown_all_schedulers())
 
 import os
 import json
@@ -1280,6 +1301,7 @@ def _start_model_scheduler():
     scheduler = BackgroundScheduler()
     scheduler.add_job(_job, "interval", seconds=MODEL_REFRESH_INTERVAL_SECONDS, id="model_refresh", replace_existing=True)
     scheduler.start()
+    _active_schedulers.append(scheduler)
     app.logger.info("[AI] Background scheduler started for model catalog refresh")
 
 
@@ -13156,6 +13178,7 @@ if is_ai_core() and SCHEDULER_ENABLED:
     scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30)
     scheduler.add_job(distribute_ai_rewards_step, "interval", minutes=int(os.getenv("AI_POOL_DISTRIBUTION_INTERVAL", "30")))
     scheduler.start()
+    _active_schedulers.append(scheduler)
     print(f"[SCHEDULER] AI Core jobs started (knowledge watcher, rewards distribution)")
 elif NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
     print(f"[SCHEDULER] Starting as MASTER node (SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")
@@ -13166,6 +13189,7 @@ elif NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
     scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30)
     scheduler.add_job(distribute_ai_rewards_step, "interval", minutes=int(os.getenv("AI_POOL_DISTRIBUTION_INTERVAL", "30")))
     scheduler.start()
+    _active_schedulers.append(scheduler)
     print(f"[SCHEDULER] All master jobs started (including AI rewards distribution)")
 elif NODE_ROLE == "replica" and SCHEDULER_ENABLED and ENABLE_CHAIN:
     print(f"[SCHEDULER] Starting as REPLICA node with worker jobs (SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")
@@ -13181,6 +13205,7 @@ elif NODE_ROLE == "replica" and SCHEDULER_ENABLED and ENABLE_CHAIN:
         print(f"[SCHEDULER] BTC pledge watcher not available: {e}")
 
     scheduler.start()
+    _active_schedulers.append(scheduler)
     print(f"[SCHEDULER] Replica scheduler started with worker jobs")
 else:
     print(f"[SCHEDULER] Scheduler disabled (NODE_ROLE={NODE_ROLE}, SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")

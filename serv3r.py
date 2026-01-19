@@ -4,6 +4,8 @@ import time
 import hashlib
 import logging
 import requests
+import atexit
+import signal
 
 from flask import (
     Flask, request, jsonify,
@@ -15,6 +17,25 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
 from apscheduler.schedulers.background import BackgroundScheduler
+
+# Global list to track scheduler instances for proper shutdown
+_active_schedulers = []
+
+def _shutdown_all_schedulers():
+    """Gracefully shutdown all active schedulers to prevent job submission errors during worker exit."""
+    for scheduler in _active_schedulers:
+        try:
+            if scheduler and scheduler.running:
+                scheduler.shutdown(wait=False)
+                print(f"[SCHEDULER] Scheduler shut down gracefully")
+        except Exception as e:
+            print(f"[SCHEDULER] Error shutting down scheduler: {e}")
+    _active_schedulers.clear()
+
+# Register shutdown handlers to prevent "RuntimeError: cannot schedule new futures after shutdown"
+atexit.register(_shutdown_all_schedulers)
+signal.signal(signal.SIGTERM, lambda sig, frame: _shutdown_all_schedulers())
+signal.signal(signal.SIGINT, lambda sig, frame: _shutdown_all_schedulers())
 
 # ─── CONFIG ───
 app = Flask(__name__)
@@ -249,6 +270,7 @@ def mint_first_blocks():
 scheduler = BackgroundScheduler(daemon=True)
 scheduler.add_job(mint_first_blocks, 'interval', minutes=1)
 scheduler.start()
+_active_schedulers.append(scheduler)
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 3333))

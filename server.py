@@ -6769,27 +6769,27 @@ def api_health():
             break
 
     # Fallback: try git command (for local dev)
-    if git_commit == "unknown":
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["git", "rev-parse", "--short", "HEAD"],
-                capture_output=True,
-                text=True,
-                timeout=2,
-                cwd=os.path.dirname(os.path.abspath(__file__))
-            )
-            if result.returncode == 0:
-                git_commit = result.stdout.strip()
-        except Exception:
-            pass
+    # DISABLED: Git subprocess can hang on Railway/Vercel causing health check timeouts
+    # if git_commit == "unknown":
+    #     try:
+    #         import subprocess
+    #         result = subprocess.run(
+    #             ["git", "rev-parse", "--short", "HEAD"],
+    #             capture_output=True,
+    #             text=True,
+    #             timeout=2,
+    #             cwd=os.path.dirname(os.path.abspath(__file__))
+    #         )
+    #         if result.returncode == 0:
+    #             git_commit = result.stdout.strip()
+    #     except Exception:
+    #         pass
 
     # FIX 1: Build metadata
-    build_time = os.path.getmtime(__file__) if os.path.exists(__file__) else None
-    # Build ID: unique identifier combining git commit and build timestamp
-    build_id = f"{git_commit}"
-    if build_time:
-        build_id += f"-{int(build_time)}"
+    # DISABLED: File system operations can be slow on networked filesystems
+    # build_time = os.path.getmtime(__file__) if os.path.exists(__file__) else None
+    build_time = None  # Disabled to keep health check fast
+    build_id = f"{git_commit}"  # No timestamp to avoid filesystem access
 
     build_info = {
         "git_commit": git_commit,

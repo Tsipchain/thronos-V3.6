@@ -1081,16 +1081,27 @@
             const widget = document.getElementById('walletWidget');
 
             try {
-                const response = await fetch(`/api/balances?address=${encodeURIComponent(walletAddress)}&show_zero=${showZero}`);
+                // Add 15-second timeout to prevent infinite loading
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+                const response = await fetch(`/api/balances?address=${encodeURIComponent(walletAddress)}&show_zero=${showZero}`, {
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+
                 if (!response.ok) throw new Error('Failed to load wallet data');
 
                 const data = await response.json();
                 renderWallet(data);
             } catch (error) {
+                const errorMsg = error.name === 'AbortError'
+                    ? 'Request timed out. Server may be overloaded. Please try again.'
+                    : error.message;
                 widget.innerHTML = `
                     <div class="error">
                         <strong>${t('errorLoading')}</strong>
-                        <p>${error.message}</p>
+                        <p>${errorMsg}</p>
                         <button class="refresh-btn" onclick="loadWalletData()">${t('retry')}</button>
                     </div>
                 `;
@@ -1549,7 +1560,15 @@
             resetHistoryState();
 
             try {
-                const res = await fetch(`/wallet_data/${walletAddress}`);
+                // Add 15-second timeout to prevent infinite loading
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+                const res = await fetch(`/wallet_data/${walletAddress}`, {
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+
                 if (!res.ok) throw new Error('Failed to load history');
                 const data = await res.json();
 
@@ -1557,7 +1576,10 @@
                 renderHistoryContent();
             } catch (e) {
                 console.error('Error loading history:', e);
-                document.getElementById('historyContent').innerHTML = '<p style="color: #ff4444;">Error loading transaction history</p>';
+                const errorMsg = e.name === 'AbortError'
+                    ? 'Request timed out. Please try again.'
+                    : 'Error loading transaction history';
+                document.getElementById('historyContent').innerHTML = `<p style="color: #ff4444;">${errorMsg}</p>`;
             }
         }
 

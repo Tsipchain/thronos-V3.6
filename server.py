@@ -33,7 +33,6 @@ from __future__ import annotations
 import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil
 import sys
 import atexit
-import signal
 from collections import Counter
 from decimal import Decimal, ROUND_DOWN
 import qrcode
@@ -99,9 +98,8 @@ def _shutdown_all_schedulers():
     _active_schedulers.clear()
 
 # Register shutdown handlers to prevent "RuntimeError: cannot schedule new futures after shutdown"
+# Note: Only use atexit, not signal handlers, to avoid conflicts with Gunicorn worker management
 atexit.register(_shutdown_all_schedulers)
-signal.signal(signal.SIGTERM, lambda sig, frame: _shutdown_all_schedulers())
-signal.signal(signal.SIGINT, lambda sig, frame: _shutdown_all_schedulers())
 
 import os
 import json

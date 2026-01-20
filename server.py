@@ -3006,7 +3006,13 @@ def get_wallet_balances(wallet: str):
 
 def get_wallet_balances_cached(wallet: str) -> dict:
     now = time.time()
-    tip_hash = (get_last_block_snapshot().get("block_hash") or "").strip()
+    # Try to get tip_hash but don't block if it takes too long
+    try:
+        snapshot = LAST_BLOCK_SNAPSHOT if LAST_BLOCK_SNAPSHOT else load_json(LAST_BLOCK_FILE, {})
+        tip_hash = (snapshot.get("block_hash") or "").strip() if isinstance(snapshot, dict) else ""
+    except Exception:
+        tip_hash = ""  # Fallback: cache without block validation
+
     entry = BALANCE_CACHE.get(wallet)
     if (
         entry
@@ -9452,7 +9458,13 @@ def wallet_data(thr_addr):
     """QUEST A+B: Enhanced wallet data with categorized history (cached)"""
     # Check cache first
     now = time.time()
-    tip_hash = (get_last_block_snapshot().get("block_hash") or "").strip()
+    # Try to get tip_hash but don't block if it takes too long
+    try:
+        snapshot = LAST_BLOCK_SNAPSHOT if LAST_BLOCK_SNAPSHOT else load_json(LAST_BLOCK_FILE, {})
+        tip_hash = (snapshot.get("block_hash") or "").strip() if isinstance(snapshot, dict) else ""
+    except Exception:
+        tip_hash = ""  # Fallback: cache without block validation
+
     cached = WALLET_DATA_CACHE.get(thr_addr)
 
     if (cached

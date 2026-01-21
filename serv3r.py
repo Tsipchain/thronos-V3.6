@@ -5,7 +5,6 @@ import hashlib
 import logging
 import requests
 import atexit
-import signal
 
 from flask import (
     Flask, request, jsonify,
@@ -32,10 +31,9 @@ def _shutdown_all_schedulers():
             print(f"[SCHEDULER] Error shutting down scheduler: {e}")
     _active_schedulers.clear()
 
-# Register shutdown handlers to prevent "RuntimeError: cannot schedule new futures after shutdown"
+# Register cleanup on normal Python exit (but not on signals - Gunicorn handles those)
+# This prevents "RuntimeError: cannot schedule new futures after shutdown" during graceful exits
 atexit.register(_shutdown_all_schedulers)
-signal.signal(signal.SIGTERM, lambda sig, frame: _shutdown_all_schedulers())
-signal.signal(signal.SIGINT, lambda sig, frame: _shutdown_all_schedulers())
 
 # ─── CONFIG ───
 app = Flask(__name__)

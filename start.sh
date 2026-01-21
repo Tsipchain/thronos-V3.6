@@ -31,8 +31,8 @@ else
 fi
 
 echo "=== Starting Flask app on HTTP port ${PORT} ==="
-# server.py is configured to read PORT env var
-python3 server.py
+# Use Gunicorn with proper lifecycle hooks for graceful scheduler shutdown
+gunicorn --config gunicorn_config.py server:app
 
 echo "=== Shutting down background services ==="
 if [[ -n "$STRATUM_PID" && -n "$MINER_PID" ]]; then

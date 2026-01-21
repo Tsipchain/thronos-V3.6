@@ -460,6 +460,10 @@ LAST_HASH_CACHE: dict = {"ts": 0.0, "data": None}
 MEMPOOL_COUNT_CACHE: dict = {"ts": 0.0, "count": 0}
 BALANCE_CACHE: dict = {}
 BALANCE_CACHE_TTL = float(os.getenv("BALANCE_CACHE_TTL_SECONDS", "10"))
+TOKEN_PRICE_CACHE: dict = {}  # {symbol: {"ts": timestamp, "price": float, "pools_hash": str}}
+TOKEN_PRICE_CACHE_TTL = float(os.getenv("TOKEN_PRICE_CACHE_TTL_SECONDS", "30"))  # Cache prices for 30 seconds
+WALLET_DATA_CACHE: dict = {}  # {wallet_addr: {"ts": timestamp, "data": dict, "tip_hash": str}}
+WALLET_DATA_CACHE_TTL = float(os.getenv("WALLET_DATA_CACHE_TTL_SECONDS", "10"))  # Cache wallet data for 10 seconds
 LAST_BLOCK_SNAPSHOT: dict = {}
 MINING_LAST_HASH_CACHE: dict = {"ts": 0.0, "data": None}
 
@@ -3002,7 +3006,13 @@ def get_wallet_balances(wallet: str):
 
 def get_wallet_balances_cached(wallet: str) -> dict:
     now = time.time()
-    tip_hash = (get_last_block_snapshot().get("block_hash") or "").strip()
+    # Try to get tip_hash but don't block if it takes too long
+    try:
+        snapshot = LAST_BLOCK_SNAPSHOT if LAST_BLOCK_SNAPSHOT else load_json(LAST_BLOCK_FILE, {})
+        tip_hash = (snapshot.get("block_hash") or "").strip() if isinstance(snapshot, dict) else ""
+    except Exception:
+        tip_hash = ""  # Fallback: cache without block validation
+
     entry = BALANCE_CACHE.get(wallet)
     if (
         entry
@@ -9445,17 +9455,43 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
 
 @app.route("/wallet_data/<thr_addr>")
 def wallet_data(thr_addr):
-    """QUEST A+B: Enhanced wallet data with categorized history"""
+    """QUEST A+B: Enhanced wallet data with categorized history (cached)"""
+    # Check cache first
+    now = time.time()
+    # Try to get tip_hash but don't block if it takes too long
+    try:
+        snapshot = LAST_BLOCK_SNAPSHOT if LAST_BLOCK_SNAPSHOT else load_json(LAST_BLOCK_FILE, {})
+        tip_hash = (snapshot.get("block_hash") or "").strip() if isinstance(snapshot, dict) else ""
+    except Exception:
+        tip_hash = ""  # Fallback: cache without block validation
+
+    cached = WALLET_DATA_CACHE.get(thr_addr)
+
+    if (cached
+        and cached.get("tip_hash") == tip_hash
+        and now - cached.get("ts", 0) < WALLET_DATA_CACHE_TTL):
+        return jsonify(**cached["data"]), 200
+
+    # Cache miss - compute fresh data
     balances = get_wallet_balances(thr_addr)
     history = build_wallet_history(thr_addr)
 
-    return jsonify(
-        balance=balances["thr"],
-        wbtc_balance=balances["wbtc"],
-        l2e_balance=balances["l2e"],
-        tokens=balances["tokens"],  # QUEST A: Include all tokens
-        transactions=history,
-    ), 200
+    data = {
+        "balance": balances["thr"],
+        "wbtc_balance": balances["wbtc"],
+        "l2e_balance": balances["l2e"],
+        "tokens": balances["tokens"],  # QUEST A: Include all tokens
+        "transactions": history,
+    }
+
+    # Store in cache
+    WALLET_DATA_CACHE[thr_addr] = {
+        "ts": now,
+        "data": data,
+        "tip_hash": tip_hash
+    }
+
+    return jsonify(**data), 200
 
 
 @app.route("/api/history", methods=["GET"])
@@ -9566,9 +9602,17 @@ def get_token_price_in_thr(symbol):
     Uses BFS to find shortest path from token to THR through pools.
     If direct pool exists, uses it (1 hop).
     Otherwise, routes through intermediary tokens (e.g., LOUMIDIS -> JAM -> THR).
+
+    OPTIMIZATION: Caches prices for 30 seconds to avoid repeated BFS calculations.
     """
     if symbol == "THR":
         return 1.0
+
+    # Check cache first
+    now = time.time()
+    cached = TOKEN_PRICE_CACHE.get(symbol)
+    if cached and now - cached.get("ts", 0) < TOKEN_PRICE_CACHE_TTL:
+        return cached.get("price")
 
     pools = load_pools()
 
@@ -9627,6 +9671,8 @@ def get_token_price_in_thr(symbol):
                 if new_hops <= 3:
                     queue.append((neighbor, new_price, new_hops, new_liquidity))
 
+    # Cache the result (even if None) to avoid repeated failed searches
+    TOKEN_PRICE_CACHE[symbol] = {"ts": time.time(), "price": best_price}
     return best_price
 
 @app.route("/api/wallet/tokens/<thr_addr>")

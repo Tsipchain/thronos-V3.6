@@ -6775,14 +6775,14 @@ def api_health():
     Lightweight health check with chain and version info.
     FIX 1: Extended with build info for deployment verification.
     FIX 2: Removed expensive chain loading - health checks must be <100ms.
+    FIX 3: Use in-memory LAST_BLOCK_SNAPSHOT for height (no disk I/O).
 
     Railway/Vercel health checks run every 2-3 seconds. Loading CHAIN_FILE
     (10MB+) on every check causes severe performance degradation and timeouts.
-    Clients needing chain height should use /api/network_live or /api/stats.
     """
-    # CRITICAL: Do NOT load chain file in health check - causes timeouts
-    # height = _current_chain_height()  # REMOVED - too expensive
-    height = "N/A"  # Health check doesn't need exact height
+    # Use in-memory cached last block snapshot (no disk I/O, <1ms)
+    last_block = get_last_block_snapshot()
+    height = last_block.get("height", "N/A")
 
     # CRITICAL FIX #3: Get git commit from env vars (Railway, Vercel, etc) or git command
     git_commit = "unknown"

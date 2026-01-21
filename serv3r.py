@@ -31,8 +31,8 @@ def _shutdown_all_schedulers():
             print(f"[SCHEDULER] Error shutting down scheduler: {e}")
     _active_schedulers.clear()
 
-# Register shutdown handlers to prevent "RuntimeError: cannot schedule new futures after shutdown"
-# Note: Only use atexit, not signal handlers, to avoid conflicts with Gunicorn worker management
+# Register cleanup on normal Python exit (but not on signals - Gunicorn handles those)
+# This prevents "RuntimeError: cannot schedule new futures after shutdown" during graceful exits
 atexit.register(_shutdown_all_schedulers)
 
 # ─── CONFIG ───

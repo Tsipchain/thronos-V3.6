@@ -234,7 +234,8 @@ async function pulseNetworkKpis(){
     console.error('Network KPIs update failed:', e);
   }
 }
-setInterval(pulseNetworkKpis, 5000);
+let networkKpiInterval = null;
+networkKpiInterval = setInterval(pulseNetworkKpis, 5000);
 pulseNetworkKpis();
 
 async function loadBalance() {
@@ -311,6 +312,13 @@ async function loadBalance() {
     $('walletBox').textContent = (lang==='el'?'Σφάλμα φόρτωσης πορτοφολιού: ':'Error loading wallet: ')+e;
   }
 }
+
+window.addEventListener('beforeunload', () => {
+  if (networkKpiInterval) {
+    clearInterval(networkKpiInterval);
+    networkKpiInterval = null;
+  }
+});
 
 /* State for pending follow-up */
 let lastSentTxId = null;

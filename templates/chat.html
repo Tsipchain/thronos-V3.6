@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <title>Thronos Quantum Chat</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <script src="{{ url_for('static', filename='wallet_session.js') }}"></script>
+  <script src="https://thrchain.vercel.app/static/wallet_session.js"></script>
   <style>
     :root {
       --bg: #020712;
@@ -2215,11 +2215,20 @@
       await loadWallet();
       await loadSessions();
       loadTelemetry();
-      setInterval(loadTelemetry, 15000);
+      telemetryInterval = setInterval(loadTelemetry, 15000);
       setSending(true);
     }
 
+    let telemetryInterval = null;
+
     document.addEventListener("DOMContentLoaded", init);
+
+    window.addEventListener("beforeunload", () => {
+      if (telemetryInterval) {
+        clearInterval(telemetryInterval);
+        telemetryInterval = null;
+      }
+    });
   </script>
 </body>
 </html>

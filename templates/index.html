@@ -1199,17 +1199,31 @@
         });
     };
 
+    let networkStatsInterval = null;
+    let recentActivityInterval = null;
+
     // ─── Initialize ───────────────────────────────────────────────
     loadNetworkStats();
     loadRecentActivity();
     loadVotingPolls();
 
-    setInterval(loadNetworkStats, 30000);
-    setInterval(loadRecentActivity, 60000);
+    networkStatsInterval = setInterval(loadNetworkStats, 30000);
+    recentActivityInterval = setInterval(loadRecentActivity, 60000);
 
     window.addEventListener("langChanged", () => {
         loadRecentActivity();
         loadVotingPolls();
+    });
+
+    window.addEventListener("beforeunload", () => {
+        if (networkStatsInterval) {
+            clearInterval(networkStatsInterval);
+            networkStatsInterval = null;
+        }
+        if (recentActivityInterval) {
+            clearInterval(recentActivityInterval);
+            recentActivityInterval = null;
+        }
     });
 })();
 

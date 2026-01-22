@@ -887,7 +887,8 @@ el('#btnRefreshTxs')?.addEventListener('click', reloadTxs);
 // All blocks/transfers pagination is now managed by static/viewer.js
 
 // live refresh ticker
-setInterval(()=>{
+let liveRefreshInterval = null;
+liveRefreshInterval = setInterval(()=>{
   loadLive();
   el('#liveClock').textContent = new Date().toLocaleTimeString();
 }, 5000);
@@ -898,6 +899,13 @@ reloadMempool();
 
 // highlight recent on first paint
 setTimeout(()=>renderBlocks(CURRENT_BLOCKS), 100);
+
+window.addEventListener('beforeunload', () => {
+  if (liveRefreshInterval) {
+    clearInterval(liveRefreshInterval);
+    liveRefreshInterval = null;
+  }
+});
 
 /* polite defaults for older servers with no data passed */
 if(!Array.isArray(CURRENT_BLOCKS)) CURRENT_BLOCKS=[];

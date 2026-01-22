@@ -283,11 +283,19 @@
     }
 
     // Energy recharge
-    setInterval(() => {
+    let energyRechargeInterval = null;
+    energyRechargeInterval = setInterval(() => {
         if (energy < 100) {
             energy += 1;
             updateHud();
         }
     }, 1000);
+
+    window.addEventListener('beforeunload', () => {
+        if (energyRechargeInterval) {
+            clearInterval(energyRechargeInterval);
+            energyRechargeInterval = null;
+        }
+    });
 </script>
 {% endblock %}

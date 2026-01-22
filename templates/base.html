@@ -7,7 +7,7 @@
   <meta name="cgminer-kit-url" content="{{ CGMINER_KIT_URL if CGMINER_KIT_URL is defined else '' }}">
 <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/thronos-token.png') }}">
   <link rel="shortcut icon" type="image/png" href="{{ url_for('static', filename='img/thronos-token.png') }}">
-  <script src="{{ url_for('static', filename='wallet_session.js') }}"></script>
+  <script src="https://thrchain.vercel.app/static/wallet_session.js"></script>
   <style>
     /* Global Styles */
     body {
@@ -2532,6 +2532,7 @@ function switchWalletTab(tabName) {
 
 // PR-5: Load and render music tab
 let musicModuleInitialized = false;
+let musicModuleCheckInterval = null;
 
 async function loadMusicTab() {
     const musicContent = document.getElementById('musicTabContent');
@@ -2566,13 +2567,18 @@ async function loadMusicTab() {
 
             // Wait for MusicModule to load (retry up to 10 times)
             let retries = 0;
-            const checkModule = setInterval(() => {
+            if (musicModuleCheckInterval) {
+                clearInterval(musicModuleCheckInterval);
+            }
+            musicModuleCheckInterval = setInterval(() => {
                 if (typeof MusicModule !== 'undefined') {
-                    clearInterval(checkModule);
+                    clearInterval(musicModuleCheckInterval);
+                    musicModuleCheckInterval = null;
                     musicModuleInitialized = true;
                     loadMusicTab(); // Retry
                 } else if (++retries >= 10) {
-                    clearInterval(checkModule);
+                    clearInterval(musicModuleCheckInterval);
+                    musicModuleCheckInterval = null;
                     musicContent.innerHTML = '<div class="music-empty">Music module failed to load. Please refresh.</div>';
                 }
             }, 100);
@@ -3963,6 +3969,9 @@ function generateClientTxId() {
 // Transaction status polling
 let txPollInterval = null;
 let historyPollInterval = null;
+let tokenPriceInterval = null;
+let walletBalanceInterval = null;
+let chainTokensInterval = null;
 
 async function refreshHistoryFromApi() {
     const addr = walletSession.getAddress();
@@ -4457,10 +4466,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Update token prices every 30 seconds
     updateTokenPrices();  // Initial update
-    setInterval(updateTokenPrices, 30000);
+    if (tokenPriceInterval) {
+        clearInterval(tokenPriceInterval);
+    }
+    tokenPriceInterval = setInterval(updateTokenPrices, 30000);
 
     // PR-5a: Refresh wallet balances every 60 seconds if wallet is open, page is visible, and no modals are open
-    setInterval(() => {
+    if (walletBalanceInterval) {
+        clearInterval(walletBalanceInterval);
+    }
+    walletBalanceInterval = setInterval(() => {
         if (!document.hidden && walletSession.isBound() && isWalletOpen() && !anyModalOpen()) {
             loadWalletBalances(true);
         }
@@ -4920,7 +4935,10 @@ function downloadCGMinerKit() {
     document.addEventListener('DOMContentLoaded', loadChainTokensWidget);
 
     // Refresh every 60 seconds
-    setInterval(loadChainTokensWidget, 60000);
+    if (chainTokensInterval) {
+        clearInterval(chainTokensInterval);
+    }
+    chainTokensInterval = setInterval(loadChainTokensWidget, 60000);
 })();
 
 </script>
@@ -4952,9 +4970,9 @@ function downloadCGMinerKit() {
 </script>
 
 <script src="{{ url_for('static', filename='fetch_utils.js') }}?v={{ build_id }}"></script>
-<script src="{{ url_for('static', filename='wallet_sdk.js') }}?v={{ build_id }}"></script>
-<script src="{{ url_for('static', filename='wallet_auth.js') }}?v={{ build_id }}"></script>
-<script src="{{ url_for('static', filename='music_module.js') }}?v={{ build_id }}"></script>
+<script src="https://thrchain.vercel.app/static/wallet_sdk.js"></script>
+<script src="https://thrchain.vercel.app/static/wallet_auth.js"></script>
+<script src="https://thrchain.vercel.app/static/music_module.js"></script>
 
 <script>
 // PR-5a: Init guard to prevent double initialization
@@ -5729,11 +5747,44 @@ window.GlobalMusicPlayer = (function() {
         removeFromQueue,
         show,
         close,
+        stopPositionSaving,
         getCurrentTrack: () => queue[currentIndex],
         getQueue: () => queue,
         isPlaying: () => isPlaying
     };
 })();
+</script>
+
+<script>
+window.addEventListener('beforeunload', () => {
+    if (musicModuleCheckInterval) {
+        clearInterval(musicModuleCheckInterval);
+        musicModuleCheckInterval = null;
+    }
+    if (historyPollInterval) {
+        clearInterval(historyPollInterval);
+        historyPollInterval = null;
+    }
+    if (txPollInterval) {
+        clearInterval(txPollInterval);
+        txPollInterval = null;
+    }
+    if (tokenPriceInterval) {
+        clearInterval(tokenPriceInterval);
+        tokenPriceInterval = null;
+    }
+    if (walletBalanceInterval) {
+        clearInterval(walletBalanceInterval);
+        walletBalanceInterval = null;
+    }
+    if (chainTokensInterval) {
+        clearInterval(chainTokensInterval);
+        chainTokensInterval = null;
+    }
+    if (typeof GlobalMusicPlayer !== 'undefined' && GlobalMusicPlayer.stopPositionSaving) {
+        GlobalMusicPlayer.stopPositionSaving();
+    }
+});
 </script>
 
 <div id="footer-sentinel" style="height:1px;"></div>

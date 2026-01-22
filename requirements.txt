@@ -2,6 +2,7 @@ Flask>=2.2
 gunicorn>=21.2
 APScheduler>=3.10
 requests>=2.31
+redis>=5.0
 beautifulsoup4>=4.12
 lxml>=4.9
 reportlab>=4.0

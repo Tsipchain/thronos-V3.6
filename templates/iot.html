@@ -1408,12 +1408,17 @@ function updateWater() {
 }
 
 // Init
+let waterInterval = null;
+
 document.addEventListener('DOMContentLoaded', () => {
     applyTranslations();
     renderParking();
     applyTranslations();
     updateWater();
-    setInterval(updateWater, 5000);
+    if (waterInterval) {
+        clearInterval(waterInterval);
+    }
+    waterInterval = setInterval(updateWater, 5000);
 });
 
 // --- Music/Telemetry Modal Functions ---
@@ -1754,5 +1759,16 @@ function requestAutopilot() {
         applyTranslations();
     }
 }
+
+window.addEventListener('beforeunload', () => {
+    if (waterInterval) {
+        clearInterval(waterInterval);
+        waterInterval = null;
+    }
+    if (telemetryInterval) {
+        clearInterval(telemetryInterval);
+        telemetryInterval = null;
+    }
+});
 </script>
 {% endblock %}

@@ -342,7 +342,15 @@
     loadWithdrawals();
 
     // Refresh every 30 seconds
-    setInterval(loadWithdrawals, 30000);
+    let withdrawalsInterval = null;
+    withdrawalsInterval = setInterval(loadWithdrawals, 30000);
+
+    window.addEventListener('beforeunload', () => {
+      if (withdrawalsInterval) {
+        clearInterval(withdrawalsInterval);
+        withdrawalsInterval = null;
+      }
+    });
   </script>
 </body>
 </html>

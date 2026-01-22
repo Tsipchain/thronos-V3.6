@@ -578,6 +578,8 @@
     // PR-5: Load and render music tab
     let viewerMusicModuleInitialized = false;
 
+    let musicModuleCheckInterval = null;
+
     async function loadViewerMusicTab() {
         const musicContent = document.getElementById('musicTabContent');
         if (!musicContent) return;
@@ -610,12 +612,17 @@
 
                 // Wait for MusicModule to load (retry up to 10 times)
                 let retries = 0;
-                const checkModule = setInterval(() => {
+                if (musicModuleCheckInterval) {
+                    clearInterval(musicModuleCheckInterval);
+                }
+                musicModuleCheckInterval = setInterval(() => {
                     if (typeof MusicModule !== 'undefined') {
-                        clearInterval(checkModule);
+                        clearInterval(musicModuleCheckInterval);
+                        musicModuleCheckInterval = null;
                         loadViewerMusicTab(); // Retry
                     } else if (++retries >= 10) {
-                        clearInterval(checkModule);
+                        clearInterval(musicModuleCheckInterval);
+                        musicModuleCheckInterval = null;
                         musicContent.innerHTML = '<div class="wallet-card"><div class="music-empty">Music module failed to load. Please refresh.</div></div>';
                     }
                 }, 100);
@@ -764,10 +771,17 @@
 
     // Init
     document.addEventListener('DOMContentLoaded', checkConnection);
+
+    window.addEventListener('beforeunload', () => {
+        if (musicModuleCheckInterval) {
+            clearInterval(musicModuleCheckInterval);
+            musicModuleCheckInterval = null;
+        }
+    });
 </script>
 
-<script src="{{ url_for('static', filename='wallet_auth.js') }}?v={{ build_id }}"></script>
-<script src="{{ url_for('static', filename='music_module.js') }}?v={{ build_id }}"></script>
+<script src="https://thrchain.vercel.app/static/wallet_auth.js"></script>
+<script src="https://thrchain.vercel.app/static/music_module.js"></script>
 
 <script>
 // PR-5a: Verify MusicModule loaded

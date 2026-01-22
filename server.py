@@ -30,7 +30,7 @@ from __future__ import annotations
 # - Real Fiat Gateway (Stripe + Bank Withdrawals) (V5.0)
 # - Admin Withdrawal Panel (V5.1)
 
-import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil
+import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil, sqlite3
 import sys
 import atexit
 from collections import Counter
@@ -54,6 +54,7 @@ import mimetypes
 import json
 import fcntl
 import requests
+import redis
 from flask import Flask, request, jsonify, send_from_directory, render_template, url_for, send_file, Response, make_response
 
 try:
@@ -490,8 +491,8 @@ if NODE_ROLE == "replica" and not READ_ONLY:
     logger.warning("[CONFIG] Forcing READ_ONLY=1 on replica node")
     READ_ONLY = True
 
-if NODE_ROLE != "master" and SCHEDULER_ENABLED:
-    logger.warning("[CONFIG] Disabling SCHEDULER_ENABLED on non-master node")
+if NODE_ROLE not in ("master", "ai_core") and SCHEDULER_ENABLED:
+    logger.warning("[CONFIG] Disabling SCHEDULER_ENABLED on non-master/non-ai-core node")
     SCHEDULER_ENABLED = False
 
 MASTER_INTERNAL_URL = os.getenv("MASTER_NODE_URL", "http://localhost:5000")
@@ -508,6 +509,14 @@ AI_CORE_URL = os.getenv("AI_CORE_URL", "").strip()
 
 # Chain enable flag - AI core nodes don't need chain functionality
 ENABLE_CHAIN = os.getenv("ENABLE_CHAIN", "1") == "1"
+
+# Redis cache configuration (optional)
+REDIS_CACHE_ENABLED = os.getenv("REDIS_CACHE_ENABLED", "1").lower() in ("1", "true", "yes")
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+REDIS_HOST = os.getenv("REDIS_HOST", "").strip()
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "").strip()
 
 # ─── Role-based helper functions ────────────────────────────────────────────
 def is_master() -> bool:
@@ -918,6 +927,10 @@ billing.init_billing(DATA_DIR, LEDGER_FILE, CHAIN_FILE, AI_CREDITS_FILE, AI_WALL
 
 L2E_LEDGER_FILE = os.path.join(DATA_DIR, "l2e_ledger.json")
 
+# --- Ledger Storage Config ---
+LEDGER_DB_FILE = os.path.join(DATA_DIR, "ledger.sqlite3")
+USE_SQLITE_LEDGER = os.getenv("USE_SQLITE_LEDGER", "1" if NODE_ROLE == "master" else "0").lower() in ("1", "true", "yes")
+
 # Courses registry for Learn‑to‑Earn
 COURSES_FILE = os.path.join(DATA_DIR, "courses.json")
 
@@ -999,6 +1012,24 @@ else:
         if handler.formatter is None:
             handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
 scheduler_logger.propagate = False
+
+REDIS_CLIENT = None
+if REDIS_CACHE_ENABLED and (REDIS_URL or REDIS_HOST):
+    try:
+        if REDIS_URL:
+            REDIS_CLIENT = redis.Redis.from_url(REDIS_URL)
+        else:
+            REDIS_CLIENT = redis.Redis(
+                host=REDIS_HOST,
+                port=REDIS_PORT,
+                db=REDIS_DB,
+                password=REDIS_PASSWORD or None,
+            )
+        REDIS_CLIENT.ping()
+        logger.info("[REDIS] Balance cache enabled")
+    except Exception as exc:
+        REDIS_CLIENT = None
+        logger.warning(f"[REDIS] Balance cache disabled: {exc}")
 
 # Security warnings for production deployments
 if ADMIN_SECRET == "CHANGE_ME_NOW":
@@ -1284,8 +1315,8 @@ def _check_provider_health(provider: str) -> str:
 
 
 def _start_model_scheduler():
-    # PR-XXX: Only run model scheduler on master nodes
-    if not is_master():
+    # PR-XXX: Only run model scheduler on master or AI core nodes
+    if not should_sync_ai_models():
         app.logger.info(f"[AI] Skipping model scheduler on {NODE_ROLE} node")
         return
 
@@ -1308,14 +1339,112 @@ def _start_model_scheduler():
 
 
 # ─── HELPERS ───────────────────────────────────────
-def load_json(path, default):
+def _load_json_file(path, default):
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return default
 
+
+def _get_ledger_db_connection():
+    conn = sqlite3.connect(LEDGER_DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _ledger_type_for_path(path: str) -> str | None:
+    if path == LEDGER_FILE:
+        return "thr"
+    if path == WBTC_LEDGER_FILE:
+        return "wbtc"
+    if path == L2E_LEDGER_FILE:
+        return "l2e"
+    return None
+
+
+def _load_ledger_from_sqlite(ledger_type: str) -> dict:
+    if not USE_SQLITE_LEDGER:
+        return {}
+    with _get_ledger_db_connection() as conn:
+        rows = conn.execute(
+            "SELECT address, balance FROM balances WHERE ledger_type = ?",
+            (ledger_type,),
+        ).fetchall()
+    return {row["address"]: row["balance"] for row in rows}
+
+
+def _write_ledger_to_sqlite(ledger_type: str, ledger: dict) -> None:
+    if not USE_SQLITE_LEDGER:
+        return
+    now_ts = int(time.time())
+    entries = [
+        (ledger_type, address, float(balance), now_ts)
+        for address, balance in ledger.items()
+        if address
+    ]
+    if not entries:
+        return
+    with _get_ledger_db_connection() as conn:
+        conn.executemany(
+            """
+            INSERT INTO balances (ledger_type, address, balance, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(ledger_type, address)
+            DO UPDATE SET balance = excluded.balance, updated_at = excluded.updated_at
+            """,
+            entries,
+        )
+
+
+def _init_ledger_db():
+    if not USE_SQLITE_LEDGER:
+        return
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with _get_ledger_db_connection() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS balances (
+                ledger_type TEXT NOT NULL,
+                address TEXT NOT NULL,
+                balance REAL NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (ledger_type, address)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_balances_address ON balances(address)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_balances_ledger_type ON balances(ledger_type)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_balances_updated_at ON balances(updated_at)")
+
+    with _get_ledger_db_connection() as conn:
+        row = conn.execute("SELECT COUNT(1) AS count FROM balances").fetchone()
+        count = row["count"] if row else 0
+
+    if count == 0:
+        seeds = {
+            "thr": _load_json_file(LEDGER_FILE, {}),
+            "wbtc": _load_json_file(WBTC_LEDGER_FILE, {}),
+            "l2e": _load_json_file(L2E_LEDGER_FILE, {}),
+        }
+        for ledger_type, ledger in seeds.items():
+            if ledger:
+                _write_ledger_to_sqlite(ledger_type, ledger)
+
+
+def load_json(path, default):
+    ledger_type = _ledger_type_for_path(path)
+    if ledger_type:
+        ledger_data = _load_ledger_from_sqlite(ledger_type)
+        if ledger_data or USE_SQLITE_LEDGER:
+            return ledger_data
+    return _load_json_file(path, default)
+
+
 def save_json(path, data):
+    ledger_type = _ledger_type_for_path(path)
+    if ledger_type:
+        _write_ledger_to_sqlite(ledger_type, data)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     dir_name = os.path.dirname(path)
     base_name = os.path.basename(path)
@@ -1350,6 +1479,9 @@ def atomic_write_json(path: str, data) -> None:
                 os.remove(tmp_path)
             except Exception:
                 pass
+
+
+_init_ledger_db()
 
 
 # ─── Whitelist Wallet System ───────────────────────────────────────────────────
@@ -2869,14 +3001,33 @@ def get_all_tokens():
     return catalog
 
 
-def get_wallet_balances(wallet: str):
-    ledger = load_json(LEDGER_FILE, {})
-    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
-    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
+def get_balance_from_store(wallet: str, ledger_type: str, default: float = 0.0) -> float:
+    if not wallet:
+        return default
+    if USE_SQLITE_LEDGER:
+        with _get_ledger_db_connection() as conn:
+            row = conn.execute(
+                "SELECT balance FROM balances WHERE ledger_type = ? AND address = ?",
+                (ledger_type, wallet),
+            ).fetchone()
+        if row:
+            return float(row["balance"])
+        return default
+    ledger_path = {
+        "thr": LEDGER_FILE,
+        "wbtc": WBTC_LEDGER_FILE,
+        "l2e": L2E_LEDGER_FILE,
+    }.get(ledger_type)
+    if not ledger_path:
+        return default
+    ledger = load_json(ledger_path, {})
+    return float(ledger.get(wallet, default))
 
-    thr_balance = round(float(ledger.get(wallet, 0.0)), 6)
-    wbtc_balance = round(float(wbtc_ledger.get(wallet, 0.0)), 8)
-    l2e_balance = round(float(l2e_ledger.get(wallet, 0.0)), 6)
+
+def get_wallet_balances(wallet: str):
+    thr_balance = round(get_balance_from_store(wallet, "thr", 0.0), 6)
+    wbtc_balance = round(get_balance_from_store(wallet, "wbtc", 0.0), 8)
+    l2e_balance = round(get_balance_from_store(wallet, "l2e", 0.0), 6)
 
     custom_token_balances = load_token_balances()
     prices_cache = {}
@@ -3004,6 +3155,35 @@ def get_wallet_balances(wallet: str):
     }
 
 
+def _balance_cache_key(wallet: str) -> str:
+    return f"balances:{wallet}"
+
+
+def _get_cached_balances_from_redis(wallet: str, tip_hash: str) -> dict | None:
+    if not REDIS_CLIENT:
+        return None
+    try:
+        raw = REDIS_CLIENT.get(_balance_cache_key(wallet))
+        if not raw:
+            return None
+        payload = json.loads(raw)
+        if payload.get("tip_hash") != tip_hash:
+            return None
+        return payload.get("data")
+    except Exception:
+        return None
+
+
+def _set_cached_balances_in_redis(wallet: str, tip_hash: str, data: dict) -> None:
+    if not REDIS_CLIENT:
+        return
+    try:
+        payload = json.dumps({"tip_hash": tip_hash, "data": data})
+        REDIS_CLIENT.setex(_balance_cache_key(wallet), int(BALANCE_CACHE_TTL), payload)
+    except Exception:
+        return
+
+
 def get_wallet_balances_cached(wallet: str) -> dict:
     now = time.time()
     # Try to get tip_hash but don't block if it takes too long
@@ -3012,6 +3192,10 @@ def get_wallet_balances_cached(wallet: str) -> dict:
         tip_hash = (snapshot.get("block_hash") or "").strip() if isinstance(snapshot, dict) else ""
     except Exception:
         tip_hash = ""  # Fallback: cache without block validation
+
+    redis_payload = _get_cached_balances_from_redis(wallet, tip_hash)
+    if redis_payload:
+        return redis_payload
 
     entry = BALANCE_CACHE.get(wallet)
     if (
@@ -3022,6 +3206,7 @@ def get_wallet_balances_cached(wallet: str) -> dict:
         return entry["data"]
     data = get_wallet_balances(wallet)
     BALANCE_CACHE[wallet] = {"ts": now, "data": data, "tip_hash": tip_hash}
+    _set_cached_balances_in_redis(wallet, tip_hash, data)
     return data
 
 def load_attest_store():
@@ -13215,7 +13400,7 @@ def api_v1_receive_block():
 # - Master nodes: run chain maintenance jobs (minting, mempool, aggregator)
 # - Replica nodes: can run worker jobs if SCHEDULER_ENABLED=1 (e.g., BTC watcher)
 # - AI Core nodes: run only AI-related jobs (NO chain jobs)
-if is_ai_core() and SCHEDULER_ENABLED:
+if is_ai_core() and should_run_schedulers():
     print(f"[SCHEDULER] Starting as AI_CORE node (SCHEDULER_ENABLED={SCHEDULER_ENABLED})")
     scheduler=BackgroundScheduler(daemon=True)
     # AI Core only runs AI jobs (no chain, no mining, no mempool)
@@ -13224,7 +13409,7 @@ if is_ai_core() and SCHEDULER_ENABLED:
     scheduler.start()
     _active_schedulers.append(scheduler)
     print(f"[SCHEDULER] AI Core jobs started (knowledge watcher, rewards distribution)")
-elif NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
+elif is_master() and should_run_schedulers() and ENABLE_CHAIN:
     print(f"[SCHEDULER] Starting as MASTER node (SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")
     scheduler=BackgroundScheduler(daemon=True)
     scheduler.add_job(mint_first_blocks, "interval", minutes=1)
@@ -13235,7 +13420,7 @@ elif NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
     scheduler.start()
     _active_schedulers.append(scheduler)
     print(f"[SCHEDULER] All master jobs started (including AI rewards distribution)")
-elif NODE_ROLE == "replica" and SCHEDULER_ENABLED and ENABLE_CHAIN:
+elif is_replica() and SCHEDULER_ENABLED and ENABLE_CHAIN:
     print(f"[SCHEDULER] Starting as REPLICA node with worker jobs (SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")
     scheduler=BackgroundScheduler(daemon=True)
 
@@ -13259,7 +13444,7 @@ else:
 # AI Core nodes don't send heartbeats (they're not part of the chain cluster)
 # CRITICAL: Replica heartbeat is independent of ENABLE_CHAIN flag
 # ENABLE_CHAIN only controls blockchain operations, not heartbeat coordination
-if NODE_ROLE == "replica" and HEARTBEAT_ENABLED:
+if is_replica() and HEARTBEAT_ENABLED:
 
     # Start heartbeat sender for replica nodes
     import threading

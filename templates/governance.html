@@ -873,5 +873,9 @@ loadProposals().then(() => {
     updateTotalVotes();
     startAutoRefresh();
 });
+
+window.addEventListener('beforeunload', () => {
+    stopAutoRefresh();
+});
 </script>
 {% endblock %}

@@ -1066,6 +1066,7 @@
         const compactMode = urlParams.get('compact') === 'true';
         const showZero = urlParams.get('show_zero') !== 'false';
         const autoRefresh = parseInt(urlParams.get('refresh') || '0');
+        let autoRefreshInterval = null;
 
         // Apply compact mode if specified
         if (compactMode) {
@@ -1269,7 +1270,7 @@
 
         // Auto-refresh if enabled
         if (autoRefresh > 0) {
-            setInterval(loadWalletData, autoRefresh * 1000);
+            autoRefreshInterval = setInterval(loadWalletData, autoRefresh * 1000);
         }
 
         // Export for embedding
@@ -1888,6 +1889,17 @@
                 closeSendModal();
                 closeBridgeModal();
                 closeMusicTelemetryModal();
+            }
+        });
+
+        window.addEventListener('beforeunload', () => {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+            }
+            if (pollInterval) {
+                clearInterval(pollInterval);
+                pollInterval = null;
             }
         });
     </script>

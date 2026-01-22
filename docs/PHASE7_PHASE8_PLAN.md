@@ -6,6 +6,10 @@ This document captures the **design plan** requested in the latest feedback so w
 implementation in Phase 2. It does **not** introduce runtime changes; it is a blueprint for the
 next iteration.
 
+Key bottlenecks to address:
+- O(n²) transaction scanning in `get_blocks_for_viewer()` (chain-wide scans for each request).
+- Single-node Merkle root construction inside `mine_block()`.
+
 ---
 
 ## 1) Distributed Merkle Tree & Parallel Validation
@@ -15,6 +19,7 @@ next iteration.
 - Allow miners/ASICs to compute subtrees in parallel and return subtree roots.
 - Aggregate subtree roots into a single `merkle_root` in a lightweight coordinator.
 - Reward first K miners that validate the proposed block in a round.
+ - Offload candidate block validation from the master to participating miners.
 
 ### Proposed Flow
 1. **Batch Partition**: split pending transactions into fixed-size chunks (e.g., 256).
@@ -50,6 +55,7 @@ next iteration.
 - Every 1000 blocks, compute a **state root** (addresses + balances).
 - Store checkpoint metadata and root for fast bootstrap.
 - Pre‑validate transactions by miners before mempool insert.
+ - Enable fast sync for new nodes via recent snapshot + replay.
 
 ### Proposed Flow
 1. **Checkpoint cadence**: `HEIGHT % 1000 == 0`.
@@ -59,6 +65,9 @@ next iteration.
 3. **Mempool Pre‑Validation**:
    - Miners sign a “pre‑valid” attestation after verifying balance/signature/nonce.
    - Master accepts transaction into mempool only with N attestations or whitelisted miners.
+4. **Fast Sync**:
+   - New nodes download the most recent snapshot.
+   - Replay blocks from snapshot height forward.
 
 ### Draft checkpoint schema
 ```json
@@ -157,6 +166,41 @@ next iteration.
 1. Payment rails & credits ledger with on‑chain settlement.
 2. Marketplace service for AI model discovery & usage.
 3. Regional deployment strategy and inter‑node messaging.
+
+---
+
+## Implementation Milestones
+
+### Milestone 1: Infrastructure & SDK Cleanup (Weeks 1–2)
+- Finalize SQLite ledger + Redis cache rollout (master-only enablement).
+- Ensure CDN SDK assets and interval cleanup are stable across templates.
+- Begin SDK unification by extracting shared wallet modules.
+
+### Milestone 2: Distributed Merkle Trees & Parallel Validation (Weeks 3–4)
+- Define Merkle subtree job schema and worker/ASIC API.
+- Modify `mine_block()` to use subtree aggregation.
+- Implement validation attestations and micro-rewards.
+- Integrate BLS aggregation into the validation round.
+
+### Milestone 3: State Snapshots & Pre‑Validation (Weeks 5–6)
+- Emit state root snapshots every 1,000 blocks.
+- Add fast-sync bootstrap from latest snapshot.
+- Require miner pre‑validation attestations before mempool insert.
+
+### Milestone 4: Erasure‑Coded Storage & Data Availability (Weeks 7–8)
+- Encode blocks into Reed‑Solomon shards.
+- Add shard distribution + sampling proofs.
+- Define PoDA verification for light nodes.
+
+### Milestone 5: Telemetry ML Pipeline & Cross‑Chain Integration (Weeks 9–10)
+- Complete telemetry ingestion + Parquet export.
+- Train initial prediction models and expose `/api/ai/predict/route`.
+- Prototype WBTC bridge contracts + Lightning HTLC design.
+
+### Milestone 6: SDK Unification & Phase 8 Prep (Weeks 11–12)
+- Publish unified SDK modules and UI components.
+- Draft AI marketplace + API credits contract design.
+- Prototype multi‑region node orchestration + message relay.
 
 ---
 

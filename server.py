@@ -6703,6 +6703,8 @@ def wallets_count():
 
 
 def _rebuild_index_from_chain() -> dict:
+    if READ_ONLY:
+        raise Exception("[REPLICA] READ_ONLY: skip snapshot rebuild")
     chain = load_json(CHAIN_FILE, [])
     supply_metrics = compute_thr_supply_metrics(chain=chain)
 
@@ -13494,8 +13496,16 @@ if is_replica() and HEARTBEAT_ENABLED:
 
         while True:
             try:
-                height = get_last_block_snapshot().get("height")
-                if height is None:
+                height = -1
+                try:
+                    if READ_ONLY:
+                        health_response = requests.get(f"{MASTER_INTERNAL_URL}/api/health", timeout=3)
+                        if health_response.ok:
+                            height = int(health_response.json().get("chain_height", -1))
+                    else:
+                        snap = get_last_block_snapshot()
+                        height = int(snap.get("height", -1) or -1)
+                except Exception:
                     height = -1
                 response = requests.post(
                     heartbeat_url,

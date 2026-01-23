@@ -2,20 +2,14 @@
   "version": 2,
   "buildCommand": "echo Static site - no build needed",
   "outputDirectory": ".",
-
   "redirects": [
     { "source": "/wallet", "destination": "https://thrchain.up.railway.app/wallet", "permanent": false },
-    { "source": "/chat", "destination": "https://thronos-v3-6.onrender.com/chat", "permanent": false }
+    { "source": "/viewer", "destination": "https://node-2.up.railway.app/viewer", "permanent": false },
+    { "source": "/chat", "destination": "https://thronos-v3-6.onrender.com/chat", "permanent": false },
+    { "source": "/api/(.*)", "destination": "https://thrchain.up.railway.app/api/$1", "permanent": false },
+    { "source": "/api/v1/write/(.*)", "destination": "https://thrchain.up.railway.app/api/$1", "permanent": false },
+    { "source": "/api/v1/read/(.*)", "destination": "https://node-2.up.railway.app/api/$1", "permanent": false }
   ],
-
-  "rewrites": [
-    { "source": "/api/v1/write/:path*", "destination": "https://thrchain.up.railway.app/api/:path*" },
-    { "source": "/api/v1/read/:path*", "destination": "https://node-2.up.railway.app/api/:path*" },
-
-    { "source": "/api/:path*", "destination": "https://node-2.up.railway.app/api/:path*" },
-    { "source": "/viewer", "destination": "https://node-2.up.railway.app/viewer" }
-  ],
-
   "headers": [
     {
       "source": "/static/(.*)",

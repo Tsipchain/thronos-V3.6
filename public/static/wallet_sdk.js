@@ -8,6 +8,31 @@
     TX_STATUS: 'thronos:wallet:tx_status'
   };
 
+  const MASTER_PUBLIC_URL = (window.THRONOS_CONFIG && window.THRONOS_CONFIG.MASTER_PUBLIC_URL)
+    ? window.THRONOS_CONFIG.MASTER_PUBLIC_URL.replace(/\/$/, '')
+    : '';
+
+  function resolveMasterUrl(path){
+    if (!MASTER_PUBLIC_URL) return path;
+    const normalized = path.startsWith('/') ? path : `/${path}`;
+    return `${MASTER_PUBLIC_URL}${normalized}`;
+  }
+
+  async function verifyWalletConnection(address){
+    const url = resolveMasterUrl(`/api/balances?address=${encodeURIComponent(address)}`);
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`wallet_balance_fetch_failed:${resp.status}`);
+      await resp.json().catch(() => ({}));
+      return true;
+    } catch (err) {
+      if (typeof window.setDisconnectedUI === 'function') {
+        window.setDisconnectedUI();
+      }
+      throw err;
+    }
+  }
+
   function emit(eventName, detail){
     try {
       window.dispatchEvent(new CustomEvent(eventName, { detail }));
@@ -82,6 +107,7 @@
     if (window.walletSession.isLocked && window.walletSession.isLocked()) {
       await unlock(options);
     }
+    await verifyWalletConnection(address);
     if (options.showUi !== false && typeof window.openHeaderWalletModal === 'function') {
       window.openHeaderWalletModal();
     }
@@ -114,6 +140,7 @@
     if (window.walletSession.isLocked && window.walletSession.isLocked()) {
       throw new Error('wallet_locked');
     }
+    await verifyWalletConnection(address);
     const payload = {
       token: (token || 'THR').toString().toUpperCase(),
       from: address,
@@ -124,7 +151,7 @@
       passphrase
     };
 
-    const resp = await fetch('/api/wallet/send', {
+    const resp = await fetch(resolveMasterUrl('/api/wallet/send'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -139,7 +166,7 @@
 
   async function getHistory({ tab = 'all', limit = 200 } = {}){
     const address = ensureWallet();
-    const resp = await fetch(`/wallet_data/${address}`);
+    const resp = await fetch(resolveMasterUrl(`/wallet_data/${address}`));
     const data = await resp.json();
     const txs = Array.isArray(data.transactions) ? data.transactions : [];
     const filtered = filterByTab(tab, txs).slice(0, limit || txs.length);

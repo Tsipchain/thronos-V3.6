@@ -375,7 +375,7 @@ function renderTokens(tokens) {
         <div class="token-card" onclick="viewToken('${t.symbol}')">
             <div class="token-header">
                 <div class="token-logo">
-                    ${t.logo_url ? `<img src="${t.logo_url}" alt="${t.symbol}" onerror="this.parentElement.innerHTML='🪙'">` : '🪙'}
+                    ${t.logo_url ? `<img src="${t.logo_url}" alt="${t.symbol}" onerror="this.onerror=null; this.src='/static/img/logo.png';">` : '🪙'}
                 </div>
                 <div class="token-name">
                     <h3>${escapeHtml(t.name || t.symbol)}</h3>

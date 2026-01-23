@@ -495,11 +495,11 @@ if NODE_ROLE not in ("master", "ai_core") and SCHEDULER_ENABLED:
     logger.warning("[CONFIG] Disabling SCHEDULER_ENABLED on non-master/non-ai-core node")
     SCHEDULER_ENABLED = False
 
-MASTER_INTERNAL_URL = os.getenv("MASTER_NODE_URL", "http://localhost:5000")
+MASTER_INTERNAL_URL = os.getenv("MASTER_URL", os.getenv("MASTER_NODE_URL", "http://localhost:5000"))
 LEADER_URL = os.getenv("LEADER_URL", MASTER_INTERNAL_URL)
 MINING_RPC_REPLICA = os.getenv("MINING_RPC_REPLICA", "").strip()
 # Replica external URL - used for heartbeat registration (e.g., Railway URL)
-REPLICA_EXTERNAL_URL = os.getenv("REPLICA_EXTERNAL_URL", os.getenv("RAILWAY_PUBLIC_DOMAIN", ""))
+REPLICA_EXTERNAL_URL = os.getenv("PUBLIC_URL", os.getenv("REPLICA_EXTERNAL_URL", os.getenv("RAILWAY_PUBLIC_DOMAIN", "")))
 
 # Admin secret for cross-node API calls
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
@@ -6805,8 +6805,10 @@ def peers_heartbeat():
         return jsonify({"error": "Heartbeats only accepted on master node"}), 403
 
     data = request.get_json() or {}
-    peer_id = data.get("peer_id")
+    peer_id = data.get("peer_id") or data.get("node_name")
     peer_url = data.get("url")
+    peer_role = data.get("role") or data.get("node_role") or "replica"
+    peer_height = data.get("height")
 
     if not peer_id:
         return jsonify({"error": "peer_id required"}), 400
@@ -6815,7 +6817,8 @@ def peers_heartbeat():
     active_peers[peer_id] = {
         "last_seen": _now_ts(),
         "url": peer_url or "unknown",
-        "node_role": "replica"
+        "node_role": peer_role,
+        "height": peer_height,
     }
 
     cleanup_expired_peers()
@@ -6829,6 +6832,18 @@ def peers_heartbeat():
         "peer_id": peer_id,
         "active_peers": len(active_peers),
         "ttl_seconds": PEER_TTL_SECONDS
+    }), 200
+
+@app.route("/api/peers/active", methods=["GET"])
+def peers_active():
+    if NODE_ROLE != "master":
+        return jsonify({"error": "Active peers only available on master node"}), 403
+
+    cleanup_expired_peers()
+    return jsonify({
+        "ok": True,
+        "active_peers": active_peers,
+        "ttl_seconds": PEER_TTL_SECONDS,
     }), 200
 
 @app.route("/api/network_live")
@@ -13455,14 +13470,15 @@ if is_replica() and HEARTBEAT_ENABLED:
         # Generate unique peer_id based on hostname and port
         hostname = socket.gethostname()
         port = os.getenv("PORT", "5000")
-        peer_id = f"replica-{hostname}-{port}"
+        peer_id = os.getenv("PEER_ID") or f"replica-{hostname}-{port}"
 
         # Use REPLICA_EXTERNAL_URL if set (for cloud deployments like Railway)
         # Otherwise fall back to hostname:port (for local Docker/testing)
         if REPLICA_EXTERNAL_URL:
             # Ensure it has https:// prefix for Railway domains
             replica_url = REPLICA_EXTERNAL_URL if REPLICA_EXTERNAL_URL.startswith('http') else f"https://{REPLICA_EXTERNAL_URL}"
-            peer_id = f"replica-{REPLICA_EXTERNAL_URL.replace('https://', '').replace('http://', '').split('.')[0]}"
+            if not os.getenv("PEER_ID"):
+                peer_id = f"replica-{REPLICA_EXTERNAL_URL.replace('https://', '').replace('http://', '').split('.')[0]}"
         else:
             replica_url = f"http://{hostname}:{port}"
 
@@ -13478,16 +13494,26 @@ if is_replica() and HEARTBEAT_ENABLED:
 
         while True:
             try:
+                height = get_last_block_snapshot().get("height")
+                if height is None:
+                    height = -1
                 response = requests.post(
                     heartbeat_url,
                     json={
                         "peer_id": peer_id,
                         "url": replica_url,
-                        "node_role": NODE_ROLE,
+                        "role": NODE_ROLE,
+                        "height": height,
                         "timestamp": int(time.time())
+                    },
+                    headers={
+                        "X-Admin-Secret": ADMIN_SECRET,
+                        "Content-Type": "application/json",
                     },
                     timeout=10
                 )
+                response_body = response.text[:500]
+                print(f"[HEARTBEAT] Master response status={response.status_code} body={response_body}")
                 if response.status_code == 200:
                     data = response.json()
                     active_peers = data.get("active_peers", "?")

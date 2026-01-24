@@ -523,7 +523,7 @@ async function loadTokens() {
         const card = document.createElement('div');
         card.className = 'token-card';
 
-        const logoUrl = tok.logo || (tok.logo_path ? `/media/${tok.logo_path}` : '');
+        const logoUrl = tok.logo_url || tok.logo || (tok.logo_path ? `/media/${tok.logo_path}` : '');
         const logoHtml = logoUrl
           ? `<img src="${logoUrl}" alt="${tok.symbol}" onerror="this.src='/static/img/logo.png';">`
           : `<span style="color: ${tok.color}">${tok.symbol[0]}</span>`;

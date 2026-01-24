@@ -359,6 +359,13 @@ def inject_build_id():
         build_id=build_id,
         node1_rpc_url=node1_rpc_url,
         node2_rpc_url=node2_rpc_url,
+        node_role=NODE_ROLE,
+        master_public_url=MASTER_PUBLIC_URL,
+        read_node_url=READ_NODE_URL,
+        public_url=PUBLIC_URL,
+        media_url=MEDIA_URL,
+        asset_cdn_base=ASSET_CDN_BASE,
+        music_modal_enabled=MUSIC_MODAL_ENABLED,
     )
 
 
@@ -486,6 +493,7 @@ MINING_WATCHDOG_MAX_REQUESTS = int(os.getenv("MINING_WATCHDOG_MAX_REQUESTS", "60
 MINING_WATCHDOG_BAN_SECONDS = int(os.getenv("MINING_WATCHDOG_BAN_SECONDS", "300"))
 HEARTBEAT_ENABLED = os.getenv("HEARTBEAT_ENABLED", "1").lower() in ("1", "true", "yes")
 HEARTBEAT_LOG_ERRORS = os.getenv("HEARTBEAT_LOG_ERRORS", "0").lower() in ("1", "true", "yes")
+MUSIC_MODAL_ENABLED = os.getenv("MUSIC_MODAL_ENABLED", "1").lower() in ("1", "true", "yes")
 
 if NODE_ROLE == "replica" and not READ_ONLY:
     logger.warning("[CONFIG] Forcing READ_ONLY=1 on replica node")
@@ -495,14 +503,21 @@ if NODE_ROLE not in ("master", "ai_core") and SCHEDULER_ENABLED:
     logger.warning("[CONFIG] Disabling SCHEDULER_ENABLED on non-master/non-ai-core node")
     SCHEDULER_ENABLED = False
 
-MASTER_INTERNAL_URL = os.getenv("MASTER_NODE_URL", "http://localhost:5000")
+MASTER_INTERNAL_URL = os.getenv("MASTER_URL", os.getenv("MASTER_NODE_URL", "http://localhost:5000"))
+MASTER_PUBLIC_URL = os.getenv("MASTER_PUBLIC_URL", MASTER_INTERNAL_URL)
+READ_NODE_URL = os.getenv("READ_NODE_URL", MASTER_PUBLIC_URL)
+PUBLIC_URL = os.getenv("PUBLIC_URL", "")
+MEDIA_URL = os.getenv("MEDIA_URL", MASTER_PUBLIC_URL)
 LEADER_URL = os.getenv("LEADER_URL", MASTER_INTERNAL_URL)
 MINING_RPC_REPLICA = os.getenv("MINING_RPC_REPLICA", "").strip()
 # Replica external URL - used for heartbeat registration (e.g., Railway URL)
-REPLICA_EXTERNAL_URL = os.getenv("REPLICA_EXTERNAL_URL", os.getenv("RAILWAY_PUBLIC_DOMAIN", ""))
+REPLICA_EXTERNAL_URL = os.getenv("PUBLIC_URL", os.getenv("REPLICA_EXTERNAL_URL", os.getenv("RAILWAY_PUBLIC_DOMAIN", "")))
 
 # Admin secret for cross-node API calls
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
+
+# Asset CDN base for public URLs (used for token/NFT images)
+ASSET_CDN_BASE = os.getenv("ASSET_CDN_BASE", "https://thrchain.vercel.app").rstrip("/")
 
 # AI Core configuration (for future Node 4)
 AI_CORE_URL = os.getenv("AI_CORE_URL", "").strip()
@@ -2946,6 +2961,16 @@ def _base_token_catalog():
     ]
 
 
+def normalize_image_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    if url.startswith("http"):
+        return url
+    if url.startswith("/media/"):
+        return f"{MEDIA_URL.rstrip('/')}{url}"
+    return f"{ASSET_CDN_BASE}/{url.lstrip('/')}"
+
+
 def get_all_tokens():
     """Centralized catalog that returns base + custom tokens."""
     catalog_map: dict[str, dict] = {}
@@ -2995,6 +3020,8 @@ def get_all_tokens():
             tok["decimals"] = int(tok.get("decimals", 6))
         except Exception:
             tok["decimals"] = 6
+        logo_url = tok.get("logo_url") or tok.get("logo")
+        tok["logo_url"] = normalize_image_url(logo_url)
         catalog.append(tok)
 
     catalog.sort(key=lambda t: t.get("symbol"))
@@ -4995,6 +5022,9 @@ def serve_contract(filename):
 def media(filename):
     """Serve persistent media assets from the data volume."""
     safe_name = filename.lstrip("/..")
+    full_path = os.path.join(MEDIA_DIR, safe_name)
+    if not os.path.exists(full_path):
+        return jsonify({"ok": False, "error": "media_not_found"}), 404
     return send_from_directory(MEDIA_DIR, safe_name)
 
 @app.route("/media/static/<path:filename>")
@@ -6646,48 +6676,63 @@ def api_last_block_hash():
 
 @app.route("/api/network_stats")
 def network_stats():
-    pledges = load_json(PLEDGE_CHAIN, [])
-    chain   = load_json(CHAIN_FILE, [])
-    ledger  = load_json(LEDGER_FILE, {})
+    try:
+        pledges = load_json(PLEDGE_CHAIN, [])
+        chain   = load_json(CHAIN_FILE, [])
+        ledger  = load_json(LEDGER_FILE, {})
 
-    pledge_count = len(pledges)
+        pledge_count = len(pledges)
 
-    blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
-    block_count = HEIGHT_OFFSET + len(blocks)
+        blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+        block_count = HEIGHT_OFFSET + len(blocks)
 
-    tx_count = len([
-        t for t in chain
-        if isinstance(t, dict) and t.get("type") in ("transfer", "service_payment", "ai_knowledge", "coinbase")
-    ])
+        tx_count = len([
+            t for t in chain
+            if isinstance(t, dict) and t.get("type") in ("transfer", "service_payment", "ai_knowledge", "coinbase")
+        ])
 
-    burned     = float(ledger.get(BURN_ADDRESS, 0))
-    ai_balance = float(ledger.get(AI_WALLET_ADDRESS, 0))
-    total_supply = round(sum(float(v) for v in ledger.values()), 6)
+        burned     = float(ledger.get(BURN_ADDRESS, 0))
+        ai_balance = float(ledger.get(AI_WALLET_ADDRESS, 0))
+        total_supply = round(sum(float(v) for v in ledger.values()), 6)
 
-    # pledge growth όπως πριν
-    pledge_dates = {}
-    for p in pledges:
-        ts = p.get("timestamp", "").split(" ")[0]
-        if not ts:
-            continue
-        pledge_dates[ts] = pledge_dates.get(ts, 0) + 1
+        # pledge growth όπως πριν
+        pledge_dates = {}
+        for p in pledges:
+            ts = p.get("timestamp", "").split(" ")[0]
+            if not ts:
+                continue
+            pledge_dates[ts] = pledge_dates.get(ts, 0) + 1
 
-    sorted_dates = sorted(pledge_dates.keys())
-    cumulative   = []
-    run = 0
-    for d in sorted_dates:
-        run += pledge_dates[d]
-        cumulative.append({"date": d, "count": run})
+        sorted_dates = sorted(pledge_dates.keys())
+        cumulative   = []
+        run = 0
+        for d in sorted_dates:
+            run += pledge_dates[d]
+            cumulative.append({"date": d, "count": run})
 
-    return jsonify({
-        "pledge_count": pledge_count,
-        "block_count":  block_count,
-        "tx_count":     tx_count,
-        "burned":       burned,
-        "ai_balance":   ai_balance,
-        "total_supply": total_supply,
-        "pledge_growth": cumulative,
-    })
+        return jsonify({
+            "ok": True,
+            "pledge_count": pledge_count,
+            "block_count":  block_count,
+            "tx_count":     tx_count,
+            "burned":       burned,
+            "ai_balance":   ai_balance,
+            "total_supply": total_supply,
+            "pledge_growth": cumulative,
+        }), 200
+    except Exception as exc:
+        logger.error("[network_stats] failed: %s", exc)
+        return jsonify({
+            "ok": False,
+            "error": "temporary",
+            "pledge_count": 0,
+            "block_count": 0,
+            "tx_count": 0,
+            "burned": 0,
+            "ai_balance": 0,
+            "total_supply": 0,
+            "pledge_growth": [],
+        }), 200
 
 # ─── WALLETS COUNT ─────────────────────────────────────────────────────
 
@@ -6703,6 +6748,8 @@ def wallets_count():
 
 
 def _rebuild_index_from_chain() -> dict:
+    if READ_ONLY or os.getenv("DISABLE_SNAPSHOT_REBUILD") == "1":
+        return {"height": -1}
     chain = load_json(CHAIN_FILE, [])
     supply_metrics = compute_thr_supply_metrics(chain=chain)
 
@@ -6805,8 +6852,10 @@ def peers_heartbeat():
         return jsonify({"error": "Heartbeats only accepted on master node"}), 403
 
     data = request.get_json() or {}
-    peer_id = data.get("peer_id")
+    peer_id = data.get("peer_id") or data.get("node_name")
     peer_url = data.get("url")
+    peer_role = data.get("role") or data.get("node_role") or "replica"
+    peer_height = data.get("height")
 
     if not peer_id:
         return jsonify({"error": "peer_id required"}), 400
@@ -6815,7 +6864,8 @@ def peers_heartbeat():
     active_peers[peer_id] = {
         "last_seen": _now_ts(),
         "url": peer_url or "unknown",
-        "node_role": "replica"
+        "node_role": peer_role,
+        "height": peer_height,
     }
 
     cleanup_expired_peers()
@@ -6829,6 +6879,18 @@ def peers_heartbeat():
         "peer_id": peer_id,
         "active_peers": len(active_peers),
         "ttl_seconds": PEER_TTL_SECONDS
+    }), 200
+
+@app.route("/api/peers/active", methods=["GET"])
+def peers_active():
+    if NODE_ROLE != "master":
+        return jsonify({"error": "Active peers only available on master node"}), 403
+
+    cleanup_expired_peers()
+    return jsonify({
+        "ok": True,
+        "active_peers": active_peers,
+        "ttl_seconds": PEER_TTL_SECONDS,
     }), 200
 
 @app.route("/api/network_live")
@@ -9694,89 +9756,124 @@ def api_history():
 @app.route("/api/dashboard", methods=["GET"])
 def api_dashboard():
     """Return the leader-driven dashboard data for index."""
-    last_block = load_json(LAST_BLOCK_FILE, {})
-    chain = load_chain_cached()
-    chain_blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
-    chain_tip = chain_blocks[-1] if chain_blocks else {}
-    chain_tip_height = HEIGHT_OFFSET + len(chain_blocks) - 1 if chain_blocks else None
-    chain_tip_hash = chain_tip.get("block_hash") or chain_tip.get("tx_id")
-    chain_tip_timestamp = chain_tip.get("timestamp")
-    blocks = get_blocks_for_viewer()
-    recent_blocks = blocks[:5]
-    recent_txs = _tx_feed(include_pending=True, include_bridge=True)[:8]
+    try:
+        last_block = load_json(LAST_BLOCK_FILE, {})
+        chain = load_chain_cached()
+        chain_blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+        chain_tip = chain_blocks[-1] if chain_blocks else {}
+        chain_tip_height = HEIGHT_OFFSET + len(chain_blocks) - 1 if chain_blocks else None
+        chain_tip_hash = chain_tip.get("block_hash") or chain_tip.get("tx_id")
+        chain_tip_timestamp = chain_tip.get("timestamp")
+        blocks = get_blocks_for_viewer()
+        recent_blocks = blocks[:5]
+        recent_txs = _tx_feed(include_pending=True, include_bridge=True)[:8]
 
-    block_count = HEIGHT_OFFSET + len(chain_blocks)
+        block_count = HEIGHT_OFFSET + len(chain_blocks)
 
-    pools = load_pools()
-    supply_metrics = compute_thr_supply_metrics(chain=chain, pools=pools)
-    total_supply = supply_metrics["total_supply_thr"]
+        pools = load_pools()
+        supply_metrics = compute_thr_supply_metrics(chain=chain, pools=pools)
+        total_supply = supply_metrics["total_supply_thr"]
 
-    tokens = load_custom_tokens()
-    token_list = list(tokens.values())
-    token_list.sort(key=lambda t: t.get("created_at", ""), reverse=True)
-    recent_tokens = token_list[:3]
+        tokens = load_custom_tokens()
+        token_list = list(tokens.values())
+        token_list.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+        recent_tokens = token_list[:3]
 
-    ledger = load_json(LEDGER_FILE, {})
-    system_addresses = {BURN_ADDRESS, AI_WALLET_ADDRESS, "GENESIS", "SYSTEM"}
-    wallet_count = sum(1 for addr, bal in ledger.items()
-                       if addr not in system_addresses and float(bal) > 0)
+        ledger = load_json(LEDGER_FILE, {})
+        system_addresses = {BURN_ADDRESS, AI_WALLET_ADDRESS, "GENESIS", "SYSTEM"}
+        wallet_count = sum(1 for addr, bal in ledger.items()
+                           if addr not in system_addresses and float(bal) > 0)
 
-    # Get all transactions for consistency with /api/transfers
-    all_txs = _tx_feed(include_pending=True, include_bridge=True)
-    total_transfers = len(all_txs)
+        # Get all transactions for consistency with /api/transfers
+        all_txs = _tx_feed(include_pending=True, include_bridge=True)
+        total_transfers = len(all_txs)
 
-    # Count unique addresses from all transactions
-    unique_addrs = set()
-    for tx in all_txs:
-        from_addr = tx.get("from", "")
-        to_addr = tx.get("to", "")
-        if from_addr:
-            unique_addrs.add(from_addr)
-        if to_addr:
-            unique_addrs.add(to_addr)
-    unique_addresses = len(unique_addrs)
+        # Count unique addresses from all transactions
+        unique_addrs = set()
+        for tx in all_txs:
+            from_addr = tx.get("from", "")
+            to_addr = tx.get("to", "")
+            if from_addr:
+                unique_addrs.add(from_addr)
+            if to_addr:
+                unique_addrs.add(to_addr)
+        unique_addresses = len(unique_addrs)
 
-    stats = {
-        "block_count": block_count,
-        "total_transfers": total_transfers,
-        "unique_addresses": unique_addresses,
-        "total_supply": total_supply,
-        "circulating_supply": supply_metrics["circulating_supply_thr"],
-        "pool_locked_thr": supply_metrics["locked_in_pools_thr"],
-        "fee_burned_total": supply_metrics["burned_total_thr"],
-        "total_supply_thr": supply_metrics["total_supply_thr"],
-        "circulating_supply_thr": supply_metrics["circulating_supply_thr"],
-        "locked_in_pools_thr": supply_metrics["locked_in_pools_thr"],
-        "burned_total_thr": supply_metrics["burned_total_thr"],
-        "total_rewards_thr": supply_metrics["minted_total_thr"],
-        "token_count": len(token_list),
-        "pool_count": len(pools),
-        "wallet_count": wallet_count,
-    }
+        stats = {
+            "block_count": block_count,
+            "total_transfers": total_transfers,
+            "unique_addresses": unique_addresses,
+            "total_supply": total_supply,
+            "circulating_supply": supply_metrics["circulating_supply_thr"],
+            "pool_locked_thr": supply_metrics["locked_in_pools_thr"],
+            "fee_burned_total": supply_metrics["burned_total_thr"],
+            "total_supply_thr": supply_metrics["total_supply_thr"],
+            "circulating_supply_thr": supply_metrics["circulating_supply_thr"],
+            "locked_in_pools_thr": supply_metrics["locked_in_pools_thr"],
+            "burned_total_thr": supply_metrics["burned_total_thr"],
+            "total_rewards_thr": supply_metrics["minted_total_thr"],
+            "token_count": len(token_list),
+            "pool_count": len(pools),
+            "wallet_count": wallet_count,
+        }
 
-    index_tip_height = last_block.get("height")
-    index_tip_hash = last_block.get("block_hash")
-    index_tip_timestamp = last_block.get("timestamp")
-    if chain_tip_height is None or index_tip_height is None:
-        index_lag = 0
-    else:
-        index_lag = max(chain_tip_height - index_tip_height, 0)
+        index_tip_height = last_block.get("height")
+        index_tip_hash = last_block.get("block_hash")
+        index_tip_timestamp = last_block.get("timestamp")
+        if chain_tip_height is None or index_tip_height is None:
+            index_lag = 0
+        else:
+            index_lag = max(chain_tip_height - index_tip_height, 0)
 
-    return jsonify({
-        "ok": True,
-        "tip": last_block,
-        "stats": stats,
-        "recent_blocks": recent_blocks,
-        "recent_transactions": recent_txs,
-        "recent_tokens": recent_tokens,
-        "chain_tip_height": chain_tip_height,
-        "chain_tip_hash": chain_tip_hash,
-        "chain_tip_timestamp": chain_tip_timestamp,
-        "index_tip_height": index_tip_height,
-        "index_tip_hash": index_tip_hash,
-        "index_tip_timestamp": index_tip_timestamp,
-        "index_lag": index_lag,
-    }), 200
+        return jsonify({
+            "ok": True,
+            "tip": last_block,
+            "stats": stats,
+            "recent_blocks": recent_blocks,
+            "recent_transactions": recent_txs,
+            "recent_tokens": recent_tokens,
+            "chain_tip_height": chain_tip_height,
+            "chain_tip_hash": chain_tip_hash,
+            "chain_tip_timestamp": chain_tip_timestamp,
+            "index_tip_height": index_tip_height,
+            "index_tip_hash": index_tip_hash,
+            "index_tip_timestamp": index_tip_timestamp,
+            "index_lag": index_lag,
+        }), 200
+    except Exception as exc:
+        logger.error("[dashboard] failed: %s", exc)
+        return jsonify({
+            "ok": False,
+            "error": "temporary",
+            "tip": {},
+            "stats": {
+                "block_count": 0,
+                "total_transfers": 0,
+                "unique_addresses": 0,
+                "total_supply": 0,
+                "circulating_supply": 0,
+                "pool_locked_thr": 0,
+                "fee_burned_total": 0,
+                "total_supply_thr": 0,
+                "circulating_supply_thr": 0,
+                "locked_in_pools_thr": 0,
+                "burned_total_thr": 0,
+                "total_rewards_thr": 0,
+                "token_count": 0,
+                "pool_count": 0,
+                "wallet_count": 0,
+            },
+            "recent_blocks": [],
+            "recent_transactions": [],
+            "recent_tokens": [],
+            "chain_tip_height": None,
+            "chain_tip_hash": None,
+            "chain_tip_timestamp": None,
+            "index_tip_height": None,
+            "index_tip_hash": None,
+            "index_tip_timestamp": None,
+            "index_lag": 0,
+        }), 200
 
 def get_token_price_in_thr(symbol):
     """
@@ -9955,9 +10052,12 @@ def api_token_prices():
         logger.error(f"Error fetching token prices: {e}")
         return jsonify({
             "ok": False,
-            "error": str(e),
-            "prices": {"THR": 0.0042}  # Fallback
-        }), 500
+            "error": "temporary",
+            "prices": {"THR": 0.0042},  # Fallback
+            "base_currency": "USD",
+            "thr_usd_rate": 0.0042,
+            "last_updated": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        }), 200
 
 
 @app.route("/api/balance/<thr_addr>", methods=["GET"])
@@ -10452,7 +10552,9 @@ def api_list_tokens():
         logo = resolve_token_logo(token)
         if logo:
             token["logo_path"] = logo
-            token["logo_url"] = f"/static/{logo}"
+            token["logo_url"] = normalize_image_url(f"/static/{logo}")
+        else:
+            token["logo_url"] = normalize_image_url(token.get("logo_url") or token.get("logo"))
 
     token_list.sort(key=lambda t: t.get("created_at", ""), reverse=True)
     return jsonify({"ok": True, "tokens": token_list}), 200
@@ -11166,69 +11268,73 @@ def api_token_holders(symbol):
 @app.route("/api/tokens/stats")
 def api_tokens_stats():
     """Get stats for all tokens including holder counts."""
-    stats = []
+    try:
+        stats = []
 
-    # Build activity index from the persistent ledger for last transfer/transfer counts
-    activity: dict[str, dict] = {}
-    ledger = _seed_tx_log_from_chain()
-    allowed_for_activity = {
-        "thr_transfer",
-        "transfer",
-        "token_transfer",
-        "swap",
-        "bridge",
-        "mint",
-        "burn",
-        "ai_credits",
-        "l2e",
-        "iot",
-        "autopilot",
-        "parking",
-        "music",
-    }
-    for norm in ledger:
-        if not isinstance(norm, dict):
-            continue
-        kind = (norm.get("kind") or norm.get("type") or "").lower()
-        if kind not in allowed_for_activity:
-            continue
-        symbol = (norm.get("asset") or norm.get("token_symbol") or "THR").upper()
-        bucket = activity.setdefault(symbol, {"count": 0, "last": None})
-        bucket["count"] += 1
-        ts = norm.get("timestamp")
-        if ts and (not bucket["last"] or str(ts) > str(bucket["last"])):
-            bucket["last"] = ts
+        # Build activity index from the persistent ledger for last transfer/transfer counts
+        activity: dict[str, dict] = {}
+        ledger = _seed_tx_log_from_chain()
+        allowed_for_activity = {
+            "thr_transfer",
+            "transfer",
+            "token_transfer",
+            "swap",
+            "bridge",
+            "mint",
+            "burn",
+            "ai_credits",
+            "l2e",
+            "iot",
+            "autopilot",
+            "parking",
+            "music",
+        }
+        for norm in ledger:
+            if not isinstance(norm, dict):
+                continue
+            kind = (norm.get("kind") or norm.get("type") or "").lower()
+            if kind not in allowed_for_activity:
+                continue
+            symbol = (norm.get("asset") or norm.get("token_symbol") or "THR").upper()
+            bucket = activity.setdefault(symbol, {"count": 0, "last": None})
+            bucket["count"] += 1
+            ts = norm.get("timestamp")
+            if ts and (not bucket["last"] or str(ts) > str(bucket["last"])):
+                bucket["last"] = ts
 
-    catalog = get_all_tokens()
-    for token in catalog:
-        symbol = (token.get("symbol") or "THR").upper()
-        token_meta = _resolve_token_meta(symbol)
-        if symbol == "THR":
-            ledger_map = load_json(LEDGER_FILE, {})
-            holders = sum(1 for b in ledger_map.values() if float(b) > 0)
-            total_supply = sum(float(b) for b in ledger_map.values())
-        else:
-            token_id = token.get("token_id") or token.get("id") or symbol
-            ledger_map = load_custom_token_ledger(token_id) if token_id else {}
-            holders = sum(1 for b in ledger_map.values() if float(b) > 0)
-            total_supply = token.get("total_supply") or token.get("current_supply") or token_meta.get("total_supply", 0)
+        catalog = get_all_tokens()
+        for token in catalog:
+            symbol = (token.get("symbol") or "THR").upper()
+            token_meta = _resolve_token_meta(symbol)
+            if symbol == "THR":
+                ledger_map = load_json(LEDGER_FILE, {})
+                holders = sum(1 for b in ledger_map.values() if float(b) > 0)
+                total_supply = sum(float(b) for b in ledger_map.values())
+            else:
+                token_id = token.get("token_id") or token.get("id") or symbol
+                ledger_map = load_custom_token_ledger(token_id) if token_id else {}
+                holders = sum(1 for b in ledger_map.values() if float(b) > 0)
+                total_supply = token.get("total_supply") or token.get("current_supply") or token_meta.get("total_supply", 0)
 
-        stats.append({
-            "symbol": symbol,
-            "name": token.get("name") or token_meta.get("name") or symbol,
-            "holders_count": holders,
-            "total_supply": total_supply,
-            "color": token.get("color", "#00ff66"),
-            "logo": token.get("logo") or token.get("logo_url"),
-            "transfers_count": activity.get(symbol, {}).get("count", 0),
-            "last_transfer": activity.get(symbol, {}).get("last"),
-            "decimals": token_meta.get("decimals", 6),
-            "decimals_is_default": token_meta.get("decimals_is_default", False),
-            "creator": token_meta.get("creator") or token.get("creator"),
-            "created_at": token_meta.get("created_at") or token.get("created_at"),
-        })
+            stats.append({
+                "symbol": symbol,
+                "name": token.get("name") or token_meta.get("name") or symbol,
+                "holders_count": holders,
+                "total_supply": total_supply,
+                "color": token.get("color", "#00ff66"),
+                "logo": token.get("logo") or token.get("logo_url"),
+                "transfers_count": activity.get(symbol, {}).get("count", 0),
+                "last_transfer": activity.get(symbol, {}).get("last"),
+                "decimals": token_meta.get("decimals", 6),
+                "decimals_is_default": token_meta.get("decimals_is_default", False),
+                "creator": token_meta.get("creator") or token.get("creator"),
+                "created_at": token_meta.get("created_at") or token.get("created_at"),
+            })
 
-    return jsonify({"ok": True, "tokens": stats}), 200
+        return jsonify({"ok": True, "tokens": stats}), 200
+    except Exception as exc:
+        logger.error("[tokens_stats] failed: %s", exc)
+        return jsonify({"ok": False, "error": "temporary", "tokens": []}), 200
 
 
 @app.route("/send_thr", methods=["POST"])
@@ -13455,14 +13561,15 @@ if is_replica() and HEARTBEAT_ENABLED:
         # Generate unique peer_id based on hostname and port
         hostname = socket.gethostname()
         port = os.getenv("PORT", "5000")
-        peer_id = f"replica-{hostname}-{port}"
+        peer_id = os.getenv("PEER_ID") or f"replica-{hostname}-{port}"
 
         # Use REPLICA_EXTERNAL_URL if set (for cloud deployments like Railway)
         # Otherwise fall back to hostname:port (for local Docker/testing)
         if REPLICA_EXTERNAL_URL:
             # Ensure it has https:// prefix for Railway domains
             replica_url = REPLICA_EXTERNAL_URL if REPLICA_EXTERNAL_URL.startswith('http') else f"https://{REPLICA_EXTERNAL_URL}"
-            peer_id = f"replica-{REPLICA_EXTERNAL_URL.replace('https://', '').replace('http://', '').split('.')[0]}"
+            if not os.getenv("PEER_ID"):
+                peer_id = f"replica-{REPLICA_EXTERNAL_URL.replace('https://', '').replace('http://', '').split('.')[0]}"
         else:
             replica_url = f"http://{hostname}:{port}"
 
@@ -13478,16 +13585,34 @@ if is_replica() and HEARTBEAT_ENABLED:
 
         while True:
             try:
+                height = -1
+                try:
+                    if READ_ONLY:
+                        health_response = requests.get(f"{MASTER_INTERNAL_URL}/api/health", timeout=3)
+                        if health_response.ok:
+                            height = int(health_response.json().get("chain_height", -1))
+                    else:
+                        snap = get_last_block_snapshot()
+                        height = int(snap.get("height", -1) or -1)
+                except Exception:
+                    height = -1
                 response = requests.post(
                     heartbeat_url,
                     json={
                         "peer_id": peer_id,
                         "url": replica_url,
-                        "node_role": NODE_ROLE,
+                        "role": NODE_ROLE,
+                        "height": height,
                         "timestamp": int(time.time())
+                    },
+                    headers={
+                        "X-Admin-Secret": ADMIN_SECRET,
+                        "Content-Type": "application/json",
                     },
                     timeout=10
                 )
+                response_body = response.text[:500]
+                print(f"[HEARTBEAT] Master response status={response.status_code} body={response_body}")
                 if response.status_code == 200:
                     data = response.json()
                     active_peers = data.get("active_peers", "?")
@@ -18054,6 +18179,102 @@ def api_music_status():
     }), 200
 
 
+MUSIC_SESSIONS_FILE = os.path.join(DATA_DIR, "music_sessions.json")
+MUSIC_GPS_FILE = os.path.join(DATA_DIR, "music_gps_telemetry.json")
+
+
+def _proxy_music_request(path: str, payload: dict | None = None, timeout: int = 5):
+    if not READ_ONLY:
+        return None
+    if MASTER_INTERNAL_URL.startswith("http://localhost"):
+        return None
+    try:
+        response = requests.post(
+            f"{MASTER_INTERNAL_URL}{path}",
+            json=payload or {},
+            timeout=timeout,
+        )
+        return response
+    except Exception as exc:
+        logger.warning("[MUSIC] Proxy to master failed: %s", exc)
+        return None
+
+
+@app.route("/api/music/session/start", methods=["POST"])
+def api_music_session_start():
+    payload = request.get_json() or {}
+    if READ_ONLY:
+        response = _proxy_music_request("/api/music/session/start", payload)
+        if response is not None:
+            return jsonify(response.json()), response.status_code
+
+    address = (payload.get("address") or "").strip()
+    session_id = f"MUSIC-{int(time.time())}-{secrets.token_hex(4)}"
+    sessions = load_json(MUSIC_SESSIONS_FILE, [])
+    sessions.append({
+        "session_id": session_id,
+        "address": address,
+        "started_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "source": payload.get("source", "modal"),
+        "user_agent": request.headers.get("User-Agent", ""),
+    })
+    save_json(MUSIC_SESSIONS_FILE, sessions)
+    return jsonify({"ok": True, "session_id": session_id}), 200
+
+
+@app.route("/api/music/session/end", methods=["POST"])
+def api_music_session_end():
+    payload = request.get_json() or {}
+    if READ_ONLY:
+        response = _proxy_music_request("/api/music/session/end", payload)
+        if response is not None:
+            return jsonify(response.json()), response.status_code
+
+    session_id = (payload.get("session_id") or "").strip()
+    if not session_id:
+        return jsonify({"ok": False, "error": "session_id required"}), 400
+    sessions = load_json(MUSIC_SESSIONS_FILE, [])
+    for session in sessions:
+        if session.get("session_id") == session_id and not session.get("ended_at"):
+            session["ended_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+            session["ended_reason"] = payload.get("reason", "modal_close")
+            break
+    save_json(MUSIC_SESSIONS_FILE, sessions)
+    return jsonify({"ok": True, "session_id": session_id}), 200
+
+
+@app.route("/api/music/gps_telemetry", methods=["POST"])
+def api_music_gps_telemetry():
+    payload = request.get_json() or {}
+    if READ_ONLY:
+        response = _proxy_music_request("/api/music/gps_telemetry", payload)
+        if response is not None:
+            return jsonify(response.json()), response.status_code
+
+    latitude = payload.get("latitude")
+    longitude = payload.get("longitude")
+    if latitude is None or longitude is None:
+        return jsonify({"ok": False, "error": "latitude and longitude required"}), 400
+
+    entry = {
+        "session_id": payload.get("session_id"),
+        "address": payload.get("address"),
+        "latitude": latitude,
+        "longitude": longitude,
+        "altitude": payload.get("altitude"),
+        "speed": payload.get("speed"),
+        "heading": payload.get("heading"),
+        "timestamp": payload.get("timestamp") or time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "entry_id": f"MUSIC-GPS-{int(time.time())}-{secrets.token_hex(4)}",
+    }
+    gps_data = load_json(MUSIC_GPS_FILE, [])
+    gps_data.append(entry)
+    if len(gps_data) > 1000:
+        gps_data = gps_data[-1000:]
+    save_json(MUSIC_GPS_FILE, gps_data)
+    return jsonify({"ok": True, "entry_id": entry["entry_id"]}), 200
+
+
 @app.route("/api/music/tracks")
 def api_music_tracks_compact():
     """Compact alias for the v1 tracks endpoint."""
@@ -19305,8 +19526,23 @@ def save_nft_registry(registry):
 @app.route("/api/v1/nfts", methods=["GET"])
 def api_v1_nfts():
     """Get all NFTs"""
+    if READ_ONLY and not MASTER_INTERNAL_URL.startswith("http://localhost"):
+        try:
+            response = requests.get(f"{MASTER_INTERNAL_URL}/api/v1/nfts", timeout=5)
+            if response.ok:
+                data = response.json()
+                nfts = data.get("nfts", [])
+                for nft in nfts:
+                    nft["image_url"] = normalize_image_url(nft.get("image_url"))
+                return jsonify({"status": "success", "nfts": nfts}), 200
+        except Exception as exc:
+            logger.warning("[NFT] Failed to fetch from master: %s", exc)
+
     registry = load_nft_registry()
-    return jsonify({"status": "success", "nfts": registry.get("nfts", [])}), 200
+    nfts = registry.get("nfts", [])
+    for nft in nfts:
+        nft["image_url"] = normalize_image_url(nft.get("image_url"))
+    return jsonify({"status": "success", "nfts": nfts}), 200
 
 
 @app.route("/api/v1/nfts/mint", methods=["POST"])

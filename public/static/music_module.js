@@ -1,293 +1,191 @@
-// PR-5: Shared Music/Playlists Module
-// Used by both wallet widget and full wallet page
-// Implements offline-first architecture with localStorage caching
+// PR-5: Global Music Modal Module
+// Handles session tracking + GPS telemetry sampling.
 
-// PR-5a: Guard against duplicate loading
-if (typeof window.MusicModule !== 'undefined') {
-    console.log('[MusicModule] Already loaded, skipping redeclaration');
+if (typeof window.MusicModal !== 'undefined') {
+  console.log('[MusicModal] Already loaded');
 } else {
-    window.MusicModule = (function() {
-        'use strict';
+  window.MusicModal = (function () {
+    'use strict';
 
-        // Private state
-    let currentAddress = null;
-    let library = [];
-    let playlists = [];
-    let selectedPlaylist = null;
+    let gpsIntervalId = null;
+    let sessionId = null;
+    let sessionActive = false;
 
-    // Cache keys
-    const CACHE_PREFIX = 'music_cache:';
-    const getCacheKey = (addr, type) => `${CACHE_PREFIX}${addr}:${type}`;
+    function masterBase() {
+      const base = window.THRONOS_CONFIG && window.THRONOS_CONFIG.MASTER_PUBLIC_URL
+        ? window.THRONOS_CONFIG.MASTER_PUBLIC_URL
+        : '';
+      return base.replace(/\/$/, '');
+    }
 
-    // Initialize module with address
-    function init(address) {
-        if (!address) {
-            console.error('[MusicModule] No address provided');
-            return Promise.reject(new Error('Address required'));
-        }
+    function resolveMasterUrl(path) {
+      const base = masterBase();
+      if (!base) return path;
+      const normalized = path.startsWith('/') ? path : `/${path}`;
+      return `${base}${normalized}`;
+    }
 
-        currentAddress = address;
+    function getAddress() {
+      return window.walletSession && typeof window.walletSession.getAddress === 'function'
+        ? window.walletSession.getAddress()
+        : '';
+    }
 
-        // Load from cache first (offline support)
-        loadFromCache();
+    async function startSession() {
+      if (sessionActive) return sessionId;
+      const payload = {
+        address: getAddress(),
+        source: 'modal'
+      };
+      const resp = await fetch(resolveMasterUrl('/api/music/session/start'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || data.ok === false) {
+        throw new Error(data.error || 'Failed to start music session');
+      }
+      sessionId = data.session_id || data.id || null;
+      sessionActive = true;
+      startGpsSampling();
+      updateStatus(`Session started: ${sessionId || 'active'}`);
+      return sessionId;
+    }
 
-        // Fetch fresh data in background
-        return Promise.all([
-            fetchLibrary(address),
-            fetchPlaylists(address)
-        ]).then(() => {
-            console.log('[MusicModule] Initialized for', address);
-        }).catch(err => {
-            console.error('[MusicModule] Failed to fetch data:', err);
-            // Graceful degradation - use cached data
+    async function endSession(reason = 'modal_close') {
+      if (!sessionActive) {
+        stopGpsSampling();
+        return null;
+      }
+      const payload = {
+        session_id: sessionId,
+        address: getAddress(),
+        reason
+      };
+      try {
+        await fetch(resolveMasterUrl('/api/music/session/end'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
         });
+      } catch (e) {
+        console.warn('[MusicModal] Failed to end session', e);
+      }
+      sessionActive = false;
+      const endedId = sessionId;
+      sessionId = null;
+      stopGpsSampling();
+      updateStatus('Session ended');
+      return endedId;
     }
 
-    // Load from localStorage (offline support)
-    function loadFromCache() {
-        try {
-            const cachedLibrary = localStorage.getItem(getCacheKey(currentAddress, 'library'));
-            const cachedPlaylists = localStorage.getItem(getCacheKey(currentAddress, 'playlists'));
-
-            if (cachedLibrary) {
-                const data = JSON.parse(cachedLibrary);
-                library = data.library || [];
-                console.log('[MusicModule] Loaded', library.length, 'tracks from cache');
-            }
-
-            if (cachedPlaylists) {
-                const data = JSON.parse(cachedPlaylists);
-                playlists = data.playlists || [];
-                console.log('[MusicModule] Loaded', playlists.length, 'playlists from cache');
-            }
-        } catch (e) {
-            console.error('[MusicModule] Failed to load cache:', e);
-        }
+    function startGpsSampling() {
+      stopGpsSampling();
+      if (!navigator.geolocation) {
+        updateStatus('GPS unavailable in this browser.');
+        return;
+      }
+      gpsIntervalId = setInterval(() => {
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            sendTelemetry(position);
+          },
+          (err) => {
+            console.warn('[MusicModal] GPS error', err);
+          },
+          {
+            enableHighAccuracy: true,
+            maximumAge: 10000,
+            timeout: 5000
+          }
+        );
+      }, 5000);
     }
 
-    // Save to localStorage
-    function saveToCache() {
-        try {
-            localStorage.setItem(getCacheKey(currentAddress, 'library'), JSON.stringify({
-                library: library,
-                last_synced: new Date().toISOString()
-            }));
-
-            localStorage.setItem(getCacheKey(currentAddress, 'playlists'), JSON.stringify({
-                playlists: playlists,
-                last_synced: new Date().toISOString()
-            }));
-        } catch (e) {
-            console.error('[MusicModule] Failed to save cache:', e);
-        }
+    function stopGpsSampling() {
+      if (gpsIntervalId) {
+        clearInterval(gpsIntervalId);
+        gpsIntervalId = null;
+      }
     }
 
-    // Fetch library from API
-    async function fetchLibrary(address) {
-        try {
-            const response = await fetch(`/api/music/library?address=${encodeURIComponent(address)}`);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-            const data = await response.json();
-            if (data.ok) {
-                library = data.library || [];
-                saveToCache();
-                console.log('[MusicModule] Fetched', library.length, 'tracks');
-            }
-        } catch (err) {
-            console.error('[MusicModule] Failed to fetch library:', err);
-            throw err;
-        }
+    function sendTelemetry(position) {
+      if (!position || !position.coords) return;
+      const coords = position.coords;
+      const payload = {
+        session_id: sessionId,
+        address: getAddress(),
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+        altitude: coords.altitude,
+        speed: coords.speed,
+        heading: coords.heading,
+        timestamp: new Date().toISOString()
+      };
+      fetch(resolveMasterUrl('/api/music/gps_telemetry'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).catch(() => {
+        // Best-effort telemetry.
+      });
     }
 
-    // Fetch playlists from API
-    async function fetchPlaylists(address) {
-        try {
-            const response = await fetch(`/api/music/playlists?address=${encodeURIComponent(address)}`);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-            const data = await response.json();
-            if (data.ok) {
-                playlists = data.playlists || [];
-                saveToCache();
-                console.log('[MusicModule] Fetched', playlists.length, 'playlists');
-            }
-        } catch (err) {
-            console.error('[MusicModule] Failed to fetch playlists:', err);
-            throw err;
-        }
+    function updateStatus(message) {
+      const el = document.getElementById('musicModalStatus');
+      if (el) el.textContent = message || '';
     }
 
-    // Create new playlist
-    async function createPlaylist(name, visibility = 'private') {
-        if (!currentAddress) {
-            throw new Error('Not initialized');
-        }
-
-        const response = await fetch('/api/music/playlist/update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                address: currentAddress,
-                action: 'create',
-                name: name,
-                visibility: visibility
-            })
-        });
-
-        if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.error || 'Failed to create playlist');
-        }
-
-        const data = await response.json();
-
-        // Refetch playlists
-        await fetchPlaylists(currentAddress);
-
-        return data;
+    function open() {
+      const modal = document.getElementById('musicModal');
+      if (modal) {
+        modal.classList.add('open');
+      }
+      startSession().catch(err => {
+        console.warn('[MusicModal] Failed to start session', err);
+        updateStatus('Failed to start session');
+      });
     }
 
-    // Add track to playlist
-    async function addTrackToPlaylist(playlistId, trackId, position) {
-        if (!currentAddress) {
-            throw new Error('Not initialized');
-        }
-
-        const payload = {
-            address: currentAddress,
-            action: 'add_track',
-            playlist_id: playlistId,
-            track_id: trackId
-        };
-
-        if (position !== undefined && position !== null) {
-            payload.position = position;
-        }
-
-        const response = await fetch('/api/music/playlist/update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-
-        if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.error || 'Failed to add track');
-        }
-
-        const data = await response.json();
-
-        // Refetch playlists
-        await fetchPlaylists(currentAddress);
-
-        return data;
+    function close() {
+      const modal = document.getElementById('musicModal');
+      if (modal) {
+        modal.classList.remove('open');
+      }
+      endSession('modal_close');
     }
 
-    // Remove track from playlist
-    async function removeTrackFromPlaylist(playlistId, trackId) {
-        if (!currentAddress) {
-            throw new Error('Not initialized');
-        }
+    window.addEventListener('beforeunload', () => {
+      stopGpsSampling();
+      if (sessionActive) {
+        endSession('page_unload');
+      }
+    });
 
-        const response = await fetch('/api/music/playlist/update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                address: currentAddress,
-                action: 'remove_track',
-                playlist_id: playlistId,
-                track_id: trackId
-            })
-        });
-
-        if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.error || 'Failed to remove track');
-        }
-
-        const data = await response.json();
-
-        // Refetch playlists
-        await fetchPlaylists(currentAddress);
-
-        return data;
-    }
-
-    // Reorder playlist tracks
-    async function reorderPlaylist(playlistId, trackIds) {
-        if (!currentAddress) {
-            throw new Error('Not initialized');
-        }
-
-        const response = await fetch('/api/music/playlist/update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                address: currentAddress,
-                action: 'reorder',
-                playlist_id: playlistId,
-                track_ids: trackIds
-            })
-        });
-
-        if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.error || 'Failed to reorder playlist');
-        }
-
-        const data = await response.json();
-
-        // Refetch playlists
-        await fetchPlaylists(currentAddress);
-
-        return data;
-    }
-
-    // Refresh data
-    async function refresh() {
-        if (!currentAddress) return;
-
-        await Promise.all([
-            fetchLibrary(currentAddress),
-            fetchPlaylists(currentAddress)
-        ]);
-    }
-
-    // Getters
-    function getLibrary() {
-        return library;
-    }
-
-    function getPlaylists() {
-        return playlists;
-    }
-
-    function getPlaylist(playlistId) {
-        return playlists.find(p => p.playlist_id === playlistId);
-    }
-
-    function getTrack(trackId) {
-        return library.find(t => t.track_id === trackId);
-    }
-
-        // Public API
-        return {
-            init,
-            refresh,
-            getLibrary,
-            getPlaylists,
-            getPlaylist,
-            getTrack,
-            createPlaylist,
-            addTrackToPlaylist,
-            removeTrackFromPlaylist,
-            reorderPlaylist
-        };
-    })();
-
-    // Export for module systems (optional)
-    if (typeof module !== 'undefined' && module.exports) {
-        module.exports = window.MusicModule;
-    }
+    return {
+      open,
+      close,
+      startSession,
+      endSession
+    };
+  })();
 }
+
+window.ThronosMusic = window.ThronosMusic || {};
+window.ThronosMusic.open = function () {
+  const modal = document.getElementById('musicModal');
+  if (modal) {
+    modal.classList.add('open');
+  }
+  if (window.MusicModal && typeof window.MusicModal.open === 'function') {
+    window.MusicModal.open();
+  }
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('walletMusicBtn');
+  if (btn) {
+    btn.addEventListener('click', () => window.ThronosMusic.open());
+  }
+});

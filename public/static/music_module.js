@@ -138,6 +138,10 @@ if (typeof window.MusicModal !== 'undefined') {
     }
 
     function open() {
+      const modal = document.getElementById('musicModal');
+      if (modal) {
+        modal.classList.add('open');
+      }
       startSession().catch(err => {
         console.warn('[MusicModal] Failed to start session', err);
         updateStatus('Failed to start session');
@@ -145,6 +149,10 @@ if (typeof window.MusicModal !== 'undefined') {
     }
 
     function close() {
+      const modal = document.getElementById('musicModal');
+      if (modal) {
+        modal.classList.remove('open');
+      }
       endSession('modal_close');
     }
 
@@ -163,3 +171,21 @@ if (typeof window.MusicModal !== 'undefined') {
     };
   })();
 }
+
+window.ThronosMusic = window.ThronosMusic || {};
+window.ThronosMusic.open = function () {
+  const modal = document.getElementById('musicModal');
+  if (modal) {
+    modal.classList.add('open');
+  }
+  if (window.MusicModal && typeof window.MusicModal.open === 'function') {
+    window.MusicModal.open();
+  }
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('walletMusicBtn');
+  if (btn) {
+    btn.addEventListener('click', () => window.ThronosMusic.open());
+  }
+});

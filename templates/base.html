@@ -256,6 +256,9 @@
         backdrop-filter: blur(10px);
         pointer-events: auto;
     }
+    .music-modal.open {
+        display: flex;
+    }
 
     /* Chain Tokens Widget (Footer) — AUTO-HIDE FIXED FOOTER */
     .chain-tokens-widget{
@@ -1517,6 +1520,9 @@
                 <div class="wallet-popup-actions">
                     <button id="walletPinBtn" class="wallet-mini-btn" title="Pin">Pin</button>
                     <button id="walletLockBtn" class="wallet-mini-btn" title="Lock">Lock</button>
+                    {% if music_modal_enabled|default(true) %}
+                    <button id="walletMusicBtn" class="wallet-mini-btn" title="Music">🎵 Music</button>
+                    {% endif %}
                 </div>
             </div>
 
@@ -3112,7 +3118,7 @@ function closeSendModal(event) {
 function openMusicModal() {
     const modal = document.getElementById('musicModal');
     if (!modal) return;
-    modal.style.display = 'flex';
+    modal.classList.add('open');
     if (window.MusicModal && typeof window.MusicModal.open === 'function') {
         window.MusicModal.open();
     }
@@ -3122,7 +3128,7 @@ function closeMusicModal(event) {
     if (event && event.target && event.target.id !== 'musicModal') return;
     const modal = document.getElementById('musicModal');
     if (!modal) return;
-    modal.style.display = 'none';
+    modal.classList.remove('open');
     if (window.MusicModal && typeof window.MusicModal.close === 'function') {
         window.MusicModal.close();
     }
@@ -3969,7 +3975,7 @@ function anyModalOpen() {
         const modal = document.getElementById(id);
         if (!modal) return false;
         if (id === 'musicModal') {
-            return modal.style.display === 'flex';
+            return modal.classList.contains('open');
         }
         return modal.classList.contains('active');
     });

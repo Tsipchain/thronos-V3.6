@@ -2957,7 +2957,7 @@ def _base_token_catalog():
 
 def normalize_image_url(url: str | None) -> str:
     if not url:
-        return f"{ASSET_CDN_BASE}/static/img/logo.png"
+        return f"{ASSET_CDN_BASE}/static/placeholders/token.png"
     if url.startswith("http"):
         return url
     return f"{ASSET_CDN_BASE}/{url.lstrip('/')}"

@@ -1,3 +1,23 @@
+(function () {
+  const host = window.location.hostname;
+
+  // Always safe defaults
+  const DEFAULT_API_BASE = "/api";
+  const DEFAULT_MASTER =
+    (host.includes("vercel.app") || host.includes("onrender.com"))
+      ? "https://thrchain.up.railway.app"
+      : window.location.origin;
+
+  window.THRONOS_CONFIG = window.THRONOS_CONFIG || {};
+  window.THRONOS_CONFIG.api_base = window.THRONOS_CONFIG.api_base || DEFAULT_API_BASE;
+  window.THRONOS_CONFIG.master_url = window.THRONOS_CONFIG.master_url || DEFAULT_MASTER;
+
+  // HARD BLOCK localhost fallback
+  if ((window.THRONOS_CONFIG.master_url || "").includes("localhost")) {
+    window.THRONOS_CONFIG.master_url = DEFAULT_MASTER;
+  }
+})();
+
 (function(window){
   if (window.ThronosWallet) return;
 
@@ -8,18 +28,29 @@
     TX_STATUS: 'thronos:wallet:tx_status'
   };
 
-  const MASTER_PUBLIC_URL = (window.THRONOS_CONFIG && window.THRONOS_CONFIG.MASTER_PUBLIC_URL)
-    ? window.THRONOS_CONFIG.MASTER_PUBLIC_URL.replace(/\/$/, '')
-    : '';
+  const API_BASE = (window.THRONOS_CONFIG && window.THRONOS_CONFIG.api_base)
+    ? window.THRONOS_CONFIG.api_base.replace(/\/$/, '')
+    : '/api';
+  const MASTER_URL = (window.THRONOS_CONFIG && window.THRONOS_CONFIG.master_url)
+    ? window.THRONOS_CONFIG.master_url.replace(/\/$/, '')
+    : window.location.origin;
 
   function resolveMasterUrl(path){
-    if (!MASTER_PUBLIC_URL) return path;
+    if (!MASTER_URL) return path;
     const normalized = path.startsWith('/') ? path : `/${path}`;
-    return `${MASTER_PUBLIC_URL}${normalized}`;
+    return `${MASTER_URL}${normalized}`;
+  }
+
+  function resolveApiUrl(path){
+    const normalized = path.startsWith('/') ? path : `/${path}`;
+    if (!API_BASE || API_BASE === '/api') {
+      return normalized.startsWith('/api') ? normalized : `/api${normalized}`;
+    }
+    return `${API_BASE}${normalized}`;
   }
 
   async function verifyWalletConnection(address){
-    const url = resolveMasterUrl(`/api/balances?address=${encodeURIComponent(address)}`);
+    const url = resolveApiUrl(`/balances?address=${encodeURIComponent(address)}`);
     try {
       const resp = await fetch(url);
       if (!resp.ok) throw new Error(`wallet_balance_fetch_failed:${resp.status}`);

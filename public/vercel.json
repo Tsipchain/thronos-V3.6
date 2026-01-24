@@ -8,11 +8,13 @@
   ],
   "rewrites": [
     { "source": "/chat", "destination": "https://thrchain.up.railway.app/chat" },
-    { "source": "/api/v1/read/api/(.*)", "destination": "https://node-2.up.railway.app/api/$1" },
+    { "source": "/api/v1/read/api/(.*)", "destination": "https://thrchain.up.railway.app/api/$1" },
+    { "source": "/api/v1/write/api/(.*)", "destination": "https://thrchain.up.railway.app/api/$1" },
     { "source": "/api/v1/write/(.*)", "destination": "https://thrchain.up.railway.app/api/$1" },
-    { "source": "/api/v1/read/(.*)", "destination": "https://node-2.up.railway.app/api/$1" },
+    { "source": "/api/v1/read/(.*)", "destination": "https://thrchain.up.railway.app/api/$1" },
     { "source": "/api/v1/music/(.*)", "destination": "https://thrchain.up.railway.app/api/v1/music/$1" },
     { "source": "/api/(.*)", "destination": "https://node-2.up.railway.app/api/$1" },
+    { "source": "/static/nft_images/(.*)", "destination": "https://thrchain.up.railway.app/media/nft_images/$1" },
     { "source": "/media/(.*)", "destination": "https://thrchain.up.railway.app/media/$1" }
   ],
   "headers": [

@@ -11,33 +11,100 @@
     const inflightRequests = new Map();
 
     const nativeFetch = window.fetch.bind(window);
-    const cfg = window.THRONOS_CONFIG || {};
-    const readBase = (cfg.apiReadBase || '/api').replace(/\/$/, '');
-    const writeBase = (cfg.apiWriteBase || readBase || '/api').replace(/\/$/, '');
 
-    function shouldRouteRpc(url) {
-        if (typeof url !== 'string') return false;
-        if (!url.startsWith('/api/')) return false;
-        return true;
+    function isVercelHost() {
+        return window.location.hostname.endsWith('vercel.app');
     }
 
-    function resolveRpcUrl(url, method) {
-        if (!shouldRouteRpc(url)) return url;
-        const upper = (method || 'GET').toUpperCase();
-        const base = (upper === 'GET' || upper === 'HEAD') ? readBase : writeBase;
-        if (!base || base === '/api') return url;
-        if (base.startsWith('http')) {
-            return `${base}${url}`;
+    function normalizeApiPath(path) {
+        if (!path) return '/api/health';
+        let p = String(path).trim();
+
+        try {
+            if (/^https?:\/\//i.test(p)) {
+                const url = new URL(p);
+                p = url.pathname + (url.search || '');
+            }
+        } catch (_) {
+            // Ignore URL parsing failures.
         }
-        return `${base}${url}`;
+
+        if (!p.startsWith('/')) p = `/${p}`;
+
+        while (/^\/(api\/v1\/(read|write)|v1\/(read|write))\//.test(p)) {
+            p = p.replace(/^\/api\/v1\/(read|write)\//, '/');
+            p = p.replace(/^\/v1\/(read|write)\//, '/');
+        }
+        p = p.replace(/\/{2,}/g, '/');
+
+        if (!p.startsWith('/api/')) {
+            p = `/api${p}`;
+        }
+
+        p = p.replace(/^\/api\/api\//, '/api/');
+
+        return p;
     }
 
-    function smartFetch(url, opts = {}) {
-        if (typeof url === 'string') {
-            const resolved = resolveRpcUrl(url, opts.method);
-            return nativeFetch(resolved, opts);
+    function getReadBase() {
+        return isVercelHost() ? '/api/v1/read' : '';
+    }
+
+    function getWriteBase() {
+        return isVercelHost() ? '/api/v1/write' : '';
+    }
+
+    function smartFetchRaw(path, opts = {}) {
+        if (typeof path === 'string') {
+            const trimmed = path.trim();
+            if (/^https?:\/\//i.test(trimmed)) {
+                return nativeFetch(trimmed, opts);
+            }
+            const lowered = trimmed.replace(/^\/+/, '').toLowerCase();
+            if (lowered.startsWith('static/')
+                || lowered.startsWith('media/')
+                || lowered.startsWith('img/')
+                || lowered.startsWith('assets/')
+                || lowered.startsWith('favicon')
+                || lowered.startsWith('robots.txt')) {
+                return nativeFetch(trimmed, opts);
+            }
         }
-        return nativeFetch(url, opts);
+        const method = (opts.method || 'GET').toUpperCase();
+        const apiPath = normalizeApiPath(path);
+        const base = method === 'GET' ? getReadBase() : getWriteBase();
+        const url = `${base}${apiPath}`;
+
+        return nativeFetch(url, {
+            credentials: 'include',
+            ...opts,
+            headers: {
+                'Content-Type': 'application/json',
+                ...(opts.headers || {})
+            }
+        });
+    }
+
+    async function smartFetch(path, opts = {}) {
+        const res = await smartFetchRaw(path, opts);
+
+        const text = await res.text();
+        let data = null;
+        try {
+            data = text ? JSON.parse(text) : null;
+        } catch (_) {
+            data = null;
+        }
+
+        if (!res.ok) {
+            const err = (data && (data.error || data.message)) || `http_${res.status}`;
+            const error = new Error(err);
+            error.status = res.status;
+            error.data = data;
+            throw error;
+        }
+
+        return data;
     }
 
     /**
@@ -47,9 +114,8 @@
      * @returns {Promise<any>}
      */
     async function fetchJSONOnce(url, opts = {}) {
-        const method = opts.method || 'GET';
-        const resolvedUrl = resolveRpcUrl(url, method);
-        const key = `${method}:${resolvedUrl}`;
+        const method = (opts.method || 'GET').toUpperCase();
+        const key = `${method}:${normalizeApiPath(url)}`;
 
         // Return existing in-flight request if any
         if (inflightRequests.has(key)) {
@@ -57,8 +123,7 @@
         }
 
         // Create new request
-        const promise = smartFetch(resolvedUrl, opts)
-            .then(response => response.json())
+        const promise = smartFetch(url, { ...opts, method })
             .finally(() => {
                 // Clean up after request completes
                 inflightRequests.delete(key);
@@ -149,12 +214,13 @@
     window.FetchUtils = {
         fetchJSONOnce,
         smartFetch,
+        smartFetchRaw,
         VisibilityGatedInterval,
         isPopupVisible
     };
 
     if (!window.__thronosSmartFetchInstalled) {
-        window.fetch = smartFetch;
+        window.fetch = smartFetchRaw;
         window.__thronosSmartFetchInstalled = true;
     }
 

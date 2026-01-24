@@ -1,21 +1,10 @@
 (function () {
-  const host = window.location.hostname;
-
   // Always safe defaults
   const DEFAULT_API_BASE = "/api";
-  const DEFAULT_MASTER =
-    (host.includes("vercel.app") || host.includes("onrender.com"))
-      ? "https://thrchain.up.railway.app"
-      : window.location.origin;
 
   window.THRONOS_CONFIG = window.THRONOS_CONFIG || {};
-  window.THRONOS_CONFIG.api_base = window.THRONOS_CONFIG.api_base || DEFAULT_API_BASE;
-  window.THRONOS_CONFIG.master_url = window.THRONOS_CONFIG.master_url || DEFAULT_MASTER;
-
-  // HARD BLOCK localhost fallback
-  if ((window.THRONOS_CONFIG.master_url || "").includes("localhost")) {
-    window.THRONOS_CONFIG.master_url = DEFAULT_MASTER;
-  }
+  window.THRONOS_CONFIG.apiReadBase = window.THRONOS_CONFIG.apiReadBase || DEFAULT_API_BASE;
+  window.THRONOS_CONFIG.apiWriteBase = window.THRONOS_CONFIG.apiWriteBase || window.THRONOS_CONFIG.apiReadBase;
 })();
 
 (function(window){
@@ -28,29 +17,23 @@
     TX_STATUS: 'thronos:wallet:tx_status'
   };
 
-  const API_BASE = (window.THRONOS_CONFIG && window.THRONOS_CONFIG.api_base)
-    ? window.THRONOS_CONFIG.api_base.replace(/\/$/, '')
-    : '/api';
-  const MASTER_URL = (window.THRONOS_CONFIG && window.THRONOS_CONFIG.master_url)
-    ? window.THRONOS_CONFIG.master_url.replace(/\/$/, '')
-    : window.location.origin;
+  const CFG = window.THRONOS_CONFIG || {};
+  const API_READ_BASE = (CFG.apiReadBase || '/api').replace(/\/$/, '');
+  const API_WRITE_BASE = (CFG.apiWriteBase || API_READ_BASE).replace(/\/$/, '');
 
-  function resolveMasterUrl(path){
-    if (!MASTER_URL) return path;
+  function resolveApiBase(base, path){
     const normalized = path.startsWith('/') ? path : `/${path}`;
-    return `${MASTER_URL}${normalized}`;
-  }
-
-  function resolveApiUrl(path){
-    const normalized = path.startsWith('/') ? path : `/${path}`;
-    if (!API_BASE || API_BASE === '/api') {
+    if (!base || base === '/api') {
       return normalized.startsWith('/api') ? normalized : `/api${normalized}`;
     }
-    return `${API_BASE}${normalized}`;
+    if (base.startsWith('http')) {
+      return `${base}${normalized}`;
+    }
+    return `${base}${normalized}`;
   }
 
   async function verifyWalletConnection(address){
-    const url = resolveApiUrl(`/balances?address=${encodeURIComponent(address)}`);
+    const url = resolveApiBase(API_READ_BASE, `/balances?address=${encodeURIComponent(address)}`);
     try {
       const resp = await fetch(url);
       if (!resp.ok) throw new Error(`wallet_balance_fetch_failed:${resp.status}`);
@@ -182,7 +165,7 @@
       passphrase
     };
 
-    const resp = await fetch(resolveMasterUrl('/api/wallet/send'), {
+    const resp = await fetch(resolveApiBase(API_WRITE_BASE, '/wallet/send'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -197,7 +180,7 @@
 
   async function getHistory({ tab = 'all', limit = 200 } = {}){
     const address = ensureWallet();
-    const resp = await fetch(resolveMasterUrl(`/wallet_data/${address}`));
+    const resp = await fetch(resolveApiBase(API_READ_BASE, `/wallet_data/${address}`));
     const data = await resp.json();
     const txs = Array.isArray(data.transactions) ? data.transactions : [];
     const filtered = filterByTab(tab, txs).slice(0, limit || txs.length);

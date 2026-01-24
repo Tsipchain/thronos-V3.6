@@ -11,8 +11,9 @@
     const inflightRequests = new Map();
 
     const nativeFetch = window.fetch.bind(window);
-    const node1Base = (window.TH_NODE1_RPC_URL || window.location.origin || '').replace(/\/$/, '');
-    const node2Base = (window.TH_NODE2_RPC_URL || node1Base || window.location.origin || '').replace(/\/$/, '');
+    const cfg = window.THRONOS_CONFIG || {};
+    const readBase = (cfg.apiReadBase || '/api').replace(/\/$/, '');
+    const writeBase = (cfg.apiWriteBase || readBase || '/api').replace(/\/$/, '');
 
     function shouldRouteRpc(url) {
         if (typeof url !== 'string') return false;
@@ -23,8 +24,11 @@
     function resolveRpcUrl(url, method) {
         if (!shouldRouteRpc(url)) return url;
         const upper = (method || 'GET').toUpperCase();
-        const base = (upper === 'GET' || upper === 'HEAD') ? node2Base : node1Base;
-        if (!base) return url;
+        const base = (upper === 'GET' || upper === 'HEAD') ? readBase : writeBase;
+        if (!base || base === '/api') return url;
+        if (base.startsWith('http')) {
+            return `${base}${url}`;
+        }
         return `${base}${url}`;
     }
 

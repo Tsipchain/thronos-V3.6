@@ -5,8 +5,17 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="cgminer-kit-url" content="{{ CGMINER_KIT_URL if CGMINER_KIT_URL is defined else '' }}">
-<link rel="icon" type="image/png" href="{{ url_for('static', filename='img/thronos-token.png') }}">
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/thronos-token.png') }}">
   <link rel="shortcut icon" type="image/png" href="{{ url_for('static', filename='img/thronos-token.png') }}">
+  <script>
+    window.THRONOS_CONFIG = {
+      NODE_ROLE: "{{ node_role|default('master') }}",
+      MASTER_PUBLIC_URL: "{{ master_public_url|default('https://thrchain.up.railway.app') }}",
+      API_BASE: "/api",
+      CDN_BASE: "{{ asset_cdn_base|default('https://thrchain.vercel.app') }}",
+      MUSIC_MODAL_ENABLED: {{ 'true' if music_modal_enabled|default(true) else 'false' }}
+    };
+  </script>
   <script src="https://thrchain.vercel.app/static/wallet_session.js"></script>
   <style>
     /* Global Styles */
@@ -169,6 +178,64 @@
         filter: drop-shadow(0 0 4px #ff6600);
     }
 
+    .music-modal-btn {
+        background: rgba(0, 30, 15, 0.9);
+        border: 1px solid rgba(0, 255, 102, 0.4);
+        color: #00ff66;
+        font-size: 0.85em;
+        padding: 6px 10px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+    .music-modal-btn:hover {
+        background: rgba(0, 60, 30, 0.9);
+        border-color: rgba(255, 215, 0, 0.6);
+        color: #ffd700;
+    }
+
+    .music-modal {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.75);
+        z-index: 4000;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+    }
+    .music-modal-content {
+        background: linear-gradient(135deg, #001b0f 0%, #000 80%);
+        border: 2px solid rgba(0, 255, 102, 0.6);
+        border-radius: 12px;
+        width: min(860px, 96vw);
+        max-height: 90vh;
+        overflow: auto;
+        padding: 20px;
+        color: #e6ffe5;
+        box-shadow: 0 0 30px rgba(0, 255, 102, 0.3);
+    }
+    .music-modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+        border-bottom: 1px solid rgba(0, 255, 102, 0.3);
+        padding-bottom: 10px;
+    }
+    .music-modal-title {
+        font-size: 1.2em;
+        font-weight: bold;
+        color: #00ff66;
+    }
+    .music-modal-close {
+        background: transparent;
+        border: 1px solid rgba(0, 255, 102, 0.4);
+        color: #00ff66;
+        font-size: 0.9em;
+        padding: 4px 10px;
+        cursor: pointer;
+    }
+
     /* Wallet Balance Popup Widget */
     .wallet-balance-popup {
         display: none;
@@ -188,6 +255,9 @@
         color: #e6ffe5;
         backdrop-filter: blur(10px);
         pointer-events: auto;
+    }
+    .music-modal.open {
+        display: flex;
     }
 
     /* Chain Tokens Widget (Footer) — AUTO-HIDE FIXED FOOTER */
@@ -1434,6 +1504,11 @@
     <button id="walletLoginBtn" class="wallet-login-btn" onclick="openHeaderWalletModal()">
         💼 <span class="lang-el">Σύνδεση</span><span class="lang-en">Login</span>
     </button>
+    {% if music_modal_enabled|default(true) %}
+    <button id="musicModalBtn" class="music-modal-btn" onclick="openMusicModal()">
+        🎵 <span class="lang-el">Μουσική</span><span class="lang-en">Music</span>
+    </button>
+    {% endif %}
     <div id="walletStatus" class="wallet-status">
         <img src="{{ url_for('static', filename='img/thronos-token.png') }}" alt="🔥" class="wallet-fire-icon" />
         <span id="walletAddrShort"></span>
@@ -1445,6 +1520,9 @@
                 <div class="wallet-popup-actions">
                     <button id="walletPinBtn" class="wallet-mini-btn" title="Pin">Pin</button>
                     <button id="walletLockBtn" class="wallet-mini-btn" title="Lock">Lock</button>
+                    {% if music_modal_enabled|default(true) %}
+                    <button id="walletMusicBtn" class="wallet-mini-btn" title="Music">🎵 Music</button>
+                    {% endif %}
                 </div>
             </div>
 
@@ -1505,6 +1583,29 @@
         </div>
     </div>
 </div>
+
+{% if music_modal_enabled|default(true) %}
+<div class="music-modal" id="musicModal" onclick="closeMusicModal(event)">
+    <div class="music-modal-content" onclick="event.stopPropagation()">
+        <div class="music-modal-header">
+            <div class="music-modal-title">🎵 <span class="lang-el">Μουσική</span><span class="lang-en">Music</span></div>
+            <button class="music-modal-close" onclick="closeMusicModal()">✖</button>
+        </div>
+        <div id="musicModalBody">
+            <p style="margin: 0 0 12px 0; color: #9f9;">
+                <span class="lang-en">Listening session active. GPS telemetry refreshes every 5 seconds.</span>
+                <span class="lang-el">Η συνεδρία μουσικής είναι ενεργή. GPS telemetry κάθε 5 δευτερόλεπτα.</span>
+            </p>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <button class="wallet-mini-btn" onclick="window.MusicModal?.startSession()">▶️ Start Session</button>
+                <button class="wallet-mini-btn" onclick="window.MusicModal?.endSession()">⏹️ End Session</button>
+                <button class="wallet-mini-btn" onclick="window.open('/music', '_blank')">Open Full Music Page</button>
+            </div>
+            <div id="musicModalStatus" style="margin-top: 12px; font-size: 12px; color: #b6ffcc;"></div>
+        </div>
+    </div>
+</div>
+{% endif %}
 
 <!-- Send Modal -->
 <div class="send-modal" id="sendModal" onclick="closeSendModal(event)">
@@ -2093,6 +2194,34 @@ function updateWalletUI() {
     }
 }
 
+const MASTER_PUBLIC_URL = (window.THRONOS_CONFIG && window.THRONOS_CONFIG.MASTER_PUBLIC_URL)
+    ? window.THRONOS_CONFIG.MASTER_PUBLIC_URL.replace(/\/$/, '')
+    : '';
+
+function resolveMasterUrl(path) {
+    if (!MASTER_PUBLIC_URL) return path;
+    const normalized = path.startsWith('/') ? path : `/${path}`;
+    return `${MASTER_PUBLIC_URL}${normalized}`;
+}
+
+function setDisconnectedUI() {
+    if (window.walletSession && typeof walletSession.disconnect === 'function') {
+        walletSession.disconnect();
+    }
+    walletBalancesLoaded = false;
+    window.tokenBalances = {};
+    if (typeof updateHeaderWalletUi === 'function') {
+        updateHeaderWalletUi();
+    }
+    if (typeof updateWalletUI === 'function') {
+        updateWalletUI();
+    }
+    if (typeof showWalletLoginForm === 'function') {
+        showWalletLoginForm();
+    }
+    setWalletOpen(false);
+}
+
 // Wallet Balance Widget Functions
 let walletBalancesLoaded = false;
 
@@ -2136,10 +2265,15 @@ async function loadWalletBalances(force = false) {
 
         // PR-5a: Use fetchJSONOnce for request coalescing
         // Show all tokens including zero balances for multi-chain assets
-        const url = `/api/balances?address=${encodeURIComponent(wallet)}&show_zero=true`;
+        const url = resolveMasterUrl(`/api/balances?address=${encodeURIComponent(wallet)}&show_zero=true`);
         const data = await (window.FetchUtils?.fetchJSONOnce
             ? window.FetchUtils.fetchJSONOnce(url)
-            : fetch(url).then(r => r.json()));
+            : fetch(url).then(r => {
+                if (!r.ok) {
+                    throw new Error(`Balance fetch failed (${r.status})`);
+                }
+                return r.json();
+            }));
 
         renderWalletBalances(data);
         walletBalancesLoaded = true;
@@ -2150,6 +2284,7 @@ async function loadWalletBalances(force = false) {
                 Failed to load balances
             </div>
         `;
+        setDisconnectedUI();
     } finally {
         // PR-5a: Clear load guard
         window.__walletLoadInProgress = false;
@@ -2977,6 +3112,25 @@ function closeSendModal(event) {
             clearInterval(txPollInterval);
             txPollInterval = null;
         }
+    }
+}
+
+function openMusicModal() {
+    const modal = document.getElementById('musicModal');
+    if (!modal) return;
+    modal.classList.add('open');
+    if (window.MusicModal && typeof window.MusicModal.open === 'function') {
+        window.MusicModal.open();
+    }
+}
+
+function closeMusicModal(event) {
+    if (event && event.target && event.target.id !== 'musicModal') return;
+    const modal = document.getElementById('musicModal');
+    if (!modal) return;
+    modal.classList.remove('open');
+    if (window.MusicModal && typeof window.MusicModal.close === 'function') {
+        window.MusicModal.close();
     }
 }
 
@@ -3819,7 +3973,11 @@ function anyModalOpen() {
     const modals = ['sendModal', 'receiveModal', 'walletHistoryModal', 'bridgeModal', 'musicModal'];
     return modals.some(id => {
         const modal = document.getElementById(id);
-        return modal && modal.classList.contains('active');
+        if (!modal) return false;
+        if (id === 'musicModal') {
+            return modal.classList.contains('open');
+        }
+        return modal.classList.contains('active');
     });
 }
 
@@ -3837,7 +3995,7 @@ async function submitCrossChainSend(network, to, amount, token, from, secret, re
             amount: amount              // Amount to withdraw
         };
 
-        const response = await fetch('/api/bridge/withdraw', {
+        const response = await fetch(resolveMasterUrl('/api/bridge/withdraw'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -3887,7 +4045,10 @@ async function loadTokenBalances() {
     if (!wallet) return;
 
     try {
-        const response = await fetch(`/api/balances?address=${encodeURIComponent(wallet)}&show_zero=true`);
+        const response = await fetch(resolveMasterUrl(`/api/balances?address=${encodeURIComponent(wallet)}&show_zero=true`));
+        if (!response.ok) {
+            throw new Error(`Balance fetch failed (${response.status})`);
+        }
         const data = await response.json();
         if (data.tokens) {
             // Update balances map
@@ -3920,6 +4081,7 @@ async function loadTokenBalances() {
         }
     } catch (e) {
         console.error('Failed to load token balances:', e);
+        setDisconnectedUI();
     }
 }
 async function loadCustomTokens() {
@@ -4126,7 +4288,7 @@ async function submitSend() {
                 tx_id: clientTxId,
                 expected_fee: fee
             };
-            response = await fetch('/send_thr', {
+            response = await fetch(resolveMasterUrl('/send_thr'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -4141,7 +4303,7 @@ async function submitSend() {
                 auth_secret: secret,
                 speed: selectedSpeed // optional fee tier hint
             };
-            response = await fetch('/api/tokens/transfer', {
+            response = await fetch(resolveMasterUrl('/api/tokens/transfer'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -4972,7 +5134,7 @@ function downloadCGMinerKit() {
 <script src="{{ url_for('static', filename='fetch_utils.js') }}?v={{ build_id }}"></script>
 <script src="https://thrchain.vercel.app/static/wallet_sdk.js"></script>
 <script src="https://thrchain.vercel.app/static/wallet_auth.js"></script>
-<script src="https://thrchain.vercel.app/static/music_module.js"></script>
+<script src="{{ asset_cdn_base|default('https://thrchain.vercel.app') }}/static/music_module.js"></script>
 
 <script>
 // PR-5a: Init guard to prevent double initialization

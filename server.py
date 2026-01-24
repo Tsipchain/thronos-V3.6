@@ -359,6 +359,10 @@ def inject_build_id():
         build_id=build_id,
         node1_rpc_url=node1_rpc_url,
         node2_rpc_url=node2_rpc_url,
+        node_role=NODE_ROLE,
+        master_public_url=MASTER_PUBLIC_URL,
+        asset_cdn_base=ASSET_CDN_BASE,
+        music_modal_enabled=MUSIC_MODAL_ENABLED,
     )
 
 
@@ -486,6 +490,7 @@ MINING_WATCHDOG_MAX_REQUESTS = int(os.getenv("MINING_WATCHDOG_MAX_REQUESTS", "60
 MINING_WATCHDOG_BAN_SECONDS = int(os.getenv("MINING_WATCHDOG_BAN_SECONDS", "300"))
 HEARTBEAT_ENABLED = os.getenv("HEARTBEAT_ENABLED", "1").lower() in ("1", "true", "yes")
 HEARTBEAT_LOG_ERRORS = os.getenv("HEARTBEAT_LOG_ERRORS", "0").lower() in ("1", "true", "yes")
+MUSIC_MODAL_ENABLED = os.getenv("MUSIC_MODAL_ENABLED", "1").lower() in ("1", "true", "yes")
 
 if NODE_ROLE == "replica" and not READ_ONLY:
     logger.warning("[CONFIG] Forcing READ_ONLY=1 on replica node")
@@ -495,14 +500,18 @@ if NODE_ROLE not in ("master", "ai_core") and SCHEDULER_ENABLED:
     logger.warning("[CONFIG] Disabling SCHEDULER_ENABLED on non-master/non-ai-core node")
     SCHEDULER_ENABLED = False
 
-MASTER_INTERNAL_URL = os.getenv("MASTER_NODE_URL", "http://localhost:5000")
+MASTER_INTERNAL_URL = os.getenv("MASTER_URL", os.getenv("MASTER_NODE_URL", "http://localhost:5000"))
+MASTER_PUBLIC_URL = os.getenv("MASTER_PUBLIC_URL", MASTER_INTERNAL_URL)
 LEADER_URL = os.getenv("LEADER_URL", MASTER_INTERNAL_URL)
 MINING_RPC_REPLICA = os.getenv("MINING_RPC_REPLICA", "").strip()
 # Replica external URL - used for heartbeat registration (e.g., Railway URL)
-REPLICA_EXTERNAL_URL = os.getenv("REPLICA_EXTERNAL_URL", os.getenv("RAILWAY_PUBLIC_DOMAIN", ""))
+REPLICA_EXTERNAL_URL = os.getenv("PUBLIC_URL", os.getenv("REPLICA_EXTERNAL_URL", os.getenv("RAILWAY_PUBLIC_DOMAIN", "")))
 
 # Admin secret for cross-node API calls
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
+
+# Asset CDN base for public URLs (used for token/NFT images)
+ASSET_CDN_BASE = os.getenv("ASSET_CDN_BASE", "https://thrchain.vercel.app").rstrip("/")
 
 # AI Core configuration (for future Node 4)
 AI_CORE_URL = os.getenv("AI_CORE_URL", "").strip()
@@ -2946,6 +2955,14 @@ def _base_token_catalog():
     ]
 
 
+def normalize_image_url(url: str | None) -> str:
+    if not url:
+        return f"{ASSET_CDN_BASE}/static/placeholders/token.png"
+    if url.startswith("http"):
+        return url
+    return f"{ASSET_CDN_BASE}/{url.lstrip('/')}"
+
+
 def get_all_tokens():
     """Centralized catalog that returns base + custom tokens."""
     catalog_map: dict[str, dict] = {}
@@ -2995,6 +3012,8 @@ def get_all_tokens():
             tok["decimals"] = int(tok.get("decimals", 6))
         except Exception:
             tok["decimals"] = 6
+        logo_url = tok.get("logo_url") or tok.get("logo")
+        tok["logo_url"] = normalize_image_url(logo_url)
         catalog.append(tok)
 
     catalog.sort(key=lambda t: t.get("symbol"))
@@ -6703,6 +6722,8 @@ def wallets_count():
 
 
 def _rebuild_index_from_chain() -> dict:
+    if READ_ONLY or os.getenv("DISABLE_SNAPSHOT_REBUILD") == "1":
+        return {"height": -1}
     chain = load_json(CHAIN_FILE, [])
     supply_metrics = compute_thr_supply_metrics(chain=chain)
 
@@ -6805,8 +6826,10 @@ def peers_heartbeat():
         return jsonify({"error": "Heartbeats only accepted on master node"}), 403
 
     data = request.get_json() or {}
-    peer_id = data.get("peer_id")
+    peer_id = data.get("peer_id") or data.get("node_name")
     peer_url = data.get("url")
+    peer_role = data.get("role") or data.get("node_role") or "replica"
+    peer_height = data.get("height")
 
     if not peer_id:
         return jsonify({"error": "peer_id required"}), 400
@@ -6815,7 +6838,8 @@ def peers_heartbeat():
     active_peers[peer_id] = {
         "last_seen": _now_ts(),
         "url": peer_url or "unknown",
-        "node_role": "replica"
+        "node_role": peer_role,
+        "height": peer_height,
     }
 
     cleanup_expired_peers()
@@ -6829,6 +6853,18 @@ def peers_heartbeat():
         "peer_id": peer_id,
         "active_peers": len(active_peers),
         "ttl_seconds": PEER_TTL_SECONDS
+    }), 200
+
+@app.route("/api/peers/active", methods=["GET"])
+def peers_active():
+    if NODE_ROLE != "master":
+        return jsonify({"error": "Active peers only available on master node"}), 403
+
+    cleanup_expired_peers()
+    return jsonify({
+        "ok": True,
+        "active_peers": active_peers,
+        "ttl_seconds": PEER_TTL_SECONDS,
     }), 200
 
 @app.route("/api/network_live")
@@ -10452,7 +10488,9 @@ def api_list_tokens():
         logo = resolve_token_logo(token)
         if logo:
             token["logo_path"] = logo
-            token["logo_url"] = f"/static/{logo}"
+            token["logo_url"] = normalize_image_url(f"/static/{logo}")
+        else:
+            token["logo_url"] = normalize_image_url(token.get("logo_url") or token.get("logo"))
 
     token_list.sort(key=lambda t: t.get("created_at", ""), reverse=True)
     return jsonify({"ok": True, "tokens": token_list}), 200
@@ -13455,14 +13493,15 @@ if is_replica() and HEARTBEAT_ENABLED:
         # Generate unique peer_id based on hostname and port
         hostname = socket.gethostname()
         port = os.getenv("PORT", "5000")
-        peer_id = f"replica-{hostname}-{port}"
+        peer_id = os.getenv("PEER_ID") or f"replica-{hostname}-{port}"
 
         # Use REPLICA_EXTERNAL_URL if set (for cloud deployments like Railway)
         # Otherwise fall back to hostname:port (for local Docker/testing)
         if REPLICA_EXTERNAL_URL:
             # Ensure it has https:// prefix for Railway domains
             replica_url = REPLICA_EXTERNAL_URL if REPLICA_EXTERNAL_URL.startswith('http') else f"https://{REPLICA_EXTERNAL_URL}"
-            peer_id = f"replica-{REPLICA_EXTERNAL_URL.replace('https://', '').replace('http://', '').split('.')[0]}"
+            if not os.getenv("PEER_ID"):
+                peer_id = f"replica-{REPLICA_EXTERNAL_URL.replace('https://', '').replace('http://', '').split('.')[0]}"
         else:
             replica_url = f"http://{hostname}:{port}"
 
@@ -13478,16 +13517,34 @@ if is_replica() and HEARTBEAT_ENABLED:
 
         while True:
             try:
+                height = -1
+                try:
+                    if READ_ONLY:
+                        health_response = requests.get(f"{MASTER_INTERNAL_URL}/api/health", timeout=3)
+                        if health_response.ok:
+                            height = int(health_response.json().get("chain_height", -1))
+                    else:
+                        snap = get_last_block_snapshot()
+                        height = int(snap.get("height", -1) or -1)
+                except Exception:
+                    height = -1
                 response = requests.post(
                     heartbeat_url,
                     json={
                         "peer_id": peer_id,
                         "url": replica_url,
-                        "node_role": NODE_ROLE,
+                        "role": NODE_ROLE,
+                        "height": height,
                         "timestamp": int(time.time())
+                    },
+                    headers={
+                        "X-Admin-Secret": ADMIN_SECRET,
+                        "Content-Type": "application/json",
                     },
                     timeout=10
                 )
+                response_body = response.text[:500]
+                print(f"[HEARTBEAT] Master response status={response.status_code} body={response_body}")
                 if response.status_code == 200:
                     data = response.json()
                     active_peers = data.get("active_peers", "?")
@@ -18054,6 +18111,102 @@ def api_music_status():
     }), 200
 
 
+MUSIC_SESSIONS_FILE = os.path.join(DATA_DIR, "music_sessions.json")
+MUSIC_GPS_FILE = os.path.join(DATA_DIR, "music_gps_telemetry.json")
+
+
+def _proxy_music_request(path: str, payload: dict | None = None, timeout: int = 5):
+    if not READ_ONLY:
+        return None
+    if MASTER_INTERNAL_URL.startswith("http://localhost"):
+        return None
+    try:
+        response = requests.post(
+            f"{MASTER_INTERNAL_URL}{path}",
+            json=payload or {},
+            timeout=timeout,
+        )
+        return response
+    except Exception as exc:
+        logger.warning("[MUSIC] Proxy to master failed: %s", exc)
+        return None
+
+
+@app.route("/api/music/session/start", methods=["POST"])
+def api_music_session_start():
+    payload = request.get_json() or {}
+    if READ_ONLY:
+        response = _proxy_music_request("/api/music/session/start", payload)
+        if response is not None:
+            return jsonify(response.json()), response.status_code
+
+    address = (payload.get("address") or "").strip()
+    session_id = f"MUSIC-{int(time.time())}-{secrets.token_hex(4)}"
+    sessions = load_json(MUSIC_SESSIONS_FILE, [])
+    sessions.append({
+        "session_id": session_id,
+        "address": address,
+        "started_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "source": payload.get("source", "modal"),
+        "user_agent": request.headers.get("User-Agent", ""),
+    })
+    save_json(MUSIC_SESSIONS_FILE, sessions)
+    return jsonify({"ok": True, "session_id": session_id}), 200
+
+
+@app.route("/api/music/session/end", methods=["POST"])
+def api_music_session_end():
+    payload = request.get_json() or {}
+    if READ_ONLY:
+        response = _proxy_music_request("/api/music/session/end", payload)
+        if response is not None:
+            return jsonify(response.json()), response.status_code
+
+    session_id = (payload.get("session_id") or "").strip()
+    if not session_id:
+        return jsonify({"ok": False, "error": "session_id required"}), 400
+    sessions = load_json(MUSIC_SESSIONS_FILE, [])
+    for session in sessions:
+        if session.get("session_id") == session_id and not session.get("ended_at"):
+            session["ended_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+            session["ended_reason"] = payload.get("reason", "modal_close")
+            break
+    save_json(MUSIC_SESSIONS_FILE, sessions)
+    return jsonify({"ok": True, "session_id": session_id}), 200
+
+
+@app.route("/api/music/gps_telemetry", methods=["POST"])
+def api_music_gps_telemetry():
+    payload = request.get_json() or {}
+    if READ_ONLY:
+        response = _proxy_music_request("/api/music/gps_telemetry", payload)
+        if response is not None:
+            return jsonify(response.json()), response.status_code
+
+    latitude = payload.get("latitude")
+    longitude = payload.get("longitude")
+    if latitude is None or longitude is None:
+        return jsonify({"ok": False, "error": "latitude and longitude required"}), 400
+
+    entry = {
+        "session_id": payload.get("session_id"),
+        "address": payload.get("address"),
+        "latitude": latitude,
+        "longitude": longitude,
+        "altitude": payload.get("altitude"),
+        "speed": payload.get("speed"),
+        "heading": payload.get("heading"),
+        "timestamp": payload.get("timestamp") or time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "entry_id": f"MUSIC-GPS-{int(time.time())}-{secrets.token_hex(4)}",
+    }
+    gps_data = load_json(MUSIC_GPS_FILE, [])
+    gps_data.append(entry)
+    if len(gps_data) > 1000:
+        gps_data = gps_data[-1000:]
+    save_json(MUSIC_GPS_FILE, gps_data)
+    return jsonify({"ok": True, "entry_id": entry["entry_id"]}), 200
+
+
 @app.route("/api/music/tracks")
 def api_music_tracks_compact():
     """Compact alias for the v1 tracks endpoint."""
@@ -19305,8 +19458,23 @@ def save_nft_registry(registry):
 @app.route("/api/v1/nfts", methods=["GET"])
 def api_v1_nfts():
     """Get all NFTs"""
+    if READ_ONLY and not MASTER_INTERNAL_URL.startswith("http://localhost"):
+        try:
+            response = requests.get(f"{MASTER_INTERNAL_URL}/api/v1/nfts", timeout=5)
+            if response.ok:
+                data = response.json()
+                nfts = data.get("nfts", [])
+                for nft in nfts:
+                    nft["image_url"] = normalize_image_url(nft.get("image_url"))
+                return jsonify({"status": "success", "nfts": nfts}), 200
+        except Exception as exc:
+            logger.warning("[NFT] Failed to fetch from master: %s", exc)
+
     registry = load_nft_registry()
-    return jsonify({"status": "success", "nfts": registry.get("nfts", [])}), 200
+    nfts = registry.get("nfts", [])
+    for nft in nfts:
+        nft["image_url"] = normalize_image_url(nft.get("image_url"))
+    return jsonify({"status": "success", "nfts": nfts}), 200
 
 
 @app.route("/api/v1/nfts/mint", methods=["POST"])

@@ -804,7 +804,7 @@ function showMusicTab(tabName) {
 
 async function loadTracks() {
     try {
-        const res = await fetch('/api/v1/music/tracks');
+        const res = await fetch('/api/music/tracks');
         const data = await res.json();
         if (data.status === 'success') {
             allTracks = data.tracks;
@@ -817,7 +817,7 @@ async function loadTracks() {
 
 async function loadTrending() {
     try {
-        const res = await fetch('/api/v1/music/tracks/trending');
+        const res = await fetch('/api/music/tracks/trending');
         const data = await res.json();
         if (data.status === 'success') {
             renderTracks(data.tracks, 'trendingGrid');
@@ -844,7 +844,9 @@ function renderTracks(tracks, containerId) {
              data-track-id="${track.id}">
             <div class="track-cover" onclick="playTrack('${track.id}')">
                 ${track.cover_path || track.cover_url
-                    ? `<img src="${track.cover_path ? '/media/' + track.cover_path : track.cover_url}" alt="${track.title}" onerror="this.src='/static/img/logo.png'">`
+                    ? `<img src="${(window.FetchUtils && window.FetchUtils.resolveMediaUrl)
+                        ? window.FetchUtils.resolveMediaUrl(track.cover_path ? '/media/' + track.cover_path : track.cover_url)
+                        : (track.cover_path ? '/media/' + track.cover_path : track.cover_url)}" alt="${track.title}" onerror="this.src='/static/img/logo.png'">`
                     : '🎵'}
                 <button class="track-play-btn" onclick="event.stopPropagation(); playTrack('${track.id}')">▶️</button>
             </div>
@@ -926,7 +928,7 @@ async function playTrack(trackId) {
     // Fallback to local player if GlobalMusicPlayer not available
     // Record play
     const wallet = localStorage.getItem('thr_address');
-    fetch(`/api/v1/music/play/${trackId}`, {
+    fetch(`/api/music/play/${trackId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ listener_address: wallet || '' })
@@ -935,13 +937,17 @@ async function playTrack(trackId) {
     // Update player UI
     document.getElementById('playerTitle').textContent = track.title;
     document.getElementById('playerArtist').textContent = track.artist_name;
-    const coverSrc = track.cover_path ? `/media/${track.cover_path}` : track.cover_url;
+    const coverSrc = (window.FetchUtils && window.FetchUtils.resolveMediaUrl)
+        ? window.FetchUtils.resolveMediaUrl(track.cover_path ? `/media/${track.cover_path}` : track.cover_url)
+        : (track.cover_path ? `/media/${track.cover_path}` : track.cover_url);
     document.getElementById('playerCover').innerHTML = coverSrc
         ? `<img src="${coverSrc}" onerror="this.src='/static/img/logo.png'">` : '🎵';
     document.getElementById('playerContainer').classList.add('active');
 
     // Play audio
-    audioElement.src = track.audio_url;
+    audioElement.src = (window.FetchUtils && window.FetchUtils.resolveMediaUrl)
+        ? window.FetchUtils.resolveMediaUrl(track.audio_url)
+        : track.audio_url;
     audioElement.play();
     document.getElementById('playPauseBtn').textContent = '⏸️';
 
@@ -1004,7 +1010,7 @@ async function tipArtist() {
         // PR-5a: Require unlocked wallet (PIN if locked)
         const { address, authSecret } = await window.WalletAuth.requireUnlockedWallet();
 
-        const res = await fetch('/api/v1/music/tip', {
+        const res = await fetch('/api/music/tip', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1047,7 +1053,7 @@ async function registerArtist(e) {
     const bio = document.getElementById('artistBio').value.trim();
 
     try {
-        const res = await fetch('/api/v1/music/register_artist', {
+        const res = await fetch('/api/music/register_artist', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ address: wallet, name, bio })
@@ -1118,7 +1124,7 @@ async function uploadTrack(e) {
     document.getElementById('uploadBtn').textContent = '⏳ Uploading...';
 
     try {
-        const res = await fetch('/api/v1/music/upload', {
+        const res = await fetch('/api/music/upload', {
             method: 'POST',
             body: formData
         });
@@ -1153,7 +1159,7 @@ async function loadMyProfile() {
     }
 
     try {
-        const res = await fetch(`/api/v1/music/artist/${wallet}`);
+        const res = await fetch(`/api/music/artist/${wallet}`);
         const data = await res.json();
 
         if (data.status === 'success' && data.artist.name) {
@@ -1213,7 +1219,7 @@ function handleSearch(e) {
 
 async function searchTracks(query) {
     try {
-        const res = await fetch(`/api/v1/music/search?q=${encodeURIComponent(query)}`);
+        const res = await fetch(`/api/music/search?q=${encodeURIComponent(query)}`);
         const data = await res.json();
         if (data.status === 'success') {
             renderTracks(data.results, 'tracksGrid');

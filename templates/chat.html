@@ -1089,6 +1089,16 @@
     let defaultModelId = "auto";
     let pendingModelSelection = null;
 
+    // Memory optimization: limit message history to prevent unbounded growth
+    const MAX_MESSAGES = 200;
+
+    function trimMessages(messages) {
+      if (messages.length > MAX_MESSAGES) {
+        return messages.slice(-MAX_MESSAGES);
+      }
+      return messages;
+    }
+
     function cacheDom() {
       sessionsListEl = document.getElementById("sessionsList");
       messagesEl = document.getElementById("messages");
@@ -2051,6 +2061,7 @@
       // optimistic render user message
       const userMessage = { role: "user", content: text, model: model };
       sessionMessages.push(userMessage);
+      sessionMessages = trimMessages(sessionMessages); // Prevent unbounded growth
       messagesBySession[currentSessionId] = sessionMessages.slice();
       updateSessionMessageCount(currentSessionId);
       persistSessionCache();
@@ -2108,6 +2119,7 @@
             })),
           };
           sessionMessages.push(assistantMessage);
+          sessionMessages = trimMessages(sessionMessages); // Prevent unbounded growth
           messagesBySession[currentSessionId] = sessionMessages.slice();
           updateSessionMessageCount(currentSessionId);
           persistSessionCache();

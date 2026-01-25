@@ -503,12 +503,13 @@ DATA_DIR = os.getenv("MUSIC_VOLUME", os.getenv("DATA_DIR", os.path.join(BASE_DIR
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # Unified media root (persists on Railway volume)
-MEDIA_DIR = os.path.join(DATA_DIR, "media")
-TOKEN_LOGOS_DIR = os.path.join(MEDIA_DIR, "token_logos")
-NFT_IMAGES_DIR = os.path.join(MEDIA_DIR, "nft_images")
-TRACKS_DIR = os.path.join(MEDIA_DIR, "tracks")
-COVERS_DIR = os.path.join(MEDIA_DIR, "covers")
-COURSE_MEDIA_DIR = os.path.join(MEDIA_DIR, "courses")
+MEDIA_ROOT = os.path.join(DATA_DIR, "media")
+MEDIA_DIR = MEDIA_ROOT
+TOKEN_LOGOS_DIR = os.path.join(MEDIA_ROOT, "token_logos")
+NFT_IMAGES_DIR = os.path.join(MEDIA_ROOT, "nft_images")
+TRACKS_DIR = os.path.join(MEDIA_ROOT, "tracks")
+COVERS_DIR = os.path.join(MEDIA_ROOT, "covers")
+COURSE_MEDIA_DIR = os.path.join(MEDIA_ROOT, "courses")
 COURSE_COVERS_DIR = os.path.join(COURSE_MEDIA_DIR, "covers")
 COURSE_FILES_DIR = os.path.join(COURSE_MEDIA_DIR, "files")
 MUSIC_AUDIO_DIR = os.path.join(MEDIA_DIR, "music_audio")
@@ -3448,13 +3449,44 @@ def canonical_media_url(url: str | None) -> str:
 def normalize_media_url(url: str | None) -> str:
     if not url:
         return ""
-    if url.startswith("/media/") or url.startswith("/static/"):
-        return url
+
+    value = url.strip()
+
+    value = re.sub(r"^https?://localhost:\d+", "", value, flags=re.IGNORECASE)
+    for origin in ("https://thrchain.vercel.app", "https://thrchain.up.railway.app"):
+        if value.lower().startswith(origin):
+            value = value[len(origin):]
+
+    if value.startswith("http://") or value.startswith("https://"):
+        try:
+            parsed = urlparse(value)
+            value = parsed.path or ""
+        except Exception:
+            return value
+
+    value = re.sub(r"/{2,}", "/", value)
+
+    if value.startswith("/static/nft_images/"):
+        return value.replace("/static/nft_images/", "/media/nft_images/")
+
+    if value.startswith("/static/token_logos/"):
+        return value.replace("/static/token_logos/", "/media/token_logos/")
+
+    if value.startswith("/media/static/"):
+        return value.replace("/media/static/", "/static/")
+
+    if value.startswith("/media/") or value.startswith("/static/"):
+        return value
+
+    if value.startswith("media/") or value.startswith("static/"):
+        return f"/{value}"
+
     for marker in ("/media/", "/static/"):
-        idx = url.find(marker)
+        idx = value.find(marker)
         if idx != -1:
-            return url[idx:]
-    return url
+            return value[idx:]
+
+    return value
 
 
 def normalize_image_url(url: str | None) -> str | None:
@@ -5518,10 +5550,10 @@ def serve_contract(filename):
 def media(filename):
     """Serve persistent media assets from the data volume."""
     safe_name = filename.lstrip("/..")
-    full_path = os.path.join(MEDIA_DIR, safe_name)
+    full_path = os.path.join(MEDIA_ROOT, safe_name)
     if not os.path.exists(full_path):
         return jsonify({"ok": False, "error": "media_not_found"}), 404
-    return send_from_directory(MEDIA_DIR, safe_name)
+    return send_from_directory(MEDIA_ROOT, safe_name)
 
 @app.route("/media/static/<path:filename>")
 def media_static(filename):
@@ -5809,6 +5841,9 @@ def api_transfers():
         if "category" not in tx:
             tx["category"] = _categorize_transaction(tx)
 
+    # Remove block-like events from transfers feed
+    all_txs = [tx for tx in all_txs if not _is_block_event(tx)]
+
     total_txs = len(all_txs)
 
     # Determine time window for statistics
@@ -5899,6 +5934,19 @@ def _parse_timestamp(ts_str: str) -> float:
         return dt.timestamp()
     except:
         return 0.0
+
+
+def _is_block_event(tx: dict) -> bool:
+    tx_type = (tx.get("type") or "").lower()
+    category = (tx.get("category") or "").lower()
+    event = (tx.get("event") or "").lower()
+    kind = (tx.get("kind") or "").lower()
+    return (
+        tx_type == "block"
+        or category == "block"
+        or event == "mined_block"
+        or kind == "block"
+    )
 
 
 @app.route("/api/wallet/mining_stats", methods=["GET"])
@@ -7608,6 +7656,8 @@ def api_tx_feed():
     limit = min(request.args.get("limit", type=int, default=100), 500)
     include_pending = (request.args.get("include_pending") or "true").lower() != "false"
     include_bridge = (request.args.get("include_bridge") or "true").lower() != "false"
+    cursor = request.args.get("cursor", type=int)
+    limit = request.args.get("limit", type=int)
 
     kinds = {k.strip().lower() for k in kinds_param.split(",") if k.strip()}
     exclude_kinds = {k.strip().lower() for k in exclude_kinds_param.split(",") if k.strip()}
@@ -7679,6 +7729,10 @@ def api_tx_feed():
             if wallet not in parties:
                 continue
 
+        for key in ("image_url", "logo_url", "audio_url", "cover_url"):
+            if key in tx:
+                tx[key] = normalize_media_url(str(tx.get(key) or ""))
+
         normalized.append(tx)
 
         if len(normalized) >= limit:
@@ -7691,7 +7745,20 @@ def api_tx_feed():
             counts[k] = counts.get(k, 0) + 1
         app.logger.info("tx_feed_counts", extra={"counts": counts, "wallet": wallet or None, "source": "chain_scan"})
 
-    return jsonify(normalized), 200
+    if limit is None and cursor is None:
+        return jsonify(normalized), 200
+
+    start = max(cursor or 0, 0)
+    cap = max(limit or 200, 1)
+    page = normalized[start:start + cap]
+    next_cursor = start + cap if start + cap < len(normalized) else None
+
+    return jsonify({
+        "ok": True,
+        "items": page,
+        "cursor": next_cursor,
+        "has_more": next_cursor is not None
+    }), 200
 
 @app.route("/api/transactions")
 def api_transactions():
@@ -19101,6 +19168,11 @@ def api_v1_music_trending():
     return jsonify({"status": "success", "tracks": tracks[:20]}), 200
 
 
+@app.route("/api/music/tracks/trending")
+def api_music_trending():
+    return api_v1_music_trending()
+
+
 @app.route("/api/v1/music/artist/<artist_address>")
 @app.route("/api/music/artist/<artist_address>")
 def api_v1_music_artist(artist_address):
@@ -19126,6 +19198,11 @@ def api_v1_music_artist(artist_address):
             "total_earnings_thr": total_earnings
         }
     }), 200
+
+
+@app.route("/api/music/artist/<artist_address>")
+def api_music_artist(artist_address):
+    return api_v1_music_artist(artist_address)
 
 
 @app.route("/api/v1/music/register_artist", methods=["POST"])
@@ -19338,9 +19415,22 @@ def api_v1_music_play(track_id):
     }), 200
 
 
-@app.route("/api/music/play/<track_id>", methods=["POST"])
+@app.route("/api/music/play/<track_id>", methods=["GET", "POST"])
 def api_music_play(track_id):
-    return api_v1_music_play(track_id)
+    if request.method == "POST":
+        return api_v1_music_play(track_id)
+
+    registry = load_music_registry()
+    track = next((t for t in registry["tracks"] if t["id"] == track_id), None)
+    if not track:
+        return jsonify({"status": "error", "message": "Track not found"}), 404
+
+    track = enrich_track_media(track)
+    audio_url = normalize_media_url(track.get("audio_url") or "")
+    if not audio_url:
+        return jsonify({"status": "error", "message": "Audio missing"}), 404
+
+    return redirect(audio_url, code=302)
 
 
 @app.route("/api/v1/music/tip", methods=["POST"])

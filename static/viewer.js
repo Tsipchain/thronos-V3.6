@@ -203,10 +203,13 @@
     }
   }
 
-  async function loadTransfers(limit = 50, cursor = null) {
+  const TRANSFER_PAGE_SIZE = 200;
+  const TRANSFER_KINDS = ['token_transfer', 'swap', 'bridge', 'thr_transfer'];
+
+  async function loadTransfers(limit = TRANSFER_PAGE_SIZE, cursor = null) {
     try {
-      let url = `${API_BASE}/api/transfers?limit=${limit}`;
-      if (cursor) {
+      let url = `${API_BASE}/api/tx_feed?limit=${Math.min(limit, 500)}&kinds=${encodeURIComponent(TRANSFER_KINDS.join(','))}`;
+      if (cursor !== null && cursor !== undefined) {
         url += `&cursor=${encodeURIComponent(cursor)}`;
       }
 
@@ -214,6 +217,9 @@
       if (!response.ok) throw new Error(`Transfers API error: ${response.status}`);
 
       const data = await response.json();
+      if (Array.isArray(data)) {
+        return { ok: true, items: data, has_more: false, cursor: null };
+      }
       if (!data.ok) throw new Error('Transfers returned ok=false');
 
       return data;
@@ -238,11 +244,17 @@
       return;
     }
 
+    const allowedKinds = new Set(TRANSFER_KINDS);
     const onlyTransfers = (transfers || []).filter(tx =>
       tx
       && tx.type !== 'block'
       && tx.category !== 'block'
-      && (tx.type === 'token_transfer' || tx.category === 'tokens' || tx.kind === 'transfer')
+      && !['block'].includes(tx.kind)
+      && (
+        allowedKinds.has(tx.type)
+        || allowedKinds.has(tx.kind)
+        || tx.category === 'tokens'
+      )
     );
 
     if (!onlyTransfers.length) {
@@ -275,7 +287,7 @@
       loadMoreBtn.textContent = 'Loading...';
     }
 
-    const data = await loadTransfers(50, transfersCursor);
+    const data = await loadTransfers(TRANSFER_PAGE_SIZE, transfersCursor);
 
     // Support both 'transfers' and 'items' response keys
     const items = data.transfers || data.items || [];
@@ -305,7 +317,7 @@
     await loadTransfersStats();
 
     // Reload transfers from beginning
-    const data = await loadTransfers(50, null);
+    const data = await loadTransfers(TRANSFER_PAGE_SIZE, null);
     const items = data.transfers || data.items || [];
     renderTransfers(items, false);
 
@@ -329,7 +341,7 @@
     await loadTransfersStats();
 
     // Load initial transfers
-    const data = await loadTransfers(50, null);
+    const data = await loadTransfers(TRANSFER_PAGE_SIZE, null);
     const items = data.transfers || data.items || [];
     renderTransfers(items, false);
 

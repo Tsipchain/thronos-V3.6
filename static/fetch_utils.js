@@ -110,12 +110,12 @@
     // If normalized is still absolute url, keep it
     if (/^https?:\/\//i.test(normalized)) return normalized;
 
+    if (!normalized.startsWith("/api/")) return normalized;
+
     const base = getApiBase();
     if (!base) return normalized; // same-origin
 
-    // If base exists, always target it (cross-domain safe)
-    if (normalized.startsWith("/")) return base + normalized;
-    return base + "/" + normalized;
+    return base + normalized;
   }
 
   function resolveMediaUrl(raw, fallback = "") {

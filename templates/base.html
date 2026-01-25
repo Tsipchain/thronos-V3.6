@@ -3825,7 +3825,8 @@ async function loadWalletHistory(category = null) {
         }
         let transactions = [];
         if (window.FetchUtils && typeof window.FetchUtils.smartFetch === 'function') {
-            const data = await window.FetchUtils.smartFetch(`/api/wallet/history?${params.toString()}`);
+            const res = await window.FetchUtils.smartFetch(`/api/wallet/history?${params.toString()}`);
+            const data = await res.json().catch(() => ({}));
             transactions = Array.isArray(data) ? data : (data?.transactions || data?.txs || []);
         } else {
             const historyRes = await fetch(`/api/wallet/history?${params.toString()}`);

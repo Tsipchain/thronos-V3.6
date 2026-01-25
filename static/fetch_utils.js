@@ -13,98 +13,71 @@
     const nativeFetch = window.fetch.bind(window);
 
     function isVercelHost() {
-        return window.location.hostname.endsWith('vercel.app');
+        return window.location.hostname.endsWith('.vercel.app');
+    }
+
+    function isAssetPath(path) {
+        if (!path) return false;
+        const lowered = path.replace(/^\/+/, '').toLowerCase();
+        return lowered.startsWith('static/')
+            || lowered.startsWith('media/')
+            || lowered.startsWith('img/')
+            || lowered.startsWith('assets/')
+            || lowered.startsWith('favicon')
+            || lowered.startsWith('robots.txt');
     }
 
     function normalizeApiPath(path) {
-        if (!path) return '/api/health';
+        if (!path) return '';
         let p = String(path).trim();
 
-        try {
-            if (/^https?:\/\//i.test(p)) {
-                const url = new URL(p);
-                p = url.pathname + (url.search || '');
-            }
-        } catch (_) {
-            // Ignore URL parsing failures.
-        }
+        p = p.replace(/^https?:\/\/[^/]+/i, '');
 
         if (!p.startsWith('/')) p = `/${p}`;
 
-        while (/^\/(api\/v1\/(read|write)|v1\/(read|write))\//.test(p)) {
-            p = p.replace(/^\/api\/v1\/(read|write)\//, '/');
-            p = p.replace(/^\/v1\/(read|write)\//, '/');
-        }
-        p = p.replace(/\/{2,}/g, '/');
+        p = p.replace(/^\/api\/v1\/read\/api\/v1\/read\//, '/');
+        p = p.replace(/^\/api\/v1\/read\/api\/v1\/write\//, '/');
+        p = p.replace(/^\/api\/v1\/read\/api\/v1\/music\//, '/api/music/');
 
-        if (!p.startsWith('/api/')) {
-            p = `/api${p}`;
-        }
-
-        p = p.replace(/^\/api\/api\//, '/api/');
+        p = p.replace(/^\/api\/v1\/read\//, '/');
+        p = p.replace(/^\/api\/v1\/write\//, '/');
+        p = p.replace(/^\/api\/v1\/music\//, '/api/music/');
 
         return p;
     }
 
-    function getReadBase() {
-        return isVercelHost() ? '/api/v1/read' : '';
+    function buildApiUrl(path, method) {
+        const p = normalizeApiPath(path);
+        const host = (window.location.hostname || '').toLowerCase();
+        const isVercel = host.endsWith('.vercel.app');
+
+        if (!isVercel) return p;
+
+        const m = (method || 'GET').toUpperCase();
+
+        if (p.startsWith('/api/music/')) {
+            return `/api/v1/music/${p.slice('/api/music/'.length)}`;
+        }
+
+        const prefix = (m === 'GET') ? '/api/v1/read' : '/api/v1/write';
+        return `${prefix}${p}`;
     }
 
-    function getWriteBase() {
-        return isVercelHost() ? '/api/v1/write' : '';
-    }
-
-    function smartFetchRaw(path, opts = {}) {
+    function smartFetch(path, opts = {}) {
         if (typeof path === 'string') {
             const trimmed = path.trim();
-            if (/^https?:\/\//i.test(trimmed)) {
-                return nativeFetch(trimmed, opts);
-            }
-            const lowered = trimmed.replace(/^\/+/, '').toLowerCase();
-            if (lowered.startsWith('static/')
-                || lowered.startsWith('media/')
-                || lowered.startsWith('img/')
-                || lowered.startsWith('assets/')
-                || lowered.startsWith('favicon')
-                || lowered.startsWith('robots.txt')) {
+            if (/^https?:\/\//i.test(trimmed) || isAssetPath(trimmed)) {
                 return nativeFetch(trimmed, opts);
             }
         }
+
         const method = (opts.method || 'GET').toUpperCase();
-        const apiPath = normalizeApiPath(path);
-        const base = method === 'GET' ? getReadBase() : getWriteBase();
-        const url = `${base}${apiPath}`;
+        const url = buildApiUrl(path, method);
 
         return nativeFetch(url, {
-            credentials: 'include',
             ...opts,
-            headers: {
-                'Content-Type': 'application/json',
-                ...(opts.headers || {})
-            }
+            method
         });
-    }
-
-    async function smartFetch(path, opts = {}) {
-        const res = await smartFetchRaw(path, opts);
-
-        const text = await res.text();
-        let data = null;
-        try {
-            data = text ? JSON.parse(text) : null;
-        } catch (_) {
-            data = null;
-        }
-
-        if (!res.ok) {
-            const err = (data && (data.error || data.message)) || `http_${res.status}`;
-            const error = new Error(err);
-            error.status = res.status;
-            error.data = data;
-            throw error;
-        }
-
-        return data;
     }
 
     /**
@@ -124,6 +97,7 @@
 
         // Create new request
         const promise = smartFetch(url, { ...opts, method })
+            .then(response => response.json())
             .finally(() => {
                 // Clean up after request completes
                 inflightRequests.delete(key);

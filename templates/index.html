@@ -1143,10 +1143,16 @@
         const container = document.getElementById("votingPolls");
 
         try {
-            const res = await fetch("/api/voting/polls");
-            const polls = await res.json();
+            let data = null;
+            if (window.FetchUtils && typeof window.FetchUtils.smartFetchJSON === "function") {
+                data = await window.FetchUtils.smartFetchJSON("/api/voting/polls");
+            } else {
+                const res = await fetch("/api/voting/polls");
+                data = await res.json().catch(() => null);
+            }
+            const polls = Array.isArray(data) ? data : (data && Array.isArray(data.polls) ? data.polls : []);
 
-            if (!polls || polls.length === 0) {
+            if (!polls.length) {
                 container.innerHTML = `<p style="color: #999; text-align: center;">${t("noPolls")}</p>`;
                 return;
             }
@@ -1168,8 +1174,8 @@
                 `;
             }).join("");
         } catch (e) {
-            console.error("Failed to load polls:", e);
-            container.innerHTML = `<p style="color: #f00;">Failed to load polls</p>`;
+            console.warn("Failed to load polls:", e);
+            container.innerHTML = `<p style="color: #999; text-align: center;">${t("noPolls")}</p>`;
         }
     }
 

@@ -18,7 +18,6 @@
     if (!p) return false;
     return (
       p.startsWith("/api/") ||
-      p.startsWith("api/") ||
       p.includes("/api/v1/") ||
       p.includes("/api/v1/read/") ||
       p.includes("/api/v1/write/")
@@ -50,8 +49,12 @@
     let p = extractPathQuery(input);
     if (typeof p !== "string") return p;
 
-    // allow "api/..." without leading slash
-    if (p.startsWith("api/")) p = "/" + p;
+    // HARD RULE: Never allow "api/" without leading slash
+    // All API paths MUST start with "/api/" (absolute)
+    if (p.startsWith("api/") && !p.startsWith("/api/")) {
+      console.error(`[fetch_utils] REJECTED: "${p}" - API paths must be absolute (/api/...), not relative (api/...)`);
+      throw new Error(`Invalid API path: "${p}" - must start with "/api/" not "api/"`);
+    }
 
     if (!isProbablyApiPath(p)) return p;
 

@@ -205,7 +205,8 @@
 
   async function loadTransfers(limit = 50, cursor = null) {
     try {
-      let url = `${API_BASE}/api/transfers?limit=${limit}`;
+      // Use tx_feed with kinds filter to exclude blocks and mining_reward
+      let url = `${API_BASE}/api/tx_feed?kinds=token_transfer,swap,bridge,liquidity&limit=${limit}`;
       if (cursor) {
         url += `&cursor=${encodeURIComponent(cursor)}`;
       }

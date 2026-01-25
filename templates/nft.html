@@ -546,7 +546,7 @@ async function loadMyNFTs() {
         return;
     }
 
-    const myNFTs = nfts.filter(n => n.owner === connectedWallet);
+    const myNFTs = nfts.filter(n => n.owner === connectedWallet && !n.burned);
     if (myNFTs.length === 0) {
         $('myNFTsGrid').innerHTML = `
             <div class="empty-state" style="grid-column: 1/-1;">
@@ -557,7 +557,81 @@ async function loadMyNFTs() {
         return;
     }
 
-    renderNFTs(myNFTs, $('myNFTsGrid'));
+    // Render NFTs with burn button for owned NFTs
+    $('myNFTsGrid').innerHTML = myNFTs.map(nft => `
+        <div class="nft-card">
+            <div class="nft-image" onclick="openBuyModal('${nft.id}')">
+                ${nft.image_url ? `<img src="${resolveNftImage(nft.image_url)}" alt="${escapeHtml(nft.name)}" onerror="this.src='/static/img/thronos-token.png'">` : '🎨'}
+            </div>
+            <div class="nft-info">
+                <div class="nft-title">${escapeHtml(nft.name)}</div>
+                <div class="nft-creator">by ${nft.creator ? nft.creator.substring(0, 10) + '...' : 'Unknown'}</div>
+                <div class="nft-price">
+                    <span class="label"><span class="lang-el">Τιμή</span><span class="lang-en">Price</span></span>
+                    <span class="value">${nft.price || 0} THR</span>
+                </div>
+                <button class="burn-btn" onclick="event.stopPropagation(); burnNFT('${nft.id}', '${escapeHtml(nft.name)}')" style="margin-top:10px; width:100%; padding:8px; background:#600; color:#f00; border:1px solid #f00; border-radius:6px; cursor:pointer; font-family:monospace;">
+                    🔥 <span class="lang-el">Καύση NFT</span><span class="lang-en">Burn NFT</span>
+                </button>
+            </div>
+        </div>
+    `).join('');
+}
+
+// Burn NFT function with PIN confirmation
+async function burnNFT(nftId, nftName) {
+    try {
+        // Confirm action
+        const confirmMsg = localStorage.getItem('lang') === 'en'
+            ? `Are you sure you want to BURN "${nftName}"?\n\nThis action is PERMANENT and CANNOT be undone!\n\nThe NFT will be destroyed forever.`
+            : `Είστε σίγουροι ότι θέλετε να ΚΆΨΕΤΕ το "${nftName}";\n\nΑυτή η ενέργεια είναι ΜΟΝΙΜΗ και ΔΕΝ μπορεί να αναιρεθεί!\n\nΤο NFT θα καταστραφεί για πάντα.`;
+
+        if (!confirm(confirmMsg)) {
+            return;
+        }
+
+        // Require unlocked wallet with PIN
+        if (!window.WalletAuth) {
+            alert('❌ Wallet authentication not available');
+            return;
+        }
+
+        const { address, authSecret } = await window.WalletAuth.requireUnlockedWallet();
+
+        // Call burn endpoint
+        const res = await fetch('/api/nft/burn', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                nft_id: nftId,
+                owner: address,
+                auth_secret: authSecret
+            })
+        });
+
+        const data = await res.json();
+
+        if (data.ok) {
+            const successMsg = localStorage.getItem('lang') === 'en'
+                ? `✅ NFT "${nftName}" has been burned successfully!`
+                : `✅ Το NFT "${nftName}" κάηκε με επιτυχία!`;
+            alert(successMsg);
+
+            // Reload NFTs
+            await loadNFTs();
+            await loadMyNFTs();
+        } else {
+            alert(`❌ Error: ${data.error || 'Failed to burn NFT'}`);
+        }
+    } catch (e) {
+        if (e.code === 'WALLET_NOT_CONNECTED') {
+            alert('❌ Please connect your wallet first!');
+        } else if (e.code === 'WALLET_LOCKED') {
+            alert('❌ Wallet is locked. Please unlock with your PIN.');
+        } else {
+            alert(`❌ Error: ${e.message || 'Unknown error'}`);
+        }
+    }
 }
 
 // Image preview

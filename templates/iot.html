@@ -1216,14 +1216,15 @@ const $ = (id) => document.getElementById(id);
 // Language (data-i18n with safe fallback)
 const LANG_SEQUENCE = ['gr', 'en', 'ja', 'es', 'ru'];
 const LANG_ALIAS = { el: 'gr' };
-const DEFAULT_LANG = 'en';
+window.DEFAULT_LANG = window.DEFAULT_LANG || 'el';
+const DEFAULT_LANG_IOT = window.DEFAULT_LANG;
 let TRANSLATIONS_CACHE = null;
 
 function normalizeLang(lang) {
-    if (!lang) return DEFAULT_LANG;
+    if (!lang) return DEFAULT_LANG_IOT;
     const alias = LANG_ALIAS[lang];
     const normalized = alias || lang;
-    return LANG_SEQUENCE.includes(normalized) ? normalized : DEFAULT_LANG;
+    return LANG_SEQUENCE.includes(normalized) ? normalized : DEFAULT_LANG_IOT;
 }
 
 function harvestTranslations() {
@@ -1245,8 +1246,8 @@ function harvestTranslations() {
         const key = node.dataset.i18n;
         store[key] = store[key] || {};
         const fallback = node.dataset.i18nDefault || node.textContent.trim();
-        if (!store[key][DEFAULT_LANG]) {
-            store[key][DEFAULT_LANG] = fallback;
+        if (!store[key][DEFAULT_LANG_IOT]) {
+            store[key][DEFAULT_LANG_IOT] = fallback;
         }
     });
     return store;
@@ -1265,7 +1266,7 @@ function applyTranslations(langOverride) {
         document.querySelectorAll('[data-i18n]').forEach((node) => {
             const key = node.dataset.i18n;
             const table = TRANSLATIONS_CACHE[key] || {};
-            const fallback = table[DEFAULT_LANG] || node.dataset.i18nDefault || node.textContent;
+            const fallback = table[DEFAULT_LANG_IOT] || node.dataset.i18nDefault || node.textContent;
             const value = table[lang] || fallback || key;
             if (node.dataset.i18nAttr === 'placeholder') {
                 node.placeholder = value;

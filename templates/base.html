@@ -8,13 +8,20 @@
   <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/thronos-token.png') }}">
   <link rel="shortcut icon" type="image/png" href="{{ url_for('static', filename='img/thronos-token.png') }}">
   <script>
-  window.THRONOS_CONFIG = {
-    apiReadBase: "/api/v1/read",
-    apiWriteBase: "/api/v1/write",
-    apiBase: "/api",
-    masterUrl: "https://thrchain.up.railway.app",
-    musicEnabled: true
-  };
+  (function() {
+    const host = window.location.hostname;
+    const isVercel = host.endsWith("vercel.app") || host === "thrchain.vercel.app";
+    window.THRONOS_CONFIG = {
+      apiReadBase: isVercel ? "/api/v1/read/api" : "/api",
+      apiWriteBase: isVercel ? "/api/v1/write/api" : "/api",
+      apiMusicBase: isVercel ? "/api/v1/read/api" : "/api",
+      apiBase: "/api",
+      masterUrl: "https://thrchain.up.railway.app",
+      MASTER_PUBLIC_URL: "https://thrchain.up.railway.app",
+      mediaBase: "/media",
+      musicEnabled: true
+    };
+  })();
   </script>
   <script src="https://thrchain.vercel.app/static/wallet_session.js"></script>
   <style>
@@ -3322,6 +3329,7 @@ function playReceiveAudio() {
 
 // Wallet History Modal Functions
 let allTransactions = [];
+let WALLET_HISTORY_CACHE = [];
 let currentHistoryFilter = 'all';
 let currentTokenFilter = null;
 
@@ -3336,7 +3344,8 @@ function openWalletHistoryModal() {
     document.getElementById('walletHistoryModal').classList.add('active');
     resetHistoryFilters();
     filterHistory('all');
-    loadWalletHistory();
+    const addr = walletSession.getAddress();
+    hydrateHistory(addr);
 }
 
 function closeWalletHistoryModal(event) {
@@ -3367,11 +3376,13 @@ function filterHistory(filter, tokenSymbol = null) {
         }
     });
 
-    if (filter === 'liquidity' || filter === 'architect_ai_jobs' || filter === 'ai_credits') {
-        loadWalletHistory(filter);
-    } else {
-        renderHistory();
-    }
+    applyHistoryFilter(filter);
+}
+
+function applyHistoryFilter(filterKey) {
+    currentHistoryFilter = filterKey;
+    allTransactions = WALLET_HISTORY_CACHE || [];
+    renderHistory();
 }
 
 function getTxType(tx) {
@@ -3802,35 +3813,40 @@ function renderHistory() {
     content.innerHTML = html;
 }
 
-async function loadWalletHistory(category = null) {
-    const content = document.getElementById('historyContent');
-    const addr = walletSession.getAddress();
+async function loadWalletHistory(thrAddress) {
+    if (!thrAddress) return [];
 
-    if (!addr) {
-        content.innerHTML = '<div class="send-result error" style="margin: 20px;">Connect wallet to view history</div>';
-        return;
+    const url = `/api/wallet/history?address=${encodeURIComponent(thrAddress)}&limit=200`;
+
+    if (window.FetchUtils && typeof window.FetchUtils.smartFetchJSON === 'function') {
+        const data = await window.FetchUtils.smartFetchJSON(url);
+        return Array.isArray(data)
+            ? data
+            : (data?.history || data?.txs || data?.transactions || data?.items || []);
     }
 
+    const res = await fetch(url);
+    const data = res.ok ? await res.json().catch(() => ({})) : {};
+    return Array.isArray(data)
+        ? data
+        : (data?.history || data?.txs || data?.transactions || data?.items || []);
+}
+
+async function hydrateHistory(thrAddress) {
+    const content = document.getElementById('historyContent');
     try {
-        const params = new URLSearchParams({ address: addr });
-        if (category) {
-            params.set('category', category);
-        }
-        const historyRes = await fetch(`/api/wallet/history?${params.toString()}`);
-        const data = historyRes.ok ? await historyRes.json() : {};
-        const transactions = data.transactions || [];
-        if (!transactions || transactions.length === 0) {
+        WALLET_HISTORY_CACHE = await loadWalletHistory(thrAddress);
+        allTransactions = WALLET_HISTORY_CACHE || [];
+        if (!allTransactions.length) {
             content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions found</div>';
-            allTransactions = [];
             return;
         }
-
-        allTransactions = transactions;
         renderHistory();
         startHistoryPendingPolling();
-
     } catch (error) {
         console.error('Failed to load history:', error);
+        WALLET_HISTORY_CACHE = [];
+        allTransactions = [];
         content.innerHTML = '<div class="send-result error" style="margin: 20px;">Failed to load transaction history</div>';
     }
 }
@@ -5577,7 +5593,7 @@ window.GlobalMusicPlayer = (function() {
             // Record play
             const wallet = localStorage.getItem('thr_address');
             if (track.id) {
-                fetch(`/api/v1/music/play/${track.id}`, {
+                fetch(`/api/music/play/${track.id}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ listener_address: wallet || '' })

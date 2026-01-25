@@ -2164,6 +2164,30 @@ function disconnectWallet() {
     updateWalletUI();
     walletBalancesLoaded = false;
     window.tokenBalances = {};
+    stopWalletPolling();
+}
+
+function stopWalletPolling() {
+    if (historyPollInterval) {
+        clearInterval(historyPollInterval);
+        historyPollInterval = null;
+    }
+    if (txPollInterval) {
+        clearInterval(txPollInterval);
+        txPollInterval = null;
+    }
+    if (tokenPriceInterval) {
+        clearInterval(tokenPriceInterval);
+        tokenPriceInterval = null;
+    }
+    if (walletBalanceInterval) {
+        clearInterval(walletBalanceInterval);
+        walletBalanceInterval = null;
+    }
+    if (chainTokensInterval) {
+        clearInterval(chainTokensInterval);
+        chainTokensInterval = null;
+    }
 }
 
 // Forget Device Function (full wipe)
@@ -3330,6 +3354,7 @@ function playReceiveAudio() {
 // Wallet History Modal Functions
 let allTransactions = [];
 let WALLET_HISTORY_CACHE = [];
+let historyLoading = false;
 let currentHistoryFilter = 'all';
 let currentTokenFilter = null;
 
@@ -3381,6 +3406,7 @@ function filterHistory(filter, tokenSymbol = null) {
 
 function applyHistoryFilter(filterKey) {
     currentHistoryFilter = filterKey;
+    if (historyLoading) return;
     allTransactions = WALLET_HISTORY_CACHE || [];
     renderHistory();
 }
@@ -3835,8 +3861,11 @@ async function loadWalletHistory(thrAddress) {
 async function hydrateHistory(thrAddress) {
     const content = document.getElementById('historyContent');
     try {
+        historyLoading = true;
+        content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">Loading...</div>';
         WALLET_HISTORY_CACHE = await loadWalletHistory(thrAddress);
         allTransactions = WALLET_HISTORY_CACHE || [];
+        historyLoading = false;
         if (!allTransactions.length) {
             content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions found</div>';
             return;
@@ -3847,7 +3876,13 @@ async function hydrateHistory(thrAddress) {
         console.error('Failed to load history:', error);
         WALLET_HISTORY_CACHE = [];
         allTransactions = [];
-        content.innerHTML = '<div class="send-result error" style="margin: 20px;">Failed to load transaction history</div>';
+        historyLoading = false;
+        content.innerHTML = `
+            <div class="send-result error" style="margin: 20px;">Unable to load transaction history</div>
+            <div style="text-align:center; margin-top:10px;">
+                <button class="wallet-btn" onclick="hydrateHistory(walletSession.getAddress())">Retry</button>
+            </div>
+        `;
     }
 }
 

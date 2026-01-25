@@ -162,6 +162,25 @@ def compat_v1_write(rest):
     return _redir("/" + fixed)
 
 
+def _dispatch_internal(target_path: str):
+    environ = request.environ.copy()
+    environ["PATH_INFO"] = target_path
+    environ["SCRIPT_NAME"] = ""
+    return Response.from_app(app.wsgi_app, environ)
+
+
+@app.route("/api/v1/read/api/<path:rest>", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+def compat_v1_read_api(rest):
+    fixed = _strip_nested(f"api/{rest}")
+    return _dispatch_internal("/" + fixed)
+
+
+@app.route("/api/v1/write/api/<path:rest>", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+def compat_v1_write_api(rest):
+    fixed = _strip_nested(f"api/{rest}")
+    return _dispatch_internal("/" + fixed)
+
+
 @app.route("/api/v1/music/<path:rest>", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 def compat_v1_music(rest):
     rest = (rest or "").lstrip("/")

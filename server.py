@@ -1477,10 +1477,18 @@ def _write_ledger_to_sqlite(ledger_type: str, ledger: dict) -> None:
 
 
 def _init_ledger_db():
+    """
+    Initialize SQLite database (idempotent).
+    Creates tables for:
+    - balances: wallet balances (existing)
+    - event_index: block/transaction events for fast querying
+    - telemetry_cache: cached network stats (hashrate, difficulty, tx count)
+    """
     if not USE_SQLITE_LEDGER:
         return
     os.makedirs(DATA_DIR, exist_ok=True)
     with _get_ledger_db_connection() as conn:
+        # Balances table (existing)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS balances (
@@ -1496,6 +1504,43 @@ def _init_ledger_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_balances_ledger_type ON balances(ledger_type)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_balances_updated_at ON balances(updated_at)")
 
+        # Event index table (NEW - for fast block/tx queries)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS event_index (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                event_id TEXT NOT NULL,
+                height INTEGER,
+                timestamp TEXT NOT NULL,
+                from_address TEXT,
+                to_address TEXT,
+                amount REAL,
+                asset_symbol TEXT,
+                metadata TEXT,
+                indexed_at INTEGER NOT NULL,
+                UNIQUE(event_type, event_id)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_event_type ON event_index(event_type)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_event_height ON event_index(height DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_event_timestamp ON event_index(timestamp DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_event_from_addr ON event_index(from_address)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_event_to_addr ON event_index(to_address)")
+
+        # Telemetry cache table (NEW - for dashboard stats)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS telemetry_cache (
+                metric_key TEXT PRIMARY KEY,
+                metric_value TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_telemetry_updated ON telemetry_cache(updated_at DESC)")
+
     with _get_ledger_db_connection() as conn:
         row = conn.execute("SELECT COUNT(1) AS count FROM balances").fetchone()
         count = row["count"] if row else 0
@@ -1509,6 +1554,176 @@ def _init_ledger_db():
         for ledger_type, ledger in seeds.items():
             if ledger:
                 _write_ledger_to_sqlite(ledger_type, ledger)
+
+
+# ========================================
+# EVENT INDEXER (NEW - Performance)
+# ========================================
+
+def _index_block_event(block: dict) -> None:
+    """Index a block event for fast querying. Prevents O(n) chain scans."""
+    if not USE_SQLITE_LEDGER:
+        return
+    try:
+        now_ts = int(time.time())
+        with _get_ledger_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO event_index
+                (event_type, event_id, height, timestamp, metadata, indexed_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "block",
+                    block.get("block_hash", ""),
+                    block.get("height"),
+                    block.get("timestamp", ""),
+                    json.dumps({
+                        "miner": block.get("thr_address"),
+                        "reward": block.get("reward"),
+                        "nonce": block.get("nonce"),
+                    }),
+                    now_ts,
+                ),
+            )
+    except Exception as e:
+        logger.error(f"Failed to index block event: {e}")
+
+
+def _index_transaction_event(tx: dict) -> None:
+    """Index a transaction event for fast querying. Enables O(1) wallet history."""
+    if not USE_SQLITE_LEDGER:
+        return
+    try:
+        now_ts = int(time.time())
+        with _get_ledger_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO event_index
+                (event_type, event_id, height, timestamp, from_address, to_address,
+                 amount, asset_symbol, metadata, indexed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    tx.get("type", "transaction"),
+                    tx.get("tx_id", tx.get("hash", "")),
+                    tx.get("height"),
+                    tx.get("timestamp", ""),
+                    tx.get("from"),
+                    tx.get("to"),
+                    tx.get("amount"),
+                    tx.get("symbol", "THR"),
+                    json.dumps({k: v for k, v in tx.items()
+                               if k not in ["from", "to", "amount", "symbol", "timestamp", "height"]}),
+                    now_ts,
+                ),
+            )
+    except Exception as e:
+        logger.error(f"Failed to index transaction event: {e}")
+
+
+def _get_recent_events(event_type: str = None, limit: int = 100, address: str = None) -> list:
+    """
+    Get recent events from index (fast).
+    - event_type: 'block', 'transaction', 'transfer', etc. (None = all)
+    - limit: max results (default 100)
+    - address: filter by from/to address (None = all)
+
+    Returns: List of events sorted by timestamp DESC
+    """
+    if not USE_SQLITE_LEDGER:
+        return []
+
+    try:
+        with _get_ledger_db_connection() as conn:
+            query = "SELECT * FROM event_index WHERE 1=1"
+            params = []
+
+            if event_type:
+                query += " AND event_type = ?"
+                params.append(event_type)
+
+            if address:
+                query += " AND (from_address = ? OR to_address = ?)"
+                params.extend([address, address])
+
+            query += " ORDER BY timestamp DESC LIMIT ?"
+            params.append(limit)
+
+            rows = conn.execute(query, params).fetchall()
+
+            return [
+                {
+                    "id": row["id"],
+                    "event_type": row["event_type"],
+                    "event_id": row["event_id"],
+                    "height": row["height"],
+                    "timestamp": row["timestamp"],
+                    "from": row["from_address"],
+                    "to": row["to_address"],
+                    "amount": row["amount"],
+                    "symbol": row["asset_symbol"],
+                    "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
+                }
+                for row in rows
+            ]
+    except Exception as e:
+        logger.error(f"Failed to get recent events: {e}")
+        return []
+
+
+# ========================================
+# TELEMETRY CACHE (NEW - Dashboard)
+# ========================================
+
+def _update_telemetry_cache(key: str, value: any) -> None:
+    """Update cached telemetry metric. Prevents expensive recalculations."""
+    if not USE_SQLITE_LEDGER:
+        return
+    try:
+        now_ts = int(time.time())
+        with _get_ledger_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO telemetry_cache (metric_key, metric_value, updated_at)
+                VALUES (?, ?, ?)
+                """,
+                (key, json.dumps(value), now_ts),
+            )
+    except Exception as e:
+        logger.error(f"Failed to update telemetry cache: {e}")
+
+
+def _get_telemetry_cache(key: str, max_age_seconds: int = 60) -> any:
+    """
+    Get cached telemetry metric if fresh enough.
+    - key: metric name (e.g., 'network_hashrate', 'difficulty', 'tx_count')
+    - max_age_seconds: max cache age (default 60s)
+
+    Returns: Cached value or None if stale/missing
+    """
+    if not USE_SQLITE_LEDGER:
+        return None
+
+    try:
+        now_ts = int(time.time())
+        with _get_ledger_db_connection() as conn:
+            row = conn.execute(
+                "SELECT metric_value, updated_at FROM telemetry_cache WHERE metric_key = ?",
+                (key,),
+            ).fetchone()
+
+            if not row:
+                return None
+
+            age = now_ts - row["updated_at"]
+            if age > max_age_seconds:
+                return None  # Stale
+
+            return json.loads(row["metric_value"])
+    except Exception as e:
+        logger.error(f"Failed to get telemetry cache: {e}")
+        return None
 
 
 def load_json(path, default):
@@ -5390,6 +5605,34 @@ def _categorize_transaction(tx: dict) -> str:
         return "token_transfer"
 
     return "other"
+
+
+@app.route("/api/tx_feed", methods=["GET"])
+def api_tx_feed():
+    """
+    Fast transaction feed using event index (NEW - Performance).
+
+    Query params:
+    - limit: Number of transactions (default 100, max 500)
+    - address: Filter by wallet address (optional)
+    - type: Filter by event type (optional)
+
+    Returns: Recent transactions from event_index (fast, no chain scan)
+    """
+    limit = min(request.args.get("limit", type=int, default=100), 500)
+    address = request.args.get("address", type=str, default=None)
+    event_type = request.args.get("type", type=str, default=None)
+
+    # Use event index for fast queries
+    events = _get_recent_events(event_type=event_type, limit=limit, address=address)
+
+    return jsonify({
+        "total": len(events),
+        "limit": limit,
+        "address": address,
+        "type": event_type,
+        "transactions": events
+    }), 200
 
 
 @app.route("/api/transfers", methods=["GET"])
@@ -13087,6 +13330,7 @@ def submit_block():
         ), 409
 
     chain.append(new_block)
+    _index_block_event(new_block)  # Index for fast queries
 
     # include mempool TXs
     pool=load_mempool()
@@ -13097,6 +13341,7 @@ def submit_block():
             tx["status"]="confirmed"
             tx["timestamp"]=ts
             chain.append(tx)
+            _index_transaction_event(tx)  # Index for fast wallet queries
             included.append(tx)
         save_mempool([])
 
@@ -13257,6 +13502,82 @@ def mint_first_blocks():
         if thr in seen:
             continue
         submit_mining_block_for_pledge(thr)
+
+
+# ─── TELEMETRY CACHE UPDATER (NEW - Dashboard Performance) ──────────────────
+def update_telemetry_cache_job():
+    """
+    Updates telemetry cache with network stats. Prevents expensive recalculations.
+    Runs every 30 seconds.
+
+    Cached metrics:
+    - network_hashrate: Estimated network hashrate
+    - difficulty: Current mining difficulty
+    - tx_count: Total transaction count
+    - block_count: Total block count
+    - tps: Transactions per second (last minute)
+    """
+    if not USE_SQLITE_LEDGER:
+        return
+
+    try:
+        # Get last block for difficulty/hashrate
+        last_block = get_last_block_snapshot()
+
+        # Calculate hashrate (blocks/day * difficulty)
+        chain = load_json(CHAIN_FILE, [])
+        blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+        block_count = len(blocks)
+
+        # Get recent blocks for TPS calculation
+        recent_blocks = blocks[-60:] if len(blocks) >= 60 else blocks  # Last 60 blocks
+        if len(recent_blocks) >= 2:
+            time_span = 0
+            first_ts = recent_blocks[0].get("timestamp", "")
+            last_ts = recent_blocks[-1].get("timestamp", "")
+
+            try:
+                from datetime import datetime
+                if first_ts and last_ts:
+                    dt1 = datetime.fromisoformat(first_ts.replace("Z", "+00:00"))
+                    dt2 = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+                    time_span = (dt2 - dt1).total_seconds()
+            except:
+                time_span = len(recent_blocks) * 60  # Fallback: assume 60s per block
+
+            if time_span > 0:
+                tps = len(recent_blocks) / time_span
+            else:
+                tps = 0
+        else:
+            tps = 0
+
+        # Count transactions
+        tx_count = sum(1 for item in chain
+                      if isinstance(item, dict) and item.get("type") in
+                      ["transfer", "token_transfer", "swap", "bridge", "service_payment"])
+
+        # Get difficulty
+        difficulty = last_block.get("difficulty", 0)
+
+        # Estimate hashrate (very rough: blocks_per_day * difficulty)
+        if len(blocks) >= 144:  # At least 1 day of blocks
+            blocks_per_day = 1440  # 1 block/min = 1440/day
+            hashrate = blocks_per_day * difficulty
+        else:
+            hashrate = 0
+
+        # Update cache
+        _update_telemetry_cache("network_hashrate", hashrate)
+        _update_telemetry_cache("difficulty", difficulty)
+        _update_telemetry_cache("tx_count", tx_count)
+        _update_telemetry_cache("block_count", block_count)
+        _update_telemetry_cache("tps", round(tps, 4))
+
+        logger.debug(f"[TELEMETRY] Updated cache: blocks={block_count}, txs={tx_count}, tps={tps:.4f}, hashrate={hashrate}")
+
+    except Exception as e:
+        logger.error(f"[TELEMETRY] Failed to update cache: {e}")
 
 
 # ─── AI KNOWLEDGE WATCHER – log -> mempool -> block ─────────────────────────
@@ -13660,14 +13981,24 @@ if is_ai_core() and should_run_schedulers():
 elif is_master() and should_run_schedulers() and ENABLE_CHAIN:
     print(f"[SCHEDULER] Starting as MASTER node (SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")
     scheduler=BackgroundScheduler(daemon=True)
-    scheduler.add_job(mint_first_blocks, "interval", minutes=1)
-    scheduler.add_job(confirm_mempool_if_stuck, "interval", seconds=45)
-    scheduler.add_job(aggregator_step, "interval", seconds=10)
-    scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30)
-    scheduler.add_job(distribute_ai_rewards_step, "interval", minutes=int(os.getenv("AI_POOL_DISTRIBUTION_INTERVAL", "30")))
+
+    # APScheduler safety: coalesce=True prevents job pileup, max_instances=1 prevents concurrent runs
+    scheduler.add_job(mint_first_blocks, "interval", minutes=1,
+                     coalesce=True, max_instances=1, id="mint_first_blocks")
+    scheduler.add_job(confirm_mempool_if_stuck, "interval", seconds=45,
+                     coalesce=True, max_instances=1, id="confirm_mempool")
+    scheduler.add_job(aggregator_step, "interval", seconds=10,
+                     coalesce=True, max_instances=1, id="aggregator_step")
+    scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30,
+                     coalesce=True, max_instances=1, id="ai_knowledge_watcher")
+    scheduler.add_job(distribute_ai_rewards_step, "interval",
+                     minutes=int(os.getenv("AI_POOL_DISTRIBUTION_INTERVAL", "30")),
+                     coalesce=True, max_instances=1, id="ai_rewards")
+    scheduler.add_job(update_telemetry_cache_job, "interval", seconds=30,
+                     coalesce=True, max_instances=1, id="telemetry_cache")
     scheduler.start()
     _active_schedulers.append(scheduler)
-    print(f"[SCHEDULER] All master jobs started (including AI rewards distribution)")
+    print(f"[SCHEDULER] All master jobs started (including telemetry cache, AI rewards distribution)")
 elif is_replica() and SCHEDULER_ENABLED and ENABLE_CHAIN:
     print(f"[SCHEDULER] Starting as REPLICA node with worker jobs (SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")
     scheduler=BackgroundScheduler(daemon=True)

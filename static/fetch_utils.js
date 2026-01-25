@@ -47,45 +47,59 @@
   function normalizeApiPath(input) {
     if (!input) return input;
 
-    let p = extractPathQuery(input);
-    if (typeof p !== "string") return p;
+    try {
+      const raw = String(input);
+      const u = new URL(raw, window.location.origin);
+      let path = u.pathname || "";
 
-    // allow "api/..." without leading slash
-    if (p.startsWith("api/")) p = "/" + p;
+      if (!path.startsWith("/")) path = "/" + path;
+      if (path.startsWith("api/")) path = "/" + path;
 
-    if (!isProbablyApiPath(p)) return p;
-
-    // Hard normalize multiple nested prefixes
-    // Examples fixed:
-    // /api/v1/read/api/dashboard  -> /api/dashboard
-    // /api/v1/write/api/music/... -> /api/music/...
-    // /api/v1/read/api/v1/read/api/balances -> /api/balances
-    // /api/api/token/prices -> /api/token/prices
-    const rules = [
-      [/^\/api\/v1\/read\/api\//, "/api/"],
-      [/^\/api\/v1\/write\/api\//, "/api/"],
-      [/^\/api\/v1\/read\//, "/"],
-      [/^\/api\/v1\/write\//, "/"],
-      [/^\/api\/api\//, "/api/"],
-    ];
-
-    // Apply repeatedly until stable
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (const [re, rep] of rules) {
-        if (re.test(p)) {
-          p = p.replace(re, rep);
-          changed = true;
+      if (!isProbablyApiPath(path)) {
+        if (/^https?:\/\//i.test(raw)) {
+          return raw;
         }
+        return path + (u.search || "") + (u.hash || "");
       }
-      // If someone accidentally produced .../api/v1/read/api/... inside again
-      p = p.replace(/\/api\/v1\/read\/api\//g, "/api/");
-      p = p.replace(/\/api\/v1\/write\/api\//g, "/api/");
-      p = p.replace(/\/api\/api\//g, "/api/");
-    }
 
-    return p;
+      path = path.replace(/^\/api\/v1\/read\/api\//, "/api/");
+      path = path.replace(/^\/api\/v1\/write\/api\//, "/api/");
+      path = path.replace(/^\/api\/v1\/read\//, "/api/");
+      path = path.replace(/^\/api\/v1\/write\//, "/api/");
+      path = path.replace(/^\/api\/api\//, "/api/");
+      path = path.replace(/^\/api\/v1\//, "/api/");
+
+      if (!path.startsWith("/api/")) {
+        path = `/api${path}`;
+      }
+
+      return path + (u.search || "") + (u.hash || "");
+    } catch (e) {
+      const m = String(input).match(/^([^?#]*)(\?[^#]*)?(#.*)?$/);
+      let base = (m?.[1] || "").trim();
+      const search = m?.[2] || "";
+      const hash = m?.[3] || "";
+
+      if (!base.startsWith("/")) base = "/" + base;
+      if (base.startsWith("api/")) base = "/" + base;
+
+      if (!isProbablyApiPath(base)) {
+        return base + search + hash;
+      }
+
+      base = base.replace(/^\/api\/v1\/read\/api\//, "/api/");
+      base = base.replace(/^\/api\/v1\/write\/api\//, "/api/");
+      base = base.replace(/^\/api\/v1\/read\//, "/api/");
+      base = base.replace(/^\/api\/v1\/write\//, "/api/");
+      base = base.replace(/^\/api\/api\//, "/api/");
+      base = base.replace(/^\/api\/v1\//, "/api/");
+
+      if (!base.startsWith("/api/")) {
+        base = `/api${base}`;
+      }
+
+      return base + search + hash;
+    }
   }
 
   function buildApiUrl(urlLike) {
@@ -104,9 +118,19 @@
     return base + "/" + normalized;
   }
 
-  function resolveMediaUrl(u) {
-    if (!u) return "";
-    let s = String(u);
+  function resolveMediaUrl(raw, fallback = "") {
+    if (!raw) return fallback;
+    let s = String(raw).trim();
+
+    s = s.replace(/^https?:\/\/localhost:\d+/i, "");
+    s = s.replace(/^https?:\/\/thrchain\.vercel\.app/i, "");
+    s = s.replace(/^https?:\/\/thrchain\.up\.railway\.app/i, "");
+
+    s = s.replace(/\/{2,}/g, "/");
+
+    if (s.startsWith("/media/static/")) {
+      return s.replace("/media/static/", "/static/");
+    }
 
     if (s.startsWith("/media/") || s.startsWith("/static/")) return s;
 
@@ -115,6 +139,10 @@
 
     const staticIndex = s.indexOf("/static/");
     if (staticIndex !== -1) return s.slice(staticIndex);
+
+    if (s.startsWith("media/") || s.startsWith("static/")) {
+      return `/${s}`;
+    }
 
     try {
       const parsed = new URL(s);

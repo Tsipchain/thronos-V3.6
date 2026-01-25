@@ -238,7 +238,21 @@
       return;
     }
 
-    transfers.forEach(tx => {
+    const onlyTransfers = (transfers || []).filter(tx =>
+      tx
+      && tx.type !== 'block'
+      && tx.category !== 'block'
+      && (tx.type === 'token_transfer' || tx.category === 'tokens' || tx.kind === 'transfer')
+    );
+
+    if (!onlyTransfers.length) {
+      if (!append) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;">No transfers found</td></tr>';
+      }
+      return;
+    }
+
+    onlyTransfers.forEach(tx => {
       const row = document.createElement('tr');
       row.innerHTML = `
         <td><code>${truncateHash(tx.tx_id || tx.id)}</code></td>

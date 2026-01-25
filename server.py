@@ -1541,6 +1541,28 @@ def _init_ledger_db():
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_telemetry_updated ON telemetry_cache(updated_at DESC)")
 
+        # Music plays table (NEW - for GPS/Music telemetry integration)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS music_plays (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                track_id TEXT NOT NULL,
+                wallet_address TEXT NOT NULL,
+                artist_address TEXT,
+                play_timestamp INTEGER NOT NULL,
+                duration_seconds INTEGER,
+                gps_lat REAL,
+                gps_lng REAL,
+                tip_amount REAL DEFAULT 0.0,
+                indexed_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_wallet ON music_plays(wallet_address)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_artist ON music_plays(artist_address)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_timestamp ON music_plays(play_timestamp DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_track ON music_plays(track_id)")
+
     with _get_ledger_db_connection() as conn:
         row = conn.execute("SELECT COUNT(1) AS count FROM balances").fetchone()
         count = row["count"] if row else 0
@@ -1724,6 +1746,91 @@ def _get_telemetry_cache(key: str, max_age_seconds: int = 60) -> any:
     except Exception as e:
         logger.error(f"Failed to get telemetry cache: {e}")
         return None
+
+
+# ========================================
+# MUSIC PLAYS TRACKING (NEW - GPS/Music Integration)
+# ========================================
+
+def _track_music_play(track_id: str, wallet_address: str, artist_address: str = None,
+                     duration_seconds: int = None, gps_lat: float = None, gps_lng: float = None,
+                     tip_amount: float = 0.0) -> None:
+    """
+    Track music play with optional GPS coordinates.
+    Used for GPS/Music telemetry integration and autonomous driving data collection.
+    """
+    if not USE_SQLITE_LEDGER:
+        return
+    try:
+        now_ts = int(time.time())
+        with _get_ledger_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO music_plays
+                (track_id, wallet_address, artist_address, play_timestamp,
+                 duration_seconds, gps_lat, gps_lng, tip_amount, indexed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (track_id, wallet_address, artist_address, now_ts,
+                 duration_seconds, gps_lat, gps_lng, tip_amount, now_ts),
+            )
+    except Exception as e:
+        logger.error(f"Failed to track music play: {e}")
+
+
+def _get_music_plays(wallet_address: str = None, track_id: str = None,
+                    artist_address: str = None, limit: int = 100) -> list:
+    """
+    Get music play history with optional filters.
+    - wallet_address: Filter by listener
+    - track_id: Filter by track
+    - artist_address: Filter by artist
+    - limit: Max results (default 100)
+
+    Returns: List of music plays with GPS data
+    """
+    if not USE_SQLITE_LEDGER:
+        return []
+
+    try:
+        with _get_ledger_db_connection() as conn:
+            query = "SELECT * FROM music_plays WHERE 1=1"
+            params = []
+
+            if wallet_address:
+                query += " AND wallet_address = ?"
+                params.append(wallet_address)
+
+            if track_id:
+                query += " AND track_id = ?"
+                params.append(track_id)
+
+            if artist_address:
+                query += " AND artist_address = ?"
+                params.append(artist_address)
+
+            query += " ORDER BY play_timestamp DESC LIMIT ?"
+            params.append(limit)
+
+            rows = conn.execute(query, params).fetchall()
+
+            return [
+                {
+                    "id": row["id"],
+                    "track_id": row["track_id"],
+                    "wallet_address": row["wallet_address"],
+                    "artist_address": row["artist_address"],
+                    "play_timestamp": row["play_timestamp"],
+                    "duration_seconds": row["duration_seconds"],
+                    "gps_lat": row["gps_lat"],
+                    "gps_lng": row["gps_lng"],
+                    "tip_amount": row["tip_amount"],
+                }
+                for row in rows
+            ]
+    except Exception as e:
+        logger.error(f"Failed to get music plays: {e}")
+        return []
 
 
 def load_json(path, default):

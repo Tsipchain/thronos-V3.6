@@ -1727,7 +1727,8 @@ function toggleTelemetryStream() {
         // Start streaming
         btn.innerHTML = '⏸️ <span class="lang-el">Παύση Ροής</span><span class="lang-en">Stop Streaming</span>';
         simulateTelemetry();
-        telemetryInterval = setInterval(simulateTelemetry, 1000);
+        // Memory optimization: reduce telemetry frequency from 1s to 5s
+        telemetryInterval = setInterval(simulateTelemetry, 5000);
     }
     applyTranslations();
 }

@@ -769,7 +769,7 @@ async function reloadBlocks(){
     const r = await fetch('/api/blocks');
     if (!r.ok) throw new Error(`blocks ${r.status}`);
     const j = await r.json();
-    CURRENT_BLOCKS = Array.isArray(j) ? j : [];
+    CURRENT_BLOCKS = Array.isArray(j) ? trimBlocks(j) : [];
   } catch (e) {
     console.error('Failed to reload blocks:', e);
     if (!Array.isArray(CURRENT_BLOCKS)) CURRENT_BLOCKS = [];
@@ -819,6 +819,24 @@ async function reloadTxs(){
 /* ===== Wireup ===== */
 let CURRENT_BLOCKS = BOOT_BLOCKS || [];
 let CURRENT_TXS    = BOOT_TXS || [];
+
+// Memory optimization: limit block history to prevent unbounded growth
+const MAX_BLOCKS = 500;
+const MAX_TXS = 500;
+
+function trimBlocks(blocks) {
+  if (blocks.length > MAX_BLOCKS) {
+    return blocks.slice(-MAX_BLOCKS);
+  }
+  return blocks;
+}
+
+function trimTxs(txs) {
+  if (txs.length > MAX_TXS) {
+    return txs.slice(-MAX_TXS);
+  }
+  return txs;
+}
 
 renderBlocks(CURRENT_BLOCKS);
 renderTxs(CURRENT_TXS);

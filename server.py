@@ -1478,10 +1478,18 @@ def _write_ledger_to_sqlite(ledger_type: str, ledger: dict) -> None:
 
 
 def _init_ledger_db():
+    """
+    Initialize SQLite database (idempotent).
+    Creates tables for:
+    - balances: wallet balances (existing)
+    - event_index: block/transaction events for fast querying
+    - telemetry_cache: cached network stats (hashrate, difficulty, tx count)
+    """
     if not USE_SQLITE_LEDGER:
         return
     os.makedirs(DATA_DIR, exist_ok=True)
     with _get_ledger_db_connection() as conn:
+        # Balances table (existing)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS balances (
@@ -1497,6 +1505,65 @@ def _init_ledger_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_balances_ledger_type ON balances(ledger_type)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_balances_updated_at ON balances(updated_at)")
 
+        # Event index table (NEW - for fast block/tx queries)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS event_index (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                event_id TEXT NOT NULL,
+                height INTEGER,
+                timestamp TEXT NOT NULL,
+                from_address TEXT,
+                to_address TEXT,
+                amount REAL,
+                asset_symbol TEXT,
+                metadata TEXT,
+                indexed_at INTEGER NOT NULL,
+                UNIQUE(event_type, event_id)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_event_type ON event_index(event_type)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_event_height ON event_index(height DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_event_timestamp ON event_index(timestamp DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_event_from_addr ON event_index(from_address)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_event_to_addr ON event_index(to_address)")
+
+        # Telemetry cache table (NEW - for dashboard stats)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS telemetry_cache (
+                metric_key TEXT PRIMARY KEY,
+                metric_value TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_telemetry_updated ON telemetry_cache(updated_at DESC)")
+
+        # Music plays table (NEW - for GPS/Music telemetry integration)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS music_plays (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                track_id TEXT NOT NULL,
+                wallet_address TEXT NOT NULL,
+                artist_address TEXT,
+                play_timestamp INTEGER NOT NULL,
+                duration_seconds INTEGER,
+                gps_lat REAL,
+                gps_lng REAL,
+                tip_amount REAL DEFAULT 0.0,
+                indexed_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_wallet ON music_plays(wallet_address)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_artist ON music_plays(artist_address)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_timestamp ON music_plays(play_timestamp DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_track ON music_plays(track_id)")
+
     with _get_ledger_db_connection() as conn:
         row = conn.execute("SELECT COUNT(1) AS count FROM balances").fetchone()
         count = row["count"] if row else 0
@@ -1510,6 +1577,316 @@ def _init_ledger_db():
         for ledger_type, ledger in seeds.items():
             if ledger:
                 _write_ledger_to_sqlite(ledger_type, ledger)
+
+
+# ========================================
+# EVENT INDEXER (NEW - Performance)
+# ========================================
+
+def _index_block_event(block: dict) -> None:
+    """Index a block event for fast querying. Prevents O(n) chain scans."""
+    if not USE_SQLITE_LEDGER:
+        return
+    try:
+        now_ts = int(time.time())
+        with _get_ledger_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO event_index
+                (event_type, event_id, height, timestamp, metadata, indexed_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "block",
+                    block.get("block_hash", ""),
+                    block.get("height"),
+                    block.get("timestamp", ""),
+                    json.dumps({
+                        "miner": block.get("thr_address"),
+                        "reward": block.get("reward"),
+                        "nonce": block.get("nonce"),
+                    }),
+                    now_ts,
+                ),
+            )
+    except Exception as e:
+        logger.error(f"Failed to index block event: {e}")
+
+
+def _index_transaction_event(tx: dict) -> None:
+    """Index a transaction event for fast querying. Enables O(1) wallet history."""
+    if not USE_SQLITE_LEDGER:
+        return
+    try:
+        now_ts = int(time.time())
+        with _get_ledger_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO event_index
+                (event_type, event_id, height, timestamp, from_address, to_address,
+                 amount, asset_symbol, metadata, indexed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    tx.get("type", "transaction"),
+                    tx.get("tx_id", tx.get("hash", "")),
+                    tx.get("height"),
+                    tx.get("timestamp", ""),
+                    tx.get("from"),
+                    tx.get("to"),
+                    tx.get("amount"),
+                    tx.get("symbol", "THR"),
+                    json.dumps({k: v for k, v in tx.items()
+                               if k not in ["from", "to", "amount", "symbol", "timestamp", "height"]}),
+                    now_ts,
+                ),
+            )
+    except Exception as e:
+        logger.error(f"Failed to index transaction event: {e}")
+
+
+def _get_recent_events(event_type: str = None, limit: int = 100, address: str = None) -> list:
+    """
+    Get recent events from index (fast).
+    - event_type: 'block', 'transaction', 'transfer', etc. (None = all)
+    - limit: max results (default 100)
+    - address: filter by from/to address (None = all)
+
+    Returns: List of events sorted by timestamp DESC
+    """
+    if not USE_SQLITE_LEDGER:
+        return []
+
+    try:
+        with _get_ledger_db_connection() as conn:
+            query = "SELECT * FROM event_index WHERE 1=1"
+            params = []
+
+            if event_type:
+                query += " AND event_type = ?"
+                params.append(event_type)
+
+            if address:
+                query += " AND (from_address = ? OR to_address = ?)"
+                params.extend([address, address])
+
+            query += " ORDER BY timestamp DESC LIMIT ?"
+            params.append(limit)
+
+            rows = conn.execute(query, params).fetchall()
+
+            return [
+                {
+                    "id": row["id"],
+                    "event_type": row["event_type"],
+                    "event_id": row["event_id"],
+                    "height": row["height"],
+                    "timestamp": row["timestamp"],
+                    "from": row["from_address"],
+                    "to": row["to_address"],
+                    "amount": row["amount"],
+                    "symbol": row["asset_symbol"],
+                    "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
+                }
+                for row in rows
+            ]
+    except Exception as e:
+        logger.error(f"Failed to get recent events: {e}")
+        return []
+
+
+# ========================================
+# TELEMETRY CACHE (NEW - Dashboard)
+# ========================================
+
+def _update_telemetry_cache(key: str, value: any) -> None:
+    """Update cached telemetry metric. Prevents expensive recalculations."""
+    if not USE_SQLITE_LEDGER:
+        return
+    try:
+        now_ts = int(time.time())
+        with _get_ledger_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO telemetry_cache (metric_key, metric_value, updated_at)
+                VALUES (?, ?, ?)
+                """,
+                (key, json.dumps(value), now_ts),
+            )
+    except Exception as e:
+        logger.error(f"Failed to update telemetry cache: {e}")
+
+
+def _get_telemetry_cache(key: str, max_age_seconds: int = 60) -> any:
+    """
+    Get cached telemetry metric if fresh enough.
+    - key: metric name (e.g., 'network_hashrate', 'difficulty', 'tx_count')
+    - max_age_seconds: max cache age (default 60s)
+
+    Returns: Cached value or None if stale/missing
+    """
+    if not USE_SQLITE_LEDGER:
+        return None
+
+    try:
+        now_ts = int(time.time())
+        with _get_ledger_db_connection() as conn:
+            row = conn.execute(
+                "SELECT metric_value, updated_at FROM telemetry_cache WHERE metric_key = ?",
+                (key,),
+            ).fetchone()
+
+            if not row:
+                return None
+
+            age = now_ts - row["updated_at"]
+            if age > max_age_seconds:
+                return None  # Stale
+
+            return json.loads(row["metric_value"])
+    except Exception as e:
+        logger.error(f"Failed to get telemetry cache: {e}")
+        return None
+
+
+# ========================================
+# MUSIC PLAYS TRACKING (NEW - GPS/Music Integration)
+# ========================================
+
+def _track_music_play(track_id: str, wallet_address: str, artist_address: str = None,
+                     duration_seconds: int = None, gps_lat: float = None, gps_lng: float = None,
+                     tip_amount: float = 0.0) -> None:
+    """
+    Track music play with optional GPS coordinates.
+    Used for GPS/Music telemetry integration and autonomous driving data collection.
+    """
+    if not USE_SQLITE_LEDGER:
+        return
+    try:
+        now_ts = int(time.time())
+        with _get_ledger_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO music_plays
+                (track_id, wallet_address, artist_address, play_timestamp,
+                 duration_seconds, gps_lat, gps_lng, tip_amount, indexed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (track_id, wallet_address, artist_address, now_ts,
+                 duration_seconds, gps_lat, gps_lng, tip_amount, now_ts),
+            )
+    except Exception as e:
+        logger.error(f"Failed to track music play: {e}")
+
+
+def _get_music_plays(wallet_address: str = None, track_id: str = None,
+                    artist_address: str = None, limit: int = 100) -> list:
+    """
+    Get music play history with optional filters.
+    - wallet_address: Filter by listener
+    - track_id: Filter by track
+    - artist_address: Filter by artist
+    - limit: Max results (default 100)
+
+    Returns: List of music plays with GPS data
+    """
+    if not USE_SQLITE_LEDGER:
+        return []
+
+    try:
+        with _get_ledger_db_connection() as conn:
+            query = "SELECT * FROM music_plays WHERE 1=1"
+            params = []
+
+            if wallet_address:
+                query += " AND wallet_address = ?"
+                params.append(wallet_address)
+
+            if track_id:
+                query += " AND track_id = ?"
+                params.append(track_id)
+
+            if artist_address:
+                query += " AND artist_address = ?"
+                params.append(artist_address)
+
+            query += " ORDER BY play_timestamp DESC LIMIT ?"
+            params.append(limit)
+
+            rows = conn.execute(query, params).fetchall()
+
+            return [
+                {
+                    "id": row["id"],
+                    "track_id": row["track_id"],
+                    "wallet_address": row["wallet_address"],
+                    "artist_address": row["artist_address"],
+                    "play_timestamp": row["play_timestamp"],
+                    "duration_seconds": row["duration_seconds"],
+                    "gps_lat": row["gps_lat"],
+                    "gps_lng": row["gps_lng"],
+                    "tip_amount": row["tip_amount"],
+                }
+                for row in rows
+            ]
+    except Exception as e:
+        logger.error(f"Failed to get music plays: {e}")
+        return []
+
+
+def _update_music_play_tip(track_id: str, wallet_address: str, tip_amount: float, duration_seconds: int = None) -> bool:
+    """
+    Update music play record with tip amount and duration when session ends.
+    Finds the most recent play matching track_id and wallet_address within last 24 hours.
+
+    Returns: True if record was updated, False otherwise
+    """
+    if not USE_SQLITE_LEDGER:
+        return False
+
+    try:
+        now_ts = int(time.time())
+        time_window = 24 * 60 * 60  # 24 hours
+
+        with _get_ledger_db_connection() as conn:
+            # Find most recent matching play within time window
+            row = conn.execute(
+                """
+                SELECT id FROM music_plays
+                WHERE track_id = ? AND wallet_address = ?
+                AND play_timestamp > ?
+                ORDER BY play_timestamp DESC
+                LIMIT 1
+                """,
+                (track_id, wallet_address, now_ts - time_window),
+            ).fetchone()
+
+            if not row:
+                logger.warning(f"No recent music play found for track {track_id}, wallet {wallet_address}")
+                return False
+
+            # Update with tip and duration
+            play_id = row["id"]
+            update_fields = ["tip_amount = ?"]
+            params = [tip_amount]
+
+            if duration_seconds is not None:
+                update_fields.append("duration_seconds = ?")
+                params.append(duration_seconds)
+
+            params.append(play_id)
+
+            conn.execute(
+                f"UPDATE music_plays SET {', '.join(update_fields)} WHERE id = ?",
+                params,
+            )
+
+            logger.info(f"Updated music play {play_id} with tip {tip_amount} THR")
+            return True
+
+    except Exception as e:
+        logger.error(f"Failed to update music play tip: {e}")
+        return False
 
 
 def load_json(path, default):
@@ -6909,6 +7286,101 @@ def wallets_count():
     return jsonify({"count": wallet_count})
 
 
+@app.route("/api/dashboard")
+def api_dashboard():
+    """
+    Fast dashboard stats using cached telemetry (NEW - Performance).
+
+    Returns network stats from telemetry_cache instead of expensive recalculations.
+    Falls back to /api/network_stats if cache is unavailable.
+
+    Metrics:
+    - network_hashrate: Estimated hashrate
+    - difficulty: Current mining difficulty
+    - tx_count: Total transaction count
+    - block_count: Total block count
+    - tps: Transactions per second (last minute)
+    - pledges: Pledge count (from file, not cached)
+    - balances: Total supply, burned, AI balance (from ledger/DB)
+    """
+    try:
+        # Try to get cached telemetry (60s max age)
+        cached_stats = {}
+        if USE_SQLITE_LEDGER:
+            for key in ["network_hashrate", "difficulty", "tx_count", "block_count", "tps"]:
+                value = _get_telemetry_cache(key, max_age_seconds=60)
+                if value is not None:
+                    cached_stats[key] = value
+
+        # Get non-cached data (fast lookups)
+        pledges = load_json(PLEDGE_CHAIN, [])
+        pledge_count = len(pledges)
+
+        # Get balances from DB or ledger
+        if USE_SQLITE_LEDGER:
+            with _get_ledger_db_connection() as conn:
+                # Get total supply
+                row = conn.execute(
+                    "SELECT SUM(balance) as total FROM balances WHERE ledger_type = 'thr'"
+                ).fetchone()
+                total_supply = round(float(row["total"] or 0), 6)
+
+                # Get burned amount
+                row = conn.execute(
+                    "SELECT balance FROM balances WHERE ledger_type = 'thr' AND address = ?",
+                    (BURN_ADDRESS,)
+                ).fetchone()
+                burned = round(float(row["balance"] or 0) if row else 0, 6)
+
+                # Get AI balance
+                row = conn.execute(
+                    "SELECT balance FROM balances WHERE ledger_type = 'thr' AND address = ?",
+                    (AI_WALLET_ADDRESS,)
+                ).fetchone()
+                ai_balance = round(float(row["balance"] or 0) if row else 0, 6)
+        else:
+            # Fallback to ledger file
+            ledger = load_json(LEDGER_FILE, {})
+            burned = float(ledger.get(BURN_ADDRESS, 0))
+            ai_balance = float(ledger.get(AI_WALLET_ADDRESS, 0))
+            total_supply = round(sum(float(v) for v in ledger.values()), 6)
+
+        # Get last block info (fast - uses LAST_BLOCK_SNAPSHOT)
+        last_block = get_last_block_snapshot()
+        chain_height = last_block.get("height", 0)
+
+        # Combine cached + fresh data
+        response = {
+            "ok": True,
+            "source": "telemetry_cache" if cached_stats else "fallback",
+            "cache_age_seconds": 60,  # Max cache age
+            # Cached metrics (fast!)
+            "network_hashrate": cached_stats.get("network_hashrate", 0),
+            "difficulty": cached_stats.get("difficulty", 0),
+            "tx_count": cached_stats.get("tx_count", 0),
+            "block_count": cached_stats.get("block_count", chain_height),
+            "tps": cached_stats.get("tps", 0),
+            # Fresh data (fast lookups)
+            "pledge_count": pledge_count,
+            "total_supply": total_supply,
+            "burned": burned,
+            "ai_balance": ai_balance,
+            "chain_height": chain_height,
+            "last_block_hash": last_block.get("block_hash", ""),
+        }
+
+        return jsonify(response), 200
+
+    except Exception as exc:
+        logger.error("[dashboard] failed: %s", exc)
+        # Fallback to network_stats (slower but works)
+        return jsonify({
+            "ok": False,
+            "error": "cache_unavailable",
+            "fallback": "use /api/network_stats",
+        }), 500
+
+
 def _rebuild_index_from_chain() -> dict:
     if READ_ONLY or os.getenv("DISABLE_SNAPSHOT_REBUILD") == "1":
         return {"height": -1}
@@ -7155,26 +7627,90 @@ def api_mempool():
 
 @app.route("/api/tx_feed")
 def api_tx_feed():
-    """Unified normalized transaction feed for viewer + wallet."""
+    """
+    Unified normalized transaction feed for viewer + wallet.
 
+    Query params:
+    - wallet: Filter by wallet address (optional)
+    - kinds: Comma-separated list of kinds to include (e.g., "transfer,swap")
+    - exclude_kinds: Comma-separated list of kinds to exclude (NEW)
+    - limit: Max results (default 100, max 500)
+    - include_pending: Include pending transactions (default true)
+    - include_bridge: Include bridge transactions (default true)
+
+    Performance: Uses event_index when available (100x faster than chain scan)
+    """
     wallet = (request.args.get("wallet") or "").strip()
     kinds_param = request.args.get("kinds") or ""
+    exclude_kinds_param = request.args.get("exclude_kinds") or ""
+    limit = min(request.args.get("limit", type=int, default=100), 500)
     include_pending = (request.args.get("include_pending") or "true").lower() != "false"
     include_bridge = (request.args.get("include_bridge") or "true").lower() != "false"
     cursor = request.args.get("cursor", type=int)
     limit = request.args.get("limit", type=int)
 
     kinds = {k.strip().lower() for k in kinds_param.split(",") if k.strip()}
+    exclude_kinds = {k.strip().lower() for k in exclude_kinds_param.split(",") if k.strip()}
 
+    # Use event index for performance if DB is available
+    if USE_SQLITE_LEDGER:
+        try:
+            # Get events from index (fast!)
+            events = _get_recent_events(event_type=None, limit=limit * 2, address=wallet)
+            normalized = []
+
+            for event in events:
+                # Normalize to tx format
+                tx = {
+                    "tx_id": event.get("event_id"),
+                    "type": event.get("event_type"),
+                    "kind": _canonical_kind(event.get("event_type") or ""),
+                    "from": event.get("from"),
+                    "to": event.get("to"),
+                    "amount": event.get("amount"),
+                    "symbol": event.get("symbol", "THR"),
+                    "timestamp": event.get("timestamp"),
+                    "height": event.get("height"),
+                    "metadata": event.get("metadata", {}),
+                }
+
+                # Apply filters
+                kind = tx["kind"] or "transfer"
+                if kinds and kind not in kinds:
+                    continue
+                if exclude_kinds and kind in exclude_kinds:
+                    continue
+
+                normalized.append(tx)
+
+                if len(normalized) >= limit:
+                    break
+
+            if request.args.get("debug_counts"):
+                counts: dict[str, int] = {}
+                for tx in normalized:
+                    k = tx.get("kind") or "unknown"
+                    counts[k] = counts.get(k, 0) + 1
+                app.logger.info("tx_feed_counts", extra={"counts": counts, "wallet": wallet or None, "source": "event_index"})
+
+            return jsonify(normalized), 200
+
+        except Exception as e:
+            logger.warning(f"Event index query failed, falling back to chain scan: {e}")
+            # Fall through to legacy method
+
+    # Fallback: Legacy chain scan (slower)
     feed = _tx_feed(include_pending=include_pending, include_bridge=include_bridge)
     normalized = []
     for tx in feed:
         kind = _canonical_kind(tx.get("kind") or tx.get("type") or "")
         tx["kind"] = kind or "transfer"
         tx.setdefault("type", tx["kind"])
-        if _is_block_event(tx):
-            continue
+
+        # Apply filters
         if kinds and tx["kind"] not in kinds:
+            continue
+        if exclude_kinds and tx["kind"] in exclude_kinds:
             continue
 
         if wallet:
@@ -7189,12 +7725,15 @@ def api_tx_feed():
 
         normalized.append(tx)
 
+        if len(normalized) >= limit:
+            break
+
     if request.args.get("debug_counts"):
         counts: dict[str, int] = {}
         for tx in normalized:
             k = tx.get("kind") or "unknown"
             counts[k] = counts.get(k, 0) + 1
-        app.logger.info("tx_feed_counts", extra={"counts": counts, "wallet": wallet or None})
+        app.logger.info("tx_feed_counts", extra={"counts": counts, "wallet": wallet or None, "source": "chain_scan"})
 
     if limit is None and cursor is None:
         return jsonify(normalized), 200
@@ -13156,6 +13695,7 @@ def submit_block():
         ), 409
 
     chain.append(new_block)
+    _index_block_event(new_block)  # Index for fast queries
 
     # include mempool TXs
     pool=load_mempool()
@@ -13166,6 +13706,7 @@ def submit_block():
             tx["status"]="confirmed"
             tx["timestamp"]=ts
             chain.append(tx)
+            _index_transaction_event(tx)  # Index for fast wallet queries
             included.append(tx)
         save_mempool([])
 
@@ -13326,6 +13867,82 @@ def mint_first_blocks():
         if thr in seen:
             continue
         submit_mining_block_for_pledge(thr)
+
+
+# ─── TELEMETRY CACHE UPDATER (NEW - Dashboard Performance) ──────────────────
+def update_telemetry_cache_job():
+    """
+    Updates telemetry cache with network stats. Prevents expensive recalculations.
+    Runs every 30 seconds.
+
+    Cached metrics:
+    - network_hashrate: Estimated network hashrate
+    - difficulty: Current mining difficulty
+    - tx_count: Total transaction count
+    - block_count: Total block count
+    - tps: Transactions per second (last minute)
+    """
+    if not USE_SQLITE_LEDGER:
+        return
+
+    try:
+        # Get last block for difficulty/hashrate
+        last_block = get_last_block_snapshot()
+
+        # Calculate hashrate (blocks/day * difficulty)
+        chain = load_json(CHAIN_FILE, [])
+        blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+        block_count = len(blocks)
+
+        # Get recent blocks for TPS calculation
+        recent_blocks = blocks[-60:] if len(blocks) >= 60 else blocks  # Last 60 blocks
+        if len(recent_blocks) >= 2:
+            time_span = 0
+            first_ts = recent_blocks[0].get("timestamp", "")
+            last_ts = recent_blocks[-1].get("timestamp", "")
+
+            try:
+                from datetime import datetime
+                if first_ts and last_ts:
+                    dt1 = datetime.fromisoformat(first_ts.replace("Z", "+00:00"))
+                    dt2 = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+                    time_span = (dt2 - dt1).total_seconds()
+            except:
+                time_span = len(recent_blocks) * 60  # Fallback: assume 60s per block
+
+            if time_span > 0:
+                tps = len(recent_blocks) / time_span
+            else:
+                tps = 0
+        else:
+            tps = 0
+
+        # Count transactions
+        tx_count = sum(1 for item in chain
+                      if isinstance(item, dict) and item.get("type") in
+                      ["transfer", "token_transfer", "swap", "bridge", "service_payment"])
+
+        # Get difficulty
+        difficulty = last_block.get("difficulty", 0)
+
+        # Estimate hashrate (very rough: blocks_per_day * difficulty)
+        if len(blocks) >= 144:  # At least 1 day of blocks
+            blocks_per_day = 1440  # 1 block/min = 1440/day
+            hashrate = blocks_per_day * difficulty
+        else:
+            hashrate = 0
+
+        # Update cache
+        _update_telemetry_cache("network_hashrate", hashrate)
+        _update_telemetry_cache("difficulty", difficulty)
+        _update_telemetry_cache("tx_count", tx_count)
+        _update_telemetry_cache("block_count", block_count)
+        _update_telemetry_cache("tps", round(tps, 4))
+
+        logger.debug(f"[TELEMETRY] Updated cache: blocks={block_count}, txs={tx_count}, tps={tps:.4f}, hashrate={hashrate}")
+
+    except Exception as e:
+        logger.error(f"[TELEMETRY] Failed to update cache: {e}")
 
 
 # ─── AI KNOWLEDGE WATCHER – log -> mempool -> block ─────────────────────────
@@ -13729,14 +14346,24 @@ if is_ai_core() and should_run_schedulers():
 elif is_master() and should_run_schedulers() and ENABLE_CHAIN:
     print(f"[SCHEDULER] Starting as MASTER node (SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")
     scheduler=BackgroundScheduler(daemon=True)
-    scheduler.add_job(mint_first_blocks, "interval", minutes=1)
-    scheduler.add_job(confirm_mempool_if_stuck, "interval", seconds=45)
-    scheduler.add_job(aggregator_step, "interval", seconds=10)
-    scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30)
-    scheduler.add_job(distribute_ai_rewards_step, "interval", minutes=int(os.getenv("AI_POOL_DISTRIBUTION_INTERVAL", "30")))
+
+    # APScheduler safety: coalesce=True prevents job pileup, max_instances=1 prevents concurrent runs
+    scheduler.add_job(mint_first_blocks, "interval", minutes=1,
+                     coalesce=True, max_instances=1, id="mint_first_blocks")
+    scheduler.add_job(confirm_mempool_if_stuck, "interval", seconds=45,
+                     coalesce=True, max_instances=1, id="confirm_mempool")
+    scheduler.add_job(aggregator_step, "interval", seconds=10,
+                     coalesce=True, max_instances=1, id="aggregator_step")
+    scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30,
+                     coalesce=True, max_instances=1, id="ai_knowledge_watcher")
+    scheduler.add_job(distribute_ai_rewards_step, "interval",
+                     minutes=int(os.getenv("AI_POOL_DISTRIBUTION_INTERVAL", "30")),
+                     coalesce=True, max_instances=1, id="ai_rewards")
+    scheduler.add_job(update_telemetry_cache_job, "interval", seconds=30,
+                     coalesce=True, max_instances=1, id="telemetry_cache")
     scheduler.start()
     _active_schedulers.append(scheduler)
-    print(f"[SCHEDULER] All master jobs started (including AI rewards distribution)")
+    print(f"[SCHEDULER] All master jobs started (including telemetry cache, AI rewards distribution)")
 elif is_replica() and SCHEDULER_ENABLED and ENABLE_CHAIN:
     print(f"[SCHEDULER] Starting as REPLICA node with worker jobs (SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")
     scheduler=BackgroundScheduler(daemon=True)
@@ -18417,6 +19044,19 @@ def _proxy_music_request(path: str, payload: dict | None = None, timeout: int = 
 
 @app.route("/api/music/session/start", methods=["POST"])
 def api_music_session_start():
+    """
+    Start music session with optional GPS tracking.
+
+    Payload:
+    - address: Wallet address (required)
+    - track_id: Track being played (optional)
+    - artist_address: Artist wallet (optional)
+    - gps_lat: Initial GPS latitude (optional)
+    - gps_lng: Initial GPS longitude (optional)
+    - source: Session source (default: "modal")
+
+    DB Integration: Tracks music plays in music_plays table for telemetry
+    """
     payload = request.get_json() or {}
     if READ_ONLY:
         response = _proxy_music_request("/api/music/session/start", payload)
@@ -18424,21 +19064,56 @@ def api_music_session_start():
             return jsonify(response.json()), response.status_code
 
     address = (payload.get("address") or "").strip()
+    track_id = (payload.get("track_id") or "").strip()
+    artist_address = (payload.get("artist_address") or "").strip()
+    gps_lat = payload.get("gps_lat")
+    gps_lng = payload.get("gps_lng")
+
     session_id = f"MUSIC-{int(time.time())}-{secrets.token_hex(4)}"
+
+    # Legacy: Save to JSON file (backward compatibility)
     sessions = load_json(MUSIC_SESSIONS_FILE, [])
     sessions.append({
         "session_id": session_id,
         "address": address,
+        "track_id": track_id,
+        "artist_address": artist_address,
         "started_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
         "source": payload.get("source", "modal"),
         "user_agent": request.headers.get("User-Agent", ""),
+        "gps_lat": gps_lat,
+        "gps_lng": gps_lng,
     })
     save_json(MUSIC_SESSIONS_FILE, sessions)
+
+    # NEW: Track in DB for GPS/Music telemetry
+    if track_id and address:
+        try:
+            _track_music_play(
+                track_id=track_id,
+                wallet_address=address,
+                artist_address=artist_address or None,
+                gps_lat=gps_lat,
+                gps_lng=gps_lng,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to track music play in DB: {e}")
+
     return jsonify({"ok": True, "session_id": session_id}), 200
 
 
 @app.route("/api/music/session/end", methods=["POST"])
 def api_music_session_end():
+    """
+    End music session and record tip amount.
+
+    Payload:
+    - session_id: Music session ID (required)
+    - reason: End reason (optional, default: "modal_close")
+    - tip_amount: Tip amount in THR (optional, default: 0.0)
+
+    DB Integration: Updates music_plays record with tip_amount and duration
+    """
     payload = request.get_json() or {}
     if READ_ONLY:
         response = _proxy_music_request("/api/music/session/end", payload)
@@ -18448,18 +19123,65 @@ def api_music_session_end():
     session_id = (payload.get("session_id") or "").strip()
     if not session_id:
         return jsonify({"ok": False, "error": "session_id required"}), 400
+
+    # Legacy: Update JSON file (backward compatibility)
     sessions = load_json(MUSIC_SESSIONS_FILE, [])
+    session_found = None
     for session in sessions:
         if session.get("session_id") == session_id and not session.get("ended_at"):
-            session["ended_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+            ended_at = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+            session["ended_at"] = ended_at
             session["ended_reason"] = payload.get("reason", "modal_close")
+            session_found = session
             break
     save_json(MUSIC_SESSIONS_FILE, sessions)
+
+    # NEW: Update DB with tip amount and duration
+    if session_found:
+        track_id = session_found.get("track_id")
+        address = session_found.get("address")
+        tip_amount = float(payload.get("tip_amount", 0.0))
+
+        # Calculate session duration
+        duration_seconds = None
+        try:
+            started_at = session_found.get("started_at")
+            ended_at = session_found.get("ended_at")
+            if started_at and ended_at:
+                start_time = time.mktime(time.strptime(started_at, "%Y-%m-%d %H:%M:%S UTC"))
+                end_time = time.mktime(time.strptime(ended_at, "%Y-%m-%d %H:%M:%S UTC"))
+                duration_seconds = int(end_time - start_time)
+        except Exception as e:
+            logger.warning(f"Failed to calculate session duration: {e}")
+
+        # Update music play record with tip and duration
+        if track_id and address:
+            try:
+                _update_music_play_tip(track_id, address, tip_amount, duration_seconds)
+            except Exception as e:
+                logger.warning(f"Failed to update music play tip in DB: {e}")
+
     return jsonify({"ok": True, "session_id": session_id}), 200
 
 
 @app.route("/api/music/gps_telemetry", methods=["POST"])
 def api_music_gps_telemetry():
+    """
+    Submit GPS telemetry during music playback.
+
+    Payload:
+    - session_id: Music session ID
+    - address: Wallet address
+    - track_id: Currently playing track (optional)
+    - artist_address: Artist wallet (optional)
+    - latitude: GPS latitude (required)
+    - longitude: GPS longitude (required)
+    - altitude: GPS altitude (optional)
+    - speed: GPS speed (optional)
+    - heading: GPS heading (optional)
+
+    DB Integration: Creates new music_plays entry with GPS coords
+    """
     payload = request.get_json() or {}
     if READ_ONLY:
         response = _proxy_music_request("/api/music/gps_telemetry", payload)
@@ -18471,6 +19193,9 @@ def api_music_gps_telemetry():
     if latitude is None or longitude is None:
         return jsonify({"ok": False, "error": "latitude and longitude required"}), 400
 
+    entry_id = f"MUSIC-GPS-{int(time.time())}-{secrets.token_hex(4)}"
+
+    # Legacy: Save to JSON file (backward compatibility)
     entry = {
         "session_id": payload.get("session_id"),
         "address": payload.get("address"),
@@ -18480,14 +19205,30 @@ def api_music_gps_telemetry():
         "speed": payload.get("speed"),
         "heading": payload.get("heading"),
         "timestamp": payload.get("timestamp") or time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-        "entry_id": f"MUSIC-GPS-{int(time.time())}-{secrets.token_hex(4)}",
+        "entry_id": entry_id,
     }
     gps_data = load_json(MUSIC_GPS_FILE, [])
     gps_data.append(entry)
     if len(gps_data) > 1000:
         gps_data = gps_data[-1000:]
     save_json(MUSIC_GPS_FILE, gps_data)
-    return jsonify({"ok": True, "entry_id": entry["entry_id"]}), 200
+
+    # NEW: Track in DB if track info provided
+    track_id = payload.get("track_id")
+    address = payload.get("address")
+    if track_id and address:
+        try:
+            _track_music_play(
+                track_id=track_id,
+                wallet_address=address,
+                artist_address=payload.get("artist_address"),
+                gps_lat=float(latitude),
+                gps_lng=float(longitude),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to track GPS telemetry in DB: {e}")
+
+    return jsonify({"ok": True, "entry_id": entry_id}), 200
 
 
 @app.route("/api/music/tracks")

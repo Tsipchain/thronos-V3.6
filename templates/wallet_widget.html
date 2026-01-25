@@ -1295,6 +1295,16 @@
             transactions: [],
         };
 
+        // Memory optimization: limit transaction history to prevent unbounded growth
+        const MAX_HISTORY = 200;
+
+        function trimHistory(transactions) {
+            if (transactions.length > MAX_HISTORY) {
+                return transactions.slice(-MAX_HISTORY);
+            }
+            return transactions;
+        }
+
         function normalizeKind(tx) {
             return String(tx.kind || '').toLowerCase();
         }
@@ -1573,7 +1583,7 @@
                 if (!res.ok) throw new Error('Failed to load history');
                 const data = await res.json();
 
-                historyState.transactions = (data.transactions || []).slice().reverse();
+                historyState.transactions = trimHistory((data.transactions || []).slice().reverse());
                 renderHistoryContent();
             } catch (e) {
                 console.error('Error loading history:', e);

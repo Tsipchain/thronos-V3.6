@@ -11,33 +11,73 @@
     const inflightRequests = new Map();
 
     const nativeFetch = window.fetch.bind(window);
-    const cfg = window.THRONOS_CONFIG || {};
-    const readBase = (cfg.apiReadBase || '/api').replace(/\/$/, '');
-    const writeBase = (cfg.apiWriteBase || readBase || '/api').replace(/\/$/, '');
 
-    function shouldRouteRpc(url) {
-        if (typeof url !== 'string') return false;
-        if (!url.startsWith('/api/')) return false;
-        return true;
+    function isVercelHost() {
+        return window.location.hostname.endsWith('.vercel.app');
     }
 
-    function resolveRpcUrl(url, method) {
-        if (!shouldRouteRpc(url)) return url;
-        const upper = (method || 'GET').toUpperCase();
-        const base = (upper === 'GET' || upper === 'HEAD') ? readBase : writeBase;
-        if (!base || base === '/api') return url;
-        if (base.startsWith('http')) {
-            return `${base}${url}`;
-        }
-        return `${base}${url}`;
+    function isAssetPath(path) {
+        if (!path) return false;
+        const lowered = path.replace(/^\/+/, '').toLowerCase();
+        return lowered.startsWith('static/')
+            || lowered.startsWith('media/')
+            || lowered.startsWith('img/')
+            || lowered.startsWith('assets/')
+            || lowered.startsWith('favicon')
+            || lowered.startsWith('robots.txt');
     }
 
-    function smartFetch(url, opts = {}) {
-        if (typeof url === 'string') {
-            const resolved = resolveRpcUrl(url, opts.method);
-            return nativeFetch(resolved, opts);
+    function normalizeApiPath(path) {
+        if (!path) return '';
+        let p = String(path).trim();
+
+        p = p.replace(/^https?:\/\/[^/]+/i, '');
+
+        if (!p.startsWith('/')) p = `/${p}`;
+
+        p = p.replace(/^\/api\/v1\/read\/api\/v1\/read\//, '/');
+        p = p.replace(/^\/api\/v1\/read\/api\/v1\/write\//, '/');
+        p = p.replace(/^\/api\/v1\/read\/api\/v1\/music\//, '/api/music/');
+
+        p = p.replace(/^\/api\/v1\/read\//, '/');
+        p = p.replace(/^\/api\/v1\/write\//, '/');
+        p = p.replace(/^\/api\/v1\/music\//, '/api/music/');
+
+        return p;
+    }
+
+    function buildApiUrl(path, method) {
+        const p = normalizeApiPath(path);
+        const host = (window.location.hostname || '').toLowerCase();
+        const isVercel = host.endsWith('.vercel.app');
+
+        if (!isVercel) return p;
+
+        const m = (method || 'GET').toUpperCase();
+
+        if (p.startsWith('/api/music/')) {
+            return `/api/v1/music/${p.slice('/api/music/'.length)}`;
         }
-        return nativeFetch(url, opts);
+
+        const prefix = (m === 'GET') ? '/api/v1/read' : '/api/v1/write';
+        return `${prefix}${p}`;
+    }
+
+    function smartFetch(path, opts = {}) {
+        if (typeof path === 'string') {
+            const trimmed = path.trim();
+            if (/^https?:\/\//i.test(trimmed) || isAssetPath(trimmed)) {
+                return nativeFetch(trimmed, opts);
+            }
+        }
+
+        const method = (opts.method || 'GET').toUpperCase();
+        const url = buildApiUrl(path, method);
+
+        return nativeFetch(url, {
+            ...opts,
+            method
+        });
     }
 
     /**
@@ -47,9 +87,8 @@
      * @returns {Promise<any>}
      */
     async function fetchJSONOnce(url, opts = {}) {
-        const method = opts.method || 'GET';
-        const resolvedUrl = resolveRpcUrl(url, method);
-        const key = `${method}:${resolvedUrl}`;
+        const method = (opts.method || 'GET').toUpperCase();
+        const key = `${method}:${normalizeApiPath(url)}`;
 
         // Return existing in-flight request if any
         if (inflightRequests.has(key)) {
@@ -57,7 +96,7 @@
         }
 
         // Create new request
-        const promise = smartFetch(resolvedUrl, opts)
+        const promise = smartFetch(url, { ...opts, method })
             .then(response => response.json())
             .finally(() => {
                 // Clean up after request completes

@@ -8,13 +8,20 @@
   <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/thronos-token.png') }}">
   <link rel="shortcut icon" type="image/png" href="{{ url_for('static', filename='img/thronos-token.png') }}">
   <script>
-  window.THRONOS_CONFIG = {
-    apiReadBase: "/api/v1/read",
-    apiWriteBase: "/api/v1/write",
-    apiBase: "/api",
-    masterUrl: "https://thrchain.up.railway.app",
-    musicEnabled: true
-  };
+  (function() {
+    const host = window.location.hostname;
+    const isVercel = host.endsWith("vercel.app") || host === "thrchain.vercel.app";
+    window.THRONOS_CONFIG = {
+      apiReadBase: isVercel ? "/api/v1/read/api" : "/api",
+      apiWriteBase: isVercel ? "/api/v1/write/api" : "/api",
+      apiMusicBase: isVercel ? "/api/v1/read/api" : "/api",
+      apiBase: "/api",
+      masterUrl: "https://thrchain.up.railway.app",
+      MASTER_PUBLIC_URL: "https://thrchain.up.railway.app",
+      mediaBase: "/media",
+      musicEnabled: true
+    };
+  })();
   </script>
   <script src="https://thrchain.vercel.app/static/wallet_session.js"></script>
   <style>
@@ -3816,9 +3823,16 @@ async function loadWalletHistory(category = null) {
         if (category) {
             params.set('category', category);
         }
-        const historyRes = await fetch(`/api/wallet/history?${params.toString()}`);
-        const data = historyRes.ok ? await historyRes.json() : {};
-        const transactions = data.transactions || [];
+        let transactions = [];
+        if (window.FetchUtils && typeof window.FetchUtils.smartFetch === 'function') {
+            const res = await window.FetchUtils.smartFetch(`/api/wallet/history?${params.toString()}`);
+            const data = await res.json().catch(() => ({}));
+            transactions = Array.isArray(data) ? data : (data?.transactions || data?.txs || []);
+        } else {
+            const historyRes = await fetch(`/api/wallet/history?${params.toString()}`);
+            const data = historyRes.ok ? await historyRes.json() : {};
+            transactions = Array.isArray(data) ? data : (data?.transactions || data?.txs || []);
+        }
         if (!transactions || transactions.length === 0) {
             content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions found</div>';
             allTransactions = [];
@@ -5577,7 +5591,7 @@ window.GlobalMusicPlayer = (function() {
             // Record play
             const wallet = localStorage.getItem('thr_address');
             if (track.id) {
-                fetch(`/api/v1/music/play/${track.id}`, {
+                fetch(`/api/music/play/${track.id}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ listener_address: wallet || '' })

@@ -55,7 +55,8 @@ import json
 import fcntl
 import requests
 import redis
-from flask import Flask, request, jsonify, send_from_directory, render_template, url_for, send_file, Response, make_response
+from urllib.parse import urlparse
+from flask import Flask, request, jsonify, send_from_directory, render_template, url_for, send_file, Response, make_response, redirect
 
 try:
     from flask_cors import CORS
@@ -124,6 +125,67 @@ CORS(app)
 # absolute path to /public folder next to server.py
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PUBLIC_DIR = os.path.join(BASE_DIR, "public")
+
+
+def _redir(target: str):
+    qs = request.query_string.decode("utf-8")
+    if qs:
+        sep = "&" if "?" in target else "?"
+        target = f"{target}{sep}{qs}"
+    return redirect(target, code=307)
+
+
+def _strip_nested(rest: str) -> str:
+    rest = (rest or "").lstrip("/")
+
+    while rest.startswith("api/v1/read/"):
+        rest = rest[len("api/v1/read/"):]
+    while rest.startswith("api/v1/write/"):
+        rest = rest[len("api/v1/write/"):]
+    if rest.startswith("api/v1/music/"):
+        rest = "api/music/" + rest[len("api/v1/music/"):]
+
+    if not rest.startswith("api/"):
+        rest = "api/" + rest
+
+    return rest
+
+
+@app.route("/api/v1/read/<path:rest>", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+def compat_v1_read(rest):
+    fixed = _strip_nested(rest)
+    return _redir("/" + fixed)
+
+
+@app.route("/api/v1/write/<path:rest>", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+def compat_v1_write(rest):
+    fixed = _strip_nested(rest)
+    return _redir("/" + fixed)
+
+
+def _dispatch_internal(target_path: str):
+    environ = request.environ.copy()
+    environ["PATH_INFO"] = target_path
+    environ["SCRIPT_NAME"] = ""
+    return Response.from_app(app.wsgi_app, environ)
+
+
+@app.route("/api/v1/read/api/<path:rest>", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+def compat_v1_read_api(rest):
+    fixed = _strip_nested(f"api/{rest}")
+    return _dispatch_internal("/" + fixed)
+
+
+@app.route("/api/v1/write/api/<path:rest>", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+def compat_v1_write_api(rest):
+    fixed = _strip_nested(f"api/{rest}")
+    return _dispatch_internal("/" + fixed)
+
+
+@app.route("/api/v1/music/<path:rest>", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+def compat_v1_music(rest):
+    rest = (rest or "").lstrip("/")
+    return _redir("/api/music/" + rest)
 
 
 def _send_public_json(filename: str):
@@ -437,13 +499,15 @@ APP_VERSION     = os.getenv("APP_VERSION", "v3.6")
 
 AI_LOG_API_KEY = os.getenv("AI_LOG_API_KEY", os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW"))
 
-DATA_DIR   = os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data"))
+DATA_DIR = os.getenv("MUSIC_VOLUME", os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data")))
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # Unified media root (persists on Railway volume)
 MEDIA_DIR = os.path.join(DATA_DIR, "media")
 TOKEN_LOGOS_DIR = os.path.join(MEDIA_DIR, "token_logos")
 NFT_IMAGES_DIR = os.path.join(MEDIA_DIR, "nft_images")
+TRACKS_DIR = os.path.join(MEDIA_DIR, "tracks")
+COVERS_DIR = os.path.join(MEDIA_DIR, "covers")
 COURSE_MEDIA_DIR = os.path.join(MEDIA_DIR, "courses")
 COURSE_COVERS_DIR = os.path.join(COURSE_MEDIA_DIR, "covers")
 COURSE_FILES_DIR = os.path.join(COURSE_MEDIA_DIR, "files")
@@ -452,7 +516,7 @@ MUSIC_COVER_DIR = os.path.join(MEDIA_DIR, "music_covers")
 L2E_ENROLLMENTS_FILE = os.path.join(DATA_DIR, "l2e_enrollments.json")
 
 for _dir in [MEDIA_DIR, TOKEN_LOGOS_DIR, NFT_IMAGES_DIR, COURSE_MEDIA_DIR,
-             COURSE_COVERS_DIR, COURSE_FILES_DIR, MUSIC_AUDIO_DIR, MUSIC_COVER_DIR]:
+             TRACKS_DIR, COVERS_DIR, COURSE_COVERS_DIR, COURSE_FILES_DIR, MUSIC_AUDIO_DIR, MUSIC_COVER_DIR]:
     os.makedirs(_dir, exist_ok=True)
 
 # AI provider/model caches
@@ -2959,6 +3023,39 @@ def _base_token_catalog():
             "type": "reward",
         },
     ]
+
+
+def canonical_media_url(url: str | None) -> str:
+    if not url:
+        return ""
+
+    u = url.strip()
+
+    if u.startswith("http://") or u.startswith("https://"):
+        try:
+            parsed = urlparse(u)
+            u = parsed.path
+        except Exception:
+            return u
+
+    if u.startswith("/static/nft_images/"):
+        fname = u.split("/")[-1]
+        return f"/media/nft_images/{fname}"
+
+    if u.startswith("/static/token_logos/"):
+        fname = u.split("/")[-1]
+        return f"/media/token_logos/{fname}"
+
+    if u.startswith("/media/"):
+        return u
+
+    if u.startswith("media/"):
+        return "/" + u
+
+    if u.startswith(("token_logos/", "nft_images/", "tracks/", "covers/")):
+        return "/media/" + u
+
+    return u
 
 
 def normalize_image_url(url: str | None) -> str | None:
@@ -6878,6 +6975,7 @@ def peers_heartbeat():
         "role": NODE_ROLE,
         "peer_id": peer_id,
         "active_peers": len(active_peers),
+        "peers": list(active_peers.values()),
         "ttl_seconds": PEER_TTL_SECONDS
     }), 200
 
@@ -6892,6 +6990,23 @@ def peers_active():
         "active_peers": active_peers,
         "ttl_seconds": PEER_TTL_SECONDS,
     }), 200
+
+
+@app.route("/api/peers/list", methods=["GET"])
+def peers_list():
+    if NODE_ROLE != "master":
+        return jsonify({"error": "Active peers only available on master node"}), 403
+    cleanup_expired_peers()
+    peers = []
+    for peer_id, data in active_peers.items():
+        peers.append({
+            "peer_id": peer_id,
+            "host": data.get("url"),
+            "last_seen": data.get("last_seen"),
+            "node_role": data.get("node_role"),
+            "height": data.get("height"),
+        })
+    return jsonify({"ok": True, "peers": peers, "ttl_seconds": PEER_TTL_SECONDS}), 200
 
 @app.route("/api/network_live")
 def network_live():
@@ -10552,9 +10667,9 @@ def api_list_tokens():
         logo = resolve_token_logo(token)
         if logo:
             token["logo_path"] = logo
-            token["logo_url"] = normalize_image_url(f"/static/{logo}")
+            token["logo_url"] = canonical_media_url(f"/static/{logo}")
         else:
-            token["logo_url"] = normalize_image_url(token.get("logo_url") or token.get("logo"))
+            token["logo_url"] = canonical_media_url(token.get("logo_url") or token.get("logo") or token.get("logo_path", ""))
 
     token_list.sort(key=lambda t: t.get("created_at", ""), reverse=True)
     return jsonify({"ok": True, "tokens": token_list}), 200
@@ -12942,7 +13057,13 @@ def submit_block():
             "reason": "stale_height",
         }))
         logger.debug("submit_block handler took %.3fs", time.time() - start)
-        return jsonify(error="stale_block", submitted_height=height, tip_height=chain_tip_height, reason="stale_height"), 409
+        return jsonify(
+            error="stale_block",
+            submitted_height=height,
+            tip_height=chain_tip_height,
+            tip_hash=server_last_hash,
+            reason="stale_height",
+        ), 409
 
     chain.append(new_block)
 
@@ -18135,8 +18256,12 @@ def enrich_track_media(track: dict) -> dict:
     """Ensure track dictionaries expose media URLs from stored paths."""
     if track.get("audio_path") and not track.get("audio_url"):
         track["audio_url"] = f"/media/{track['audio_path']}"
+    if track.get("audio_url"):
+        track["audio_url"] = canonical_media_url(track.get("audio_url"))
     if track.get("cover_path"):
         track["cover_url"] = f"/media/{track['cover_path']}"
+    if track.get("cover_url"):
+        track["cover_url"] = canonical_media_url(track.get("cover_url"))
     return track
 
 
@@ -18557,6 +18682,11 @@ def api_v1_music_play(track_id):
         "play_count": len(registry["plays"].get(track_id, [])),
         "royalty_paid": play.get("royalty_paid", 0)
     }), 200
+
+
+@app.route("/api/music/play/<track_id>", methods=["POST"])
+def api_music_play(track_id):
+    return api_v1_music_play(track_id)
 
 
 @app.route("/api/v1/music/tip", methods=["POST"])
@@ -19533,7 +19663,7 @@ def api_v1_nfts():
                 data = response.json()
                 nfts = data.get("nfts", [])
                 for nft in nfts:
-                    nft["image_url"] = normalize_image_url(nft.get("image_url"))
+                    nft["image_url"] = canonical_media_url(nft.get("image_url") or nft.get("image"))
                 return jsonify({"status": "success", "nfts": nfts}), 200
         except Exception as exc:
             logger.warning("[NFT] Failed to fetch from master: %s", exc)
@@ -19541,7 +19671,7 @@ def api_v1_nfts():
     registry = load_nft_registry()
     nfts = registry.get("nfts", [])
     for nft in nfts:
-        nft["image_url"] = normalize_image_url(nft.get("image_url"))
+        nft["image_url"] = canonical_media_url(nft.get("image_url") or nft.get("image"))
     return jsonify({"status": "success", "nfts": nfts}), 200
 
 
@@ -19591,6 +19721,7 @@ def api_v1_nfts_mint():
     registry["nfts"].append(nft)
     save_nft_registry(registry)
 
+    nft["image_url"] = canonical_media_url(nft.get("image_url") or nft.get("image"))
     return jsonify({"status": "success", "nft": nft}), 201
 
 

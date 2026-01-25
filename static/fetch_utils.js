@@ -104,6 +104,26 @@
     return base + "/" + normalized;
   }
 
+  function resolveMediaUrl(u) {
+    if (!u) return "";
+    let s = String(u);
+
+    if (s.startsWith("/media/") || s.startsWith("/static/")) return s;
+
+    const mediaIndex = s.indexOf("/media/");
+    if (mediaIndex !== -1) return s.slice(mediaIndex);
+
+    const staticIndex = s.indexOf("/static/");
+    if (staticIndex !== -1) return s.slice(staticIndex);
+
+    try {
+      const parsed = new URL(s);
+      return parsed.pathname + (parsed.search || "");
+    } catch (e) {
+      return s;
+    }
+  }
+
   async function smartFetch(url, options) {
     const finalUrl = buildApiUrl(typeof url === "string" ? url : (url?.url || url));
     return NATIVE_FETCH(finalUrl, options);
@@ -140,6 +160,7 @@
   window.FetchUtils = {
     normalizeApiPath,
     buildApiUrl,
+    resolveMediaUrl,
     smartFetch,
     smartFetchJSON,
     fetchJSONOnce,

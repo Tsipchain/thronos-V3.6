@@ -424,6 +424,10 @@ let connectedWallet = localStorage.getItem('thr_address');
 
 function resolveNftImage(path) {
     if (!path) return '/static/img/thronos-token.png';
+    if (window.FetchUtils && typeof window.FetchUtils.resolveMediaUrl === 'function') {
+        const resolved = window.FetchUtils.resolveMediaUrl(path);
+        return resolved || '/static/img/thronos-token.png';
+    }
     if (/^https?:\/\//i.test(path)) return path;
     if (path.startsWith('/media/')) return path;
     if (path.startsWith('/static/nft_images/')) {

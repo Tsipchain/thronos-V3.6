@@ -188,12 +188,13 @@
     window.FetchUtils = {
         fetchJSONOnce,
         smartFetch,
+        smartFetchRaw,
         VisibilityGatedInterval,
         isPopupVisible
     };
 
     if (!window.__thronosSmartFetchInstalled) {
-        window.fetch = smartFetch;
+        window.fetch = smartFetchRaw;
         window.__thronosSmartFetchInstalled = true;
     }
 

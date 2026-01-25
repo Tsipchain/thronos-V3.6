@@ -3058,6 +3058,18 @@ def canonical_media_url(url: str | None) -> str:
     return u
 
 
+def normalize_media_url(url: str | None) -> str:
+    if not url:
+        return ""
+    if url.startswith("/media/") or url.startswith("/static/"):
+        return url
+    for marker in ("/media/", "/static/"):
+        idx = url.find(marker)
+        if idx != -1:
+            return url[idx:]
+    return url
+
+
 def normalize_image_url(url: str | None) -> str | None:
     if not url:
         return None
@@ -5653,6 +5665,11 @@ def api_wallet_history():
     # Apply category filter
     if category_filter:
         wallet_txs = [tx for tx in wallet_txs if tx.get("category", "").lower() == category_filter]
+
+    for tx in wallet_txs:
+        for key in ("image_url", "logo_url", "audio_url", "cover_url"):
+            if key in tx:
+                tx[key] = normalize_media_url(str(tx.get(key) or ""))
 
     # Calculate category summaries
     summary = {
@@ -9863,6 +9880,10 @@ def api_history():
     if not thr_addr:
         return jsonify({"ok": False, "error": "Missing wallet address"}), 400
     history = build_wallet_history(thr_addr)
+    for entry in history:
+        for key in ("image_url", "logo_url", "audio_url", "cover_url"):
+            if key in entry:
+                entry[key] = normalize_media_url(str(entry.get(key) or ""))
     if category:
         history = [entry for entry in history if (entry.get("category") or entry.get("kind") or "").lower() == category]
     return jsonify({"ok": True, "wallet": thr_addr, "history": history}), 200
@@ -10667,9 +10688,9 @@ def api_list_tokens():
         logo = resolve_token_logo(token)
         if logo:
             token["logo_path"] = logo
-            token["logo_url"] = canonical_media_url(f"/static/{logo}")
+            token["logo_url"] = normalize_media_url(f"/static/{logo}")
         else:
-            token["logo_url"] = canonical_media_url(token.get("logo_url") or token.get("logo") or token.get("logo_path", ""))
+            token["logo_url"] = normalize_media_url(token.get("logo_url") or token.get("logo") or token.get("logo_path", ""))
 
     token_list.sort(key=lambda t: t.get("created_at", ""), reverse=True)
     return jsonify({"ok": True, "tokens": token_list}), 200
@@ -18257,11 +18278,11 @@ def enrich_track_media(track: dict) -> dict:
     if track.get("audio_path") and not track.get("audio_url"):
         track["audio_url"] = f"/media/{track['audio_path']}"
     if track.get("audio_url"):
-        track["audio_url"] = canonical_media_url(track.get("audio_url"))
+        track["audio_url"] = normalize_media_url(track.get("audio_url"))
     if track.get("cover_path"):
         track["cover_url"] = f"/media/{track['cover_path']}"
     if track.get("cover_url"):
-        track["cover_url"] = canonical_media_url(track.get("cover_url"))
+        track["cover_url"] = normalize_media_url(track.get("cover_url"))
     return track
 
 
@@ -19663,7 +19684,7 @@ def api_v1_nfts():
                 data = response.json()
                 nfts = data.get("nfts", [])
                 for nft in nfts:
-                    nft["image_url"] = canonical_media_url(nft.get("image_url") or nft.get("image"))
+                    nft["image_url"] = normalize_media_url(nft.get("image_url") or nft.get("image"))
                 return jsonify({"status": "success", "nfts": nfts}), 200
         except Exception as exc:
             logger.warning("[NFT] Failed to fetch from master: %s", exc)
@@ -19671,7 +19692,7 @@ def api_v1_nfts():
     registry = load_nft_registry()
     nfts = registry.get("nfts", [])
     for nft in nfts:
-        nft["image_url"] = canonical_media_url(nft.get("image_url") or nft.get("image"))
+        nft["image_url"] = normalize_media_url(nft.get("image_url") or nft.get("image"))
     return jsonify({"status": "success", "nfts": nfts}), 200
 
 
@@ -19721,7 +19742,7 @@ def api_v1_nfts_mint():
     registry["nfts"].append(nft)
     save_nft_registry(registry)
 
-    nft["image_url"] = canonical_media_url(nft.get("image_url") or nft.get("image"))
+    nft["image_url"] = normalize_media_url(nft.get("image_url") or nft.get("image"))
     return jsonify({"status": "success", "nft": nft}), 201
 
 

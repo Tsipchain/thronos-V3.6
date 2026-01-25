@@ -104,29 +104,24 @@
     return base + "/" + normalized;
   }
 
-  function mediaUrl(u) {
+  function resolveMediaUrl(u) {
     if (!u) return "";
     let s = String(u);
 
+    if (s.startsWith("/media/") || s.startsWith("/static/")) return s;
+
+    const mediaIndex = s.indexOf("/media/");
+    if (mediaIndex !== -1) return s.slice(mediaIndex);
+
+    const staticIndex = s.indexOf("/static/");
+    if (staticIndex !== -1) return s.slice(staticIndex);
+
     try {
-      if (s.startsWith("http://") || s.startsWith("https://")) {
-        const parsed = new URL(s);
-        s = parsed.pathname;
-      }
-    } catch {}
-
-    if (!s.startsWith("/")) s = "/" + s;
-
-    if (s.startsWith("/static/nft_images/")) {
-      const fname = s.split("/").pop();
-      s = `/media/nft_images/${fname}`;
+      const parsed = new URL(s);
+      return parsed.pathname + (parsed.search || "");
+    } catch (e) {
+      return s;
     }
-    if (s.startsWith("/static/token_logos/")) {
-      const fname = s.split("/").pop();
-      s = `/media/token_logos/${fname}`;
-    }
-
-    return `${window.location.origin}${s}`;
   }
 
   async function smartFetch(url, options) {
@@ -165,7 +160,7 @@
   window.FetchUtils = {
     normalizeApiPath,
     buildApiUrl,
-    mediaUrl,
+    resolveMediaUrl,
     smartFetch,
     smartFetchJSON,
     fetchJSONOnce,

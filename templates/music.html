@@ -844,7 +844,9 @@ function renderTracks(tracks, containerId) {
              data-track-id="${track.id}">
             <div class="track-cover" onclick="playTrack('${track.id}')">
                 ${track.cover_path || track.cover_url
-                    ? `<img src="${track.cover_path ? '/media/' + track.cover_path : track.cover_url}" alt="${track.title}" onerror="this.src='/static/img/logo.png'">`
+                    ? `<img src="${(window.FetchUtils && window.FetchUtils.resolveMediaUrl)
+                        ? window.FetchUtils.resolveMediaUrl(track.cover_path ? '/media/' + track.cover_path : track.cover_url)
+                        : (track.cover_path ? '/media/' + track.cover_path : track.cover_url)}" alt="${track.title}" onerror="this.src='/static/img/logo.png'">`
                     : '🎵'}
                 <button class="track-play-btn" onclick="event.stopPropagation(); playTrack('${track.id}')">▶️</button>
             </div>
@@ -935,13 +937,17 @@ async function playTrack(trackId) {
     // Update player UI
     document.getElementById('playerTitle').textContent = track.title;
     document.getElementById('playerArtist').textContent = track.artist_name;
-    const coverSrc = track.cover_path ? `/media/${track.cover_path}` : track.cover_url;
+    const coverSrc = (window.FetchUtils && window.FetchUtils.resolveMediaUrl)
+        ? window.FetchUtils.resolveMediaUrl(track.cover_path ? `/media/${track.cover_path}` : track.cover_url)
+        : (track.cover_path ? `/media/${track.cover_path}` : track.cover_url);
     document.getElementById('playerCover').innerHTML = coverSrc
         ? `<img src="${coverSrc}" onerror="this.src='/static/img/logo.png'">` : '🎵';
     document.getElementById('playerContainer').classList.add('active');
 
     // Play audio
-    audioElement.src = track.audio_url;
+    audioElement.src = (window.FetchUtils && window.FetchUtils.resolveMediaUrl)
+        ? window.FetchUtils.resolveMediaUrl(track.audio_url)
+        : track.audio_url;
     audioElement.play();
     document.getElementById('playPauseBtn').textContent = '⏸️';
 

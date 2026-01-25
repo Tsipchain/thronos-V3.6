@@ -55,7 +55,7 @@ import json
 import fcntl
 import requests
 import redis
-from flask import Flask, request, jsonify, send_from_directory, render_template, url_for, send_file, Response, make_response
+from flask import Flask, request, jsonify, send_from_directory, render_template, url_for, send_file, Response, make_response, redirect
 
 try:
     from flask_cors import CORS
@@ -124,6 +124,67 @@ CORS(app)
 # absolute path to /public folder next to server.py
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PUBLIC_DIR = os.path.join(BASE_DIR, "public")
+
+
+def _redir(target: str):
+    qs = request.query_string.decode("utf-8")
+    if qs:
+        sep = "&" if "?" in target else "?"
+        target = f"{target}{sep}{qs}"
+    return redirect(target, code=307)
+
+
+def _strip_nested(rest: str) -> str:
+    rest = (rest or "").lstrip("/")
+
+    while rest.startswith("api/v1/read/"):
+        rest = rest[len("api/v1/read/"):]
+    while rest.startswith("api/v1/write/"):
+        rest = rest[len("api/v1/write/"):]
+    if rest.startswith("api/v1/music/"):
+        rest = "api/music/" + rest[len("api/v1/music/"):]
+
+    if not rest.startswith("api/"):
+        rest = "api/" + rest
+
+    return rest
+
+
+@app.route("/api/v1/read/<path:rest>", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+def compat_v1_read(rest):
+    fixed = _strip_nested(rest)
+    return _redir("/" + fixed)
+
+
+@app.route("/api/v1/write/<path:rest>", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+def compat_v1_write(rest):
+    fixed = _strip_nested(rest)
+    return _redir("/" + fixed)
+
+
+def _dispatch_internal(target_path: str):
+    environ = request.environ.copy()
+    environ["PATH_INFO"] = target_path
+    environ["SCRIPT_NAME"] = ""
+    return Response.from_app(app.wsgi_app, environ)
+
+
+@app.route("/api/v1/read/api/<path:rest>", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+def compat_v1_read_api(rest):
+    fixed = _strip_nested(f"api/{rest}")
+    return _dispatch_internal("/" + fixed)
+
+
+@app.route("/api/v1/write/api/<path:rest>", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+def compat_v1_write_api(rest):
+    fixed = _strip_nested(f"api/{rest}")
+    return _dispatch_internal("/" + fixed)
+
+
+@app.route("/api/v1/music/<path:rest>", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+def compat_v1_music(rest):
+    rest = (rest or "").lstrip("/")
+    return _redir("/api/music/" + rest)
 
 
 def _send_public_json(filename: str):

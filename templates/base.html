@@ -3329,6 +3329,7 @@ function playReceiveAudio() {
 
 // Wallet History Modal Functions
 let allTransactions = [];
+let WALLET_HISTORY_CACHE = [];
 let currentHistoryFilter = 'all';
 let currentTokenFilter = null;
 
@@ -3343,7 +3344,8 @@ function openWalletHistoryModal() {
     document.getElementById('walletHistoryModal').classList.add('active');
     resetHistoryFilters();
     filterHistory('all');
-    loadWalletHistory();
+    const addr = walletSession.getAddress();
+    hydrateHistory(addr);
 }
 
 function closeWalletHistoryModal(event) {
@@ -3374,11 +3376,13 @@ function filterHistory(filter, tokenSymbol = null) {
         }
     });
 
-    if (filter === 'liquidity' || filter === 'architect_ai_jobs' || filter === 'ai_credits') {
-        loadWalletHistory(filter);
-    } else {
-        renderHistory();
-    }
+    applyHistoryFilter(filter);
+}
+
+function applyHistoryFilter(filterKey) {
+    currentHistoryFilter = filterKey;
+    allTransactions = WALLET_HISTORY_CACHE || [];
+    renderHistory();
 }
 
 function getTxType(tx) {
@@ -3809,42 +3813,40 @@ function renderHistory() {
     content.innerHTML = html;
 }
 
-async function loadWalletHistory(category = null) {
-    const content = document.getElementById('historyContent');
-    const addr = walletSession.getAddress();
+async function loadWalletHistory(thrAddress) {
+    if (!thrAddress) return [];
 
-    if (!addr) {
-        content.innerHTML = '<div class="send-result error" style="margin: 20px;">Connect wallet to view history</div>';
-        return;
+    const url = `/api/wallet/history?address=${encodeURIComponent(thrAddress)}&limit=200`;
+
+    if (window.FetchUtils && typeof window.FetchUtils.smartFetchJSON === 'function') {
+        const data = await window.FetchUtils.smartFetchJSON(url);
+        return Array.isArray(data)
+            ? data
+            : (data?.history || data?.txs || data?.transactions || data?.items || []);
     }
 
+    const res = await fetch(url);
+    const data = res.ok ? await res.json().catch(() => ({})) : {};
+    return Array.isArray(data)
+        ? data
+        : (data?.history || data?.txs || data?.transactions || data?.items || []);
+}
+
+async function hydrateHistory(thrAddress) {
+    const content = document.getElementById('historyContent');
     try {
-        const params = new URLSearchParams({ address: addr });
-        if (category) {
-            params.set('category', category);
-        }
-        let transactions = [];
-        if (window.FetchUtils && typeof window.FetchUtils.smartFetch === 'function') {
-            const res = await window.FetchUtils.smartFetch(`/api/wallet/history?${params.toString()}`);
-            const data = await res.json().catch(() => ({}));
-            transactions = Array.isArray(data) ? data : (data?.transactions || data?.txs || []);
-        } else {
-            const historyRes = await fetch(`/api/wallet/history?${params.toString()}`);
-            const data = historyRes.ok ? await historyRes.json() : {};
-            transactions = Array.isArray(data) ? data : (data?.transactions || data?.txs || []);
-        }
-        if (!transactions || transactions.length === 0) {
+        WALLET_HISTORY_CACHE = await loadWalletHistory(thrAddress);
+        allTransactions = WALLET_HISTORY_CACHE || [];
+        if (!allTransactions.length) {
             content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions found</div>';
-            allTransactions = [];
             return;
         }
-
-        allTransactions = transactions;
         renderHistory();
         startHistoryPendingPolling();
-
     } catch (error) {
         console.error('Failed to load history:', error);
+        WALLET_HISTORY_CACHE = [];
+        allTransactions = [];
         content.innerHTML = '<div class="send-result error" style="margin: 20px;">Failed to load transaction history</div>';
     }
 }

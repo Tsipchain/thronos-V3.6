@@ -423,7 +423,7 @@ let nfts = [];
 let connectedWallet = localStorage.getItem('thr_address');
 
 function resolveNftImage(path) {
-    if (!path) return '/static/placeholders/token.png';
+    if (!path) return '/static/img/thronos-token.png';
     if (/^https?:\/\//i.test(path)) return path;
     if (path.startsWith('/media/')) return path;
     if (path.startsWith('/static/nft_images/')) {
@@ -516,7 +516,7 @@ function renderNFTs(items, container) {
     container.innerHTML = items.map(nft => `
         <div class="nft-card" onclick="openBuyModal('${nft.id}')">
             <div class="nft-image">
-                ${nft.image_url ? `<img src="${resolveNftImage(nft.image_url)}" alt="${escapeHtml(nft.name)}" onerror="this.src='/static/placeholders/token.png'">` : '🎨'}
+                ${nft.image_url ? `<img src="${resolveNftImage(nft.image_url)}" alt="${escapeHtml(nft.name)}" onerror="this.src='/static/img/thronos-token.png'">` : '🎨'}
             </div>
             <div class="nft-info">
                 <div class="nft-title">${escapeHtml(nft.name)}</div>
@@ -622,7 +622,7 @@ function openBuyModal(nftId) {
     $('buyModalContent').innerHTML = `
         <div style="text-align: center;">
             <div class="nft-image" style="height: 150px; margin-bottom: 15px; border-radius: 12px;">
-                ${nft.image_url ? `<img src="${resolveNftImage(nft.image_url)}" style="border-radius: 12px;" onerror="this.src='/static/placeholders/token.png'">` : '🎨'}
+                ${nft.image_url ? `<img src="${resolveNftImage(nft.image_url)}" style="border-radius: 12px;" onerror="this.src='/static/img/thronos-token.png'">` : '🎨'}
             </div>
             <h3 style="color: #d7ffe6;">${escapeHtml(nft.name)}</h3>
             <p style="opacity: 0.7;">${escapeHtml(nft.description || '')}</p>

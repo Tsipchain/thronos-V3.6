@@ -1,201 +1,153 @@
-/**
- * PR-5a: Fetch Utilities - Request coalescing and visibility gating
- *
- * Prevents duplicate in-flight requests and manages polling lifecycle
- */
+/* Thronos Fetch Utils - API path normalizer + safe fetch wrapper */
+(function () {
+  // Keep native fetch safe (avoid recursion)
+  const NATIVE_FETCH = window.fetch ? window.fetch.bind(window) : null;
+  if (!NATIVE_FETCH) {
+    console.error("[fetch_utils] Native fetch missing");
+    return;
+  }
 
-(function(window) {
-    'use strict';
+  // Optional: force API base (useful if frontend is on Vercel and API on Railway)
+  // Example: window.THRONOS_API_BASE = "https://thrchain.up.railway.app";
+  function getApiBase() {
+    const base = window.THRONOS_API_BASE || "";
+    return String(base).replace(/\/+$/, "");
+  }
 
-    // In-flight request tracking
-    const inflightRequests = new Map();
+  function isProbablyApiPath(p) {
+    if (!p) return false;
+    return (
+      p.startsWith("/api/") ||
+      p.startsWith("api/") ||
+      p.includes("/api/v1/") ||
+      p.includes("/api/v1/read/") ||
+      p.includes("/api/v1/write/")
+    );
+  }
 
-    const nativeFetch = window.fetch.bind(window);
+  function extractPathQuery(u) {
+    if (typeof u !== "string") return u;
+    const s = u.trim();
 
-    function isVercelHost() {
-        return window.location.hostname.endsWith('.vercel.app');
+    // If absolute URL, normalize only if it looks like Thronos API URL
+    if (/^https?:\/\//i.test(s)) {
+      try {
+        const url = new URL(s);
+        const pq = url.pathname + url.search;
+        return isProbablyApiPath(url.pathname) ? pq : s;
+      } catch {
+        return s;
+      }
     }
 
-    function isAssetPath(path) {
-        if (!path) return false;
-        const lowered = path.replace(/^\/+/, '').toLowerCase();
-        return lowered.startsWith('static/')
-            || lowered.startsWith('media/')
-            || lowered.startsWith('img/')
-            || lowered.startsWith('assets/')
-            || lowered.startsWith('favicon')
-            || lowered.startsWith('robots.txt');
+    return s;
+  }
+
+  // Normalize all legacy prefixes -> canonical /api/...
+  function normalizeApiPath(input) {
+    if (!input) return input;
+
+    let p = extractPathQuery(input);
+    if (typeof p !== "string") return p;
+
+    // allow "api/..." without leading slash
+    if (p.startsWith("api/")) p = "/" + p;
+
+    if (!isProbablyApiPath(p)) return p;
+
+    // Hard normalize multiple nested prefixes
+    // Examples fixed:
+    // /api/v1/read/api/dashboard  -> /api/dashboard
+    // /api/v1/write/api/music/... -> /api/music/...
+    // /api/v1/read/api/v1/read/api/balances -> /api/balances
+    // /api/api/token/prices -> /api/token/prices
+    const rules = [
+      [/^\/api\/v1\/read\/api\//, "/api/"],
+      [/^\/api\/v1\/write\/api\//, "/api/"],
+      [/^\/api\/v1\/read\//, "/"],
+      [/^\/api\/v1\/write\//, "/"],
+      [/^\/api\/api\//, "/api/"],
+    ];
+
+    // Apply repeatedly until stable
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const [re, rep] of rules) {
+        if (re.test(p)) {
+          p = p.replace(re, rep);
+          changed = true;
+        }
+      }
+      // If someone accidentally produced .../api/v1/read/api/... inside again
+      p = p.replace(/\/api\/v1\/read\/api\//g, "/api/");
+      p = p.replace(/\/api\/v1\/write\/api\//g, "/api/");
+      p = p.replace(/\/api\/api\//g, "/api/");
     }
 
-    function normalizeApiPath(path) {
-        if (!path) return '';
-        let p = String(path).trim();
+    return p;
+  }
 
-        p = p.replace(/^https?:\/\/[^/]+/i, '');
+  function buildApiUrl(urlLike) {
+    if (typeof urlLike !== "string") return urlLike;
 
-        if (!p.startsWith('/')) p = `/${p}`;
+    const normalized = normalizeApiPath(urlLike);
 
-        p = p.replace(/^\/api\/v1\/read\/api\/v1\/read\//, '/');
-        p = p.replace(/^\/api\/v1\/read\/api\/v1\/write\//, '/');
-        p = p.replace(/^\/api\/v1\/read\/api\/v1\/music\//, '/api/music/');
+    // If normalized is still absolute url, keep it
+    if (/^https?:\/\//i.test(normalized)) return normalized;
 
-        p = p.replace(/^\/api\/v1\/read\//, '/');
-        p = p.replace(/^\/api\/v1\/write\//, '/');
-        p = p.replace(/^\/api\/v1\/music\//, '/api/music/');
+    const base = getApiBase();
+    if (!base) return normalized; // same-origin
 
-        return p;
+    // If base exists, always target it (cross-domain safe)
+    if (normalized.startsWith("/")) return base + normalized;
+    return base + "/" + normalized;
+  }
+
+  async function smartFetch(url, options) {
+    const finalUrl = buildApiUrl(typeof url === "string" ? url : (url?.url || url));
+    return NATIVE_FETCH(finalUrl, options);
+  }
+
+  async function smartFetchJSON(url, options = {}) {
+    const res = await smartFetch(url, options);
+    const text = await res.text().catch(() => "");
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = text;
     }
 
-    function buildApiUrl(path, method) {
-        const p = normalizeApiPath(path);
-        const host = (window.location.hostname || '').toLowerCase();
-        const isVercel = host.endsWith('.vercel.app');
-
-        if (!isVercel) return p;
-
-        const m = (method || 'GET').toUpperCase();
-
-        if (p.startsWith('/api/music/')) {
-            return `/api/v1/music/${p.slice('/api/music/'.length)}`;
-        }
-
-        const prefix = (m === 'GET') ? '/api/v1/read' : '/api/v1/write';
-        return `${prefix}${p}`;
+    if (!res.ok) {
+      const err = new Error((data && data.error) || "request_failed");
+      err.status = res.status;
+      err.payload = data;
+      throw err;
     }
+    return data;
+  }
 
-    function smartFetch(path, opts = {}) {
-        if (typeof path === 'string') {
-            const trimmed = path.trim();
-            if (/^https?:\/\//i.test(trimmed) || isAssetPath(trimmed)) {
-                return nativeFetch(trimmed, opts);
-            }
-        }
+  const _onceCache = new Map();
+  function fetchJSONOnce(url, options = {}) {
+    const key = (typeof url === "string" ? url : JSON.stringify(url)) + "|" + JSON.stringify(options || {});
+    if (_onceCache.has(key)) return _onceCache.get(key);
+    const p = smartFetchJSON(url, options).finally(() => _onceCache.delete(key));
+    _onceCache.set(key, p);
+    return p;
+  }
 
-        const method = (opts.method || 'GET').toUpperCase();
-        const url = buildApiUrl(path, method);
+  window.FetchUtils = {
+    normalizeApiPath,
+    buildApiUrl,
+    smartFetch,
+    smartFetchJSON,
+    fetchJSONOnce,
+  };
 
-        return nativeFetch(url, {
-            ...opts,
-            method
-        });
-    }
+  // Optional: overwrite global fetch to auto-fix legacy calls everywhere
+  window.__thronos_native_fetch = NATIVE_FETCH;
+  window.fetch = smartFetch;
 
-    /**
-     * Fetch JSON with automatic coalescing of identical requests
-     * @param {string} url - The URL to fetch
-     * @param {object} opts - Fetch options
-     * @returns {Promise<any>}
-     */
-    async function fetchJSONOnce(url, opts = {}) {
-        const method = (opts.method || 'GET').toUpperCase();
-        const key = `${method}:${normalizeApiPath(url)}`;
-
-        // Return existing in-flight request if any
-        if (inflightRequests.has(key)) {
-            return inflightRequests.get(key);
-        }
-
-        // Create new request
-        const promise = smartFetch(url, { ...opts, method })
-            .then(response => response.json())
-            .finally(() => {
-                // Clean up after request completes
-                inflightRequests.delete(key);
-            });
-
-        inflightRequests.set(key, promise);
-        return promise;
-    }
-
-    /**
-     * Visibility-gated interval manager
-     * Runs callback only when page is visible
-     */
-    class VisibilityGatedInterval {
-        constructor(callback, interval) {
-            this.callback = callback;
-            this.interval = interval;
-            this.intervalId = null;
-            this.isRunning = false;
-
-            // Bind visibility change handler
-            this.handleVisibilityChange = this.handleVisibilityChange.bind(this);
-        }
-
-        start() {
-            if (this.isRunning) return;
-            this.isRunning = true;
-
-            // Add visibility change listener
-            document.addEventListener('visibilitychange', this.handleVisibilityChange);
-
-            // Start interval if page is visible
-            if (!document.hidden) {
-                this.startInterval();
-            }
-        }
-
-        stop() {
-            this.isRunning = false;
-            this.stopInterval();
-            document.removeEventListener('visibilitychange', this.handleVisibilityChange);
-        }
-
-        handleVisibilityChange() {
-            if (document.hidden) {
-                this.stopInterval();
-            } else if (this.isRunning) {
-                this.startInterval();
-            }
-        }
-
-        startInterval() {
-            if (this.intervalId) return;
-            this.intervalId = setInterval(this.callback, this.interval);
-        }
-
-        stopInterval() {
-            if (this.intervalId) {
-                clearInterval(this.intervalId);
-                this.intervalId = null;
-            }
-        }
-    }
-
-    /**
-     * Check if popup/modal is currently visible
-     * @param {string} elementId - ID of the popup element
-     * @returns {boolean}
-     */
-    function isPopupVisible(elementId) {
-        const el = document.getElementById(elementId);
-        if (!el) return false;
-
-        // Check if element is visible
-        const style = window.getComputedStyle(el);
-        if (style.display === 'none') return false;
-        if (style.visibility === 'hidden') return false;
-        if (style.opacity === '0') return false;
-
-        // Check if element has 'active' class (common pattern)
-        if (el.classList.contains('active')) return true;
-
-        // Check if element has actual dimensions
-        return el.offsetWidth > 0 && el.offsetHeight > 0;
-    }
-
-    // Export to window
-    window.FetchUtils = {
-        fetchJSONOnce,
-        smartFetch,
-        smartFetchRaw,
-        VisibilityGatedInterval,
-        isPopupVisible
-    };
-
-    if (!window.__thronosSmartFetchInstalled) {
-        window.fetch = smartFetchRaw;
-        window.__thronosSmartFetchInstalled = true;
-    }
-
-})(window);
+  console.log("✓ fetch_utils loaded (API prefix normalizer active)");
+})();

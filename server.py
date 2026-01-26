@@ -19168,11 +19168,6 @@ def api_v1_music_trending():
     return jsonify({"status": "success", "tracks": tracks[:20]}), 200
 
 
-@app.route("/api/music/tracks/trending")
-def api_music_trending():
-    return api_v1_music_trending()
-
-
 @app.route("/api/v1/music/artist/<artist_address>")
 @app.route("/api/music/artist/<artist_address>")
 def api_v1_music_artist(artist_address):
@@ -19198,11 +19193,6 @@ def api_v1_music_artist(artist_address):
             "total_earnings_thr": total_earnings
         }
     }), 200
-
-
-@app.route("/api/music/artist/<artist_address>")
-def api_music_artist(artist_address):
-    return api_v1_music_artist(artist_address)
 
 
 @app.route("/api/v1/music/register_artist", methods=["POST"])

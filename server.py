@@ -14070,24 +14070,83 @@ def api_game_submit_score():
 
 @app.route("/api/v1/balance/<thr_addr>", methods=["GET"])
 def api_v1_balance(thr_addr: str):
-    """Return the current THR balance for the given address."""
+    """Return the current THR balance and all token balances for the given address."""
     ledger = load_json(LEDGER_FILE, {})
+    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+    token_balances = load_token_balances()
+
     try:
-        bal = round(float(ledger.get(thr_addr, 0.0)), 6)
+        thr_bal = round(float(ledger.get(thr_addr, 0.0)), 6)
     except Exception:
-        bal = 0.0
-    return jsonify(address=thr_addr, balance=bal), 200
+        thr_bal = 0.0
+
+    try:
+        wbtc_bal = round(float(wbtc_ledger.get(thr_addr, 0.0)), 6)
+    except Exception:
+        wbtc_bal = 0.0
+
+    # Get all custom token balances for this address
+    tokens = {}
+    for token_symbol, holders in token_balances.items():
+        if thr_addr in holders:
+            try:
+                tokens[token_symbol] = round(float(holders[thr_addr]), 6)
+            except Exception:
+                tokens[token_symbol] = 0.0
+
+    return jsonify(
+        address=thr_addr,
+        balance=thr_bal,  # Keep for backward compatibility
+        balances={
+            "THR": thr_bal,
+            "WBTC": wbtc_bal,
+            **tokens
+        }
+    ), 200
 
 
 @app.route("/api/v1/address/<thr_addr>/history", methods=["GET"])
 def api_v1_address_history(thr_addr: str):
-    """Return the on‑chain transaction history for the specified address."""
+    """Return the on‑chain transaction history for the specified address.
+
+    IMPORTANT: Excludes blocks (entries with 'reward' field) and deduplicates.
+    Only returns actual transactions: transfers, payments, pledges, etc.
+    """
     chain = load_json(CHAIN_FILE, [])
+
+    # Filter: must be dict, match address, and NOT be a block
     history = [
         tx for tx in chain
-        if isinstance(tx, dict) and (tx.get("from") == thr_addr or tx.get("to") == thr_addr)
+        if isinstance(tx, dict)
+        and (tx.get("from") == thr_addr or tx.get("to") == thr_addr)
+        and tx.get("reward") is None  # Exclude blocks
+        and tx.get("kind") != "block"  # Extra safety
     ]
-    return jsonify(address=thr_addr, transactions=history), 200
+
+    # Deduplicate by tx_id if present, or by (kind, timestamp, from, to, amount) tuple
+    seen = set()
+    deduped = []
+    for tx in history:
+        # Primary key: tx_id
+        tx_id = tx.get("tx_id")
+        if tx_id:
+            if tx_id not in seen:
+                seen.add(tx_id)
+                deduped.append(tx)
+        else:
+            # Fallback dedup key
+            key = (
+                tx.get("kind") or tx.get("type"),
+                tx.get("timestamp"),
+                tx.get("from"),
+                tx.get("to"),
+                tx.get("amount")
+            )
+            if key not in seen:
+                seen.add(key)
+                deduped.append(tx)
+
+    return jsonify(address=thr_addr, transactions=deduped), 200
 
 
 @app.route("/api/v1/block/<int:height>", methods=["GET"])
@@ -14142,6 +14201,7 @@ def api_v1_status():
 
 
 @app.route("/api/v1/submit", methods=["POST"])
+@app.route("/api/v1/submit_transaction", methods=["POST"])
 def api_v1_submit_transaction():
     """Submit a signed transaction to the node.  Currently supports only
     basic THR transfers.  The expected JSON payload mirrors the fields

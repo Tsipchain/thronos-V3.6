@@ -803,27 +803,92 @@ function showMusicTab(tabName) {
 }
 
 async function loadTracks() {
+    const container = document.getElementById('tracksGrid');
+    const emptyEl = document.getElementById('tracksEmpty');
+
     try {
         const res = await fetch('/api/music/tracks');
+
+        if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+        }
+
         const data = await res.json();
-        if (data.status === 'success') {
+
+        if (data.status === 'success' && data.tracks && data.tracks.length > 0) {
             allTracks = data.tracks;
             renderTracks(allTracks, 'tracksGrid');
+        } else {
+            // Empty state - no tracks yet
+            allTracks = [];
+            container.innerHTML = '';
+            if (emptyEl) {
+                emptyEl.style.display = 'block';
+            }
         }
     } catch (e) {
         console.error('Error loading tracks:', e);
+        // Show friendly empty state instead of breaking the page
+        allTracks = [];
+        container.innerHTML = `
+            <div style="grid-column: 1/-1; text-align: center; padding: 40px; color: #888;">
+                <div style="font-size: 48px; margin-bottom: 20px;">🎵</div>
+                <p style="font-size: 16px; margin-bottom: 10px;">
+                    <span class="lang-el">Δεν υπάρχουν τραγούδια ακόμα</span>
+                    <span class="lang-en">No tracks available yet</span>
+                </p>
+                <p style="font-size: 12px; opacity: 0.7;">
+                    <span class="lang-el">Γίνε ο πρώτος που ανεβάζει μουσική!</span>
+                    <span class="lang-en">Be the first to upload music!</span>
+                </p>
+            </div>
+        `;
+        if (emptyEl) emptyEl.style.display = 'none';
     }
 }
 
 async function loadTrending() {
+    const container = document.getElementById('trendingGrid');
+
     try {
         const res = await fetch('/api/music/tracks/trending');
+
+        if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+        }
+
         const data = await res.json();
-        if (data.status === 'success') {
+
+        if (data.status === 'success' && data.tracks && data.tracks.length > 0) {
             renderTracks(data.tracks, 'trendingGrid');
+        } else {
+            // Empty state - no trending tracks
+            container.innerHTML = `
+                <div style="grid-column: 1/-1; text-align: center; padding: 40px; color: #888;">
+                    <div style="font-size: 48px; margin-bottom: 20px;">📈</div>
+                    <p style="font-size: 16px; margin-bottom: 10px;">
+                        <span class="lang-el">Δεν υπάρχουν trending τραγούδια ακόμα</span>
+                        <span class="lang-en">No trending tracks yet</span>
+                    </p>
+                    <p style="font-size: 12px; opacity: 0.7;">
+                        <span class="lang-el">Ακούστε και κάντε tip για να ανεβάσετε τραγούδια!</span>
+                        <span class="lang-en">Play and tip tracks to make them trend!</span>
+                    </p>
+                </div>
+            `;
         }
     } catch (e) {
         console.error('Error loading trending:', e);
+        // Show friendly empty state
+        container.innerHTML = `
+            <div style="grid-column: 1/-1; text-align: center; padding: 40px; color: #888;">
+                <div style="font-size: 48px; margin-bottom: 20px;">📈</div>
+                <p style="font-size: 16px;">
+                    <span class="lang-el">Δεν υπάρχουν trending τραγούδια</span>
+                    <span class="lang-en">No trending tracks available</span>
+                </p>
+            </div>
+        `;
     }
 }
 

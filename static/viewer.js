@@ -204,7 +204,7 @@
   }
 
   const TRANSFER_PAGE_SIZE = 200;
-  const TRANSFER_KINDS = ['token_transfer', 'swap', 'bridge', 'thr_transfer'];
+  const TRANSFER_KINDS = ['token_transfer', 'swap', 'bridge', 'liquidity', 'thr_transfer'];
 
   async function loadTransfers(limit = TRANSFER_PAGE_SIZE, cursor = null) {
     try {

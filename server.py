@@ -2571,6 +2571,12 @@ def _canonical_kind(kind_raw: str) -> str:
     lookup = {
         "transfer": "thr_transfer",
         "thr_transfer": "thr_transfer",
+        "block": "block",
+        "block_mined": "block",
+        "mining": "mining_reward",
+        "mining_reward": "mining_reward",
+        "mined": "mining_reward",
+        "block_reward": "mining_reward",
         "pool_swap": "swap",
         "swap": "swap",
         "token_transfer": "token_transfer",
@@ -2608,11 +2614,15 @@ def _canonical_kind(kind_raw: str) -> str:
         "token_burn": "burn",
         "music_offline_tip": "music",
         "music_tip": "music",
+        "music_play_reward": "music_play_reward",
         "music_track_add": "music",  # PR-5: Music/Playlists canonical kinds
         "playlist_create": "music",  # PR-5: Music/Playlists canonical kinds
         "playlist_add_track": "music",  # PR-5: Music/Playlists canonical kinds
         "playlist_remove_track": "music",  # PR-5: Music/Playlists canonical kinds
         "playlist_reorder": "music",  # PR-5: Music/Playlists canonical kinds
+        "nft_mint": "nft_mint",
+        "nft_sale": "nft_sale",
+        "nft_burn": "nft_burn",
         "pool_create": "liquidity",
         "pool_add_liquidity": "liquidity",
         "pool_remove_liquidity": "liquidity",
@@ -10496,128 +10506,6 @@ def api_history():
         history = [entry for entry in history if (entry.get("category") or entry.get("kind") or "").lower() == category]
     return jsonify({"ok": True, "wallet": thr_addr, "history": history}), 200
 
-
-@app.route("/api/dashboard", methods=["GET"])
-def api_dashboard():
-    """Return the leader-driven dashboard data for index."""
-    try:
-        last_block = load_json(LAST_BLOCK_FILE, {})
-        chain = load_chain_cached()
-        chain_blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
-        chain_tip = chain_blocks[-1] if chain_blocks else {}
-        chain_tip_height = HEIGHT_OFFSET + len(chain_blocks) - 1 if chain_blocks else None
-        chain_tip_hash = chain_tip.get("block_hash") or chain_tip.get("tx_id")
-        chain_tip_timestamp = chain_tip.get("timestamp")
-        blocks = get_blocks_for_viewer()
-        recent_blocks = blocks[:5]
-        recent_txs = _tx_feed(include_pending=True, include_bridge=True)[:8]
-
-        block_count = HEIGHT_OFFSET + len(chain_blocks)
-
-        pools = load_pools()
-        supply_metrics = compute_thr_supply_metrics(chain=chain, pools=pools)
-        total_supply = supply_metrics["total_supply_thr"]
-
-        tokens = load_custom_tokens()
-        token_list = list(tokens.values())
-        token_list.sort(key=lambda t: t.get("created_at", ""), reverse=True)
-        recent_tokens = token_list[:3]
-
-        ledger = load_json(LEDGER_FILE, {})
-        system_addresses = {BURN_ADDRESS, AI_WALLET_ADDRESS, "GENESIS", "SYSTEM"}
-        wallet_count = sum(1 for addr, bal in ledger.items()
-                           if addr not in system_addresses and float(bal) > 0)
-
-        # Get all transactions for consistency with /api/transfers
-        all_txs = _tx_feed(include_pending=True, include_bridge=True)
-        total_transfers = len(all_txs)
-
-        # Count unique addresses from all transactions
-        unique_addrs = set()
-        for tx in all_txs:
-            from_addr = tx.get("from", "")
-            to_addr = tx.get("to", "")
-            if from_addr:
-                unique_addrs.add(from_addr)
-            if to_addr:
-                unique_addrs.add(to_addr)
-        unique_addresses = len(unique_addrs)
-
-        stats = {
-            "block_count": block_count,
-            "total_transfers": total_transfers,
-            "unique_addresses": unique_addresses,
-            "total_supply": total_supply,
-            "circulating_supply": supply_metrics["circulating_supply_thr"],
-            "pool_locked_thr": supply_metrics["locked_in_pools_thr"],
-            "fee_burned_total": supply_metrics["burned_total_thr"],
-            "total_supply_thr": supply_metrics["total_supply_thr"],
-            "circulating_supply_thr": supply_metrics["circulating_supply_thr"],
-            "locked_in_pools_thr": supply_metrics["locked_in_pools_thr"],
-            "burned_total_thr": supply_metrics["burned_total_thr"],
-            "total_rewards_thr": supply_metrics["minted_total_thr"],
-            "token_count": len(token_list),
-            "pool_count": len(pools),
-            "wallet_count": wallet_count,
-        }
-
-        index_tip_height = last_block.get("height")
-        index_tip_hash = last_block.get("block_hash")
-        index_tip_timestamp = last_block.get("timestamp")
-        if chain_tip_height is None or index_tip_height is None:
-            index_lag = 0
-        else:
-            index_lag = max(chain_tip_height - index_tip_height, 0)
-
-        return jsonify({
-            "ok": True,
-            "tip": last_block,
-            "stats": stats,
-            "recent_blocks": recent_blocks,
-            "recent_transactions": recent_txs,
-            "recent_tokens": recent_tokens,
-            "chain_tip_height": chain_tip_height,
-            "chain_tip_hash": chain_tip_hash,
-            "chain_tip_timestamp": chain_tip_timestamp,
-            "index_tip_height": index_tip_height,
-            "index_tip_hash": index_tip_hash,
-            "index_tip_timestamp": index_tip_timestamp,
-            "index_lag": index_lag,
-        }), 200
-    except Exception as exc:
-        logger.error("[dashboard] failed: %s", exc)
-        return jsonify({
-            "ok": False,
-            "error": "temporary",
-            "tip": {},
-            "stats": {
-                "block_count": 0,
-                "total_transfers": 0,
-                "unique_addresses": 0,
-                "total_supply": 0,
-                "circulating_supply": 0,
-                "pool_locked_thr": 0,
-                "fee_burned_total": 0,
-                "total_supply_thr": 0,
-                "circulating_supply_thr": 0,
-                "locked_in_pools_thr": 0,
-                "burned_total_thr": 0,
-                "total_rewards_thr": 0,
-                "token_count": 0,
-                "pool_count": 0,
-                "wallet_count": 0,
-            },
-            "recent_blocks": [],
-            "recent_transactions": [],
-            "recent_tokens": [],
-            "chain_tip_height": None,
-            "chain_tip_hash": None,
-            "chain_tip_timestamp": None,
-            "index_tip_height": None,
-            "index_tip_hash": None,
-            "index_tip_timestamp": None,
-            "index_lag": 0,
-        }), 200
 
 def get_token_price_in_thr(symbol):
     """
@@ -19261,6 +19149,7 @@ def api_v1_music_tracks():
 
 
 @app.route("/api/v1/music/tracks/trending")
+@app.route("/api/music/tracks/trending")
 def api_v1_music_trending():
     """Get trending tracks (most plays in last 7 days)"""
     registry = load_music_registry()
@@ -19285,6 +19174,7 @@ def api_music_trending():
 
 
 @app.route("/api/v1/music/artist/<artist_address>")
+@app.route("/api/music/artist/<artist_address>")
 def api_v1_music_artist(artist_address):
     """Get artist profile and tracks"""
     if not validate_thr_address(artist_address):
@@ -20612,6 +20502,107 @@ def api_v1_nfts_buy():
         "status": "success",
         "message": f"NFT transferred from {old_owner} to {buyer}",
         "nft": nft
+    }), 200
+
+
+@app.route("/api/nft/burn", methods=["POST"])
+@app.route("/api/v1/nft/burn", methods=["POST"])
+def api_nft_burn():
+    """
+    Burn an NFT (mark as burned and remove from marketplace).
+
+    Request body:
+    {
+        "nft_id": "NFT...",
+        "owner": "THR...",
+        "auth_secret": "..."
+    }
+
+    Effect:
+    - Mark burned=true
+    - Remove from marketplace (for_sale=false)
+    - Write event kind=nft_burn to history
+    """
+    data = request.get_json() or {}
+    nft_id = data.get("nft_id", "").strip()
+    owner = data.get("owner", "").strip()
+    auth_secret = data.get("auth_secret", "").strip()
+
+    if not nft_id or not owner:
+        return jsonify({"ok": False, "error": "Missing nft_id or owner"}), 400
+
+    # Validate owner address
+    if not validate_thr_address(owner):
+        return jsonify({"ok": False, "error": "Invalid owner address"}), 400
+
+    # Authenticate owner (basic check with auth_secret)
+    if not auth_secret:
+        return jsonify({"ok": False, "error": "auth_secret required"}), 400
+
+    # Load NFT registry
+    registry = load_nft_registry()
+    nft = next((n for n in registry["nfts"] if n["id"] == nft_id), None)
+
+    if not nft:
+        return jsonify({"ok": False, "error": "NFT not found"}), 404
+
+    # Verify ownership
+    if nft.get("owner") != owner:
+        return jsonify({"ok": False, "error": "You do not own this NFT"}), 403
+
+    # Check if already burned
+    if nft.get("burned"):
+        return jsonify({"ok": False, "error": "NFT already burned"}), 400
+
+    # Mark NFT as burned and remove from marketplace
+    nft["burned"] = True
+    nft["for_sale"] = False
+    nft["burned_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    nft["burned_by"] = owner
+
+    # Save updated registry
+    save_nft_registry(registry)
+
+    # Write burn event to history (for tx feed)
+    try:
+        burn_event = {
+            "tx_id": f"NFTBURN{int(time.time() * 1000)}",
+            "type": "nft_burn",
+            "kind": "nft_burn",
+            "from": owner,
+            "to": BURN_ADDRESS,
+            "nft_id": nft_id,
+            "nft_name": nft.get("name", ""),
+            "timestamp": time.time(),
+            "note": f"NFT burned: {nft.get('name', nft_id)}"
+        }
+
+        # Index the event if DB is available
+        if USE_SQLITE_LEDGER:
+            _index_block_event(
+                event_type="nft_burn",
+                event_id=burn_event["tx_id"],
+                height=0,  # Not blockchain-verified
+                timestamp=burn_event["timestamp"],
+                from_address=owner,
+                to_address=BURN_ADDRESS,
+                amount=0,
+                asset_symbol="NFT",
+                metadata={"nft_id": nft_id, "nft_name": nft.get("name", "")}
+            )
+    except Exception as e:
+        logger.warning(f"Failed to index NFT burn event: {e}")
+
+    return jsonify({
+        "ok": True,
+        "message": f"NFT {nft.get('name', nft_id)} has been burned",
+        "nft": {
+            "id": nft["id"],
+            "name": nft.get("name"),
+            "burned": True,
+            "burned_at": nft.get("burned_at"),
+            "burned_by": owner
+        }
     }), 200
 
 

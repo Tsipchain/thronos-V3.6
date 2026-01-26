@@ -18,7 +18,6 @@
     if (!p) return false;
     return (
       p.startsWith("/api/") ||
-      p.startsWith("api/") ||
       p.includes("/api/v1/") ||
       p.includes("/api/v1/read/") ||
       p.includes("/api/v1/write/")
@@ -52,8 +51,12 @@
       const u = new URL(raw, window.location.origin);
       let path = u.pathname || "";
 
+      // Ensure all paths start with "/"
       if (!path.startsWith("/")) path = "/" + path;
-      if (path.startsWith("api/")) path = "/" + path;
+      // Auto-correct "api/" to "/api/" for consistency (hard rule: all API paths must be absolute)
+      if (path.startsWith("/api/") === false && path.includes("api/")) {
+        path = path.replace(/^\/(.*)api\//, "/api/");
+      }
 
       if (!isProbablyApiPath(path)) {
         if (/^https?:\/\//i.test(raw)) {

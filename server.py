@@ -14107,13 +14107,46 @@ def api_v1_balance(thr_addr: str):
 
 @app.route("/api/v1/address/<thr_addr>/history", methods=["GET"])
 def api_v1_address_history(thr_addr: str):
-    """Return the on‑chain transaction history for the specified address."""
+    """Return the on‑chain transaction history for the specified address.
+
+    IMPORTANT: Excludes blocks (entries with 'reward' field) and deduplicates.
+    Only returns actual transactions: transfers, payments, pledges, etc.
+    """
     chain = load_json(CHAIN_FILE, [])
+
+    # Filter: must be dict, match address, and NOT be a block
     history = [
         tx for tx in chain
-        if isinstance(tx, dict) and (tx.get("from") == thr_addr or tx.get("to") == thr_addr)
+        if isinstance(tx, dict)
+        and (tx.get("from") == thr_addr or tx.get("to") == thr_addr)
+        and tx.get("reward") is None  # Exclude blocks
+        and tx.get("kind") != "block"  # Extra safety
     ]
-    return jsonify(address=thr_addr, transactions=history), 200
+
+    # Deduplicate by tx_id if present, or by (kind, timestamp, from, to, amount) tuple
+    seen = set()
+    deduped = []
+    for tx in history:
+        # Primary key: tx_id
+        tx_id = tx.get("tx_id")
+        if tx_id:
+            if tx_id not in seen:
+                seen.add(tx_id)
+                deduped.append(tx)
+        else:
+            # Fallback dedup key
+            key = (
+                tx.get("kind") or tx.get("type"),
+                tx.get("timestamp"),
+                tx.get("from"),
+                tx.get("to"),
+                tx.get("amount")
+            )
+            if key not in seen:
+                seen.add(key)
+                deduped.append(tx)
+
+    return jsonify(address=thr_addr, transactions=deduped), 200
 
 
 @app.route("/api/v1/block/<int:height>", methods=["GET"])

@@ -1572,6 +1572,36 @@ def _init_ledger_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_music_timestamp ON music_plays(play_timestamp DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_music_track ON music_plays(track_id)")
 
+        # Music playlists tables (NEW - playlist persistence)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS music_playlists (
+                id TEXT PRIMARY KEY,
+                owner_address TEXT NOT NULL,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_playlists_owner ON music_playlists(owner_address)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_playlists_updated ON music_playlists(updated_at DESC)")
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS music_playlist_items (
+                playlist_id TEXT NOT NULL,
+                track_id TEXT NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0,
+                added_at TEXT NOT NULL,
+                PRIMARY KEY (playlist_id, track_id),
+                FOREIGN KEY (playlist_id) REFERENCES music_playlists(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_playlist_items_playlist ON music_playlist_items(playlist_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_playlist_items_position ON music_playlist_items(position)")
+
     with _get_ledger_db_connection() as conn:
         row = conn.execute("SELECT COUNT(1) AS count FROM balances").fetchone()
         count = row["count"] if row else 0
@@ -6104,129 +6134,153 @@ def api_wallet_history():
     if not address:
         return jsonify({"ok": False, "error": "Address required"}), 400
 
-    # Get all transactions
-    chain = load_json(CHAIN_FILE, [])
-    blocks = get_blocks_for_viewer()
+    try:
+        # Get all transactions
+        chain = load_json(CHAIN_FILE, [])
+        blocks = get_blocks_for_viewer()
 
-    # Collect transactions involving this address
-    wallet_txs = []
+        # Collect transactions involving this address
+        wallet_txs = []
 
-    # 1. Regular chain transactions
-    for tx in chain:
-        if not isinstance(tx, dict):
-            continue
+        # 1. Regular chain transactions
+        for tx in chain:
+            if not isinstance(tx, dict):
+                continue
 
-        tx_from = tx.get("from") or tx.get("sender")
-        tx_to = tx.get("to") or tx.get("recipient")
-        tx_address = tx.get("address")  # For IoT telemetry
+            tx_from = tx.get("from") or tx.get("sender")
+            tx_to = tx.get("to") or tx.get("recipient")
+            tx_address = tx.get("address")  # For IoT telemetry
 
-        if address.lower() in [str(tx_from).lower(), str(tx_to).lower(), str(tx_address).lower()]:
-            tx_copy = dict(tx)
-            tx_copy["category"] = _categorize_transaction(tx)
-            tx_copy = normalize_history_item(tx_copy)
+            if address.lower() in [str(tx_from).lower(), str(tx_to).lower(), str(tx_address).lower()]:
+                tx_copy = dict(tx)
+                tx_copy["category"] = _categorize_transaction(tx)
+                tx_copy = normalize_history_item(tx_copy)
 
-            # Determine direction
-            if tx_to and tx_to.lower() == address.lower():
-                tx_copy["direction"] = "received"
-            elif tx_from and tx_from.lower() == address.lower():
-                tx_copy["direction"] = "sent"
-            else:
-                tx_copy["direction"] = "related"
-
-            wallet_txs.append(tx_copy)
-
-    # 2. Block mining rewards
-    for block in blocks:
-        block_txs = block.get("transactions", [])
-        for tx in block_txs:
-            if tx.get("type") in ["coinbase", "mining_reward", "mint"]:
-                miner_addr = tx.get("to") or tx.get("thr_address")
-                if miner_addr and miner_addr.lower() == address.lower():
-                    tx_copy = dict(tx)
-                    tx_copy["category"] = "mining"
-                    tx_copy = normalize_history_item(tx_copy)
+                # Determine direction
+                if tx_to and tx_to.lower() == address.lower():
                     tx_copy["direction"] = "received"
-                    tx_copy["block_height"] = block.get("index")
-                    wallet_txs.append(tx_copy)
-        block_miner = block.get("thr_address") or block.get("miner_address") or block.get("miner")
-        if block_miner and str(block_miner).lower() == address.lower():
-            wallet_txs.append(normalize_history_item({
-                "kind": "mining_reward",
-                "type": "mining_reward",
-                "category": "mining",
-                "direction": "received",
-                "amount": float(block.get("reward_to_miner", block.get("reward", 0.0)) or 0.0),
-                "timestamp": block.get("timestamp"),
-                "block_height": block.get("index"),
-                "block_hash": block.get("block_hash"),
-                "thr_address": block_miner,
-            }))
+                elif tx_from and tx_from.lower() == address.lower():
+                    tx_copy["direction"] = "sent"
+                else:
+                    tx_copy["direction"] = "related"
 
-    # Apply category filter
-    if category_filter:
-        wallet_txs = [tx for tx in wallet_txs if tx.get("category", "").lower() == category_filter]
+                wallet_txs.append(tx_copy)
 
-    for tx in wallet_txs:
-        for key in ("image_url", "logo_url", "audio_url", "cover_url"):
-            if key in tx:
-                tx[key] = normalize_media_url(str(tx.get(key) or ""))
+        # 2. Block mining rewards
+        for block in blocks:
+            block_txs = block.get("transactions", [])
+            for tx in block_txs:
+                if tx.get("type") in ["coinbase", "mining_reward", "mint"]:
+                    miner_addr = tx.get("to") or tx.get("thr_address")
+                    if miner_addr and miner_addr.lower() == address.lower():
+                        tx_copy = dict(tx)
+                        tx_copy["category"] = "mining"
+                        tx_copy = normalize_history_item(tx_copy)
+                        tx_copy["direction"] = "received"
+                        tx_copy["block_height"] = block.get("index")
+                        wallet_txs.append(tx_copy)
+            block_miner = block.get("thr_address") or block.get("miner_address") or block.get("miner")
+            if block_miner and str(block_miner).lower() == address.lower():
+                wallet_txs.append(normalize_history_item({
+                    "kind": "mining_reward",
+                    "type": "mining_reward",
+                    "category": "mining",
+                    "direction": "received",
+                    "amount": float(block.get("reward_to_miner", block.get("reward", 0.0)) or 0.0),
+                    "timestamp": block.get("timestamp"),
+                    "block_height": block.get("index"),
+                    "block_hash": block.get("block_hash"),
+                    "thr_address": block_miner,
+                }))
 
-    # Calculate category summaries
-    summary = {
-        "total_mining": 0.0,
-        "total_ai_rewards": 0.0,
-        "total_music_tips_sent": 0.0,
-        "total_music_tips_received": 0.0,
-        "total_iot_rewards": 0.0,
-        "total_sent": 0.0,
-        "total_received": 0.0,
-        "mining_count": 0,
-        "ai_reward_count": 0,
-        "music_tip_count": 0,
-        "iot_count": 0
-    }
+        # Apply category filter
+        if category_filter:
+            wallet_txs = [tx for tx in wallet_txs if tx.get("category", "").lower() == category_filter]
 
-    for tx in wallet_txs:
-        category = tx.get("category", "other")
-        direction = tx.get("direction", "related")
-        amount = float(tx.get("amount", 0))
+        for tx in wallet_txs:
+            for key in ("image_url", "logo_url", "audio_url", "cover_url"):
+                if key in tx:
+                    tx[key] = normalize_media_url(str(tx.get(key) or ""))
 
-        if category == "mining":
-            summary["total_mining"] += amount
-            summary["mining_count"] += 1
-        elif category == "ai_reward":
-            summary["total_ai_rewards"] += amount
-            summary["ai_reward_count"] += 1
-        elif category == "music_tip":
-            if direction == "sent":
-                summary["total_music_tips_sent"] += amount
-            elif direction == "received":
-                summary["total_music_tips_received"] += amount
-            summary["music_tip_count"] += 1
-        elif category == "iot_telemetry":
-            # IoT txs represent work done, rewards come via ai_reward
-            summary["iot_count"] += 1
+        # Calculate category summaries
+        summary = {
+            "total_mining": 0.0,
+            "total_ai_rewards": 0.0,
+            "total_music_tips_sent": 0.0,
+            "total_music_tips_received": 0.0,
+            "total_iot_rewards": 0.0,
+            "total_sent": 0.0,
+            "total_received": 0.0,
+            "mining_count": 0,
+            "ai_reward_count": 0,
+            "music_tip_count": 0,
+            "iot_count": 0
+        }
 
-        if direction == "received":
-            summary["total_received"] += amount
-        elif direction == "sent":
-            summary["total_sent"] += amount
+        for tx in wallet_txs:
+            category = tx.get("category", "other")
+            direction = tx.get("direction", "related")
+            amount = float(tx.get("amount", 0))
 
-    # Round summary values
-    for key in summary:
-        if isinstance(summary[key], float):
-            summary[key] = round(summary[key], 6)
+            if category == "mining":
+                summary["total_mining"] += amount
+                summary["mining_count"] += 1
+            elif category == "ai_reward":
+                summary["total_ai_rewards"] += amount
+                summary["ai_reward_count"] += 1
+            elif category == "music_tip":
+                if direction == "sent":
+                    summary["total_music_tips_sent"] += amount
+                elif direction == "received":
+                    summary["total_music_tips_received"] += amount
+                summary["music_tip_count"] += 1
+            elif category == "iot_telemetry":
+                # IoT txs represent work done, rewards come via ai_reward
+                summary["iot_count"] += 1
 
-    # Sort by timestamp descending
-    wallet_txs.sort(key=lambda t: _parse_timestamp(t.get("timestamp", "")), reverse=True)
+            if direction == "received":
+                summary["total_received"] += amount
+            elif direction == "sent":
+                summary["total_sent"] += amount
 
-    return jsonify({
-        "ok": True,
-        "address": address,
-        "transactions": wallet_txs,
-        "summary": summary,
-        "total_transactions": len(wallet_txs)
-    }), 200
+        # Round summary values
+        for key in summary:
+            if isinstance(summary[key], float):
+                summary[key] = round(summary[key], 6)
+
+        # Sort by timestamp descending
+        wallet_txs.sort(key=lambda t: _parse_timestamp(t.get("timestamp", "")), reverse=True)
+
+        return jsonify({
+            "ok": True,
+            "address": address,
+            "transactions": wallet_txs,
+            "summary": summary,
+            "total_transactions": len(wallet_txs)
+        }), 200
+    except Exception as exc:
+        logger.error("[wallet_history] failed: %s", exc)
+        summary = {
+            "total_mining": 0.0,
+            "total_ai_rewards": 0.0,
+            "total_music_tips_sent": 0.0,
+            "total_music_tips_received": 0.0,
+            "total_iot_rewards": 0.0,
+            "total_sent": 0.0,
+            "total_received": 0.0,
+            "mining_count": 0,
+            "ai_reward_count": 0,
+            "music_tip_count": 0,
+            "iot_count": 0
+        }
+        return jsonify({
+            "ok": False,
+            "error": "temporary",
+            "address": address,
+            "transactions": [],
+            "summary": summary,
+            "total_transactions": 0
+        }), 200
 
 
 @app.route("/wallet")
@@ -10496,14 +10550,18 @@ def api_history():
     category = (request.args.get("category") or "").strip().lower()
     if not thr_addr:
         return jsonify({"ok": False, "error": "Missing wallet address"}), 400
-    history = build_wallet_history(thr_addr)
-    for entry in history:
-        for key in ("image_url", "logo_url", "audio_url", "cover_url"):
-            if key in entry:
-                entry[key] = normalize_media_url(str(entry.get(key) or ""))
-    if category:
-        history = [entry for entry in history if (entry.get("category") or entry.get("kind") or "").lower() == category]
-    return jsonify({"ok": True, "wallet": thr_addr, "history": history}), 200
+    try:
+        history = build_wallet_history(thr_addr)
+        for entry in history:
+            for key in ("image_url", "logo_url", "audio_url", "cover_url"):
+                if key in entry:
+                    entry[key] = normalize_media_url(str(entry.get(key) or ""))
+        if category:
+            history = [entry for entry in history if (entry.get("category") or entry.get("kind") or "").lower() == category]
+        return jsonify({"ok": True, "wallet": thr_addr, "history": history}), 200
+    except Exception as exc:
+        logger.error("[api_history] failed: %s", exc)
+        return jsonify({"ok": False, "error": "temporary", "wallet": thr_addr, "history": []}), 200
 
 
 def get_token_price_in_thr(symbol):
@@ -19164,10 +19222,10 @@ def api_music_tracks_compact():
         tracks.sort(key=lambda t: t.get("uploaded_at", ""), reverse=True)
         for t in tracks:
             t["play_count"] = len(registry.get("plays", {}).get(t.get("id"), []))
-        return jsonify({"ok": True, "tracks": tracks[:limit], "total": len(tracks)}), 200
+        return jsonify({"ok": True, "status": "success", "tracks": tracks[:limit], "total": len(tracks)}), 200
     except Exception as e:
         logger.exception("Failed to load music tracks")
-        return jsonify({"ok": True, "tracks": [], "total": 0, "error": str(e)}), 200
+        return jsonify({"ok": False, "tracks": [], "total": 0, "error": str(e)}), 200
 
 
 @app.route("/api/v1/music/tracks")
@@ -19280,6 +19338,7 @@ def api_v1_music_register_artist():
 
 
 @app.route("/api/v1/music/upload", methods=["POST"])
+@app.route("/api/music/upload", methods=["POST"])
 def api_v1_music_upload():
     """Upload a new track"""
     # Handle form data
@@ -19287,6 +19346,11 @@ def api_v1_music_upload():
     title = (request.form.get("title") or "").strip()
     genre = (request.form.get("genre") or "Other").strip()
     description = (request.form.get("description") or "").strip()
+    raw_playlist_ids = request.form.getlist("playlist_ids") or []
+    if not raw_playlist_ids:
+        raw_value = (request.form.get("playlist_ids") or "").strip()
+        if raw_value:
+            raw_playlist_ids = [pid.strip() for pid in raw_value.split(",") if pid.strip()]
 
     if not artist_address or not validate_thr_address(artist_address):
         return jsonify({"status": "error", "message": "Invalid artist address"}), 400
@@ -19355,14 +19419,25 @@ def api_v1_music_upload():
 
         logger.info(f"Track uploaded: {title} by {registry['artists'][artist_address]['name']}")
 
+        playlist_ids = [pid for pid in raw_playlist_ids if pid]
+        for playlist_id in playlist_ids:
+            try:
+                _add_track_to_playlist(playlist_id, track_id, artist_address)
+            except Exception as add_error:
+                logger.warning(f"Failed to add track {track_id} to playlist {playlist_id}: {add_error}")
+
+        track = enrich_track_media(track)
+        track["play_count"] = 0
+
         return jsonify({
+            "ok": True,
             "status": "success",
             "track": track
         }), 201
 
     except Exception as e:
         logger.error(f"Track upload error: {e}", exc_info=True)
-        return jsonify({"status": "error", "message": f"Upload failed: {str(e)}"}), 500
+        return jsonify({"ok": False, "status": "error", "message": f"Upload failed: {str(e)}"}), 500
 
 
 @app.route("/api/v1/music/play/<track_id>", methods=["POST"])
@@ -19614,6 +19689,162 @@ def api_v1_music_search():
 MUSIC_PLAYLISTS_DIR = os.path.join(DATA_DIR, "music", "playlists")
 os.makedirs(MUSIC_PLAYLISTS_DIR, exist_ok=True)
 
+def _get_playlist_rows(owner_address: str | None = None):
+    if not USE_SQLITE_LEDGER:
+        return []
+    query = "SELECT id, owner_address, title, created_at, updated_at FROM music_playlists"
+    params: tuple = ()
+    if owner_address:
+        query += " WHERE owner_address = ?"
+        params = (owner_address,)
+    query += " ORDER BY updated_at DESC"
+    with _get_ledger_db_connection() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _get_playlist_items(playlist_ids: list[str]):
+    if not USE_SQLITE_LEDGER or not playlist_ids:
+        return {}
+    placeholders = ",".join("?" for _ in playlist_ids)
+    query = f"""
+        SELECT playlist_id, track_id, position, added_at
+        FROM music_playlist_items
+        WHERE playlist_id IN ({placeholders})
+        ORDER BY position ASC, added_at ASC
+    """
+    with _get_ledger_db_connection() as conn:
+        rows = conn.execute(query, playlist_ids).fetchall()
+    items_map: dict[str, list[str]] = {}
+    for row in rows:
+        items_map.setdefault(row["playlist_id"], []).append(row["track_id"])
+    return items_map
+
+
+def _hydrate_playlists(playlists: list[dict]):
+    registry = load_music_registry()
+    track_map = {t.get("id"): enrich_track_media(dict(t)) for t in registry.get("tracks", [])}
+    playlist_ids = [p["id"] for p in playlists]
+    items_map = _get_playlist_items(playlist_ids)
+    hydrated = []
+    for playlist in playlists:
+        track_ids = items_map.get(playlist["id"], [])
+        tracks = [track_map[tid] for tid in track_ids if tid in track_map]
+        hydrated.append({
+            "id": playlist["id"],
+            "playlist_id": playlist["id"],
+            "owner_address": playlist["owner_address"],
+            "title": playlist["title"],
+            "name": playlist["title"],
+            "created_at": playlist["created_at"],
+            "updated_at": playlist["updated_at"],
+            "track_ids": track_ids,
+            "tracks": tracks,
+            "track_count": len(track_ids),
+        })
+    return hydrated
+
+
+def _create_music_playlist(owner_address: str, title: str):
+    if not USE_SQLITE_LEDGER:
+        raise RuntimeError("SQLite disabled")
+    playlist_id = f"pl_{int(time.time())}_{secrets.token_hex(4)}"
+    now = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    with _get_ledger_db_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO music_playlists (id, owner_address, title, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (playlist_id, owner_address, title, now, now),
+        )
+    return {
+        "id": playlist_id,
+        "playlist_id": playlist_id,
+        "owner_address": owner_address,
+        "title": title,
+        "name": title,
+        "created_at": now,
+        "updated_at": now,
+        "track_ids": [],
+        "tracks": [],
+        "track_count": 0,
+    }
+
+
+def _add_track_to_playlist(playlist_id: str, track_id: str, owner_address: str | None = None):
+    if not USE_SQLITE_LEDGER:
+        raise RuntimeError("SQLite disabled")
+    with _get_ledger_db_connection() as conn:
+        playlist = conn.execute(
+            "SELECT id, owner_address FROM music_playlists WHERE id = ?",
+            (playlist_id,),
+        ).fetchone()
+        if not playlist:
+            return False, "Playlist not found"
+        if owner_address and playlist["owner_address"] != owner_address:
+            return False, "Unauthorized"
+
+        row = conn.execute(
+            "SELECT MAX(position) AS max_pos FROM music_playlist_items WHERE playlist_id = ?",
+            (playlist_id,),
+        ).fetchone()
+        next_pos = int(row["max_pos"] or 0) + 1
+        now = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO music_playlist_items (playlist_id, track_id, position, added_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (playlist_id, track_id, next_pos, now),
+        )
+        conn.execute(
+            "UPDATE music_playlists SET updated_at = ? WHERE id = ?",
+            (now, playlist_id),
+        )
+    return True, ""
+
+
+def _remove_track_from_playlist(playlist_id: str, track_id: str, owner_address: str | None = None):
+    if not USE_SQLITE_LEDGER:
+        raise RuntimeError("SQLite disabled")
+    with _get_ledger_db_connection() as conn:
+        playlist = conn.execute(
+            "SELECT id, owner_address FROM music_playlists WHERE id = ?",
+            (playlist_id,),
+        ).fetchone()
+        if not playlist:
+            return False, "Playlist not found"
+        if owner_address and playlist["owner_address"] != owner_address:
+            return False, "Unauthorized"
+        conn.execute(
+            "DELETE FROM music_playlist_items WHERE playlist_id = ? AND track_id = ?",
+            (playlist_id, track_id),
+        )
+        now = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        conn.execute(
+            "UPDATE music_playlists SET updated_at = ? WHERE id = ?",
+            (now, playlist_id),
+        )
+    return True, ""
+
+
+def _delete_music_playlist(playlist_id: str, owner_address: str | None = None):
+    if not USE_SQLITE_LEDGER:
+        raise RuntimeError("SQLite disabled")
+    with _get_ledger_db_connection() as conn:
+        playlist = conn.execute(
+            "SELECT id, owner_address FROM music_playlists WHERE id = ?",
+            (playlist_id,),
+        ).fetchone()
+        if not playlist:
+            return False, "Playlist not found"
+        if owner_address and playlist["owner_address"] != owner_address:
+            return False, "Unauthorized"
+        conn.execute("DELETE FROM music_playlist_items WHERE playlist_id = ?", (playlist_id,))
+        conn.execute("DELETE FROM music_playlists WHERE id = ?", (playlist_id,))
+    return True, ""
+
 @app.route("/api/music/playlists/<wallet>", methods=["GET"])
 def api_music_get_playlists(wallet):
     """
@@ -19621,14 +19852,14 @@ def api_music_get_playlists(wallet):
     Returns list of playlists with metadata.
     """
     try:
-        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
-        playlists = load_json(playlist_file, {"playlists": []})
+        playlists = _get_playlist_rows(wallet)
+        hydrated = _hydrate_playlists(playlists)
 
         return jsonify({
             "ok": True,
             "wallet": wallet,
-            "playlists": playlists.get("playlists", []),
-            "total": len(playlists.get("playlists", []))
+            "playlists": hydrated,
+            "total": len(hydrated)
         }), 200
     except Exception as e:
         # PRIORITY 10: Graceful degradation
@@ -19657,25 +19888,10 @@ def api_music_create_playlist(wallet):
         return jsonify({"ok": False, "error": "Playlist name required"}), 400
 
     try:
-        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
-        playlists_data = load_json(playlist_file, {"playlists": []})
-
-        # Create new playlist
-        playlist_id = f"pl_{int(time.time())}_{secrets.token_hex(4)}"
-        new_playlist = {
-            "id": playlist_id,
-            "name": name,
-            "description": description,
-            "track_ids": track_ids,
-            "is_public": is_public,
-            "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-            "track_count": len(track_ids)
-        }
-
-        playlists_data.setdefault("playlists", []).append(new_playlist)
-        save_json(playlist_file, playlists_data)
-
+        new_playlist = _create_music_playlist(wallet, name)
+        if track_ids:
+            for track_id in track_ids:
+                _add_track_to_playlist(new_playlist["id"], track_id, wallet)
         app.logger.info(f"🎵 Playlist Created: {name} → {wallet} | {len(track_ids)} tracks")
 
         return jsonify({
@@ -19697,19 +19913,9 @@ def api_music_create_playlist(wallet):
 def api_music_delete_playlist(wallet, playlist_id):
     """PRIORITY 10: Delete playlist."""
     try:
-        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
-        playlists_data = load_json(playlist_file, {"playlists": []})
-
-        # Find and remove playlist
-        original_count = len(playlists_data["playlists"])
-        playlists_data["playlists"] = [
-            p for p in playlists_data["playlists"] if p.get("id") != playlist_id
-        ]
-
-        if len(playlists_data["playlists"]) == original_count:
-            return jsonify({"ok": False, "error": "Playlist not found"}), 404
-
-        save_json(playlist_file, playlists_data)
+        deleted, message = _delete_music_playlist(playlist_id, wallet)
+        if not deleted:
+            return jsonify({"ok": False, "error": message}), 404
 
         return jsonify({
             "ok": True,
@@ -19888,17 +20094,9 @@ def api_music_playlist_add_track(wallet, playlist_id):
         return jsonify({"ok": False, "error": "Missing track_id"}), 400
 
     try:
-        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
-        playlists_data = load_json(playlist_file, {"playlists": []})
-
-        playlist = next((p for p in playlists_data["playlists"] if p["id"] == playlist_id), None)
-        if not playlist:
-            return jsonify({"ok": False, "error": "Playlist not found"}), 404
-
-        if track_id not in playlist.get("tracks", []):
-            playlist.setdefault("tracks", []).append(track_id)
-            playlist["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-            save_json(playlist_file, playlists_data)
+        added, message = _add_track_to_playlist(playlist_id, track_id, wallet)
+        if not added:
+            return jsonify({"ok": False, "error": message}), 404
 
         return jsonify({
             "ok": True,
@@ -19924,17 +20122,9 @@ def api_music_playlist_remove_track(wallet, playlist_id):
         return jsonify({"ok": False, "error": "Missing track_id"}), 400
 
     try:
-        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
-        playlists_data = load_json(playlist_file, {"playlists": []})
-
-        playlist = next((p for p in playlists_data["playlists"] if p["id"] == playlist_id), None)
-        if not playlist:
-            return jsonify({"ok": False, "error": "Playlist not found"}), 404
-
-        if track_id in playlist.get("tracks", []):
-            playlist["tracks"].remove(track_id)
-            playlist["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-            save_json(playlist_file, playlists_data)
+        removed, message = _remove_track_from_playlist(playlist_id, track_id, wallet)
+        if not removed:
+            return jsonify({"ok": False, "error": message}), 404
 
         return jsonify({
             "ok": True,
@@ -19954,30 +20144,16 @@ def api_music_playlist_remove_track(wallet, playlist_id):
 def api_music_get_playlist_tracks(wallet, playlist_id):
     """PRIORITY 10: Get full track objects for a playlist."""
     try:
-        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
-        playlists_data = load_json(playlist_file, {"playlists": []})
-
-        playlist = next((p for p in playlists_data["playlists"] if p["id"] == playlist_id), None)
+        playlists = _get_playlist_rows(wallet)
+        playlist = next((p for p in playlists if p["id"] == playlist_id), None)
         if not playlist:
             return jsonify({"ok": False, "error": "Playlist not found"}), 404
-
-        track_ids = playlist.get("tracks", [])
-
-        # Load music registry and get full track objects
-        registry = load_music_registry()
-        tracks = []
-        for track_id in track_ids:
-            track = next((t for t in registry["tracks"] if t["id"] == track_id), None)
-            if track:
-                tracks.append(enrich_track_media(track))
+        hydrated = _hydrate_playlists([playlist])[0]
 
         return jsonify({
             "ok": True,
             "status": "success",
-            "playlist": {
-                **playlist,
-                "tracks": tracks
-            }
+            "playlist": hydrated
         }), 200
 
     except Exception as e:
@@ -20059,106 +20235,83 @@ def api_music_library():
 
 
 @app.route("/api/music/playlists", methods=["GET"])
-def api_music_playlists_chain():
-    """
-    PR-5: Get playlists for address (chain-derived).
-    Returns playlists built from on-chain transactions:
-    - playlist_create
-    - playlist_add_track
-    - playlist_remove_track
-    - playlist_reorder
-    """
+def api_music_playlists():
+    """Get playlists for address (DB-backed)."""
     address = (request.args.get("address") or "").strip()
     if not address:
         return jsonify({"ok": False, "error": "address required"}), 400
 
     try:
-        chain = load_json(CHAIN_FILE, [])
-        playlists_map = {}
-
-        for tx in chain:
-            if not isinstance(tx, dict):
-                continue
-
-            tx_type = (tx.get("type") or tx.get("kind") or "").lower()
-            meta = tx.get("meta") or {}
-
-            # Filter by owner
-            owner = tx.get("from") or meta.get("owner")
-            if owner != address:
-                continue
-
-            playlist_id = meta.get("playlist_id")
-            if not playlist_id:
-                continue
-
-            # Process different playlist operations
-            if tx_type == "playlist_create":
-                playlists_map[playlist_id] = {
-                    "playlist_id": playlist_id,
-                    "name": meta.get("name", "Untitled Playlist"),
-                    "owner": owner,
-                    "visibility": meta.get("visibility", "private"),
-                    "track_ids": [],
-                    "created_at": tx.get("timestamp"),
-                    "updated_at": tx.get("timestamp"),
-                }
-
-            elif tx_type == "playlist_add_track":
-                if playlist_id not in playlists_map:
-                    # Playlist doesn't exist, skip
-                    continue
-                track_id = meta.get("track_id")
-                if track_id and track_id not in playlists_map[playlist_id]["track_ids"]:
-                    position = meta.get("position")
-                    if position is not None:
-                        playlists_map[playlist_id]["track_ids"].insert(position, track_id)
-                    else:
-                        playlists_map[playlist_id]["track_ids"].append(track_id)
-                    playlists_map[playlist_id]["updated_at"] = tx.get("timestamp")
-
-            elif tx_type == "playlist_remove_track":
-                if playlist_id not in playlists_map:
-                    continue
-                track_id = meta.get("track_id")
-                if track_id in playlists_map[playlist_id]["track_ids"]:
-                    playlists_map[playlist_id]["track_ids"].remove(track_id)
-                    playlists_map[playlist_id]["updated_at"] = tx.get("timestamp")
-
-            elif tx_type == "playlist_reorder":
-                if playlist_id not in playlists_map:
-                    continue
-                new_order = meta.get("track_ids")
-                if isinstance(new_order, list):
-                    playlists_map[playlist_id]["track_ids"] = new_order
-                    playlists_map[playlist_id]["updated_at"] = tx.get("timestamp")
-
-        playlists = list(playlists_map.values())
-
-        # PR-5c: Populate playlists with full track objects
-        registry = load_music_registry()
-        all_tracks = registry.get("tracks", [])
-
-        for playlist in playlists:
-            track_ids = playlist.get("track_ids", [])
-            full_tracks = []
-            for track_id in track_ids:
-                track = next((t for t in all_tracks if t.get("id") == track_id), None)
-                if track:
-                    full_tracks.append(track)
-            playlist["tracks"] = full_tracks
-
+        playlists = _get_playlist_rows(address)
+        hydrated = _hydrate_playlists(playlists)
         return jsonify({
             "ok": True,
             "address": address,
-            "playlists": playlists,
-            "total": len(playlists)
+            "playlists": hydrated,
+            "total": len(hydrated)
         }), 200
-
     except Exception as e:
         app.logger.error(f"Failed to load playlists for {address}: {e}")
-        return jsonify({"ok": False, "error": "Failed to load playlists"}), 500
+        return jsonify({"ok": False, "error": "Failed to load playlists", "playlists": []}), 200
 
+
+@app.route("/api/music/playlists", methods=["POST"])
+def api_music_playlists_create():
+    """Create a new playlist (DB-backed)."""
+    data = request.get_json() or {}
+    address = (data.get("address") or "").strip()
+    title = (data.get("title") or data.get("name") or "").strip()
+    track_ids = data.get("track_ids") or []
+
+    if not address or not title:
+        return jsonify({"ok": False, "error": "address and title required"}), 400
+
+    try:
+        playlist = _create_music_playlist(address, title)
+        if isinstance(track_ids, list):
+            for track_id in track_ids:
+                if track_id:
+                    _add_track_to_playlist(playlist["id"], str(track_id), address)
+        return jsonify({"ok": True, "playlist": playlist}), 201
+    except Exception as e:
+        app.logger.error(f"Failed to create playlist for {address}: {e}")
+        return jsonify({"ok": False, "error": "Failed to create playlist"}), 200
+
+
+@app.route("/api/music/playlists/<playlist_id>/items", methods=["POST"])
+def api_music_playlist_add_item(playlist_id):
+    """Add a track to a playlist (DB-backed)."""
+    data = request.get_json() or {}
+    address = (data.get("address") or "").strip()
+    track_id = (data.get("track_id") or "").strip()
+    if not track_id:
+        return jsonify({"ok": False, "error": "track_id required"}), 400
+
+    try:
+        added, message = _add_track_to_playlist(playlist_id, track_id, address or None)
+        if not added:
+            return jsonify({"ok": False, "error": message}), 404
+        return jsonify({"ok": True, "message": "Track added"}), 200
+    except Exception as e:
+        app.logger.error(f"Failed to add track {track_id} to playlist {playlist_id}: {e}")
+        return jsonify({"ok": False, "error": "Failed to add track"}), 200
+
+
+@app.route("/api/music/playlists/<playlist_id>/items/<track_id>", methods=["DELETE"])
+def api_music_playlist_remove_item(playlist_id, track_id):
+    """Remove a track from a playlist (DB-backed)."""
+    address = (request.args.get("address") or "").strip()
+    if not track_id:
+        return jsonify({"ok": False, "error": "track_id required"}), 400
+
+    try:
+        removed, message = _remove_track_from_playlist(playlist_id, track_id, address or None)
+        if not removed:
+            return jsonify({"ok": False, "error": message}), 404
+        return jsonify({"ok": True, "message": "Track removed"}), 200
+    except Exception as e:
+        app.logger.error(f"Failed to remove track {track_id} from playlist {playlist_id}: {e}")
+        return jsonify({"ok": False, "error": "Failed to remove track"}), 200
 
 @app.route("/api/music/playlist/update", methods=["POST"])
 def api_music_playlist_update():

@@ -5845,6 +5845,22 @@ def _categorize_transaction(tx: dict) -> str:
     return "other"
 
 
+def normalize_history_item(tx: dict) -> dict:
+    sym = (tx.get("symbol") or tx.get("token_symbol") or tx.get("token") or "").upper()
+    kind = (tx.get("kind") or tx.get("type") or "").lower()
+
+    if sym == "CREDITS" and kind in ("token_transfer", "transfer", ""):
+        tx["kind"] = "ai_credit"
+        tx["category"] = "ai"
+        tx["unit"] = "credits"
+
+    if tx.get("reward") is not None and (tx.get("thr_address") or tx.get("miner")):
+        tx["kind"] = "mining_reward"
+        tx["category"] = tx.get("category") or "mining"
+
+    return tx
+
+
 @app.route("/api/transfers", methods=["GET"])
 def api_transfers():
     """
@@ -6107,6 +6123,7 @@ def api_wallet_history():
         if address.lower() in [str(tx_from).lower(), str(tx_to).lower(), str(tx_address).lower()]:
             tx_copy = dict(tx)
             tx_copy["category"] = _categorize_transaction(tx)
+            tx_copy = normalize_history_item(tx_copy)
 
             # Determine direction
             if tx_to and tx_to.lower() == address.lower():
@@ -6127,9 +6144,23 @@ def api_wallet_history():
                 if miner_addr and miner_addr.lower() == address.lower():
                     tx_copy = dict(tx)
                     tx_copy["category"] = "mining"
+                    tx_copy = normalize_history_item(tx_copy)
                     tx_copy["direction"] = "received"
                     tx_copy["block_height"] = block.get("index")
                     wallet_txs.append(tx_copy)
+        block_miner = block.get("thr_address") or block.get("miner_address") or block.get("miner")
+        if block_miner and str(block_miner).lower() == address.lower():
+            wallet_txs.append(normalize_history_item({
+                "kind": "mining_reward",
+                "type": "mining_reward",
+                "category": "mining",
+                "direction": "received",
+                "amount": float(block.get("reward_to_miner", block.get("reward", 0.0)) or 0.0),
+                "timestamp": block.get("timestamp"),
+                "block_height": block.get("index"),
+                "block_hash": block.get("block_hash"),
+                "thr_address": block_miner,
+            }))
 
     # Apply category filter
     if category_filter:
@@ -6262,6 +6293,7 @@ def api_v2_wallet_history():
         if address.lower() in [str(tx_from).lower(), str(tx_to).lower(), str(tx_address).lower()]:
             tx_copy = dict(tx)
             tx_copy["category"] = _categorize_transaction(tx)
+            tx_copy = normalize_history_item(tx_copy)
 
             if tx_to and tx_to.lower() == address.lower():
                 tx_copy["direction"] = "received"
@@ -6280,9 +6312,23 @@ def api_v2_wallet_history():
                 if miner_addr and miner_addr.lower() == address.lower():
                     tx_copy = dict(tx)
                     tx_copy["category"] = "mining"
+                    tx_copy = normalize_history_item(tx_copy)
                     tx_copy["direction"] = "received"
                     tx_copy["block_height"] = block.get("index")
                     wallet_txs.append(tx_copy)
+        block_miner = block.get("thr_address") or block.get("miner_address") or block.get("miner")
+        if block_miner and str(block_miner).lower() == address.lower():
+            wallet_txs.append(normalize_history_item({
+                "kind": "mining_reward",
+                "type": "mining_reward",
+                "category": "mining",
+                "direction": "received",
+                "amount": float(block.get("reward_to_miner", block.get("reward", 0.0)) or 0.0),
+                "timestamp": block.get("timestamp"),
+                "block_height": block.get("index"),
+                "block_hash": block.get("block_hash"),
+                "thr_address": block_miner,
+            }))
 
     # Apply filters
     if category_filter:
@@ -7175,9 +7221,19 @@ def api_last_block():
     blk = CHAIN_META.get("last_block")
     return jsonify(ok=True, block=blk), 200
 
-@app.route("/last_block_hash", methods=["GET"], endpoint="last_block_hash")
+@app.route("/last_block_hash", methods=["GET"])
 def last_block_hash():
-    return CHAIN_META.get("last_hash") or "0" * 64
+    last_hash = CHAIN_META.get("last_hash") or "0" * 64
+    height = CHAIN_META.get("height", -1)
+    target = get_mining_target()
+    nbits = target_to_bits(target)
+    return jsonify({
+        "last_hash": last_hash,
+        "block_hash": last_hash,
+        "height": int(height) if height is not None else -1,
+        "target": hex(target),
+        "nbits": hex(nbits),
+    }), 200
 
 @app.route("/mining_info")
 def mining_info():
@@ -7306,7 +7362,7 @@ def wallets_count():
     return jsonify({"count": wallet_count})
 
 
-@app.route("/api/dashboard", endpoint="api_dashboard")
+@app.route("/api/dashboard")
 def api_dashboard():
     """
     Fast dashboard stats using cached telemetry (NEW - Performance).
@@ -7751,9 +7807,15 @@ def api_transactions():
     return jsonify(get_transactions_for_viewer()), 200
 
 
-@app.route("/api/health", methods=["GET"], endpoint="api_health")
+@app.route("/api/health", methods=["GET"])
 def api_health():
-    return jsonify(ok=True, role=NODE_ROLE, ts=int(time.time())), 200
+    return jsonify({
+        "ok": True,
+        "role": NODE_ROLE,
+        "chain_height": int(CHAIN_META.get("height") or 0),
+        "last_hash": CHAIN_META.get("last_hash") or "0" * 64,
+        "ts": int(time.time())
+    }), 200
 
 
 @app.route("/api/replica_health")
@@ -10218,12 +10280,14 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
         "autopilot": "Autopilot",
         "parking": "Parking",
         "music": "Music",
+        "mining": "Mining Reward",
         "mint": "Token Mint",
         "burn": "Token Burn",
         "gateway": "Gateway",
     }
 
     for norm in _tx_feed():
+        norm = normalize_history_item(dict(norm))
         parties = set(norm.get("parties") or [])
         if thr_addr not in parties and thr_addr not in {norm.get("from"), norm.get("to")}:  # type: ignore[arg-type]
             continue
@@ -10290,6 +10354,7 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
                     "bridge": "bridge",
                     "l2e": "l2e",
                     "ai_credits": "ai_credits",
+                    "ai_credit": "ai_credits",
                     "iot": "iot",
                     "autopilot": "iot",
                     "parking": "iot",
@@ -10352,6 +10417,33 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
             "decimals": decimals,
             "decimals_is_default": norm.get("decimals_is_default", False) or token_meta.get("decimals_is_default", False),
         })
+
+    for block in get_blocks_for_viewer():
+        miner_addr = block.get("thr_address") or block.get("miner_address") or block.get("miner")
+        if not miner_addr or miner_addr != thr_addr:
+            continue
+        history.append(normalize_history_item({
+            "kind": "mining_reward",
+            "type": "mining_reward",
+            "category": "mining",
+            "category_label": category_labels.get("mining", "Mining Reward"),
+            "asset_symbol": "THR",
+            "symbol": "THR",
+            "amount_in": float(block.get("reward_to_miner", block.get("reward", 0.0)) or 0.0),
+            "amount_out": None,
+            "amounts": None,
+            "subtype": "mining",
+            "fee_burned": block.get("fee_burned", 0.0),
+            "status": "confirmed",
+            "timestamp": block.get("timestamp"),
+            "note": "Mining reward",
+            "direction": "in",
+            "display_amount": float(block.get("reward_to_miner", block.get("reward", 0.0)) or 0.0),
+            "decimals": 6,
+            "block_hash": block.get("block_hash"),
+            "height": block.get("index"),
+            "thr_address": miner_addr,
+        }))
 
     history.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
     return history

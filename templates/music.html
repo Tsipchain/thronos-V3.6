@@ -1506,6 +1506,49 @@ async function playPlaylist(playlistId, shuffleMode = false) {
     }
 }
 
+/**
+ * Repair media URLs that reference localhost:5000 to use current origin
+ */
+function repairMediaUrl(url) {
+    if (!url || typeof url !== 'string') return url;
+
+    try {
+        // If URL starts with localhost:5000, replace with current origin
+        if (url.startsWith('http://localhost:5000/') || url.startsWith('https://localhost:5000/')) {
+            const urlObj = new URL(url);
+            return window.location.origin + urlObj.pathname + urlObj.search + urlObj.hash;
+        }
+
+        // If it's already relative, leave it
+        if (url.startsWith('/')) {
+            return url;
+        }
+
+        return url;
+    } catch (e) {
+        console.warn('Failed to repair URL:', url, e);
+        return url;
+    }
+}
+
+/**
+ * Repair all media URLs in a track object
+ */
+function repairTrackUrls(track) {
+    if (!track) return track;
+
+    const repaired = { ...track };
+
+    // Repair common media URL fields
+    ['audio_url', 'cover_url', 'image_url', 'logo_url', 'thumbnail_url'].forEach(field => {
+        if (repaired[field]) {
+            repaired[field] = repairMediaUrl(repaired[field]);
+        }
+    });
+
+    return repaired;
+}
+
 async function loadOfflineTracks() {
     const wallet = localStorage.getItem('thr_address');
     if (!wallet) {
@@ -1519,15 +1562,18 @@ async function loadOfflineTracks() {
         const data = await res.json();
 
         if (data.ok && data.tracks && data.tracks.length > 0) {
-            offlineTracks = data.tracks;
+            // Repair URLs before storing and rendering
+            offlineTracks = data.tracks.map(repairTrackUrls);
             document.getElementById('offlineEmpty').style.display = 'none';
-            renderTracks(data.tracks, 'offlineTracksGrid');
+            renderTracks(offlineTracks, 'offlineTracksGrid');
         } else {
             document.getElementById('offlineTracksGrid').innerHTML = '';
             document.getElementById('offlineEmpty').style.display = 'block';
         }
     } catch (e) {
         console.error('Error loading offline tracks:', e);
+        document.getElementById('offlineTracksGrid').innerHTML = '';
+        document.getElementById('offlineEmpty').style.display = 'block';
     }
 }
 

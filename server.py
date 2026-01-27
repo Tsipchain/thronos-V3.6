@@ -539,6 +539,12 @@ WALLET_DATA_CACHE: dict = {}  # {wallet_addr: {"ts": timestamp, "data": dict, "t
 WALLET_DATA_CACHE_TTL = float(os.getenv("WALLET_DATA_CACHE_TTL_SECONDS", "10"))  # Cache wallet data for 10 seconds
 LAST_BLOCK_SNAPSHOT: dict = {}
 MINING_LAST_HASH_CACHE: dict = {"ts": 0.0, "data": None}
+CHAIN_META = {"height": 0, "last_hash": "0" * 64, "last_block": None}
+
+def set_chain_meta(height, last_hash, last_block):
+    CHAIN_META["height"] = height if height is not None else 0
+    CHAIN_META["last_hash"] = last_hash or "0" * 64
+    CHAIN_META["last_block"] = last_block
 
 # ─── PR-182: Multi-Node Role Configuration ────────────────────────────────
 # Node role: "master" or "replica"
@@ -619,7 +625,7 @@ def should_sync_ai_models() -> bool:
     """Check if AI model sync should run on this node (master or ai_core)"""
     return (is_master() or is_ai_core()) and bool(os.getenv("OPENAI_API_KEY"))
 
-def call_ai_core(path: str, payload: dict, timeout: int = 60) -> dict | None:
+def call_ai_core(path: str, payload: dict, timeout: int = 2) -> dict | None:
     """
     Call AI core service for LLM operations (Node 4).
 
@@ -634,6 +640,7 @@ def call_ai_core(path: str, payload: dict, timeout: int = 60) -> dict | None:
     Raises:
         Nothing - returns None on error for graceful fallback
     """
+    timeout = 2
     if not AI_CORE_URL:
         logger.warning("[AI_CORE] AI_CORE_URL not configured, cannot proxy to Node 4")
         return None
@@ -641,7 +648,7 @@ def call_ai_core(path: str, payload: dict, timeout: int = 60) -> dict | None:
     url = f"{AI_CORE_URL.rstrip('/')}/{path.lstrip('/')}"
     try:
         logger.info(f"[AI_CORE] Proxying to {url}")
-        response = requests.post(url, json=payload, timeout=timeout, headers={
+        response = requests.post(url, json=payload, timeout=2, headers={
             "X-Admin-Secret": ADMIN_SECRET,
             "Content-Type": "application/json"
         })
@@ -685,7 +692,8 @@ INDEX_REBUILD_LOCK  = os.path.join(DATA_DIR, "index_rebuild.lock")
 
 # Active peers tracking (for replicas heartbeating to master)
 PEER_TTL_SECONDS = 60  # Peers expire after 60 seconds without heartbeat
-active_peers = {}  # {peer_id: {"last_seen": timestamp, "url": replica_url}}
+PEERS = {}  # {url: {"url": url, "node_role": role, "height": int, "last_seen": ts}}
+active_peers = PEERS  # Backward-compatible alias
 
 # AI commerce
 AI_PACKS_FILE       = os.path.join(DATA_DIR, "ai_packs.json")
@@ -1194,7 +1202,7 @@ def call_claude(model: str, messages: list[dict], max_tokens: int = 2048, temper
             "https://api.anthropic.com/v1/messages",
             headers=headers,
             json=payload,
-            timeout=30,
+            timeout=2,
         )
     except requests.Timeout:
         app.logger.error("Claude timeout", extra={"model": model})
@@ -1239,7 +1247,7 @@ def call_openai_chat(model: str, messages: list[dict], max_tokens: int = 2048, t
             "https://api.openai.com/v1/chat/completions",
             headers=headers,
             json=payload,
-            timeout=30,
+            timeout=2,
         )
     except requests.Timeout:
         app.logger.error("OpenAI timeout", extra={"model": model})
@@ -1278,7 +1286,7 @@ def call_gemini_chat(model: str, messages: list[dict], max_tokens: int = 1024, t
         "generationConfig": {"maxOutputTokens": max_tokens, "temperature": temperature},
     }
     try:
-        resp = requests.post(url, params=params, json=body, timeout=30)
+        resp = requests.post(url, params=params, json=body, timeout=2)
     except requests.Timeout:
         app.logger.error("Gemini timeout", extra={"model": model})
         raise
@@ -1337,7 +1345,7 @@ def refresh_model_catalog(force: bool = False) -> dict:
             res = requests.get(
                 "https://api.openai.com/v1/models",
                 headers={"Authorization": f"Bearer {openai_api_key}"},
-                timeout=8,
+                timeout=2,
             )
             if res.status_code == 200:
                 data = res.json().get("data", [])
@@ -1896,6 +1904,22 @@ def load_json(path, default):
         if ledger_data or USE_SQLITE_LEDGER:
             return ledger_data
     return _load_json_file(path, default)
+
+
+def _seed_chain_meta():
+    try:
+        snapshot = load_json(LAST_BLOCK_FILE, {})
+    except Exception:
+        snapshot = {}
+    if isinstance(snapshot, dict) and snapshot:
+        set_chain_meta(
+            snapshot.get("height", 0),
+            snapshot.get("block_hash") or snapshot.get("last_hash"),
+            snapshot,
+        )
+
+
+_seed_chain_meta()
 
 
 def save_json(path, data):
@@ -4181,7 +4205,7 @@ def broadcast_tx(tx: dict) -> None:
         try:
             # ensure trailing slash is not duplicated
             url = peer.rstrip("/") + "/api/v1/receive_tx"
-            requests.post(url, json=tx, timeout=3)
+            requests.post(url, json=tx, timeout=2)
         except Exception:
             pass
 
@@ -4194,7 +4218,7 @@ def broadcast_block(block: dict) -> None:
     for peer in peers:
         try:
             url = peer.rstrip("/") + "/api/v1/receive_block"
-            requests.post(url, json=block, timeout=3)
+            requests.post(url, json=block, timeout=2)
         except Exception:
             pass
 
@@ -4983,6 +5007,11 @@ def update_last_block(entry, is_block=True):
     save_json(LAST_BLOCK_FILE, summary)
     LAST_BLOCK_SNAPSHOT.clear()
     LAST_BLOCK_SNAPSHOT.update(summary)
+    set_chain_meta(
+        summary.get("height"),
+        summary.get("block_hash"),
+        summary,
+    )
     LAST_HASH_CACHE.update({
         "ts": time.time(),
         "data": {
@@ -5006,6 +5035,11 @@ def get_last_block_snapshot() -> dict:
             logger.error("Failed to rebuild last block snapshot: %s", exc)
     if isinstance(snapshot, dict):
         LAST_BLOCK_SNAPSHOT.update(snapshot)
+        set_chain_meta(
+            snapshot.get("height"),
+            snapshot.get("block_hash") or snapshot.get("last_hash"),
+            snapshot,
+        )
     return LAST_BLOCK_SNAPSHOT
 
 def verify_btc_payment(btc_address, min_amount=MIN_AMOUNT):
@@ -7138,36 +7172,12 @@ def get_chain():
 
 @app.route("/last_block")
 def api_last_block():
-    return jsonify(load_json(LAST_BLOCK_FILE, {})), 200
+    blk = CHAIN_META.get("last_block")
+    return jsonify(ok=True, block=blk), 200
 
-@app.route("/last_block_hash")
+@app.route("/last_block_hash", methods=["GET"], endpoint="last_block_hash")
 def last_block_hash():
-    start = time.time()
-    now = time.time()
-    cached = MINING_LAST_HASH_CACHE.get("data")
-    if cached and now - MINING_LAST_HASH_CACHE.get("ts", 0.0) < 1.0:
-        logger.debug("mining.last_block_hash ms=%s source=cache", int((time.time() - start) * 1000))
-        return jsonify(cached)
-
-    source = "local"
-    last = get_last_block_snapshot()
-    last_hash = last.get("block_hash") or "0" * 64
-    height = last.get("height")
-    timestamp = last.get("timestamp")
-    target = get_mining_target()
-    nbits = target_to_bits(target)
-    payload = {
-        "block_hash": last_hash,
-        "last_hash": last_hash,
-        "height": height if height is not None else -1,
-        "timestamp": timestamp,
-        "target": hex(target),
-        "nbits": hex(nbits),
-    }
-
-    MINING_LAST_HASH_CACHE.update({"ts": now, "data": payload})
-    logger.debug("mining.last_block_hash ms=%s source=%s", int((time.time() - start) * 1000), source)
-    return jsonify(payload)
+    return CHAIN_META.get("last_hash") or "0" * 64
 
 @app.route("/mining_info")
 def mining_info():
@@ -7296,7 +7306,7 @@ def wallets_count():
     return jsonify({"count": wallet_count})
 
 
-@app.route("/api/dashboard")
+@app.route("/api/dashboard", endpoint="api_dashboard")
 def api_dashboard():
     """
     Fast dashboard stats using cached telemetry (NEW - Performance).
@@ -7477,54 +7487,29 @@ def api_admin_reindex():
 
 def cleanup_expired_peers():
     """Remove peers that haven't sent heartbeat in PEER_TTL_SECONDS"""
-    global active_peers
+    global PEERS
     now = _now_ts()
-    expired = [peer_id for peer_id, data in active_peers.items()
+    expired = [peer_id for peer_id, data in PEERS.items()
                if now - data.get("last_seen", 0) > PEER_TTL_SECONDS]
     for peer_id in expired:
-        del active_peers[peer_id]
+        del PEERS[peer_id]
     return len(expired)
 
-@app.route("/api/peers/heartbeat", methods=["POST"])
+@app.route("/api/peers/heartbeat", methods=["POST"], endpoint="api_peers_heartbeat")
 def peers_heartbeat():
-    """
-    Replica nodes send heartbeat to master with their peer_id and URL.
-    Master tracks active replicas with TTL of 60 seconds.
-    Fast response (<1-2s) with clear status information.
-    """
-    if NODE_ROLE != "master":
-        return jsonify({"error": "Heartbeats only accepted on master node"}), 403
+    data = request.get_json(silent=True) or {}
+    url = data.get("url")
+    if not url:
+        return jsonify(ok=False, error="missing url"), 400
 
-    data = request.get_json() or {}
-    peer_id = data.get("peer_id") or data.get("node_name")
-    peer_url = data.get("url")
-    peer_role = data.get("role") or data.get("node_role") or "replica"
-    peer_height = data.get("height")
-
-    if not peer_id:
-        return jsonify({"error": "peer_id required"}), 400
-
-    # Update peer tracking
-    active_peers[peer_id] = {
-        "last_seen": _now_ts(),
-        "url": peer_url or "unknown",
-        "node_role": peer_role,
-        "height": peer_height,
+    PEERS[url] = {
+        "url": url,
+        "node_role": data.get("node_role", "replica"),
+        "height": int(data.get("height", -1) or -1),
+        "last_seen": int(time.time()),
     }
-
-    cleanup_expired_peers()
-
-    # Heartbeat should be FAST (<100ms) - no expensive operations
-    # Replica nodes call this every 30s, so we must not load CHAIN_FILE here
-    # (use /api/network_live or /api/network_stats for blockchain height)
-    return jsonify({
-        "ok": True,
-        "role": NODE_ROLE,
-        "peer_id": peer_id,
-        "active_peers": len(active_peers),
-        "peers": list(active_peers.values()),
-        "ttl_seconds": PEER_TTL_SECONDS
-    }), 200
+    peers = list(PEERS.values())
+    return jsonify(ok=True, role=NODE_ROLE, active_peers=len(peers), peers=peers, ttl_seconds=60), 200
 
 @app.route("/api/peers/active", methods=["GET"])
 def peers_active():
@@ -7766,87 +7751,9 @@ def api_transactions():
     return jsonify(get_transactions_for_viewer()), 200
 
 
-@app.route("/api/health")
+@app.route("/api/health", methods=["GET"], endpoint="api_health")
 def api_health():
-    """
-    Lightweight health check with chain and version info.
-    FIX 1: Extended with build info for deployment verification.
-    FIX 2: Removed expensive chain loading - health checks must be <100ms.
-    FIX 3: Use in-memory LAST_BLOCK_SNAPSHOT for height (no disk I/O).
-
-    Railway/Vercel health checks run every 2-3 seconds. Loading CHAIN_FILE
-    (10MB+) on every check causes severe performance degradation and timeouts.
-    """
-    # Use in-memory cached last block snapshot (no disk I/O, <1ms)
-    last_block = get_last_block_snapshot()
-    height = last_block.get("height", "N/A")
-
-    # CRITICAL FIX #3: Get git commit from env vars (Railway, Vercel, etc) or git command
-    git_commit = "unknown"
-    checked_env = []
-
-    # Try environment variables first (Railway, Vercel, etc)
-    env_vars = ["RAILWAY_GIT_COMMIT_SHA", "GIT_COMMIT", "COMMIT_SHA", "VERCEL_GIT_COMMIT_SHA"]
-    for env_var in env_vars:
-        checked_env.append(env_var)
-        commit_sha = os.getenv(env_var)
-        if commit_sha:
-            # Take first 7 chars for short hash
-            git_commit = commit_sha[:7] if len(commit_sha) > 7 else commit_sha
-            break
-
-    # Fallback: try git command (for local dev)
-    # DISABLED: Git subprocess can hang on Railway/Vercel causing health check timeouts
-    # if git_commit == "unknown":
-    #     try:
-    #         import subprocess
-    #         result = subprocess.run(
-    #             ["git", "rev-parse", "--short", "HEAD"],
-    #             capture_output=True,
-    #             text=True,
-    #             timeout=2,
-    #             cwd=os.path.dirname(os.path.abspath(__file__))
-    #         )
-    #         if result.returncode == 0:
-    #             git_commit = result.stdout.strip()
-    #     except Exception:
-    #         pass
-
-    # FIX 1: Build metadata
-    # DISABLED: File system operations can be slow on networked filesystems
-    # build_time = os.path.getmtime(__file__) if os.path.exists(__file__) else None
-    build_time = None  # Disabled to keep health check fast
-    build_id = f"{git_commit}"  # No timestamp to avoid filesystem access
-
-    build_info = {
-        "git_commit": git_commit,
-        "build_id": build_id,
-        "checked_env": checked_env,  # Show which env vars we checked
-        "build_time": build_time,
-        "DATA_DIR": os.getenv("DATA_DIR", "/app/data"),
-        "node_role": os.getenv("NODE_ROLE", "standalone"),
-        "degraded_mode_enabled": True  # Always use degraded mode patterns
-    }
-
-    # FIX 1: Env presence check (names only, no secrets)
-    env_present = {
-        "OPENAI_API_KEY": bool(os.getenv("OPENAI_API_KEY")),
-        "OPENAI_KEY": bool(os.getenv("OPENAI_KEY")),
-        "ANTHROPIC_API_KEY": bool(os.getenv("ANTHROPIC_API_KEY")),
-        "GEMINI_API_KEY": bool(os.getenv("GEMINI_API_KEY")),
-        "GOOGLE_API_KEY": bool(os.getenv("GOOGLE_API_KEY")),
-        "DATA_DIR": bool(os.getenv("DATA_DIR"))
-    }
-
-    return jsonify({
-        "ok": True,
-        "version": APP_VERSION,
-        "chain_height": height,
-        "api_base": API_BASE_PREFIX,
-        "time": datetime.utcnow().isoformat(timespec="seconds") + "Z",
-        "build": build_info,
-        "env_present": env_present
-    }), 200
+    return jsonify(ok=True, role=NODE_ROLE, ts=int(time.time())), 200
 
 
 @app.route("/api/replica_health")
@@ -12276,7 +12183,7 @@ def fetch_btc_price():
         resp = requests.get(
             "https://api.coingecko.com/api/v3/simple/price",
             params={"ids": "bitcoin", "vs_currencies": "usd,eur"},
-            timeout=5
+            timeout=2
         )
         if resp.status_code == 200:
             data = resp.json().get("bitcoin", {})
@@ -14278,20 +14185,8 @@ def api_v1_receive_block():
     return jsonify(status="added"), 201
 
 # ─── SCHEDULER ─────────────────────────────────────
-# PR-182: Start scheduler based on NODE_ROLE and SCHEDULER_ENABLED
-# - Master nodes: run chain maintenance jobs (minting, mempool, aggregator)
-# - Replica nodes: can run worker jobs if SCHEDULER_ENABLED=1 (e.g., BTC watcher)
-# - AI Core nodes: run only AI-related jobs (NO chain jobs)
-if is_ai_core() and should_run_schedulers():
-    print(f"[SCHEDULER] Starting as AI_CORE node (SCHEDULER_ENABLED={SCHEDULER_ENABLED})")
-    scheduler=BackgroundScheduler(daemon=True)
-    # AI Core only runs AI jobs (no chain, no mining, no mempool)
-    scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30)
-    scheduler.add_job(distribute_ai_rewards_step, "interval", minutes=int(os.getenv("AI_POOL_DISTRIBUTION_INTERVAL", "30")))
-    scheduler.start()
-    _active_schedulers.append(scheduler)
-    print(f"[SCHEDULER] AI Core jobs started (knowledge watcher, rewards distribution)")
-elif is_master() and should_run_schedulers() and ENABLE_CHAIN:
+# Start scheduler only on master nodes.
+if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
     print(f"[SCHEDULER] Starting as MASTER node (SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")
     scheduler=BackgroundScheduler(daemon=True)
 
@@ -14312,22 +14207,6 @@ elif is_master() and should_run_schedulers() and ENABLE_CHAIN:
     scheduler.start()
     _active_schedulers.append(scheduler)
     print(f"[SCHEDULER] All master jobs started (including telemetry cache, AI rewards distribution)")
-elif is_replica() and SCHEDULER_ENABLED and ENABLE_CHAIN:
-    print(f"[SCHEDULER] Starting as REPLICA node with worker jobs (SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")
-    scheduler=BackgroundScheduler(daemon=True)
-
-    # PR-183: Add BTC pledge watcher for replica nodes
-    try:
-        from btc_pledge_watcher import watch_btc_pledges
-        # Run every 60 seconds to check for new BTC pledges
-        scheduler.add_job(watch_btc_pledges, "interval", seconds=60, id="btc_pledge_watcher")
-        print(f"[SCHEDULER] Added BTC pledge watcher job (every 60s)")
-    except ImportError as e:
-        print(f"[SCHEDULER] BTC pledge watcher not available: {e}")
-
-    scheduler.start()
-    _active_schedulers.append(scheduler)
-    print(f"[SCHEDULER] Replica scheduler started with worker jobs")
 else:
     print(f"[SCHEDULER] Scheduler disabled (NODE_ROLE={NODE_ROLE}, SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")
     scheduler = None
@@ -14374,7 +14253,7 @@ if is_replica() and HEARTBEAT_ENABLED:
                 height = -1
                 try:
                     if READ_ONLY:
-                        health_response = requests.get(f"{MASTER_INTERNAL_URL}/api/health", timeout=3)
+                        health_response = requests.get(f"{MASTER_INTERNAL_URL}/api/health", timeout=2)
                         if health_response.ok:
                             height = int(health_response.json().get("chain_height", -1))
                     else:
@@ -14387,7 +14266,7 @@ if is_replica() and HEARTBEAT_ENABLED:
                     json={
                         "peer_id": peer_id,
                         "url": replica_url,
-                        "role": NODE_ROLE,
+                        "node_role": NODE_ROLE,
                         "height": height,
                         "timestamp": int(time.time())
                     },
@@ -14395,7 +14274,7 @@ if is_replica() and HEARTBEAT_ENABLED:
                         "X-Admin-Secret": ADMIN_SECRET,
                         "Content-Type": "application/json",
                     },
-                    timeout=10
+                    timeout=2
                 )
                 response_body = response.text[:500]
                 print(f"[HEARTBEAT] Master response status={response.status_code} body={response_body}")
@@ -18973,7 +18852,7 @@ MUSIC_SESSIONS_FILE = os.path.join(DATA_DIR, "music_sessions.json")
 MUSIC_GPS_FILE = os.path.join(DATA_DIR, "music_gps_telemetry.json")
 
 
-def _proxy_music_request(path: str, payload: dict | None = None, timeout: int = 5):
+def _proxy_music_request(path: str, payload: dict | None = None, timeout: int = 2):
     if not READ_ONLY:
         return None
     if MASTER_INTERNAL_URL.startswith("http://localhost"):
@@ -18982,7 +18861,7 @@ def _proxy_music_request(path: str, payload: dict | None = None, timeout: int = 
         response = requests.post(
             f"{MASTER_INTERNAL_URL}{path}",
             json=payload or {},
-            timeout=timeout,
+            timeout=2,
         )
         return response
     except Exception as exc:
@@ -20452,7 +20331,7 @@ def api_v1_nfts():
     """Get all NFTs"""
     if READ_ONLY and not MASTER_INTERNAL_URL.startswith("http://localhost"):
         try:
-            response = requests.get(f"{MASTER_INTERNAL_URL}/api/v1/nfts", timeout=5)
+            response = requests.get(f"{MASTER_INTERNAL_URL}/api/v1/nfts", timeout=2)
             if response.ok:
                 data = response.json()
                 nfts = data.get("nfts", [])

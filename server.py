@@ -19181,51 +19181,63 @@ def api_music_gps_telemetry():
 
 @app.route("/api/music/tracks")
 def api_music_tracks_compact():
-    """Compact alias for the v1 tracks endpoint."""
+    """Compact alias for the v1 tracks endpoint. Always returns valid JSON."""
     try:
         limit = int(request.args.get("limit", 25))
     except Exception:
         limit = 25
 
-    registry = load_music_registry()
-    tracks = [enrich_track_media(t) for t in registry.get("tracks", []) if t.get("published", True)]
-    tracks.sort(key=lambda t: t.get("uploaded_at", ""), reverse=True)
-    for t in tracks:
-        t["play_count"] = len(registry.get("plays", {}).get(t.get("id"), []))
-    return jsonify({"ok": True, "tracks": tracks[:limit], "total": len(tracks)}), 200
+    try:
+        registry = load_music_registry()
+        tracks = [enrich_track_media(t) for t in registry.get("tracks", []) if t.get("published", True)]
+        tracks.sort(key=lambda t: t.get("uploaded_at", ""), reverse=True)
+        for t in tracks:
+            t["play_count"] = len(registry.get("plays", {}).get(t.get("id"), []))
+        return jsonify({"ok": True, "tracks": tracks[:limit], "total": len(tracks)}), 200
+    except Exception as e:
+        logger.exception("Failed to load music tracks")
+        return jsonify({"ok": True, "tracks": [], "total": 0, "error": str(e)}), 200
 
 
 @app.route("/api/v1/music/tracks")
 def api_v1_music_tracks():
-    """Get all published tracks"""
-    registry = load_music_registry()
-    tracks = [enrich_track_media(t) for t in registry["tracks"] if t.get("published", True)]
-    # Add play counts
-    for track in tracks:
-        track["play_count"] = len(registry["plays"].get(track["id"], []))
-    # Sort by newest first
-    tracks.sort(key=lambda t: t.get("uploaded_at", ""), reverse=True)
-    return jsonify({"status": "success", "tracks": tracks}), 200
+    """Get all published tracks. Always returns valid JSON."""
+    try:
+        registry = load_music_registry()
+        tracks = [enrich_track_media(t) for t in registry.get("tracks", []) if t.get("published", True)]
+        # Add play counts
+        for track in tracks:
+            track["play_count"] = len(registry.get("plays", {}).get(track.get("id"), []))
+        # Sort by newest first
+        tracks.sort(key=lambda t: t.get("uploaded_at", ""), reverse=True)
+        return jsonify({"status": "success", "tracks": tracks}), 200
+    except Exception as e:
+        logger.exception("Failed to load v1 music tracks")
+        return jsonify({"status": "success", "tracks": [], "error": str(e)}), 200
 
 
 @app.route("/api/v1/music/tracks/trending")
 @app.route("/api/music/tracks/trending")
 def api_v1_music_trending():
-    """Get trending tracks (most plays in last 7 days)"""
-    registry = load_music_registry()
-    tracks = [enrich_track_media(t) for t in registry["tracks"] if t.get("published", True)]
+    """Get trending tracks (most plays in last 7 days). Always returns valid JSON."""
+    try:
+        registry = load_music_registry()
+        tracks = [enrich_track_media(t) for t in registry.get("tracks", []) if t.get("published", True)]
 
-    # Calculate recent play counts
-    week_ago = time.time() - (7 * 24 * 60 * 60)
-    for track in tracks:
-        recent_plays = [p for p in registry["plays"].get(track["id"], [])
-                       if float(p.get("timestamp", 0)) > week_ago]
-        track["recent_plays"] = len(recent_plays)
-        track["play_count"] = len(registry["plays"].get(track["id"], []))
+        # Calculate recent play counts
+        week_ago = time.time() - (7 * 24 * 60 * 60)
+        for track in tracks:
+            recent_plays = [p for p in registry.get("plays", {}).get(track.get("id"), [])
+                           if float(p.get("timestamp", 0)) > week_ago]
+            track["recent_plays"] = len(recent_plays)
+            track["play_count"] = len(registry.get("plays", {}).get(track.get("id"), []))
 
-    # Sort by recent plays
-    tracks.sort(key=lambda t: t.get("recent_plays", 0), reverse=True)
-    return jsonify({"status": "success", "tracks": tracks[:20]}), 200
+        # Sort by recent plays
+        tracks.sort(key=lambda t: t.get("recent_plays", 0), reverse=True)
+        return jsonify({"status": "success", "tracks": tracks[:20]}), 200
+    except Exception as e:
+        logger.exception("Failed to load trending tracks")
+        return jsonify({"status": "success", "tracks": [], "error": str(e)}), 200
 
 
 @app.route("/api/v1/music/artist/<artist_address>")

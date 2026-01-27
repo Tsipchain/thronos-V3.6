@@ -693,13 +693,12 @@
             }
 
             // Create via API
-            const res = await fetch('/api/music/playlist/update', {
+            const res = await fetch('/api/music/playlists', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     address: address,
-                    action: 'create',
-                    name: name.trim(),
+                    title: name.trim(),
                     auth_secret: authSecret
                 })
             });

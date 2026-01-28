@@ -6115,29 +6115,21 @@ def api_wallet_mining_stats():
     }), 200
 
 
-@app.route("/api/wallet/history", methods=["GET"])
-def api_wallet_history():
-    """
-    Get wallet transaction history with category grouping and summaries (Phase 4).
+def _collect_wallet_history_transactions(address: str, category_filter: str):
+    # Get all transactions
+    chain = load_json(CHAIN_FILE, [])
+    blocks = get_blocks_for_viewer()
 
-    Query params:
-    - address: THR address
-    - category: Optional filter (mining, ai_reward, music_tip, iot_telemetry, etc.)
+    # Collect transactions involving this address
+    wallet_txs = []
 
-    Returns:
-    - transactions: List of transactions
-    - summary: Category breakdown with totals
-    """
-    address = request.args.get("address", "").strip()
-    category_filter = request.args.get("category", "").strip().lower()
-
-    if not address:
-        return jsonify({"ok": False, "error": "Address required"}), 400
-
-    try:
-        # Get all transactions
-        chain = load_json(CHAIN_FILE, [])
-        blocks = get_blocks_for_viewer()
+    # 1. Regular chain transactions (skip mining rewards here)
+    for tx in chain:
+        if not isinstance(tx, dict):
+            continue
+        tx_type = (tx.get("type") or tx.get("kind") or "").lower()
+        if tx_type in ["coinbase", "mining_reward", "mint"]:
+            continue
 
         # Collect transactions involving this address
         wallet_txs = []
@@ -6156,107 +6148,180 @@ def api_wallet_history():
                 tx_copy["category"] = _categorize_transaction(tx)
                 tx_copy = normalize_history_item(tx_copy)
 
-                # Determine direction
-                if tx_to and tx_to.lower() == address.lower():
+    # 2. Block mining rewards
+    mining_ids = set()
+    for block in blocks:
+        block_txs = block.get("transactions", [])
+        for tx in block_txs:
+            if tx.get("type") in ["coinbase", "mining_reward", "mint"]:
+                miner_addr = tx.get("to") or tx.get("thr_address")
+                if miner_addr and miner_addr.lower() == address.lower():
+                    reward_id = f"reward:{block.get('block_hash')}:{miner_addr}"
+                    if reward_id in mining_ids:
+                        continue
+                    mining_ids.add(reward_id)
+                    tx_copy = dict(tx)
+                    tx_copy["kind"] = "mining_reward"
+                    tx_copy["type"] = "mining_reward"
+                    tx_copy["category"] = "mining"
+                    tx_copy["asset_symbol"] = "THR"
+                    tx_copy["symbol"] = "THR"
+                    tx_copy["from"] = tx_copy.get("from") or "COINBASE"
+                    tx_copy["to"] = miner_addr
                     tx_copy["direction"] = "received"
-                elif tx_from and tx_from.lower() == address.lower():
-                    tx_copy["direction"] = "sent"
-                else:
-                    tx_copy["direction"] = "related"
-
-                wallet_txs.append(tx_copy)
-
-        # 2. Block mining rewards
-        for block in blocks:
-            block_txs = block.get("transactions", [])
-            for tx in block_txs:
-                if tx.get("type") in ["coinbase", "mining_reward", "mint"]:
-                    miner_addr = tx.get("to") or tx.get("thr_address")
-                    if miner_addr and miner_addr.lower() == address.lower():
-                        tx_copy = dict(tx)
-                        tx_copy["category"] = "mining"
-                        tx_copy = normalize_history_item(tx_copy)
-                        tx_copy["direction"] = "received"
-                        tx_copy["block_height"] = block.get("index")
-                        wallet_txs.append(tx_copy)
-            block_miner = block.get("thr_address") or block.get("miner_address") or block.get("miner")
-            if block_miner and str(block_miner).lower() == address.lower():
-                wallet_txs.append(normalize_history_item({
-                    "kind": "mining_reward",
-                    "type": "mining_reward",
-                    "category": "mining",
-                    "direction": "received",
-                    "amount": float(block.get("reward_to_miner", block.get("reward", 0.0)) or 0.0),
-                    "timestamp": block.get("timestamp"),
+                    tx_copy["block_height"] = block.get("index")
+                    tx_copy["block_hash"] = block.get("block_hash")
+                    tx_copy["id"] = reward_id
+                    tx_copy["meta"] = {
+                        "block_height": block.get("index"),
+                        "block_hash": block.get("block_hash"),
+                        "fee_burned": block.get("fee_burned"),
+                        "reward_to_miner": block.get("reward_to_miner", block.get("reward")),
+                        "reward_to_ai": block.get("reward_to_ai"),
+                        "source": "stratum" if block.get("is_stratum") else "legacy",
+                    }
+                    tx_copy = normalize_history_item(tx_copy)
+                    wallet_txs.append(tx_copy)
+        block_miner = block.get("thr_address") or block.get("miner_address") or block.get("miner")
+        if block_miner and str(block_miner).lower() == address.lower():
+            reward_id = f"reward:{block.get('block_hash')}:{block_miner}"
+            if reward_id in mining_ids:
+                continue
+            mining_ids.add(reward_id)
+            wallet_txs.append(normalize_history_item({
+                "kind": "mining_reward",
+                "type": "mining_reward",
+                "category": "mining",
+                "direction": "received",
+                "from": "COINBASE",
+                "to": block_miner,
+                "asset_symbol": "THR",
+                "symbol": "THR",
+                "amount": float(block.get("reward_to_miner", block.get("reward", 0.0)) or 0.0),
+                "timestamp": block.get("timestamp"),
+                "block_height": block.get("index"),
+                "block_hash": block.get("block_hash"),
+                "thr_address": block_miner,
+                "id": reward_id,
+                "meta": {
                     "block_height": block.get("index"),
                     "block_hash": block.get("block_hash"),
-                    "thr_address": block_miner,
-                }))
+                    "fee_burned": block.get("fee_burned"),
+                    "reward_to_miner": block.get("reward_to_miner", block.get("reward")),
+                    "reward_to_ai": block.get("reward_to_ai"),
+                    "source": "stratum" if block.get("is_stratum") else "legacy",
+                },
+            }))
 
-        # Apply category filter
-        if category_filter:
-            wallet_txs = [tx for tx in wallet_txs if tx.get("category", "").lower() == category_filter]
+    # Apply category filter
+    if category_filter:
+        wallet_txs = [tx for tx in wallet_txs if tx.get("category", "").lower() == category_filter]
 
-        for tx in wallet_txs:
-            for key in ("image_url", "logo_url", "audio_url", "cover_url"):
-                if key in tx:
-                    tx[key] = normalize_media_url(str(tx.get(key) or ""))
+    for tx in wallet_txs:
+        for key in ("image_url", "logo_url", "audio_url", "cover_url"):
+            if key in tx:
+                tx[key] = normalize_media_url(str(tx.get(key) or ""))
 
-        # Calculate category summaries
-        summary = {
-            "total_mining": 0.0,
-            "total_ai_rewards": 0.0,
-            "total_music_tips_sent": 0.0,
-            "total_music_tips_received": 0.0,
-            "total_iot_rewards": 0.0,
-            "total_sent": 0.0,
-            "total_received": 0.0,
-            "mining_count": 0,
-            "ai_reward_count": 0,
-            "music_tip_count": 0,
-            "iot_count": 0
-        }
+    # Sort by timestamp descending
+    wallet_txs.sort(key=lambda t: _parse_timestamp(t.get("timestamp", "")), reverse=True)
 
-        for tx in wallet_txs:
-            category = tx.get("category", "other")
-            direction = tx.get("direction", "related")
-            amount = float(tx.get("amount", 0))
+    # Calculate category summaries
+    summary = {
+        "total_mining": 0.0,
+        "total_ai_rewards": 0.0,
+        "total_music_tips_sent": 0.0,
+        "total_music_tips_received": 0.0,
+        "total_iot_rewards": 0.0,
+        "total_sent": 0.0,
+        "total_received": 0.0,
+        "mining_count": 0,
+        "ai_reward_count": 0,
+        "music_tip_count": 0,
+        "iot_count": 0
+    }
 
-            if category == "mining":
-                summary["total_mining"] += amount
-                summary["mining_count"] += 1
-            elif category == "ai_reward":
-                summary["total_ai_rewards"] += amount
-                summary["ai_reward_count"] += 1
-            elif category == "music_tip":
-                if direction == "sent":
-                    summary["total_music_tips_sent"] += amount
-                elif direction == "received":
-                    summary["total_music_tips_received"] += amount
-                summary["music_tip_count"] += 1
-            elif category == "iot_telemetry":
-                # IoT txs represent work done, rewards come via ai_reward
-                summary["iot_count"] += 1
+    for tx in wallet_txs:
+        category = tx.get("category", "other")
+        direction = tx.get("direction", "related")
+        amount = float(tx.get("amount", 0))
 
-            if direction == "received":
-                summary["total_received"] += amount
-            elif direction == "sent":
-                summary["total_sent"] += amount
+        if category == "mining":
+            summary["total_mining"] += amount
+            summary["mining_count"] += 1
+        elif category == "ai_reward":
+            summary["total_ai_rewards"] += amount
+            summary["ai_reward_count"] += 1
+        elif category == "music_tip":
+            if direction == "sent":
+                summary["total_music_tips_sent"] += amount
+            elif direction == "received":
+                summary["total_music_tips_received"] += amount
+            summary["music_tip_count"] += 1
+        elif category == "iot_telemetry":
+            # IoT txs represent work done, rewards come via ai_reward
+            summary["iot_count"] += 1
 
-        # Round summary values
-        for key in summary:
-            if isinstance(summary[key], float):
-                summary[key] = round(summary[key], 6)
+        if direction == "received":
+            summary["total_received"] += amount
+        elif direction == "sent":
+            summary["total_sent"] += amount
 
-        # Sort by timestamp descending
-        wallet_txs.sort(key=lambda t: _parse_timestamp(t.get("timestamp", "")), reverse=True)
+    # Round summary values
+    for key in summary:
+        if isinstance(summary[key], float):
+            summary[key] = round(summary[key], 6)
 
+    return wallet_txs, summary
+
+
+def _build_wallet_history(address: str, category_filter: str, limit: int, cursor: int):
+    wallet_txs, summary = _collect_wallet_history_transactions(address, category_filter)
+
+    total = len(wallet_txs)
+    paged = wallet_txs[cursor:cursor + limit]
+    next_cursor = cursor + limit if cursor + limit < total else None
+
+    return {
+        "transactions": paged,
+        "summary": summary,
+        "total_transactions": total,
+        "limit": limit,
+        "cursor": cursor,
+        "next_cursor": next_cursor,
+    }
+
+
+@app.route("/api/wallet/history", methods=["GET"])
+def api_wallet_history():
+    """
+    Get wallet transaction history with category grouping and summaries (Phase 4).
+
+    Query params:
+    - address: THR address
+    - category: Optional filter (mining, ai_reward, music_tip, iot_telemetry, etc.)
+    - limit: Max entries to return (default 200)
+    - cursor: Offset cursor for pagination
+    """
+    address = (request.args.get("address") or request.args.get("wallet") or "").strip()
+    category_filter = request.args.get("category", "").strip().lower()
+    try:
+        limit = min(int(request.args.get("limit", 200)), 500)
+    except Exception:
+        limit = 200
+    try:
+        cursor = max(int(request.args.get("cursor", 0)), 0)
+    except Exception:
+        cursor = 0
+
+    if not address:
+        return jsonify({"ok": False, "error": "Address required"}), 400
+
+    try:
+        payload = _build_wallet_history(address, category_filter, limit, cursor)
         return jsonify({
             "ok": True,
             "address": address,
-            "transactions": wallet_txs,
-            "summary": summary,
-            "total_transactions": len(wallet_txs)
+            **payload,
         }), 200
     except Exception as exc:
         logger.error("[wallet_history] failed: %s", exc)
@@ -6279,7 +6344,10 @@ def api_wallet_history():
             "address": address,
             "transactions": [],
             "summary": summary,
-            "total_transactions": 0
+            "total_transactions": 0,
+            "limit": limit,
+            "cursor": cursor,
+            "next_cursor": None,
         }), 200
 
 
@@ -6329,73 +6397,13 @@ def api_v2_wallet_history():
     if not address:
         return jsonify({"ok": False, "error": "Address required"}), 400
 
-    # Get all transactions (use existing logic from /api/wallet/history)
-    chain = load_json(CHAIN_FILE, [])
-    blocks = get_blocks_for_viewer()
-
-    wallet_txs = []
-
-    # Collect chain transactions
-    for tx in chain:
-        if not isinstance(tx, dict):
-            continue
-
-        tx_from = tx.get("from") or tx.get("sender")
-        tx_to = tx.get("to") or tx.get("recipient")
-        tx_address = tx.get("address")
-
-        if address.lower() in [str(tx_from).lower(), str(tx_to).lower(), str(tx_address).lower()]:
-            tx_copy = dict(tx)
-            tx_copy["category"] = _categorize_transaction(tx)
-            tx_copy = normalize_history_item(tx_copy)
-
-            if tx_to and tx_to.lower() == address.lower():
-                tx_copy["direction"] = "received"
-            elif tx_from and tx_from.lower() == address.lower():
-                tx_copy["direction"] = "sent"
-            else:
-                tx_copy["direction"] = "related"
-
-            wallet_txs.append(tx_copy)
-
-    # Add mining rewards
-    for block in blocks:
-        for tx in block.get("transactions", []):
-            if tx.get("type") in ["coinbase", "mining_reward", "mint"]:
-                miner_addr = tx.get("to") or tx.get("thr_address")
-                if miner_addr and miner_addr.lower() == address.lower():
-                    tx_copy = dict(tx)
-                    tx_copy["category"] = "mining"
-                    tx_copy = normalize_history_item(tx_copy)
-                    tx_copy["direction"] = "received"
-                    tx_copy["block_height"] = block.get("index")
-                    wallet_txs.append(tx_copy)
-        block_miner = block.get("thr_address") or block.get("miner_address") or block.get("miner")
-        if block_miner and str(block_miner).lower() == address.lower():
-            wallet_txs.append(normalize_history_item({
-                "kind": "mining_reward",
-                "type": "mining_reward",
-                "category": "mining",
-                "direction": "received",
-                "amount": float(block.get("reward_to_miner", block.get("reward", 0.0)) or 0.0),
-                "timestamp": block.get("timestamp"),
-                "block_height": block.get("index"),
-                "block_hash": block.get("block_hash"),
-                "thr_address": block_miner,
-            }))
-
-    # Apply filters
-    if category_filter:
-        wallet_txs = [tx for tx in wallet_txs if tx.get("category", "").lower() == category_filter]
+    wallet_txs, _summary = _collect_wallet_history_transactions(address, category_filter)
 
     if from_date:
         wallet_txs = [tx for tx in wallet_txs if tx.get("timestamp", "") >= from_date]
 
     if to_date:
         wallet_txs = [tx for tx in wallet_txs if tx.get("timestamp", "") <= to_date]
-
-    # Sort by timestamp descending
-    wallet_txs.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
 
     # Pagination
     total = len(wallet_txs)
@@ -10551,17 +10559,46 @@ def api_history():
     if not thr_addr:
         return jsonify({"ok": False, "error": "Missing wallet address"}), 400
     try:
-        history = build_wallet_history(thr_addr)
-        for entry in history:
-            for key in ("image_url", "logo_url", "audio_url", "cover_url"):
-                if key in entry:
-                    entry[key] = normalize_media_url(str(entry.get(key) or ""))
-        if category:
-            history = [entry for entry in history if (entry.get("category") or entry.get("kind") or "").lower() == category]
-        return jsonify({"ok": True, "wallet": thr_addr, "history": history}), 200
+        try:
+            limit = min(int(request.args.get("limit", 200)), 500)
+        except Exception:
+            limit = 200
+        try:
+            cursor = max(int(request.args.get("cursor", 0)), 0)
+        except Exception:
+            cursor = 0
+        payload = _build_wallet_history(thr_addr, category, limit, cursor)
+        return jsonify({
+            "ok": True,
+            "address": thr_addr,
+            **payload,
+        }), 200
     except Exception as exc:
         logger.error("[api_history] failed: %s", exc)
-        return jsonify({"ok": False, "error": "temporary", "wallet": thr_addr, "history": []}), 200
+        summary = {
+            "total_mining": 0.0,
+            "total_ai_rewards": 0.0,
+            "total_music_tips_sent": 0.0,
+            "total_music_tips_received": 0.0,
+            "total_iot_rewards": 0.0,
+            "total_sent": 0.0,
+            "total_received": 0.0,
+            "mining_count": 0,
+            "ai_reward_count": 0,
+            "music_tip_count": 0,
+            "iot_count": 0
+        }
+        return jsonify({
+            "ok": False,
+            "error": "temporary",
+            "address": thr_addr,
+            "transactions": [],
+            "summary": summary,
+            "total_transactions": 0,
+            "limit": 0,
+            "cursor": 0,
+            "next_cursor": None,
+        }), 200
 
 
 def get_token_price_in_thr(symbol):
@@ -19346,6 +19383,7 @@ def api_v1_music_upload():
     title = (request.form.get("title") or "").strip()
     genre = (request.form.get("genre") or "Other").strip()
     description = (request.form.get("description") or "").strip()
+    status = (request.form.get("status") or "published").strip().lower()
     raw_playlist_ids = request.form.getlist("playlist_ids") or []
     if not raw_playlist_ids:
         raw_value = (request.form.get("playlist_ids") or "").strip()
@@ -19397,6 +19435,7 @@ def api_v1_music_upload():
                 cover_file.save(os.path.join(MEDIA_DIR, cover_relative))
 
         # Create track entry
+        published = status == "published"
         track = {
             "id": track_id,
             "title": title,
@@ -19409,7 +19448,8 @@ def api_v1_music_upload():
             "cover_path": cover_relative,
             "cover_url": f"/media/{cover_relative}" if cover_relative else None,
             "uploaded_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-            "published": True,
+            "status": "published" if published else "draft",
+            "published": published,
             "tips_total": 0
         }
 
@@ -20276,6 +20316,27 @@ def api_music_playlists_create():
     except Exception as e:
         app.logger.error(f"Failed to create playlist for {address}: {e}")
         return jsonify({"ok": False, "error": "Failed to create playlist"}), 200
+
+
+@app.route("/api/music/playlists/add_track", methods=["POST"])
+def api_music_playlists_add_track():
+    """Add a track to a playlist (DB-backed)."""
+    data = request.get_json() or {}
+    address = (data.get("address") or "").strip()
+    playlist_id = (data.get("playlist_id") or "").strip()
+    track_id = (data.get("track_id") or "").strip()
+
+    if not playlist_id or not track_id:
+        return jsonify({"ok": False, "error": "playlist_id and track_id required"}), 400
+
+    try:
+        added, message = _add_track_to_playlist(playlist_id, track_id, address or None)
+        if not added:
+            return jsonify({"ok": False, "error": message}), 404
+        return jsonify({"ok": True, "message": "Track added"}), 200
+    except Exception as e:
+        app.logger.error(f"Failed to add track {track_id} to playlist {playlist_id}: {e}")
+        return jsonify({"ok": False, "error": "Failed to add track"}), 200
 
 
 @app.route("/api/music/playlists/<playlist_id>/items", methods=["POST"])

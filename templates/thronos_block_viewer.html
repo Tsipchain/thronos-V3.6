@@ -67,6 +67,7 @@
   <div class="tabs">
     <div class="tab active" data-tab="blocks">Blocks</div>
     <div class="tab" data-tab="txs">Transfers</div>
+    <div class="tab" data-tab="mining">Mining</div>
     <div class="tab" data-tab="mempool">Mempool</div>
     <div class="tab" data-tab="live">Live Stats</div>
     <div class="tab" data-tab="tokens">Tokens</div>
@@ -177,6 +178,35 @@
       <button class="btn" id="btnLoadMoreTxs">Load More Transactions</button>
       <span class="muted small" id="txsShowing"></span>
     </div>
+  </section>
+
+  <!-- Mining -->
+  <section id="view-mining" class="panel" style="display:none;margin-top:12px">
+    <div class="grid" style="margin-bottom:12px">
+      <div class="card">
+        <h4>Total Rewards</h4>
+        <div class="big" id="miningTotalRewards">—</div>
+        <div class="small muted">THR paid to miners</div>
+      </div>
+      <div class="card">
+        <h4>Reward Events</h4>
+        <div class="big" id="miningTotalCount">—</div>
+        <div class="small muted">mining_reward entries</div>
+      </div>
+    </div>
+    <table id="tblMining">
+      <thead>
+        <tr>
+          <th>TX ID</th>
+          <th>Miner</th>
+          <th>Amount</th>
+          <th>Block</th>
+          <th>Fee Burned</th>
+          <th>Timestamp</th>
+        </tr>
+      </thead>
+      <tbody id="miningTableBody"></tbody>
+    </table>
   </section>
 
   <!-- Mempool -->
@@ -382,6 +412,9 @@ const canonicalKind = (kindRaw) => {
   const map = {
     'thr_transfer': 'thr_transfer',
     'transfer': 'thr_transfer',
+    'coinbase': 'mining_reward',
+    'mining_reward': 'mining_reward',
+    'mint': 'mining_reward',
     'pool_swap': 'swap',
     'swap': 'swap',
     'token_transfer': 'token_transfer',
@@ -402,25 +435,20 @@ const CATEGORY_RULES = {
   transfers: {
     label: 'Transfers',
     kinds: [
-      'thr_transfer',
-      'transfer',
+      'token_transfer',
       'swap',
       'bridge',
-      'coinbase',
-      'ai_credits',
-      'token_transfer',
-      'l2e',
-      'iot',
-      'autopilot',
-      'parking',
-      'music',
     ],
     predicate: (tx) => {
       const kind = canonicalKind(tx?.kind || tx?.type);
-      if (kind === 'block') return false;
       if (!tx?.from && !tx?.to) return false;
-      return true;
+      return CATEGORY_RULES.transfers.kinds.includes(kind);
     },
+  },
+  mining: {
+    label: 'Mining',
+    kinds: ['mining_reward'],
+    predicate: (tx) => canonicalKind(tx?.kind || tx?.type) === 'mining_reward',
   },
   tokens: {
     label: 'Tokens',
@@ -446,7 +474,7 @@ const CATEGORY_RULES = {
         'swap',
         'pool_swap',
         'bridge',
-        'coinbase',
+        'mining_reward',
         'ai_credits',
         'token_transfer',
         'l2e',
@@ -501,11 +529,12 @@ document.querySelectorAll('.tab').forEach(t=>{
     document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
     t.classList.add('active');
     const tab = t.dataset.tab;
-    ['blocks','txs','mempool','live','tokens','pools','l2e','music'].forEach(name=>{
+    ['blocks','txs','mining','mempool','live','tokens','pools','l2e','music'].forEach(name=>{
       el('#view-'+name).style.display = (name===tab)?'block':'none';
     });
     // Load data for the selected tab
     if(tab==='txs' && window.THROnosViewer) window.THROnosViewer.initTransfersTab();
+    if(tab==='mining') renderMining(CURRENT_TXS);
     if(tab==='tokens') loadTokens();
     if(tab==='pools') loadPools();
     if(tab==='l2e') loadL2E();
@@ -675,12 +704,7 @@ function renderTxs(list){
     let typeBadge = '<span class="badge b-legacy">transfer</span>';
     if(kind === 'swap') typeBadge = '<span class="badge b-hot">swap</span>';
     else if(kind === 'bridge') typeBadge = '<span class="badge" style="color:#f0f;background:#f0f30;border-color:#f0f">bridge</span>';
-    else if(kind === 'coinbase') typeBadge = '<span class="badge b-stratum">coinbase</span>';
-    else if(kind === 'ai_credits') typeBadge = '<span class="badge" style="color:#0af;background:#0af30;border-color:#0af">ai</span>';
     else if(kind === 'token_transfer') typeBadge = '<span class="badge" style="color:#0f0;background:#0f03;border-color:#0f0">token</span>';
-    else if(kind === 'l2e') typeBadge = '<span class="badge" style="color:#ffd166;background:#ffd16622;border-color:#ffd166">l2e</span>';
-    else if(kind === 'iot' || kind === 'autopilot' || kind === 'parking') typeBadge = '<span class="badge" style="color:#0ff;background:#0ff1a;border-color:#0ff">iot</span>';
-    else if(kind === 'music') typeBadge = '<span class="badge" style="color:#ff9bf2;background:#ff9bf220;border-color:#ff9bf2">music</span>';
     else if(CATEGORY_RULES.other.predicate(t)) typeBadge = '<span class="badge" style="color:#f7d6ff;background:#f7d6ff22;border-color:#f7d6ff">other</span>';
 
     const details = renderTxDetailsCell(t);
@@ -699,6 +723,36 @@ function renderTxs(list){
     `;
     tb.appendChild(tr);
   });
+}
+
+function renderMining(list){
+  const tb = tbody('#tblMining');
+  if (!tb) return;
+  tb.innerHTML = '';
+  const miningList = list.filter(CATEGORY_RULES.mining.predicate);
+  let totalRewards = 0;
+
+  miningList.forEach(t => {
+    totalRewards += Number(t.amount || 0);
+    const tr = document.createElement('tr');
+    const miner = t.to || t.thr_address || '—';
+    const blockHeight = t.block_height || t.meta?.block_height || '—';
+    const feeBurned = t.meta?.fee_burned ?? t.fee_burned ?? '—';
+    tr.innerHTML = `
+      <td class="mono"><a class="hash" title="${t.tx_id}" onclick="copy('${t.tx_id}')">${short(t.tx_id)}</a></td>
+      <td class="mono"><a class="addr" onclick="copy('${miner}')">${short(miner)}</a></td>
+      <td>${fmtN(t.amount)}</td>
+      <td>${short(String(blockHeight))}</td>
+      <td>${fmtN(feeBurned)}</td>
+      <td class="muted">${rel(t.timestamp)}</td>
+    `;
+    tb.appendChild(tr);
+  });
+
+  const totalEl = el('#miningTotalRewards');
+  const countEl = el('#miningTotalCount');
+  if (totalEl) totalEl.textContent = fmtN(totalRewards) + ' THR';
+  if (countEl) countEl.textContent = miningList.length.toLocaleString();
 }
 
 function renderMempool(list){
@@ -814,6 +868,7 @@ async function reloadTxs(){
     if (!Array.isArray(CURRENT_TXS)) CURRENT_TXS = [];
   }
   renderTxs(CURRENT_TXS);
+  renderMining(CURRENT_TXS);
 }
 
 /* ===== Wireup ===== */
@@ -840,6 +895,7 @@ function trimTxs(txs) {
 
 renderBlocks(CURRENT_BLOCKS);
 renderTxs(CURRENT_TXS);
+renderMining(CURRENT_TXS);
 loadChainTip();
 
 // PR-5g: Search functionality
@@ -1132,17 +1188,10 @@ async function loadL2E(){
 
 async function loadMusic(){
   try{
+    let statusJ = null;
     const statusR = await fetch('/api/music/status');
     if(statusR.ok){
-      const statusJ = await statusR.json();
-      el('#musicTotalArtists').textContent = statusJ.artists ?? 0;
-      el('#musicTotalTracks').textContent = statusJ.tracks ?? 0;
-      el('#musicRoyaltiesPaid').textContent = `${(statusJ.royalties_thr ?? 0).toLocaleString()} THR`;
-      const connected = !!statusJ.connected;
-      el('#musicStatus').textContent = connected ? 'Online' : 'Degraded';
-      el('#musicStatus').style.color = connected ? '#16ff57' : '#ffd166';
-      const note = statusJ.status_note || (connected ? 'registry connected' : 'partial data');
-      el('#musicStatusNote').textContent = note;
+      statusJ = await statusR.json();
     }
 
     const tracksR = await fetch('/api/music/tracks?limit=12');
@@ -1154,6 +1203,18 @@ async function loadMusic(){
     }
     const tracksJ = await tracksR.json();
     const tracks = Array.isArray(tracksJ.tracks) ? tracksJ.tracks : [];
+    const artistSet = new Set(tracks.map(t => t.artist_address || t.artist_name).filter(Boolean));
+    const totalArtists = statusJ?.artists ?? artistSet.size;
+    const totalTracks = statusJ?.tracks ?? tracks.length;
+    const royaltiesPaid = statusJ?.royalties_thr ?? 0;
+    const connected = statusJ?.connected ?? tracks.length > 0;
+    el('#musicTotalArtists').textContent = totalArtists ?? 0;
+    el('#musicTotalTracks').textContent = totalTracks ?? 0;
+    el('#musicRoyaltiesPaid').textContent = `${(royaltiesPaid ?? 0).toLocaleString()} THR`;
+    el('#musicStatus').textContent = connected ? 'Online' : 'Degraded';
+    el('#musicStatus').style.color = connected ? '#16ff57' : '#ffd166';
+    const note = statusJ?.status_note || (connected ? 'tracks loaded' : 'partial data');
+    el('#musicStatusNote').textContent = note;
     if(tracks.length === 0){
       body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#9fdfb4">No tracks published yet</td></tr>';
       return;

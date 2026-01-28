@@ -52,9 +52,10 @@
       if (!response.ok) throw new Error(`Dashboard API error: ${response.status}`);
 
       const data = await response.json();
-      if (!data.ok) throw new Error('Dashboard returned ok=false');
+      const stats = data?.stats || data?.dashboard || data || {};
+      if (data?.ok === false) throw new Error('Dashboard returned ok=false');
 
-      dashboardStats = data.stats;
+      dashboardStats = stats;
 
       // Update counters with correct IDs
       if (el('stat-block-count')) {
@@ -91,6 +92,14 @@
       return dashboardStats;
     } catch (error) {
       console.error('[Viewer] Failed to load dashboard stats:', error);
+      if (el('stat-block-count')) el('stat-block-count').textContent = '—';
+      if (el('stat-fees-burned')) el('stat-fees-burned').textContent = '—';
+      if (el('stat-total-rewards')) el('stat-total-rewards').textContent = '—';
+      if (el('stat-avg-reward')) el('stat-avg-reward').textContent = '—';
+      if (el('blocksTotalCount')) el('blocksTotalCount').textContent = '—';
+      if (el('blocksTotalBurned')) el('blocksTotalBurned').textContent = '—';
+      if (el('blocksTotalRewards')) el('blocksTotalRewards').textContent = '—';
+      if (el('blocksAvgReward')) el('blocksAvgReward').textContent = '—';
       return null;
     }
   }
@@ -178,9 +187,9 @@
       if (!response.ok) throw new Error(`Dashboard API error: ${response.status}`);
 
       const data = await response.json();
-      if (!data.ok) throw new Error('Dashboard returned ok=false');
+      if (data?.ok === false) throw new Error('Dashboard returned ok=false');
 
-      const stats = data.stats;
+      const stats = data?.stats || data?.dashboard || data || {};
 
       // Update transfers tab counters
       if (el('txsTotalCount')) {
@@ -199,6 +208,10 @@
       return stats;
     } catch (error) {
       console.error('[Viewer] Failed to load transfers stats:', error);
+      if (el('txsTotalCount')) el('txsTotalCount').textContent = '—';
+      if (el('txsUniqueAddresses')) el('txsUniqueAddresses').textContent = '—';
+      if (el('stat-total-transfers')) el('stat-total-transfers').textContent = '—';
+      if (el('stat-unique-addresses')) el('stat-unique-addresses').textContent = '—';
       return null;
     }
   }

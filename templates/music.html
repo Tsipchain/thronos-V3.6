@@ -781,6 +781,7 @@ let currentTrack = null;
 let audioElement = null;
 let userPlaylists = [];
 let offlineTracks = [];
+const playlistCacheKey = (wallet) => `music_playlists_offline_${wallet || 'anon'}`;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -1350,6 +1351,48 @@ function showMessage(elementId, message, type) {
 }
 
 // ========== PLAYLISTS & OFFLINE FUNCTIONALITY ==========
+function loadLocalPlaylists(wallet) {
+    try {
+        const raw = localStorage.getItem(playlistCacheKey(wallet));
+        const data = raw ? JSON.parse(raw) : null;
+        return Array.isArray(data) ? data : [];
+    } catch (e) {
+        console.warn('Failed to read local playlists cache', e);
+        return [];
+    }
+}
+
+function saveLocalPlaylists(wallet, playlists) {
+    try {
+        localStorage.setItem(playlistCacheKey(wallet), JSON.stringify(playlists || []));
+    } catch (e) {
+        console.warn('Failed to save local playlists cache', e);
+    }
+}
+
+async function syncLocalPlaylists(wallet, localPlaylists, remotePlaylists) {
+    if (!Array.isArray(localPlaylists) || localPlaylists.length === 0) return;
+    const remoteTitles = new Set((remotePlaylists || []).map(p => (p.title || p.name || '').toLowerCase()));
+    const toCreate = localPlaylists.filter(p => {
+        const title = (p.title || p.name || '').toLowerCase();
+        return title && !remoteTitles.has(title);
+    });
+    for (const playlist of toCreate) {
+        try {
+            await fetch('/api/music/playlists', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    address: wallet,
+                    title: playlist.title || playlist.name || 'Untitled Playlist',
+                    track_ids: playlist.track_ids || []
+                })
+            });
+        } catch (e) {
+            console.warn('Failed to sync local playlist', e);
+        }
+    }
+}
 async function loadUploadPlaylists() {
     const wallet = localStorage.getItem('thr_address');
     if (!wallet) {
@@ -1367,9 +1410,12 @@ async function loadUploadPlaylists() {
         const data = await res.json();
         if (data.ok && Array.isArray(data.playlists)) {
             userPlaylists = data.playlists;
+        } else {
+            userPlaylists = loadLocalPlaylists(wallet);
         }
     } catch (e) {
         console.error('Error loading playlists for upload:', e);
+        userPlaylists = loadLocalPlaylists(wallet);
     } finally {
         updateUploadPlaylistOptions();
     }
@@ -1411,19 +1457,30 @@ async function loadPlaylists() {
         if (data.ok && Array.isArray(data.playlists) && data.playlists.length > 0) {
             userPlaylists = data.playlists;
             renderPlaylists();
+            saveLocalPlaylists(wallet, userPlaylists);
+            await syncLocalPlaylists(wallet, loadLocalPlaylists(wallet), userPlaylists);
         } else {
-            userPlaylists = [];
-            document.getElementById('playlistsContainer').innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-state-icon">📋</div>
-                    <p><span class="lang-el">Δεν έχετε playlists ακόμα</span><span class="lang-en">No playlists yet</span></p>
-                </div>
-            `;
+            const localPlaylists = loadLocalPlaylists(wallet);
+            userPlaylists = localPlaylists;
+            if (localPlaylists.length > 0) {
+                renderPlaylists();
+            } else {
+                document.getElementById('playlistsContainer').innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📋</div>
+                        <p><span class="lang-el">Δεν έχετε playlists ακόμα</span><span class="lang-en">No playlists yet</span></p>
+                    </div>
+                `;
+            }
         }
         updateUploadPlaylistOptions();
     } catch (e) {
         console.error('Error loading playlists:', e);
-        userPlaylists = [];
+        const localPlaylists = loadLocalPlaylists(wallet);
+        userPlaylists = localPlaylists;
+        if (localPlaylists.length > 0) {
+            renderPlaylists();
+        }
         updateUploadPlaylistOptions();
     }
 }
@@ -1492,7 +1549,23 @@ async function createNewPlaylist() {
         } else if (e.code === 'WALLET_LOCKED') {
             alert('❌ Wallet is locked. Please unlock with your PIN.');
         } else {
-            alert(`❌ Error: ${e.message}`);
+            const fallbackPlaylist = {
+                id: `offline-${Date.now()}`,
+                playlist_id: `offline-${Date.now()}`,
+                title: name.trim(),
+                name: name.trim(),
+                tracks: [],
+                track_ids: [],
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+            };
+            const localPlaylists = loadLocalPlaylists(wallet);
+            localPlaylists.push(fallbackPlaylist);
+            saveLocalPlaylists(wallet, localPlaylists);
+            userPlaylists = localPlaylists;
+            renderPlaylists();
+            updateUploadPlaylistOptions();
+            alert(`⚠️ Saved playlist locally: ${e.message}`);
         }
     }
 }
@@ -1509,6 +1582,8 @@ async function deletePlaylist(playlistId) {
         const data = await res.json();
         if (data.ok) {
             alert('✅ Playlist deleted!');
+            const localPlaylists = loadLocalPlaylists(wallet).filter(p => (p.playlist_id || p.id) !== playlistId);
+            saveLocalPlaylists(wallet, localPlaylists);
             loadPlaylists();
         } else {
             alert(`❌ Error: ${data.error}`);
@@ -1761,7 +1836,7 @@ async function showTrackOptions(trackId) {
 
     // PR-5c: Build dropdown HTML
     const playlistOptions = userPlaylists.length > 0
-        ? userPlaylists.map(p => `<option value="${p.playlist_id}">${p.name} (${(p.tracks || []).length} tracks)</option>`).join('')
+        ? userPlaylists.map(p => `<option value="${p.playlist_id || p.id}">${p.title || p.name} (${(p.tracks || []).length} tracks)</option>`).join('')
         : '<option value="">No playlists available</option>';
 
     const dropdownHtml = `
@@ -1804,12 +1879,13 @@ async function addTrackToPlaylistUI(trackId, playlistId) {
         // PR-5c: Use WalletAuth for PIN-based unlock
         const { address, authSecret } = await window.WalletAuth.requireUnlockedWallet();
 
-        const res = await fetch(`/api/music/playlists/${playlistId}/items`, {
+        const res = await fetch('/api/music/playlists/add_track', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 address: address,
                 track_id: trackId,
+                playlist_id: playlistId,
                 auth_secret: authSecret
             })
         });
@@ -1817,6 +1893,17 @@ async function addTrackToPlaylistUI(trackId, playlistId) {
         const data = await res.json();
         if (data.ok) {
             alert('✅ Track added to playlist!');
+            const wallet = localStorage.getItem('thr_address');
+            const localPlaylists = loadLocalPlaylists(wallet);
+            const target = localPlaylists.find(p => (p.playlist_id || p.id) === playlistId);
+            if (target) {
+                const trackIds = target.track_ids || target.tracks?.map(t => t.id) || [];
+                if (!trackIds.includes(trackId)) {
+                    trackIds.push(trackId);
+                    target.track_ids = trackIds;
+                }
+                saveLocalPlaylists(wallet, localPlaylists);
+            }
         } else {
             alert(`❌ Error: ${data.error || 'Failed to add track'}`);
         }

@@ -6131,24 +6131,22 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
         if tx_type in ["coinbase", "mining_reward", "mint"]:
             continue
 
-        tx_from = tx.get("from") or tx.get("sender")
-        tx_to = tx.get("to") or tx.get("recipient")
-        tx_address = tx.get("address")  # For IoT telemetry
+        # Collect transactions involving this address
+        wallet_txs = []
 
-        if address.lower() in [str(tx_from).lower(), str(tx_to).lower(), str(tx_address).lower()]:
-            tx_copy = dict(tx)
-            tx_copy["category"] = _categorize_transaction(tx)
-            tx_copy = normalize_history_item(tx_copy)
+        # 1. Regular chain transactions
+        for tx in chain:
+            if not isinstance(tx, dict):
+                continue
 
-            # Determine direction
-            if tx_to and tx_to.lower() == address.lower():
-                tx_copy["direction"] = "received"
-            elif tx_from and tx_from.lower() == address.lower():
-                tx_copy["direction"] = "sent"
-            else:
-                tx_copy["direction"] = "related"
+            tx_from = tx.get("from") or tx.get("sender")
+            tx_to = tx.get("to") or tx.get("recipient")
+            tx_address = tx.get("address")  # For IoT telemetry
 
-            wallet_txs.append(tx_copy)
+            if address.lower() in [str(tx_from).lower(), str(tx_to).lower(), str(tx_address).lower()]:
+                tx_copy = dict(tx)
+                tx_copy["category"] = _categorize_transaction(tx)
+                tx_copy = normalize_history_item(tx_copy)
 
     # 2. Block mining rewards
     mining_ids = set()

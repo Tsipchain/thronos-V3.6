@@ -11,13 +11,14 @@
   (function() {
     const host = window.location.hostname;
     const isVercel = host.endsWith("vercel.app") || host === "thrchain.vercel.app";
+    const origin = window.location.origin;
     window.THRONOS_CONFIG = {
       apiReadBase: isVercel ? "/api/v1/read/api" : "/api",
       apiWriteBase: isVercel ? "/api/v1/write/api" : "/api",
       apiMusicBase: isVercel ? "/api/v1/read/api" : "/api",
       apiBase: "/api",
-      masterUrl: "https://thrchain.up.railway.app",
-      MASTER_PUBLIC_URL: "https://thrchain.up.railway.app",
+      masterUrl: origin,
+      MASTER_PUBLIC_URL: origin,
       mediaBase: "/media",
       musicEnabled: true
     };
@@ -2922,13 +2923,12 @@ async function createPlaylistFromWallet() {
         }
 
         // Create via API
-        const res = await fetch('/api/music/playlist/update', {
+        const res = await fetch('/api/music/playlists', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 address: address,
-                action: 'create',
-                name: name.trim(),
+                title: name.trim(),
                 auth_secret: authSecret
             })
         });
@@ -4197,10 +4197,11 @@ async function refreshHistoryFromApi() {
     const addr = walletSession.getAddress();
     if (!addr) return;
     try {
-        const response = await fetch(`/api/history?wallet=${encodeURIComponent(addr)}`);
+        const response = await fetch(`/api/wallet/history?address=${encodeURIComponent(addr)}&limit=200`);
         const data = response.ok ? await response.json() : {};
-        if (Array.isArray(data.history)) {
-            allTransactions = data.history;
+        const txs = Array.isArray(data.transactions) ? data.transactions : (data.history || []);
+        if (Array.isArray(txs)) {
+            allTransactions = txs;
             renderHistory();
         }
     } catch (error) {

@@ -10,7 +10,7 @@
   // Optional: force API base (useful if frontend is on Vercel and API on Railway)
   // Example: window.THRONOS_API_BASE = "https://thrchain.up.railway.app";
   function getApiBase() {
-    const base = window.THRONOS_API_BASE || "";
+    const base = window.__API_BASE__ || window.THRONOS_API_BASE || "";
     return String(base).replace(/\/+$/, "");
   }
 
@@ -155,6 +155,35 @@
     }
   }
 
+  function normalizeMediaUrl(raw, fallback = "") {
+    if (!raw) return fallback;
+    const base = (window.__API_BASE__ || window.location.origin || "").replace(/\/+$/, "");
+    const value = String(raw).trim();
+    if (!value) return fallback;
+
+    if (/^https?:\/\/localhost:\d+/i.test(value)) {
+      return value.replace(/^https?:\/\/localhost:\d+/i, base);
+    }
+
+    if (value.startsWith("/media/")) {
+      try {
+        return new URL(value, base).toString();
+      } catch {
+        return value;
+      }
+    }
+
+    if (/^https?:\/\//i.test(value)) {
+      return value;
+    }
+
+    try {
+      return new URL(value, base).toString();
+    } catch {
+      return value;
+    }
+  }
+
   async function smartFetch(url, options) {
     const finalUrl = buildApiUrl(typeof url === "string" ? url : (url?.url || url));
     return NATIVE_FETCH(finalUrl, options);
@@ -192,6 +221,7 @@
     normalizeApiPath,
     buildApiUrl,
     resolveMediaUrl,
+    normalizeMediaUrl,
     smartFetch,
     smartFetchJSON,
     fetchJSONOnce,

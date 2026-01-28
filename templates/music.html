@@ -782,6 +782,15 @@ let audioElement = null;
 let userPlaylists = [];
 let offlineTracks = [];
 const playlistCacheKey = (wallet) => `music_playlists_offline_${wallet || 'anon'}`;
+const API_BASE = window.__API_BASE__ || window.location.origin;
+const normalizeMediaUrl = window.normalizeMediaUrl || window.FetchUtils?.normalizeMediaUrl;
+
+function buildApiUrl(path) {
+    if (!path) return path;
+    if (/^https?:\/\//i.test(path)) return path;
+    const normalized = path.startsWith('/') ? path : `/${path}`;
+    return `${API_BASE}${normalized}`;
+}
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -843,7 +852,7 @@ async function loadTracks() {
     const emptyEl = document.getElementById('tracksEmpty');
 
     try {
-        const data = await fetchJsonWithRetry('/api/music/tracks');
+        const data = await fetchJsonWithRetry(buildApiUrl('/api/music/tracks'));
 
         const tracks = data?.tracks || [];
         if ((data.ok || data.status === 'success') && tracks.length > 0) {
@@ -882,7 +891,7 @@ async function loadTrending() {
     const container = document.getElementById('trendingGrid');
 
     try {
-        const res = await fetch('/api/music/tracks/trending');
+        const res = await fetch(buildApiUrl('/api/music/tracks/trending'));
 
         if (!res.ok) {
             throw new Error(`HTTP ${res.status}`);
@@ -940,9 +949,11 @@ function renderTracks(tracks, containerId) {
              data-track-id="${track.id}">
             <div class="track-cover" onclick="playTrack('${track.id}')">
                 ${track.cover_path || track.cover_url
-                    ? `<img src="${(window.FetchUtils && window.FetchUtils.resolveMediaUrl)
-                        ? window.FetchUtils.resolveMediaUrl(track.cover_path ? '/media/' + track.cover_path : track.cover_url)
-                        : (track.cover_path ? '/media/' + track.cover_path : track.cover_url)}" alt="${track.title}" onerror="this.src='/static/img/logo.png'">`
+                    ? `<img src="${normalizeMediaUrl
+                        ? normalizeMediaUrl(track.cover_path ? '/media/' + track.cover_path : track.cover_url)
+                        : ((window.FetchUtils && window.FetchUtils.resolveMediaUrl)
+                            ? window.FetchUtils.resolveMediaUrl(track.cover_path ? '/media/' + track.cover_path : track.cover_url)
+                            : (track.cover_path ? '/media/' + track.cover_path : track.cover_url))}" alt="${track.title}" onerror="this.src='/static/img/logo.png'">`
                     : '🎵'}
                 <button class="track-play-btn" onclick="event.stopPropagation(); playTrack('${track.id}')">▶️</button>
             </div>
@@ -1024,7 +1035,7 @@ async function playTrack(trackId) {
     // Fallback to local player if GlobalMusicPlayer not available
     // Record play
     const wallet = localStorage.getItem('thr_address');
-    fetch(`/api/music/play/${trackId}`, {
+    fetch(buildApiUrl(`/api/music/play/${trackId}`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ listener_address: wallet || '' })
@@ -1033,17 +1044,21 @@ async function playTrack(trackId) {
     // Update player UI
     document.getElementById('playerTitle').textContent = track.title;
     document.getElementById('playerArtist').textContent = track.artist_name;
-    const coverSrc = (window.FetchUtils && window.FetchUtils.resolveMediaUrl)
-        ? window.FetchUtils.resolveMediaUrl(track.cover_path ? `/media/${track.cover_path}` : track.cover_url)
-        : (track.cover_path ? `/media/${track.cover_path}` : track.cover_url);
+    const coverSrc = normalizeMediaUrl
+        ? normalizeMediaUrl(track.cover_path ? `/media/${track.cover_path}` : track.cover_url)
+        : ((window.FetchUtils && window.FetchUtils.resolveMediaUrl)
+            ? window.FetchUtils.resolveMediaUrl(track.cover_path ? `/media/${track.cover_path}` : track.cover_url)
+            : (track.cover_path ? `/media/${track.cover_path}` : track.cover_url));
     document.getElementById('playerCover').innerHTML = coverSrc
         ? `<img src="${coverSrc}" onerror="this.src='/static/img/logo.png'">` : '🎵';
     document.getElementById('playerContainer').classList.add('active');
 
     // Play audio
-    audioElement.src = (window.FetchUtils && window.FetchUtils.resolveMediaUrl)
-        ? window.FetchUtils.resolveMediaUrl(track.audio_url)
-        : track.audio_url;
+    audioElement.src = normalizeMediaUrl
+        ? normalizeMediaUrl(track.audio_url)
+        : ((window.FetchUtils && window.FetchUtils.resolveMediaUrl)
+            ? window.FetchUtils.resolveMediaUrl(track.audio_url)
+            : track.audio_url);
     audioElement.play();
     document.getElementById('playPauseBtn').textContent = '⏸️';
 
@@ -1106,7 +1121,7 @@ async function tipArtist() {
         // PR-5a: Require unlocked wallet (PIN if locked)
         const { address, authSecret } = await window.WalletAuth.requireUnlockedWallet();
 
-        const res = await fetch('/api/music/tip', {
+        const res = await fetch(buildApiUrl('/api/music/tip'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1149,7 +1164,7 @@ async function registerArtist(e) {
     const bio = document.getElementById('artistBio').value.trim();
 
     try {
-        const res = await fetch('/api/music/register_artist', {
+        const res = await fetch(buildApiUrl('/api/music/register_artist'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ address: wallet, name, bio })
@@ -1227,7 +1242,7 @@ async function uploadTrack(e) {
     document.getElementById('uploadBtn').textContent = '⏳ Uploading...';
 
     try {
-        const res = await fetch('/api/music/upload', {
+        const res = await fetch(buildApiUrl('/api/music/upload'), {
             method: 'POST',
             body: formData
         });
@@ -1263,7 +1278,7 @@ async function loadMyProfile() {
     }
 
     try {
-        const res = await fetch(`/api/music/artist/${wallet}`);
+        const res = await fetch(buildApiUrl(`/api/music/artist/${wallet}`));
         const data = await res.json();
 
         if (data.status === 'success' && data.artist.name) {
@@ -1323,7 +1338,7 @@ function handleSearch(e) {
 
 async function searchTracks(query) {
     try {
-        const res = await fetch(`/api/music/search?q=${encodeURIComponent(query)}`);
+        const res = await fetch(buildApiUrl(`/api/music/search?q=${encodeURIComponent(query)}`));
         const data = await res.json();
         if (data.status === 'success') {
             renderTracks(data.results, 'tracksGrid');
@@ -1379,7 +1394,7 @@ async function syncLocalPlaylists(wallet, localPlaylists, remotePlaylists) {
     });
     for (const playlist of toCreate) {
         try {
-            await fetch('/api/music/playlists', {
+            await fetch(buildApiUrl('/api/music/playlists'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1406,7 +1421,7 @@ async function loadUploadPlaylists() {
     }
 
     try {
-        const res = await fetch(`/api/music/playlists?address=${encodeURIComponent(wallet)}`);
+        const res = await fetch(buildApiUrl(`/api/music/playlists?address=${encodeURIComponent(wallet)}`));
         const data = await res.json();
         if (data.ok && Array.isArray(data.playlists)) {
             userPlaylists = data.playlists;
@@ -1451,7 +1466,7 @@ async function loadPlaylists() {
     }
 
     try {
-        const res = await fetch(`/api/music/playlists?address=${encodeURIComponent(wallet)}`);
+        const res = await fetch(buildApiUrl(`/api/music/playlists?address=${encodeURIComponent(wallet)}`));
         const data = await res.json();
 
         if (data.ok && Array.isArray(data.playlists) && data.playlists.length > 0) {
@@ -1525,7 +1540,7 @@ async function createNewPlaylist() {
         // PR-5c: Use chain-based API with PIN-based auth
         const { address, authSecret } = await window.WalletAuth.requireUnlockedWallet();
 
-        const res = await fetch('/api/music/playlists', {
+        const res = await fetch(buildApiUrl('/api/music/playlists'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1575,7 +1590,7 @@ async function deletePlaylist(playlistId) {
 
     const wallet = localStorage.getItem('thr_address');
     try {
-        const res = await fetch(`/api/music/playlists/${wallet}/${playlistId}`, {
+        const res = await fetch(buildApiUrl(`/api/music/playlists/${wallet}/${playlistId}`), {
             method: 'DELETE'
         });
 
@@ -1596,7 +1611,7 @@ async function deletePlaylist(playlistId) {
 async function viewPlaylist(playlistId) {
     const wallet = localStorage.getItem('thr_address');
     try {
-        const res = await fetch(`/api/music/playlists/${wallet}/${playlistId}`);
+        const res = await fetch(buildApiUrl(`/api/music/playlists/${wallet}/${playlistId}`));
         const data = await res.json();
 
         if (data.ok && data.playlist) {
@@ -1665,34 +1680,14 @@ async function playPlaylist(playlistId, shuffleMode = false) {
 }
 
 /**
- * Repair media URLs that reference localhost:5000 to use current origin
+ * Normalize media URLs to the active API base.
  */
 function repairMediaUrl(url) {
     if (!url || typeof url !== 'string') return url;
-
-    try {
-        if (url.startsWith('/')) {
-            return url;
-        }
-
-        if (url.startsWith('http://') || url.startsWith('https://')) {
-            const urlObj = new URL(url);
-            const knownHosts = [
-                window.location.host,
-                'localhost:5000',
-                'thrchain.up.railway.app',
-                'thrchain.vercel.app'
-            ];
-            if (knownHosts.includes(urlObj.host)) {
-                return urlObj.pathname + urlObj.search + urlObj.hash;
-            }
-        }
-
-        return url;
-    } catch (e) {
-        console.warn('Failed to repair URL:', url, e);
-        return url;
+    if (normalizeMediaUrl) {
+        return normalizeMediaUrl(url);
     }
+    return url;
 }
 
 /**
@@ -1722,7 +1717,7 @@ async function loadOfflineTracks() {
     }
 
     try {
-        const res = await fetch(`/api/music/offline/${wallet}`);
+        const res = await fetch(buildApiUrl(`/api/music/offline/${wallet}`));
         const data = await res.json();
 
         if (data.ok && data.tracks && data.tracks.length > 0) {
@@ -1749,7 +1744,7 @@ async function saveTrackOffline(trackId, sendTip = false) {
     }
 
     try {
-        const res = await fetch('/api/music/offline/save', {
+        const res = await fetch(buildApiUrl('/api/music/offline/save'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1781,7 +1776,7 @@ async function removeTrackOffline(trackId) {
     if (!confirm('Remove this track from offline storage?')) return;
 
     try {
-        const res = await fetch(`/api/music/offline/${wallet}/${trackId}`, {
+        const res = await fetch(buildApiUrl(`/api/music/offline/${wallet}/${trackId}`), {
             method: 'DELETE'
         });
 
@@ -1807,7 +1802,7 @@ async function showTrackOptions(trackId) {
 
     // Load playlists first
     try {
-        const res = await fetch(`/api/music/playlists?address=${encodeURIComponent(wallet)}`);
+        const res = await fetch(buildApiUrl(`/api/music/playlists?address=${encodeURIComponent(wallet)}`));
         const data = await res.json();
         userPlaylists = data.ok ? data.playlists || [] : [];
     } catch (e) {
@@ -1879,7 +1874,7 @@ async function addTrackToPlaylistUI(trackId, playlistId) {
         // PR-5c: Use WalletAuth for PIN-based unlock
         const { address, authSecret } = await window.WalletAuth.requireUnlockedWallet();
 
-        const res = await fetch('/api/music/playlists/add_track', {
+        const res = await fetch(buildApiUrl('/api/music/playlists/add_track'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1939,7 +1934,7 @@ async function deleteTrack(trackId) {
         // PR-5d: Use WalletAuth for PIN-based unlock
         const { address, authSecret } = await window.WalletAuth.requireUnlockedWallet();
 
-        const res = await fetch('/api/music/playlist/update', {
+        const res = await fetch(buildApiUrl('/api/music/playlist/update'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1996,7 +1991,7 @@ async function addTrackToPlaylist(trackId, playlistId) {
     const wallet = localStorage.getItem('thr_address');
 
     try {
-        const res = await fetch(`/api/music/playlists/${wallet}/${playlistId}/add`, {
+        const res = await fetch(buildApiUrl(`/api/music/playlists/${wallet}/${playlistId}/add`), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ track_id: trackId })

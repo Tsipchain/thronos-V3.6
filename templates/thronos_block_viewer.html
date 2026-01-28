@@ -1243,6 +1243,7 @@ async function loadMusic(){
 <script>
 // Set API base URL for new viewer.js
 window.TH_API_BASE_URL = "{{ api_base_url if api_base_url else '' }}";
+window.__API_BASE__ = window.TH_API_BASE_URL || window.location.origin;
 </script>
 <script src="{{ url_for('static', filename='viewer.js') }}"></script>
 

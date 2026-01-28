@@ -31,6 +31,14 @@ let quizData = null;
 let courseData = null;
 let studentAddr = '';
 let isEnrolled = false;
+const ADMIN_SECRET_KEY = "thronos_admin_secret";
+const ADMIN_MODE_KEY = "thronos_admin_mode";
+
+function hasAdminAccess() {
+    const adminSecret = localStorage.getItem(ADMIN_SECRET_KEY) || window.ADMIN_SECRET || '';
+    const adminMode = localStorage.getItem(ADMIN_MODE_KEY) === '1';
+    return Boolean(adminSecret || adminMode);
+}
 
 function setEnrollmentState() {
     studentAddr = window.walletSession?.getAddress ? window.walletSession.getAddress() : '';
@@ -46,7 +54,7 @@ function setEnrollmentState() {
     const isInStudentsList = (courseData?.students || []).includes(studentAddr);
     const coursePrice = parseFloat(courseData?.price_thr || 0);
     const isTeacher = courseData?.teacher === studentAddr;
-    const isAdmin = false; // TODO: Add admin check if needed
+    const isAdmin = hasAdminAccess();
 
     // Teachers and admins bypass payment requirement
     if (isTeacher || isAdmin) {

@@ -159,31 +159,31 @@
 
   function normalizeMediaUrl(raw, fallback = "") {
     if (!raw) return fallback;
-    const base = (window.__API_BASE__ || window.location.origin || "").replace(/\/+$/, "");
-    const value = String(raw).trim();
+    let value = String(raw).trim();
     if (!value) return fallback;
 
-    if (/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0):\d+/i.test(value)) {
-      return value.replace(/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0):\d+/i, base);
+    value = value.replace(/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?/i, "");
+
+    if (value.startsWith("media/") || value.startsWith("static/")) {
+      value = `/${value}`;
     }
 
-    if (value.startsWith("/media/")) {
-      try {
-        return new URL(value, base).toString();
-      } catch {
-        return value;
-      }
+    if (value.startsWith("/media/") || value.startsWith("/static/")) {
+      const base = (window.__API_BASE__ || window.API_BASE || "").replace(/\/$/, "");
+      return base ? `${base}${value}` : value;
+    }
+
+    if (/^[A-Za-z0-9._-]+\.(png|jpe?g|webp|mp3|wav|ogg)$/i.test(value)) {
+      const base = (window.__API_BASE__ || window.API_BASE || "").replace(/\/$/, "");
+      const path = `/media/${value}`;
+      return base ? `${base}${path}` : path;
     }
 
     if (/^https?:\/\//i.test(value)) {
       return value;
     }
 
-    try {
-      return new URL(value, base).toString();
-    } catch {
-      return value;
-    }
+    return value;
   }
 
   async function smartFetch(url, options) {

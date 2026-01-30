@@ -6296,6 +6296,64 @@ def _build_wallet_history(address: str, category_filter: str, limit: int, cursor
     }
 
 
+def _empty_wallet_history_summary() -> dict:
+    return {
+        "total_mining": 0.0,
+        "total_ai_rewards": 0.0,
+        "total_music_tips_sent": 0.0,
+        "total_music_tips_received": 0.0,
+        "total_iot_rewards": 0.0,
+        "total_sent": 0.0,
+        "total_received": 0.0,
+        "mining_count": 0,
+        "ai_reward_count": 0,
+        "music_tip_count": 0,
+        "iot_count": 0,
+    }
+
+
+def _build_wallet_history_fallback(address: str, limit: int, cursor: int) -> dict:
+    addr_lower = address.lower()
+    entries: list[dict] = []
+    feed = _tx_feed(include_pending=True, include_bridge=True)
+    for tx in feed:
+        if not isinstance(tx, dict):
+            continue
+        parties = set(tx.get("parties") or [])
+        parties.update({tx.get("from"), tx.get("to"), tx.get("trader"), tx.get("thr_address")})
+        parties = {str(p).lower() for p in parties if p}
+        if addr_lower not in parties:
+            continue
+        tx_copy = dict(tx)
+        tx_copy["category"] = tx_copy.get("category") or _categorize_transaction(tx_copy)
+        tx_copy = normalize_history_item(tx_copy)
+        tx_from = tx_copy.get("from")
+        tx_to = tx_copy.get("to")
+        if tx_to and str(tx_to).lower() == addr_lower:
+            tx_copy["direction"] = "received"
+        elif tx_from and str(tx_from).lower() == addr_lower:
+            tx_copy["direction"] = "sent"
+        else:
+            tx_copy["direction"] = "related"
+        for key in ("logo_url", "image_url", "cover_url", "audio_url", "token_logo"):
+            if key in tx_copy:
+                tx_copy[key] = normalize_media_url(str(tx_copy.get(key) or ""))
+        entries.append(tx_copy)
+
+    entries.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    total = len(entries)
+    paged = entries[cursor:cursor + limit]
+    next_cursor = cursor + limit if cursor + limit < total else None
+    return {
+        "transactions": paged,
+        "summary": _empty_wallet_history_summary(),
+        "total_transactions": total,
+        "limit": limit,
+        "cursor": cursor,
+        "next_cursor": next_cursor,
+    }
+
+
 @app.route("/api/wallet/history", methods=["GET"])
 def api_wallet_history():
     """
@@ -6323,37 +6381,20 @@ def api_wallet_history():
 
     try:
         payload = _build_wallet_history(address, category_filter, limit, cursor)
-        return jsonify({
-            "ok": True,
-            "address": address,
-            **payload,
-        }), 200
     except Exception as exc:
         logger.error("[wallet_history] failed: %s", exc)
-        summary = {
-            "total_mining": 0.0,
-            "total_ai_rewards": 0.0,
-            "total_music_tips_sent": 0.0,
-            "total_music_tips_received": 0.0,
-            "total_iot_rewards": 0.0,
-            "total_sent": 0.0,
-            "total_received": 0.0,
-            "mining_count": 0,
-            "ai_reward_count": 0,
-            "music_tip_count": 0,
-            "iot_count": 0
-        }
-        return jsonify({
-            "ok": False,
-            "error": "temporary",
-            "address": address,
-            "transactions": [],
-            "summary": summary,
-            "total_transactions": 0,
-            "limit": limit,
-            "cursor": cursor,
-            "next_cursor": None,
-        }), 200
+        payload = _build_wallet_history_fallback(address, limit, cursor)
+
+    for tx in payload.get("transactions", []):
+        for key in ("logo_url", "image_url", "cover_url", "audio_url", "token_logo"):
+            if key in tx:
+                tx[key] = normalize_media_url(str(tx.get(key) or ""))
+
+    return jsonify({
+        "ok": True,
+        "address": address,
+        **payload,
+    }), 200
 
 
 @app.route("/wallet")
@@ -7913,34 +7954,6 @@ def api_tx_feed():
                 break
         entries.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
         return entries[:max_items]
-
-    def _classify_tx_feed_entry(tx: dict) -> dict:
-        if not isinstance(tx, dict):
-            return tx
-
-        raw_kind = (tx.get("kind") or tx.get("type") or "").lower()
-        has_block_reward = tx.get("reward") is not None or tx.get("reward_to_miner") is not None
-        is_block = raw_kind == "block" or tx.get("type") == "block" or tx.get("block_hash") or has_block_reward
-        if is_block:
-            tx["kind"] = "block"
-            tx["type"] = "block"
-            tx["category"] = "blocks"
-            return tx
-
-        if raw_kind in {"mining_reward", "block_reward"}:
-            tx["category"] = "mining"
-            return tx
-
-        if raw_kind in {"swap", "pool_swap"}:
-            tx["category"] = "dex"
-            return tx
-
-        if raw_kind in {"thr_transfer", "token_transfer", "transfer", "bridge", "bridge_in", "bridge_out"}:
-            tx["category"] = "transfers"
-            return tx
-
-        tx["category"] = tx.get("category") or raw_kind or "other"
-        return tx
 
     # Use event index for performance if DB is available
     if USE_SQLITE_LEDGER:
@@ -13773,6 +13786,70 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
     job_id = data.get("job_id")
     if require_job_id:
         if not job_id:
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            return jsonify(error="job_id required", reason="missing_job_id"), 400
+        job, err = _get_job_or_stale(job_id, thr_address, now)
+        if err:
+            reason, stale_reason = err
+            last_block = get_last_block_snapshot()
+            tip_height = last_block.get("height")
+            tip_hash = last_block.get("block_hash") or "0" * 64
+            logger.info("mining.stale_block %s", json.dumps({
+                "submitted_height": submitted_height,
+                "tip_height": tip_height,
+                "tip_hash": tip_hash,
+                "prev_hash": data.get("prev_hash"),
+                "reason": reason,
+                "job_id": job_id,
+            }))
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            status = 409 if stale_reason == "stale_job" else 403
+            return jsonify(
+                error="stale_block" if status == 409 else "unauthorized",
+                submitted_height=submitted_height,
+                tip_height=tip_height,
+                tip_hash=tip_hash,
+                reason=reason,
+                job_id=job_id,
+            ), status
+
+        data["prev_hash"] = job.get("prev_hash")
+        data["height"] = job.get("height") or data.get("height")
+        data["submitted_height"] = data.get("height")
+        submitted_height = data.get("height") or data.get("submitted_height")
+        if not data.get("pow_hash"):
+            data["pow_hash"] = data.get("hash")
+
+        last_block = get_last_block_snapshot()
+        server_last_hash = last_block.get("block_hash") or "0" * 64
+        tip_height = last_block.get("height")
+        if data["prev_hash"] != server_last_hash:
+            logger.info("mining.stale_block %s", json.dumps({
+                "submitted_height": data.get("submitted_height"),
+                "tip_height": tip_height,
+                "tip_hash": server_last_hash,
+                "prev_hash": data.get("prev_hash"),
+                "reason": "prev_mismatch",
+                "job_id": job_id,
+            }))
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            return jsonify(
+                error="stale_block",
+                submitted_height=data.get("submitted_height"),
+                tip_height=tip_height,
+                tip_hash=server_last_hash,
+                reason="prev_mismatch",
+                job_id=job_id,
+            ), 409
+
+    entry = get_mining_whitelist_entry(thr_address)
+    if MINING_WHITELIST_ONLY:
+        if not entry:
+            logger.info("Mining rejected thr_address=%s reason=not_whitelisted", thr_address)
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            return jsonify(error="Mining not whitelisted", reason="not_whitelisted"), 403
+        if not entry.get("active", True) or entry.get("banned", False):
+            logger.info("Mining rejected thr_address=%s reason=inactive_or_banned", thr_address)
             logger.debug("submit_block handler took %.3fs", time.time() - start)
             return jsonify(error="job_id required", reason="missing_job_id"), 400
         job, err = _get_job_or_stale(job_id, thr_address, now)
@@ -21072,6 +21149,22 @@ def api_music_playlist_add_item(playlist_id):
         app.logger.error(f"Failed to add track {track_id} to playlist {playlist_id}: {e}")
         return jsonify({"ok": False, "error": "Failed to add track"}), 200
 
+
+@app.route("/api/music/playlists/<playlist_id>/items/<track_id>", methods=["DELETE"])
+def api_music_playlist_remove_item(playlist_id, track_id):
+    """Remove a track from a playlist (DB-backed)."""
+    address = (request.args.get("address") or "").strip()
+    if not track_id:
+        return jsonify({"ok": False, "error": "track_id required"}), 400
+
+    try:
+        removed, message = _remove_track_from_playlist(playlist_id, track_id, address or None)
+        if not removed:
+            return jsonify({"ok": False, "error": message}), 404
+        return jsonify({"ok": True, "message": "Track removed"}), 200
+    except Exception as e:
+        app.logger.error(f"Failed to remove track {track_id} from playlist {playlist_id}: {e}")
+        return jsonify({"ok": False, "error": "Failed to remove track"}), 200
 
 @app.route("/api/music/playlists/<playlist_id>/items/<track_id>", methods=["DELETE"])
 def api_music_playlist_remove_item(playlist_id, track_id):

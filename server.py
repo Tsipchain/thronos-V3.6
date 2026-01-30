@@ -530,6 +530,7 @@ PROVIDER_HEALTH_TTL = 300  # seconds
 # Lightweight caches for hot endpoints
 MINING_INFO_CACHE: dict = {"ts": 0.0, "data": None}
 LAST_HASH_CACHE: dict = {"ts": 0.0, "data": None}
+HEALTH_CACHE: dict = {"ts": 0.0, "data": None}
 MEMPOOL_COUNT_CACHE: dict = {"ts": 0.0, "count": 0}
 BALANCE_CACHE: dict = {}
 BALANCE_CACHE_TTL = float(os.getenv("BALANCE_CACHE_TTL_SECONDS", "10"))
@@ -6388,8 +6389,14 @@ def api_v2_wallet_history():
     }
     """
     address = request.args.get("address", "").strip()
-    limit = min(int(request.args.get("limit", 100)), 500)  # Max 500
-    offset = int(request.args.get("offset", 0))
+    try:
+        limit = min(int(request.args.get("limit", 100)), 500)  # Max 500
+    except (TypeError, ValueError):
+        limit = 100
+    try:
+        offset = int(request.args.get("offset", 0))
+    except (TypeError, ValueError):
+        offset = 0
     category_filter = request.args.get("category", "").strip().lower()
     from_date = request.args.get("from_date", "").strip()
     to_date = request.args.get("to_date", "").strip()
@@ -7285,17 +7292,29 @@ def api_last_block():
 
 @app.route("/last_block_hash", methods=["GET"])
 def last_block_hash():
+    now = time.time()
+    cached = LAST_HASH_CACHE.get("data")
+    if cached and now - LAST_HASH_CACHE.get("ts", 0.0) < 0.75:
+        return jsonify(cached), 200
+
     last_hash = CHAIN_META.get("last_hash") or "0" * 64
-    height = CHAIN_META.get("height", -1)
+    height = CHAIN_META.get("height", 0)
+    last_block = CHAIN_META.get("last_block") or {}
+    timestamp = last_block.get("timestamp") or ""
     target = get_mining_target()
     nbits = target_to_bits(target)
-    return jsonify({
+
+    payload = {
+        "ok": True,
         "last_hash": last_hash,
         "block_hash": last_hash,
-        "height": int(height) if height is not None else -1,
+        "height": int(height) if height is not None and int(height) >= 0 else 0,
+        "timestamp": timestamp,
         "target": hex(target),
         "nbits": hex(nbits),
-    }), 200
+    }
+    LAST_HASH_CACHE.update({"ts": now, "data": payload})
+    return jsonify(payload), 200
 
 @app.route("/mining_info")
 def mining_info():
@@ -7627,7 +7646,7 @@ def peers_heartbeat():
         "last_seen": int(time.time()),
     }
     peers = list(PEERS.values())
-    return jsonify(ok=True, role=NODE_ROLE, active_peers=len(peers), peers=peers, ttl_seconds=60), 200
+    return jsonify(ok=True, role=NODE_ROLE, active_peers=len(peers), peers=peers, ttl_seconds=PEER_TTL_SECONDS), 200
 
 @app.route("/api/peers/active", methods=["GET"])
 def peers_active():
@@ -7637,7 +7656,7 @@ def peers_active():
     cleanup_expired_peers()
     return jsonify({
         "ok": True,
-        "active_peers": active_peers,
+        "active_peers": list(PEERS.values()),
         "ttl_seconds": PEER_TTL_SECONDS,
     }), 200
 
@@ -7648,7 +7667,7 @@ def peers_list():
         return jsonify({"error": "Active peers only available on master node"}), 403
     cleanup_expired_peers()
     peers = []
-    for peer_id, data in active_peers.items():
+    for peer_id, data in PEERS.items():
         peers.append({
             "peer_id": peer_id,
             "host": data.get("url"),
@@ -7696,7 +7715,7 @@ def network_live():
 
     # Active peers - use real heartbeat tracking from replicas
     cleanup_expired_peers()  # Remove stale peers
-    active_peers_count = len(active_peers)
+    active_peers_count = len(PEERS)
 
     return jsonify({
         "difficulty":          difficulty,
@@ -7760,10 +7779,37 @@ def api_tx_feed():
     include_pending = (request.args.get("include_pending") or "true").lower() != "false"
     include_bridge = (request.args.get("include_bridge") or "true").lower() != "false"
     cursor = request.args.get("cursor", type=int)
-    limit = request.args.get("limit", type=int)
 
     kinds = {k.strip().lower() for k in kinds_param.split(",") if k.strip()}
     exclude_kinds = {k.strip().lower() for k in exclude_kinds_param.split(",") if k.strip()}
+
+    def _classify_tx_feed_entry(tx: dict) -> dict:
+        if not isinstance(tx, dict):
+            return tx
+
+        raw_kind = (tx.get("kind") or tx.get("type") or "").lower()
+        has_block_reward = tx.get("reward") is not None or tx.get("reward_to_miner") is not None
+        is_block = raw_kind == "block" or tx.get("type") == "block" or tx.get("block_hash") or has_block_reward
+        if is_block:
+            tx["kind"] = "block"
+            tx["type"] = "block"
+            tx["category"] = "blocks"
+            return tx
+
+        if raw_kind in {"mining_reward", "block_reward"}:
+            tx["category"] = "mining"
+            return tx
+
+        if raw_kind in {"swap", "pool_swap"}:
+            tx["category"] = "dex"
+            return tx
+
+        if raw_kind in {"thr_transfer", "token_transfer", "transfer", "bridge", "bridge_in", "bridge_out"}:
+            tx["category"] = "transfers"
+            return tx
+
+        tx["category"] = tx.get("category") or raw_kind or "other"
+        return tx
 
     # Use event index for performance if DB is available
     if USE_SQLITE_LEDGER:
@@ -7786,6 +7832,7 @@ def api_tx_feed():
                     "height": event.get("height"),
                     "metadata": event.get("metadata", {}),
                 }
+                tx = _classify_tx_feed_entry(tx)
 
                 # Apply filters
                 kind = tx["kind"] or "transfer"
@@ -7819,6 +7866,7 @@ def api_tx_feed():
         kind = _canonical_kind(tx.get("kind") or tx.get("type") or "")
         tx["kind"] = kind or "transfer"
         tx.setdefault("type", tx["kind"])
+        tx = _classify_tx_feed_entry(tx)
 
         # Apply filters
         if kinds and tx["kind"] not in kinds:
@@ -7871,13 +7919,24 @@ def api_transactions():
 
 @app.route("/api/health", methods=["GET"])
 def api_health():
-    return jsonify({
+    now = time.time()
+    cached = HEALTH_CACHE.get("data")
+    if cached and now - HEALTH_CACHE.get("ts", 0.0) < 0.75:
+        return jsonify(cached), 200
+
+    height = int(CHAIN_META.get("height") or 0)
+    if height < 0:
+        height = 0
+    payload = {
         "ok": True,
         "role": NODE_ROLE,
-        "chain_height": int(CHAIN_META.get("height") or 0),
+        "chain_height": height,
         "last_hash": CHAIN_META.get("last_hash") or "0" * 64,
-        "ts": int(time.time())
-    }), 200
+        "ts": int(now),
+        "version": APP_VERSION,
+    }
+    HEALTH_CACHE.update({"ts": now, "data": payload})
+    return jsonify(payload), 200
 
 
 @app.route("/api/replica_health")
@@ -13424,6 +13483,8 @@ MINING_WATCHDOG_STATE = {
     "invalid": {},
     "banned": {},
 }
+MINING_JOB_CACHE: dict[str, dict] = {}
+MINING_JOB_TTL_SECONDS = int(os.getenv("MINING_JOB_TTL_SECONDS", "20"))
 
 
 def _prune_watchdog_samples(samples: list[float], now: float, window: int) -> list[float]:
@@ -13475,20 +13536,133 @@ def _mining_watchdog_register_invalid(key: str, now: float) -> bool:
     return False
 
 
+def _prune_mining_jobs(now: float) -> None:
+    expired = [job_id for job_id, job in MINING_JOB_CACHE.items() if job.get("expires_at", 0) <= now]
+    for job_id in expired:
+        MINING_JOB_CACHE.pop(job_id, None)
+
+
+def _create_mining_job(thr_address: str | None = None) -> dict:
+    now = time.time()
+    _prune_mining_jobs(now)
+    last_block = get_last_block_snapshot()
+    prev_hash = last_block.get("block_hash") or "0" * 64
+    tip_height = last_block.get("height")
+    if tip_height is None:
+        block_count = last_block.get("block_count")
+        if block_count is not None:
+            tip_height = int(block_count)
+    height = int(tip_height) + 1 if tip_height is not None else None
+    target = get_mining_target()
+    nbits = target_to_bits(target)
+    job_id = f"job_{int(now * 1000)}_{secrets.token_hex(4)}"
+    expires_at = now + MINING_JOB_TTL_SECONDS
+    MINING_JOB_CACHE[job_id] = {
+        "job_id": job_id,
+        "address": thr_address,
+        "prev_hash": prev_hash,
+        "height": height,
+        "target": target,
+        "expires_at": expires_at,
+    }
+    return {
+        "job_id": job_id,
+        "height": height,
+        "prev_hash": prev_hash,
+        "target": hex(target),
+        "nbits": hex(nbits),
+        "reward": reward,
+        "difficulty_int": difficulty,
+        "expires_at": expires_at,
+    }
+
+
+def _get_job_or_stale(job_id: str, thr_address: str | None, now: float):
+    job = MINING_JOB_CACHE.get(job_id)
+    if not job:
+        return None, ("missing_job", "stale_job")
+    if job.get("expires_at", 0) <= now:
+        MINING_JOB_CACHE.pop(job_id, None)
+        return None, ("expired_job", "stale_job")
+    if job.get("address") and thr_address and job["address"] != thr_address:
+        return None, ("address_mismatch", "unauthorized")
+    return job, None
+
+
 # ─── MINING ENDPOINT ───────────────────────────────
-@app.route("/submit_block", methods=["POST"])
-@app.route("/api/submit_block", methods=["POST"])
-def submit_block():
+def _process_mining_submission(data: dict, require_job_id: bool = False):
     start = time.time()
-    data = request.get_json() or {}
-    thr_address = data.get("thr_address")
+    data = dict(data)
+    if not data.get("pow_hash") and data.get("hash"):
+        data["pow_hash"] = data.get("hash")
+    thr_address = data.get("thr_address") or data.get("address")
     nonce = data.get("nonce")
     if not thr_address or nonce is None:
         logger.debug("submit_block handler took %.3fs", time.time() - start)
-        return jsonify(error="Missing mining data"),400
+        return jsonify(error="Missing mining data"), 400
+
     now = time.time()
     miner_key = _mining_watchdog_key(thr_address)
     submitted_height = data.get("height") or data.get("submitted_height")
+
+    job_id = data.get("job_id")
+    if require_job_id:
+        if not job_id:
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            return jsonify(error="job_id required", reason="missing_job_id"), 400
+        job, err = _get_job_or_stale(job_id, thr_address, now)
+        if err:
+            reason, stale_reason = err
+            last_block = get_last_block_snapshot()
+            tip_height = last_block.get("height")
+            tip_hash = last_block.get("block_hash") or "0" * 64
+            logger.info("mining.stale_block %s", json.dumps({
+                "submitted_height": submitted_height,
+                "tip_height": tip_height,
+                "tip_hash": tip_hash,
+                "prev_hash": data.get("prev_hash"),
+                "reason": reason,
+                "job_id": job_id,
+            }))
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            status = 409 if stale_reason == "stale_job" else 403
+            return jsonify(
+                error="stale_block" if status == 409 else "unauthorized",
+                submitted_height=submitted_height,
+                tip_height=tip_height,
+                tip_hash=tip_hash,
+                reason=reason,
+                job_id=job_id,
+            ), status
+
+        data["prev_hash"] = job.get("prev_hash")
+        data["height"] = job.get("height") or data.get("height")
+        data["submitted_height"] = data.get("height")
+        submitted_height = data.get("height") or data.get("submitted_height")
+        if not data.get("pow_hash"):
+            data["pow_hash"] = data.get("hash")
+
+        last_block = get_last_block_snapshot()
+        server_last_hash = last_block.get("block_hash") or "0" * 64
+        tip_height = last_block.get("height")
+        if data["prev_hash"] != server_last_hash:
+            logger.info("mining.stale_block %s", json.dumps({
+                "submitted_height": data.get("submitted_height"),
+                "tip_height": tip_height,
+                "tip_hash": server_last_hash,
+                "prev_hash": data.get("prev_hash"),
+                "reason": "prev_mismatch",
+                "job_id": job_id,
+            }))
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            return jsonify(
+                error="stale_block",
+                submitted_height=data.get("submitted_height"),
+                tip_height=tip_height,
+                tip_hash=server_last_hash,
+                reason="prev_mismatch",
+                job_id=job_id,
+            ), 409
 
     entry = get_mining_whitelist_entry(thr_address)
     if MINING_WHITELIST_ONLY:
@@ -13679,6 +13853,30 @@ def submit_block():
     chain.append(new_block)
     _index_block_event(new_block)  # Index for fast queries
 
+    reward_tx_id = f"reward:{pow_hash}:{thr_address}"
+    reward_tx = {
+        "tx_id": reward_tx_id,
+        "type": "mining_reward",
+        "kind": "mining_reward",
+        "thr_address": thr_address,
+        "from": "COINBASE",
+        "to": thr_address,
+        "amount": miner_share,
+        "timestamp": ts,
+        "height": height,
+        "block_hash": pow_hash,
+        "meta": {
+            "block_height": height,
+            "block_hash": pow_hash,
+            "fee_burned": burn_share,
+            "reward_to_miner": miner_share,
+            "reward_to_ai": ai_share,
+            "source": "stratum" if is_stratum else "legacy",
+        },
+    }
+    persist_normalized_tx(reward_tx)
+    _index_transaction_event(reward_tx)
+
     # include mempool TXs
     pool=load_mempool()
     included=[]
@@ -13737,6 +13935,46 @@ def submit_block():
     print(f"⛏️ Miner {thr_address} found block #{height}! R={total_reward} (m/a/b: {miner_share}/{ai_share}/{burn_share}) | TXs: {len(included)} | Stratum={is_stratum}")
     logger.debug("submit_block handler took %.3fs", time.time() - start)
     return jsonify(status="accepted", height=height, reward=miner_share, tx_included=len(included)), 200
+
+
+@app.route("/submit_block", methods=["POST"])
+@app.route("/api/submit_block", methods=["POST"])
+def submit_block():
+    data = request.get_json() or {}
+    return _process_mining_submission(data, require_job_id=False)
+
+
+@app.route("/api/mining/work")
+def api_mining_work():
+    address = (request.args.get("address") or request.args.get("thr_address") or "").strip() or None
+    job = _create_mining_job(address)
+    return jsonify({"ok": True, **job}), 200
+
+
+@app.route("/api/mining/submit", methods=["POST"])
+def api_mining_submit():
+    data = request.get_json() or {}
+    return _process_mining_submission(data, require_job_id=True)
+
+
+@app.route("/api/miner/work")
+def api_miner_work():
+    """Simple HTTP miner contract (CPU/GPU)."""
+    address = (request.args.get("address") or request.args.get("thr_address") or "").strip() or None
+    job = _create_mining_job(address)
+    return jsonify({
+        "ok": True,
+        **job,
+        "last_hash": job.get("prev_hash"),
+        "header": job.get("prev_hash"),
+    }), 200
+
+
+@app.route("/api/miner/submit", methods=["POST"])
+def api_miner_submit():
+    """Simple HTTP miner submit (CPU/GPU)."""
+    data = request.get_json() or {}
+    return _process_mining_submission(data, require_job_id=False)
 
 
 # ─── BACKGROUND MINTER / WATCHDOG ──────────────────
@@ -14437,17 +14675,9 @@ if is_replica() and HEARTBEAT_ENABLED:
 
         while True:
             try:
-                height = -1
-                try:
-                    if READ_ONLY:
-                        health_response = requests.get(f"{MASTER_INTERNAL_URL}/api/health", timeout=2)
-                        if health_response.ok:
-                            height = int(health_response.json().get("chain_height", -1))
-                    else:
-                        snap = get_last_block_snapshot()
-                        height = int(snap.get("height", -1) or -1)
-                except Exception:
-                    height = -1
+                height = int(CHAIN_META.get("height") or 0)
+                if height < 0:
+                    height = 0
                 response = requests.post(
                     heartbeat_url,
                     json={
@@ -20318,6 +20548,12 @@ def api_music_playlists_create():
         return jsonify({"ok": False, "error": "Failed to create playlist"}), 200
 
 
+@app.route("/api/music/playlists/create", methods=["POST"])
+def api_music_playlists_create_alias():
+    """Alias for playlist creation (wallet module)."""
+    return api_music_playlists_create()
+
+
 @app.route("/api/music/playlists/add_track", methods=["POST"])
 def api_music_playlists_add_track():
     """Add a track to a playlist (DB-backed)."""
@@ -20357,6 +20593,14 @@ def api_music_playlist_add_item(playlist_id):
         app.logger.error(f"Failed to add track {track_id} to playlist {playlist_id}: {e}")
         return jsonify({"ok": False, "error": "Failed to add track"}), 200
 
+    try:
+        removed, message = _remove_track_from_playlist(playlist_id, track_id, address or None)
+        if not removed:
+            return jsonify({"ok": False, "error": message}), 404
+        return jsonify({"ok": True, "message": "Track removed"}), 200
+    except Exception as e:
+        app.logger.error(f"Failed to remove track {track_id} from playlist {playlist_id}: {e}")
+        return jsonify({"ok": False, "error": "Failed to remove track"}), 200
 
 @app.route("/api/music/playlists/<playlist_id>/items/<track_id>", methods=["DELETE"])
 def api_music_playlist_remove_item(playlist_id, track_id):

@@ -30,7 +30,7 @@ from __future__ import annotations
 # - Real Fiat Gateway (Stripe + Bank Withdrawals) (V5.0)
 # - Admin Withdrawal Panel (V5.1)
 
-import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil, sqlite3
+import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil, sqlite3, base64
 import sys
 import atexit
 from collections import Counter
@@ -530,6 +530,7 @@ PROVIDER_HEALTH_TTL = 300  # seconds
 # Lightweight caches for hot endpoints
 MINING_INFO_CACHE: dict = {"ts": 0.0, "data": None}
 LAST_HASH_CACHE: dict = {"ts": 0.0, "data": None}
+HEALTH_CACHE: dict = {"ts": 0.0, "data": None}
 MEMPOOL_COUNT_CACHE: dict = {"ts": 0.0, "count": 0}
 BALANCE_CACHE: dict = {}
 BALANCE_CACHE_TTL = float(os.getenv("BALANCE_CACHE_TTL_SECONDS", "10"))
@@ -1571,6 +1572,36 @@ def _init_ledger_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_music_artist ON music_plays(artist_address)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_music_timestamp ON music_plays(play_timestamp DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_music_track ON music_plays(track_id)")
+
+        # Music playlists tables (NEW - playlist persistence)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS music_playlists (
+                id TEXT PRIMARY KEY,
+                owner_address TEXT NOT NULL,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_playlists_owner ON music_playlists(owner_address)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_playlists_updated ON music_playlists(updated_at DESC)")
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS music_playlist_items (
+                playlist_id TEXT NOT NULL,
+                track_id TEXT NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0,
+                added_at TEXT NOT NULL,
+                PRIMARY KEY (playlist_id, track_id),
+                FOREIGN KEY (playlist_id) REFERENCES music_playlists(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_playlist_items_playlist ON music_playlist_items(playlist_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_playlist_items_position ON music_playlist_items(position)")
 
     with _get_ledger_db_connection() as conn:
         row = conn.execute("SELECT COUNT(1) AS count FROM balances").fetchone()
@@ -3476,7 +3507,7 @@ def normalize_media_url(url: str | None) -> str:
 
     value = url.strip()
 
-    value = re.sub(r"^https?://localhost:\d+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?", "", value, flags=re.IGNORECASE)
     for origin in ("https://thrchain.vercel.app", "https://thrchain.up.railway.app"):
         if value.lower().startswith(origin):
             value = value[len(origin):]
@@ -3673,6 +3704,10 @@ def get_wallet_balances(wallet: str):
         },
     ]
 
+    for token in tokens:
+        token["logo_url"] = normalize_media_url(token.get("logo_url") or token.get("logo") or "")
+        token["logo"] = token.get("logo_url") or token.get("logo") or ""
+
     custom_tokens = load_custom_tokens()
     for symbol, token_data in custom_tokens.items():
         token_id = token_data.get("id")
@@ -3701,8 +3736,8 @@ def get_wallet_balances(wallet: str):
             "name": token_data.get("name", symbol),
             "balance": token_balance,
             "decimals": token_data.get("decimals", 6),
-            "logo": logo_path,
-            "logo_url": logo_url,
+            "logo": normalize_media_url(logo_url or ""),
+            "logo_url": normalize_media_url(logo_url or ""),
             "color": token_data.get("color", "#00ff66"),
             "chain": "Thronos",
             "type": "experimental",
@@ -6085,25 +6120,7 @@ def api_wallet_mining_stats():
     }), 200
 
 
-@app.route("/api/wallet/history", methods=["GET"])
-def api_wallet_history():
-    """
-    Get wallet transaction history with category grouping and summaries (Phase 4).
-
-    Query params:
-    - address: THR address
-    - category: Optional filter (mining, ai_reward, music_tip, iot_telemetry, etc.)
-
-    Returns:
-    - transactions: List of transactions
-    - summary: Category breakdown with totals
-    """
-    address = request.args.get("address", "").strip()
-    category_filter = request.args.get("category", "").strip().lower()
-
-    if not address:
-        return jsonify({"ok": False, "error": "Address required"}), 400
-
+def _collect_wallet_history_transactions(address: str, category_filter: str):
     # Get all transactions
     chain = load_json(CHAIN_FILE, [])
     blocks = get_blocks_for_viewer()
@@ -6111,9 +6128,12 @@ def api_wallet_history():
     # Collect transactions involving this address
     wallet_txs = []
 
-    # 1. Regular chain transactions
+    # 1. Regular chain transactions (skip mining rewards here)
     for tx in chain:
         if not isinstance(tx, dict):
+            continue
+        tx_type = (tx.get("type") or tx.get("kind") or "").lower()
+        if tx_type in ["coinbase", "mining_reward", "mint"]:
             continue
 
         tx_from = tx.get("from") or tx.get("sender")
@@ -6136,30 +6156,68 @@ def api_wallet_history():
             wallet_txs.append(tx_copy)
 
     # 2. Block mining rewards
+    mining_ids = set()
     for block in blocks:
         block_txs = block.get("transactions", [])
         for tx in block_txs:
             if tx.get("type") in ["coinbase", "mining_reward", "mint"]:
                 miner_addr = tx.get("to") or tx.get("thr_address")
                 if miner_addr and miner_addr.lower() == address.lower():
+                    reward_id = f"reward:{block.get('block_hash')}:{miner_addr}"
+                    if reward_id in mining_ids:
+                        continue
+                    mining_ids.add(reward_id)
                     tx_copy = dict(tx)
+                    tx_copy["kind"] = "mining_reward"
+                    tx_copy["type"] = "mining_reward"
                     tx_copy["category"] = "mining"
-                    tx_copy = normalize_history_item(tx_copy)
+                    tx_copy["asset_symbol"] = "THR"
+                    tx_copy["symbol"] = "THR"
+                    tx_copy["from"] = tx_copy.get("from") or "COINBASE"
+                    tx_copy["to"] = miner_addr
                     tx_copy["direction"] = "received"
                     tx_copy["block_height"] = block.get("index")
+                    tx_copy["block_hash"] = block.get("block_hash")
+                    tx_copy["id"] = reward_id
+                    tx_copy["meta"] = {
+                        "block_height": block.get("index"),
+                        "block_hash": block.get("block_hash"),
+                        "fee_burned": block.get("fee_burned"),
+                        "reward_to_miner": block.get("reward_to_miner", block.get("reward")),
+                        "reward_to_ai": block.get("reward_to_ai"),
+                        "source": "stratum" if block.get("is_stratum") else "legacy",
+                    }
+                    tx_copy = normalize_history_item(tx_copy)
                     wallet_txs.append(tx_copy)
         block_miner = block.get("thr_address") or block.get("miner_address") or block.get("miner")
         if block_miner and str(block_miner).lower() == address.lower():
+            reward_id = f"reward:{block.get('block_hash')}:{block_miner}"
+            if reward_id in mining_ids:
+                continue
+            mining_ids.add(reward_id)
             wallet_txs.append(normalize_history_item({
                 "kind": "mining_reward",
                 "type": "mining_reward",
                 "category": "mining",
                 "direction": "received",
+                "from": "COINBASE",
+                "to": block_miner,
+                "asset_symbol": "THR",
+                "symbol": "THR",
                 "amount": float(block.get("reward_to_miner", block.get("reward", 0.0)) or 0.0),
                 "timestamp": block.get("timestamp"),
                 "block_height": block.get("index"),
                 "block_hash": block.get("block_hash"),
                 "thr_address": block_miner,
+                "id": reward_id,
+                "meta": {
+                    "block_height": block.get("index"),
+                    "block_hash": block.get("block_hash"),
+                    "fee_burned": block.get("fee_burned"),
+                    "reward_to_miner": block.get("reward_to_miner", block.get("reward")),
+                    "reward_to_ai": block.get("reward_to_ai"),
+                    "source": "stratum" if block.get("is_stratum") else "legacy",
+                },
             }))
 
     # Apply category filter
@@ -6170,6 +6228,9 @@ def api_wallet_history():
         for key in ("image_url", "logo_url", "audio_url", "cover_url"):
             if key in tx:
                 tx[key] = normalize_media_url(str(tx.get(key) or ""))
+
+    # Sort by timestamp descending
+    wallet_txs.sort(key=lambda t: _parse_timestamp(t.get("timestamp", "")), reverse=True)
 
     # Calculate category summaries
     summary = {
@@ -6217,15 +6278,124 @@ def api_wallet_history():
         if isinstance(summary[key], float):
             summary[key] = round(summary[key], 6)
 
-    # Sort by timestamp descending
-    wallet_txs.sort(key=lambda t: _parse_timestamp(t.get("timestamp", "")), reverse=True)
+    return wallet_txs, summary
+
+
+def _build_wallet_history(address: str, category_filter: str, limit: int, cursor: int):
+    wallet_txs, summary = _collect_wallet_history_transactions(address, category_filter)
+
+    total = len(wallet_txs)
+    paged = wallet_txs[cursor:cursor + limit]
+    next_cursor = cursor + limit if cursor + limit < total else None
+
+    return {
+        "transactions": paged,
+        "summary": summary,
+        "total_transactions": total,
+        "limit": limit,
+        "cursor": cursor,
+        "next_cursor": next_cursor,
+    }
+
+
+def _empty_wallet_history_summary() -> dict:
+    return {
+        "total_mining": 0.0,
+        "total_ai_rewards": 0.0,
+        "total_music_tips_sent": 0.0,
+        "total_music_tips_received": 0.0,
+        "total_iot_rewards": 0.0,
+        "total_sent": 0.0,
+        "total_received": 0.0,
+        "mining_count": 0,
+        "ai_reward_count": 0,
+        "music_tip_count": 0,
+        "iot_count": 0,
+    }
+
+
+def _build_wallet_history_fallback(address: str, limit: int, cursor: int) -> dict:
+    addr_lower = address.lower()
+    entries: list[dict] = []
+    feed = _tx_feed(include_pending=True, include_bridge=True)
+    for tx in feed:
+        if not isinstance(tx, dict):
+            continue
+        parties = set(tx.get("parties") or [])
+        parties.update({tx.get("from"), tx.get("to"), tx.get("trader"), tx.get("thr_address")})
+        parties = {str(p).lower() for p in parties if p}
+        if addr_lower not in parties:
+            continue
+        tx_copy = dict(tx)
+        tx_copy["category"] = tx_copy.get("category") or _categorize_transaction(tx_copy)
+        tx_copy = normalize_history_item(tx_copy)
+        tx_from = tx_copy.get("from")
+        tx_to = tx_copy.get("to")
+        if tx_to and str(tx_to).lower() == addr_lower:
+            tx_copy["direction"] = "received"
+        elif tx_from and str(tx_from).lower() == addr_lower:
+            tx_copy["direction"] = "sent"
+        else:
+            tx_copy["direction"] = "related"
+        for key in ("logo_url", "image_url", "cover_url", "audio_url", "token_logo"):
+            if key in tx_copy:
+                tx_copy[key] = normalize_media_url(str(tx_copy.get(key) or ""))
+        entries.append(tx_copy)
+
+    entries.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    total = len(entries)
+    paged = entries[cursor:cursor + limit]
+    next_cursor = cursor + limit if cursor + limit < total else None
+    return {
+        "transactions": paged,
+        "summary": _empty_wallet_history_summary(),
+        "total_transactions": total,
+        "limit": limit,
+        "cursor": cursor,
+        "next_cursor": next_cursor,
+    }
+
+
+@app.route("/api/wallet/history", methods=["GET"])
+def api_wallet_history():
+    """
+    Get wallet transaction history with category grouping and summaries (Phase 4).
+
+    Query params:
+    - address: THR address
+    - category: Optional filter (mining, ai_reward, music_tip, iot_telemetry, etc.)
+    - limit: Max entries to return (default 200)
+    - cursor: Offset cursor for pagination
+    """
+    address = (request.args.get("address") or request.args.get("wallet") or "").strip()
+    category_filter = request.args.get("category", "").strip().lower()
+    try:
+        limit = min(int(request.args.get("limit", 200)), 500)
+    except Exception:
+        limit = 200
+    try:
+        cursor = max(int(request.args.get("cursor", 0)), 0)
+    except Exception:
+        cursor = 0
+
+    if not address:
+        return jsonify({"ok": False, "error": "Address required"}), 400
+
+    try:
+        payload = _build_wallet_history(address, category_filter, limit, cursor)
+    except Exception as exc:
+        logger.error("[wallet_history] failed: %s", exc)
+        payload = _build_wallet_history_fallback(address, limit, cursor)
+
+    for tx in payload.get("transactions", []):
+        for key in ("logo_url", "image_url", "cover_url", "audio_url", "token_logo"):
+            if key in tx:
+                tx[key] = normalize_media_url(str(tx.get(key) or ""))
 
     return jsonify({
         "ok": True,
         "address": address,
-        "transactions": wallet_txs,
-        "summary": summary,
-        "total_transactions": len(wallet_txs)
+        **payload,
     }), 200
 
 
@@ -6266,8 +6436,14 @@ def api_v2_wallet_history():
     }
     """
     address = request.args.get("address", "").strip()
-    limit = min(int(request.args.get("limit", 100)), 500)  # Max 500
-    offset = int(request.args.get("offset", 0))
+    try:
+        limit = min(int(request.args.get("limit", 100)), 500)  # Max 500
+    except (TypeError, ValueError):
+        limit = 100
+    try:
+        offset = int(request.args.get("offset", 0))
+    except (TypeError, ValueError):
+        offset = 0
     category_filter = request.args.get("category", "").strip().lower()
     from_date = request.args.get("from_date", "").strip()
     to_date = request.args.get("to_date", "").strip()
@@ -6275,73 +6451,13 @@ def api_v2_wallet_history():
     if not address:
         return jsonify({"ok": False, "error": "Address required"}), 400
 
-    # Get all transactions (use existing logic from /api/wallet/history)
-    chain = load_json(CHAIN_FILE, [])
-    blocks = get_blocks_for_viewer()
-
-    wallet_txs = []
-
-    # Collect chain transactions
-    for tx in chain:
-        if not isinstance(tx, dict):
-            continue
-
-        tx_from = tx.get("from") or tx.get("sender")
-        tx_to = tx.get("to") or tx.get("recipient")
-        tx_address = tx.get("address")
-
-        if address.lower() in [str(tx_from).lower(), str(tx_to).lower(), str(tx_address).lower()]:
-            tx_copy = dict(tx)
-            tx_copy["category"] = _categorize_transaction(tx)
-            tx_copy = normalize_history_item(tx_copy)
-
-            if tx_to and tx_to.lower() == address.lower():
-                tx_copy["direction"] = "received"
-            elif tx_from and tx_from.lower() == address.lower():
-                tx_copy["direction"] = "sent"
-            else:
-                tx_copy["direction"] = "related"
-
-            wallet_txs.append(tx_copy)
-
-    # Add mining rewards
-    for block in blocks:
-        for tx in block.get("transactions", []):
-            if tx.get("type") in ["coinbase", "mining_reward", "mint"]:
-                miner_addr = tx.get("to") or tx.get("thr_address")
-                if miner_addr and miner_addr.lower() == address.lower():
-                    tx_copy = dict(tx)
-                    tx_copy["category"] = "mining"
-                    tx_copy = normalize_history_item(tx_copy)
-                    tx_copy["direction"] = "received"
-                    tx_copy["block_height"] = block.get("index")
-                    wallet_txs.append(tx_copy)
-        block_miner = block.get("thr_address") or block.get("miner_address") or block.get("miner")
-        if block_miner and str(block_miner).lower() == address.lower():
-            wallet_txs.append(normalize_history_item({
-                "kind": "mining_reward",
-                "type": "mining_reward",
-                "category": "mining",
-                "direction": "received",
-                "amount": float(block.get("reward_to_miner", block.get("reward", 0.0)) or 0.0),
-                "timestamp": block.get("timestamp"),
-                "block_height": block.get("index"),
-                "block_hash": block.get("block_hash"),
-                "thr_address": block_miner,
-            }))
-
-    # Apply filters
-    if category_filter:
-        wallet_txs = [tx for tx in wallet_txs if tx.get("category", "").lower() == category_filter]
+    wallet_txs, _summary = _collect_wallet_history_transactions(address, category_filter)
 
     if from_date:
         wallet_txs = [tx for tx in wallet_txs if tx.get("timestamp", "") >= from_date]
 
     if to_date:
         wallet_txs = [tx for tx in wallet_txs if tx.get("timestamp", "") <= to_date]
-
-    # Sort by timestamp descending
-    wallet_txs.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
 
     # Pagination
     total = len(wallet_txs)
@@ -6369,6 +6485,46 @@ def wallet_qr_code(thr_addr):
     img.save(buf, format='PNG')
     buf.seek(0)
     return send_file(buf, mimetype="image/png")
+
+
+def _build_qr_payload(network: str | None, address: str) -> str:
+    net = (network or "").strip().lower()
+    if net in {"btc", "bitcoin"}:
+        return f"bitcoin:{address}"
+    if net in {"eth", "ethereum"}:
+        return f"ethereum:{address}"
+    if net in {"bnb", "bsc"}:
+        return f"bnb:{address}"
+    if net in {"xrp", "ripple"}:
+        return f"xrp:{address}"
+    return address
+
+
+def _qr_response(payload: str, force_json: bool = False):
+    img = qrcode.make(payload)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    if force_json:
+        encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
+        return jsonify({"ok": True, "data_url": f"data:image/png;base64,{encoded}"}), 200
+    return send_file(buf, mimetype="image/png")
+
+
+@app.route("/api/qr")
+@app.route("/api/bridge/qr")
+def api_qr():
+    address = (request.args.get("address") or request.args.get("thr_address") or "").strip()
+    if not address:
+        return jsonify({"ok": False, "error": "Missing address"}), 400
+    network = request.args.get("network")
+    payload = _build_qr_payload(network, address)
+    wants_json = (request.args.get("format") or "").lower() == "json"
+    wants_json = wants_json or (request.args.get("json") or "").lower() in {"1", "true", "yes"}
+    if not wants_json:
+        best = request.accept_mimetypes.best if request.accept_mimetypes else ""
+        wants_json = best == "application/json"
+    return _qr_response(payload, force_json=wants_json)
 
 
 @app.route("/api/wallet/audio/<thr_addr>")
@@ -7223,17 +7379,29 @@ def api_last_block():
 
 @app.route("/last_block_hash", methods=["GET"])
 def last_block_hash():
+    now = time.time()
+    cached = LAST_HASH_CACHE.get("data")
+    if cached and now - LAST_HASH_CACHE.get("ts", 0.0) < 0.75:
+        return jsonify(cached), 200
+
     last_hash = CHAIN_META.get("last_hash") or "0" * 64
-    height = CHAIN_META.get("height", -1)
+    height = CHAIN_META.get("height", 0)
+    last_block = CHAIN_META.get("last_block") or {}
+    timestamp = last_block.get("timestamp") or ""
     target = get_mining_target()
     nbits = target_to_bits(target)
-    return jsonify({
+
+    payload = {
+        "ok": True,
         "last_hash": last_hash,
         "block_hash": last_hash,
-        "height": int(height) if height is not None else -1,
+        "height": int(height) if height is not None and int(height) >= 0 else 0,
+        "timestamp": timestamp,
         "target": hex(target),
         "nbits": hex(nbits),
-    }), 200
+    }
+    LAST_HASH_CACHE.update({"ts": now, "data": payload})
+    return jsonify(payload), 200
 
 @app.route("/mining_info")
 def mining_info():
@@ -7565,7 +7733,7 @@ def peers_heartbeat():
         "last_seen": int(time.time()),
     }
     peers = list(PEERS.values())
-    return jsonify(ok=True, role=NODE_ROLE, active_peers=len(peers), peers=peers, ttl_seconds=60), 200
+    return jsonify(ok=True, role=NODE_ROLE, active_peers=len(peers), peers=peers, ttl_seconds=PEER_TTL_SECONDS), 200
 
 @app.route("/api/peers/active", methods=["GET"])
 def peers_active():
@@ -7575,7 +7743,7 @@ def peers_active():
     cleanup_expired_peers()
     return jsonify({
         "ok": True,
-        "active_peers": active_peers,
+        "active_peers": list(PEERS.values()),
         "ttl_seconds": PEER_TTL_SECONDS,
     }), 200
 
@@ -7586,7 +7754,7 @@ def peers_list():
         return jsonify({"error": "Active peers only available on master node"}), 403
     cleanup_expired_peers()
     peers = []
-    for peer_id, data in active_peers.items():
+    for peer_id, data in PEERS.items():
         peers.append({
             "peer_id": peer_id,
             "host": data.get("url"),
@@ -7634,7 +7802,7 @@ def network_live():
 
     # Active peers - use real heartbeat tracking from replicas
     cleanup_expired_peers()  # Remove stale peers
-    active_peers_count = len(active_peers)
+    active_peers_count = len(PEERS)
 
     return jsonify({
         "difficulty":          difficulty,
@@ -7694,14 +7862,100 @@ def api_tx_feed():
     wallet = (request.args.get("wallet") or "").strip()
     kinds_param = request.args.get("kinds") or ""
     exclude_kinds_param = request.args.get("exclude_kinds") or ""
-    limit = min(request.args.get("limit", type=int, default=100), 500)
+    limit_param = request.args.get("limit", type=int)
+    limit = min(limit_param if limit_param is not None else 100, 500)
     include_pending = (request.args.get("include_pending") or "true").lower() != "false"
     include_bridge = (request.args.get("include_bridge") or "true").lower() != "false"
     cursor = request.args.get("cursor", type=int)
-    limit = request.args.get("limit", type=int)
+    paginate = limit_param is not None or cursor is not None
 
     kinds = {k.strip().lower() for k in kinds_param.split(",") if k.strip()}
     exclude_kinds = {k.strip().lower() for k in exclude_kinds_param.split(",") if k.strip()}
+    has_tx_log = bool(load_tx_log())
+
+    def _classify_tx_feed_entry(tx: dict) -> dict:
+        if not isinstance(tx, dict):
+            return tx
+
+        raw_kind = (tx.get("kind") or tx.get("type") or "").lower()
+        has_block_reward = tx.get("reward") is not None or tx.get("reward_to_miner") is not None
+        is_block = raw_kind == "block" or tx.get("type") == "block" or tx.get("block_hash") or has_block_reward
+        if is_block:
+            tx["kind"] = "block"
+            tx["type"] = "block"
+            tx["category"] = "blocks"
+            return tx
+
+        if raw_kind in {"mining_reward", "block_reward"}:
+            tx["category"] = "mining"
+            return tx
+
+        if raw_kind in {"swap", "pool_swap"}:
+            tx["category"] = "dex"
+            return tx
+
+        if raw_kind in {"thr_transfer", "token_transfer", "transfer", "bridge", "bridge_in", "bridge_out"}:
+            tx["category"] = "transfers"
+            return tx
+
+        tx["category"] = tx.get("category") or raw_kind or "other"
+        return tx
+
+    def _build_block_feed(max_items: int) -> list[dict]:
+        blocks = get_blocks_for_viewer()
+        if not blocks:
+            return []
+        entries: list[dict] = []
+        for block in blocks:
+            miner_addr = block.get("thr_address") or block.get("miner_address") or block.get("miner")
+            if wallet and (not miner_addr or str(miner_addr).lower() != wallet.lower()):
+                continue
+            block_hash = block.get("block_hash") or block.get("hash")
+            height = block.get("index")
+            timestamp = block.get("timestamp")
+            base = {
+                "tx_id": block_hash or f"block:{height}",
+                "block_hash": block_hash,
+                "height": height,
+                "timestamp": timestamp,
+                "reward_to_miner": block.get("reward_to_miner", block.get("reward")),
+                "reward_to_ai": block.get("reward_to_ai"),
+                "fee_burned": block.get("fee_burned"),
+                "thr_address": miner_addr,
+                "from": "COINBASE",
+                "to": miner_addr,
+                "kind": "block",
+                "type": "block",
+            }
+            entries.append(_classify_tx_feed_entry(base))
+
+            reward = base.get("reward_to_miner")
+            if reward:
+                reward_entry = {
+                    "tx_id": f"reward:{block_hash or height}:{miner_addr or 'miner'}",
+                    "kind": "mining_reward",
+                    "type": "mining_reward",
+                    "category": "mining",
+                    "timestamp": timestamp,
+                    "amount": reward,
+                    "from": "COINBASE",
+                    "to": miner_addr,
+                    "block_hash": block_hash,
+                    "block_height": height,
+                    "meta": {
+                        "block_height": height,
+                        "block_hash": block_hash,
+                        "fee_burned": block.get("fee_burned"),
+                        "reward_to_miner": reward,
+                        "reward_to_ai": block.get("reward_to_ai"),
+                    },
+                }
+                entries.append(_classify_tx_feed_entry(reward_entry))
+
+            if len(entries) >= max_items:
+                break
+        entries.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        return entries[:max_items]
 
     # Use event index for performance if DB is available
     if USE_SQLITE_LEDGER:
@@ -7724,6 +7978,10 @@ def api_tx_feed():
                     "height": event.get("height"),
                     "metadata": event.get("metadata", {}),
                 }
+                tx = _classify_tx_feed_entry(tx)
+                for key in ("image_url", "logo_url", "audio_url", "cover_url"):
+                    if key in tx:
+                        tx[key] = normalize_media_url(str(tx.get(key) or ""))
 
                 # Apply filters
                 kind = tx["kind"] or "transfer"
@@ -7744,7 +8002,21 @@ def api_tx_feed():
                     counts[k] = counts.get(k, 0) + 1
                 app.logger.info("tx_feed_counts", extra={"counts": counts, "wallet": wallet or None, "source": "event_index"})
 
-            return jsonify(normalized), 200
+            if normalized:
+                if not paginate:
+                    return jsonify(normalized), 200
+                start = max(cursor or 0, 0)
+                cap = max(limit or 200, 1)
+                page = normalized[start:start + cap]
+                next_cursor = start + cap if start + cap < len(normalized) else None
+                reason = None if page else "no_events"
+                return jsonify({
+                    "ok": True,
+                    "items": page,
+                    "cursor": next_cursor,
+                    "has_more": next_cursor is not None,
+                    "reason": reason,
+                }), 200
 
         except Exception as e:
             logger.warning(f"Event index query failed, falling back to chain scan: {e}")
@@ -7757,6 +8029,7 @@ def api_tx_feed():
         kind = _canonical_kind(tx.get("kind") or tx.get("type") or "")
         tx["kind"] = kind or "transfer"
         tx.setdefault("type", tx["kind"])
+        tx = _classify_tx_feed_entry(tx)
 
         # Apply filters
         if kinds and tx["kind"] not in kinds:
@@ -7779,6 +8052,9 @@ def api_tx_feed():
         if len(normalized) >= limit:
             break
 
+    if not normalized and not has_tx_log:
+        normalized = _build_block_feed(limit)
+
     if request.args.get("debug_counts"):
         counts: dict[str, int] = {}
         for tx in normalized:
@@ -7786,7 +8062,7 @@ def api_tx_feed():
             counts[k] = counts.get(k, 0) + 1
         app.logger.info("tx_feed_counts", extra={"counts": counts, "wallet": wallet or None, "source": "chain_scan"})
 
-    if limit is None and cursor is None:
+    if not paginate:
         return jsonify(normalized), 200
 
     start = max(cursor or 0, 0)
@@ -7798,8 +8074,14 @@ def api_tx_feed():
         "ok": True,
         "items": page,
         "cursor": next_cursor,
-        "has_more": next_cursor is not None
+        "has_more": next_cursor is not None,
+        "reason": None if page else "no_events",
     }), 200
+
+
+@app.route("/api/feed_tx")
+def api_feed_tx():
+    return api_tx_feed()
 
 @app.route("/api/transactions")
 def api_transactions():
@@ -7809,13 +8091,24 @@ def api_transactions():
 
 @app.route("/api/health", methods=["GET"])
 def api_health():
-    return jsonify({
+    now = time.time()
+    cached = HEALTH_CACHE.get("data")
+    if cached and now - HEALTH_CACHE.get("ts", 0.0) < 0.75:
+        return jsonify(cached), 200
+
+    height = int(CHAIN_META.get("height") or 0)
+    if height < 0:
+        height = 0
+    payload = {
         "ok": True,
         "role": NODE_ROLE,
-        "chain_height": int(CHAIN_META.get("height") or 0),
+        "chain_height": height,
         "last_hash": CHAIN_META.get("last_hash") or "0" * 64,
-        "ts": int(time.time())
-    }), 200
+        "ts": int(now),
+        "version": APP_VERSION,
+    }
+    HEALTH_CACHE.update({"ts": now, "data": payload})
+    return jsonify(payload), 200
 
 
 @app.route("/api/replica_health")
@@ -10496,14 +10789,47 @@ def api_history():
     category = (request.args.get("category") or "").strip().lower()
     if not thr_addr:
         return jsonify({"ok": False, "error": "Missing wallet address"}), 400
-    history = build_wallet_history(thr_addr)
-    for entry in history:
-        for key in ("image_url", "logo_url", "audio_url", "cover_url"):
-            if key in entry:
-                entry[key] = normalize_media_url(str(entry.get(key) or ""))
-    if category:
-        history = [entry for entry in history if (entry.get("category") or entry.get("kind") or "").lower() == category]
-    return jsonify({"ok": True, "wallet": thr_addr, "history": history}), 200
+    try:
+        try:
+            limit = min(int(request.args.get("limit", 200)), 500)
+        except Exception:
+            limit = 200
+        try:
+            cursor = max(int(request.args.get("cursor", 0)), 0)
+        except Exception:
+            cursor = 0
+        payload = _build_wallet_history(thr_addr, category, limit, cursor)
+        return jsonify({
+            "ok": True,
+            "address": thr_addr,
+            **payload,
+        }), 200
+    except Exception as exc:
+        logger.error("[api_history] failed: %s", exc)
+        summary = {
+            "total_mining": 0.0,
+            "total_ai_rewards": 0.0,
+            "total_music_tips_sent": 0.0,
+            "total_music_tips_received": 0.0,
+            "total_iot_rewards": 0.0,
+            "total_sent": 0.0,
+            "total_received": 0.0,
+            "mining_count": 0,
+            "ai_reward_count": 0,
+            "music_tip_count": 0,
+            "iot_count": 0
+        }
+        return jsonify({
+            "ok": False,
+            "error": "temporary",
+            "address": thr_addr,
+            "transactions": [],
+            "summary": summary,
+            "total_transactions": 0,
+            "limit": 0,
+            "cursor": 0,
+            "next_cursor": None,
+        }), 200
 
 
 def get_token_price_in_thr(symbol):
@@ -11186,9 +11512,15 @@ def api_list_tokens():
             token["logo_url"] = normalize_media_url(f"/static/{logo}")
         else:
             token["logo_url"] = normalize_media_url(token.get("logo_url") or token.get("logo") or token.get("logo_path", ""))
+        token["logo"] = token.get("logo_url") or token.get("logo") or ""
 
     token_list.sort(key=lambda t: t.get("created_at", ""), reverse=True)
     return jsonify({"ok": True, "tokens": token_list}), 200
+
+
+@app.route("/api/tokens")
+def api_tokens_alias():
+    return api_list_tokens()
 
 @app.route("/api/tokens/<symbol>/balance/<address>")
 def api_token_balance(symbol, address):
@@ -11197,6 +11529,8 @@ def api_token_balance(symbol, address):
     token = tokens.get(symbol.upper())
     if not token:
         return jsonify({"ok": False, "error": "Token not found"}), 404
+    token["logo_url"] = normalize_media_url(token.get("logo_url") or token.get("logo") or token.get("logo_path", ""))
+    token["logo"] = token.get("logo_url") or token.get("logo") or ""
     ledger = load_custom_token_ledger(token["id"])
     balance = float(ledger.get(address, 0))
     return jsonify({"ok": True, "symbol": symbol.upper(), "address": address, "balance": balance, "token": token}), 200
@@ -13329,6 +13663,8 @@ MINING_WATCHDOG_STATE = {
     "invalid": {},
     "banned": {},
 }
+MINING_JOB_CACHE: dict[str, dict] = {}
+MINING_JOB_TTL_SECONDS = int(os.getenv("MINING_JOB_TTL_SECONDS", "20"))
 
 
 def _prune_watchdog_samples(samples: list[float], now: float, window: int) -> list[float]:
@@ -13380,20 +13716,133 @@ def _mining_watchdog_register_invalid(key: str, now: float) -> bool:
     return False
 
 
+def _prune_mining_jobs(now: float) -> None:
+    expired = [job_id for job_id, job in MINING_JOB_CACHE.items() if job.get("expires_at", 0) <= now]
+    for job_id in expired:
+        MINING_JOB_CACHE.pop(job_id, None)
+
+
+def _create_mining_job(thr_address: str | None = None) -> dict:
+    now = time.time()
+    _prune_mining_jobs(now)
+    last_block = get_last_block_snapshot()
+    prev_hash = last_block.get("block_hash") or "0" * 64
+    tip_height = last_block.get("height")
+    if tip_height is None:
+        block_count = last_block.get("block_count")
+        if block_count is not None:
+            tip_height = int(block_count)
+    height = int(tip_height) + 1 if tip_height is not None else None
+    target = get_mining_target()
+    nbits = target_to_bits(target)
+    job_id = f"job_{int(now * 1000)}_{secrets.token_hex(4)}"
+    expires_at = now + MINING_JOB_TTL_SECONDS
+    MINING_JOB_CACHE[job_id] = {
+        "job_id": job_id,
+        "address": thr_address,
+        "prev_hash": prev_hash,
+        "height": height,
+        "target": target,
+        "expires_at": expires_at,
+    }
+    return {
+        "job_id": job_id,
+        "height": height,
+        "prev_hash": prev_hash,
+        "target": hex(target),
+        "nbits": hex(nbits),
+        "reward": reward,
+        "difficulty_int": difficulty,
+        "expires_at": expires_at,
+    }
+
+
+def _get_job_or_stale(job_id: str, thr_address: str | None, now: float):
+    job = MINING_JOB_CACHE.get(job_id)
+    if not job:
+        return None, ("missing_job", "stale_job")
+    if job.get("expires_at", 0) <= now:
+        MINING_JOB_CACHE.pop(job_id, None)
+        return None, ("expired_job", "stale_job")
+    if job.get("address") and thr_address and job["address"] != thr_address:
+        return None, ("address_mismatch", "unauthorized")
+    return job, None
+
+
 # ─── MINING ENDPOINT ───────────────────────────────
-@app.route("/submit_block", methods=["POST"])
-@app.route("/api/submit_block", methods=["POST"])
-def submit_block():
+def _process_mining_submission(data: dict, require_job_id: bool = False):
     start = time.time()
-    data = request.get_json() or {}
-    thr_address = data.get("thr_address")
+    data = dict(data)
+    if not data.get("pow_hash") and data.get("hash"):
+        data["pow_hash"] = data.get("hash")
+    thr_address = data.get("thr_address") or data.get("address")
     nonce = data.get("nonce")
     if not thr_address or nonce is None:
         logger.debug("submit_block handler took %.3fs", time.time() - start)
-        return jsonify(error="Missing mining data"),400
+        return jsonify(error="Missing mining data"), 400
+
     now = time.time()
     miner_key = _mining_watchdog_key(thr_address)
     submitted_height = data.get("height") or data.get("submitted_height")
+
+    job_id = data.get("job_id")
+    if require_job_id:
+        if not job_id:
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            return jsonify(error="job_id required", reason="missing_job_id"), 400
+        job, err = _get_job_or_stale(job_id, thr_address, now)
+        if err:
+            reason, stale_reason = err
+            last_block = get_last_block_snapshot()
+            tip_height = last_block.get("height")
+            tip_hash = last_block.get("block_hash") or "0" * 64
+            logger.info("mining.stale_block %s", json.dumps({
+                "submitted_height": submitted_height,
+                "tip_height": tip_height,
+                "tip_hash": tip_hash,
+                "prev_hash": data.get("prev_hash"),
+                "reason": reason,
+                "job_id": job_id,
+            }))
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            status = 409 if stale_reason == "stale_job" else 403
+            return jsonify(
+                error="stale_block" if status == 409 else "unauthorized",
+                submitted_height=submitted_height,
+                tip_height=tip_height,
+                tip_hash=tip_hash,
+                reason=reason,
+                job_id=job_id,
+            ), status
+
+        data["prev_hash"] = job.get("prev_hash")
+        data["height"] = job.get("height") or data.get("height")
+        data["submitted_height"] = data.get("height")
+        submitted_height = data.get("height") or data.get("submitted_height")
+        if not data.get("pow_hash"):
+            data["pow_hash"] = data.get("hash")
+
+        last_block = get_last_block_snapshot()
+        server_last_hash = last_block.get("block_hash") or "0" * 64
+        tip_height = last_block.get("height")
+        if data["prev_hash"] != server_last_hash:
+            logger.info("mining.stale_block %s", json.dumps({
+                "submitted_height": data.get("submitted_height"),
+                "tip_height": tip_height,
+                "tip_hash": server_last_hash,
+                "prev_hash": data.get("prev_hash"),
+                "reason": "prev_mismatch",
+                "job_id": job_id,
+            }))
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            return jsonify(
+                error="stale_block",
+                submitted_height=data.get("submitted_height"),
+                tip_height=tip_height,
+                tip_hash=server_last_hash,
+                reason="prev_mismatch",
+                job_id=job_id,
+            ), 409
 
     entry = get_mining_whitelist_entry(thr_address)
     if MINING_WHITELIST_ONLY:
@@ -13584,6 +14033,30 @@ def submit_block():
     chain.append(new_block)
     _index_block_event(new_block)  # Index for fast queries
 
+    reward_tx_id = f"reward:{pow_hash}:{thr_address}"
+    reward_tx = {
+        "tx_id": reward_tx_id,
+        "type": "mining_reward",
+        "kind": "mining_reward",
+        "thr_address": thr_address,
+        "from": "COINBASE",
+        "to": thr_address,
+        "amount": miner_share,
+        "timestamp": ts,
+        "height": height,
+        "block_hash": pow_hash,
+        "meta": {
+            "block_height": height,
+            "block_hash": pow_hash,
+            "fee_burned": burn_share,
+            "reward_to_miner": miner_share,
+            "reward_to_ai": ai_share,
+            "source": "stratum" if is_stratum else "legacy",
+        },
+    }
+    persist_normalized_tx(reward_tx)
+    _index_transaction_event(reward_tx)
+
     # include mempool TXs
     pool=load_mempool()
     included=[]
@@ -13642,6 +14115,46 @@ def submit_block():
     print(f"⛏️ Miner {thr_address} found block #{height}! R={total_reward} (m/a/b: {miner_share}/{ai_share}/{burn_share}) | TXs: {len(included)} | Stratum={is_stratum}")
     logger.debug("submit_block handler took %.3fs", time.time() - start)
     return jsonify(status="accepted", height=height, reward=miner_share, tx_included=len(included)), 200
+
+
+@app.route("/submit_block", methods=["POST"])
+@app.route("/api/submit_block", methods=["POST"])
+def submit_block():
+    data = request.get_json() or {}
+    return _process_mining_submission(data, require_job_id=False)
+
+
+@app.route("/api/mining/work")
+def api_mining_work():
+    address = (request.args.get("address") or request.args.get("thr_address") or "").strip() or None
+    job = _create_mining_job(address)
+    return jsonify({"ok": True, **job}), 200
+
+
+@app.route("/api/mining/submit", methods=["POST"])
+def api_mining_submit():
+    data = request.get_json() or {}
+    return _process_mining_submission(data, require_job_id=True)
+
+
+@app.route("/api/miner/work")
+def api_miner_work():
+    """Simple HTTP miner contract (CPU/GPU)."""
+    address = (request.args.get("address") or request.args.get("thr_address") or "").strip() or None
+    job = _create_mining_job(address)
+    return jsonify({
+        "ok": True,
+        **job,
+        "last_hash": job.get("prev_hash"),
+        "header": job.get("prev_hash"),
+    }), 200
+
+
+@app.route("/api/miner/submit", methods=["POST"])
+def api_miner_submit():
+    """Simple HTTP miner submit (CPU/GPU)."""
+    data = request.get_json() or {}
+    return _process_mining_submission(data, require_job_id=False)
 
 
 # ─── BACKGROUND MINTER / WATCHDOG ──────────────────
@@ -14342,17 +14855,9 @@ if is_replica() and HEARTBEAT_ENABLED:
 
         while True:
             try:
-                height = -1
-                try:
-                    if READ_ONLY:
-                        health_response = requests.get(f"{MASTER_INTERNAL_URL}/api/health", timeout=2)
-                        if health_response.ok:
-                            height = int(health_response.json().get("chain_height", -1))
-                    else:
-                        snap = get_last_block_snapshot()
-                        height = int(snap.get("height", -1) or -1)
-                except Exception:
-                    height = -1
+                height = int(CHAIN_META.get("height") or 0)
+                if height < 0:
+                    height = 0
                 response = requests.post(
                     heartbeat_url,
                     json={
@@ -16754,6 +17259,11 @@ def api_v1_get_pools():
     return jsonify(pools=pools), 200
 
 
+@app.route("/api/pools", methods=["GET"])
+def api_pools_alias():
+    return api_v1_get_pools()
+
+
 @app.route("/api/v1/pools/positions/<address>")
 def api_v1_user_positions(address):
     """
@@ -16839,6 +17349,11 @@ def api_v1_user_positions(address):
         "total_value_thr": round(total_value_thr, 6),
         "total_value_usd": round(total_value_usd, 2)
     }), 200
+
+
+@app.route("/api/pools/positions/<address>")
+def api_pools_positions_alias(address):
+    return api_v1_user_positions(address)
 
 
 @app.route("/api/v1/pools/referral/<pool_id>")
@@ -19164,10 +19679,10 @@ def api_music_tracks_compact():
         tracks.sort(key=lambda t: t.get("uploaded_at", ""), reverse=True)
         for t in tracks:
             t["play_count"] = len(registry.get("plays", {}).get(t.get("id"), []))
-        return jsonify({"ok": True, "tracks": tracks[:limit], "total": len(tracks)}), 200
+        return jsonify({"ok": True, "status": "success", "tracks": tracks[:limit], "total": len(tracks)}), 200
     except Exception as e:
         logger.exception("Failed to load music tracks")
-        return jsonify({"ok": True, "tracks": [], "total": 0, "error": str(e)}), 200
+        return jsonify({"ok": False, "tracks": [], "total": 0, "error": str(e)}), 200
 
 
 @app.route("/api/v1/music/tracks")
@@ -19280,6 +19795,7 @@ def api_v1_music_register_artist():
 
 
 @app.route("/api/v1/music/upload", methods=["POST"])
+@app.route("/api/music/upload", methods=["POST"])
 def api_v1_music_upload():
     """Upload a new track"""
     # Handle form data
@@ -19287,6 +19803,12 @@ def api_v1_music_upload():
     title = (request.form.get("title") or "").strip()
     genre = (request.form.get("genre") or "Other").strip()
     description = (request.form.get("description") or "").strip()
+    status = (request.form.get("status") or "published").strip().lower()
+    raw_playlist_ids = request.form.getlist("playlist_ids") or []
+    if not raw_playlist_ids:
+        raw_value = (request.form.get("playlist_ids") or "").strip()
+        if raw_value:
+            raw_playlist_ids = [pid.strip() for pid in raw_value.split(",") if pid.strip()]
 
     if not artist_address or not validate_thr_address(artist_address):
         return jsonify({"status": "error", "message": "Invalid artist address"}), 400
@@ -19333,6 +19855,7 @@ def api_v1_music_upload():
                 cover_file.save(os.path.join(MEDIA_DIR, cover_relative))
 
         # Create track entry
+        published = status == "published"
         track = {
             "id": track_id,
             "title": title,
@@ -19345,7 +19868,8 @@ def api_v1_music_upload():
             "cover_path": cover_relative,
             "cover_url": f"/media/{cover_relative}" if cover_relative else None,
             "uploaded_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-            "published": True,
+            "status": "published" if published else "draft",
+            "published": published,
             "tips_total": 0
         }
 
@@ -19355,14 +19879,25 @@ def api_v1_music_upload():
 
         logger.info(f"Track uploaded: {title} by {registry['artists'][artist_address]['name']}")
 
+        playlist_ids = [pid for pid in raw_playlist_ids if pid]
+        for playlist_id in playlist_ids:
+            try:
+                _add_track_to_playlist(playlist_id, track_id, artist_address)
+            except Exception as add_error:
+                logger.warning(f"Failed to add track {track_id} to playlist {playlist_id}: {add_error}")
+
+        track = enrich_track_media(track)
+        track["play_count"] = 0
+
         return jsonify({
+            "ok": True,
             "status": "success",
             "track": track
         }), 201
 
     except Exception as e:
         logger.error(f"Track upload error: {e}", exc_info=True)
-        return jsonify({"status": "error", "message": f"Upload failed: {str(e)}"}), 500
+        return jsonify({"ok": False, "status": "error", "message": f"Upload failed: {str(e)}"}), 500
 
 
 @app.route("/api/v1/music/play/<track_id>", methods=["POST"])
@@ -19614,6 +20149,162 @@ def api_v1_music_search():
 MUSIC_PLAYLISTS_DIR = os.path.join(DATA_DIR, "music", "playlists")
 os.makedirs(MUSIC_PLAYLISTS_DIR, exist_ok=True)
 
+def _get_playlist_rows(owner_address: str | None = None):
+    if not USE_SQLITE_LEDGER:
+        return []
+    query = "SELECT id, owner_address, title, created_at, updated_at FROM music_playlists"
+    params: tuple = ()
+    if owner_address:
+        query += " WHERE owner_address = ?"
+        params = (owner_address,)
+    query += " ORDER BY updated_at DESC"
+    with _get_ledger_db_connection() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _get_playlist_items(playlist_ids: list[str]):
+    if not USE_SQLITE_LEDGER or not playlist_ids:
+        return {}
+    placeholders = ",".join("?" for _ in playlist_ids)
+    query = f"""
+        SELECT playlist_id, track_id, position, added_at
+        FROM music_playlist_items
+        WHERE playlist_id IN ({placeholders})
+        ORDER BY position ASC, added_at ASC
+    """
+    with _get_ledger_db_connection() as conn:
+        rows = conn.execute(query, playlist_ids).fetchall()
+    items_map: dict[str, list[str]] = {}
+    for row in rows:
+        items_map.setdefault(row["playlist_id"], []).append(row["track_id"])
+    return items_map
+
+
+def _hydrate_playlists(playlists: list[dict]):
+    registry = load_music_registry()
+    track_map = {t.get("id"): enrich_track_media(dict(t)) for t in registry.get("tracks", [])}
+    playlist_ids = [p["id"] for p in playlists]
+    items_map = _get_playlist_items(playlist_ids)
+    hydrated = []
+    for playlist in playlists:
+        track_ids = items_map.get(playlist["id"], [])
+        tracks = [track_map[tid] for tid in track_ids if tid in track_map]
+        hydrated.append({
+            "id": playlist["id"],
+            "playlist_id": playlist["id"],
+            "owner_address": playlist["owner_address"],
+            "title": playlist["title"],
+            "name": playlist["title"],
+            "created_at": playlist["created_at"],
+            "updated_at": playlist["updated_at"],
+            "track_ids": track_ids,
+            "tracks": tracks,
+            "track_count": len(track_ids),
+        })
+    return hydrated
+
+
+def _create_music_playlist(owner_address: str, title: str):
+    if not USE_SQLITE_LEDGER:
+        raise RuntimeError("SQLite disabled")
+    playlist_id = f"pl_{int(time.time())}_{secrets.token_hex(4)}"
+    now = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    with _get_ledger_db_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO music_playlists (id, owner_address, title, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (playlist_id, owner_address, title, now, now),
+        )
+    return {
+        "id": playlist_id,
+        "playlist_id": playlist_id,
+        "owner_address": owner_address,
+        "title": title,
+        "name": title,
+        "created_at": now,
+        "updated_at": now,
+        "track_ids": [],
+        "tracks": [],
+        "track_count": 0,
+    }
+
+
+def _add_track_to_playlist(playlist_id: str, track_id: str, owner_address: str | None = None):
+    if not USE_SQLITE_LEDGER:
+        raise RuntimeError("SQLite disabled")
+    with _get_ledger_db_connection() as conn:
+        playlist = conn.execute(
+            "SELECT id, owner_address FROM music_playlists WHERE id = ?",
+            (playlist_id,),
+        ).fetchone()
+        if not playlist:
+            return False, "Playlist not found"
+        if owner_address and playlist["owner_address"] != owner_address:
+            return False, "Unauthorized"
+
+        row = conn.execute(
+            "SELECT MAX(position) AS max_pos FROM music_playlist_items WHERE playlist_id = ?",
+            (playlist_id,),
+        ).fetchone()
+        next_pos = int(row["max_pos"] or 0) + 1
+        now = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO music_playlist_items (playlist_id, track_id, position, added_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (playlist_id, track_id, next_pos, now),
+        )
+        conn.execute(
+            "UPDATE music_playlists SET updated_at = ? WHERE id = ?",
+            (now, playlist_id),
+        )
+    return True, ""
+
+
+def _remove_track_from_playlist(playlist_id: str, track_id: str, owner_address: str | None = None):
+    if not USE_SQLITE_LEDGER:
+        raise RuntimeError("SQLite disabled")
+    with _get_ledger_db_connection() as conn:
+        playlist = conn.execute(
+            "SELECT id, owner_address FROM music_playlists WHERE id = ?",
+            (playlist_id,),
+        ).fetchone()
+        if not playlist:
+            return False, "Playlist not found"
+        if owner_address and playlist["owner_address"] != owner_address:
+            return False, "Unauthorized"
+        conn.execute(
+            "DELETE FROM music_playlist_items WHERE playlist_id = ? AND track_id = ?",
+            (playlist_id, track_id),
+        )
+        now = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        conn.execute(
+            "UPDATE music_playlists SET updated_at = ? WHERE id = ?",
+            (now, playlist_id),
+        )
+    return True, ""
+
+
+def _delete_music_playlist(playlist_id: str, owner_address: str | None = None):
+    if not USE_SQLITE_LEDGER:
+        raise RuntimeError("SQLite disabled")
+    with _get_ledger_db_connection() as conn:
+        playlist = conn.execute(
+            "SELECT id, owner_address FROM music_playlists WHERE id = ?",
+            (playlist_id,),
+        ).fetchone()
+        if not playlist:
+            return False, "Playlist not found"
+        if owner_address and playlist["owner_address"] != owner_address:
+            return False, "Unauthorized"
+        conn.execute("DELETE FROM music_playlist_items WHERE playlist_id = ?", (playlist_id,))
+        conn.execute("DELETE FROM music_playlists WHERE id = ?", (playlist_id,))
+    return True, ""
+
 @app.route("/api/music/playlists/<wallet>", methods=["GET"])
 def api_music_get_playlists(wallet):
     """
@@ -19621,14 +20312,14 @@ def api_music_get_playlists(wallet):
     Returns list of playlists with metadata.
     """
     try:
-        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
-        playlists = load_json(playlist_file, {"playlists": []})
+        playlists = _get_playlist_rows(wallet)
+        hydrated = _hydrate_playlists(playlists)
 
         return jsonify({
             "ok": True,
             "wallet": wallet,
-            "playlists": playlists.get("playlists", []),
-            "total": len(playlists.get("playlists", []))
+            "playlists": hydrated,
+            "total": len(hydrated)
         }), 200
     except Exception as e:
         # PRIORITY 10: Graceful degradation
@@ -19657,25 +20348,10 @@ def api_music_create_playlist(wallet):
         return jsonify({"ok": False, "error": "Playlist name required"}), 400
 
     try:
-        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
-        playlists_data = load_json(playlist_file, {"playlists": []})
-
-        # Create new playlist
-        playlist_id = f"pl_{int(time.time())}_{secrets.token_hex(4)}"
-        new_playlist = {
-            "id": playlist_id,
-            "name": name,
-            "description": description,
-            "track_ids": track_ids,
-            "is_public": is_public,
-            "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-            "track_count": len(track_ids)
-        }
-
-        playlists_data.setdefault("playlists", []).append(new_playlist)
-        save_json(playlist_file, playlists_data)
-
+        new_playlist = _create_music_playlist(wallet, name)
+        if track_ids:
+            for track_id in track_ids:
+                _add_track_to_playlist(new_playlist["id"], track_id, wallet)
         app.logger.info(f"🎵 Playlist Created: {name} → {wallet} | {len(track_ids)} tracks")
 
         return jsonify({
@@ -19697,19 +20373,9 @@ def api_music_create_playlist(wallet):
 def api_music_delete_playlist(wallet, playlist_id):
     """PRIORITY 10: Delete playlist."""
     try:
-        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
-        playlists_data = load_json(playlist_file, {"playlists": []})
-
-        # Find and remove playlist
-        original_count = len(playlists_data["playlists"])
-        playlists_data["playlists"] = [
-            p for p in playlists_data["playlists"] if p.get("id") != playlist_id
-        ]
-
-        if len(playlists_data["playlists"]) == original_count:
-            return jsonify({"ok": False, "error": "Playlist not found"}), 404
-
-        save_json(playlist_file, playlists_data)
+        deleted, message = _delete_music_playlist(playlist_id, wallet)
+        if not deleted:
+            return jsonify({"ok": False, "error": message}), 404
 
         return jsonify({
             "ok": True,
@@ -19888,17 +20554,9 @@ def api_music_playlist_add_track(wallet, playlist_id):
         return jsonify({"ok": False, "error": "Missing track_id"}), 400
 
     try:
-        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
-        playlists_data = load_json(playlist_file, {"playlists": []})
-
-        playlist = next((p for p in playlists_data["playlists"] if p["id"] == playlist_id), None)
-        if not playlist:
-            return jsonify({"ok": False, "error": "Playlist not found"}), 404
-
-        if track_id not in playlist.get("tracks", []):
-            playlist.setdefault("tracks", []).append(track_id)
-            playlist["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-            save_json(playlist_file, playlists_data)
+        added, message = _add_track_to_playlist(playlist_id, track_id, wallet)
+        if not added:
+            return jsonify({"ok": False, "error": message}), 404
 
         return jsonify({
             "ok": True,
@@ -19924,17 +20582,9 @@ def api_music_playlist_remove_track(wallet, playlist_id):
         return jsonify({"ok": False, "error": "Missing track_id"}), 400
 
     try:
-        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
-        playlists_data = load_json(playlist_file, {"playlists": []})
-
-        playlist = next((p for p in playlists_data["playlists"] if p["id"] == playlist_id), None)
-        if not playlist:
-            return jsonify({"ok": False, "error": "Playlist not found"}), 404
-
-        if track_id in playlist.get("tracks", []):
-            playlist["tracks"].remove(track_id)
-            playlist["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-            save_json(playlist_file, playlists_data)
+        removed, message = _remove_track_from_playlist(playlist_id, track_id, wallet)
+        if not removed:
+            return jsonify({"ok": False, "error": message}), 404
 
         return jsonify({
             "ok": True,
@@ -19954,30 +20604,16 @@ def api_music_playlist_remove_track(wallet, playlist_id):
 def api_music_get_playlist_tracks(wallet, playlist_id):
     """PRIORITY 10: Get full track objects for a playlist."""
     try:
-        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
-        playlists_data = load_json(playlist_file, {"playlists": []})
-
-        playlist = next((p for p in playlists_data["playlists"] if p["id"] == playlist_id), None)
+        playlists = _get_playlist_rows(wallet)
+        playlist = next((p for p in playlists if p["id"] == playlist_id), None)
         if not playlist:
             return jsonify({"ok": False, "error": "Playlist not found"}), 404
-
-        track_ids = playlist.get("tracks", [])
-
-        # Load music registry and get full track objects
-        registry = load_music_registry()
-        tracks = []
-        for track_id in track_ids:
-            track = next((t for t in registry["tracks"] if t["id"] == track_id), None)
-            if track:
-                tracks.append(enrich_track_media(track))
+        hydrated = _hydrate_playlists([playlist])[0]
 
         return jsonify({
             "ok": True,
             "status": "success",
-            "playlist": {
-                **playlist,
-                "tracks": tracks
-            }
+            "playlist": hydrated
         }), 200
 
     except Exception as e:
@@ -20059,106 +20695,114 @@ def api_music_library():
 
 
 @app.route("/api/music/playlists", methods=["GET"])
-def api_music_playlists_chain():
-    """
-    PR-5: Get playlists for address (chain-derived).
-    Returns playlists built from on-chain transactions:
-    - playlist_create
-    - playlist_add_track
-    - playlist_remove_track
-    - playlist_reorder
-    """
+def api_music_playlists():
+    """Get playlists for address (DB-backed)."""
     address = (request.args.get("address") or "").strip()
     if not address:
         return jsonify({"ok": False, "error": "address required"}), 400
 
     try:
-        chain = load_json(CHAIN_FILE, [])
-        playlists_map = {}
-
-        for tx in chain:
-            if not isinstance(tx, dict):
-                continue
-
-            tx_type = (tx.get("type") or tx.get("kind") or "").lower()
-            meta = tx.get("meta") or {}
-
-            # Filter by owner
-            owner = tx.get("from") or meta.get("owner")
-            if owner != address:
-                continue
-
-            playlist_id = meta.get("playlist_id")
-            if not playlist_id:
-                continue
-
-            # Process different playlist operations
-            if tx_type == "playlist_create":
-                playlists_map[playlist_id] = {
-                    "playlist_id": playlist_id,
-                    "name": meta.get("name", "Untitled Playlist"),
-                    "owner": owner,
-                    "visibility": meta.get("visibility", "private"),
-                    "track_ids": [],
-                    "created_at": tx.get("timestamp"),
-                    "updated_at": tx.get("timestamp"),
-                }
-
-            elif tx_type == "playlist_add_track":
-                if playlist_id not in playlists_map:
-                    # Playlist doesn't exist, skip
-                    continue
-                track_id = meta.get("track_id")
-                if track_id and track_id not in playlists_map[playlist_id]["track_ids"]:
-                    position = meta.get("position")
-                    if position is not None:
-                        playlists_map[playlist_id]["track_ids"].insert(position, track_id)
-                    else:
-                        playlists_map[playlist_id]["track_ids"].append(track_id)
-                    playlists_map[playlist_id]["updated_at"] = tx.get("timestamp")
-
-            elif tx_type == "playlist_remove_track":
-                if playlist_id not in playlists_map:
-                    continue
-                track_id = meta.get("track_id")
-                if track_id in playlists_map[playlist_id]["track_ids"]:
-                    playlists_map[playlist_id]["track_ids"].remove(track_id)
-                    playlists_map[playlist_id]["updated_at"] = tx.get("timestamp")
-
-            elif tx_type == "playlist_reorder":
-                if playlist_id not in playlists_map:
-                    continue
-                new_order = meta.get("track_ids")
-                if isinstance(new_order, list):
-                    playlists_map[playlist_id]["track_ids"] = new_order
-                    playlists_map[playlist_id]["updated_at"] = tx.get("timestamp")
-
-        playlists = list(playlists_map.values())
-
-        # PR-5c: Populate playlists with full track objects
-        registry = load_music_registry()
-        all_tracks = registry.get("tracks", [])
-
-        for playlist in playlists:
-            track_ids = playlist.get("track_ids", [])
-            full_tracks = []
-            for track_id in track_ids:
-                track = next((t for t in all_tracks if t.get("id") == track_id), None)
-                if track:
-                    full_tracks.append(track)
-            playlist["tracks"] = full_tracks
-
+        playlists = _get_playlist_rows(address)
+        hydrated = _hydrate_playlists(playlists)
         return jsonify({
             "ok": True,
             "address": address,
-            "playlists": playlists,
-            "total": len(playlists)
+            "playlists": hydrated,
+            "total": len(hydrated)
         }), 200
-
     except Exception as e:
         app.logger.error(f"Failed to load playlists for {address}: {e}")
-        return jsonify({"ok": False, "error": "Failed to load playlists"}), 500
+        return jsonify({"ok": False, "error": "Failed to load playlists", "playlists": []}), 200
 
+
+@app.route("/api/music/playlists", methods=["POST"])
+def api_music_playlists_create():
+    """Create a new playlist (DB-backed)."""
+    data = request.get_json() or {}
+    address = (data.get("address") or "").strip()
+    title = (data.get("title") or data.get("name") or "").strip()
+    track_ids = data.get("track_ids") or []
+
+    if not address or not title:
+        return jsonify({"ok": False, "error": "address and title required"}), 400
+
+    try:
+        playlist = _create_music_playlist(address, title)
+        if isinstance(track_ids, list):
+            for track_id in track_ids:
+                if track_id:
+                    _add_track_to_playlist(playlist["id"], str(track_id), address)
+        return jsonify({"ok": True, "playlist": playlist}), 201
+    except Exception as e:
+        app.logger.error(f"Failed to create playlist for {address}: {e}")
+        return jsonify({"ok": False, "error": "Failed to create playlist"}), 200
+
+
+@app.route("/api/music/playlists/create", methods=["POST"])
+def api_music_playlists_create_alias():
+    """Alias for playlist creation (wallet module)."""
+    return api_music_playlists_create()
+
+
+@app.route("/api/music/playlists/add_track", methods=["POST"])
+def api_music_playlists_add_track():
+    """Add a track to a playlist (DB-backed)."""
+    data = request.get_json() or {}
+    address = (data.get("address") or "").strip()
+    playlist_id = (data.get("playlist_id") or "").strip()
+    track_id = (data.get("track_id") or "").strip()
+
+    if not playlist_id or not track_id:
+        return jsonify({"ok": False, "error": "playlist_id and track_id required"}), 400
+
+    try:
+        added, message = _add_track_to_playlist(playlist_id, track_id, address or None)
+        if not added:
+            return jsonify({"ok": False, "error": message}), 404
+        return jsonify({"ok": True, "message": "Track added"}), 200
+    except Exception as e:
+        app.logger.error(f"Failed to add track {track_id} to playlist {playlist_id}: {e}")
+        return jsonify({"ok": False, "error": "Failed to add track"}), 200
+
+
+@app.route("/api/music/playlists/<playlist_id>/items", methods=["POST"])
+def api_music_playlist_add_item(playlist_id):
+    """Add a track to a playlist (DB-backed)."""
+    data = request.get_json() or {}
+    address = (data.get("address") or "").strip()
+    track_id = (data.get("track_id") or "").strip()
+    if not track_id:
+        return jsonify({"ok": False, "error": "track_id required"}), 400
+
+    try:
+        added, message = _add_track_to_playlist(playlist_id, track_id, address or None)
+        if not added:
+            return jsonify({"ok": False, "error": message}), 404
+        return jsonify({"ok": True, "message": "Track added"}), 200
+    except Exception as e:
+        app.logger.error(f"Failed to add track {track_id} to playlist {playlist_id}: {e}")
+        return jsonify({"ok": False, "error": "Failed to add track"}), 200
+
+
+@app.route(
+    "/api/music/playlists/<playlist_id>/items/<track_id>",
+    methods=["DELETE"],
+    endpoint="api_music_playlist_remove_item_v2",
+)
+def api_music_playlist_remove_item(playlist_id, track_id):
+    """Remove a track from a playlist (DB-backed)."""
+    address = (request.args.get("address") or "").strip()
+    if not track_id:
+        return jsonify({"ok": False, "error": "track_id required"}), 400
+
+    try:
+        removed, message = _remove_track_from_playlist(playlist_id, track_id, address or None)
+        if not removed:
+            return jsonify({"ok": False, "error": message}), 404
+        return jsonify({"ok": True, "message": "Track removed"}), 200
+    except Exception as e:
+        app.logger.error(f"Failed to remove track {track_id} from playlist {playlist_id}: {e}")
+        return jsonify({"ok": False, "error": "Failed to remove track"}), 200
 
 @app.route("/api/music/playlist/update", methods=["POST"])
 def api_music_playlist_update():

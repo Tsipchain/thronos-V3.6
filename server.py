@@ -7307,7 +7307,9 @@ def last_block_hash():
     nbits = target_to_bits(target)
 
     payload = {
+        "ok": True,
         "last_hash": last_hash,
+        "block_hash": last_hash,
         "height": int(height) if height is not None and int(height) >= 0 else 0,
         "timestamp": timestamp,
         "target": hex(target),
@@ -7783,6 +7785,34 @@ def api_tx_feed():
     kinds = {k.strip().lower() for k in kinds_param.split(",") if k.strip()}
     exclude_kinds = {k.strip().lower() for k in exclude_kinds_param.split(",") if k.strip()}
 
+    def _classify_tx_feed_entry(tx: dict) -> dict:
+        if not isinstance(tx, dict):
+            return tx
+
+        raw_kind = (tx.get("kind") or tx.get("type") or "").lower()
+        has_block_reward = tx.get("reward") is not None or tx.get("reward_to_miner") is not None
+        is_block = raw_kind == "block" or tx.get("type") == "block" or tx.get("block_hash") or has_block_reward
+        if is_block:
+            tx["kind"] = "block"
+            tx["type"] = "block"
+            tx["category"] = "blocks"
+            return tx
+
+        if raw_kind in {"mining_reward", "block_reward"}:
+            tx["category"] = "mining"
+            return tx
+
+        if raw_kind in {"swap", "pool_swap"}:
+            tx["category"] = "dex"
+            return tx
+
+        if raw_kind in {"thr_transfer", "token_transfer", "transfer", "bridge", "bridge_in", "bridge_out"}:
+            tx["category"] = "transfers"
+            return tx
+
+        tx["category"] = tx.get("category") or raw_kind or "other"
+        return tx
+
     # Use event index for performance if DB is available
     if USE_SQLITE_LEDGER:
         try:
@@ -7804,6 +7834,7 @@ def api_tx_feed():
                     "height": event.get("height"),
                     "metadata": event.get("metadata", {}),
                 }
+                tx = _classify_tx_feed_entry(tx)
 
                 # Apply filters
                 kind = tx["kind"] or "transfer"
@@ -7837,6 +7868,7 @@ def api_tx_feed():
         kind = _canonical_kind(tx.get("kind") or tx.get("type") or "")
         tx["kind"] = kind or "transfer"
         tx.setdefault("type", tx["kind"])
+        tx = _classify_tx_feed_entry(tx)
 
         # Apply filters
         if kinds and tx["kind"] not in kinds:

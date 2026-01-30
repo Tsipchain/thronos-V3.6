@@ -293,17 +293,12 @@
     }
 
     const allowedKinds = new Set(TRANSFER_KINDS);
-    const onlyTransfers = (transfers || []).filter(tx =>
-      tx
-      && tx.type !== 'block'
-      && tx.category !== 'block'
-      && !['block'].includes(tx.kind)
-      && (
-        allowedKinds.has(tx.type)
-        || allowedKinds.has(tx.kind)
-        || tx.category === 'tokens'
-      )
-    );
+    const onlyTransfers = (transfers || []).filter(tx => {
+      if (!tx) return false;
+      if (tx.category === 'blocks' || tx.kind === 'block' || tx.type === 'block') return false;
+      if (tx.category === 'transfers' || tx.category === 'dex') return true;
+      return allowedKinds.has(tx.type) || allowedKinds.has(tx.kind) || tx.category === 'tokens';
+    });
 
     if (!onlyTransfers.length) {
       if (!append) {

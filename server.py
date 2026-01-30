@@ -13851,70 +13851,6 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
         if not entry.get("active", True) or entry.get("banned", False):
             logger.info("Mining rejected thr_address=%s reason=inactive_or_banned", thr_address)
             logger.debug("submit_block handler took %.3fs", time.time() - start)
-            return jsonify(error="job_id required", reason="missing_job_id"), 400
-        job, err = _get_job_or_stale(job_id, thr_address, now)
-        if err:
-            reason, stale_reason = err
-            last_block = get_last_block_snapshot()
-            tip_height = last_block.get("height")
-            tip_hash = last_block.get("block_hash") or "0" * 64
-            logger.info("mining.stale_block %s", json.dumps({
-                "submitted_height": submitted_height,
-                "tip_height": tip_height,
-                "tip_hash": tip_hash,
-                "prev_hash": data.get("prev_hash"),
-                "reason": reason,
-                "job_id": job_id,
-            }))
-            logger.debug("submit_block handler took %.3fs", time.time() - start)
-            status = 409 if stale_reason == "stale_job" else 403
-            return jsonify(
-                error="stale_block" if status == 409 else "unauthorized",
-                submitted_height=submitted_height,
-                tip_height=tip_height,
-                tip_hash=tip_hash,
-                reason=reason,
-                job_id=job_id,
-            ), status
-
-        data["prev_hash"] = job.get("prev_hash")
-        data["height"] = job.get("height") or data.get("height")
-        data["submitted_height"] = data.get("height")
-        submitted_height = data.get("height") or data.get("submitted_height")
-        if not data.get("pow_hash"):
-            data["pow_hash"] = data.get("hash")
-
-        last_block = get_last_block_snapshot()
-        server_last_hash = last_block.get("block_hash") or "0" * 64
-        tip_height = last_block.get("height")
-        if data["prev_hash"] != server_last_hash:
-            logger.info("mining.stale_block %s", json.dumps({
-                "submitted_height": data.get("submitted_height"),
-                "tip_height": tip_height,
-                "tip_hash": server_last_hash,
-                "prev_hash": data.get("prev_hash"),
-                "reason": "prev_mismatch",
-                "job_id": job_id,
-            }))
-            logger.debug("submit_block handler took %.3fs", time.time() - start)
-            return jsonify(
-                error="stale_block",
-                submitted_height=data.get("submitted_height"),
-                tip_height=tip_height,
-                tip_hash=server_last_hash,
-                reason="prev_mismatch",
-                job_id=job_id,
-            ), 409
-
-    entry = get_mining_whitelist_entry(thr_address)
-    if MINING_WHITELIST_ONLY:
-        if not entry:
-            logger.info("Mining rejected thr_address=%s reason=not_whitelisted", thr_address)
-            logger.debug("submit_block handler took %.3fs", time.time() - start)
-            return jsonify(error="Mining not whitelisted", reason="not_whitelisted"), 403
-        if not entry.get("active", True) or entry.get("banned", False):
-            logger.info("Mining rejected thr_address=%s reason=inactive_or_banned", thr_address)
-            logger.debug("submit_block handler took %.3fs", time.time() - start)
             return jsonify(error="Mining not active", reason="inactive_or_banned"), 403
         if not (entry.get("pledge_ok", False) or _whitelist_allows_no_pledge(entry)):
             logger.info("Mining rejected thr_address=%s reason=no_effective_pledge", thr_address)
@@ -21150,23 +21086,11 @@ def api_music_playlist_add_item(playlist_id):
         return jsonify({"ok": False, "error": "Failed to add track"}), 200
 
 
-@app.route("/api/music/playlists/<playlist_id>/items/<track_id>", methods=["DELETE"])
-def api_music_playlist_remove_item(playlist_id, track_id):
-    """Remove a track from a playlist (DB-backed)."""
-    address = (request.args.get("address") or "").strip()
-    if not track_id:
-        return jsonify({"ok": False, "error": "track_id required"}), 400
-
-    try:
-        removed, message = _remove_track_from_playlist(playlist_id, track_id, address or None)
-        if not removed:
-            return jsonify({"ok": False, "error": message}), 404
-        return jsonify({"ok": True, "message": "Track removed"}), 200
-    except Exception as e:
-        app.logger.error(f"Failed to remove track {track_id} from playlist {playlist_id}: {e}")
-        return jsonify({"ok": False, "error": "Failed to remove track"}), 200
-
-@app.route("/api/music/playlists/<playlist_id>/items/<track_id>", methods=["DELETE"])
+@app.route(
+    "/api/music/playlists/<playlist_id>/items/<track_id>",
+    methods=["DELETE"],
+    endpoint="api_music_playlist_remove_item_v2",
+)
 def api_music_playlist_remove_item(playlist_id, track_id):
     """Remove a track from a playlist (DB-backed)."""
     address = (request.args.get("address") or "").strip()

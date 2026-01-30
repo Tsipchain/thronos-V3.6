@@ -10,7 +10,7 @@
   // Optional: force API base (useful if frontend is on Vercel and API on Railway)
   // Example: window.THRONOS_API_BASE = "https://thrchain.up.railway.app";
   function getApiBase() {
-    const base = window.THRONOS_API_BASE || "";
+    const base = window.__API_BASE__ || window.THRONOS_API_BASE || "";
     return String(base).replace(/\/+$/, "");
   }
 
@@ -126,6 +126,8 @@
     let s = String(raw).trim();
 
     s = s.replace(/^https?:\/\/localhost:\d+/i, "");
+    s = s.replace(/^https?:\/\/127\.0\.0\.1:\d+/i, "");
+    s = s.replace(/^https?:\/\/0\.0\.0\.0:\d+/i, "");
     s = s.replace(/^https?:\/\/thrchain\.vercel\.app/i, "");
     s = s.replace(/^https?:\/\/thrchain\.up\.railway\.app/i, "");
 
@@ -153,6 +155,35 @@
     } catch (e) {
       return s;
     }
+  }
+
+  function normalizeMediaUrl(raw, fallback = "") {
+    if (!raw) return fallback;
+    let value = String(raw).trim();
+    if (!value) return fallback;
+
+    value = value.replace(/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?/i, "");
+
+    if (value.startsWith("media/") || value.startsWith("static/")) {
+      value = `/${value}`;
+    }
+
+    if (value.startsWith("/media/") || value.startsWith("/static/")) {
+      const base = (window.__API_BASE__ || window.API_BASE || "").replace(/\/$/, "");
+      return base ? `${base}${value}` : value;
+    }
+
+    if (/^[A-Za-z0-9._-]+\.(png|jpe?g|webp|mp3|wav|ogg)$/i.test(value)) {
+      const base = (window.__API_BASE__ || window.API_BASE || "").replace(/\/$/, "");
+      const path = `/media/${value}`;
+      return base ? `${base}${path}` : path;
+    }
+
+    if (/^https?:\/\//i.test(value)) {
+      return value;
+    }
+
+    return value;
   }
 
   async function smartFetch(url, options) {
@@ -192,6 +223,7 @@
     normalizeApiPath,
     buildApiUrl,
     resolveMediaUrl,
+    normalizeMediaUrl,
     smartFetch,
     smartFetchJSON,
     fetchJSONOnce,

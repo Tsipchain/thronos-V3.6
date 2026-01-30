@@ -1,0 +1,7 @@
+{
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "https://thrchain.up.railway.app/api/:path*" },
+    { "source": "/media/:path*", "destination": "https://thrchain.up.railway.app/media/:path*" },
+    { "source": "/static/:path*", "destination": "https://thrchain.up.railway.app/static/:path*" }
+  ]
+}

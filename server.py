@@ -30,7 +30,7 @@ from __future__ import annotations
 # - Real Fiat Gateway (Stripe + Bank Withdrawals) (V5.0)
 # - Admin Withdrawal Panel (V5.1)
 
-import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil, sqlite3
+import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil, sqlite3, base64
 import sys
 import atexit
 from collections import Counter
@@ -3507,7 +3507,7 @@ def normalize_media_url(url: str | None) -> str:
 
     value = url.strip()
 
-    value = re.sub(r"^https?://localhost:\d+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?", "", value, flags=re.IGNORECASE)
     for origin in ("https://thrchain.vercel.app", "https://thrchain.up.railway.app"):
         if value.lower().startswith(origin):
             value = value[len(origin):]
@@ -3704,6 +3704,10 @@ def get_wallet_balances(wallet: str):
         },
     ]
 
+    for token in tokens:
+        token["logo_url"] = normalize_media_url(token.get("logo_url") or token.get("logo") or "")
+        token["logo"] = token.get("logo_url") or token.get("logo") or ""
+
     custom_tokens = load_custom_tokens()
     for symbol, token_data in custom_tokens.items():
         token_id = token_data.get("id")
@@ -3732,8 +3736,8 @@ def get_wallet_balances(wallet: str):
             "name": token_data.get("name", symbol),
             "balance": token_balance,
             "decimals": token_data.get("decimals", 6),
-            "logo": logo_path,
-            "logo_url": logo_url,
+            "logo": normalize_media_url(logo_url or ""),
+            "logo_url": normalize_media_url(logo_url or ""),
             "color": token_data.get("color", "#00ff66"),
             "chain": "Thronos",
             "type": "experimental",
@@ -6440,6 +6444,46 @@ def wallet_qr_code(thr_addr):
     return send_file(buf, mimetype="image/png")
 
 
+def _build_qr_payload(network: str | None, address: str) -> str:
+    net = (network or "").strip().lower()
+    if net in {"btc", "bitcoin"}:
+        return f"bitcoin:{address}"
+    if net in {"eth", "ethereum"}:
+        return f"ethereum:{address}"
+    if net in {"bnb", "bsc"}:
+        return f"bnb:{address}"
+    if net in {"xrp", "ripple"}:
+        return f"xrp:{address}"
+    return address
+
+
+def _qr_response(payload: str, force_json: bool = False):
+    img = qrcode.make(payload)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    if force_json:
+        encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
+        return jsonify({"ok": True, "data_url": f"data:image/png;base64,{encoded}"}), 200
+    return send_file(buf, mimetype="image/png")
+
+
+@app.route("/api/qr")
+@app.route("/api/bridge/qr")
+def api_qr():
+    address = (request.args.get("address") or request.args.get("thr_address") or "").strip()
+    if not address:
+        return jsonify({"ok": False, "error": "Missing address"}), 400
+    network = request.args.get("network")
+    payload = _build_qr_payload(network, address)
+    wants_json = (request.args.get("format") or "").lower() == "json"
+    wants_json = wants_json or (request.args.get("json") or "").lower() in {"1", "true", "yes"}
+    if not wants_json:
+        best = request.accept_mimetypes.best if request.accept_mimetypes else ""
+        wants_json = best == "application/json"
+    return _qr_response(payload, force_json=wants_json)
+
+
 @app.route("/api/wallet/audio/<thr_addr>")
 def wallet_audio(thr_addr):
     """Generate WAV audio encoding the THR address."""
@@ -7775,13 +7819,100 @@ def api_tx_feed():
     wallet = (request.args.get("wallet") or "").strip()
     kinds_param = request.args.get("kinds") or ""
     exclude_kinds_param = request.args.get("exclude_kinds") or ""
-    limit = min(request.args.get("limit", type=int, default=100), 500)
+    limit_param = request.args.get("limit", type=int)
+    limit = min(limit_param if limit_param is not None else 100, 500)
     include_pending = (request.args.get("include_pending") or "true").lower() != "false"
     include_bridge = (request.args.get("include_bridge") or "true").lower() != "false"
     cursor = request.args.get("cursor", type=int)
+    paginate = limit_param is not None or cursor is not None
 
     kinds = {k.strip().lower() for k in kinds_param.split(",") if k.strip()}
     exclude_kinds = {k.strip().lower() for k in exclude_kinds_param.split(",") if k.strip()}
+    has_tx_log = bool(load_tx_log())
+
+    def _classify_tx_feed_entry(tx: dict) -> dict:
+        if not isinstance(tx, dict):
+            return tx
+
+        raw_kind = (tx.get("kind") or tx.get("type") or "").lower()
+        has_block_reward = tx.get("reward") is not None or tx.get("reward_to_miner") is not None
+        is_block = raw_kind == "block" or tx.get("type") == "block" or tx.get("block_hash") or has_block_reward
+        if is_block:
+            tx["kind"] = "block"
+            tx["type"] = "block"
+            tx["category"] = "blocks"
+            return tx
+
+        if raw_kind in {"mining_reward", "block_reward"}:
+            tx["category"] = "mining"
+            return tx
+
+        if raw_kind in {"swap", "pool_swap"}:
+            tx["category"] = "dex"
+            return tx
+
+        if raw_kind in {"thr_transfer", "token_transfer", "transfer", "bridge", "bridge_in", "bridge_out"}:
+            tx["category"] = "transfers"
+            return tx
+
+        tx["category"] = tx.get("category") or raw_kind or "other"
+        return tx
+
+    def _build_block_feed(max_items: int) -> list[dict]:
+        blocks = get_blocks_for_viewer()
+        if not blocks:
+            return []
+        entries: list[dict] = []
+        for block in blocks:
+            miner_addr = block.get("thr_address") or block.get("miner_address") or block.get("miner")
+            if wallet and (not miner_addr or str(miner_addr).lower() != wallet.lower()):
+                continue
+            block_hash = block.get("block_hash") or block.get("hash")
+            height = block.get("index")
+            timestamp = block.get("timestamp")
+            base = {
+                "tx_id": block_hash or f"block:{height}",
+                "block_hash": block_hash,
+                "height": height,
+                "timestamp": timestamp,
+                "reward_to_miner": block.get("reward_to_miner", block.get("reward")),
+                "reward_to_ai": block.get("reward_to_ai"),
+                "fee_burned": block.get("fee_burned"),
+                "thr_address": miner_addr,
+                "from": "COINBASE",
+                "to": miner_addr,
+                "kind": "block",
+                "type": "block",
+            }
+            entries.append(_classify_tx_feed_entry(base))
+
+            reward = base.get("reward_to_miner")
+            if reward:
+                reward_entry = {
+                    "tx_id": f"reward:{block_hash or height}:{miner_addr or 'miner'}",
+                    "kind": "mining_reward",
+                    "type": "mining_reward",
+                    "category": "mining",
+                    "timestamp": timestamp,
+                    "amount": reward,
+                    "from": "COINBASE",
+                    "to": miner_addr,
+                    "block_hash": block_hash,
+                    "block_height": height,
+                    "meta": {
+                        "block_height": height,
+                        "block_hash": block_hash,
+                        "fee_burned": block.get("fee_burned"),
+                        "reward_to_miner": reward,
+                        "reward_to_ai": block.get("reward_to_ai"),
+                    },
+                }
+                entries.append(_classify_tx_feed_entry(reward_entry))
+
+            if len(entries) >= max_items:
+                break
+        entries.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        return entries[:max_items]
 
     def _classify_tx_feed_entry(tx: dict) -> dict:
         if not isinstance(tx, dict):
@@ -7833,6 +7964,9 @@ def api_tx_feed():
                     "metadata": event.get("metadata", {}),
                 }
                 tx = _classify_tx_feed_entry(tx)
+                for key in ("image_url", "logo_url", "audio_url", "cover_url"):
+                    if key in tx:
+                        tx[key] = normalize_media_url(str(tx.get(key) or ""))
 
                 # Apply filters
                 kind = tx["kind"] or "transfer"
@@ -7853,7 +7987,21 @@ def api_tx_feed():
                     counts[k] = counts.get(k, 0) + 1
                 app.logger.info("tx_feed_counts", extra={"counts": counts, "wallet": wallet or None, "source": "event_index"})
 
-            return jsonify(normalized), 200
+            if normalized:
+                if not paginate:
+                    return jsonify(normalized), 200
+                start = max(cursor or 0, 0)
+                cap = max(limit or 200, 1)
+                page = normalized[start:start + cap]
+                next_cursor = start + cap if start + cap < len(normalized) else None
+                reason = None if page else "no_events"
+                return jsonify({
+                    "ok": True,
+                    "items": page,
+                    "cursor": next_cursor,
+                    "has_more": next_cursor is not None,
+                    "reason": reason,
+                }), 200
 
         except Exception as e:
             logger.warning(f"Event index query failed, falling back to chain scan: {e}")
@@ -7889,6 +8037,9 @@ def api_tx_feed():
         if len(normalized) >= limit:
             break
 
+    if not normalized and not has_tx_log:
+        normalized = _build_block_feed(limit)
+
     if request.args.get("debug_counts"):
         counts: dict[str, int] = {}
         for tx in normalized:
@@ -7896,7 +8047,7 @@ def api_tx_feed():
             counts[k] = counts.get(k, 0) + 1
         app.logger.info("tx_feed_counts", extra={"counts": counts, "wallet": wallet or None, "source": "chain_scan"})
 
-    if limit is None and cursor is None:
+    if not paginate:
         return jsonify(normalized), 200
 
     start = max(cursor or 0, 0)
@@ -7908,8 +8059,14 @@ def api_tx_feed():
         "ok": True,
         "items": page,
         "cursor": next_cursor,
-        "has_more": next_cursor is not None
+        "has_more": next_cursor is not None,
+        "reason": None if page else "no_events",
     }), 200
+
+
+@app.route("/api/feed_tx")
+def api_feed_tx():
+    return api_tx_feed()
 
 @app.route("/api/transactions")
 def api_transactions():
@@ -11340,9 +11497,15 @@ def api_list_tokens():
             token["logo_url"] = normalize_media_url(f"/static/{logo}")
         else:
             token["logo_url"] = normalize_media_url(token.get("logo_url") or token.get("logo") or token.get("logo_path", ""))
+        token["logo"] = token.get("logo_url") or token.get("logo") or ""
 
     token_list.sort(key=lambda t: t.get("created_at", ""), reverse=True)
     return jsonify({"ok": True, "tokens": token_list}), 200
+
+
+@app.route("/api/tokens")
+def api_tokens_alias():
+    return api_list_tokens()
 
 @app.route("/api/tokens/<symbol>/balance/<address>")
 def api_token_balance(symbol, address):
@@ -11351,6 +11514,8 @@ def api_token_balance(symbol, address):
     token = tokens.get(symbol.upper())
     if not token:
         return jsonify({"ok": False, "error": "Token not found"}), 404
+    token["logo_url"] = normalize_media_url(token.get("logo_url") or token.get("logo") or token.get("logo_path", ""))
+    token["logo"] = token.get("logo_url") or token.get("logo") or ""
     ledger = load_custom_token_ledger(token["id"])
     balance = float(ledger.get(address, 0))
     return jsonify({"ok": True, "symbol": symbol.upper(), "address": address, "balance": balance, "token": token}), 200
@@ -17079,6 +17244,11 @@ def api_v1_get_pools():
     return jsonify(pools=pools), 200
 
 
+@app.route("/api/pools", methods=["GET"])
+def api_pools_alias():
+    return api_v1_get_pools()
+
+
 @app.route("/api/v1/pools/positions/<address>")
 def api_v1_user_positions(address):
     """
@@ -17164,6 +17334,11 @@ def api_v1_user_positions(address):
         "total_value_thr": round(total_value_thr, 6),
         "total_value_usd": round(total_value_usd, 2)
     }), 200
+
+
+@app.route("/api/pools/positions/<address>")
+def api_pools_positions_alias(address):
+    return api_v1_user_positions(address)
 
 
 @app.route("/api/v1/pools/referral/<pool_id>")
@@ -20593,14 +20768,6 @@ def api_music_playlist_add_item(playlist_id):
         app.logger.error(f"Failed to add track {track_id} to playlist {playlist_id}: {e}")
         return jsonify({"ok": False, "error": "Failed to add track"}), 200
 
-    try:
-        removed, message = _remove_track_from_playlist(playlist_id, track_id, address or None)
-        if not removed:
-            return jsonify({"ok": False, "error": message}), 404
-        return jsonify({"ok": True, "message": "Track removed"}), 200
-    except Exception as e:
-        app.logger.error(f"Failed to remove track {track_id} from playlist {playlist_id}: {e}")
-        return jsonify({"ok": False, "error": "Failed to remove track"}), 200
 
 @app.route("/api/music/playlists/<playlist_id>/items/<track_id>", methods=["DELETE"])
 def api_music_playlist_remove_item(playlist_id, track_id):

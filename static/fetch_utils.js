@@ -126,6 +126,8 @@
     let s = String(raw).trim();
 
     s = s.replace(/^https?:\/\/localhost:\d+/i, "");
+    s = s.replace(/^https?:\/\/127\.0\.0\.1:\d+/i, "");
+    s = s.replace(/^https?:\/\/0\.0\.0\.0:\d+/i, "");
     s = s.replace(/^https?:\/\/thrchain\.vercel\.app/i, "");
     s = s.replace(/^https?:\/\/thrchain\.up\.railway\.app/i, "");
 
@@ -161,8 +163,8 @@
     const value = String(raw).trim();
     if (!value) return fallback;
 
-    if (/^https?:\/\/localhost:\d+/i.test(value)) {
-      return value.replace(/^https?:\/\/localhost:\d+/i, base);
+    if (/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0):\d+/i.test(value)) {
+      return value.replace(/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0):\d+/i, base);
     }
 
     if (value.startsWith("/media/")) {

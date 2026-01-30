@@ -574,41 +574,267 @@ function toggleContentFields() {
     $("externalFields").style.display = type === 'external' ? 'block' : 'none';
 }
 
+// Builder question data storage
+let builderQuestionsData = {};
+
 function addBuilderQuestion() {
     builderQuestionCounter += 1;
     const idx = builderQuestionCounter;
+
+    // Initialize question data
+    builderQuestionsData[idx] = {
+        type: 'multiple_choice',
+        options: ['', '', '', ''],
+        correct: 0,
+        correct_text: '',
+        pairs: [['', ''], ['', '']],
+        items: ['', '', ''],
+        text_with_blanks: '',
+        blanks: [{ answer: '' }]
+    };
+
     const wrapper = document.createElement('div');
     wrapper.className = 'question-card builder-question';
     wrapper.dataset.qid = idx;
     wrapper.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-            <strong>Question #${idx}</strong>
-            <button type="button" onclick="this.closest('.builder-question').remove();" style="background:none;border:none;color:#ff6b6b;cursor:pointer;">✕</button>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <strong>${currentLang === 'el' ? 'Ερώτηση' : 'Question'} #${idx}</strong>
+            <button type="button" onclick="removeBuilderQuestion(${idx})" style="background:none;border:none;color:#ff6b6b;cursor:pointer;">✕</button>
         </div>
-        <input class="input-field question-text" placeholder="Question text" style="width:100%; margin:8px 0;" />
-        ${['A','B','C','D'].map((label,i)=>`
-            <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
-                <input type="radio" name="correct-${idx}" value="${i}" ${i===0?'checked':''}>
-                <input class="input-field option-input" placeholder="Option ${label}" style="flex:1;" />
-            </div>
-        `).join('')}
+        <input class="input-field question-text" placeholder="${currentLang === 'el' ? 'Κείμενο ερώτησης' : 'Question text'}" style="width:100%; margin-bottom:10px;" />
+        <div style="margin-bottom:10px;">
+            <label style="font-size:12px;opacity:0.8;">${currentLang === 'el' ? 'Τύπος ερώτησης' : 'Question type'}</label>
+            <select class="input-field builder-type-select" onchange="onBuilderTypeChange(${idx}, this.value)">
+                ${Object.keys(QUESTION_TYPE_LABELS).map(t => `
+                    <option value="${t}">${QUESTION_TYPE_LABELS[t][currentLang] || QUESTION_TYPE_LABELS[t].en}</option>
+                `).join('')}
+            </select>
+        </div>
+        <div id="builder-fields-${idx}"></div>
     `;
     $("builderQuestions").appendChild(wrapper);
+    renderBuilderFields(idx, 'multiple_choice');
+}
+
+function removeBuilderQuestion(idx) {
+    const el = document.querySelector(`.builder-question[data-qid="${idx}"]`);
+    if (el) el.remove();
+    delete builderQuestionsData[idx];
+}
+
+function onBuilderTypeChange(idx, type) {
+    const normalized = normalizeQuestionType(type);
+    const q = builderQuestionsData[idx];
+    if (!q) return;
+
+    q.type = normalized;
+    if (normalized === 'true_false') {
+        q.options = ['False', 'True'];
+        q.correct = 0;
+    } else if (normalized === 'matching') {
+        q.pairs = q.pairs || [['', ''], ['', '']];
+    } else if (normalized === 'ordering') {
+        q.items = q.items || ['', '', ''];
+    } else if (normalized === 'fill_blank') {
+        q.text_with_blanks = q.text_with_blanks || '';
+        q.blanks = q.blanks || [{ answer: '' }];
+    } else if (normalized === 'multi_select') {
+        q.options = ['', '', '', ''];
+        q.correct = [];
+    } else if (normalized === 'short_answer') {
+        q.correct_text = '';
+    } else {
+        q.options = ['', '', '', ''];
+        q.correct = 0;
+    }
+    renderBuilderFields(idx, normalized);
+}
+
+function renderBuilderFields(idx, type) {
+    const container = $(`builder-fields-${idx}`);
+    if (!container) return;
+    const q = builderQuestionsData[idx] || {};
+    let html = '';
+
+    if (type === 'multiple_choice') {
+        html = `
+            <div style="font-size:0.9em;opacity:0.7;margin-bottom:8px;">${currentLang === 'el' ? 'Επιλογές (επιλέξτε τη σωστή)' : 'Options (select correct)'}:</div>
+            ${[0,1,2,3].map(i => `
+                <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
+                    <input type="radio" name="builder-correct-${idx}" value="${i}" ${(q.correct || 0) === i ? 'checked' : ''} onchange="builderQuestionsData[${idx}].correct=${i}">
+                    <input class="input-field builder-option" data-idx="${i}" placeholder="Option ${i+1}" value="${escapeAttr((q.options||[])[i]||'')}" onchange="builderQuestionsData[${idx}].options[${i}]=this.value" style="flex:1;">
+                </div>
+            `).join('')}
+        `;
+    } else if (type === 'true_false') {
+        html = `
+            <div style="display:flex;gap:10px;align-items:center;">
+                <label><input type="radio" name="builder-correct-${idx}" value="0" ${(q.correct||0)===0?'checked':''} onchange="builderQuestionsData[${idx}].correct=0"> ${currentLang === 'el' ? 'Λάθος' : 'False'}</label>
+                <label><input type="radio" name="builder-correct-${idx}" value="1" ${(q.correct||0)===1?'checked':''} onchange="builderQuestionsData[${idx}].correct=1"> ${currentLang === 'el' ? 'Σωστό' : 'True'}</label>
+            </div>
+        `;
+    } else if (type === 'multi_select') {
+        const correctValues = Array.isArray(q.correct) ? q.correct : [];
+        html = `
+            <div style="font-size:0.9em;opacity:0.7;margin-bottom:8px;">${currentLang === 'el' ? 'Επιλογές (πολλαπλές σωστές)' : 'Options (multiple correct)'}:</div>
+            ${[0,1,2,3].map(i => `
+                <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
+                    <input type="checkbox" value="${i}" ${correctValues.includes(i)?'checked':''} onchange="toggleBuilderMultiSelect(${idx},${i},this.checked)">
+                    <input class="input-field builder-option" data-idx="${i}" placeholder="Option ${i+1}" value="${escapeAttr((q.options||[])[i]||'')}" onchange="builderQuestionsData[${idx}].options[${i}]=this.value" style="flex:1;">
+                </div>
+            `).join('')}
+        `;
+    } else if (type === 'short_answer') {
+        html = `
+            <div style="font-size:0.9em;opacity:0.7;margin-bottom:8px;">${currentLang === 'el' ? 'Σωστή απάντηση (διαχωρίστε με κόμμα)' : 'Correct answer (comma-separated)'}:</div>
+            <input class="input-field" placeholder="${currentLang === 'el' ? 'Σωστή απάντηση' : 'Correct answer'}" value="${escapeAttr(q.correct_text||'')}" onchange="builderQuestionsData[${idx}].correct_text=this.value" style="width:100%;">
+        `;
+    } else if (type === 'matching') {
+        const pairs = q.pairs || [['', ''], ['', '']];
+        html = `
+            <div style="font-size:0.9em;opacity:0.7;margin-bottom:8px;">${currentLang === 'el' ? 'Ζευγάρια (όρος → ορισμός)' : 'Pairs (term → definition)'}:</div>
+            <div id="builder-pairs-${idx}">
+                ${pairs.map((p, i) => `
+                    <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;">
+                        <input class="input-field" placeholder="${currentLang === 'el' ? 'Όρος' : 'Term'} ${i+1}" value="${escapeAttr(p[0]||'')}" onchange="builderQuestionsData[${idx}].pairs[${i}][0]=this.value" style="flex:1;">
+                        <span style="color:#0f6;">→</span>
+                        <input class="input-field" placeholder="${currentLang === 'el' ? 'Ορισμός' : 'Definition'} ${i+1}" value="${escapeAttr(p[1]||'')}" onchange="builderQuestionsData[${idx}].pairs[${i}][1]=this.value" style="flex:1;">
+                        <button type="button" onclick="removeBuilderPair(${idx},${i})" style="background:none;border:none;color:#ff6b6b;cursor:pointer;">✕</button>
+                    </div>
+                `).join('')}
+            </div>
+            <button type="button" onclick="addBuilderPair(${idx})" class="btn-secondary" style="padding:6px 12px;font-size:12px;">➕ ${currentLang === 'el' ? 'Προσθήκη' : 'Add pair'}</button>
+        `;
+    } else if (type === 'ordering') {
+        const items = q.items || ['', '', ''];
+        html = `
+            <div style="font-size:0.9em;opacity:0.7;margin-bottom:8px;">${currentLang === 'el' ? 'Στοιχεία (στη σωστή σειρά)' : 'Items (in correct order)'}:</div>
+            <div id="builder-items-${idx}">
+                ${items.map((item, i) => `
+                    <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;">
+                        <span style="color:#888;min-width:25px;">${i+1}.</span>
+                        <input class="input-field" placeholder="${currentLang === 'el' ? 'Στοιχείο' : 'Item'} ${i+1}" value="${escapeAttr(item||'')}" onchange="builderQuestionsData[${idx}].items[${i}]=this.value" style="flex:1;">
+                        <button type="button" onclick="removeBuilderItem(${idx},${i})" style="background:none;border:none;color:#ff6b6b;cursor:pointer;">✕</button>
+                    </div>
+                `).join('')}
+            </div>
+            <button type="button" onclick="addBuilderItem(${idx})" class="btn-secondary" style="padding:6px 12px;font-size:12px;">➕ ${currentLang === 'el' ? 'Προσθήκη' : 'Add item'}</button>
+            <div style="font-size:0.85em;color:#888;margin-top:8px;">💡 ${currentLang === 'el' ? 'Θα ανακατευτούν για τον μαθητή' : 'Will be shuffled for student'}</div>
+        `;
+    } else if (type === 'fill_blank') {
+        const blanks = q.blanks || [{ answer: '' }];
+        html = `
+            <div style="font-size:0.9em;opacity:0.7;margin-bottom:8px;">${currentLang === 'el' ? 'Κείμενο (χρησιμοποίησε ___ για κενά)' : 'Text (use ___ for blanks)'}:</div>
+            <textarea class="input-field" placeholder="${currentLang === 'el' ? 'Η ___ είναι η πρωτεύουσα της ___.' : 'The ___ is the capital of ___.'}" style="width:100%;min-height:60px;margin-bottom:12px;" onchange="builderQuestionsData[${idx}].text_with_blanks=this.value;updateBuilderBlanks(${idx})">${escapeAttr(q.text_with_blanks||'')}</textarea>
+            <div style="font-size:0.9em;opacity:0.7;margin-bottom:8px;">${currentLang === 'el' ? 'Απαντήσεις κενών' : 'Blank answers'}:</div>
+            <div id="builder-blanks-${idx}">
+                ${blanks.map((b, i) => `
+                    <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;">
+                        <span style="color:#0f6;min-width:60px;">${currentLang === 'el' ? 'Κενό' : 'Blank'} ${i+1}:</span>
+                        <input class="input-field" placeholder="${currentLang === 'el' ? 'Απάντηση' : 'Answer'}" value="${escapeAttr(typeof b==='object'?b.answer||'':b)}" onchange="builderQuestionsData[${idx}].blanks[${i}]={answer:this.value}" style="flex:1;">
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    }
+
+    container.innerHTML = html;
+}
+
+// Builder helper functions
+function toggleBuilderMultiSelect(idx, optionIndex, isChecked) {
+    const q = builderQuestionsData[idx];
+    if (!q) return;
+    const current = Array.isArray(q.correct) ? q.correct : [];
+    q.correct = isChecked
+        ? Array.from(new Set([...current, optionIndex]))
+        : current.filter(v => v !== optionIndex);
+}
+
+function addBuilderPair(idx) {
+    const q = builderQuestionsData[idx];
+    if (!q) return;
+    q.pairs = q.pairs || [];
+    q.pairs.push(['', '']);
+    renderBuilderFields(idx, 'matching');
+}
+
+function removeBuilderPair(idx, pairIdx) {
+    const q = builderQuestionsData[idx];
+    if (!q || !q.pairs) return;
+    q.pairs.splice(pairIdx, 1);
+    if (q.pairs.length === 0) q.pairs.push(['', '']);
+    renderBuilderFields(idx, 'matching');
+}
+
+function addBuilderItem(idx) {
+    const q = builderQuestionsData[idx];
+    if (!q) return;
+    q.items = q.items || [];
+    q.items.push('');
+    renderBuilderFields(idx, 'ordering');
+}
+
+function removeBuilderItem(idx, itemIdx) {
+    const q = builderQuestionsData[idx];
+    if (!q || !q.items) return;
+    q.items.splice(itemIdx, 1);
+    if (q.items.length === 0) q.items.push('');
+    renderBuilderFields(idx, 'ordering');
+}
+
+function updateBuilderBlanks(idx) {
+    const q = builderQuestionsData[idx];
+    if (!q) return;
+    const text = q.text_with_blanks || '';
+    const blankCount = (text.match(/___/g) || []).length || 1;
+    const currentBlanks = q.blanks || [];
+    while (currentBlanks.length < blankCount) currentBlanks.push({ answer: '' });
+    while (currentBlanks.length > blankCount && currentBlanks.length > 1) currentBlanks.pop();
+    q.blanks = currentBlanks;
+    renderBuilderFields(idx, 'fill_blank');
 }
 
 function collectQuizBuilder() {
     const passScore = parseInt($("builderPassScore").value || '70');
     const questions = [];
+
     document.querySelectorAll('.builder-question').forEach((el) => {
-        const text = el.querySelector('.question-text').value.trim();
-        const options = Array.from(el.querySelectorAll('.option-input')).map(i => i.value.trim());
         const qid = el.dataset.qid;
-        const correctRadio = el.querySelector(`input[name="correct-${qid}"]:checked`);
-        const correctIndex = correctRadio ? parseInt(correctRadio.value) : 0;
-        if (text && options.every(Boolean)) {
-            questions.push({ id: questions.length + 1, text, options, correct_index: correctIndex });
+        const text = el.querySelector('.question-text')?.value?.trim() || '';
+        const q = builderQuestionsData[qid];
+        if (!text || !q) return;
+
+        const qType = normalizeQuestionType(q.type);
+        const questionData = {
+            id: questions.length + 1,
+            text: text,
+            type: qType
+        };
+
+        if (qType === 'multiple_choice') {
+            questionData.options = q.options || ['', '', '', ''];
+            questionData.correct_index = q.correct || 0;
+        } else if (qType === 'true_false') {
+            questionData.options = ['False', 'True'];
+            questionData.correct_index = q.correct || 0;
+        } else if (qType === 'multi_select') {
+            questionData.options = q.options || ['', '', '', ''];
+            questionData.correct = q.correct || [];
+        } else if (qType === 'short_answer') {
+            questionData.correct_text = q.correct_text || '';
+        } else if (qType === 'matching') {
+            questionData.pairs = q.pairs || [];
+        } else if (qType === 'ordering') {
+            questionData.items = q.items || [];
+        } else if (qType === 'fill_blank') {
+            questionData.text_with_blanks = q.text_with_blanks || '';
+            questionData.blanks = q.blanks || [];
         }
+
+        questions.push(questionData);
     });
+
     return {
         pass_score: isNaN(passScore) ? 70 : passScore,
         questions

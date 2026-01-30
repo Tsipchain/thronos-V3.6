@@ -1,0 +1,13 @@
+{
+  "pools": [
+    {
+      "url": "stratum+tcp://127.0.0.1:3334",
+      "user": "THR_YOUR_ADDRESS",
+      "pass": "x"
+    }
+  ],
+  "api-listen": true,
+  "api-allow": "W:127.0.0.1",
+  "expiry": "120",
+  "failover-only": true
+}

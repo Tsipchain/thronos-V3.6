@@ -6136,24 +6136,22 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
         if tx_type in ["coinbase", "mining_reward", "mint"]:
             continue
 
-        tx_from = tx.get("from") or tx.get("sender")
-        tx_to = tx.get("to") or tx.get("recipient")
-        tx_address = tx.get("address")  # For IoT telemetry
+        # Collect transactions involving this address
+        wallet_txs = []
 
-        if address.lower() in [str(tx_from).lower(), str(tx_to).lower(), str(tx_address).lower()]:
-            tx_copy = dict(tx)
-            tx_copy["category"] = _categorize_transaction(tx)
-            tx_copy = normalize_history_item(tx_copy)
+        # 1. Regular chain transactions
+        for tx in chain:
+            if not isinstance(tx, dict):
+                continue
 
-            # Determine direction
-            if tx_to and tx_to.lower() == address.lower():
-                tx_copy["direction"] = "received"
-            elif tx_from and tx_from.lower() == address.lower():
-                tx_copy["direction"] = "sent"
-            else:
-                tx_copy["direction"] = "related"
+            tx_from = tx.get("from") or tx.get("sender")
+            tx_to = tx.get("to") or tx.get("recipient")
+            tx_address = tx.get("address")  # For IoT telemetry
 
-            wallet_txs.append(tx_copy)
+            if address.lower() in [str(tx_from).lower(), str(tx_to).lower(), str(tx_address).lower()]:
+                tx_copy = dict(tx)
+                tx_copy["category"] = _categorize_transaction(tx)
+                tx_copy = normalize_history_item(tx_copy)
 
     # 2. Block mining rewards
     mining_ids = set()
@@ -7915,6 +7913,34 @@ def api_tx_feed():
                 break
         entries.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
         return entries[:max_items]
+
+    def _classify_tx_feed_entry(tx: dict) -> dict:
+        if not isinstance(tx, dict):
+            return tx
+
+        raw_kind = (tx.get("kind") or tx.get("type") or "").lower()
+        has_block_reward = tx.get("reward") is not None or tx.get("reward_to_miner") is not None
+        is_block = raw_kind == "block" or tx.get("type") == "block" or tx.get("block_hash") or has_block_reward
+        if is_block:
+            tx["kind"] = "block"
+            tx["type"] = "block"
+            tx["category"] = "blocks"
+            return tx
+
+        if raw_kind in {"mining_reward", "block_reward"}:
+            tx["category"] = "mining"
+            return tx
+
+        if raw_kind in {"swap", "pool_swap"}:
+            tx["category"] = "dex"
+            return tx
+
+        if raw_kind in {"thr_transfer", "token_transfer", "transfer", "bridge", "bridge_in", "bridge_out"}:
+            tx["category"] = "transfers"
+            return tx
+
+        tx["category"] = tx.get("category") or raw_kind or "other"
+        return tx
 
     # Use event index for performance if DB is available
     if USE_SQLITE_LEDGER:

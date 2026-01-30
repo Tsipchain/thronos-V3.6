@@ -1594,22 +1594,60 @@
 
 {% if music_modal_enabled|default(true) %}
 <div class="music-modal" id="musicModal" onclick="closeMusicModal(event)">
-    <div class="music-modal-content" onclick="event.stopPropagation()">
+    <div class="music-modal-content" onclick="event.stopPropagation()" style="max-width: 500px; width: 95%;">
         <div class="music-modal-header">
             <div class="music-modal-title">🎵 <span class="lang-el">Μουσική</span><span class="lang-en">Music</span></div>
             <button class="music-modal-close" onclick="closeMusicModal()">✖</button>
         </div>
         <div id="musicModalBody">
-            <p style="margin: 0 0 12px 0; color: #9f9;">
-                <span class="lang-en">Listening session active. GPS telemetry refreshes every 5 seconds.</span>
-                <span class="lang-el">Η συνεδρία μουσικής είναι ενεργή. GPS telemetry κάθε 5 δευτερόλεπτα.</span>
-            </p>
-            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                <button class="wallet-mini-btn" onclick="window.MusicModal?.startSession()">▶️ Start Session</button>
-                <button class="wallet-mini-btn" onclick="window.MusicModal?.endSession()">⏹️ End Session</button>
-                <button class="wallet-mini-btn" onclick="window.open('/music', '_blank')">Open Full Music Page</button>
+            <!-- Session Controls -->
+            <div style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid rgba(0,255,102,0.2);">
+                <p style="margin: 0 0 8px 0; color: #9f9; font-size: 12px;">
+                    <span class="lang-en">Session controls</span>
+                    <span class="lang-el">Έλεγχοι συνεδρίας</span>
+                </p>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    <button class="wallet-mini-btn" onclick="window.MusicModal?.startSession()">▶️ Start</button>
+                    <button class="wallet-mini-btn" onclick="window.MusicModal?.endSession()">⏹️ End</button>
+                    <button class="wallet-mini-btn" onclick="window.open('/music', '_blank')">🎧 Full Page</button>
+                </div>
+                <div id="musicModalStatus" style="margin-top: 8px; font-size: 11px; color: #b6ffcc;"></div>
             </div>
-            <div id="musicModalStatus" style="margin-top: 12px; font-size: 12px; color: #b6ffcc;"></div>
+
+            <!-- Playlists Section -->
+            <div style="margin-bottom: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <span style="color: #0f6; font-weight: bold; font-size: 13px;">
+                        📋 <span class="lang-en">Your Playlists</span><span class="lang-el">Οι Playlists σου</span>
+                    </span>
+                    <button class="wallet-mini-btn" onclick="window.MusicPlaylist?.showCreateDialog()" style="padding: 4px 10px; font-size: 11px;">
+                        ➕ <span class="lang-en">Create</span><span class="lang-el">Δημιουργία</span>
+                    </button>
+                </div>
+                <div id="musicPlaylistsList" style="max-height: 200px; overflow-y: auto; background: rgba(0,0,0,0.3); border-radius: 6px; padding: 8px;">
+                    <div style="color: #888; font-size: 11px; text-align: center; padding: 12px;">
+                        <span class="lang-en">Loading playlists...</span>
+                        <span class="lang-el">Φόρτωση playlists...</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Create Playlist Dialog (hidden by default) -->
+            <div id="createPlaylistDialog" style="display: none; background: rgba(0,20,10,0.95); border: 1px solid rgba(0,255,102,0.3); border-radius: 8px; padding: 12px; margin-top: 12px;">
+                <div style="margin-bottom: 10px; font-weight: bold; color: #0f6;">
+                    <span class="lang-en">Create New Playlist</span>
+                    <span class="lang-el">Δημιουργία Νέας Playlist</span>
+                </div>
+                <input type="text" id="newPlaylistName" placeholder="Playlist name..." style="width: 100%; padding: 8px; background: rgba(0,0,0,0.5); border: 1px solid rgba(0,255,102,0.3); border-radius: 4px; color: #0f6; font-size: 13px; box-sizing: border-box; margin-bottom: 10px;">
+                <div style="display: flex; gap: 8px; justify-content: flex-end;">
+                    <button class="wallet-mini-btn" onclick="window.MusicPlaylist?.hideCreateDialog()" style="background: rgba(255,0,0,0.2); border-color: rgba(255,0,0,0.3);">
+                        <span class="lang-en">Cancel</span><span class="lang-el">Άκυρο</span>
+                    </button>
+                    <button class="wallet-mini-btn" onclick="window.MusicPlaylist?.createPlaylist()">
+                        <span class="lang-en">Create</span><span class="lang-el">Δημιουργία</span>
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -1830,35 +1868,21 @@
             <span class="lang-en">Transaction History</span>
         </div>
 
-        <!-- History Tabs -->
-        <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; padding: 0 4px;">
-            <button class="history-tab-btn active" data-filter="all" onclick="filterHistory('all')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.2); border: 1px solid rgba(0,255,102,0.4); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+        <!-- History Tabs - Clean 4 categories + All -->
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; padding: 0 4px;">
+            <button class="history-tab-btn active" data-filter="all" onclick="filterHistory('all')" style="flex: 1; min-width: 70px; padding: 8px 12px; background: rgba(0,255,102,0.2); border: 1px solid rgba(0,255,102,0.4); border-radius: 6px; color: #00ff66; font-size: 12px; cursor: pointer; transition: all 0.2s;">
                 <span class="lang-el">Όλα</span><span class="lang-en">All</span>
             </button>
-            <button class="history-tab-btn" data-filter="thr" onclick="filterHistory('thr')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">THR</button>
-            <button class="history-tab-btn" data-filter="mining" onclick="filterHistory('mining')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+            <button class="history-tab-btn" data-filter="transfers" onclick="filterHistory('transfers')" style="flex: 1; min-width: 80px; padding: 8px 12px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 12px; cursor: pointer; transition: all 0.2s;">
+                💸 <span class="lang-el">Μεταφορές</span><span class="lang-en">Transfers</span>
+            </button>
+            <button class="history-tab-btn" data-filter="mining" onclick="filterHistory('mining')" style="flex: 1; min-width: 80px; padding: 8px 12px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 12px; cursor: pointer; transition: all 0.2s;">
                 ⛏️ <span class="lang-el">Mining</span><span class="lang-en">Mining</span>
             </button>
-            <button class="history-tab-btn" data-filter="tokens" onclick="filterHistory('tokens')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                <span class="lang-el">Tokens</span><span class="lang-en">Tokens</span>
+            <button class="history-tab-btn" data-filter="ai" onclick="filterHistory('ai')" style="flex: 1; min-width: 80px; padding: 8px 12px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 12px; cursor: pointer; transition: all 0.2s;">
+                🤖 <span class="lang-el">AI</span><span class="lang-en">AI</span>
             </button>
-            <button class="history-tab-btn" data-filter="l2e" onclick="filterHistory('l2e')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">L2E</button>
-            <button class="history-tab-btn" data-filter="ai_credits" onclick="filterHistory('ai_credits')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">AI Credits (Chat)</button>
-            <button class="history-tab-btn" data-filter="architect_ai_jobs" onclick="filterHistory('architect_ai_jobs')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">Architect / AI Jobs</button>
-            <button class="history-tab-btn" data-filter="iot" onclick="filterHistory('iot')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">IoT</button>
-            <button class="history-tab-btn" data-filter="bridge" onclick="filterHistory('bridge')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                <span class="lang-el">Bridge</span><span class="lang-en">Bridge</span>
-            </button>
-            <button class="history-tab-btn" data-filter="swaps" onclick="filterHistory('swaps')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                <span class="lang-el">Swaps</span><span class="lang-en">Swaps</span>
-            </button>
-            <button class="history-tab-btn" data-filter="liquidity" onclick="filterHistory('liquidity')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                <span class="lang-el">Liquidity</span><span class="lang-en">Liquidity</span>
-            </button>
-            <button class="history-tab-btn" data-filter="gateway" onclick="filterHistory('gateway')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                <span class="lang-el">Gateway</span><span class="lang-en">Gateway</span>
-            </button>
-            <button class="history-tab-btn" data-filter="music" onclick="filterHistory('music')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+            <button class="history-tab-btn" data-filter="music" onclick="filterHistory('music')" style="flex: 1; min-width: 80px; padding: 8px 12px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 12px; cursor: pointer; transition: all 0.2s;">
                 🎵 <span class="lang-el">Μουσική</span><span class="lang-en">Music</span>
             </button>
         </div>
@@ -3412,109 +3436,66 @@ function applyHistoryFilter(filterKey) {
 }
 
 function getTxType(tx) {
+    // PR-2.1: Clean 4-category mapping for wallet history tabs
+    // Transfers | Mining | AI | Music
+
     const category = (tx.category || '').toLowerCase();
-    if ([
-        'thr',
-        'mining',
-        'tokens',
-        'l2e',
-        'ai_credits',
-        'architect_ai_jobs',
-        'iot',
-        'bridge',
-        'swaps',
-        'liquidity',
-        'gateway',
-        'music',
-    ].includes(category)) {
-        return category;
-    }
-
     const raw = (tx.kind || tx.type || '').toLowerCase();
-    const asset = (tx.asset_symbol || tx.asset || tx.symbol || 'THR').toUpperCase();
 
-    // Mining rewards
-    if (raw === 'mining' || raw === 'block_reward' || raw === 'mining_reward' || raw.includes('mined')) {
+    // === MINING: mining_reward, block_reward, mining ===
+    // PRIORITY: Check mining FIRST before anything else to prevent leaking to transfers
+    if (raw === 'mining' || raw === 'block_reward' || raw === 'mining_reward' ||
+        raw.includes('mined') || raw.includes('mining') ||
+        category === 'mining') {
         return 'mining';
     }
 
-    // PR-5c: Music tips
-    if (raw === 'music_tip' || raw.includes('music')) {
+    // === MUSIC: music_play, music_tip, royalty, music_offline_tip ===
+    if (raw === 'music_tip' || raw === 'music_play' || raw === 'music_offline_tip' ||
+        raw === 'royalty' || raw === 'play_reward' ||
+        raw.includes('music') || raw.startsWith('music_') ||
+        category === 'music' || category === 'music_tip') {
         return 'music';
     }
 
-    // THR transfers: must be transfer/thr_transfer AND asset must be THR
-    if ((raw === 'thr_transfer' || raw === 'transfer') && asset === 'THR') {
-        return 'thr';
+    // === AI: ai_credit_*, ai_credits, ai_job_*, architect, l2e ===
+    if (raw.startsWith('ai_credit') || raw.startsWith('ai_job') ||
+        raw === 'ai_credits' || raw === 'ai_credits_earned' || raw === 'ai_credits_spent' ||
+        raw === 'architect_job' || raw === 'architect' ||
+        raw === 'l2e' || raw === 'ai_reward' ||
+        category === 'ai_credits' || category === 'architect_ai_jobs' ||
+        category === 'l2e' || category === 'ai_reward') {
+        return 'ai';
     }
 
-    // Token transfers: must be token_transfer AND asset must NOT be THR
-    if (raw === 'token_transfer' && asset !== 'THR') {
-        return 'tokens';
+    // === TRANSFERS: token_transfer, thr_transfer, transfer, swap, bridge, liquidity, gateway ===
+    // Everything else that's a value transfer (not mining/music/ai)
+    const transferKinds = [
+        'token_transfer', 'thr_transfer', 'transfer',
+        'swap', 'pool_swap',
+        'bridge', 'bridge_in', 'bridge_out', 'bridge_deposit', 'bridge_withdraw', 'crosschain', 'cross_chain',
+        'add_liquidity', 'remove_liquidity', 'pool_create', 'pool_add_liquidity', 'pool_remove_liquidity', 'pool_add', 'pool_remove',
+        'fiat_onramp', 'fiat_offramp', 'gateway', 'onramp', 'offramp',
+        'iot', 'autopilot', 'parking'
+    ];
+
+    const transferCategories = [
+        'thr', 'tokens', 'bridge', 'swaps', 'liquidity', 'gateway', 'iot'
+    ];
+
+    if (transferKinds.includes(raw) ||
+        raw.startsWith('liquidity_') ||
+        transferCategories.includes(category)) {
+        return 'transfers';
     }
 
-    // Liquidity events
-    if (raw.startsWith('liquidity_') ||
-        raw === 'add_liquidity' ||
-        raw === 'remove_liquidity' ||
-        raw === 'pool_create' ||
-        raw === 'pool_add_liquidity' ||
-        raw === 'pool_remove_liquidity' ||
-        raw === 'pool_add' ||
-        raw === 'pool_remove') {
-        return 'liquidity';
+    // Fallback: anything with from/to and amount is a transfer
+    if (tx.from && tx.to && (tx.amount !== undefined || tx.value !== undefined)) {
+        return 'transfers';
     }
 
-    const kindMap = {
-        'mining': 'mining',
-        'block_reward': 'mining',
-        'mining_reward': 'mining',
-        'swap': 'swaps',
-        'pool_swap': 'swaps',
-        'bridge': 'bridge',
-        'bridge_in': 'bridge',
-        'bridge_out': 'bridge',
-        'bridge_deposit': 'bridge',
-        'bridge_withdraw': 'bridge',
-        'crosschain': 'bridge',
-        'cross_chain': 'bridge',
-        'l2e': 'l2e',
-        'ai_credit': 'ai_credits',
-        'ai_credits': 'ai_credits',
-        'ai_credits_earned': 'ai_credits',
-        'ai_credits_spent': 'ai_credits',
-        'iot': 'iot',
-        'autopilot': 'iot',
-        'parking': 'iot',
-        'architect_job': 'architect_ai_jobs',
-        'architect': 'architect_ai_jobs',
-        'ai_job_created': 'architect_ai_jobs',
-        'ai_job_progress': 'architect_ai_jobs',
-        'ai_job_completed': 'architect_ai_jobs',
-        'ai_job_reward': 'architect_ai_jobs',
-        'music': 'music',
-        'fiat_onramp': 'gateway',
-        'fiat_offramp': 'gateway',
-        'gateway': 'gateway',
-        'onramp': 'gateway',
-        'offramp': 'gateway',
-    };
-    if (kindMap[raw]) return kindMap[raw];
-
-    // Multi-chain assets detection
-    const multiChainAssets = ['BTC', 'WBTC', 'ETH', 'BNB', 'XRP', 'SOL'];
-    if (multiChainAssets.includes(asset)) {
-        // If it's a bridge-related transaction, keep it as bridge
-        if (raw.includes('bridge') || raw.includes('deposit') || raw.includes('withdraw') || raw.includes('crosschain')) {
-            return 'bridge';
-        }
-        // Otherwise it's a token transfer
-        return 'tokens';
-    }
-
-    // Fallback: use already-declared asset variable
-    if (asset && asset !== 'THR') return 'tokens';
-    return 'thr';
+    // Default to transfers for unknown types
+    return 'transfers';
 }
 
 function formatTxDate(timestamp) {

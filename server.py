@@ -18485,9 +18485,10 @@ def api_chat_sessions_list():
     return resp, 200
 
 
-@app.route("/api/ai/sessions/rename", methods=["POST"])
-def api_ai_session_rename_v2():
-    """Rename a session"""
+# NOTE: Duplicate route removed - /api/ai/sessions/rename is already defined at line ~9935
+# The primary handler (api_ai_session_rename) supports both /api/ai_sessions/rename and /api/ai/sessions/rename
+def api_ai_session_rename_v2_UNUSED():
+    """Rename a session - DISABLED: duplicate route would cause AssertionError"""
     data = request.get_json(silent=True) or {}
     session_id = data.get("id") or data.get("session_id")
     new_title = (data.get("title") or "").strip()

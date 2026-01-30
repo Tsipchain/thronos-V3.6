@@ -16285,23 +16285,294 @@ def save_quizzes(quizzes):
     save_json(QUIZZES_FILE, quizzes)
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# QUESTION TYPE SYSTEM - Enum + Validators + Grading
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class QuestionType:
+    """Enum-like class for supported quiz question types."""
+    MULTIPLE_CHOICE = "multiple_choice"
+    TRUE_FALSE = "true_false"
+    MULTI_SELECT = "multi_select"
+    SHORT_ANSWER = "short_answer"
+    MATCHING = "matching"
+    ORDERING = "ordering"
+    FILL_BLANK = "fill_blank"
+
+    ALL_TYPES = {
+        MULTIPLE_CHOICE,
+        TRUE_FALSE,
+        MULTI_SELECT,
+        SHORT_ANSWER,
+        MATCHING,
+        ORDERING,
+        FILL_BLANK,
+    }
+
+    # Human-readable labels for UI
+    LABELS = {
+        MULTIPLE_CHOICE: {"en": "Multiple Choice", "el": "Πολλαπλής Επιλογής"},
+        TRUE_FALSE: {"en": "True/False", "el": "Σωστό/Λάθος"},
+        MULTI_SELECT: {"en": "Multi-Select", "el": "Πολλαπλή Επιλογή"},
+        SHORT_ANSWER: {"en": "Short Answer", "el": "Σύντομη Απάντηση"},
+        MATCHING: {"en": "Matching Pairs", "el": "Αντιστοίχιση"},
+        ORDERING: {"en": "Put in Order", "el": "Βάλε σε Σειρά"},
+        FILL_BLANK: {"en": "Fill in the Blank", "el": "Συμπλήρωσε τα Κενά"},
+    }
+
+
+def validate_question_structure(question: dict, qtype: str) -> tuple[bool, str]:
+    """
+    Validate that a question has the correct structure for its type.
+    Returns (is_valid, error_message).
+    """
+    if qtype not in QuestionType.ALL_TYPES:
+        return False, f"Unknown question type: {qtype}"
+
+    prompt = question.get("prompt") or question.get("question") or question.get("text")
+    if not prompt or not str(prompt).strip():
+        return False, "Question prompt/text is required"
+
+    if qtype == QuestionType.MULTIPLE_CHOICE:
+        options = question.get("options", [])
+        if not options or len(options) < 2:
+            return False, "Multiple choice requires at least 2 options"
+        correct = question.get("correct")
+        if correct is None or not isinstance(correct, int) or correct < 0 or correct >= len(options):
+            return False, "Invalid correct answer index for multiple choice"
+
+    elif qtype == QuestionType.TRUE_FALSE:
+        correct = question.get("correct")
+        if correct not in (0, 1, True, False):
+            return False, "True/False correct answer must be 0 (False) or 1 (True)"
+
+    elif qtype == QuestionType.MULTI_SELECT:
+        options = question.get("options", [])
+        if not options or len(options) < 2:
+            return False, "Multi-select requires at least 2 options"
+        correct = question.get("correct", [])
+        if not isinstance(correct, list) or not correct:
+            return False, "Multi-select requires a list of correct indices"
+        if any(not isinstance(i, int) or i < 0 or i >= len(options) for i in correct):
+            return False, "Invalid correct indices for multi-select"
+
+    elif qtype == QuestionType.SHORT_ANSWER:
+        correct_text = question.get("correct_text") or question.get("correct_answers") or question.get("correct")
+        if not correct_text:
+            return False, "Short answer requires correct_text with acceptable answers"
+
+    elif qtype == QuestionType.MATCHING:
+        pairs = question.get("pairs", [])
+        if not pairs or len(pairs) < 2:
+            return False, "Matching requires at least 2 pairs"
+        for i, pair in enumerate(pairs):
+            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                return False, f"Pair {i+1} must be [term, definition]"
+            if not pair[0] or not pair[1]:
+                return False, f"Pair {i+1} has empty term or definition"
+
+    elif qtype == QuestionType.ORDERING:
+        items = question.get("items") or question.get("options", [])
+        if not items or len(items) < 2:
+            return False, "Ordering requires at least 2 items"
+        correct_order = question.get("correct_order")
+        if correct_order is None:
+            # If no correct_order, assume items are in correct order
+            pass
+        elif not isinstance(correct_order, list) or len(correct_order) != len(items):
+            return False, "correct_order must match items length"
+
+    elif qtype == QuestionType.FILL_BLANK:
+        text = question.get("text_with_blanks") or question.get("prompt") or question.get("text")
+        if not text or "___" not in str(text) and "[[" not in str(text):
+            return False, "Fill-blank requires text with ___ or [[blank]] markers"
+        blanks = question.get("blanks", [])
+        if not blanks:
+            return False, "Fill-blank requires blanks array with correct answers"
+
+    return True, ""
+
+
 def normalize_quiz_question_type(raw_type: str | None, *, course_id: str = "", question_id: int | None = None) -> str:
     if not raw_type:
         app.logger.warning("Missing quiz question type; defaulting to multiple_choice", extra={
             "course_id": course_id,
             "question_id": question_id,
         })
-        return "multiple_choice"
+        return QuestionType.MULTIPLE_CHOICE
     normalized = str(raw_type).strip().lower()
-    if normalized in {"single", "mcq", "multiple_choice", "multiple-choice"}:
-        return "multiple_choice"
-    if normalized in {"tf", "true_false", "truefalse"}:
-        return "true_false"
-    if normalized in {"multi_select", "multi-select", "checkbox", "multi"}:
-        return "multi_select"
-    if normalized in {"short_answer", "short", "text", "free_text"}:
-        return "short_answer"
+
+    # Multiple Choice aliases
+    if normalized in {"single", "mcq", "multiple_choice", "multiple-choice", "mc"}:
+        return QuestionType.MULTIPLE_CHOICE
+
+    # True/False aliases
+    if normalized in {"tf", "true_false", "truefalse", "true-false", "boolean"}:
+        return QuestionType.TRUE_FALSE
+
+    # Multi-Select aliases
+    if normalized in {"multi_select", "multi-select", "checkbox", "multi", "checkboxes"}:
+        return QuestionType.MULTI_SELECT
+
+    # Short Answer aliases
+    if normalized in {"short_answer", "short", "text", "free_text", "freetext", "open"}:
+        return QuestionType.SHORT_ANSWER
+
+    # Matching aliases
+    if normalized in {"matching", "match", "pairs", "pair"}:
+        return QuestionType.MATCHING
+
+    # Ordering aliases
+    if normalized in {"ordering", "order", "sequence", "sort", "rank"}:
+        return QuestionType.ORDERING
+
+    # Fill-in-the-blank aliases
+    if normalized in {"fill_blank", "fill-blank", "fillblank", "blank", "fill", "cloze"}:
+        return QuestionType.FILL_BLANK
+
+    # If nothing matches, return as-is (will fail validation later)
     return normalized
+
+
+def grade_question(question: dict, user_answer, qtype: str) -> tuple[bool, any]:
+    """
+    Grade a single question based on its type.
+    Returns (is_correct, correct_answer_for_display).
+    """
+    if qtype == QuestionType.MULTIPLE_CHOICE:
+        correct_answer = question.get("correct")
+        if not isinstance(user_answer, int):
+            try:
+                user_answer = int(user_answer)
+            except (ValueError, TypeError):
+                return False, correct_answer
+        return user_answer == correct_answer, correct_answer
+
+    elif qtype == QuestionType.TRUE_FALSE:
+        correct_answer = question.get("correct")
+        try:
+            user_val = int(user_answer) if isinstance(user_answer, str) else (1 if user_answer else 0)
+        except (ValueError, TypeError):
+            return False, correct_answer
+        return user_val == correct_answer, correct_answer
+
+    elif qtype == QuestionType.MULTI_SELECT:
+        correct_answer = sorted(set(question.get("correct") or []))
+        if isinstance(user_answer, str):
+            try:
+                user_answer = json.loads(user_answer)
+            except Exception:
+                user_answer = [user_answer]
+        if not isinstance(user_answer, list):
+            return False, correct_answer
+        try:
+            chosen = sorted({int(x) for x in user_answer if str(x).isdigit()})
+        except Exception:
+            return False, correct_answer
+        return chosen == correct_answer, correct_answer
+
+    elif qtype == QuestionType.SHORT_ANSWER:
+        raw_expected = question.get("correct_text") or question.get("correct_answers") or question.get("correct") or []
+        if isinstance(raw_expected, str):
+            expected = [t.strip().lower() for t in raw_expected.split(",") if t.strip()]
+        else:
+            expected = [str(t).strip().lower() for t in raw_expected if str(t).strip()]
+        user_value = str(user_answer).strip().lower() if user_answer else ""
+        return user_value in expected, expected
+
+    elif qtype == QuestionType.MATCHING:
+        # user_answer should be a dict/list of pairs mapping left→right indices
+        # e.g., {"0": 1, "1": 0, "2": 2} or [[0,1], [1,0], [2,2]]
+        pairs = question.get("pairs", [])
+        correct_mapping = {i: i for i in range(len(pairs))}  # By default, pairs[i][0] matches pairs[i][1]
+
+        if isinstance(user_answer, dict):
+            try:
+                user_mapping = {int(k): int(v) for k, v in user_answer.items()}
+            except (ValueError, TypeError):
+                return False, correct_mapping
+        elif isinstance(user_answer, list):
+            try:
+                user_mapping = {int(pair[0]): int(pair[1]) for pair in user_answer}
+            except (ValueError, TypeError, IndexError):
+                return False, correct_mapping
+        elif isinstance(user_answer, str):
+            try:
+                parsed = json.loads(user_answer)
+                if isinstance(parsed, dict):
+                    user_mapping = {int(k): int(v) for k, v in parsed.items()}
+                else:
+                    user_mapping = {int(pair[0]): int(pair[1]) for pair in parsed}
+            except Exception:
+                return False, correct_mapping
+        else:
+            return False, correct_mapping
+
+        is_correct = user_mapping == correct_mapping
+        return is_correct, correct_mapping
+
+    elif qtype == QuestionType.ORDERING:
+        # user_answer should be a list of indices in the order chosen by user
+        # e.g., [2, 0, 1, 3] means item at original index 2 is first, etc.
+        items = question.get("items") or question.get("options", [])
+        correct_order = question.get("correct_order")
+        if correct_order is None:
+            # Items are in correct order, so correct_order = [0, 1, 2, ...]
+            correct_order = list(range(len(items)))
+
+        if isinstance(user_answer, str):
+            try:
+                user_answer = json.loads(user_answer)
+            except Exception:
+                return False, correct_order
+
+        if not isinstance(user_answer, list):
+            return False, correct_order
+
+        try:
+            user_order = [int(x) for x in user_answer]
+        except (ValueError, TypeError):
+            return False, correct_order
+
+        return user_order == correct_order, correct_order
+
+    elif qtype == QuestionType.FILL_BLANK:
+        # user_answer should be a list of strings for each blank
+        # e.g., ["answer1", "answer2"]
+        blanks = question.get("blanks", [])
+        if isinstance(user_answer, str):
+            try:
+                user_answer = json.loads(user_answer)
+            except Exception:
+                user_answer = [user_answer]
+
+        if not isinstance(user_answer, list):
+            return False, [b.get("answer") or b for b in blanks]
+
+        if len(user_answer) != len(blanks):
+            return False, [b.get("answer") or b for b in blanks]
+
+        all_correct = True
+        correct_answers = []
+        for i, blank in enumerate(blanks):
+            # Each blank can be a string or dict with "answer" and optional "alternatives"
+            if isinstance(blank, dict):
+                expected = [blank.get("answer", "").strip().lower()]
+                alternatives = blank.get("alternatives", [])
+                expected.extend([str(a).strip().lower() for a in alternatives])
+                correct_answers.append(blank.get("answer", ""))
+            else:
+                expected = [str(blank).strip().lower()]
+                correct_answers.append(str(blank))
+
+            user_val = str(user_answer[i]).strip().lower() if i < len(user_answer) else ""
+            if user_val not in expected:
+                all_correct = False
+
+        return all_correct, correct_answers
+
+    # Unknown type - fail
+    return False, None
 
 
 def get_course_quiz(course_id: str):
@@ -16312,37 +16583,65 @@ def get_course_quiz(course_id: str):
 
     if metadata_quiz:
         normalized_questions = []
-        allowed_types = {"multiple_choice", "true_false", "multi_select", "short_answer"}
         for idx, q in enumerate(metadata_quiz.get("questions", []), start=1):
             options = q.get("options", [])
             qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=idx)
-            if qtype not in allowed_types:
+            if qtype not in QuestionType.ALL_TYPES:
                 app.logger.warning("Unsupported quiz question type; forcing multiple_choice", extra={
                     "course_id": course_id,
                     "question_id": q.get("id") or idx,
                     "type": qtype,
                 })
-                qtype = "multiple_choice"
+                qtype = QuestionType.MULTIPLE_CHOICE
+
             normalized = {
                 "id": q.get("id") or idx,
                 "type": qtype,
-                "question": q.get("text") or q.get("question"),
+                "question": q.get("text") or q.get("question") or q.get("prompt"),
+                "prompt": q.get("prompt") or q.get("text") or q.get("question"),
                 "options": options,
+                "shuffle": q.get("shuffle", False),
             }
-            if qtype == "multi_select":
+
+            # Type-specific normalization
+            if qtype == QuestionType.MULTI_SELECT:
                 raw_correct = q.get("correct") or q.get("correct_indexes") or q.get("correct_indices") or []
                 if isinstance(raw_correct, (int, str)):
                     raw_correct = [raw_correct]
                 normalized["correct"] = [int(x) for x in raw_correct if str(x).isdigit()]
-            elif qtype == "short_answer":
+
+            elif qtype == QuestionType.SHORT_ANSWER:
                 raw_text = q.get("correct_text") or q.get("correct_answers") or q.get("correct") or ""
                 if isinstance(raw_text, str):
                     texts = [t.strip() for t in raw_text.split(",") if t.strip()]
                 else:
                     texts = [str(t).strip() for t in raw_text if str(t).strip()]
                 normalized["correct_text"] = texts
+
+            elif qtype == QuestionType.MATCHING:
+                pairs = q.get("pairs", [])
+                normalized["pairs"] = pairs
+                # Don't include correct mapping in student view
+
+            elif qtype == QuestionType.ORDERING:
+                items = q.get("items") or q.get("options", [])
+                normalized["items"] = items
+                correct_order = q.get("correct_order")
+                if correct_order is None:
+                    normalized["correct_order"] = list(range(len(items)))
+                else:
+                    normalized["correct_order"] = correct_order
+
+            elif qtype == QuestionType.FILL_BLANK:
+                text_with_blanks = q.get("text_with_blanks") or q.get("prompt") or q.get("text") or ""
+                blanks = q.get("blanks", [])
+                normalized["text_with_blanks"] = text_with_blanks
+                normalized["blanks"] = blanks
+
             else:
+                # Multiple choice / True-False
                 normalized["correct"] = int(q.get("correct", q.get("correct_index", 0)))
+
             normalized_questions.append(normalized)
         return {
             "course_id": course_id,
@@ -16355,37 +16654,65 @@ def get_course_quiz(course_id: str):
     quiz = quizzes.get(course_id)
     if quiz:
         normalized_questions = []
-        allowed_types = {"multiple_choice", "true_false", "multi_select", "short_answer"}
         for idx, q in enumerate(quiz.get("questions", []), start=1):
             qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=idx)
-            if qtype not in allowed_types:
+            if qtype not in QuestionType.ALL_TYPES:
                 app.logger.warning("Unsupported quiz question type; forcing multiple_choice", extra={
                     "course_id": course_id,
                     "question_id": q.get("id") or idx,
                     "type": qtype,
                 })
-                qtype = "multiple_choice"
+                qtype = QuestionType.MULTIPLE_CHOICE
+
             normalized = {
-                "id": q.get("id"),
+                "id": q.get("id") or idx,
                 "type": qtype,
-                "question": q.get("question"),
+                "question": q.get("question") or q.get("text") or q.get("prompt"),
+                "prompt": q.get("prompt") or q.get("question") or q.get("text"),
                 "options": q.get("options", []),
+                "shuffle": q.get("shuffle", False),
             }
-            if qtype == "multi_select":
+
+            # Type-specific normalization
+            if qtype == QuestionType.MULTI_SELECT:
                 raw_correct = q.get("correct") or q.get("correct_indexes") or q.get("correct_indices") or []
                 if isinstance(raw_correct, (int, str)):
                     raw_correct = [raw_correct]
                 normalized["correct"] = [int(x) for x in raw_correct if str(x).isdigit()]
-            elif qtype == "short_answer":
+
+            elif qtype == QuestionType.SHORT_ANSWER:
                 raw_text = q.get("correct_text") or q.get("correct_answers") or q.get("correct") or ""
                 if isinstance(raw_text, str):
                     texts = [t.strip() for t in raw_text.split(",") if t.strip()]
                 else:
                     texts = [str(t).strip() for t in raw_text if str(t).strip()]
                 normalized["correct_text"] = texts
+
+            elif qtype == QuestionType.MATCHING:
+                pairs = q.get("pairs", [])
+                normalized["pairs"] = pairs
+
+            elif qtype == QuestionType.ORDERING:
+                items = q.get("items") or q.get("options", [])
+                normalized["items"] = items
+                correct_order = q.get("correct_order")
+                if correct_order is None:
+                    normalized["correct_order"] = list(range(len(items)))
+                else:
+                    normalized["correct_order"] = correct_order
+
+            elif qtype == QuestionType.FILL_BLANK:
+                text_with_blanks = q.get("text_with_blanks") or q.get("prompt") or q.get("text") or ""
+                blanks = q.get("blanks", [])
+                normalized["text_with_blanks"] = text_with_blanks
+                normalized["blanks"] = blanks
+
             else:
+                # Multiple choice / True-False
                 normalized["correct"] = int(q.get("correct", 0))
+
             normalized_questions.append(normalized)
+
         return {
             "course_id": course_id,
             "title": quiz.get("title", "Course Quiz"),
@@ -16393,6 +16720,31 @@ def get_course_quiz(course_id: str):
             "questions": normalized_questions,
         }
     return None
+
+
+@app.route("/api/v1/question_types", methods=["GET"])
+def api_v1_question_types():
+    """Return all supported question types with labels for UI."""
+    types_list = []
+    for qtype in QuestionType.ALL_TYPES:
+        labels = QuestionType.LABELS.get(qtype, {"en": qtype, "el": qtype})
+        types_list.append({
+            "type": qtype,
+            "label_en": labels.get("en", qtype),
+            "label_el": labels.get("el", qtype),
+        })
+    # Sort by a sensible order
+    order = [
+        QuestionType.MULTIPLE_CHOICE,
+        QuestionType.TRUE_FALSE,
+        QuestionType.MULTI_SELECT,
+        QuestionType.MATCHING,
+        QuestionType.ORDERING,
+        QuestionType.FILL_BLANK,
+        QuestionType.SHORT_ANSWER,
+    ]
+    types_list.sort(key=lambda x: order.index(x["type"]) if x["type"] in order else 999)
+    return jsonify(ok=True, types=types_list), 200
 
 
 @app.route("/api/v1/courses/<string:course_id>/quiz", methods=["GET"])
@@ -16695,7 +17047,7 @@ def api_v1_submit_quiz(course_id: str):
     if student not in course.get("students", []):
         return jsonify(status="error", message="Not enrolled"), 403
 
-    # QUEST: Calculate score with support for multiple question types
+    # QUEST: Calculate score with support for all question types (including matching, ordering, fill_blank)
     questions = quiz.get("questions", [])
     total = len(questions)
     if total == 0:
@@ -16708,64 +17060,15 @@ def api_v1_submit_quiz(course_id: str):
         qid = str(q.get("id"))
         qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=q.get("id"))
         user_answer = answers.get(qid)
-        is_correct = False
-        correct_answer = None
 
-        if qtype not in {"multiple_choice", "true_false", "multi_select", "short_answer"}:
+        if qtype not in QuestionType.ALL_TYPES:
             return jsonify(status="error", message=f"Unsupported question type '{qtype}'"), 400
 
         if user_answer is None:
             return jsonify(status="error", message=f"Missing answer for question {qid}"), 400
 
-        # Deterministic grading per type
-        if qtype == "multiple_choice" or qtype == "true_false":
-            # Single choice or True/False: compare index
-            correct_answer = q.get("correct")
-            if qtype == "multiple_choice":
-                options = q.get("options", [])
-                if not isinstance(user_answer, int) and not (isinstance(user_answer, str) and user_answer.isdigit()):
-                    return jsonify(status="error", message=f"Invalid answer for question {qid}"), 400
-                answer_index = int(user_answer)
-                if answer_index < 0 or answer_index >= len(options):
-                    return jsonify(status="error", message=f"Answer out of range for question {qid}"), 400
-                is_correct = answer_index == correct_answer
-            else:
-                if user_answer not in (0, 1, "0", "1"):
-                    return jsonify(status="error", message=f"Invalid true/false answer for question {qid}"), 400
-                is_correct = int(user_answer) == correct_answer
-        elif qtype == "multi_select":
-            options = q.get("options", [])
-            correct_answer = sorted(set(q.get("correct") or []))
-            if isinstance(user_answer, str):
-                try:
-                    user_answer = json.loads(user_answer)
-                except Exception:
-                    user_answer = [user_answer]
-            if not isinstance(user_answer, list):
-                return jsonify(status="error", message=f"Invalid multi-select answer for question {qid}"), 400
-            try:
-                chosen = sorted({int(x) for x in user_answer if str(x).isdigit()})
-            except Exception:
-                return jsonify(status="error", message=f"Invalid multi-select answer for question {qid}"), 400
-            if not options:
-                return jsonify(status="error", message=f"Invalid options for question {qid}"), 400
-            if any(idx < 0 or idx >= len(options) for idx in chosen):
-                return jsonify(status="error", message=f"Answer out of range for question {qid}"), 400
-            is_correct = chosen == correct_answer
-        elif qtype == "short_answer":
-            raw_expected = q.get("correct_text") or q.get("correct_answers") or q.get("correct") or []
-            if isinstance(raw_expected, str):
-                expected = [t.strip().lower() for t in raw_expected.split(",") if t.strip()]
-            else:
-                expected = [str(t).strip().lower() for t in raw_expected if str(t).strip()]
-            correct_answer = expected
-            if isinstance(user_answer, str):
-                user_value = user_answer.strip().lower()
-            else:
-                user_value = str(user_answer).strip().lower()
-            if not user_value:
-                return jsonify(status="error", message=f"Invalid short answer for question {qid}"), 400
-            is_correct = user_value in expected
+        # Use centralized grading function
+        is_correct, correct_answer = grade_question(q, user_answer, qtype)
 
         if is_correct:
             correct += 1
@@ -18890,9 +19193,10 @@ def api_chat_sessions_list():
     return resp, 200
 
 
-@app.route("/api/ai/sessions/rename", methods=["POST"])
-def api_ai_session_rename_v2():
-    """Rename a session"""
+# NOTE: Duplicate route removed - /api/ai/sessions/rename is already defined at line ~9935
+# The primary handler (api_ai_session_rename) supports both /api/ai_sessions/rename and /api/ai/sessions/rename
+def api_ai_session_rename_v2_UNUSED():
+    """Rename a session - DISABLED: duplicate route would cause AssertionError"""
     data = request.get_json(silent=True) or {}
     session_id = data.get("id") or data.get("session_id")
     new_title = (data.get("title") or "").strip()

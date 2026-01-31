@@ -3647,11 +3647,17 @@ function formatBytes(value) {
 }
 
 function buildTokenIndexData() {
+    // Experimental/invalid tokens to hide from UI
+    const HIDDEN_TOKENS = ['TOKEN', 'UNKNOWN', 'TEST', 'NULL', ''];
+
     const counts = {};
     allTransactions.forEach(tx => {
         if (getTxType(tx) === 'tokens') {
-            const sym = (tx.symbol || '').toUpperCase() || 'TOKEN';
-            counts[sym] = (counts[sym] || 0) + 1;
+            const sym = (tx.symbol || tx.asset_symbol || tx.asset || '').toUpperCase();
+            // Skip hidden/experimental tokens
+            if (sym && !HIDDEN_TOKENS.includes(sym)) {
+                counts[sym] = (counts[sym] || 0) + 1;
+            }
         }
     });
 
@@ -3659,13 +3665,14 @@ function buildTokenIndexData() {
     if (select) {
         Array.from(select.options).forEach(opt => {
             const sym = (opt.value || '').toUpperCase();
-            if (sym && sym !== 'THR' && counts[sym] === undefined) {
+            if (sym && sym !== 'THR' && !HIDDEN_TOKENS.includes(sym) && counts[sym] === undefined) {
                 counts[sym] = 0;
             }
         });
     }
 
     return Object.keys(counts)
+        .filter(sym => !HIDDEN_TOKENS.includes(sym))
         .sort((a, b) => a.localeCompare(b))
         .map(sym => ({ symbol: sym, count: counts[sym] }));
 }
@@ -3751,6 +3758,15 @@ function renderHistory() {
         filtered = filtered.filter(tx => (tx.symbol || '').toUpperCase() === currentTokenFilter.toUpperCase());
     }
 
+    // Hide experimental/invalid tokens from display
+    const HIDDEN_TOKENS_LIST = ['TOKEN', 'UNKNOWN', 'TEST', 'NULL'];
+    if (currentHistoryFilter === 'tokens') {
+        filtered = filtered.filter(tx => {
+            const sym = (tx.symbol || tx.asset_symbol || tx.asset || '').toUpperCase();
+            return sym && !HIDDEN_TOKENS_LIST.includes(sym);
+        });
+    }
+
     if (filtered.length === 0) {
         content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions in this category</div>';
         return;
@@ -3799,10 +3815,12 @@ function renderHistory() {
         const amountOut = poolEvent?.out_amount ?? tx.amount_out ?? tx.amountOut ?? tx.output_amount ?? tx.received_amount;
         const amountOutNum = (amountOut !== undefined && Number.isFinite(Number(amountOut))) ? Number(amountOut) : null;
 
-        // Determine correct asset symbol for display
-        const displayAsset = txType === 'tokens'
-            ? (tx.asset_symbol || tx.asset || tx.symbol || 'TOKEN')
+        // Determine correct asset symbol for display (avoid experimental 'TOKEN')
+        const rawAsset = txType === 'tokens'
+            ? (tx.asset_symbol || tx.asset || tx.symbol || '')
             : (tx.symbol || tx.asset_symbol || tx.asset || 'THR');
+        const HIDDEN_TOKENS = ['TOKEN', 'UNKNOWN', 'TEST', 'NULL'];
+        const displayAsset = HIDDEN_TOKENS.includes(rawAsset.toUpperCase()) ? 'THR' : (rawAsset || 'THR');
 
         const liquiditySubtype = (tx.subtype || tx.meta?.subtype || '').toLowerCase();
         const isLiquidityRemove = liquiditySubtype === 'remove_liq' || (tx.kind || tx.type || '').toLowerCase().includes('remove');

@@ -3547,11 +3547,13 @@ def normalize_media_url(url: str | None) -> str:
 def normalize_image_url(url: str | None) -> str | None:
     if not url:
         return None
-    if url.startswith("http"):
-        return url
-    if url.startswith("/media/"):
-        return f"{MEDIA_URL.rstrip('/')}{url}"
-    return f"{ASSET_CDN_BASE}/{url.lstrip('/')}"
+    # Strip localhost URLs for production safety
+    value = re.sub(r"^https?://localhost:\d+", "", url, flags=re.IGNORECASE)
+    if value.startswith("http"):
+        return value
+    if value.startswith("/media/"):
+        return f"{MEDIA_URL.rstrip('/')}{value}"
+    return f"{ASSET_CDN_BASE}/{value.lstrip('/')}"
 
 
 def get_all_tokens():
@@ -3663,7 +3665,7 @@ def get_wallet_balances(wallet: str):
             "balance": thr_balance,
             "decimals": 6,
             "logo": "/static/img/thronos-token.png",
-            "logo_url": url_for("static", filename="img/thronos-token.png"),
+            "logo_url": url_for("static", filename="img/thronos-token.png", _external=False),
             "color": "#00ff66",
             "chain": "Thronos",
             "type": "native",
@@ -3678,7 +3680,7 @@ def get_wallet_balances(wallet: str):
             "balance": wbtc_balance,
             "decimals": 8,
             "logo": "/static/img/wbtc-logo.png",
-            "logo_url": url_for("static", filename="img/wbtc-logo.png"),
+            "logo_url": url_for("static", filename="img/wbtc-logo.png", _external=False),
             "color": "#f7931a",
             "chain": "Thronos",
             "type": "wrapped",
@@ -3693,7 +3695,7 @@ def get_wallet_balances(wallet: str):
             "balance": l2e_balance,
             "decimals": 6,
             "logo": "/static/img/l2e-logo.png",
-            "logo_url": url_for("static", filename="img/l2e-logo.png"),
+            "logo_url": url_for("static", filename="img/l2e-logo.png", _external=False),
             "color": "#00ccff",
             "chain": "Thronos",
             "type": "reward",

@@ -30,7 +30,7 @@ from __future__ import annotations
 # - Real Fiat Gateway (Stripe + Bank Withdrawals) (V5.0)
 # - Admin Withdrawal Panel (V5.1)
 
-import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil, sqlite3
+import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil, sqlite3, base64
 import sys
 import atexit
 from collections import Counter
@@ -530,6 +530,7 @@ PROVIDER_HEALTH_TTL = 300  # seconds
 # Lightweight caches for hot endpoints
 MINING_INFO_CACHE: dict = {"ts": 0.0, "data": None}
 LAST_HASH_CACHE: dict = {"ts": 0.0, "data": None}
+HEALTH_CACHE: dict = {"ts": 0.0, "data": None}
 MEMPOOL_COUNT_CACHE: dict = {"ts": 0.0, "count": 0}
 BALANCE_CACHE: dict = {}
 BALANCE_CACHE_TTL = float(os.getenv("BALANCE_CACHE_TTL_SECONDS", "10"))
@@ -3506,7 +3507,7 @@ def normalize_media_url(url: str | None) -> str:
 
     value = url.strip()
 
-    value = re.sub(r"^https?://localhost:\d+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?", "", value, flags=re.IGNORECASE)
     for origin in ("https://thrchain.vercel.app", "https://thrchain.up.railway.app"):
         if value.lower().startswith(origin):
             value = value[len(origin):]
@@ -3705,6 +3706,10 @@ def get_wallet_balances(wallet: str):
         },
     ]
 
+    for token in tokens:
+        token["logo_url"] = normalize_media_url(token.get("logo_url") or token.get("logo") or "")
+        token["logo"] = token.get("logo_url") or token.get("logo") or ""
+
     custom_tokens = load_custom_tokens()
     for symbol, token_data in custom_tokens.items():
         token_id = token_data.get("id")
@@ -3733,8 +3738,8 @@ def get_wallet_balances(wallet: str):
             "name": token_data.get("name", symbol),
             "balance": token_balance,
             "decimals": token_data.get("decimals", 6),
-            "logo": logo_path,
-            "logo_url": logo_url,
+            "logo": normalize_media_url(logo_url or ""),
+            "logo_url": normalize_media_url(logo_url or ""),
             "color": token_data.get("color", "#00ff66"),
             "chain": "Thronos",
             "type": "experimental",
@@ -6286,6 +6291,64 @@ def _build_wallet_history(address: str, category_filter: str, limit: int, cursor
     }
 
 
+def _empty_wallet_history_summary() -> dict:
+    return {
+        "total_mining": 0.0,
+        "total_ai_rewards": 0.0,
+        "total_music_tips_sent": 0.0,
+        "total_music_tips_received": 0.0,
+        "total_iot_rewards": 0.0,
+        "total_sent": 0.0,
+        "total_received": 0.0,
+        "mining_count": 0,
+        "ai_reward_count": 0,
+        "music_tip_count": 0,
+        "iot_count": 0,
+    }
+
+
+def _build_wallet_history_fallback(address: str, limit: int, cursor: int) -> dict:
+    addr_lower = address.lower()
+    entries: list[dict] = []
+    feed = _tx_feed(include_pending=True, include_bridge=True)
+    for tx in feed:
+        if not isinstance(tx, dict):
+            continue
+        parties = set(tx.get("parties") or [])
+        parties.update({tx.get("from"), tx.get("to"), tx.get("trader"), tx.get("thr_address")})
+        parties = {str(p).lower() for p in parties if p}
+        if addr_lower not in parties:
+            continue
+        tx_copy = dict(tx)
+        tx_copy["category"] = tx_copy.get("category") or _categorize_transaction(tx_copy)
+        tx_copy = normalize_history_item(tx_copy)
+        tx_from = tx_copy.get("from")
+        tx_to = tx_copy.get("to")
+        if tx_to and str(tx_to).lower() == addr_lower:
+            tx_copy["direction"] = "received"
+        elif tx_from and str(tx_from).lower() == addr_lower:
+            tx_copy["direction"] = "sent"
+        else:
+            tx_copy["direction"] = "related"
+        for key in ("logo_url", "image_url", "cover_url", "audio_url", "token_logo"):
+            if key in tx_copy:
+                tx_copy[key] = normalize_media_url(str(tx_copy.get(key) or ""))
+        entries.append(tx_copy)
+
+    entries.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    total = len(entries)
+    paged = entries[cursor:cursor + limit]
+    next_cursor = cursor + limit if cursor + limit < total else None
+    return {
+        "transactions": paged,
+        "summary": _empty_wallet_history_summary(),
+        "total_transactions": total,
+        "limit": limit,
+        "cursor": cursor,
+        "next_cursor": next_cursor,
+    }
+
+
 @app.route("/api/wallet/history", methods=["GET"])
 def api_wallet_history():
     """
@@ -6313,37 +6376,20 @@ def api_wallet_history():
 
     try:
         payload = _build_wallet_history(address, category_filter, limit, cursor)
-        return jsonify({
-            "ok": True,
-            "address": address,
-            **payload,
-        }), 200
     except Exception as exc:
         logger.error("[wallet_history] failed: %s", exc)
-        summary = {
-            "total_mining": 0.0,
-            "total_ai_rewards": 0.0,
-            "total_music_tips_sent": 0.0,
-            "total_music_tips_received": 0.0,
-            "total_iot_rewards": 0.0,
-            "total_sent": 0.0,
-            "total_received": 0.0,
-            "mining_count": 0,
-            "ai_reward_count": 0,
-            "music_tip_count": 0,
-            "iot_count": 0
-        }
-        return jsonify({
-            "ok": False,
-            "error": "temporary",
-            "address": address,
-            "transactions": [],
-            "summary": summary,
-            "total_transactions": 0,
-            "limit": limit,
-            "cursor": cursor,
-            "next_cursor": None,
-        }), 200
+        payload = _build_wallet_history_fallback(address, limit, cursor)
+
+    for tx in payload.get("transactions", []):
+        for key in ("logo_url", "image_url", "cover_url", "audio_url", "token_logo"):
+            if key in tx:
+                tx[key] = normalize_media_url(str(tx.get(key) or ""))
+
+    return jsonify({
+        "ok": True,
+        "address": address,
+        **payload,
+    }), 200
 
 
 # NOTE: /wallet page hidden - use wallet widget in base.html instead
@@ -6384,8 +6430,14 @@ def api_v2_wallet_history():
     }
     """
     address = request.args.get("address", "").strip()
-    limit = min(int(request.args.get("limit", 100)), 500)  # Max 500
-    offset = int(request.args.get("offset", 0))
+    try:
+        limit = min(int(request.args.get("limit", 100)), 500)  # Max 500
+    except (TypeError, ValueError):
+        limit = 100
+    try:
+        offset = int(request.args.get("offset", 0))
+    except (TypeError, ValueError):
+        offset = 0
     category_filter = request.args.get("category", "").strip().lower()
     from_date = request.args.get("from_date", "").strip()
     to_date = request.args.get("to_date", "").strip()
@@ -6427,6 +6479,46 @@ def wallet_qr_code(thr_addr):
     img.save(buf, format='PNG')
     buf.seek(0)
     return send_file(buf, mimetype="image/png")
+
+
+def _build_qr_payload(network: str | None, address: str) -> str:
+    net = (network or "").strip().lower()
+    if net in {"btc", "bitcoin"}:
+        return f"bitcoin:{address}"
+    if net in {"eth", "ethereum"}:
+        return f"ethereum:{address}"
+    if net in {"bnb", "bsc"}:
+        return f"bnb:{address}"
+    if net in {"xrp", "ripple"}:
+        return f"xrp:{address}"
+    return address
+
+
+def _qr_response(payload: str, force_json: bool = False):
+    img = qrcode.make(payload)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    if force_json:
+        encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
+        return jsonify({"ok": True, "data_url": f"data:image/png;base64,{encoded}"}), 200
+    return send_file(buf, mimetype="image/png")
+
+
+@app.route("/api/qr")
+@app.route("/api/bridge/qr")
+def api_qr():
+    address = (request.args.get("address") or request.args.get("thr_address") or "").strip()
+    if not address:
+        return jsonify({"ok": False, "error": "Missing address"}), 400
+    network = request.args.get("network")
+    payload = _build_qr_payload(network, address)
+    wants_json = (request.args.get("format") or "").lower() == "json"
+    wants_json = wants_json or (request.args.get("json") or "").lower() in {"1", "true", "yes"}
+    if not wants_json:
+        best = request.accept_mimetypes.best if request.accept_mimetypes else ""
+        wants_json = best == "application/json"
+    return _qr_response(payload, force_json=wants_json)
 
 
 @app.route("/api/wallet/audio/<thr_addr>")
@@ -7281,17 +7373,29 @@ def api_last_block():
 
 @app.route("/last_block_hash", methods=["GET"])
 def last_block_hash():
+    now = time.time()
+    cached = LAST_HASH_CACHE.get("data")
+    if cached and now - LAST_HASH_CACHE.get("ts", 0.0) < 0.75:
+        return jsonify(cached), 200
+
     last_hash = CHAIN_META.get("last_hash") or "0" * 64
-    height = CHAIN_META.get("height", -1)
+    height = CHAIN_META.get("height", 0)
+    last_block = CHAIN_META.get("last_block") or {}
+    timestamp = last_block.get("timestamp") or ""
     target = get_mining_target()
     nbits = target_to_bits(target)
-    return jsonify({
+
+    payload = {
+        "ok": True,
         "last_hash": last_hash,
         "block_hash": last_hash,
-        "height": int(height) if height is not None else -1,
+        "height": int(height) if height is not None and int(height) >= 0 else 0,
+        "timestamp": timestamp,
         "target": hex(target),
         "nbits": hex(nbits),
-    }), 200
+    }
+    LAST_HASH_CACHE.update({"ts": now, "data": payload})
+    return jsonify(payload), 200
 
 @app.route("/mining_info")
 def mining_info():
@@ -7623,7 +7727,7 @@ def peers_heartbeat():
         "last_seen": int(time.time()),
     }
     peers = list(PEERS.values())
-    return jsonify(ok=True, role=NODE_ROLE, active_peers=len(peers), peers=peers, ttl_seconds=60), 200
+    return jsonify(ok=True, role=NODE_ROLE, active_peers=len(peers), peers=peers, ttl_seconds=PEER_TTL_SECONDS), 200
 
 @app.route("/api/peers/active", methods=["GET"])
 def peers_active():
@@ -7633,7 +7737,7 @@ def peers_active():
     cleanup_expired_peers()
     return jsonify({
         "ok": True,
-        "active_peers": active_peers,
+        "active_peers": list(PEERS.values()),
         "ttl_seconds": PEER_TTL_SECONDS,
     }), 200
 
@@ -7644,7 +7748,7 @@ def peers_list():
         return jsonify({"error": "Active peers only available on master node"}), 403
     cleanup_expired_peers()
     peers = []
-    for peer_id, data in active_peers.items():
+    for peer_id, data in PEERS.items():
         peers.append({
             "peer_id": peer_id,
             "host": data.get("url"),
@@ -7692,7 +7796,7 @@ def network_live():
 
     # Active peers - use real heartbeat tracking from replicas
     cleanup_expired_peers()  # Remove stale peers
-    active_peers_count = len(active_peers)
+    active_peers_count = len(PEERS)
 
     return jsonify({
         "difficulty":          difficulty,
@@ -7752,14 +7856,100 @@ def api_tx_feed():
     wallet = (request.args.get("wallet") or "").strip()
     kinds_param = request.args.get("kinds") or ""
     exclude_kinds_param = request.args.get("exclude_kinds") or ""
-    limit = min(request.args.get("limit", type=int, default=100), 500)
+    limit_param = request.args.get("limit", type=int)
+    limit = min(limit_param if limit_param is not None else 100, 500)
     include_pending = (request.args.get("include_pending") or "true").lower() != "false"
     include_bridge = (request.args.get("include_bridge") or "true").lower() != "false"
     cursor = request.args.get("cursor", type=int)
-    limit = request.args.get("limit", type=int)
+    paginate = limit_param is not None or cursor is not None
 
     kinds = {k.strip().lower() for k in kinds_param.split(",") if k.strip()}
     exclude_kinds = {k.strip().lower() for k in exclude_kinds_param.split(",") if k.strip()}
+    has_tx_log = bool(load_tx_log())
+
+    def _classify_tx_feed_entry(tx: dict) -> dict:
+        if not isinstance(tx, dict):
+            return tx
+
+        raw_kind = (tx.get("kind") or tx.get("type") or "").lower()
+        has_block_reward = tx.get("reward") is not None or tx.get("reward_to_miner") is not None
+        is_block = raw_kind == "block" or tx.get("type") == "block" or tx.get("block_hash") or has_block_reward
+        if is_block:
+            tx["kind"] = "block"
+            tx["type"] = "block"
+            tx["category"] = "blocks"
+            return tx
+
+        if raw_kind in {"mining_reward", "block_reward"}:
+            tx["category"] = "mining"
+            return tx
+
+        if raw_kind in {"swap", "pool_swap"}:
+            tx["category"] = "dex"
+            return tx
+
+        if raw_kind in {"thr_transfer", "token_transfer", "transfer", "bridge", "bridge_in", "bridge_out"}:
+            tx["category"] = "transfers"
+            return tx
+
+        tx["category"] = tx.get("category") or raw_kind or "other"
+        return tx
+
+    def _build_block_feed(max_items: int) -> list[dict]:
+        blocks = get_blocks_for_viewer()
+        if not blocks:
+            return []
+        entries: list[dict] = []
+        for block in blocks:
+            miner_addr = block.get("thr_address") or block.get("miner_address") or block.get("miner")
+            if wallet and (not miner_addr or str(miner_addr).lower() != wallet.lower()):
+                continue
+            block_hash = block.get("block_hash") or block.get("hash")
+            height = block.get("index")
+            timestamp = block.get("timestamp")
+            base = {
+                "tx_id": block_hash or f"block:{height}",
+                "block_hash": block_hash,
+                "height": height,
+                "timestamp": timestamp,
+                "reward_to_miner": block.get("reward_to_miner", block.get("reward")),
+                "reward_to_ai": block.get("reward_to_ai"),
+                "fee_burned": block.get("fee_burned"),
+                "thr_address": miner_addr,
+                "from": "COINBASE",
+                "to": miner_addr,
+                "kind": "block",
+                "type": "block",
+            }
+            entries.append(_classify_tx_feed_entry(base))
+
+            reward = base.get("reward_to_miner")
+            if reward:
+                reward_entry = {
+                    "tx_id": f"reward:{block_hash or height}:{miner_addr or 'miner'}",
+                    "kind": "mining_reward",
+                    "type": "mining_reward",
+                    "category": "mining",
+                    "timestamp": timestamp,
+                    "amount": reward,
+                    "from": "COINBASE",
+                    "to": miner_addr,
+                    "block_hash": block_hash,
+                    "block_height": height,
+                    "meta": {
+                        "block_height": height,
+                        "block_hash": block_hash,
+                        "fee_burned": block.get("fee_burned"),
+                        "reward_to_miner": reward,
+                        "reward_to_ai": block.get("reward_to_ai"),
+                    },
+                }
+                entries.append(_classify_tx_feed_entry(reward_entry))
+
+            if len(entries) >= max_items:
+                break
+        entries.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        return entries[:max_items]
 
     # Use event index for performance if DB is available
     if USE_SQLITE_LEDGER:
@@ -7782,6 +7972,10 @@ def api_tx_feed():
                     "height": event.get("height"),
                     "metadata": event.get("metadata", {}),
                 }
+                tx = _classify_tx_feed_entry(tx)
+                for key in ("image_url", "logo_url", "audio_url", "cover_url"):
+                    if key in tx:
+                        tx[key] = normalize_media_url(str(tx.get(key) or ""))
 
                 # Apply filters
                 kind = tx["kind"] or "transfer"
@@ -7802,7 +7996,21 @@ def api_tx_feed():
                     counts[k] = counts.get(k, 0) + 1
                 app.logger.info("tx_feed_counts", extra={"counts": counts, "wallet": wallet or None, "source": "event_index"})
 
-            return jsonify(normalized), 200
+            if normalized:
+                if not paginate:
+                    return jsonify(normalized), 200
+                start = max(cursor or 0, 0)
+                cap = max(limit or 200, 1)
+                page = normalized[start:start + cap]
+                next_cursor = start + cap if start + cap < len(normalized) else None
+                reason = None if page else "no_events"
+                return jsonify({
+                    "ok": True,
+                    "items": page,
+                    "cursor": next_cursor,
+                    "has_more": next_cursor is not None,
+                    "reason": reason,
+                }), 200
 
         except Exception as e:
             logger.warning(f"Event index query failed, falling back to chain scan: {e}")
@@ -7815,6 +8023,7 @@ def api_tx_feed():
         kind = _canonical_kind(tx.get("kind") or tx.get("type") or "")
         tx["kind"] = kind or "transfer"
         tx.setdefault("type", tx["kind"])
+        tx = _classify_tx_feed_entry(tx)
 
         # Apply filters
         if kinds and tx["kind"] not in kinds:
@@ -7837,6 +8046,9 @@ def api_tx_feed():
         if len(normalized) >= limit:
             break
 
+    if not normalized and not has_tx_log:
+        normalized = _build_block_feed(limit)
+
     if request.args.get("debug_counts"):
         counts: dict[str, int] = {}
         for tx in normalized:
@@ -7844,7 +8056,7 @@ def api_tx_feed():
             counts[k] = counts.get(k, 0) + 1
         app.logger.info("tx_feed_counts", extra={"counts": counts, "wallet": wallet or None, "source": "chain_scan"})
 
-    if limit is None and cursor is None:
+    if not paginate:
         return jsonify(normalized), 200
 
     start = max(cursor or 0, 0)
@@ -7856,8 +8068,14 @@ def api_tx_feed():
         "ok": True,
         "items": page,
         "cursor": next_cursor,
-        "has_more": next_cursor is not None
+        "has_more": next_cursor is not None,
+        "reason": None if page else "no_events",
     }), 200
+
+
+@app.route("/api/feed_tx")
+def api_feed_tx():
+    return api_tx_feed()
 
 @app.route("/api/transactions")
 def api_transactions():
@@ -7867,13 +8085,24 @@ def api_transactions():
 
 @app.route("/api/health", methods=["GET"])
 def api_health():
-    return jsonify({
+    now = time.time()
+    cached = HEALTH_CACHE.get("data")
+    if cached and now - HEALTH_CACHE.get("ts", 0.0) < 0.75:
+        return jsonify(cached), 200
+
+    height = int(CHAIN_META.get("height") or 0)
+    if height < 0:
+        height = 0
+    payload = {
         "ok": True,
         "role": NODE_ROLE,
-        "chain_height": int(CHAIN_META.get("height") or 0),
+        "chain_height": height,
         "last_hash": CHAIN_META.get("last_hash") or "0" * 64,
-        "ts": int(time.time())
-    }), 200
+        "ts": int(now),
+        "version": APP_VERSION,
+    }
+    HEALTH_CACHE.update({"ts": now, "data": payload})
+    return jsonify(payload), 200
 
 
 @app.route("/api/replica_health")
@@ -11277,9 +11506,15 @@ def api_list_tokens():
             token["logo_url"] = normalize_media_url(f"/static/{logo}")
         else:
             token["logo_url"] = normalize_media_url(token.get("logo_url") or token.get("logo") or token.get("logo_path", ""))
+        token["logo"] = token.get("logo_url") or token.get("logo") or ""
 
     token_list.sort(key=lambda t: t.get("created_at", ""), reverse=True)
     return jsonify({"ok": True, "tokens": token_list}), 200
+
+
+@app.route("/api/tokens")
+def api_tokens_alias():
+    return api_list_tokens()
 
 @app.route("/api/tokens/<symbol>/balance/<address>")
 def api_token_balance(symbol, address):
@@ -11288,6 +11523,8 @@ def api_token_balance(symbol, address):
     token = tokens.get(symbol.upper())
     if not token:
         return jsonify({"ok": False, "error": "Token not found"}), 404
+    token["logo_url"] = normalize_media_url(token.get("logo_url") or token.get("logo") or token.get("logo_path", ""))
+    token["logo"] = token.get("logo_url") or token.get("logo") or ""
     ledger = load_custom_token_ledger(token["id"])
     balance = float(ledger.get(address, 0))
     return jsonify({"ok": True, "symbol": symbol.upper(), "address": address, "balance": balance, "token": token}), 200
@@ -13420,6 +13657,8 @@ MINING_WATCHDOG_STATE = {
     "invalid": {},
     "banned": {},
 }
+MINING_JOB_CACHE: dict[str, dict] = {}
+MINING_JOB_TTL_SECONDS = int(os.getenv("MINING_JOB_TTL_SECONDS", "20"))
 
 
 def _prune_watchdog_samples(samples: list[float], now: float, window: int) -> list[float]:
@@ -13471,20 +13710,133 @@ def _mining_watchdog_register_invalid(key: str, now: float) -> bool:
     return False
 
 
+def _prune_mining_jobs(now: float) -> None:
+    expired = [job_id for job_id, job in MINING_JOB_CACHE.items() if job.get("expires_at", 0) <= now]
+    for job_id in expired:
+        MINING_JOB_CACHE.pop(job_id, None)
+
+
+def _create_mining_job(thr_address: str | None = None) -> dict:
+    now = time.time()
+    _prune_mining_jobs(now)
+    last_block = get_last_block_snapshot()
+    prev_hash = last_block.get("block_hash") or "0" * 64
+    tip_height = last_block.get("height")
+    if tip_height is None:
+        block_count = last_block.get("block_count")
+        if block_count is not None:
+            tip_height = int(block_count)
+    height = int(tip_height) + 1 if tip_height is not None else None
+    target = get_mining_target()
+    nbits = target_to_bits(target)
+    job_id = f"job_{int(now * 1000)}_{secrets.token_hex(4)}"
+    expires_at = now + MINING_JOB_TTL_SECONDS
+    MINING_JOB_CACHE[job_id] = {
+        "job_id": job_id,
+        "address": thr_address,
+        "prev_hash": prev_hash,
+        "height": height,
+        "target": target,
+        "expires_at": expires_at,
+    }
+    return {
+        "job_id": job_id,
+        "height": height,
+        "prev_hash": prev_hash,
+        "target": hex(target),
+        "nbits": hex(nbits),
+        "reward": reward,
+        "difficulty_int": difficulty,
+        "expires_at": expires_at,
+    }
+
+
+def _get_job_or_stale(job_id: str, thr_address: str | None, now: float):
+    job = MINING_JOB_CACHE.get(job_id)
+    if not job:
+        return None, ("missing_job", "stale_job")
+    if job.get("expires_at", 0) <= now:
+        MINING_JOB_CACHE.pop(job_id, None)
+        return None, ("expired_job", "stale_job")
+    if job.get("address") and thr_address and job["address"] != thr_address:
+        return None, ("address_mismatch", "unauthorized")
+    return job, None
+
+
 # ─── MINING ENDPOINT ───────────────────────────────
-@app.route("/submit_block", methods=["POST"])
-@app.route("/api/submit_block", methods=["POST"])
-def submit_block():
+def _process_mining_submission(data: dict, require_job_id: bool = False):
     start = time.time()
-    data = request.get_json() or {}
-    thr_address = data.get("thr_address")
+    data = dict(data)
+    if not data.get("pow_hash") and data.get("hash"):
+        data["pow_hash"] = data.get("hash")
+    thr_address = data.get("thr_address") or data.get("address")
     nonce = data.get("nonce")
     if not thr_address or nonce is None:
         logger.debug("submit_block handler took %.3fs", time.time() - start)
-        return jsonify(error="Missing mining data"),400
+        return jsonify(error="Missing mining data"), 400
+
     now = time.time()
     miner_key = _mining_watchdog_key(thr_address)
     submitted_height = data.get("height") or data.get("submitted_height")
+
+    job_id = data.get("job_id")
+    if require_job_id:
+        if not job_id:
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            return jsonify(error="job_id required", reason="missing_job_id"), 400
+        job, err = _get_job_or_stale(job_id, thr_address, now)
+        if err:
+            reason, stale_reason = err
+            last_block = get_last_block_snapshot()
+            tip_height = last_block.get("height")
+            tip_hash = last_block.get("block_hash") or "0" * 64
+            logger.info("mining.stale_block %s", json.dumps({
+                "submitted_height": submitted_height,
+                "tip_height": tip_height,
+                "tip_hash": tip_hash,
+                "prev_hash": data.get("prev_hash"),
+                "reason": reason,
+                "job_id": job_id,
+            }))
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            status = 409 if stale_reason == "stale_job" else 403
+            return jsonify(
+                error="stale_block" if status == 409 else "unauthorized",
+                submitted_height=submitted_height,
+                tip_height=tip_height,
+                tip_hash=tip_hash,
+                reason=reason,
+                job_id=job_id,
+            ), status
+
+        data["prev_hash"] = job.get("prev_hash")
+        data["height"] = job.get("height") or data.get("height")
+        data["submitted_height"] = data.get("height")
+        submitted_height = data.get("height") or data.get("submitted_height")
+        if not data.get("pow_hash"):
+            data["pow_hash"] = data.get("hash")
+
+        last_block = get_last_block_snapshot()
+        server_last_hash = last_block.get("block_hash") or "0" * 64
+        tip_height = last_block.get("height")
+        if data["prev_hash"] != server_last_hash:
+            logger.info("mining.stale_block %s", json.dumps({
+                "submitted_height": data.get("submitted_height"),
+                "tip_height": tip_height,
+                "tip_hash": server_last_hash,
+                "prev_hash": data.get("prev_hash"),
+                "reason": "prev_mismatch",
+                "job_id": job_id,
+            }))
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            return jsonify(
+                error="stale_block",
+                submitted_height=data.get("submitted_height"),
+                tip_height=tip_height,
+                tip_hash=server_last_hash,
+                reason="prev_mismatch",
+                job_id=job_id,
+            ), 409
 
     entry = get_mining_whitelist_entry(thr_address)
     if MINING_WHITELIST_ONLY:
@@ -13675,6 +14027,30 @@ def submit_block():
     chain.append(new_block)
     _index_block_event(new_block)  # Index for fast queries
 
+    reward_tx_id = f"reward:{pow_hash}:{thr_address}"
+    reward_tx = {
+        "tx_id": reward_tx_id,
+        "type": "mining_reward",
+        "kind": "mining_reward",
+        "thr_address": thr_address,
+        "from": "COINBASE",
+        "to": thr_address,
+        "amount": miner_share,
+        "timestamp": ts,
+        "height": height,
+        "block_hash": pow_hash,
+        "meta": {
+            "block_height": height,
+            "block_hash": pow_hash,
+            "fee_burned": burn_share,
+            "reward_to_miner": miner_share,
+            "reward_to_ai": ai_share,
+            "source": "stratum" if is_stratum else "legacy",
+        },
+    }
+    persist_normalized_tx(reward_tx)
+    _index_transaction_event(reward_tx)
+
     # include mempool TXs
     pool=load_mempool()
     included=[]
@@ -13733,6 +14109,46 @@ def submit_block():
     print(f"⛏️ Miner {thr_address} found block #{height}! R={total_reward} (m/a/b: {miner_share}/{ai_share}/{burn_share}) | TXs: {len(included)} | Stratum={is_stratum}")
     logger.debug("submit_block handler took %.3fs", time.time() - start)
     return jsonify(status="accepted", height=height, reward=miner_share, tx_included=len(included)), 200
+
+
+@app.route("/submit_block", methods=["POST"])
+@app.route("/api/submit_block", methods=["POST"])
+def submit_block():
+    data = request.get_json() or {}
+    return _process_mining_submission(data, require_job_id=False)
+
+
+@app.route("/api/mining/work")
+def api_mining_work():
+    address = (request.args.get("address") or request.args.get("thr_address") or "").strip() or None
+    job = _create_mining_job(address)
+    return jsonify({"ok": True, **job}), 200
+
+
+@app.route("/api/mining/submit", methods=["POST"])
+def api_mining_submit():
+    data = request.get_json() or {}
+    return _process_mining_submission(data, require_job_id=True)
+
+
+@app.route("/api/miner/work")
+def api_miner_work():
+    """Simple HTTP miner contract (CPU/GPU)."""
+    address = (request.args.get("address") or request.args.get("thr_address") or "").strip() or None
+    job = _create_mining_job(address)
+    return jsonify({
+        "ok": True,
+        **job,
+        "last_hash": job.get("prev_hash"),
+        "header": job.get("prev_hash"),
+    }), 200
+
+
+@app.route("/api/miner/submit", methods=["POST"])
+def api_miner_submit():
+    """Simple HTTP miner submit (CPU/GPU)."""
+    data = request.get_json() or {}
+    return _process_mining_submission(data, require_job_id=False)
 
 
 # ─── BACKGROUND MINTER / WATCHDOG ──────────────────
@@ -14433,17 +14849,9 @@ if is_replica() and HEARTBEAT_ENABLED:
 
         while True:
             try:
-                height = -1
-                try:
-                    if READ_ONLY:
-                        health_response = requests.get(f"{MASTER_INTERNAL_URL}/api/health", timeout=2)
-                        if health_response.ok:
-                            height = int(health_response.json().get("chain_height", -1))
-                    else:
-                        snap = get_last_block_snapshot()
-                        height = int(snap.get("height", -1) or -1)
-                except Exception:
-                    height = -1
+                height = int(CHAIN_META.get("height") or 0)
+                if height < 0:
+                    height = 0
                 response = requests.post(
                     heartbeat_url,
                     json={
@@ -17148,6 +17556,11 @@ def api_v1_get_pools():
     return jsonify(pools=pools), 200
 
 
+@app.route("/api/pools", methods=["GET"])
+def api_pools_alias():
+    return api_v1_get_pools()
+
+
 @app.route("/api/v1/pools/positions/<address>")
 def api_v1_user_positions(address):
     """
@@ -17233,6 +17646,11 @@ def api_v1_user_positions(address):
         "total_value_thr": round(total_value_thr, 6),
         "total_value_usd": round(total_value_usd, 2)
     }), 200
+
+
+@app.route("/api/pools/positions/<address>")
+def api_pools_positions_alias(address):
+    return api_v1_user_positions(address)
 
 
 @app.route("/api/v1/pools/referral/<pool_id>")
@@ -20618,6 +21036,12 @@ def api_music_playlists_create():
         return jsonify({"ok": False, "error": "Failed to create playlist"}), 200
 
 
+@app.route("/api/music/playlists/create", methods=["POST"])
+def api_music_playlists_create_alias():
+    """Alias for playlist creation (wallet module)."""
+    return api_music_playlists_create()
+
+
 @app.route("/api/music/playlists/add_track", methods=["POST"])
 def api_music_playlists_add_track():
     """Add a track to a playlist (DB-backed)."""
@@ -20658,7 +21082,11 @@ def api_music_playlist_add_item(playlist_id):
         return jsonify({"ok": False, "error": "Failed to add track"}), 200
 
 
-@app.route("/api/music/playlists/<playlist_id>/items/<track_id>", methods=["DELETE"])
+@app.route(
+    "/api/music/playlists/<playlist_id>/items/<track_id>",
+    methods=["DELETE"],
+    endpoint="api_music_playlist_remove_item_v2",
+)
 def api_music_playlist_remove_item(playlist_id, track_id):
     """Remove a track from a playlist (DB-backed)."""
     address = (request.args.get("address") or "").strip()

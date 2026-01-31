@@ -9,7 +9,7 @@
   'use strict';
 
   // ===== Configuration =====
-  const API_BASE = window.TH_API_BASE_URL || window.location.origin;
+  const API_BASE = window.__API_BASE__ || window.TH_API_BASE_URL || window.location.origin;
 
   // ===== State =====
   let currentBlocksOffset = 0;
@@ -45,6 +45,33 @@
     return hash.length > 16 ? `${hash.substring(0, 8)}...${hash.substring(hash.length - 8)}` : hash;
   };
 
+  const safeNumber = (value) => {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : 0;
+  };
+
+  const setStatsBanner = (message) => {
+    let banner = document.getElementById('viewerStatsBanner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'viewerStatsBanner';
+      banner.style.cssText = 'margin: 12px 0; padding: 10px 12px; border: 1px solid rgba(255, 140, 0, 0.6); border-radius: 8px; color: #ff9b5f; background: rgba(255, 140, 0, 0.1); display: none;';
+      const wrap = document.querySelector('.wrap');
+      if (wrap) {
+        wrap.insertBefore(banner, wrap.firstChild);
+      } else {
+        document.body.insertBefore(banner, document.body.firstChild);
+      }
+    }
+    if (message) {
+      banner.textContent = message;
+      banner.style.display = 'block';
+    } else {
+      banner.textContent = '';
+      banner.style.display = 'none';
+    }
+  };
+
   // ===== Dashboard Stats =====
   async function loadStats() {
     try {
@@ -52,46 +79,52 @@
       if (!response.ok) throw new Error(`Dashboard API error: ${response.status}`);
 
       const data = await response.json();
-      const stats = data?.stats || data?.dashboard || data || {};
+      const stats = data?.stats || data?.data || data?.dashboard || data || {};
       if (data?.ok === false) throw new Error('Dashboard returned ok=false');
 
       dashboardStats = stats;
+      setStatsBanner('');
 
       // Update counters with correct IDs
       if (el('stat-block-count')) {
-        el('stat-block-count').textContent = formatNumber(dashboardStats.block_count);
+        el('stat-block-count').textContent = formatNumber(safeNumber(dashboardStats.block_count));
       }
       if (el('stat-fees-burned')) {
-        el('stat-fees-burned').textContent = formatTHR(dashboardStats.burned_total_thr || 0);
+        el('stat-fees-burned').textContent = formatTHR(safeNumber(dashboardStats.burned_total_thr));
       }
       if (el('stat-total-rewards')) {
-        el('stat-total-rewards').textContent = formatTHR(dashboardStats.total_rewards_thr || 0);
+        el('stat-total-rewards').textContent = formatTHR(safeNumber(dashboardStats.total_rewards_thr));
       }
       if (el('stat-avg-reward')) {
-        const avgReward = dashboardStats.block_count > 0 ?
-          (dashboardStats.total_rewards_thr || 0) / dashboardStats.block_count : 0;
+        const blockCount = safeNumber(dashboardStats.block_count);
+        const avgReward = blockCount > 0
+          ? safeNumber(dashboardStats.total_rewards_thr) / blockCount
+          : 0;
         el('stat-avg-reward').textContent = formatTHR(avgReward);
       }
 
       // Also update old IDs for compatibility (blocks tab)
       if (el('blocksTotalCount')) {
-        el('blocksTotalCount').textContent = formatNumber(dashboardStats.block_count);
+        el('blocksTotalCount').textContent = formatNumber(safeNumber(dashboardStats.block_count));
       }
       if (el('blocksTotalBurned')) {
-        el('blocksTotalBurned').textContent = formatTHR(dashboardStats.burned_total_thr || 0);
+        el('blocksTotalBurned').textContent = formatTHR(safeNumber(dashboardStats.burned_total_thr));
       }
       if (el('blocksTotalRewards')) {
-        el('blocksTotalRewards').textContent = formatTHR(dashboardStats.total_rewards_thr || 0);
+        el('blocksTotalRewards').textContent = formatTHR(safeNumber(dashboardStats.total_rewards_thr));
       }
       if (el('blocksAvgReward')) {
-        const avgReward = dashboardStats.block_count > 0 ?
-          (dashboardStats.total_rewards_thr || 0) / dashboardStats.block_count : 0;
+        const blockCount = safeNumber(dashboardStats.block_count);
+        const avgReward = blockCount > 0
+          ? safeNumber(dashboardStats.total_rewards_thr) / blockCount
+          : 0;
         el('blocksAvgReward').textContent = formatTHR(avgReward);
       }
 
       return dashboardStats;
     } catch (error) {
       console.error('[Viewer] Failed to load dashboard stats:', error);
+      setStatsBanner('Stats unavailable');
       if (el('stat-block-count')) el('stat-block-count').textContent = '—';
       if (el('stat-fees-burned')) el('stat-fees-burned').textContent = '—';
       if (el('stat-total-rewards')) el('stat-total-rewards').textContent = '—';
@@ -189,25 +222,27 @@
       const data = await response.json();
       if (data?.ok === false) throw new Error('Dashboard returned ok=false');
 
-      const stats = data?.stats || data?.dashboard || data || {};
+      const stats = data?.stats || data?.data || data?.dashboard || data || {};
+      setStatsBanner('');
 
       // Update transfers tab counters
       if (el('txsTotalCount')) {
-        el('txsTotalCount').textContent = formatNumber(stats.total_transfers || 0);
+        el('txsTotalCount').textContent = formatNumber(safeNumber(stats.total_transfers));
       }
       if (el('txsUniqueAddresses')) {
-        el('txsUniqueAddresses').textContent = formatNumber(stats.unique_addresses || 0);
+        el('txsUniqueAddresses').textContent = formatNumber(safeNumber(stats.unique_addresses));
       }
       if (el('stat-total-transfers')) {
-        el('stat-total-transfers').textContent = formatNumber(stats.total_transfers || 0);
+        el('stat-total-transfers').textContent = formatNumber(safeNumber(stats.total_transfers));
       }
       if (el('stat-unique-addresses')) {
-        el('stat-unique-addresses').textContent = formatNumber(stats.unique_addresses || 0);
+        el('stat-unique-addresses').textContent = formatNumber(safeNumber(stats.unique_addresses));
       }
 
       return stats;
     } catch (error) {
       console.error('[Viewer] Failed to load transfers stats:', error);
+      setStatsBanner('Stats unavailable');
       if (el('txsTotalCount')) el('txsTotalCount').textContent = '—';
       if (el('txsUniqueAddresses')) el('txsUniqueAddresses').textContent = '—';
       if (el('stat-total-transfers')) el('stat-total-transfers').textContent = '—';
@@ -217,7 +252,7 @@
   }
 
   const TRANSFER_PAGE_SIZE = 200;
-  const TRANSFER_KINDS = ['token_transfer', 'swap', 'bridge', 'liquidity', 'thr_transfer'];
+  const TRANSFER_KINDS = ['token_transfer', 'swap', 'bridge'];
 
   async function loadTransfers(limit = TRANSFER_PAGE_SIZE, cursor = null) {
     try {
@@ -258,17 +293,12 @@
     }
 
     const allowedKinds = new Set(TRANSFER_KINDS);
-    const onlyTransfers = (transfers || []).filter(tx =>
-      tx
-      && tx.type !== 'block'
-      && tx.category !== 'block'
-      && !['block'].includes(tx.kind)
-      && (
-        allowedKinds.has(tx.type)
-        || allowedKinds.has(tx.kind)
-        || tx.category === 'tokens'
-      )
-    );
+    const onlyTransfers = (transfers || []).filter(tx => {
+      if (!tx) return false;
+      if (tx.category === 'blocks' || tx.kind === 'block' || tx.type === 'block') return false;
+      if (tx.category === 'transfers' || tx.category === 'dex') return true;
+      return allowedKinds.has(tx.type) || allowedKinds.has(tx.kind) || tx.category === 'tokens';
+    });
 
     if (!onlyTransfers.length) {
       if (!append) {

@@ -12,6 +12,8 @@
     const host = window.location.hostname;
     const isVercel = host.endsWith("vercel.app") || host === "thrchain.vercel.app";
     const origin = window.location.origin;
+    window.__API_BASE__ = origin;
+    window.THRONOS_API_BASE = origin;
     window.THRONOS_CONFIG = {
       apiReadBase: isVercel ? "/api/v1/read/api" : "/api",
       apiWriteBase: isVercel ? "/api/v1/write/api" : "/api",
@@ -21,6 +23,26 @@
       MASTER_PUBLIC_URL: origin,
       mediaBase: "/media",
       musicEnabled: true
+    };
+    window.normalizeMediaUrl = function normalizeMediaUrl(urlOrPath) {
+      if (!urlOrPath) return "";
+      const base = window.__API_BASE__ || window.location.origin;
+      const raw = String(urlOrPath).trim();
+      if (!raw) return "";
+
+      if (/^https?:\/\/localhost:\d+/i.test(raw)) {
+        return raw.replace(/^https?:\/\/localhost:\d+/i, base);
+      }
+
+      if (raw.startsWith("/media/")) {
+        return new URL(raw, base).toString();
+      }
+
+      if (/^https?:\/\//i.test(raw)) {
+        return raw;
+      }
+
+      return new URL(raw, base).toString();
     };
   })();
   </script>
@@ -1584,7 +1606,6 @@
     </div>
 </div>
 
-
 <!-- Send Modal -->
 <div class="send-modal" id="sendModal" onclick="closeSendModal(event)">
     <div class="send-modal-content" onclick="event.stopPropagation()">
@@ -2695,6 +2716,97 @@ function switchWalletTab(tabName) {
 // PR-5: Load and render music tab
 let musicModuleInitialized = false;
 let musicModuleCheckInterval = null;
+const walletMusicState = {
+    library: [],
+    playlists: [],
+    libraryError: null,
+    playlistsError: null
+};
+
+function getWalletMusicApiBase() {
+    return window.__API_BASE__ || window.location.origin;
+}
+
+function buildWalletMusicApiUrl(path) {
+    if (!path) return path;
+    if (/^https?:\/\//i.test(path)) return path;
+    const normalized = path.startsWith('/') ? path : `/${path}`;
+    return `${getWalletMusicApiBase()}${normalized}`;
+}
+
+function normalizeWalletTrack(track) {
+    if (!track || typeof track !== 'object') return track;
+    const normalized = { ...track };
+    ['audio_url', 'cover_url', 'image_url', 'logo_url', 'thumbnail_url'].forEach(field => {
+        if (normalized[field]) {
+            const fixer = window.normalizeMediaUrl || window.FetchUtils?.normalizeMediaUrl;
+            normalized[field] = fixer ? fixer(normalized[field]) : normalized[field];
+        }
+    });
+    return normalized;
+}
+
+function normalizeWalletPlaylist(playlist) {
+    if (!playlist || typeof playlist !== 'object') return playlist;
+    const normalized = { ...playlist };
+    if (Array.isArray(normalized.tracks)) {
+        normalized.tracks = normalized.tracks.map(track => normalizeWalletTrack(track));
+    }
+    return normalized;
+}
+
+function initWalletMusic() {
+    const musicContent = document.getElementById('musicTabContent');
+    if (!musicContent) return;
+    const lang = getCurrentLang();
+    const isGreek = isGreekLang(lang);
+    const loadingLabel = isGreek ? 'Φόρτωση μουσικής...' : 'Loading music...';
+    musicContent.innerHTML = `
+        <div class="music-section">
+            <div class="music-section-title">${isGreek ? 'Βιβλιοθήκη' : 'Library'}</div>
+            <div class="music-empty">${loadingLabel}</div>
+        </div>
+        <div class="music-section">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div class="music-section-title" style="margin: 0;">${isGreek ? 'Λίστες Αναπαραγωγής' : 'Playlists'}</div>
+                <button onclick="createPlaylistFromWallet()" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 500;">
+                    ${isGreek ? '➕ Νέα Playlist' : '➕ New Playlist'}
+                </button>
+            </div>
+            <div class="music-empty">${loadingLabel}</div>
+        </div>
+    `;
+}
+
+async function loadWalletLibrary(wallet) {
+    try {
+        const res = await fetch(buildWalletMusicApiUrl(`/api/music/library?address=${encodeURIComponent(wallet)}`));
+        const data = res.ok ? await res.json() : {};
+        if (data.ok && Array.isArray(data.library)) {
+            return { items: data.library.map(track => normalizeWalletTrack(track)), error: null };
+        }
+        const items = Array.isArray(data.library) ? data.library : [];
+        return { items: items.map(track => normalizeWalletTrack(track)), error: data.error || 'library_unavailable' };
+    } catch (error) {
+        return { items: [], error: error.message || 'library_unavailable' };
+    }
+}
+
+async function loadWalletPlaylists(wallet) {
+    try {
+        const res = await fetch(buildWalletMusicApiUrl(`/api/music/playlists?address=${encodeURIComponent(wallet)}`));
+        const data = res.ok ? await res.json() : {};
+        const playlists = Array.isArray(data.playlists)
+            ? data.playlists
+            : (Array.isArray(data.items) ? data.items : []);
+        return {
+            items: playlists.map(playlist => normalizeWalletPlaylist(playlist)),
+            error: data.ok === false ? (data.error || 'playlists_unavailable') : null
+        };
+    } catch (error) {
+        return { items: [], error: error.message || 'playlists_unavailable' };
+    }
+}
 
 async function loadMusicTab() {
     const musicContent = document.getElementById('musicTabContent');
@@ -2716,65 +2828,47 @@ async function loadMusicTab() {
         return;
     }
 
-    try {
-        // PR-5c: Wait for MusicModule to load if needed
-        if (typeof MusicModule === 'undefined') {
-            // Show loading while waiting
-            musicContent.innerHTML = `
-                <div class="wallet-popup-loading">
-                    <div class="wallet-popup-spinner"></div>
-                    Loading music module...
-                </div>
-            `;
+    initWalletMusic();
+    walletMusicState.libraryError = null;
+    walletMusicState.playlistsError = null;
 
-            // Wait for MusicModule to load (retry up to 10 times)
-            let retries = 0;
-            if (musicModuleCheckInterval) {
-                clearInterval(musicModuleCheckInterval);
-            }
-            musicModuleCheckInterval = setInterval(() => {
-                if (typeof MusicModule !== 'undefined') {
-                    clearInterval(musicModuleCheckInterval);
-                    musicModuleCheckInterval = null;
-                    musicModuleInitialized = true;
-                    loadMusicTab(); // Retry
-                } else if (++retries >= 10) {
-                    clearInterval(musicModuleCheckInterval);
-                    musicModuleCheckInterval = null;
-                    musicContent.innerHTML = '<div class="music-empty">Music module failed to load. Please refresh.</div>';
-                }
-            }, 100);
-            return;
+    const moduleAvailable = typeof MusicModule !== 'undefined';
+    let moduleLoaded = false;
+
+    if (moduleAvailable) {
+        try {
+            await MusicModule.init(wallet);
+            musicModuleInitialized = true;
+            walletMusicState.library = (MusicModule.getLibrary() || []).map(track => normalizeWalletTrack(track));
+            walletMusicState.playlists = (MusicModule.getPlaylists() || []).map(playlist => normalizeWalletPlaylist(playlist));
+            moduleLoaded = true;
+        } catch (error) {
+            console.warn('[Wallet] MusicModule init failed, falling back to API:', error);
+            walletMusicState.libraryError = error.message || 'library_unavailable';
+            walletMusicState.playlistsError = error.message || 'playlists_unavailable';
         }
-
-        // Mark as initialized
-        musicModuleInitialized = true;
-
-        // Show loading
-        musicContent.innerHTML = `
-            <div class="wallet-popup-loading">
-                <div class="wallet-popup-spinner"></div>
-                Loading music...
-            </div>
-        `;
-
-        // Initialize MusicModule with address
-        await MusicModule.init(wallet);
-
-        // Render music content
-        renderMusicTab();
-    } catch (error) {
-        console.error('[Wallet] Failed to load music:', error);
-        musicContent.innerHTML = `<div class="music-empty" style="color: #ff6666;">Error loading music: ${error.message}</div>`;
     }
+
+    if (!moduleLoaded) {
+        const [libraryResult, playlistsResult] = await Promise.all([
+            loadWalletLibrary(wallet),
+            loadWalletPlaylists(wallet)
+        ]);
+        walletMusicState.library = libraryResult.items;
+        walletMusicState.playlists = playlistsResult.items;
+        walletMusicState.libraryError = libraryResult.error;
+        walletMusicState.playlistsError = playlistsResult.error;
+    }
+
+    renderMusicTab();
 }
 
 function renderMusicTab() {
     const musicContent = document.getElementById('musicTabContent');
     if (!musicContent) return;
 
-    const library = MusicModule.getLibrary();
-    const playlists = MusicModule.getPlaylists();
+    const library = walletMusicState.library || [];
+    const playlists = walletMusicState.playlists || [];
 
     const lang = getCurrentLang();
     const isGreek = isGreekLang(lang);
@@ -2785,6 +2879,9 @@ function renderMusicTab() {
     const noPlaylistsLabel = isGreek ? 'Δεν βρέθηκαν λίστες' : 'No playlists found';
 
     // Render library tracks
+    const libraryError = walletMusicState.libraryError;
+    const playlistsError = walletMusicState.playlistsError;
+
     const libraryHtml = library.length > 0
         ? library.map(track => {
             const trackIdSafe = (track.id || track.track_id || '').toString().replace(/'/g, "\\'");
@@ -2805,7 +2902,7 @@ function renderMusicTab() {
             </div>
             `;
         }).join('')
-        : `<div class="music-empty">${noTracksLabel}</div>`;
+        : `<div class="music-empty">${libraryError ? (isGreek ? 'Δεν φορτώθηκε η βιβλιοθήκη' : 'Library unavailable') : noTracksLabel}</div>`;
 
     // Render playlists
     const playlistsHtml = playlists.length > 0
@@ -2827,7 +2924,12 @@ function renderMusicTab() {
                 </div>
             `;
         }).join('')
-        : `<div class="music-empty">${noPlaylistsLabel}</div>`;
+        : `
+            <div class="music-empty">
+                ${playlistsError ? (isGreek ? 'Δεν φορτώθηκαν playlists.' : 'Playlists failed to load.') : noPlaylistsLabel}
+                ${playlistsError ? `<button onclick="reloadWalletPlaylists()" style="margin-left:8px; background: transparent; border: 1px solid rgba(0,255,102,0.4); color: #0f0; padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 10px;">${isGreek ? 'Retry' : 'Retry'}</button>` : ''}
+            </div>
+        `;
 
     const newPlaylistBtn = isGreek ? '➕ Νέα Playlist' : '➕ New Playlist';
     const sessionLabel = isGreek ? 'Έλεγχοι συνεδρίας' : 'Session controls';
@@ -2872,6 +2974,15 @@ function renderMusicTab() {
     musicContent.innerHTML = html;
 }
 
+async function reloadWalletPlaylists() {
+    const wallet = walletSession.getAddress();
+    if (!wallet) return;
+    const result = await loadWalletPlaylists(wallet);
+    walletMusicState.playlists = result.items;
+    walletMusicState.playlistsError = result.error;
+    renderMusicTab();
+}
+
 // PR-5g: Play track from wallet widget (online or offline)
 async function playWalletTrack(trackId, isOffline = false) {
     if (typeof GlobalMusicPlayer === 'undefined') {
@@ -2888,7 +2999,7 @@ async function playWalletTrack(trackId, isOffline = false) {
             const wallet = walletSession.getAddress();
             if (!wallet) return;
 
-            const res = await fetch(`/api/music/offline/${encodeURIComponent(wallet)}`);
+            const res = await fetch(buildWalletMusicApiUrl(`/api/music/offline/${encodeURIComponent(wallet)}`));
             const data = await res.json();
 
             if (data.ok && data.tracks) {
@@ -2940,12 +3051,12 @@ async function createPlaylistFromWallet() {
         }
 
         // Create via API
-        const res = await fetch('/api/music/playlists', {
+        const res = await fetch(buildWalletMusicApiUrl('/api/music/playlists/create'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 address: address,
-                title: name.trim(),
+                name: name.trim(),
                 auth_secret: authSecret
             })
         });
@@ -2990,7 +3101,7 @@ async function playWalletPlaylist(playlistId, shuffleMode = false) {
         if (tracks.length === 0 && playlist.track_ids && playlist.track_ids.length > 0) {
             // Fetch full playlist data
             const wallet = walletSession.getAddress();
-            const res = await fetch(`/api/music/playlists?address=${encodeURIComponent(wallet)}`);
+            const res = await fetch(buildWalletMusicApiUrl(`/api/music/playlists?address=${encodeURIComponent(wallet)}`));
             const data = await res.json();
             if (data.ok && data.playlists) {
                 const fullPlaylist = data.playlists.find(p => (p.playlist_id || p.id) === playlistId);
@@ -3064,7 +3175,7 @@ async function loadOfflineTab() {
         `;
 
         // Fetch offline tracks
-        const res = await fetch(`/api/music/offline/${encodeURIComponent(wallet)}`);
+        const res = await fetch(buildWalletMusicApiUrl(`/api/music/offline/${encodeURIComponent(wallet)}`));
         const data = await res.json();
 
         if (data.ok && data.tracks && data.tracks.length > 0) {
@@ -3832,7 +3943,7 @@ async function loadWalletHistory(thrAddress) {
     const cleanAddress = thrAddress.trim();
     if (!cleanAddress) return [];
 
-    const url = `/api/wallet/history?address=${encodeURIComponent(cleanAddress)}&limit=200`;
+    const url = buildWalletMusicApiUrl(`/api/wallet/history?address=${encodeURIComponent(cleanAddress)}&limit=200`);
 
     if (window.FetchUtils && typeof window.FetchUtils.smartFetchJSON === 'function') {
         const data = await window.FetchUtils.smartFetchJSON(url);

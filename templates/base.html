@@ -3006,8 +3006,8 @@ async function playWalletTrack(trackId, isOffline = false) {
                 track = data.tracks.find(t => (t.id || t.track_id) === trackId);
             }
         } else {
-            // Get online track from library
-            const library = MusicModule.getLibrary();
+            // Get online track from library (use walletMusicState which is loaded from API/MusicModule)
+            const library = walletMusicState.library || [];
             track = library.find(t => (t.id || t.track_id) === trackId);
         }
 
@@ -3063,9 +3063,8 @@ async function createPlaylistFromWallet() {
 
         const data = await res.json();
         if (data.ok) {
-            // Refresh music tab
-            await MusicModule.init(address);
-            renderMusicTab();
+            // Refresh music tab - reload everything
+            await loadMusicTab();
             alert('✅ Playlist created!');
         } else {
             alert(`❌ Error: ${data.error}`);
@@ -3087,8 +3086,8 @@ async function createPlaylistFromWallet() {
 // PR-5e: Play playlist from wallet widget using GlobalMusicPlayer
 async function playWalletPlaylist(playlistId, shuffleMode = false) {
     try {
-        // Get playlist from MusicModule
-        const playlists = MusicModule.getPlaylists();
+        // Get playlist from walletMusicState (loaded from API/MusicModule)
+        const playlists = walletMusicState.playlists || [];
         const playlist = playlists.find(p => (p.playlist_id || p.id) === playlistId);
 
         if (!playlist) {

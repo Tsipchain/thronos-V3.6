@@ -6128,7 +6128,7 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
     # Collect transactions involving this address
     wallet_txs = []
 
-    # 1. Regular chain transactions (skip mining rewards here)
+    # 1. Regular chain transactions (skip mining rewards - those come from blocks)
     for tx in chain:
         if not isinstance(tx, dict):
             continue
@@ -6136,22 +6136,15 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
         if tx_type in ["coinbase", "mining_reward", "mint"]:
             continue
 
-        # Collect transactions involving this address
-        wallet_txs = []
+        tx_from = tx.get("from") or tx.get("sender")
+        tx_to = tx.get("to") or tx.get("recipient")
+        tx_address = tx.get("address")  # For IoT telemetry
 
-        # 1. Regular chain transactions
-        for tx in chain:
-            if not isinstance(tx, dict):
-                continue
-
-            tx_from = tx.get("from") or tx.get("sender")
-            tx_to = tx.get("to") or tx.get("recipient")
-            tx_address = tx.get("address")  # For IoT telemetry
-
-            if address.lower() in [str(tx_from).lower(), str(tx_to).lower(), str(tx_address).lower()]:
-                tx_copy = dict(tx)
-                tx_copy["category"] = _categorize_transaction(tx)
-                tx_copy = normalize_history_item(tx_copy)
+        if address.lower() in [str(tx_from).lower(), str(tx_to).lower(), str(tx_address).lower()]:
+            tx_copy = dict(tx)
+            tx_copy["category"] = _categorize_transaction(tx)
+            tx_copy = normalize_history_item(tx_copy)
+            wallet_txs.append(tx_copy)
 
     # 2. Block mining rewards
     mining_ids = set()
@@ -6397,13 +6390,14 @@ def api_wallet_history():
     }), 200
 
 
-@app.route("/wallet")
-def wallet_page():
-    """
-    Full wallet dashboard page with wallet widget.
-    Extends base.html and uses walletSession for connection.
-    """
-    return render_template("thronos_wallet.html")
+# NOTE: /wallet page hidden - use wallet widget in base.html instead
+# @app.route("/wallet")
+# def wallet_page():
+#     """
+#     Full wallet dashboard page with wallet widget.
+#     Extends base.html and uses walletSession for connection.
+#     """
+#     return render_template("thronos_wallet.html")
 
 
 @app.route("/api/v2/wallet/history", methods=["GET"])

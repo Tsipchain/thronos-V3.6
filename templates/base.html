@@ -1890,27 +1890,45 @@
             <span class="lang-en">Transaction History</span>
         </div>
 
-        <!-- History Tabs - 7 categories -->
+        <!-- History Tabs - Full categories -->
         <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; padding: 0 4px;">
-            <button class="history-tab-btn active" data-filter="all" onclick="filterHistory('all')" style="flex: 1; min-width: 50px; padding: 6px 8px; background: rgba(0,255,102,0.2); border: 1px solid rgba(0,255,102,0.4); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+            <button class="history-tab-btn active" data-filter="all" onclick="filterHistory('all')" style="flex: 1; min-width: 45px; padding: 6px 8px; background: rgba(0,255,102,0.2); border: 1px solid rgba(0,255,102,0.4); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
                 <span class="lang-el">Όλα</span><span class="lang-en">All</span>
             </button>
-            <button class="history-tab-btn" data-filter="transfers" onclick="filterHistory('transfers')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                💸 <span class="lang-el">Μεταφορές</span><span class="lang-en">Transfers</span>
+            <button class="history-tab-btn" data-filter="thr" onclick="filterHistory('thr')" style="flex: 1; min-width: 45px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                THR
             </button>
-            <button class="history-tab-btn" data-filter="swaps" onclick="filterHistory('swaps')" style="flex: 1; min-width: 50px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                🔄 Swaps
-            </button>
-            <button class="history-tab-btn" data-filter="bridge" onclick="filterHistory('bridge')" style="flex: 1; min-width: 50px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                🌉 <span class="lang-el">Γέφυρα</span><span class="lang-en">Bridge</span>
-            </button>
-            <button class="history-tab-btn" data-filter="mining" onclick="filterHistory('mining')" style="flex: 1; min-width: 50px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+            <button class="history-tab-btn" data-filter="mining" onclick="filterHistory('mining')" style="flex: 1; min-width: 55px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
                 ⛏️ Mining
             </button>
-            <button class="history-tab-btn" data-filter="ai" onclick="filterHistory('ai')" style="flex: 1; min-width: 50px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                🤖 AI
+            <button class="history-tab-btn" data-filter="tokens" onclick="filterHistory('tokens')" style="flex: 1; min-width: 50px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                Tokens
             </button>
-            <button class="history-tab-btn" data-filter="music" onclick="filterHistory('music')" style="flex: 1; min-width: 50px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+            <button class="history-tab-btn" data-filter="l2e" onclick="filterHistory('l2e')" style="flex: 1; min-width: 40px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                L2E
+            </button>
+            <button class="history-tab-btn" data-filter="ai_credits" onclick="filterHistory('ai_credits')" style="flex: 1; min-width: 75px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                AI Credits (Chat)
+            </button>
+            <button class="history-tab-btn" data-filter="architect" onclick="filterHistory('architect')" style="flex: 1; min-width: 85px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                Architect / AI Jobs
+            </button>
+            <button class="history-tab-btn" data-filter="iot" onclick="filterHistory('iot')" style="flex: 1; min-width: 40px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                IoT
+            </button>
+            <button class="history-tab-btn" data-filter="bridge" onclick="filterHistory('bridge')" style="flex: 1; min-width: 50px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                Bridge
+            </button>
+            <button class="history-tab-btn" data-filter="swaps" onclick="filterHistory('swaps')" style="flex: 1; min-width: 50px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                Swaps
+            </button>
+            <button class="history-tab-btn" data-filter="liquidity" onclick="filterHistory('liquidity')" style="flex: 1; min-width: 55px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                Liquidity
+            </button>
+            <button class="history-tab-btn" data-filter="gateway" onclick="filterHistory('gateway')" style="flex: 1; min-width: 55px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                Gateway
+            </button>
+            <button class="history-tab-btn" data-filter="music" onclick="filterHistory('music')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
                 🎵 <span class="lang-el">Μουσική</span><span class="lang-en">Music</span>
             </button>
         </div>
@@ -3569,18 +3587,18 @@ function applyHistoryFilter(filterKey) {
 }
 
 function getTxType(tx) {
-    // 7-category mapping: Transfers | Swaps | Bridge | Mining | AI | Music
+    // Full 13-category mapping for wallet history tabs
     const category = (tx.category || '').toLowerCase();
     const raw = (tx.kind || tx.type || '').toLowerCase();
+    const symbol = (tx.symbol || tx.asset_symbol || '').toUpperCase();
 
-    // === MINING: mining_reward, block_reward, mining ===
+    // === MINING ===
     if (raw === 'mining' || raw === 'block_reward' || raw === 'mining_reward' ||
-        raw.includes('mined') || raw.includes('mining') ||
-        category === 'mining') {
+        raw.includes('mined') || raw.includes('mining') || category === 'mining') {
         return 'mining';
     }
 
-    // === MUSIC: music_play, music_tip, royalty, music_offline_tip ===
+    // === MUSIC ===
     if (raw === 'music_tip' || raw === 'music_play' || raw === 'music_offline_tip' ||
         raw === 'royalty' || raw === 'play_reward' ||
         raw.includes('music') || raw.startsWith('music_') ||
@@ -3588,44 +3606,75 @@ function getTxType(tx) {
         return 'music';
     }
 
-    // === AI: ai_credit_*, ai_credits, ai_job_*, architect, l2e ===
-    if (raw.startsWith('ai_credit') || raw.startsWith('ai_job') ||
-        raw === 'ai_credits' || raw === 'ai_credits_earned' || raw === 'ai_credits_spent' ||
-        raw === 'architect_job' || raw === 'architect' ||
-        raw === 'l2e' || raw === 'ai_reward' ||
-        category === 'ai_credits' || category === 'architect_ai_jobs' ||
-        category === 'l2e' || category === 'ai_reward') {
-        return 'ai';
+    // === L2E (Learn-to-Earn specific) ===
+    if (raw === 'l2e' || raw === 'l2e_reward' || raw === 'learn_reward' ||
+        category === 'l2e' || symbol === 'L2E') {
+        return 'l2e';
     }
 
-    // === SWAPS: swap, pool_swap, add/remove liquidity ===
-    const swapKinds = ['swap', 'pool_swap', 'add_liquidity', 'remove_liquidity',
-        'pool_create', 'pool_add_liquidity', 'pool_remove_liquidity', 'pool_add', 'pool_remove'];
-    if (swapKinds.includes(raw) || raw.startsWith('liquidity_') ||
-        category === 'swaps' || category === 'liquidity') {
+    // === AI CREDITS (Chat) ===
+    if (raw.startsWith('ai_credit') || raw === 'ai_credits' ||
+        raw === 'ai_credits_earned' || raw === 'ai_credits_spent' ||
+        category === 'ai_credits') {
+        return 'ai_credits';
+    }
+
+    // === ARCHITECT / AI JOBS ===
+    if (raw.startsWith('ai_job') || raw === 'architect_job' || raw === 'architect' ||
+        raw === 'ai_reward' || category === 'architect_ai_jobs' || category === 'ai_reward') {
+        return 'architect';
+    }
+
+    // === IoT / TELEMETRY ===
+    if (raw === 'iot' || raw === 'iot_telemetry' || raw === 'autopilot' || raw === 'parking' ||
+        raw === 'telemetry' || category === 'iot' || category === 'iot_telemetry') {
+        return 'iot';
+    }
+
+    // === SWAPS ===
+    if (raw === 'swap' || raw === 'pool_swap' || category === 'swaps') {
         return 'swaps';
     }
 
-    // === BRIDGE: bridge_in, bridge_out, crosschain, gateway ===
-    const bridgeKinds = ['bridge', 'bridge_in', 'bridge_out', 'bridge_deposit', 'bridge_withdraw',
-        'crosschain', 'cross_chain', 'fiat_onramp', 'fiat_offramp', 'gateway', 'onramp', 'offramp'];
-    if (bridgeKinds.includes(raw) || category === 'bridge' || category === 'gateway') {
+    // === LIQUIDITY ===
+    if (raw === 'add_liquidity' || raw === 'remove_liquidity' ||
+        raw === 'pool_create' || raw === 'pool_add_liquidity' || raw === 'pool_remove_liquidity' ||
+        raw === 'pool_add' || raw === 'pool_remove' || raw.startsWith('liquidity_') ||
+        category === 'liquidity') {
+        return 'liquidity';
+    }
+
+    // === BRIDGE ===
+    if (raw === 'bridge' || raw === 'bridge_in' || raw === 'bridge_out' ||
+        raw === 'bridge_deposit' || raw === 'bridge_withdraw' ||
+        raw === 'crosschain' || raw === 'cross_chain' || category === 'bridge') {
         return 'bridge';
     }
 
-    // === TRANSFERS: token_transfer, thr_transfer, transfer, iot ===
-    const transferKinds = ['token_transfer', 'thr_transfer', 'transfer', 'iot', 'autopilot', 'parking'];
-    if (transferKinds.includes(raw) || category === 'thr' || category === 'tokens' || category === 'iot') {
-        return 'transfers';
+    // === GATEWAY (Fiat on/off ramp) ===
+    if (raw === 'fiat_onramp' || raw === 'fiat_offramp' || raw === 'gateway' ||
+        raw === 'onramp' || raw === 'offramp' || category === 'gateway') {
+        return 'gateway';
     }
 
-    // Fallback: anything with from/to and amount is a transfer
+    // === TOKENS (non-THR token transfers) ===
+    if (raw === 'token_transfer' || category === 'tokens' ||
+        (symbol && symbol !== 'THR' && (raw === 'transfer' || !raw))) {
+        return 'tokens';
+    }
+
+    // === THR (native THR transfers) ===
+    if (raw === 'thr_transfer' || category === 'thr' ||
+        symbol === 'THR' || (!symbol && raw === 'transfer')) {
+        return 'thr';
+    }
+
+    // Fallback to THR for unknown types with from/to
     if (tx.from && tx.to && (tx.amount !== undefined || tx.value !== undefined)) {
-        return 'transfers';
+        return 'thr';
     }
 
-    // Default to transfers for unknown types
-    return 'transfers';
+    return 'thr';
 }
 
 function formatTxDate(timestamp) {

@@ -1534,11 +1534,6 @@
     <button id="walletLoginBtn" class="wallet-login-btn" onclick="openHeaderWalletModal()">
         💼 <span class="lang-el">Σύνδεση</span><span class="lang-en">Login</span>
     </button>
-    {% if music_modal_enabled|default(true) %}
-    <button id="musicModalBtn" class="music-modal-btn" onclick="openMusicModal()">
-        🎵 <span class="lang-el">Μουσική</span><span class="lang-en">Music</span>
-    </button>
-    {% endif %}
     <div id="walletStatus" class="wallet-status">
         <img src="{{ url_for('static', filename='img/thronos-token.png') }}" alt="🔥" class="wallet-fire-icon" />
         <span id="walletAddrShort"></span>
@@ -1550,9 +1545,6 @@
                 <div class="wallet-popup-actions">
                     <button id="walletPinBtn" class="wallet-mini-btn" title="Pin">Pin</button>
                     <button id="walletLockBtn" class="wallet-mini-btn" title="Lock">Lock</button>
-                    {% if music_modal_enabled|default(true) %}
-                    <button id="walletMusicBtn" class="wallet-mini-btn" title="Music">🎵 Music</button>
-                    {% endif %}
                 </div>
             </div>
 
@@ -1613,67 +1605,6 @@
         </div>
     </div>
 </div>
-
-{% if music_modal_enabled|default(true) %}
-<div class="music-modal" id="musicModal" onclick="closeMusicModal(event)">
-    <div class="music-modal-content" onclick="event.stopPropagation()" style="max-width: 500px; width: 95%;">
-        <div class="music-modal-header">
-            <div class="music-modal-title">🎵 <span class="lang-el">Μουσική</span><span class="lang-en">Music</span></div>
-            <button class="music-modal-close" onclick="closeMusicModal()">✖</button>
-        </div>
-        <div id="musicModalBody">
-            <!-- Session Controls -->
-            <div style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid rgba(0,255,102,0.2);">
-                <p style="margin: 0 0 8px 0; color: #9f9; font-size: 12px;">
-                    <span class="lang-en">Session controls</span>
-                    <span class="lang-el">Έλεγχοι συνεδρίας</span>
-                </p>
-                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                    <button class="wallet-mini-btn" onclick="window.MusicModal?.startSession()">▶️ Start</button>
-                    <button class="wallet-mini-btn" onclick="window.MusicModal?.endSession()">⏹️ End</button>
-                    <button class="wallet-mini-btn" onclick="window.open('/music', '_blank')">🎧 Full Page</button>
-                </div>
-                <div id="musicModalStatus" style="margin-top: 8px; font-size: 11px; color: #b6ffcc;"></div>
-            </div>
-
-            <!-- Playlists Section -->
-            <div style="margin-bottom: 12px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                    <span style="color: #0f6; font-weight: bold; font-size: 13px;">
-                        📋 <span class="lang-en">Your Playlists</span><span class="lang-el">Οι Playlists σου</span>
-                    </span>
-                    <button class="wallet-mini-btn" onclick="window.MusicPlaylist?.showCreateDialog()" style="padding: 4px 10px; font-size: 11px;">
-                        ➕ <span class="lang-en">Create</span><span class="lang-el">Δημιουργία</span>
-                    </button>
-                </div>
-                <div id="musicPlaylistsList" style="max-height: 200px; overflow-y: auto; background: rgba(0,0,0,0.3); border-radius: 6px; padding: 8px;">
-                    <div style="color: #888; font-size: 11px; text-align: center; padding: 12px;">
-                        <span class="lang-en">Loading playlists...</span>
-                        <span class="lang-el">Φόρτωση playlists...</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Create Playlist Dialog (hidden by default) -->
-            <div id="createPlaylistDialog" style="display: none; background: rgba(0,20,10,0.95); border: 1px solid rgba(0,255,102,0.3); border-radius: 8px; padding: 12px; margin-top: 12px;">
-                <div style="margin-bottom: 10px; font-weight: bold; color: #0f6;">
-                    <span class="lang-en">Create New Playlist</span>
-                    <span class="lang-el">Δημιουργία Νέας Playlist</span>
-                </div>
-                <input type="text" id="newPlaylistName" placeholder="Playlist name..." style="width: 100%; padding: 8px; background: rgba(0,0,0,0.5); border: 1px solid rgba(0,255,102,0.3); border-radius: 4px; color: #0f6; font-size: 13px; box-sizing: border-box; margin-bottom: 10px;">
-                <div style="display: flex; gap: 8px; justify-content: flex-end;">
-                    <button class="wallet-mini-btn" onclick="window.MusicPlaylist?.hideCreateDialog()" style="background: rgba(255,0,0,0.2); border-color: rgba(255,0,0,0.3);">
-                        <span class="lang-en">Cancel</span><span class="lang-el">Άκυρο</span>
-                    </button>
-                    <button class="wallet-mini-btn" onclick="window.MusicPlaylist?.createPlaylist()">
-                        <span class="lang-en">Create</span><span class="lang-el">Δημιουργία</span>
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-{% endif %}
 
 <!-- Send Modal -->
 <div class="send-modal" id="sendModal" onclick="closeSendModal(event)">
@@ -3001,8 +2932,30 @@ function renderMusicTab() {
         `;
 
     const newPlaylistBtn = isGreek ? '➕ Νέα Playlist' : '➕ New Playlist';
+    const sessionLabel = isGreek ? 'Έλεγχοι συνεδρίας' : 'Session controls';
+    const startLabel = isGreek ? 'Έναρξη' : 'Start';
+    const endLabel = isGreek ? 'Λήξη' : 'End';
+    const fullPageLabel = isGreek ? 'Πλήρης Σελίδα' : 'Full Page';
+
+    // Check session status
+    const isSessionActive = window.MusicModal?.isSessionActive?.() || false;
+    const sessionId = window.MusicModal?.getSessionId?.() || '';
+    const sessionStatusHtml = isSessionActive
+        ? `<div style="margin-top: 8px; font-size: 11px; color: #b6ffcc;">${isGreek ? 'Συνεδρία ενεργή' : 'Session started'}: ${sessionId}</div>`
+        : '';
 
     const html = `
+        <!-- Session Controls -->
+        <div class="music-section" style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid rgba(0,255,102,0.2);">
+            <div class="music-section-title" style="font-size: 12px; color: #9f9; margin-bottom: 8px;">${sessionLabel}</div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <button class="wallet-mini-btn" onclick="window.MusicModal?.startSession(); setTimeout(() => renderMusicTab(), 500);">▶️ ${startLabel}</button>
+                <button class="wallet-mini-btn" onclick="window.MusicModal?.endSession(); setTimeout(() => renderMusicTab(), 500);">⏹️ ${endLabel}</button>
+                <button class="wallet-mini-btn" onclick="window.open('/music', '_blank')">🎧 ${fullPageLabel}</button>
+            </div>
+            ${sessionStatusHtml}
+        </div>
+
         <div class="music-section">
             <div class="music-section-title">${libraryLabel}</div>
             ${libraryHtml}
@@ -3318,25 +3271,6 @@ function closeSendModal(event) {
             clearInterval(txPollInterval);
             txPollInterval = null;
         }
-    }
-}
-
-function openMusicModal() {
-    const modal = document.getElementById('musicModal');
-    if (!modal) return;
-    modal.classList.add('open');
-    if (window.MusicModal && typeof window.MusicModal.open === 'function') {
-        window.MusicModal.open();
-    }
-}
-
-function closeMusicModal(event) {
-    if (event && event.target && event.target.id !== 'musicModal') return;
-    const modal = document.getElementById('musicModal');
-    if (!modal) return;
-    modal.classList.remove('open');
-    if (window.MusicModal && typeof window.MusicModal.close === 'function') {
-        window.MusicModal.close();
     }
 }
 

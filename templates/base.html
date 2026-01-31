@@ -2064,6 +2064,22 @@ function normalizeLang(lang) {
       return window.LANG_SEQUENCE.includes(lang) ? lang : 'en';
 }
 
+// Strip localhost URLs for production safety
+function repairMediaUrl(url) {
+    if (!url || typeof url !== 'string') return url;
+    try {
+        if (url.startsWith('/')) return url;
+        if (url.startsWith('http://') || url.startsWith('https://')) {
+            const urlObj = new URL(url);
+            const knownHosts = [window.location.host, 'localhost:5000', 'thrchain.up.railway.app', 'thrchain.vercel.app'];
+            if (knownHosts.includes(urlObj.host)) {
+                return urlObj.pathname + urlObj.search + urlObj.hash;
+            }
+        }
+        return url;
+    } catch (e) { return url; }
+}
+
 function getCurrentLang() {
     // PR-5a: Use thr_lang key for consistency, migrate from old 'lang' key
     let savedLang = localStorage.getItem('thr_lang');
@@ -2548,7 +2564,7 @@ function renderWalletBalances(data) {
         const symbol = t.symbol;
         const name = t.name || symbol;
         const color = t.color || '#00ff66';
-        const logo = t.logo_url || t.logo;
+        const logo = repairMediaUrl(t.logo_url || t.logo);
 
         // PR-1b: Use API value fields, display "—" for null
         const valueInThr = t.value_in_thr !== null && t.value_in_thr !== undefined
@@ -4861,8 +4877,9 @@ function renderTokenInfo(token) {
     const lang = getCurrentLang();
     const isGreek = isGreekLang(lang);
 
-    const logoHtml = token.logo
-        ? `<img src="${token.logo}" alt="${token.symbol}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+    const logoUrl = repairMediaUrl(token.logo);
+    const logoHtml = logoUrl
+        ? `<img src="${logoUrl}" alt="${token.symbol}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
            <span style="display:none; color:${token.color}; font-weight:bold; font-size:24px;">${token.symbol[0]}</span>`
         : `<span style="color:${token.color}; font-weight:bold; font-size:24px;">${token.symbol[0]}</span>`;
 
@@ -5104,7 +5121,7 @@ function downloadCGMinerKit() {
 
             let html = '';
             tokensWithStats.forEach(token => {
-                const logoSrc = token.logo || (token.symbol === 'THR' ? '/static/img/thronos-token.png' : null);
+                const logoSrc = repairMediaUrl(token.logo) || (token.symbol === 'THR' ? '/static/img/thronos-token.png' : null);
                 const logoHtml = logoSrc
                     ? `<img src="${logoSrc}" alt="${token.symbol}" onerror="this.style.display='none'; this.parentElement.innerHTML='<span style=\\'color:${token.color}\\'>${token.symbol[0]}</span>';">`
                     : `<span style="color: ${token.color};">${token.symbol[0]}</span>`;

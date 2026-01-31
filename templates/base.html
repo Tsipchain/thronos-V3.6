@@ -1890,21 +1890,27 @@
             <span class="lang-en">Transaction History</span>
         </div>
 
-        <!-- History Tabs - Clean 4 categories + All -->
-        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; padding: 0 4px;">
-            <button class="history-tab-btn active" data-filter="all" onclick="filterHistory('all')" style="flex: 1; min-width: 70px; padding: 8px 12px; background: rgba(0,255,102,0.2); border: 1px solid rgba(0,255,102,0.4); border-radius: 6px; color: #00ff66; font-size: 12px; cursor: pointer; transition: all 0.2s;">
+        <!-- History Tabs - 7 categories -->
+        <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; padding: 0 4px;">
+            <button class="history-tab-btn active" data-filter="all" onclick="filterHistory('all')" style="flex: 1; min-width: 50px; padding: 6px 8px; background: rgba(0,255,102,0.2); border: 1px solid rgba(0,255,102,0.4); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
                 <span class="lang-el">Όλα</span><span class="lang-en">All</span>
             </button>
-            <button class="history-tab-btn" data-filter="transfers" onclick="filterHistory('transfers')" style="flex: 1; min-width: 80px; padding: 8px 12px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 12px; cursor: pointer; transition: all 0.2s;">
+            <button class="history-tab-btn" data-filter="transfers" onclick="filterHistory('transfers')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
                 💸 <span class="lang-el">Μεταφορές</span><span class="lang-en">Transfers</span>
             </button>
-            <button class="history-tab-btn" data-filter="mining" onclick="filterHistory('mining')" style="flex: 1; min-width: 80px; padding: 8px 12px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 12px; cursor: pointer; transition: all 0.2s;">
-                ⛏️ <span class="lang-el">Mining</span><span class="lang-en">Mining</span>
+            <button class="history-tab-btn" data-filter="swaps" onclick="filterHistory('swaps')" style="flex: 1; min-width: 50px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                🔄 Swaps
             </button>
-            <button class="history-tab-btn" data-filter="ai" onclick="filterHistory('ai')" style="flex: 1; min-width: 80px; padding: 8px 12px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 12px; cursor: pointer; transition: all 0.2s;">
-                🤖 <span class="lang-el">AI</span><span class="lang-en">AI</span>
+            <button class="history-tab-btn" data-filter="bridge" onclick="filterHistory('bridge')" style="flex: 1; min-width: 50px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                🌉 <span class="lang-el">Γέφυρα</span><span class="lang-en">Bridge</span>
             </button>
-            <button class="history-tab-btn" data-filter="music" onclick="filterHistory('music')" style="flex: 1; min-width: 80px; padding: 8px 12px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 12px; cursor: pointer; transition: all 0.2s;">
+            <button class="history-tab-btn" data-filter="mining" onclick="filterHistory('mining')" style="flex: 1; min-width: 50px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                ⛏️ Mining
+            </button>
+            <button class="history-tab-btn" data-filter="ai" onclick="filterHistory('ai')" style="flex: 1; min-width: 50px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                🤖 AI
+            </button>
+            <button class="history-tab-btn" data-filter="music" onclick="filterHistory('music')" style="flex: 1; min-width: 50px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
                 🎵 <span class="lang-el">Μουσική</span><span class="lang-en">Music</span>
             </button>
         </div>
@@ -2016,7 +2022,6 @@
     <li class="nav-item">
       <span class="nav-link">📱 <span class="lang-el">Εφαρμογές</span><span class="lang-en">Apps</span><span class="lang-ja">アプリ</span><span class="lang-ru">Приложения</span><span class="lang-es">Apps</span> ▼</span>
       <div class="dropdown-content">
-        <a href="/wallet">👛 <span class="lang-el">Πορτοφόλι</span><span class="lang-en">Wallet</span><span class="lang-ja">ウォレット</span><span class="lang-ru">Кошелёк</span><span class="lang-es">Billetera</span></a>
         <a href="/send">💸 <span class="lang-el">Αποστολή</span><span class="lang-en">Send</span><span class="lang-ja">送金</span><span class="lang-ru">Отправить</span><span class="lang-es">Enviar</span></a>
         <a href="/swap">🔄 Swap</a>
         <a href="/pools">💧 Pools</a>
@@ -3564,14 +3569,11 @@ function applyHistoryFilter(filterKey) {
 }
 
 function getTxType(tx) {
-    // PR-2.1: Clean 4-category mapping for wallet history tabs
-    // Transfers | Mining | AI | Music
-
+    // 7-category mapping: Transfers | Swaps | Bridge | Mining | AI | Music
     const category = (tx.category || '').toLowerCase();
     const raw = (tx.kind || tx.type || '').toLowerCase();
 
     // === MINING: mining_reward, block_reward, mining ===
-    // PRIORITY: Check mining FIRST before anything else to prevent leaking to transfers
     if (raw === 'mining' || raw === 'block_reward' || raw === 'mining_reward' ||
         raw.includes('mined') || raw.includes('mining') ||
         category === 'mining') {
@@ -3596,24 +3598,24 @@ function getTxType(tx) {
         return 'ai';
     }
 
-    // === TRANSFERS: token_transfer, thr_transfer, transfer, swap, bridge, liquidity, gateway ===
-    // Everything else that's a value transfer (not mining/music/ai)
-    const transferKinds = [
-        'token_transfer', 'thr_transfer', 'transfer',
-        'swap', 'pool_swap',
-        'bridge', 'bridge_in', 'bridge_out', 'bridge_deposit', 'bridge_withdraw', 'crosschain', 'cross_chain',
-        'add_liquidity', 'remove_liquidity', 'pool_create', 'pool_add_liquidity', 'pool_remove_liquidity', 'pool_add', 'pool_remove',
-        'fiat_onramp', 'fiat_offramp', 'gateway', 'onramp', 'offramp',
-        'iot', 'autopilot', 'parking'
-    ];
+    // === SWAPS: swap, pool_swap, add/remove liquidity ===
+    const swapKinds = ['swap', 'pool_swap', 'add_liquidity', 'remove_liquidity',
+        'pool_create', 'pool_add_liquidity', 'pool_remove_liquidity', 'pool_add', 'pool_remove'];
+    if (swapKinds.includes(raw) || raw.startsWith('liquidity_') ||
+        category === 'swaps' || category === 'liquidity') {
+        return 'swaps';
+    }
 
-    const transferCategories = [
-        'thr', 'tokens', 'bridge', 'swaps', 'liquidity', 'gateway', 'iot'
-    ];
+    // === BRIDGE: bridge_in, bridge_out, crosschain, gateway ===
+    const bridgeKinds = ['bridge', 'bridge_in', 'bridge_out', 'bridge_deposit', 'bridge_withdraw',
+        'crosschain', 'cross_chain', 'fiat_onramp', 'fiat_offramp', 'gateway', 'onramp', 'offramp'];
+    if (bridgeKinds.includes(raw) || category === 'bridge' || category === 'gateway') {
+        return 'bridge';
+    }
 
-    if (transferKinds.includes(raw) ||
-        raw.startsWith('liquidity_') ||
-        transferCategories.includes(category)) {
+    // === TRANSFERS: token_transfer, thr_transfer, transfer, iot ===
+    const transferKinds = ['token_transfer', 'thr_transfer', 'transfer', 'iot', 'autopilot', 'parking'];
+    if (transferKinds.includes(raw) || category === 'thr' || category === 'tokens' || category === 'iot') {
         return 'transfers';
     }
 

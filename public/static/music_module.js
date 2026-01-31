@@ -167,10 +167,15 @@ if (typeof window.MusicModal !== 'undefined') {
       if (window.MusicPlaylist) {
         window.MusicPlaylist.loadPlaylists();
       }
-      startSession().catch(err => {
-        console.warn('[MusicModal] Failed to start session', err);
-        updateStatus('Failed to start session');
-      });
+      // Show current session status or start new one
+      if (sessionActive && sessionId) {
+        updateStatus(`Session started: ${sessionId}`);
+      } else {
+        startSession().catch(err => {
+          console.warn('[MusicModal] Failed to start session', err);
+          updateStatus('Failed to start session');
+        });
+      }
     }
 
     function close() {
@@ -178,7 +183,8 @@ if (typeof window.MusicModal !== 'undefined') {
       if (modal) {
         modal.classList.remove('open');
       }
-      endSession('modal_close');
+      // Session continues in background when modal closes
+      // User must click "End" to stop the session and GPS tracking
     }
 
     window.addEventListener('beforeunload', () => {
@@ -188,11 +194,21 @@ if (typeof window.MusicModal !== 'undefined') {
       }
     });
 
+    function isSessionActive() {
+      return sessionActive;
+    }
+
+    function getSessionId() {
+      return sessionId;
+    }
+
     return {
       open,
       close,
       startSession,
       endSession,
+      isSessionActive,
+      getSessionId,
       normalizeMediaUrl,
       resolveMasterUrl,
       getAddress

@@ -17913,6 +17913,7 @@ def api_v1_create_pool():
 
 # ─── ADD LIQUIDITY TO EXISTING POOL ────────────────────────────────────
 @app.route("/api/v1/pools/add_liquidity", methods=["POST"])
+@app.route("/api/pools/add_liquidity", methods=["POST"])  # Alias without v1
 def api_v1_add_liquidity():
     """
     Add liquidity to an existing pool. Shares are minted proportionally.
@@ -18178,6 +18179,7 @@ def api_v1_add_liquidity():
 
 # ─── REMOVE LIQUIDITY FROM POOL ────────────────────────────────────
 @app.route("/api/v1/pools/remove_liquidity", methods=["POST"])
+@app.route("/api/pools/remove_liquidity", methods=["POST"])  # Alias without v1
 def api_v1_remove_liquidity():
     """
     Remove liquidity from a pool by burning shares.
@@ -18376,6 +18378,7 @@ def api_v1_remove_liquidity():
 
 # ─── SWAP THROUGH POOL (AMM - AUTOMATED MARKET MAKER) ────────────────
 @app.route("/api/v1/pools/swap", methods=["POST"])
+@app.route("/api/pools/swap", methods=["POST"])  # Alias without v1
 def api_v1_pool_swap():
     """
     Swap tokens through a liquidity pool using constant product formula (x * y = k).

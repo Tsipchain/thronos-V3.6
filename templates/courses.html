@@ -574,6 +574,39 @@ function toggleContentFields() {
     $("externalFields").style.display = type === 'external' ? 'block' : 'none';
 }
 
+// Supported question types enum - MUST be defined before addBuilderQuestion
+const QUESTION_TYPES = {
+    MULTIPLE_CHOICE: 'multiple_choice',
+    TRUE_FALSE: 'true_false',
+    MULTI_SELECT: 'multi_select',
+    SHORT_ANSWER: 'short_answer',
+    MATCHING: 'matching',
+    ORDERING: 'ordering',
+    FILL_BLANK: 'fill_blank'
+};
+
+const QUESTION_TYPE_LABELS = {
+    multiple_choice: { en: 'Multiple Choice', el: 'Πολλαπλής Επιλογής' },
+    true_false: { en: 'True/False', el: 'Σωστό/Λάθος' },
+    multi_select: { en: 'Multi-Select', el: 'Πολλαπλή Επιλογή' },
+    short_answer: { en: 'Short Answer', el: 'Σύντομη Απάντηση' },
+    matching: { en: 'Matching Pairs', el: 'Αντιστοίχιση' },
+    ordering: { en: 'Put in Order', el: 'Βάλε σε Σειρά' },
+    fill_blank: { en: 'Fill in the Blank', el: 'Συμπλήρωσε τα Κενά' }
+};
+
+function normalizeQuestionType(rawType) {
+    const val = String(rawType || '').toLowerCase();
+    if (val === 'multiple_choice' || val === 'mcq' || val === 'single' || val === 'multiple-choice' || val === 'mc') return 'multiple_choice';
+    if (val === 'true_false' || val === 'tf' || val === 'truefalse' || val === 'true-false' || val === 'boolean') return 'true_false';
+    if (val === 'multi_select' || val === 'multi-select' || val === 'checkbox' || val === 'multi' || val === 'checkboxes') return 'multi_select';
+    if (val === 'short_answer' || val === 'short' || val === 'text' || val === 'free_text' || val === 'freetext' || val === 'open') return 'short_answer';
+    if (val === 'matching' || val === 'match' || val === 'pairs' || val === 'pair') return 'matching';
+    if (val === 'ordering' || val === 'order' || val === 'sequence' || val === 'sort' || val === 'rank') return 'ordering';
+    if (val === 'fill_blank' || val === 'fill-blank' || val === 'fillblank' || val === 'blank' || val === 'fill' || val === 'cloze') return 'fill_blank';
+    return 'multiple_choice';
+}
+
 // Builder question data storage
 let builderQuestionsData = {};
 
@@ -1673,45 +1706,7 @@ async function loadQuizForEdit(courseId) {
     }
 }
 
-// Supported question types enum
-const QUESTION_TYPES = {
-    MULTIPLE_CHOICE: 'multiple_choice',
-    TRUE_FALSE: 'true_false',
-    MULTI_SELECT: 'multi_select',
-    SHORT_ANSWER: 'short_answer',
-    MATCHING: 'matching',
-    ORDERING: 'ordering',
-    FILL_BLANK: 'fill_blank'
-};
-
-const QUESTION_TYPE_LABELS = {
-    multiple_choice: { en: 'Multiple Choice', el: 'Πολλαπλής Επιλογής' },
-    true_false: { en: 'True/False', el: 'Σωστό/Λάθος' },
-    multi_select: { en: 'Multi-Select', el: 'Πολλαπλή Επιλογή' },
-    short_answer: { en: 'Short Answer', el: 'Σύντομη Απάντηση' },
-    matching: { en: 'Matching Pairs', el: 'Αντιστοίχιση' },
-    ordering: { en: 'Put in Order', el: 'Βάλε σε Σειρά' },
-    fill_blank: { en: 'Fill in the Blank', el: 'Συμπλήρωσε τα Κενά' }
-};
-
-function normalizeQuestionType(rawType) {
-    const val = String(rawType || '').toLowerCase();
-    // Multiple Choice
-    if (val === 'multiple_choice' || val === 'mcq' || val === 'single' || val === 'multiple-choice' || val === 'mc') return 'multiple_choice';
-    // True/False
-    if (val === 'true_false' || val === 'tf' || val === 'truefalse' || val === 'true-false' || val === 'boolean') return 'true_false';
-    // Multi-Select
-    if (val === 'multi_select' || val === 'multi-select' || val === 'checkbox' || val === 'multi' || val === 'checkboxes') return 'multi_select';
-    // Short Answer
-    if (val === 'short_answer' || val === 'short' || val === 'text' || val === 'free_text' || val === 'freetext' || val === 'open') return 'short_answer';
-    // Matching
-    if (val === 'matching' || val === 'match' || val === 'pairs' || val === 'pair') return 'matching';
-    // Ordering
-    if (val === 'ordering' || val === 'order' || val === 'sequence' || val === 'sort' || val === 'rank') return 'ordering';
-    // Fill in the Blank
-    if (val === 'fill_blank' || val === 'fill-blank' || val === 'fillblank' || val === 'blank' || val === 'fill' || val === 'cloze') return 'fill_blank';
-    return 'multiple_choice';
-}
+// NOTE: QUESTION_TYPES, QUESTION_TYPE_LABELS and normalizeQuestionType are defined earlier in this file
 
 function addQuestion(existing = null) {
     const idx = quizQuestions.length;

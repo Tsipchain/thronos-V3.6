@@ -4139,13 +4139,10 @@ function updateTokenListForNetwork(network) {
 }
 
 function anyModalOpen() {
-    const modals = ['sendModal', 'receiveModal', 'walletHistoryModal', 'bridgeModal', 'musicModal'];
+    const modals = ['sendModal', 'receiveModal', 'walletHistoryModal', 'bridgeModal'];
     return modals.some(id => {
         const modal = document.getElementById(id);
         if (!modal) return false;
-        if (id === 'musicModal') {
-            return modal.classList.contains('open');
-        }
         return modal.classList.contains('active');
     });
 }
@@ -5331,18 +5328,18 @@ if (typeof MusicModule === 'undefined') {
             </div>
         </div>
         <div class="global-player-controls">
-            <button class="global-player-btn" onclick="GlobalMusicPlayer.previous()" title="Previous">⏮️</button>
-            <button class="global-player-btn global-player-btn-play" onclick="GlobalMusicPlayer.togglePlay()" id="globalPlayPauseBtn" title="Play/Pause">▶️</button>
-            <button class="global-player-btn" onclick="GlobalMusicPlayer.next()" title="Next">⏭️</button>
+            <button class="global-player-btn" onclick="typeof GlobalMusicPlayer !== 'undefined' && GlobalMusicPlayer.previous()" title="Previous">⏮️</button>
+            <button class="global-player-btn global-player-btn-play" onclick="typeof GlobalMusicPlayer !== 'undefined' && GlobalMusicPlayer.togglePlay()" id="globalPlayPauseBtn" title="Play/Pause">▶️</button>
+            <button class="global-player-btn" onclick="typeof GlobalMusicPlayer !== 'undefined' && GlobalMusicPlayer.next()" title="Next">⏭️</button>
         </div>
         <div class="global-player-extra">
-            <button class="global-player-btn" onclick="GlobalMusicPlayer.toggleShuffle()" id="globalShuffleBtn" title="Shuffle">🔀</button>
-            <button class="global-player-btn" onclick="GlobalMusicPlayer.toggleRepeat()" id="globalRepeatBtn" title="Repeat">🔁</button>
-            <button class="global-player-btn" onclick="GlobalMusicPlayer.toggleQueue()" title="Queue">📋</button>
-            <button class="global-player-btn" onclick="GlobalMusicPlayer.close()" title="Close">✖</button>
+            <button class="global-player-btn" onclick="typeof GlobalMusicPlayer !== 'undefined' && GlobalMusicPlayer.toggleShuffle()" id="globalShuffleBtn" title="Shuffle">🔀</button>
+            <button class="global-player-btn" onclick="typeof GlobalMusicPlayer !== 'undefined' && GlobalMusicPlayer.toggleRepeat()" id="globalRepeatBtn" title="Repeat">🔁</button>
+            <button class="global-player-btn" onclick="typeof GlobalMusicPlayer !== 'undefined' && GlobalMusicPlayer.toggleQueue()" title="Queue">📋</button>
+            <button class="global-player-btn" onclick="typeof GlobalMusicPlayer !== 'undefined' && GlobalMusicPlayer.close()" title="Close">✖</button>
         </div>
     </div>
-    <div class="global-player-progress-bar" onclick="GlobalMusicPlayer.seekTo(event)">
+    <div class="global-player-progress-bar" onclick="typeof GlobalMusicPlayer !== 'undefined' && GlobalMusicPlayer.seekTo(event)">
         <div class="global-player-progress-fill" id="globalProgressFill"></div>
     </div>
     <div class="global-player-queue" id="globalPlayerQueue" style="display: none;">

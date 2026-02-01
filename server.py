@@ -5863,11 +5863,11 @@ def _categorize_transaction(tx: dict) -> str:
     if tx_type in ["coinbase", "mint", "mining_reward"]:
         return "mining"
 
-    # Swaps
+    # Swaps (category: "swaps" to match frontend filter)
     if "swap" in tx_type_lower:
-        return "swap"
+        return "swaps"
 
-    # Liquidity
+    # Liquidity (category: "liquidity" to match frontend filter)
     if "liquidity" in tx_type_lower or "pool" in tx_type_lower:
         return "liquidity"
 
@@ -7605,6 +7605,9 @@ def api_dashboard():
             "ai_balance": ai_balance,
             "chain_height": chain_height,
             "last_block_hash": last_block.get("block_hash", ""),
+            # Token and pool counts for index page stats
+            "token_count": len(load_json(CUSTOM_TOKENS_FILE, [])),
+            "pool_count": len(load_pools()),
         }
 
         return jsonify(response), 200

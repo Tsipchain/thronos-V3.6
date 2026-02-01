@@ -459,7 +459,7 @@
         const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
         const isToken = kind === 'token_transfer';
         const tokenSymbol = sanitizeTokenSymbol(tx.asset_symbol || tx.asset || tx.symbol);
-        const asset = isToken ? (tokenSymbol || '(unknown token)') : 'THR';
+        const asset = tokenSymbol || 'THR';
         const decimals = tx.decimals || tokenDecimals;
         const formattedAmount = formatTokenAmount(tx.display_amount ?? tx.amount ?? 0, decimals);
         const label = (tx.category_label || tx.kind || tx.type || '').toString().toUpperCase();

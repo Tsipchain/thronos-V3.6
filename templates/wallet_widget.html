@@ -1378,10 +1378,7 @@
         }
 
         function displayAsset(tx) {
-            if (isTokenTx(tx)) {
-                const sym = sanitizeTokenSymbol(tx.asset_symbol || tx.asset || tx.symbol);
-                return sym || '(unknown token)';
-            }
+            const sym = sanitizeTokenSymbol(tx.asset_symbol || tx.asset || tx.symbol);
             return sym || 'THR';
         };
 

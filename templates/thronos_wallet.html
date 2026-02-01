@@ -200,7 +200,7 @@
             <div class="tx">
               <div style="display:flex; justify-content:space-between;">
                   <span style="color:#fff;">${tx.timestamp}</span>
-                  <span style="color:${color}; font-weight:bold;">${sign} ${tx.amount ?? 0} THR</span>
+                  <span style="color:${color}; font-weight:bold;">${sign} ${tx.amount ?? 0} ${tx.asset_symbol || tx.asset || tx.symbol || 'THR'}</span>
               </div>
               <div style="font-size:0.8em; color:#888; margin-top:4px;">
                   ${isIncoming ? 'From: ' + tx.from : 'To: ' + tx.to}

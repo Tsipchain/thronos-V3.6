@@ -5820,16 +5820,19 @@ def _categorize_transaction(tx: dict) -> str:
     """
     Categorize a transaction into a specific type for filtering and statistics.
 
-    Categories:
-    - token_transfer: Normal THR/token sends
-    - music_tip: Tips to artists
-    - ai_reward: AI-related rewards/payments
-    - iot_telemetry: IoT device data/GPS
-    - bridge: Bridge in/out transactions
-    - pledge: BTC/fiat pledges
+    Categories (matching frontend wallet history tabs):
+    - thr: THR transfers
     - mining: Block mining rewards
-    - swap: Token swaps
-    - liquidity: Pool adds/removes
+    - tokens: Token operations
+    - l2e: Learn-to-Earn rewards
+    - ai_credits: AI Chat credits (consume, earn, spend)
+    - architect: Architect/AI Jobs (THR billing)
+    - iot: IoT device data/GPS/telemetry
+    - bridge: Bridge in/out transactions
+    - swaps: Pool swap operations
+    - liquidity: Pool add/remove liquidity
+    - gateway: Gateway operations
+    - music: Music tips/plays/royalties
     - other: Everything else
     """
     tx_type = tx.get("type") or tx.get("kind") or ""
@@ -5839,9 +5842,20 @@ def _categorize_transaction(tx: dict) -> str:
     if "music" in tx_type_lower or "tip" in tx_type_lower:
         return "music_tip"
 
-    # AI rewards
-    if "ai" in tx_type_lower or tx_type in ["ai_reward", "ai_job_reward", "ai_job_completed"]:
-        return "ai_reward"
+    # AI Credits (Chat billing) - must check BEFORE generic "ai" match
+    if tx_type in ["credits_consume", "ai_credits", "ai_credit", "ai_credits_earned",
+                   "ai_credits_spent", "ai_credits_refund", "service_payment", "ai_knowledge"]:
+        return "ai_credits"
+
+    # Architect / AI Jobs (THR billing) - check specific types first
+    if tx_type in ["architect_payment", "architect_service", "ai_job_created",
+                   "ai_job_progress", "ai_job_completed", "ai_job_reward",
+                   "t2e_architect_reward"] or tx_type_lower.startswith("ai_job"):
+        return "architect"
+
+    # Train2Earn contributions (credits rewards)
+    if "t2e" in tx_type_lower and "architect" not in tx_type_lower:
+        return "ai_credits"
 
     # Learn-to-earn rewards
     if "l2e" in tx_type_lower or tx_type in ["l2e_reward", "l2e"]:

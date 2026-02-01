@@ -13516,13 +13516,30 @@ def admin_whitelist_list():
 
 @app.route("/admin/wallet_whitelist/add", methods=["POST"])
 def admin_wallet_whitelist_add():
-    """Add a THR wallet address to the whitelist for send/receive without auth_secret."""
+    """
+    Add a THR wallet address to the whitelist for send/receive without auth_secret.
+    Requires both admin secret AND a confirmation hash for security.
+    confirmation = SHA256(ADMIN_SECRET + thr_address + "WHITELIST_CONFIRM")
+    """
     data = request.get_json() or {}
     if data.get("secret") != ADMIN_SECRET:
         return jsonify(error="forbidden"), 403
+
     thr_address = (data.get("thr_address") or "").strip()
     if not thr_address or not validate_thr_address(thr_address):
         return jsonify(error="invalid_thr_address"), 400
+
+    # Require confirmation hash for extra security
+    confirmation = (data.get("confirmation") or "").strip()
+    expected_confirm = hashlib.sha256(
+        f"{ADMIN_SECRET}{thr_address}WHITELIST_CONFIRM".encode()
+    ).hexdigest()[:16]  # First 16 chars of hash
+
+    if confirmation != expected_confirm:
+        return jsonify(
+            error="invalid_confirmation",
+            hint="confirmation = SHA256(secret + thr_address + 'WHITELIST_CONFIRM')[:16]"
+        ), 403
 
     entries = load_json(WHITELIST_WALLETS_FILE, [])
     # Check if already exists
@@ -13550,22 +13567,6 @@ def admin_wallet_whitelist_list():
         return jsonify(error="forbidden"), 403
     entries = load_json(WHITELIST_WALLETS_FILE, [])
     return jsonify(whitelist=entries), 200
-
-
-@app.route("/admin/ai_wallet/credentials", methods=["GET"])
-def admin_ai_wallet_credentials():
-    """Retrieve AI wallet credentials for authorized system operations."""
-    secret = request.args.get("secret", "")
-    if secret != ADMIN_SECRET:
-        return jsonify(error="forbidden"), 403
-    creds = load_json(AI_CREDS_FILE, {})
-    if not creds:
-        return jsonify(error="ai_credentials_not_found", note="Run init_ai_wallet first"), 404
-    return jsonify(
-        thr_address=creds.get("thr_address"),
-        auth_secret=creds.get("auth_secret"),
-        note="Use these for system-level operations"
-    ), 200
 
 
 @app.route("/admin/ai_wallet/status", methods=["GET"])

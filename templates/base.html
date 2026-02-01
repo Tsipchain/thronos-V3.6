@@ -5259,8 +5259,13 @@ function downloadCGMinerKit() {
                     ? Number(token.total_supply).toLocaleString('en-US', {maximumFractionDigits: 0})
                     : '';
 
+                // Show name if different from symbol, otherwise just symbol
+                const displayName = token.name && token.name !== token.symbol
+                    ? token.name
+                    : token.symbol;
+
                 html += `
-                    <div class="chain-token-pill" title="${token.name} - ${holdersText || '0'} holders" onclick="openTokenInfoModal('${token.symbol}')" style="cursor: pointer;">
+                    <div class="chain-token-pill" title="${token.name || token.symbol} (${token.symbol}) - ${holdersText || '0'} holders" onclick="openTokenInfoModal('${token.symbol}')" style="cursor: pointer;">
                         <div class="chain-token-logo" style="border-color: ${token.color};">${logoHtml}</div>
                         <span class="chain-token-symbol">${token.symbol}</span>
                         ${holdersText ? `<span class="chain-token-holders">${holdersText}</span>` : ''}

@@ -1331,8 +1331,9 @@ async function addLiquidity(poolId) {
         });
 
         const data = await response.json();
+        console.log('[AddLiquidity] Response:', response.status, data);
 
-        if (response.ok) {
+        if (response.ok && data.status === 'success') {
             let msg = `✅ Liquidity added successfully!\n\nShares minted: ${data.shares_minted}\nYour total shares: ${data.provider_shares}`;
             if (data.referral_bonus) {
                 msg += `\n\n🎁 Referral bonus: ${data.referrer} received ${data.referral_bonus} bonus shares!`;
@@ -1340,7 +1341,10 @@ async function addLiquidity(poolId) {
             alert(msg);
             loadPools(); // Reload pools
         } else {
-            alert(`❌ Error: ${data.message || 'Failed to add liquidity'}`);
+            // Show detailed error message
+            const errorMsg = data.message || data.error || 'Failed to add liquidity';
+            const hint = data.expected_ratio ? `\nExpected ratio: ${data.expected_ratio.toFixed(4)}, You provided: ${data.provided_ratio?.toFixed(4) || 'N/A'}` : '';
+            alert(`❌ Error: ${errorMsg}${hint}`);
         }
     } catch (error) {
         alert(`❌ Error: ${error.message}`);

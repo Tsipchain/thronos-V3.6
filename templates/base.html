@@ -3958,22 +3958,33 @@ async function loadWalletHistory(thrAddress) {
 
     // Ensure proper URL format with query string
     const cleanAddress = thrAddress.trim();
-    if (!cleanAddress) return [];
-
-    const url = buildWalletMusicApiUrl(`/api/wallet/history?address=${encodeURIComponent(cleanAddress)}&limit=200`);
-
-    if (window.FetchUtils && typeof window.FetchUtils.smartFetchJSON === 'function') {
-        const data = await window.FetchUtils.smartFetchJSON(url);
-        return Array.isArray(data)
-            ? data
-            : (data?.history || data?.txs || data?.transactions || data?.items || []);
+    if (!cleanAddress) {
+        console.warn('loadWalletHistory: empty address after trim');
+        return [];
     }
 
-    const res = await fetch(url);
-    const data = res.ok ? await res.json().catch(() => ({})) : {};
-    return Array.isArray(data)
-        ? data
-        : (data?.history || data?.txs || data?.transactions || data?.items || []);
+    // Use direct URL to avoid any base URL issues
+    const url = `/api/wallet/history?address=${encodeURIComponent(cleanAddress)}&limit=200`;
+    console.log('[WalletHistory] Fetching:', url);
+
+    try {
+        const res = await fetch(url);
+        if (!res.ok) {
+            console.error('[WalletHistory] HTTP error:', res.status, res.statusText);
+            return [];
+        }
+        const data = await res.json();
+        console.log('[WalletHistory] Response ok:', data?.ok, 'txCount:', data?.transactions?.length || 0);
+
+        // Extract transactions array from response
+        const txs = Array.isArray(data)
+            ? data
+            : (data?.transactions || data?.history || data?.txs || data?.items || []);
+        return txs;
+    } catch (err) {
+        console.error('[WalletHistory] Fetch error:', err);
+        return [];
+    }
 }
 
 async function hydrateHistory(thrAddress) {

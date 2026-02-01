@@ -5820,16 +5820,19 @@ def _categorize_transaction(tx: dict) -> str:
     """
     Categorize a transaction into a specific type for filtering and statistics.
 
-    Categories:
-    - token_transfer: Normal THR/token sends
-    - music_tip: Tips to artists
-    - ai_reward: AI-related rewards/payments
-    - iot_telemetry: IoT device data/GPS
-    - bridge: Bridge in/out transactions
-    - pledge: BTC/fiat pledges
+    Categories (matching frontend wallet history tabs):
+    - thr: THR transfers
     - mining: Block mining rewards
-    - swap: Token swaps
-    - liquidity: Pool adds/removes
+    - tokens: Token operations
+    - l2e: Learn-to-Earn rewards
+    - ai_credits: AI Chat credits (consume, earn, spend)
+    - architect: Architect/AI Jobs (THR billing)
+    - iot: IoT device data/GPS/telemetry
+    - bridge: Bridge in/out transactions
+    - swaps: Pool swap operations
+    - liquidity: Pool add/remove liquidity
+    - gateway: Gateway operations
+    - music: Music tips/plays/royalties
     - other: Everything else
     """
     tx_type = tx.get("type") or tx.get("kind") or ""
@@ -5839,17 +5842,31 @@ def _categorize_transaction(tx: dict) -> str:
     if "music" in tx_type_lower or "tip" in tx_type_lower:
         return "music_tip"
 
-    # AI rewards
-    if "ai" in tx_type_lower or tx_type in ["ai_reward", "ai_job_reward", "ai_job_completed"]:
-        return "ai_reward"
+    # AI Credits (Chat billing) - must check BEFORE generic "ai" match
+    if tx_type in ["credits_consume", "ai_credits", "ai_credit", "ai_credits_earned",
+                   "ai_credits_spent", "ai_credits_refund", "service_payment", "ai_knowledge"]:
+        return "ai_credits"
+
+    # Architect / AI Jobs (THR billing) - check specific types first
+    if tx_type in ["architect_payment", "architect_service", "ai_job_created",
+                   "ai_job_progress", "ai_job_completed", "ai_job_reward",
+                   "t2e_architect_reward"] or tx_type_lower.startswith("ai_job"):
+        return "architect"
+
+    # Train2Earn contributions (credits rewards)
+    if "t2e" in tx_type_lower and "architect" not in tx_type_lower:
+        return "ai_credits"
 
     # Learn-to-earn rewards
     if "l2e" in tx_type_lower or tx_type in ["l2e_reward", "l2e"]:
         return "l2e"
 
-    # IoT telemetry
-    if "iot" in tx_type_lower or "telemetry" in tx_type_lower or "gps" in tx_type_lower:
-        return "iot_telemetry"
+    # IoT (GPS telemetry, autopilot, parking, vehicle data)
+    # Includes: GPS route data for autopilot training, parking reservations, autonomous driving
+    if ("iot" in tx_type_lower or "telemetry" in tx_type_lower or "gps" in tx_type_lower or
+        tx_type in ["autopilot", "parking", "iot_autopilot", "iot_parking",
+                    "iot_parking_reservation", "gps_mining", "route_contribution"]):
+        return "iot"
 
     # Bridge operations
     if "bridge" in tx_type_lower or tx_type in ["bridge", "bridge_in", "bridge_out", "bridge_deposit", "bridge_withdraw", "crosschain", "wbtc_burn"]:
@@ -5863,11 +5880,11 @@ def _categorize_transaction(tx: dict) -> str:
     if tx_type in ["coinbase", "mint", "mining_reward"]:
         return "mining"
 
-    # Swaps
+    # Swaps (category: "swaps" to match frontend filter)
     if "swap" in tx_type_lower:
-        return "swap"
+        return "swaps"
 
-    # Liquidity
+    # Liquidity (category: "liquidity" to match frontend filter)
     if "liquidity" in tx_type_lower or "pool" in tx_type_lower:
         return "liquidity"
 
@@ -7605,6 +7622,9 @@ def api_dashboard():
             "ai_balance": ai_balance,
             "chain_height": chain_height,
             "last_block_hash": last_block.get("block_hash", ""),
+            # Token and pool counts for index page stats
+            "token_count": len(load_json(CUSTOM_TOKENS_FILE, [])),
+            "pool_count": len(load_pools()),
         }
 
         return jsonify(response), 200
@@ -20375,13 +20395,27 @@ def api_music_play(track_id):
 
 @app.route("/api/v1/music/tip", methods=["POST"])
 def api_v1_music_tip():
-    """Tip an artist for a track"""
+    """
+    Tip an artist for a track.
+
+    Optional GPS telemetry for music-while-traveling integration:
+    - gps_lat/gps_lng: Current location (for trip telemetry)
+    - duration_seconds: How long the track was played
+
+    This data helps train autopilot routes by correlating music listening
+    patterns with travel routes.
+    """
     data = request.get_json() or {}
     track_id = (data.get("track_id") or "").strip()
     from_address = (data.get("from_address") or "").strip()
     amount = float(data.get("amount", 0))
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
+
+    # GPS telemetry for music-while-traveling (optional)
+    gps_lat = data.get("gps_lat")
+    gps_lng = data.get("gps_lng")
+    duration_seconds = data.get("duration_seconds")
 
     if not track_id or not from_address or amount <= 0:
         return jsonify({"status": "error", "message": "Invalid tip parameters"}), 400
@@ -20461,7 +20495,19 @@ def api_v1_music_tip():
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
 
-    logger.info(f"Music tip: {amount} THR from {from_address} to {artist_address} for track {track_id} (artist: {artist_amount}, AI pool: {ai_pool_amount})")
+    # Track music play with GPS telemetry (for autopilot route training)
+    _track_music_play(
+        track_id=track_id,
+        wallet_address=from_address,
+        artist_address=artist_address,
+        duration_seconds=duration_seconds,
+        gps_lat=gps_lat,
+        gps_lng=gps_lng,
+        tip_amount=amount
+    )
+
+    logger.info(f"Music tip: {amount} THR from {from_address} to {artist_address} for track {track_id} (artist: {artist_amount}, AI pool: {ai_pool_amount})" +
+                (f" @ GPS({gps_lat:.4f}, {gps_lng:.4f})" if gps_lat and gps_lng else ""))
 
     return jsonify({
         "status": "success",
@@ -20469,7 +20515,8 @@ def api_v1_music_tip():
         "amount": amount,
         "artist_amount": artist_amount,
         "ai_pool_amount": ai_pool_amount,
-        "new_balance": ledger[from_address]
+        "new_balance": ledger[from_address],
+        "gps_recorded": bool(gps_lat and gps_lng)
     }), 200
 
 
@@ -22059,14 +22106,19 @@ def api_pytheia_advice():
 @app.route("/api/iot/telemetry", methods=["POST"])
 def api_iot_telemetry():
     """
-    Submit IoT telemetry data for rewards eligibility.
+    Submit IoT telemetry data for GPS mining rewards.
+
+    Users earn THR for contributing route data that trains the autopilot.
+    Reward formula: 0.001 THR per 10 GPS samples (route points).
+
     Expected JSON:
     {
       "address": "THR...",
       "device_id": "optional_device_identifier",
       "route_hash": "hash_of_gps_path",
-      "samples": <int>,
-      "auth_secret": "..."  # Optional: for authentication
+      "samples": <int>,        # Number of GPS data points
+      "music_session": "...",  # Optional: linked music session for trip
+      "auth_secret": "..."     # Optional: for authentication
     }
     """
     data = request.get_json() or {}
@@ -22074,6 +22126,7 @@ def api_iot_telemetry():
     device_id = (data.get("device_id") or "").strip()
     route_hash = (data.get("route_hash") or "").strip()
     samples = int(data.get("samples", 0))
+    music_session = (data.get("music_session") or "").strip()
 
     if not address or not route_hash or samples <= 0:
         return jsonify({"ok": False, "error": "Missing required fields: address, route_hash, samples"}), 400
@@ -22086,28 +22139,65 @@ def api_iot_telemetry():
     if not address_exists:
         return jsonify({"ok": False, "error": "Address not found in system"}), 404
 
+    # Calculate GPS mining reward: 0.001 THR per 10 samples (min 10 samples)
+    # This incentivizes users to contribute route data for autopilot training
+    GPS_REWARD_PER_10_SAMPLES = 0.001
+    reward_thr = round((samples // 10) * GPS_REWARD_PER_10_SAMPLES, 6) if samples >= 10 else 0.0
+
     # Create IoT telemetry transaction
     chain = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     tx_id = f"IOT-TELEM-{int(time.time())}-{secrets.token_hex(4)}"
+
     tx = {
         "type": "iot_telemetry",
         "address": address,
         "device_id": device_id,
         "route_hash": route_hash,
         "samples": samples,
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "music_session": music_session if music_session else None,
+        "timestamp": ts,
         "tx_id": tx_id,
         "status": "confirmed"
     }
     chain.append(tx)
-    save_json(CHAIN_FILE, chain)
 
-    logger.info(f"[IOT] Telemetry recorded: {address} - {samples} samples (route: {route_hash[:16]}...)")
+    # If reward earned, credit THR and log mining transaction
+    if reward_thr > 0:
+        # Credit THR to user (from AI pool)
+        ai_balance = float(ledger.get(AI_WALLET_ADDRESS, 0.0))
+        if ai_balance >= reward_thr:
+            ledger[AI_WALLET_ADDRESS] = round(ai_balance - reward_thr, 6)
+            ledger[address] = round(float(ledger.get(address, 0.0)) + reward_thr, 6)
+
+            # Log GPS mining reward transaction
+            reward_tx = {
+                "type": "gps_mining",
+                "from": AI_WALLET_ADDRESS,
+                "to": address,
+                "amount": reward_thr,
+                "samples": samples,
+                "route_hash": route_hash,
+                "music_session": music_session if music_session else None,
+                "timestamp": ts,
+                "tx_id": f"GPS-MINE-{int(time.time())}-{secrets.token_hex(4)}",
+                "note": f"GPS route contribution: {samples} samples → autopilot training"
+            }
+            chain.append(reward_tx)
+            tx["reward_thr"] = reward_thr
+            tx["reward_tx_id"] = reward_tx["tx_id"]
+
+    save_json(CHAIN_FILE, chain)
+    save_json(LEDGER_FILE, ledger)
+
+    logger.info(f"📍 GPS Mining: {address} - {samples} samples → {reward_thr} THR (route: {route_hash[:16]}...)")
 
     return jsonify({
         "ok": True,
         "tx_id": tx_id,
-        "message": f"Telemetry recorded: {samples} samples"
+        "samples": samples,
+        "reward_thr": reward_thr,
+        "message": f"Telemetry recorded: {samples} samples" + (f", earned {reward_thr} THR" if reward_thr > 0 else "")
     }), 201
 
 

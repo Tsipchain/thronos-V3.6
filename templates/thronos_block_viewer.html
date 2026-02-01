@@ -837,7 +837,8 @@ async function loadChainTip(){
     const r = await fetch('/api/dashboard');
     if (!r.ok) throw new Error(`dashboard ${r.status}`);
     const j = await r.json();
-    const height = j.chain_tip_height ?? null;
+    // Support both old and new API field names
+    const height = j.chain_height ?? j.chain_tip_height ?? j.block_count ?? null;
     if (height !== null && height !== undefined) {
       el('#blocksTotalCount').textContent = Number(height).toLocaleString();
     }

@@ -1605,12 +1605,23 @@ async function submitQuiz() {
             const qMeta = currentQuizQuestions.find(q => String(q.id) === String(row.question_id)) || {};
             const label = currentLang === 'el' ? 'Σωστό' : 'Correct';
             const wrong = currentLang === 'el' ? 'Λάθος' : 'Wrong';
+            // Get explanation from result (returned by API) or fallback to question metadata
+            const explanation = currentLang === 'el'
+                ? (row.explanation_el || row.explanation || qMeta.explanation_el || qMeta.explanation || '')
+                : (row.explanation || row.explanation_el || qMeta.explanation || qMeta.explanation_el || '');
+            const explanationHtml = explanation
+                ? `<div style="margin-top:10px;padding:10px;background:rgba(0,255,102,0.1);border-radius:8px;border-left:3px solid #00ff66;">
+                    <div style="font-size:11px;opacity:0.7;margin-bottom:4px;">💡 ${currentLang === 'el' ? 'Επεξήγηση από τον καθηγητή' : "Teacher's explanation"}:</div>
+                    <div style="font-size:13px;">${escapeHtml(explanation)}</div>
+                   </div>`
+                : '';
             breakdown += `
                 <div class="question-card" style="border:${row.correct ? '1px solid #1a5a2f' : '1px solid #5f1a1a'}">
                     <div class="question-text"><span class="question-number">#${i + 1}</span> ${escapeHtml(qMeta.question || '')}</div>
                     <div style="opacity:0.8;font-size:13px;">${row.correct ? label : wrong}</div>
                     <div style="font-size:12px;opacity:0.7;">${currentLang === 'el' ? 'Απάντησή σου' : 'Your answer'}: ${JSON.stringify(row.your_answer)}</div>
                     <div style="font-size:12px;opacity:0.7;">${currentLang === 'el' ? 'Σωστή απάντηση' : 'Correct answer'}: ${JSON.stringify(row.correct_answer)}</div>
+                    ${explanationHtml}
                 </div>`;
         });
 
@@ -1716,7 +1727,9 @@ function addQuestion(existing = null) {
         options: existing?.options || ['', '', '', ''],
         correct: existing?.correct ?? 0,
         correct_text: existing?.correct_text || '',
-        type: normalizeQuestionType(existing?.type)
+        type: normalizeQuestionType(existing?.type),
+        explanation: existing?.explanation || '',
+        explanation_el: existing?.explanation_el || ''
     };
 
     quizQuestions.push(baseQuestion);
@@ -1724,6 +1737,8 @@ function addQuestion(existing = null) {
     const questionText = escapeAttr(baseQuestion.question || '');
     const questionEl = escapeAttr(baseQuestion.question_el || '');
     const questionType = baseQuestion.type || 'multiple_choice';
+    const explanationText = escapeAttr(baseQuestion.explanation || '');
+    const explanationEl = escapeAttr(baseQuestion.explanation_el || '');
 
     const div = document.createElement('div');
     div.className = 'question-card';
@@ -1746,6 +1761,13 @@ function addQuestion(existing = null) {
             </select>
         </div>
         <div id="q-${idx}-fields"></div>
+        <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid rgba(0,255,102,0.2);">
+            <label style="font-size:12px;opacity:0.8;">💡 ${currentLang === 'el' ? 'Επεξήγηση απάντησης (προαιρετικό - εμφανίζεται στον μαθητή μετά την υποβολή)' : 'Answer explanation (optional - shown to student after submission)'}</label>
+            <textarea class="input-field" placeholder="${currentLang === 'el' ? 'Γιατί αυτή είναι η σωστή απάντηση...' : 'Why this is the correct answer...'}"
+                   onchange="quizQuestions[${idx}].explanation = this.value" style="width: 100%; margin-top: 5px; min-height: 60px; resize: vertical;">${explanationText}</textarea>
+            <textarea class="input-field" placeholder="${currentLang === 'el' ? 'Επεξήγηση (Ελληνικά)' : 'Explanation (Greek)'}"
+                   onchange="quizQuestions[${idx}].explanation_el = this.value" style="width: 100%; margin-top: 5px; min-height: 60px; resize: vertical;">${explanationEl}</textarea>
+        </div>
     `;
 
     $("questionsContainer").appendChild(div);

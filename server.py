@@ -13513,6 +13513,79 @@ def admin_whitelist_list():
         return jsonify(error="forbidden"),403
     return jsonify(whitelist=load_json(WHITELIST_FILE,[])),200
 
+
+@app.route("/admin/wallet_whitelist/add", methods=["POST"])
+def admin_wallet_whitelist_add():
+    """Add a THR wallet address to the whitelist for send/receive without auth_secret."""
+    data = request.get_json() or {}
+    if data.get("secret") != ADMIN_SECRET:
+        return jsonify(error="forbidden"), 403
+    thr_address = (data.get("thr_address") or "").strip()
+    if not thr_address or not validate_thr_address(thr_address):
+        return jsonify(error="invalid_thr_address"), 400
+
+    entries = load_json(WHITELIST_WALLETS_FILE, [])
+    # Check if already exists
+    for entry in entries:
+        addr = entry if isinstance(entry, str) else entry.get("address") or entry.get("thr_address")
+        if addr == thr_address:
+            return jsonify(status="already_whitelisted", address=thr_address), 200
+
+    # Add new entry
+    entries.append({
+        "address": thr_address,
+        "active": True,
+        "whitelist_legacy": True,
+        "added_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    })
+    save_json(WHITELIST_WALLETS_FILE, entries)
+    return jsonify(status="ok", address=thr_address, whitelist_count=len(entries)), 200
+
+
+@app.route("/admin/wallet_whitelist/list", methods=["GET"])
+def admin_wallet_whitelist_list():
+    """List all THR wallets in the whitelist."""
+    secret = request.args.get("secret", "")
+    if secret != ADMIN_SECRET:
+        return jsonify(error="forbidden"), 403
+    entries = load_json(WHITELIST_WALLETS_FILE, [])
+    return jsonify(whitelist=entries), 200
+
+
+@app.route("/admin/ai_wallet/credentials", methods=["GET"])
+def admin_ai_wallet_credentials():
+    """Retrieve AI wallet credentials for authorized system operations."""
+    secret = request.args.get("secret", "")
+    if secret != ADMIN_SECRET:
+        return jsonify(error="forbidden"), 403
+    creds = load_json(AI_CREDS_FILE, {})
+    if not creds:
+        return jsonify(error="ai_credentials_not_found", note="Run init_ai_wallet first"), 404
+    return jsonify(
+        thr_address=creds.get("thr_address"),
+        auth_secret=creds.get("auth_secret"),
+        note="Use these for system-level operations"
+    ), 200
+
+
+@app.route("/admin/ai_wallet/status", methods=["GET"])
+def admin_ai_wallet_status():
+    """Get AI wallet status including balance and pledge state."""
+    secret = request.args.get("secret", "")
+    if secret != ADMIN_SECRET:
+        return jsonify(error="forbidden"), 403
+
+    ledger = load_json(LEDGER_FILE, {})
+    balance = float(ledger.get(AI_WALLET_ADDRESS, 0.0))
+    pledge_state = get_effective_pledge_state(AI_WALLET_ADDRESS)
+
+    return jsonify(
+        address=AI_WALLET_ADDRESS,
+        balance=balance,
+        pledge_state=pledge_state,
+        is_whitelisted=is_wallet_whitelisted(AI_WALLET_ADDRESS)
+    ), 200
+
 @app.route("/admin/migrate_seeds", methods=["POST","GET"])
 def admin_migrate_seeds():
     payload=request.get_json() or {}

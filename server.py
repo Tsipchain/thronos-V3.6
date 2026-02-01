@@ -16059,6 +16059,13 @@ def api_v1_create_course():
     return jsonify(status="success", course=new_course), 201
 
 
+# Alias route for course creation (without versioned prefix)
+@app.route("/api/courses", methods=["POST"])
+def api_courses_create_alias():
+    """Alias for creating courses without versioned prefix - forwards to api_v1_create_course."""
+    return api_v1_create_course()
+
+
 @app.route("/api/v1/courses/<string:course_id>/enroll", methods=["POST"])
 def api_v1_enroll_course(course_id: str):
     """
@@ -16166,6 +16173,12 @@ def api_courses_enroll_alias():
     course_id = (data.get("course_id") or data.get("id") or "").strip()
     if not course_id:
         return jsonify(status="error", message="Missing course_id"), 400
+    return api_v1_enroll_course(course_id)
+
+
+@app.route("/api/courses/<string:course_id>/enroll", methods=["POST"])
+def api_courses_enroll_path_alias(course_id: str):
+    """Alias for enrollment without versioned prefix."""
     return api_v1_enroll_course(course_id)
 
 

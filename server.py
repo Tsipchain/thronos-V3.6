@@ -16949,6 +16949,8 @@ def api_v1_get_quiz_for_edit(course_id: str):
                 "question_el": q.get("question_el"),
                 "options": q.get("options", []),
                 "options_el": q.get("options_el", q.get("options", [])),
+                "explanation": q.get("explanation", ""),  # Teacher's explanation
+                "explanation_el": q.get("explanation_el", q.get("explanation", "")),
             }
             if qtype == "multi_select":
                 raw_correct = q.get("correct") or q.get("correct_indexes") or q.get("correct_indices") or []
@@ -17067,7 +17069,9 @@ def api_v1_create_quiz(course_id: str):
             "id": i + 1,
             "type": qtype,
             "question": question_text,
-            "question_el": q.get("question_el", question_text)
+            "question_el": q.get("question_el", question_text),
+            "explanation": q.get("explanation", ""),  # Teacher's explanation for the answer
+            "explanation_el": q.get("explanation_el", q.get("explanation", ""))  # Greek explanation
         }
 
         # Validate based on type
@@ -17194,7 +17198,9 @@ def api_v1_submit_quiz(course_id: str):
             "type": qtype,
             "correct": is_correct,
             "your_answer": user_answer,
-            "correct_answer": correct_answer
+            "correct_answer": correct_answer,
+            "explanation": q.get("explanation", ""),  # Teacher's explanation for student
+            "explanation_el": q.get("explanation_el", q.get("explanation", ""))
         })
 
     score = round((correct / total) * 100)
@@ -17351,7 +17357,9 @@ def api_l2e_submit_quiz():
             "question_id": qid,
             "correct": is_correct,
             "your_answer": user_answer,
-            "correct_answer": q.get("correct_index")
+            "correct_answer": q.get("correct_index"),
+            "explanation": q.get("explanation", ""),  # Teacher's explanation
+            "explanation_el": q.get("explanation_el", q.get("explanation", ""))
         })
 
     score = round((correct / total) * 100)
@@ -18281,6 +18289,13 @@ def api_v1_add_liquidity():
         response["referrer"] = referrer
 
     return jsonify(response), 200
+
+
+# Alias for add_liquidity without version prefix
+@app.route("/api/pools/add_liquidity", methods=["POST"])
+def api_pools_add_liquidity_alias():
+    """Alias for add_liquidity without /v1/ prefix."""
+    return api_v1_add_liquidity()
 
 
 # ─── REMOVE LIQUIDITY FROM POOL ────────────────────────────────────

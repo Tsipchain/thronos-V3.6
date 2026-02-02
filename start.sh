@@ -32,7 +32,8 @@ fi
 
 echo "=== Starting Flask app on HTTP port ${PORT} ==="
 # Use Gunicorn with proper lifecycle hooks for graceful scheduler shutdown
-gunicorn -w 2 -k sync --timeout 120 --access-logfile - --error-logfile - server:app
+# NOTE: Using config file which sets workers=1 to avoid APScheduler job duplication
+gunicorn -c gunicorn_config.py server:app
 
 echo "=== Shutting down background services ==="
 if [[ -n "$STRATUM_PID" && -n "$MINER_PID" ]]; then

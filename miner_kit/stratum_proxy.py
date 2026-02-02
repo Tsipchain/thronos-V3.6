@@ -15,6 +15,7 @@ DEFAULT_HTTP_PORT = os.getenv("PORT", "8000")
 if str(DEFAULT_HTTP_PORT) == str(STRATUM_PORT):
     DEFAULT_HTTP_PORT = "8000"
 THRONOS_SERVER = os.getenv("THRONOS_SERVER", "https://thrchain.up.railway.app")
+STRATUM_PROXY_ADDRESS = os.getenv("STRATUM_PROXY_ADDRESS", "")
 POLL_INTERVAL = 1.0
 SHARE_TARGET_MULTIPLIER = float(os.getenv("SHARE_TARGET_MULTIPLIER", "16"))
 MAX_TARGET = int("f" * 64, 16)
@@ -74,7 +75,8 @@ class Job:
 def get_mining_info():
     global last_block_cache
     try:
-        r1 = requests.get(f"{THRONOS_SERVER}/api/last_block_hash", timeout=5)
+        params = {"address": STRATUM_PROXY_ADDRESS} if STRATUM_PROXY_ADDRESS else None
+        r1 = requests.get(f"{THRONOS_SERVER}/api/mining/work", params=params, timeout=5)
         r1.raise_for_status()
         last_block = r1.json()
         last_block_cache = last_block
@@ -88,12 +90,14 @@ def get_mining_info():
 
 def _build_job(last_block):
     global job_id_counter
-    prev_hash = last_block.get("block_hash") or last_block.get("last_hash", "0" * 64)
+    prev_hash = last_block.get("prev_hash") or last_block.get("block_hash") or last_block.get("last_hash", "0" * 64)
     tip_height = last_block.get("height")
     target_hex = last_block.get("target")
     block_target = int(target_hex, 16) if isinstance(target_hex, str) else MAX_TARGET
-    job_id_counter += 1
-    job_id = hex(job_id_counter)[2:]
+    job_id = last_block.get("job_id")
+    if not job_id:
+        job_id_counter += 1
+        job_id = hex(job_id_counter)[2:]
 
     prev_hash_be = reverse_bytes(prev_hash)
 
@@ -136,8 +140,9 @@ def job_updater():
     while True:
         last_block = get_mining_info()
         if last_block:
-            prev_hash = last_block.get("block_hash") or last_block.get("last_hash", "0" * 64)
-            if prev_hash != last_prev_hash:
+            prev_hash = last_block.get("prev_hash") or last_block.get("block_hash") or last_block.get("last_hash", "0" * 64)
+            job_age = time.time() - current_job.fetched_at if current_job else None
+            if prev_hash != last_prev_hash or (job_age is not None and job_age >= JOB_STALE_SECONDS):
                 with lock:
                     current_job = _build_job(last_block)
                     last_prev_hash = prev_hash
@@ -325,6 +330,7 @@ def handle_client(conn, addr):
                             payload = {
                                 "thr_address": thr_address,
                                 "nonce": nonce_int,
+                                "job_id": current_job.job_id,
                                 "merkle_root": merkle_root_hex,
                                 "prev_hash": prev_hash_server,
                                 "time": ntime_int,
@@ -333,12 +339,12 @@ def handle_client(conn, addr):
                                 "pow_hash": pow_hash_hex,
                             }
                             if current_job.height is not None:
-                                payload["height"] = int(current_job.height) + 1
+                                payload["height"] = int(current_job.height)
 
                             if pow_int <= block_target:
                                 print(f"Submitting block candidate: Nonce={nonce_int} Merkle={merkle_root_hex[:8]}")
                                 try:
-                                    r = requests.post(f"{THRONOS_SERVER}/submit_block", json=payload, timeout=5)
+                                    r = requests.post(f"{THRONOS_SERVER}/api/mining/submit", json=payload, timeout=5)
                                     res_json = r.json()
                                     if r.status_code == 200:
                                         print("✅ Block Accepted!")

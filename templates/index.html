@@ -1031,18 +1031,20 @@
     async function loadNetworkStats() {
         try {
             const dashboard = await fetch("/api/dashboard").then(r => r.json()).catch(() => ({}));
-            const stats = dashboard.stats || {};
+            const stats = dashboard.stats || dashboard || {};
             const tip = dashboard.tip || {};
 
-            const chainHeight = dashboard.chain_tip_height ?? 0;
-            const indexHeight = dashboard.index_tip_height ?? 0;
+            // Support both old and new API field names
+            const chainHeight = dashboard.chain_height ?? dashboard.chain_tip_height ?? dashboard.block_count ?? 0;
+            const indexHeight = dashboard.index_tip_height ?? dashboard.chain_height ?? chainHeight;
             const indexLag = dashboard.index_lag ?? 0;
-            const totalSupply = stats.total_supply ?? stats.total_supply_thr ?? tip.total_supply ?? 0;
+            const totalSupply = dashboard.total_supply ?? stats.total_supply ?? stats.total_supply_thr ?? tip.total_supply ?? 0;
             const circulatingSupply = stats.circulating_supply ?? stats.circulating_supply_thr ?? null;
             const lockedSupply = stats.pool_locked_thr ?? stats.locked_in_pools_thr ?? null;
-            const tokenCount = stats.token_count || 0;
-            const poolCount = stats.pool_count || 0;
-            const walletCount = stats.wallet_count || 0;
+            const tokenCount = dashboard.token_count ?? stats.token_count ?? 0;
+            const poolCount = dashboard.pool_count ?? stats.pool_count ?? 0;
+            const walletCount = dashboard.wallet_count ?? dashboard.pledge_count ?? stats.wallet_count ?? 0;
+            const txCount = dashboard.tx_count ?? stats.tx_count ?? 0;
 
             const chainEl = document.getElementById("statChainHeight");
             const indexEl = document.getElementById("statIndexHeight");
@@ -1066,7 +1068,7 @@
             document.getElementById("statWallets").textContent = walletCount.toLocaleString();
             document.getElementById("statTokens").textContent = tokenCount.toLocaleString();
             document.getElementById("statPools").textContent = poolCount.toLocaleString();
-            document.getElementById("statTxns").textContent = (Number(chainHeight || 0) * 2).toLocaleString();
+            document.getElementById("statTxns").textContent = (txCount || chainHeight).toLocaleString();
 
             window.__THR_STATS = { dashboard };
         } catch (e) {

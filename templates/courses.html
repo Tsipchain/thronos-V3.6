@@ -574,41 +574,300 @@ function toggleContentFields() {
     $("externalFields").style.display = type === 'external' ? 'block' : 'none';
 }
 
+// Supported question types enum - MUST be defined before addBuilderQuestion
+const QUESTION_TYPES = {
+    MULTIPLE_CHOICE: 'multiple_choice',
+    TRUE_FALSE: 'true_false',
+    MULTI_SELECT: 'multi_select',
+    SHORT_ANSWER: 'short_answer',
+    MATCHING: 'matching',
+    ORDERING: 'ordering',
+    FILL_BLANK: 'fill_blank'
+};
+
+const QUESTION_TYPE_LABELS = {
+    multiple_choice: { en: 'Multiple Choice', el: 'Πολλαπλής Επιλογής' },
+    true_false: { en: 'True/False', el: 'Σωστό/Λάθος' },
+    multi_select: { en: 'Multi-Select', el: 'Πολλαπλή Επιλογή' },
+    short_answer: { en: 'Short Answer', el: 'Σύντομη Απάντηση' },
+    matching: { en: 'Matching Pairs', el: 'Αντιστοίχιση' },
+    ordering: { en: 'Put in Order', el: 'Βάλε σε Σειρά' },
+    fill_blank: { en: 'Fill in the Blank', el: 'Συμπλήρωσε τα Κενά' }
+};
+
+function normalizeQuestionType(rawType) {
+    const val = String(rawType || '').toLowerCase();
+    if (val === 'multiple_choice' || val === 'mcq' || val === 'single' || val === 'multiple-choice' || val === 'mc') return 'multiple_choice';
+    if (val === 'true_false' || val === 'tf' || val === 'truefalse' || val === 'true-false' || val === 'boolean') return 'true_false';
+    if (val === 'multi_select' || val === 'multi-select' || val === 'checkbox' || val === 'multi' || val === 'checkboxes') return 'multi_select';
+    if (val === 'short_answer' || val === 'short' || val === 'text' || val === 'free_text' || val === 'freetext' || val === 'open') return 'short_answer';
+    if (val === 'matching' || val === 'match' || val === 'pairs' || val === 'pair') return 'matching';
+    if (val === 'ordering' || val === 'order' || val === 'sequence' || val === 'sort' || val === 'rank') return 'ordering';
+    if (val === 'fill_blank' || val === 'fill-blank' || val === 'fillblank' || val === 'blank' || val === 'fill' || val === 'cloze') return 'fill_blank';
+    return 'multiple_choice';
+}
+
+// Builder question data storage
+let builderQuestionsData = {};
+
 function addBuilderQuestion() {
     builderQuestionCounter += 1;
     const idx = builderQuestionCounter;
+
+    // Initialize question data
+    builderQuestionsData[idx] = {
+        type: 'multiple_choice',
+        options: ['', '', '', ''],
+        correct: 0,
+        correct_text: '',
+        pairs: [['', ''], ['', '']],
+        items: ['', '', ''],
+        text_with_blanks: '',
+        blanks: [{ answer: '' }]
+    };
+
     const wrapper = document.createElement('div');
     wrapper.className = 'question-card builder-question';
     wrapper.dataset.qid = idx;
     wrapper.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-            <strong>Question #${idx}</strong>
-            <button type="button" onclick="this.closest('.builder-question').remove();" style="background:none;border:none;color:#ff6b6b;cursor:pointer;">✕</button>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <strong>${currentLang === 'el' ? 'Ερώτηση' : 'Question'} #${idx}</strong>
+            <button type="button" onclick="removeBuilderQuestion(${idx})" style="background:none;border:none;color:#ff6b6b;cursor:pointer;">✕</button>
         </div>
-        <input class="input-field question-text" placeholder="Question text" style="width:100%; margin:8px 0;" />
-        ${['A','B','C','D'].map((label,i)=>`
-            <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
-                <input type="radio" name="correct-${idx}" value="${i}" ${i===0?'checked':''}>
-                <input class="input-field option-input" placeholder="Option ${label}" style="flex:1;" />
-            </div>
-        `).join('')}
+        <input class="input-field question-text" placeholder="${currentLang === 'el' ? 'Κείμενο ερώτησης' : 'Question text'}" style="width:100%; margin-bottom:10px;" />
+        <div style="margin-bottom:10px;">
+            <label style="font-size:12px;opacity:0.8;">${currentLang === 'el' ? 'Τύπος ερώτησης' : 'Question type'}</label>
+            <select class="input-field builder-type-select" onchange="onBuilderTypeChange(${idx}, this.value)">
+                ${Object.keys(QUESTION_TYPE_LABELS).map(t => `
+                    <option value="${t}">${QUESTION_TYPE_LABELS[t][currentLang] || QUESTION_TYPE_LABELS[t].en}</option>
+                `).join('')}
+            </select>
+        </div>
+        <div id="builder-fields-${idx}"></div>
     `;
     $("builderQuestions").appendChild(wrapper);
+    renderBuilderFields(idx, 'multiple_choice');
+}
+
+function removeBuilderQuestion(idx) {
+    const el = document.querySelector(`.builder-question[data-qid="${idx}"]`);
+    if (el) el.remove();
+    delete builderQuestionsData[idx];
+}
+
+function onBuilderTypeChange(idx, type) {
+    const normalized = normalizeQuestionType(type);
+    const q = builderQuestionsData[idx];
+    if (!q) return;
+
+    q.type = normalized;
+    if (normalized === 'true_false') {
+        q.options = ['False', 'True'];
+        q.correct = 0;
+    } else if (normalized === 'matching') {
+        q.pairs = q.pairs || [['', ''], ['', '']];
+    } else if (normalized === 'ordering') {
+        q.items = q.items || ['', '', ''];
+    } else if (normalized === 'fill_blank') {
+        q.text_with_blanks = q.text_with_blanks || '';
+        q.blanks = q.blanks || [{ answer: '' }];
+    } else if (normalized === 'multi_select') {
+        q.options = ['', '', '', ''];
+        q.correct = [];
+    } else if (normalized === 'short_answer') {
+        q.correct_text = '';
+    } else {
+        q.options = ['', '', '', ''];
+        q.correct = 0;
+    }
+    renderBuilderFields(idx, normalized);
+}
+
+function renderBuilderFields(idx, type) {
+    const container = $(`builder-fields-${idx}`);
+    if (!container) return;
+    const q = builderQuestionsData[idx] || {};
+    let html = '';
+
+    if (type === 'multiple_choice') {
+        html = `
+            <div style="font-size:0.9em;opacity:0.7;margin-bottom:8px;">${currentLang === 'el' ? 'Επιλογές (επιλέξτε τη σωστή)' : 'Options (select correct)'}:</div>
+            ${[0,1,2,3].map(i => `
+                <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
+                    <input type="radio" name="builder-correct-${idx}" value="${i}" ${(q.correct || 0) === i ? 'checked' : ''} onchange="builderQuestionsData[${idx}].correct=${i}">
+                    <input class="input-field builder-option" data-idx="${i}" placeholder="Option ${i+1}" value="${escapeAttr((q.options||[])[i]||'')}" onchange="builderQuestionsData[${idx}].options[${i}]=this.value" style="flex:1;">
+                </div>
+            `).join('')}
+        `;
+    } else if (type === 'true_false') {
+        html = `
+            <div style="display:flex;gap:10px;align-items:center;">
+                <label><input type="radio" name="builder-correct-${idx}" value="0" ${(q.correct||0)===0?'checked':''} onchange="builderQuestionsData[${idx}].correct=0"> ${currentLang === 'el' ? 'Λάθος' : 'False'}</label>
+                <label><input type="radio" name="builder-correct-${idx}" value="1" ${(q.correct||0)===1?'checked':''} onchange="builderQuestionsData[${idx}].correct=1"> ${currentLang === 'el' ? 'Σωστό' : 'True'}</label>
+            </div>
+        `;
+    } else if (type === 'multi_select') {
+        const correctValues = Array.isArray(q.correct) ? q.correct : [];
+        html = `
+            <div style="font-size:0.9em;opacity:0.7;margin-bottom:8px;">${currentLang === 'el' ? 'Επιλογές (πολλαπλές σωστές)' : 'Options (multiple correct)'}:</div>
+            ${[0,1,2,3].map(i => `
+                <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
+                    <input type="checkbox" value="${i}" ${correctValues.includes(i)?'checked':''} onchange="toggleBuilderMultiSelect(${idx},${i},this.checked)">
+                    <input class="input-field builder-option" data-idx="${i}" placeholder="Option ${i+1}" value="${escapeAttr((q.options||[])[i]||'')}" onchange="builderQuestionsData[${idx}].options[${i}]=this.value" style="flex:1;">
+                </div>
+            `).join('')}
+        `;
+    } else if (type === 'short_answer') {
+        html = `
+            <div style="font-size:0.9em;opacity:0.7;margin-bottom:8px;">${currentLang === 'el' ? 'Σωστή απάντηση (διαχωρίστε με κόμμα)' : 'Correct answer (comma-separated)'}:</div>
+            <input class="input-field" placeholder="${currentLang === 'el' ? 'Σωστή απάντηση' : 'Correct answer'}" value="${escapeAttr(q.correct_text||'')}" onchange="builderQuestionsData[${idx}].correct_text=this.value" style="width:100%;">
+        `;
+    } else if (type === 'matching') {
+        const pairs = q.pairs || [['', ''], ['', '']];
+        html = `
+            <div style="font-size:0.9em;opacity:0.7;margin-bottom:8px;">${currentLang === 'el' ? 'Ζευγάρια (όρος → ορισμός)' : 'Pairs (term → definition)'}:</div>
+            <div id="builder-pairs-${idx}">
+                ${pairs.map((p, i) => `
+                    <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;">
+                        <input class="input-field" placeholder="${currentLang === 'el' ? 'Όρος' : 'Term'} ${i+1}" value="${escapeAttr(p[0]||'')}" onchange="builderQuestionsData[${idx}].pairs[${i}][0]=this.value" style="flex:1;">
+                        <span style="color:#0f6;">→</span>
+                        <input class="input-field" placeholder="${currentLang === 'el' ? 'Ορισμός' : 'Definition'} ${i+1}" value="${escapeAttr(p[1]||'')}" onchange="builderQuestionsData[${idx}].pairs[${i}][1]=this.value" style="flex:1;">
+                        <button type="button" onclick="removeBuilderPair(${idx},${i})" style="background:none;border:none;color:#ff6b6b;cursor:pointer;">✕</button>
+                    </div>
+                `).join('')}
+            </div>
+            <button type="button" onclick="addBuilderPair(${idx})" class="btn-secondary" style="padding:6px 12px;font-size:12px;">➕ ${currentLang === 'el' ? 'Προσθήκη' : 'Add pair'}</button>
+        `;
+    } else if (type === 'ordering') {
+        const items = q.items || ['', '', ''];
+        html = `
+            <div style="font-size:0.9em;opacity:0.7;margin-bottom:8px;">${currentLang === 'el' ? 'Στοιχεία (στη σωστή σειρά)' : 'Items (in correct order)'}:</div>
+            <div id="builder-items-${idx}">
+                ${items.map((item, i) => `
+                    <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;">
+                        <span style="color:#888;min-width:25px;">${i+1}.</span>
+                        <input class="input-field" placeholder="${currentLang === 'el' ? 'Στοιχείο' : 'Item'} ${i+1}" value="${escapeAttr(item||'')}" onchange="builderQuestionsData[${idx}].items[${i}]=this.value" style="flex:1;">
+                        <button type="button" onclick="removeBuilderItem(${idx},${i})" style="background:none;border:none;color:#ff6b6b;cursor:pointer;">✕</button>
+                    </div>
+                `).join('')}
+            </div>
+            <button type="button" onclick="addBuilderItem(${idx})" class="btn-secondary" style="padding:6px 12px;font-size:12px;">➕ ${currentLang === 'el' ? 'Προσθήκη' : 'Add item'}</button>
+            <div style="font-size:0.85em;color:#888;margin-top:8px;">💡 ${currentLang === 'el' ? 'Θα ανακατευτούν για τον μαθητή' : 'Will be shuffled for student'}</div>
+        `;
+    } else if (type === 'fill_blank') {
+        const blanks = q.blanks || [{ answer: '' }];
+        html = `
+            <div style="font-size:0.9em;opacity:0.7;margin-bottom:8px;">${currentLang === 'el' ? 'Κείμενο (χρησιμοποίησε ___ για κενά)' : 'Text (use ___ for blanks)'}:</div>
+            <textarea class="input-field" placeholder="${currentLang === 'el' ? 'Η ___ είναι η πρωτεύουσα της ___.' : 'The ___ is the capital of ___.'}" style="width:100%;min-height:60px;margin-bottom:12px;" onchange="builderQuestionsData[${idx}].text_with_blanks=this.value;updateBuilderBlanks(${idx})">${escapeAttr(q.text_with_blanks||'')}</textarea>
+            <div style="font-size:0.9em;opacity:0.7;margin-bottom:8px;">${currentLang === 'el' ? 'Απαντήσεις κενών' : 'Blank answers'}:</div>
+            <div id="builder-blanks-${idx}">
+                ${blanks.map((b, i) => `
+                    <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;">
+                        <span style="color:#0f6;min-width:60px;">${currentLang === 'el' ? 'Κενό' : 'Blank'} ${i+1}:</span>
+                        <input class="input-field" placeholder="${currentLang === 'el' ? 'Απάντηση' : 'Answer'}" value="${escapeAttr(typeof b==='object'?b.answer||'':b)}" onchange="builderQuestionsData[${idx}].blanks[${i}]={answer:this.value}" style="flex:1;">
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    }
+
+    container.innerHTML = html;
+}
+
+// Builder helper functions
+function toggleBuilderMultiSelect(idx, optionIndex, isChecked) {
+    const q = builderQuestionsData[idx];
+    if (!q) return;
+    const current = Array.isArray(q.correct) ? q.correct : [];
+    q.correct = isChecked
+        ? Array.from(new Set([...current, optionIndex]))
+        : current.filter(v => v !== optionIndex);
+}
+
+function addBuilderPair(idx) {
+    const q = builderQuestionsData[idx];
+    if (!q) return;
+    q.pairs = q.pairs || [];
+    q.pairs.push(['', '']);
+    renderBuilderFields(idx, 'matching');
+}
+
+function removeBuilderPair(idx, pairIdx) {
+    const q = builderQuestionsData[idx];
+    if (!q || !q.pairs) return;
+    q.pairs.splice(pairIdx, 1);
+    if (q.pairs.length === 0) q.pairs.push(['', '']);
+    renderBuilderFields(idx, 'matching');
+}
+
+function addBuilderItem(idx) {
+    const q = builderQuestionsData[idx];
+    if (!q) return;
+    q.items = q.items || [];
+    q.items.push('');
+    renderBuilderFields(idx, 'ordering');
+}
+
+function removeBuilderItem(idx, itemIdx) {
+    const q = builderQuestionsData[idx];
+    if (!q || !q.items) return;
+    q.items.splice(itemIdx, 1);
+    if (q.items.length === 0) q.items.push('');
+    renderBuilderFields(idx, 'ordering');
+}
+
+function updateBuilderBlanks(idx) {
+    const q = builderQuestionsData[idx];
+    if (!q) return;
+    const text = q.text_with_blanks || '';
+    const blankCount = (text.match(/___/g) || []).length || 1;
+    const currentBlanks = q.blanks || [];
+    while (currentBlanks.length < blankCount) currentBlanks.push({ answer: '' });
+    while (currentBlanks.length > blankCount && currentBlanks.length > 1) currentBlanks.pop();
+    q.blanks = currentBlanks;
+    renderBuilderFields(idx, 'fill_blank');
 }
 
 function collectQuizBuilder() {
     const passScore = parseInt($("builderPassScore").value || '70');
     const questions = [];
+
     document.querySelectorAll('.builder-question').forEach((el) => {
-        const text = el.querySelector('.question-text').value.trim();
-        const options = Array.from(el.querySelectorAll('.option-input')).map(i => i.value.trim());
         const qid = el.dataset.qid;
-        const correctRadio = el.querySelector(`input[name="correct-${qid}"]:checked`);
-        const correctIndex = correctRadio ? parseInt(correctRadio.value) : 0;
-        if (text && options.every(Boolean)) {
-            questions.push({ id: questions.length + 1, text, options, correct_index: correctIndex });
+        const text = el.querySelector('.question-text')?.value?.trim() || '';
+        const q = builderQuestionsData[qid];
+        if (!text || !q) return;
+
+        const qType = normalizeQuestionType(q.type);
+        const questionData = {
+            id: questions.length + 1,
+            text: text,
+            type: qType
+        };
+
+        if (qType === 'multiple_choice') {
+            questionData.options = q.options || ['', '', '', ''];
+            questionData.correct_index = q.correct || 0;
+        } else if (qType === 'true_false') {
+            questionData.options = ['False', 'True'];
+            questionData.correct_index = q.correct || 0;
+        } else if (qType === 'multi_select') {
+            questionData.options = q.options || ['', '', '', ''];
+            questionData.correct = q.correct || [];
+        } else if (qType === 'short_answer') {
+            questionData.correct_text = q.correct_text || '';
+        } else if (qType === 'matching') {
+            questionData.pairs = q.pairs || [];
+        } else if (qType === 'ordering') {
+            questionData.items = q.items || [];
+        } else if (qType === 'fill_blank') {
+            questionData.text_with_blanks = q.text_with_blanks || '';
+            questionData.blanks = q.blanks || [];
         }
+
+        questions.push(questionData);
     });
+
     return {
         pass_score: isNaN(passScore) ? 70 : passScore,
         questions
@@ -1100,7 +1359,84 @@ async function loadQuizForModal(courseId) {
                 body = `
                     <input class="input-field" name="q${q.id}" placeholder="${currentLang === 'el' ? 'Γράψε την απάντηση' : 'Type your answer'}" style="width: 100%;">
                 `;
+            } else if (qType === 'matching') {
+                // Render matching pairs - shuffle right column for student
+                const pairs = q.pairs || [];
+                const terms = pairs.map((p, i) => ({ text: p[0], idx: i }));
+                const definitions = pairs.map((p, i) => ({ text: p[1], idx: i }));
+                // Shuffle definitions
+                const shuffledDefs = [...definitions].sort(() => Math.random() - 0.5);
+                body = `
+                    <div style="font-size: 0.9em; margin-bottom: 10px; color: #888;">
+                        ${currentLang === 'el' ? 'Αντιστοίχισε κάθε όρο με τον σωστό ορισμό' : 'Match each term with the correct definition'}
+                    </div>
+                    <div class="matching-container" data-qid="${q.id}">
+                        ${terms.map((term, i) => `
+                            <div style="display: flex; gap: 10px; margin-bottom: 10px; align-items: center;">
+                                <div style="flex: 1; padding: 8px; background: rgba(0,255,102,0.1); border-radius: 4px;">
+                                    ${escapeHtml(term.text)}
+                                </div>
+                                <span style="color: #0f6;">→</span>
+                                <select class="input-field matching-select" data-term="${term.idx}" name="q${q.id}_${term.idx}" style="flex: 1;">
+                                    <option value="">-- ${currentLang === 'el' ? 'Επίλεξε' : 'Select'} --</option>
+                                    ${shuffledDefs.map(def => `
+                                        <option value="${def.idx}">${escapeHtml(def.text)}</option>
+                                    `).join('')}
+                                </select>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            } else if (qType === 'ordering') {
+                // Render ordering - shuffle items for student
+                const items = q.items || q.options || [];
+                const shuffledItems = items.map((item, i) => ({ text: item, originalIdx: i }))
+                    .sort(() => Math.random() - 0.5);
+                body = `
+                    <div style="font-size: 0.9em; margin-bottom: 10px; color: #888;">
+                        ${currentLang === 'el' ? 'Σύρε τα στοιχεία στη σωστή σειρά (ή χρησιμοποίησε τα βέλη)' : 'Drag items to correct order (or use arrows)'}
+                    </div>
+                    <div class="ordering-container" data-qid="${q.id}" id="ordering-${q.id}">
+                        ${shuffledItems.map((item, i) => `
+                            <div class="ordering-item" data-original-idx="${item.originalIdx}" draggable="true"
+                                 style="display: flex; gap: 10px; align-items: center; padding: 10px; margin-bottom: 6px;
+                                        background: rgba(0,255,102,0.1); border: 1px solid rgba(0,255,102,0.3);
+                                        border-radius: 6px; cursor: move;">
+                                <span style="color: #888;" class="order-number">${i + 1}.</span>
+                                <span style="flex: 1;">${escapeHtml(item.text)}</span>
+                                <div style="display: flex; flex-direction: column; gap: 2px;">
+                                    <button type="button" onclick="moveOrderItem('${q.id}', this.closest('.ordering-item'), -1)"
+                                            style="background: none; border: none; color: #0f6; cursor: pointer; font-size: 14px;">▲</button>
+                                    <button type="button" onclick="moveOrderItem('${q.id}', this.closest('.ordering-item'), 1)"
+                                            style="background: none; border: none; color: #0f6; cursor: pointer; font-size: 14px;">▼</button>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            } else if (qType === 'fill_blank') {
+                // Render fill in the blank
+                const textWithBlanks = q.text_with_blanks || q.prompt || '';
+                const blanks = q.blanks || [];
+                let blankIdx = 0;
+                const renderedText = textWithBlanks.replace(/___/g, () => {
+                    const inputHtml = `<input class="input-field fill-blank-input" name="q${q.id}_${blankIdx}"
+                                              data-blank-idx="${blankIdx}"
+                                              style="width: 120px; display: inline-block; margin: 0 4px;"
+                                              placeholder="${currentLang === 'el' ? 'απάντηση' : 'answer'}">`;
+                    blankIdx++;
+                    return inputHtml;
+                });
+                body = `
+                    <div style="font-size: 0.9em; margin-bottom: 10px; color: #888;">
+                        ${currentLang === 'el' ? 'Συμπλήρωσε τα κενά' : 'Fill in the blanks'}
+                    </div>
+                    <div class="fill-blank-text" data-qid="${q.id}" style="line-height: 2.2; font-size: 1.05em;">
+                        ${renderedText}
+                    </div>
+                `;
             } else {
+                // Multiple choice (default)
                 body = (options || []).map((opt, optIdx) => `
                     <label class="option-label">
                         <input type="radio" name="q${q.id}" value="${optIdx}">
@@ -1178,6 +1514,54 @@ async function submitQuiz() {
             } else {
                 unansweredQuestions.push(idx + 1);
             }
+        } else if (qType === 'matching') {
+            // Collect matching pairs: {termIdx: definitionIdx, ...}
+            const pairs = q.pairs || [];
+            const mapping = {};
+            let allSelected = true;
+            pairs.forEach((p, termIdx) => {
+                const select = document.querySelector(`select[name="q${q.id}_${termIdx}"]`);
+                if (select && select.value !== '') {
+                    mapping[termIdx] = parseInt(select.value);
+                } else {
+                    allSelected = false;
+                }
+            });
+            if (allSelected && Object.keys(mapping).length === pairs.length) {
+                answers[q.id] = mapping;
+            } else {
+                unansweredQuestions.push(idx + 1);
+            }
+        } else if (qType === 'ordering') {
+            // Collect ordering: [originalIdx, ...] in the displayed order
+            const container = document.querySelector(`#ordering-${q.id}`);
+            if (container) {
+                const items = container.querySelectorAll('.ordering-item');
+                const order = Array.from(items).map(item => parseInt(item.dataset.originalIdx));
+                if (order.length > 0) {
+                    answers[q.id] = order;
+                } else {
+                    unansweredQuestions.push(idx + 1);
+                }
+            } else {
+                unansweredQuestions.push(idx + 1);
+            }
+        } else if (qType === 'fill_blank') {
+            // Collect fill-in-the-blank answers: [answer1, answer2, ...]
+            const blanks = q.blanks || [];
+            const blankAnswers = [];
+            let allFilled = true;
+            blanks.forEach((b, blankIdx) => {
+                const input = document.querySelector(`input[name="q${q.id}_${blankIdx}"]`);
+                const value = input ? input.value.trim() : '';
+                blankAnswers.push(value);
+                if (!value) allFilled = false;
+            });
+            if (allFilled && blankAnswers.length === blanks.length) {
+                answers[q.id] = blankAnswers;
+            } else {
+                unansweredQuestions.push(idx + 1);
+            }
         }
     });
 
@@ -1221,12 +1605,23 @@ async function submitQuiz() {
             const qMeta = currentQuizQuestions.find(q => String(q.id) === String(row.question_id)) || {};
             const label = currentLang === 'el' ? 'Σωστό' : 'Correct';
             const wrong = currentLang === 'el' ? 'Λάθος' : 'Wrong';
+            // Get explanation from result (returned by API) or fallback to question metadata
+            const explanation = currentLang === 'el'
+                ? (row.explanation_el || row.explanation || qMeta.explanation_el || qMeta.explanation || '')
+                : (row.explanation || row.explanation_el || qMeta.explanation || qMeta.explanation_el || '');
+            const explanationHtml = explanation
+                ? `<div style="margin-top:10px;padding:10px;background:rgba(0,255,102,0.1);border-radius:8px;border-left:3px solid #00ff66;">
+                    <div style="font-size:11px;opacity:0.7;margin-bottom:4px;">💡 ${currentLang === 'el' ? 'Επεξήγηση από τον καθηγητή' : "Teacher's explanation"}:</div>
+                    <div style="font-size:13px;">${escapeHtml(explanation)}</div>
+                   </div>`
+                : '';
             breakdown += `
                 <div class="question-card" style="border:${row.correct ? '1px solid #1a5a2f' : '1px solid #5f1a1a'}">
                     <div class="question-text"><span class="question-number">#${i + 1}</span> ${escapeHtml(qMeta.question || '')}</div>
                     <div style="opacity:0.8;font-size:13px;">${row.correct ? label : wrong}</div>
                     <div style="font-size:12px;opacity:0.7;">${currentLang === 'el' ? 'Απάντησή σου' : 'Your answer'}: ${JSON.stringify(row.your_answer)}</div>
                     <div style="font-size:12px;opacity:0.7;">${currentLang === 'el' ? 'Σωστή απάντηση' : 'Correct answer'}: ${JSON.stringify(row.correct_answer)}</div>
+                    ${explanationHtml}
                 </div>`;
         });
 
@@ -1322,14 +1717,7 @@ async function loadQuizForEdit(courseId) {
     }
 }
 
-function normalizeQuestionType(rawType) {
-    const val = String(rawType || '').toLowerCase();
-    if (val === 'true_false' || val === 'tf' || val === 'truefalse') return 'true_false';
-    if (val === 'multiple_choice' || val === 'mcq' || val === 'single' || val === 'multiple-choice') return 'multiple_choice';
-    if (val === 'multi_select' || val === 'multi-select' || val === 'checkbox' || val === 'multi') return 'multi_select';
-    if (val === 'short_answer' || val === 'short' || val === 'text') return 'short_answer';
-    return 'multiple_choice';
-}
+// NOTE: QUESTION_TYPES, QUESTION_TYPE_LABELS and normalizeQuestionType are defined earlier in this file
 
 function addQuestion(existing = null) {
     const idx = quizQuestions.length;
@@ -1339,7 +1727,9 @@ function addQuestion(existing = null) {
         options: existing?.options || ['', '', '', ''],
         correct: existing?.correct ?? 0,
         correct_text: existing?.correct_text || '',
-        type: normalizeQuestionType(existing?.type)
+        type: normalizeQuestionType(existing?.type),
+        explanation: existing?.explanation || '',
+        explanation_el: existing?.explanation_el || ''
     };
 
     quizQuestions.push(baseQuestion);
@@ -1347,6 +1737,8 @@ function addQuestion(existing = null) {
     const questionText = escapeAttr(baseQuestion.question || '');
     const questionEl = escapeAttr(baseQuestion.question_el || '');
     const questionType = baseQuestion.type || 'multiple_choice';
+    const explanationText = escapeAttr(baseQuestion.explanation || '');
+    const explanationEl = escapeAttr(baseQuestion.explanation_el || '');
 
     const div = document.createElement('div');
     div.className = 'question-card';
@@ -1363,13 +1755,19 @@ function addQuestion(existing = null) {
         <div style="margin-bottom:10px;">
             <label style="font-size:12px;opacity:0.8;">${currentLang === 'el' ? 'Τύπος ερώτησης' : 'Question type'}</label>
             <select class="input-field" onchange="onQuestionTypeChange(${idx}, this.value)">
-                <option value="multiple_choice" ${questionType === 'multiple_choice' ? 'selected' : ''}>Multiple choice</option>
-                <option value="true_false" ${questionType === 'true_false' ? 'selected' : ''}>True / False</option>
-                <option value="multi_select" ${questionType === 'multi_select' ? 'selected' : ''}>Multi-select</option>
-                <option value="short_answer" ${questionType === 'short_answer' ? 'selected' : ''}>Short answer</option>
+                ${Object.keys(QUESTION_TYPE_LABELS).map(t => `
+                    <option value="${t}" ${questionType === t ? 'selected' : ''}>${QUESTION_TYPE_LABELS[t][currentLang] || QUESTION_TYPE_LABELS[t].en}</option>
+                `).join('')}
             </select>
         </div>
         <div id="q-${idx}-fields"></div>
+        <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid rgba(0,255,102,0.2);">
+            <label style="font-size:12px;opacity:0.8;">💡 ${currentLang === 'el' ? 'Επεξήγηση απάντησης (προαιρετικό - εμφανίζεται στον μαθητή μετά την υποβολή)' : 'Answer explanation (optional - shown to student after submission)'}</label>
+            <textarea class="input-field" placeholder="${currentLang === 'el' ? 'Γιατί αυτή είναι η σωστή απάντηση...' : 'Why this is the correct answer...'}"
+                   onchange="quizQuestions[${idx}].explanation = this.value" style="width: 100%; margin-top: 5px; min-height: 60px; resize: vertical;">${explanationText}</textarea>
+            <textarea class="input-field" placeholder="${currentLang === 'el' ? 'Επεξήγηση (Ελληνικά)' : 'Explanation (Greek)'}"
+                   onchange="quizQuestions[${idx}].explanation_el = this.value" style="width: 100%; margin-top: 5px; min-height: 60px; resize: vertical;">${explanationEl}</textarea>
+        </div>
     `;
 
     $("questionsContainer").appendChild(div);
@@ -1388,6 +1786,7 @@ function renderQuestionFields(idx, type) {
     const question = quizQuestions[idx] || {};
     const optionValues = (question.options || []).concat(['', '', '', '']).slice(0, 4);
     let html = '';
+
     if (type === 'multiple_choice') {
         html = `
             <div style="font-size: 0.9em; opacity: 0.7; margin-bottom: 8px;">${currentLang === 'el' ? 'Επιλογές (επιλέξτε τη σωστή)' : 'Options (select the correct one)'}:</div>
@@ -1398,6 +1797,7 @@ function renderQuestionFields(idx, type) {
                 </div>`).join('')}
         `;
         quizQuestions[idx].options = quizQuestions[idx].options || ['', '', '', ''];
+
     } else if (type === 'true_false') {
         const correctValue = Number(question.correct ?? 0);
         html = `
@@ -1405,6 +1805,7 @@ function renderQuestionFields(idx, type) {
                 <label><input type="radio" name="correct-${idx}" value="0" ${correctValue === 0 ? 'checked' : ''} onchange="quizQuestions[${idx}].correct=0"> ${currentLang === 'el' ? 'Λάθος' : 'False'}</label>
                 <label><input type="radio" name="correct-${idx}" value="1" ${correctValue === 1 ? 'checked' : ''} onchange="quizQuestions[${idx}].correct=1"> ${currentLang === 'el' ? 'Σωστό' : 'True'}</label>
             </div>`;
+
     } else if (type === 'multi_select') {
         const correctValues = Array.isArray(question.correct) ? question.correct : [];
         html = `
@@ -1417,6 +1818,7 @@ function renderQuestionFields(idx, type) {
         `;
         quizQuestions[idx].options = quizQuestions[idx].options || ['', '', '', ''];
         quizQuestions[idx].correct = correctValues;
+
     } else if (type === 'short_answer') {
         const answerValue = escapeAttr(question.correct_text || '');
         html = `
@@ -1425,29 +1827,179 @@ function renderQuestionFields(idx, type) {
             </div>
             <input class="input-field" placeholder="${currentLang === 'el' ? 'Σωστή απάντηση' : 'Correct answer'}" value="${answerValue}" onchange="quizQuestions[${idx}].correct_text = this.value" style="width: 100%;">
         `;
+
+    } else if (type === 'matching') {
+        // Matching pairs: [[term, definition], ...]
+        const pairs = question.pairs || [['', ''], ['', ''], ['', '']];
+        quizQuestions[idx].pairs = pairs;
+        html = `
+            <div style="font-size: 0.9em; opacity: 0.7; margin-bottom: 8px;">
+                ${currentLang === 'el' ? 'Ζευγάρια (όρος → ορισμός)' : 'Pairs (term → definition)'}:
+            </div>
+            <div id="pairs-${idx}">
+                ${pairs.map((p, i) => `
+                    <div style="display: flex; gap: 8px; margin-bottom: 8px; align-items: center;" class="pair-row">
+                        <input class="input-field" placeholder="${currentLang === 'el' ? 'Όρος' : 'Term'} ${i+1}" value="${escapeAttr(p[0] || '')}"
+                               onchange="quizQuestions[${idx}].pairs[${i}][0] = this.value" style="flex: 1;">
+                        <span style="color: #0f6;">→</span>
+                        <input class="input-field" placeholder="${currentLang === 'el' ? 'Ορισμός' : 'Definition'} ${i+1}" value="${escapeAttr(p[1] || '')}"
+                               onchange="quizQuestions[${idx}].pairs[${i}][1] = this.value" style="flex: 1;">
+                        <button type="button" onclick="removePair(${idx}, ${i})" style="background:none;border:none;color:#ff6b6b;cursor:pointer;">✕</button>
+                    </div>
+                `).join('')}
+            </div>
+            <button type="button" onclick="addPair(${idx})" class="btn-secondary" style="margin-top: 8px; padding: 6px 12px; font-size: 12px;">
+                ➕ ${currentLang === 'el' ? 'Προσθήκη ζευγαριού' : 'Add pair'}
+            </button>
+        `;
+
+    } else if (type === 'ordering') {
+        // Items to order: [item1, item2, ...]
+        const items = question.items || question.options || ['', '', ''];
+        quizQuestions[idx].items = items;
+        html = `
+            <div style="font-size: 0.9em; opacity: 0.7; margin-bottom: 8px;">
+                ${currentLang === 'el' ? 'Στοιχεία (στη σωστή σειρά)' : 'Items (in correct order)'}:
+            </div>
+            <div id="order-items-${idx}">
+                ${items.map((item, i) => `
+                    <div style="display: flex; gap: 8px; margin-bottom: 8px; align-items: center;" class="order-row">
+                        <span style="color: #888; min-width: 25px;">${i+1}.</span>
+                        <input class="input-field" placeholder="${currentLang === 'el' ? 'Στοιχείο' : 'Item'} ${i+1}" value="${escapeAttr(item || '')}"
+                               onchange="quizQuestions[${idx}].items[${i}] = this.value" style="flex: 1;">
+                        <button type="button" onclick="removeOrderItem(${idx}, ${i})" style="background:none;border:none;color:#ff6b6b;cursor:pointer;">✕</button>
+                    </div>
+                `).join('')}
+            </div>
+            <button type="button" onclick="addOrderItem(${idx})" class="btn-secondary" style="margin-top: 8px; padding: 6px 12px; font-size: 12px;">
+                ➕ ${currentLang === 'el' ? 'Προσθήκη στοιχείου' : 'Add item'}
+            </button>
+            <div style="font-size: 0.85em; color: #888; margin-top: 8px;">
+                💡 ${currentLang === 'el' ? 'Τα στοιχεία θα ανακατευτούν για τον μαθητή' : 'Items will be shuffled for the student'}
+            </div>
+        `;
+
+    } else if (type === 'fill_blank') {
+        // Text with blanks and answers
+        const textWithBlanks = question.text_with_blanks || '';
+        const blanks = question.blanks || [{ answer: '' }];
+        quizQuestions[idx].text_with_blanks = textWithBlanks;
+        quizQuestions[idx].blanks = blanks;
+        html = `
+            <div style="font-size: 0.9em; opacity: 0.7; margin-bottom: 8px;">
+                ${currentLang === 'el' ? 'Κείμενο (χρησιμοποίησε ___ για κενά)' : 'Text (use ___ for blanks)'}:
+            </div>
+            <textarea class="input-field" placeholder="${currentLang === 'el' ? 'Η ___ είναι η πρωτεύουσα της ___.' : 'The ___ is the capital of ___.'}"
+                      style="width: 100%; min-height: 60px; margin-bottom: 12px;"
+                      onchange="quizQuestions[${idx}].text_with_blanks = this.value; updateBlankFields(${idx})">${escapeAttr(textWithBlanks)}</textarea>
+            <div style="font-size: 0.9em; opacity: 0.7; margin-bottom: 8px;">
+                ${currentLang === 'el' ? 'Σωστές απαντήσεις για κάθε κενό' : 'Correct answers for each blank'}:
+            </div>
+            <div id="blanks-${idx}">
+                ${blanks.map((b, i) => `
+                    <div style="display: flex; gap: 8px; margin-bottom: 8px; align-items: center;">
+                        <span style="color: #0f6; min-width: 60px;">${currentLang === 'el' ? 'Κενό' : 'Blank'} ${i+1}:</span>
+                        <input class="input-field" placeholder="${currentLang === 'el' ? 'Σωστή απάντηση' : 'Correct answer'}"
+                               value="${escapeAttr(typeof b === 'object' ? b.answer || '' : b)}"
+                               onchange="quizQuestions[${idx}].blanks[${i}] = {answer: this.value}" style="flex: 1;">
+                    </div>
+                `).join('')}
+            </div>
+            <div style="font-size: 0.85em; color: #888; margin-top: 8px;">
+                💡 ${currentLang === 'el' ? 'Χρησιμοποίησε ___ (3 κάτω παύλες) για κάθε κενό' : 'Use ___ (3 underscores) for each blank'}
+            </div>
+        `;
     }
+
     container.innerHTML = html;
     quizQuestions[idx].type = type;
 }
 
+// Helper functions for matching pairs
+function addPair(idx) {
+    const question = quizQuestions[idx];
+    if (!question) return;
+    question.pairs = question.pairs || [];
+    question.pairs.push(['', '']);
+    renderQuestionFields(idx, 'matching');
+}
+
+function removePair(idx, pairIdx) {
+    const question = quizQuestions[idx];
+    if (!question || !question.pairs) return;
+    question.pairs.splice(pairIdx, 1);
+    if (question.pairs.length === 0) question.pairs.push(['', '']);
+    renderQuestionFields(idx, 'matching');
+}
+
+// Helper functions for ordering items
+function addOrderItem(idx) {
+    const question = quizQuestions[idx];
+    if (!question) return;
+    question.items = question.items || [];
+    question.items.push('');
+    renderQuestionFields(idx, 'ordering');
+}
+
+function removeOrderItem(idx, itemIdx) {
+    const question = quizQuestions[idx];
+    if (!question || !question.items) return;
+    question.items.splice(itemIdx, 1);
+    if (question.items.length === 0) question.items.push('');
+    renderQuestionFields(idx, 'ordering');
+}
+
+// Helper function to update blank fields when text changes
+function updateBlankFields(idx) {
+    const question = quizQuestions[idx];
+    if (!question) return;
+    const text = question.text_with_blanks || '';
+    const blankCount = (text.match(/___/g) || []).length;
+    const currentBlanks = question.blanks || [];
+    // Adjust blanks array to match count
+    while (currentBlanks.length < blankCount) {
+        currentBlanks.push({ answer: '' });
+    }
+    while (currentBlanks.length > blankCount && currentBlanks.length > 1) {
+        currentBlanks.pop();
+    }
+    question.blanks = currentBlanks;
+    renderQuestionFields(idx, 'fill_blank');
+}
+
 function onQuestionTypeChange(idx, type) {
     const normalized = normalizeQuestionType(type);
+    const q = quizQuestions[idx];
+
     if (normalized === 'true_false') {
-        quizQuestions[idx].options = ['False', 'True'];
-        quizQuestions[idx].correct = 0;
-        quizQuestions[idx].correct_text = '';
+        q.options = ['False', 'True'];
+        q.correct = 0;
+        q.correct_text = '';
     } else if (normalized === 'multi_select') {
-        quizQuestions[idx].options = (quizQuestions[idx].options || ['', '', '', '']).concat(['', '', '', '']).slice(0, 4);
-        quizQuestions[idx].correct = [];
-        quizQuestions[idx].correct_text = '';
+        q.options = (q.options || ['', '', '', '']).concat(['', '', '', '']).slice(0, 4);
+        q.correct = [];
+        q.correct_text = '';
     } else if (normalized === 'short_answer') {
-        quizQuestions[idx].options = [];
-        quizQuestions[idx].correct = 0;
-        quizQuestions[idx].correct_text = quizQuestions[idx].correct_text || '';
+        q.options = [];
+        q.correct = 0;
+        q.correct_text = q.correct_text || '';
+    } else if (normalized === 'matching') {
+        q.pairs = q.pairs || [['', ''], ['', ''], ['', '']];
+        q.options = [];
+        q.correct = null;
+    } else if (normalized === 'ordering') {
+        q.items = q.items || q.options || ['', '', ''];
+        q.correct_order = null; // Will be calculated from items order
+        q.options = [];
+    } else if (normalized === 'fill_blank') {
+        q.text_with_blanks = q.text_with_blanks || '';
+        q.blanks = q.blanks || [{ answer: '' }];
+        q.options = [];
     } else {
-        quizQuestions[idx].options = (quizQuestions[idx].options || ['', '', '', '']).concat(['', '', '', '']).slice(0, 4);
-        quizQuestions[idx].correct = Number(quizQuestions[idx].correct ?? 0);
-        quizQuestions[idx].correct_text = '';
+        // multiple_choice
+        q.options = (q.options || ['', '', '', '']).concat(['', '', '', '']).slice(0, 4);
+        q.correct = Number(q.correct ?? 0);
+        q.correct_text = '';
     }
     renderQuestionFields(idx, normalized);
 }
@@ -1471,6 +2023,7 @@ async function saveQuiz() {
     const validationErrors = [];
     const validQuestions = quizQuestions.filter(q => q && q.question).map((q, idx) => {
         const qType = normalizeQuestionType(q.type);
+
         if (qType === 'multiple_choice') {
             const options = (q.options || []).concat(['', '', '', '']).slice(0, 4);
             if (!options.every(o => o)) {
@@ -1480,8 +2033,7 @@ async function saveQuiz() {
             if (Number.isNaN(correctIndex) || correctIndex < 0 || correctIndex >= options.length) {
                 validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'λάθος σωστή επιλογή' : 'invalid correct option'}`);
             }
-        }
-        if (qType === 'multi_select') {
+        } else if (qType === 'multi_select') {
             const options = (q.options || []).concat(['', '', '', '']).slice(0, 4);
             const correctValues = Array.isArray(q.correct) ? q.correct : [];
             if (!options.every(o => o)) {
@@ -1490,18 +2042,53 @@ async function saveQuiz() {
             if (correctValues.length === 0) {
                 validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'επίλεξε τουλάχιστον μία σωστή' : 'select at least one correct option'}`);
             }
-        }
-        if (qType === 'true_false') {
+        } else if (qType === 'true_false') {
             if (q.correct !== 0 && q.correct !== 1) {
                 validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'επέλεξε σωστό True/False' : 'select correct True/False'}`);
             }
-        }
-        if (qType === 'short_answer') {
+        } else if (qType === 'short_answer') {
             const correctText = (q.correct_text || '').trim();
             if (!correctText) {
                 validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'γράψε σωστή απάντηση' : 'enter correct answer'}`);
             }
+        } else if (qType === 'matching') {
+            const pairs = q.pairs || [];
+            if (pairs.length < 2) {
+                validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'χρειάζονται τουλάχιστον 2 ζευγάρια' : 'need at least 2 pairs'}`);
+            }
+            pairs.forEach((p, i) => {
+                if (!p[0] || !p[1]) {
+                    validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? `συμπλήρωσε ζευγάρι ${i+1}` : `fill pair ${i+1}`}`);
+                }
+            });
+        } else if (qType === 'ordering') {
+            const items = q.items || [];
+            if (items.length < 2) {
+                validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'χρειάζονται τουλάχιστον 2 στοιχεία' : 'need at least 2 items'}`);
+            }
+            items.forEach((item, i) => {
+                if (!item || !item.trim()) {
+                    validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? `συμπλήρωσε στοιχείο ${i+1}` : `fill item ${i+1}`}`);
+                }
+            });
+        } else if (qType === 'fill_blank') {
+            const text = q.text_with_blanks || '';
+            const blanks = q.blanks || [];
+            const blankCount = (text.match(/___/g) || []).length;
+            if (!text || blankCount === 0) {
+                validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'το κείμενο πρέπει να έχει τουλάχιστον 1 κενό (___)' : 'text must have at least 1 blank (___)'}`);
+            }
+            if (blanks.length !== blankCount) {
+                validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? 'αριθμός απαντήσεων δεν ταιριάζει με κενά' : 'answers count doesn\'t match blanks'}`);
+            }
+            blanks.forEach((b, i) => {
+                const answer = typeof b === 'object' ? b.answer : b;
+                if (!answer || !answer.trim()) {
+                    validationErrors.push(`#${idx + 1}: ${currentLang === 'el' ? `συμπλήρωσε απάντηση κενού ${i+1}` : `fill blank ${i+1} answer`}`);
+                }
+            });
         }
+
         return { ...q, type: qType };
     });
 
@@ -1537,6 +2124,30 @@ async function saveQuiz() {
 }
 
 // Utility
+// Helper function for ordering questions - move item up/down
+function moveOrderItem(qid, item, direction) {
+    const container = document.querySelector(`#ordering-${qid}`);
+    if (!container || !item) return;
+
+    const items = Array.from(container.querySelectorAll('.ordering-item'));
+    const currentIndex = items.indexOf(item);
+    const newIndex = currentIndex + direction;
+
+    if (newIndex < 0 || newIndex >= items.length) return;
+
+    if (direction === -1 && items[currentIndex - 1]) {
+        container.insertBefore(item, items[currentIndex - 1]);
+    } else if (direction === 1 && items[currentIndex + 1]) {
+        container.insertBefore(items[currentIndex + 1], item);
+    }
+
+    // Update order numbers
+    container.querySelectorAll('.ordering-item').forEach((el, i) => {
+        const numEl = el.querySelector('.order-number');
+        if (numEl) numEl.textContent = `${i + 1}.`;
+    });
+}
+
 function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;

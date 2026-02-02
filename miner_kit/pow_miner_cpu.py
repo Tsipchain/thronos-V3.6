@@ -18,55 +18,52 @@ SERVER_URL = os.getenv("THRONOS_SERVER_URL", os.getenv("THRONOS_SERVER", "https:
 SUBMIT_RETRIES = int(os.getenv("THRONOS_SUBMIT_RETRIES", "3"))
 SUBMIT_RETRY_DELAY = float(os.getenv("THRONOS_SUBMIT_RETRY_DELAY", "2"))
 
-def get_last_hash():
-    """Fetches the last block hash from the Thronos server."""
+def get_mining_work():
+    """Fetches mining work (job_id, target, prev_hash, height)."""
     try:
-        r = requests.get(f"{SERVER_URL}/api/last_block_hash", timeout=5)
+        r = requests.get(
+            f"{SERVER_URL}/api/miner/work",
+            params={"address": THR_ADDRESS},
+            timeout=5,
+        )
         r.raise_for_status()
         data = r.json()
-        return {
-            "last_hash": data.get("block_hash") or data.get("last_hash", "0" * 64),
-            "height": data.get("height"),
-        }
+        if data.get("ok") is False:
+            print(f"⚠️ Mining work rejected: {data.get('error')}")
+            return None
+        return data
     except requests.exceptions.RequestException as e:
-        print(f"❌ Connection error fetching last hash: {e}")
+        print(f"❌ Connection error fetching work: {e}")
         return None
     except Exception as e:
-        print(f"❌ Unexpected error fetching last hash: {e}")
+        print(f"❌ Unexpected error fetching work: {e}")
         return None
 
-def get_mining_info():
-    """Fetches dynamic mining info (target, difficulty, reward)."""
-    try:
-        r = requests.get(f"{SERVER_URL}/mining_info", timeout=10)
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        print(f"❌ Error fetching mining info: {e}")
-        return None
-
-def mine_block(last_hash_info):
+def mine_block(work):
     """
     CPU mining with dynamic difficulty:
     - Fetches target from server
     - Tries nonces until hash < target
     """
-    info = get_mining_info()
-    if not info:
-        print("⚠️ Could not fetch mining info. Retrying...")
+    if not work:
+        print("⚠️ Could not fetch mining work. Retrying...")
         return None
 
-    target_hex = info.get("target", "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+    target_hex = work.get("target", "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
     target = int(target_hex, 16)
-    difficulty = info.get("difficulty_int", 1)
-    reward = info.get("reward", 0)
+    reward = work.get("reward", 0)
+    job_id = work.get("job_id")
+    expires_at = work.get("expires_at")
     
     print(f"⛏️  Starting mining for {THR_ADDRESS}")
-    last_hash = last_hash_info.get("last_hash") if isinstance(last_hash_info, dict) else last_hash_info
-    tip_height = last_hash_info.get("height") if isinstance(last_hash_info, dict) else None
+    last_hash = work.get("prev_hash") or "0" * 64
+    tip_height = work.get("height")
     print(f"   Last Hash: {last_hash[:16]}...")
-    print(f"   Target:    {target_hex[:16]}... (Diff: ~{difficulty})")
-    print(f"   Reward:    {reward} THR")
+    print(f"   Target:    {target_hex[:16]}...")
+    if reward:
+        print(f"   Reward:    {reward} THR")
+    if job_id:
+        print(f"   Job ID:    {job_id}")
 
     nonce = 0
     start = time.time()
@@ -74,19 +71,9 @@ def mine_block(last_hash_info):
     
     while True:
         # Refresh info every 30 seconds or if block found elsewhere
-        if time.time() - start > 30:
-             current_server_info = get_last_hash()
-             current_server_hash = current_server_info.get("last_hash") if current_server_info else None
-             if current_server_hash and current_server_hash != last_hash:
-                 print("🔄 New block found on network. Restarting mining...")
-                 return None
-             
-             # Refresh target just in case
-             new_info = get_mining_info()
-             if new_info:
-                 target = int(new_info.get("target", target_hex), 16)
-                 
-             start = time.time() 
+        if expires_at and time.time() >= float(expires_at):
+            print("🔄 Work expired. Restarting mining...")
+            return None
 
         nonce_str = str(nonce).encode()
         data = (last_hash + THR_ADDRESS).encode() + nonce_str
@@ -108,9 +95,10 @@ def mine_block(last_hash_info):
                 "nonce": nonce,
                 "pow_hash": h_hex,
                 "prev_hash": last_hash,
+                "job_id": job_id,
             }
             if tip_height is not None:
-                block["height"] = int(tip_height) + 1
+                block["height"] = int(tip_height)
             return block
 
         nonce += 1
@@ -122,10 +110,13 @@ def submit_block(block):
     delay = max(0.5, SUBMIT_RETRY_DELAY)
     for attempt in range(1, attempts + 1):
         try:
-            r = requests.post(f"{SERVER_URL}/submit_block", json=block, timeout=10)
+            r = requests.post(f"{SERVER_URL}/api/miner/submit", json=block, timeout=10)
             if r.status_code == 200:
                 print(f"📬 Submission successful: {r.json()}")
                 return True
+            if r.status_code == 409:
+                print("🔄 Stale work detected. Refreshing work...")
+                return False
             if r.status_code in {429, 500, 502, 503, 504}:
                 print(f"⏳ Node busy (HTTP {r.status_code}). Retrying {attempt}/{attempts}...")
                 if attempt < attempts:
@@ -158,11 +149,12 @@ if __name__ == "__main__":
     print(f"📡 Server: {SERVER_URL}")
     
     while True:
-        last_hash_info = get_last_hash()
-        if last_hash_info:
-            mined_block = mine_block(last_hash_info)
+        work = get_mining_work()
+        if work:
+            mined_block = mine_block(work)
             if mined_block:
-                submit_block(mined_block)
+                if not submit_block(mined_block):
+                    time.sleep(1)
             
             time.sleep(2)
         else:

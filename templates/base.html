@@ -11,15 +11,38 @@
   (function() {
     const host = window.location.hostname;
     const isVercel = host.endsWith("vercel.app") || host === "thrchain.vercel.app";
+    const origin = window.location.origin;
+    window.__API_BASE__ = origin;
+    window.THRONOS_API_BASE = origin;
     window.THRONOS_CONFIG = {
       apiReadBase: isVercel ? "/api/v1/read/api" : "/api",
       apiWriteBase: isVercel ? "/api/v1/write/api" : "/api",
       apiMusicBase: isVercel ? "/api/v1/read/api" : "/api",
       apiBase: "/api",
-      masterUrl: "https://thrchain.up.railway.app",
-      MASTER_PUBLIC_URL: "https://thrchain.up.railway.app",
+      masterUrl: origin,
+      MASTER_PUBLIC_URL: origin,
       mediaBase: "/media",
       musicEnabled: true
+    };
+    window.normalizeMediaUrl = function normalizeMediaUrl(urlOrPath) {
+      if (!urlOrPath) return "";
+      const base = window.__API_BASE__ || window.location.origin;
+      const raw = String(urlOrPath).trim();
+      if (!raw) return "";
+
+      if (/^https?:\/\/localhost:\d+/i.test(raw)) {
+        return raw.replace(/^https?:\/\/localhost:\d+/i, base);
+      }
+
+      if (raw.startsWith("/media/")) {
+        return new URL(raw, base).toString();
+      }
+
+      if (/^https?:\/\//i.test(raw)) {
+        return raw;
+      }
+
+      return new URL(raw, base).toString();
     };
   })();
   </script>
@@ -1511,11 +1534,6 @@
     <button id="walletLoginBtn" class="wallet-login-btn" onclick="openHeaderWalletModal()">
         💼 <span class="lang-el">Σύνδεση</span><span class="lang-en">Login</span>
     </button>
-    {% if music_modal_enabled|default(true) %}
-    <button id="musicModalBtn" class="music-modal-btn" onclick="openMusicModal()">
-        🎵 <span class="lang-el">Μουσική</span><span class="lang-en">Music</span>
-    </button>
-    {% endif %}
     <div id="walletStatus" class="wallet-status">
         <img src="{{ url_for('static', filename='img/thronos-token.png') }}" alt="🔥" class="wallet-fire-icon" />
         <span id="walletAddrShort"></span>
@@ -1527,9 +1545,6 @@
                 <div class="wallet-popup-actions">
                     <button id="walletPinBtn" class="wallet-mini-btn" title="Pin">Pin</button>
                     <button id="walletLockBtn" class="wallet-mini-btn" title="Lock">Lock</button>
-                    {% if music_modal_enabled|default(true) %}
-                    <button id="walletMusicBtn" class="wallet-mini-btn" title="Music">🎵 Music</button>
-                    {% endif %}
                 </div>
             </div>
 
@@ -1590,29 +1605,6 @@
         </div>
     </div>
 </div>
-
-{% if music_modal_enabled|default(true) %}
-<div class="music-modal" id="musicModal" onclick="closeMusicModal(event)">
-    <div class="music-modal-content" onclick="event.stopPropagation()">
-        <div class="music-modal-header">
-            <div class="music-modal-title">🎵 <span class="lang-el">Μουσική</span><span class="lang-en">Music</span></div>
-            <button class="music-modal-close" onclick="closeMusicModal()">✖</button>
-        </div>
-        <div id="musicModalBody">
-            <p style="margin: 0 0 12px 0; color: #9f9;">
-                <span class="lang-en">Listening session active. GPS telemetry refreshes every 5 seconds.</span>
-                <span class="lang-el">Η συνεδρία μουσικής είναι ενεργή. GPS telemetry κάθε 5 δευτερόλεπτα.</span>
-            </p>
-            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                <button class="wallet-mini-btn" onclick="window.MusicModal?.startSession()">▶️ Start Session</button>
-                <button class="wallet-mini-btn" onclick="window.MusicModal?.endSession()">⏹️ End Session</button>
-                <button class="wallet-mini-btn" onclick="window.open('/music', '_blank')">Open Full Music Page</button>
-            </div>
-            <div id="musicModalStatus" style="margin-top: 12px; font-size: 12px; color: #b6ffcc;"></div>
-        </div>
-    </div>
-</div>
-{% endif %}
 
 <!-- Send Modal -->
 <div class="send-modal" id="sendModal" onclick="closeSendModal(event)">
@@ -1829,35 +1821,45 @@
             <span class="lang-en">Transaction History</span>
         </div>
 
-        <!-- History Tabs -->
+        <!-- History Tabs - Full categories -->
         <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; padding: 0 4px;">
-            <button class="history-tab-btn active" data-filter="all" onclick="filterHistory('all')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.2); border: 1px solid rgba(0,255,102,0.4); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+            <button class="history-tab-btn active" data-filter="all" onclick="filterHistory('all')" style="flex: 1; min-width: 45px; padding: 6px 8px; background: rgba(0,255,102,0.2); border: 1px solid rgba(0,255,102,0.4); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
                 <span class="lang-el">Όλα</span><span class="lang-en">All</span>
             </button>
-            <button class="history-tab-btn" data-filter="thr" onclick="filterHistory('thr')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">THR</button>
-            <button class="history-tab-btn" data-filter="mining" onclick="filterHistory('mining')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                ⛏️ <span class="lang-el">Mining</span><span class="lang-en">Mining</span>
+            <button class="history-tab-btn" data-filter="thr" onclick="filterHistory('thr')" style="flex: 1; min-width: 45px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                THR
             </button>
-            <button class="history-tab-btn" data-filter="tokens" onclick="filterHistory('tokens')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                <span class="lang-el">Tokens</span><span class="lang-en">Tokens</span>
+            <button class="history-tab-btn" data-filter="mining" onclick="filterHistory('mining')" style="flex: 1; min-width: 55px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                ⛏️ Mining
             </button>
-            <button class="history-tab-btn" data-filter="l2e" onclick="filterHistory('l2e')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">L2E</button>
-            <button class="history-tab-btn" data-filter="ai_credits" onclick="filterHistory('ai_credits')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">AI Credits (Chat)</button>
-            <button class="history-tab-btn" data-filter="architect_ai_jobs" onclick="filterHistory('architect_ai_jobs')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">Architect / AI Jobs</button>
-            <button class="history-tab-btn" data-filter="iot" onclick="filterHistory('iot')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">IoT</button>
-            <button class="history-tab-btn" data-filter="bridge" onclick="filterHistory('bridge')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                <span class="lang-el">Bridge</span><span class="lang-en">Bridge</span>
+            <button class="history-tab-btn" data-filter="tokens" onclick="filterHistory('tokens')" style="flex: 1; min-width: 50px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                Tokens
             </button>
-            <button class="history-tab-btn" data-filter="swaps" onclick="filterHistory('swaps')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                <span class="lang-el">Swaps</span><span class="lang-en">Swaps</span>
+            <button class="history-tab-btn" data-filter="l2e" onclick="filterHistory('l2e')" style="flex: 1; min-width: 40px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                L2E
             </button>
-            <button class="history-tab-btn" data-filter="liquidity" onclick="filterHistory('liquidity')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                <span class="lang-el">Liquidity</span><span class="lang-en">Liquidity</span>
+            <button class="history-tab-btn" data-filter="ai_credits" onclick="filterHistory('ai_credits')" style="flex: 1; min-width: 75px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                AI Credits (Chat)
             </button>
-            <button class="history-tab-btn" data-filter="gateway" onclick="filterHistory('gateway')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
-                <span class="lang-el">Gateway</span><span class="lang-en">Gateway</span>
+            <button class="history-tab-btn" data-filter="architect" onclick="filterHistory('architect')" style="flex: 1; min-width: 85px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                Architect / AI Jobs
             </button>
-            <button class="history-tab-btn" data-filter="music" onclick="filterHistory('music')" style="flex: 1; min-width: 70px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+            <button class="history-tab-btn" data-filter="iot" onclick="filterHistory('iot')" style="flex: 1; min-width: 40px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                IoT
+            </button>
+            <button class="history-tab-btn" data-filter="bridge" onclick="filterHistory('bridge')" style="flex: 1; min-width: 50px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                Bridge
+            </button>
+            <button class="history-tab-btn" data-filter="swaps" onclick="filterHistory('swaps')" style="flex: 1; min-width: 50px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                Swaps
+            </button>
+            <button class="history-tab-btn" data-filter="liquidity" onclick="filterHistory('liquidity')" style="flex: 1; min-width: 55px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                Liquidity
+            </button>
+            <button class="history-tab-btn" data-filter="gateway" onclick="filterHistory('gateway')" style="flex: 1; min-width: 55px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                Gateway
+            </button>
+            <button class="history-tab-btn" data-filter="music" onclick="filterHistory('music')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
                 🎵 <span class="lang-el">Μουσική</span><span class="lang-en">Music</span>
             </button>
         </div>
@@ -1969,7 +1971,6 @@
     <li class="nav-item">
       <span class="nav-link">📱 <span class="lang-el">Εφαρμογές</span><span class="lang-en">Apps</span><span class="lang-ja">アプリ</span><span class="lang-ru">Приложения</span><span class="lang-es">Apps</span> ▼</span>
       <div class="dropdown-content">
-        <a href="/wallet">👛 <span class="lang-el">Πορτοφόλι</span><span class="lang-en">Wallet</span><span class="lang-ja">ウォレット</span><span class="lang-ru">Кошелёк</span><span class="lang-es">Billetera</span></a>
         <a href="/send">💸 <span class="lang-el">Αποστολή</span><span class="lang-en">Send</span><span class="lang-ja">送金</span><span class="lang-ru">Отправить</span><span class="lang-es">Enviar</span></a>
         <a href="/swap">🔄 Swap</a>
         <a href="/pools">💧 Pools</a>
@@ -2037,6 +2038,22 @@ function normalizeLang(lang) {
     if (!lang) return DEFAULT_LANG;
     if (lang === 'el') return 'gr';
       return window.LANG_SEQUENCE.includes(lang) ? lang : 'en';
+}
+
+// Strip localhost URLs for production safety
+function repairMediaUrl(url) {
+    if (!url || typeof url !== 'string') return url;
+    try {
+        if (url.startsWith('/')) return url;
+        if (url.startsWith('http://') || url.startsWith('https://')) {
+            const urlObj = new URL(url);
+            const knownHosts = [window.location.host, 'localhost:5000', 'thrchain.up.railway.app', 'thrchain.vercel.app'];
+            if (knownHosts.includes(urlObj.host)) {
+                return urlObj.pathname + urlObj.search + urlObj.hash;
+            }
+        }
+        return url;
+    } catch (e) { return url; }
 }
 
 function getCurrentLang() {
@@ -2523,7 +2540,7 @@ function renderWalletBalances(data) {
         const symbol = t.symbol;
         const name = t.name || symbol;
         const color = t.color || '#00ff66';
-        const logo = t.logo_url || t.logo;
+        const logo = repairMediaUrl(t.logo_url || t.logo);
 
         // PR-1b: Use API value fields, display "—" for null
         const valueInThr = t.value_in_thr !== null && t.value_in_thr !== undefined
@@ -2699,6 +2716,97 @@ function switchWalletTab(tabName) {
 // PR-5: Load and render music tab
 let musicModuleInitialized = false;
 let musicModuleCheckInterval = null;
+const walletMusicState = {
+    library: [],
+    playlists: [],
+    libraryError: null,
+    playlistsError: null
+};
+
+function getWalletMusicApiBase() {
+    return window.__API_BASE__ || window.location.origin;
+}
+
+function buildWalletMusicApiUrl(path) {
+    if (!path) return path;
+    if (/^https?:\/\//i.test(path)) return path;
+    const normalized = path.startsWith('/') ? path : `/${path}`;
+    return `${getWalletMusicApiBase()}${normalized}`;
+}
+
+function normalizeWalletTrack(track) {
+    if (!track || typeof track !== 'object') return track;
+    const normalized = { ...track };
+    ['audio_url', 'cover_url', 'image_url', 'logo_url', 'thumbnail_url'].forEach(field => {
+        if (normalized[field]) {
+            const fixer = window.normalizeMediaUrl || window.FetchUtils?.normalizeMediaUrl;
+            normalized[field] = fixer ? fixer(normalized[field]) : normalized[field];
+        }
+    });
+    return normalized;
+}
+
+function normalizeWalletPlaylist(playlist) {
+    if (!playlist || typeof playlist !== 'object') return playlist;
+    const normalized = { ...playlist };
+    if (Array.isArray(normalized.tracks)) {
+        normalized.tracks = normalized.tracks.map(track => normalizeWalletTrack(track));
+    }
+    return normalized;
+}
+
+function initWalletMusic() {
+    const musicContent = document.getElementById('musicTabContent');
+    if (!musicContent) return;
+    const lang = getCurrentLang();
+    const isGreek = isGreekLang(lang);
+    const loadingLabel = isGreek ? 'Φόρτωση μουσικής...' : 'Loading music...';
+    musicContent.innerHTML = `
+        <div class="music-section">
+            <div class="music-section-title">${isGreek ? 'Βιβλιοθήκη' : 'Library'}</div>
+            <div class="music-empty">${loadingLabel}</div>
+        </div>
+        <div class="music-section">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div class="music-section-title" style="margin: 0;">${isGreek ? 'Λίστες Αναπαραγωγής' : 'Playlists'}</div>
+                <button onclick="createPlaylistFromWallet()" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 500;">
+                    ${isGreek ? '➕ Νέα Playlist' : '➕ New Playlist'}
+                </button>
+            </div>
+            <div class="music-empty">${loadingLabel}</div>
+        </div>
+    `;
+}
+
+async function loadWalletLibrary(wallet) {
+    try {
+        const res = await fetch(buildWalletMusicApiUrl(`/api/music/library?address=${encodeURIComponent(wallet)}`));
+        const data = res.ok ? await res.json() : {};
+        if (data.ok && Array.isArray(data.library)) {
+            return { items: data.library.map(track => normalizeWalletTrack(track)), error: null };
+        }
+        const items = Array.isArray(data.library) ? data.library : [];
+        return { items: items.map(track => normalizeWalletTrack(track)), error: data.error || 'library_unavailable' };
+    } catch (error) {
+        return { items: [], error: error.message || 'library_unavailable' };
+    }
+}
+
+async function loadWalletPlaylists(wallet) {
+    try {
+        const res = await fetch(buildWalletMusicApiUrl(`/api/music/playlists?address=${encodeURIComponent(wallet)}`));
+        const data = res.ok ? await res.json() : {};
+        const playlists = Array.isArray(data.playlists)
+            ? data.playlists
+            : (Array.isArray(data.items) ? data.items : []);
+        return {
+            items: playlists.map(playlist => normalizeWalletPlaylist(playlist)),
+            error: data.ok === false ? (data.error || 'playlists_unavailable') : null
+        };
+    } catch (error) {
+        return { items: [], error: error.message || 'playlists_unavailable' };
+    }
+}
 
 async function loadMusicTab() {
     const musicContent = document.getElementById('musicTabContent');
@@ -2720,65 +2828,47 @@ async function loadMusicTab() {
         return;
     }
 
-    try {
-        // PR-5c: Wait for MusicModule to load if needed
-        if (typeof MusicModule === 'undefined') {
-            // Show loading while waiting
-            musicContent.innerHTML = `
-                <div class="wallet-popup-loading">
-                    <div class="wallet-popup-spinner"></div>
-                    Loading music module...
-                </div>
-            `;
+    initWalletMusic();
+    walletMusicState.libraryError = null;
+    walletMusicState.playlistsError = null;
 
-            // Wait for MusicModule to load (retry up to 10 times)
-            let retries = 0;
-            if (musicModuleCheckInterval) {
-                clearInterval(musicModuleCheckInterval);
-            }
-            musicModuleCheckInterval = setInterval(() => {
-                if (typeof MusicModule !== 'undefined') {
-                    clearInterval(musicModuleCheckInterval);
-                    musicModuleCheckInterval = null;
-                    musicModuleInitialized = true;
-                    loadMusicTab(); // Retry
-                } else if (++retries >= 10) {
-                    clearInterval(musicModuleCheckInterval);
-                    musicModuleCheckInterval = null;
-                    musicContent.innerHTML = '<div class="music-empty">Music module failed to load. Please refresh.</div>';
-                }
-            }, 100);
-            return;
+    const moduleAvailable = typeof MusicModule !== 'undefined';
+    let moduleLoaded = false;
+
+    if (moduleAvailable) {
+        try {
+            await MusicModule.init(wallet);
+            musicModuleInitialized = true;
+            walletMusicState.library = (MusicModule.getLibrary() || []).map(track => normalizeWalletTrack(track));
+            walletMusicState.playlists = (MusicModule.getPlaylists() || []).map(playlist => normalizeWalletPlaylist(playlist));
+            moduleLoaded = true;
+        } catch (error) {
+            console.warn('[Wallet] MusicModule init failed, falling back to API:', error);
+            walletMusicState.libraryError = error.message || 'library_unavailable';
+            walletMusicState.playlistsError = error.message || 'playlists_unavailable';
         }
-
-        // Mark as initialized
-        musicModuleInitialized = true;
-
-        // Show loading
-        musicContent.innerHTML = `
-            <div class="wallet-popup-loading">
-                <div class="wallet-popup-spinner"></div>
-                Loading music...
-            </div>
-        `;
-
-        // Initialize MusicModule with address
-        await MusicModule.init(wallet);
-
-        // Render music content
-        renderMusicTab();
-    } catch (error) {
-        console.error('[Wallet] Failed to load music:', error);
-        musicContent.innerHTML = `<div class="music-empty" style="color: #ff6666;">Error loading music: ${error.message}</div>`;
     }
+
+    if (!moduleLoaded) {
+        const [libraryResult, playlistsResult] = await Promise.all([
+            loadWalletLibrary(wallet),
+            loadWalletPlaylists(wallet)
+        ]);
+        walletMusicState.library = libraryResult.items;
+        walletMusicState.playlists = playlistsResult.items;
+        walletMusicState.libraryError = libraryResult.error;
+        walletMusicState.playlistsError = playlistsResult.error;
+    }
+
+    renderMusicTab();
 }
 
 function renderMusicTab() {
     const musicContent = document.getElementById('musicTabContent');
     if (!musicContent) return;
 
-    const library = MusicModule.getLibrary();
-    const playlists = MusicModule.getPlaylists();
+    const library = walletMusicState.library || [];
+    const playlists = walletMusicState.playlists || [];
 
     const lang = getCurrentLang();
     const isGreek = isGreekLang(lang);
@@ -2789,6 +2879,9 @@ function renderMusicTab() {
     const noPlaylistsLabel = isGreek ? 'Δεν βρέθηκαν λίστες' : 'No playlists found';
 
     // Render library tracks
+    const libraryError = walletMusicState.libraryError;
+    const playlistsError = walletMusicState.playlistsError;
+
     const libraryHtml = library.length > 0
         ? library.map(track => {
             const trackIdSafe = (track.id || track.track_id || '').toString().replace(/'/g, "\\'");
@@ -2809,7 +2902,7 @@ function renderMusicTab() {
             </div>
             `;
         }).join('')
-        : `<div class="music-empty">${noTracksLabel}</div>`;
+        : `<div class="music-empty">${libraryError ? (isGreek ? 'Δεν φορτώθηκε η βιβλιοθήκη' : 'Library unavailable') : noTracksLabel}</div>`;
 
     // Render playlists
     const playlistsHtml = playlists.length > 0
@@ -2831,11 +2924,38 @@ function renderMusicTab() {
                 </div>
             `;
         }).join('')
-        : `<div class="music-empty">${noPlaylistsLabel}</div>`;
+        : `
+            <div class="music-empty">
+                ${playlistsError ? (isGreek ? 'Δεν φορτώθηκαν playlists.' : 'Playlists failed to load.') : noPlaylistsLabel}
+                ${playlistsError ? `<button onclick="reloadWalletPlaylists()" style="margin-left:8px; background: transparent; border: 1px solid rgba(0,255,102,0.4); color: #0f0; padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 10px;">${isGreek ? 'Retry' : 'Retry'}</button>` : ''}
+            </div>
+        `;
 
     const newPlaylistBtn = isGreek ? '➕ Νέα Playlist' : '➕ New Playlist';
+    const sessionLabel = isGreek ? 'Έλεγχοι συνεδρίας' : 'Session controls';
+    const startLabel = isGreek ? 'Έναρξη' : 'Start';
+    const endLabel = isGreek ? 'Λήξη' : 'End';
+    const fullPageLabel = isGreek ? 'Πλήρης Σελίδα' : 'Full Page';
+
+    // Check session status
+    const isSessionActive = window.MusicModal?.isSessionActive?.() || false;
+    const sessionId = window.MusicModal?.getSessionId?.() || '';
+    const sessionStatusHtml = isSessionActive
+        ? `<div style="margin-top: 8px; font-size: 11px; color: #b6ffcc;">${isGreek ? 'Συνεδρία ενεργή' : 'Session started'}: ${sessionId}</div>`
+        : '';
 
     const html = `
+        <!-- Session Controls -->
+        <div class="music-section" style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid rgba(0,255,102,0.2);">
+            <div class="music-section-title" style="font-size: 12px; color: #9f9; margin-bottom: 8px;">${sessionLabel}</div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <button class="wallet-mini-btn" onclick="window.MusicModal?.startSession(); setTimeout(() => renderMusicTab(), 500);">▶️ ${startLabel}</button>
+                <button class="wallet-mini-btn" onclick="window.MusicModal?.endSession(); setTimeout(() => renderMusicTab(), 500);">⏹️ ${endLabel}</button>
+                <button class="wallet-mini-btn" onclick="window.open('/music', '_blank')">🎧 ${fullPageLabel}</button>
+            </div>
+            ${sessionStatusHtml}
+        </div>
+
         <div class="music-section">
             <div class="music-section-title">${libraryLabel}</div>
             ${libraryHtml}
@@ -2854,6 +2974,15 @@ function renderMusicTab() {
     musicContent.innerHTML = html;
 }
 
+async function reloadWalletPlaylists() {
+    const wallet = walletSession.getAddress();
+    if (!wallet) return;
+    const result = await loadWalletPlaylists(wallet);
+    walletMusicState.playlists = result.items;
+    walletMusicState.playlistsError = result.error;
+    renderMusicTab();
+}
+
 // PR-5g: Play track from wallet widget (online or offline)
 async function playWalletTrack(trackId, isOffline = false) {
     if (typeof GlobalMusicPlayer === 'undefined') {
@@ -2870,15 +2999,15 @@ async function playWalletTrack(trackId, isOffline = false) {
             const wallet = walletSession.getAddress();
             if (!wallet) return;
 
-            const res = await fetch(`/api/music/offline/${encodeURIComponent(wallet)}`);
+            const res = await fetch(buildWalletMusicApiUrl(`/api/music/offline/${encodeURIComponent(wallet)}`));
             const data = await res.json();
 
             if (data.ok && data.tracks) {
                 track = data.tracks.find(t => (t.id || t.track_id) === trackId);
             }
         } else {
-            // Get online track from library
-            const library = MusicModule.getLibrary();
+            // Get online track from library (use walletMusicState which is loaded from API/MusicModule)
+            const library = walletMusicState.library || [];
             track = library.find(t => (t.id || t.track_id) === trackId);
         }
 
@@ -2922,12 +3051,11 @@ async function createPlaylistFromWallet() {
         }
 
         // Create via API
-        const res = await fetch('/api/music/playlist/update', {
+        const res = await fetch(buildWalletMusicApiUrl('/api/music/playlists/create'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 address: address,
-                action: 'create',
                 name: name.trim(),
                 auth_secret: authSecret
             })
@@ -2935,9 +3063,8 @@ async function createPlaylistFromWallet() {
 
         const data = await res.json();
         if (data.ok) {
-            // Refresh music tab
-            await MusicModule.init(address);
-            renderMusicTab();
+            // Refresh music tab - reload everything
+            await loadMusicTab();
             alert('✅ Playlist created!');
         } else {
             alert(`❌ Error: ${data.error}`);
@@ -2959,8 +3086,8 @@ async function createPlaylistFromWallet() {
 // PR-5e: Play playlist from wallet widget using GlobalMusicPlayer
 async function playWalletPlaylist(playlistId, shuffleMode = false) {
     try {
-        // Get playlist from MusicModule
-        const playlists = MusicModule.getPlaylists();
+        // Get playlist from walletMusicState (loaded from API/MusicModule)
+        const playlists = walletMusicState.playlists || [];
         const playlist = playlists.find(p => (p.playlist_id || p.id) === playlistId);
 
         if (!playlist) {
@@ -2973,7 +3100,7 @@ async function playWalletPlaylist(playlistId, shuffleMode = false) {
         if (tracks.length === 0 && playlist.track_ids && playlist.track_ids.length > 0) {
             // Fetch full playlist data
             const wallet = walletSession.getAddress();
-            const res = await fetch(`/api/music/playlists?address=${encodeURIComponent(wallet)}`);
+            const res = await fetch(buildWalletMusicApiUrl(`/api/music/playlists?address=${encodeURIComponent(wallet)}`));
             const data = await res.json();
             if (data.ok && data.playlists) {
                 const fullPlaylist = data.playlists.find(p => (p.playlist_id || p.id) === playlistId);
@@ -3047,7 +3174,7 @@ async function loadOfflineTab() {
         `;
 
         // Fetch offline tracks
-        const res = await fetch(`/api/music/offline/${encodeURIComponent(wallet)}`);
+        const res = await fetch(buildWalletMusicApiUrl(`/api/music/offline/${encodeURIComponent(wallet)}`));
         const data = await res.json();
 
         if (data.ok && data.tracks && data.tracks.length > 0) {
@@ -3143,25 +3270,6 @@ function closeSendModal(event) {
             clearInterval(txPollInterval);
             txPollInterval = null;
         }
-    }
-}
-
-function openMusicModal() {
-    const modal = document.getElementById('musicModal');
-    if (!modal) return;
-    modal.classList.add('open');
-    if (window.MusicModal && typeof window.MusicModal.open === 'function') {
-        window.MusicModal.open();
-    }
-}
-
-function closeMusicModal(event) {
-    if (event && event.target && event.target.id !== 'musicModal') return;
-    const modal = document.getElementById('musicModal');
-    if (!modal) return;
-    modal.classList.remove('open');
-    if (window.MusicModal && typeof window.MusicModal.close === 'function') {
-        window.MusicModal.close();
     }
 }
 
@@ -3412,108 +3520,93 @@ function applyHistoryFilter(filterKey) {
 }
 
 function getTxType(tx) {
+    // Full 13-category mapping for wallet history tabs
     const category = (tx.category || '').toLowerCase();
-    if ([
-        'thr',
-        'mining',
-        'tokens',
-        'l2e',
-        'ai_credits',
-        'architect_ai_jobs',
-        'iot',
-        'bridge',
-        'swaps',
-        'liquidity',
-        'gateway',
-        'music',
-    ].includes(category)) {
-        return category;
-    }
-
     const raw = (tx.kind || tx.type || '').toLowerCase();
-    const asset = (tx.asset_symbol || tx.asset || tx.symbol || 'THR').toUpperCase();
+    const symbol = (tx.symbol || tx.asset_symbol || '').toUpperCase();
 
-    // Mining rewards
-    if (raw === 'mining' || raw === 'block_reward' || raw === 'mining_reward' || raw.includes('mined')) {
+    // === MINING ===
+    if (raw === 'mining' || raw === 'block_reward' || raw === 'mining_reward' ||
+        raw.includes('mined') || raw.includes('mining') || category === 'mining') {
         return 'mining';
     }
 
-    // PR-5c: Music tips
-    if (raw === 'music_tip' || raw.includes('music')) {
+    // === MUSIC ===
+    if (raw === 'music_tip' || raw === 'music_play' || raw === 'music_offline_tip' ||
+        raw === 'royalty' || raw === 'play_reward' ||
+        raw.includes('music') || raw.startsWith('music_') ||
+        category === 'music' || category === 'music_tip') {
         return 'music';
     }
 
-    // THR transfers: must be transfer/thr_transfer AND asset must be THR
-    if ((raw === 'thr_transfer' || raw === 'transfer') && asset === 'THR') {
-        return 'thr';
+    // === L2E (Learn-to-Earn specific) ===
+    if (raw === 'l2e' || raw === 'l2e_reward' || raw === 'learn_reward' ||
+        category === 'l2e' || symbol === 'L2E') {
+        return 'l2e';
     }
 
-    // Token transfers: must be token_transfer AND asset must NOT be THR
-    if (raw === 'token_transfer' && asset !== 'THR') {
-        return 'tokens';
+    // === AI CREDITS (Chat) ===
+    if (raw.startsWith('ai_credit') || raw === 'ai_credits' ||
+        raw === 'ai_credits_earned' || raw === 'ai_credits_spent' ||
+        category === 'ai_credits') {
+        return 'ai_credits';
     }
 
-    // Liquidity events
-    if (raw.startsWith('liquidity_') ||
-        raw === 'add_liquidity' ||
-        raw === 'remove_liquidity' ||
-        raw === 'pool_create' ||
-        raw === 'pool_add_liquidity' ||
-        raw === 'pool_remove_liquidity' ||
-        raw === 'pool_add' ||
-        raw === 'pool_remove') {
+    // === ARCHITECT / AI JOBS ===
+    if (raw.startsWith('ai_job') || raw === 'architect_job' || raw === 'architect' ||
+        raw === 'ai_reward' || category === 'architect_ai_jobs' || category === 'ai_reward') {
+        return 'architect';
+    }
+
+    // === IoT / TELEMETRY ===
+    if (raw === 'iot' || raw === 'iot_telemetry' || raw === 'autopilot' || raw === 'parking' ||
+        raw === 'telemetry' || category === 'iot' || category === 'iot_telemetry') {
+        return 'iot';
+    }
+
+    // === SWAPS ===
+    if (raw === 'swap' || raw === 'pool_swap' || category === 'swaps') {
+        return 'swaps';
+    }
+
+    // === LIQUIDITY ===
+    if (raw === 'add_liquidity' || raw === 'remove_liquidity' ||
+        raw === 'pool_create' || raw === 'pool_add_liquidity' || raw === 'pool_remove_liquidity' ||
+        raw === 'pool_add' || raw === 'pool_remove' || raw.startsWith('liquidity_') ||
+        category === 'liquidity') {
         return 'liquidity';
     }
 
-    const kindMap = {
-        'mining': 'mining',
-        'block_reward': 'mining',
-        'mining_reward': 'mining',
-        'swap': 'swaps',
-        'pool_swap': 'swaps',
-        'bridge': 'bridge',
-        'bridge_in': 'bridge',
-        'bridge_out': 'bridge',
-        'bridge_deposit': 'bridge',
-        'bridge_withdraw': 'bridge',
-        'crosschain': 'bridge',
-        'cross_chain': 'bridge',
-        'l2e': 'l2e',
-        'ai_credit': 'ai_credits',
-        'ai_credits': 'ai_credits',
-        'ai_credits_earned': 'ai_credits',
-        'ai_credits_spent': 'ai_credits',
-        'iot': 'iot',
-        'autopilot': 'iot',
-        'parking': 'iot',
-        'architect_job': 'architect_ai_jobs',
-        'architect': 'architect_ai_jobs',
-        'ai_job_created': 'architect_ai_jobs',
-        'ai_job_progress': 'architect_ai_jobs',
-        'ai_job_completed': 'architect_ai_jobs',
-        'ai_job_reward': 'architect_ai_jobs',
-        'music': 'music',
-        'fiat_onramp': 'gateway',
-        'fiat_offramp': 'gateway',
-        'gateway': 'gateway',
-        'onramp': 'gateway',
-        'offramp': 'gateway',
-    };
-    if (kindMap[raw]) return kindMap[raw];
+    // === BRIDGE ===
+    if (raw === 'bridge' || raw === 'bridge_in' || raw === 'bridge_out' ||
+        raw === 'bridge_deposit' || raw === 'bridge_withdraw' ||
+        raw === 'crosschain' || raw === 'cross_chain' || category === 'bridge') {
+        return 'bridge';
+    }
 
-    // Multi-chain assets detection
-    const multiChainAssets = ['BTC', 'WBTC', 'ETH', 'BNB', 'XRP', 'SOL'];
-    if (multiChainAssets.includes(asset)) {
-        // If it's a bridge-related transaction, keep it as bridge
-        if (raw.includes('bridge') || raw.includes('deposit') || raw.includes('withdraw') || raw.includes('crosschain')) {
-            return 'bridge';
-        }
-        // Otherwise it's a token transfer
+    // === GATEWAY (Fiat on/off ramp) ===
+    if (raw === 'fiat_onramp' || raw === 'fiat_offramp' || raw === 'gateway' ||
+        raw === 'onramp' || raw === 'offramp' || category === 'gateway') {
+        return 'gateway';
+    }
+
+    // === TOKENS (non-THR token transfers) ===
+    if (raw === 'token_transfer' || category === 'tokens' ||
+        (symbol && symbol !== 'THR' && (raw === 'transfer' || !raw))) {
         return 'tokens';
     }
 
-    // Fallback: use already-declared asset variable
-    if (asset && asset !== 'THR') return 'tokens';
+    // === THR (native THR transfers) ===
+    if (raw === 'thr_transfer' || category === 'thr' ||
+        symbol === 'THR' || (!symbol && raw === 'transfer')) {
+        return 'thr';
+    }
+
+    // Fallback to THR for unknown types with from/to
+    if (tx.from && tx.to && (tx.amount !== undefined || tx.value !== undefined)) {
+        return 'thr';
+    }
+
     return 'thr';
 }
 
@@ -3554,11 +3647,17 @@ function formatBytes(value) {
 }
 
 function buildTokenIndexData() {
+    // Experimental/invalid tokens to hide from UI
+    const HIDDEN_TOKENS = ['TOKEN', 'UNKNOWN', 'TEST', 'NULL', ''];
+
     const counts = {};
     allTransactions.forEach(tx => {
         if (getTxType(tx) === 'tokens') {
-            const sym = (tx.symbol || '').toUpperCase() || 'TOKEN';
-            counts[sym] = (counts[sym] || 0) + 1;
+            const sym = (tx.symbol || tx.asset_symbol || tx.asset || '').toUpperCase();
+            // Skip hidden/experimental tokens
+            if (sym && !HIDDEN_TOKENS.includes(sym)) {
+                counts[sym] = (counts[sym] || 0) + 1;
+            }
         }
     });
 
@@ -3566,13 +3665,14 @@ function buildTokenIndexData() {
     if (select) {
         Array.from(select.options).forEach(opt => {
             const sym = (opt.value || '').toUpperCase();
-            if (sym && sym !== 'THR' && counts[sym] === undefined) {
+            if (sym && sym !== 'THR' && !HIDDEN_TOKENS.includes(sym) && counts[sym] === undefined) {
                 counts[sym] = 0;
             }
         });
     }
 
     return Object.keys(counts)
+        .filter(sym => !HIDDEN_TOKENS.includes(sym))
         .sort((a, b) => a.localeCompare(b))
         .map(sym => ({ symbol: sym, count: counts[sym] }));
 }
@@ -3658,6 +3758,15 @@ function renderHistory() {
         filtered = filtered.filter(tx => (tx.symbol || '').toUpperCase() === currentTokenFilter.toUpperCase());
     }
 
+    // Hide experimental/invalid tokens from display
+    const HIDDEN_TOKENS_LIST = ['TOKEN', 'UNKNOWN', 'TEST', 'NULL'];
+    if (currentHistoryFilter === 'tokens') {
+        filtered = filtered.filter(tx => {
+            const sym = (tx.symbol || tx.asset_symbol || tx.asset || '').toUpperCase();
+            return sym && !HIDDEN_TOKENS_LIST.includes(sym);
+        });
+    }
+
     if (filtered.length === 0) {
         content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions in this category</div>';
         return;
@@ -3706,10 +3815,12 @@ function renderHistory() {
         const amountOut = poolEvent?.out_amount ?? tx.amount_out ?? tx.amountOut ?? tx.output_amount ?? tx.received_amount;
         const amountOutNum = (amountOut !== undefined && Number.isFinite(Number(amountOut))) ? Number(amountOut) : null;
 
-        // Determine correct asset symbol for display
-        const displayAsset = txType === 'tokens'
-            ? (tx.asset_symbol || tx.asset || tx.symbol || 'TOKEN')
+        // Determine correct asset symbol for display (avoid experimental 'TOKEN')
+        const rawAsset = txType === 'tokens'
+            ? (tx.asset_symbol || tx.asset || tx.symbol || '')
             : (tx.symbol || tx.asset_symbol || tx.asset || 'THR');
+        const HIDDEN_TOKENS = ['TOKEN', 'UNKNOWN', 'TEST', 'NULL'];
+        const displayAsset = HIDDEN_TOKENS.includes(rawAsset.toUpperCase()) ? 'THR' : (rawAsset || 'THR');
 
         const liquiditySubtype = (tx.subtype || tx.meta?.subtype || '').toLowerCase();
         const isLiquidityRemove = liquiditySubtype === 'remove_liq' || (tx.kind || tx.type || '').toLowerCase().includes('remove');
@@ -3840,22 +3951,40 @@ function renderHistory() {
 }
 
 async function loadWalletHistory(thrAddress) {
-    if (!thrAddress) return [];
-
-    const url = `/api/wallet/history?address=${encodeURIComponent(thrAddress)}&limit=200`;
-
-    if (window.FetchUtils && typeof window.FetchUtils.smartFetchJSON === 'function') {
-        const data = await window.FetchUtils.smartFetchJSON(url);
-        return Array.isArray(data)
-            ? data
-            : (data?.history || data?.txs || data?.transactions || data?.items || []);
+    if (!thrAddress || typeof thrAddress !== 'string') {
+        console.warn('loadWalletHistory: invalid address', thrAddress);
+        return [];
     }
 
-    const res = await fetch(url);
-    const data = res.ok ? await res.json().catch(() => ({})) : {};
-    return Array.isArray(data)
-        ? data
-        : (data?.history || data?.txs || data?.transactions || data?.items || []);
+    // Ensure proper URL format with query string
+    const cleanAddress = thrAddress.trim();
+    if (!cleanAddress) {
+        console.warn('loadWalletHistory: empty address after trim');
+        return [];
+    }
+
+    // Use direct URL to avoid any base URL issues
+    const url = `/api/wallet/history?address=${encodeURIComponent(cleanAddress)}&limit=200`;
+    console.log('[WalletHistory] Fetching:', url);
+
+    try {
+        const res = await fetch(url);
+        if (!res.ok) {
+            console.error('[WalletHistory] HTTP error:', res.status, res.statusText);
+            return [];
+        }
+        const data = await res.json();
+        console.log('[WalletHistory] Response ok:', data?.ok, 'txCount:', data?.transactions?.length || 0);
+
+        // Extract transactions array from response
+        const txs = Array.isArray(data)
+            ? data
+            : (data?.transactions || data?.history || data?.txs || data?.items || []);
+        return txs;
+    } catch (err) {
+        console.error('[WalletHistory] Fetch error:', err);
+        return [];
+    }
 }
 
 async function hydrateHistory(thrAddress) {
@@ -4190,10 +4319,11 @@ async function refreshHistoryFromApi() {
     const addr = walletSession.getAddress();
     if (!addr) return;
     try {
-        const response = await fetch(`/api/history?wallet=${encodeURIComponent(addr)}`);
+        const response = await fetch(`/api/wallet/history?address=${encodeURIComponent(addr)}&limit=200`);
         const data = response.ok ? await response.json() : {};
-        if (Array.isArray(data.history)) {
-            allTransactions = data.history;
+        const txs = Array.isArray(data.transactions) ? data.transactions : (data.history || []);
+        if (Array.isArray(txs)) {
+            allTransactions = txs;
             renderHistory();
         }
     } catch (error) {
@@ -4872,8 +5002,9 @@ function renderTokenInfo(token) {
     const lang = getCurrentLang();
     const isGreek = isGreekLang(lang);
 
-    const logoHtml = token.logo
-        ? `<img src="${token.logo}" alt="${token.symbol}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+    const logoUrl = repairMediaUrl(token.logo);
+    const logoHtml = logoUrl
+        ? `<img src="${logoUrl}" alt="${token.symbol}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
            <span style="display:none; color:${token.color}; font-weight:bold; font-size:24px;">${token.symbol[0]}</span>`
         : `<span style="color:${token.color}; font-weight:bold; font-size:24px;">${token.symbol[0]}</span>`;
 
@@ -5115,7 +5246,7 @@ function downloadCGMinerKit() {
 
             let html = '';
             tokensWithStats.forEach(token => {
-                const logoSrc = token.logo || (token.symbol === 'THR' ? '/static/img/thronos-token.png' : null);
+                const logoSrc = repairMediaUrl(token.logo) || (token.symbol === 'THR' ? '/static/img/thronos-token.png' : null);
                 const logoHtml = logoSrc
                     ? `<img src="${logoSrc}" alt="${token.symbol}" onerror="this.style.display='none'; this.parentElement.innerHTML='<span style=\\'color:${token.color}\\'>${token.symbol[0]}</span>';">`
                     : `<span style="color: ${token.color};">${token.symbol[0]}</span>`;
@@ -5128,8 +5259,13 @@ function downloadCGMinerKit() {
                     ? Number(token.total_supply).toLocaleString('en-US', {maximumFractionDigits: 0})
                     : '';
 
+                // Show name if different from symbol, otherwise just symbol
+                const displayName = token.name && token.name !== token.symbol
+                    ? token.name
+                    : token.symbol;
+
                 html += `
-                    <div class="chain-token-pill" title="${token.name} - ${holdersText || '0'} holders" onclick="openTokenInfoModal('${token.symbol}')" style="cursor: pointer;">
+                    <div class="chain-token-pill" title="${token.name || token.symbol} (${token.symbol}) - ${holdersText || '0'} holders" onclick="openTokenInfoModal('${token.symbol}')" style="cursor: pointer;">
                         <div class="chain-token-logo" style="border-color: ${token.color};">${logoHtml}</div>
                         <span class="chain-token-symbol">${token.symbol}</span>
                         ${holdersText ? `<span class="chain-token-holders">${holdersText}</span>` : ''}

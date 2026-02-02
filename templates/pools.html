@@ -1289,12 +1289,22 @@ async function addLiquidity(poolId) {
         return;
     }
 
-    // Prompt for amounts
-    const amountA = prompt(`Enter amount of ${pool.token_a} to add:`);
+    // Calculate current pool ratio for helper text
+    const reservesA = parseFloat(pool.reserves_a) || 0;
+    const reservesB = parseFloat(pool.reserves_b) || 0;
+    const ratio = reservesB > 0 ? (reservesA / reservesB).toFixed(6) : 'N/A';
+    const ratioHint = reservesB > 0 ? `\n(Current ratio: 1 ${pool.token_b} = ${ratio} ${pool.token_a})` : '';
+
+    // Prompt for amounts with ratio hint
+    const amountA = prompt(`Enter amount of ${pool.token_a} to add:${ratioHint}`);
     if (!amountA || isNaN(amountA) || parseFloat(amountA) <= 0) return;
 
-    const amountB = prompt(`Enter amount of ${pool.token_b} to add:`);
-    if (!amountB || isNaN(amountB) || parseFloat(amountB) <= 0) return;
+    // Auto-calculate suggested amount B based on pool ratio
+    const suggestedB = reservesA > 0 ? (parseFloat(amountA) * reservesB / reservesA).toFixed(6) : '';
+    const amountBHint = suggestedB ? `\n(Suggested: ${suggestedB} ${pool.token_b} to match ratio)` : '';
+    const amountBInput = prompt(`Enter amount of ${pool.token_b} to add:${amountBHint}`, suggestedB);
+    if (!amountBInput || isNaN(amountBInput) || parseFloat(amountBInput) <= 0) return;
+    const amountB = amountBInput;
 
     const authSecret = walletSession.getSendSeed() || prompt('Enter your auth secret:');
     if (!authSecret) return;
@@ -1331,8 +1341,9 @@ async function addLiquidity(poolId) {
         });
 
         const data = await response.json();
+        console.log('[AddLiquidity] Response:', response.status, data);
 
-        if (response.ok) {
+        if (response.ok && data.status === 'success') {
             let msg = `✅ Liquidity added successfully!\n\nShares minted: ${data.shares_minted}\nYour total shares: ${data.provider_shares}`;
             if (data.referral_bonus) {
                 msg += `\n\n🎁 Referral bonus: ${data.referrer} received ${data.referral_bonus} bonus shares!`;
@@ -1340,7 +1351,10 @@ async function addLiquidity(poolId) {
             alert(msg);
             loadPools(); // Reload pools
         } else {
-            alert(`❌ Error: ${data.message || 'Failed to add liquidity'}`);
+            // Show detailed error message
+            const errorMsg = data.message || data.error || 'Failed to add liquidity';
+            const hint = data.expected_ratio ? `\nExpected ratio: ${data.expected_ratio.toFixed(4)}, You provided: ${data.provided_ratio?.toFixed(4) || 'N/A'}` : '';
+            alert(`❌ Error: ${errorMsg}${hint}`);
         }
     } catch (error) {
         alert(`❌ Error: ${error.message}`);

@@ -30,7 +30,7 @@ from __future__ import annotations
 # - Real Fiat Gateway (Stripe + Bank Withdrawals) (V5.0)
 # - Admin Withdrawal Panel (V5.1)
 
-import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil, sqlite3
+import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil, sqlite3, base64
 import sys
 import atexit
 from collections import Counter
@@ -530,6 +530,7 @@ PROVIDER_HEALTH_TTL = 300  # seconds
 # Lightweight caches for hot endpoints
 MINING_INFO_CACHE: dict = {"ts": 0.0, "data": None}
 LAST_HASH_CACHE: dict = {"ts": 0.0, "data": None}
+HEALTH_CACHE: dict = {"ts": 0.0, "data": None}
 MEMPOOL_COUNT_CACHE: dict = {"ts": 0.0, "count": 0}
 BALANCE_CACHE: dict = {}
 BALANCE_CACHE_TTL = float(os.getenv("BALANCE_CACHE_TTL_SECONDS", "10"))
@@ -539,6 +540,12 @@ WALLET_DATA_CACHE: dict = {}  # {wallet_addr: {"ts": timestamp, "data": dict, "t
 WALLET_DATA_CACHE_TTL = float(os.getenv("WALLET_DATA_CACHE_TTL_SECONDS", "10"))  # Cache wallet data for 10 seconds
 LAST_BLOCK_SNAPSHOT: dict = {}
 MINING_LAST_HASH_CACHE: dict = {"ts": 0.0, "data": None}
+CHAIN_META = {"height": 0, "last_hash": "0" * 64, "last_block": None}
+
+def set_chain_meta(height, last_hash, last_block):
+    CHAIN_META["height"] = height if height is not None else 0
+    CHAIN_META["last_hash"] = last_hash or "0" * 64
+    CHAIN_META["last_block"] = last_block
 
 # ─── PR-182: Multi-Node Role Configuration ────────────────────────────────
 # Node role: "master" or "replica"
@@ -619,7 +626,7 @@ def should_sync_ai_models() -> bool:
     """Check if AI model sync should run on this node (master or ai_core)"""
     return (is_master() or is_ai_core()) and bool(os.getenv("OPENAI_API_KEY"))
 
-def call_ai_core(path: str, payload: dict, timeout: int = 60) -> dict | None:
+def call_ai_core(path: str, payload: dict, timeout: int = 2) -> dict | None:
     """
     Call AI core service for LLM operations (Node 4).
 
@@ -634,6 +641,7 @@ def call_ai_core(path: str, payload: dict, timeout: int = 60) -> dict | None:
     Raises:
         Nothing - returns None on error for graceful fallback
     """
+    timeout = 2
     if not AI_CORE_URL:
         logger.warning("[AI_CORE] AI_CORE_URL not configured, cannot proxy to Node 4")
         return None
@@ -641,7 +649,7 @@ def call_ai_core(path: str, payload: dict, timeout: int = 60) -> dict | None:
     url = f"{AI_CORE_URL.rstrip('/')}/{path.lstrip('/')}"
     try:
         logger.info(f"[AI_CORE] Proxying to {url}")
-        response = requests.post(url, json=payload, timeout=timeout, headers={
+        response = requests.post(url, json=payload, timeout=2, headers={
             "X-Admin-Secret": ADMIN_SECRET,
             "Content-Type": "application/json"
         })
@@ -685,7 +693,8 @@ INDEX_REBUILD_LOCK  = os.path.join(DATA_DIR, "index_rebuild.lock")
 
 # Active peers tracking (for replicas heartbeating to master)
 PEER_TTL_SECONDS = 60  # Peers expire after 60 seconds without heartbeat
-active_peers = {}  # {peer_id: {"last_seen": timestamp, "url": replica_url}}
+PEERS = {}  # {url: {"url": url, "node_role": role, "height": int, "last_seen": ts}}
+active_peers = PEERS  # Backward-compatible alias
 
 # AI commerce
 AI_PACKS_FILE       = os.path.join(DATA_DIR, "ai_packs.json")
@@ -1194,7 +1203,7 @@ def call_claude(model: str, messages: list[dict], max_tokens: int = 2048, temper
             "https://api.anthropic.com/v1/messages",
             headers=headers,
             json=payload,
-            timeout=30,
+            timeout=2,
         )
     except requests.Timeout:
         app.logger.error("Claude timeout", extra={"model": model})
@@ -1239,7 +1248,7 @@ def call_openai_chat(model: str, messages: list[dict], max_tokens: int = 2048, t
             "https://api.openai.com/v1/chat/completions",
             headers=headers,
             json=payload,
-            timeout=30,
+            timeout=2,
         )
     except requests.Timeout:
         app.logger.error("OpenAI timeout", extra={"model": model})
@@ -1278,7 +1287,7 @@ def call_gemini_chat(model: str, messages: list[dict], max_tokens: int = 1024, t
         "generationConfig": {"maxOutputTokens": max_tokens, "temperature": temperature},
     }
     try:
-        resp = requests.post(url, params=params, json=body, timeout=30)
+        resp = requests.post(url, params=params, json=body, timeout=2)
     except requests.Timeout:
         app.logger.error("Gemini timeout", extra={"model": model})
         raise
@@ -1337,7 +1346,7 @@ def refresh_model_catalog(force: bool = False) -> dict:
             res = requests.get(
                 "https://api.openai.com/v1/models",
                 headers={"Authorization": f"Bearer {openai_api_key}"},
-                timeout=8,
+                timeout=2,
             )
             if res.status_code == 200:
                 data = res.json().get("data", [])
@@ -1563,6 +1572,36 @@ def _init_ledger_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_music_artist ON music_plays(artist_address)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_music_timestamp ON music_plays(play_timestamp DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_music_track ON music_plays(track_id)")
+
+        # Music playlists tables (NEW - playlist persistence)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS music_playlists (
+                id TEXT PRIMARY KEY,
+                owner_address TEXT NOT NULL,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_playlists_owner ON music_playlists(owner_address)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_playlists_updated ON music_playlists(updated_at DESC)")
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS music_playlist_items (
+                playlist_id TEXT NOT NULL,
+                track_id TEXT NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0,
+                added_at TEXT NOT NULL,
+                PRIMARY KEY (playlist_id, track_id),
+                FOREIGN KEY (playlist_id) REFERENCES music_playlists(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_playlist_items_playlist ON music_playlist_items(playlist_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_playlist_items_position ON music_playlist_items(position)")
 
     with _get_ledger_db_connection() as conn:
         row = conn.execute("SELECT COUNT(1) AS count FROM balances").fetchone()
@@ -1896,6 +1935,22 @@ def load_json(path, default):
         if ledger_data or USE_SQLITE_LEDGER:
             return ledger_data
     return _load_json_file(path, default)
+
+
+def _seed_chain_meta():
+    try:
+        snapshot = load_json(LAST_BLOCK_FILE, {})
+    except Exception:
+        snapshot = {}
+    if isinstance(snapshot, dict) and snapshot:
+        set_chain_meta(
+            snapshot.get("height", 0),
+            snapshot.get("block_hash") or snapshot.get("last_hash"),
+            snapshot,
+        )
+
+
+_seed_chain_meta()
 
 
 def save_json(path, data):
@@ -3452,7 +3507,7 @@ def normalize_media_url(url: str | None) -> str:
 
     value = url.strip()
 
-    value = re.sub(r"^https?://localhost:\d+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?", "", value, flags=re.IGNORECASE)
     for origin in ("https://thrchain.vercel.app", "https://thrchain.up.railway.app"):
         if value.lower().startswith(origin):
             value = value[len(origin):]
@@ -3492,11 +3547,13 @@ def normalize_media_url(url: str | None) -> str:
 def normalize_image_url(url: str | None) -> str | None:
     if not url:
         return None
-    if url.startswith("http"):
-        return url
-    if url.startswith("/media/"):
-        return f"{MEDIA_URL.rstrip('/')}{url}"
-    return f"{ASSET_CDN_BASE}/{url.lstrip('/')}"
+    # Strip localhost URLs for production safety
+    value = re.sub(r"^https?://localhost:\d+", "", url, flags=re.IGNORECASE)
+    if value.startswith("http"):
+        return value
+    if value.startswith("/media/"):
+        return f"{MEDIA_URL.rstrip('/')}{value}"
+    return f"{ASSET_CDN_BASE}/{value.lstrip('/')}"
 
 
 def get_all_tokens():
@@ -3608,7 +3665,7 @@ def get_wallet_balances(wallet: str):
             "balance": thr_balance,
             "decimals": 6,
             "logo": "/static/img/thronos-token.png",
-            "logo_url": url_for("static", filename="img/thronos-token.png"),
+            "logo_url": url_for("static", filename="img/thronos-token.png", _external=False),
             "color": "#00ff66",
             "chain": "Thronos",
             "type": "native",
@@ -3623,7 +3680,7 @@ def get_wallet_balances(wallet: str):
             "balance": wbtc_balance,
             "decimals": 8,
             "logo": "/static/img/wbtc-logo.png",
-            "logo_url": url_for("static", filename="img/wbtc-logo.png"),
+            "logo_url": url_for("static", filename="img/wbtc-logo.png", _external=False),
             "color": "#f7931a",
             "chain": "Thronos",
             "type": "wrapped",
@@ -3638,7 +3695,7 @@ def get_wallet_balances(wallet: str):
             "balance": l2e_balance,
             "decimals": 6,
             "logo": "/static/img/l2e-logo.png",
-            "logo_url": url_for("static", filename="img/l2e-logo.png"),
+            "logo_url": url_for("static", filename="img/l2e-logo.png", _external=False),
             "color": "#00ccff",
             "chain": "Thronos",
             "type": "reward",
@@ -3648,6 +3705,10 @@ def get_wallet_balances(wallet: str):
             "value_usd": round(l2e_balance * l2e_price * thr_usd, 6) if (l2e_price and thr_usd) else None,
         },
     ]
+
+    for token in tokens:
+        token["logo_url"] = normalize_media_url(token.get("logo_url") or token.get("logo") or "")
+        token["logo"] = token.get("logo_url") or token.get("logo") or ""
 
     custom_tokens = load_custom_tokens()
     for symbol, token_data in custom_tokens.items():
@@ -3677,8 +3738,8 @@ def get_wallet_balances(wallet: str):
             "name": token_data.get("name", symbol),
             "balance": token_balance,
             "decimals": token_data.get("decimals", 6),
-            "logo": logo_path,
-            "logo_url": logo_url,
+            "logo": normalize_media_url(logo_url or ""),
+            "logo_url": normalize_media_url(logo_url or ""),
             "color": token_data.get("color", "#00ff66"),
             "chain": "Thronos",
             "type": "experimental",
@@ -4181,7 +4242,7 @@ def broadcast_tx(tx: dict) -> None:
         try:
             # ensure trailing slash is not duplicated
             url = peer.rstrip("/") + "/api/v1/receive_tx"
-            requests.post(url, json=tx, timeout=3)
+            requests.post(url, json=tx, timeout=2)
         except Exception:
             pass
 
@@ -4194,7 +4255,7 @@ def broadcast_block(block: dict) -> None:
     for peer in peers:
         try:
             url = peer.rstrip("/") + "/api/v1/receive_block"
-            requests.post(url, json=block, timeout=3)
+            requests.post(url, json=block, timeout=2)
         except Exception:
             pass
 
@@ -4983,6 +5044,11 @@ def update_last_block(entry, is_block=True):
     save_json(LAST_BLOCK_FILE, summary)
     LAST_BLOCK_SNAPSHOT.clear()
     LAST_BLOCK_SNAPSHOT.update(summary)
+    set_chain_meta(
+        summary.get("height"),
+        summary.get("block_hash"),
+        summary,
+    )
     LAST_HASH_CACHE.update({
         "ts": time.time(),
         "data": {
@@ -5006,6 +5072,11 @@ def get_last_block_snapshot() -> dict:
             logger.error("Failed to rebuild last block snapshot: %s", exc)
     if isinstance(snapshot, dict):
         LAST_BLOCK_SNAPSHOT.update(snapshot)
+        set_chain_meta(
+            snapshot.get("height"),
+            snapshot.get("block_hash") or snapshot.get("last_hash"),
+            snapshot,
+        )
     return LAST_BLOCK_SNAPSHOT
 
 def verify_btc_payment(btc_address, min_amount=MIN_AMOUNT):
@@ -5749,16 +5820,19 @@ def _categorize_transaction(tx: dict) -> str:
     """
     Categorize a transaction into a specific type for filtering and statistics.
 
-    Categories:
-    - token_transfer: Normal THR/token sends
-    - music_tip: Tips to artists
-    - ai_reward: AI-related rewards/payments
-    - iot_telemetry: IoT device data/GPS
-    - bridge: Bridge in/out transactions
-    - pledge: BTC/fiat pledges
+    Categories (matching frontend wallet history tabs):
+    - thr: THR transfers
     - mining: Block mining rewards
-    - swap: Token swaps
-    - liquidity: Pool adds/removes
+    - tokens: Token operations
+    - l2e: Learn-to-Earn rewards
+    - ai_credits: AI Chat credits (consume, earn, spend)
+    - architect: Architect/AI Jobs (THR billing)
+    - iot: IoT device data/GPS/telemetry
+    - bridge: Bridge in/out transactions
+    - swaps: Pool swap operations
+    - liquidity: Pool add/remove liquidity
+    - gateway: Gateway operations
+    - music: Music tips/plays/royalties
     - other: Everything else
     """
     tx_type = tx.get("type") or tx.get("kind") or ""
@@ -5768,17 +5842,31 @@ def _categorize_transaction(tx: dict) -> str:
     if "music" in tx_type_lower or "tip" in tx_type_lower:
         return "music_tip"
 
-    # AI rewards
-    if "ai" in tx_type_lower or tx_type in ["ai_reward", "ai_job_reward", "ai_job_completed"]:
-        return "ai_reward"
+    # AI Credits (Chat billing) - must check BEFORE generic "ai" match
+    if tx_type in ["credits_consume", "ai_credits", "ai_credit", "ai_credits_earned",
+                   "ai_credits_spent", "ai_credits_refund", "service_payment", "ai_knowledge"]:
+        return "ai_credits"
+
+    # Architect / AI Jobs (THR billing) - check specific types first
+    if tx_type in ["architect_payment", "architect_service", "ai_job_created",
+                   "ai_job_progress", "ai_job_completed", "ai_job_reward",
+                   "t2e_architect_reward"] or tx_type_lower.startswith("ai_job"):
+        return "architect"
+
+    # Train2Earn contributions (credits rewards)
+    if "t2e" in tx_type_lower and "architect" not in tx_type_lower:
+        return "ai_credits"
 
     # Learn-to-earn rewards
     if "l2e" in tx_type_lower or tx_type in ["l2e_reward", "l2e"]:
         return "l2e"
 
-    # IoT telemetry
-    if "iot" in tx_type_lower or "telemetry" in tx_type_lower or "gps" in tx_type_lower:
-        return "iot_telemetry"
+    # IoT (GPS telemetry, autopilot, parking, vehicle data)
+    # Includes: GPS route data for autopilot training, parking reservations, autonomous driving
+    if ("iot" in tx_type_lower or "telemetry" in tx_type_lower or "gps" in tx_type_lower or
+        tx_type in ["autopilot", "parking", "iot_autopilot", "iot_parking",
+                    "iot_parking_reservation", "gps_mining", "route_contribution"]):
+        return "iot"
 
     # Bridge operations
     if "bridge" in tx_type_lower or tx_type in ["bridge", "bridge_in", "bridge_out", "bridge_deposit", "bridge_withdraw", "crosschain", "wbtc_burn"]:
@@ -5792,11 +5880,11 @@ def _categorize_transaction(tx: dict) -> str:
     if tx_type in ["coinbase", "mint", "mining_reward"]:
         return "mining"
 
-    # Swaps
+    # Swaps (category: "swaps" to match frontend filter)
     if "swap" in tx_type_lower:
-        return "swap"
+        return "swaps"
 
-    # Liquidity
+    # Liquidity (category: "liquidity" to match frontend filter)
     if "liquidity" in tx_type_lower or "pool" in tx_type_lower:
         return "liquidity"
 
@@ -5809,6 +5897,22 @@ def _categorize_transaction(tx: dict) -> str:
         return "token_transfer"
 
     return "other"
+
+
+def normalize_history_item(tx: dict) -> dict:
+    sym = (tx.get("symbol") or tx.get("token_symbol") or tx.get("token") or "").upper()
+    kind = (tx.get("kind") or tx.get("type") or "").lower()
+
+    if sym == "CREDITS" and kind in ("token_transfer", "transfer", ""):
+        tx["kind"] = "ai_credit"
+        tx["category"] = "ai"
+        tx["unit"] = "credits"
+
+    if tx.get("reward") is not None and (tx.get("thr_address") or tx.get("miner")):
+        tx["kind"] = "mining_reward"
+        tx["category"] = tx.get("category") or "mining"
+
+    return tx
 
 
 @app.route("/api/transfers", methods=["GET"])
@@ -6035,25 +6139,7 @@ def api_wallet_mining_stats():
     }), 200
 
 
-@app.route("/api/wallet/history", methods=["GET"])
-def api_wallet_history():
-    """
-    Get wallet transaction history with category grouping and summaries (Phase 4).
-
-    Query params:
-    - address: THR address
-    - category: Optional filter (mining, ai_reward, music_tip, iot_telemetry, etc.)
-
-    Returns:
-    - transactions: List of transactions
-    - summary: Category breakdown with totals
-    """
-    address = request.args.get("address", "").strip()
-    category_filter = request.args.get("category", "").strip().lower()
-
-    if not address:
-        return jsonify({"ok": False, "error": "Address required"}), 400
-
+def _collect_wallet_history_transactions(address: str, category_filter: str):
     # Get all transactions
     chain = load_json(CHAIN_FILE, [])
     blocks = get_blocks_for_viewer()
@@ -6061,9 +6147,12 @@ def api_wallet_history():
     # Collect transactions involving this address
     wallet_txs = []
 
-    # 1. Regular chain transactions
+    # 1. Regular chain transactions (skip mining rewards - those come from blocks)
     for tx in chain:
         if not isinstance(tx, dict):
+            continue
+        tx_type = (tx.get("type") or tx.get("kind") or "").lower()
+        if tx_type in ["coinbase", "mining_reward", "mint"]:
             continue
 
         tx_from = tx.get("from") or tx.get("sender")
@@ -6101,17 +6190,69 @@ def api_wallet_history():
             wallet_txs.append(tx_copy)
 
     # 2. Block mining rewards
+    mining_ids = set()
     for block in blocks:
         block_txs = block.get("transactions", [])
         for tx in block_txs:
             if tx.get("type") in ["coinbase", "mining_reward", "mint"]:
                 miner_addr = tx.get("to") or tx.get("thr_address")
                 if miner_addr and miner_addr.lower() == address.lower():
+                    reward_id = f"reward:{block.get('block_hash')}:{miner_addr}"
+                    if reward_id in mining_ids:
+                        continue
+                    mining_ids.add(reward_id)
                     tx_copy = dict(tx)
+                    tx_copy["kind"] = "mining_reward"
+                    tx_copy["type"] = "mining_reward"
                     tx_copy["category"] = "mining"
+                    tx_copy["asset_symbol"] = "THR"
+                    tx_copy["symbol"] = "THR"
+                    tx_copy["from"] = tx_copy.get("from") or "COINBASE"
+                    tx_copy["to"] = miner_addr
                     tx_copy["direction"] = "received"
                     tx_copy["block_height"] = block.get("index")
+                    tx_copy["block_hash"] = block.get("block_hash")
+                    tx_copy["id"] = reward_id
+                    tx_copy["meta"] = {
+                        "block_height": block.get("index"),
+                        "block_hash": block.get("block_hash"),
+                        "fee_burned": block.get("fee_burned"),
+                        "reward_to_miner": block.get("reward_to_miner", block.get("reward")),
+                        "reward_to_ai": block.get("reward_to_ai"),
+                        "source": "stratum" if block.get("is_stratum") else "legacy",
+                    }
+                    tx_copy = normalize_history_item(tx_copy)
                     wallet_txs.append(tx_copy)
+        block_miner = block.get("thr_address") or block.get("miner_address") or block.get("miner")
+        if block_miner and str(block_miner).lower() == address.lower():
+            reward_id = f"reward:{block.get('block_hash')}:{block_miner}"
+            if reward_id in mining_ids:
+                continue
+            mining_ids.add(reward_id)
+            wallet_txs.append(normalize_history_item({
+                "kind": "mining_reward",
+                "type": "mining_reward",
+                "category": "mining",
+                "direction": "received",
+                "from": "COINBASE",
+                "to": block_miner,
+                "asset_symbol": "THR",
+                "symbol": "THR",
+                "amount": float(block.get("reward_to_miner", block.get("reward", 0.0)) or 0.0),
+                "timestamp": block.get("timestamp"),
+                "block_height": block.get("index"),
+                "block_hash": block.get("block_hash"),
+                "thr_address": block_miner,
+                "id": reward_id,
+                "meta": {
+                    "block_height": block.get("index"),
+                    "block_hash": block.get("block_hash"),
+                    "fee_burned": block.get("fee_burned"),
+                    "reward_to_miner": block.get("reward_to_miner", block.get("reward")),
+                    "reward_to_ai": block.get("reward_to_ai"),
+                    "source": "stratum" if block.get("is_stratum") else "legacy",
+                },
+            }))
 
     # Apply category filter
     if category_filter:
@@ -6121,6 +6262,9 @@ def api_wallet_history():
         for key in ("image_url", "logo_url", "audio_url", "cover_url"):
             if key in tx:
                 tx[key] = normalize_media_url(str(tx.get(key) or ""))
+
+    # Sort by timestamp descending
+    wallet_txs.sort(key=lambda t: _parse_timestamp(t.get("timestamp", "")), reverse=True)
 
     # Calculate category summaries
     summary = {
@@ -6168,25 +6312,135 @@ def api_wallet_history():
         if isinstance(summary[key], float):
             summary[key] = round(summary[key], 6)
 
-    # Sort by timestamp descending
-    wallet_txs.sort(key=lambda t: _parse_timestamp(t.get("timestamp", "")), reverse=True)
+    return wallet_txs, summary
+
+
+def _build_wallet_history(address: str, category_filter: str, limit: int, cursor: int):
+    wallet_txs, summary = _collect_wallet_history_transactions(address, category_filter)
+
+    total = len(wallet_txs)
+    paged = wallet_txs[cursor:cursor + limit]
+    next_cursor = cursor + limit if cursor + limit < total else None
+
+    return {
+        "transactions": paged,
+        "summary": summary,
+        "total_transactions": total,
+        "limit": limit,
+        "cursor": cursor,
+        "next_cursor": next_cursor,
+    }
+
+
+def _empty_wallet_history_summary() -> dict:
+    return {
+        "total_mining": 0.0,
+        "total_ai_rewards": 0.0,
+        "total_music_tips_sent": 0.0,
+        "total_music_tips_received": 0.0,
+        "total_iot_rewards": 0.0,
+        "total_sent": 0.0,
+        "total_received": 0.0,
+        "mining_count": 0,
+        "ai_reward_count": 0,
+        "music_tip_count": 0,
+        "iot_count": 0,
+    }
+
+
+def _build_wallet_history_fallback(address: str, limit: int, cursor: int) -> dict:
+    addr_lower = address.lower()
+    entries: list[dict] = []
+    feed = _tx_feed(include_pending=True, include_bridge=True)
+    for tx in feed:
+        if not isinstance(tx, dict):
+            continue
+        parties = set(tx.get("parties") or [])
+        parties.update({tx.get("from"), tx.get("to"), tx.get("trader"), tx.get("thr_address")})
+        parties = {str(p).lower() for p in parties if p}
+        if addr_lower not in parties:
+            continue
+        tx_copy = dict(tx)
+        tx_copy["category"] = tx_copy.get("category") or _categorize_transaction(tx_copy)
+        tx_copy = normalize_history_item(tx_copy)
+        tx_from = tx_copy.get("from")
+        tx_to = tx_copy.get("to")
+        if tx_to and str(tx_to).lower() == addr_lower:
+            tx_copy["direction"] = "received"
+        elif tx_from and str(tx_from).lower() == addr_lower:
+            tx_copy["direction"] = "sent"
+        else:
+            tx_copy["direction"] = "related"
+        for key in ("logo_url", "image_url", "cover_url", "audio_url", "token_logo"):
+            if key in tx_copy:
+                tx_copy[key] = normalize_media_url(str(tx_copy.get(key) or ""))
+        entries.append(tx_copy)
+
+    entries.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    total = len(entries)
+    paged = entries[cursor:cursor + limit]
+    next_cursor = cursor + limit if cursor + limit < total else None
+    return {
+        "transactions": paged,
+        "summary": _empty_wallet_history_summary(),
+        "total_transactions": total,
+        "limit": limit,
+        "cursor": cursor,
+        "next_cursor": next_cursor,
+    }
+
+
+@app.route("/api/wallet/history", methods=["GET"])
+def api_wallet_history():
+    """
+    Get wallet transaction history with category grouping and summaries (Phase 4).
+
+    Query params:
+    - address: THR address
+    - category: Optional filter (mining, ai_reward, music_tip, iot_telemetry, etc.)
+    - limit: Max entries to return (default 200)
+    - cursor: Offset cursor for pagination
+    """
+    address = (request.args.get("address") or request.args.get("wallet") or "").strip()
+    category_filter = request.args.get("category", "").strip().lower()
+    try:
+        limit = min(int(request.args.get("limit", 200)), 500)
+    except Exception:
+        limit = 200
+    try:
+        cursor = max(int(request.args.get("cursor", 0)), 0)
+    except Exception:
+        cursor = 0
+
+    if not address:
+        return jsonify({"ok": False, "error": "Address required"}), 400
+
+    try:
+        payload = _build_wallet_history(address, category_filter, limit, cursor)
+    except Exception as exc:
+        logger.error("[wallet_history] failed: %s", exc)
+        payload = _build_wallet_history_fallback(address, limit, cursor)
+
+    for tx in payload.get("transactions", []):
+        for key in ("logo_url", "image_url", "cover_url", "audio_url", "token_logo"):
+            if key in tx:
+                tx[key] = normalize_media_url(str(tx.get(key) or ""))
 
     return jsonify({
         "ok": True,
         "address": address,
-        "transactions": wallet_txs,
-        "summary": summary,
-        "total_transactions": len(wallet_txs)
+        **payload,
     }), 200
 
 
-@app.route("/wallet")
-def wallet_page():
-    """
-    Full wallet dashboard page with wallet widget.
-    Extends base.html and uses walletSession for connection.
-    """
-    return render_template("thronos_wallet.html")
+# NOTE: /wallet page hidden - use wallet widget in base.html instead
+# @app.route("/wallet")
+# def wallet_page():
+#     """
+#     Full wallet dashboard page with wallet widget.
+#     Extends base.html and uses walletSession for connection.
+#     """
+#     return render_template("thronos_wallet.html")
 
 
 @app.route("/api/v2/wallet/history", methods=["GET"])
@@ -6217,8 +6471,14 @@ def api_v2_wallet_history():
     }
     """
     address = request.args.get("address", "").strip()
-    limit = min(int(request.args.get("limit", 100)), 500)  # Max 500
-    offset = int(request.args.get("offset", 0))
+    try:
+        limit = min(int(request.args.get("limit", 100)), 500)  # Max 500
+    except (TypeError, ValueError):
+        limit = 100
+    try:
+        offset = int(request.args.get("offset", 0))
+    except (TypeError, ValueError):
+        offset = 0
     category_filter = request.args.get("category", "").strip().lower()
     from_date = request.args.get("from_date", "").strip()
     to_date = request.args.get("to_date", "").strip()
@@ -6226,58 +6486,13 @@ def api_v2_wallet_history():
     if not address:
         return jsonify({"ok": False, "error": "Address required"}), 400
 
-    # Get all transactions (use existing logic from /api/wallet/history)
-    chain = load_json(CHAIN_FILE, [])
-    blocks = get_blocks_for_viewer()
-
-    wallet_txs = []
-
-    # Collect chain transactions
-    for tx in chain:
-        if not isinstance(tx, dict):
-            continue
-
-        tx_from = tx.get("from") or tx.get("sender")
-        tx_to = tx.get("to") or tx.get("recipient")
-        tx_address = tx.get("address")
-
-        if address.lower() in [str(tx_from).lower(), str(tx_to).lower(), str(tx_address).lower()]:
-            tx_copy = dict(tx)
-            tx_copy["category"] = _categorize_transaction(tx)
-
-            if tx_to and tx_to.lower() == address.lower():
-                tx_copy["direction"] = "received"
-            elif tx_from and tx_from.lower() == address.lower():
-                tx_copy["direction"] = "sent"
-            else:
-                tx_copy["direction"] = "related"
-
-            wallet_txs.append(tx_copy)
-
-    # Add mining rewards
-    for block in blocks:
-        for tx in block.get("transactions", []):
-            if tx.get("type") in ["coinbase", "mining_reward", "mint"]:
-                miner_addr = tx.get("to") or tx.get("thr_address")
-                if miner_addr and miner_addr.lower() == address.lower():
-                    tx_copy = dict(tx)
-                    tx_copy["category"] = "mining"
-                    tx_copy["direction"] = "received"
-                    tx_copy["block_height"] = block.get("index")
-                    wallet_txs.append(tx_copy)
-
-    # Apply filters
-    if category_filter:
-        wallet_txs = [tx for tx in wallet_txs if tx.get("category", "").lower() == category_filter]
+    wallet_txs, _summary = _collect_wallet_history_transactions(address, category_filter)
 
     if from_date:
         wallet_txs = [tx for tx in wallet_txs if tx.get("timestamp", "") >= from_date]
 
     if to_date:
         wallet_txs = [tx for tx in wallet_txs if tx.get("timestamp", "") <= to_date]
-
-    # Sort by timestamp descending
-    wallet_txs.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
 
     # Pagination
     total = len(wallet_txs)
@@ -6305,6 +6520,46 @@ def wallet_qr_code(thr_addr):
     img.save(buf, format='PNG')
     buf.seek(0)
     return send_file(buf, mimetype="image/png")
+
+
+def _build_qr_payload(network: str | None, address: str) -> str:
+    net = (network or "").strip().lower()
+    if net in {"btc", "bitcoin"}:
+        return f"bitcoin:{address}"
+    if net in {"eth", "ethereum"}:
+        return f"ethereum:{address}"
+    if net in {"bnb", "bsc"}:
+        return f"bnb:{address}"
+    if net in {"xrp", "ripple"}:
+        return f"xrp:{address}"
+    return address
+
+
+def _qr_response(payload: str, force_json: bool = False):
+    img = qrcode.make(payload)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    if force_json:
+        encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
+        return jsonify({"ok": True, "data_url": f"data:image/png;base64,{encoded}"}), 200
+    return send_file(buf, mimetype="image/png")
+
+
+@app.route("/api/qr")
+@app.route("/api/bridge/qr")
+def api_qr():
+    address = (request.args.get("address") or request.args.get("thr_address") or "").strip()
+    if not address:
+        return jsonify({"ok": False, "error": "Missing address"}), 400
+    network = request.args.get("network")
+    payload = _build_qr_payload(network, address)
+    wants_json = (request.args.get("format") or "").lower() == "json"
+    wants_json = wants_json or (request.args.get("json") or "").lower() in {"1", "true", "yes"}
+    if not wants_json:
+        best = request.accept_mimetypes.best if request.accept_mimetypes else ""
+        wants_json = best == "application/json"
+    return _qr_response(payload, force_json=wants_json)
 
 
 @app.route("/api/wallet/audio/<thr_addr>")
@@ -7154,36 +7409,34 @@ def get_chain():
 
 @app.route("/last_block")
 def api_last_block():
-    return jsonify(load_json(LAST_BLOCK_FILE, {})), 200
+    blk = CHAIN_META.get("last_block")
+    return jsonify(ok=True, block=blk), 200
 
-@app.route("/last_block_hash")
+@app.route("/last_block_hash", methods=["GET"])
 def last_block_hash():
-    start = time.time()
     now = time.time()
-    cached = MINING_LAST_HASH_CACHE.get("data")
-    if cached and now - MINING_LAST_HASH_CACHE.get("ts", 0.0) < 1.0:
-        logger.debug("mining.last_block_hash ms=%s source=cache", int((time.time() - start) * 1000))
-        return jsonify(cached)
+    cached = LAST_HASH_CACHE.get("data")
+    if cached and now - LAST_HASH_CACHE.get("ts", 0.0) < 0.75:
+        return jsonify(cached), 200
 
-    source = "local"
-    last = get_last_block_snapshot()
-    last_hash = last.get("block_hash") or "0" * 64
-    height = last.get("height")
-    timestamp = last.get("timestamp")
+    last_hash = CHAIN_META.get("last_hash") or "0" * 64
+    height = CHAIN_META.get("height", 0)
+    last_block = CHAIN_META.get("last_block") or {}
+    timestamp = last_block.get("timestamp") or ""
     target = get_mining_target()
     nbits = target_to_bits(target)
+
     payload = {
-        "block_hash": last_hash,
+        "ok": True,
         "last_hash": last_hash,
-        "height": height if height is not None else -1,
+        "block_hash": last_hash,
+        "height": int(height) if height is not None and int(height) >= 0 else 0,
         "timestamp": timestamp,
         "target": hex(target),
         "nbits": hex(nbits),
     }
-
-    MINING_LAST_HASH_CACHE.update({"ts": now, "data": payload})
-    logger.debug("mining.last_block_hash ms=%s source=%s", int((time.time() - start) * 1000), source)
-    return jsonify(payload)
+    LAST_HASH_CACHE.update({"ts": now, "data": payload})
+    return jsonify(payload), 200
 
 @app.route("/mining_info")
 def mining_info():
@@ -7393,6 +7646,9 @@ def api_dashboard():
             "ai_balance": ai_balance,
             "chain_height": chain_height,
             "last_block_hash": last_block.get("block_hash", ""),
+            # Token and pool counts for index page stats
+            "token_count": len(load_json(CUSTOM_TOKENS_FILE, [])),
+            "pool_count": len(load_pools()),
         }
 
         return jsonify(response), 200
@@ -7493,54 +7749,29 @@ def api_admin_reindex():
 
 def cleanup_expired_peers():
     """Remove peers that haven't sent heartbeat in PEER_TTL_SECONDS"""
-    global active_peers
+    global PEERS
     now = _now_ts()
-    expired = [peer_id for peer_id, data in active_peers.items()
+    expired = [peer_id for peer_id, data in PEERS.items()
                if now - data.get("last_seen", 0) > PEER_TTL_SECONDS]
     for peer_id in expired:
-        del active_peers[peer_id]
+        del PEERS[peer_id]
     return len(expired)
 
-@app.route("/api/peers/heartbeat", methods=["POST"])
+@app.route("/api/peers/heartbeat", methods=["POST"], endpoint="api_peers_heartbeat")
 def peers_heartbeat():
-    """
-    Replica nodes send heartbeat to master with their peer_id and URL.
-    Master tracks active replicas with TTL of 60 seconds.
-    Fast response (<1-2s) with clear status information.
-    """
-    if NODE_ROLE != "master":
-        return jsonify({"error": "Heartbeats only accepted on master node"}), 403
+    data = request.get_json(silent=True) or {}
+    url = data.get("url")
+    if not url:
+        return jsonify(ok=False, error="missing url"), 400
 
-    data = request.get_json() or {}
-    peer_id = data.get("peer_id") or data.get("node_name")
-    peer_url = data.get("url")
-    peer_role = data.get("role") or data.get("node_role") or "replica"
-    peer_height = data.get("height")
-
-    if not peer_id:
-        return jsonify({"error": "peer_id required"}), 400
-
-    # Update peer tracking
-    active_peers[peer_id] = {
-        "last_seen": _now_ts(),
-        "url": peer_url or "unknown",
-        "node_role": peer_role,
-        "height": peer_height,
+    PEERS[url] = {
+        "url": url,
+        "node_role": data.get("node_role", "replica"),
+        "height": int(data.get("height", -1) or -1),
+        "last_seen": int(time.time()),
     }
-
-    cleanup_expired_peers()
-
-    # Heartbeat should be FAST (<100ms) - no expensive operations
-    # Replica nodes call this every 30s, so we must not load CHAIN_FILE here
-    # (use /api/network_live or /api/network_stats for blockchain height)
-    return jsonify({
-        "ok": True,
-        "role": NODE_ROLE,
-        "peer_id": peer_id,
-        "active_peers": len(active_peers),
-        "peers": list(active_peers.values()),
-        "ttl_seconds": PEER_TTL_SECONDS
-    }), 200
+    peers = list(PEERS.values())
+    return jsonify(ok=True, role=NODE_ROLE, active_peers=len(peers), peers=peers, ttl_seconds=PEER_TTL_SECONDS), 200
 
 @app.route("/api/peers/active", methods=["GET"])
 def peers_active():
@@ -7550,7 +7781,7 @@ def peers_active():
     cleanup_expired_peers()
     return jsonify({
         "ok": True,
-        "active_peers": active_peers,
+        "active_peers": list(PEERS.values()),
         "ttl_seconds": PEER_TTL_SECONDS,
     }), 200
 
@@ -7561,7 +7792,7 @@ def peers_list():
         return jsonify({"error": "Active peers only available on master node"}), 403
     cleanup_expired_peers()
     peers = []
-    for peer_id, data in active_peers.items():
+    for peer_id, data in PEERS.items():
         peers.append({
             "peer_id": peer_id,
             "host": data.get("url"),
@@ -7609,7 +7840,7 @@ def network_live():
 
     # Active peers - use real heartbeat tracking from replicas
     cleanup_expired_peers()  # Remove stale peers
-    active_peers_count = len(active_peers)
+    active_peers_count = len(PEERS)
 
     return jsonify({
         "difficulty":          difficulty,
@@ -7669,14 +7900,100 @@ def api_tx_feed():
     wallet = (request.args.get("wallet") or "").strip()
     kinds_param = request.args.get("kinds") or ""
     exclude_kinds_param = request.args.get("exclude_kinds") or ""
-    limit = min(request.args.get("limit", type=int, default=100), 500)
+    limit_param = request.args.get("limit", type=int)
+    limit = min(limit_param if limit_param is not None else 100, 500)
     include_pending = (request.args.get("include_pending") or "true").lower() != "false"
     include_bridge = (request.args.get("include_bridge") or "true").lower() != "false"
     cursor = request.args.get("cursor", type=int)
-    limit = request.args.get("limit", type=int)
+    paginate = limit_param is not None or cursor is not None
 
     kinds = {k.strip().lower() for k in kinds_param.split(",") if k.strip()}
     exclude_kinds = {k.strip().lower() for k in exclude_kinds_param.split(",") if k.strip()}
+    has_tx_log = bool(load_tx_log())
+
+    def _classify_tx_feed_entry(tx: dict) -> dict:
+        if not isinstance(tx, dict):
+            return tx
+
+        raw_kind = (tx.get("kind") or tx.get("type") or "").lower()
+        has_block_reward = tx.get("reward") is not None or tx.get("reward_to_miner") is not None
+        is_block = raw_kind == "block" or tx.get("type") == "block" or tx.get("block_hash") or has_block_reward
+        if is_block:
+            tx["kind"] = "block"
+            tx["type"] = "block"
+            tx["category"] = "blocks"
+            return tx
+
+        if raw_kind in {"mining_reward", "block_reward"}:
+            tx["category"] = "mining"
+            return tx
+
+        if raw_kind in {"swap", "pool_swap"}:
+            tx["category"] = "dex"
+            return tx
+
+        if raw_kind in {"thr_transfer", "token_transfer", "transfer", "bridge", "bridge_in", "bridge_out"}:
+            tx["category"] = "transfers"
+            return tx
+
+        tx["category"] = tx.get("category") or raw_kind or "other"
+        return tx
+
+    def _build_block_feed(max_items: int) -> list[dict]:
+        blocks = get_blocks_for_viewer()
+        if not blocks:
+            return []
+        entries: list[dict] = []
+        for block in blocks:
+            miner_addr = block.get("thr_address") or block.get("miner_address") or block.get("miner")
+            if wallet and (not miner_addr or str(miner_addr).lower() != wallet.lower()):
+                continue
+            block_hash = block.get("block_hash") or block.get("hash")
+            height = block.get("index")
+            timestamp = block.get("timestamp")
+            base = {
+                "tx_id": block_hash or f"block:{height}",
+                "block_hash": block_hash,
+                "height": height,
+                "timestamp": timestamp,
+                "reward_to_miner": block.get("reward_to_miner", block.get("reward")),
+                "reward_to_ai": block.get("reward_to_ai"),
+                "fee_burned": block.get("fee_burned"),
+                "thr_address": miner_addr,
+                "from": "COINBASE",
+                "to": miner_addr,
+                "kind": "block",
+                "type": "block",
+            }
+            entries.append(_classify_tx_feed_entry(base))
+
+            reward = base.get("reward_to_miner")
+            if reward:
+                reward_entry = {
+                    "tx_id": f"reward:{block_hash or height}:{miner_addr or 'miner'}",
+                    "kind": "mining_reward",
+                    "type": "mining_reward",
+                    "category": "mining",
+                    "timestamp": timestamp,
+                    "amount": reward,
+                    "from": "COINBASE",
+                    "to": miner_addr,
+                    "block_hash": block_hash,
+                    "block_height": height,
+                    "meta": {
+                        "block_height": height,
+                        "block_hash": block_hash,
+                        "fee_burned": block.get("fee_burned"),
+                        "reward_to_miner": reward,
+                        "reward_to_ai": block.get("reward_to_ai"),
+                    },
+                }
+                entries.append(_classify_tx_feed_entry(reward_entry))
+
+            if len(entries) >= max_items:
+                break
+        entries.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        return entries[:max_items]
 
     # Use event index for performance if DB is available
     if USE_SQLITE_LEDGER:
@@ -7699,6 +8016,10 @@ def api_tx_feed():
                     "height": event.get("height"),
                     "metadata": event.get("metadata", {}),
                 }
+                tx = _classify_tx_feed_entry(tx)
+                for key in ("image_url", "logo_url", "audio_url", "cover_url"):
+                    if key in tx:
+                        tx[key] = normalize_media_url(str(tx.get(key) or ""))
 
                 # Apply filters
                 kind = tx["kind"] or "transfer"
@@ -7719,7 +8040,21 @@ def api_tx_feed():
                     counts[k] = counts.get(k, 0) + 1
                 app.logger.info("tx_feed_counts", extra={"counts": counts, "wallet": wallet or None, "source": "event_index"})
 
-            return jsonify(normalized), 200
+            if normalized:
+                if not paginate:
+                    return jsonify(normalized), 200
+                start = max(cursor or 0, 0)
+                cap = max(limit or 200, 1)
+                page = normalized[start:start + cap]
+                next_cursor = start + cap if start + cap < len(normalized) else None
+                reason = None if page else "no_events"
+                return jsonify({
+                    "ok": True,
+                    "items": page,
+                    "cursor": next_cursor,
+                    "has_more": next_cursor is not None,
+                    "reason": reason,
+                }), 200
 
         except Exception as e:
             logger.warning(f"Event index query failed, falling back to chain scan: {e}")
@@ -7732,6 +8067,7 @@ def api_tx_feed():
         kind = _canonical_kind(tx.get("kind") or tx.get("type") or "")
         tx["kind"] = kind or "transfer"
         tx.setdefault("type", tx["kind"])
+        tx = _classify_tx_feed_entry(tx)
 
         # Apply filters
         if kinds and tx["kind"] not in kinds:
@@ -7754,6 +8090,9 @@ def api_tx_feed():
         if len(normalized) >= limit:
             break
 
+    if not normalized and not has_tx_log:
+        normalized = _build_block_feed(limit)
+
     if request.args.get("debug_counts"):
         counts: dict[str, int] = {}
         for tx in normalized:
@@ -7761,7 +8100,7 @@ def api_tx_feed():
             counts[k] = counts.get(k, 0) + 1
         app.logger.info("tx_feed_counts", extra={"counts": counts, "wallet": wallet or None, "source": "chain_scan"})
 
-    if limit is None and cursor is None:
+    if not paginate:
         return jsonify(normalized), 200
 
     start = max(cursor or 0, 0)
@@ -7773,8 +8112,14 @@ def api_tx_feed():
         "ok": True,
         "items": page,
         "cursor": next_cursor,
-        "has_more": next_cursor is not None
+        "has_more": next_cursor is not None,
+        "reason": None if page else "no_events",
     }), 200
+
+
+@app.route("/api/feed_tx")
+def api_feed_tx():
+    return api_tx_feed()
 
 @app.route("/api/transactions")
 def api_transactions():
@@ -7782,87 +8127,26 @@ def api_transactions():
     return jsonify(get_transactions_for_viewer()), 200
 
 
-@app.route("/api/health")
+@app.route("/api/health", methods=["GET"])
 def api_health():
-    """
-    Lightweight health check with chain and version info.
-    FIX 1: Extended with build info for deployment verification.
-    FIX 2: Removed expensive chain loading - health checks must be <100ms.
-    FIX 3: Use in-memory LAST_BLOCK_SNAPSHOT for height (no disk I/O).
+    now = time.time()
+    cached = HEALTH_CACHE.get("data")
+    if cached and now - HEALTH_CACHE.get("ts", 0.0) < 0.75:
+        return jsonify(cached), 200
 
-    Railway/Vercel health checks run every 2-3 seconds. Loading CHAIN_FILE
-    (10MB+) on every check causes severe performance degradation and timeouts.
-    """
-    # Use in-memory cached last block snapshot (no disk I/O, <1ms)
-    last_block = get_last_block_snapshot()
-    height = last_block.get("height", "N/A")
-
-    # CRITICAL FIX #3: Get git commit from env vars (Railway, Vercel, etc) or git command
-    git_commit = "unknown"
-    checked_env = []
-
-    # Try environment variables first (Railway, Vercel, etc)
-    env_vars = ["RAILWAY_GIT_COMMIT_SHA", "GIT_COMMIT", "COMMIT_SHA", "VERCEL_GIT_COMMIT_SHA"]
-    for env_var in env_vars:
-        checked_env.append(env_var)
-        commit_sha = os.getenv(env_var)
-        if commit_sha:
-            # Take first 7 chars for short hash
-            git_commit = commit_sha[:7] if len(commit_sha) > 7 else commit_sha
-            break
-
-    # Fallback: try git command (for local dev)
-    # DISABLED: Git subprocess can hang on Railway/Vercel causing health check timeouts
-    # if git_commit == "unknown":
-    #     try:
-    #         import subprocess
-    #         result = subprocess.run(
-    #             ["git", "rev-parse", "--short", "HEAD"],
-    #             capture_output=True,
-    #             text=True,
-    #             timeout=2,
-    #             cwd=os.path.dirname(os.path.abspath(__file__))
-    #         )
-    #         if result.returncode == 0:
-    #             git_commit = result.stdout.strip()
-    #     except Exception:
-    #         pass
-
-    # FIX 1: Build metadata
-    # DISABLED: File system operations can be slow on networked filesystems
-    # build_time = os.path.getmtime(__file__) if os.path.exists(__file__) else None
-    build_time = None  # Disabled to keep health check fast
-    build_id = f"{git_commit}"  # No timestamp to avoid filesystem access
-
-    build_info = {
-        "git_commit": git_commit,
-        "build_id": build_id,
-        "checked_env": checked_env,  # Show which env vars we checked
-        "build_time": build_time,
-        "DATA_DIR": os.getenv("DATA_DIR", "/app/data"),
-        "node_role": os.getenv("NODE_ROLE", "standalone"),
-        "degraded_mode_enabled": True  # Always use degraded mode patterns
-    }
-
-    # FIX 1: Env presence check (names only, no secrets)
-    env_present = {
-        "OPENAI_API_KEY": bool(os.getenv("OPENAI_API_KEY")),
-        "OPENAI_KEY": bool(os.getenv("OPENAI_KEY")),
-        "ANTHROPIC_API_KEY": bool(os.getenv("ANTHROPIC_API_KEY")),
-        "GEMINI_API_KEY": bool(os.getenv("GEMINI_API_KEY")),
-        "GOOGLE_API_KEY": bool(os.getenv("GOOGLE_API_KEY")),
-        "DATA_DIR": bool(os.getenv("DATA_DIR"))
-    }
-
-    return jsonify({
+    height = int(CHAIN_META.get("height") or 0)
+    if height < 0:
+        height = 0
+    payload = {
         "ok": True,
-        "version": APP_VERSION,
+        "role": NODE_ROLE,
         "chain_height": height,
-        "api_base": API_BASE_PREFIX,
-        "time": datetime.utcnow().isoformat(timespec="seconds") + "Z",
-        "build": build_info,
-        "env_present": env_present
-    }), 200
+        "last_hash": CHAIN_META.get("last_hash") or "0" * 64,
+        "ts": int(now),
+        "version": APP_VERSION,
+    }
+    HEALTH_CACHE.update({"ts": now, "data": payload})
+    return jsonify(payload), 200
 
 
 @app.route("/api/replica_health")
@@ -10327,12 +10611,14 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
         "autopilot": "Autopilot",
         "parking": "Parking",
         "music": "Music",
+        "mining": "Mining Reward",
         "mint": "Token Mint",
         "burn": "Token Burn",
         "gateway": "Gateway",
     }
 
     for norm in _tx_feed():
+        norm = normalize_history_item(dict(norm))
         parties = set(norm.get("parties") or [])
         if thr_addr not in parties and thr_addr not in {norm.get("from"), norm.get("to")}:  # type: ignore[arg-type]
             continue
@@ -10399,6 +10685,7 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
                     "bridge": "bridge",
                     "l2e": "l2e",
                     "ai_credits": "ai_credits",
+                    "ai_credit": "ai_credits",
                     "iot": "iot",
                     "autopilot": "iot",
                     "parking": "iot",
@@ -10462,6 +10749,33 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
             "decimals_is_default": norm.get("decimals_is_default", False) or token_meta.get("decimals_is_default", False),
         })
 
+    for block in get_blocks_for_viewer():
+        miner_addr = block.get("thr_address") or block.get("miner_address") or block.get("miner")
+        if not miner_addr or miner_addr != thr_addr:
+            continue
+        history.append(normalize_history_item({
+            "kind": "mining_reward",
+            "type": "mining_reward",
+            "category": "mining",
+            "category_label": category_labels.get("mining", "Mining Reward"),
+            "asset_symbol": "THR",
+            "symbol": "THR",
+            "amount_in": float(block.get("reward_to_miner", block.get("reward", 0.0)) or 0.0),
+            "amount_out": None,
+            "amounts": None,
+            "subtype": "mining",
+            "fee_burned": block.get("fee_burned", 0.0),
+            "status": "confirmed",
+            "timestamp": block.get("timestamp"),
+            "note": "Mining reward",
+            "direction": "in",
+            "display_amount": float(block.get("reward_to_miner", block.get("reward", 0.0)) or 0.0),
+            "decimals": 6,
+            "block_hash": block.get("block_hash"),
+            "height": block.get("index"),
+            "thr_address": miner_addr,
+        }))
+
     history.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
     return history
 
@@ -10513,14 +10827,47 @@ def api_history():
     category = (request.args.get("category") or "").strip().lower()
     if not thr_addr:
         return jsonify({"ok": False, "error": "Missing wallet address"}), 400
-    history = build_wallet_history(thr_addr)
-    for entry in history:
-        for key in ("image_url", "logo_url", "audio_url", "cover_url"):
-            if key in entry:
-                entry[key] = normalize_media_url(str(entry.get(key) or ""))
-    if category:
-        history = [entry for entry in history if (entry.get("category") or entry.get("kind") or "").lower() == category]
-    return jsonify({"ok": True, "wallet": thr_addr, "history": history}), 200
+    try:
+        try:
+            limit = min(int(request.args.get("limit", 200)), 500)
+        except Exception:
+            limit = 200
+        try:
+            cursor = max(int(request.args.get("cursor", 0)), 0)
+        except Exception:
+            cursor = 0
+        payload = _build_wallet_history(thr_addr, category, limit, cursor)
+        return jsonify({
+            "ok": True,
+            "address": thr_addr,
+            **payload,
+        }), 200
+    except Exception as exc:
+        logger.error("[api_history] failed: %s", exc)
+        summary = {
+            "total_mining": 0.0,
+            "total_ai_rewards": 0.0,
+            "total_music_tips_sent": 0.0,
+            "total_music_tips_received": 0.0,
+            "total_iot_rewards": 0.0,
+            "total_sent": 0.0,
+            "total_received": 0.0,
+            "mining_count": 0,
+            "ai_reward_count": 0,
+            "music_tip_count": 0,
+            "iot_count": 0
+        }
+        return jsonify({
+            "ok": False,
+            "error": "temporary",
+            "address": thr_addr,
+            "transactions": [],
+            "summary": summary,
+            "total_transactions": 0,
+            "limit": 0,
+            "cursor": 0,
+            "next_cursor": None,
+        }), 200
 
 
 def get_token_price_in_thr(symbol):
@@ -11203,9 +11550,15 @@ def api_list_tokens():
             token["logo_url"] = normalize_media_url(f"/static/{logo}")
         else:
             token["logo_url"] = normalize_media_url(token.get("logo_url") or token.get("logo") or token.get("logo_path", ""))
+        token["logo"] = token.get("logo_url") or token.get("logo") or ""
 
     token_list.sort(key=lambda t: t.get("created_at", ""), reverse=True)
     return jsonify({"ok": True, "tokens": token_list}), 200
+
+
+@app.route("/api/tokens")
+def api_tokens_alias():
+    return api_list_tokens()
 
 @app.route("/api/tokens/<symbol>/balance/<address>")
 def api_token_balance(symbol, address):
@@ -11214,6 +11567,8 @@ def api_token_balance(symbol, address):
     token = tokens.get(symbol.upper())
     if not token:
         return jsonify({"ok": False, "error": "Token not found"}), 404
+    token["logo_url"] = normalize_media_url(token.get("logo_url") or token.get("logo") or token.get("logo_path", ""))
+    token["logo"] = token.get("logo_url") or token.get("logo") or ""
     ledger = load_custom_token_ledger(token["id"])
     balance = float(ledger.get(address, 0))
     return jsonify({"ok": True, "symbol": symbol.upper(), "address": address, "balance": balance, "token": token}), 200
@@ -12292,7 +12647,7 @@ def fetch_btc_price():
         resp = requests.get(
             "https://api.coingecko.com/api/v3/simple/price",
             params={"ids": "bitcoin", "vs_currencies": "usd,eur"},
-            timeout=5
+            timeout=2
         )
         if resp.status_code == 200:
             data = resp.json().get("bitcoin", {})
@@ -13202,6 +13557,80 @@ def admin_whitelist_list():
         return jsonify(error="forbidden"),403
     return jsonify(whitelist=load_json(WHITELIST_FILE,[])),200
 
+
+@app.route("/admin/wallet_whitelist/add", methods=["POST"])
+def admin_wallet_whitelist_add():
+    """
+    Add a THR wallet address to the whitelist for send/receive without auth_secret.
+    Requires both admin secret AND a confirmation hash for security.
+    confirmation = SHA256(ADMIN_SECRET + thr_address + "WHITELIST_CONFIRM")
+    """
+    data = request.get_json() or {}
+    if data.get("secret") != ADMIN_SECRET:
+        return jsonify(error="forbidden"), 403
+
+    thr_address = (data.get("thr_address") or "").strip()
+    if not thr_address or not validate_thr_address(thr_address):
+        return jsonify(error="invalid_thr_address"), 400
+
+    # Require confirmation hash for extra security
+    confirmation = (data.get("confirmation") or "").strip()
+    expected_confirm = hashlib.sha256(
+        f"{ADMIN_SECRET}{thr_address}WHITELIST_CONFIRM".encode()
+    ).hexdigest()[:16]  # First 16 chars of hash
+
+    if confirmation != expected_confirm:
+        return jsonify(
+            error="invalid_confirmation",
+            hint="confirmation = SHA256(secret + thr_address + 'WHITELIST_CONFIRM')[:16]"
+        ), 403
+
+    entries = load_json(WHITELIST_WALLETS_FILE, [])
+    # Check if already exists
+    for entry in entries:
+        addr = entry if isinstance(entry, str) else entry.get("address") or entry.get("thr_address")
+        if addr == thr_address:
+            return jsonify(status="already_whitelisted", address=thr_address), 200
+
+    # Add new entry
+    entries.append({
+        "address": thr_address,
+        "active": True,
+        "whitelist_legacy": True,
+        "added_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    })
+    save_json(WHITELIST_WALLETS_FILE, entries)
+    return jsonify(status="ok", address=thr_address, whitelist_count=len(entries)), 200
+
+
+@app.route("/admin/wallet_whitelist/list", methods=["GET"])
+def admin_wallet_whitelist_list():
+    """List all THR wallets in the whitelist."""
+    secret = request.args.get("secret", "")
+    if secret != ADMIN_SECRET:
+        return jsonify(error="forbidden"), 403
+    entries = load_json(WHITELIST_WALLETS_FILE, [])
+    return jsonify(whitelist=entries), 200
+
+
+@app.route("/admin/ai_wallet/status", methods=["GET"])
+def admin_ai_wallet_status():
+    """Get AI wallet status including balance and pledge state."""
+    secret = request.args.get("secret", "")
+    if secret != ADMIN_SECRET:
+        return jsonify(error="forbidden"), 403
+
+    ledger = load_json(LEDGER_FILE, {})
+    balance = float(ledger.get(AI_WALLET_ADDRESS, 0.0))
+    pledge_state = get_effective_pledge_state(AI_WALLET_ADDRESS)
+
+    return jsonify(
+        address=AI_WALLET_ADDRESS,
+        balance=balance,
+        pledge_state=pledge_state,
+        is_whitelisted=is_wallet_whitelisted(AI_WALLET_ADDRESS)
+    ), 200
+
 @app.route("/admin/migrate_seeds", methods=["POST","GET"])
 def admin_migrate_seeds():
     payload=request.get_json() or {}
@@ -13346,6 +13775,8 @@ MINING_WATCHDOG_STATE = {
     "invalid": {},
     "banned": {},
 }
+MINING_JOB_CACHE: dict[str, dict] = {}
+MINING_JOB_TTL_SECONDS = int(os.getenv("MINING_JOB_TTL_SECONDS", "20"))
 
 
 def _prune_watchdog_samples(samples: list[float], now: float, window: int) -> list[float]:
@@ -13397,20 +13828,133 @@ def _mining_watchdog_register_invalid(key: str, now: float) -> bool:
     return False
 
 
+def _prune_mining_jobs(now: float) -> None:
+    expired = [job_id for job_id, job in MINING_JOB_CACHE.items() if job.get("expires_at", 0) <= now]
+    for job_id in expired:
+        MINING_JOB_CACHE.pop(job_id, None)
+
+
+def _create_mining_job(thr_address: str | None = None) -> dict:
+    now = time.time()
+    _prune_mining_jobs(now)
+    last_block = get_last_block_snapshot()
+    prev_hash = last_block.get("block_hash") or "0" * 64
+    tip_height = last_block.get("height")
+    if tip_height is None:
+        block_count = last_block.get("block_count")
+        if block_count is not None:
+            tip_height = int(block_count)
+    height = int(tip_height) + 1 if tip_height is not None else None
+    target = get_mining_target()
+    nbits = target_to_bits(target)
+    job_id = f"job_{int(now * 1000)}_{secrets.token_hex(4)}"
+    expires_at = now + MINING_JOB_TTL_SECONDS
+    MINING_JOB_CACHE[job_id] = {
+        "job_id": job_id,
+        "address": thr_address,
+        "prev_hash": prev_hash,
+        "height": height,
+        "target": target,
+        "expires_at": expires_at,
+    }
+    return {
+        "job_id": job_id,
+        "height": height,
+        "prev_hash": prev_hash,
+        "target": hex(target),
+        "nbits": hex(nbits),
+        "reward": reward,
+        "difficulty_int": difficulty,
+        "expires_at": expires_at,
+    }
+
+
+def _get_job_or_stale(job_id: str, thr_address: str | None, now: float):
+    job = MINING_JOB_CACHE.get(job_id)
+    if not job:
+        return None, ("missing_job", "stale_job")
+    if job.get("expires_at", 0) <= now:
+        MINING_JOB_CACHE.pop(job_id, None)
+        return None, ("expired_job", "stale_job")
+    if job.get("address") and thr_address and job["address"] != thr_address:
+        return None, ("address_mismatch", "unauthorized")
+    return job, None
+
+
 # ─── MINING ENDPOINT ───────────────────────────────
-@app.route("/submit_block", methods=["POST"])
-@app.route("/api/submit_block", methods=["POST"])
-def submit_block():
+def _process_mining_submission(data: dict, require_job_id: bool = False):
     start = time.time()
-    data = request.get_json() or {}
-    thr_address = data.get("thr_address")
+    data = dict(data)
+    if not data.get("pow_hash") and data.get("hash"):
+        data["pow_hash"] = data.get("hash")
+    thr_address = data.get("thr_address") or data.get("address")
     nonce = data.get("nonce")
     if not thr_address or nonce is None:
         logger.debug("submit_block handler took %.3fs", time.time() - start)
-        return jsonify(error="Missing mining data"),400
+        return jsonify(error="Missing mining data"), 400
+
     now = time.time()
     miner_key = _mining_watchdog_key(thr_address)
     submitted_height = data.get("height") or data.get("submitted_height")
+
+    job_id = data.get("job_id")
+    if require_job_id:
+        if not job_id:
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            return jsonify(error="job_id required", reason="missing_job_id"), 400
+        job, err = _get_job_or_stale(job_id, thr_address, now)
+        if err:
+            reason, stale_reason = err
+            last_block = get_last_block_snapshot()
+            tip_height = last_block.get("height")
+            tip_hash = last_block.get("block_hash") or "0" * 64
+            logger.info("mining.stale_block %s", json.dumps({
+                "submitted_height": submitted_height,
+                "tip_height": tip_height,
+                "tip_hash": tip_hash,
+                "prev_hash": data.get("prev_hash"),
+                "reason": reason,
+                "job_id": job_id,
+            }))
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            status = 409 if stale_reason == "stale_job" else 403
+            return jsonify(
+                error="stale_block" if status == 409 else "unauthorized",
+                submitted_height=submitted_height,
+                tip_height=tip_height,
+                tip_hash=tip_hash,
+                reason=reason,
+                job_id=job_id,
+            ), status
+
+        data["prev_hash"] = job.get("prev_hash")
+        data["height"] = job.get("height") or data.get("height")
+        data["submitted_height"] = data.get("height")
+        submitted_height = data.get("height") or data.get("submitted_height")
+        if not data.get("pow_hash"):
+            data["pow_hash"] = data.get("hash")
+
+        last_block = get_last_block_snapshot()
+        server_last_hash = last_block.get("block_hash") or "0" * 64
+        tip_height = last_block.get("height")
+        if data["prev_hash"] != server_last_hash:
+            logger.info("mining.stale_block %s", json.dumps({
+                "submitted_height": data.get("submitted_height"),
+                "tip_height": tip_height,
+                "tip_hash": server_last_hash,
+                "prev_hash": data.get("prev_hash"),
+                "reason": "prev_mismatch",
+                "job_id": job_id,
+            }))
+            logger.debug("submit_block handler took %.3fs", time.time() - start)
+            return jsonify(
+                error="stale_block",
+                submitted_height=data.get("submitted_height"),
+                tip_height=tip_height,
+                tip_hash=server_last_hash,
+                reason="prev_mismatch",
+                job_id=job_id,
+            ), 409
 
     entry = get_mining_whitelist_entry(thr_address)
     if MINING_WHITELIST_ONLY:
@@ -13601,6 +14145,30 @@ def submit_block():
     chain.append(new_block)
     _index_block_event(new_block)  # Index for fast queries
 
+    reward_tx_id = f"reward:{pow_hash}:{thr_address}"
+    reward_tx = {
+        "tx_id": reward_tx_id,
+        "type": "mining_reward",
+        "kind": "mining_reward",
+        "thr_address": thr_address,
+        "from": "COINBASE",
+        "to": thr_address,
+        "amount": miner_share,
+        "timestamp": ts,
+        "height": height,
+        "block_hash": pow_hash,
+        "meta": {
+            "block_height": height,
+            "block_hash": pow_hash,
+            "fee_burned": burn_share,
+            "reward_to_miner": miner_share,
+            "reward_to_ai": ai_share,
+            "source": "stratum" if is_stratum else "legacy",
+        },
+    }
+    persist_normalized_tx(reward_tx)
+    _index_transaction_event(reward_tx)
+
     # include mempool TXs
     pool=load_mempool()
     included=[]
@@ -13659,6 +14227,46 @@ def submit_block():
     print(f"⛏️ Miner {thr_address} found block #{height}! R={total_reward} (m/a/b: {miner_share}/{ai_share}/{burn_share}) | TXs: {len(included)} | Stratum={is_stratum}")
     logger.debug("submit_block handler took %.3fs", time.time() - start)
     return jsonify(status="accepted", height=height, reward=miner_share, tx_included=len(included)), 200
+
+
+@app.route("/submit_block", methods=["POST"])
+@app.route("/api/submit_block", methods=["POST"])
+def submit_block():
+    data = request.get_json() or {}
+    return _process_mining_submission(data, require_job_id=False)
+
+
+@app.route("/api/mining/work")
+def api_mining_work():
+    address = (request.args.get("address") or request.args.get("thr_address") or "").strip() or None
+    job = _create_mining_job(address)
+    return jsonify({"ok": True, **job}), 200
+
+
+@app.route("/api/mining/submit", methods=["POST"])
+def api_mining_submit():
+    data = request.get_json() or {}
+    return _process_mining_submission(data, require_job_id=True)
+
+
+@app.route("/api/miner/work")
+def api_miner_work():
+    """Simple HTTP miner contract (CPU/GPU)."""
+    address = (request.args.get("address") or request.args.get("thr_address") or "").strip() or None
+    job = _create_mining_job(address)
+    return jsonify({
+        "ok": True,
+        **job,
+        "last_hash": job.get("prev_hash"),
+        "header": job.get("prev_hash"),
+    }), 200
+
+
+@app.route("/api/miner/submit", methods=["POST"])
+def api_miner_submit():
+    """Simple HTTP miner submit (CPU/GPU)."""
+    data = request.get_json() or {}
+    return _process_mining_submission(data, require_job_id=False)
 
 
 # ─── BACKGROUND MINTER / WATCHDOG ──────────────────
@@ -14086,24 +14694,83 @@ def api_game_submit_score():
 
 @app.route("/api/v1/balance/<thr_addr>", methods=["GET"])
 def api_v1_balance(thr_addr: str):
-    """Return the current THR balance for the given address."""
+    """Return the current THR balance and all token balances for the given address."""
     ledger = load_json(LEDGER_FILE, {})
+    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+    token_balances = load_token_balances()
+
     try:
-        bal = round(float(ledger.get(thr_addr, 0.0)), 6)
+        thr_bal = round(float(ledger.get(thr_addr, 0.0)), 6)
     except Exception:
-        bal = 0.0
-    return jsonify(address=thr_addr, balance=bal), 200
+        thr_bal = 0.0
+
+    try:
+        wbtc_bal = round(float(wbtc_ledger.get(thr_addr, 0.0)), 6)
+    except Exception:
+        wbtc_bal = 0.0
+
+    # Get all custom token balances for this address
+    tokens = {}
+    for token_symbol, holders in token_balances.items():
+        if thr_addr in holders:
+            try:
+                tokens[token_symbol] = round(float(holders[thr_addr]), 6)
+            except Exception:
+                tokens[token_symbol] = 0.0
+
+    return jsonify(
+        address=thr_addr,
+        balance=thr_bal,  # Keep for backward compatibility
+        balances={
+            "THR": thr_bal,
+            "WBTC": wbtc_bal,
+            **tokens
+        }
+    ), 200
 
 
 @app.route("/api/v1/address/<thr_addr>/history", methods=["GET"])
 def api_v1_address_history(thr_addr: str):
-    """Return the on‑chain transaction history for the specified address."""
+    """Return the on‑chain transaction history for the specified address.
+
+    IMPORTANT: Excludes blocks (entries with 'reward' field) and deduplicates.
+    Only returns actual transactions: transfers, payments, pledges, etc.
+    """
     chain = load_json(CHAIN_FILE, [])
+
+    # Filter: must be dict, match address, and NOT be a block
     history = [
         tx for tx in chain
-        if isinstance(tx, dict) and (tx.get("from") == thr_addr or tx.get("to") == thr_addr)
+        if isinstance(tx, dict)
+        and (tx.get("from") == thr_addr or tx.get("to") == thr_addr)
+        and tx.get("reward") is None  # Exclude blocks
+        and tx.get("kind") != "block"  # Extra safety
     ]
-    return jsonify(address=thr_addr, transactions=history), 200
+
+    # Deduplicate by tx_id if present, or by (kind, timestamp, from, to, amount) tuple
+    seen = set()
+    deduped = []
+    for tx in history:
+        # Primary key: tx_id
+        tx_id = tx.get("tx_id")
+        if tx_id:
+            if tx_id not in seen:
+                seen.add(tx_id)
+                deduped.append(tx)
+        else:
+            # Fallback dedup key
+            key = (
+                tx.get("kind") or tx.get("type"),
+                tx.get("timestamp"),
+                tx.get("from"),
+                tx.get("to"),
+                tx.get("amount")
+            )
+            if key not in seen:
+                seen.add(key)
+                deduped.append(tx)
+
+    return jsonify(address=thr_addr, transactions=deduped), 200
 
 
 @app.route("/api/v1/block/<int:height>", methods=["GET"])
@@ -14158,6 +14825,7 @@ def api_v1_status():
 
 
 @app.route("/api/v1/submit", methods=["POST"])
+@app.route("/api/v1/submit_transaction", methods=["POST"])
 def api_v1_submit_transaction():
     """Submit a signed transaction to the node.  Currently supports only
     basic THR transfers.  The expected JSON payload mirrors the fields
@@ -14234,20 +14902,8 @@ def api_v1_receive_block():
     return jsonify(status="added"), 201
 
 # ─── SCHEDULER ─────────────────────────────────────
-# PR-182: Start scheduler based on NODE_ROLE and SCHEDULER_ENABLED
-# - Master nodes: run chain maintenance jobs (minting, mempool, aggregator)
-# - Replica nodes: can run worker jobs if SCHEDULER_ENABLED=1 (e.g., BTC watcher)
-# - AI Core nodes: run only AI-related jobs (NO chain jobs)
-if is_ai_core() and should_run_schedulers():
-    print(f"[SCHEDULER] Starting as AI_CORE node (SCHEDULER_ENABLED={SCHEDULER_ENABLED})")
-    scheduler=BackgroundScheduler(daemon=True)
-    # AI Core only runs AI jobs (no chain, no mining, no mempool)
-    scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30)
-    scheduler.add_job(distribute_ai_rewards_step, "interval", minutes=int(os.getenv("AI_POOL_DISTRIBUTION_INTERVAL", "30")))
-    scheduler.start()
-    _active_schedulers.append(scheduler)
-    print(f"[SCHEDULER] AI Core jobs started (knowledge watcher, rewards distribution)")
-elif is_master() and should_run_schedulers() and ENABLE_CHAIN:
+# Start scheduler only on master nodes.
+if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
     print(f"[SCHEDULER] Starting as MASTER node (SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")
     scheduler=BackgroundScheduler(daemon=True)
 
@@ -14268,22 +14924,6 @@ elif is_master() and should_run_schedulers() and ENABLE_CHAIN:
     scheduler.start()
     _active_schedulers.append(scheduler)
     print(f"[SCHEDULER] All master jobs started (including telemetry cache, AI rewards distribution)")
-elif is_replica() and SCHEDULER_ENABLED and ENABLE_CHAIN:
-    print(f"[SCHEDULER] Starting as REPLICA node with worker jobs (SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")
-    scheduler=BackgroundScheduler(daemon=True)
-
-    # PR-183: Add BTC pledge watcher for replica nodes
-    try:
-        from btc_pledge_watcher import watch_btc_pledges
-        # Run every 60 seconds to check for new BTC pledges
-        scheduler.add_job(watch_btc_pledges, "interval", seconds=60, id="btc_pledge_watcher")
-        print(f"[SCHEDULER] Added BTC pledge watcher job (every 60s)")
-    except ImportError as e:
-        print(f"[SCHEDULER] BTC pledge watcher not available: {e}")
-
-    scheduler.start()
-    _active_schedulers.append(scheduler)
-    print(f"[SCHEDULER] Replica scheduler started with worker jobs")
 else:
     print(f"[SCHEDULER] Scheduler disabled (NODE_ROLE={NODE_ROLE}, SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")
     scheduler = None
@@ -14327,23 +14967,15 @@ if is_replica() and HEARTBEAT_ENABLED:
 
         while True:
             try:
-                height = -1
-                try:
-                    if READ_ONLY:
-                        health_response = requests.get(f"{MASTER_INTERNAL_URL}/api/health", timeout=3)
-                        if health_response.ok:
-                            height = int(health_response.json().get("chain_height", -1))
-                    else:
-                        snap = get_last_block_snapshot()
-                        height = int(snap.get("height", -1) or -1)
-                except Exception:
-                    height = -1
+                height = int(CHAIN_META.get("height") or 0)
+                if height < 0:
+                    height = 0
                 response = requests.post(
                     heartbeat_url,
                     json={
                         "peer_id": peer_id,
                         "url": replica_url,
-                        "role": NODE_ROLE,
+                        "node_role": NODE_ROLE,
                         "height": height,
                         "timestamp": int(time.time())
                     },
@@ -14351,7 +14983,7 @@ if is_replica() and HEARTBEAT_ENABLED:
                         "X-Admin-Secret": ADMIN_SECRET,
                         "Content-Type": "application/json",
                     },
-                    timeout=10
+                    timeout=2
                 )
                 response_body = response.text[:500]
                 print(f"[HEARTBEAT] Master response status={response.status_code} body={response_body}")
@@ -15451,6 +16083,13 @@ def api_v1_create_course():
     return jsonify(status="success", course=new_course), 201
 
 
+# Alias route for course creation (without versioned prefix)
+@app.route("/api/courses", methods=["POST"])
+def api_courses_create_alias():
+    """Alias for creating courses without versioned prefix - forwards to api_v1_create_course."""
+    return api_v1_create_course()
+
+
 @app.route("/api/v1/courses/<string:course_id>/enroll", methods=["POST"])
 def api_v1_enroll_course(course_id: str):
     """
@@ -15558,6 +16197,12 @@ def api_courses_enroll_alias():
     course_id = (data.get("course_id") or data.get("id") or "").strip()
     if not course_id:
         return jsonify(status="error", message="Missing course_id"), 400
+    return api_v1_enroll_course(course_id)
+
+
+@app.route("/api/courses/<string:course_id>/enroll", methods=["POST"])
+def api_courses_enroll_path_alias(course_id: str):
+    """Alias for enrollment without versioned prefix."""
     return api_v1_enroll_course(course_id)
 
 
@@ -15780,23 +16425,294 @@ def save_quizzes(quizzes):
     save_json(QUIZZES_FILE, quizzes)
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# QUESTION TYPE SYSTEM - Enum + Validators + Grading
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class QuestionType:
+    """Enum-like class for supported quiz question types."""
+    MULTIPLE_CHOICE = "multiple_choice"
+    TRUE_FALSE = "true_false"
+    MULTI_SELECT = "multi_select"
+    SHORT_ANSWER = "short_answer"
+    MATCHING = "matching"
+    ORDERING = "ordering"
+    FILL_BLANK = "fill_blank"
+
+    ALL_TYPES = {
+        MULTIPLE_CHOICE,
+        TRUE_FALSE,
+        MULTI_SELECT,
+        SHORT_ANSWER,
+        MATCHING,
+        ORDERING,
+        FILL_BLANK,
+    }
+
+    # Human-readable labels for UI
+    LABELS = {
+        MULTIPLE_CHOICE: {"en": "Multiple Choice", "el": "Πολλαπλής Επιλογής"},
+        TRUE_FALSE: {"en": "True/False", "el": "Σωστό/Λάθος"},
+        MULTI_SELECT: {"en": "Multi-Select", "el": "Πολλαπλή Επιλογή"},
+        SHORT_ANSWER: {"en": "Short Answer", "el": "Σύντομη Απάντηση"},
+        MATCHING: {"en": "Matching Pairs", "el": "Αντιστοίχιση"},
+        ORDERING: {"en": "Put in Order", "el": "Βάλε σε Σειρά"},
+        FILL_BLANK: {"en": "Fill in the Blank", "el": "Συμπλήρωσε τα Κενά"},
+    }
+
+
+def validate_question_structure(question: dict, qtype: str) -> tuple[bool, str]:
+    """
+    Validate that a question has the correct structure for its type.
+    Returns (is_valid, error_message).
+    """
+    if qtype not in QuestionType.ALL_TYPES:
+        return False, f"Unknown question type: {qtype}"
+
+    prompt = question.get("prompt") or question.get("question") or question.get("text")
+    if not prompt or not str(prompt).strip():
+        return False, "Question prompt/text is required"
+
+    if qtype == QuestionType.MULTIPLE_CHOICE:
+        options = question.get("options", [])
+        if not options or len(options) < 2:
+            return False, "Multiple choice requires at least 2 options"
+        correct = question.get("correct")
+        if correct is None or not isinstance(correct, int) or correct < 0 or correct >= len(options):
+            return False, "Invalid correct answer index for multiple choice"
+
+    elif qtype == QuestionType.TRUE_FALSE:
+        correct = question.get("correct")
+        if correct not in (0, 1, True, False):
+            return False, "True/False correct answer must be 0 (False) or 1 (True)"
+
+    elif qtype == QuestionType.MULTI_SELECT:
+        options = question.get("options", [])
+        if not options or len(options) < 2:
+            return False, "Multi-select requires at least 2 options"
+        correct = question.get("correct", [])
+        if not isinstance(correct, list) or not correct:
+            return False, "Multi-select requires a list of correct indices"
+        if any(not isinstance(i, int) or i < 0 or i >= len(options) for i in correct):
+            return False, "Invalid correct indices for multi-select"
+
+    elif qtype == QuestionType.SHORT_ANSWER:
+        correct_text = question.get("correct_text") or question.get("correct_answers") or question.get("correct")
+        if not correct_text:
+            return False, "Short answer requires correct_text with acceptable answers"
+
+    elif qtype == QuestionType.MATCHING:
+        pairs = question.get("pairs", [])
+        if not pairs or len(pairs) < 2:
+            return False, "Matching requires at least 2 pairs"
+        for i, pair in enumerate(pairs):
+            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                return False, f"Pair {i+1} must be [term, definition]"
+            if not pair[0] or not pair[1]:
+                return False, f"Pair {i+1} has empty term or definition"
+
+    elif qtype == QuestionType.ORDERING:
+        items = question.get("items") or question.get("options", [])
+        if not items or len(items) < 2:
+            return False, "Ordering requires at least 2 items"
+        correct_order = question.get("correct_order")
+        if correct_order is None:
+            # If no correct_order, assume items are in correct order
+            pass
+        elif not isinstance(correct_order, list) or len(correct_order) != len(items):
+            return False, "correct_order must match items length"
+
+    elif qtype == QuestionType.FILL_BLANK:
+        text = question.get("text_with_blanks") or question.get("prompt") or question.get("text")
+        if not text or "___" not in str(text) and "[[" not in str(text):
+            return False, "Fill-blank requires text with ___ or [[blank]] markers"
+        blanks = question.get("blanks", [])
+        if not blanks:
+            return False, "Fill-blank requires blanks array with correct answers"
+
+    return True, ""
+
+
 def normalize_quiz_question_type(raw_type: str | None, *, course_id: str = "", question_id: int | None = None) -> str:
     if not raw_type:
         app.logger.warning("Missing quiz question type; defaulting to multiple_choice", extra={
             "course_id": course_id,
             "question_id": question_id,
         })
-        return "multiple_choice"
+        return QuestionType.MULTIPLE_CHOICE
     normalized = str(raw_type).strip().lower()
-    if normalized in {"single", "mcq", "multiple_choice", "multiple-choice"}:
-        return "multiple_choice"
-    if normalized in {"tf", "true_false", "truefalse"}:
-        return "true_false"
-    if normalized in {"multi_select", "multi-select", "checkbox", "multi"}:
-        return "multi_select"
-    if normalized in {"short_answer", "short", "text", "free_text"}:
-        return "short_answer"
+
+    # Multiple Choice aliases
+    if normalized in {"single", "mcq", "multiple_choice", "multiple-choice", "mc"}:
+        return QuestionType.MULTIPLE_CHOICE
+
+    # True/False aliases
+    if normalized in {"tf", "true_false", "truefalse", "true-false", "boolean"}:
+        return QuestionType.TRUE_FALSE
+
+    # Multi-Select aliases
+    if normalized in {"multi_select", "multi-select", "checkbox", "multi", "checkboxes"}:
+        return QuestionType.MULTI_SELECT
+
+    # Short Answer aliases
+    if normalized in {"short_answer", "short", "text", "free_text", "freetext", "open"}:
+        return QuestionType.SHORT_ANSWER
+
+    # Matching aliases
+    if normalized in {"matching", "match", "pairs", "pair"}:
+        return QuestionType.MATCHING
+
+    # Ordering aliases
+    if normalized in {"ordering", "order", "sequence", "sort", "rank"}:
+        return QuestionType.ORDERING
+
+    # Fill-in-the-blank aliases
+    if normalized in {"fill_blank", "fill-blank", "fillblank", "blank", "fill", "cloze"}:
+        return QuestionType.FILL_BLANK
+
+    # If nothing matches, return as-is (will fail validation later)
     return normalized
+
+
+def grade_question(question: dict, user_answer, qtype: str) -> tuple[bool, any]:
+    """
+    Grade a single question based on its type.
+    Returns (is_correct, correct_answer_for_display).
+    """
+    if qtype == QuestionType.MULTIPLE_CHOICE:
+        correct_answer = question.get("correct")
+        if not isinstance(user_answer, int):
+            try:
+                user_answer = int(user_answer)
+            except (ValueError, TypeError):
+                return False, correct_answer
+        return user_answer == correct_answer, correct_answer
+
+    elif qtype == QuestionType.TRUE_FALSE:
+        correct_answer = question.get("correct")
+        try:
+            user_val = int(user_answer) if isinstance(user_answer, str) else (1 if user_answer else 0)
+        except (ValueError, TypeError):
+            return False, correct_answer
+        return user_val == correct_answer, correct_answer
+
+    elif qtype == QuestionType.MULTI_SELECT:
+        correct_answer = sorted(set(question.get("correct") or []))
+        if isinstance(user_answer, str):
+            try:
+                user_answer = json.loads(user_answer)
+            except Exception:
+                user_answer = [user_answer]
+        if not isinstance(user_answer, list):
+            return False, correct_answer
+        try:
+            chosen = sorted({int(x) for x in user_answer if str(x).isdigit()})
+        except Exception:
+            return False, correct_answer
+        return chosen == correct_answer, correct_answer
+
+    elif qtype == QuestionType.SHORT_ANSWER:
+        raw_expected = question.get("correct_text") or question.get("correct_answers") or question.get("correct") or []
+        if isinstance(raw_expected, str):
+            expected = [t.strip().lower() for t in raw_expected.split(",") if t.strip()]
+        else:
+            expected = [str(t).strip().lower() for t in raw_expected if str(t).strip()]
+        user_value = str(user_answer).strip().lower() if user_answer else ""
+        return user_value in expected, expected
+
+    elif qtype == QuestionType.MATCHING:
+        # user_answer should be a dict/list of pairs mapping left→right indices
+        # e.g., {"0": 1, "1": 0, "2": 2} or [[0,1], [1,0], [2,2]]
+        pairs = question.get("pairs", [])
+        correct_mapping = {i: i for i in range(len(pairs))}  # By default, pairs[i][0] matches pairs[i][1]
+
+        if isinstance(user_answer, dict):
+            try:
+                user_mapping = {int(k): int(v) for k, v in user_answer.items()}
+            except (ValueError, TypeError):
+                return False, correct_mapping
+        elif isinstance(user_answer, list):
+            try:
+                user_mapping = {int(pair[0]): int(pair[1]) for pair in user_answer}
+            except (ValueError, TypeError, IndexError):
+                return False, correct_mapping
+        elif isinstance(user_answer, str):
+            try:
+                parsed = json.loads(user_answer)
+                if isinstance(parsed, dict):
+                    user_mapping = {int(k): int(v) for k, v in parsed.items()}
+                else:
+                    user_mapping = {int(pair[0]): int(pair[1]) for pair in parsed}
+            except Exception:
+                return False, correct_mapping
+        else:
+            return False, correct_mapping
+
+        is_correct = user_mapping == correct_mapping
+        return is_correct, correct_mapping
+
+    elif qtype == QuestionType.ORDERING:
+        # user_answer should be a list of indices in the order chosen by user
+        # e.g., [2, 0, 1, 3] means item at original index 2 is first, etc.
+        items = question.get("items") or question.get("options", [])
+        correct_order = question.get("correct_order")
+        if correct_order is None:
+            # Items are in correct order, so correct_order = [0, 1, 2, ...]
+            correct_order = list(range(len(items)))
+
+        if isinstance(user_answer, str):
+            try:
+                user_answer = json.loads(user_answer)
+            except Exception:
+                return False, correct_order
+
+        if not isinstance(user_answer, list):
+            return False, correct_order
+
+        try:
+            user_order = [int(x) for x in user_answer]
+        except (ValueError, TypeError):
+            return False, correct_order
+
+        return user_order == correct_order, correct_order
+
+    elif qtype == QuestionType.FILL_BLANK:
+        # user_answer should be a list of strings for each blank
+        # e.g., ["answer1", "answer2"]
+        blanks = question.get("blanks", [])
+        if isinstance(user_answer, str):
+            try:
+                user_answer = json.loads(user_answer)
+            except Exception:
+                user_answer = [user_answer]
+
+        if not isinstance(user_answer, list):
+            return False, [b.get("answer") or b for b in blanks]
+
+        if len(user_answer) != len(blanks):
+            return False, [b.get("answer") or b for b in blanks]
+
+        all_correct = True
+        correct_answers = []
+        for i, blank in enumerate(blanks):
+            # Each blank can be a string or dict with "answer" and optional "alternatives"
+            if isinstance(blank, dict):
+                expected = [blank.get("answer", "").strip().lower()]
+                alternatives = blank.get("alternatives", [])
+                expected.extend([str(a).strip().lower() for a in alternatives])
+                correct_answers.append(blank.get("answer", ""))
+            else:
+                expected = [str(blank).strip().lower()]
+                correct_answers.append(str(blank))
+
+            user_val = str(user_answer[i]).strip().lower() if i < len(user_answer) else ""
+            if user_val not in expected:
+                all_correct = False
+
+        return all_correct, correct_answers
+
+    # Unknown type - fail
+    return False, None
 
 
 def get_course_quiz(course_id: str):
@@ -15807,37 +16723,65 @@ def get_course_quiz(course_id: str):
 
     if metadata_quiz:
         normalized_questions = []
-        allowed_types = {"multiple_choice", "true_false", "multi_select", "short_answer"}
         for idx, q in enumerate(metadata_quiz.get("questions", []), start=1):
             options = q.get("options", [])
             qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=idx)
-            if qtype not in allowed_types:
+            if qtype not in QuestionType.ALL_TYPES:
                 app.logger.warning("Unsupported quiz question type; forcing multiple_choice", extra={
                     "course_id": course_id,
                     "question_id": q.get("id") or idx,
                     "type": qtype,
                 })
-                qtype = "multiple_choice"
+                qtype = QuestionType.MULTIPLE_CHOICE
+
             normalized = {
                 "id": q.get("id") or idx,
                 "type": qtype,
-                "question": q.get("text") or q.get("question"),
+                "question": q.get("text") or q.get("question") or q.get("prompt"),
+                "prompt": q.get("prompt") or q.get("text") or q.get("question"),
                 "options": options,
+                "shuffle": q.get("shuffle", False),
             }
-            if qtype == "multi_select":
+
+            # Type-specific normalization
+            if qtype == QuestionType.MULTI_SELECT:
                 raw_correct = q.get("correct") or q.get("correct_indexes") or q.get("correct_indices") or []
                 if isinstance(raw_correct, (int, str)):
                     raw_correct = [raw_correct]
                 normalized["correct"] = [int(x) for x in raw_correct if str(x).isdigit()]
-            elif qtype == "short_answer":
+
+            elif qtype == QuestionType.SHORT_ANSWER:
                 raw_text = q.get("correct_text") or q.get("correct_answers") or q.get("correct") or ""
                 if isinstance(raw_text, str):
                     texts = [t.strip() for t in raw_text.split(",") if t.strip()]
                 else:
                     texts = [str(t).strip() for t in raw_text if str(t).strip()]
                 normalized["correct_text"] = texts
+
+            elif qtype == QuestionType.MATCHING:
+                pairs = q.get("pairs", [])
+                normalized["pairs"] = pairs
+                # Don't include correct mapping in student view
+
+            elif qtype == QuestionType.ORDERING:
+                items = q.get("items") or q.get("options", [])
+                normalized["items"] = items
+                correct_order = q.get("correct_order")
+                if correct_order is None:
+                    normalized["correct_order"] = list(range(len(items)))
+                else:
+                    normalized["correct_order"] = correct_order
+
+            elif qtype == QuestionType.FILL_BLANK:
+                text_with_blanks = q.get("text_with_blanks") or q.get("prompt") or q.get("text") or ""
+                blanks = q.get("blanks", [])
+                normalized["text_with_blanks"] = text_with_blanks
+                normalized["blanks"] = blanks
+
             else:
+                # Multiple choice / True-False
                 normalized["correct"] = int(q.get("correct", q.get("correct_index", 0)))
+
             normalized_questions.append(normalized)
         return {
             "course_id": course_id,
@@ -15850,37 +16794,65 @@ def get_course_quiz(course_id: str):
     quiz = quizzes.get(course_id)
     if quiz:
         normalized_questions = []
-        allowed_types = {"multiple_choice", "true_false", "multi_select", "short_answer"}
         for idx, q in enumerate(quiz.get("questions", []), start=1):
             qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=idx)
-            if qtype not in allowed_types:
+            if qtype not in QuestionType.ALL_TYPES:
                 app.logger.warning("Unsupported quiz question type; forcing multiple_choice", extra={
                     "course_id": course_id,
                     "question_id": q.get("id") or idx,
                     "type": qtype,
                 })
-                qtype = "multiple_choice"
+                qtype = QuestionType.MULTIPLE_CHOICE
+
             normalized = {
-                "id": q.get("id"),
+                "id": q.get("id") or idx,
                 "type": qtype,
-                "question": q.get("question"),
+                "question": q.get("question") or q.get("text") or q.get("prompt"),
+                "prompt": q.get("prompt") or q.get("question") or q.get("text"),
                 "options": q.get("options", []),
+                "shuffle": q.get("shuffle", False),
             }
-            if qtype == "multi_select":
+
+            # Type-specific normalization
+            if qtype == QuestionType.MULTI_SELECT:
                 raw_correct = q.get("correct") or q.get("correct_indexes") or q.get("correct_indices") or []
                 if isinstance(raw_correct, (int, str)):
                     raw_correct = [raw_correct]
                 normalized["correct"] = [int(x) for x in raw_correct if str(x).isdigit()]
-            elif qtype == "short_answer":
+
+            elif qtype == QuestionType.SHORT_ANSWER:
                 raw_text = q.get("correct_text") or q.get("correct_answers") or q.get("correct") or ""
                 if isinstance(raw_text, str):
                     texts = [t.strip() for t in raw_text.split(",") if t.strip()]
                 else:
                     texts = [str(t).strip() for t in raw_text if str(t).strip()]
                 normalized["correct_text"] = texts
+
+            elif qtype == QuestionType.MATCHING:
+                pairs = q.get("pairs", [])
+                normalized["pairs"] = pairs
+
+            elif qtype == QuestionType.ORDERING:
+                items = q.get("items") or q.get("options", [])
+                normalized["items"] = items
+                correct_order = q.get("correct_order")
+                if correct_order is None:
+                    normalized["correct_order"] = list(range(len(items)))
+                else:
+                    normalized["correct_order"] = correct_order
+
+            elif qtype == QuestionType.FILL_BLANK:
+                text_with_blanks = q.get("text_with_blanks") or q.get("prompt") or q.get("text") or ""
+                blanks = q.get("blanks", [])
+                normalized["text_with_blanks"] = text_with_blanks
+                normalized["blanks"] = blanks
+
             else:
+                # Multiple choice / True-False
                 normalized["correct"] = int(q.get("correct", 0))
+
             normalized_questions.append(normalized)
+
         return {
             "course_id": course_id,
             "title": quiz.get("title", "Course Quiz"),
@@ -15888,6 +16860,31 @@ def get_course_quiz(course_id: str):
             "questions": normalized_questions,
         }
     return None
+
+
+@app.route("/api/v1/question_types", methods=["GET"])
+def api_v1_question_types():
+    """Return all supported question types with labels for UI."""
+    types_list = []
+    for qtype in QuestionType.ALL_TYPES:
+        labels = QuestionType.LABELS.get(qtype, {"en": qtype, "el": qtype})
+        types_list.append({
+            "type": qtype,
+            "label_en": labels.get("en", qtype),
+            "label_el": labels.get("el", qtype),
+        })
+    # Sort by a sensible order
+    order = [
+        QuestionType.MULTIPLE_CHOICE,
+        QuestionType.TRUE_FALSE,
+        QuestionType.MULTI_SELECT,
+        QuestionType.MATCHING,
+        QuestionType.ORDERING,
+        QuestionType.FILL_BLANK,
+        QuestionType.SHORT_ANSWER,
+    ]
+    types_list.sort(key=lambda x: order.index(x["type"]) if x["type"] in order else 999)
+    return jsonify(ok=True, types=types_list), 200
 
 
 @app.route("/api/v1/courses/<string:course_id>/quiz", methods=["GET"])
@@ -15976,6 +16973,8 @@ def api_v1_get_quiz_for_edit(course_id: str):
                 "question_el": q.get("question_el"),
                 "options": q.get("options", []),
                 "options_el": q.get("options_el", q.get("options", [])),
+                "explanation": q.get("explanation", ""),  # Teacher's explanation
+                "explanation_el": q.get("explanation_el", q.get("explanation", "")),
             }
             if qtype == "multi_select":
                 raw_correct = q.get("correct") or q.get("correct_indexes") or q.get("correct_indices") or []
@@ -16094,7 +17093,9 @@ def api_v1_create_quiz(course_id: str):
             "id": i + 1,
             "type": qtype,
             "question": question_text,
-            "question_el": q.get("question_el", question_text)
+            "question_el": q.get("question_el", question_text),
+            "explanation": q.get("explanation", ""),  # Teacher's explanation for the answer
+            "explanation_el": q.get("explanation_el", q.get("explanation", ""))  # Greek explanation
         }
 
         # Validate based on type
@@ -16190,7 +17191,7 @@ def api_v1_submit_quiz(course_id: str):
     if student not in course.get("students", []):
         return jsonify(status="error", message="Not enrolled"), 403
 
-    # QUEST: Calculate score with support for multiple question types
+    # QUEST: Calculate score with support for all question types (including matching, ordering, fill_blank)
     questions = quiz.get("questions", [])
     total = len(questions)
     if total == 0:
@@ -16203,64 +17204,15 @@ def api_v1_submit_quiz(course_id: str):
         qid = str(q.get("id"))
         qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=q.get("id"))
         user_answer = answers.get(qid)
-        is_correct = False
-        correct_answer = None
 
-        if qtype not in {"multiple_choice", "true_false", "multi_select", "short_answer"}:
+        if qtype not in QuestionType.ALL_TYPES:
             return jsonify(status="error", message=f"Unsupported question type '{qtype}'"), 400
 
         if user_answer is None:
             return jsonify(status="error", message=f"Missing answer for question {qid}"), 400
 
-        # Deterministic grading per type
-        if qtype == "multiple_choice" or qtype == "true_false":
-            # Single choice or True/False: compare index
-            correct_answer = q.get("correct")
-            if qtype == "multiple_choice":
-                options = q.get("options", [])
-                if not isinstance(user_answer, int) and not (isinstance(user_answer, str) and user_answer.isdigit()):
-                    return jsonify(status="error", message=f"Invalid answer for question {qid}"), 400
-                answer_index = int(user_answer)
-                if answer_index < 0 or answer_index >= len(options):
-                    return jsonify(status="error", message=f"Answer out of range for question {qid}"), 400
-                is_correct = answer_index == correct_answer
-            else:
-                if user_answer not in (0, 1, "0", "1"):
-                    return jsonify(status="error", message=f"Invalid true/false answer for question {qid}"), 400
-                is_correct = int(user_answer) == correct_answer
-        elif qtype == "multi_select":
-            options = q.get("options", [])
-            correct_answer = sorted(set(q.get("correct") or []))
-            if isinstance(user_answer, str):
-                try:
-                    user_answer = json.loads(user_answer)
-                except Exception:
-                    user_answer = [user_answer]
-            if not isinstance(user_answer, list):
-                return jsonify(status="error", message=f"Invalid multi-select answer for question {qid}"), 400
-            try:
-                chosen = sorted({int(x) for x in user_answer if str(x).isdigit()})
-            except Exception:
-                return jsonify(status="error", message=f"Invalid multi-select answer for question {qid}"), 400
-            if not options:
-                return jsonify(status="error", message=f"Invalid options for question {qid}"), 400
-            if any(idx < 0 or idx >= len(options) for idx in chosen):
-                return jsonify(status="error", message=f"Answer out of range for question {qid}"), 400
-            is_correct = chosen == correct_answer
-        elif qtype == "short_answer":
-            raw_expected = q.get("correct_text") or q.get("correct_answers") or q.get("correct") or []
-            if isinstance(raw_expected, str):
-                expected = [t.strip().lower() for t in raw_expected.split(",") if t.strip()]
-            else:
-                expected = [str(t).strip().lower() for t in raw_expected if str(t).strip()]
-            correct_answer = expected
-            if isinstance(user_answer, str):
-                user_value = user_answer.strip().lower()
-            else:
-                user_value = str(user_answer).strip().lower()
-            if not user_value:
-                return jsonify(status="error", message=f"Invalid short answer for question {qid}"), 400
-            is_correct = user_value in expected
+        # Use centralized grading function
+        is_correct, correct_answer = grade_question(q, user_answer, qtype)
 
         if is_correct:
             correct += 1
@@ -16270,7 +17222,9 @@ def api_v1_submit_quiz(course_id: str):
             "type": qtype,
             "correct": is_correct,
             "your_answer": user_answer,
-            "correct_answer": correct_answer
+            "correct_answer": correct_answer,
+            "explanation": q.get("explanation", ""),  # Teacher's explanation for student
+            "explanation_el": q.get("explanation_el", q.get("explanation", ""))
         })
 
     score = round((correct / total) * 100)
@@ -16427,7 +17381,9 @@ def api_l2e_submit_quiz():
             "question_id": qid,
             "correct": is_correct,
             "your_answer": user_answer,
-            "correct_answer": q.get("correct_index")
+            "correct_answer": q.get("correct_index"),
+            "explanation": q.get("explanation", ""),  # Teacher's explanation
+            "explanation_el": q.get("explanation_el", q.get("explanation", ""))
         })
 
     score = round((correct / total) * 100)
@@ -16739,6 +17695,11 @@ def api_v1_get_pools():
     return jsonify(pools=pools), 200
 
 
+@app.route("/api/pools", methods=["GET"])
+def api_pools_alias():
+    return api_v1_get_pools()
+
+
 @app.route("/api/v1/pools/positions/<address>")
 def api_v1_user_positions(address):
     """
@@ -16824,6 +17785,11 @@ def api_v1_user_positions(address):
         "total_value_thr": round(total_value_thr, 6),
         "total_value_usd": round(total_value_usd, 2)
     }), 200
+
+
+@app.route("/api/pools/positions/<address>")
+def api_pools_positions_alias(address):
+    return api_v1_user_positions(address)
 
 
 @app.route("/api/v1/pools/referral/<pool_id>")
@@ -17347,6 +18313,13 @@ def api_v1_add_liquidity():
         response["referrer"] = referrer
 
     return jsonify(response), 200
+
+
+# Alias for add_liquidity without version prefix
+@app.route("/api/pools/add_liquidity", methods=["POST"])
+def api_pools_add_liquidity_alias():
+    """Alias for add_liquidity without /v1/ prefix."""
+    return api_v1_add_liquidity()
 
 
 # ─── REMOVE LIQUIDITY FROM POOL ────────────────────────────────────
@@ -18375,9 +19348,10 @@ def api_chat_sessions_list():
     return resp, 200
 
 
-@app.route("/api/ai/sessions/rename", methods=["POST"])
-def api_ai_session_rename_v2():
-    """Rename a session"""
+# NOTE: Duplicate route removed - /api/ai/sessions/rename is already defined at line ~9935
+# The primary handler (api_ai_session_rename) supports both /api/ai_sessions/rename and /api/ai/sessions/rename
+def api_ai_session_rename_v2_UNUSED():
+    """Rename a session - DISABLED: duplicate route would cause AssertionError"""
     data = request.get_json(silent=True) or {}
     session_id = data.get("id") or data.get("session_id")
     new_title = (data.get("title") or "").strip()
@@ -18929,7 +19903,7 @@ MUSIC_SESSIONS_FILE = os.path.join(DATA_DIR, "music_sessions.json")
 MUSIC_GPS_FILE = os.path.join(DATA_DIR, "music_gps_telemetry.json")
 
 
-def _proxy_music_request(path: str, payload: dict | None = None, timeout: int = 5):
+def _proxy_music_request(path: str, payload: dict | None = None, timeout: int = 2):
     if not READ_ONLY:
         return None
     if MASTER_INTERNAL_URL.startswith("http://localhost"):
@@ -18938,7 +19912,7 @@ def _proxy_music_request(path: str, payload: dict | None = None, timeout: int = 
         response = requests.post(
             f"{MASTER_INTERNAL_URL}{path}",
             json=payload or {},
-            timeout=timeout,
+            timeout=2,
         )
         return response
     except Exception as exc:
@@ -19137,51 +20111,63 @@ def api_music_gps_telemetry():
 
 @app.route("/api/music/tracks")
 def api_music_tracks_compact():
-    """Compact alias for the v1 tracks endpoint."""
+    """Compact alias for the v1 tracks endpoint. Always returns valid JSON."""
     try:
         limit = int(request.args.get("limit", 25))
     except Exception:
         limit = 25
 
-    registry = load_music_registry()
-    tracks = [enrich_track_media(t) for t in registry.get("tracks", []) if t.get("published", True)]
-    tracks.sort(key=lambda t: t.get("uploaded_at", ""), reverse=True)
-    for t in tracks:
-        t["play_count"] = len(registry.get("plays", {}).get(t.get("id"), []))
-    return jsonify({"ok": True, "tracks": tracks[:limit], "total": len(tracks)}), 200
+    try:
+        registry = load_music_registry()
+        tracks = [enrich_track_media(t) for t in registry.get("tracks", []) if t.get("published", True)]
+        tracks.sort(key=lambda t: t.get("uploaded_at", ""), reverse=True)
+        for t in tracks:
+            t["play_count"] = len(registry.get("plays", {}).get(t.get("id"), []))
+        return jsonify({"ok": True, "status": "success", "tracks": tracks[:limit], "total": len(tracks)}), 200
+    except Exception as e:
+        logger.exception("Failed to load music tracks")
+        return jsonify({"ok": False, "tracks": [], "total": 0, "error": str(e)}), 200
 
 
 @app.route("/api/v1/music/tracks")
 def api_v1_music_tracks():
-    """Get all published tracks"""
-    registry = load_music_registry()
-    tracks = [enrich_track_media(t) for t in registry["tracks"] if t.get("published", True)]
-    # Add play counts
-    for track in tracks:
-        track["play_count"] = len(registry["plays"].get(track["id"], []))
-    # Sort by newest first
-    tracks.sort(key=lambda t: t.get("uploaded_at", ""), reverse=True)
-    return jsonify({"status": "success", "tracks": tracks}), 200
+    """Get all published tracks. Always returns valid JSON."""
+    try:
+        registry = load_music_registry()
+        tracks = [enrich_track_media(t) for t in registry.get("tracks", []) if t.get("published", True)]
+        # Add play counts
+        for track in tracks:
+            track["play_count"] = len(registry.get("plays", {}).get(track.get("id"), []))
+        # Sort by newest first
+        tracks.sort(key=lambda t: t.get("uploaded_at", ""), reverse=True)
+        return jsonify({"status": "success", "tracks": tracks}), 200
+    except Exception as e:
+        logger.exception("Failed to load v1 music tracks")
+        return jsonify({"status": "success", "tracks": [], "error": str(e)}), 200
 
 
 @app.route("/api/v1/music/tracks/trending")
 @app.route("/api/music/tracks/trending")
 def api_v1_music_trending():
-    """Get trending tracks (most plays in last 7 days)"""
-    registry = load_music_registry()
-    tracks = [enrich_track_media(t) for t in registry["tracks"] if t.get("published", True)]
+    """Get trending tracks (most plays in last 7 days). Always returns valid JSON."""
+    try:
+        registry = load_music_registry()
+        tracks = [enrich_track_media(t) for t in registry.get("tracks", []) if t.get("published", True)]
 
-    # Calculate recent play counts
-    week_ago = time.time() - (7 * 24 * 60 * 60)
-    for track in tracks:
-        recent_plays = [p for p in registry["plays"].get(track["id"], [])
-                       if float(p.get("timestamp", 0)) > week_ago]
-        track["recent_plays"] = len(recent_plays)
-        track["play_count"] = len(registry["plays"].get(track["id"], []))
+        # Calculate recent play counts
+        week_ago = time.time() - (7 * 24 * 60 * 60)
+        for track in tracks:
+            recent_plays = [p for p in registry.get("plays", {}).get(track.get("id"), [])
+                           if float(p.get("timestamp", 0)) > week_ago]
+            track["recent_plays"] = len(recent_plays)
+            track["play_count"] = len(registry.get("plays", {}).get(track.get("id"), []))
 
-    # Sort by recent plays
-    tracks.sort(key=lambda t: t.get("recent_plays", 0), reverse=True)
-    return jsonify({"status": "success", "tracks": tracks[:20]}), 200
+        # Sort by recent plays
+        tracks.sort(key=lambda t: t.get("recent_plays", 0), reverse=True)
+        return jsonify({"status": "success", "tracks": tracks[:20]}), 200
+    except Exception as e:
+        logger.exception("Failed to load trending tracks")
+        return jsonify({"status": "success", "tracks": [], "error": str(e)}), 200
 
 
 @app.route("/api/v1/music/artist/<artist_address>")
@@ -19253,6 +20239,7 @@ def api_v1_music_register_artist():
 
 
 @app.route("/api/v1/music/upload", methods=["POST"])
+@app.route("/api/music/upload", methods=["POST"])
 def api_v1_music_upload():
     """Upload a new track"""
     # Handle form data
@@ -19260,6 +20247,12 @@ def api_v1_music_upload():
     title = (request.form.get("title") or "").strip()
     genre = (request.form.get("genre") or "Other").strip()
     description = (request.form.get("description") or "").strip()
+    status = (request.form.get("status") or "published").strip().lower()
+    raw_playlist_ids = request.form.getlist("playlist_ids") or []
+    if not raw_playlist_ids:
+        raw_value = (request.form.get("playlist_ids") or "").strip()
+        if raw_value:
+            raw_playlist_ids = [pid.strip() for pid in raw_value.split(",") if pid.strip()]
 
     if not artist_address or not validate_thr_address(artist_address):
         return jsonify({"status": "error", "message": "Invalid artist address"}), 400
@@ -19306,6 +20299,7 @@ def api_v1_music_upload():
                 cover_file.save(os.path.join(MEDIA_DIR, cover_relative))
 
         # Create track entry
+        published = status == "published"
         track = {
             "id": track_id,
             "title": title,
@@ -19318,7 +20312,8 @@ def api_v1_music_upload():
             "cover_path": cover_relative,
             "cover_url": f"/media/{cover_relative}" if cover_relative else None,
             "uploaded_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-            "published": True,
+            "status": "published" if published else "draft",
+            "published": published,
             "tips_total": 0
         }
 
@@ -19328,14 +20323,25 @@ def api_v1_music_upload():
 
         logger.info(f"Track uploaded: {title} by {registry['artists'][artist_address]['name']}")
 
+        playlist_ids = [pid for pid in raw_playlist_ids if pid]
+        for playlist_id in playlist_ids:
+            try:
+                _add_track_to_playlist(playlist_id, track_id, artist_address)
+            except Exception as add_error:
+                logger.warning(f"Failed to add track {track_id} to playlist {playlist_id}: {add_error}")
+
+        track = enrich_track_media(track)
+        track["play_count"] = 0
+
         return jsonify({
+            "ok": True,
             "status": "success",
             "track": track
         }), 201
 
     except Exception as e:
         logger.error(f"Track upload error: {e}", exc_info=True)
-        return jsonify({"status": "error", "message": f"Upload failed: {str(e)}"}), 500
+        return jsonify({"ok": False, "status": "error", "message": f"Upload failed: {str(e)}"}), 500
 
 
 @app.route("/api/v1/music/play/<track_id>", methods=["POST"])
@@ -19441,13 +20447,27 @@ def api_music_play(track_id):
 
 @app.route("/api/v1/music/tip", methods=["POST"])
 def api_v1_music_tip():
-    """Tip an artist for a track"""
+    """
+    Tip an artist for a track.
+
+    Optional GPS telemetry for music-while-traveling integration:
+    - gps_lat/gps_lng: Current location (for trip telemetry)
+    - duration_seconds: How long the track was played
+
+    This data helps train autopilot routes by correlating music listening
+    patterns with travel routes.
+    """
     data = request.get_json() or {}
     track_id = (data.get("track_id") or "").strip()
     from_address = (data.get("from_address") or "").strip()
     amount = float(data.get("amount", 0))
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
+
+    # GPS telemetry for music-while-traveling (optional)
+    gps_lat = data.get("gps_lat")
+    gps_lng = data.get("gps_lng")
+    duration_seconds = data.get("duration_seconds")
 
     if not track_id or not from_address or amount <= 0:
         return jsonify({"status": "error", "message": "Invalid tip parameters"}), 400
@@ -19527,7 +20547,19 @@ def api_v1_music_tip():
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
 
-    logger.info(f"Music tip: {amount} THR from {from_address} to {artist_address} for track {track_id} (artist: {artist_amount}, AI pool: {ai_pool_amount})")
+    # Track music play with GPS telemetry (for autopilot route training)
+    _track_music_play(
+        track_id=track_id,
+        wallet_address=from_address,
+        artist_address=artist_address,
+        duration_seconds=duration_seconds,
+        gps_lat=gps_lat,
+        gps_lng=gps_lng,
+        tip_amount=amount
+    )
+
+    logger.info(f"Music tip: {amount} THR from {from_address} to {artist_address} for track {track_id} (artist: {artist_amount}, AI pool: {ai_pool_amount})" +
+                (f" @ GPS({gps_lat:.4f}, {gps_lng:.4f})" if gps_lat and gps_lng else ""))
 
     return jsonify({
         "status": "success",
@@ -19535,7 +20567,8 @@ def api_v1_music_tip():
         "amount": amount,
         "artist_amount": artist_amount,
         "ai_pool_amount": ai_pool_amount,
-        "new_balance": ledger[from_address]
+        "new_balance": ledger[from_address],
+        "gps_recorded": bool(gps_lat and gps_lng)
     }), 200
 
 
@@ -19587,6 +20620,162 @@ def api_v1_music_search():
 MUSIC_PLAYLISTS_DIR = os.path.join(DATA_DIR, "music", "playlists")
 os.makedirs(MUSIC_PLAYLISTS_DIR, exist_ok=True)
 
+def _get_playlist_rows(owner_address: str | None = None):
+    if not USE_SQLITE_LEDGER:
+        return []
+    query = "SELECT id, owner_address, title, created_at, updated_at FROM music_playlists"
+    params: tuple = ()
+    if owner_address:
+        query += " WHERE owner_address = ?"
+        params = (owner_address,)
+    query += " ORDER BY updated_at DESC"
+    with _get_ledger_db_connection() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _get_playlist_items(playlist_ids: list[str]):
+    if not USE_SQLITE_LEDGER or not playlist_ids:
+        return {}
+    placeholders = ",".join("?" for _ in playlist_ids)
+    query = f"""
+        SELECT playlist_id, track_id, position, added_at
+        FROM music_playlist_items
+        WHERE playlist_id IN ({placeholders})
+        ORDER BY position ASC, added_at ASC
+    """
+    with _get_ledger_db_connection() as conn:
+        rows = conn.execute(query, playlist_ids).fetchall()
+    items_map: dict[str, list[str]] = {}
+    for row in rows:
+        items_map.setdefault(row["playlist_id"], []).append(row["track_id"])
+    return items_map
+
+
+def _hydrate_playlists(playlists: list[dict]):
+    registry = load_music_registry()
+    track_map = {t.get("id"): enrich_track_media(dict(t)) for t in registry.get("tracks", [])}
+    playlist_ids = [p["id"] for p in playlists]
+    items_map = _get_playlist_items(playlist_ids)
+    hydrated = []
+    for playlist in playlists:
+        track_ids = items_map.get(playlist["id"], [])
+        tracks = [track_map[tid] for tid in track_ids if tid in track_map]
+        hydrated.append({
+            "id": playlist["id"],
+            "playlist_id": playlist["id"],
+            "owner_address": playlist["owner_address"],
+            "title": playlist["title"],
+            "name": playlist["title"],
+            "created_at": playlist["created_at"],
+            "updated_at": playlist["updated_at"],
+            "track_ids": track_ids,
+            "tracks": tracks,
+            "track_count": len(track_ids),
+        })
+    return hydrated
+
+
+def _create_music_playlist(owner_address: str, title: str):
+    if not USE_SQLITE_LEDGER:
+        raise RuntimeError("SQLite disabled")
+    playlist_id = f"pl_{int(time.time())}_{secrets.token_hex(4)}"
+    now = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    with _get_ledger_db_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO music_playlists (id, owner_address, title, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (playlist_id, owner_address, title, now, now),
+        )
+    return {
+        "id": playlist_id,
+        "playlist_id": playlist_id,
+        "owner_address": owner_address,
+        "title": title,
+        "name": title,
+        "created_at": now,
+        "updated_at": now,
+        "track_ids": [],
+        "tracks": [],
+        "track_count": 0,
+    }
+
+
+def _add_track_to_playlist(playlist_id: str, track_id: str, owner_address: str | None = None):
+    if not USE_SQLITE_LEDGER:
+        raise RuntimeError("SQLite disabled")
+    with _get_ledger_db_connection() as conn:
+        playlist = conn.execute(
+            "SELECT id, owner_address FROM music_playlists WHERE id = ?",
+            (playlist_id,),
+        ).fetchone()
+        if not playlist:
+            return False, "Playlist not found"
+        if owner_address and playlist["owner_address"] != owner_address:
+            return False, "Unauthorized"
+
+        row = conn.execute(
+            "SELECT MAX(position) AS max_pos FROM music_playlist_items WHERE playlist_id = ?",
+            (playlist_id,),
+        ).fetchone()
+        next_pos = int(row["max_pos"] or 0) + 1
+        now = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO music_playlist_items (playlist_id, track_id, position, added_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (playlist_id, track_id, next_pos, now),
+        )
+        conn.execute(
+            "UPDATE music_playlists SET updated_at = ? WHERE id = ?",
+            (now, playlist_id),
+        )
+    return True, ""
+
+
+def _remove_track_from_playlist(playlist_id: str, track_id: str, owner_address: str | None = None):
+    if not USE_SQLITE_LEDGER:
+        raise RuntimeError("SQLite disabled")
+    with _get_ledger_db_connection() as conn:
+        playlist = conn.execute(
+            "SELECT id, owner_address FROM music_playlists WHERE id = ?",
+            (playlist_id,),
+        ).fetchone()
+        if not playlist:
+            return False, "Playlist not found"
+        if owner_address and playlist["owner_address"] != owner_address:
+            return False, "Unauthorized"
+        conn.execute(
+            "DELETE FROM music_playlist_items WHERE playlist_id = ? AND track_id = ?",
+            (playlist_id, track_id),
+        )
+        now = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        conn.execute(
+            "UPDATE music_playlists SET updated_at = ? WHERE id = ?",
+            (now, playlist_id),
+        )
+    return True, ""
+
+
+def _delete_music_playlist(playlist_id: str, owner_address: str | None = None):
+    if not USE_SQLITE_LEDGER:
+        raise RuntimeError("SQLite disabled")
+    with _get_ledger_db_connection() as conn:
+        playlist = conn.execute(
+            "SELECT id, owner_address FROM music_playlists WHERE id = ?",
+            (playlist_id,),
+        ).fetchone()
+        if not playlist:
+            return False, "Playlist not found"
+        if owner_address and playlist["owner_address"] != owner_address:
+            return False, "Unauthorized"
+        conn.execute("DELETE FROM music_playlist_items WHERE playlist_id = ?", (playlist_id,))
+        conn.execute("DELETE FROM music_playlists WHERE id = ?", (playlist_id,))
+    return True, ""
+
 @app.route("/api/music/playlists/<wallet>", methods=["GET"])
 def api_music_get_playlists(wallet):
     """
@@ -19594,14 +20783,14 @@ def api_music_get_playlists(wallet):
     Returns list of playlists with metadata.
     """
     try:
-        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
-        playlists = load_json(playlist_file, {"playlists": []})
+        playlists = _get_playlist_rows(wallet)
+        hydrated = _hydrate_playlists(playlists)
 
         return jsonify({
             "ok": True,
             "wallet": wallet,
-            "playlists": playlists.get("playlists", []),
-            "total": len(playlists.get("playlists", []))
+            "playlists": hydrated,
+            "total": len(hydrated)
         }), 200
     except Exception as e:
         # PRIORITY 10: Graceful degradation
@@ -19630,25 +20819,10 @@ def api_music_create_playlist(wallet):
         return jsonify({"ok": False, "error": "Playlist name required"}), 400
 
     try:
-        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
-        playlists_data = load_json(playlist_file, {"playlists": []})
-
-        # Create new playlist
-        playlist_id = f"pl_{int(time.time())}_{secrets.token_hex(4)}"
-        new_playlist = {
-            "id": playlist_id,
-            "name": name,
-            "description": description,
-            "track_ids": track_ids,
-            "is_public": is_public,
-            "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-            "track_count": len(track_ids)
-        }
-
-        playlists_data.setdefault("playlists", []).append(new_playlist)
-        save_json(playlist_file, playlists_data)
-
+        new_playlist = _create_music_playlist(wallet, name)
+        if track_ids:
+            for track_id in track_ids:
+                _add_track_to_playlist(new_playlist["id"], track_id, wallet)
         app.logger.info(f"🎵 Playlist Created: {name} → {wallet} | {len(track_ids)} tracks")
 
         return jsonify({
@@ -19670,19 +20844,9 @@ def api_music_create_playlist(wallet):
 def api_music_delete_playlist(wallet, playlist_id):
     """PRIORITY 10: Delete playlist."""
     try:
-        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
-        playlists_data = load_json(playlist_file, {"playlists": []})
-
-        # Find and remove playlist
-        original_count = len(playlists_data["playlists"])
-        playlists_data["playlists"] = [
-            p for p in playlists_data["playlists"] if p.get("id") != playlist_id
-        ]
-
-        if len(playlists_data["playlists"]) == original_count:
-            return jsonify({"ok": False, "error": "Playlist not found"}), 404
-
-        save_json(playlist_file, playlists_data)
+        deleted, message = _delete_music_playlist(playlist_id, wallet)
+        if not deleted:
+            return jsonify({"ok": False, "error": message}), 404
 
         return jsonify({
             "ok": True,
@@ -19861,17 +21025,9 @@ def api_music_playlist_add_track(wallet, playlist_id):
         return jsonify({"ok": False, "error": "Missing track_id"}), 400
 
     try:
-        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
-        playlists_data = load_json(playlist_file, {"playlists": []})
-
-        playlist = next((p for p in playlists_data["playlists"] if p["id"] == playlist_id), None)
-        if not playlist:
-            return jsonify({"ok": False, "error": "Playlist not found"}), 404
-
-        if track_id not in playlist.get("tracks", []):
-            playlist.setdefault("tracks", []).append(track_id)
-            playlist["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-            save_json(playlist_file, playlists_data)
+        added, message = _add_track_to_playlist(playlist_id, track_id, wallet)
+        if not added:
+            return jsonify({"ok": False, "error": message}), 404
 
         return jsonify({
             "ok": True,
@@ -19897,17 +21053,9 @@ def api_music_playlist_remove_track(wallet, playlist_id):
         return jsonify({"ok": False, "error": "Missing track_id"}), 400
 
     try:
-        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
-        playlists_data = load_json(playlist_file, {"playlists": []})
-
-        playlist = next((p for p in playlists_data["playlists"] if p["id"] == playlist_id), None)
-        if not playlist:
-            return jsonify({"ok": False, "error": "Playlist not found"}), 404
-
-        if track_id in playlist.get("tracks", []):
-            playlist["tracks"].remove(track_id)
-            playlist["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-            save_json(playlist_file, playlists_data)
+        removed, message = _remove_track_from_playlist(playlist_id, track_id, wallet)
+        if not removed:
+            return jsonify({"ok": False, "error": message}), 404
 
         return jsonify({
             "ok": True,
@@ -19927,30 +21075,16 @@ def api_music_playlist_remove_track(wallet, playlist_id):
 def api_music_get_playlist_tracks(wallet, playlist_id):
     """PRIORITY 10: Get full track objects for a playlist."""
     try:
-        playlist_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{wallet}.json")
-        playlists_data = load_json(playlist_file, {"playlists": []})
-
-        playlist = next((p for p in playlists_data["playlists"] if p["id"] == playlist_id), None)
+        playlists = _get_playlist_rows(wallet)
+        playlist = next((p for p in playlists if p["id"] == playlist_id), None)
         if not playlist:
             return jsonify({"ok": False, "error": "Playlist not found"}), 404
-
-        track_ids = playlist.get("tracks", [])
-
-        # Load music registry and get full track objects
-        registry = load_music_registry()
-        tracks = []
-        for track_id in track_ids:
-            track = next((t for t in registry["tracks"] if t["id"] == track_id), None)
-            if track:
-                tracks.append(enrich_track_media(track))
+        hydrated = _hydrate_playlists([playlist])[0]
 
         return jsonify({
             "ok": True,
             "status": "success",
-            "playlist": {
-                **playlist,
-                "tracks": tracks
-            }
+            "playlist": hydrated
         }), 200
 
     except Exception as e:
@@ -20032,106 +21166,114 @@ def api_music_library():
 
 
 @app.route("/api/music/playlists", methods=["GET"])
-def api_music_playlists_chain():
-    """
-    PR-5: Get playlists for address (chain-derived).
-    Returns playlists built from on-chain transactions:
-    - playlist_create
-    - playlist_add_track
-    - playlist_remove_track
-    - playlist_reorder
-    """
+def api_music_playlists():
+    """Get playlists for address (DB-backed)."""
     address = (request.args.get("address") or "").strip()
     if not address:
         return jsonify({"ok": False, "error": "address required"}), 400
 
     try:
-        chain = load_json(CHAIN_FILE, [])
-        playlists_map = {}
-
-        for tx in chain:
-            if not isinstance(tx, dict):
-                continue
-
-            tx_type = (tx.get("type") or tx.get("kind") or "").lower()
-            meta = tx.get("meta") or {}
-
-            # Filter by owner
-            owner = tx.get("from") or meta.get("owner")
-            if owner != address:
-                continue
-
-            playlist_id = meta.get("playlist_id")
-            if not playlist_id:
-                continue
-
-            # Process different playlist operations
-            if tx_type == "playlist_create":
-                playlists_map[playlist_id] = {
-                    "playlist_id": playlist_id,
-                    "name": meta.get("name", "Untitled Playlist"),
-                    "owner": owner,
-                    "visibility": meta.get("visibility", "private"),
-                    "track_ids": [],
-                    "created_at": tx.get("timestamp"),
-                    "updated_at": tx.get("timestamp"),
-                }
-
-            elif tx_type == "playlist_add_track":
-                if playlist_id not in playlists_map:
-                    # Playlist doesn't exist, skip
-                    continue
-                track_id = meta.get("track_id")
-                if track_id and track_id not in playlists_map[playlist_id]["track_ids"]:
-                    position = meta.get("position")
-                    if position is not None:
-                        playlists_map[playlist_id]["track_ids"].insert(position, track_id)
-                    else:
-                        playlists_map[playlist_id]["track_ids"].append(track_id)
-                    playlists_map[playlist_id]["updated_at"] = tx.get("timestamp")
-
-            elif tx_type == "playlist_remove_track":
-                if playlist_id not in playlists_map:
-                    continue
-                track_id = meta.get("track_id")
-                if track_id in playlists_map[playlist_id]["track_ids"]:
-                    playlists_map[playlist_id]["track_ids"].remove(track_id)
-                    playlists_map[playlist_id]["updated_at"] = tx.get("timestamp")
-
-            elif tx_type == "playlist_reorder":
-                if playlist_id not in playlists_map:
-                    continue
-                new_order = meta.get("track_ids")
-                if isinstance(new_order, list):
-                    playlists_map[playlist_id]["track_ids"] = new_order
-                    playlists_map[playlist_id]["updated_at"] = tx.get("timestamp")
-
-        playlists = list(playlists_map.values())
-
-        # PR-5c: Populate playlists with full track objects
-        registry = load_music_registry()
-        all_tracks = registry.get("tracks", [])
-
-        for playlist in playlists:
-            track_ids = playlist.get("track_ids", [])
-            full_tracks = []
-            for track_id in track_ids:
-                track = next((t for t in all_tracks if t.get("id") == track_id), None)
-                if track:
-                    full_tracks.append(track)
-            playlist["tracks"] = full_tracks
-
+        playlists = _get_playlist_rows(address)
+        hydrated = _hydrate_playlists(playlists)
         return jsonify({
             "ok": True,
             "address": address,
-            "playlists": playlists,
-            "total": len(playlists)
+            "playlists": hydrated,
+            "total": len(hydrated)
         }), 200
-
     except Exception as e:
         app.logger.error(f"Failed to load playlists for {address}: {e}")
-        return jsonify({"ok": False, "error": "Failed to load playlists"}), 500
+        return jsonify({"ok": False, "error": "Failed to load playlists", "playlists": []}), 200
 
+
+@app.route("/api/music/playlists", methods=["POST"])
+def api_music_playlists_create():
+    """Create a new playlist (DB-backed)."""
+    data = request.get_json() or {}
+    address = (data.get("address") or "").strip()
+    title = (data.get("title") or data.get("name") or "").strip()
+    track_ids = data.get("track_ids") or []
+
+    if not address or not title:
+        return jsonify({"ok": False, "error": "address and title required"}), 400
+
+    try:
+        playlist = _create_music_playlist(address, title)
+        if isinstance(track_ids, list):
+            for track_id in track_ids:
+                if track_id:
+                    _add_track_to_playlist(playlist["id"], str(track_id), address)
+        return jsonify({"ok": True, "playlist": playlist}), 201
+    except Exception as e:
+        app.logger.error(f"Failed to create playlist for {address}: {e}")
+        return jsonify({"ok": False, "error": "Failed to create playlist"}), 200
+
+
+@app.route("/api/music/playlists/create", methods=["POST"])
+def api_music_playlists_create_alias():
+    """Alias for playlist creation (wallet module)."""
+    return api_music_playlists_create()
+
+
+@app.route("/api/music/playlists/add_track", methods=["POST"])
+def api_music_playlists_add_track():
+    """Add a track to a playlist (DB-backed)."""
+    data = request.get_json() or {}
+    address = (data.get("address") or "").strip()
+    playlist_id = (data.get("playlist_id") or "").strip()
+    track_id = (data.get("track_id") or "").strip()
+
+    if not playlist_id or not track_id:
+        return jsonify({"ok": False, "error": "playlist_id and track_id required"}), 400
+
+    try:
+        added, message = _add_track_to_playlist(playlist_id, track_id, address or None)
+        if not added:
+            return jsonify({"ok": False, "error": message}), 404
+        return jsonify({"ok": True, "message": "Track added"}), 200
+    except Exception as e:
+        app.logger.error(f"Failed to add track {track_id} to playlist {playlist_id}: {e}")
+        return jsonify({"ok": False, "error": "Failed to add track"}), 200
+
+
+@app.route("/api/music/playlists/<playlist_id>/items", methods=["POST"])
+def api_music_playlist_add_item(playlist_id):
+    """Add a track to a playlist (DB-backed)."""
+    data = request.get_json() or {}
+    address = (data.get("address") or "").strip()
+    track_id = (data.get("track_id") or "").strip()
+    if not track_id:
+        return jsonify({"ok": False, "error": "track_id required"}), 400
+
+    try:
+        added, message = _add_track_to_playlist(playlist_id, track_id, address or None)
+        if not added:
+            return jsonify({"ok": False, "error": message}), 404
+        return jsonify({"ok": True, "message": "Track added"}), 200
+    except Exception as e:
+        app.logger.error(f"Failed to add track {track_id} to playlist {playlist_id}: {e}")
+        return jsonify({"ok": False, "error": "Failed to add track"}), 200
+
+
+@app.route(
+    "/api/music/playlists/<playlist_id>/items/<track_id>",
+    methods=["DELETE"],
+    endpoint="api_music_playlist_remove_item_v2",
+)
+def api_music_playlist_remove_item(playlist_id, track_id):
+    """Remove a track from a playlist (DB-backed)."""
+    address = (request.args.get("address") or "").strip()
+    if not track_id:
+        return jsonify({"ok": False, "error": "track_id required"}), 400
+
+    try:
+        removed, message = _remove_track_from_playlist(playlist_id, track_id, address or None)
+        if not removed:
+            return jsonify({"ok": False, "error": message}), 404
+        return jsonify({"ok": True, "message": "Track removed"}), 200
+    except Exception as e:
+        app.logger.error(f"Failed to remove track {track_id} from playlist {playlist_id}: {e}")
+        return jsonify({"ok": False, "error": "Failed to remove track"}), 200
 
 @app.route("/api/music/playlist/update", methods=["POST"])
 def api_music_playlist_update():
@@ -20408,7 +21550,7 @@ def api_v1_nfts():
     """Get all NFTs"""
     if READ_ONLY and not MASTER_INTERNAL_URL.startswith("http://localhost"):
         try:
-            response = requests.get(f"{MASTER_INTERNAL_URL}/api/v1/nfts", timeout=5)
+            response = requests.get(f"{MASTER_INTERNAL_URL}/api/v1/nfts", timeout=2)
             if response.ok:
                 data = response.json()
                 nfts = data.get("nfts", [])
@@ -21016,14 +22158,19 @@ def api_pytheia_advice():
 @app.route("/api/iot/telemetry", methods=["POST"])
 def api_iot_telemetry():
     """
-    Submit IoT telemetry data for rewards eligibility.
+    Submit IoT telemetry data for GPS mining rewards.
+
+    Users earn THR for contributing route data that trains the autopilot.
+    Reward formula: 0.001 THR per 10 GPS samples (route points).
+
     Expected JSON:
     {
       "address": "THR...",
       "device_id": "optional_device_identifier",
       "route_hash": "hash_of_gps_path",
-      "samples": <int>,
-      "auth_secret": "..."  # Optional: for authentication
+      "samples": <int>,        # Number of GPS data points
+      "music_session": "...",  # Optional: linked music session for trip
+      "auth_secret": "..."     # Optional: for authentication
     }
     """
     data = request.get_json() or {}
@@ -21031,6 +22178,7 @@ def api_iot_telemetry():
     device_id = (data.get("device_id") or "").strip()
     route_hash = (data.get("route_hash") or "").strip()
     samples = int(data.get("samples", 0))
+    music_session = (data.get("music_session") or "").strip()
 
     if not address or not route_hash or samples <= 0:
         return jsonify({"ok": False, "error": "Missing required fields: address, route_hash, samples"}), 400
@@ -21043,28 +22191,65 @@ def api_iot_telemetry():
     if not address_exists:
         return jsonify({"ok": False, "error": "Address not found in system"}), 404
 
+    # Calculate GPS mining reward: 0.001 THR per 10 samples (min 10 samples)
+    # This incentivizes users to contribute route data for autopilot training
+    GPS_REWARD_PER_10_SAMPLES = 0.001
+    reward_thr = round((samples // 10) * GPS_REWARD_PER_10_SAMPLES, 6) if samples >= 10 else 0.0
+
     # Create IoT telemetry transaction
     chain = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     tx_id = f"IOT-TELEM-{int(time.time())}-{secrets.token_hex(4)}"
+
     tx = {
         "type": "iot_telemetry",
         "address": address,
         "device_id": device_id,
         "route_hash": route_hash,
         "samples": samples,
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "music_session": music_session if music_session else None,
+        "timestamp": ts,
         "tx_id": tx_id,
         "status": "confirmed"
     }
     chain.append(tx)
-    save_json(CHAIN_FILE, chain)
 
-    logger.info(f"[IOT] Telemetry recorded: {address} - {samples} samples (route: {route_hash[:16]}...)")
+    # If reward earned, credit THR and log mining transaction
+    if reward_thr > 0:
+        # Credit THR to user (from AI pool)
+        ai_balance = float(ledger.get(AI_WALLET_ADDRESS, 0.0))
+        if ai_balance >= reward_thr:
+            ledger[AI_WALLET_ADDRESS] = round(ai_balance - reward_thr, 6)
+            ledger[address] = round(float(ledger.get(address, 0.0)) + reward_thr, 6)
+
+            # Log GPS mining reward transaction
+            reward_tx = {
+                "type": "gps_mining",
+                "from": AI_WALLET_ADDRESS,
+                "to": address,
+                "amount": reward_thr,
+                "samples": samples,
+                "route_hash": route_hash,
+                "music_session": music_session if music_session else None,
+                "timestamp": ts,
+                "tx_id": f"GPS-MINE-{int(time.time())}-{secrets.token_hex(4)}",
+                "note": f"GPS route contribution: {samples} samples → autopilot training"
+            }
+            chain.append(reward_tx)
+            tx["reward_thr"] = reward_thr
+            tx["reward_tx_id"] = reward_tx["tx_id"]
+
+    save_json(CHAIN_FILE, chain)
+    save_json(LEDGER_FILE, ledger)
+
+    logger.info(f"📍 GPS Mining: {address} - {samples} samples → {reward_thr} THR (route: {route_hash[:16]}...)")
 
     return jsonify({
         "ok": True,
         "tx_id": tx_id,
-        "message": f"Telemetry recorded: {samples} samples"
+        "samples": samples,
+        "reward_thr": reward_thr,
+        "message": f"Telemetry recorded: {samples} samples" + (f", earned {reward_thr} THR" if reward_thr > 0 else "")
     }), 201
 
 

@@ -459,7 +459,7 @@
         const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
         const isToken = kind === 'token_transfer';
         const tokenSymbol = sanitizeTokenSymbol(tx.asset_symbol || tx.asset || tx.symbol);
-        const asset = isToken ? (tokenSymbol || '(unknown token)') : 'THR';
+        const asset = tokenSymbol || 'THR';
         const decimals = tx.decimals || tokenDecimals;
         const formattedAmount = formatTokenAmount(tx.display_amount ?? tx.amount ?? 0, decimals);
         const label = (tx.category_label || tx.kind || tx.type || '').toString().toUpperCase();
@@ -597,8 +597,87 @@
 
     // PR-5: Load and render music tab
     let viewerMusicModuleInitialized = false;
+    const viewerMusicState = {
+        library: [],
+        playlists: [],
+        libraryError: null,
+        playlistsError: null
+    };
 
-    let musicModuleCheckInterval = null;
+    function viewerMusicApiUrl(path) {
+        if (window.buildWalletMusicApiUrl) return window.buildWalletMusicApiUrl(path);
+        const base = window.__API_BASE__ || window.location.origin;
+        if (!path) return path;
+        if (/^https?:\/\//i.test(path)) return path;
+        const normalized = path.startsWith('/') ? path : `/${path}`;
+        return `${base}${normalized}`;
+    }
+
+    function normalizeViewerTrack(track) {
+        if (!track || typeof track !== 'object') return track;
+        const normalized = { ...track };
+        const fixer = window.normalizeMediaUrl || window.FetchUtils?.normalizeMediaUrl;
+        ['audio_url', 'cover_url', 'image_url', 'logo_url', 'thumbnail_url'].forEach(field => {
+            if (normalized[field] && fixer) {
+                normalized[field] = fixer(normalized[field]);
+            }
+        });
+        return normalized;
+    }
+
+    function normalizeViewerPlaylist(playlist) {
+        if (!playlist || typeof playlist !== 'object') return playlist;
+        const normalized = { ...playlist };
+        if (Array.isArray(normalized.tracks)) {
+            normalized.tracks = normalized.tracks.map(track => normalizeViewerTrack(track));
+        }
+        return normalized;
+    }
+
+    function initViewerMusicSkeleton() {
+        const musicContent = document.getElementById('musicTabContent');
+        if (!musicContent) return;
+        musicContent.innerHTML = `
+            <div class="wallet-card">
+                <div style="margin-bottom: 12px; font-weight: bold;">Library</div>
+                <div class="music-empty">Loading music...</div>
+                <div style="margin: 16px 0 8px; font-weight: bold; display:flex; justify-content: space-between; align-items:center;">
+                    <span>Playlists</span>
+                    <button onclick="viewerCreatePlaylist()" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 500;">➕ Νέα Playlist</button>
+                </div>
+                <div class="music-empty">Loading music...</div>
+            </div>
+        `;
+    }
+
+    async function loadViewerLibrary(wallet) {
+        try {
+            const res = await fetch(viewerMusicApiUrl(`/api/music/library?address=${encodeURIComponent(wallet)}`));
+            const data = res.ok ? await res.json() : {};
+            if (data.ok && Array.isArray(data.library)) {
+                return { items: data.library.map(track => normalizeViewerTrack(track)), error: null };
+            }
+            return { items: Array.isArray(data.library) ? data.library : [], error: data.error || 'library_unavailable' };
+        } catch (error) {
+            return { items: [], error: error.message || 'library_unavailable' };
+        }
+    }
+
+    async function loadViewerPlaylists(wallet) {
+        try {
+            const res = await fetch(viewerMusicApiUrl(`/api/music/playlists?address=${encodeURIComponent(wallet)}`));
+            const data = res.ok ? await res.json() : {};
+            const playlists = Array.isArray(data.playlists)
+                ? data.playlists
+                : (Array.isArray(data.items) ? data.items : []);
+            return {
+                items: playlists.map(playlist => normalizeViewerPlaylist(playlist)),
+                error: data.ok === false ? (data.error || 'playlists_unavailable') : null
+            };
+        } catch (error) {
+            return { items: [], error: error.message || 'playlists_unavailable' };
+        }
+    }
 
     async function loadViewerMusicTab() {
         const musicContent = document.getElementById('musicTabContent');
@@ -617,57 +696,37 @@
             return;
         }
 
-        try {
-            // PR-5c: Wait for MusicModule to load if needed
-            if (typeof MusicModule === 'undefined') {
-                // Show loading while waiting
-                musicContent.innerHTML = `
-                    <div class="wallet-card">
-                        <div style="text-align:center; padding:20px; color:#0f0;">
-                            <div style="display:inline-block; width:20px; height:20px; border:2px solid rgba(0,255,0,0.2); border-top:2px solid #0f0; border-radius:50%; animation:spin 1s linear infinite;"></div>
-                            <div style="margin-top:10px;">Loading music module...</div>
-                        </div>
-                    </div>
-                `;
+        initViewerMusicSkeleton();
+        viewerMusicState.libraryError = null;
+        viewerMusicState.playlistsError = null;
 
-                // Wait for MusicModule to load (retry up to 10 times)
-                let retries = 0;
-                if (musicModuleCheckInterval) {
-                    clearInterval(musicModuleCheckInterval);
-                }
-                musicModuleCheckInterval = setInterval(() => {
-                    if (typeof MusicModule !== 'undefined') {
-                        clearInterval(musicModuleCheckInterval);
-                        musicModuleCheckInterval = null;
-                        loadViewerMusicTab(); // Retry
-                    } else if (++retries >= 10) {
-                        clearInterval(musicModuleCheckInterval);
-                        musicModuleCheckInterval = null;
-                        musicContent.innerHTML = '<div class="wallet-card"><div class="music-empty">Music module failed to load. Please refresh.</div></div>';
-                    }
-                }, 100);
-                return;
+        let moduleLoaded = false;
+        if (typeof MusicModule !== 'undefined') {
+            try {
+                await MusicModule.init(wallet);
+                viewerMusicModuleInitialized = true;
+                viewerMusicState.library = (MusicModule.getLibrary() || []).map(track => normalizeViewerTrack(track));
+                viewerMusicState.playlists = (MusicModule.getPlaylists() || []).map(playlist => normalizeViewerPlaylist(playlist));
+                moduleLoaded = true;
+            } catch (error) {
+                console.warn('[Wallet Viewer] MusicModule init failed, falling back to API:', error);
+                viewerMusicState.libraryError = error.message || 'library_unavailable';
+                viewerMusicState.playlistsError = error.message || 'playlists_unavailable';
             }
-
-            // Show loading
-            musicContent.innerHTML = `
-                <div class="wallet-card">
-                    <div style="text-align:center; padding:20px; color:#0f0;">
-                        <div style="display:inline-block; width:20px; height:20px; border:2px solid rgba(0,255,0,0.2); border-top:2px solid #0f0; border-radius:50%; animation:spin 1s linear infinite;"></div>
-                        <div style="margin-top:10px;">Loading music...</div>
-                    </div>
-                </div>
-            `;
-
-            // Initialize MusicModule with address
-            await MusicModule.init(wallet);
-
-            // Render music content
-            renderViewerMusicTab();
-        } catch (error) {
-            console.error('[Wallet Viewer] Failed to load music:', error);
-            musicContent.innerHTML = `<div class="wallet-card"><div class="music-empty" style="color: #ff6666;">Error loading music: ${error.message}</div></div>`;
         }
+
+        if (!moduleLoaded) {
+            const [libraryResult, playlistsResult] = await Promise.all([
+                loadViewerLibrary(wallet),
+                loadViewerPlaylists(wallet)
+            ]);
+            viewerMusicState.library = libraryResult.items;
+            viewerMusicState.playlists = playlistsResult.items;
+            viewerMusicState.libraryError = libraryResult.error;
+            viewerMusicState.playlistsError = playlistsResult.error;
+        }
+
+        renderViewerMusicTab();
     }
 
     // PR-5c: Create playlist from wallet music tab
@@ -693,12 +752,11 @@
             }
 
             // Create via API
-            const res = await fetch('/api/music/playlist/update', {
+            const res = await fetch(viewerMusicApiUrl('/api/music/playlists/create'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     address: address,
-                    action: 'create',
                     name: name.trim(),
                     auth_secret: authSecret
                 })
@@ -707,7 +765,12 @@
             const data = await res.json();
             if (data.ok) {
                 // Refresh music tab
-                await MusicModule.init(address);
+                if (typeof MusicModule !== 'undefined') {
+                    await MusicModule.init(address);
+                }
+                const playlistsResult = await loadViewerPlaylists(address);
+                viewerMusicState.playlists = playlistsResult.items;
+                viewerMusicState.playlistsError = playlistsResult.error;
                 renderViewerMusicTab();
                 alert('✅ Playlist created!');
             } else {
@@ -730,8 +793,10 @@
         const musicContent = document.getElementById('musicTabContent');
         if (!musicContent) return;
 
-        const library = MusicModule.getLibrary();
-        const playlists = MusicModule.getPlaylists();
+        const library = viewerMusicState.library || [];
+        const playlists = viewerMusicState.playlists || [];
+        const libraryError = viewerMusicState.libraryError;
+        const playlistsError = viewerMusicState.playlistsError;
 
         // Render library tracks
         const libraryHtml = library.length > 0
@@ -744,7 +809,7 @@
                     <div style="font-size: 11px; color: #666;">${escapeHtml(track.duration || '')}</div>
                 </div>
             `).join('')
-            : `<div class="music-empty">No tracks found</div>`;
+            : `<div class="music-empty">${libraryError ? 'Library unavailable' : 'No tracks found'}</div>`;
 
         // Render playlists
         const playlistsHtml = playlists.length > 0
@@ -759,7 +824,12 @@
                     </div>
                 `;
             }).join('')
-            : `<div class="music-empty">No playlists found</div>`;
+            : `
+                <div class="music-empty">
+                    ${playlistsError ? 'Playlists failed to load.' : 'No playlists found'}
+                    ${playlistsError ? `<button onclick="reloadViewerPlaylists()" style="margin-left:8px; background: transparent; border: 1px solid rgba(0,255,102,0.4); color: #0f0; padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 10px;">Retry</button>` : ''}
+                </div>
+            `;
 
         const html = `
             <div class="wallet-card">
@@ -780,6 +850,15 @@
         `;
 
         musicContent.innerHTML = html;
+    }
+
+    async function reloadViewerPlaylists() {
+        const wallet = currentAddress || localStorage.getItem('thr_address');
+        if (!wallet) return;
+        const result = await loadViewerPlaylists(wallet);
+        viewerMusicState.playlists = result.items;
+        viewerMusicState.playlistsError = result.error;
+        renderViewerMusicTab();
     }
 
     // Helper function to escape HTML

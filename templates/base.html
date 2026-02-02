@@ -3173,8 +3173,14 @@ async function loadOfflineTab() {
             </div>
         `;
 
-        // Fetch offline tracks
-        const res = await fetch(buildWalletMusicApiUrl(`/api/music/offline/${encodeURIComponent(wallet)}`));
+        // Fetch offline tracks with timeout (20s) and retry disabled for this specific call
+        const url = buildWalletMusicApiUrl(`/api/music/offline/${encodeURIComponent(wallet)}`);
+        const res = await fetch(url, { timeout: 20000, noRetry: true });
+
+        if (!res.ok) {
+            throw new Error(`Failed to fetch offline tracks: ${res.status} ${res.statusText}`);
+        }
+
         const data = await res.json();
 
         if (data.ok && data.tracks && data.tracks.length > 0) {
@@ -3197,7 +3203,12 @@ async function loadOfflineTab() {
         }
     } catch (error) {
         console.error('[Wallet] Failed to load offline tracks:', error);
-        offlineContent.innerHTML = `<div class="music-empty" style="color: #ff6666;">Error loading offline tracks: ${error.message}</div>`;
+        const lang = getCurrentLang();
+        const isGreek = isGreekLang(lang);
+        const errorMsg = error.name === 'TimeoutError'
+            ? (isGreek ? 'Λήξη χρόνου κατά τη φόρτωση' : 'Request timeout')
+            : error.message;
+        offlineContent.innerHTML = `<div class="music-empty" style="color: #ff6666;">Error loading offline tracks: ${errorMsg}</div>`;
     }
 }
 
@@ -4315,19 +4326,59 @@ let tokenPriceInterval = null;
 let walletBalanceInterval = null;
 let chainTokensInterval = null;
 
+// History refresh with exponential backoff on consecutive failures
+let historyFailCount = 0;
+let historyPollDelay = 10000; // Start with 10s
+const MIN_HISTORY_POLL_DELAY = 10000; // 10s minimum
+const MAX_HISTORY_POLL_DELAY = 60000; // 60s maximum
+
 async function refreshHistoryFromApi() {
     const addr = walletSession.getAddress();
     if (!addr) return;
     try {
-        const response = await fetch(`/api/wallet/history?address=${encodeURIComponent(addr)}&limit=200`);
-        const data = response.ok ? await response.json() : {};
+        const response = await fetch(`/api/wallet/history?address=${encodeURIComponent(addr)}&limit=200`, { timeout: 20000 });
+
+        if (!response.ok) {
+            throw new Error(`History API returned ${response.status}`);
+        }
+
+        const data = await response.json();
         const txs = Array.isArray(data.transactions) ? data.transactions : (data.history || []);
         if (Array.isArray(txs)) {
             allTransactions = txs;
             renderHistory();
+
+            // Reset failure count and delay on success
+            historyFailCount = 0;
+            if (historyPollDelay !== MIN_HISTORY_POLL_DELAY) {
+                historyPollDelay = MIN_HISTORY_POLL_DELAY;
+                // Restart polling with normal interval
+                if (historyPollInterval) {
+                    clearInterval(historyPollInterval);
+                    historyPollInterval = setInterval(refreshHistoryFromApi, historyPollDelay);
+                }
+            }
         }
     } catch (error) {
         console.error('Failed to refresh history:', error);
+
+        // Increment failure count and apply exponential backoff
+        historyFailCount++;
+        const newDelay = Math.min(
+            MIN_HISTORY_POLL_DELAY * Math.pow(2, Math.min(historyFailCount - 1, 3)),
+            MAX_HISTORY_POLL_DELAY
+        );
+
+        if (newDelay !== historyPollDelay) {
+            historyPollDelay = newDelay;
+            console.warn(`[Wallet] History refresh failed ${historyFailCount} times, backing off to ${historyPollDelay}ms`);
+
+            // Restart polling with new backoff interval
+            if (historyPollInterval) {
+                clearInterval(historyPollInterval);
+                historyPollInterval = setInterval(refreshHistoryFromApi, historyPollDelay);
+            }
+        }
     }
 }
 
@@ -4335,8 +4386,11 @@ function startHistoryPendingPolling() {
     if (historyPollInterval) {
         clearInterval(historyPollInterval);
     }
+    // Reset failure count and delay when explicitly starting polling
+    historyFailCount = 0;
+    historyPollDelay = MIN_HISTORY_POLL_DELAY;
     refreshHistoryFromApi();
-    historyPollInterval = setInterval(refreshHistoryFromApi, 10000);
+    historyPollInterval = setInterval(refreshHistoryFromApi, historyPollDelay);
 }
 
 async function pollTransactionStatus(txid, resultDiv) {

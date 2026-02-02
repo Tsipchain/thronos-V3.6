@@ -575,7 +575,20 @@ if NODE_ROLE not in ("master", "ai_core") and SCHEDULER_ENABLED:
     logger.warning("[CONFIG] Disabling SCHEDULER_ENABLED on non-master/non-ai-core node")
     SCHEDULER_ENABLED = False
 
-MASTER_INTERNAL_URL = os.getenv("MASTER_URL", os.getenv("MASTER_NODE_URL", "http://localhost:5000"))
+# Improved fallback logic for MASTER_INTERNAL_URL
+# Priority: MASTER_URL > MASTER_NODE_URL > RAILWAY_PUBLIC_DOMAIN with https > localhost:5000
+_railway_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+_default_master_url = f"https://{_railway_domain}" if _railway_domain else "http://localhost:5000"
+MASTER_INTERNAL_URL = os.getenv("MASTER_URL", os.getenv("MASTER_NODE_URL", _default_master_url))
+
+# Warn if using localhost in production
+if "localhost" in MASTER_INTERNAL_URL.lower() or "127.0.0.1" in MASTER_INTERNAL_URL:
+    logger.warning(
+        f"[CONFIG] MASTER_INTERNAL_URL is set to localhost ({MASTER_INTERNAL_URL}). "
+        "This may cause issues with media URLs and cross-node communication. "
+        "Set MASTER_NODE_URL or MASTER_URL environment variable to the public Railway domain."
+    )
+
 MASTER_PUBLIC_URL = os.getenv("MASTER_PUBLIC_URL", MASTER_INTERNAL_URL)
 READ_NODE_URL = os.getenv("READ_NODE_URL", MASTER_PUBLIC_URL)
 PUBLIC_URL = os.getenv("PUBLIC_URL", "")
@@ -7651,7 +7664,12 @@ def api_dashboard():
             "pool_count": len(load_pools()),
         }
 
-        return jsonify(response), 200
+        # Add Cache-Control headers to prevent browser caching
+        resp = jsonify(response)
+        resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        resp.headers['Pragma'] = 'no-cache'
+        resp.headers['Expires'] = '0'
+        return resp, 200
 
     except Exception as exc:
         logger.error("[dashboard] failed: %s", exc)

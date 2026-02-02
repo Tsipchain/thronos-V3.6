@@ -186,9 +186,92 @@
     return value;
   }
 
+  /**
+   * Fetch with timeout support
+   * @param {string} url - URL to fetch
+   * @param {object} options - Fetch options
+   * @param {number} timeout - Timeout in milliseconds (default: 30000)
+   * @returns {Promise<Response>}
+   */
+  async function fetchWithTimeout(url, options = {}, timeout = 30000) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+    try {
+      const response = await NATIVE_FETCH(url, {
+        ...options,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      return response;
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        const timeoutError = new Error(`Request timeout after ${timeout}ms`);
+        timeoutError.name = 'TimeoutError';
+        throw timeoutError;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Fetch with retry logic and exponential backoff
+   * @param {string} url - URL to fetch
+   * @param {object} options - Fetch options
+   * @param {number} maxRetries - Maximum number of retries (default: 3)
+   * @param {number} timeout - Timeout per request in ms (default: 30000)
+   * @returns {Promise<Response>}
+   */
+  async function fetchWithRetry(url, options = {}, maxRetries = 3, timeout = 30000) {
+    let lastError;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await fetchWithTimeout(url, options, timeout);
+
+        // Don't retry on client errors (4xx), only on 5xx or network errors
+        if (response.status >= 400 && response.status < 500) {
+          return response;
+        }
+
+        // Retry on 5xx errors
+        if (response.status >= 500 && attempt < maxRetries) {
+          const delay = Math.min(1000 * Math.pow(2, attempt), 16000); // Max 16s
+          console.warn(`[fetch_utils] Request failed with ${response.status}, retrying in ${delay}ms... (attempt ${attempt + 1}/${maxRetries})`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+
+        return response;
+      } catch (error) {
+        lastError = error;
+
+        // Don't retry on timeout errors if it's the last attempt
+        if (attempt >= maxRetries) {
+          throw error;
+        }
+
+        // Exponential backoff: 2s, 4s, 8s, 16s
+        const delay = Math.min(2000 * Math.pow(2, attempt), 16000);
+        console.warn(`[fetch_utils] Request failed: ${error.message}, retrying in ${delay}ms... (attempt ${attempt + 1}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+
+    throw lastError;
+  }
+
   async function smartFetch(url, options) {
     const finalUrl = buildApiUrl(typeof url === "string" ? url : (url?.url || url));
-    return NATIVE_FETCH(finalUrl, options);
+
+    // Use retry logic with timeout by default
+    // Allow disabling retry with options.noRetry = true
+    if (options?.noRetry) {
+      return fetchWithTimeout(finalUrl, options, options.timeout || 30000);
+    }
+
+    return fetchWithRetry(finalUrl, options, 3, options?.timeout || 30000);
   }
 
   async function smartFetchJSON(url, options = {}) {
@@ -227,6 +310,8 @@
     smartFetch,
     smartFetchJSON,
     fetchJSONOnce,
+    fetchWithTimeout,
+    fetchWithRetry,
   };
 
   // Optional: overwrite global fetch to auto-fix legacy calls everywhere

@@ -75,7 +75,7 @@
   // ===== Dashboard Stats =====
   async function loadStats() {
     try {
-      const response = await fetch(`${API_BASE}/api/dashboard`);
+      const response = await fetch(`${API_BASE}/api/dashboard`, { timeout: 30000 });
       if (!response.ok) throw new Error(`Dashboard API error: ${response.status}`);
 
       const data = await response.json();
@@ -140,7 +140,7 @@
   // ===== Blocks Tab =====
   async function loadBlocks(offset = 0, limit = 100) {
     try {
-      const response = await fetch(`${API_BASE}/api/blocks?offset=${offset}&limit=${limit}`);
+      const response = await fetch(`${API_BASE}/api/blocks?offset=${offset}&limit=${limit}`, { timeout: 30000 });
       if (!response.ok) throw new Error(`Blocks API error: ${response.status}`);
 
       const data = await response.json();
@@ -216,7 +216,8 @@
   // ===== Transfers Tab =====
   async function loadTransfersStats() {
     try {
-      const response = await fetch(`${API_BASE}/api/dashboard`);
+      // Use fetch with timeout and retry (smartFetch is now global via fetch_utils.js)
+      const response = await fetch(`${API_BASE}/api/dashboard`, { timeout: 30000 });
       if (!response.ok) throw new Error(`Dashboard API error: ${response.status}`);
 
       const data = await response.json();
@@ -242,7 +243,8 @@
       return stats;
     } catch (error) {
       console.error('[Viewer] Failed to load transfers stats:', error);
-      setStatsBanner('Stats unavailable');
+      const isTimeout = error.name === 'TimeoutError';
+      setStatsBanner(isTimeout ? 'Stats timeout - retrying...' : 'Stats unavailable');
       if (el('txsTotalCount')) el('txsTotalCount').textContent = '—';
       if (el('txsUniqueAddresses')) el('txsUniqueAddresses').textContent = '—';
       if (el('stat-total-transfers')) el('stat-total-transfers').textContent = '—';
@@ -261,7 +263,8 @@
         url += `&cursor=${encodeURIComponent(cursor)}`;
       }
 
-      const response = await fetch(url);
+      // Use fetch with timeout and retry
+      const response = await fetch(url, { timeout: 30000 });
       if (!response.ok) throw new Error(`Transfers API error: ${response.status}`);
 
       const data = await response.json();

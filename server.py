@@ -6072,7 +6072,23 @@ def api_wallet_history():
 
         if address.lower() in [str(tx_from).lower(), str(tx_to).lower(), str(tx_address).lower()]:
             tx_copy = dict(tx)
-            tx_copy["category"] = _categorize_transaction(tx)
+            raw_category = _categorize_transaction(tx)
+
+            # Map internal categories to frontend-friendly names
+            category_map = {
+                "token_transfer": "tokens",
+                "music_tip": "music",
+                "ai_reward": "ai_credits",
+                "l2e": "l2e",
+                "iot_telemetry": "iot",
+                "bridge": "bridge",
+                "pledge": "gateway",
+                "mining": "mining",
+                "swap": "swaps",
+                "liquidity": "liquidity",
+                "other": "other"
+            }
+            tx_copy["category"] = category_map.get(raw_category, raw_category)
 
             # Determine direction
             if tx_to and tx_to.lower() == address.lower():

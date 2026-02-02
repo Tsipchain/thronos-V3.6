@@ -1472,7 +1472,6 @@
             const filtered = txs.filter(tx => {
                 const category = getCanonicalCategory(tx);
                 if (historyState.filter === 'thr') return category === 'thr';
-                if (historyState.filter === 'mining') return category === 'mining';
                 if (historyState.filter === 'tokens') return category === 'tokens';
                 if (historyState.filter === 'swaps') return category === 'swaps';
                 if (historyState.filter === 'l2e') return category === 'l2e';
@@ -1492,7 +1491,6 @@
             const tabs = [
                 { id: 'all', label: 'All' },
                 { id: 'thr', label: 'THR' },
-                { id: 'mining', label: '⛏️ Mining' },
                 { id: 'tokens', label: 'Tokens' },
                 { id: 'l2e', label: 'L2E' },
                 { id: 'ai_credits', label: 'AI Credits' },

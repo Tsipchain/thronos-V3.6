@@ -1361,6 +1361,10 @@
                 music_purchase: 'music',
                 music_stream: 'music',
                 music_play_reward: 'music',
+                t2e_reward: 't2e',
+                train_reward: 't2e',
+                network_reward: 'network',
+                validator_reward: 'network',
             };
             return map[kind] || kind;
         }
@@ -1468,18 +1472,20 @@
 
             const filtered = txs.filter(tx => {
                 const category = getCanonicalCategory(tx);
+                const rawKind = (tx.kind || tx.type || '').toLowerCase();
                 if (historyState.filter === 'thr') return category === 'thr';
                 if (historyState.filter === 'mining') return category === 'mining';
                 if (historyState.filter === 'tokens') return category === 'tokens';
                 if (historyState.filter === 'swaps') return category === 'swaps';
                 if (historyState.filter === 'l2e') return category === 'l2e';
+                if (historyState.filter === 't2e') return rawKind === 't2e_reward' || rawKind === 'ai_reward' && (tx.category === 't2e_reward' || tx.details?.device_id);
                 if (historyState.filter === 'ai_credits') return category === 'ai_credits';
                 if (historyState.filter === 'iot') return category === 'iot';
                 if (historyState.filter === 'bridge') return category === 'bridge';
                 if (historyState.filter === 'architect_ai_jobs') return category === 'architect_ai_jobs';
                 if (historyState.filter === 'liquidity') return category === 'liquidity';
                 if (historyState.filter === 'gateway') return category === 'gateway';
-                if (historyState.filter === 'music') return category === 'music';
+                if (historyState.filter === 'music') return category === 'music' || rawKind === 'music_play_reward' || rawKind === 'music_tip';
                 return true;
             }).filter(tx => {
                 if (historyState.filter !== 'tokens' || !historyState.selectedToken) return true;
@@ -1492,6 +1498,7 @@
                 { id: 'mining', label: '⛏️ Mining' },
                 { id: 'tokens', label: 'Tokens' },
                 { id: 'l2e', label: 'L2E' },
+                { id: 't2e', label: '🎓 T2E' },
                 { id: 'ai_credits', label: 'AI Credits' },
                 { id: 'architect_ai_jobs', label: 'Architect / AI Jobs' },
                 { id: 'iot', label: 'IoT' },
@@ -1537,13 +1544,37 @@
 
             html += filtered.map(tx => {
                 const kind = normalizeKind(tx);
+                const rawKind = (tx.kind || tx.type || '').toLowerCase();
                 const isIncoming = tx.direction === 'in' || tx.to === walletAddress;
                 const isSwap = kind === 'swap' || kind === 'pool_swap';
+                const isMusicReward = rawKind === 'music_play_reward' || rawKind === 'music_tip';
                 const amountClass = isSwap ? 'swap' : (isIncoming ? 'incoming' : 'outgoing');
                 const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
                 const status = tx.status || 'confirmed';
                 const asset = getAssetSymbol(tx);
                 const amountStr = displayAmount(tx);
+
+                // Build reward split display for music transactions
+                let rewardSplitHtml = '';
+                if (isMusicReward && tx.reward_split) {
+                    const split = tx.reward_split;
+                    rewardSplitHtml = `
+                        <div style="font-size:10px; margin-top:4px; padding:4px; background:rgba(60,255,122,0.1); border-radius:4px;">
+                            <div style="color:#3CFF7A;">🎵 80/10/10 Split:</div>
+                            <div>Artist: ${Number(split.artist || 0).toFixed(6)} THR (80%)</div>
+                            <div>Network: ${Number(split.network || 0).toFixed(6)} THR (10%)</div>
+                            <div>AI/T2E: ${Number(split.ai_t2e || split.ai || 0).toFixed(6)} THR (10%)</div>
+                            ${tx.gps_recorded ? '<div style="color:#5C9FFF;">📍 GPS telemetry recorded (Driver Training)</div>' : ''}
+                            ${tx.t2e_contribution_recorded ? '<div style="color:#FFD700;">🎓 T2E contribution recorded</div>' : ''}
+                        </div>
+                    `;
+                }
+
+                // Show track info for music transactions
+                let trackInfo = '';
+                if (isMusicReward && tx.track_title) {
+                    trackInfo = `<br>🎵 Track: ${tx.track_title}`;
+                }
 
                 return `
                     <div class="tx-item">
@@ -1552,9 +1583,10 @@
                             <span class="tx-status ${status}">${status.toUpperCase()}</span>
                         </div>
                         <div class="tx-details">
-                            ${isSwap ? 'Trader: ' + (tx.from || walletAddress) : (isIncoming ? 'From: ' + (tx.from || '') : 'To: ' + (tx.to || ''))}<br>
+                            ${isSwap ? 'Trader: ' + (tx.from || walletAddress) : (isIncoming ? 'From: ' + (tx.from || '') : 'To: ' + (tx.to || ''))}${trackInfo}<br>
                             ${tx.timestamp || 'Unknown time'}<br>
                             TXID: ${(tx.tx_id || 'pending').substring(0, 16)}...
+                            ${rewardSplitHtml}
                         </div>
                     </div>
                 `;

@@ -3556,6 +3556,18 @@ function getTxType(tx) {
         return 'l2e';
     }
 
+    // === T2E (Train-to-Earn - IoT/ASIC miners) ===
+    if (raw === 't2e' || raw === 't2e_reward' || raw === 'train_reward' ||
+        category === 't2e' || symbol === 'T2E') {
+        return 't2e';
+    }
+
+    // === NETWORK REWARDS (Validators/Nodes) ===
+    if (raw === 'network_reward' || raw === 'validator_reward' || raw === 'node_reward' ||
+        category === 'network_reward') {
+        return 'network';
+    }
+
     // === AI CREDITS (Chat) ===
     if (raw.startsWith('ai_credit') || raw === 'ai_credits' ||
         raw === 'ai_credits_earned' || raw === 'ai_credits_spent' ||

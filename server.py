@@ -727,6 +727,8 @@ active_peers = PEERS  # Backward-compatible alias
 AI_PACKS_FILE       = os.path.join(DATA_DIR, "ai_packs.json")
 AI_CREDITS_FILE     = os.path.join(DATA_DIR, "ai_credits.json")
 AI_POOL_FILE        = os.path.join(DATA_DIR, "ai_pool.json")  # Phase 4: AI rewards pool
+NETWORK_POOL_FILE   = os.path.join(DATA_DIR, "network_pool.json")  # Phase 5: Network rewards pool (10% of music telemetry)
+T2E_REWARDS_FILE    = os.path.join(DATA_DIR, "t2e_rewards.json")  # Train-to-Earn rewards for IoT/ASIC miners
 
 # Register optional EVM routes (if module exists)
 if register_evm_routes is not None:
@@ -2391,6 +2393,331 @@ def _distribute_ai_pool_to_address(address: str, amount: float, category: str, d
     return tx_id
 
 
+# ─── Phase 5: Network Pool Management (Music Telemetry 10%) ─────────────────────
+def get_network_pool_state() -> dict:
+    """Get current network pool state."""
+    return load_json(NETWORK_POOL_FILE, {
+        "network_pool_balance": 0.0,
+        "total_music_contributions": 0.0,
+        "total_distributed_to_nodes": 0.0,
+        "last_distribution_time": None,
+        "distribution_count": 0,
+        "active_validators": []
+    })
+
+
+def save_network_pool_state(pool_state: dict):
+    """Save network pool state (master only)."""
+    save_json(NETWORK_POOL_FILE, pool_state)
+
+
+def credit_network_pool(amount: float, source: str = "music_telemetry"):
+    """Add THR to the network pool (from music plays/tips)."""
+    if READ_ONLY or NODE_ROLE != "master":
+        logger.warning(f"[NETWORK_POOL] Skipping credit on {NODE_ROLE} node")
+        return
+
+    pool = get_network_pool_state()
+    pool["network_pool_balance"] = round(float(pool.get("network_pool_balance", 0)) + amount, 6)
+    pool["total_music_contributions"] = round(float(pool.get("total_music_contributions", 0)) + amount, 6)
+    save_network_pool_state(pool)
+    logger.info(f"[NETWORK_POOL] Added {amount} THR from {source} (total pool: {pool['network_pool_balance']} THR)")
+
+
+def _distribute_network_reward(validator_address: str, amount: float, reason: str = "network_validation") -> str:
+    """Distribute network pool rewards to validators/nodes."""
+    if READ_ONLY or NODE_ROLE != "master":
+        return None
+    if amount <= 0:
+        return None
+
+    pool = get_network_pool_state()
+    balance = float(pool.get("network_pool_balance", 0))
+    if balance < amount:
+        logger.warning(f"[NETWORK_POOL] Insufficient balance ({balance}) for {amount} THR distribution")
+        return None
+
+    # Debit pool
+    pool["network_pool_balance"] = round(balance - amount, 6)
+    pool["total_distributed_to_nodes"] = round(float(pool.get("total_distributed_to_nodes", 0)) + amount, 6)
+    pool["last_distribution_time"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    pool["distribution_count"] = int(pool.get("distribution_count", 0)) + 1
+    save_network_pool_state(pool)
+
+    # Credit validator wallet
+    ledger = load_json(LEDGER_FILE, {})
+    ledger[validator_address] = round(float(ledger.get(validator_address, 0)) + amount, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    # Record transaction
+    chain = load_json(CHAIN_FILE, [])
+    tx_id = f"NET-REWARD-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "network_reward",
+        "to": validator_address,
+        "amount": amount,
+        "reason": reason,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "tx_id": tx_id,
+        "status": "confirmed"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+
+    logger.info(f"[NETWORK_POOL] Distributed {amount} THR to {validator_address} (reason: {reason})")
+    return tx_id
+
+
+# ─── Phase 5: T2E (Train-to-Earn) Rewards System ────────────────────────────────
+def get_t2e_state() -> dict:
+    """Get Train-to-Earn rewards state."""
+    return load_json(T2E_REWARDS_FILE, {
+        "total_training_data_points": 0,
+        "total_t2e_distributed": 0.0,
+        "device_contributions": {},  # device_id -> contribution_count
+        "last_distribution_time": None,
+        "pending_rewards": []
+    })
+
+
+def save_t2e_state(state: dict):
+    """Save T2E state (master only)."""
+    save_json(T2E_REWARDS_FILE, state)
+
+
+def record_training_contribution(device_id: str, wallet_address: str, data_type: str,
+                                  data_points: int = 1, gps_data: dict = None) -> dict:
+    """
+    Record a training data contribution from an IoT device/ASIC/music listener.
+
+    data_type: "music_telemetry", "gps_driving", "asic_validation", "iot_sensor"
+    """
+    state = get_t2e_state()
+
+    # Update device contribution count
+    device_contributions = state.get("device_contributions", {})
+    if device_id not in device_contributions:
+        device_contributions[device_id] = {
+            "wallet": wallet_address,
+            "total_contributions": 0,
+            "data_types": {},
+            "first_contribution": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "last_contribution": None
+        }
+
+    dc = device_contributions[device_id]
+    dc["total_contributions"] += data_points
+    dc["last_contribution"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    if data_type not in dc["data_types"]:
+        dc["data_types"][data_type] = 0
+    dc["data_types"][data_type] += data_points
+
+    state["device_contributions"] = device_contributions
+    state["total_training_data_points"] = int(state.get("total_training_data_points", 0)) + data_points
+
+    # Add to pending rewards queue
+    pending = state.get("pending_rewards", [])
+    pending.append({
+        "device_id": device_id,
+        "wallet": wallet_address,
+        "data_type": data_type,
+        "data_points": data_points,
+        "gps_data": gps_data,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    })
+    # Keep only last 1000 pending
+    if len(pending) > 1000:
+        pending = pending[-1000:]
+    state["pending_rewards"] = pending
+
+    save_t2e_state(state)
+
+    return {
+        "device_id": device_id,
+        "total_contributions": dc["total_contributions"],
+        "data_type": data_type
+    }
+
+
+def distribute_t2e_rewards(min_contributions: int = 10) -> list:
+    """
+    Distribute T2E rewards from AI pool to qualified contributors.
+    Called periodically by scheduler or manually.
+
+    Returns list of distributed reward tx_ids.
+    """
+    if READ_ONLY or NODE_ROLE != "master":
+        return []
+
+    state = get_t2e_state()
+    ai_pool = get_ai_pool_state()
+    ai_balance = float(ai_pool.get("ai_pool_balance", 0))
+
+    if ai_balance < 0.1:  # Minimum pool balance for distribution
+        logger.info("[T2E] AI pool balance too low for distribution")
+        return []
+
+    # Calculate rewards for qualifying devices
+    device_contributions = state.get("device_contributions", {})
+    qualifying_devices = [
+        (dev_id, data)
+        for dev_id, data in device_contributions.items()
+        if data.get("total_contributions", 0) >= min_contributions
+    ]
+
+    if not qualifying_devices:
+        return []
+
+    # Distribute proportionally (max 50% of pool per round)
+    available_for_distribution = min(ai_balance * 0.5, 10.0)  # Max 10 THR per round
+    total_contributions = sum(d[1].get("total_contributions", 0) for d in qualifying_devices)
+
+    tx_ids = []
+    for dev_id, data in qualifying_devices:
+        wallet = data.get("wallet")
+        contributions = data.get("total_contributions", 0)
+
+        # Proportional reward
+        share = contributions / total_contributions
+        reward_amount = round(available_for_distribution * share, 6)
+
+        if reward_amount < 0.001:  # Minimum reward threshold
+            continue
+
+        # Distribute from AI pool
+        tx_id = _distribute_ai_pool_to_address(
+            wallet,
+            reward_amount,
+            category="t2e_reward",
+            details={
+                "device_id": dev_id,
+                "contributions": contributions,
+                "data_types": data.get("data_types", {})
+            }
+        )
+
+        if tx_id:
+            tx_ids.append(tx_id)
+            # Reset contribution counter after reward
+            device_contributions[dev_id]["total_contributions"] = 0
+
+    state["device_contributions"] = device_contributions
+    state["total_t2e_distributed"] = round(
+        float(state.get("total_t2e_distributed", 0)) + sum(
+            float(_distribute_ai_pool_to_address.__wrapped__ if hasattr(_distribute_ai_pool_to_address, '__wrapped__') else 0)
+            for _ in tx_ids
+        ), 6
+    )
+    state["last_distribution_time"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    save_t2e_state(state)
+
+    logger.info(f"[T2E] Distributed rewards to {len(tx_ids)} devices")
+    return tx_ids
+
+
+# ─── Music Telemetry Reward Distribution (80/10/10) ─────────────────────────────
+MUSIC_REWARD_ARTIST_PERCENT = 0.80   # 80% to artist
+MUSIC_REWARD_NETWORK_PERCENT = 0.10  # 10% to network pool
+MUSIC_REWARD_AI_PERCENT = 0.10       # 10% to AI/T2E pool
+
+def distribute_music_reward(total_amount: float, artist_address: str, listener_address: str,
+                            track_id: str, track_title: str = None, gps_data: dict = None,
+                            duration_seconds: int = None, device_id: str = None) -> dict:
+    """
+    Distribute music play/tip rewards according to 80/10/10 split.
+
+    - 80% to artist
+    - 10% to network (validators/nodes)
+    - 10% to AI pool (T2E for IoT miners, ASICs, data trainers)
+
+    Also records training data contribution for T2E if GPS data provided.
+    """
+    if READ_ONLY or NODE_ROLE != "master":
+        return {"ok": False, "error": "read_only_node"}
+
+    if total_amount <= 0:
+        return {"ok": False, "error": "invalid_amount"}
+
+    # Calculate splits
+    artist_amount = round(total_amount * MUSIC_REWARD_ARTIST_PERCENT, 6)
+    network_amount = round(total_amount * MUSIC_REWARD_NETWORK_PERCENT, 6)
+    ai_amount = round(total_amount * MUSIC_REWARD_AI_PERCENT, 6)
+
+    # Ensure rounding doesn't lose/gain THR
+    actual_total = artist_amount + network_amount + ai_amount
+    if actual_total != total_amount:
+        artist_amount = round(total_amount - network_amount - ai_amount, 6)
+
+    ledger = load_json(LEDGER_FILE, {})
+    chain = load_json(CHAIN_FILE, [])
+    tx_id = f"MUSIC-TELEMETRY-{int(time.time())}-{secrets.token_hex(4)}"
+
+    # Credit artist (80%)
+    ledger[artist_address] = round(float(ledger.get(artist_address, 0)) + artist_amount, 6)
+
+    # Credit network pool (10%)
+    credit_network_pool(network_amount, source="music_play")
+
+    # Credit AI pool (10%) for T2E distribution
+    credit_ai_pool(ai_amount, music_tip_amount=total_amount)
+
+    save_json(LEDGER_FILE, ledger)
+
+    # Create unified transaction record
+    tx = {
+        "type": "music_play_reward",
+        "track_id": track_id,
+        "track_title": track_title or track_id,
+        "listener": listener_address,
+        "artist": artist_address,
+        "total_amount": total_amount,
+        "reward_split": {
+            "artist": artist_amount,
+            "network": network_amount,
+            "ai_t2e": ai_amount
+        },
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "tx_id": tx_id,
+        "status": "confirmed",
+        "gps_recorded": bool(gps_data),
+        "duration_seconds": duration_seconds
+    }
+
+    if gps_data:
+        tx["gps_data"] = gps_data
+
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+
+    # Record T2E training contribution if GPS data provided (driver training)
+    if gps_data and listener_address:
+        effective_device_id = device_id or f"LISTENER-{listener_address[:16]}"
+        record_training_contribution(
+            device_id=effective_device_id,
+            wallet_address=listener_address,
+            data_type="music_telemetry",
+            data_points=1,
+            gps_data=gps_data
+        )
+
+    logger.info(f"[MUSIC_REWARD] Distributed {total_amount} THR: "
+                f"artist={artist_amount}, network={network_amount}, ai={ai_amount} "
+                f"for track {track_id}")
+
+    return {
+        "ok": True,
+        "tx_id": tx_id,
+        "total_amount": total_amount,
+        "splits": {
+            "artist": artist_amount,
+            "network": network_amount,
+            "ai_t2e": ai_amount
+        },
+        "artist_address": artist_address,
+        "t2e_recorded": bool(gps_data)
+    }
+
+
 def _sha256_hex(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -2702,6 +3029,11 @@ def _canonical_kind(kind_raw: str) -> str:
         "playlist_add_track": "music",  # PR-5: Music/Playlists canonical kinds
         "playlist_remove_track": "music",  # PR-5: Music/Playlists canonical kinds
         "playlist_reorder": "music",  # PR-5: Music/Playlists canonical kinds
+        "t2e_reward": "t2e_reward",  # Phase 5: Train-to-Earn rewards
+        "train_reward": "t2e_reward",  # Phase 5: Train-to-Earn alias
+        "network_reward": "network_reward",  # Phase 5: Network pool rewards
+        "validator_reward": "network_reward",  # Phase 5: Validator rewards alias
+        "ai_reward": "ai_reward",  # AI pool distribution
         "nft_mint": "nft_mint",
         "nft_sale": "nft_sale",
         "nft_burn": "nft_burn",
@@ -20600,39 +20932,51 @@ def api_v1_music_tip():
         if error_key == "invalid_auth":
             return jsonify({"status": "error", "message": "Invalid auth"}), 403
 
-    # Transfer THR with 10% to AI pool (Phase 4)
-    AI_POOL_PERCENTAGE = 0.10  # 10% of music tips go to AI pool
+    # Transfer THR with 80/10/10 split (Phase 5: Music Telemetry Rewards)
+    # 80% to artist, 10% to network pool, 10% to AI/T2E pool
     ledger = load_json(LEDGER_FILE, {})
     sender_balance = float(ledger.get(from_address, 0))
 
     if sender_balance < amount:
         return jsonify({"status": "error", "message": "Insufficient balance"}), 400
 
-    # Split: 10% to AI pool, 90% to artist
-    ai_pool_amount = round(amount * AI_POOL_PERCENTAGE, 6)
-    artist_amount = round(amount - ai_pool_amount, 6)
+    # Calculate splits using global constants
+    artist_amount = round(amount * MUSIC_REWARD_ARTIST_PERCENT, 6)    # 80%
+    network_amount = round(amount * MUSIC_REWARD_NETWORK_PERCENT, 6)  # 10%
+    ai_pool_amount = round(amount * MUSIC_REWARD_AI_PERCENT, 6)       # 10%
 
+    # Ensure no rounding errors
+    actual_total = artist_amount + network_amount + ai_pool_amount
+    if actual_total != amount:
+        artist_amount = round(amount - network_amount - ai_pool_amount, 6)
+
+    # Debit sender
     ledger[from_address] = round(sender_balance - amount, 6)
+
+    # Credit artist (80%)
     ledger[artist_address] = round(float(ledger.get(artist_address, 0)) + artist_amount, 6)
     save_json(LEDGER_FILE, ledger)
 
-    # Credit AI pool
+    # Credit network pool (10%)
+    credit_network_pool(network_amount, source="music_tip")
+
+    # Credit AI/T2E pool (10%)
     credit_ai_pool(ai_pool_amount, music_tip_amount=amount)
 
-    # Update track tips (total amount including AI pool portion)
+    # Update track tips (total amount)
     for t in registry["tracks"]:
         if t["id"] == track_id:
             t["tips_total"] = float(t.get("tips_total", 0)) + amount
             break
 
-    # Update artist earnings (only their portion after AI pool cut)
+    # Update artist earnings (only their 80% portion)
     if artist_address in registry["artists"]:
         registry["artists"][artist_address]["total_earnings"] = \
             float(registry["artists"][artist_address].get("total_earnings", 0)) + artist_amount
 
     save_music_registry(registry)
 
-    # Record transaction
+    # Record transaction with full reward split info
     chain = load_json(CHAIN_FILE, [])
     tx_id = f"MUSIC-TIP-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
@@ -20642,12 +20986,27 @@ def api_v1_music_tip():
         "from": from_address,
         "to": artist_address,
         "amount": amount,
-        "artist_amount": artist_amount,  # Amount after AI pool cut
-        "ai_pool_amount": ai_pool_amount,  # Amount contributed to AI pool
+        "reward_split": {
+            "artist": artist_amount,
+            "network": network_amount,
+            "ai_t2e": ai_pool_amount
+        },
+        # Legacy fields for backward compatibility
+        "artist_amount": artist_amount,
+        "ai_pool_amount": ai_pool_amount,
+        "network_amount": network_amount,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
         "tx_id": tx_id,
         "status": "confirmed"
     }
+
+    # Add GPS data if provided
+    gps_data = None
+    if gps_lat is not None and gps_lng is not None:
+        gps_data = {"lat": gps_lat, "lng": gps_lng}
+        tx["gps_data"] = gps_data
+        tx["gps_recorded"] = True
+
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
 
@@ -20662,17 +21021,35 @@ def api_v1_music_tip():
         tip_amount=amount
     )
 
-    logger.info(f"Music tip: {amount} THR from {from_address} to {artist_address} for track {track_id} (artist: {artist_amount}, AI pool: {ai_pool_amount})" +
+    # Record T2E contribution if GPS data provided (driver training)
+    if gps_data:
+        record_training_contribution(
+            device_id=f"TIPPER-{from_address[:16]}",
+            wallet_address=from_address,
+            data_type="music_telemetry",
+            data_points=1,
+            gps_data=gps_data
+        )
+
+    logger.info(f"Music tip: {amount} THR from {from_address} for track {track_id} "
+                f"(artist={artist_amount}, network={network_amount}, ai={ai_pool_amount})" +
                 (f" @ GPS({gps_lat:.4f}, {gps_lng:.4f})" if gps_lat and gps_lng else ""))
 
     return jsonify({
         "status": "success",
         "tx_id": tx_id,
         "amount": amount,
+        "reward_split": {
+            "artist": artist_amount,
+            "network": network_amount,
+            "ai_t2e": ai_pool_amount
+        },
         "artist_amount": artist_amount,
+        "network_amount": network_amount,
         "ai_pool_amount": ai_pool_amount,
         "new_balance": ledger[from_address],
-        "gps_recorded": bool(gps_lat and gps_lng)
+        "gps_recorded": bool(gps_lat and gps_lng),
+        "t2e_contribution_recorded": bool(gps_data)
     }), 200
 
 
@@ -21616,6 +21993,314 @@ def api_music_playlist_update():
     except Exception as e:
         app.logger.error(f"Failed to update playlist: {e}")
         return jsonify({"ok": False, "error": "Failed to update playlist"}), 500
+
+
+# ─── Music Telemetry & T2E (Train-to-Earn) API ─────────────────────────────────
+
+@app.route("/api/music/telemetry/stats", methods=["GET"])
+def api_music_telemetry_stats():
+    """
+    Get music telemetry statistics including reward distribution pools.
+
+    Returns:
+    - AI pool balance and stats
+    - Network pool balance and stats
+    - T2E (Train-to-Earn) stats
+    - Recent music play rewards
+    """
+    ai_pool = get_ai_pool_state()
+    network_pool = get_network_pool_state()
+    t2e_state = get_t2e_state()
+
+    # Get recent music telemetry transactions
+    chain = load_json(CHAIN_FILE, [])
+    recent_music_rewards = [
+        tx for tx in chain[-100:]
+        if tx.get("type") in ("music_play_reward", "music_tip")
+        and tx.get("reward_split")
+    ][-20:]  # Last 20
+
+    return jsonify({
+        "ok": True,
+        "reward_distribution": {
+            "artist_percent": int(MUSIC_REWARD_ARTIST_PERCENT * 100),
+            "network_percent": int(MUSIC_REWARD_NETWORK_PERCENT * 100),
+            "ai_t2e_percent": int(MUSIC_REWARD_AI_PERCENT * 100)
+        },
+        "pools": {
+            "ai_pool": {
+                "balance": ai_pool.get("ai_pool_balance", 0),
+                "total_music_contributions": ai_pool.get("total_music_tips", 0),
+                "total_distributed": ai_pool.get("total_ai_distributed", 0),
+                "rewards_count": ai_pool.get("total_ai_rewards_count", 0),
+                "last_distribution": ai_pool.get("last_distribution_time")
+            },
+            "network_pool": {
+                "balance": network_pool.get("network_pool_balance", 0),
+                "total_contributions": network_pool.get("total_music_contributions", 0),
+                "total_distributed": network_pool.get("total_distributed_to_nodes", 0),
+                "distribution_count": network_pool.get("distribution_count", 0),
+                "last_distribution": network_pool.get("last_distribution_time")
+            }
+        },
+        "t2e": {
+            "total_training_data_points": t2e_state.get("total_training_data_points", 0),
+            "total_distributed": t2e_state.get("total_t2e_distributed", 0),
+            "active_devices": len(t2e_state.get("device_contributions", {})),
+            "last_distribution": t2e_state.get("last_distribution_time")
+        },
+        "recent_rewards": recent_music_rewards
+    }), 200
+
+
+@app.route("/api/t2e/status", methods=["GET"])
+def api_t2e_status():
+    """
+    Get Train-to-Earn status for the requesting wallet.
+
+    Query params:
+    - wallet: Wallet address (optional, shows global stats if not provided)
+    """
+    wallet = request.args.get("wallet", "").strip()
+    t2e_state = get_t2e_state()
+    ai_pool = get_ai_pool_state()
+
+    response = {
+        "ok": True,
+        "ai_pool_balance": ai_pool.get("ai_pool_balance", 0),
+        "total_training_data_points": t2e_state.get("total_training_data_points", 0),
+        "total_distributed": t2e_state.get("total_t2e_distributed", 0),
+        "active_devices": len(t2e_state.get("device_contributions", {}))
+    }
+
+    if wallet:
+        # Find contributions from devices owned by this wallet
+        device_contributions = t2e_state.get("device_contributions", {})
+        wallet_devices = [
+            {"device_id": dev_id, **data}
+            for dev_id, data in device_contributions.items()
+            if data.get("wallet") == wallet
+        ]
+        response["wallet"] = wallet
+        response["wallet_devices"] = wallet_devices
+        response["wallet_total_contributions"] = sum(
+            d.get("total_contributions", 0) for d in wallet_devices
+        )
+
+    return jsonify(response), 200
+
+
+@app.route("/api/t2e/contribute", methods=["POST"])
+def api_t2e_contribute():
+    """
+    Record a T2E training data contribution.
+
+    Payload:
+    - device_id: Device identifier (required)
+    - wallet: Wallet address (required)
+    - data_type: Type of data (music_telemetry, gps_driving, asic_validation, iot_sensor)
+    - data_points: Number of data points (default: 1)
+    - gps_data: GPS coordinates {lat, lng} (optional)
+    """
+    data = request.get_json() or {}
+    device_id = (data.get("device_id") or "").strip()
+    wallet = (data.get("wallet") or "").strip()
+    data_type = (data.get("data_type") or "").strip() or "generic"
+    data_points = int(data.get("data_points", 1))
+    gps_data = data.get("gps_data")
+
+    if not device_id or not wallet:
+        return jsonify({"ok": False, "error": "device_id and wallet required"}), 400
+
+    result = record_training_contribution(
+        device_id=device_id,
+        wallet_address=wallet,
+        data_type=data_type,
+        data_points=data_points,
+        gps_data=gps_data
+    )
+
+    return jsonify({
+        "ok": True,
+        "contribution": result
+    }), 200
+
+
+@app.route("/api/t2e/distribute", methods=["POST"])
+def api_t2e_distribute():
+    """
+    Trigger T2E reward distribution (admin only).
+
+    Payload:
+    - admin_secret: Admin authentication
+    - min_contributions: Minimum contributions to qualify (default: 10)
+    """
+    data = request.get_json() or {}
+    admin_secret = (data.get("admin_secret") or "").strip()
+    min_contributions = int(data.get("min_contributions", 10))
+
+    # Validate admin access
+    expected_secret = os.getenv("ADMIN_SECRET") or os.getenv("THRONOS_ADMIN_SECRET")
+    if not expected_secret or admin_secret != expected_secret:
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+
+    tx_ids = distribute_t2e_rewards(min_contributions=min_contributions)
+
+    return jsonify({
+        "ok": True,
+        "distributed_count": len(tx_ids),
+        "tx_ids": tx_ids
+    }), 200
+
+
+@app.route("/api/network/pool/status", methods=["GET"])
+def api_network_pool_status():
+    """Get network pool status."""
+    pool = get_network_pool_state()
+    return jsonify({
+        "ok": True,
+        "pool": pool
+    }), 200
+
+
+@app.route("/api/music/auto_reward", methods=["POST"])
+def api_music_auto_reward():
+    """
+    Award automatic music listening reward with 80/10/10 split.
+
+    Called when a listener completes a track or reaches a reward threshold.
+
+    Payload:
+    - track_id: Track being played (required)
+    - listener_address: Listener's wallet (required)
+    - duration_seconds: How long they listened (required, min 30s)
+    - gps_lat, gps_lng: GPS coordinates (optional, triggers T2E bonus)
+    - device_id: Device identifier (optional)
+    """
+    data = request.get_json() or {}
+    track_id = (data.get("track_id") or "").strip()
+    listener_address = (data.get("listener_address") or "").strip()
+    duration_seconds = int(data.get("duration_seconds", 0))
+    gps_lat = data.get("gps_lat")
+    gps_lng = data.get("gps_lng")
+    device_id = data.get("device_id")
+
+    if not track_id or not listener_address:
+        return jsonify({"ok": False, "error": "track_id and listener_address required"}), 400
+
+    # Minimum 30 seconds listening for reward
+    if duration_seconds < 30:
+        return jsonify({
+            "ok": False,
+            "error": "Minimum 30 seconds listening required for reward",
+            "duration_seconds": duration_seconds
+        }), 400
+
+    # Get track info
+    registry = load_music_registry()
+    track = next((t for t in registry["tracks"] if t["id"] == track_id), None)
+    if not track:
+        return jsonify({"ok": False, "error": "Track not found"}), 404
+
+    artist_address = track["artist_address"]
+
+    # Calculate reward based on listening time
+    # Base rate: 0.001 THR per 30 seconds (capped at track duration or 5 mins)
+    BASE_REWARD_PER_30S = 0.001
+    MAX_REWARD_DURATION = 300  # 5 minutes
+    effective_duration = min(duration_seconds, MAX_REWARD_DURATION)
+    base_reward = round((effective_duration / 30) * BASE_REWARD_PER_30S, 6)
+
+    # GPS bonus: +50% if GPS telemetry provided (contributes to AI training)
+    gps_data = None
+    if gps_lat is not None and gps_lng is not None:
+        base_reward = round(base_reward * 1.5, 6)
+        gps_data = {"lat": gps_lat, "lng": gps_lng}
+
+    # Mint reward from system (this creates new THR for music ecosystem)
+    # This is inflationary but controlled - music rewards come from the
+    # music ecosystem allocation in tokenomics
+    result = distribute_music_reward(
+        total_amount=base_reward,
+        artist_address=artist_address,
+        listener_address=listener_address,
+        track_id=track_id,
+        track_title=track.get("title"),
+        gps_data=gps_data,
+        duration_seconds=duration_seconds,
+        device_id=device_id
+    )
+
+    if result.get("ok"):
+        # Track the music play in database
+        _track_music_play(
+            track_id=track_id,
+            wallet_address=listener_address,
+            artist_address=artist_address,
+            duration_seconds=duration_seconds,
+            gps_lat=gps_lat,
+            gps_lng=gps_lng,
+            tip_amount=base_reward
+        )
+
+        # Update play count in registry
+        if track_id not in registry["plays"]:
+            registry["plays"][track_id] = []
+        registry["plays"][track_id].append({
+            "listener": listener_address,
+            "timestamp": time.time(),
+            "datetime": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "duration": duration_seconds,
+            "reward": base_reward,
+            "gps_recorded": bool(gps_data)
+        })
+        save_music_registry(registry)
+
+        return jsonify({
+            "ok": True,
+            "tx_id": result.get("tx_id"),
+            "reward": base_reward,
+            "splits": result.get("splits"),
+            "gps_bonus_applied": bool(gps_data),
+            "t2e_contribution": result.get("t2e_recorded", False)
+        }), 200
+    else:
+        return jsonify(result), 400
+
+
+@app.route("/api/music/plays/history", methods=["GET"])
+def api_music_plays_history():
+    """
+    Get music play history with GPS telemetry data.
+
+    Query params:
+    - wallet: Filter by listener wallet (optional)
+    - artist: Filter by artist address (optional)
+    - track_id: Filter by track (optional)
+    - limit: Max results (default 50)
+    """
+    wallet = request.args.get("wallet", "").strip() or None
+    artist = request.args.get("artist", "").strip() or None
+    track_id = request.args.get("track_id", "").strip() or None
+    limit = min(int(request.args.get("limit", 50)), 200)
+
+    plays = _get_music_plays(
+        wallet_address=wallet,
+        track_id=track_id,
+        artist_address=artist,
+        limit=limit
+    )
+
+    return jsonify({
+        "ok": True,
+        "plays": plays,
+        "count": len(plays),
+        "filters": {
+            "wallet": wallet,
+            "artist": artist,
+            "track_id": track_id
+        }
+    }), 200
 
 
 # ─── Token Explorer, NFT & Governance Pages ─────────────────────────────────

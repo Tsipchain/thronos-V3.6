@@ -2486,11 +2486,25 @@ def save_t2e_state(state: dict):
 
 
 def record_training_contribution(device_id: str, wallet_address: str, data_type: str,
-                                  data_points: int = 1, gps_data: dict = None) -> dict:
+                                  data_points: int = 1, gps_data: dict = None,
+                                  block_data: dict = None) -> dict:
     """
     Record a training data contribution from an IoT device/ASIC/music listener.
 
-    data_type: "music_telemetry", "gps_driving", "asic_validation", "iot_sensor"
+    data_type options:
+    - "music_telemetry": Music + GPS data from Android Auto/CarPlay
+    - "gps_driving": Pure GPS driving data for AI training
+    - "asic_block_storage": ASIC storing encrypted block data
+    - "asic_network_relay": ASIC helping with network speed
+    - "asic_offline_tx": ASIC supporting offline/RadioNode transactions
+    - "iot_sensor": IoT sensor data (temperature, etc.)
+    - "iot_mesh_relay": IoT device acting as mesh network relay
+
+    block_data: Optional metadata for ASIC contributions
+    - block_hash: Hash of block being stored
+    - block_height: Height of block
+    - tx_count: Number of transactions in block
+    - offline_relay: Whether this was an offline relay
     """
     state = get_t2e_state()
 
@@ -2613,6 +2627,207 @@ def distribute_t2e_rewards(min_contributions: int = 10) -> list:
 
     logger.info(f"[T2E] Distributed rewards to {len(tx_ids)} devices")
     return tx_ids
+
+
+# ─── Anti-GPS Spoofing & Car Platform Validation ────────────────────────────────
+# T2E rewards ONLY for verified real-time trips via Android Auto or Apple CarPlay
+
+VALID_CAR_PLATFORMS = {"android_auto", "carplay", "apple_carplay"}
+GPS_SPOOF_FILE = os.path.join(DATA_DIR, "gps_spoof_detection.json")
+
+# Speed limits for spoof detection (km/h)
+MAX_REASONABLE_SPEED_KMH = 300  # No car goes faster than this
+MIN_MOVEMENT_THRESHOLD_KM = 0.001  # 1 meter minimum movement
+MAX_TELEPORT_DISTANCE_KM = 10  # Max distance in 1 second (impossible jump)
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculate distance between two GPS points in kilometers."""
+    from math import radians, sin, cos, sqrt, atan2
+    R = 6371  # Earth's radius in km
+
+    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1-a))
+
+    return R * c
+
+
+def load_gps_history(device_id: str) -> list:
+    """Load GPS history for a device."""
+    data = load_json(GPS_SPOOF_FILE, {})
+    return data.get(device_id, {}).get("history", [])
+
+
+def save_gps_point(device_id: str, lat: float, lng: float, timestamp: float = None):
+    """Save a GPS point for spoof detection."""
+    data = load_json(GPS_SPOOF_FILE, {})
+    if device_id not in data:
+        data[device_id] = {"history": [], "spoof_flags": 0, "last_verified": None}
+
+    ts = timestamp or time.time()
+    data[device_id]["history"].append({
+        "lat": lat,
+        "lng": lng,
+        "timestamp": ts
+    })
+
+    # Keep only last 100 points per device
+    if len(data[device_id]["history"]) > 100:
+        data[device_id]["history"] = data[device_id]["history"][-100:]
+
+    save_json(GPS_SPOOF_FILE, data)
+
+
+def validate_car_platform(device_info: dict) -> tuple[bool, str]:
+    """
+    Validate that the device is Android Auto or Apple CarPlay.
+
+    Returns (is_valid, reason)
+    """
+    platform = (device_info.get("platform") or "").lower().replace(" ", "_")
+    device_type = (device_info.get("device_type") or "").lower()
+
+    # Must be a car platform
+    if platform not in VALID_CAR_PLATFORMS and device_type not in VALID_CAR_PLATFORMS:
+        return False, "not_car_platform"
+
+    # Must have a linked wallet
+    if not device_info.get("wallet_address"):
+        return False, "no_wallet_linked"
+
+    # Must be a registered/verified device
+    if not device_info.get("device_id"):
+        return False, "no_device_id"
+
+    return True, "valid"
+
+
+def detect_gps_spoofing(device_id: str, current_lat: float, current_lng: float,
+                         reported_speed: float = None) -> tuple[bool, str, dict]:
+    """
+    Detect GPS spoofing based on movement patterns.
+
+    Returns (is_spoofed, reason, details)
+
+    Checks for:
+    1. Teleportation (impossible distance in short time)
+    2. Impossible speed
+    3. Static location while reporting movement
+    4. Erratic patterns (constant jumps)
+    """
+    history = load_gps_history(device_id)
+
+    if not history:
+        # First point, can't detect spoofing yet
+        save_gps_point(device_id, current_lat, current_lng)
+        return False, "first_point", {}
+
+    last_point = history[-1]
+    last_lat = last_point["lat"]
+    last_lng = last_point["lng"]
+    last_ts = last_point["timestamp"]
+    current_ts = time.time()
+
+    time_diff_seconds = max(current_ts - last_ts, 0.1)  # Avoid division by zero
+    distance_km = _haversine_km(last_lat, last_lng, current_lat, current_lng)
+
+    # Calculate implied speed
+    implied_speed_kmh = (distance_km / time_diff_seconds) * 3600
+
+    details = {
+        "distance_km": round(distance_km, 4),
+        "time_diff_seconds": round(time_diff_seconds, 2),
+        "implied_speed_kmh": round(implied_speed_kmh, 2),
+        "reported_speed_kmh": reported_speed
+    }
+
+    # Check 1: Teleportation (moved too far too fast)
+    if time_diff_seconds < 5 and distance_km > MAX_TELEPORT_DISTANCE_KM:
+        return True, "teleportation_detected", details
+
+    # Check 2: Impossible speed
+    if implied_speed_kmh > MAX_REASONABLE_SPEED_KMH:
+        return True, "impossible_speed", details
+
+    # Check 3: Speed mismatch (reported vs calculated)
+    if reported_speed is not None:
+        speed_diff = abs(implied_speed_kmh - reported_speed)
+        if speed_diff > 50 and reported_speed > 10:  # Allow some variance at low speeds
+            details["speed_mismatch"] = round(speed_diff, 2)
+            return True, "speed_mismatch", details
+
+    # Check 4: Stationary spoof (same location repeated while claiming movement)
+    if len(history) >= 5:
+        recent_points = history[-5:]
+        unique_locations = set()
+        for p in recent_points:
+            # Round to ~10m precision
+            loc_key = (round(p["lat"], 4), round(p["lng"], 4))
+            unique_locations.add(loc_key)
+
+        if len(unique_locations) == 1 and reported_speed and reported_speed > 5:
+            return True, "stationary_while_moving", details
+
+    # Save this point for future checks
+    save_gps_point(device_id, current_lat, current_lng, current_ts)
+
+    return False, "valid", details
+
+
+def validate_t2e_eligibility(device_info: dict, gps_data: dict) -> tuple[bool, str, dict]:
+    """
+    Full validation for T2E reward eligibility.
+
+    Requirements:
+    1. Must be Android Auto or Apple CarPlay device
+    2. Must have wallet linked
+    3. GPS must not be spoofed
+    4. Must be a real-time trip
+
+    Returns (is_eligible, reason, details)
+    """
+    # Step 1: Validate car platform
+    platform_valid, platform_reason = validate_car_platform(device_info)
+    if not platform_valid:
+        return False, f"platform_invalid:{platform_reason}", {
+            "required": "android_auto or carplay",
+            "provided": device_info.get("platform")
+        }
+
+    # Step 2: Validate GPS data exists
+    if not gps_data or gps_data.get("lat") is None or gps_data.get("lng") is None:
+        return False, "no_gps_data", {}
+
+    lat = float(gps_data["lat"])
+    lng = float(gps_data["lng"])
+    speed = gps_data.get("speed")
+
+    # Step 3: Check for GPS spoofing
+    device_id = device_info.get("device_id")
+    is_spoofed, spoof_reason, spoof_details = detect_gps_spoofing(
+        device_id, lat, lng, speed
+    )
+
+    if is_spoofed:
+        # Flag the device
+        data = load_json(GPS_SPOOF_FILE, {})
+        if device_id in data:
+            data[device_id]["spoof_flags"] = data[device_id].get("spoof_flags", 0) + 1
+            save_json(GPS_SPOOF_FILE, data)
+
+        return False, f"gps_spoofed:{spoof_reason}", spoof_details
+
+    # Step 4: All checks passed
+    return True, "eligible", {
+        "device_id": device_id,
+        "platform": device_info.get("platform"),
+        "wallet": device_info.get("wallet_address"),
+        "gps_valid": True
+    }
 
 
 # ─── Music Telemetry Reward Distribution (80/10/10) ─────────────────────────────
@@ -6959,6 +7174,13 @@ def whitepaper_page():
 @app.route("/roadmap")
 def roadmap_page():
     return render_template("roadmap.html")
+
+@app.route("/downloads")
+@app.route("/apps")
+@app.route("/wallet/download")
+def downloads_page():
+    """Mobile wallet downloads page - Android APK, iOS, Web PWA, Chrome Extension"""
+    return render_template("downloads.html")
 
 @app.route("/token_chart")
 def token_chart_page():
@@ -22163,6 +22385,236 @@ def api_network_pool_status():
     }), 200
 
 
+# ─── ASIC & IoT Miner Contribution Endpoints ────────────────────────────────────
+
+@app.route("/api/asic/contribute/block", methods=["POST"])
+def api_asic_contribute_block():
+    """
+    Record ASIC contribution for storing/encrypting block data.
+
+    ASICs help the network by:
+    - Storing encrypted block data
+    - Speeding up transaction validation
+    - Supporting offline transactions (RadioNode/survival mode)
+
+    Payload:
+    - device_id: ASIC identifier (required)
+    - wallet: Owner wallet address (required)
+    - block_hash: Hash of block being stored
+    - block_height: Block height
+    - tx_count: Number of transactions in block
+    - contribution_type: "block_storage", "network_relay", "offline_tx"
+    """
+    data = request.get_json() or {}
+    device_id = (data.get("device_id") or "").strip()
+    wallet = (data.get("wallet") or "").strip()
+    block_hash = data.get("block_hash")
+    block_height = data.get("block_height")
+    tx_count = data.get("tx_count", 0)
+    contribution_type = data.get("contribution_type", "block_storage")
+
+    if not device_id or not wallet:
+        return jsonify({"ok": False, "error": "device_id and wallet required"}), 400
+
+    # Map contribution type to data_type
+    type_mapping = {
+        "block_storage": "asic_block_storage",
+        "network_relay": "asic_network_relay",
+        "offline_tx": "asic_offline_tx"
+    }
+    data_type = type_mapping.get(contribution_type, "asic_block_storage")
+
+    # Calculate points based on contribution
+    # More transactions = more work = more points
+    base_points = 1
+    if tx_count:
+        base_points += min(int(tx_count) // 10, 10)  # Up to +10 bonus points
+
+    block_data = {
+        "block_hash": block_hash,
+        "block_height": block_height,
+        "tx_count": tx_count,
+        "contribution_type": contribution_type
+    }
+
+    result = record_training_contribution(
+        device_id=device_id,
+        wallet_address=wallet,
+        data_type=data_type,
+        data_points=base_points,
+        block_data=block_data
+    )
+
+    logger.info(f"[ASIC] Block contribution: {device_id}, type={contribution_type}, points={base_points}")
+
+    return jsonify({
+        "ok": True,
+        "contribution": result,
+        "points_earned": base_points,
+        "contribution_type": contribution_type
+    }), 200
+
+
+@app.route("/api/asic/contribute/offline", methods=["POST"])
+def api_asic_contribute_offline():
+    """
+    Record ASIC contribution for supporting offline/RadioNode transactions.
+
+    This is critical for survival mode - when internet is down, ASICs and
+    IoT miners help propagate transactions via radio/mesh networking.
+
+    Payload:
+    - device_id: ASIC/IoT miner identifier (required)
+    - wallet: Owner wallet address (required)
+    - tx_hash: Transaction hash being relayed
+    - relay_method: "radio", "mesh", "bluetooth", "local"
+    - hop_count: Number of hops this relay represents
+    """
+    data = request.get_json() or {}
+    device_id = (data.get("device_id") or "").strip()
+    wallet = (data.get("wallet") or "").strip()
+    tx_hash = data.get("tx_hash")
+    relay_method = data.get("relay_method", "mesh")
+    hop_count = int(data.get("hop_count", 1))
+
+    if not device_id or not wallet:
+        return jsonify({"ok": False, "error": "device_id and wallet required"}), 400
+
+    # Offline relay is valuable - bonus points for survival mode support
+    points = 2 + min(hop_count, 5)  # 2 base + up to 5 for multi-hop
+
+    block_data = {
+        "tx_hash": tx_hash,
+        "relay_method": relay_method,
+        "hop_count": hop_count,
+        "offline_relay": True,
+        "survival_mode": True
+    }
+
+    result = record_training_contribution(
+        device_id=device_id,
+        wallet_address=wallet,
+        data_type="asic_offline_tx",
+        data_points=points,
+        block_data=block_data
+    )
+
+    logger.info(f"[ASIC] Offline relay: {device_id}, method={relay_method}, hops={hop_count}, points={points}")
+
+    return jsonify({
+        "ok": True,
+        "contribution": result,
+        "points_earned": points,
+        "relay_method": relay_method,
+        "survival_mode_contribution": True
+    }), 200
+
+
+@app.route("/api/iot/contribute/mesh", methods=["POST"])
+def api_iot_contribute_mesh():
+    """
+    Record IoT device contribution as mesh network relay.
+
+    IoT miners help extend network coverage and support offline transactions.
+
+    Payload:
+    - device_id: IoT device identifier (required)
+    - wallet: Owner wallet address (required)
+    - relay_type: "wifi_mesh", "lora", "bluetooth", "radio"
+    - packets_relayed: Number of packets/messages relayed
+    - uptime_hours: Device uptime in hours
+    """
+    data = request.get_json() or {}
+    device_id = (data.get("device_id") or "").strip()
+    wallet = (data.get("wallet") or "").strip()
+    relay_type = data.get("relay_type", "wifi_mesh")
+    packets_relayed = int(data.get("packets_relayed", 1))
+    uptime_hours = float(data.get("uptime_hours", 0))
+
+    if not device_id or not wallet:
+        return jsonify({"ok": False, "error": "device_id and wallet required"}), 400
+
+    # Calculate points: base + packets bonus + uptime bonus
+    points = 1
+    points += min(packets_relayed // 100, 5)  # Up to +5 for packet volume
+    points += min(int(uptime_hours // 24), 3)  # Up to +3 for uptime (per day)
+
+    block_data = {
+        "relay_type": relay_type,
+        "packets_relayed": packets_relayed,
+        "uptime_hours": uptime_hours
+    }
+
+    result = record_training_contribution(
+        device_id=device_id,
+        wallet_address=wallet,
+        data_type="iot_mesh_relay",
+        data_points=points,
+        block_data=block_data
+    )
+
+    logger.info(f"[IoT] Mesh relay: {device_id}, type={relay_type}, packets={packets_relayed}, points={points}")
+
+    return jsonify({
+        "ok": True,
+        "contribution": result,
+        "points_earned": points,
+        "relay_type": relay_type
+    }), 200
+
+
+@app.route("/api/miner/stats", methods=["GET"])
+def api_miner_stats():
+    """
+    Get miner/device statistics for T2E rewards.
+
+    Query params:
+    - wallet: Filter by wallet address (optional)
+    - device_id: Filter by specific device (optional)
+    """
+    wallet = request.args.get("wallet", "").strip() or None
+    device_id = request.args.get("device_id", "").strip() or None
+
+    t2e_state = get_t2e_state()
+    device_contributions = t2e_state.get("device_contributions", {})
+
+    # Filter devices
+    devices = []
+    for dev_id, data in device_contributions.items():
+        if wallet and data.get("wallet") != wallet:
+            continue
+        if device_id and dev_id != device_id:
+            continue
+
+        devices.append({
+            "device_id": dev_id,
+            "wallet": data.get("wallet"),
+            "total_contributions": data.get("total_contributions", 0),
+            "data_types": data.get("data_types", {}),
+            "first_contribution": data.get("first_contribution"),
+            "last_contribution": data.get("last_contribution")
+        })
+
+    # Sort by contributions
+    devices.sort(key=lambda x: x["total_contributions"], reverse=True)
+
+    # Calculate totals by type
+    totals_by_type = {}
+    for dev in devices:
+        for dtype, count in dev.get("data_types", {}).items():
+            if dtype not in totals_by_type:
+                totals_by_type[dtype] = 0
+            totals_by_type[dtype] += count
+
+    return jsonify({
+        "ok": True,
+        "devices": devices[:100],  # Limit to top 100
+        "total_devices": len(devices),
+        "totals_by_type": totals_by_type,
+        "ai_pool_balance": get_ai_pool_state().get("ai_pool_balance", 0)
+    }), 200
+
+
 @app.route("/api/music/auto_reward", methods=["POST"])
 def api_music_auto_reward():
     """
@@ -22170,12 +22622,19 @@ def api_music_auto_reward():
 
     Called when a listener completes a track or reaches a reward threshold.
 
+    IMPORTANT: T2E (Train-to-Earn) rewards with GPS bonus are ONLY available for:
+    - Android Auto devices
+    - Apple CarPlay devices
+    - Real-time trips (anti-GPS spoofing validation)
+
     Payload:
     - track_id: Track being played (required)
     - listener_address: Listener's wallet (required)
     - duration_seconds: How long they listened (required, min 30s)
-    - gps_lat, gps_lng: GPS coordinates (optional, triggers T2E bonus)
-    - device_id: Device identifier (optional)
+    - gps_lat, gps_lng: GPS coordinates (requires car platform for T2E)
+    - gps_speed: Current speed in km/h (helps validate real trip)
+    - device_id: Device identifier (required for T2E)
+    - platform: "android_auto" or "carplay" (required for T2E)
     """
     data = request.get_json() or {}
     track_id = (data.get("track_id") or "").strip()
@@ -22183,7 +22642,9 @@ def api_music_auto_reward():
     duration_seconds = int(data.get("duration_seconds", 0))
     gps_lat = data.get("gps_lat")
     gps_lng = data.get("gps_lng")
+    gps_speed = data.get("gps_speed")  # Speed in km/h
     device_id = data.get("device_id")
+    platform = data.get("platform")  # "android_auto" or "carplay"
 
     if not track_id or not listener_address:
         return jsonify({"ok": False, "error": "track_id and listener_address required"}), 400
@@ -22211,11 +22672,46 @@ def api_music_auto_reward():
     effective_duration = min(duration_seconds, MAX_REWARD_DURATION)
     base_reward = round((effective_duration / 30) * BASE_REWARD_PER_30S, 6)
 
-    # GPS bonus: +50% if GPS telemetry provided (contributes to AI training)
+    # T2E GPS bonus: +50% ONLY for verified Android Auto / CarPlay real-time trips
     gps_data = None
+    t2e_eligible = False
+    t2e_validation_result = None
+
     if gps_lat is not None and gps_lng is not None:
-        base_reward = round(base_reward * 1.5, 6)
-        gps_data = {"lat": gps_lat, "lng": gps_lng}
+        # Build device info for validation
+        device_info = {
+            "device_id": device_id,
+            "platform": platform,
+            "wallet_address": listener_address,
+            "device_type": platform
+        }
+
+        # Build GPS data
+        gps_data_raw = {
+            "lat": gps_lat,
+            "lng": gps_lng,
+            "speed": gps_speed
+        }
+
+        # Validate T2E eligibility (car platform + anti-spoofing)
+        t2e_eligible, t2e_reason, t2e_details = validate_t2e_eligibility(device_info, gps_data_raw)
+
+        t2e_validation_result = {
+            "eligible": t2e_eligible,
+            "reason": t2e_reason,
+            "details": t2e_details
+        }
+
+        if t2e_eligible:
+            # Verified real trip via Android Auto / CarPlay - apply GPS bonus
+            base_reward = round(base_reward * 1.5, 6)
+            gps_data = {"lat": gps_lat, "lng": gps_lng, "speed": gps_speed, "verified": True}
+            logger.info(f"[T2E] Verified trip: {listener_address} on {platform}, reward={base_reward}")
+        else:
+            # GPS provided but not eligible for T2E (not car platform or possible spoofing)
+            # Still record GPS but no bonus
+            gps_data = {"lat": gps_lat, "lng": gps_lng, "speed": gps_speed, "verified": False}
+            logger.warning(f"[T2E] Ineligible: {listener_address}, reason={t2e_reason}, details={t2e_details}")
 
     # Mint reward from system (this creates new THR for music ecosystem)
     # This is inflationary but controlled - music rewards come from the
@@ -22256,14 +22752,21 @@ def api_music_auto_reward():
         })
         save_music_registry(registry)
 
-        return jsonify({
+        response = {
             "ok": True,
             "tx_id": result.get("tx_id"),
             "reward": base_reward,
             "splits": result.get("splits"),
-            "gps_bonus_applied": bool(gps_data),
-            "t2e_contribution": result.get("t2e_recorded", False)
-        }), 200
+            "gps_bonus_applied": t2e_eligible,
+            "t2e_contribution": result.get("t2e_recorded", False) and t2e_eligible,
+            "t2e_validation": t2e_validation_result
+        }
+
+        # Add helpful message if GPS provided but T2E not eligible
+        if gps_data and not t2e_eligible:
+            response["t2e_note"] = "GPS recorded but T2E bonus not applied. T2E requires Android Auto or Apple CarPlay with real-time trip verification."
+
+        return jsonify(response), 200
     else:
         return jsonify(result), 400
 

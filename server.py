@@ -523,7 +523,7 @@ for _dir in [MEDIA_DIR, TOKEN_LOGOS_DIR, NFT_IMAGES_DIR, COURSE_MEDIA_DIR,
 # AI provider/model caches
 MODEL_CATALOG: dict = {}
 MODEL_CATALOG_LAST_REFRESH = 0.0
-MODEL_REFRESH_INTERVAL_SECONDS = float(os.getenv("MODEL_REFRESH_INTERVAL_SECONDS", 6 * 3600))
+MODEL_REFRESH_INTERVAL_SECONDS = float(_strip_env_quotes(os.getenv("MODEL_REFRESH_INTERVAL_SECONDS", str(6 * 3600))))
 PROVIDER_HEALTH_CACHE: dict = {}
 PROVIDER_HEALTH_TTL = 300  # seconds
 
@@ -533,11 +533,11 @@ LAST_HASH_CACHE: dict = {"ts": 0.0, "data": None}
 HEALTH_CACHE: dict = {"ts": 0.0, "data": None}
 MEMPOOL_COUNT_CACHE: dict = {"ts": 0.0, "count": 0}
 BALANCE_CACHE: dict = {}
-BALANCE_CACHE_TTL = float(os.getenv("BALANCE_CACHE_TTL_SECONDS", "10"))
+BALANCE_CACHE_TTL = float(_strip_env_quotes(os.getenv("BALANCE_CACHE_TTL_SECONDS", "10")))
 TOKEN_PRICE_CACHE: dict = {}  # {symbol: {"ts": timestamp, "price": float, "pools_hash": str}}
-TOKEN_PRICE_CACHE_TTL = float(os.getenv("TOKEN_PRICE_CACHE_TTL_SECONDS", "30"))  # Cache prices for 30 seconds
+TOKEN_PRICE_CACHE_TTL = float(_strip_env_quotes(os.getenv("TOKEN_PRICE_CACHE_TTL_SECONDS", "30")))  # Cache prices for 30 seconds
 WALLET_DATA_CACHE: dict = {}  # {wallet_addr: {"ts": timestamp, "data": dict, "tip_hash": str}}
-WALLET_DATA_CACHE_TTL = float(os.getenv("WALLET_DATA_CACHE_TTL_SECONDS", "10"))  # Cache wallet data for 10 seconds
+WALLET_DATA_CACHE_TTL = float(_strip_env_quotes(os.getenv("WALLET_DATA_CACHE_TTL_SECONDS", "10")))  # Cache wallet data for 10 seconds
 LAST_BLOCK_SNAPSHOT: dict = {}
 MINING_LAST_HASH_CACHE: dict = {"ts": 0.0, "data": None}
 CHAIN_META = {"height": 0, "last_hash": "0" * 64, "last_block": None}
@@ -568,10 +568,10 @@ SCHEDULER_ENABLED = _strip_env_quotes(os.getenv("SCHEDULER_ENABLED", "1")) == "1
 # AI mode: "production" (user-facing) or "worker" (background tasks)
 THRONOS_AI_MODE = _strip_env_quotes(os.getenv("THRONOS_AI_MODE", "production" if NODE_ROLE == "master" else "worker")).lower()
 MINING_WHITELIST_ONLY = _strip_env_quotes(os.getenv("MINING_WHITELIST_ONLY", "0")).lower() in ("1", "true", "yes")
-MINING_WATCHDOG_WINDOW_SECONDS = int(os.getenv("MINING_WATCHDOG_WINDOW_SECONDS", "60"))
-MINING_WATCHDOG_MAX_INVALID = int(os.getenv("MINING_WATCHDOG_MAX_INVALID", "12"))
-MINING_WATCHDOG_MAX_REQUESTS = int(os.getenv("MINING_WATCHDOG_MAX_REQUESTS", "60"))
-MINING_WATCHDOG_BAN_SECONDS = int(os.getenv("MINING_WATCHDOG_BAN_SECONDS", "300"))
+MINING_WATCHDOG_WINDOW_SECONDS = int(_strip_env_quotes(os.getenv("MINING_WATCHDOG_WINDOW_SECONDS", "60")))
+MINING_WATCHDOG_MAX_INVALID = int(_strip_env_quotes(os.getenv("MINING_WATCHDOG_MAX_INVALID", "12")))
+MINING_WATCHDOG_MAX_REQUESTS = int(_strip_env_quotes(os.getenv("MINING_WATCHDOG_MAX_REQUESTS", "60")))
+MINING_WATCHDOG_BAN_SECONDS = int(_strip_env_quotes(os.getenv("MINING_WATCHDOG_BAN_SECONDS", "300")))
 HEARTBEAT_ENABLED = _strip_env_quotes(os.getenv("HEARTBEAT_ENABLED", "1")).lower() in ("1", "true", "yes")
 HEARTBEAT_LOG_ERRORS = _strip_env_quotes(os.getenv("HEARTBEAT_LOG_ERRORS", "0")).lower() in ("1", "true", "yes")
 MUSIC_MODAL_ENABLED = _strip_env_quotes(os.getenv("MUSIC_MODAL_ENABLED", "1")).lower() in ("1", "true", "yes")
@@ -623,8 +623,8 @@ ENABLE_CHAIN = _strip_env_quotes(os.getenv("ENABLE_CHAIN", "1")) == "1"
 REDIS_CACHE_ENABLED = _strip_env_quotes(os.getenv("REDIS_CACHE_ENABLED", "1")).lower() in ("1", "true", "yes")
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 REDIS_HOST = os.getenv("REDIS_HOST", "").strip()
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+REDIS_PORT = int(_strip_env_quotes(os.getenv("REDIS_PORT", "6379")))
+REDIS_DB = int(_strip_env_quotes(os.getenv("REDIS_DB", "0")))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "").strip()
 
 # ─── Role-based helper functions ────────────────────────────────────────────
@@ -741,11 +741,11 @@ if register_evm_routes is not None:
 # requests are denied until a wallet is supplied.  The counters are stored
 # in ``AI_FREE_USAGE_FILE`` and keyed by the session ID supplied by the
 # --- Guest access (no wallet) ---
-AI_FREE_MESSAGES_LIMIT = int(os.getenv("AI_FREE_MESSAGES_LIMIT", "5"))
-GUEST_MAX_FREE_MESSAGES = int(os.getenv("GUEST_MAX_FREE_MESSAGES", str(AI_FREE_MESSAGES_LIMIT)))
-GUEST_MAX_FREE_SESSIONS = int(os.getenv("GUEST_MAX_FREE_SESSIONS", "1"))  # keep it simple
+AI_FREE_MESSAGES_LIMIT = int(_strip_env_quotes(os.getenv("AI_FREE_MESSAGES_LIMIT", "5")))
+GUEST_MAX_FREE_MESSAGES = int(_strip_env_quotes(os.getenv("GUEST_MAX_FREE_MESSAGES", str(AI_FREE_MESSAGES_LIMIT))))
+GUEST_MAX_FREE_SESSIONS = int(_strip_env_quotes(os.getenv("GUEST_MAX_FREE_SESSIONS", "1")))  # keep it simple
 GUEST_COOKIE_NAME = "thr_guest_id"
-GUEST_TTL_SECONDS = int(os.getenv("GUEST_TTL_SECONDS", str(7*24*3600)))  # 7 days
+GUEST_TTL_SECONDS = int(_strip_env_quotes(os.getenv("GUEST_TTL_SECONDS", str(7*24*3600))))  # 7 days
 
 GUEST_STATE_FILE = os.path.join(DATA_DIR, "guest_state.json")
 
@@ -961,17 +961,17 @@ BTC_HOT_WALLET = os.getenv("BTC_HOT_WALLET", "1QFeDPwEF8yEgPEfP79hpc8pHytXMz9oEQ
 BTC_TREASURY = os.getenv("BTC_TREASURY", "3KUGVJQ5tJWKY7GDVgwLjJ7EBzVWatD9nF")
 
 # BTC network fee for transactions
-BTC_NETWORK_FEE = float(os.getenv("BTC_NETWORK_FEE", "0.0002"))
+BTC_NETWORK_FEE = float(_strip_env_quotes(os.getenv("BTC_NETWORK_FEE", "0.0002")))
 
 # Min/Max BTC withdrawal limits
-MIN_BTC_WITHDRAWAL = float(os.getenv("MIN_BTC_WITHDRAWAL", "0.001"))
-MAX_BTC_WITHDRAWAL = float(os.getenv("MAX_BTC_WITHDRAWAL", "0.5"))
+MIN_BTC_WITHDRAWAL = float(_strip_env_quotes(os.getenv("MIN_BTC_WITHDRAWAL", "0.001")))
+MAX_BTC_WITHDRAWAL = float(_strip_env_quotes(os.getenv("MAX_BTC_WITHDRAWAL", "0.5")))
 
 # Withdrawal fee as percentage (0.5 = 0.5%, factor = value / 100.0)
-WITHDRAWAL_FEE_PERCENT = float(os.getenv("WITHDRAWAL_FEE_PERCENT", "0.5"))
+WITHDRAWAL_FEE_PERCENT = float(_strip_env_quotes(os.getenv("WITHDRAWAL_FEE_PERCENT", "0.5")))
 
 # THR per 1 BTC exchange rate
-THR_BTC_RATE = float(os.getenv("THR_BTC_RATE", "33333.33"))  # 1 BTC = 33,333.33 THR
+THR_BTC_RATE = float(_strip_env_quotes(os.getenv("THR_BTC_RATE", "33333.33")))  # 1 BTC = 33,333.33 THR
 
 # BTC RPC configuration
 BTC_RPC_URL = os.getenv("BTC_RPC_URL", "")
@@ -4308,7 +4308,7 @@ AI_DEFAULT_PACKS = [
 ]
 
 # Πόσα credits καίει κάθε AI μήνυμα
-AI_CREDIT_COST_PER_MSG = int(os.getenv("AI_CREDIT_COST_PER_MSG", "1"))
+AI_CREDIT_COST_PER_MSG = int(_strip_env_quotes(os.getenv("AI_CREDIT_COST_PER_MSG", "1")))
 
 def load_ai_packs():
     """Διαβάζει τα διαθέσιμα packs από αρχείο, αλλιώς επιστρέφει τα default."""
@@ -13803,7 +13803,7 @@ MINING_WATCHDOG_STATE = {
     "banned": {},
 }
 MINING_JOB_CACHE: dict[str, dict] = {}
-MINING_JOB_TTL_SECONDS = int(os.getenv("MINING_JOB_TTL_SECONDS", "20"))
+MINING_JOB_TTL_SECONDS = int(_strip_env_quotes(os.getenv("MINING_JOB_TTL_SECONDS", "20")))
 
 
 def _prune_watchdog_samples(samples: list[float], now: float, window: int) -> list[float]:
@@ -14586,12 +14586,12 @@ def distribute_ai_rewards_step():
 
     try:
         # Configuration
-        MINER_SHARE = float(os.getenv("AI_POOL_MINER_SHARE", "0.60"))  # 60%
+        MINER_SHARE = float(_strip_env_quotes(os.getenv("AI_POOL_MINER_SHARE", "0.60")))  # 60%
         IOT_SHARE = 1.0 - MINER_SHARE
-        LOOKBACK_BLOCKS = int(os.getenv("AI_POOL_LOOKBACK_BLOCKS", "100"))
-        LOOKBACK_MINUTES = int(os.getenv("AI_POOL_LOOKBACK_MINUTES", "60"))
-        MIN_POOL_BALANCE = float(os.getenv("AI_POOL_MIN_BALANCE", "10.0"))
-        DISTRIBUTION_PERCENTAGE = float(os.getenv("AI_POOL_DISTRIBUTION_PCT", "0.10"))  # Distribute 10% of pool each time
+        LOOKBACK_BLOCKS = int(_strip_env_quotes(os.getenv("AI_POOL_LOOKBACK_BLOCKS", "100")))
+        LOOKBACK_MINUTES = int(_strip_env_quotes(os.getenv("AI_POOL_LOOKBACK_MINUTES", "60")))
+        MIN_POOL_BALANCE = float(_strip_env_quotes(os.getenv("AI_POOL_MIN_BALANCE", "10.0")))
+        DISTRIBUTION_PERCENTAGE = float(_strip_env_quotes(os.getenv("AI_POOL_DISTRIBUTION_PCT", "0.10")))  # Distribute 10% of pool each time
 
         pool = get_ai_pool_state()
         balance = float(pool.get("ai_pool_balance", 0))
@@ -14944,7 +14944,7 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
     scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30,
                      coalesce=True, max_instances=1, id="ai_knowledge_watcher")
     scheduler.add_job(distribute_ai_rewards_step, "interval",
-                     minutes=int(os.getenv("AI_POOL_DISTRIBUTION_INTERVAL", "30")),
+                     minutes=int(_strip_env_quotes(os.getenv("AI_POOL_DISTRIBUTION_INTERVAL", "30"))),
                      coalesce=True, max_instances=1, id="ai_rewards")
     scheduler.add_job(update_telemetry_cache_job, "interval", seconds=30,
                      coalesce=True, max_instances=1, id="telemetry_cache")
@@ -21950,7 +21950,7 @@ def api_v1_governance_vote():
         proposal["operator_votes"].append({"voter": voter, "vote": vote, "timestamp": vote_tx["timestamp"]})
 
     # FIX G2: Check operator quorum
-    MIN_OPERATOR_VOTES = int(os.getenv("MIN_OPERATOR_VOTES", "3"))
+    MIN_OPERATOR_VOTES = int(_strip_env_quotes(os.getenv("MIN_OPERATOR_VOTES", "3")))
     operator_count = len(proposal.get("operator_votes", []))
 
     # Update proposal status
@@ -22025,7 +22025,7 @@ def api_v1_governance_finalize():
         return jsonify({"status": "error", "message": "Proposal not found"}), 404
 
     # Check if quorum reached
-    MIN_OPERATOR_VOTES = int(os.getenv("MIN_OPERATOR_VOTES", "3"))
+    MIN_OPERATOR_VOTES = int(_strip_env_quotes(os.getenv("MIN_OPERATOR_VOTES", "3")))
     operator_count = len(proposal.get("operator_votes", []))
 
     if operator_count < MIN_OPERATOR_VOTES:
@@ -22348,6 +22348,6 @@ print(f"[STARTUP] {NODE_ROLE.upper()} node initialization complete.\n")
 
 if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
-    port = int(os.getenv("PORT", 8000))
+    port = int(_strip_env_quotes(os.getenv("PORT", "8000")))
     app.run(host=host, port=port)
 # === AI Session API Fixes (append to end of server.py) ===========================

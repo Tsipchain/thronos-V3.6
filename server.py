@@ -648,14 +648,15 @@ def should_sync_ai_models() -> bool:
     """Check if AI model sync should run on this node (master or ai_core)"""
     return (is_master() or is_ai_core()) and bool(os.getenv("OPENAI_API_KEY"))
 
-def call_ai_core(path: str, payload: dict, timeout: int = 2) -> dict | None:
+def call_ai_core(path: str, payload: dict, timeout: int = 30, method: str = "POST") -> dict | None:
     """
     Call AI core service for LLM operations (Node 4).
 
     Args:
         path: API endpoint path (e.g., "/api/ai/chat")
-        payload: Request payload
-        timeout: Request timeout in seconds
+        payload: Request payload (for POST) or query params (for GET)
+        timeout: Request timeout in seconds (default 30)
+        method: HTTP method - "POST" or "GET" (default POST)
 
     Returns:
         Response JSON or None if call fails
@@ -663,18 +664,22 @@ def call_ai_core(path: str, payload: dict, timeout: int = 2) -> dict | None:
     Raises:
         Nothing - returns None on error for graceful fallback
     """
-    timeout = 2
     if not AI_CORE_URL:
         logger.warning("[AI_CORE] AI_CORE_URL not configured, cannot proxy to Node 4")
         return None
 
     url = f"{AI_CORE_URL.rstrip('/')}/{path.lstrip('/')}"
+    headers = {
+        "X-Admin-Secret": ADMIN_SECRET,
+        "Content-Type": "application/json"
+    }
+
     try:
-        logger.info(f"[AI_CORE] Proxying to {url}")
-        response = requests.post(url, json=payload, timeout=2, headers={
-            "X-Admin-Secret": ADMIN_SECRET,
-            "Content-Type": "application/json"
-        })
+        logger.info(f"[AI_CORE] Proxying {method} to {url}")
+        if method.upper() == "GET":
+            response = requests.get(url, params=payload, timeout=timeout, headers=headers)
+        else:
+            response = requests.post(url, json=payload, timeout=timeout, headers=headers)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.Timeout:
@@ -19745,7 +19750,7 @@ def api_ai_models():
         try:
             # GET endpoint - pass query params as payload
             params = {k: v for k, v in request.args.items()}
-            result = call_ai_core("/api/ai_models", params, timeout=30)
+            result = call_ai_core("/api/ai_models", params, timeout=30, method="GET")
             if result:
                 logger.info("[AI_CORE] Successfully proxied /api/ai_models to Node 4")
                 return jsonify(result), 200
@@ -19855,6 +19860,12 @@ def chat_page_v2():
     """Render chat interface with wallet from cookie"""
     thr_wallet = request.cookies.get("thr_address") or ""
     return render_template("chat.html", thr_wallet=thr_wallet)
+
+
+@app.route("/ai/settings")
+def ai_settings_page():
+    """Render AI settings/configuration page showing model and provider status"""
+    return render_template("ai_settings.html")
 
 
 # ─── DECENT MUSIC PLATFORM ────────────────────────────────────────────
@@ -22306,6 +22317,20 @@ def api_ai_pool_status():
 print("✓ AI Session fixes loaded - supports guest mode and file uploads")
 print("✓ Token Explorer, NFT Marketplace and Governance pages loaded")
 print("✓ Decent Music Platform loaded - artist registration, uploads, and royalties")
+
+# ─── VerifyID Service Integration ─────────────────────────────────────────────
+# Device verification for ASICs, GPS nodes, vehicle nodes, and AI trainers
+try:
+    from verify_id_service import register_verify_id_routes, get_verify_id_service
+    register_verify_id_routes(app)
+    _verify_service = get_verify_id_service()
+    print("✓ VerifyID Service loaded - ASIC/device verification and driver rewards")
+except ImportError as e:
+    print(f"⚠ VerifyID Service not available: {e}")
+    _verify_service = None
+except Exception as e:
+    print(f"⚠ VerifyID Service initialization failed: {e}")
+    _verify_service = None
 
 # ─── Startup hooks ────────────────────────────────────────────────────────────
 # PR-XXX: Role-based initialization with clear logging

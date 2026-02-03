@@ -2531,14 +2531,17 @@ def record_training_contribution(device_id: str, wallet_address: str, data_type:
 
     # Add to pending rewards queue
     pending = state.get("pending_rewards", [])
-    pending.append({
+    reward_entry = {
         "device_id": device_id,
         "wallet": wallet_address,
         "data_type": data_type,
         "data_points": data_points,
         "gps_data": gps_data,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-    })
+    }
+    if block_data:
+        reward_entry["block_data"] = block_data
+    pending.append(reward_entry)
     # Keep only last 1000 pending
     if len(pending) > 1000:
         pending = pending[-1000:]

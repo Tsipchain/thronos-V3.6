@@ -1,0 +1,429 @@
+{% extends "base.html" %}
+
+{% block title %}Thronos Wallet Downloads{% endblock %}
+
+{% block styles %}
+<style>
+    .downloads-container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+    }
+
+    .downloads-header {
+        text-align: center;
+        margin-bottom: 50px;
+        padding: 40px 20px;
+        background: linear-gradient(135deg, #071510 0%, #0a2518 50%, #071510 100%);
+        border: 1px solid #1a5a2f;
+        border-radius: 20px;
+    }
+
+    .downloads-header h1 {
+        color: #3CFF7A;
+        font-size: 2.5em;
+        margin: 0 0 15px 0;
+        text-shadow: 0 0 30px rgba(60, 255, 122, 0.4);
+    }
+
+    .downloads-header p {
+        color: #d7ffe6;
+        font-size: 1.1em;
+        max-width: 600px;
+        margin: 0 auto;
+    }
+
+    .platforms-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+        gap: 25px;
+        margin-bottom: 40px;
+    }
+
+    .platform-card {
+        background: linear-gradient(135deg, #07120b 0%, #0a1f14 100%);
+        border: 1px solid #1a5a2f;
+        border-radius: 16px;
+        padding: 30px;
+        transition: all 0.3s;
+    }
+
+    .platform-card:hover {
+        border-color: #3CFF7A;
+        transform: translateY(-5px);
+        box-shadow: 0 10px 40px rgba(60, 255, 122, 0.2);
+    }
+
+    .platform-card.featured {
+        border-color: #3CFF7A;
+        background: linear-gradient(135deg, #071510 0%, #0a2518 100%);
+    }
+
+    .platform-icon {
+        font-size: 48px;
+        margin-bottom: 15px;
+    }
+
+    .platform-title {
+        color: #3CFF7A;
+        font-size: 1.5em;
+        margin: 0 0 10px 0;
+    }
+
+    .platform-desc {
+        color: #d7ffe6;
+        font-size: 0.95em;
+        margin-bottom: 20px;
+        opacity: 0.9;
+    }
+
+    .platform-features {
+        list-style: none;
+        padding: 0;
+        margin: 0 0 20px 0;
+    }
+
+    .platform-features li {
+        color: #a0d8b3;
+        font-size: 0.9em;
+        padding: 5px 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .platform-features li::before {
+        content: "✓";
+        color: #3CFF7A;
+        font-weight: bold;
+    }
+
+    .download-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        background: linear-gradient(135deg, #3CFF7A 0%, #28a745 100%);
+        color: #000;
+        padding: 14px 28px;
+        border-radius: 10px;
+        font-weight: bold;
+        font-size: 1em;
+        text-decoration: none;
+        transition: all 0.3s;
+        border: none;
+        cursor: pointer;
+    }
+
+    .download-btn:hover {
+        transform: scale(1.05);
+        box-shadow: 0 0 20px rgba(60, 255, 122, 0.5);
+    }
+
+    .download-btn.secondary {
+        background: transparent;
+        color: #3CFF7A;
+        border: 2px solid #3CFF7A;
+    }
+
+    .download-btn.secondary:hover {
+        background: rgba(60, 255, 122, 0.1);
+    }
+
+    .version-badge {
+        display: inline-block;
+        background: rgba(60, 255, 122, 0.2);
+        color: #3CFF7A;
+        padding: 4px 12px;
+        border-radius: 15px;
+        font-size: 0.8em;
+        margin-bottom: 15px;
+    }
+
+    .car-section {
+        background: linear-gradient(135deg, #0a1510 0%, #071510 100%);
+        border: 1px solid #1a5a2f;
+        border-radius: 16px;
+        padding: 40px;
+        margin-top: 40px;
+        text-align: center;
+    }
+
+    .car-section h2 {
+        color: #3CFF7A;
+        font-size: 1.8em;
+        margin: 0 0 15px 0;
+    }
+
+    .car-section p {
+        color: #d7ffe6;
+        max-width: 800px;
+        margin: 0 auto 30px auto;
+    }
+
+    .car-platforms {
+        display: flex;
+        justify-content: center;
+        gap: 40px;
+        flex-wrap: wrap;
+    }
+
+    .car-platform {
+        text-align: center;
+    }
+
+    .car-platform img {
+        width: 120px;
+        height: 60px;
+        object-fit: contain;
+        margin-bottom: 10px;
+        filter: brightness(0) invert(1);
+        opacity: 0.8;
+    }
+
+    .car-platform-name {
+        color: #3CFF7A;
+        font-weight: bold;
+        font-size: 1.1em;
+    }
+
+    .t2e-callout {
+        background: linear-gradient(135deg, rgba(255, 215, 0, 0.1) 0%, rgba(60, 255, 122, 0.1) 100%);
+        border: 1px dashed #ffd700;
+        border-radius: 12px;
+        padding: 25px;
+        margin-top: 40px;
+        text-align: center;
+    }
+
+    .t2e-callout h3 {
+        color: #ffd700;
+        margin: 0 0 10px 0;
+    }
+
+    .t2e-callout p {
+        color: #d7ffe6;
+        margin: 0;
+    }
+
+    .stats-row {
+        display: flex;
+        justify-content: center;
+        gap: 40px;
+        margin: 30px 0;
+        flex-wrap: wrap;
+    }
+
+    .stat-item {
+        text-align: center;
+    }
+
+    .stat-value {
+        color: #3CFF7A;
+        font-size: 2em;
+        font-weight: bold;
+    }
+
+    .stat-label {
+        color: #a0d8b3;
+        font-size: 0.85em;
+    }
+
+    .coming-soon {
+        opacity: 0.6;
+        position: relative;
+    }
+
+    .coming-soon::after {
+        content: "Coming Soon";
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        background: #ff6600;
+        color: #fff;
+        padding: 4px 10px;
+        border-radius: 10px;
+        font-size: 0.75em;
+        font-weight: bold;
+    }
+
+    @media (max-width: 768px) {
+        .platforms-grid {
+            grid-template-columns: 1fr;
+        }
+        .downloads-header h1 {
+            font-size: 1.8em;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="downloads-container">
+    <!-- Header -->
+    <div class="downloads-header">
+        <h1>
+            <span class="lang-el">Thronos Wallet</span>
+            <span class="lang-en">Thronos Wallet</span>
+        </h1>
+        <p>
+            <span class="lang-el">Κατέβασε το native wallet για Android, iOS ή Web. Ίδια εμπειρία με το base wallet, παντού.</span>
+            <span class="lang-en">Download the native wallet for Android, iOS or Web. Same experience as the base wallet, everywhere.</span>
+        </p>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-row">
+        <div class="stat-item">
+            <div class="stat-value">v2.0</div>
+            <div class="stat-label"><span class="lang-el">Τρέχουσα Έκδοση</span><span class="lang-en">Current Version</span></div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-value">SHA256</div>
+            <div class="stat-label"><span class="lang-el">Ασφάλεια</span><span class="lang-en">Security</span></div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-value">HD</div>
+            <div class="stat-label"><span class="lang-el">BIP39/44 Wallet</span><span class="lang-en">BIP39/44 Wallet</span></div>
+        </div>
+    </div>
+
+    <!-- Platform Cards -->
+    <div class="platforms-grid">
+        <!-- Android -->
+        <div class="platform-card featured">
+            <div class="platform-icon">🤖</div>
+            <div class="version-badge">v2.0.0</div>
+            <h2 class="platform-title">Android</h2>
+            <p class="platform-desc">
+                <span class="lang-el">Native Android app με πλήρη λειτουργικότητα wallet. Υποστηρίζει Android Auto για T2E rewards.</span>
+                <span class="lang-en">Native Android app with full wallet functionality. Supports Android Auto for T2E rewards.</span>
+            </p>
+            <ul class="platform-features">
+                <li><span class="lang-el">Πλήρες HD Wallet (BIP39/44)</span><span class="lang-en">Full HD Wallet (BIP39/44)</span></li>
+                <li><span class="lang-el">Send, Receive, Swap, Bridge</span><span class="lang-en">Send, Receive, Swap, Bridge</span></li>
+                <li><span class="lang-el">Decent Music integration</span><span class="lang-en">Decent Music integration</span></li>
+                <li><span class="lang-el">Android Auto για T2E</span><span class="lang-en">Android Auto for T2E</span></li>
+                <li><span class="lang-el">Background music playback</span><span class="lang-en">Background music playback</span></li>
+            </ul>
+            <a href="/static/thronos-wallet.apk" class="download-btn" download>
+                <span class="lang-el">Λήψη APK</span>
+                <span class="lang-en">Download APK</span>
+            </a>
+        </div>
+
+        <!-- iOS -->
+        <div class="platform-card coming-soon">
+            <div class="platform-icon">🍎</div>
+            <div class="version-badge">v2.0.0</div>
+            <h2 class="platform-title">iOS</h2>
+            <p class="platform-desc">
+                <span class="lang-el">Native iOS app για iPhone και iPad. Υποστηρίζει Apple CarPlay για T2E rewards.</span>
+                <span class="lang-en">Native iOS app for iPhone and iPad. Supports Apple CarPlay for T2E rewards.</span>
+            </p>
+            <ul class="platform-features">
+                <li><span class="lang-el">Πλήρες HD Wallet (BIP39/44)</span><span class="lang-en">Full HD Wallet (BIP39/44)</span></li>
+                <li><span class="lang-el">Face ID / Touch ID</span><span class="lang-en">Face ID / Touch ID</span></li>
+                <li><span class="lang-el">CarPlay για T2E</span><span class="lang-en">CarPlay for T2E</span></li>
+                <li><span class="lang-el">iCloud Backup</span><span class="lang-en">iCloud Backup</span></li>
+                <li><span class="lang-el">Apple Watch companion</span><span class="lang-en">Apple Watch companion</span></li>
+            </ul>
+            <button class="download-btn secondary" disabled>
+                <span class="lang-el">Σύντομα στο App Store</span>
+                <span class="lang-en">Coming to App Store</span>
+            </button>
+        </div>
+
+        <!-- Web PWA -->
+        <div class="platform-card">
+            <div class="platform-icon">🌐</div>
+            <div class="version-badge">v3.6</div>
+            <h2 class="platform-title">Web Wallet</h2>
+            <p class="platform-desc">
+                <span class="lang-el">Progressive Web App - χρησιμοποίησε το wallet από οποιονδήποτε browser.</span>
+                <span class="lang-en">Progressive Web App - use the wallet from any browser.</span>
+            </p>
+            <ul class="platform-features">
+                <li><span class="lang-el">Καμία εγκατάσταση</span><span class="lang-en">No installation required</span></li>
+                <li><span class="lang-el">Λειτουργεί παντού</span><span class="lang-en">Works everywhere</span></li>
+                <li><span class="lang-el">Offline mode</span><span class="lang-en">Offline mode</span></li>
+                <li><span class="lang-el">Desktop & Mobile</span><span class="lang-en">Desktop & Mobile</span></li>
+            </ul>
+            <a href="/wallet" class="download-btn">
+                <span class="lang-el">Άνοιγμα Web Wallet</span>
+                <span class="lang-en">Open Web Wallet</span>
+            </a>
+        </div>
+
+        <!-- Chrome Extension -->
+        <div class="platform-card">
+            <div class="platform-icon">🧩</div>
+            <div class="version-badge">v1.0</div>
+            <h2 class="platform-title">Chrome Extension</h2>
+            <p class="platform-desc">
+                <span class="lang-el">Browser extension για Chrome, Brave, Edge. dApp integration ready.</span>
+                <span class="lang-en">Browser extension for Chrome, Brave, Edge. dApp integration ready.</span>
+            </p>
+            <ul class="platform-features">
+                <li><span class="lang-el">dApp Provider</span><span class="lang-en">dApp Provider</span></li>
+                <li><span class="lang-el">Quick Send/Receive</span><span class="lang-en">Quick Send/Receive</span></li>
+                <li><span class="lang-el">Balance tracking</span><span class="lang-en">Balance tracking</span></li>
+                <li><span class="lang-el">Multi-wallet support</span><span class="lang-en">Multi-wallet support</span></li>
+            </ul>
+            <a href="/static/thronos-extension.zip" class="download-btn secondary" download>
+                <span class="lang-el">Λήψη Extension</span>
+                <span class="lang-en">Download Extension</span>
+            </a>
+        </div>
+    </div>
+
+    <!-- Car Integration Section -->
+    <div class="car-section">
+        <h2>
+            <span class="lang-el">🚗 Οδήγηση & Train-to-Earn</span>
+            <span class="lang-en">🚗 Driving & Train-to-Earn</span>
+        </h2>
+        <p>
+            <span class="lang-el">Σύνδεσε το wallet σου με Android Auto ή Apple CarPlay. Ακούγοντας μουσική Decent Music ενώ οδηγείς, κερδίζεις T2E rewards και εκπαιδεύεις το AI για αυτόνομη οδήγηση.</span>
+            <span class="lang-en">Connect your wallet with Android Auto or Apple CarPlay. Listening to Decent Music while driving earns you T2E rewards and trains the AI for autonomous driving.</span>
+        </p>
+        <div class="car-platforms">
+            <div class="car-platform">
+                <div style="font-size: 48px;">🚗</div>
+                <div class="car-platform-name">Android Auto</div>
+            </div>
+            <div class="car-platform">
+                <div style="font-size: 48px;">🍎</div>
+                <div class="car-platform-name">Apple CarPlay</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- T2E Callout -->
+    <div class="t2e-callout">
+        <h3>
+            <span class="lang-el">🎓 Train-to-Earn (T2E) - Κέρδισε ενώ οδηγείς!</span>
+            <span class="lang-en">🎓 Train-to-Earn (T2E) - Earn while you drive!</span>
+        </h3>
+        <p>
+            <span class="lang-el">Με το GPS telemetry και τη μουσική, βοηθάς στην εκπαίδευση του AI για αυτόνομη οδήγηση. Κατανομή: 80% καλλιτέχνης, 10% δίκτυο, 10% AI/T2E pool.</span>
+            <span class="lang-en">With GPS telemetry and music, you help train the AI for autonomous driving. Distribution: 80% artist, 10% network, 10% AI/T2E pool.</span>
+        </p>
+    </div>
+
+    <!-- ASIC/IoT Section -->
+    <div class="car-section" style="margin-top: 30px;">
+        <h2>
+            <span class="lang-el">⛏️ ASIC & IoT Miners</span>
+            <span class="lang-en">⛏️ ASIC & IoT Miners</span>
+        </h2>
+        <p>
+            <span class="lang-el">Τα ASIC miners και οι IoT συσκευές βοηθούν στην αποθήκευση δεδομένων, ταχύτητα δικτύου, και υποστήριξη offline συναλλαγών (survival mode). Κέρδισε T2E rewards!</span>
+            <span class="lang-en">ASIC miners and IoT devices help with data storage, network speed, and offline transaction support (survival mode). Earn T2E rewards!</span>
+        </p>
+        <a href="/static/miner_kit.zip" class="download-btn" download style="margin-top: 20px;">
+            <span class="lang-el">Λήψη Miner Kit</span>
+            <span class="lang-en">Download Miner Kit</span>
+        </a>
+    </div>
+</div>
+{% endblock %}

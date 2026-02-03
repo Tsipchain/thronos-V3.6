@@ -648,14 +648,15 @@ def should_sync_ai_models() -> bool:
     """Check if AI model sync should run on this node (master or ai_core)"""
     return (is_master() or is_ai_core()) and bool(os.getenv("OPENAI_API_KEY"))
 
-def call_ai_core(path: str, payload: dict, timeout: int = 2) -> dict | None:
+def call_ai_core(path: str, payload: dict, timeout: int = 30, method: str = "POST") -> dict | None:
     """
     Call AI core service for LLM operations (Node 4).
 
     Args:
         path: API endpoint path (e.g., "/api/ai/chat")
-        payload: Request payload
-        timeout: Request timeout in seconds
+        payload: Request payload (for POST) or query params (for GET)
+        timeout: Request timeout in seconds (default 30)
+        method: HTTP method - "POST" or "GET" (default POST)
 
     Returns:
         Response JSON or None if call fails
@@ -663,18 +664,22 @@ def call_ai_core(path: str, payload: dict, timeout: int = 2) -> dict | None:
     Raises:
         Nothing - returns None on error for graceful fallback
     """
-    timeout = 2
     if not AI_CORE_URL:
         logger.warning("[AI_CORE] AI_CORE_URL not configured, cannot proxy to Node 4")
         return None
 
     url = f"{AI_CORE_URL.rstrip('/')}/{path.lstrip('/')}"
+    headers = {
+        "X-Admin-Secret": ADMIN_SECRET,
+        "Content-Type": "application/json"
+    }
+
     try:
-        logger.info(f"[AI_CORE] Proxying to {url}")
-        response = requests.post(url, json=payload, timeout=2, headers={
-            "X-Admin-Secret": ADMIN_SECRET,
-            "Content-Type": "application/json"
-        })
+        logger.info(f"[AI_CORE] Proxying {method} to {url}")
+        if method.upper() == "GET":
+            response = requests.get(url, params=payload, timeout=timeout, headers=headers)
+        else:
+            response = requests.post(url, json=payload, timeout=timeout, headers=headers)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.Timeout:
@@ -722,6 +727,8 @@ active_peers = PEERS  # Backward-compatible alias
 AI_PACKS_FILE       = os.path.join(DATA_DIR, "ai_packs.json")
 AI_CREDITS_FILE     = os.path.join(DATA_DIR, "ai_credits.json")
 AI_POOL_FILE        = os.path.join(DATA_DIR, "ai_pool.json")  # Phase 4: AI rewards pool
+NETWORK_POOL_FILE   = os.path.join(DATA_DIR, "network_pool.json")  # Phase 5: Network rewards pool (10% of music telemetry)
+T2E_REWARDS_FILE    = os.path.join(DATA_DIR, "t2e_rewards.json")  # Train-to-Earn rewards for IoT/ASIC miners
 
 # Register optional EVM routes (if module exists)
 if register_evm_routes is not None:
@@ -2386,6 +2393,546 @@ def _distribute_ai_pool_to_address(address: str, amount: float, category: str, d
     return tx_id
 
 
+# ─── Phase 5: Network Pool Management (Music Telemetry 10%) ─────────────────────
+def get_network_pool_state() -> dict:
+    """Get current network pool state."""
+    return load_json(NETWORK_POOL_FILE, {
+        "network_pool_balance": 0.0,
+        "total_music_contributions": 0.0,
+        "total_distributed_to_nodes": 0.0,
+        "last_distribution_time": None,
+        "distribution_count": 0,
+        "active_validators": []
+    })
+
+
+def save_network_pool_state(pool_state: dict):
+    """Save network pool state (master only)."""
+    save_json(NETWORK_POOL_FILE, pool_state)
+
+
+def credit_network_pool(amount: float, source: str = "music_telemetry"):
+    """Add THR to the network pool (from music plays/tips)."""
+    if READ_ONLY or NODE_ROLE != "master":
+        logger.warning(f"[NETWORK_POOL] Skipping credit on {NODE_ROLE} node")
+        return
+
+    pool = get_network_pool_state()
+    pool["network_pool_balance"] = round(float(pool.get("network_pool_balance", 0)) + amount, 6)
+    pool["total_music_contributions"] = round(float(pool.get("total_music_contributions", 0)) + amount, 6)
+    save_network_pool_state(pool)
+    logger.info(f"[NETWORK_POOL] Added {amount} THR from {source} (total pool: {pool['network_pool_balance']} THR)")
+
+
+def _distribute_network_reward(validator_address: str, amount: float, reason: str = "network_validation") -> str:
+    """Distribute network pool rewards to validators/nodes."""
+    if READ_ONLY or NODE_ROLE != "master":
+        return None
+    if amount <= 0:
+        return None
+
+    pool = get_network_pool_state()
+    balance = float(pool.get("network_pool_balance", 0))
+    if balance < amount:
+        logger.warning(f"[NETWORK_POOL] Insufficient balance ({balance}) for {amount} THR distribution")
+        return None
+
+    # Debit pool
+    pool["network_pool_balance"] = round(balance - amount, 6)
+    pool["total_distributed_to_nodes"] = round(float(pool.get("total_distributed_to_nodes", 0)) + amount, 6)
+    pool["last_distribution_time"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    pool["distribution_count"] = int(pool.get("distribution_count", 0)) + 1
+    save_network_pool_state(pool)
+
+    # Credit validator wallet
+    ledger = load_json(LEDGER_FILE, {})
+    ledger[validator_address] = round(float(ledger.get(validator_address, 0)) + amount, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    # Record transaction
+    chain = load_json(CHAIN_FILE, [])
+    tx_id = f"NET-REWARD-{int(time.time())}-{secrets.token_hex(4)}"
+    tx = {
+        "type": "network_reward",
+        "to": validator_address,
+        "amount": amount,
+        "reason": reason,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "tx_id": tx_id,
+        "status": "confirmed"
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+
+    logger.info(f"[NETWORK_POOL] Distributed {amount} THR to {validator_address} (reason: {reason})")
+    return tx_id
+
+
+# ─── Phase 5: T2E (Train-to-Earn) Rewards System ────────────────────────────────
+def get_t2e_state() -> dict:
+    """Get Train-to-Earn rewards state."""
+    return load_json(T2E_REWARDS_FILE, {
+        "total_training_data_points": 0,
+        "total_t2e_distributed": 0.0,
+        "device_contributions": {},  # device_id -> contribution_count
+        "last_distribution_time": None,
+        "pending_rewards": []
+    })
+
+
+def save_t2e_state(state: dict):
+    """Save T2E state (master only)."""
+    save_json(T2E_REWARDS_FILE, state)
+
+
+def record_training_contribution(device_id: str, wallet_address: str, data_type: str,
+                                  data_points: int = 1, gps_data: dict = None,
+                                  block_data: dict = None) -> dict:
+    """
+    Record a training data contribution from an IoT device/ASIC/music listener.
+
+    data_type options:
+    - "music_telemetry": Music + GPS data from Android Auto/CarPlay
+    - "gps_driving": Pure GPS driving data for AI training
+    - "asic_block_storage": ASIC storing encrypted block data
+    - "asic_network_relay": ASIC helping with network speed
+    - "asic_offline_tx": ASIC supporting offline/RadioNode transactions
+    - "iot_sensor": IoT sensor data (temperature, etc.)
+    - "iot_mesh_relay": IoT device acting as mesh network relay
+
+    block_data: Optional metadata for ASIC contributions
+    - block_hash: Hash of block being stored
+    - block_height: Height of block
+    - tx_count: Number of transactions in block
+    - offline_relay: Whether this was an offline relay
+    """
+    state = get_t2e_state()
+
+    # Update device contribution count
+    device_contributions = state.get("device_contributions", {})
+    if device_id not in device_contributions:
+        device_contributions[device_id] = {
+            "wallet": wallet_address,
+            "total_contributions": 0,
+            "data_types": {},
+            "first_contribution": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "last_contribution": None
+        }
+
+    dc = device_contributions[device_id]
+    dc["total_contributions"] += data_points
+    dc["last_contribution"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    if data_type not in dc["data_types"]:
+        dc["data_types"][data_type] = 0
+    dc["data_types"][data_type] += data_points
+
+    state["device_contributions"] = device_contributions
+    state["total_training_data_points"] = int(state.get("total_training_data_points", 0)) + data_points
+
+    # Add to pending rewards queue
+    pending = state.get("pending_rewards", [])
+    pending.append({
+        "device_id": device_id,
+        "wallet": wallet_address,
+        "data_type": data_type,
+        "data_points": data_points,
+        "gps_data": gps_data,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    })
+    # Keep only last 1000 pending
+    if len(pending) > 1000:
+        pending = pending[-1000:]
+    state["pending_rewards"] = pending
+
+    save_t2e_state(state)
+
+    return {
+        "device_id": device_id,
+        "total_contributions": dc["total_contributions"],
+        "data_type": data_type
+    }
+
+
+def distribute_t2e_rewards(min_contributions: int = 10) -> list:
+    """
+    Distribute T2E rewards from AI pool to qualified contributors.
+    Called periodically by scheduler or manually.
+
+    Returns list of distributed reward tx_ids.
+    """
+    if READ_ONLY or NODE_ROLE != "master":
+        return []
+
+    state = get_t2e_state()
+    ai_pool = get_ai_pool_state()
+    ai_balance = float(ai_pool.get("ai_pool_balance", 0))
+
+    if ai_balance < 0.1:  # Minimum pool balance for distribution
+        logger.info("[T2E] AI pool balance too low for distribution")
+        return []
+
+    # Calculate rewards for qualifying devices
+    device_contributions = state.get("device_contributions", {})
+    qualifying_devices = [
+        (dev_id, data)
+        for dev_id, data in device_contributions.items()
+        if data.get("total_contributions", 0) >= min_contributions
+    ]
+
+    if not qualifying_devices:
+        return []
+
+    # Distribute proportionally (max 50% of pool per round)
+    available_for_distribution = min(ai_balance * 0.5, 10.0)  # Max 10 THR per round
+    total_contributions = sum(d[1].get("total_contributions", 0) for d in qualifying_devices)
+
+    tx_ids = []
+    for dev_id, data in qualifying_devices:
+        wallet = data.get("wallet")
+        contributions = data.get("total_contributions", 0)
+
+        # Proportional reward
+        share = contributions / total_contributions
+        reward_amount = round(available_for_distribution * share, 6)
+
+        if reward_amount < 0.001:  # Minimum reward threshold
+            continue
+
+        # Distribute from AI pool
+        tx_id = _distribute_ai_pool_to_address(
+            wallet,
+            reward_amount,
+            category="t2e_reward",
+            details={
+                "device_id": dev_id,
+                "contributions": contributions,
+                "data_types": data.get("data_types", {})
+            }
+        )
+
+        if tx_id:
+            tx_ids.append(tx_id)
+            # Reset contribution counter after reward
+            device_contributions[dev_id]["total_contributions"] = 0
+
+    state["device_contributions"] = device_contributions
+    state["total_t2e_distributed"] = round(
+        float(state.get("total_t2e_distributed", 0)) + sum(
+            float(_distribute_ai_pool_to_address.__wrapped__ if hasattr(_distribute_ai_pool_to_address, '__wrapped__') else 0)
+            for _ in tx_ids
+        ), 6
+    )
+    state["last_distribution_time"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    save_t2e_state(state)
+
+    logger.info(f"[T2E] Distributed rewards to {len(tx_ids)} devices")
+    return tx_ids
+
+
+# ─── Anti-GPS Spoofing & Car Platform Validation ────────────────────────────────
+# T2E rewards ONLY for verified real-time trips via Android Auto or Apple CarPlay
+
+VALID_CAR_PLATFORMS = {"android_auto", "carplay", "apple_carplay"}
+GPS_SPOOF_FILE = os.path.join(DATA_DIR, "gps_spoof_detection.json")
+
+# Speed limits for spoof detection (km/h)
+MAX_REASONABLE_SPEED_KMH = 300  # No car goes faster than this
+MIN_MOVEMENT_THRESHOLD_KM = 0.001  # 1 meter minimum movement
+MAX_TELEPORT_DISTANCE_KM = 10  # Max distance in 1 second (impossible jump)
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculate distance between two GPS points in kilometers."""
+    from math import radians, sin, cos, sqrt, atan2
+    R = 6371  # Earth's radius in km
+
+    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1-a))
+
+    return R * c
+
+
+def load_gps_history(device_id: str) -> list:
+    """Load GPS history for a device."""
+    data = load_json(GPS_SPOOF_FILE, {})
+    return data.get(device_id, {}).get("history", [])
+
+
+def save_gps_point(device_id: str, lat: float, lng: float, timestamp: float = None):
+    """Save a GPS point for spoof detection."""
+    data = load_json(GPS_SPOOF_FILE, {})
+    if device_id not in data:
+        data[device_id] = {"history": [], "spoof_flags": 0, "last_verified": None}
+
+    ts = timestamp or time.time()
+    data[device_id]["history"].append({
+        "lat": lat,
+        "lng": lng,
+        "timestamp": ts
+    })
+
+    # Keep only last 100 points per device
+    if len(data[device_id]["history"]) > 100:
+        data[device_id]["history"] = data[device_id]["history"][-100:]
+
+    save_json(GPS_SPOOF_FILE, data)
+
+
+def validate_car_platform(device_info: dict) -> tuple[bool, str]:
+    """
+    Validate that the device is Android Auto or Apple CarPlay.
+
+    Returns (is_valid, reason)
+    """
+    platform = (device_info.get("platform") or "").lower().replace(" ", "_")
+    device_type = (device_info.get("device_type") or "").lower()
+
+    # Must be a car platform
+    if platform not in VALID_CAR_PLATFORMS and device_type not in VALID_CAR_PLATFORMS:
+        return False, "not_car_platform"
+
+    # Must have a linked wallet
+    if not device_info.get("wallet_address"):
+        return False, "no_wallet_linked"
+
+    # Must be a registered/verified device
+    if not device_info.get("device_id"):
+        return False, "no_device_id"
+
+    return True, "valid"
+
+
+def detect_gps_spoofing(device_id: str, current_lat: float, current_lng: float,
+                         reported_speed: float = None) -> tuple[bool, str, dict]:
+    """
+    Detect GPS spoofing based on movement patterns.
+
+    Returns (is_spoofed, reason, details)
+
+    Checks for:
+    1. Teleportation (impossible distance in short time)
+    2. Impossible speed
+    3. Static location while reporting movement
+    4. Erratic patterns (constant jumps)
+    """
+    history = load_gps_history(device_id)
+
+    if not history:
+        # First point, can't detect spoofing yet
+        save_gps_point(device_id, current_lat, current_lng)
+        return False, "first_point", {}
+
+    last_point = history[-1]
+    last_lat = last_point["lat"]
+    last_lng = last_point["lng"]
+    last_ts = last_point["timestamp"]
+    current_ts = time.time()
+
+    time_diff_seconds = max(current_ts - last_ts, 0.1)  # Avoid division by zero
+    distance_km = _haversine_km(last_lat, last_lng, current_lat, current_lng)
+
+    # Calculate implied speed
+    implied_speed_kmh = (distance_km / time_diff_seconds) * 3600
+
+    details = {
+        "distance_km": round(distance_km, 4),
+        "time_diff_seconds": round(time_diff_seconds, 2),
+        "implied_speed_kmh": round(implied_speed_kmh, 2),
+        "reported_speed_kmh": reported_speed
+    }
+
+    # Check 1: Teleportation (moved too far too fast)
+    if time_diff_seconds < 5 and distance_km > MAX_TELEPORT_DISTANCE_KM:
+        return True, "teleportation_detected", details
+
+    # Check 2: Impossible speed
+    if implied_speed_kmh > MAX_REASONABLE_SPEED_KMH:
+        return True, "impossible_speed", details
+
+    # Check 3: Speed mismatch (reported vs calculated)
+    if reported_speed is not None:
+        speed_diff = abs(implied_speed_kmh - reported_speed)
+        if speed_diff > 50 and reported_speed > 10:  # Allow some variance at low speeds
+            details["speed_mismatch"] = round(speed_diff, 2)
+            return True, "speed_mismatch", details
+
+    # Check 4: Stationary spoof (same location repeated while claiming movement)
+    if len(history) >= 5:
+        recent_points = history[-5:]
+        unique_locations = set()
+        for p in recent_points:
+            # Round to ~10m precision
+            loc_key = (round(p["lat"], 4), round(p["lng"], 4))
+            unique_locations.add(loc_key)
+
+        if len(unique_locations) == 1 and reported_speed and reported_speed > 5:
+            return True, "stationary_while_moving", details
+
+    # Save this point for future checks
+    save_gps_point(device_id, current_lat, current_lng, current_ts)
+
+    return False, "valid", details
+
+
+def validate_t2e_eligibility(device_info: dict, gps_data: dict) -> tuple[bool, str, dict]:
+    """
+    Full validation for T2E reward eligibility.
+
+    Requirements:
+    1. Must be Android Auto or Apple CarPlay device
+    2. Must have wallet linked
+    3. GPS must not be spoofed
+    4. Must be a real-time trip
+
+    Returns (is_eligible, reason, details)
+    """
+    # Step 1: Validate car platform
+    platform_valid, platform_reason = validate_car_platform(device_info)
+    if not platform_valid:
+        return False, f"platform_invalid:{platform_reason}", {
+            "required": "android_auto or carplay",
+            "provided": device_info.get("platform")
+        }
+
+    # Step 2: Validate GPS data exists
+    if not gps_data or gps_data.get("lat") is None or gps_data.get("lng") is None:
+        return False, "no_gps_data", {}
+
+    lat = float(gps_data["lat"])
+    lng = float(gps_data["lng"])
+    speed = gps_data.get("speed")
+
+    # Step 3: Check for GPS spoofing
+    device_id = device_info.get("device_id")
+    is_spoofed, spoof_reason, spoof_details = detect_gps_spoofing(
+        device_id, lat, lng, speed
+    )
+
+    if is_spoofed:
+        # Flag the device
+        data = load_json(GPS_SPOOF_FILE, {})
+        if device_id in data:
+            data[device_id]["spoof_flags"] = data[device_id].get("spoof_flags", 0) + 1
+            save_json(GPS_SPOOF_FILE, data)
+
+        return False, f"gps_spoofed:{spoof_reason}", spoof_details
+
+    # Step 4: All checks passed
+    return True, "eligible", {
+        "device_id": device_id,
+        "platform": device_info.get("platform"),
+        "wallet": device_info.get("wallet_address"),
+        "gps_valid": True
+    }
+
+
+# ─── Music Telemetry Reward Distribution (80/10/10) ─────────────────────────────
+MUSIC_REWARD_ARTIST_PERCENT = 0.80   # 80% to artist
+MUSIC_REWARD_NETWORK_PERCENT = 0.10  # 10% to network pool
+MUSIC_REWARD_AI_PERCENT = 0.10       # 10% to AI/T2E pool
+
+def distribute_music_reward(total_amount: float, artist_address: str, listener_address: str,
+                            track_id: str, track_title: str = None, gps_data: dict = None,
+                            duration_seconds: int = None, device_id: str = None) -> dict:
+    """
+    Distribute music play/tip rewards according to 80/10/10 split.
+
+    - 80% to artist
+    - 10% to network (validators/nodes)
+    - 10% to AI pool (T2E for IoT miners, ASICs, data trainers)
+
+    Also records training data contribution for T2E if GPS data provided.
+    """
+    if READ_ONLY or NODE_ROLE != "master":
+        return {"ok": False, "error": "read_only_node"}
+
+    if total_amount <= 0:
+        return {"ok": False, "error": "invalid_amount"}
+
+    # Calculate splits
+    artist_amount = round(total_amount * MUSIC_REWARD_ARTIST_PERCENT, 6)
+    network_amount = round(total_amount * MUSIC_REWARD_NETWORK_PERCENT, 6)
+    ai_amount = round(total_amount * MUSIC_REWARD_AI_PERCENT, 6)
+
+    # Ensure rounding doesn't lose/gain THR
+    actual_total = artist_amount + network_amount + ai_amount
+    if actual_total != total_amount:
+        artist_amount = round(total_amount - network_amount - ai_amount, 6)
+
+    ledger = load_json(LEDGER_FILE, {})
+    chain = load_json(CHAIN_FILE, [])
+    tx_id = f"MUSIC-TELEMETRY-{int(time.time())}-{secrets.token_hex(4)}"
+
+    # Credit artist (80%)
+    ledger[artist_address] = round(float(ledger.get(artist_address, 0)) + artist_amount, 6)
+
+    # Credit network pool (10%)
+    credit_network_pool(network_amount, source="music_play")
+
+    # Credit AI pool (10%) for T2E distribution
+    credit_ai_pool(ai_amount, music_tip_amount=total_amount)
+
+    save_json(LEDGER_FILE, ledger)
+
+    # Create unified transaction record
+    tx = {
+        "type": "music_play_reward",
+        "track_id": track_id,
+        "track_title": track_title or track_id,
+        "listener": listener_address,
+        "artist": artist_address,
+        "total_amount": total_amount,
+        "reward_split": {
+            "artist": artist_amount,
+            "network": network_amount,
+            "ai_t2e": ai_amount
+        },
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "tx_id": tx_id,
+        "status": "confirmed",
+        "gps_recorded": bool(gps_data),
+        "duration_seconds": duration_seconds
+    }
+
+    if gps_data:
+        tx["gps_data"] = gps_data
+
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+
+    # Record T2E training contribution if GPS data provided (driver training)
+    if gps_data and listener_address:
+        effective_device_id = device_id or f"LISTENER-{listener_address[:16]}"
+        record_training_contribution(
+            device_id=effective_device_id,
+            wallet_address=listener_address,
+            data_type="music_telemetry",
+            data_points=1,
+            gps_data=gps_data
+        )
+
+    logger.info(f"[MUSIC_REWARD] Distributed {total_amount} THR: "
+                f"artist={artist_amount}, network={network_amount}, ai={ai_amount} "
+                f"for track {track_id}")
+
+    return {
+        "ok": True,
+        "tx_id": tx_id,
+        "total_amount": total_amount,
+        "splits": {
+            "artist": artist_amount,
+            "network": network_amount,
+            "ai_t2e": ai_amount
+        },
+        "artist_address": artist_address,
+        "t2e_recorded": bool(gps_data)
+    }
+
+
 def _sha256_hex(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -2697,6 +3244,11 @@ def _canonical_kind(kind_raw: str) -> str:
         "playlist_add_track": "music",  # PR-5: Music/Playlists canonical kinds
         "playlist_remove_track": "music",  # PR-5: Music/Playlists canonical kinds
         "playlist_reorder": "music",  # PR-5: Music/Playlists canonical kinds
+        "t2e_reward": "t2e_reward",  # Phase 5: Train-to-Earn rewards
+        "train_reward": "t2e_reward",  # Phase 5: Train-to-Earn alias
+        "network_reward": "network_reward",  # Phase 5: Network pool rewards
+        "validator_reward": "network_reward",  # Phase 5: Validator rewards alias
+        "ai_reward": "ai_reward",  # AI pool distribution
         "nft_mint": "nft_mint",
         "nft_sale": "nft_sale",
         "nft_burn": "nft_burn",
@@ -6622,6 +7174,13 @@ def whitepaper_page():
 @app.route("/roadmap")
 def roadmap_page():
     return render_template("roadmap.html")
+
+@app.route("/downloads")
+@app.route("/apps")
+@app.route("/wallet/download")
+def downloads_page():
+    """Mobile wallet downloads page - Android APK, iOS, Web PWA, Chrome Extension"""
+    return render_template("downloads.html")
 
 @app.route("/token_chart")
 def token_chart_page():
@@ -19745,7 +20304,7 @@ def api_ai_models():
         try:
             # GET endpoint - pass query params as payload
             params = {k: v for k, v in request.args.items()}
-            result = call_ai_core("/api/ai_models", params, timeout=30)
+            result = call_ai_core("/api/ai_models", params, timeout=30, method="GET")
             if result:
                 logger.info("[AI_CORE] Successfully proxied /api/ai_models to Node 4")
                 return jsonify(result), 200
@@ -19814,6 +20373,72 @@ def api_ai_provider_status():
         app.logger.warning("provider_status_failed", extra={"error": str(exc)})
         return jsonify({"providers": {}, "error": str(exc)}), 200
 
+
+@app.route("/api/ai/debug", methods=["GET"])
+def api_ai_debug():
+    """
+    Debug endpoint showing AI configuration, node role, and connection status.
+    Use this to diagnose why models might not be showing.
+    Access at: /api/ai/debug
+    """
+    debug_info = {
+        "node": {
+            "role": NODE_ROLE,
+            "is_master": is_master(),
+            "is_ai_core": is_ai_core(),
+            "is_replica": is_replica(),
+        },
+        "ai_core_proxy": {
+            "ai_core_url": AI_CORE_URL or "(not configured)",
+            "proxy_enabled": bool(AI_CORE_URL) and not is_ai_core(),
+            "will_proxy_to_node4": bool(AI_CORE_URL) and not is_ai_core(),
+        },
+        "api_keys_configured": {
+            "openai": bool((os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip()),
+            "anthropic": bool((os.getenv("ANTHROPIC_API_KEY") or "").strip()),
+            "gemini": bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()),
+        },
+        "thronos_ai_mode": os.getenv("THRONOS_AI_MODE", "all"),
+        "scheduler_enabled": SCHEDULER_ENABLED,
+    }
+
+    # Test connection to AI Core if configured
+    if AI_CORE_URL and not is_ai_core():
+        try:
+            test_result = call_ai_core("/api/ai/provider_status", {}, timeout=5, method="GET")
+            debug_info["ai_core_connection"] = {
+                "status": "connected" if test_result else "failed",
+                "response": test_result if test_result else None,
+            }
+        except Exception as e:
+            debug_info["ai_core_connection"] = {
+                "status": "error",
+                "error": str(e),
+            }
+    else:
+        debug_info["ai_core_connection"] = {
+            "status": "local" if is_ai_core() else "not_configured",
+        }
+
+    # Get provider status
+    try:
+        debug_info["providers"] = get_provider_status()
+    except Exception as e:
+        debug_info["providers_error"] = str(e)
+
+    # Get enabled models count
+    try:
+        enabled = list_enabled_model_ids()
+        debug_info["enabled_models"] = {
+            "count": len(enabled),
+            "ids": enabled,
+        }
+    except Exception as e:
+        debug_info["enabled_models_error"] = str(e)
+
+    return jsonify(debug_info), 200
+
+
 @app.route("/api/ai/feedback", methods=["POST"])
 def api_ai_feedback():
     """Record user feedback (thumbs up/down) on AI responses"""
@@ -19855,6 +20480,12 @@ def chat_page_v2():
     """Render chat interface with wallet from cookie"""
     thr_wallet = request.cookies.get("thr_address") or ""
     return render_template("chat.html", thr_wallet=thr_wallet)
+
+
+@app.route("/ai/settings")
+def ai_settings_page():
+    """Render AI settings/configuration page showing model and provider status"""
+    return render_template("ai_settings.html")
 
 
 # ─── DECENT MUSIC PLATFORM ────────────────────────────────────────────
@@ -20523,39 +21154,51 @@ def api_v1_music_tip():
         if error_key == "invalid_auth":
             return jsonify({"status": "error", "message": "Invalid auth"}), 403
 
-    # Transfer THR with 10% to AI pool (Phase 4)
-    AI_POOL_PERCENTAGE = 0.10  # 10% of music tips go to AI pool
+    # Transfer THR with 80/10/10 split (Phase 5: Music Telemetry Rewards)
+    # 80% to artist, 10% to network pool, 10% to AI/T2E pool
     ledger = load_json(LEDGER_FILE, {})
     sender_balance = float(ledger.get(from_address, 0))
 
     if sender_balance < amount:
         return jsonify({"status": "error", "message": "Insufficient balance"}), 400
 
-    # Split: 10% to AI pool, 90% to artist
-    ai_pool_amount = round(amount * AI_POOL_PERCENTAGE, 6)
-    artist_amount = round(amount - ai_pool_amount, 6)
+    # Calculate splits using global constants
+    artist_amount = round(amount * MUSIC_REWARD_ARTIST_PERCENT, 6)    # 80%
+    network_amount = round(amount * MUSIC_REWARD_NETWORK_PERCENT, 6)  # 10%
+    ai_pool_amount = round(amount * MUSIC_REWARD_AI_PERCENT, 6)       # 10%
 
+    # Ensure no rounding errors
+    actual_total = artist_amount + network_amount + ai_pool_amount
+    if actual_total != amount:
+        artist_amount = round(amount - network_amount - ai_pool_amount, 6)
+
+    # Debit sender
     ledger[from_address] = round(sender_balance - amount, 6)
+
+    # Credit artist (80%)
     ledger[artist_address] = round(float(ledger.get(artist_address, 0)) + artist_amount, 6)
     save_json(LEDGER_FILE, ledger)
 
-    # Credit AI pool
+    # Credit network pool (10%)
+    credit_network_pool(network_amount, source="music_tip")
+
+    # Credit AI/T2E pool (10%)
     credit_ai_pool(ai_pool_amount, music_tip_amount=amount)
 
-    # Update track tips (total amount including AI pool portion)
+    # Update track tips (total amount)
     for t in registry["tracks"]:
         if t["id"] == track_id:
             t["tips_total"] = float(t.get("tips_total", 0)) + amount
             break
 
-    # Update artist earnings (only their portion after AI pool cut)
+    # Update artist earnings (only their 80% portion)
     if artist_address in registry["artists"]:
         registry["artists"][artist_address]["total_earnings"] = \
             float(registry["artists"][artist_address].get("total_earnings", 0)) + artist_amount
 
     save_music_registry(registry)
 
-    # Record transaction
+    # Record transaction with full reward split info
     chain = load_json(CHAIN_FILE, [])
     tx_id = f"MUSIC-TIP-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
@@ -20565,12 +21208,27 @@ def api_v1_music_tip():
         "from": from_address,
         "to": artist_address,
         "amount": amount,
-        "artist_amount": artist_amount,  # Amount after AI pool cut
-        "ai_pool_amount": ai_pool_amount,  # Amount contributed to AI pool
+        "reward_split": {
+            "artist": artist_amount,
+            "network": network_amount,
+            "ai_t2e": ai_pool_amount
+        },
+        # Legacy fields for backward compatibility
+        "artist_amount": artist_amount,
+        "ai_pool_amount": ai_pool_amount,
+        "network_amount": network_amount,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
         "tx_id": tx_id,
         "status": "confirmed"
     }
+
+    # Add GPS data if provided
+    gps_data = None
+    if gps_lat is not None and gps_lng is not None:
+        gps_data = {"lat": gps_lat, "lng": gps_lng}
+        tx["gps_data"] = gps_data
+        tx["gps_recorded"] = True
+
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
 
@@ -20585,17 +21243,35 @@ def api_v1_music_tip():
         tip_amount=amount
     )
 
-    logger.info(f"Music tip: {amount} THR from {from_address} to {artist_address} for track {track_id} (artist: {artist_amount}, AI pool: {ai_pool_amount})" +
+    # Record T2E contribution if GPS data provided (driver training)
+    if gps_data:
+        record_training_contribution(
+            device_id=f"TIPPER-{from_address[:16]}",
+            wallet_address=from_address,
+            data_type="music_telemetry",
+            data_points=1,
+            gps_data=gps_data
+        )
+
+    logger.info(f"Music tip: {amount} THR from {from_address} for track {track_id} "
+                f"(artist={artist_amount}, network={network_amount}, ai={ai_pool_amount})" +
                 (f" @ GPS({gps_lat:.4f}, {gps_lng:.4f})" if gps_lat and gps_lng else ""))
 
     return jsonify({
         "status": "success",
         "tx_id": tx_id,
         "amount": amount,
+        "reward_split": {
+            "artist": artist_amount,
+            "network": network_amount,
+            "ai_t2e": ai_pool_amount
+        },
         "artist_amount": artist_amount,
+        "network_amount": network_amount,
         "ai_pool_amount": ai_pool_amount,
         "new_balance": ledger[from_address],
-        "gps_recorded": bool(gps_lat and gps_lng)
+        "gps_recorded": bool(gps_lat and gps_lng),
+        "t2e_contribution_recorded": bool(gps_data)
     }), 200
 
 
@@ -21541,6 +22217,595 @@ def api_music_playlist_update():
         return jsonify({"ok": False, "error": "Failed to update playlist"}), 500
 
 
+# ─── Music Telemetry & T2E (Train-to-Earn) API ─────────────────────────────────
+
+@app.route("/api/music/telemetry/stats", methods=["GET"])
+def api_music_telemetry_stats():
+    """
+    Get music telemetry statistics including reward distribution pools.
+
+    Returns:
+    - AI pool balance and stats
+    - Network pool balance and stats
+    - T2E (Train-to-Earn) stats
+    - Recent music play rewards
+    """
+    ai_pool = get_ai_pool_state()
+    network_pool = get_network_pool_state()
+    t2e_state = get_t2e_state()
+
+    # Get recent music telemetry transactions
+    chain = load_json(CHAIN_FILE, [])
+    recent_music_rewards = [
+        tx for tx in chain[-100:]
+        if tx.get("type") in ("music_play_reward", "music_tip")
+        and tx.get("reward_split")
+    ][-20:]  # Last 20
+
+    return jsonify({
+        "ok": True,
+        "reward_distribution": {
+            "artist_percent": int(MUSIC_REWARD_ARTIST_PERCENT * 100),
+            "network_percent": int(MUSIC_REWARD_NETWORK_PERCENT * 100),
+            "ai_t2e_percent": int(MUSIC_REWARD_AI_PERCENT * 100)
+        },
+        "pools": {
+            "ai_pool": {
+                "balance": ai_pool.get("ai_pool_balance", 0),
+                "total_music_contributions": ai_pool.get("total_music_tips", 0),
+                "total_distributed": ai_pool.get("total_ai_distributed", 0),
+                "rewards_count": ai_pool.get("total_ai_rewards_count", 0),
+                "last_distribution": ai_pool.get("last_distribution_time")
+            },
+            "network_pool": {
+                "balance": network_pool.get("network_pool_balance", 0),
+                "total_contributions": network_pool.get("total_music_contributions", 0),
+                "total_distributed": network_pool.get("total_distributed_to_nodes", 0),
+                "distribution_count": network_pool.get("distribution_count", 0),
+                "last_distribution": network_pool.get("last_distribution_time")
+            }
+        },
+        "t2e": {
+            "total_training_data_points": t2e_state.get("total_training_data_points", 0),
+            "total_distributed": t2e_state.get("total_t2e_distributed", 0),
+            "active_devices": len(t2e_state.get("device_contributions", {})),
+            "last_distribution": t2e_state.get("last_distribution_time")
+        },
+        "recent_rewards": recent_music_rewards
+    }), 200
+
+
+@app.route("/api/t2e/status", methods=["GET"])
+def api_t2e_status():
+    """
+    Get Train-to-Earn status for the requesting wallet.
+
+    Query params:
+    - wallet: Wallet address (optional, shows global stats if not provided)
+    """
+    wallet = request.args.get("wallet", "").strip()
+    t2e_state = get_t2e_state()
+    ai_pool = get_ai_pool_state()
+
+    response = {
+        "ok": True,
+        "ai_pool_balance": ai_pool.get("ai_pool_balance", 0),
+        "total_training_data_points": t2e_state.get("total_training_data_points", 0),
+        "total_distributed": t2e_state.get("total_t2e_distributed", 0),
+        "active_devices": len(t2e_state.get("device_contributions", {}))
+    }
+
+    if wallet:
+        # Find contributions from devices owned by this wallet
+        device_contributions = t2e_state.get("device_contributions", {})
+        wallet_devices = [
+            {"device_id": dev_id, **data}
+            for dev_id, data in device_contributions.items()
+            if data.get("wallet") == wallet
+        ]
+        response["wallet"] = wallet
+        response["wallet_devices"] = wallet_devices
+        response["wallet_total_contributions"] = sum(
+            d.get("total_contributions", 0) for d in wallet_devices
+        )
+
+    return jsonify(response), 200
+
+
+@app.route("/api/t2e/contribute", methods=["POST"])
+def api_t2e_contribute():
+    """
+    Record a T2E training data contribution.
+
+    Payload:
+    - device_id: Device identifier (required)
+    - wallet: Wallet address (required)
+    - data_type: Type of data (music_telemetry, gps_driving, asic_validation, iot_sensor)
+    - data_points: Number of data points (default: 1)
+    - gps_data: GPS coordinates {lat, lng} (optional)
+    """
+    data = request.get_json() or {}
+    device_id = (data.get("device_id") or "").strip()
+    wallet = (data.get("wallet") or "").strip()
+    data_type = (data.get("data_type") or "").strip() or "generic"
+    data_points = int(data.get("data_points", 1))
+    gps_data = data.get("gps_data")
+
+    if not device_id or not wallet:
+        return jsonify({"ok": False, "error": "device_id and wallet required"}), 400
+
+    result = record_training_contribution(
+        device_id=device_id,
+        wallet_address=wallet,
+        data_type=data_type,
+        data_points=data_points,
+        gps_data=gps_data
+    )
+
+    return jsonify({
+        "ok": True,
+        "contribution": result
+    }), 200
+
+
+@app.route("/api/t2e/distribute", methods=["POST"])
+def api_t2e_distribute():
+    """
+    Trigger T2E reward distribution (admin only).
+
+    Payload:
+    - admin_secret: Admin authentication
+    - min_contributions: Minimum contributions to qualify (default: 10)
+    """
+    data = request.get_json() or {}
+    admin_secret = (data.get("admin_secret") or "").strip()
+    min_contributions = int(data.get("min_contributions", 10))
+
+    # Validate admin access
+    expected_secret = os.getenv("ADMIN_SECRET") or os.getenv("THRONOS_ADMIN_SECRET")
+    if not expected_secret or admin_secret != expected_secret:
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+
+    tx_ids = distribute_t2e_rewards(min_contributions=min_contributions)
+
+    return jsonify({
+        "ok": True,
+        "distributed_count": len(tx_ids),
+        "tx_ids": tx_ids
+    }), 200
+
+
+@app.route("/api/network/pool/status", methods=["GET"])
+def api_network_pool_status():
+    """Get network pool status."""
+    pool = get_network_pool_state()
+    return jsonify({
+        "ok": True,
+        "pool": pool
+    }), 200
+
+
+# ─── ASIC & IoT Miner Contribution Endpoints ────────────────────────────────────
+
+@app.route("/api/asic/contribute/block", methods=["POST"])
+def api_asic_contribute_block():
+    """
+    Record ASIC contribution for storing/encrypting block data.
+
+    ASICs help the network by:
+    - Storing encrypted block data
+    - Speeding up transaction validation
+    - Supporting offline transactions (RadioNode/survival mode)
+
+    Payload:
+    - device_id: ASIC identifier (required)
+    - wallet: Owner wallet address (required)
+    - block_hash: Hash of block being stored
+    - block_height: Block height
+    - tx_count: Number of transactions in block
+    - contribution_type: "block_storage", "network_relay", "offline_tx"
+    """
+    data = request.get_json() or {}
+    device_id = (data.get("device_id") or "").strip()
+    wallet = (data.get("wallet") or "").strip()
+    block_hash = data.get("block_hash")
+    block_height = data.get("block_height")
+    tx_count = data.get("tx_count", 0)
+    contribution_type = data.get("contribution_type", "block_storage")
+
+    if not device_id or not wallet:
+        return jsonify({"ok": False, "error": "device_id and wallet required"}), 400
+
+    # Map contribution type to data_type
+    type_mapping = {
+        "block_storage": "asic_block_storage",
+        "network_relay": "asic_network_relay",
+        "offline_tx": "asic_offline_tx"
+    }
+    data_type = type_mapping.get(contribution_type, "asic_block_storage")
+
+    # Calculate points based on contribution
+    # More transactions = more work = more points
+    base_points = 1
+    if tx_count:
+        base_points += min(int(tx_count) // 10, 10)  # Up to +10 bonus points
+
+    block_data = {
+        "block_hash": block_hash,
+        "block_height": block_height,
+        "tx_count": tx_count,
+        "contribution_type": contribution_type
+    }
+
+    result = record_training_contribution(
+        device_id=device_id,
+        wallet_address=wallet,
+        data_type=data_type,
+        data_points=base_points,
+        block_data=block_data
+    )
+
+    logger.info(f"[ASIC] Block contribution: {device_id}, type={contribution_type}, points={base_points}")
+
+    return jsonify({
+        "ok": True,
+        "contribution": result,
+        "points_earned": base_points,
+        "contribution_type": contribution_type
+    }), 200
+
+
+@app.route("/api/asic/contribute/offline", methods=["POST"])
+def api_asic_contribute_offline():
+    """
+    Record ASIC contribution for supporting offline/RadioNode transactions.
+
+    This is critical for survival mode - when internet is down, ASICs and
+    IoT miners help propagate transactions via radio/mesh networking.
+
+    Payload:
+    - device_id: ASIC/IoT miner identifier (required)
+    - wallet: Owner wallet address (required)
+    - tx_hash: Transaction hash being relayed
+    - relay_method: "radio", "mesh", "bluetooth", "local"
+    - hop_count: Number of hops this relay represents
+    """
+    data = request.get_json() or {}
+    device_id = (data.get("device_id") or "").strip()
+    wallet = (data.get("wallet") or "").strip()
+    tx_hash = data.get("tx_hash")
+    relay_method = data.get("relay_method", "mesh")
+    hop_count = int(data.get("hop_count", 1))
+
+    if not device_id or not wallet:
+        return jsonify({"ok": False, "error": "device_id and wallet required"}), 400
+
+    # Offline relay is valuable - bonus points for survival mode support
+    points = 2 + min(hop_count, 5)  # 2 base + up to 5 for multi-hop
+
+    block_data = {
+        "tx_hash": tx_hash,
+        "relay_method": relay_method,
+        "hop_count": hop_count,
+        "offline_relay": True,
+        "survival_mode": True
+    }
+
+    result = record_training_contribution(
+        device_id=device_id,
+        wallet_address=wallet,
+        data_type="asic_offline_tx",
+        data_points=points,
+        block_data=block_data
+    )
+
+    logger.info(f"[ASIC] Offline relay: {device_id}, method={relay_method}, hops={hop_count}, points={points}")
+
+    return jsonify({
+        "ok": True,
+        "contribution": result,
+        "points_earned": points,
+        "relay_method": relay_method,
+        "survival_mode_contribution": True
+    }), 200
+
+
+@app.route("/api/iot/contribute/mesh", methods=["POST"])
+def api_iot_contribute_mesh():
+    """
+    Record IoT device contribution as mesh network relay.
+
+    IoT miners help extend network coverage and support offline transactions.
+
+    Payload:
+    - device_id: IoT device identifier (required)
+    - wallet: Owner wallet address (required)
+    - relay_type: "wifi_mesh", "lora", "bluetooth", "radio"
+    - packets_relayed: Number of packets/messages relayed
+    - uptime_hours: Device uptime in hours
+    """
+    data = request.get_json() or {}
+    device_id = (data.get("device_id") or "").strip()
+    wallet = (data.get("wallet") or "").strip()
+    relay_type = data.get("relay_type", "wifi_mesh")
+    packets_relayed = int(data.get("packets_relayed", 1))
+    uptime_hours = float(data.get("uptime_hours", 0))
+
+    if not device_id or not wallet:
+        return jsonify({"ok": False, "error": "device_id and wallet required"}), 400
+
+    # Calculate points: base + packets bonus + uptime bonus
+    points = 1
+    points += min(packets_relayed // 100, 5)  # Up to +5 for packet volume
+    points += min(int(uptime_hours // 24), 3)  # Up to +3 for uptime (per day)
+
+    block_data = {
+        "relay_type": relay_type,
+        "packets_relayed": packets_relayed,
+        "uptime_hours": uptime_hours
+    }
+
+    result = record_training_contribution(
+        device_id=device_id,
+        wallet_address=wallet,
+        data_type="iot_mesh_relay",
+        data_points=points,
+        block_data=block_data
+    )
+
+    logger.info(f"[IoT] Mesh relay: {device_id}, type={relay_type}, packets={packets_relayed}, points={points}")
+
+    return jsonify({
+        "ok": True,
+        "contribution": result,
+        "points_earned": points,
+        "relay_type": relay_type
+    }), 200
+
+
+@app.route("/api/miner/stats", methods=["GET"])
+def api_miner_stats():
+    """
+    Get miner/device statistics for T2E rewards.
+
+    Query params:
+    - wallet: Filter by wallet address (optional)
+    - device_id: Filter by specific device (optional)
+    """
+    wallet = request.args.get("wallet", "").strip() or None
+    device_id = request.args.get("device_id", "").strip() or None
+
+    t2e_state = get_t2e_state()
+    device_contributions = t2e_state.get("device_contributions", {})
+
+    # Filter devices
+    devices = []
+    for dev_id, data in device_contributions.items():
+        if wallet and data.get("wallet") != wallet:
+            continue
+        if device_id and dev_id != device_id:
+            continue
+
+        devices.append({
+            "device_id": dev_id,
+            "wallet": data.get("wallet"),
+            "total_contributions": data.get("total_contributions", 0),
+            "data_types": data.get("data_types", {}),
+            "first_contribution": data.get("first_contribution"),
+            "last_contribution": data.get("last_contribution")
+        })
+
+    # Sort by contributions
+    devices.sort(key=lambda x: x["total_contributions"], reverse=True)
+
+    # Calculate totals by type
+    totals_by_type = {}
+    for dev in devices:
+        for dtype, count in dev.get("data_types", {}).items():
+            if dtype not in totals_by_type:
+                totals_by_type[dtype] = 0
+            totals_by_type[dtype] += count
+
+    return jsonify({
+        "ok": True,
+        "devices": devices[:100],  # Limit to top 100
+        "total_devices": len(devices),
+        "totals_by_type": totals_by_type,
+        "ai_pool_balance": get_ai_pool_state().get("ai_pool_balance", 0)
+    }), 200
+
+
+@app.route("/api/music/auto_reward", methods=["POST"])
+def api_music_auto_reward():
+    """
+    Award automatic music listening reward with 80/10/10 split.
+
+    Called when a listener completes a track or reaches a reward threshold.
+
+    IMPORTANT: T2E (Train-to-Earn) rewards with GPS bonus are ONLY available for:
+    - Android Auto devices
+    - Apple CarPlay devices
+    - Real-time trips (anti-GPS spoofing validation)
+
+    Payload:
+    - track_id: Track being played (required)
+    - listener_address: Listener's wallet (required)
+    - duration_seconds: How long they listened (required, min 30s)
+    - gps_lat, gps_lng: GPS coordinates (requires car platform for T2E)
+    - gps_speed: Current speed in km/h (helps validate real trip)
+    - device_id: Device identifier (required for T2E)
+    - platform: "android_auto" or "carplay" (required for T2E)
+    """
+    data = request.get_json() or {}
+    track_id = (data.get("track_id") or "").strip()
+    listener_address = (data.get("listener_address") or "").strip()
+    duration_seconds = int(data.get("duration_seconds", 0))
+    gps_lat = data.get("gps_lat")
+    gps_lng = data.get("gps_lng")
+    gps_speed = data.get("gps_speed")  # Speed in km/h
+    device_id = data.get("device_id")
+    platform = data.get("platform")  # "android_auto" or "carplay"
+
+    if not track_id or not listener_address:
+        return jsonify({"ok": False, "error": "track_id and listener_address required"}), 400
+
+    # Minimum 30 seconds listening for reward
+    if duration_seconds < 30:
+        return jsonify({
+            "ok": False,
+            "error": "Minimum 30 seconds listening required for reward",
+            "duration_seconds": duration_seconds
+        }), 400
+
+    # Get track info
+    registry = load_music_registry()
+    track = next((t for t in registry["tracks"] if t["id"] == track_id), None)
+    if not track:
+        return jsonify({"ok": False, "error": "Track not found"}), 404
+
+    artist_address = track["artist_address"]
+
+    # Calculate reward based on listening time
+    # Base rate: 0.001 THR per 30 seconds (capped at track duration or 5 mins)
+    BASE_REWARD_PER_30S = 0.001
+    MAX_REWARD_DURATION = 300  # 5 minutes
+    effective_duration = min(duration_seconds, MAX_REWARD_DURATION)
+    base_reward = round((effective_duration / 30) * BASE_REWARD_PER_30S, 6)
+
+    # T2E GPS bonus: +50% ONLY for verified Android Auto / CarPlay real-time trips
+    gps_data = None
+    t2e_eligible = False
+    t2e_validation_result = None
+
+    if gps_lat is not None and gps_lng is not None:
+        # Build device info for validation
+        device_info = {
+            "device_id": device_id,
+            "platform": platform,
+            "wallet_address": listener_address,
+            "device_type": platform
+        }
+
+        # Build GPS data
+        gps_data_raw = {
+            "lat": gps_lat,
+            "lng": gps_lng,
+            "speed": gps_speed
+        }
+
+        # Validate T2E eligibility (car platform + anti-spoofing)
+        t2e_eligible, t2e_reason, t2e_details = validate_t2e_eligibility(device_info, gps_data_raw)
+
+        t2e_validation_result = {
+            "eligible": t2e_eligible,
+            "reason": t2e_reason,
+            "details": t2e_details
+        }
+
+        if t2e_eligible:
+            # Verified real trip via Android Auto / CarPlay - apply GPS bonus
+            base_reward = round(base_reward * 1.5, 6)
+            gps_data = {"lat": gps_lat, "lng": gps_lng, "speed": gps_speed, "verified": True}
+            logger.info(f"[T2E] Verified trip: {listener_address} on {platform}, reward={base_reward}")
+        else:
+            # GPS provided but not eligible for T2E (not car platform or possible spoofing)
+            # Still record GPS but no bonus
+            gps_data = {"lat": gps_lat, "lng": gps_lng, "speed": gps_speed, "verified": False}
+            logger.warning(f"[T2E] Ineligible: {listener_address}, reason={t2e_reason}, details={t2e_details}")
+
+    # Mint reward from system (this creates new THR for music ecosystem)
+    # This is inflationary but controlled - music rewards come from the
+    # music ecosystem allocation in tokenomics
+    result = distribute_music_reward(
+        total_amount=base_reward,
+        artist_address=artist_address,
+        listener_address=listener_address,
+        track_id=track_id,
+        track_title=track.get("title"),
+        gps_data=gps_data,
+        duration_seconds=duration_seconds,
+        device_id=device_id
+    )
+
+    if result.get("ok"):
+        # Track the music play in database
+        _track_music_play(
+            track_id=track_id,
+            wallet_address=listener_address,
+            artist_address=artist_address,
+            duration_seconds=duration_seconds,
+            gps_lat=gps_lat,
+            gps_lng=gps_lng,
+            tip_amount=base_reward
+        )
+
+        # Update play count in registry
+        if track_id not in registry["plays"]:
+            registry["plays"][track_id] = []
+        registry["plays"][track_id].append({
+            "listener": listener_address,
+            "timestamp": time.time(),
+            "datetime": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "duration": duration_seconds,
+            "reward": base_reward,
+            "gps_recorded": bool(gps_data)
+        })
+        save_music_registry(registry)
+
+        response = {
+            "ok": True,
+            "tx_id": result.get("tx_id"),
+            "reward": base_reward,
+            "splits": result.get("splits"),
+            "gps_bonus_applied": t2e_eligible,
+            "t2e_contribution": result.get("t2e_recorded", False) and t2e_eligible,
+            "t2e_validation": t2e_validation_result
+        }
+
+        # Add helpful message if GPS provided but T2E not eligible
+        if gps_data and not t2e_eligible:
+            response["t2e_note"] = "GPS recorded but T2E bonus not applied. T2E requires Android Auto or Apple CarPlay with real-time trip verification."
+
+        return jsonify(response), 200
+    else:
+        return jsonify(result), 400
+
+
+@app.route("/api/music/plays/history", methods=["GET"])
+def api_music_plays_history():
+    """
+    Get music play history with GPS telemetry data.
+
+    Query params:
+    - wallet: Filter by listener wallet (optional)
+    - artist: Filter by artist address (optional)
+    - track_id: Filter by track (optional)
+    - limit: Max results (default 50)
+    """
+    wallet = request.args.get("wallet", "").strip() or None
+    artist = request.args.get("artist", "").strip() or None
+    track_id = request.args.get("track_id", "").strip() or None
+    limit = min(int(request.args.get("limit", 50)), 200)
+
+    plays = _get_music_plays(
+        wallet_address=wallet,
+        track_id=track_id,
+        artist_address=artist,
+        limit=limit
+    )
+
+    return jsonify({
+        "ok": True,
+        "plays": plays,
+        "count": len(plays),
+        "filters": {
+            "wallet": wallet,
+            "artist": artist,
+            "track_id": track_id
+        }
+    }), 200
+
+
 # ─── Token Explorer, NFT & Governance Pages ─────────────────────────────────
 
 @app.route("/explorer")
@@ -22301,11 +23566,383 @@ def api_ai_pool_status():
     }), 200
 
 
+# ─── VERIFYID INTEGRATION ENDPOINTS ───────────────────────────────────────────
+# These endpoints allow the external VerifyID service (thronos-verifyid.up.railway.app)
+# to interact with the Thronos blockchain for:
+# - Hash submission and verification (document integrity)
+# - Wallet authentication
+# - Rewards distribution based on verification activity
+
+VERIFYID_ALLOWED_ORIGINS = [
+    "https://thronos-verifyid.vercel.app",
+    "https://thronos-verifyid.up.railway.app",
+    "http://localhost:3000",
+    "http://localhost:8000",
+]
+
+
+def _verify_verifyid_origin():
+    """Check if request comes from allowed VerifyID origins or has valid admin secret."""
+    origin = request.headers.get("Origin", "")
+    admin_secret = request.headers.get("X-Admin-Secret", "") or request.args.get("admin_secret", "")
+
+    if admin_secret and admin_secret == ADMIN_SECRET:
+        return True
+    if origin in VERIFYID_ALLOWED_ORIGINS:
+        return True
+    # Also allow if referer matches
+    referer = request.headers.get("Referer", "")
+    for allowed in VERIFYID_ALLOWED_ORIGINS:
+        if referer.startswith(allowed):
+            return True
+    return False
+
+
+@app.route("/api/chain/hash/submit", methods=["POST"])
+def api_chain_hash_submit():
+    """
+    Submit a document hash to the blockchain for immutable verification.
+    Used by VerifyID to anchor document hashes on-chain.
+
+    Request:
+    {
+        "hash": "sha256_hash_of_document",
+        "hash_type": "document|identity|signature|kyc",
+        "wallet": "THR...",  # Owner wallet
+        "metadata": {
+            "document_type": "passport|id|license|...",
+            "verification_id": "uuid",
+            ...
+        }
+    }
+
+    Response:
+    {
+        "ok": true,
+        "tx_id": "VERIFY-...",
+        "block_height": 12345,
+        "timestamp": "2024-..."
+    }
+    """
+    if READ_ONLY:
+        return jsonify({"ok": False, "error": "Node is read-only. Use master node."}), 403
+
+    data = request.get_json() or {}
+    doc_hash = data.get("hash", "").strip()
+    hash_type = data.get("hash_type", "document").strip()
+    wallet = data.get("wallet", "").strip()
+    metadata = data.get("metadata", {})
+
+    if not doc_hash:
+        return jsonify({"ok": False, "error": "hash required"}), 400
+    if len(doc_hash) != 64:  # SHA256 = 64 hex chars
+        return jsonify({"ok": False, "error": "Invalid hash format. Expected SHA256 (64 hex characters)"}), 400
+
+    # Generate transaction
+    ts = datetime.utcnow().isoformat() + "Z"
+    tx_id = f"VERIFY-{hash_type.upper()}-{int(time.time())}-{secrets.token_hex(4)}"
+
+    chain = load_json(CHAIN_FILE, [])
+
+    # Check if hash already exists
+    for tx in chain:
+        if tx.get("type") == "hash_verification" and tx.get("hash") == doc_hash:
+            return jsonify({
+                "ok": True,
+                "exists": True,
+                "tx_id": tx.get("tx_id"),
+                "timestamp": tx.get("timestamp"),
+                "message": "Hash already recorded on chain"
+            }), 200
+
+    # Create verification transaction
+    verification_tx = {
+        "type": "hash_verification",
+        "hash": doc_hash,
+        "hash_type": hash_type,
+        "wallet": wallet or "anonymous",
+        "metadata": metadata,
+        "timestamp": ts,
+        "tx_id": tx_id,
+        "block_height": len(chain) + 1,
+        "source": "verifyid"
+    }
+
+    chain.append(verification_tx)
+    save_json(CHAIN_FILE, chain)
+
+    logger.info(f"🔐 Hash verified: {hash_type} - {doc_hash[:16]}... by {wallet or 'anonymous'}")
+
+    return jsonify({
+        "ok": True,
+        "tx_id": tx_id,
+        "hash": doc_hash,
+        "block_height": verification_tx["block_height"],
+        "timestamp": ts,
+        "message": "Hash recorded on Thronos blockchain"
+    }), 201
+
+
+@app.route("/api/chain/hash/verify", methods=["GET", "POST"])
+def api_chain_hash_verify():
+    """
+    Verify if a hash exists on the blockchain.
+
+    GET /api/chain/hash/verify?hash=abc123...
+    POST /api/chain/hash/verify {"hash": "abc123..."}
+
+    Response:
+    {
+        "ok": true,
+        "verified": true/false,
+        "tx_id": "VERIFY-...",
+        "timestamp": "2024-...",
+        "hash_type": "document",
+        "wallet": "THR..."
+    }
+    """
+    if request.method == "POST":
+        data = request.get_json() or {}
+        doc_hash = data.get("hash", "").strip()
+    else:
+        doc_hash = request.args.get("hash", "").strip()
+
+    if not doc_hash:
+        return jsonify({"ok": False, "error": "hash required"}), 400
+
+    chain = load_json(CHAIN_FILE, [])
+
+    # Search for hash
+    for tx in reversed(chain):  # Most recent first
+        if tx.get("type") == "hash_verification" and tx.get("hash") == doc_hash:
+            return jsonify({
+                "ok": True,
+                "verified": True,
+                "hash": doc_hash,
+                "tx_id": tx.get("tx_id"),
+                "timestamp": tx.get("timestamp"),
+                "hash_type": tx.get("hash_type"),
+                "wallet": tx.get("wallet"),
+                "block_height": tx.get("block_height"),
+                "metadata": tx.get("metadata", {})
+            }), 200
+
+    return jsonify({
+        "ok": True,
+        "verified": False,
+        "hash": doc_hash,
+        "message": "Hash not found on blockchain"
+    }), 200
+
+
+@app.route("/api/chain/wallet/authenticate", methods=["POST"])
+def api_chain_wallet_authenticate():
+    """
+    Authenticate a wallet for VerifyID login.
+    Verifies wallet exists and returns balance + verification stats.
+
+    Request:
+    {
+        "wallet": "THR...",
+        "signature": "optional_signature_for_proof",
+        "message": "optional_message_that_was_signed"
+    }
+
+    Response:
+    {
+        "ok": true,
+        "authenticated": true,
+        "wallet": "THR...",
+        "balance": 123.45,
+        "verification_count": 10,
+        "rewards_earned": 5.5,
+        "last_activity": "2024-..."
+    }
+    """
+    data = request.get_json() or {}
+    wallet = data.get("wallet", "").strip()
+
+    if not wallet:
+        return jsonify({"ok": False, "error": "wallet required"}), 400
+    if not wallet.startswith("THR"):
+        return jsonify({"ok": False, "error": "Invalid wallet format. Must start with THR"}), 400
+
+    ledger = load_json(LEDGER_FILE, {})
+    chain = load_json(CHAIN_FILE, [])
+
+    # Get wallet balance
+    balance = float(ledger.get(wallet, 0.0))
+
+    # Count verification activity
+    verification_count = 0
+    rewards_earned = 0.0
+    last_activity = None
+
+    for tx in chain:
+        if tx.get("wallet") == wallet:
+            if tx.get("type") == "hash_verification":
+                verification_count += 1
+                last_activity = tx.get("timestamp")
+            elif tx.get("type") == "verifyid_reward" and tx.get("to") == wallet:
+                rewards_earned += float(tx.get("amount", 0))
+
+    # Wallet exists if it has balance OR has activity
+    wallet_exists = balance > 0 or verification_count > 0
+
+    return jsonify({
+        "ok": True,
+        "authenticated": wallet_exists,
+        "wallet": wallet,
+        "balance": round(balance, 6),
+        "verification_count": verification_count,
+        "rewards_earned": round(rewards_earned, 6),
+        "last_activity": last_activity,
+        "message": "Wallet authenticated" if wallet_exists else "New wallet - no prior activity"
+    }), 200
+
+
+@app.route("/api/chain/verifyid/reward", methods=["POST"])
+def api_chain_verifyid_reward():
+    """
+    Distribute rewards for VerifyID verification activity.
+    Called by VerifyID backend when user completes verifications.
+
+    Request:
+    {
+        "wallet": "THR...",
+        "amount": 0.5,
+        "reason": "kyc_completion|document_verification|referral|...",
+        "verification_id": "uuid",
+        "admin_secret": "..." (required)
+    }
+    """
+    if READ_ONLY:
+        return jsonify({"ok": False, "error": "Node is read-only"}), 403
+
+    data = request.get_json() or {}
+    wallet = data.get("wallet", "").strip()
+    amount = float(data.get("amount", 0))
+    reason = data.get("reason", "verification").strip()
+    verification_id = data.get("verification_id", "")
+    admin_secret = data.get("admin_secret", "") or request.headers.get("X-Admin-Secret", "")
+
+    # Require admin secret for reward distribution
+    if admin_secret != ADMIN_SECRET:
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+
+    if not wallet:
+        return jsonify({"ok": False, "error": "wallet required"}), 400
+    if amount <= 0:
+        return jsonify({"ok": False, "error": "amount must be positive"}), 400
+    if amount > 100:  # Sanity check
+        return jsonify({"ok": False, "error": "amount exceeds maximum (100 THR)"}), 400
+
+    ledger = load_json(LEDGER_FILE, {})
+    chain = load_json(CHAIN_FILE, [])
+
+    # Check AI pool balance
+    ai_balance = float(ledger.get(AI_WALLET_ADDRESS, 0.0))
+    if ai_balance < amount:
+        return jsonify({
+            "ok": False,
+            "error": "Insufficient AI pool balance",
+            "pool_balance": ai_balance,
+            "requested": amount
+        }), 400
+
+    # Transfer from AI pool to user
+    ledger[AI_WALLET_ADDRESS] = round(ai_balance - amount, 6)
+    ledger[wallet] = round(float(ledger.get(wallet, 0.0)) + amount, 6)
+
+    # Create reward transaction
+    ts = datetime.utcnow().isoformat() + "Z"
+    tx_id = f"VERIFYID-RWD-{int(time.time())}-{secrets.token_hex(4)}"
+
+    reward_tx = {
+        "type": "verifyid_reward",
+        "from": AI_WALLET_ADDRESS,
+        "to": wallet,
+        "amount": amount,
+        "reason": reason,
+        "verification_id": verification_id,
+        "timestamp": ts,
+        "tx_id": tx_id
+    }
+
+    chain.append(reward_tx)
+    save_json(CHAIN_FILE, chain)
+    save_json(LEDGER_FILE, ledger)
+
+    logger.info(f"🎁 VerifyID Reward: {amount} THR → {wallet} ({reason})")
+
+    return jsonify({
+        "ok": True,
+        "tx_id": tx_id,
+        "wallet": wallet,
+        "amount": amount,
+        "reason": reason,
+        "new_balance": ledger[wallet],
+        "timestamp": ts
+    }), 201
+
+
+@app.route("/api/chain/verifyid/stats", methods=["GET"])
+def api_chain_verifyid_stats():
+    """
+    Get VerifyID integration statistics.
+    """
+    chain = load_json(CHAIN_FILE, [])
+
+    hash_count = 0
+    hash_by_type = {}
+    total_rewards = 0.0
+    reward_count = 0
+    unique_wallets = set()
+
+    for tx in chain:
+        if tx.get("type") == "hash_verification":
+            hash_count += 1
+            ht = tx.get("hash_type", "unknown")
+            hash_by_type[ht] = hash_by_type.get(ht, 0) + 1
+            if tx.get("wallet"):
+                unique_wallets.add(tx["wallet"])
+        elif tx.get("type") == "verifyid_reward":
+            total_rewards += float(tx.get("amount", 0))
+            reward_count += 1
+            if tx.get("to"):
+                unique_wallets.add(tx["to"])
+
+    return jsonify({
+        "ok": True,
+        "stats": {
+            "total_hashes_verified": hash_count,
+            "hashes_by_type": hash_by_type,
+            "total_rewards_distributed": round(total_rewards, 6),
+            "reward_transactions": reward_count,
+            "unique_wallets": len(unique_wallets)
+        }
+    }), 200
+
+
 # ... ΤΕΛΟΣ όλων των routes / helpers ...
 
 print("✓ AI Session fixes loaded - supports guest mode and file uploads")
 print("✓ Token Explorer, NFT Marketplace and Governance pages loaded")
 print("✓ Decent Music Platform loaded - artist registration, uploads, and royalties")
+
+# ─── VerifyID Service Integration ─────────────────────────────────────────────
+# Device verification for ASICs, GPS nodes, vehicle nodes, and AI trainers
+try:
+    from verify_id_service import register_verify_id_routes, get_verify_id_service
+    register_verify_id_routes(app)
+    _verify_service = get_verify_id_service()
+    print("✓ VerifyID Service loaded - ASIC/device verification and driver rewards")
+except ImportError as e:
+    print(f"⚠ VerifyID Service not available: {e}")
+    _verify_service = None
+except Exception as e:
+    print(f"⚠ VerifyID Service initialization failed: {e}")
+    _verify_service = None
 
 # ─── Startup hooks ────────────────────────────────────────────────────────────
 # PR-XXX: Role-based initialization with clear logging

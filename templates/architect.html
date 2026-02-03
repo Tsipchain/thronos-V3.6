@@ -402,6 +402,7 @@ const LANG_SEQUENCE = ['gr', 'en', 'ja', 'es', 'ru'];
 const LANG_ALIAS = { el: 'gr' };
 const DEFAULT_LANG = 'en';
 let TRANSLATIONS_CACHE = null;
+let lastArchitectFiles = []; // Store generated files for download
 
 function normalizeLang(lang) {
   if (!lang) return DEFAULT_LANG;
@@ -440,6 +441,12 @@ function applyTranslations(langOverride) {
   const lang = normalizeLang(langOverride || localStorage.getItem('lang'));
   localStorage.setItem('lang', lang);
   document.documentElement.lang = lang;
+
+  // FIX: Apply language class to body for CSS language toggle to work
+  // CSS rules use body.lang-el, body.lang-en, etc.
+  const langClass = 'lang-' + (lang === 'gr' ? 'el' : lang);
+  document.body.className = document.body.className.replace(/lang-\w+/g, '').trim();
+  document.body.classList.add(langClass);
 
   if (!TRANSLATIONS_CACHE) {
     TRANSLATIONS_CACHE = harvestTranslations();
@@ -563,8 +570,17 @@ $("generate").onclick = async () => {
     $("out").textContent = j.response || "";
 
     let filesInfo = "";
+    const filesEl = $("files");
     if(j.files && j.files.length){
+      lastArchitectFiles = j.files;
       filesInfo = `Files: ${j.files_count}\nTotal: ${j.total_kb} KB\nCost: ${j.cost_thr} THR\n\n${parseFiles(j.files)}`;
+      if (filesEl) {
+        filesEl.style.display = "block";
+      }
+      // Enable download button if zip_url is provided
+      if (j.zip_url) {
+        enableDownloadBtn(j.zip_url);
+      }
     }
 
     if(j.redirect_to_chat && j.session_id){
@@ -576,10 +592,22 @@ $("generate").onclick = async () => {
       }
     }
 
-    $("files").textContent = filesInfo;
+    if (filesEl) {
+      filesEl.textContent = filesInfo;
+    }
   }catch(e){
     setStatus(false,"Architect: offline");
     $("out").textContent = "Σφάλμα: " + e.message;
+  } finally {
+    // Re-enable the button
+    const btn = $("generate");
+    btn.disabled = false;
+    btn.innerHTML = `🚀 <span class="lang-el">ΔΗΜΙΟΥΡΓΙΑ ΑΡΧΙΤΕΚΤΟΝΙΚΗΣ</span>
+        <span class="lang-en">GENERATE ARCHITECTURE</span>
+        <span class="lang-ja">アーキテクチャ生成</span>
+        <span class="lang-ru">СОЗДАТЬ АРХИТЕКТУРУ</span>
+        <span class="lang-es">GENERAR ARQUITECTURA</span>`;
+    applyTranslations();
   }
 };
 

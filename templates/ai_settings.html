@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Thronos AI Settings</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #020712;
+      --panel: #050f1f;
+      --accent: #23ff6b;
+      --accent-soft: rgba(35, 255, 107, 0.15);
+      --danger: #ff4b81;
+      --warning: #ffb84b;
+      --text: #e6fff4;
+      --muted: #7aa398;
+      --border: #102338;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at top, #07162a 0, #020712 55%, #000 100%);
+      color: var(--text);
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .logo-icon {
+      width: 40px;
+      height: 40px;
+      border: 2px solid var(--accent);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 20px;
+      letter-spacing: 0.1em;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 4px;
+    }
+
+    .section {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+
+    .section-title {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .provider-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 0;
+      border-bottom: 1px solid rgba(16, 35, 56, 0.5);
+    }
+
+    .provider-row:last-child {
+      border-bottom: none;
+    }
+
+    .provider-info {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .provider-name {
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .provider-desc {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .provider-models {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    .status-badge {
+      padding: 4px 12px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .status-active {
+      background: rgba(35, 255, 107, 0.15);
+      color: var(--accent);
+      border: 1px solid rgba(35, 255, 107, 0.3);
+    }
+
+    .status-inactive {
+      background: rgba(255, 75, 129, 0.15);
+      color: var(--danger);
+      border: 1px solid rgba(255, 75, 129, 0.3);
+    }
+
+    .status-partial {
+      background: rgba(255, 184, 75, 0.15);
+      color: var(--warning);
+      border: 1px solid rgba(255, 184, 75, 0.3);
+    }
+
+    .models-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .model-card {
+      background: rgba(5, 15, 31, 0.8);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+    }
+
+    .model-card.enabled {
+      border-color: rgba(35, 255, 107, 0.3);
+    }
+
+    .model-card.disabled {
+      opacity: 0.6;
+    }
+
+    .model-name {
+      font-weight: 500;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .model-meta {
+      font-size: 11px;
+      color: var(--muted);
+      display: flex;
+      gap: 8px;
+    }
+
+    .model-tier {
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: var(--accent-soft);
+      font-size: 10px;
+      text-transform: uppercase;
+    }
+
+    .env-section {
+      margin-top: 16px;
+      padding: 16px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+    }
+
+    .env-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(16, 35, 56, 0.3);
+    }
+
+    .env-row:last-child {
+      border-bottom: none;
+    }
+
+    .env-key {
+      color: var(--accent);
+    }
+
+    .env-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .dot-green {
+      background: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
+    }
+
+    .dot-red {
+      background: var(--danger);
+      box-shadow: 0 0 8px var(--danger);
+    }
+
+    .btn {
+      padding: 10px 20px;
+      border-radius: 999px;
+      border: 1px solid var(--accent);
+      background: linear-gradient(135deg, var(--accent) 0%, #00cc55 100%);
+      color: #000;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 0 20px rgba(35, 255, 107, 0.3);
+    }
+
+    .btn-secondary {
+      background: transparent;
+      color: var(--accent);
+    }
+
+    .actions {
+      display: flex;
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .info-box {
+      background: var(--accent-soft);
+      border: 1px solid rgba(35, 255, 107, 0.2);
+      border-radius: 12px;
+      padding: 16px;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .info-box strong {
+      color: var(--accent);
+    }
+
+    .info-box code {
+      background: rgba(0, 0, 0, 0.3);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    @media (max-width: 768px) {
+      .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    .stat-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--accent);
+    }
+
+    .stat-label {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-top: 4px;
+    }
+
+    #loadingOverlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div id="loadingOverlay">
+    <div class="spinner"></div>
+  </div>
+
+  <div class="container">
+    <header class="header">
+      <div class="logo-icon">AI</div>
+      <div>
+        <h1>THRONOS AI SETTINGS</h1>
+        <div class="subtitle">API Configuration & Model Status</div>
+      </div>
+    </header>
+
+    <!-- Stats -->
+    <div class="stats-grid" id="statsGrid">
+      <div class="stat-card">
+        <div class="stat-value" id="totalModels">-</div>
+        <div class="stat-label">Total Models</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="enabledModels">-</div>
+        <div class="stat-label">Enabled</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="activeProviders">-</div>
+        <div class="stat-label">Active Providers</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="defaultModel">-</div>
+        <div class="stat-label">Default Model</div>
+      </div>
+    </div>
+
+    <!-- Provider Status -->
+    <div class="section">
+      <div class="section-title">Provider Status</div>
+      <div id="providerList"></div>
+    </div>
+
+    <!-- Environment Variables -->
+    <div class="section">
+      <div class="section-title">Environment Variables</div>
+      <div class="env-section" id="envList"></div>
+    </div>
+
+    <!-- Available Models -->
+    <div class="section">
+      <div class="section-title">Available Models</div>
+      <div class="models-grid" id="modelsList"></div>
+    </div>
+
+    <!-- Configuration Info -->
+    <div class="section">
+      <div class="section-title">Configuration Guide</div>
+      <div class="info-box">
+        <p><strong>Setting up API Keys:</strong></p>
+        <p>To enable AI providers, set the following environment variables on your server:</p>
+        <ul>
+          <li><code>OPENAI_API_KEY</code> - OpenAI GPT models (gpt-4.1, gpt-4.1-mini, o3-mini)</li>
+          <li><code>ANTHROPIC_API_KEY</code> - Anthropic Claude models (claude-3.5-sonnet, claude-3.5-haiku)</li>
+          <li><code>GEMINI_API_KEY</code> or <code>GOOGLE_API_KEY</code> - Google Gemini models</li>
+        </ul>
+        <p><strong>Railway Deployment:</strong></p>
+        <p>Add these keys in your Railway project's Variables tab. The server will automatically detect and enable the corresponding models.</p>
+        <p><strong>Auto Mode:</strong></p>
+        <p>When multiple providers are configured, the "Auto" option will intelligently route requests to the best available model based on task type and provider health.</p>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="actions">
+      <button class="btn" onclick="refreshData()">Refresh Status</button>
+      <button class="btn btn-secondary" onclick="window.location.href='/chat'">Back to Chat</button>
+      <button class="btn btn-secondary" onclick="window.location.href='/architect'">Back to Architect</button>
+    </div>
+  </div>
+
+  <script>
+    const API_MODELS = "/api/ai_models";
+    const API_PROVIDER_STATUS = "/api/ai/provider_status";
+
+    let modelsData = null;
+    let providerData = null;
+
+    async function loadData() {
+      try {
+        const [modelsRes, providerRes] = await Promise.all([
+          fetch(API_MODELS),
+          fetch(API_PROVIDER_STATUS)
+        ]);
+
+        modelsData = await modelsRes.json();
+        providerData = await providerRes.json();
+
+        renderStats();
+        renderProviders();
+        renderEnvVars();
+        renderModels();
+
+      } catch (e) {
+        console.error("Failed to load data:", e);
+        document.getElementById("providerList").innerHTML = `<p style="color: var(--danger);">Failed to load data: ${e.message}</p>`;
+      } finally {
+        document.getElementById("loadingOverlay").classList.add("hidden");
+      }
+    }
+
+    function renderStats() {
+      if (!modelsData) return;
+
+      const models = modelsData.models || [];
+      const enabledCount = models.filter(m => m.enabled).length;
+      const providers = providerData?.providers || {};
+      const activeCount = Object.values(providers).filter(p => p.configured).length;
+
+      document.getElementById("totalModels").textContent = models.length;
+      document.getElementById("enabledModels").textContent = enabledCount;
+      document.getElementById("activeProviders").textContent = activeCount;
+      document.getElementById("defaultModel").textContent = modelsData.default_model_id || "auto";
+    }
+
+    function renderProviders() {
+      const providers = providerData?.providers || {};
+      const container = document.getElementById("providerList");
+
+      const providerNames = {
+        openai: { name: "OpenAI", icon: "GPT", desc: "GPT-4.1 family models" },
+        anthropic: { name: "Anthropic", icon: "CL", desc: "Claude 3.5 models" },
+        gemini: { name: "Google Gemini", icon: "GE", desc: "Gemini 2.0/2.5 models" },
+        local: { name: "Local Corpus", icon: "LC", desc: "Offline knowledge base" },
+        thronos: { name: "Thronos/Thrai", icon: "TH", desc: "Custom Thronos model" }
+      };
+
+      let html = "";
+
+      for (const [key, info] of Object.entries(providers)) {
+        const meta = providerNames[key] || { name: key, icon: "?", desc: "" };
+        const configured = info.configured;
+        const libraryLoaded = info.library_loaded !== false;
+
+        let status = "inactive";
+        let statusText = "Not Configured";
+
+        if (configured && libraryLoaded) {
+          status = "active";
+          statusText = "Active";
+        } else if (configured && !libraryLoaded) {
+          status = "partial";
+          statusText = "Library Missing";
+        }
+
+        const models = (modelsData?.models || []).filter(m => m.provider === key);
+        const enabledModels = models.filter(m => m.enabled);
+
+        html += `
+          <div class="provider-row">
+            <div class="provider-info">
+              <div class="provider-name">
+                <span style="width: 24px; height: 24px; background: var(--accent-soft); border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700;">${meta.icon}</span>
+                ${meta.name}
+              </div>
+              <div class="provider-desc">${meta.desc}</div>
+              <div class="provider-models">Models: ${enabledModels.length}/${models.length} enabled</div>
+            </div>
+            <span class="status-badge status-${status}">${statusText}</span>
+          </div>
+        `;
+      }
+
+      container.innerHTML = html || "<p>No provider data available</p>";
+    }
+
+    function renderEnvVars() {
+      const providers = providerData?.providers || {};
+      const container = document.getElementById("envList");
+
+      const envVars = [
+        { key: "OPENAI_API_KEY", provider: "openai" },
+        { key: "ANTHROPIC_API_KEY", provider: "anthropic" },
+        { key: "GEMINI_API_KEY", provider: "gemini" },
+        { key: "GOOGLE_API_KEY", provider: "gemini" },
+        { key: "THRONOS_AI_MODE", provider: "thronos" },
+        { key: "CUSTOM_MODEL_URL", provider: "thronos" }
+      ];
+
+      let html = "";
+
+      for (const env of envVars) {
+        const provider = providers[env.provider] || {};
+        const checkedSources = provider.checked_sources || [];
+        const found = checkedSources.some(s => s.key === env.key && s.present);
+
+        html += `
+          <div class="env-row">
+            <span class="env-key">${env.key}</span>
+            <span class="env-status">
+              <span class="dot ${found ? 'dot-green' : 'dot-red'}"></span>
+              ${found ? 'Configured' : 'Not Set'}
+            </span>
+          </div>
+        `;
+      }
+
+      container.innerHTML = html;
+    }
+
+    function renderModels() {
+      const models = modelsData?.models || [];
+      const container = document.getElementById("modelsList");
+
+      let html = "";
+
+      for (const model of models) {
+        const enabled = model.enabled;
+
+        html += `
+          <div class="model-card ${enabled ? 'enabled' : 'disabled'}">
+            <div class="model-name">${model.label || model.id}</div>
+            <div class="model-meta">
+              <span>${model.provider}</span>
+              <span class="status-badge ${enabled ? 'status-active' : 'status-inactive'}" style="padding: 2px 6px; font-size: 9px;">
+                ${enabled ? 'Enabled' : 'Disabled'}
+              </span>
+            </div>
+          </div>
+        `;
+      }
+
+      container.innerHTML = html || "<p>No models available</p>";
+    }
+
+    async function refreshData() {
+      document.getElementById("loadingOverlay").classList.remove("hidden");
+      await loadData();
+    }
+
+    // Initialize
+    document.addEventListener("DOMContentLoaded", loadData);
+  </script>
+</body>
+</html>

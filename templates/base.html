@@ -2011,6 +2011,11 @@
       </div>
     </li>
 
+    <!-- Downloads -->
+    <li class="nav-item">
+      <a href="/downloads" class="nav-link">📱 <span class="lang-el">Εφαρμογές</span><span class="lang-en">Apps</span><span class="lang-ja">アプリ</span><span class="lang-ru">Приложения</span><span class="lang-es">Apps</span></a>
+    </li>
+
     <!-- Recovery -->
     <li class="nav-item">
       <a href="/recovery" class="nav-link">🛠️ <span class="lang-el">Ανάκτηση</span><span class="lang-en">Recovery</span><span class="lang-ja">リカバリー</span><span class="lang-ru">Восстановление</span><span class="lang-es">Recuperación</span></a>
@@ -3554,6 +3559,18 @@ function getTxType(tx) {
     if (raw === 'l2e' || raw === 'l2e_reward' || raw === 'learn_reward' ||
         category === 'l2e' || symbol === 'L2E') {
         return 'l2e';
+    }
+
+    // === T2E (Train-to-Earn - IoT/ASIC miners) ===
+    if (raw === 't2e' || raw === 't2e_reward' || raw === 'train_reward' ||
+        category === 't2e' || symbol === 'T2E') {
+        return 't2e';
+    }
+
+    // === NETWORK REWARDS (Validators/Nodes) ===
+    if (raw === 'network_reward' || raw === 'validator_reward' || raw === 'node_reward' ||
+        category === 'network_reward') {
+        return 'network';
     }
 
     // === AI CREDITS (Chat) ===

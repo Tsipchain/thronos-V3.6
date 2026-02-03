@@ -19819,6 +19819,72 @@ def api_ai_provider_status():
         app.logger.warning("provider_status_failed", extra={"error": str(exc)})
         return jsonify({"providers": {}, "error": str(exc)}), 200
 
+
+@app.route("/api/ai/debug", methods=["GET"])
+def api_ai_debug():
+    """
+    Debug endpoint showing AI configuration, node role, and connection status.
+    Use this to diagnose why models might not be showing.
+    Access at: /api/ai/debug
+    """
+    debug_info = {
+        "node": {
+            "role": NODE_ROLE,
+            "is_master": is_master(),
+            "is_ai_core": is_ai_core(),
+            "is_replica": is_replica(),
+        },
+        "ai_core_proxy": {
+            "ai_core_url": AI_CORE_URL or "(not configured)",
+            "proxy_enabled": bool(AI_CORE_URL) and not is_ai_core(),
+            "will_proxy_to_node4": bool(AI_CORE_URL) and not is_ai_core(),
+        },
+        "api_keys_configured": {
+            "openai": bool((os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip()),
+            "anthropic": bool((os.getenv("ANTHROPIC_API_KEY") or "").strip()),
+            "gemini": bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()),
+        },
+        "thronos_ai_mode": os.getenv("THRONOS_AI_MODE", "all"),
+        "scheduler_enabled": SCHEDULER_ENABLED,
+    }
+
+    # Test connection to AI Core if configured
+    if AI_CORE_URL and not is_ai_core():
+        try:
+            test_result = call_ai_core("/api/ai/provider_status", {}, timeout=5, method="GET")
+            debug_info["ai_core_connection"] = {
+                "status": "connected" if test_result else "failed",
+                "response": test_result if test_result else None,
+            }
+        except Exception as e:
+            debug_info["ai_core_connection"] = {
+                "status": "error",
+                "error": str(e),
+            }
+    else:
+        debug_info["ai_core_connection"] = {
+            "status": "local" if is_ai_core() else "not_configured",
+        }
+
+    # Get provider status
+    try:
+        debug_info["providers"] = get_provider_status()
+    except Exception as e:
+        debug_info["providers_error"] = str(e)
+
+    # Get enabled models count
+    try:
+        enabled = list_enabled_model_ids()
+        debug_info["enabled_models"] = {
+            "count": len(enabled),
+            "ids": enabled,
+        }
+    except Exception as e:
+        debug_info["enabled_models_error"] = str(e)
+
+    return jsonify(debug_info), 200
+
+
 @app.route("/api/ai/feedback", methods=["POST"])
 def api_ai_feedback():
     """Record user feedback (thumbs up/down) on AI responses"""

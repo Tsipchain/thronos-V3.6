@@ -22378,6 +22378,364 @@ def api_ai_pool_status():
     }), 200
 
 
+# ─── VERIFYID INTEGRATION ENDPOINTS ───────────────────────────────────────────
+# These endpoints allow the external VerifyID service (thronos-verifyid.up.railway.app)
+# to interact with the Thronos blockchain for:
+# - Hash submission and verification (document integrity)
+# - Wallet authentication
+# - Rewards distribution based on verification activity
+
+VERIFYID_ALLOWED_ORIGINS = [
+    "https://thronos-verifyid.vercel.app",
+    "https://thronos-verifyid.up.railway.app",
+    "http://localhost:3000",
+    "http://localhost:8000",
+]
+
+
+def _verify_verifyid_origin():
+    """Check if request comes from allowed VerifyID origins or has valid admin secret."""
+    origin = request.headers.get("Origin", "")
+    admin_secret = request.headers.get("X-Admin-Secret", "") or request.args.get("admin_secret", "")
+
+    if admin_secret and admin_secret == ADMIN_SECRET:
+        return True
+    if origin in VERIFYID_ALLOWED_ORIGINS:
+        return True
+    # Also allow if referer matches
+    referer = request.headers.get("Referer", "")
+    for allowed in VERIFYID_ALLOWED_ORIGINS:
+        if referer.startswith(allowed):
+            return True
+    return False
+
+
+@app.route("/api/chain/hash/submit", methods=["POST"])
+def api_chain_hash_submit():
+    """
+    Submit a document hash to the blockchain for immutable verification.
+    Used by VerifyID to anchor document hashes on-chain.
+
+    Request:
+    {
+        "hash": "sha256_hash_of_document",
+        "hash_type": "document|identity|signature|kyc",
+        "wallet": "THR...",  # Owner wallet
+        "metadata": {
+            "document_type": "passport|id|license|...",
+            "verification_id": "uuid",
+            ...
+        }
+    }
+
+    Response:
+    {
+        "ok": true,
+        "tx_id": "VERIFY-...",
+        "block_height": 12345,
+        "timestamp": "2024-..."
+    }
+    """
+    if READ_ONLY:
+        return jsonify({"ok": False, "error": "Node is read-only. Use master node."}), 403
+
+    data = request.get_json() or {}
+    doc_hash = data.get("hash", "").strip()
+    hash_type = data.get("hash_type", "document").strip()
+    wallet = data.get("wallet", "").strip()
+    metadata = data.get("metadata", {})
+
+    if not doc_hash:
+        return jsonify({"ok": False, "error": "hash required"}), 400
+    if len(doc_hash) != 64:  # SHA256 = 64 hex chars
+        return jsonify({"ok": False, "error": "Invalid hash format. Expected SHA256 (64 hex characters)"}), 400
+
+    # Generate transaction
+    ts = datetime.utcnow().isoformat() + "Z"
+    tx_id = f"VERIFY-{hash_type.upper()}-{int(time.time())}-{secrets.token_hex(4)}"
+
+    chain = load_json(CHAIN_FILE, [])
+
+    # Check if hash already exists
+    for tx in chain:
+        if tx.get("type") == "hash_verification" and tx.get("hash") == doc_hash:
+            return jsonify({
+                "ok": True,
+                "exists": True,
+                "tx_id": tx.get("tx_id"),
+                "timestamp": tx.get("timestamp"),
+                "message": "Hash already recorded on chain"
+            }), 200
+
+    # Create verification transaction
+    verification_tx = {
+        "type": "hash_verification",
+        "hash": doc_hash,
+        "hash_type": hash_type,
+        "wallet": wallet or "anonymous",
+        "metadata": metadata,
+        "timestamp": ts,
+        "tx_id": tx_id,
+        "block_height": len(chain) + 1,
+        "source": "verifyid"
+    }
+
+    chain.append(verification_tx)
+    save_json(CHAIN_FILE, chain)
+
+    logger.info(f"🔐 Hash verified: {hash_type} - {doc_hash[:16]}... by {wallet or 'anonymous'}")
+
+    return jsonify({
+        "ok": True,
+        "tx_id": tx_id,
+        "hash": doc_hash,
+        "block_height": verification_tx["block_height"],
+        "timestamp": ts,
+        "message": "Hash recorded on Thronos blockchain"
+    }), 201
+
+
+@app.route("/api/chain/hash/verify", methods=["GET", "POST"])
+def api_chain_hash_verify():
+    """
+    Verify if a hash exists on the blockchain.
+
+    GET /api/chain/hash/verify?hash=abc123...
+    POST /api/chain/hash/verify {"hash": "abc123..."}
+
+    Response:
+    {
+        "ok": true,
+        "verified": true/false,
+        "tx_id": "VERIFY-...",
+        "timestamp": "2024-...",
+        "hash_type": "document",
+        "wallet": "THR..."
+    }
+    """
+    if request.method == "POST":
+        data = request.get_json() or {}
+        doc_hash = data.get("hash", "").strip()
+    else:
+        doc_hash = request.args.get("hash", "").strip()
+
+    if not doc_hash:
+        return jsonify({"ok": False, "error": "hash required"}), 400
+
+    chain = load_json(CHAIN_FILE, [])
+
+    # Search for hash
+    for tx in reversed(chain):  # Most recent first
+        if tx.get("type") == "hash_verification" and tx.get("hash") == doc_hash:
+            return jsonify({
+                "ok": True,
+                "verified": True,
+                "hash": doc_hash,
+                "tx_id": tx.get("tx_id"),
+                "timestamp": tx.get("timestamp"),
+                "hash_type": tx.get("hash_type"),
+                "wallet": tx.get("wallet"),
+                "block_height": tx.get("block_height"),
+                "metadata": tx.get("metadata", {})
+            }), 200
+
+    return jsonify({
+        "ok": True,
+        "verified": False,
+        "hash": doc_hash,
+        "message": "Hash not found on blockchain"
+    }), 200
+
+
+@app.route("/api/chain/wallet/authenticate", methods=["POST"])
+def api_chain_wallet_authenticate():
+    """
+    Authenticate a wallet for VerifyID login.
+    Verifies wallet exists and returns balance + verification stats.
+
+    Request:
+    {
+        "wallet": "THR...",
+        "signature": "optional_signature_for_proof",
+        "message": "optional_message_that_was_signed"
+    }
+
+    Response:
+    {
+        "ok": true,
+        "authenticated": true,
+        "wallet": "THR...",
+        "balance": 123.45,
+        "verification_count": 10,
+        "rewards_earned": 5.5,
+        "last_activity": "2024-..."
+    }
+    """
+    data = request.get_json() or {}
+    wallet = data.get("wallet", "").strip()
+
+    if not wallet:
+        return jsonify({"ok": False, "error": "wallet required"}), 400
+    if not wallet.startswith("THR"):
+        return jsonify({"ok": False, "error": "Invalid wallet format. Must start with THR"}), 400
+
+    ledger = load_json(LEDGER_FILE, {})
+    chain = load_json(CHAIN_FILE, [])
+
+    # Get wallet balance
+    balance = float(ledger.get(wallet, 0.0))
+
+    # Count verification activity
+    verification_count = 0
+    rewards_earned = 0.0
+    last_activity = None
+
+    for tx in chain:
+        if tx.get("wallet") == wallet:
+            if tx.get("type") == "hash_verification":
+                verification_count += 1
+                last_activity = tx.get("timestamp")
+            elif tx.get("type") == "verifyid_reward" and tx.get("to") == wallet:
+                rewards_earned += float(tx.get("amount", 0))
+
+    # Wallet exists if it has balance OR has activity
+    wallet_exists = balance > 0 or verification_count > 0
+
+    return jsonify({
+        "ok": True,
+        "authenticated": wallet_exists,
+        "wallet": wallet,
+        "balance": round(balance, 6),
+        "verification_count": verification_count,
+        "rewards_earned": round(rewards_earned, 6),
+        "last_activity": last_activity,
+        "message": "Wallet authenticated" if wallet_exists else "New wallet - no prior activity"
+    }), 200
+
+
+@app.route("/api/chain/verifyid/reward", methods=["POST"])
+def api_chain_verifyid_reward():
+    """
+    Distribute rewards for VerifyID verification activity.
+    Called by VerifyID backend when user completes verifications.
+
+    Request:
+    {
+        "wallet": "THR...",
+        "amount": 0.5,
+        "reason": "kyc_completion|document_verification|referral|...",
+        "verification_id": "uuid",
+        "admin_secret": "..." (required)
+    }
+    """
+    if READ_ONLY:
+        return jsonify({"ok": False, "error": "Node is read-only"}), 403
+
+    data = request.get_json() or {}
+    wallet = data.get("wallet", "").strip()
+    amount = float(data.get("amount", 0))
+    reason = data.get("reason", "verification").strip()
+    verification_id = data.get("verification_id", "")
+    admin_secret = data.get("admin_secret", "") or request.headers.get("X-Admin-Secret", "")
+
+    # Require admin secret for reward distribution
+    if admin_secret != ADMIN_SECRET:
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+
+    if not wallet:
+        return jsonify({"ok": False, "error": "wallet required"}), 400
+    if amount <= 0:
+        return jsonify({"ok": False, "error": "amount must be positive"}), 400
+    if amount > 100:  # Sanity check
+        return jsonify({"ok": False, "error": "amount exceeds maximum (100 THR)"}), 400
+
+    ledger = load_json(LEDGER_FILE, {})
+    chain = load_json(CHAIN_FILE, [])
+
+    # Check AI pool balance
+    ai_balance = float(ledger.get(AI_WALLET_ADDRESS, 0.0))
+    if ai_balance < amount:
+        return jsonify({
+            "ok": False,
+            "error": "Insufficient AI pool balance",
+            "pool_balance": ai_balance,
+            "requested": amount
+        }), 400
+
+    # Transfer from AI pool to user
+    ledger[AI_WALLET_ADDRESS] = round(ai_balance - amount, 6)
+    ledger[wallet] = round(float(ledger.get(wallet, 0.0)) + amount, 6)
+
+    # Create reward transaction
+    ts = datetime.utcnow().isoformat() + "Z"
+    tx_id = f"VERIFYID-RWD-{int(time.time())}-{secrets.token_hex(4)}"
+
+    reward_tx = {
+        "type": "verifyid_reward",
+        "from": AI_WALLET_ADDRESS,
+        "to": wallet,
+        "amount": amount,
+        "reason": reason,
+        "verification_id": verification_id,
+        "timestamp": ts,
+        "tx_id": tx_id
+    }
+
+    chain.append(reward_tx)
+    save_json(CHAIN_FILE, chain)
+    save_json(LEDGER_FILE, ledger)
+
+    logger.info(f"🎁 VerifyID Reward: {amount} THR → {wallet} ({reason})")
+
+    return jsonify({
+        "ok": True,
+        "tx_id": tx_id,
+        "wallet": wallet,
+        "amount": amount,
+        "reason": reason,
+        "new_balance": ledger[wallet],
+        "timestamp": ts
+    }), 201
+
+
+@app.route("/api/chain/verifyid/stats", methods=["GET"])
+def api_chain_verifyid_stats():
+    """
+    Get VerifyID integration statistics.
+    """
+    chain = load_json(CHAIN_FILE, [])
+
+    hash_count = 0
+    hash_by_type = {}
+    total_rewards = 0.0
+    reward_count = 0
+    unique_wallets = set()
+
+    for tx in chain:
+        if tx.get("type") == "hash_verification":
+            hash_count += 1
+            ht = tx.get("hash_type", "unknown")
+            hash_by_type[ht] = hash_by_type.get(ht, 0) + 1
+            if tx.get("wallet"):
+                unique_wallets.add(tx["wallet"])
+        elif tx.get("type") == "verifyid_reward":
+            total_rewards += float(tx.get("amount", 0))
+            reward_count += 1
+            if tx.get("to"):
+                unique_wallets.add(tx["to"])
+
+    return jsonify({
+        "ok": True,
+        "stats": {
+            "total_hashes_verified": hash_count,
+            "hashes_by_type": hash_by_type,
+            "total_rewards_distributed": round(total_rewards, 6),
+            "reward_transactions": reward_count,
+            "unique_wallets": len(unique_wallets)
+        }
+    }), 200
+
+
 # ... ΤΕΛΟΣ όλων των routes / helpers ...
 
 print("✓ AI Session fixes loaded - supports guest mode and file uploads")

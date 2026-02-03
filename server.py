@@ -547,25 +547,34 @@ def set_chain_meta(height, last_hash, last_block):
     CHAIN_META["last_hash"] = last_hash or "0" * 64
     CHAIN_META["last_block"] = last_block
 
+# Helper function to strip surrounding quotes from environment variables
+# Fixes issue where Railway/Docker env vars are set as NODE_ROLE="master" (with quotes)
+def _strip_env_quotes(value: str) -> str:
+    """Strip surrounding single or double quotes from environment variable values."""
+    if value and len(value) >= 2:
+        if (value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'"):
+            return value[1:-1]
+    return value
+
 # ─── PR-182: Multi-Node Role Configuration ────────────────────────────────
 # Node role: "master" or "replica"
-NODE_ROLE = os.getenv("NODE_ROLE", "master").lower()
+NODE_ROLE = _strip_env_quotes(os.getenv("NODE_ROLE", "master")).lower()
 # Read-only mode for replica nodes
-READ_ONLY = os.getenv("READ_ONLY", "0" if NODE_ROLE == "master" else "1") == "1"
+READ_ONLY = _strip_env_quotes(os.getenv("READ_ONLY", "0" if NODE_ROLE == "master" else "1")) == "1"
 # Leader flag for consensus
-IS_LEADER = os.getenv("IS_LEADER", "1" if NODE_ROLE == "master" else "0") == "1"
+IS_LEADER = _strip_env_quotes(os.getenv("IS_LEADER", "1" if NODE_ROLE == "master" else "0")) == "1"
 # Scheduler enabled flag
-SCHEDULER_ENABLED = os.getenv("SCHEDULER_ENABLED", "1") == "1"
+SCHEDULER_ENABLED = _strip_env_quotes(os.getenv("SCHEDULER_ENABLED", "1")) == "1"
 # AI mode: "production" (user-facing) or "worker" (background tasks)
-THRONOS_AI_MODE = os.getenv("THRONOS_AI_MODE", "production" if NODE_ROLE == "master" else "worker").lower()
-MINING_WHITELIST_ONLY = os.getenv("MINING_WHITELIST_ONLY", "0").lower() in ("1", "true", "yes")
+THRONOS_AI_MODE = _strip_env_quotes(os.getenv("THRONOS_AI_MODE", "production" if NODE_ROLE == "master" else "worker")).lower()
+MINING_WHITELIST_ONLY = _strip_env_quotes(os.getenv("MINING_WHITELIST_ONLY", "0")).lower() in ("1", "true", "yes")
 MINING_WATCHDOG_WINDOW_SECONDS = int(os.getenv("MINING_WATCHDOG_WINDOW_SECONDS", "60"))
 MINING_WATCHDOG_MAX_INVALID = int(os.getenv("MINING_WATCHDOG_MAX_INVALID", "12"))
 MINING_WATCHDOG_MAX_REQUESTS = int(os.getenv("MINING_WATCHDOG_MAX_REQUESTS", "60"))
 MINING_WATCHDOG_BAN_SECONDS = int(os.getenv("MINING_WATCHDOG_BAN_SECONDS", "300"))
-HEARTBEAT_ENABLED = os.getenv("HEARTBEAT_ENABLED", "1").lower() in ("1", "true", "yes")
-HEARTBEAT_LOG_ERRORS = os.getenv("HEARTBEAT_LOG_ERRORS", "0").lower() in ("1", "true", "yes")
-MUSIC_MODAL_ENABLED = os.getenv("MUSIC_MODAL_ENABLED", "1").lower() in ("1", "true", "yes")
+HEARTBEAT_ENABLED = _strip_env_quotes(os.getenv("HEARTBEAT_ENABLED", "1")).lower() in ("1", "true", "yes")
+HEARTBEAT_LOG_ERRORS = _strip_env_quotes(os.getenv("HEARTBEAT_LOG_ERRORS", "0")).lower() in ("1", "true", "yes")
+MUSIC_MODAL_ENABLED = _strip_env_quotes(os.getenv("MUSIC_MODAL_ENABLED", "1")).lower() in ("1", "true", "yes")
 
 if NODE_ROLE == "replica" and not READ_ONLY:
     logger.warning("[CONFIG] Forcing READ_ONLY=1 on replica node")
@@ -608,10 +617,10 @@ ASSET_CDN_BASE = os.getenv("ASSET_CDN_BASE", "https://thrchain.vercel.app").rstr
 AI_CORE_URL = os.getenv("AI_CORE_URL", "").strip()
 
 # Chain enable flag - AI core nodes don't need chain functionality
-ENABLE_CHAIN = os.getenv("ENABLE_CHAIN", "1") == "1"
+ENABLE_CHAIN = _strip_env_quotes(os.getenv("ENABLE_CHAIN", "1")) == "1"
 
 # Redis cache configuration (optional)
-REDIS_CACHE_ENABLED = os.getenv("REDIS_CACHE_ENABLED", "1").lower() in ("1", "true", "yes")
+REDIS_CACHE_ENABLED = _strip_env_quotes(os.getenv("REDIS_CACHE_ENABLED", "1")).lower() in ("1", "true", "yes")
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 REDIS_HOST = os.getenv("REDIS_HOST", "").strip()
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
@@ -1031,7 +1040,7 @@ L2E_LEDGER_FILE = os.path.join(DATA_DIR, "l2e_ledger.json")
 
 # --- Ledger Storage Config ---
 LEDGER_DB_FILE = os.path.join(DATA_DIR, "ledger.sqlite3")
-USE_SQLITE_LEDGER = os.getenv("USE_SQLITE_LEDGER", "1" if NODE_ROLE == "master" else "0").lower() in ("1", "true", "yes")
+USE_SQLITE_LEDGER = _strip_env_quotes(os.getenv("USE_SQLITE_LEDGER", "1" if NODE_ROLE == "master" else "0")).lower() in ("1", "true", "yes")
 
 # Courses registry for Learn‑to‑Earn
 COURSES_FILE = os.path.join(DATA_DIR, "courses.json")
@@ -1422,7 +1431,7 @@ def _start_model_scheduler():
         app.logger.info(f"[AI] Skipping model scheduler on {NODE_ROLE} node")
         return
 
-    enabled = (os.getenv("SCHEDULER_ENABLED", "true").lower() not in ("0", "false", "no"))
+    enabled = (_strip_env_quotes(os.getenv("SCHEDULER_ENABLED", "true")).lower() not in ("0", "false", "no"))
     if not enabled:
         app.logger.info("Model refresh scheduler disabled via SCHEDULER_ENABLED")
         return
@@ -7682,7 +7691,7 @@ def api_dashboard():
 
 
 def _rebuild_index_from_chain() -> dict:
-    if READ_ONLY or os.getenv("DISABLE_SNAPSHOT_REBUILD") == "1":
+    if READ_ONLY or _strip_env_quotes(os.getenv("DISABLE_SNAPSHOT_REBUILD", "0")) == "1":
         return {"height": -1}
     chain = load_json(CHAIN_FILE, [])
     supply_metrics = compute_thr_supply_metrics(chain=chain)

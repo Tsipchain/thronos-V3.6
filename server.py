@@ -5907,7 +5907,8 @@ def get_blocks_for_viewer():
 def _tx_feed(include_pending: bool = True, include_bridge: bool = True) -> list[dict]:
     """Return normalized tx records from the shared ledger plus optional extras."""
 
-    records = list(_seed_tx_log_from_chain())
+    # Use load_tx_log directly - seeding happens at startup, not on every request
+    records = list(load_tx_log())
     # Canonicalize kinds in case the ledger has legacy values
     for r in records:
         if isinstance(r, dict):
@@ -24041,6 +24042,15 @@ if is_master():
         logger.warning(f"Startup session prune skipped: {exc}")
 else:
     logger.info(f"[STARTUP] Skipping session prune on {NODE_ROLE} node")
+
+# Seed transaction log from chain (one-time at startup for master nodes)
+if is_master():
+    try:
+        print("[STARTUP] Seeding transaction log from chain...")
+        _seed_tx_log_from_chain()
+        print("[STARTUP] Transaction log seeded successfully.")
+    except Exception as exc:
+        logger.warning(f"[STARTUP] TX log seeding skipped: {exc}")
 
 print(f"[STARTUP] {NODE_ROLE.upper()} node initialization complete.\n")
 

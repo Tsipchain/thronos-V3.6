@@ -6070,6 +6070,7 @@ def forward_writes_to_leader():
         "/api/swap",
         "/api/bridge",
         "/submit_block",
+        "/api/miner/submit",  # Miner block submissions must go to master
     )
     if not request.path.startswith(guarded_prefixes):
         return None
@@ -6132,6 +6133,9 @@ def forward_reads_to_leader():
         "/last_block",
         "/last_block_hash",
         "/token_chart",
+        "/api/balances",      # Wallet balance queries
+        "/api/miner/work",    # Miner work requests
+        "/api/wallet",        # All wallet-related GET requests
     )
     if not request.path.startswith(guarded_prefixes):
         return None

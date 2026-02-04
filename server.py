@@ -6110,7 +6110,6 @@ def forward_writes_to_leader():
 def forward_reads_to_leader():
     """
     Non-leader nodes must proxy chain-dependent reads to the leader.
-    Falls back to local data if leader is unavailable (may be stale).
     """
     if NODE_ROLE == "master":
         return None
@@ -6145,24 +6144,25 @@ def forward_reads_to_leader():
             url=target_url,
             params=request.args,
             headers=headers,
-            timeout=5  # Reduced from 15s for faster fallback
+            timeout=15
         )
-        excluded_headers = {"content-encoding", "content-length", "transfer-encoding", "connection"}
-        response = Response(upstream.content, status=upstream.status_code)
-        for key, value in upstream.headers.items():
-            if key.lower() not in excluded_headers:
-                response.headers[key] = value
-        response.headers["X-Forwarded-To-Leader"] = "true"
-        response.headers["X-Thronos-Leader"] = "1"
-        return response
     except requests.RequestException as exc:
-        # Fallback: serve local data instead of returning 503
-        # This allows the replica to work independently when master is down
-        logger.warning(f"[REPLICA] Leader unavailable for {request.path}, serving local data: {exc}")
-        # Return None to let the request continue to the local handler
-        # Add a flag to indicate this is fallback data
-        request.environ["THRONOS_FALLBACK"] = True
-        return None
+        return jsonify({
+            "error": "leader_unavailable",
+            "message": "Leader node unavailable for read operation",
+            "detail": str(exc),
+            "node_role": NODE_ROLE,
+            "leader_url": LEADER_URL
+        }), 503
+
+    excluded_headers = {"content-encoding", "content-length", "transfer-encoding", "connection"}
+    response = Response(upstream.content, status=upstream.status_code)
+    for key, value in upstream.headers.items():
+        if key.lower() not in excluded_headers:
+            response.headers[key] = value
+    response.headers["X-Forwarded-To-Leader"] = "true"
+    response.headers["X-Thronos-Leader"] = "1"
+    return response
 
 
 @app.after_request

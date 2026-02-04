@@ -13256,18 +13256,26 @@ def fetch_precious_metals_prices():
     if cached:
         return cached
 
-    # Try to use Google AI grounding for real-time data
+    # Try to use Google AI grounding for real-time data (with 5s timeout to prevent blocking)
     if ai_agent and ai_agent.gemini_enabled:
         try:
             import google.generativeai as genai
-            # Use Gemini with Google Search grounding for live prices
-            model = genai.GenerativeModel("gemini-2.0-flash")
-            response = model.generate_content(
-                "What are the current spot prices (USD per troy ounce) for: Gold (XAU), Silver (XAG), Platinum (XPT), Palladium (XPD)? "
-                "Return ONLY a JSON object with these exact keys: gold, silver, platinum, palladium with numeric USD values. No explanation.",
-                generation_config={"temperature": 0}
-            )
-            text = response.text.strip()
+            from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+
+            def _fetch_metals_from_gemini():
+                model = genai.GenerativeModel("gemini-2.0-flash")
+                response = model.generate_content(
+                    "What are the current spot prices (USD per troy ounce) for: Gold (XAU), Silver (XAG), Platinum (XPT), Palladium (XPD)? "
+                    "Return ONLY a JSON object with these exact keys: gold, silver, platinum, palladium with numeric USD values. No explanation.",
+                    generation_config={"temperature": 0}
+                )
+                return response.text.strip()
+
+            # Execute with 5 second timeout to prevent blocking the server
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_fetch_metals_from_gemini)
+                text = future.result(timeout=5)
+
             # Extract JSON from response
             import re
             json_match = re.search(r'\{[^}]+\}', text)
@@ -13277,6 +13285,8 @@ def fetch_precious_metals_prices():
                 if all(isinstance(prices.get(k), (int, float)) for k in ["gold", "silver", "platinum", "palladium"]):
                     set_cached_price("metals", prices)
                     return prices
+        except FuturesTimeoutError:
+            logger.warning("Gemini metals price fetch timed out after 5s, using fallback")
         except Exception as e:
             logger.warning(f"Gemini metals price fetch failed: {e}")
 
@@ -14437,6 +14447,10 @@ def _create_mining_job(thr_address: str | None = None) -> dict:
     height = int(tip_height) + 1 if tip_height is not None else None
     target = get_mining_target()
     nbits = target_to_bits(target)
+    # Calculate reward based on height (with halving schedule)
+    reward = calculate_reward(height if height is not None else 0)
+    # Calculate difficulty from target
+    difficulty = int(INITIAL_TARGET // target) if target > 0 else 1
     job_id = f"job_{int(now * 1000)}_{secrets.token_hex(4)}"
     expires_at = now + MINING_JOB_TTL_SECONDS
     MINING_JOB_CACHE[job_id] = {

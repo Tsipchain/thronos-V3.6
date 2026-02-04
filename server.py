@@ -5836,21 +5836,44 @@ def get_blocks_for_viewer():
             and tx.get("height") == height
         ]
         rsplit = b.get("reward_split") or {}
-        reward_to_miner = float(rsplit.get("miner", b.get("reward_to_miner", 0.0)))
-        reward_to_ai    = float(rsplit.get("ai", 0.0))
-        burn_from_split = float(rsplit.get("burn", 0.0))
+        # Get total block reward (default 1.0 THR per block)
+        total_reward = float(b.get("reward", 1.0))
+
+        # Calculate reward split - if no reward_split, use default 90/10 split
+        if rsplit:
+            reward_to_miner = float(rsplit.get("miner", 0.0))
+            reward_to_ai = float(rsplit.get("ai", 0.0))
+            burn_from_split = float(rsplit.get("burn", 0.0))
+        else:
+            # Fallback: use reward_to_miner if set, otherwise 90% of total reward
+            reward_to_miner = float(b.get("reward_to_miner", total_reward * 0.9))
+            reward_to_ai = float(b.get("reward_to_ai", total_reward * 0.1))
+            burn_from_split = 0.0
+
         # Include swap fees (stored as "fee") and regular fees (stored as "fee_burned")
-        fees_from_txs   = sum(float(tx.get("fee_burned", 0.0) or tx.get("fee", 0.0)) for tx in block_txs)
+        fees_from_txs = sum(float(tx.get("fee_burned", 0.0) or tx.get("fee", 0.0)) for tx in block_txs)
+
+        # Get miner address from block or first transaction
+        miner_address = b.get("thr_address") or b.get("miner_address") or ""
+        if not miner_address and block_txs:
+            # Try to get from coinbase transaction
+            for tx in block_txs:
+                if tx.get("type") in ("coinbase", "mining_reward"):
+                    miner_address = tx.get("to") or tx.get("thr_address") or ""
+                    break
+
         blocks.append({
             "index": height,
-            "hash": b.get("block_hash",""),
+            "hash": b.get("block_hash", ""),
+            "thr_address": miner_address,  # Added miner address
             "fee_burned": round(burn_from_split + fees_from_txs, 6),
-            "reward_to_miner": reward_to_miner,
-            "reward_to_ai": reward_to_ai,
+            "reward_to_miner": round(reward_to_miner, 6),
+            "reward_to_ai": round(reward_to_ai, 6),
+            "reward": round(total_reward, 6),  # Added total reward
             "is_stratum": bool(b.get("is_stratum")),
-            "nonce": b.get("nonce","-"),
+            "nonce": b.get("nonce", "-"),
             "transactions": block_txs,
-            "timestamp": b.get("timestamp","")
+            "timestamp": b.get("timestamp", "")
         })
 
     # PR-3: Dedupe blocks by hash before returning (keep last occurrence)

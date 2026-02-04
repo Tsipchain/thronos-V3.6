@@ -14447,6 +14447,10 @@ def _create_mining_job(thr_address: str | None = None) -> dict:
     height = int(tip_height) + 1 if tip_height is not None else None
     target = get_mining_target()
     nbits = target_to_bits(target)
+    # Calculate reward based on height (with halving schedule)
+    reward = calculate_reward(height if height is not None else 0)
+    # Calculate difficulty from target
+    difficulty = int(INITIAL_TARGET // target) if target > 0 else 1
     job_id = f"job_{int(now * 1000)}_{secrets.token_hex(4)}"
     expires_at = now + MINING_JOB_TTL_SECONDS
     MINING_JOB_CACHE[job_id] = {

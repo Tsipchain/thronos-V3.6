@@ -520,6 +520,16 @@ for _dir in [MEDIA_DIR, TOKEN_LOGOS_DIR, NFT_IMAGES_DIR, COURSE_MEDIA_DIR,
              TRACKS_DIR, COVERS_DIR, COURSE_COVERS_DIR, COURSE_FILES_DIR, MUSIC_AUDIO_DIR, MUSIC_COVER_DIR]:
     os.makedirs(_dir, exist_ok=True)
 
+# Helper function to strip surrounding quotes from environment variables
+# Fixes issue where Railway/Docker env vars are set as NODE_ROLE="master" (with quotes)
+# MUST be defined before any usage below
+def _strip_env_quotes(value: str) -> str:
+    """Strip surrounding single or double quotes from environment variable values."""
+    if value and len(value) >= 2:
+        if (value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'"):
+            return value[1:-1]
+    return value
+
 # AI provider/model caches
 MODEL_CATALOG: dict = {}
 MODEL_CATALOG_LAST_REFRESH = 0.0
@@ -546,15 +556,6 @@ def set_chain_meta(height, last_hash, last_block):
     CHAIN_META["height"] = height if height is not None else 0
     CHAIN_META["last_hash"] = last_hash or "0" * 64
     CHAIN_META["last_block"] = last_block
-
-# Helper function to strip surrounding quotes from environment variables
-# Fixes issue where Railway/Docker env vars are set as NODE_ROLE="master" (with quotes)
-def _strip_env_quotes(value: str) -> str:
-    """Strip surrounding single or double quotes from environment variable values."""
-    if value and len(value) >= 2:
-        if (value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'"):
-            return value[1:-1]
-    return value
 
 # ─── PR-182: Multi-Node Role Configuration ────────────────────────────────
 # Node role: "master" or "replica"

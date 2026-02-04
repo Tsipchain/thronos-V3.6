@@ -9,7 +9,7 @@ bind = f"0.0.0.0:{os.getenv('PORT', 8000)}"
 # Worker configuration
 workers = 1  # Single worker to avoid scheduler conflicts
 worker_class = "gthread"
-threads = 4
+threads = 32  # Match CPU cores for maximum concurrency
 timeout = 120
 graceful_timeout = 30
 

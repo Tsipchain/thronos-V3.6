@@ -12862,15 +12862,27 @@ def api_token_holders(symbol):
     }), 200
 
 
+# Cache for /api/tokens/stats (expensive endpoint)
+_tokens_stats_cache: dict = {"data": None, "timestamp": 0}
+_TOKENS_STATS_CACHE_TTL = 120  # 2 minutes
+
+
 @app.route("/api/tokens/stats")
 def api_tokens_stats():
-    """Get stats for all tokens including holder counts."""
+    """Get stats for all tokens including holder counts (CACHED - 2 min TTL)."""
+    global _tokens_stats_cache
+
+    # Return cached data if fresh
+    now = time.time()
+    if _tokens_stats_cache["data"] and (now - _tokens_stats_cache["timestamp"]) < _TOKENS_STATS_CACHE_TTL:
+        return jsonify(_tokens_stats_cache["data"]), 200
+
     try:
         stats = []
 
-        # Build activity index from the persistent ledger for last transfer/transfer counts
+        # Build activity index - use load_tx_log directly instead of expensive _seed_tx_log_from_chain
         activity: dict[str, dict] = {}
-        ledger = _seed_tx_log_from_chain()
+        ledger = load_tx_log()  # FAST: just loads the already-seeded log
         allowed_for_activity = {
             "thr_transfer",
             "transfer",
@@ -12928,7 +12940,11 @@ def api_tokens_stats():
                 "created_at": token_meta.get("created_at") or token.get("created_at"),
             })
 
-        return jsonify({"ok": True, "tokens": stats}), 200
+        # Cache the result
+        result = {"ok": True, "tokens": stats}
+        _tokens_stats_cache["data"] = result
+        _tokens_stats_cache["timestamp"] = time.time()
+        return jsonify(result), 200
     except Exception as exc:
         logger.error("[tokens_stats] failed: %s", exc)
         return jsonify({"ok": False, "error": "temporary", "tokens": []}), 200

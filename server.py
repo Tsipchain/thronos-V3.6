@@ -593,8 +593,8 @@ MASTER_INTERNAL_URL = os.getenv("MASTER_URL", os.getenv("MASTER_NODE_URL", _defa
 
 # Warn if using localhost in production
 if "localhost" in MASTER_INTERNAL_URL.lower() or "127.0.0.1" in MASTER_INTERNAL_URL:
-    logger.warning(
-        f"[CONFIG] MASTER_INTERNAL_URL is set to localhost ({MASTER_INTERNAL_URL}). "
+    print(
+        f"[CONFIG] WARNING: MASTER_INTERNAL_URL is set to localhost ({MASTER_INTERNAL_URL}). "
         "This may cause issues with media URLs and cross-node communication. "
         "Set MASTER_NODE_URL or MASTER_URL environment variable to the public Railway domain."
     )

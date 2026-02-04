@@ -5836,21 +5836,44 @@ def get_blocks_for_viewer():
             and tx.get("height") == height
         ]
         rsplit = b.get("reward_split") or {}
-        reward_to_miner = float(rsplit.get("miner", b.get("reward_to_miner", 0.0)))
-        reward_to_ai    = float(rsplit.get("ai", 0.0))
-        burn_from_split = float(rsplit.get("burn", 0.0))
+        # Get total block reward (default 1.0 THR per block)
+        total_reward = float(b.get("reward", 1.0))
+
+        # Calculate reward split - if no reward_split, use default 90/10 split
+        if rsplit:
+            reward_to_miner = float(rsplit.get("miner", 0.0))
+            reward_to_ai = float(rsplit.get("ai", 0.0))
+            burn_from_split = float(rsplit.get("burn", 0.0))
+        else:
+            # Fallback: use reward_to_miner if set, otherwise 90% of total reward
+            reward_to_miner = float(b.get("reward_to_miner", total_reward * 0.9))
+            reward_to_ai = float(b.get("reward_to_ai", total_reward * 0.1))
+            burn_from_split = 0.0
+
         # Include swap fees (stored as "fee") and regular fees (stored as "fee_burned")
-        fees_from_txs   = sum(float(tx.get("fee_burned", 0.0) or tx.get("fee", 0.0)) for tx in block_txs)
+        fees_from_txs = sum(float(tx.get("fee_burned", 0.0) or tx.get("fee", 0.0)) for tx in block_txs)
+
+        # Get miner address from block or first transaction
+        miner_address = b.get("thr_address") or b.get("miner_address") or ""
+        if not miner_address and block_txs:
+            # Try to get from coinbase transaction
+            for tx in block_txs:
+                if tx.get("type") in ("coinbase", "mining_reward"):
+                    miner_address = tx.get("to") or tx.get("thr_address") or ""
+                    break
+
         blocks.append({
             "index": height,
-            "hash": b.get("block_hash",""),
+            "hash": b.get("block_hash", ""),
+            "thr_address": miner_address,  # Added miner address
             "fee_burned": round(burn_from_split + fees_from_txs, 6),
-            "reward_to_miner": reward_to_miner,
-            "reward_to_ai": reward_to_ai,
+            "reward_to_miner": round(reward_to_miner, 6),
+            "reward_to_ai": round(reward_to_ai, 6),
+            "reward": round(total_reward, 6),  # Added total reward
             "is_stratum": bool(b.get("is_stratum")),
-            "nonce": b.get("nonce","-"),
+            "nonce": b.get("nonce", "-"),
             "transactions": block_txs,
-            "timestamp": b.get("timestamp","")
+            "timestamp": b.get("timestamp", "")
         })
 
     # PR-3: Dedupe blocks by hash before returning (keep last occurrence)
@@ -5884,7 +5907,8 @@ def get_blocks_for_viewer():
 def _tx_feed(include_pending: bool = True, include_bridge: bool = True) -> list[dict]:
     """Return normalized tx records from the shared ledger plus optional extras."""
 
-    records = list(_seed_tx_log_from_chain())
+    # Use load_tx_log directly - seeding happens at startup, not on every request
+    records = list(load_tx_log())
     # Canonicalize kinds in case the ledger has legacy values
     for r in records:
         if isinstance(r, dict):
@@ -12862,15 +12886,27 @@ def api_token_holders(symbol):
     }), 200
 
 
+# Cache for /api/tokens/stats (expensive endpoint)
+_tokens_stats_cache: dict = {"data": None, "timestamp": 0}
+_TOKENS_STATS_CACHE_TTL = 120  # 2 minutes
+
+
 @app.route("/api/tokens/stats")
 def api_tokens_stats():
-    """Get stats for all tokens including holder counts."""
+    """Get stats for all tokens including holder counts (CACHED - 2 min TTL)."""
+    global _tokens_stats_cache
+
+    # Return cached data if fresh
+    now = time.time()
+    if _tokens_stats_cache["data"] and (now - _tokens_stats_cache["timestamp"]) < _TOKENS_STATS_CACHE_TTL:
+        return jsonify(_tokens_stats_cache["data"]), 200
+
     try:
         stats = []
 
-        # Build activity index from the persistent ledger for last transfer/transfer counts
+        # Build activity index - use load_tx_log directly instead of expensive _seed_tx_log_from_chain
         activity: dict[str, dict] = {}
-        ledger = _seed_tx_log_from_chain()
+        ledger = load_tx_log()  # FAST: just loads the already-seeded log
         allowed_for_activity = {
             "thr_transfer",
             "transfer",
@@ -12928,7 +12964,11 @@ def api_tokens_stats():
                 "created_at": token_meta.get("created_at") or token.get("created_at"),
             })
 
-        return jsonify({"ok": True, "tokens": stats}), 200
+        # Cache the result
+        result = {"ok": True, "tokens": stats}
+        _tokens_stats_cache["data"] = result
+        _tokens_stats_cache["timestamp"] = time.time()
+        return jsonify(result), 200
     except Exception as exc:
         logger.error("[tokens_stats] failed: %s", exc)
         return jsonify({"ok": False, "error": "temporary", "tokens": []}), 200
@@ -24002,6 +24042,15 @@ if is_master():
         logger.warning(f"Startup session prune skipped: {exc}")
 else:
     logger.info(f"[STARTUP] Skipping session prune on {NODE_ROLE} node")
+
+# Seed transaction log from chain (one-time at startup for master nodes)
+if is_master():
+    try:
+        print("[STARTUP] Seeding transaction log from chain...")
+        _seed_tx_log_from_chain()
+        print("[STARTUP] Transaction log seeded successfully.")
+    except Exception as exc:
+        logger.warning(f"[STARTUP] TX log seeding skipped: {exc}")
 
 print(f"[STARTUP] {NODE_ROLE.upper()} node initialization complete.\n")
 

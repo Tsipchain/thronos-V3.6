@@ -1467,8 +1467,11 @@ def _load_json_file(path, default):
 
 
 def _get_ledger_db_connection():
-    conn = sqlite3.connect(LEDGER_DB_FILE)
+    conn = sqlite3.connect(LEDGER_DB_FILE, timeout=30)  # Wait up to 30s if locked
     conn.row_factory = sqlite3.Row
+    # Enable WAL mode for better concurrent read/write performance
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")  # 30 second busy timeout
     return conn
 
 
@@ -6746,54 +6749,65 @@ def api_wallet_mining_stats():
 
 
 def _collect_wallet_history_transactions(address: str, category_filter: str):
-    # Get all transactions
-    chain = load_json(CHAIN_FILE, [])
+    # Use tx_log as primary source (same as viewer) for consistency
+    tx_log = load_tx_log()
     blocks = get_blocks_for_viewer()
 
     # Collect transactions involving this address
     wallet_txs = []
+    addr_lower = address.lower()
 
-    # 1. Regular chain transactions (skip mining rewards - those come from blocks)
-    for tx in chain:
+    # 1. Transactions from tx_log (includes normalized chain + pending + bridge)
+    for tx in tx_log:
         if not isinstance(tx, dict):
             continue
+
         tx_type = (tx.get("type") or tx.get("kind") or "").lower()
         if tx_type in ["coinbase", "mining_reward", "mint"]:
             continue
 
-        tx_from = tx.get("from") or tx.get("sender")
-        tx_to = tx.get("to") or tx.get("recipient")
-        tx_address = tx.get("address")  # For IoT telemetry
+        tx_from = str(tx.get("from") or tx.get("sender") or "").lower()
+        tx_to = str(tx.get("to") or tx.get("recipient") or "").lower()
+        tx_address = str(tx.get("address") or "").lower()
+        tx_trader = str(tx.get("trader") or "").lower()
 
-        if address.lower() in [str(tx_from).lower(), str(tx_to).lower(), str(tx_address).lower()]:
-            tx_copy = dict(tx)
-            raw_category = _categorize_transaction(tx)
+        # Check if address is involved
+        if addr_lower not in [tx_from, tx_to, tx_address, tx_trader]:
+            continue
 
-            # Map internal categories to frontend-friendly names
-            category_map = {
-                "token_transfer": "tokens",
-                "music_tip": "music",
-                "ai_reward": "ai_credits",
-                "l2e": "l2e",
-                "iot_telemetry": "iot",
-                "bridge": "bridge",
-                "pledge": "gateway",
-                "mining": "mining",
-                "swap": "swaps",
-                "liquidity": "liquidity",
-                "other": "other"
-            }
-            tx_copy["category"] = category_map.get(raw_category, raw_category)
+        tx_copy = dict(tx)
+        raw_category = _categorize_transaction(tx)
 
-            # Determine direction
-            if tx_to and tx_to.lower() == address.lower():
-                tx_copy["direction"] = "received"
-            elif tx_from and tx_from.lower() == address.lower():
-                tx_copy["direction"] = "sent"
-            else:
-                tx_copy["direction"] = "related"
+        # Map internal categories to frontend-friendly names
+        category_map = {
+            "token_transfer": "tokens",
+            "thr_transfer": "thr",
+            "transfer": "thr",
+            "music_tip": "music",
+            "ai_reward": "ai_credits",
+            "l2e": "l2e",
+            "t2e": "t2e",
+            "iot_telemetry": "iot",
+            "bridge": "bridge",
+            "pledge": "gateway",
+            "mining": "mining",
+            "swap": "swaps",
+            "liquidity": "liquidity",
+            "other": "other"
+        }
+        tx_copy["category"] = category_map.get(raw_category, raw_category)
 
-            wallet_txs.append(tx_copy)
+        # Determine direction
+        if tx_to == addr_lower:
+            tx_copy["direction"] = "received"
+        elif tx_from == addr_lower:
+            tx_copy["direction"] = "sent"
+        elif tx_trader == addr_lower and tx_type == "swap":
+            tx_copy["direction"] = "swap"
+        else:
+            tx_copy["direction"] = "related"
+
+        wallet_txs.append(tx_copy)
 
     # 2. Block mining rewards
     mining_ids = set()

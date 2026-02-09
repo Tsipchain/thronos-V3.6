@@ -3566,7 +3566,7 @@ function getTxType(tx) {
 
     // === T2E (Train-to-Earn - IoT/ASIC miners) ===
     if (raw === 't2e' || raw === 't2e_reward' || raw === 'train_reward' ||
-        category === 't2e' || symbol === 'T2E') {
+        raw.startsWith('t2e_') || category === 't2e' || symbol === 'T2E') {
         return 't2e';
     }
 
@@ -3579,13 +3579,16 @@ function getTxType(tx) {
     // === AI CREDITS (Chat) ===
     if (raw.startsWith('ai_credit') || raw === 'ai_credits' ||
         raw === 'ai_credits_earned' || raw === 'ai_credits_spent' ||
+        raw === 'credits_consume' || raw === 'service_payment' || raw === 'ai_knowledge' ||
         category === 'ai_credits') {
         return 'ai_credits';
     }
 
     // === ARCHITECT / AI JOBS ===
     if (raw.startsWith('ai_job') || raw === 'architect_job' || raw === 'architect' ||
-        raw === 'ai_reward' || category === 'architect_ai_jobs' || category === 'ai_reward') {
+        raw === 'architect_service' || raw === 'architect_payment' ||
+        raw === 'ai_reward' || category === 'architect_ai_jobs' ||
+        category === 'architect' || category === 'ai_reward') {
         return 'architect';
     }
 
@@ -3843,7 +3846,10 @@ function renderHistory() {
         const isLiquidity = txType === 'liquidity';
         const meta = tx.meta || {};
         const poolEvent = tx.meta && tx.meta.pool_event ? tx.meta.pool_event : null;
-        const amountInRaw = poolEvent?.in_amount ?? tx.amount_in ?? tx.amountIn ?? tx.input_amount ?? tx.amount ?? 0;
+        // For AI credits / T2E, prefer display_amount or credits_delta over raw amount
+        const isCreditsType = (txType === 'ai_credits' || txType === 't2e');
+        const amountInRaw = poolEvent?.in_amount ?? tx.amount_in ?? tx.amountIn ?? tx.input_amount
+            ?? tx.display_amount ?? tx.amount ?? (isCreditsType ? (meta.credits_delta ?? tx.credits ?? tx.reward ?? 0) : 0);
         const amountIn = Number.isFinite(Number(amountInRaw)) ? Number(amountInRaw) : 0;
         const amountOut = poolEvent?.out_amount ?? tx.amount_out ?? tx.amountOut ?? tx.output_amount ?? tx.received_amount;
         const amountOutNum = (amountOut !== undefined && Number.isFinite(Number(amountOut))) ? Number(amountOut) : null;
@@ -3851,6 +3857,8 @@ function renderHistory() {
         // Determine correct asset symbol for display (avoid experimental 'TOKEN')
         const rawAsset = txType === 'tokens'
             ? (tx.asset_symbol || tx.asset || tx.symbol || '')
+            : txType === 't2e' ? 'T2E'
+            : txType === 'ai_credits' ? (tx.unit || tx.asset || tx.symbol || (amountIn > 0 && !tx.amount ? 'Credits' : 'THR'))
             : (tx.symbol || tx.asset_symbol || tx.asset || 'THR');
         const HIDDEN_TOKENS = ['TOKEN', 'UNKNOWN', 'TEST', 'NULL'];
         const displayAsset = HIDDEN_TOKENS.includes(rawAsset.toUpperCase()) ? 'THR' : (rawAsset || 'THR');

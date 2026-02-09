@@ -6462,9 +6462,9 @@ def _categorize_transaction(tx: dict) -> str:
                    "t2e_architect_reward"] or tx_type_lower.startswith("ai_job"):
         return "architect"
 
-    # Train2Earn contributions (credits rewards)
+    # Train2Earn contributions
     if "t2e" in tx_type_lower and "architect" not in tx_type_lower:
-        return "ai_credits"
+        return "t2e"
 
     # Learn-to-earn rewards
     if "l2e" in tx_type_lower or tx_type in ["l2e_reward", "l2e"]:
@@ -6772,6 +6772,7 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
         "ai_reward": "ai_credits",
         "ai_credits": "ai_credits",
         "architect": "architect",
+        "t2e": "t2e",
         "l2e": "l2e",
         "iot_telemetry": "iot",
         "iot": "iot",

@@ -6755,14 +6755,34 @@ def api_wallet_mining_stats():
 
 
 def _collect_wallet_history_transactions(address: str, category_filter: str):
-    # Use tx_log as primary source (same as viewer) for consistency
+    # Load chain + tx_log ONCE (avoid the O(n²) get_blocks_for_viewer call)
+    chain = load_json(CHAIN_FILE, [])
     tx_log = load_tx_log()
-    blocks = get_blocks_for_viewer()
+
+    addr_lower = address.lower()
+
+    # Category mapping used for all tx types
+    category_map = {
+        "token_transfer": "tokens",
+        "music_tip": "music",
+        "ai_reward": "ai_credits",
+        "l2e": "l2e",
+        "iot_telemetry": "iot",
+        "bridge": "bridge",
+        "pledge": "gateway",
+        "mining": "mining",
+        "swap": "swaps",
+        "liquidity": "liquidity",
+        "verifyid": "verifyid",
+        "other": "other",
+    }
 
     # Merge chain + tx_log, deduplicate by tx_id
     seen_tx_ids = set()
     all_txs = []
     for tx in chain:
+        if not isinstance(tx, dict):
+            continue
         tid = tx.get("tx_id") or tx.get("id")
         if tid and tid in seen_tx_ids:
             continue
@@ -6779,102 +6799,71 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
             seen_tx_ids.add(tid)
         all_txs.append(tx)
 
-    # Collect transactions involving this address
     wallet_txs = []
-    addr_lower = address.lower()
-
-    # 1. Transactions from tx_log (includes normalized chain + pending + bridge)
-    for tx in tx_log:
-        if not isinstance(tx, dict):
-            continue
-
-        tx_type = (tx.get("type") or tx.get("kind") or "").lower()
-        if tx_type in ["coinbase", "mining_reward", "mint"]:
-            continue
-
-        tx_from = str(tx.get("from") or tx.get("sender") or "").lower()
-        tx_to = str(tx.get("to") or tx.get("recipient") or "").lower()
-        tx_address = str(tx.get("address") or "").lower()
-        tx_trader = str(tx.get("trader") or "").lower()
-
-        # Check if address is involved
-        if addr_lower not in [tx_from, tx_to, tx_address, tx_trader]:
-            continue
-
-        tx_copy = dict(tx)
-        raw_category = _categorize_transaction(tx)
-
-        # Map internal categories to frontend-friendly names
-        category_map = {
-            "token_transfer": "tokens",
-            "thr_transfer": "thr",
-            "transfer": "thr",
-            "music_tip": "music",
-            "ai_reward": "ai_credits",
-            "l2e": "l2e",
-            "t2e": "t2e",
-            "iot_telemetry": "iot",
-            "bridge": "bridge",
-            "pledge": "gateway",
-            "mining": "mining",
-            "swap": "swaps",
-            "liquidity": "liquidity",
-            "other": "other"
-        }
-        tx_copy["category"] = category_map.get(raw_category, raw_category)
-
-        # Determine direction
-        if tx_to == addr_lower:
-            tx_copy["direction"] = "received"
-        elif tx_from == addr_lower:
-            tx_copy["direction"] = "sent"
-        elif tx_trader == addr_lower and tx_type == "swap":
-            tx_copy["direction"] = "swap"
-        else:
-            tx_copy["direction"] = "related"
-
-        wallet_txs.append(tx_copy)
-
-    # 2. Block mining rewards
     mining_ids = set()
-    for block in blocks:
-        block_txs = block.get("transactions", [])
-        for tx in block_txs:
-            if tx.get("type") in ["coinbase", "mining_reward", "mint"]:
-                miner_addr = tx.get("to") or tx.get("thr_address")
-                if miner_addr and miner_addr.lower() == address.lower():
-                    reward_id = f"reward:{block.get('block_hash')}:{miner_addr}"
-                    if reward_id in mining_ids:
-                        continue
-                    mining_ids.add(reward_id)
-                    tx_copy = dict(tx)
-                    tx_copy["kind"] = "mining_reward"
-                    tx_copy["type"] = "mining_reward"
-                    tx_copy["category"] = "mining"
-                    tx_copy["asset_symbol"] = "THR"
-                    tx_copy["symbol"] = "THR"
-                    tx_copy["from"] = tx_copy.get("from") or "COINBASE"
-                    tx_copy["to"] = miner_addr
-                    tx_copy["direction"] = "received"
-                    tx_copy["block_height"] = block.get("index")
-                    tx_copy["block_hash"] = block.get("block_hash")
-                    tx_copy["id"] = reward_id
-                    tx_copy["meta"] = {
-                        "block_height": block.get("index"),
-                        "block_hash": block.get("block_hash"),
-                        "fee_burned": block.get("fee_burned"),
-                        "reward_to_miner": block.get("reward_to_miner", block.get("reward")),
-                        "reward_to_ai": block.get("reward_to_ai"),
-                        "source": "stratum" if block.get("is_stratum") else "legacy",
-                    }
-                    tx_copy = normalize_history_item(tx_copy)
-                    wallet_txs.append(tx_copy)
-        block_miner = block.get("thr_address") or block.get("miner_address") or block.get("miner")
-        if block_miner and str(block_miner).lower() == address.lower():
-            reward_id = f"reward:{block.get('block_hash')}:{block_miner}"
+
+    # Single pass: collect regular txs AND mining rewards from chain entries
+    for tx in all_txs:
+        tx_type = (tx.get("type") or tx.get("kind") or "").lower()
+
+        # --- Mining / coinbase entries → extract block reward ---
+        if tx_type in ("coinbase", "mining_reward", "mint"):
+            miner_addr = tx.get("to") or tx.get("thr_address")
+            if not miner_addr or miner_addr.lower() != addr_lower:
+                continue
+            block_hash = tx.get("block_hash") or tx.get("hash") or ""
+            reward_id = f"reward:{block_hash}:{miner_addr}"
             if reward_id in mining_ids:
                 continue
             mining_ids.add(reward_id)
+            rsplit = tx.get("reward_split") or {}
+            reward_amt = float(
+                rsplit.get("miner")
+                or tx.get("reward_to_miner")
+                or tx.get("reward")
+                or tx.get("amount")
+                or 0.0
+            )
+            wallet_txs.append(normalize_history_item({
+                "kind": "mining_reward",
+                "type": "mining_reward",
+                "category": "mining",
+                "direction": "received",
+                "from": "COINBASE",
+                "to": miner_addr,
+                "asset_symbol": "THR",
+                "symbol": "THR",
+                "amount": reward_amt,
+                "timestamp": tx.get("timestamp"),
+                "block_height": tx.get("height") or tx.get("index"),
+                "block_hash": block_hash,
+                "thr_address": miner_addr,
+                "id": reward_id,
+                "meta": {
+                    "block_height": tx.get("height") or tx.get("index"),
+                    "block_hash": block_hash,
+                    "fee_burned": tx.get("fee_burned"),
+                    "reward_to_miner": tx.get("reward_to_miner", tx.get("reward")),
+                    "reward_to_ai": tx.get("reward_to_ai"),
+                    "source": "stratum" if tx.get("is_stratum") else "legacy",
+                },
+            }))
+            continue
+
+        # --- Block entries (have "reward" key, no "type") → extract miner reward ---
+        if tx.get("reward") is not None and not tx_type:
+            block_miner = tx.get("thr_address") or tx.get("miner_address") or tx.get("miner")
+            if not block_miner or block_miner.lower() != addr_lower:
+                continue
+            block_hash = tx.get("block_hash") or ""
+            reward_id = f"reward:{block_hash}:{block_miner}"
+            if reward_id in mining_ids:
+                continue
+            mining_ids.add(reward_id)
+            rsplit = tx.get("reward_split") or {}
+            total_reward = float(tx.get("reward", 1.0) or 1.0)
+            reward_to_miner = float(rsplit.get("miner", tx.get("reward_to_miner", total_reward * 0.9)) or 0.0)
+            reward_to_ai = float(rsplit.get("ai", tx.get("reward_to_ai", total_reward * 0.1)) or 0.0)
             wallet_txs.append(normalize_history_item({
                 "kind": "mining_reward",
                 "type": "mining_reward",
@@ -6884,21 +6873,44 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
                 "to": block_miner,
                 "asset_symbol": "THR",
                 "symbol": "THR",
-                "amount": float(block.get("reward_to_miner", block.get("reward", 0.0)) or 0.0),
-                "timestamp": block.get("timestamp"),
-                "block_height": block.get("index"),
-                "block_hash": block.get("block_hash"),
+                "amount": reward_to_miner,
+                "timestamp": tx.get("timestamp"),
+                "block_height": tx.get("height") or tx.get("index"),
+                "block_hash": block_hash,
                 "thr_address": block_miner,
                 "id": reward_id,
                 "meta": {
-                    "block_height": block.get("index"),
-                    "block_hash": block.get("block_hash"),
-                    "fee_burned": block.get("fee_burned"),
-                    "reward_to_miner": block.get("reward_to_miner", block.get("reward")),
-                    "reward_to_ai": block.get("reward_to_ai"),
-                    "source": "stratum" if block.get("is_stratum") else "legacy",
+                    "block_height": tx.get("height") or tx.get("index"),
+                    "block_hash": block_hash,
+                    "fee_burned": tx.get("fee_burned"),
+                    "reward_to_miner": reward_to_miner,
+                    "reward_to_ai": reward_to_ai,
+                    "source": "stratum" if tx.get("is_stratum") else "legacy",
                 },
             }))
+            continue
+
+        # --- Regular transactions ---
+        tx_from = tx.get("from") or tx.get("sender")
+        tx_to = tx.get("to") or tx.get("recipient")
+        tx_address = tx.get("address")  # IoT telemetry
+
+        parties = {str(tx_from or "").lower(), str(tx_to or "").lower(), str(tx_address or "").lower()}
+        if addr_lower not in parties:
+            continue
+
+        tx_copy = dict(tx)
+        raw_category = _categorize_transaction(tx)
+        tx_copy["category"] = category_map.get(raw_category, raw_category)
+
+        if tx_to and str(tx_to).lower() == addr_lower:
+            tx_copy["direction"] = "received"
+        elif tx_from and str(tx_from).lower() == addr_lower:
+            tx_copy["direction"] = "sent"
+        else:
+            tx_copy["direction"] = "related"
+
+        wallet_txs.append(tx_copy)
 
     # Apply category filter
     if category_filter:

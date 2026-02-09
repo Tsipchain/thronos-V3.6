@@ -1084,7 +1084,7 @@ POOLS_FILE          = os.path.join(DATA_DIR, "pools.json")
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "sk_live_...Tuhr") 
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "pk_live_n7kIflBg8OTy2FJLsp80DY0M")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "whsec_PLACEHOLDER")
-DOMAIN_URL = os.getenv("DOMAIN_URL", "http://localhost:3333")
+DOMAIN_URL = os.getenv("DOMAIN_URL", "http://localhost:3334")
 
 
 # Optional Stripe dependency (server may run without it)
@@ -6498,6 +6498,12 @@ def _categorize_transaction(tx: dict) -> str:
     if tx_type in ["token_transfer", "token_create", "token_mint", "token_burn"]:
         return "token_transfer"
 
+    # VerifyID / verification rewards
+    if "verifyid" in tx_type_lower or "verify_id" in tx_type_lower or tx_type in [
+        "hash_verification", "verifyid_reward", "device_verification", "device_registration"
+    ]:
+        return "verifyid"
+
     # Default to token_transfer for transfers
     if tx_type in ["transfer", "send"]:
         return "token_transfer"
@@ -6746,15 +6752,36 @@ def api_wallet_mining_stats():
 
 
 def _collect_wallet_history_transactions(address: str, category_filter: str):
-    # Get all transactions
+    # Get all transactions from chain + tx_log for completeness
     chain = load_json(CHAIN_FILE, [])
+    tx_log = load_tx_log()
     blocks = get_blocks_for_viewer()
+
+    # Merge chain + tx_log, deduplicate by tx_id
+    seen_tx_ids = set()
+    all_txs = []
+    for tx in chain:
+        tid = tx.get("tx_id") or tx.get("id")
+        if tid and tid in seen_tx_ids:
+            continue
+        if tid:
+            seen_tx_ids.add(tid)
+        all_txs.append(tx)
+    for tx in tx_log:
+        if not isinstance(tx, dict):
+            continue
+        tid = tx.get("tx_id") or tx.get("id")
+        if tid and tid in seen_tx_ids:
+            continue
+        if tid:
+            seen_tx_ids.add(tid)
+        all_txs.append(tx)
 
     # Collect transactions involving this address
     wallet_txs = []
 
     # 1. Regular chain transactions (skip mining rewards - those come from blocks)
-    for tx in chain:
+    for tx in all_txs:
         if not isinstance(tx, dict):
             continue
         tx_type = (tx.get("type") or tx.get("kind") or "").lower()
@@ -6781,6 +6808,7 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
                 "mining": "mining",
                 "swap": "swaps",
                 "liquidity": "liquidity",
+                "verifyid": "verifyid",
                 "other": "other"
             }
             tx_copy["category"] = category_map.get(raw_category, raw_category)

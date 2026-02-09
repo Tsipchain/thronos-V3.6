@@ -1084,7 +1084,7 @@ POOLS_FILE          = os.path.join(DATA_DIR, "pools.json")
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "sk_live_...Tuhr") 
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "pk_live_n7kIflBg8OTy2FJLsp80DY0M")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "whsec_PLACEHOLDER")
-DOMAIN_URL = os.getenv("DOMAIN_URL", "http://localhost:3333")
+DOMAIN_URL = os.getenv("DOMAIN_URL", "http://localhost:3334")
 
 
 # Optional Stripe dependency (server may run without it)
@@ -6138,7 +6138,6 @@ def forward_writes_to_leader():
 def forward_reads_to_leader():
     """
     Non-leader nodes must proxy chain-dependent reads to the leader.
-    Falls back to local data if leader is unavailable (may be stale).
     """
     if NODE_ROLE == "master":
         return None
@@ -6176,24 +6175,25 @@ def forward_reads_to_leader():
             url=target_url,
             params=request.args,
             headers=headers,
-            timeout=5  # Reduced from 15s for faster fallback
+            timeout=15
         )
-        excluded_headers = {"content-encoding", "content-length", "transfer-encoding", "connection"}
-        response = Response(upstream.content, status=upstream.status_code)
-        for key, value in upstream.headers.items():
-            if key.lower() not in excluded_headers:
-                response.headers[key] = value
-        response.headers["X-Forwarded-To-Leader"] = "true"
-        response.headers["X-Thronos-Leader"] = "1"
-        return response
     except requests.RequestException as exc:
-        # Fallback: serve local data instead of returning 503
-        # This allows the replica to work independently when master is down
-        logger.warning(f"[REPLICA] Leader unavailable for {request.path}, serving local data: {exc}")
-        # Return None to let the request continue to the local handler
-        # Add a flag to indicate this is fallback data
-        request.environ["THRONOS_FALLBACK"] = True
-        return None
+        return jsonify({
+            "error": "leader_unavailable",
+            "message": "Leader node unavailable for read operation",
+            "detail": str(exc),
+            "node_role": NODE_ROLE,
+            "leader_url": LEADER_URL
+        }), 503
+
+    excluded_headers = {"content-encoding", "content-length", "transfer-encoding", "connection"}
+    response = Response(upstream.content, status=upstream.status_code)
+    for key, value in upstream.headers.items():
+        if key.lower() not in excluded_headers:
+            response.headers[key] = value
+    response.headers["X-Forwarded-To-Leader"] = "true"
+    response.headers["X-Thronos-Leader"] = "1"
+    return response
 
 
 @app.after_request
@@ -6501,6 +6501,12 @@ def _categorize_transaction(tx: dict) -> str:
     if tx_type in ["token_transfer", "token_create", "token_mint", "token_burn"]:
         return "token_transfer"
 
+    # VerifyID / verification rewards
+    if "verifyid" in tx_type_lower or "verify_id" in tx_type_lower or tx_type in [
+        "hash_verification", "verifyid_reward", "device_verification", "device_registration"
+    ]:
+        return "verifyid"
+
     # Default to token_transfer for transfers
     if tx_type in ["transfer", "send"]:
         return "token_transfer"
@@ -6752,6 +6758,26 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
     # Use tx_log as primary source (same as viewer) for consistency
     tx_log = load_tx_log()
     blocks = get_blocks_for_viewer()
+
+    # Merge chain + tx_log, deduplicate by tx_id
+    seen_tx_ids = set()
+    all_txs = []
+    for tx in chain:
+        tid = tx.get("tx_id") or tx.get("id")
+        if tid and tid in seen_tx_ids:
+            continue
+        if tid:
+            seen_tx_ids.add(tid)
+        all_txs.append(tx)
+    for tx in tx_log:
+        if not isinstance(tx, dict):
+            continue
+        tid = tx.get("tx_id") or tx.get("id")
+        if tid and tid in seen_tx_ids:
+            continue
+        if tid:
+            seen_tx_ids.add(tid)
+        all_txs.append(tx)
 
     # Collect transactions involving this address
     wallet_txs = []

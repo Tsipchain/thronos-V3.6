@@ -4,7 +4,7 @@ import time
 
 # Configuration
 SERVER_HOST = "stratum+tcp://thronos-server.up.railway.app:443"  # Corrected server host configuration
-SERVER_PORT = 3333
+SERVER_PORT = 3334
 BTC_ADDRESS = "3KUGVJ96T3JHuUrEHMeAvDKSo1zM9tD9nF"
 REFERRAL = "ref123"
 

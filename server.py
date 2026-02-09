@@ -7677,7 +7677,10 @@ def regenerate_pledges():
 
 @app.route("/architect")
 def architect_page():
-    return render_template("architect.html")
+    resp = make_response(render_template("architect.html"))
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
 
 @app.route("/api/ai_blueprints")
 def api_ai_blueprints():
@@ -11244,6 +11247,21 @@ def pledge_submit():
     pledge_entry["pdf_filename"]=pdf_name
     pledges.append(pledge_entry)
     save_json(PLEDGE_CHAIN, pledges)
+
+    # Register BTC->THR mapping for the BTC pledge watcher
+    try:
+        reg_file = os.path.join(DATA_DIR, "btc_user_registry.json")
+        registry = load_json(reg_file, {})
+        registry[btc_address] = {
+            "thr_address": thr_addr,
+            "kyc_verified": False,
+            "whitelisted_admin": btc_address in (free_list or []),
+            "source": "pledge_submit",
+        }
+        save_json(reg_file, registry)
+    except Exception as exc:
+        app.logger.warning(f"Failed to update btc_user_registry: {exc}")
+
     return jsonify(
         status="verified",
         thr_address=thr_addr,
@@ -15609,9 +15627,19 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
                      coalesce=True, max_instances=1, id="ai_rewards")
     scheduler.add_job(update_telemetry_cache_job, "interval", seconds=30,
                      coalesce=True, max_instances=1, id="telemetry_cache")
+
+    # BTC Pledge Watcher – polls blockstream.info for vault deposits
+    try:
+        from btc_pledge_watcher import watch_btc_pledges
+        scheduler.add_job(watch_btc_pledges, "interval", minutes=5,
+                         coalesce=True, max_instances=1, id="btc_pledge_watcher")
+        print("[SCHEDULER] BTC pledge watcher scheduled (every 5 min)")
+    except ImportError as e:
+        print(f"[SCHEDULER] BTC pledge watcher unavailable: {e}")
+
     scheduler.start()
     _active_schedulers.append(scheduler)
-    print(f"[SCHEDULER] All master jobs started (including telemetry cache, AI rewards distribution)")
+    print(f"[SCHEDULER] All master jobs started (including telemetry cache, AI rewards, BTC pledge watcher)")
 else:
     print(f"[SCHEDULER] Scheduler disabled (NODE_ROLE={NODE_ROLE}, SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")
     scheduler = None

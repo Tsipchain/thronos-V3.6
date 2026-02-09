@@ -136,29 +136,137 @@ def btc_rpc_call(method: str, params: List = None) -> Optional[Dict]:
 
 
 def get_vault_transactions() -> List[Dict]:
-    """Get all transactions received by the pledge vault address"""
+    """
+    Get transactions received by the pledge vault address.
+    Uses blockstream.info public API (no Bitcoin node needed).
+    Falls back to BTC RPC if configured.
+    """
     if not BTC_PLEDGE_VAULT:
         logger.warning("BTC_PLEDGE_VAULT not configured")
         return []
 
-    # Get transactions for the vault address
-    # Note: This assumes the vault address is being watched by the Bitcoin node
-    # Use listtransactions or similar method depending on your node setup
+    logger.info(f"Checking vault address: {BTC_PLEDGE_VAULT}")
 
-    # For now, return empty list as this requires specific RPC setup
-    # In production, you would use methods like:
-    # - listreceivedbyaddress
-    # - listtransactions
-    # - listsinceblock
-    # depending on your Bitcoin node configuration
+    # Strategy 1: Use blockstream.info API (public, no config needed)
+    try:
+        txs = _fetch_vault_txs_blockstream(BTC_PLEDGE_VAULT)
+        if txs:
+            return txs
+    except Exception as e:
+        logger.warning(f"Blockstream API failed: {e}")
 
-    logger.debug(f"Checking vault address: {BTC_PLEDGE_VAULT}")
+    # Strategy 2: Fall back to BTC RPC if configured
+    if BTC_RPC_URL:
+        try:
+            result = btc_rpc_call("listtransactions", ["*", 100])
+            if result:
+                vault_txs = []
+                for tx in result:
+                    if tx.get("address") == BTC_PLEDGE_VAULT and tx.get("category") == "receive":
+                        vault_txs.append({
+                            "txid": tx.get("txid"),
+                            "address": tx.get("address"),
+                            "amount": abs(float(tx.get("amount", 0))),
+                            "confirmations": tx.get("confirmations", 0),
+                            "timestamp": tx.get("time", int(time.time())),
+                        })
+                return vault_txs
+        except Exception as e:
+            logger.warning(f"BTC RPC fallback failed: {e}")
+
     return []
+
+
+def _fetch_vault_txs_blockstream(vault_address: str) -> List[Dict]:
+    """Fetch incoming transactions to vault using blockstream.info API."""
+    BLOCKSTREAM_URL = "https://blockstream.info/api"
+    all_txs = []
+
+    # Fetch confirmed transactions (paginated)
+    last_seen = None
+    for _page in range(10):  # Max 10 pages = 250 txs
+        url = f"{BLOCKSTREAM_URL}/address/{vault_address}/txs/chain"
+        if last_seen:
+            url += f"/{last_seen}"
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        page = resp.json()
+        if not page:
+            break
+        all_txs.extend(page)
+        last_seen = page[-1]["txid"]
+        if len(page) < 25:
+            break
+
+    # Also check mempool (unconfirmed)
+    try:
+        resp = requests.get(
+            f"{BLOCKSTREAM_URL}/address/{vault_address}/txs/mempool",
+            timeout=10
+        )
+        resp.raise_for_status()
+        all_txs.extend(resp.json())
+    except Exception:
+        pass
+
+    # Parse into normalized format
+    result = []
+    seen_txids = set()
+    user_registry = load_user_registry()
+
+    for raw_tx in all_txs:
+        txid = raw_tx.get("txid")
+        if not txid or txid in seen_txids:
+            continue
+        seen_txids.add(txid)
+
+        status = raw_tx.get("status", {})
+        confirmed = status.get("confirmed", False)
+        block_time = status.get("block_time", 0)
+        confirmations = 0
+        if confirmed and block_time:
+            # Estimate confirmations from block time
+            confirmations = max(1, int((time.time() - block_time) / 600))
+
+        # Find vouts that pay to the vault address
+        for vout in raw_tx.get("vout", []):
+            addr = vout.get("scriptpubkey_address", "")
+            if addr == vault_address:
+                amount_btc = vout.get("value", 0) / 1e8
+                if amount_btc <= 0:
+                    continue
+
+                # Try to find the sender address from vin
+                sender_addr = ""
+                for vin in raw_tx.get("vin", []):
+                    prevout = vin.get("prevout", {})
+                    sa = prevout.get("scriptpubkey_address", "")
+                    if sa and sa != vault_address:
+                        sender_addr = sa
+                        break
+
+                result.append({
+                    "txid": txid,
+                    "address": sender_addr,
+                    "to": vault_address,
+                    "amount": amount_btc,
+                    "confirmations": confirmations,
+                    "timestamp": block_time or int(time.time()),
+                    "confirmed": confirmed,
+                })
+                break  # Only count first vout to vault per tx
+
+    logger.info(f"Found {len(result)} transactions to vault via blockstream.info")
+    return result
 
 
 def resolve_user_from_tx(tx: Dict) -> Optional[Dict]:
     """
-    Resolve user information from a transaction
+    Resolve user information from a transaction.
+
+    Lookup order:
+    1. User registry (btc_user_registry.json)
+    2. Pledge chain (pledge_chain.json) - for addresses submitted via /pledge_submit
 
     Returns dict with:
     - thr_address: THR wallet address
@@ -167,27 +275,52 @@ def resolve_user_from_tx(tx: Dict) -> Optional[Dict]:
     - whitelisted_admin: bool
     """
     # Get source BTC address from the transaction
-    # This is simplified - in production you'd parse the tx inputs
     btc_address = tx.get("address", "")
 
     if not btc_address:
         logger.warning(f"No source address found in tx: {tx.get('txid')}")
         return None
 
-    # Look up user in registry
+    # Strategy 1: Look up user in registry
     registry = load_user_registry()
     user_info = registry.get(btc_address)
 
-    if not user_info:
-        logger.warning(f"No user found for BTC address: {btc_address}")
-        return None
+    if user_info and user_info.get("thr_address"):
+        return {
+            "thr_address": user_info.get("thr_address"),
+            "btc_address": btc_address,
+            "kyc_verified": user_info.get("kyc_verified", False),
+            "whitelisted_admin": user_info.get("whitelisted_admin", False),
+        }
 
-    return {
-        "thr_address": user_info.get("thr_address"),
-        "btc_address": btc_address,
-        "kyc_verified": user_info.get("kyc_verified", False),
-        "whitelisted_admin": user_info.get("whitelisted_admin", False),
-    }
+    # Strategy 2: Look up in pledge_chain.json (from /pledge_submit)
+    pledge_chain_file = os.path.join(DATA_DIR, "pledge_chain.json")
+    try:
+        if os.path.exists(pledge_chain_file):
+            with open(pledge_chain_file, 'r') as f:
+                pledges = json.load(f)
+            for pledge in pledges:
+                if pledge.get("btc_address") == btc_address and pledge.get("thr_address"):
+                    logger.info(f"Resolved BTC {btc_address} -> THR {pledge['thr_address']} from pledge chain")
+                    # Auto-populate registry for future lookups
+                    registry[btc_address] = {
+                        "thr_address": pledge["thr_address"],
+                        "kyc_verified": False,
+                        "whitelisted_admin": False,
+                        "source": "pledge_chain"
+                    }
+                    save_user_registry(registry)
+                    return {
+                        "thr_address": pledge["thr_address"],
+                        "btc_address": btc_address,
+                        "kyc_verified": False,
+                        "whitelisted_admin": False,
+                    }
+    except Exception as e:
+        logger.error(f"Error reading pledge chain: {e}")
+
+    logger.warning(f"No user found for BTC address: {btc_address}")
+    return None
 
 
 def call_master_node_api(endpoint: str, data: Dict) -> Optional[Dict]:

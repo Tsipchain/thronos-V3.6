@@ -819,7 +819,9 @@ async function reloadBlocks(){
     const r = await fetch('/api/blocks');
     if (!r.ok) throw new Error(`blocks ${r.status}`);
     const j = await r.json();
-    CURRENT_BLOCKS = Array.isArray(j) ? trimBlocks(j) : [];
+    // /api/blocks returns { ok, blocks: [...], total, ... }
+    const raw = Array.isArray(j) ? j : (j.blocks || []);
+    CURRENT_BLOCKS = trimBlocks(raw);
   } catch (e) {
     console.error('Failed to reload blocks:', e);
     if (!Array.isArray(CURRENT_BLOCKS)) CURRENT_BLOCKS = [];

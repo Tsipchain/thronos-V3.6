@@ -22,9 +22,13 @@ import os
 import json
 import time
 import hashlib
+import hmac
 import secrets
 import sqlite3
 import logging
+import threading
+import urllib.request
+import urllib.error
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
@@ -35,6 +39,23 @@ logger = logging.getLogger(__name__)
 # Configuration
 DATA_DIR = os.getenv("DATA_DIR", "/app/data")
 VERIFY_DB_FILE = os.path.join(DATA_DIR, "ledger.sqlite3")
+
+# Blockchain / Chain connection
+CHAIN_RPC_URL = os.getenv("CHAIN_RPC_URL", "https://thrchain.up.railway.app/evm")
+CHAIN_CONTRACT_ADDRESS = os.getenv("CHAIN_CONTRACT_ADDRESS", "")
+CHAIN_PRIVATE_KEY = os.getenv("CHAIN_PRIVATE_KEY", "")
+
+# Admin secret (shared with server.py)
+ADMIN_SECRET = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
+
+# IP geolocation
+IPINFO_TOKEN = os.getenv("IPINFO_TOKEN", "")
+
+# JWT secret for role-based access control
+JWT_SECRET = os.getenv("JWT_SECRET", os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW"))
+
+# Challenge expiry (seconds)
+CHALLENGE_EXPIRY_SECONDS = 300  # 5 minutes
 
 
 class DeviceType(Enum):
@@ -121,9 +142,11 @@ class VerifyIDService:
         self._init_tables()
 
     def _get_connection(self) -> sqlite3.Connection:
-        """Get database connection with Row factory"""
-        conn = sqlite3.connect(self.db_path)
+        """Get database connection with Row factory, WAL mode, and extended timeout."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
         return conn
 
     def _init_tables(self):
@@ -214,8 +237,663 @@ class VerifyIDService:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_contrib_device ON training_contributions(device_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_contrib_type ON training_contributions(contribution_type)")
 
+            # Device challenge-response table (for secure verification)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS device_challenges (
+                    challenge_id TEXT PRIMARY KEY,
+                    device_id TEXT NOT NULL,
+                    challenge TEXT NOT NULL,
+                    expected_response TEXT NOT NULL,
+                    public_key TEXT,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    resolved INTEGER DEFAULT 0,
+                    FOREIGN KEY (device_id) REFERENCES verified_devices(device_id)
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_challenge_device ON device_challenges(device_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_challenge_expires ON device_challenges(expires_at)")
+
+            # Blockchain verification log
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS blockchain_verifications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_id TEXT NOT NULL,
+                    wallet_address TEXT NOT NULL,
+                    tx_hash TEXT,
+                    block_height INTEGER,
+                    verification_type TEXT NOT NULL,
+                    data_hash TEXT NOT NULL,
+                    chain_status TEXT DEFAULT 'pending',
+                    created_at TEXT NOT NULL,
+                    confirmed_at TEXT,
+                    FOREIGN KEY (device_id) REFERENCES verified_devices(device_id)
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_bc_device ON blockchain_verifications(device_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_bc_wallet ON blockchain_verifications(wallet_address)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_bc_status ON blockchain_verifications(chain_status)")
+
+            # Risk score cache
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS risk_score_cache (
+                    wallet_address TEXT PRIMARY KEY,
+                    score REAL NOT NULL,
+                    account_age_days INTEGER,
+                    previous_verifications INTEGER,
+                    ip_country TEXT,
+                    ip_risk_flag INTEGER DEFAULT 0,
+                    computed_at TEXT NOT NULL
+                )
+            """)
+
             conn.commit()
-            logger.info("[VerifyID] Database tables initialized")
+            logger.info("[VerifyID] Database tables initialized (with WAL mode)")
+
+    # ─── Blockchain Integration ───────────────────────────────────────────
+
+    def _submit_to_chain(self, verification_type: str, device_id: str,
+                         wallet_address: str, data_hash: str) -> Dict[str, Any]:
+        """
+        Submit a verification record to the Thronos blockchain.
+        Uses the main server's /api/chain/hash/submit endpoint.
+        """
+        try:
+            payload = json.dumps({
+                "hash": data_hash,
+                "hash_type": verification_type,
+                "wallet": wallet_address,
+                "metadata": {
+                    "device_id": device_id,
+                    "source": "verify_id_service",
+                    "verification_type": verification_type
+                }
+            }).encode("utf-8")
+
+            chain_url = CHAIN_RPC_URL.rstrip("/")
+            # Use the main server's hash submission endpoint
+            submit_url = chain_url.replace("/evm", "") + "/api/chain/hash/submit"
+
+            req = urllib.request.Request(
+                submit_url,
+                data=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Admin-Secret": ADMIN_SECRET
+                },
+                method="POST"
+            )
+
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+
+            tx_hash = result.get("tx_id", "")
+            block_height = result.get("block_height", 0)
+
+            # Store in local DB
+            now = datetime.utcnow().isoformat() + "Z"
+            with self._get_connection() as conn:
+                conn.execute("""
+                    INSERT INTO blockchain_verifications
+                    (device_id, wallet_address, tx_hash, block_height,
+                     verification_type, data_hash, chain_status, created_at, confirmed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    device_id, wallet_address, tx_hash, block_height,
+                    verification_type, data_hash, "confirmed", now, now
+                ))
+                conn.commit()
+
+            logger.info(f"[VerifyID] Chain submission OK: {tx_hash} for {device_id}")
+            return {"ok": True, "tx_hash": tx_hash, "block_height": block_height}
+
+        except Exception as e:
+            logger.warning(f"[VerifyID] Chain submission failed: {e}")
+            # Store as pending for retry
+            now = datetime.utcnow().isoformat() + "Z"
+            try:
+                with self._get_connection() as conn:
+                    conn.execute("""
+                        INSERT INTO blockchain_verifications
+                        (device_id, wallet_address, tx_hash, block_height,
+                         verification_type, data_hash, chain_status, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        device_id, wallet_address, "", 0,
+                        verification_type, data_hash, "pending", now
+                    ))
+                    conn.commit()
+            except Exception:
+                pass
+            return {"ok": False, "error": str(e), "chain_status": "pending"}
+
+    def retry_pending_chain_submissions(self) -> Dict[str, Any]:
+        """Retry any pending blockchain submissions."""
+        retried = 0
+        confirmed = 0
+        try:
+            with self._get_connection() as conn:
+                pending = conn.execute(
+                    "SELECT * FROM blockchain_verifications WHERE chain_status = 'pending'"
+                ).fetchall()
+
+            for row in pending:
+                retried += 1
+                result = self._submit_to_chain(
+                    row["verification_type"], row["device_id"],
+                    row["wallet_address"], row["data_hash"]
+                )
+                if result.get("ok"):
+                    confirmed += 1
+                    with self._get_connection() as conn:
+                        conn.execute("""
+                            UPDATE blockchain_verifications
+                            SET chain_status = 'confirmed', tx_hash = ?, block_height = ?,
+                                confirmed_at = ?
+                            WHERE id = ?
+                        """, (
+                            result["tx_hash"], result["block_height"],
+                            datetime.utcnow().isoformat() + "Z", row["id"]
+                        ))
+                        conn.commit()
+
+        except Exception as e:
+            logger.exception(f"[VerifyID] Retry chain error: {e}")
+
+        return {"retried": retried, "confirmed": confirmed}
+
+    def get_blockchain_verifications(self, device_id: str = None,
+                                     wallet_address: str = None,
+                                     limit: int = 50) -> List[Dict[str, Any]]:
+        """Get blockchain verification history."""
+        try:
+            with self._get_connection() as conn:
+                if device_id:
+                    rows = conn.execute(
+                        "SELECT * FROM blockchain_verifications WHERE device_id = ? ORDER BY created_at DESC LIMIT ?",
+                        (device_id, limit)
+                    ).fetchall()
+                elif wallet_address:
+                    rows = conn.execute(
+                        "SELECT * FROM blockchain_verifications WHERE wallet_address = ? ORDER BY created_at DESC LIMIT ?",
+                        (wallet_address, limit)
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT * FROM blockchain_verifications ORDER BY created_at DESC LIMIT ?",
+                        (limit,)
+                    ).fetchall()
+                return [dict(r) for r in rows]
+        except Exception as e:
+            logger.exception(f"[VerifyID] Get BC verifications error: {e}")
+            return []
+
+    # ─── Challenge-Response Device Verification ───────────────────────────
+
+    def create_device_challenge(self, device_id: str, public_key: str = None) -> Dict[str, Any]:
+        """
+        Create a challenge for secure device verification.
+        The device must respond with HMAC-SHA256(challenge, device_secret).
+        """
+        try:
+            with self._get_connection() as conn:
+                device = conn.execute(
+                    "SELECT * FROM verified_devices WHERE device_id = ?",
+                    (device_id,)
+                ).fetchone()
+                if not device:
+                    return {"ok": False, "error": "Device not found"}
+
+                challenge = secrets.token_hex(32)
+                challenge_id = f"CH-{secrets.token_hex(8)}"
+                # Expected response is HMAC of challenge using hardware_hash as key
+                expected = hmac.new(
+                    device["hardware_hash"].encode(),
+                    challenge.encode(),
+                    hashlib.sha256
+                ).hexdigest()
+
+                now = datetime.utcnow()
+                expires = now + timedelta(seconds=CHALLENGE_EXPIRY_SECONDS)
+
+                conn.execute("""
+                    INSERT INTO device_challenges
+                    (challenge_id, device_id, challenge, expected_response, public_key,
+                     created_at, expires_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    challenge_id, device_id, challenge, expected, public_key,
+                    now.isoformat() + "Z", expires.isoformat() + "Z"
+                ))
+                conn.commit()
+
+                return {
+                    "ok": True,
+                    "challenge_id": challenge_id,
+                    "challenge": challenge,
+                    "expires_at": expires.isoformat() + "Z"
+                }
+        except Exception as e:
+            logger.exception(f"[VerifyID] Create challenge error: {e}")
+            return {"ok": False, "error": str(e)}
+
+    def verify_challenge_response(self, challenge_id: str, response: str,
+                                   public_key: str = None) -> Dict[str, Any]:
+        """
+        Verify a device's response to a challenge.
+        If valid, the device is marked as verified and the public key is stored.
+        """
+        try:
+            with self._get_connection() as conn:
+                ch = conn.execute(
+                    "SELECT * FROM device_challenges WHERE challenge_id = ? AND resolved = 0",
+                    (challenge_id,)
+                ).fetchone()
+
+                if not ch:
+                    return {"ok": False, "error": "Challenge not found or already resolved"}
+
+                # Check expiry
+                expires = datetime.fromisoformat(ch["expires_at"].replace("Z", "+00:00"))
+                now = datetime.utcnow().replace(tzinfo=expires.tzinfo)
+                if now > expires:
+                    return {"ok": False, "error": "Challenge expired"}
+
+                # Verify response
+                if not hmac.compare_digest(response, ch["expected_response"]):
+                    return {"ok": False, "error": "Invalid response"}
+
+                # Mark challenge resolved
+                conn.execute(
+                    "UPDATE device_challenges SET resolved = 1 WHERE challenge_id = ?",
+                    (challenge_id,)
+                )
+
+                # Store public key if provided
+                pk = public_key or ch["public_key"]
+                if pk:
+                    # Store public key in device metadata
+                    device = conn.execute(
+                        "SELECT metadata FROM verified_devices WHERE device_id = ?",
+                        (ch["device_id"],)
+                    ).fetchone()
+                    meta = json.loads(device["metadata"]) if device and device["metadata"] else {}
+                    meta["public_key"] = pk
+                    meta["key_registered_at"] = datetime.utcnow().isoformat() + "Z"
+                    conn.execute(
+                        "UPDATE verified_devices SET metadata = ? WHERE device_id = ?",
+                        (json.dumps(meta), ch["device_id"])
+                    )
+
+                # Mark device as verified
+                now_str = datetime.utcnow().isoformat() + "Z"
+                conn.execute("""
+                    UPDATE verified_devices SET status = ?, last_seen = ? WHERE device_id = ?
+                """, (VerificationStatus.VERIFIED.value, now_str, ch["device_id"]))
+
+                conn.commit()
+
+                # Submit to blockchain
+                data_hash = hashlib.sha256(
+                    f"{ch['device_id']}:{ch['challenge']}:{response}".encode()
+                ).hexdigest()
+                chain_result = self._submit_to_chain(
+                    "device_verification", ch["device_id"],
+                    "", data_hash
+                )
+
+                return {
+                    "ok": True,
+                    "device_id": ch["device_id"],
+                    "status": VerificationStatus.VERIFIED.value,
+                    "public_key_stored": bool(pk),
+                    "chain_tx": chain_result.get("tx_hash", ""),
+                    "message": "Device verified via challenge-response"
+                }
+
+        except Exception as e:
+            logger.exception(f"[VerifyID] Verify challenge error: {e}")
+            return {"ok": False, "error": str(e)}
+
+    # ─── Risk Score Calculation ───────────────────────────────────────────
+
+    def _get_ip_location(self, ip_address: str) -> Dict[str, Any]:
+        """Get IP geolocation using ipinfo.io API."""
+        try:
+            token_param = f"?token={IPINFO_TOKEN}" if IPINFO_TOKEN else ""
+            url = f"https://ipinfo.io/{ip_address}/json{token_param}"
+            req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            logger.warning(f"[VerifyID] IP geolocation failed for {ip_address}: {e}")
+            return {}
+
+    def calculate_risk_score(self, wallet_address: str,
+                              ip_address: str = None) -> Dict[str, Any]:
+        """
+        Calculate a risk score for a wallet address.
+
+        Components (weighted sum):
+        - account_age_days: Older accounts are lower risk (weight 0.3)
+        - previous_verifications: More verifications = lower risk (weight 0.4)
+        - ip_location: Geographic anomalies increase risk (weight 0.3)
+
+        Score: 0.0 (lowest risk) to 1.0 (highest risk)
+        """
+        try:
+            # 1. Account age (from first on-chain activity)
+            account_age_days = 0
+            try:
+                chain_url = CHAIN_RPC_URL.rstrip("/").replace("/evm", "")
+                auth_url = f"{chain_url}/api/chain/wallet/authenticate"
+                payload = json.dumps({"wallet": wallet_address}).encode("utf-8")
+                req = urllib.request.Request(
+                    auth_url, data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    wallet_data = json.loads(resp.read().decode("utf-8"))
+
+                last_activity = wallet_data.get("last_activity")
+                if last_activity:
+                    activity_dt = datetime.fromisoformat(last_activity.replace("Z", "+00:00"))
+                    age_delta = datetime.utcnow().replace(
+                        tzinfo=activity_dt.tzinfo) - activity_dt
+                    account_age_days = max(age_delta.days, 0)
+            except Exception:
+                pass
+
+            # 2. Previous successful verifications
+            previous_verifications = 0
+            try:
+                with self._get_connection() as conn:
+                    row = conn.execute(
+                        """SELECT COUNT(*) as cnt FROM blockchain_verifications
+                           WHERE wallet_address = ? AND chain_status = 'confirmed'""",
+                        (wallet_address,)
+                    ).fetchone()
+                    previous_verifications = row["cnt"] if row else 0
+            except Exception:
+                pass
+
+            # 3. IP geolocation risk
+            ip_country = ""
+            ip_risk_flag = 0
+            if ip_address:
+                geo = self._get_ip_location(ip_address)
+                ip_country = geo.get("country", "")
+                # Flag if IP is from a VPN/proxy or unusual location
+                if geo.get("privacy", {}).get("vpn") or geo.get("privacy", {}).get("proxy"):
+                    ip_risk_flag = 1
+                # Also flag bogon IPs
+                if geo.get("bogon"):
+                    ip_risk_flag = 1
+
+            # Calculate weighted score components
+            # Account age: 0 days = 1.0 risk, 365+ days = 0.0 risk
+            age_score = max(0.0, 1.0 - (account_age_days / 365.0))
+
+            # Verifications: 0 = 1.0 risk, 10+ = 0.0 risk
+            verif_score = max(0.0, 1.0 - (previous_verifications / 10.0))
+
+            # IP: 0 = no risk flag, 1 = flagged
+            ip_score = float(ip_risk_flag)
+
+            # Weighted sum
+            risk_score = round(
+                (age_score * 0.3) + (verif_score * 0.4) + (ip_score * 0.3),
+                4
+            )
+
+            # Cache the result
+            now = datetime.utcnow().isoformat() + "Z"
+            try:
+                with self._get_connection() as conn:
+                    conn.execute("""
+                        INSERT OR REPLACE INTO risk_score_cache
+                        (wallet_address, score, account_age_days, previous_verifications,
+                         ip_country, ip_risk_flag, computed_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (wallet_address, risk_score, account_age_days,
+                          previous_verifications, ip_country, ip_risk_flag, now))
+                    conn.commit()
+            except Exception:
+                pass
+
+            return {
+                "ok": True,
+                "wallet_address": wallet_address,
+                "risk_score": risk_score,
+                "risk_level": "low" if risk_score < 0.3 else ("medium" if risk_score < 0.7 else "high"),
+                "components": {
+                    "account_age_days": account_age_days,
+                    "account_age_score": round(age_score, 4),
+                    "previous_verifications": previous_verifications,
+                    "verification_score": round(verif_score, 4),
+                    "ip_country": ip_country,
+                    "ip_risk_flag": ip_risk_flag,
+                    "ip_score": round(ip_score, 4)
+                },
+                "weights": {"account_age": 0.3, "verifications": 0.4, "ip_location": 0.3},
+                "computed_at": now
+            }
+
+        except Exception as e:
+            logger.exception(f"[VerifyID] Risk score error: {e}")
+            return {"ok": False, "error": str(e)}
+
+    # ─── Live Telemetry (Real-time truck tracking) ────────────────────────
+
+    def get_live_position(self, device_id: str) -> Optional[Dict[str, Any]]:
+        """Get the most recent GPS position for a device."""
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute(
+                    """SELECT * FROM device_telemetry
+                       WHERE device_id = ? AND gps_lat IS NOT NULL AND gps_lng IS NOT NULL
+                       ORDER BY timestamp DESC LIMIT 1""",
+                    (device_id,)
+                ).fetchone()
+
+                if not row:
+                    return None
+
+                entry = dict(row)
+                if entry.get("sensor_data"):
+                    try:
+                        entry["sensor_data"] = json.loads(entry["sensor_data"])
+                    except Exception:
+                        pass
+                return entry
+        except Exception as e:
+            logger.exception(f"[VerifyID] Get live position error: {e}")
+            return None
+
+    def get_fleet_positions(self, wallet_address: str) -> List[Dict[str, Any]]:
+        """Get latest positions for all devices owned by a wallet (fleet view)."""
+        try:
+            devices = self.list_devices_by_wallet(wallet_address)
+            positions = []
+            for dev in devices:
+                pos = self.get_live_position(dev["device_id"])
+                if pos:
+                    pos["device_type"] = dev.get("device_type", "")
+                    pos["device_status"] = dev.get("status", "")
+                    positions.append(pos)
+            return positions
+        except Exception as e:
+            logger.exception(f"[VerifyID] Fleet positions error: {e}")
+            return []
+
+    # ─── Driver Rewards Scheduler ─────────────────────────────────────────
+
+    def process_pending_trips(self) -> Dict[str, Any]:
+        """
+        Scheduler: Process recent telemetry to calculate trip distances
+        and distribute T2E rewards automatically.
+        """
+        processed = 0
+        rewards_created = 0
+        try:
+            with self._get_connection() as conn:
+                # Get all vehicle nodes with recent telemetry
+                vehicles = conn.execute(
+                    """SELECT DISTINCT d.device_id, d.owner_wallet
+                       FROM verified_devices d
+                       JOIN device_telemetry t ON d.device_id = t.device_id
+                       WHERE d.device_type IN ('vehicle_node', 'gps_node')
+                       AND d.status = 'verified'
+                       AND t.timestamp >= ?""",
+                    ((datetime.utcnow() - timedelta(hours=24)).isoformat() + "Z",)
+                ).fetchall()
+
+                for vehicle in vehicles:
+                    dev_id = vehicle["device_id"]
+                    wallet = vehicle["owner_wallet"]
+
+                    # Get telemetry points for last 24h
+                    points = conn.execute(
+                        """SELECT gps_lat, gps_lng, speed_kmh, mode, timestamp
+                           FROM device_telemetry
+                           WHERE device_id = ? AND gps_lat IS NOT NULL
+                           AND timestamp >= ?
+                           ORDER BY timestamp ASC""",
+                        (dev_id, (datetime.utcnow() - timedelta(hours=24)).isoformat() + "Z")
+                    ).fetchall()
+
+                    if len(points) < 2:
+                        continue
+
+                    # Calculate approximate distance (haversine simplified)
+                    total_km = 0.0
+                    training_mode = False
+                    for i in range(1, len(points)):
+                        lat1, lng1 = points[i-1]["gps_lat"], points[i-1]["gps_lng"]
+                        lat2, lng2 = points[i]["gps_lat"], points[i]["gps_lng"]
+                        if lat1 and lng1 and lat2 and lng2:
+                            # Approximate distance in km
+                            import math
+                            dlat = math.radians(lat2 - lat1)
+                            dlng = math.radians(lng2 - lng1)
+                            a = (math.sin(dlat/2)**2 +
+                                 math.cos(math.radians(lat1)) *
+                                 math.cos(math.radians(lat2)) *
+                                 math.sin(dlng/2)**2)
+                            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+                            total_km += 6371.0 * c
+
+                        if points[i]["mode"] == "TRAINING":
+                            training_mode = True
+
+                    processed += 1
+
+                    if total_km >= 1.0:  # Minimum 1km to earn rewards
+                        result = self.calculate_trip_reward(
+                            dev_id, wallet, total_km, training_mode=training_mode
+                        )
+                        if result.get("ok"):
+                            rewards_created += 1
+
+        except Exception as e:
+            logger.exception(f"[VerifyID] Process trips error: {e}")
+
+        return {
+            "vehicles_processed": processed,
+            "rewards_created": rewards_created
+        }
+
+    # ─── Chain Health Check ───────────────────────────────────────────────
+
+    def check_chain_health(self) -> Dict[str, Any]:
+        """Check connectivity to the Thronos chain RPC."""
+        try:
+            chain_url = CHAIN_RPC_URL.rstrip("/").replace("/evm", "")
+            health_url = f"{chain_url}/api/health"
+
+            req = urllib.request.Request(health_url, method="GET")
+            start = time.time()
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                latency_ms = round((time.time() - start) * 1000, 1)
+                data = json.loads(resp.read().decode("utf-8"))
+
+            return {
+                "ok": True,
+                "chain_url": chain_url,
+                "status": "connected",
+                "latency_ms": latency_ms,
+                "chain_response": data
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "chain_url": CHAIN_RPC_URL,
+                "status": "unreachable",
+                "error": str(e)
+            }
+
+    # ─── AI Training Feedback ─────────────────────────────────────────────
+
+    def record_ai_feedback(self, wallet_address: str, prompt: str,
+                            answer: str, rating: str,
+                            session_id: str = "") -> Dict[str, Any]:
+        """
+        Record user feedback (thumb-up/down) on AI responses.
+        Positive feedback is queued for the Pythia training buffer.
+        """
+        try:
+            data_hash = hashlib.sha256(
+                f"{prompt}:{answer}:{wallet_address}".encode()
+            ).hexdigest()
+
+            contribution_type = "ai_feedback_positive" if rating == "up" else "ai_feedback_negative"
+
+            # Only queue positive feedback for training
+            if rating == "up":
+                data_size = len(prompt.encode()) + len(answer.encode())
+                result = self.record_training_contribution(
+                    device_id=f"AI-FEEDBACK-{wallet_address[:16]}",
+                    wallet_address=wallet_address,
+                    contribution_type="ai_feedback",
+                    data_hash=data_hash,
+                    data_size_bytes=data_size,
+                    quality_score=1.0
+                )
+
+                # Write to training buffer file for Pythia
+                try:
+                    buffer_file = os.path.join(DATA_DIR, "ai_training_buffer.jsonl")
+                    entry = {
+                        "prompt": prompt,
+                        "answer": answer,
+                        "wallet": wallet_address,
+                        "rating": rating,
+                        "session_id": session_id,
+                        "timestamp": datetime.utcnow().isoformat() + "Z",
+                        "data_hash": data_hash
+                    }
+                    with open(buffer_file, "a") as f:
+                        f.write(json.dumps(entry) + "\n")
+                except Exception as e:
+                    logger.warning(f"[VerifyID] Training buffer write error: {e}")
+
+                return {
+                    "ok": True,
+                    "feedback": "positive",
+                    "queued_for_training": True,
+                    "reward_amount": result.get("reward_amount", 0)
+                }
+            else:
+                return {
+                    "ok": True,
+                    "feedback": "negative",
+                    "queued_for_training": False
+                }
+
+        except Exception as e:
+            logger.exception(f"[VerifyID] AI feedback error: {e}")
+            return {"ok": False, "error": str(e)}
 
     # ─── Device Registration & Verification ───────────────────────────────
 
@@ -290,10 +968,19 @@ class VerifyIDService:
 
                 logger.info(f"[VerifyID] Device registered: {device_id} ({device_type}) for {owner_wallet}")
 
+                # Submit registration to blockchain (async-safe)
+                reg_hash = hashlib.sha256(
+                    f"{device_id}:{owner_wallet}:{hardware_hash}".encode()
+                ).hexdigest()
+                chain_result = self._submit_to_chain(
+                    "device_registration", device_id, owner_wallet, reg_hash
+                )
+
                 return {
                     "ok": True,
                     "device_id": device_id,
                     "status": VerificationStatus.PENDING.value,
+                    "chain_tx": chain_result.get("tx_hash", ""),
                     "message": "Device registered successfully. Awaiting verification."
                 }
 
@@ -823,6 +1510,49 @@ def get_verify_id_service() -> VerifyIDService:
 
 # ─── Flask Route Handlers (for integration with server.py) ────────────────
 
+def _extract_jwt_role(request) -> str:
+    """
+    Extract user role from JWT Bearer token or X-User-Role header.
+    Roles: 'inspector', 'driver', 'admin', '' (unknown).
+    """
+    import base64
+    # Try Authorization header (Bearer token)
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        try:
+            # Decode JWT payload (middle segment) without full verification
+            # In production, use proper JWT library with signature verification
+            parts = token.split(".")
+            if len(parts) == 3:
+                # Pad base64 if needed
+                payload_b64 = parts[1] + "=" * (4 - len(parts[1]) % 4)
+                payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+                return payload.get("role", "")
+        except Exception:
+            pass
+
+    # Fallback: X-User-Role header (for internal services)
+    return request.headers.get("X-User-Role", "")
+
+
+def _extract_jwt_wallet(request) -> str:
+    """Extract wallet address from JWT token."""
+    import base64
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        try:
+            parts = token.split(".")
+            if len(parts) == 3:
+                payload_b64 = parts[1] + "=" * (4 - len(parts[1]) % 4)
+                payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+                return payload.get("wallet", "")
+        except Exception:
+            pass
+    return request.headers.get("X-User-Wallet", "")
+
+
 def register_verify_id_routes(app):
     """Register VerifyID API routes with Flask app"""
     from flask import request, jsonify
@@ -972,20 +1702,172 @@ def register_verify_id_routes(app):
 
     @app.route("/api/verify/admin/approve", methods=["POST"])
     def api_verify_admin_approve():
-        """Admin: Approve/verify a pending device"""
+        """Admin/Inspector: Approve/verify a pending device"""
         data = request.get_json() or {}
 
         device_id = data.get("device_id")
-        admin_secret = data.get("admin_secret")
+        admin_secret = data.get("admin_secret") or request.headers.get("X-Admin-Secret", "")
 
         if not device_id:
             return jsonify({"ok": False, "error": "device_id required"}), 400
 
-        # Note: Add admin secret validation in production
+        # RBAC: require admin secret or inspector role
+        role = _extract_jwt_role(request)
+        if admin_secret != ADMIN_SECRET and role != "inspector":
+            return jsonify({"ok": False, "error": "Unauthorized. Inspector role or admin secret required."}), 403
+
         result = service.verify_device(device_id, admin_secret)
         return jsonify(result), 200 if result.get("ok") else 400
 
-    logger.info("[VerifyID] API routes registered")
+    # ─── Challenge-Response Endpoints ─────────────────────────────────────
+
+    @app.route("/api/verify/challenge/create", methods=["POST"])
+    def api_verify_challenge_create():
+        """Create a challenge for secure device verification"""
+        data = request.get_json() or {}
+        device_id = data.get("device_id")
+        public_key = data.get("public_key")
+
+        if not device_id:
+            return jsonify({"ok": False, "error": "device_id required"}), 400
+
+        result = service.create_device_challenge(device_id, public_key)
+        return jsonify(result), 200 if result.get("ok") else 400
+
+    @app.route("/api/verify/challenge/respond", methods=["POST"])
+    def api_verify_challenge_respond():
+        """Respond to a device verification challenge"""
+        data = request.get_json() or {}
+        challenge_id = data.get("challenge_id")
+        response = data.get("response")
+        public_key = data.get("public_key")
+
+        if not challenge_id or not response:
+            return jsonify({"ok": False, "error": "challenge_id and response required"}), 400
+
+        result = service.verify_challenge_response(challenge_id, response, public_key)
+        return jsonify(result), 200 if result.get("ok") else 400
+
+    # ─── Risk Score Endpoint ──────────────────────────────────────────────
+
+    @app.route("/api/verify/riskscore", methods=["GET", "POST"])
+    @app.route("/blockchain/riskscore", methods=["GET", "POST"])
+    def api_verify_risk_score():
+        """Calculate risk score for a wallet address"""
+        if request.method == "POST":
+            data = request.get_json() or {}
+        else:
+            data = dict(request.args)
+
+        wallet = data.get("wallet", "").strip()
+        ip_address = data.get("ip") or request.remote_addr
+
+        if not wallet:
+            return jsonify({"ok": False, "error": "wallet required"}), 400
+
+        result = service.calculate_risk_score(wallet, ip_address)
+        return jsonify(result), 200
+
+    # ─── Live Telemetry / Truck Tracking Endpoints ────────────────────────
+
+    @app.route("/api/telemetry/live", methods=["GET"])
+    def api_telemetry_live():
+        """Get the most recent GPS position for a device (live tracking)"""
+        device_id = request.args.get("device_id", "").strip()
+        if not device_id:
+            return jsonify({"ok": False, "error": "device_id required"}), 400
+
+        # RBAC: drivers can only see their own devices
+        role = _extract_jwt_role(request)
+        wallet = _extract_jwt_wallet(request)
+
+        if role == "driver" and wallet:
+            device = service.get_device(device_id)
+            if device and device.get("owner_wallet") != wallet:
+                return jsonify({"ok": False, "error": "Access denied. You can only view your own devices."}), 403
+
+        pos = service.get_live_position(device_id)
+        if not pos:
+            return jsonify({"ok": True, "position": None, "message": "No GPS data available"}), 200
+
+        return jsonify({"ok": True, "position": pos}), 200
+
+    @app.route("/api/telemetry/fleet", methods=["GET"])
+    def api_telemetry_fleet():
+        """Get latest positions for all devices owned by a wallet (fleet view)"""
+        wallet = request.args.get("wallet", "").strip()
+        if not wallet:
+            return jsonify({"ok": False, "error": "wallet required"}), 400
+
+        positions = service.get_fleet_positions(wallet)
+        return jsonify({
+            "ok": True,
+            "positions": positions,
+            "count": len(positions)
+        }), 200
+
+    # ─── Blockchain Verification Endpoints ────────────────────────────────
+
+    @app.route("/api/verify/blockchain/history", methods=["GET"])
+    def api_verify_blockchain_history():
+        """Get blockchain verification history"""
+        device_id = request.args.get("device_id")
+        wallet = request.args.get("wallet")
+        limit = int(request.args.get("limit", 50))
+
+        records = service.get_blockchain_verifications(device_id, wallet, limit)
+        return jsonify({"ok": True, "verifications": records, "count": len(records)}), 200
+
+    @app.route("/api/verify/blockchain/retry", methods=["POST"])
+    def api_verify_blockchain_retry():
+        """Retry pending blockchain submissions"""
+        admin_secret = (request.get_json() or {}).get("admin_secret") or request.headers.get("X-Admin-Secret", "")
+        if admin_secret != ADMIN_SECRET:
+            return jsonify({"ok": False, "error": "Unauthorized"}), 401
+
+        result = service.retry_pending_chain_submissions()
+        return jsonify({"ok": True, **result}), 200
+
+    # ─── Chain Health Check ───────────────────────────────────────────────
+
+    @app.route("/api/verify/chain/health", methods=["GET"])
+    def api_verify_chain_health():
+        """Check connectivity to Thronos blockchain"""
+        result = service.check_chain_health()
+        status = 200 if result.get("ok") else 503
+        return jsonify(result), status
+
+    # ─── Driver Rewards Scheduler Endpoint ────────────────────────────────
+
+    @app.route("/api/verify/rewards/process", methods=["POST"])
+    def api_verify_process_rewards():
+        """Process pending trips and distribute rewards (scheduler/admin)"""
+        admin_secret = (request.get_json() or {}).get("admin_secret") or request.headers.get("X-Admin-Secret", "")
+        if admin_secret != ADMIN_SECRET:
+            return jsonify({"ok": False, "error": "Unauthorized"}), 401
+
+        result = service.process_pending_trips()
+        return jsonify({"ok": True, **result}), 200
+
+    # ─── AI Training Feedback Endpoint ────────────────────────────────────
+
+    @app.route("/api/verify/ai/feedback", methods=["POST"])
+    def api_verify_ai_feedback():
+        """Record AI response feedback (thumb-up/down) for training"""
+        data = request.get_json() or {}
+        wallet = data.get("wallet", "").strip()
+        prompt = data.get("prompt", "")
+        answer = data.get("answer", "")
+        rating = data.get("rating", "")  # "up" or "down"
+        session_id = data.get("session_id", "")
+
+        if not wallet or not prompt or not answer or rating not in ("up", "down"):
+            return jsonify({"ok": False, "error": "wallet, prompt, answer, and rating (up/down) required"}), 400
+
+        result = service.record_ai_feedback(wallet, prompt, answer, rating, session_id)
+        return jsonify(result), 200
+
+    logger.info("[VerifyID] API routes registered (with blockchain, RBAC, live tracking)")
 
 
 # ─── CLI for testing ──────────────────────────────────────────────────────

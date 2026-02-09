@@ -28,7 +28,7 @@ import base64
 
 # Configuration
 # Default to the live server, can be overridden by THRONOS_API_URL env var
-DEFAULT_SERVER_URL = "https://thrchain.up.railway.app:3333" 
+DEFAULT_SERVER_URL = "https://thrchain.up.railway.app:3334"
 
 AGENT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(AGENT_DIR, "agent_config.json")

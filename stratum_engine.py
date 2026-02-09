@@ -3,7 +3,7 @@ stratum_engine.py
 ~~~~~~~~~~~~~~~~~~
 
 A very simple Stratum job server for ThronosChain.  This engine accepts
-incoming TCP connections from SHA‑256 miners on port 3333 and exchanges
+incoming TCP connections from SHA‑256 miners on port 3334 and exchanges
 minimal Stratum protocol messages.  It is intended as a **placeholder** to
 enable miners (such as cgminer, bfgminer or USB sticks) to connect during
 development.  The server currently issues a fixed job template and does not
@@ -25,7 +25,7 @@ import time
 
 
 HOST = os.getenv("STRATUM_HOST", "0.0.0.0")
-PORT = int(os.getenv("STRATUM_PORT", "3333"))
+PORT = int(os.getenv("STRATUM_PORT", "3334"))
 
 
 def build_static_job() -> dict:

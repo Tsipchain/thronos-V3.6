@@ -3996,7 +3996,10 @@ async function loadWalletHistory(thrAddress) {
     console.log('[WalletHistory] Fetching:', url);
 
     try {
-        const res = await fetch(url);
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15000);
+        const res = await fetch(url, { signal: controller.signal });
+        clearTimeout(timer);
         if (!res.ok) {
             console.error('[WalletHistory] HTTP error:', res.status, res.statusText);
             return [];
@@ -4353,7 +4356,10 @@ async function refreshHistoryFromApi() {
     const addr = walletSession.getAddress();
     if (!addr) return;
     try {
-        const response = await fetch(`/api/wallet/history?address=${encodeURIComponent(addr)}&limit=200`, { timeout: 20000 });
+        const _ctrl = new AbortController();
+        const _t = setTimeout(() => _ctrl.abort(), 15000);
+        const response = await fetch(`/api/wallet/history?address=${encodeURIComponent(addr)}&limit=200`, { signal: _ctrl.signal });
+        clearTimeout(_t);
 
         if (!response.ok) {
             throw new Error(`History API returned ${response.status}`);

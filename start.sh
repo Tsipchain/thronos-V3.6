@@ -1,6 +1,14 @@
 #!/bin/bash
 set -e
 
+# Activate the Nixpacks virtual-env so gunicorn & all pip packages are on PATH.
+# This is needed because Nixpacks writes PATH to /root/.profile which is only
+# sourced for login shells, and $NIXPACKS_PATH may be undefined.
+if [[ -f /opt/venv/bin/activate ]]; then
+  # shellcheck disable=SC1091
+  source /opt/venv/bin/activate
+fi
+
 # Ensure DATA_DIR exists (defaults to ./data if not set env var)
 DATA_DIR=${DATA_DIR:-./data}
 mkdir -p "$DATA_DIR/contracts"

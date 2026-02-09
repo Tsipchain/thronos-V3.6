@@ -6462,9 +6462,9 @@ def _categorize_transaction(tx: dict) -> str:
                    "t2e_architect_reward"] or tx_type_lower.startswith("ai_job"):
         return "architect"
 
-    # Train2Earn contributions (credits rewards)
+    # Train2Earn contributions
     if "t2e" in tx_type_lower and "architect" not in tx_type_lower:
-        return "ai_credits"
+        return "t2e"
 
     # Learn-to-earn rewards
     if "l2e" in tx_type_lower or tx_type in ["l2e_reward", "l2e"]:
@@ -6497,7 +6497,7 @@ def _categorize_transaction(tx: dict) -> str:
     if "liquidity" in tx_type_lower or "pool" in tx_type_lower:
         return "liquidity"
 
-    # Token operations
+    # Token operations (explicit token_* types)
     if tx_type in ["token_transfer", "token_create", "token_mint", "token_burn"]:
         return "token_transfer"
 
@@ -6507,9 +6507,12 @@ def _categorize_transaction(tx: dict) -> str:
     ]:
         return "verifyid"
 
-    # Default to token_transfer for transfers
-    if tx_type in ["transfer", "send"]:
-        return "token_transfer"
+    # Native THR transfers vs non-THR token transfers
+    if tx_type in ["transfer", "send", "thr_transfer"]:
+        symbol = (tx.get("symbol") or tx.get("asset_symbol") or "").upper()
+        if symbol and symbol != "THR":
+            return "token_transfer"
+        return "thr"
 
     return "other"
 
@@ -6763,14 +6766,20 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
 
     # Category mapping used for all tx types
     category_map = {
+        "thr": "thr",
         "token_transfer": "tokens",
         "music_tip": "music",
         "ai_reward": "ai_credits",
+        "ai_credits": "ai_credits",
+        "architect": "architect",
+        "t2e": "t2e",
         "l2e": "l2e",
         "iot_telemetry": "iot",
+        "iot": "iot",
         "bridge": "bridge",
         "pledge": "gateway",
         "mining": "mining",
+        "swaps": "swaps",
         "swap": "swaps",
         "liquidity": "liquidity",
         "verifyid": "verifyid",

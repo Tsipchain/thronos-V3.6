@@ -5827,39 +5827,47 @@ def enqueue_offline_corpus(wallet: str, prompt: str, response: str, files, sessi
 # ─── VIEWER HELPERS ────────────────────────────────
 def get_blocks_for_viewer():
     chain = load_json(CHAIN_FILE, [])
-    raw_blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
+
+    # Pre-index transactions by height for O(1) lookup instead of O(n) per block
+    _TX_TYPES = frozenset((
+        "transfer", "coinbase", "service_payment", "ai_knowledge",
+        "token_transfer", "token_create", "token_mint", "token_burn",
+        "swap", "bridge",
+    ))
+    txs_by_height = {}
+    raw_blocks = []
+    for entry in chain:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("reward") is not None:
+            raw_blocks.append(entry)
+        elif entry.get("type") in _TX_TYPES and entry.get("height") is not None:
+            h = entry["height"]
+            txs_by_height.setdefault(h, []).append(entry)
+
     blocks = []
     for b in raw_blocks:
         height = b.get("height")
         if height is None:
             height = len(blocks)
-        block_txs = [
-            tx for tx in chain
-            if tx.get("type") in ("transfer", "coinbase", "service_payment", "ai_knowledge", "token_transfer", "token_create", "token_mint", "token_burn", "swap", "bridge")
-            and tx.get("height") == height
-        ]
+        block_txs = txs_by_height.get(height, [])
+
         rsplit = b.get("reward_split") or {}
-        # Get total block reward (default 1.0 THR per block)
         total_reward = float(b.get("reward", 1.0))
 
-        # Calculate reward split - if no reward_split, use default 90/10 split
         if rsplit:
             reward_to_miner = float(rsplit.get("miner", 0.0))
             reward_to_ai = float(rsplit.get("ai", 0.0))
             burn_from_split = float(rsplit.get("burn", 0.0))
         else:
-            # Fallback: use reward_to_miner if set, otherwise 90% of total reward
             reward_to_miner = float(b.get("reward_to_miner", total_reward * 0.9))
             reward_to_ai = float(b.get("reward_to_ai", total_reward * 0.1))
             burn_from_split = 0.0
 
-        # Include swap fees (stored as "fee") and regular fees (stored as "fee_burned")
         fees_from_txs = sum(float(tx.get("fee_burned", 0.0) or tx.get("fee", 0.0)) for tx in block_txs)
 
-        # Get miner address from block or first transaction
         miner_address = b.get("thr_address") or b.get("miner_address") or ""
         if not miner_address and block_txs:
-            # Try to get from coinbase transaction
             for tx in block_txs:
                 if tx.get("type") in ("coinbase", "mining_reward"):
                     miner_address = tx.get("to") or tx.get("thr_address") or ""
@@ -5868,11 +5876,11 @@ def get_blocks_for_viewer():
         blocks.append({
             "index": height,
             "hash": b.get("block_hash", ""),
-            "thr_address": miner_address,  # Added miner address
+            "thr_address": miner_address,
             "fee_burned": round(burn_from_split + fees_from_txs, 6),
             "reward_to_miner": round(reward_to_miner, 6),
             "reward_to_ai": round(reward_to_ai, 6),
-            "reward": round(total_reward, 6),  # Added total reward
+            "reward": round(total_reward, 6),
             "is_stratum": bool(b.get("is_stratum")),
             "nonce": b.get("nonce", "-"),
             "transactions": block_txs,

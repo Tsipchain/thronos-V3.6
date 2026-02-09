@@ -7,7 +7,7 @@ mkdir -p "$DATA_DIR/contracts"
 
 # Reserve the public web port for the Flask app and keep Stratum separate
 PORT=${PORT:-8000}
-STRATUM_PORT=${STRATUM_PORT:-3333}
+STRATUM_PORT=${STRATUM_PORT:-3334}
 export PORT STRATUM_PORT
 
 # Only start Stratum on master node (replicas are read-only)

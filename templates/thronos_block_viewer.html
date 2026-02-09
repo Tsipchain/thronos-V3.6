@@ -73,6 +73,7 @@
     <div class="tab" data-tab="pools">Pools</div>
     <div class="tab" data-tab="l2e">L2E</div>
     <div class="tab" data-tab="music">Music</div>
+    <div class="tab" data-tab="verifyid">VerifyID</div>
     <div class="right muted" id="liveClock">—</div>
   </div>
 
@@ -367,6 +368,65 @@
       </table>
     </div>
   </section>
+
+  <!-- VerifyID / T2E (Train-to-Earn) -->
+  <section id="view-verifyid" class="panel" style="display:none;margin-top:12px">
+    <div class="grid">
+      <div class="card">
+        <h4>🔐 Verified Devices</h4>
+        <div class="big" id="verifyTotalDevices">0</div>
+        <div class="small muted">ASICs & IoT devices</div>
+      </div>
+      <div class="card">
+        <h4>📍 Active Drivers</h4>
+        <div class="big" id="verifyActiveDrivers">0</div>
+        <div class="small muted">Train-to-Earn participants</div>
+      </div>
+      <div class="card">
+        <h4>🚗 Total Trips</h4>
+        <div class="big" id="verifyTotalTrips">0</div>
+        <div class="small muted">verified driving sessions</div>
+      </div>
+      <div class="card">
+        <h4>💰 T2E Rewards Paid</h4>
+        <div class="big" id="verifyRewardsPaid">0 THR</div>
+        <div class="small muted">driver training rewards</div>
+      </div>
+    </div>
+    <h4 style="margin:16px 0 8px;color:var(--muted)">📋 Registered Devices</h4>
+    <table id="verifyDevicesTable">
+      <thead>
+        <tr>
+          <th>Device ID</th>
+          <th>Type</th>
+          <th>Owner</th>
+          <th>Status</th>
+          <th>Trips</th>
+          <th>Rewards</th>
+          <th>Registered</th>
+        </tr>
+      </thead>
+      <tbody id="verifyDevicesBody">
+        <tr><td colspan="7" style="text-align:center;color:#9fdfb4">Loading devices…</td></tr>
+      </tbody>
+    </table>
+    <h4 style="margin:16px 0 8px;color:var(--muted)">📍 Recent Telemetry</h4>
+    <table id="verifyTelemetryTable">
+      <thead>
+        <tr>
+          <th>Device</th>
+          <th>Location</th>
+          <th>Speed</th>
+          <th>Heading</th>
+          <th>Anti-Spoof</th>
+          <th>Time</th>
+        </tr>
+      </thead>
+      <tbody id="verifyTelemetryBody">
+        <tr><td colspan="6" style="text-align:center;color:#9fdfb4">Loading telemetry…</td></tr>
+      </tbody>
+    </table>
+  </section>
 </div>
 
 <script>
@@ -494,7 +554,7 @@ document.querySelectorAll('.tab').forEach(t=>{
     document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
     t.classList.add('active');
     const tab = t.dataset.tab;
-    ['blocks','txs','mempool','live','tokens','pools','l2e','music'].forEach(name=>{
+    ['blocks','txs','mempool','live','tokens','pools','l2e','music','verifyid'].forEach(name=>{
       el('#view-'+name).style.display = (name===tab)?'block':'none';
     });
     // Load data for the selected tab
@@ -503,6 +563,7 @@ document.querySelectorAll('.tab').forEach(t=>{
     if(tab==='pools') loadPools();
     if(tab==='l2e') loadL2E();
     if(tab==='music') loadMusic();
+    if(tab==='verifyid') loadVerifyID();
   };
 });
 
@@ -1169,6 +1230,99 @@ async function loadMusic(){
     el('#musicStatusNote').textContent = 'music endpoints unavailable';
     const body = el('#musicBody');
     body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#ff5577">Music service unavailable</td></tr>';
+  }
+}
+
+async function loadVerifyID(){
+  try{
+    // Load stats
+    const statsR = await fetch('/api/verify/stats');
+    let stats = {};
+    if(statsR.ok){
+      stats = await statsR.json();
+    }
+
+    el('#verifyTotalDevices').textContent = (stats.total_devices || 0).toLocaleString();
+    el('#verifyActiveDrivers').textContent = (stats.active_drivers || 0).toLocaleString();
+    el('#verifyTotalTrips').textContent = (stats.total_trips || 0).toLocaleString();
+    el('#verifyRewardsPaid').textContent = `${(stats.total_rewards || 0).toLocaleString()} THR`;
+
+    // Load devices list
+    const devicesR = await fetch('/api/verify/devices?limit=20');
+    const devicesBody = el('#verifyDevicesBody');
+    devicesBody.innerHTML = '';
+
+    if(devicesR.ok){
+      const devicesJ = await devicesR.json();
+      const devices = devicesJ.devices || [];
+
+      if(devices.length === 0){
+        devicesBody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#9fdfb4">No devices registered yet</td></tr>';
+      } else {
+        devices.forEach(d => {
+          const statusBadge = d.verified
+            ? '<span style="color:#16ff57">✓ Verified</span>'
+            : d.pending
+              ? '<span style="color:#ffd166">⏳ Pending</span>'
+              : '<span style="color:#ff5577">✕ Rejected</span>';
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td class="mono k">${short(d.device_id || '—')}</td>
+            <td>${d.device_type || 'unknown'}</td>
+            <td class="mono"><a class="addr" onclick="copy('${d.owner||'—'}')">${short(d.owner||'—')}</a></td>
+            <td>${statusBadge}</td>
+            <td class="mono">${(d.trip_count || 0).toLocaleString()}</td>
+            <td class="mono">${(d.total_rewards || 0).toFixed(4)} THR</td>
+            <td class="muted">${rel(d.registered_at || '')}</td>
+          `;
+          devicesBody.appendChild(tr);
+        });
+      }
+    } else {
+      devicesBody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#ff5577">Unable to load devices</td></tr>';
+    }
+
+    // Load recent telemetry
+    const telemetryBody = el('#verifyTelemetryBody');
+    telemetryBody.innerHTML = '';
+
+    // Try to get recent telemetry from all devices
+    try {
+      const telR = await fetch('/api/verify/telemetry/recent?limit=10');
+      if(telR.ok){
+        const telJ = await telR.json();
+        const entries = telJ.entries || telJ.telemetry || [];
+
+        if(entries.length === 0){
+          telemetryBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#9fdfb4">No telemetry data yet</td></tr>';
+        } else {
+          entries.forEach(t => {
+            const spoofStatus = t.anti_spoof_valid
+              ? '<span style="color:#16ff57">✓ Valid</span>'
+              : '<span style="color:#ff5577">⚠ Suspect</span>';
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+              <td class="mono k">${short(t.device_id || '—')}</td>
+              <td class="mono">${t.latitude?.toFixed(5) || '—'}, ${t.longitude?.toFixed(5) || '—'}</td>
+              <td class="mono">${t.speed ? t.speed.toFixed(1) + ' km/h' : '—'}</td>
+              <td class="mono">${t.heading ? t.heading.toFixed(0) + '°' : '—'}</td>
+              <td>${spoofStatus}</td>
+              <td class="muted">${rel(t.timestamp || '')}</td>
+            `;
+            telemetryBody.appendChild(tr);
+          });
+        }
+      } else {
+        telemetryBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#9fdfb4">Telemetry endpoint not available</td></tr>';
+      }
+    } catch(telErr) {
+      telemetryBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#9fdfb4">No telemetry data</td></tr>';
+    }
+
+  }catch(e){
+    console.error('VerifyID load failed', e);
+    el('#verifyDevicesBody').innerHTML = '<tr><td colspan="7" style="text-align:center;color:#ff5577">VerifyID service unavailable</td></tr>';
+    el('#verifyTelemetryBody').innerHTML = '<tr><td colspan="6" style="text-align:center;color:#ff5577">Telemetry unavailable</td></tr>';
   }
 }
 </script>

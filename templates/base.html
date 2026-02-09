@@ -1838,6 +1838,9 @@
             <button class="history-tab-btn" data-filter="l2e" onclick="filterHistory('l2e')" style="flex: 1; min-width: 40px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
                 L2E
             </button>
+            <button class="history-tab-btn" data-filter="t2e" onclick="filterHistory('t2e')" style="flex: 1; min-width: 40px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                🚗 T2E
+            </button>
             <button class="history-tab-btn" data-filter="ai_credits" onclick="filterHistory('ai_credits')" style="flex: 1; min-width: 75px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
                 AI Credits (Chat)
             </button>
@@ -3825,15 +3828,17 @@ function renderHistory() {
 
         const txType = getTxType(tx);
         const typeLabel = txType === 'mining' ? '⛏️ Mining' :
-                         txType === 'l2e' ? 'L2E' :
+                         txType === 'l2e' ? '📚 L2E' :
+                         txType === 't2e' ? '🚗 T2E' :
                          txType === 'ai_credits' ? 'AI Credits' :
                          txType === 'architect_ai_jobs' ? 'Architect / AI Jobs' :
-                         txType === 'iot' ? 'IoT' :
-                         txType === 'bridge' ? 'Bridge' :
-                         txType === 'swaps' ? 'Swaps' :
-                         txType === 'liquidity' ? 'Liquidity' :
-                         txType === 'gateway' ? 'Gateway' :
-                         txType === 'music' ? '🎵 Music Tip' : '';
+                         txType === 'architect' ? 'Architect / AI Jobs' :
+                         txType === 'iot' ? '📡 IoT' :
+                         txType === 'bridge' ? '🌉 Bridge' :
+                         txType === 'swaps' ? '🔄 Swaps' :
+                         txType === 'liquidity' ? '💧 Liquidity' :
+                         txType === 'gateway' ? '🏦 Gateway' :
+                         txType === 'music' ? '🎵 Music' : '';
         const isSwap = txType === 'swaps';
         const isLiquidity = txType === 'liquidity';
         const meta = tx.meta || {};

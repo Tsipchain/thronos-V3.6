@@ -1467,8 +1467,11 @@ def _load_json_file(path, default):
 
 
 def _get_ledger_db_connection():
-    conn = sqlite3.connect(LEDGER_DB_FILE)
+    conn = sqlite3.connect(LEDGER_DB_FILE, timeout=30)  # Wait up to 30s if locked
     conn.row_factory = sqlite3.Row
+    # Enable WAL mode for better concurrent read/write performance
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")  # 30 second busy timeout
     return conn
 
 

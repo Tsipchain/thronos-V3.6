@@ -531,11 +531,11 @@
     </div>
     <div class="info-card">
         <h4>📈
-            <span class="lang-el">24h Volume</span>
-            <span class="lang-en">24h Volume</span>
+            <span class="lang-el">Συναλλαγές</span>
+            <span class="lang-en">Transactions</span>
         </h4>
         <div class="value" id="volume24h">--</div>
-        <div class="label">THR</div>
+        <div class="label">Total TXs</div>
     </div>
 </div>
 
@@ -778,9 +778,9 @@ async function loadBridgeStats() {
         const res = await fetch('/api/bridge/stats');
         const data = await res.json();
 
-        $('totalBurned').textContent = (data.total_burned || 0).toLocaleString();
-        $('lockedBTC').textContent = (data.locked_btc || 0).toFixed(8);
-        $('volume24h').textContent = (data.volume_24h || 0).toLocaleString();
+        $('totalBurned').textContent = (data.total_thr || 0).toLocaleString();
+        $('lockedBTC').textContent = (data.total_btc || 0).toFixed(8);
+        $('volume24h').textContent = (data.txs || 0).toLocaleString();
     } catch (e) {
         console.error('Failed to load bridge stats:', e);
         $('totalBurned').textContent = '0';
@@ -936,8 +936,9 @@ async function loadHistory() {
         const data = await res.json();
 
         const tbody = $('historyBody');
+        const history = data.history || [];
 
-        if (!data.length) {
+        if (!history.length) {
             tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #888;">
                 <span class="lang-el">Δεν υπάρχουν συναλλαγές</span>
                 <span class="lang-en">No transactions yet</span>
@@ -945,15 +946,22 @@ async function loadHistory() {
             return;
         }
 
-        tbody.innerHTML = data.map(tx => `
-            <tr>
-                <td>${tx.type === 'deposit' ? '📥 Deposit' : '📤 Withdraw'}</td>
-                <td class="tx-hash" onclick="copyTxId('${tx.tx_id}')">${(tx.tx_id || '').substring(0, 16)}...</td>
-                <td>${tx.amount} ${tx.token || 'THR'}</td>
-                <td><span class="status-badge ${tx.status}">${tx.status.toUpperCase()}</span></td>
-                <td>${tx.timestamp || '-'}</td>
-            </tr>
-        `).join('');
+        tbody.innerHTML = history.map(tx => {
+            const txType = (tx.type || tx.tx_type || 'deposit').toLowerCase();
+            const isDeposit = txType.includes('deposit') || txType.includes('pledge');
+            const txId = tx.tx_id || tx.txid || tx.hash || '';
+            const amount = tx.amount || tx.thr_amount || tx.btc_amount || tx.thr || tx.btc || 0;
+            const token = tx.token || (tx.thr_amount || tx.thr ? 'THR' : 'BTC');
+            const status = (tx.status || 'confirmed').toLowerCase();
+            const ts = tx.timestamp || tx.date || tx.created_at || '-';
+            return `<tr>
+                <td>${isDeposit ? '📥 Deposit' : '📤 Withdraw'}</td>
+                <td class="tx-hash" onclick="copyTxId('${txId}')">${txId.substring(0, 16)}${txId.length > 16 ? '...' : ''}</td>
+                <td>${amount} ${token}</td>
+                <td><span class="status-badge ${status}">${status.toUpperCase()}</span></td>
+                <td>${ts}</td>
+            </tr>`;
+        }).join('');
     } catch (e) {
         console.error('Failed to load history:', e);
     }

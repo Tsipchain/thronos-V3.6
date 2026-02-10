@@ -145,9 +145,15 @@ document.getElementById("pledgeForm").onsubmit = async (e) => {
     if (data.status === "already_verified") {
       result.innerHTML = `
         <b>${msg.alreadyVerified}</b><br><br>
-        ${msg.addr}: <code>${data.thr_address}</code><br>
+        ${msg.addr}: <code style="font-size:14px;background:#111;padding:4px 8px;user-select:all">${data.thr_address}</code><br>
         ${msg.hash}: <code>${data.pledge_hash}</code><br><br>
-        📄 <a class="pdf-link" href="/contracts/${data.pdf_filename}" target="_blank">${msg.pdf}</a><br>
+        ${data.recovery_required ? `
+          <div style="border:2px solid #ff9500;background:rgba(255,149,0,0.1);padding:15px;margin:10px 0;text-align:center;">
+            <b style="color:#ff9500;">🔑 ${msg.secret}</b><br>
+            <small>${msg.pdfNote} <a href="${data.recovery_url || '/recovery'}" class="pdf-link">${msg.recovery}</a></small>
+          </div>
+        ` : ''}
+        ${data.pdf_url ? `📄 <a class="pdf-link" href="${data.pdf_url}" target="_blank">${msg.pdf}</a><br>` : ''}
         💼 <a href="/wallet/${data.thr_address}">${msg.wallet}</a>
       `;
       return;
@@ -159,13 +165,17 @@ document.getElementById("pledgeForm").onsubmit = async (e) => {
       ${msg.hash}: <code>${data.pledge_hash}</code><br><br>
       ${data.send_secret ? `
         <div style="border:2px solid #ff0;background:rgba(255,255,0,0.1);padding:15px;margin:10px 0;text-align:center;">
-          <b style="color:#ff0;">${msg.secret}</b><br>
-          <code style="font-size:18px;color:#ff0;background:#111;padding:8px 16px;display:inline-block;margin:10px 0;user-select:all;letter-spacing:1px">${data.send_secret}</code><br>
+          <b style="color:#ff0;">⚠️ ${msg.secret}</b><br>
+          <code id="secretCode" style="font-size:18px;color:#ff0;background:#111;padding:8px 16px;display:inline-block;margin:10px 0;user-select:all;letter-spacing:1px">${data.send_secret}</code><br>
+          <div style="margin:10px 0;display:flex;gap:10px;justify-content:center;">
+            <button onclick="navigator.clipboard.writeText('${data.send_secret}');this.textContent='✅ Copied!';setTimeout(()=>this.textContent='📋 Copy',2000)" style="padding:8px 16px;background:#ff0;color:#000;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">📋 Copy</button>
+            <button onclick="(function(){var b=new Blob(['Send Secret for ${data.thr_address}\\n\\n${data.send_secret}\\n\\nKeep this safe. Required to send THR.'],{type:'text/plain'});var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='thr_send_secret_${data.thr_address}.txt';a.click()})()" style="padding:8px 16px;background:#0f0;color:#000;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">💾 Download .txt</button>
+          </div>
           <small style="color:#f88;">${msg.secretWarn}</small><br>
           <small>${msg.pdfNote} <a href="/recovery" class="pdf-link">${msg.recovery}</a></small>
         </div>
       ` : ''}
-      📄 <a class="pdf-link" href="/contracts/${data.pdf_filename}" target="_blank">${msg.pdf}</a><br>
+      ${data.pdf_url ? `📄 <a class="pdf-link" href="${data.pdf_url}" target="_blank">${msg.pdf}</a><br>` : ''}
       ⛏️ <a class="pdf-link" href="/static/miner_kit.zip" download>${msg.miner}</a><br><br>
       💼 <a href="/wallet/${data.thr_address}">${msg.wallet}</a>
     `;

@@ -77,6 +77,20 @@
 
 {% block scripts %}
 <script>
+function activateWallet(addr, secret) {
+  // Connect via the base.html wallet widget (walletSession from wallet_session.js)
+  if (typeof walletSession !== 'undefined' && walletSession.saveSession) {
+    walletSession.saveSession({ address: addr, sendSeed: secret || '', bound: true });
+  }
+  // Update header wallet UI if available
+  if (typeof updateHeaderWalletUi === 'function') updateHeaderWalletUi();
+  if (typeof updateWalletUI === 'function') updateWalletUI();
+  if (typeof loadWalletBalances === 'function') loadWalletBalances(true);
+  // Open the wallet popup
+  if (typeof setWalletOpen === 'function') setWalletOpen(true);
+  if (typeof showWalletContentSection === 'function') showWalletContentSection();
+}
+
 document.getElementById("qr").onclick = () => {
   navigator.clipboard.writeText("1QFeDPwEF8yEgPEfP79hpc8pHytXMz9oEQ");
   const lang = localStorage.getItem('lang') || 'el';
@@ -118,7 +132,7 @@ document.getElementById("pledgeForm").onsubmit = async (e) => {
         pdfNote: "Το PDF περιέχει κρυπτογραφημένο αντίγραφο. Αν χάσεις το μυστικό, μπορείς να το ανακτήσεις από το",
         recovery: "Σελίδα Ανάκτησης",
         wallet: "Μετάβαση στο Πορτοφόλι",
-        miner: "Λήψη Miner Kit",
+        miner: "Λήψη Thronos Kit",
         alreadyVerified: "Αυτή η διεύθυνση BTC έχει ήδη δεσμευτεί.",
         pending: "Αναμονή πληρωμής BTC...",
     } : {
@@ -131,7 +145,7 @@ document.getElementById("pledgeForm").onsubmit = async (e) => {
         pdfNote: "The PDF contains an encrypted backup. If you lose your secret, recover it from the",
         recovery: "Recovery Page",
         wallet: "Go to Wallet",
-        miner: "Download Miner Kit",
+        miner: "Download Thronos Kit",
         alreadyVerified: "This BTC address has already been pledged.",
         pending: "Waiting for BTC payment...",
     };
@@ -154,8 +168,10 @@ document.getElementById("pledgeForm").onsubmit = async (e) => {
           </div>
         ` : ''}
         ${data.pdf_url ? `📄 <a class="pdf-link" href="${data.pdf_url}" target="_blank">${msg.pdf}</a><br>` : ''}
-        💼 <a href="/wallet/${data.thr_address}">${msg.wallet}</a>
+        💼 <a href="#" class="pdf-link" onclick="activateWallet('${data.thr_address}');return false;">${msg.wallet}</a>
       `;
+      // Auto-connect wallet for already_verified
+      activateWallet(data.thr_address);
       return;
     }
 
@@ -176,9 +192,11 @@ document.getElementById("pledgeForm").onsubmit = async (e) => {
         </div>
       ` : ''}
       ${data.pdf_url ? `📄 <a class="pdf-link" href="${data.pdf_url}" target="_blank">${msg.pdf}</a><br>` : ''}
-      ⛏️ <a class="pdf-link" href="/static/miner_kit.zip" download>${msg.miner}</a><br><br>
-      💼 <a href="/wallet/${data.thr_address}">${msg.wallet}</a>
+      ⛏️ <a class="pdf-link" href="/static/thronos_kit.zip" download>${msg.miner}</a><br><br>
+      💼 <a href="#" class="pdf-link" onclick="activateWallet('${data.thr_address}','${data.send_secret || ''}');return false;">${msg.wallet}</a>
     `;
+    // Auto-connect wallet with new credentials
+    if (data.send_secret) activateWallet(data.thr_address, data.send_secret);
   } catch (err) {
     result.classList.add("error");
     const errMsg = lang === 'el' ? "❌ Σφάλμα:" : "❌ Error:";

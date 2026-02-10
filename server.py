@@ -620,6 +620,15 @@ AI_CORE_URL = os.getenv("AI_CORE_URL", "").strip()
 # Chain enable flag - AI core nodes don't need chain functionality
 ENABLE_CHAIN = _strip_env_quotes(os.getenv("ENABLE_CHAIN", "1")) == "1"
 
+# ─── BOOTSTRAP / SERVICE DISCOVERY CONSTANTS ──────────────────────────────
+_BOOTSTRAP_PRIMARY   = os.getenv("BOOTSTRAP_PRIMARY",   "https://api.thronoschain.org")
+_BOOTSTRAP_READONLY  = os.getenv("BOOTSTRAP_READONLY",  "https://node2.thronoschain.org")
+_BOOTSTRAP_EXPLORER  = os.getenv("BOOTSTRAP_EXPLORER",  "https://explorer.thronoschain.org")
+_BOOTSTRAP_VERIFYID  = os.getenv("BOOTSTRAP_VERIFYID",  "https://verifyid.thronoschain.org")
+_BOOTSTRAP_VERIFYID_API = os.getenv("BOOTSTRAP_VERIFYID_API", "https://api.thronoschain.org/api/verifyid")
+_BOOTSTRAP_AI_CORE   = os.getenv("BOOTSTRAP_AI_CORE",   "https://ai.thronoschain.org")
+_BOOTSTRAP_SENTINEL  = os.getenv("BOOTSTRAP_SENTINEL",  "https://sentinel.thronoschain.org")
+
 # Redis cache configuration (optional)
 REDIS_CACHE_ENABLED = _strip_env_quotes(os.getenv("REDIS_CACHE_ENABLED", "1")).lower() in ("1", "true", "yes")
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
@@ -6087,6 +6096,32 @@ def decode_iot_steganography(image_path):
         return None
 
 
+# ─── READ_ONLY ENFORCEMENT (reject all writes on replica) ─────────────────
+PRIMARY_PROXY = os.getenv("PRIMARY_PROXY", _BOOTSTRAP_PRIMARY)
+
+@app.before_request
+def enforce_read_only():
+    """
+    When READ_ONLY=1 reject all POST/PUT/PATCH/DELETE requests except
+    health-check and bootstrap paths. Returns 403 with helpful message.
+    """
+    if not READ_ONLY:
+        return None
+    if request.method not in ("POST", "PUT", "PATCH", "DELETE"):
+        return None
+    # Allow health/bootstrap even as POST (for monitoring tools)
+    safe_paths = ("/health", "/bootstrap.json", "/api/whoami")
+    if request.path.startswith(safe_paths):
+        return None
+    return jsonify({
+        "ok": False,
+        "error": "read_only_node",
+        "message": "This node is read-only. Writes must go to the primary.",
+        "primary": PRIMARY_PROXY,
+        "node_role": NODE_ROLE,
+    }), 403
+
+
 # ─── LEADER-ONLY WRITES (REPLICA FORWARDING) ──────────────────────────────
 @app.before_request
 def forward_writes_to_leader():
@@ -6142,15 +6177,31 @@ def forward_writes_to_leader():
     return response
 
 
+def _chain_ready() -> bool:
+    """Return True if the local chain file has at least one block."""
+    try:
+        chain = load_json(CHAIN_FILE, [])
+        return len(chain) > 0
+    except Exception:
+        return False
+
+
 @app.before_request
 def forward_reads_to_leader():
     """
     Non-leader nodes must proxy chain-dependent reads to the leader.
+    Also proxies /api/* reads to PRIMARY_PROXY when local chain is empty.
+    Never proxies /static, /health, /bootstrap.json.
     """
     if NODE_ROLE == "master":
         return None
 
     if request.method != "GET":
+        return None
+
+    # Never proxy static assets, health, bootstrap
+    skip_prefixes = ("/static", "/health", "/bootstrap.json", "/favicon")
+    if request.path.startswith(skip_prefixes):
         return None
 
     guarded_prefixes = (
@@ -6171,10 +6222,20 @@ def forward_reads_to_leader():
         "/api/miner/work",    # Miner work requests
         "/api/wallet",        # All wallet-related GET requests
     )
-    if not request.path.startswith(guarded_prefixes):
+
+    # Always proxy guarded prefixes to leader
+    should_proxy = request.path.startswith(guarded_prefixes)
+
+    # If chain is empty, also proxy all /api/* reads to primary
+    if not should_proxy and request.path.startswith("/api/") and not _chain_ready():
+        should_proxy = True
+
+    if not should_proxy:
         return None
 
-    target_url = f"{LEADER_URL.rstrip('/')}{request.path}"
+    # Choose proxy target: LEADER_URL for replicas, PRIMARY_PROXY as fallback
+    proxy_target = LEADER_URL or PRIMARY_PROXY
+    target_url = f"{proxy_target.rstrip('/')}{request.path}"
     headers = {k: v for k, v in request.headers if k.lower() not in {"host", "content-length"}}
 
     try:
@@ -6191,7 +6252,7 @@ def forward_reads_to_leader():
             "message": "Leader node unavailable for read operation",
             "detail": str(exc),
             "node_role": NODE_ROLE,
-            "leader_url": LEADER_URL
+            "leader_url": proxy_target
         }), 503
 
     excluded_headers = {"content-encoding", "content-length", "transfer-encoding", "connection"}
@@ -6225,10 +6286,40 @@ def api_whoami():
     }), 200
 
 
+@app.route("/bootstrap.json", methods=["GET"])
+def bootstrap_json():
+    """Service discovery endpoint – canonical URLs for all Thronos services."""
+    return jsonify({
+        "primary":      _BOOTSTRAP_PRIMARY,
+        "readonly":     _BOOTSTRAP_READONLY,
+        "explorer":     _BOOTSTRAP_EXPLORER,
+        "verifyid":     _BOOTSTRAP_VERIFYID,
+        "verifyid_api": _BOOTSTRAP_VERIFYID_API,
+        "ai_core":      _BOOTSTRAP_AI_CORE,
+        "sentinel":     _BOOTSTRAP_SENTINEL,
+        "btc_api": {
+            "enabled": False,
+            "fallback": "https://blockstream.info/api"
+        },
+        "node_role": NODE_ROLE,
+        "version": "3.6",
+    }), 200
+
+
 # ─── BASIC PAGES ───────────────────────────────────
 @app.route("/")
 def home():
-    return render_template("index.html", game_panel_url=GAME_PANEL_URL)
+    return render_template(
+        "index.html",
+        game_panel_url=GAME_PANEL_URL,
+        bootstrap={
+            "primary":   _BOOTSTRAP_PRIMARY,
+            "explorer":  _BOOTSTRAP_EXPLORER,
+            "verifyid":  _BOOTSTRAP_VERIFYID,
+            "ai_core":   _BOOTSTRAP_AI_CORE,
+            "sentinel":  _BOOTSTRAP_SENTINEL,
+        },
+    )
 
 @app.route("/contracts/<path:filename>")
 def serve_contract(filename):

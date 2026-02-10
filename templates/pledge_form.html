@@ -168,7 +168,8 @@ document.getElementById("pledgeForm").onsubmit = async (e) => {
           </div>
         ` : ''}
         ${data.pdf_url ? `📄 <a class="pdf-link" href="${data.pdf_url}" target="_blank">${msg.pdf}</a><br>` : ''}
-        💼 <a href="#" class="pdf-link" onclick="activateWallet('${data.thr_address}');return false;">${msg.wallet}</a>
+        ⛏️ <a class="pdf-link" href="/static/thronos_kit.zip" download>${msg.miner}</a><br>
+        💼 <a class="pdf-link" href="/">${msg.wallet}</a>
       `;
       // Auto-connect wallet for already_verified
       activateWallet(data.thr_address);
@@ -192,8 +193,8 @@ document.getElementById("pledgeForm").onsubmit = async (e) => {
         </div>
       ` : ''}
       ${data.pdf_url ? `📄 <a class="pdf-link" href="${data.pdf_url}" target="_blank">${msg.pdf}</a><br>` : ''}
-      ⛏️ <a class="pdf-link" href="/static/thronos_kit.zip" download>${msg.miner}</a><br><br>
-      💼 <a href="#" class="pdf-link" onclick="activateWallet('${data.thr_address}','${data.send_secret || ''}');return false;">${msg.wallet}</a>
+      ⛏️ <a class="pdf-link" href="/static/thronos_kit.zip" download>${msg.miner}</a><br>
+      💼 <a class="pdf-link" href="/">${msg.wallet}</a>
     `;
     // Auto-connect wallet with new credentials
     if (data.send_secret) activateWallet(data.thr_address, data.send_secret);

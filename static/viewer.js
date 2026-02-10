@@ -254,7 +254,7 @@
   }
 
   const TRANSFER_PAGE_SIZE = 200;
-  const TRANSFER_KINDS = ['token_transfer', 'swap', 'bridge'];
+  const TRANSFER_KINDS = ['thr_transfer', 'token_transfer', 'swap', 'bridge'];
 
   async function loadTransfers(limit = TRANSFER_PAGE_SIZE, cursor = null) {
     try {
@@ -359,13 +359,13 @@
     transfersCursor = null;
     currentTransfersOffset = 0;
 
-    // Reload stats
-    await loadTransfersStats();
-
     // Reload transfers from beginning
     const data = await loadTransfers(TRANSFER_PAGE_SIZE, null);
     const items = data.transfers || data.items || [];
     renderTransfers(items, false);
+
+    // Compute and display stats from actual data
+    updateTransfersStatsFromData(items);
 
     // Update cursor
     transfersCursor = data.cursor || data.next_cursor || null;
@@ -382,14 +382,39 @@
     }
   }
 
-  async function initTransfersTab() {
-    // Load stats first
-    await loadTransfersStats();
+  function updateTransfersStatsFromData(items) {
+    // Compute stats from actual fetched transfer data
+    let totalVolume = 0;
+    const uniqueAddresses = new Set();
+    let swapCount = 0;
 
+    (items || []).forEach(tx => {
+      const asset = (tx.asset_symbol || tx.asset || tx.symbol || 'THR').toUpperCase();
+      if (asset === 'THR') {
+        totalVolume += safeNumber(tx.amount);
+      }
+      if (tx.from) uniqueAddresses.add(tx.from);
+      if (tx.to) uniqueAddresses.add(tx.to);
+      if ((tx.kind || tx.type || '').toLowerCase().includes('swap')) swapCount++;
+    });
+
+    const countText = formatNumber(items.length) + (swapCount > 0 ? ` (${swapCount} swaps)` : '');
+    if (el('txsTotalCount')) el('txsTotalCount').textContent = countText;
+    if (el('txsTotalVolume')) el('txsTotalVolume').textContent = formatTHR(totalVolume) + ' THR';
+    if (el('txsUniqueAddresses')) el('txsUniqueAddresses').textContent = formatNumber(uniqueAddresses.size);
+    if (el('txsAvgSize')) {
+      el('txsAvgSize').textContent = items.length > 0 ? formatTHR(totalVolume / items.length) + ' THR' : '—';
+    }
+  }
+
+  async function initTransfersTab() {
     // Load initial transfers
     const data = await loadTransfers(TRANSFER_PAGE_SIZE, null);
     const items = data.transfers || data.items || [];
     renderTransfers(items, false);
+
+    // Compute and display stats from actual data
+    updateTransfersStatsFromData(items);
 
     // Update cursor
     transfersCursor = data.cursor || data.next_cursor || null;
@@ -440,7 +465,8 @@
     renderTransfers,
     handleLoadMoreTransfers,
     handleRefreshTransfers,
-    initTransfersTab
+    initTransfersTab,
+    updateTransfersStatsFromData
   };
 
 })();

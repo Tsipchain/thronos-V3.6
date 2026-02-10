@@ -560,7 +560,7 @@ document.querySelectorAll('.tab').forEach(t=>{
     });
     // Load data for the selected tab
     if(tab==='blocks') reloadBlocks();
-    if(tab==='txs') { reloadTxs(); if(window.THROnosViewer) window.THROnosViewer.initTransfersTab(); }
+    if(tab==='txs' && window.THROnosViewer) window.THROnosViewer.initTransfersTab();
     if(tab==='tokens') loadTokens();
     if(tab==='pools') loadPools();
     if(tab==='l2e') loadL2E();
@@ -895,8 +895,8 @@ function trimTxs(txs) {
 
 // Fetch live data from API on page load instead of relying on empty boot data
 reloadBlocks();
-reloadTxs();
 loadChainTip();
+// Note: Transfers tab is handled by viewer.js initTransfersTab() when tab is clicked
 
 // PR-5g: Search functionality
 let searchTimeout = null;

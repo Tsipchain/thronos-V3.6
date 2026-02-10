@@ -459,7 +459,11 @@ def replica_sync_guard():
 
 # ─── API ERROR HANDLERS ────────────────────────────────────────────────
 def _api_error_response(status_code: int, message: str):
-    if request.path.startswith("/api/"):
+    # Return JSON for API paths and for any request that sent/expects JSON
+    if (request.path.startswith("/api/")
+        or request.is_json
+        or "application/json" in (request.headers.get("Accept") or "")
+        or request.path in ("/pledge_submit", "/send_thr")):
         return jsonify({"ok": False, "error": message, "status": status_code}), status_code
     return None
 
@@ -11314,7 +11318,7 @@ def pledge_submit():
     data = request.get_json() or {}
     btc_address=(data.get("btc_address") or "").strip()
     pledge_text=(data.get("pledge_text") or "").strip()
-    passphrase=(data.get("passphrase") or "").strip()
+    passphrase=(data.get("user_passphrase") or data.get("passphrase") or "").strip()
     if not btc_address:
         return jsonify(error="Missing BTC address"),400
     pledges = load_json(PLEDGE_CHAIN, [])
@@ -11324,61 +11328,70 @@ def pledge_submit():
             status="already_verified",
             thr_address=exists["thr_address"],
             pledge_hash=exists["pledge_hash"],
-            pdf_filename=exists.get("pdf_filename",f"pledge_{exists['thr_address']}.pdf")
+            pdf_filename=exists.get("pdf_filename",f"pledge_{exists['thr_address']}.pdf"),
+            send_secret=exists.get("_onetime_seed")  # None after first retrieval
         ),200
     free_list=load_json(WHITELIST_FILE,[])
     paid, txns = (True,[]) if btc_address in free_list else verify_btc_payment(btc_address)
     if not paid:
         return jsonify(status="pending",message="Waiting for BTC payment",txns=txns),200
 
-    # Generate proper THR address (THR + 40 hex chars)
-    timestamp = str(int(time.time() * 1000))
-    thr_addr = generate_thr_address(btc_address, timestamp)
-    phash = hashlib.sha256((btc_address+pledge_text).encode()).hexdigest()
-    send_seed=secrets.token_hex(16)
-    send_seed_hash=hashlib.sha256(send_seed.encode()).hexdigest()
-    auth_string=f"{send_seed}:{passphrase}:auth" if passphrase else f"{send_seed}:auth"
-    send_auth_hash=hashlib.sha256(auth_string.encode()).hexdigest()
-    pledge_entry={
-        "btc_address":btc_address,
-        "pledge_text":pledge_text,
-        "timestamp":time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-        "pledge_hash":phash,
-        "thr_address":thr_addr,
-        "send_seed_hash":send_seed_hash,
-        "send_auth_hash":send_auth_hash,
-        "has_passphrase":bool(passphrase)
-    }
-    chain=load_json(CHAIN_FILE,[])
-    height=len(chain)
-    pdf_name=create_secure_pdf_contract(
-        btc_address, pledge_text, thr_addr, phash, height, send_seed, CONTRACTS_DIR, passphrase
-    )
-    pledge_entry["pdf_filename"]=pdf_name
-    pledges.append(pledge_entry)
-    save_json(PLEDGE_CHAIN, pledges)
-
-    # Register BTC->THR mapping for the BTC pledge watcher
     try:
-        reg_file = os.path.join(DATA_DIR, "btc_user_registry.json")
-        registry = load_json(reg_file, {})
-        registry[btc_address] = {
-            "thr_address": thr_addr,
-            "kyc_verified": False,
-            "whitelisted_admin": btc_address in (free_list or []),
-            "source": "pledge_submit",
+        # Generate proper THR address (THR + 40 hex chars)
+        timestamp = str(int(time.time() * 1000))
+        thr_addr = generate_thr_address(btc_address, timestamp)
+        phash = hashlib.sha256((btc_address+pledge_text).encode()).hexdigest()
+        send_seed=secrets.token_hex(16)
+        send_seed_hash=hashlib.sha256(send_seed.encode()).hexdigest()
+        auth_string=f"{send_seed}:{passphrase}:auth" if passphrase else f"{send_seed}:auth"
+        send_auth_hash=hashlib.sha256(auth_string.encode()).hexdigest()
+        pledge_entry={
+            "btc_address":btc_address,
+            "pledge_text":pledge_text,
+            "timestamp":time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "pledge_hash":phash,
+            "thr_address":thr_addr,
+            "send_seed_hash":send_seed_hash,
+            "send_auth_hash":send_auth_hash,
+            "has_passphrase":bool(passphrase)
         }
-        save_json(reg_file, registry)
-    except Exception as exc:
-        app.logger.warning(f"Failed to update btc_user_registry: {exc}")
+        chain=load_json(CHAIN_FILE,[])
+        height=len(chain)
+        try:
+            pdf_name=create_secure_pdf_contract(
+                btc_address, pledge_text, thr_addr, phash, height, send_seed, CONTRACTS_DIR, passphrase
+            )
+        except Exception as pdf_err:
+            app.logger.error(f"PDF generation failed: {pdf_err}")
+            pdf_name=f"pledge_{thr_addr}.pdf"
+        pledge_entry["pdf_filename"]=pdf_name
+        pledges.append(pledge_entry)
+        save_json(PLEDGE_CHAIN, pledges)
 
-    return jsonify(
-        status="verified",
-        thr_address=thr_addr,
-        pledge_hash=phash,
-        pdf_filename=pdf_name,
-        send_secret=send_seed
-    ),200
+        # Register BTC->THR mapping for the BTC pledge watcher
+        try:
+            reg_file = os.path.join(DATA_DIR, "btc_user_registry.json")
+            registry = load_json(reg_file, {})
+            registry[btc_address] = {
+                "thr_address": thr_addr,
+                "kyc_verified": False,
+                "whitelisted_admin": btc_address in (free_list or []),
+                "source": "pledge_submit",
+            }
+            save_json(reg_file, registry)
+        except Exception as exc:
+            app.logger.warning(f"Failed to update btc_user_registry: {exc}")
+
+        return jsonify(
+            status="verified",
+            thr_address=thr_addr,
+            pledge_hash=phash,
+            pdf_filename=pdf_name,
+            send_secret=send_seed
+        ),200
+    except Exception as exc:
+        app.logger.error(f"Pledge creation failed: {exc}")
+        return jsonify(error=f"Pledge creation failed: {str(exc)}"),500
 
 
 def build_wallet_history(thr_addr: str) -> list[dict]:

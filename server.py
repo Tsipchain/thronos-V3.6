@@ -4956,19 +4956,9 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
     fallback_notice = None
 
     if requested not in callable_ids and requested != "auto":
-        if requested_raw:
-            error_payload = {
-                "ok": False,
-                "status": "model_not_callable",
-                "error": f"Model '{requested_raw}' is disabled or not configured",
-                "requested_model": requested_raw,
-                "mode": normalized_mode,
-                "providers": provider_status,
-                "enabled_models": callable_ids,
-            }
-            return None, None, (jsonify(error_payload), 400)
-        fallback_notice = f"Model '{requested}' not callable; using {default_model_id}" if default_model_id else None
-        requested = default_model_id
+        # Gracefully fall back to default/auto instead of hard-failing
+        fallback_notice = f"Model '{requested}' not callable; using {default_model_id or 'auto'}"
+        requested = default_model_id or "auto"
 
     resolved = _resolve_model(requested, normalized_mode=normalized_mode, provider_status=provider_status) if requested else None
     if resolved:
@@ -6555,10 +6545,10 @@ def _categorize_transaction(tx: dict) -> str:
                    "ai_credits_spent", "ai_credits_refund", "service_payment", "ai_knowledge"]:
         return "ai_credits"
 
-    # Architect / AI Jobs (THR billing) - check specific types first
+    # Architect / AI Jobs (THR billing + ai_reward for training providers)
     if tx_type in ["architect_payment", "architect_service", "ai_job_created",
                    "ai_job_progress", "ai_job_completed", "ai_job_reward",
-                   "t2e_architect_reward"] or tx_type_lower.startswith("ai_job"):
+                   "ai_reward", "t2e_architect_reward"] or tx_type_lower.startswith("ai_job"):
         return "architect"
 
     # Train2Earn contributions
@@ -6868,7 +6858,7 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
         "thr": "thr",
         "token_transfer": "tokens",
         "music_tip": "music",
-        "ai_reward": "ai_credits",
+        "ai_reward": "architect",
         "ai_credits": "ai_credits",
         "architect": "architect",
         "t2e": "t2e",

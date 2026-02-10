@@ -254,7 +254,7 @@
   }
 
   const TRANSFER_PAGE_SIZE = 200;
-  const TRANSFER_KINDS = ['token_transfer', 'swap', 'bridge'];
+  const TRANSFER_KINDS = ['thr_transfer', 'token_transfer', 'swap', 'bridge'];
 
   async function loadTransfers(limit = TRANSFER_PAGE_SIZE, cursor = null) {
     try {
@@ -290,7 +290,7 @@
 
     if (!transfers || transfers.length === 0) {
       if (!append) {
-        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;">No transfers found</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;">No transfers found</td></tr>';
       }
       return;
     }
@@ -305,13 +305,35 @@
 
     if (!onlyTransfers.length) {
       if (!append) {
-        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;">No transfers found</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;">No transfers found</td></tr>';
       }
       return;
     }
 
     onlyTransfers.forEach(tx => {
       const row = document.createElement('tr');
+      const fee = tx.fee_burned || tx.fee || 0;
+      const kind = (tx.kind || tx.type || '').toLowerCase();
+
+      // Build details string from transaction metadata
+      let details = '—';
+      const meta = tx.meta || tx.metadata || {};
+      if (kind === 'swap' || kind === 'pool_swap') {
+        const fromAsset = meta.from_asset || tx.symbol_in || tx.from_symbol || 'THR';
+        const toAsset = meta.to_asset || tx.symbol_out || tx.to_symbol || '';
+        if (toAsset) details = `${fromAsset} → ${toAsset}`;
+        else details = `Swap ${fromAsset}`;
+      } else if (kind === 'token_transfer') {
+        const asset = tx.asset_symbol || tx.asset || tx.symbol || 'THR';
+        details = `${asset} transfer`;
+      } else if (kind === 'thr_transfer' || kind === 'transfer') {
+        details = 'THR transfer';
+      } else if (kind === 'bridge' || kind.includes('bridge')) {
+        details = `Bridge ${meta.direction || tx.direction || ''}`.trim();
+      } else if (tx.note) {
+        details = tx.note;
+      }
+
       row.innerHTML = `
         <td><code>${truncateHash(tx.tx_id || tx.id)}</code></td>
         <td>${tx.type || tx.kind || '—'}</td>
@@ -319,7 +341,8 @@
         <td><code>${truncateHash(tx.to || '—')}</code></td>
         <td>${tx.asset_symbol || tx.asset || tx.symbol || 'THR'}</td>
         <td>${formatTHR(tx.amount || 0)}</td>
-        <td>${formatTHR(tx.fee || 0)}</td>
+        <td>${formatTHR(fee)}</td>
+        <td style="font-size:11px;opacity:0.8">${details}</td>
         <td>${formatTimestamp(tx.timestamp)}</td>
       `;
       tbody.appendChild(row);
@@ -359,13 +382,13 @@
     transfersCursor = null;
     currentTransfersOffset = 0;
 
-    // Reload stats
-    await loadTransfersStats();
-
     // Reload transfers from beginning
     const data = await loadTransfers(TRANSFER_PAGE_SIZE, null);
     const items = data.transfers || data.items || [];
     renderTransfers(items, false);
+
+    // Compute and display stats from actual data
+    updateTransfersStatsFromData(items);
 
     // Update cursor
     transfersCursor = data.cursor || data.next_cursor || null;
@@ -382,14 +405,39 @@
     }
   }
 
-  async function initTransfersTab() {
-    // Load stats first
-    await loadTransfersStats();
+  function updateTransfersStatsFromData(items) {
+    // Compute stats from actual fetched transfer data
+    let totalVolume = 0;
+    const uniqueAddresses = new Set();
+    let swapCount = 0;
 
+    (items || []).forEach(tx => {
+      const asset = (tx.asset_symbol || tx.asset || tx.symbol || 'THR').toUpperCase();
+      if (asset === 'THR') {
+        totalVolume += safeNumber(tx.amount);
+      }
+      if (tx.from) uniqueAddresses.add(tx.from);
+      if (tx.to) uniqueAddresses.add(tx.to);
+      if ((tx.kind || tx.type || '').toLowerCase().includes('swap')) swapCount++;
+    });
+
+    const countText = formatNumber(items.length) + (swapCount > 0 ? ` (${swapCount} swaps)` : '');
+    if (el('txsTotalCount')) el('txsTotalCount').textContent = countText;
+    if (el('txsTotalVolume')) el('txsTotalVolume').textContent = formatTHR(totalVolume) + ' THR';
+    if (el('txsUniqueAddresses')) el('txsUniqueAddresses').textContent = formatNumber(uniqueAddresses.size);
+    if (el('txsAvgSize')) {
+      el('txsAvgSize').textContent = items.length > 0 ? formatTHR(totalVolume / items.length) + ' THR' : '—';
+    }
+  }
+
+  async function initTransfersTab() {
     // Load initial transfers
     const data = await loadTransfers(TRANSFER_PAGE_SIZE, null);
     const items = data.transfers || data.items || [];
     renderTransfers(items, false);
+
+    // Compute and display stats from actual data
+    updateTransfersStatsFromData(items);
 
     // Update cursor
     transfersCursor = data.cursor || data.next_cursor || null;
@@ -440,7 +488,8 @@
     renderTransfers,
     handleLoadMoreTransfers,
     handleRefreshTransfers,
-    initTransfersTab
+    initTransfersTab,
+    updateTransfersStatsFromData
   };
 
 })();

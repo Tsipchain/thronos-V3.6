@@ -506,6 +506,7 @@ async function loadBlueprints() {
   const j = await api("/api/ai_blueprints");
   const list = j.blueprints || [];
   const sel = $("blueprint");
+  if (!sel) { console.warn("Blueprint selector element not found"); return; }
   sel.innerHTML = "";
 
   if (!list.length) {

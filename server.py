@@ -11330,6 +11330,31 @@ def pledge_submit():
         pdf_url = None
         if pdf_fn and os.path.isfile(os.path.join(CONTRACTS_DIR, pdf_fn)):
             pdf_url = f"/contracts/{pdf_fn}"
+        else:
+            # PDF missing (volume reset / first-deploy) → regenerate contract
+            try:
+                chain = load_json(CHAIN_FILE, [])
+                height = len(chain)
+                # send_seed not stored; use a placeholder so PDF is a
+                # proof-of-pledge document (recovery still needs the original)
+                regen_seed = "RECOVERY_REQUIRED"
+                pdf_fn = create_secure_pdf_contract(
+                    exists["btc_address"],
+                    exists.get("pledge_text", pledge_text or ""),
+                    exists["thr_address"],
+                    exists["pledge_hash"],
+                    height,
+                    regen_seed,
+                    CONTRACTS_DIR,
+                    passphrase or None,
+                )
+                # Update stored filename so next visit is instant
+                exists["pdf_filename"] = pdf_fn
+                save_json(PLEDGE_CHAIN, pledges)
+                pdf_url = f"/contracts/{pdf_fn}"
+                app.logger.info(f"Regenerated pledge PDF for {exists['thr_address']}")
+            except Exception as regen_err:
+                app.logger.warning(f"PDF regen failed for {exists['thr_address']}: {regen_err}")
         return jsonify(
             status="already_verified",
             thr_address=exists["thr_address"],
@@ -11389,8 +11414,19 @@ def pledge_submit():
         except Exception as exc:
             app.logger.warning(f"Failed to update btc_user_registry: {exc}")
 
-        # Build pdf_url only if file actually exists
+        # Build pdf_url – regenerate if the file is unexpectedly absent
         pdf_path = os.path.join(CONTRACTS_DIR, pdf_name)
+        if not os.path.isfile(pdf_path):
+            try:
+                pdf_name = create_secure_pdf_contract(
+                    btc_address, pledge_text, thr_addr, phash, height, send_seed, CONTRACTS_DIR, passphrase
+                )
+                pdf_path = os.path.join(CONTRACTS_DIR, pdf_name)
+                pledge_entry["pdf_filename"] = pdf_name
+                pledges[-1] = pledge_entry
+                save_json(PLEDGE_CHAIN, pledges)
+            except Exception:
+                pass
         pdf_url = f"/contracts/{pdf_name}" if os.path.isfile(pdf_path) else None
 
         return jsonify(

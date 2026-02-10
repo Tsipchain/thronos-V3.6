@@ -223,38 +223,41 @@ def create_secure_pdf_contract(
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
+    # Effective width available for text (A4 = 210mm, margins 10mm each)
+    ew = pdf.w - pdf.l_margin - pdf.r_margin
+
     pdf.set_font("Courier", "B", 14)
-    pdf.cell(0, 10, "Thronos Chain - Pledge Contract", ln=1)
+    pdf.cell(ew, 10, "Thronos Chain - Pledge Contract", new_x="LMARGIN", new_y="NEXT")
 
-    pdf.set_font("Courier", "", 11)
-    pdf.cell(0, 8, f"Node: CPE_GATEWAY", ln=1)
-    pdf.cell(0, 8, f"Time: {payload['timestamp']}", ln=1)
+    pdf.set_font("Courier", "", 10)
+    pdf.cell(ew, 7, f"Node: CPE_GATEWAY", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(ew, 7, f"Time: {payload['timestamp']}", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(4)
 
-    pdf.set_font("Courier", "", 11)
-    pdf.cell(0, 8, f"BTC Address (KYC): {btc_address}", ln=1)
-    pdf.cell(0, 8, f"THR Address: {thr_address}", ln=1)
-    pdf.cell(0, 8, f"Pledge Hash: {pledge_hash}", ln=1)
-    pdf.cell(0, 8, f"Chain Height at Pledge: {height}", ln=1)
-    pdf.ln(4)
-
-    pdf.set_font("Courier", "B", 11)
-    pdf.cell(0, 8, "Pledge:", ln=1)
-    pdf.set_font("Courier", "", 11)
-    pdf.multi_cell(0, 6, pledge_text or "I pledge to the fire that never dies.")
-    pdf.ln(4)
-
-    pdf.set_font("Courier", "B", 11)
-    pdf.cell(0, 8, "Encrypted Payload (AES/EAX/base64):", ln=1)
     pdf.set_font("Courier", "", 9)
-    # σπάμε τη μεγάλη γραμμή σε κομμάτια
-    chunk = 80
-    for i in range(0, len(encrypted_blob), chunk):
-        pdf.multi_cell(0, 5, encrypted_blob[i : i + chunk])
+    pdf.multi_cell(ew, 6, f"BTC Address (KYC): {btc_address}")
+    pdf.multi_cell(ew, 6, f"THR Address: {thr_address}")
+    pdf.multi_cell(ew, 6, f"Pledge Hash: {pledge_hash}")
+    pdf.set_font("Courier", "", 10)
+    pdf.cell(ew, 7, f"Chain Height at Pledge: {height}", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(4)
-    
-    pdf.set_font("Courier", "I", 10)
-    pdf.cell(0, 8, "Note: This payload is also hidden inside the image below.", ln=1)
+
+    pdf.set_font("Courier", "B", 10)
+    pdf.cell(ew, 7, "Pledge:", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Courier", "", 10)
+    pdf.multi_cell(ew, 6, pledge_text or "I pledge to the fire that never dies.")
+    pdf.ln(4)
+
+    pdf.set_font("Courier", "B", 10)
+    pdf.cell(ew, 7, "Encrypted Payload (AES/EAX/base64):", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Courier", "", 8)
+    chunk = 90
+    for i in range(0, len(encrypted_blob), chunk):
+        pdf.multi_cell(ew, 4, encrypted_blob[i : i + chunk])
+    pdf.ln(4)
+
+    pdf.set_font("Courier", "I", 9)
+    pdf.cell(ew, 7, "Note: This payload is also hidden inside the image below.", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(2)
 
     # 4. Εισαγωγή της εικόνας (fire + QR + Stego)

@@ -632,6 +632,7 @@ _BOOTSTRAP_VERIFYID  = os.getenv("BOOTSTRAP_VERIFYID",  "https://verifyid.throno
 _BOOTSTRAP_VERIFYID_API = os.getenv("BOOTSTRAP_VERIFYID_API", "https://api.thronoschain.org/api/verifyid")
 _BOOTSTRAP_AI_CORE   = os.getenv("BOOTSTRAP_AI_CORE",   "https://ai.thronoschain.org")
 _BOOTSTRAP_SENTINEL  = os.getenv("BOOTSTRAP_SENTINEL",  "https://sentinel.thronoschain.org")
+_BOOTSTRAP_BTC_API   = os.getenv("BOOTSTRAP_BTC_API",   "https://btc-api.thronoschain.org")
 
 # Redis cache configuration (optional)
 REDIS_CACHE_ENABLED = _strip_env_quotes(os.getenv("REDIS_CACHE_ENABLED", "1")).lower() in ("1", "true", "yes")
@@ -6291,10 +6292,7 @@ def bootstrap_json():
         "verifyid_api": _BOOTSTRAP_VERIFYID_API,
         "ai_core":      _BOOTSTRAP_AI_CORE,
         "sentinel":     _BOOTSTRAP_SENTINEL,
-        "btc_api": {
-            "enabled": False,
-            "fallback": "https://blockstream.info/api"
-        },
+        "btc_api":      _BOOTSTRAP_BTC_API,
         "node_role": NODE_ROLE,
         "version": "3.6",
     }), 200

@@ -6315,7 +6315,11 @@ def home():
 
 @app.route("/contracts/<path:filename>")
 def serve_contract(filename):
-    return send_from_directory(CONTRACTS_DIR, filename)
+    safe_name = secure_filename(filename)
+    full_path = os.path.join(CONTRACTS_DIR, safe_name)
+    if not os.path.isfile(full_path):
+        return jsonify({"ok": False, "error": "contract_not_found"}), 404
+    return send_from_directory(CONTRACTS_DIR, safe_name)
 
 @app.route("/media/<path:filename>")
 def media(filename):
@@ -11322,12 +11326,42 @@ def pledge_submit():
     pledges = load_json(PLEDGE_CHAIN, [])
     exists = next((p for p in pledges if p["btc_address"]==btc_address), None)
     if exists:
+        pdf_fn = exists.get("pdf_filename", "")
+        pdf_url = None
+        if pdf_fn and os.path.isfile(os.path.join(CONTRACTS_DIR, pdf_fn)):
+            pdf_url = f"/contracts/{pdf_fn}"
+        else:
+            # PDF missing (volume reset / first-deploy) → regenerate contract
+            try:
+                chain = load_json(CHAIN_FILE, [])
+                height = len(chain)
+                # send_seed not stored; use a placeholder so PDF is a
+                # proof-of-pledge document (recovery still needs the original)
+                regen_seed = "RECOVERY_REQUIRED"
+                pdf_fn = create_secure_pdf_contract(
+                    exists["btc_address"],
+                    exists.get("pledge_text", pledge_text or ""),
+                    exists["thr_address"],
+                    exists["pledge_hash"],
+                    height,
+                    regen_seed,
+                    CONTRACTS_DIR,
+                    passphrase or None,
+                )
+                # Update stored filename so next visit is instant
+                exists["pdf_filename"] = pdf_fn
+                save_json(PLEDGE_CHAIN, pledges)
+                pdf_url = f"/contracts/{pdf_fn}"
+                app.logger.info(f"Regenerated pledge PDF for {exists['thr_address']}")
+            except Exception as regen_err:
+                app.logger.warning(f"PDF regen failed for {exists['thr_address']}: {regen_err}")
         return jsonify(
             status="already_verified",
             thr_address=exists["thr_address"],
             pledge_hash=exists["pledge_hash"],
-            pdf_filename=exists.get("pdf_filename",f"pledge_{exists['thr_address']}.pdf"),
-            send_secret=exists.get("_onetime_seed")  # None after first retrieval
+            pdf_url=pdf_url,
+            recovery_required=True,
+            recovery_url="/recovery",
         ),200
     free_list=load_json(WHITELIST_FILE,[])
     paid, txns = (True,[]) if btc_address in free_list else verify_btc_payment(btc_address)
@@ -11380,11 +11414,26 @@ def pledge_submit():
         except Exception as exc:
             app.logger.warning(f"Failed to update btc_user_registry: {exc}")
 
+        # Build pdf_url – regenerate if the file is unexpectedly absent
+        pdf_path = os.path.join(CONTRACTS_DIR, pdf_name)
+        if not os.path.isfile(pdf_path):
+            try:
+                pdf_name = create_secure_pdf_contract(
+                    btc_address, pledge_text, thr_addr, phash, height, send_seed, CONTRACTS_DIR, passphrase
+                )
+                pdf_path = os.path.join(CONTRACTS_DIR, pdf_name)
+                pledge_entry["pdf_filename"] = pdf_name
+                pledges[-1] = pledge_entry
+                save_json(PLEDGE_CHAIN, pledges)
+            except Exception:
+                pass
+        pdf_url = f"/contracts/{pdf_name}" if os.path.isfile(pdf_path) else None
+
         return jsonify(
             status="verified",
             thr_address=thr_addr,
             pledge_hash=phash,
-            pdf_filename=pdf_name,
+            pdf_url=pdf_url,
             send_secret=send_seed
         ),200
     except Exception as exc:

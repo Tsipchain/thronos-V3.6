@@ -43,6 +43,9 @@ MASTER_NODE_URL = os.getenv("MASTER_NODE_URL", "http://localhost:5000")
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
 DATA_DIR = os.getenv("DATA_DIR", "./data")
 
+# Thronos BTC API adapter (primary) – falls back to blockstream.info if unavailable
+BTC_API_URL = os.getenv("BTC_API_URL", "https://btc-api.thronoschain.org")
+
 # State file to track processed transactions
 PROCESSED_TXS_FILE = os.path.join(DATA_DIR, "btc_pledge_processed.json")
 
@@ -138,8 +141,10 @@ def btc_rpc_call(method: str, params: List = None) -> Optional[Dict]:
 def get_vault_transactions() -> List[Dict]:
     """
     Get transactions received by the pledge vault address.
-    Uses blockstream.info public API (no Bitcoin node needed).
-    Falls back to BTC RPC if configured.
+    Strategy order:
+      1. Thronos BTC API adapter (btc-api.thronoschain.org)
+      2. Blockstream.info public API
+      3. BTC RPC (if configured)
     """
     if not BTC_PLEDGE_VAULT:
         logger.warning("BTC_PLEDGE_VAULT not configured")
@@ -147,7 +152,17 @@ def get_vault_transactions() -> List[Dict]:
 
     logger.info(f"Checking vault address: {BTC_PLEDGE_VAULT}")
 
-    # Strategy 1: Use blockstream.info API (public, no config needed)
+    # Strategy 1: Thronos BTC API adapter (our own service)
+    if BTC_API_URL:
+        try:
+            txs = _fetch_vault_txs_adapter(BTC_PLEDGE_VAULT)
+            if txs:
+                logger.info(f"Got {len(txs)} txs from Thronos BTC API")
+                return txs
+        except Exception as e:
+            logger.warning(f"Thronos BTC API failed: {e}, falling back to blockstream")
+
+    # Strategy 2: Blockstream.info public API (fallback)
     try:
         txs = _fetch_vault_txs_blockstream(BTC_PLEDGE_VAULT)
         if txs:
@@ -155,7 +170,7 @@ def get_vault_transactions() -> List[Dict]:
     except Exception as e:
         logger.warning(f"Blockstream API failed: {e}")
 
-    # Strategy 2: Fall back to BTC RPC if configured
+    # Strategy 3: BTC RPC (if configured)
     if BTC_RPC_URL:
         try:
             result = btc_rpc_call("listtransactions", ["*", 100])
@@ -175,6 +190,77 @@ def get_vault_transactions() -> List[Dict]:
             logger.warning(f"BTC RPC fallback failed: {e}")
 
     return []
+
+
+def _fetch_vault_txs_adapter(vault_address: str) -> List[Dict]:
+    """Fetch incoming transactions to vault using the Thronos BTC API adapter."""
+    base_url = BTC_API_URL.rstrip("/")
+    result = []
+    seen_txids = set()
+    user_registry = load_user_registry()
+
+    # The adapter mirrors blockstream.info API format
+    # Try confirmed transactions
+    resp = requests.get(
+        f"{base_url}/api/address/{vault_address}/txs",
+        timeout=15
+    )
+    resp.raise_for_status()
+    all_txs = resp.json() if isinstance(resp.json(), list) else []
+
+    # Also check mempool
+    try:
+        mem_resp = requests.get(
+            f"{base_url}/api/address/{vault_address}/txs/mempool",
+            timeout=10
+        )
+        mem_resp.raise_for_status()
+        mem_txs = mem_resp.json() if isinstance(mem_resp.json(), list) else []
+        all_txs.extend(mem_txs)
+    except Exception:
+        pass
+
+    for raw_tx in all_txs:
+        txid = raw_tx.get("txid")
+        if not txid or txid in seen_txids:
+            continue
+        seen_txids.add(txid)
+
+        status = raw_tx.get("status", {})
+        confirmed = status.get("confirmed", False)
+        block_time = status.get("block_time", 0)
+        confirmations = 0
+        if confirmed and block_time:
+            confirmations = max(1, int((time.time() - block_time) / 600))
+
+        for vout in raw_tx.get("vout", []):
+            addr = vout.get("scriptpubkey_address", "")
+            if addr == vault_address:
+                amount_btc = vout.get("value", 0) / 1e8
+                if amount_btc <= 0:
+                    continue
+
+                sender_addr = ""
+                for vin in raw_tx.get("vin", []):
+                    prevout = vin.get("prevout", {})
+                    sa = prevout.get("scriptpubkey_address", "")
+                    if sa and sa != vault_address:
+                        sender_addr = sa
+                        break
+
+                result.append({
+                    "txid": txid,
+                    "address": sender_addr,
+                    "to": vault_address,
+                    "amount": amount_btc,
+                    "confirmations": confirmations,
+                    "timestamp": block_time or int(time.time()),
+                    "confirmed": confirmed,
+                })
+                break
+
+    logger.info(f"Found {len(result)} transactions to vault via Thronos BTC API")
+    return result
 
 
 def _fetch_vault_txs_blockstream(vault_address: str) -> List[Dict]:

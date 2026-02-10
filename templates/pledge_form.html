@@ -112,22 +112,59 @@ document.getElementById("pledgeForm").onsubmit = async (e) => {
         accepted: "🔥 Η Δέσμευση Έγινε Δεκτή!",
         addr: "Διεύθυνση THR",
         hash: "Pledge Hash",
+        secret: "Μυστικό Αποστολής (ΑΠΟΘΗΚΕΥΣΕ ΤΟ!)",
+        secretWarn: "Αυτό εμφανίζεται ΜΟΝΟ ΜΙΑ ΦΟΡΑ. Αποθήκευσέ το με ασφάλεια. Χρειάζεται για αποστολή THR.",
         pdf: "Λήψη Συμβολαίου PDF",
+        pdfNote: "Το PDF περιέχει κρυπτογραφημένο αντίγραφο. Αν χάσεις το μυστικό, μπορείς να το ανακτήσεις από το",
+        recovery: "Σελίδα Ανάκτησης",
         wallet: "Μετάβαση στο Πορτοφόλι",
-        miner: "Λήψη Miner Kit"
+        miner: "Λήψη Miner Kit",
+        alreadyVerified: "Αυτή η διεύθυνση BTC έχει ήδη δεσμευτεί.",
+        pending: "Αναμονή πληρωμής BTC...",
     } : {
         accepted: "🔥 Pledge Accepted!",
         addr: "THR Address",
         hash: "Pledge Hash",
+        secret: "Send Secret (SAVE THIS!)",
+        secretWarn: "This is shown ONLY ONCE. Save it securely. Required to send THR.",
         pdf: "Download Contract PDF",
+        pdfNote: "The PDF contains an encrypted backup. If you lose your secret, recover it from the",
+        recovery: "Recovery Page",
         wallet: "Go to Wallet",
-        miner: "Download Miner Kit"
+        miner: "Download Miner Kit",
+        alreadyVerified: "This BTC address has already been pledged.",
+        pending: "Waiting for BTC payment...",
     };
+
+    if (data.status === "pending") {
+      result.classList.add("error");
+      result.innerHTML = `<b>⏳ ${msg.pending}</b><br>${data.message || ''}`;
+      return;
+    }
+
+    if (data.status === "already_verified") {
+      result.innerHTML = `
+        <b>${msg.alreadyVerified}</b><br><br>
+        ${msg.addr}: <code>${data.thr_address}</code><br>
+        ${msg.hash}: <code>${data.pledge_hash}</code><br><br>
+        📄 <a class="pdf-link" href="/contracts/${data.pdf_filename}" target="_blank">${msg.pdf}</a><br>
+        💼 <a href="/wallet/${data.thr_address}">${msg.wallet}</a>
+      `;
+      return;
+    }
 
     result.innerHTML = `
       <b>${msg.accepted}</b><br><br>
-      ${msg.addr}: <code>${data.thr_address}</code><br>
+      ${msg.addr}: <code style="font-size:14px;background:#111;padding:4px 8px;user-select:all">${data.thr_address}</code><br>
       ${msg.hash}: <code>${data.pledge_hash}</code><br><br>
+      ${data.send_secret ? `
+        <div style="border:2px solid #ff0;background:rgba(255,255,0,0.1);padding:15px;margin:10px 0;text-align:center;">
+          <b style="color:#ff0;">${msg.secret}</b><br>
+          <code style="font-size:18px;color:#ff0;background:#111;padding:8px 16px;display:inline-block;margin:10px 0;user-select:all;letter-spacing:1px">${data.send_secret}</code><br>
+          <small style="color:#f88;">${msg.secretWarn}</small><br>
+          <small>${msg.pdfNote} <a href="/recovery" class="pdf-link">${msg.recovery}</a></small>
+        </div>
+      ` : ''}
       📄 <a class="pdf-link" href="/contracts/${data.pdf_filename}" target="_blank">${msg.pdf}</a><br>
       ⛏️ <a class="pdf-link" href="/static/miner_kit.zip" download>${msg.miner}</a><br><br>
       💼 <a href="/wallet/${data.thr_address}">${msg.wallet}</a>

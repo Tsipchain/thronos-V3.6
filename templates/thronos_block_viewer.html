@@ -465,6 +465,7 @@ const CATEGORY_RULES = {
   transfers: {
     label: 'Transfers',
     kinds: [
+      'thr_transfer',
       'token_transfer',
       'swap',
       'bridge',
@@ -558,7 +559,8 @@ document.querySelectorAll('.tab').forEach(t=>{
       el('#view-'+name).style.display = (name===tab)?'block':'none';
     });
     // Load data for the selected tab
-    if(tab==='txs' && window.THROnosViewer) window.THROnosViewer.initTransfersTab();
+    if(tab==='blocks') reloadBlocks();
+    if(tab==='txs') { reloadTxs(); if(window.THROnosViewer) window.THROnosViewer.initTransfersTab(); }
     if(tab==='tokens') loadTokens();
     if(tab==='pools') loadPools();
     if(tab==='l2e') loadL2E();
@@ -891,8 +893,9 @@ function trimTxs(txs) {
   return txs;
 }
 
-renderBlocks(CURRENT_BLOCKS);
-renderTxs(CURRENT_TXS);
+// Fetch live data from API on page load instead of relying on empty boot data
+reloadBlocks();
+reloadTxs();
 loadChainTip();
 
 // PR-5g: Search functionality

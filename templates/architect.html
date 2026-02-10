@@ -625,6 +625,7 @@ if (langSelectEl) {
 // Load Models from API
 async function loadModels() {
   const modelSel = $("model");
+  if (!modelSel) { console.warn("Model selector element not found"); return; }
   const previousValue = modelSel.value || "auto";
 
   // Keep "Auto" option

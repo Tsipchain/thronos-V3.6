@@ -745,6 +745,7 @@ active_peers = PEERS  # Backward-compatible alias
 # AI commerce
 AI_PACKS_FILE       = os.path.join(DATA_DIR, "ai_packs.json")
 AI_CREDITS_FILE     = os.path.join(DATA_DIR, "ai_credits.json")
+AI_CREDITS_LEDGER_FILE = os.path.join(DATA_DIR, "ai_credits_ledger.json")
 AI_POOL_FILE        = os.path.join(DATA_DIR, "ai_pool.json")  # Phase 4: AI rewards pool
 NETWORK_POOL_FILE   = os.path.join(DATA_DIR, "network_pool.json")  # Phase 5: Network rewards pool (10% of music telemetry)
 T2E_REWARDS_FILE    = os.path.join(DATA_DIR, "t2e_rewards.json")  # Train-to-Earn rewards for IoT/ASIC miners
@@ -2672,7 +2673,7 @@ def distribute_t2e_rewards(min_contributions: int = 10) -> list:
         tx_id = _distribute_ai_pool_to_address(
             wallet,
             reward_amount,
-            category="t2e_reward",
+            category="t2e_reward_thr",
             details={
                 "device_id": dev_id,
                 "contributions": contributions,
@@ -3314,8 +3315,8 @@ def _canonical_kind(kind_raw: str) -> str:
         "playlist_add_track": "music",  # PR-5: Music/Playlists canonical kinds
         "playlist_remove_track": "music",  # PR-5: Music/Playlists canonical kinds
         "playlist_reorder": "music",  # PR-5: Music/Playlists canonical kinds
-        "t2e_reward": "t2e_reward",  # Phase 5: Train-to-Earn rewards
-        "train_reward": "t2e_reward",  # Phase 5: Train-to-Earn alias
+        "t2e_reward": "t2e_reward_thr",  # Phase 5: Train-to-Earn rewards (THR)
+        "train_reward": "t2e_reward_thr",  # Phase 5: Train-to-Earn alias
         "network_reward": "network_reward",  # Phase 5: Network pool rewards
         "validator_reward": "network_reward",  # Phase 5: Validator rewards alias
         "ai_reward": "ai_reward",  # AI pool distribution
@@ -4948,6 +4949,36 @@ def save_ai_packs(packs):
     save_json(AI_PACKS_FILE, packs)
 
 
+def load_ai_credits_ledger():
+    return load_json(AI_CREDITS_LEDGER_FILE, [])
+
+
+def save_ai_credits_ledger(entries):
+    save_json(AI_CREDITS_LEDGER_FILE, entries)
+
+
+def append_ai_credits_ledger(wallet: str, delta: int, reason: str, before: int, after: int, metadata: dict | None = None):
+    try:
+        ledger = load_ai_credits_ledger()
+        if not isinstance(ledger, list):
+            ledger = []
+        entry = {
+            "id": f"acl-{int(time.time()*1000)}-{secrets.token_hex(4)}",
+            "wallet": wallet,
+            "delta": int(delta or 0),
+            "reason": (reason or "adjust").strip().lower(),
+            "balance_before": int(before or 0),
+            "balance_after": int(after or 0),
+            "unit": "credits",
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "metadata": metadata or {},
+        }
+        ledger.append(entry)
+        save_ai_credits_ledger(ledger[-5000:])
+    except Exception:
+        logger.exception("[AI_CREDITS] failed to append ledger entry")
+
+
 def load_ai_credits():
     """wallet -> σύνολο credits"""
     return load_json(AI_CREDITS_FILE, {})
@@ -4968,7 +4999,7 @@ def get_ai_credits(wallet: str) -> int:
         return 0
 
 
-def add_ai_credits(wallet: str, delta: int, reason: str = "") -> int:
+def add_ai_credits(wallet: str, delta: int, reason: str = "", metadata: dict | None = None) -> int:
     wallet = (wallet or "").strip()
     if not wallet:
         return 0
@@ -4977,7 +5008,11 @@ def add_ai_credits(wallet: str, delta: int, reason: str = "") -> int:
     after = max(0, before + int(delta or 0))
     credits_map[wallet] = after
     save_ai_credits(credits_map)
-    logger.info("[AI_CREDITS] wallet=%s op=%s cost=%s before=%s after=%s", wallet, reason or "adjust", abs(int(delta or 0)), before, after)
+    normalized_reason = (reason or "adjust").strip().lower()
+    if normalized_reason == "chat_message":
+        normalized_reason = "chat_usage"
+    logger.info("[AI_CREDITS] wallet=%s op=%s cost=%s before=%s after=%s", wallet, normalized_reason, abs(int(delta or 0)), before, after)
+    append_ai_credits_ledger(wallet, int(delta or 0), normalized_reason, before, after, metadata=metadata)
     return after
 
 
@@ -6740,7 +6775,7 @@ def _categorize_transaction(tx: dict) -> str:
     if tx_type in ["architect_payment", "architect_service", "ai_job_created",
                    "ai_job_progress", "ai_job_completed", "ai_job_reward",
                    "ai_reward", "t2e_architect_reward"] or tx_type_lower.startswith("ai_job"):
-        return "architect"
+        return "architect_job"
 
     # Train2Earn contributions
     if "t2e" in tx_type_lower and "architect" not in tx_type_lower:
@@ -7051,8 +7086,8 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
         "music_tip": "music",
         "ai_reward": "architect",
         "ai_credits": "ai_credits",
-        "architect": "architect",
-        "t2e": "t2e",
+        "architect": "architect_job",
+        "t2e": "t2e_reward_thr",
         "l2e": "l2e",
         "iot_telemetry": "iot",
         "iot": "iot",
@@ -10919,7 +10954,7 @@ def api_chat():
     can_charge = bool(wallet) and raw_status not in charge_block_statuses
 
     if wallet and can_charge and not billing_precharged:
-        success, credits_after = debit_ai_credits(wallet, AI_CREDIT_COST_PER_MSG, reason="chat_message")
+        success, credits_after = debit_ai_credits(wallet, AI_CREDIT_COST_PER_MSG, reason="chat_usage")
         if not success:
             credits_for_frontend = get_ai_credits(wallet)
             ai_credits_spent = 0.0
@@ -11344,6 +11379,45 @@ def api_ai_credits():
 
     value = get_ai_credits(wallet)
     return jsonify({"wallet": wallet, "credits": value}), 200
+
+
+@app.route("/api/ai_credits/ledger", methods=["GET"])
+def api_ai_credits_ledger():
+    wallet = (request.args.get("wallet") or "").strip()
+    if not wallet:
+        return jsonify({"ok": False, "error": "wallet required", "entries": []}), 400
+
+    try:
+        limit = max(1, min(int(request.args.get("limit") or 200), 1000))
+    except Exception:
+        limit = 200
+
+    all_entries = load_ai_credits_ledger()
+    if not isinstance(all_entries, list):
+        all_entries = []
+
+    entries = [e for e in all_entries if isinstance(e, dict) and (e.get("wallet") or "") == wallet]
+    entries.sort(key=lambda e: str(e.get("timestamp") or ""), reverse=True)
+    entries = entries[:limit]
+
+    reasons_summary = {
+        "pack_purchase": 0,
+        "chat_usage": 0,
+        "t2e_reward": 0,
+    }
+    for e in entries:
+        r = str(e.get("reason") or "").lower()
+        if r in reasons_summary:
+            reasons_summary[r] += int(e.get("delta") or 0)
+
+    return jsonify({
+        "ok": True,
+        "wallet": wallet,
+        "unit": "credits",
+        "balance": get_ai_credits(wallet),
+        "entries": entries,
+        "summary": reasons_summary,
+    }), 200
 
 
 @app.route("/api/ai/files", methods=["POST", "GET"])
@@ -11815,7 +11889,7 @@ def api_ai_purchase_pack():
 
     # --- Credits ledger ---
     add_credits = int(pack.get("credits", 0))
-    total_credits = add_ai_credits(wallet, add_credits, reason="pack_purchase")
+    total_credits = add_ai_credits(wallet, add_credits, reason="pack_purchase", metadata={"pack_code": pack.get("code"), "thr_spent": price})
 
     # --- Chain TX (service_payment) ---
     chain = load_json(CHAIN_FILE, [])
@@ -12122,7 +12196,8 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
         "liquidity": "Liquidity",
         "l2e": "Learn-to-Earn Reward",
         "ai_credits": "AI Credits",
-        "architect_ai_jobs": "Architect / AI Jobs",
+        "architect_job": "Architect / AI Jobs",
+        "t2e_reward_thr": "T2E Reward (THR)",
         "iot": "IoT",
         "autopilot": "Autopilot",
         "parking": "Parking",
@@ -12190,7 +12265,7 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
         if category_value is None:
             # PR-4: Normalize architect taxonomy - any tx with architect-related kind gets architect_ai_jobs category
             if is_architect_meta or kind in {"architect", "architect_job", "architect_payment", "architect_ai_jobs", "ai_job_created", "ai_job_progress", "ai_job_completed", "ai_job_reward"}:
-                category_value = "architect_ai_jobs"
+                category_value = "architect_job"
             elif is_chat_meta or kind in {"ai_credits_earned", "ai_credits_spent"}:
                 category_value = "ai_credits"
             else:
@@ -12202,6 +12277,7 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
                     "l2e": "l2e",
                     "ai_credits": "ai_credits",
                     "ai_credit": "ai_credits",
+                    "t2e_reward_thr": "t2e_reward_thr",
                     "iot": "iot",
                     "autopilot": "iot",
                     "parking": "iot",
@@ -21608,12 +21684,9 @@ def api_t2e_submit():
     if (session.get("session_type") or "train") != "train":
         return jsonify({"ok": False, "error": "session_type_mismatch", "expected": "train", "found": session.get("session_type")}), 409
 
-    credits_map = load_ai_credits()
-    before = int(credits_map.get(wallet, 0) or 0)
+    before = get_ai_credits(wallet)
     delta = int(data.get("credits_delta") or 5)
-    after = before + delta
-    credits_map[wallet] = after
-    save_ai_credits(credits_map)
+    after = add_ai_credits(wallet, delta, reason="t2e_reward", metadata={"event_id": event_id, "session_id": session_id})
 
     event = {
         "event_id": event_id,

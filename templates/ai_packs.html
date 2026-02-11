@@ -164,6 +164,7 @@
     </div>
 
     <div id="status" class="status-line"></div>
+    <div id="creditsView" class="status-line">AI Credits: -</div>
 
     <div id="packs" class="packs-grid">
         <!-- packs will load here -->
@@ -181,9 +182,13 @@
         statusDiv.className = "status-line " + (cls || "");
     }
 
+    const creditsView = document.getElementById("creditsView");
+
     function loadWalletLocal() {
         try {
-            return localStorage.getItem("thronos_wallet") || "";
+            const qp = new URLSearchParams(window.location.search).get("wallet");
+            if (qp) return qp;
+            return localStorage.getItem("thr_address") || localStorage.getItem("thronos_wallet") || "";
         } catch (_) {
             return "";
         }
@@ -192,14 +197,32 @@
     function saveWalletLocal(addr) {
         try {
             localStorage.setItem("thronos_wallet", addr || "");
+            localStorage.setItem("thr_address", addr || "");
         } catch (_) {}
     }
 
+    async function refreshCredits() {
+        const wallet = walletInput.value.trim();
+        if (!wallet) {
+            creditsView.textContent = "AI Credits: -";
+            return;
+        }
+        try {
+            const res = await fetch(`/api/ai_credits?wallet=${encodeURIComponent(wallet)}`);
+            const data = await res.json();
+            creditsView.textContent = `AI Credits: ${data.credits ?? 0}`;
+        } catch (_) {
+            creditsView.textContent = "AI Credits: -";
+        }
+    }
+
     walletInput.value = loadWalletLocal();
+    refreshCredits();
 
     saveBtn.addEventListener("click", () => {
         saveWalletLocal(walletInput.value.trim());
         setStatus("Wallet saved locally. Χρησιμοποίησε το ίδιο στο Quantum Chat.", "ok");
+        refreshCredits();
     });
 
     async function loadPacks() {
@@ -289,6 +312,7 @@
                 "Purchased " + data.pack.title + ". Total credits: " + data.total_credits,
                 "ok"
             );
+            refreshCredits();
         } catch (err) {
             setStatus("Network error during purchase: " + err.message, "error");
         }

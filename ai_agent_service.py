@@ -260,6 +260,7 @@ def call_llm(
     wallet: Optional[str] = None,
     difficulty: Optional[str] = None,
     block_hash: Optional[str] = None,
+    chain_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     requested_model = model
     enabled_model_ids = list_enabled_model_ids()
@@ -340,8 +341,10 @@ def call_llm(
             call_attempted = True
             text = call_gemini(model, messages, system_prompt=system_prompt, temperature=temperature, max_tokens=max_tokens)
         elif provider == "local":
-            data_dir = os.getenv("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
-            corpus_file = os.path.join(data_dir, "ai_offline_corpus.json")
+            corpus_file = (os.getenv("THR_OFFLINE_CORPUS_PATH") or "").strip()
+            if not corpus_file:
+                data_dir = os.getenv("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
+                corpus_file = os.path.join(data_dir, "ai_offline_corpus.json")
             if not os.path.exists(corpus_file):
                 routing_meta["call_attempted"] = False
                 return {
@@ -354,7 +357,12 @@ def call_llm(
             call_attempted = True
             text = _read_offline_corpus(corpus_file, messages)
         elif provider in ("thronos", "custom"):
-            custom_url = (os.getenv("CUSTOM_MODEL_URL") or os.getenv("CUSTOM_MODEL_URI") or "").strip()
+            custom_url = (
+                os.getenv("DIKO_MAS_MODEL_URL")
+                or os.getenv("CUSTOM_MODEL_URL")
+                or os.getenv("CUSTOM_MODEL_URI")
+                or ""
+            ).strip()
             if not custom_url:
                 routing_meta["call_attempted"] = False
                 return {
@@ -371,6 +379,8 @@ def call_llm(
                 "temperature": temperature,
                 "max_tokens": max_tokens,
                 "session_id": session_id,
+                "wallet": wallet,
+                "chain_context": chain_context or {},
             }
             res = requests.post(custom_url, json=payload, timeout=60)
             try:
@@ -1093,6 +1103,7 @@ Multiple files can be created in one response. Always describe what you're creat
                 wallet=wallet,
                 difficulty=kwargs.get("difficulty"),
                 block_hash=kwargs.get("block_hash"),
+                chain_context=kwargs.get("chain_context"),
             )
             resp["task_type"] = task_type
             resp = ensure_quantum_key(resp)

@@ -3773,6 +3773,7 @@ def api_train2earn_contribute():
     Rewards contributors with T2E tokens based on contribution type.
     """
     data = request.get_json() or {}
+
     contributor = (data.get("contributor") or "").strip()
     contrib_type = (data.get("type") or "").strip()
     content = data.get("content", {})
@@ -3940,6 +3941,8 @@ def api_architect_complete_project():
     - +10 T2E per 10KB of code
     """
     data = request.get_json() or {}
+
+
     wallet = (data.get("wallet") or "").strip()
     session_id = (data.get("session_id") or "").strip()
 
@@ -4906,6 +4909,50 @@ def load_ai_credits():
 
 def save_ai_credits(credits):
     save_json(AI_CREDITS_FILE, credits)
+
+
+def get_ai_credits(wallet: str) -> int:
+    wallet = (wallet or "").strip()
+    if not wallet:
+        return 0
+    credits_map = load_ai_credits()
+    try:
+        return int(credits_map.get(wallet, 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def add_ai_credits(wallet: str, delta: int, reason: str = "") -> int:
+    wallet = (wallet or "").strip()
+    if not wallet:
+        return 0
+    credits_map = load_ai_credits()
+    before = get_ai_credits(wallet)
+    after = max(0, before + int(delta or 0))
+    credits_map[wallet] = after
+    save_ai_credits(credits_map)
+    logger.info("[AI_CREDITS] wallet=%s op=%s cost=%s before=%s after=%s", wallet, reason or "adjust", abs(int(delta or 0)), before, after)
+    return after
+
+
+def require_ai_credits(wallet: str, cost: int) -> bool:
+    wallet = (wallet or "").strip()
+    if not wallet:
+        return False
+    return get_ai_credits(wallet) >= max(0, int(cost or 0))
+
+
+def debit_ai_credits(wallet: str, cost: int, reason: str = "chat_message") -> tuple[bool, int]:
+    wallet = (wallet or "").strip()
+    amount = max(0, int(cost or 0))
+    if not wallet:
+        return False, 0
+    before = get_ai_credits(wallet)
+    if before < amount:
+        logger.info("[AI_CREDITS] wallet=%s op=%s cost=%s before=%s after=%s", wallet, reason, amount, before, before)
+        return False, before
+    after = add_ai_credits(wallet, -amount, reason=reason)
+    return True, after
 
 
 def _default_model_id():
@@ -8113,7 +8160,7 @@ def api_architect_generate():
         call_meta["resolved_provider"] = resolved_info.provider
     try:
         call_meta["call_attempted"] = True
-        raw = ai_agent.generate_response(prompt, wallet=wallet, model_key=model_key, session_id=session_id)
+        raw = ai_agent.generate_response(prompt, wallet=wallet, model_key=model_key, session_id=session_id, chain_context=_build_chain_context_for_router())
     except Exception as exc:
         app.logger.exception("Architect generation failed")
         call_meta["failure_reason"] = str(exc)
@@ -10131,6 +10178,31 @@ def api_voting_results():
     return jsonify(results), 200
 
 
+
+
+def _build_chain_context_for_router(max_blocks: int = 8, max_tokens: int = 8, max_blueprints: int = 8) -> dict:
+    context = {"blocks": [], "tokens": [], "blueprints": []}
+    try:
+        chain = load_json(CHAIN_FILE, []) or []
+        if isinstance(chain, list):
+            context["blocks"] = chain[-max_blocks:]
+    except Exception:
+        context["blocks"] = []
+    try:
+        tokens = load_json(TOKENS_FILE, []) or []
+        if isinstance(tokens, list):
+            context["tokens"] = tokens[:max_tokens]
+    except Exception:
+        context["tokens"] = []
+    try:
+        bp_dir = os.path.join(DATA_DIR, "ai_blueprints")
+        if os.path.isdir(bp_dir):
+            names = sorted([f for f in os.listdir(bp_dir) if f.endswith(".md") or f.endswith(".txt")])
+            context["blueprints"] = names[:max_blueprints]
+    except Exception:
+        context["blueprints"] = []
+    return context
+
 # ─── QUANTUM CHAT API (ενιαίο AI + αρχεία + offline corpus) ─────────────────
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
@@ -10314,30 +10386,18 @@ def api_chat():
     if not msg:
         return jsonify(error="Message required"), 400
 
-    # --- FIX 8: Credits check (Chat billing mode) ---
+    # --- Credits check (Chat billing mode) ---
     credits_value = None
     if wallet:
-        # Check credits availability (don't deduct yet - wait for successful AI call)
-        credits_map = load_ai_credits()
-        try:
-            credits_value = int(credits_map.get(wallet, 0) or 0)
-        except (TypeError, ValueError):
-            credits_value = 0
-
-        if credits_value <= 0:
-            warning_text = (
-                "Δεν έχεις άλλα Quantum credits γι' αυτό το THR wallet.\\n"
-                "Πήγαινε στη σελίδα AI Packs και αγόρασε πακέτο για να συνεχίσεις."
-            )
+        credits_value = get_ai_credits(wallet)
+        if credits_value < AI_CREDIT_COST_PER_MSG:
             return jsonify(
-                response=warning_text,
-                quantum_key=ai_agent.generate_quantum_key(),
-                status="no_credits",
+                error="insufficient_ai_credits",
+                message="Δεν έχεις άλλα Quantum credits γι' αυτό το THR wallet.",
+                credits=credits_value,
                 wallet=wallet,
-                credits=0,
-                files=[],
                 session_id=session_id,
-            ), 200
+            ), 400
     else:
         # No wallet supplied: treat this as a free demo chat.  Look up how
         # many messages have already been consumed for this session.  Once
@@ -10430,7 +10490,7 @@ def api_chat():
         call_meta["resolved_provider"] = resolved_info.provider
     try:
         call_meta["call_attempted"] = True
-        raw = ai_agent.generate_response(full_prompt, wallet=wallet, model_key=model_key, session_id=session_id)
+        raw = ai_agent.generate_response(full_prompt, wallet=wallet, model_key=model_key, session_id=session_id, chain_context=_build_chain_context_for_router())
     except Exception as exc:
         app.logger.exception("AI chat generation failed")
         call_meta["failure_reason"] = str(exc)
@@ -10492,16 +10552,19 @@ def api_chat():
     can_charge = bool(wallet) and raw_status not in charge_block_statuses
 
     if wallet and can_charge and not billing_precharged:
-        # Use billing module (clean separation, telemetry, cross-charge guard)
-        success, error_msg, telemetry = billing.consume_credits(wallet, AI_CREDIT_COST_PER_MSG, product="chat")
+        success, credits_after = debit_ai_credits(wallet, AI_CREDIT_COST_PER_MSG, reason="chat_message")
         if not success:
-            # This shouldn't happen (already checked above), but handle gracefully
-            logger.error(f"Credits consumption failed after AI call: {error_msg}")
-            credits_for_frontend = 0
+            credits_for_frontend = get_ai_credits(wallet)
             ai_credits_spent = 0.0
-        else:
-            credits_for_frontend = telemetry.get("credits_after", 0)
-            ai_credits_spent = abs(telemetry.get("credits_delta", 0))
+            return jsonify({
+                "error": "insufficient_ai_credits",
+                "message": "Δεν έχεις άλλα Quantum credits γι' αυτό το THR wallet.",
+                "credits": credits_for_frontend,
+                "wallet": wallet,
+                "session_id": session_id,
+            }), 400
+        credits_for_frontend = credits_after
+        ai_credits_spent = float(AI_CREDIT_COST_PER_MSG)
     elif wallet and can_charge and billing_precharged:
         credits_map_now = load_ai_credits()
         credits_for_frontend = int(credits_map_now.get(wallet, 0) or 0)
@@ -10888,25 +10951,23 @@ def api_ai_credits():
     Αν δεν δοθεί wallet, θεωρούμε demo / infinite.
     """
     wallet = (request.args.get("wallet") or "").strip()
-    if not wallet:
-        # no wallet => do not expose server-side sessions
-        gid = get_or_set_guest_id()
-        resp = jsonify({"sessions": [], "mode": "guest"})
-        resp.set_cookie(GUEST_COOKIE_NAME, gid, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
-        return resp, 200
+
+    # Keep master as source-of-truth for credits in multi-node topology.
+    if NODE_ROLE == "ai_core" and LEADER_URL:
+        try:
+            upstream = requests.get(f"{LEADER_URL.rstrip('/')}/api/ai_credits", params={"wallet": wallet}, timeout=8)
+            return jsonify(upstream.json()), upstream.status_code
+        except Exception as exc:
+            logger.warning("[AI_CREDITS] leader proxy failed for api_ai_credits: %s", exc)
+
     if not wallet:
         gid = get_or_set_guest_id()
         remaining = guest_remaining_free_messages(gid)
         resp = jsonify({"mode": "guest", "credits": remaining, "max_free_messages": GUEST_MAX_FREE_MESSAGES})
-        # set cookie so we can track remaining free questions
         resp.set_cookie(GUEST_COOKIE_NAME, gid, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
         return resp, 200
 
-    credits_map = load_ai_credits()
-    try:
-        value = int(credits_map.get(wallet, 0) or 0)
-    except (TypeError, ValueError):
-        value = 0
+    value = get_ai_credits(wallet)
     return jsonify({"wallet": wallet, "credits": value}), 200
 
 
@@ -11329,6 +11390,15 @@ def api_ai_purchase_pack():
     - Αυξάνει τα credits του wallet στο ai_credits.json
     """
     data = request.get_json() or {}
+
+    # Keep master node as source-of-truth for THR debit + AI credits ledger.
+    if NODE_ROLE == "ai_core" and LEADER_URL:
+        try:
+            upstream = requests.post(f"{LEADER_URL.rstrip('/')}/api/ai_purchase_pack", json=data, timeout=12)
+            return jsonify(upstream.json()), upstream.status_code
+        except Exception as exc:
+            logger.warning("[AI_CREDITS] leader proxy failed for ai_purchase_pack: %s", exc)
+
     wallet = (data.get("wallet") or "").strip()
     code   = (data.get("pack") or "").strip()
 
@@ -11369,12 +11439,8 @@ def api_ai_purchase_pack():
     save_json(LEDGER_FILE, ledger)
 
     # --- Credits ledger ---
-    credits = load_ai_credits()
-    current_credits = int(credits.get(wallet, 0))
     add_credits = int(pack.get("credits", 0))
-    total_credits = current_credits + add_credits
-    credits[wallet] = total_credits
-    save_ai_credits(credits)
+    total_credits = add_ai_credits(wallet, add_credits, reason="pack_purchase")
 
     # --- Chain TX (service_payment) ---
     chain = load_json(CHAIN_FILE, [])
@@ -20214,14 +20280,8 @@ def api_ai_session_model_update(session_id):
     # Credit sufficiency check for selected model/provider.
     # Keep this conservative: at least one chat message cost must be available.
     required_credits = max(1, int(AI_CREDIT_COST_PER_MSG or 1))
-    if wallet_in and not wallet_in.startswith("GUEST:"):
-        credits_map = load_ai_credits()
-        try:
-            wallet_credits = int(credits_map.get(wallet_in, 0) or 0)
-        except (TypeError, ValueError):
-            wallet_credits = 0
-        if wallet_credits < required_credits:
-            return jsonify({"error": "Insufficient AI credits", "code": "insufficient_ai_credits"}), 400
+    if wallet_in and not wallet_in.startswith("GUEST:") and not require_ai_credits(wallet_in, required_credits):
+        return jsonify({"error": "Insufficient AI credits", "code": "insufficient_ai_credits"}), 400
 
     _save_session_selected_model(session_id, model_id)
 
@@ -20864,7 +20924,7 @@ def api_ai_models():
                         "display_name": mi.display_name,
                         "provider": mi.provider,
                         "enabled": mi.enabled,
-                        "degraded": not mi.enabled,
+                        "degraded": bool(getattr(mi, "degraded", (not mi.enabled))),
                         "mode": mode,
                     }
                 )

@@ -4,6 +4,8 @@ import os
 import importlib.util
 import logging
 from dataclasses import dataclass
+from urllib import request as urllib_request
+from urllib.parse import urlsplit
 from typing import Dict, List, Optional
 
 MODEL_DISABLE_REASONS: Dict[str, str] = {}
@@ -24,6 +26,41 @@ def _module_available(module_name: str) -> bool:
         return importlib.util.find_spec(module_name) is not None
     except Exception:
         return False
+
+
+def _env_truthy(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _url_health_ok(url: str, timeout: float = 2.5) -> tuple[bool, Optional[str]]:
+    target = (url or "").strip()
+    if not target:
+        return False, "empty_url"
+
+    candidates = [target]
+    try:
+        parsed = urlsplit(target)
+        if parsed.scheme and parsed.netloc:
+            base = f"{parsed.scheme}://{parsed.netloc}"
+            candidates.append(f"{base}/api/ai/health")
+            candidates.append(f"{base}/health")
+    except Exception:
+        pass
+
+    for candidate in candidates:
+        try:
+            req = urllib_request.Request(candidate, method="GET")
+            with urllib_request.urlopen(req, timeout=timeout) as resp:
+                status = int(getattr(resp, "status", 200) or 200)
+                if status < 500:
+                    return True, None
+        except Exception as exc:
+            last = str(exc)
+            continue
+    return False, last if 'last' in locals() else "health_check_failed"
 
 try:
     import google.genai as genai
@@ -213,40 +250,63 @@ def get_provider_status() -> dict:
     status["gemini"] = gemini_entry
 
     data_dir = os.getenv("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
-    corpus_file = os.path.join(data_dir, "ai_offline_corpus.json")
-    local_configured = os.path.exists(corpus_file)
+    offline_path = (os.getenv("THR_OFFLINE_CORPUS_PATH") or "").strip()
+    if not offline_path:
+        offline_path = os.path.join(data_dir, "ai_offline_corpus.json")
+    offline_flag = _env_truthy("THR_OFFLINE_CORPUS_ENABLED", default=False)
+    offline_exists = os.path.exists(offline_path)
+    local_configured = bool(offline_flag and offline_exists)
+    local_missing = []
+    if not offline_flag:
+        local_missing.append("THR_OFFLINE_CORPUS_ENABLED")
+    if not offline_exists:
+        local_missing.append(f"THR_OFFLINE_CORPUS_PATH={offline_path}")
     local_entry = _ensure_diag(
         _provider_status_entry(
             local_configured,
-            ["DATA_DIR"],
+            ["THR_OFFLINE_CORPUS_ENABLED", "THR_OFFLINE_CORPUS_PATH", "DATA_DIR"],
             library_loaded=True,
-            extra={"corpus_file": corpus_file},
+            extra={"corpus_file": offline_path, "missing_env": local_missing},
         )
     )
-    local_entry["checked_sources"].append({"source": "file", "path": corpus_file, "present": local_configured})
+    local_entry["checked_sources"].append({"source": "file", "path": offline_path, "present": offline_exists})
     local_entry["invalid_models"] = invalid_by_provider.get("local", [])
     if local_entry["invalid_models"] and not local_entry.get("last_error"):
         local_entry["last_error"] = local_entry["invalid_models"][0].get("reason")
     status["local"] = local_entry
 
-    thronos_vars = ["CUSTOM_MODEL_URL", "THRONOS_AI_MODE"]
-    custom_url = (os.getenv("CUSTOM_MODEL_URL") or os.getenv("CUSTOM_MODEL_URI") or "").strip()
-    ai_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
-    thronos_configured = bool(custom_url) and ai_mode in ("all", "router", "auto", "custom", "hybrid", "")
+    thronos_vars = ["THR_THAI_ENABLED", "DIKO_MAS_MODEL_URL", "CUSTOM_MODEL_URL", "CUSTOM_MODEL_URI"]
+    diko_url = (
+        os.getenv("DIKO_MAS_MODEL_URL")
+        or os.getenv("CUSTOM_MODEL_URL")
+        or os.getenv("CUSTOM_MODEL_URI")
+        or ""
+    ).strip()
+    thai_flag = _env_truthy("THR_THAI_ENABLED", default=bool(diko_url))
+    thai_health_ok, thai_health_err = _url_health_ok(diko_url) if diko_url else (False, "missing_router_url")
+    thronos_configured = bool(diko_url and thai_flag and thai_health_ok)
     thronos_missing = []
-    if not custom_url:
-        thronos_missing.append("CUSTOM_MODEL_URL (or legacy CUSTOM_MODEL_URI)")
-    if ai_mode not in ("all", "router", "auto", "custom", "hybrid", ""):
-        thronos_missing.append(f"THRONOS_AI_MODE={ai_mode} (restrictive)")
+    if not thai_flag:
+        thronos_missing.append("THR_THAI_ENABLED")
+    if not diko_url:
+        thronos_missing.append("DIKO_MAS_MODEL_URL")
+    if diko_url and not thai_health_ok:
+        thronos_missing.append("DIKO_MAS_MODEL_URL health_check")
     thronos_entry = _ensure_diag(
         _provider_status_entry(
             thronos_configured,
             thronos_vars,
             library_loaded=True,
-            extra={"missing_env": thronos_missing, "custom_url": bool(custom_url)},
+            last_error=None if thai_health_ok else thai_health_err,
+            extra={
+                "missing_env": thronos_missing,
+                "custom_url": bool(diko_url),
+                "router_url": diko_url,
+                "health_ok": thai_health_ok,
+            },
         )
     )
-    thronos_entry["checked_sources"].append({"source": "env", "key": "CUSTOM_MODEL_URI", "present": bool(os.getenv("CUSTOM_MODEL_URI"))})
+    thronos_entry["checked_sources"].append({"source": "health", "url": diko_url, "ok": thai_health_ok})
     thronos_entry["invalid_models"] = invalid_by_provider.get("thronos", [])
     if thronos_entry["invalid_models"] and not thronos_entry.get("last_error"):
         thronos_entry["last_error"] = thronos_entry["invalid_models"][0].get("reason")

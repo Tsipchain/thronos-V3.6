@@ -905,9 +905,16 @@
         </div>
         <div class="pill pill-danger">
           <div class="pill-dot"></div>
-          <div class="pill-label">THR wallet</div>
+          <div class="pill-label" data-i18n="chat.wallet">THR wallet</div>
           <div class="pill-value" id="walletLabel">unknown</div>
         </div>
+        <select id="chatLanguageSelect" class="model-select" style="max-width:150px;">
+          <option value="en">English</option>
+          <option value="gr">Ελληνικά</option>
+          <option value="ja">日本語</option>
+          <option value="es">Español</option>
+          <option value="ru">Русский</option>
+        </select>
       </div>
     </header>
 
@@ -959,7 +966,7 @@
 
           <div class="chat-input-block">
             <div class="wallet-row">
-              <span class="wallet-label">Bound wallet:</span>
+              <span class="wallet-label" data-i18n="chat.bound_wallet">Bound wallet:</span>
               <input
                 id="walletInput"
                 placeholder="THR address"
@@ -982,7 +989,7 @@
                   <select id="modelSelect" class="model-select">
                     <option value="auto">Auto (Thronos chooses)</option>
                   </select>
-                  <button id="openAIPacksBtn" class="attach-btn" type="button" title="Buy AI Credits">💳 AI Packs</button>
+                  <button id="openAIPacksBtn" class="attach-btn" type="button" title="Buy AI Credits" data-i18n="chat.ai_packs">💳 AI Packs</button>
                 </div>
                 <button id="sendBtn" class="send-btn">
                   SEND
@@ -1076,6 +1083,7 @@
     const ACTIVE_SESSION_KEY = "thronos_ai_active_session";
     const SESSION_CACHE_KEY = "thronos_ai_session_cache_v1";
     const SELECTED_MODEL_KEY = "thronos_ai_selected_model_v1";
+    window.aiCredits = Number.NaN;
 
     // --- DOM refs ---
     let sessionsListEl,
@@ -1100,6 +1108,7 @@
       pendingTxsLabelEl,
       difficultyLabelEl,
       creditsLabelEl,
+      chatLanguageSelectEl,
       openAIPacksBtnEl,
       aiPacksModalEl,
       closeAIPacksBtnEl,
@@ -1145,6 +1154,7 @@
       pendingTxsLabelEl = document.getElementById("pendingTxsLabel");
       difficultyLabelEl = document.getElementById("difficultyLabel");
       creditsLabelEl = document.getElementById("creditsLabel");
+      chatLanguageSelectEl = document.getElementById("chatLanguageSelect");
       openAIPacksBtnEl = document.getElementById("openAIPacksBtn");
       aiPacksModalEl = document.getElementById("aiPacksModal");
       closeAIPacksBtnEl = document.getElementById("closeAIPacksBtn");
@@ -2027,9 +2037,15 @@
         }
 
         models.forEach((model) => {
+          if ((model.id === "offline_corpus" || model.id === "thrai") && model.enabled !== true) {
+            return;
+          }
           const opt = document.createElement("option");
           opt.value = model.id;
-          opt.textContent = model.label || model.id;
+          const badge = model.id === "offline_corpus"
+            ? " · [On-chain / local]"
+            : (model.id === "thrai" ? " · [Router]" : "");
+          opt.textContent = `${model.label || model.id}${badge}`;
           if (model.enabled === false) {
             opt.disabled = true;
             opt.textContent += " (disabled)";
@@ -2150,6 +2166,12 @@
         }
 
         if (!res.ok || (data && (data.ok === false || data.error))) {
+          if (data && data.error === "insufficient_ai_credits") {
+            usageStatusEl.textContent = "Δεν έχεις άλλα Quantum credits…";
+            await refreshCreditsForWallet(wallet);
+            setSessionStatus("No credits");
+            return;
+          }
           const errText = (data && (data.error || data.details)) || `HTTP ${res.status}`;
           appendMessage({
             role: "assistant",
@@ -2194,7 +2216,10 @@
           const u = data.usage;
           usageStatusEl.textContent = `Usage: in ${u.input_tokens || 0} / out ${u.output_tokens || 0}`;
         } else if (data.credits !== undefined) {
-          usageStatusEl.textContent = `AI Credits: ${data.credits}`;
+          const credits = Number(data.credits) || 0;
+          window.aiCredits = credits;
+          usageStatusEl.textContent = `AI Credits: ${credits}`;
+          creditsLabelEl.textContent = credits;
         }
 
         if (data.wallet) {
@@ -2230,8 +2255,13 @@
         const res = await fetch(`${API_AI_CREDITS}?wallet=${encodeURIComponent(wallet)}`);
         const data = await res.json();
         if (data && data.credits != null) {
-          creditsLabelEl.textContent = data.credits;
-          usageStatusEl.textContent = `AI Credits: ${data.credits}`;
+          const credits = Number(data.credits) || 0;
+          window.aiCredits = credits;
+          creditsLabelEl.textContent = credits;
+          usageStatusEl.textContent = `AI Credits: ${credits}`;
+          if (aiPacksWalletInfoEl && wallet) {
+            aiPacksWalletInfoEl.textContent = `Bound wallet: ${wallet} • AI Credits: ${credits}`;
+          }
         }
       } catch (_) {}
     }
@@ -2269,7 +2299,7 @@
       const wallet = walletInputEl.value.trim();
       aiPacksModalEl.style.display = "flex";
       aiPacksWalletInfoEl.textContent = wallet
-        ? `Bound wallet: ${wallet}`
+        ? `Bound wallet: ${wallet}${Number.isFinite(window.aiCredits) ? ` • AI Credits: ${window.aiCredits}` : ""}`
         : "Δώσε πρώτα THR wallet στη Quantum Chat για να αγοράσεις credits.";
       setAIPacksStatus("");
       aiPacksListEl.innerHTML = "Loading packs…";
@@ -2304,6 +2334,33 @@
       if (aiPacksModalEl) aiPacksModalEl.style.display = "none";
     }
 
+
+    const CHAT_TRANSLATIONS = {
+      chat: {
+        wallet: { en: "THR wallet", gr: "THR wallet", ja: "THRウォレット", es: "Billetera THR", ru: "THR кошелёк" },
+        bound_wallet: { en: "Bound wallet:", gr: "Συνδεδεμένο wallet:", ja: "接続ウォレット:", es: "Wallet vinculada:", ru: "Привязанный кошелёк:" },
+        ai_packs: { en: "💳 AI Packs", gr: "💳 AI Packs", ja: "💳 AIパック", es: "💳 Packs AI", ru: "💳 AI Пакеты" },
+      }
+    };
+
+    function normalizeLang(value) {
+      const v = String(value || "").toLowerCase().trim();
+      if (v === "el") return "gr";
+      return ["gr", "en", "ja", "es", "ru"].includes(v) ? v : "en";
+    }
+
+    function applyChatTranslations(langOverride) {
+      const lang = normalizeLang(langOverride || localStorage.getItem("thr_lang") || "en");
+      localStorage.setItem("thr_lang", lang);
+      if (chatLanguageSelectEl) chatLanguageSelectEl.value = lang;
+      document.querySelectorAll("[data-i18n]").forEach((el) => {
+        const key = el.dataset.i18n || "";
+        const [scope, token] = key.split(".");
+        const val = CHAT_TRANSLATIONS?.[scope]?.[token]?.[lang];
+        if (val) el.textContent = val;
+      });
+    }
+
     // --- Events ---
     function bindEvents() {
       document
@@ -2321,6 +2378,7 @@
       }
 
       if (openAIPacksBtnEl) openAIPacksBtnEl.addEventListener("click", openAIPacksModal);
+      if (chatLanguageSelectEl) chatLanguageSelectEl.addEventListener("change", (e) => applyChatTranslations(e.target.value));
       if (closeAIPacksBtnEl) closeAIPacksBtnEl.addEventListener("click", closeAIPacksModal);
 
       fileInputEl.addEventListener("change", (e) => {
@@ -2381,6 +2439,7 @@
       initAdminAccess();
       hydrateSessionCache();
       bindEvents();
+      applyChatTranslations();
       await loadModels();
       await loadWallet();
       await loadSessions();

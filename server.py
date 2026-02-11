@@ -7162,9 +7162,13 @@ def api_wallet_history():
     - category: Optional filter (mining, ai_reward, music_tip, iot_telemetry, etc.)
     - limit: Max entries to return (default 200)
     - cursor: Offset cursor for pagination
+    - exclude_source: Comma-separated sources to hide (default: "architect")
+    - status: Filter by "pending" or "confirmed"
     """
     address = (request.args.get("address") or request.args.get("wallet") or "").strip()
     category_filter = request.args.get("category", "").strip().lower()
+    exclude_source = request.args.get("exclude_source", "architect").strip().lower()
+    status_filter = request.args.get("status", "").strip().lower()
     try:
         limit = min(int(request.args.get("limit", 200)), 500)
     except Exception:
@@ -7183,10 +7187,32 @@ def api_wallet_history():
         logger.error("[wallet_history] failed: %s", exc)
         payload = _build_wallet_history_fallback(address, limit, cursor)
 
+    # Enrich each tx with canonical type/status/source and apply filters
+    exclude_set = {s.strip() for s in exclude_source.split(",") if s.strip()} if exclude_source else set()
+    filtered = []
     for tx in payload.get("transactions", []):
+        # Canonical fields
+        if "type" not in tx:
+            tx["type"] = tx.get("kind") or tx.get("tx_type") or tx.get("category") or "transfer"
+        if "status" not in tx:
+            tx["status"] = "pending" if tx.get("pending") else "confirmed"
+        if "source" not in tx:
+            tx["source"] = tx.get("category") or _categorize_transaction(tx)
+
+        # Filter by status
+        if status_filter and tx["status"] != status_filter:
+            continue
+        # Filter by excluded source
+        if tx.get("source") in exclude_set:
+            continue
+
         for key in ("logo_url", "image_url", "cover_url", "audio_url", "token_logo"):
             if key in tx:
                 tx[key] = normalize_media_url(str(tx.get(key) or ""))
+        filtered.append(tx)
+
+    payload["transactions"] = filtered
+    payload["total_transactions"] = len(filtered)
 
     return jsonify({
         "ok": True,
@@ -11439,6 +11465,82 @@ def pledge_submit():
     except Exception as exc:
         app.logger.error(f"Pledge creation failed: {exc}")
         return jsonify(error=f"Pledge creation failed: {str(exc)}"),500
+
+
+# ─── PLEDGE STATUS & QUOTE APIs ────────────────────
+@app.route("/api/pledge/status")
+def api_pledge_status():
+    """Check pledge status for a BTC address: pending / verified / unknown."""
+    btc_address = (request.args.get("btc") or request.args.get("btc_address") or "").strip()
+    if not btc_address:
+        return jsonify(ok=False, error="Missing ?btc= parameter"), 400
+
+    pledges = load_json(PLEDGE_CHAIN, [])
+    exists = next((p for p in pledges if p["btc_address"] == btc_address), None)
+
+    if exists:
+        return jsonify(
+            ok=True,
+            status="verified",
+            thr_address=exists["thr_address"],
+            pledge_hash=exists["pledge_hash"],
+            timestamp=exists.get("timestamp"),
+            has_passphrase=exists.get("has_passphrase", False),
+        ), 200
+
+    # Not pledged yet – check if there's a payment pending
+    free_list = load_json(WHITELIST_FILE, [])
+    if btc_address in free_list:
+        return jsonify(ok=True, status="whitelisted", message="Whitelisted – submit pledge to activate"), 200
+
+    try:
+        txns = get_btc_txns(btc_address, BTC_RECEIVER)
+    except Exception:
+        txns = []
+
+    paid_sats = 0
+    confirmations = 0
+    seen_txids = set()
+    for tx in txns:
+        txid = tx.get("txid", "")
+        if txid in seen_txids:
+            continue
+        seen_txids.add(txid)
+        if tx.get("to") == BTC_RECEIVER:
+            amt = float(tx.get("amount_btc", 0))
+            paid_sats += int(amt * 1e8)
+            confirmations = max(confirmations, int(tx.get("confirmations", 0)))
+
+    required_sats = int(MIN_AMOUNT * 1e8)
+    meets_min_fee = paid_sats >= required_sats
+
+    if paid_sats > 0:
+        return jsonify(
+            ok=True,
+            status="pending" if not meets_min_fee else "paid_not_pledged",
+            paid_sats=paid_sats,
+            required_sats=required_sats,
+            confirmations=confirmations,
+            meets_min_fee=meets_min_fee,
+            message="Payment detected – submit pledge form to activate" if meets_min_fee else "Partial payment",
+        ), 200
+
+    return jsonify(ok=True, status="unknown", message="No pledge or payment found for this BTC address"), 200
+
+
+@app.route("/api/pledge/quote")
+def api_pledge_quote():
+    """Return current pledge fee requirements and THR exchange rate."""
+    required_sats = int(MIN_AMOUNT * 1e8)
+    return jsonify(
+        ok=True,
+        required_sats=required_sats,
+        required_btc=MIN_AMOUNT,
+        thr_btc_rate=THR_BTC_RATE,
+        thr_per_pledge=round(MIN_AMOUNT * THR_BTC_RATE, 6),
+        vault_address=BTC_RECEIVER,
+        confirmations_required=1,
+    ), 200
 
 
 def build_wallet_history(thr_addr: str) -> list[dict]:

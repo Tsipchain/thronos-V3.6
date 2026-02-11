@@ -567,34 +567,35 @@ $("generate").onclick = async () => {
   resetDownloadBtn();
 
   try {
-    const j = await api("/api/architect_generate", {
+    const j = await api("/api/ai/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ wallet, blueprint, spec, model_id: model })
+      body: JSON.stringify({ product: "architect", wallet, blueprint_id: blueprint, model, messages: [{ role: "user", content: spec }], options: { spec, blueprint } })
     });
     setStatus(true,"Architect: online");
-    $("out").textContent = j.response || "";
+    const outPayload = j.output || j;
+    $("out").textContent = outPayload.response || "";
 
     let filesInfo = "";
     const filesEl = $("files");
-    if(j.files && j.files.length){
-      lastArchitectFiles = j.files;
-      filesInfo = `Files: ${j.files_count}\nTotal: ${j.total_kb} KB\nCost: ${j.cost_thr} THR\n\n${parseFiles(j.files)}`;
+    if(outPayload.files && outPayload.files.length){
+      lastArchitectFiles = outPayload.files;
+      filesInfo = `Files: ${outPayload.files_count || (outPayload.files || []).length || 0}\nTotal: ${outPayload.total_kb || 0} KB\nCost: ${outPayload.cost_thr || outPayload.thr_spent || 0} THR\n\n${parseFiles(outPayload.files)}`;
       if (filesEl) {
         filesEl.style.display = "block";
       }
       // Enable download button if zip_url is provided
-      if (j.zip_url) {
-        enableDownloadBtn(j.zip_url);
+      if (outPayload.zip_url) {
+        enableDownloadBtn(outPayload.zip_url);
       }
     }
 
-    if(j.redirect_to_chat && j.session_id){
-      filesInfo += `\n\n✅ Architecture complete!\n👉 Continue development in Chat: /chat?session=${j.session_id}`;
+    if(outPayload.redirect_to_chat && outPayload.session_id){
+      filesInfo += `\n\n✅ Architecture complete!\n👉 Continue development in Chat: /chat?session=${outPayload.session_id}`;
 
       // Auto-redirect option
-      if(confirm(`Architecture generated successfully!\n\nCost: ${j.cost_thr} THR\nFiles: ${j.files_count}\n\nContinue in Chat for further development?`)){
-        window.location.href = `/chat?session=${j.session_id}&from=architect`;
+      if(confirm(`Architecture generated successfully!\n\nCost: ${outPayload.cost_thr || outPayload.thr_spent || 0} THR\nFiles: ${outPayload.files_count || (outPayload.files || []).length || 0}\n\nContinue in Chat for further development?`)){
+        window.location.href = `/chat?session=${outPayload.session_id}&from=architect`;
       }
     }
 
@@ -641,7 +642,9 @@ async function loadModels() {
   modelSel.innerHTML = '<option value="auto">🔀 Auto (Pythia chooses)</option>';
 
   try {
-    const res = await fetch("/api/ai_models");
+    const providerFilter = provSel ? provSel.value : "all";
+    const modelUrl = providerFilter && providerFilter !== "all" ? `/api/ai/models?provider=${encodeURIComponent(providerFilter)}` : "/api/ai/models";
+    const res = await fetch(modelUrl);
     let data = null;
     try { data = await res.json(); } catch (e) {
       console.error("Models API parse error", e);
@@ -652,16 +655,21 @@ async function loadModels() {
     _allModels = Array.isArray(data.models) ? data.models : [];
     _defaultModelId = data.default_model_id || "auto";
 
-    // Populate provider dropdown
+    // Populate provider dropdown from backend providers API (no keys client-side)
     if (provSel) {
-      const providers = [...new Set(_allModels.map(m => m.provider).filter(Boolean))];
       provSel.innerHTML = '<option value="all">All Providers</option>';
-      providers.forEach(p => {
-        const opt = document.createElement("option");
-        opt.value = p;
-        opt.textContent = p.charAt(0).toUpperCase() + p.slice(1);
-        provSel.appendChild(opt);
-      });
+      try {
+        const pRes = await fetch('/api/ai/providers');
+        const pJson = await pRes.json();
+        (pJson.providers || []).filter(p => p && p.enabled).forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p.id;
+          opt.textContent = p.name || p.id;
+          provSel.appendChild(opt);
+        });
+      } catch (e) {
+        console.warn('Failed to load providers list:', e);
+      }
     }
 
     _renderModels(previousValue);

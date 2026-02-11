@@ -4917,7 +4917,7 @@ def _default_model_id():
 
 def _normalized_ai_mode() -> str:
     raw_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
-    if raw_mode in ("", "router", "auto", "hybrid", "all"):
+    if raw_mode in ("", "router", "auto", "hybrid", "all", "proxy"):
         return "all"
     if raw_mode == "openai_only":
         return "openai"
@@ -7821,6 +7821,8 @@ def regenerate_pledges():
 def architect_page():
     resp = make_response(render_template("architect.html"))
     resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    resp.headers["Cache-Control"] = "no-store, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
     resp.headers["X-Content-Type-Options"] = "nosniff"
     return resp
 
@@ -7854,7 +7856,7 @@ def api_architect_generate():
     - Writes files to AI_FILES_DIR.
     """
     # ─── TASK 2: Proxy to Node 4 (AI Core) if configured ───
-    if not is_ai_core() and AI_CORE_URL:
+    if not is_ai_core() and AI_CORE_URL and (os.getenv("THRONOS_AI_MODE", "").strip().lower() == "proxy"):
         try:
             data = request.get_json(force=True) or {}
             result = call_ai_core("/api/architect_generate", data, timeout=120)
@@ -19890,6 +19892,11 @@ def api_thrai_ask():
         return jsonify(ok=False, error=str(e)), 500
 
 
+@app.route("/api/thrai/ask", methods=["GET"])
+def api_thrai_ask_get_not_allowed():
+    return _method_not_allowed_post_hint()
+
+
 # Override existing /api/ai/sessions routes with v2 versions that support guests
 @app.route("/api/ai/sessions", methods=["GET", "POST"])
 def api_ai_sessions_combined():
@@ -20702,7 +20709,7 @@ def api_ai_models():
     NEVER returns 500 - always returns 200 with degraded mode fallback if needed.
     """
     # ─── TASK 2: Proxy to Node 4 (AI Core) if configured ───
-    if not is_ai_core() and AI_CORE_URL:
+    if not is_ai_core() and AI_CORE_URL and (os.getenv("THRONOS_AI_MODE", "").strip().lower() == "proxy"):
         try:
             # GET endpoint - pass query params as payload
             params = {k: v for k, v in request.args.items()}
@@ -20741,9 +20748,20 @@ def api_ai_models():
                     }
                 )
 
+        if not models:
+            models = [{
+                "id": "auto",
+                "label": "Auto (Thronos chooses)",
+                "display_name": "Auto (Thronos chooses)",
+                "provider": "system",
+                "enabled": True,
+                "degraded": False,
+                "mode": mode,
+            }]
+
         payload = {
             "models": models,
-            "default_model_id": default_model_id,
+            "default_model_id": default_model_id or "auto",
         }
         return jsonify(payload), 200
 
@@ -20756,14 +20774,176 @@ def api_ai_models():
         return (
             jsonify(
                 {
-                    "models": fallback_models,
-                    "default_model_id": fallback_models[0]["id"] if fallback_models else None,
+                    "models": fallback_models or [{"id": "auto", "label": "Auto (Thronos chooses)", "provider": "system", "enabled": True}],
+                    "default_model_id": fallback_models[0]["id"] if fallback_models else "auto",
                     "error_code": "CATASTROPHIC_FAILURE",
                     "error_message": str(exc),
                 }
             ),
             200,
         )
+
+
+@app.route("/api/ai/models", methods=["GET"])
+def api_ai_models_canonical():
+    return api_ai_models()
+
+
+@app.route("/api/ai_model", methods=["GET"])
+def api_ai_model_alias():
+    return api_ai_models()
+
+
+@app.route("/api/ai/providers", methods=["GET"])
+def api_ai_providers():
+    mode_raw = (os.getenv("THRONOS_AI_MODE") or "router").strip().lower()
+    primary_mode = mode_raw if mode_raw in {"proxy", "direct", "router"} else "router"
+    core_url = (AI_CORE_URL or "").strip()
+    providers = [
+        {"id": "anthropic", "name": "Anthropic", "enabled": bool((os.getenv("ANTHROPIC_API_KEY") or "").strip())},
+        {"id": "gemini", "name": "Google Gemini", "enabled": bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())},
+        {"id": "openai", "name": "OpenAI", "enabled": bool((os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip())},
+        {"id": "custom", "name": "AI Core (Node4)", "enabled": bool(core_url), "base_url": core_url},
+    ]
+    return jsonify({"primary_mode": primary_mode, "providers": providers}), 200
+
+
+def _method_not_allowed_post_hint():
+    resp = jsonify({"ok": False, "error": "method_not_allowed", "hint": "Use POST for this endpoint."})
+    resp.headers["Allow"] = "POST"
+    return resp, 405
+
+
+@app.route("/api/ai/ask", methods=["GET", "POST"])
+def api_ai_ask():
+    if request.method != "POST":
+        return _method_not_allowed_post_hint()
+
+    data = request.get_json(silent=True) or {}
+    product = (data.get("product") or "chat").strip().lower()
+    request_id = data.get("request_id") or f"aiask-{int(time.time()*1000)}-{secrets.token_hex(4)}"
+    start = time.time()
+
+    proxy_mode = (os.getenv("THRONOS_AI_MODE") or "").strip().lower() == "proxy"
+    if proxy_mode and AI_CORE_URL and not is_ai_core():
+        proxied = dict(data)
+        proxied["request_id"] = request_id
+        result = call_ai_core("/api/ai/ask", proxied, timeout=60, method="POST")
+        if isinstance(result, dict):
+            result.setdefault("ok", True)
+            result.setdefault("request_id", request_id)
+            result.setdefault("ai_route", "core")
+            result.setdefault("latency_ms", int((time.time() - start) * 1000))
+            return jsonify(result), 200
+
+    if product == "architect":
+        msgs = data.get("messages") or []
+        user_text = ""
+        if isinstance(msgs, list):
+            for item in reversed(msgs):
+                if isinstance(item, dict) and (item.get("role") or "").lower() == "user":
+                    user_text = (item.get("content") or "").strip()
+                    if user_text:
+                        break
+        payload = {
+            "wallet": (data.get("wallet") or "").strip(),
+            "session_id": data.get("session_id"),
+            "blueprint": data.get("blueprint_id") or (data.get("options") or {}).get("blueprint") or "default",
+            "spec": (data.get("options") or {}).get("spec") or user_text,
+            "model": data.get("model") or "auto",
+        }
+        with app.test_request_context("/api/architect_generate", method="POST", json=payload):
+            response = api_architect_generate()
+        body = response[0].get_json() if isinstance(response, tuple) else response.get_json()
+        status_code = response[1] if isinstance(response, tuple) else 200
+        return jsonify({
+            "ok": status_code < 400,
+            "request_id": request_id,
+            "ai_route": "fallback",
+            "provider_used": (body or {}).get("provider", "local"),
+            "latency_ms": int((time.time() - start) * 1000),
+            "model": (body or {}).get("model") or data.get("model") or "auto",
+            "cost_estimate": {"billing_channel": (body or {}).get("billing_channel")},
+            "output": body or {},
+        }), status_code
+
+    msgs = data.get("messages") or []
+    if not isinstance(msgs, list) or not msgs:
+        return jsonify({"ok": False, "error": "messages required"}), 400
+
+    with app.test_request_context("/api/ai/providers/chat", method="POST", json={
+        "messages": msgs,
+        "model": data.get("model") or "auto",
+        "session_id": data.get("session_id"),
+    }):
+        response = api_ai_provider_chat()
+    body = response[0].get_json() if isinstance(response, tuple) else response.get_json()
+    status_code = response[1] if isinstance(response, tuple) else 200
+    payload = {
+        "ok": status_code < 400,
+        "request_id": request_id,
+        "ai_route": "fallback",
+        "provider_used": (body or {}).get("provider", "local"),
+        "latency_ms": int((time.time() - start) * 1000),
+        "model": (body or {}).get("model") or data.get("model") or "auto",
+        "cost_estimate": {},
+        "output": body or {},
+    }
+    app.logger.info("ai_ask_request", extra={"ai_request": {
+        "request_id": request_id,
+        "ai_route": payload["ai_route"],
+        "provider_used": payload["provider_used"],
+        "latency_ms": payload["latency_ms"],
+        "model": payload["model"],
+        "session_id": data.get("session_id"),
+        "blueprint_id": data.get("blueprint_id"),
+        "node_role": NODE_ROLE,
+    }})
+    return jsonify(payload), status_code
+
+
+@app.route("/api/architect_generate", methods=["GET"])
+def api_architect_generate_get_not_allowed():
+    return _method_not_allowed_post_hint()
+
+
+@app.route("/api/t2e/submit", methods=["POST"])
+def api_t2e_submit():
+    data = request.get_json(silent=True) or {}
+    wallet = (data.get("wallet") or "").strip()
+    session_id = (data.get("session_id") or "").strip()
+    if not wallet:
+        return jsonify({"ok": False, "error": "wallet required"}), 400
+    if not session_id and not data.get("diff") and not data.get("metadata"):
+        return jsonify({"ok": False, "error": "training contribution required"}), 400
+
+    credits_map = load_ai_credits()
+    before = int(credits_map.get(wallet, 0) or 0)
+    delta = 5
+    after = before + delta
+    credits_map[wallet] = after
+    save_ai_credits(credits_map)
+
+    try:
+        record_ai_interaction(
+            session_id=session_id or None,
+            user_wallet=wallet,
+            provider="thronos",
+            model="t2e-attestor",
+            prompt="t2e_submit",
+            output="accepted",
+            tokens_input=0,
+            tokens_output=0,
+            cost_usd=0.0,
+            latency_ms=0,
+            ai_credits_spent=0.0,
+            metadata={"source": "t2e", "credits_delta": delta},
+            success=True,
+        )
+    except Exception:
+        app.logger.exception("t2e_submit_record_failed")
+
+    return jsonify({"ok": True, "wallet": wallet, "credits_before": before, "credits_delta": delta, "credits_after": after}), 200
 
 
 @app.route("/api/ai/provider_status", methods=["GET"])

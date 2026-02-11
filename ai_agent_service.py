@@ -19,6 +19,8 @@ from typing import Dict, Any, List, Optional
 
 import requests
 
+logger = logging.getLogger("thronos")
+
 # Optional Gemini provider
 try:
     import google.generativeai as genai
@@ -57,9 +59,10 @@ def _resolve_model(
     model: Optional[str],
     normalized_mode: Optional[str] = None,
     provider_status: Optional[dict] = None,
+    wallet: Optional[str] = None,
 ):
     raw_mode = normalized_mode or (os.getenv("THRONOS_AI_MODE", "all").strip().lower() or "all")
-    if raw_mode in ("router", "auto", "all", "hybrid"):
+    if raw_mode in ("router", "auto", "all", "hybrid", "proxy"):
         normalized_mode = "all"
     elif raw_mode == "openai_only":
         normalized_mode = "openai"
@@ -68,8 +71,34 @@ def _resolve_model(
 
     provider_status = provider_status or get_provider_status()
 
+    logger.info("[AI_MODEL] resolve model_id=%s raw_mode=%s normalized=%s wallet=%s", model, raw_mode, normalized_mode, wallet)
+
     def _provider_configured(provider: str) -> bool:
         info = provider_status.get(provider) if isinstance(provider_status, dict) else None
+
+        def _has_env_key(p: str) -> bool:
+            if p == "openai":
+                return bool((os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip())
+            if p == "anthropic":
+                return bool((os.getenv("ANTHROPIC_API_KEY") or "").strip())
+            if p == "gemini":
+                return bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
+            return False
+
+        if info and info.get("enabled") is False and not _has_env_key(provider):
+            return False
+
+        if provider == "local":
+            return True
+
+        if provider in ("thronos", "custom", "diko_mas"):
+            custom_url = (
+                os.getenv("CUSTOM_MODEL_URL", "").strip()
+                or os.getenv("CUSTOM_MODEL_URI", "").strip()
+                or os.getenv("DIKO_MAS_MODEL_URL", "").strip()
+            )
+            return bool(custom_url)
+
         if info:
             if not info.get("configured"):
                 return False
@@ -78,13 +107,7 @@ def _resolve_model(
             return True
 
         # Fallback directly to env detection if status payload is missing/empty
-        if provider == "openai":
-            return bool((os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip())
-        if provider == "anthropic":
-            return bool((os.getenv("ANTHROPIC_API_KEY") or "").strip())
-        if provider == "gemini":
-            return bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
-        return False
+        return _has_env_key(provider)
 
     def _match_alias(candidate: str):
         cand_norm = (candidate or "").strip().lower().replace(" ", "").replace("-", "")
@@ -240,7 +263,7 @@ def call_llm(
 ) -> Dict[str, Any]:
     requested_model = model
     enabled_model_ids = list_enabled_model_ids()
-    resolved = _resolve_model(model)
+    resolved = _resolve_model(model, wallet=wallet)
     if not resolved:
         # QUEST: Better error messaging for disabled models
         from llm_registry import find_model
@@ -266,7 +289,7 @@ def call_llm(
     tier = resolved.tier
 
     mode = (os.getenv("THRONOS_AI_MODE", "all").strip().lower() or "all")
-    if mode in ("router", "auto", "all", "hybrid"):
+    if mode in ("router", "auto", "all", "hybrid", "proxy"):
         normalized_mode = "all"
     elif mode == "openai_only":
         normalized_mode = "openai"

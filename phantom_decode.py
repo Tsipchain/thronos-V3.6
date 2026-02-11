@@ -39,20 +39,26 @@ def _extract_largest_image_from_pdf(pdf_path):
 def _decode_lsb(img):
     """
     Read LSB bits from an RGB image and return the decoded base64 blob string.
+    Optimized: uses bytearray and stops as soon as null terminator is found.
     """
-    bits = ""
-    for pixel in img.getdata():
-        for color in pixel[:3]:
-            bits += str(color & 1)
+    pixels = img.getdata()
+    current_byte = 0
+    bit_count = 0
+    result = bytearray()
 
-    bytes_list = [bits[i:i+8] for i in range(0, len(bits), 8)]
-    decoded_chars = []
-    for byte in bytes_list:
-        if byte == "00000000":
-            break
-        decoded_chars.append(chr(int(byte, 2)))
+    for pixel in pixels:
+        for color in pixel[:3]:  # R, G, B
+            current_byte = (current_byte << 1) | (color & 1)
+            bit_count += 1
+            if bit_count == 8:
+                if current_byte == 0:  # null terminator
+                    return result.decode("ascii", errors="ignore")
+                result.append(current_byte)
+                current_byte = 0
+                bit_count = 0
 
-    return ''.join(decoded_chars)
+    # No null terminator found, return what we have
+    return result.decode("ascii", errors="ignore") if result else ""
 
 
 def _decrypt_blob(encrypted_blob_b64, passphrase):

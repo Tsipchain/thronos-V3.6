@@ -294,10 +294,15 @@
       <input id="wallet" placeholder="THR..." style="width: 200px"/>
     </div>
     <div class="input-row">
+      <span class="section-title" style="margin: 0;" data-i18n="label.provider" data-i18n-default="Provider">Provider</span>
+      <select id="provider" onchange="filterModels()">
+        <option value="all">All Providers</option>
+      </select>
+    </div>
+    <div class="input-row">
       <span class="section-title" style="margin: 0;" data-i18n="label.model" data-i18n-default="Model">Model</span>
       <select id="model">
         <option value="auto">🔀 Auto (Pythia chooses)</option>
-        <!-- Models loaded dynamically from /api/ai_models -->
       </select>
     </div>
     <div class="lang-control">
@@ -624,59 +629,73 @@ if (langSelectEl) {
 }
 
 // Load Models from API
+let _allModels = [];
+let _defaultModelId = "auto";
+
 async function loadModels() {
   const modelSel = $("model");
+  const provSel = $("provider");
   if (!modelSel) { console.warn("Model selector element not found"); return; }
   const previousValue = modelSel.value || "auto";
 
-  // Keep "Auto" option
   modelSel.innerHTML = '<option value="auto">🔀 Auto (Pythia chooses)</option>';
 
   try {
     const res = await fetch("/api/ai_models");
-
     let data = null;
-    try {
-      data = await res.json();
-    } catch (e) {
+    try { data = await res.json(); } catch (e) {
       console.error("Models API parse error", e);
       setStatus(false, "Models unavailable");
       return;
     }
 
-    const models = Array.isArray(data.models) ? data.models : [];
-    const defaultModelId = data.default_model_id || "auto";
+    _allModels = Array.isArray(data.models) ? data.models : [];
+    _defaultModelId = data.default_model_id || "auto";
 
-    if (!models.length) {
-      const autoOnly = document.createElement("option");
-      autoOnly.value = defaultModelId;
-      autoOnly.textContent = "🔀 Auto only (router available)";
-      modelSel.innerHTML = "";
-      modelSel.appendChild(autoOnly);
-      return;
+    // Populate provider dropdown
+    if (provSel) {
+      const providers = [...new Set(_allModels.map(m => m.provider).filter(Boolean))];
+      provSel.innerHTML = '<option value="all">All Providers</option>';
+      providers.forEach(p => {
+        const opt = document.createElement("option");
+        opt.value = p;
+        opt.textContent = p.charAt(0).toUpperCase() + p.slice(1);
+        provSel.appendChild(opt);
+      });
     }
 
-    models.forEach((m) => {
-      const opt = document.createElement("option");
-      opt.value = m.id;
-      opt.textContent = `${m.label || m.id}`;
-      if (m.enabled === false) {
-        opt.disabled = true;
-        opt.textContent += " (disabled)";
-      }
-      modelSel.appendChild(opt);
-    });
-
-    if (previousValue && Array.from(modelSel.options).some((o) => o.value === previousValue)) {
-      modelSel.value = previousValue;
-    } else if (Array.from(modelSel.options).some((o) => o.value === defaultModelId)) {
-      modelSel.value = defaultModelId;
-    }
+    _renderModels(previousValue);
   } catch (e) {
     console.warn("Failed to load models from API:", e);
     setStatus(false, "Models unavailable");
   }
   applyTranslations();
+}
+
+function _renderModels(selectValue) {
+  const modelSel = $("model");
+  const provSel = $("provider");
+  const provFilter = provSel ? provSel.value : "all";
+  modelSel.innerHTML = '<option value="auto">🔀 Auto (Pythia chooses)</option>';
+
+  const filtered = provFilter === "all" ? _allModels : _allModels.filter(m => m.provider === provFilter);
+  filtered.forEach(m => {
+    const opt = document.createElement("option");
+    opt.value = m.id;
+    opt.textContent = `${m.label || m.id} (${m.provider || '?'})`;
+    if (m.enabled === false) { opt.disabled = true; opt.textContent += " ⛔"; }
+    modelSel.appendChild(opt);
+  });
+
+  if (selectValue && Array.from(modelSel.options).some(o => o.value === selectValue)) {
+    modelSel.value = selectValue;
+  } else if (Array.from(modelSel.options).some(o => o.value === _defaultModelId)) {
+    modelSel.value = _defaultModelId;
+  }
+}
+
+function filterModels() {
+  _renderModels(null);
 }
 
 // Initialize

@@ -2037,9 +2037,15 @@
         }
 
         models.forEach((model) => {
+          if ((model.id === "offline_corpus" || model.id === "thrai") && model.enabled !== true) {
+            return;
+          }
           const opt = document.createElement("option");
           opt.value = model.id;
-          opt.textContent = model.label || model.id;
+          const badge = model.id === "offline_corpus"
+            ? " · [On-chain / local]"
+            : (model.id === "thrai" ? " · [Router]" : "");
+          opt.textContent = `${model.label || model.id}${badge}`;
           if (model.enabled === false) {
             opt.disabled = true;
             opt.textContent += " (disabled)";

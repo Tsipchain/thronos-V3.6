@@ -8160,7 +8160,7 @@ def api_architect_generate():
         call_meta["resolved_provider"] = resolved_info.provider
     try:
         call_meta["call_attempted"] = True
-        raw = ai_agent.generate_response(prompt, wallet=wallet, model_key=model_key, session_id=session_id)
+        raw = ai_agent.generate_response(prompt, wallet=wallet, model_key=model_key, session_id=session_id, chain_context=_build_chain_context_for_router())
     except Exception as exc:
         app.logger.exception("Architect generation failed")
         call_meta["failure_reason"] = str(exc)
@@ -10178,6 +10178,31 @@ def api_voting_results():
     return jsonify(results), 200
 
 
+
+
+def _build_chain_context_for_router(max_blocks: int = 8, max_tokens: int = 8, max_blueprints: int = 8) -> dict:
+    context = {"blocks": [], "tokens": [], "blueprints": []}
+    try:
+        chain = load_json(CHAIN_FILE, []) or []
+        if isinstance(chain, list):
+            context["blocks"] = chain[-max_blocks:]
+    except Exception:
+        context["blocks"] = []
+    try:
+        tokens = load_json(TOKENS_FILE, []) or []
+        if isinstance(tokens, list):
+            context["tokens"] = tokens[:max_tokens]
+    except Exception:
+        context["tokens"] = []
+    try:
+        bp_dir = os.path.join(DATA_DIR, "ai_blueprints")
+        if os.path.isdir(bp_dir):
+            names = sorted([f for f in os.listdir(bp_dir) if f.endswith(".md") or f.endswith(".txt")])
+            context["blueprints"] = names[:max_blueprints]
+    except Exception:
+        context["blueprints"] = []
+    return context
+
 # ─── QUANTUM CHAT API (ενιαίο AI + αρχεία + offline corpus) ─────────────────
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
@@ -10465,7 +10490,7 @@ def api_chat():
         call_meta["resolved_provider"] = resolved_info.provider
     try:
         call_meta["call_attempted"] = True
-        raw = ai_agent.generate_response(full_prompt, wallet=wallet, model_key=model_key, session_id=session_id)
+        raw = ai_agent.generate_response(full_prompt, wallet=wallet, model_key=model_key, session_id=session_id, chain_context=_build_chain_context_for_router())
     except Exception as exc:
         app.logger.exception("AI chat generation failed")
         call_meta["failure_reason"] = str(exc)
@@ -20899,7 +20924,7 @@ def api_ai_models():
                         "display_name": mi.display_name,
                         "provider": mi.provider,
                         "enabled": mi.enabled,
-                        "degraded": not mi.enabled,
+                        "degraded": bool(getattr(mi, "degraded", (not mi.enabled))),
                         "mode": mode,
                     }
                 )

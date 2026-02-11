@@ -16036,9 +16036,22 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
     except ImportError as e:
         print(f"[SCHEDULER] BTC pledge watcher unavailable: {e}")
 
+    # PYTHEIA Worker – system health monitoring & governance advice
+    try:
+        from pytheia_worker import PYTHEIAWorker
+        _pytheia_instance = PYTHEIAWorker()
+        scheduler.add_job(_pytheia_instance.run_cycle, "interval",
+                         seconds=int(_strip_env_quotes(os.getenv("PYTHEIA_CHECK_INTERVAL", "300"))),
+                         coalesce=True, max_instances=1, id="pytheia_worker")
+        print("[SCHEDULER] PYTHEIA worker scheduled (every 5 min)")
+    except ImportError as e:
+        print(f"[SCHEDULER] PYTHEIA worker unavailable: {e}")
+    except Exception as e:
+        print(f"[SCHEDULER] PYTHEIA worker init error: {e}")
+
     scheduler.start()
     _active_schedulers.append(scheduler)
-    print(f"[SCHEDULER] All master jobs started (including telemetry cache, AI rewards, BTC pledge watcher)")
+    print(f"[SCHEDULER] All master jobs started (including telemetry cache, AI rewards, BTC pledge watcher, PYTHEIA)")
 else:
     print(f"[SCHEDULER] Scheduler disabled (NODE_ROLE={NODE_ROLE}, SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")
     scheduler = None

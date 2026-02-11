@@ -6206,7 +6206,9 @@ def forward_writes_to_leader():
     """
     Non-leader nodes must forward critical state-changing requests to the leader.
     """
-    if NODE_ROLE == "master":
+    # AI core is an independent control-plane node and must not proxy writes
+    # through chain leader forwarding middleware.
+    if NODE_ROLE in ("master", "ai_core"):
         return None
 
     if request.method not in ["POST", "PUT", "DELETE", "PATCH"]:
@@ -6271,7 +6273,9 @@ def forward_reads_to_leader():
     Also proxies /api/* reads to PRIMARY_PROXY when local chain is empty.
     Never proxies /static, /health, /bootstrap.json.
     """
-    if NODE_ROLE == "master":
+    # AI core must always serve local AI endpoints (models/providers/chat)
+    # and should never depend on leader read-proxy behavior.
+    if NODE_ROLE in ("master", "ai_core"):
         return None
 
     if request.method != "GET":
@@ -6304,8 +6308,12 @@ def forward_reads_to_leader():
     # Always proxy guarded prefixes to leader
     should_proxy = request.path.startswith(guarded_prefixes)
 
-    # If chain is empty, also proxy all /api/* reads to primary
-    if not should_proxy and request.path.startswith("/api/") and not _chain_ready():
+    # Never proxy AI API reads; these should resolve locally (especially on ai_core)
+    if request.path.startswith("/api/ai"):
+        should_proxy = False
+
+    # If chain is empty, proxy /api/* reads to primary, except AI APIs above.
+    if not should_proxy and request.path.startswith("/api/") and not request.path.startswith("/api/ai") and not _chain_ready():
         should_proxy = True
 
     if not should_proxy:

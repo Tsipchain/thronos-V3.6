@@ -70,6 +70,20 @@ def _resolve_model(
 
     def _provider_configured(provider: str) -> bool:
         info = provider_status.get(provider) if isinstance(provider_status, dict) else None
+        if info and info.get("enabled") is False:
+            return False
+
+        if provider == "local":
+            return True
+
+        if provider in ("thronos", "custom", "diko_mas"):
+            custom_url = (
+                os.getenv("CUSTOM_MODEL_URL", "").strip()
+                or os.getenv("CUSTOM_MODEL_URI", "").strip()
+                or os.getenv("DIKO_MAS_MODEL_URL", "").strip()
+            )
+            return bool(custom_url)
+
         if info:
             if not info.get("configured"):
                 return False

@@ -7900,13 +7900,20 @@ def regenerate_pledges():
 
 # ─── AI ARCHITECT ROUTES (NEW) ──────────────────────────────────────────────
 
-@app.route("/architect")
+@app.route("/architect", methods=["GET"])
 def architect_page():
     resp = make_response(render_template("architect.html"))
     resp.headers["Content-Type"] = "text/html; charset=utf-8"
     resp.headers["Cache-Control"] = "no-store, max-age=0"
     resp.headers["Pragma"] = "no-cache"
     resp.headers["X-Content-Type-Options"] = "nosniff"
+    # Helpful in production diagnostics to verify which deploy serves /architect
+    resp.headers["X-Thronos-Release"] = (
+        os.getenv("RAILWAY_GIT_COMMIT_SHA")
+        or os.getenv("RENDER_GIT_COMMIT")
+        or os.getenv("SOURCE_COMMIT")
+        or "unknown"
+    )
     return resp
 
 @app.route("/api/ai_blueprints")

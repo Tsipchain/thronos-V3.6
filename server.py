@@ -726,6 +726,9 @@ AI_INTERACTIONS_FILE = os.path.join(DATA_DIR, "ai_interactions.jsonl")
 WATCHER_LEDGER_FILE = os.path.join(DATA_DIR, "watcher_ledger.json")
 IOT_DATA_FILE       = os.path.join(DATA_DIR, "iot_data.json")
 IOT_PARKING_FILE    = os.path.join(DATA_DIR, "iot_parking.json")
+IOT_API_REQUIRE_REGISTER = _strip_env_quotes(os.getenv("IOT_API_REQUIRE_REGISTER", "true")).lower() in ("1", "true", "yes", "on")
+IOT_SUMMARY_WINDOW_MINUTES = int(_strip_env_quotes(os.getenv("IOT_SUMMARY_WINDOW_MINUTES", "5")) or 5)
+IOT_SUMMARY_LIMIT_PER_DEVICE = int(_strip_env_quotes(os.getenv("IOT_SUMMARY_LIMIT_PER_DEVICE", "50")) or 50)
 MEMPOOL_FILE        = os.path.join(DATA_DIR, "mempool.json")
 ATTEST_STORE_FILE   = os.path.join(DATA_DIR, "attest_store.json")
 TX_LOG_FILE         = os.path.join(DATA_DIR, "tx_ledger.json")
@@ -960,6 +963,13 @@ AI_FREE_USAGE_FILE  = os.path.join(DATA_DIR, "ai_free_usage.json")
 # AI extra storage
 AI_FILES_DIR   = os.path.join(DATA_DIR, "ai_files")
 AI_CORPUS_FILE = os.path.join(DATA_DIR, "ai_offline_corpus.json")
+THR_OFFLINE_CORPUS_ENABLED = _strip_env_quotes(os.getenv("THR_OFFLINE_CORPUS_ENABLED", "false")).lower() in ("1", "true", "yes", "on")
+THR_THAI_ENABLED = _strip_env_quotes(os.getenv("THR_THAI_ENABLED", "")).lower() in ("1", "true", "yes", "on")
+DIKO_MAS_MODEL_URL = (
+    _strip_env_quotes(os.getenv("DIKO_MAS_MODEL_URL", ""))
+    or _strip_env_quotes(os.getenv("CUSTOM_MODEL_URL", ""))
+    or _strip_env_quotes(os.getenv("CUSTOM_MODEL_URI", ""))
+)
 LAST_PROMPT_HASH: dict[str, str] = {}
 os.makedirs(AI_FILES_DIR, exist_ok=True)
 
@@ -1652,6 +1662,42 @@ def _init_ledger_db():
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_music_playlist_items_playlist ON music_playlist_items(playlist_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_music_playlist_items_position ON music_playlist_items(position)")
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS iot_devices (
+                device_id TEXT PRIMARY KEY,
+                label TEXT,
+                owner_wallet TEXT,
+                sensor_type TEXT,
+                location TEXT,
+                api_key TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_iot_devices_owner ON iot_devices(owner_wallet)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_iot_devices_sensor_type ON iot_devices(sensor_type)")
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS iot_readings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT NOT NULL,
+                sensor_type TEXT NOT NULL,
+                value_text TEXT,
+                value_num REAL,
+                unit TEXT,
+                ts INTEGER NOT NULL,
+                metadata_json TEXT,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (device_id) REFERENCES iot_devices(device_id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_iot_readings_device_ts ON iot_readings(device_id, ts DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_iot_readings_sensor_ts ON iot_readings(sensor_type, ts DESC)")
 
     with _get_ledger_db_connection() as conn:
         row = conn.execute("SELECT COUNT(1) AS count FROM balances").fetchone()
@@ -9868,6 +9914,202 @@ def api_bridge_withdraw():
         "new_balance": wrapped_ledger[wallet]
     }), 200
 
+
+
+def _normalize_iot_ts(raw_ts) -> int:
+    try:
+        if raw_ts is None:
+            return int(time.time())
+        return int(float(raw_ts))
+    except Exception:
+        return int(time.time())
+
+
+def _register_iot_device_row(device_id: str, label: str, owner_wallet: str, sensor_type: str, location: str, api_key: str | None = None) -> dict:
+    now_ts = int(time.time())
+    normalized = {
+        "device_id": (device_id or "").strip(),
+        "label": (label or "").strip(),
+        "owner_wallet": (owner_wallet or "").strip(),
+        "sensor_type": (sensor_type or "").strip(),
+        "location": location if isinstance(location, str) else json.dumps(location or {}, ensure_ascii=False),
+    }
+    with _get_ledger_db_connection() as conn:
+        existing = conn.execute("SELECT api_key, created_at FROM iot_devices WHERE device_id = ?", (normalized["device_id"],)).fetchone()
+        keep_api = (existing["api_key"] if existing and existing["api_key"] else None) or api_key or secrets.token_hex(16)
+        created_at = int(existing["created_at"]) if existing and existing["created_at"] else now_ts
+        conn.execute(
+            """
+            INSERT INTO iot_devices (device_id, label, owner_wallet, sensor_type, location, api_key, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(device_id)
+            DO UPDATE SET label=excluded.label, owner_wallet=excluded.owner_wallet, sensor_type=excluded.sensor_type,
+                          location=excluded.location, api_key=COALESCE(iot_devices.api_key, excluded.api_key), updated_at=excluded.updated_at
+            """,
+            (normalized["device_id"], normalized["label"], normalized["owner_wallet"], normalized["sensor_type"], normalized["location"], keep_api, created_at, now_ts),
+        )
+    normalized["created_at"] = created_at
+    normalized["updated_at"] = now_ts
+    normalized["api_key"] = keep_api
+    return normalized
+
+
+def _get_iot_device(device_id: str):
+    with _get_ledger_db_connection() as conn:
+        return conn.execute("SELECT * FROM iot_devices WHERE device_id = ?", (device_id,)).fetchone()
+
+
+def _verify_iot_api_key(device_row, supplied_key: str | None) -> bool:
+    expected = (device_row["api_key"] or "") if device_row else ""
+    if not expected:
+        return True
+    return bool(supplied_key and secrets.compare_digest(str(expected), str(supplied_key)))
+
+
+def summarize_recent_iot_to_corpus() -> None:
+    if not USE_SQLITE_LEDGER:
+        return
+    cutoff = int(time.time()) - (IOT_SUMMARY_WINDOW_MINUTES * 60)
+    with _get_ledger_db_connection() as conn:
+        devices = conn.execute("SELECT device_id, sensor_type FROM iot_devices ORDER BY updated_at DESC LIMIT 200").fetchall()
+        for dev in devices:
+            rows = conn.execute(
+                """
+                SELECT value_num, value_text, unit, ts FROM iot_readings
+                WHERE device_id = ? AND ts >= ?
+                ORDER BY ts DESC LIMIT ?
+                """,
+                (dev["device_id"], cutoff, IOT_SUMMARY_LIMIT_PER_DEVICE),
+            ).fetchall()
+            if not rows:
+                continue
+            numeric = [float(r["value_num"]) for r in rows if r["value_num"] is not None]
+            if numeric:
+                avg_val = round(sum(numeric) / len(numeric), 4)
+                trend = "rising" if len(numeric) > 1 and numeric[0] > numeric[-1] else "steady_or_falling"
+                summary = f"IoT summary device={dev['device_id']} sensor={dev['sensor_type']} count={len(rows)} avg={avg_val} trend={trend}"
+            else:
+                summary = f"IoT summary device={dev['device_id']} sensor={dev['sensor_type']} count={len(rows)} latest={rows[0]['value_text']}"
+            enqueue_offline_corpus(
+                wallet=f"IOT:{dev['device_id']}",
+                prompt=f"[IOT_SUMMARY] {dev['device_id']}",
+                response=summary,
+                files=[],
+                session_id=f"iot-{dev['device_id']}",
+            )
+
+
+@app.route("/api/iot/register_device", methods=["POST"])
+def api_iot_register_device():
+    if not USE_SQLITE_LEDGER:
+        return jsonify({"ok": False, "error": "sqlite_iot_storage_disabled"}), 503
+
+    data = request.get_json(silent=True) or {}
+    device_id = (data.get("device_id") or "").strip()
+    if not device_id:
+        return jsonify({"ok": False, "error": "device_id required"}), 400
+
+    normalized = _register_iot_device_row(
+        device_id=device_id,
+        label=data.get("label") or device_id,
+        owner_wallet=data.get("owner_wallet") or "",
+        sensor_type=data.get("sensor_type") or "unknown",
+        location=data.get("location") or "",
+        api_key=data.get("api_key"),
+    )
+    return jsonify({"ok": True, "status": "registered", "device": normalized}), 200
+
+
+@app.route("/api/iot/push_reading", methods=["POST"])
+def api_iot_push_reading():
+    if not USE_SQLITE_LEDGER:
+        return jsonify({"ok": False, "error": "sqlite_iot_storage_disabled"}), 503
+
+    data = request.get_json(silent=True) or {}
+    device_id = (data.get("device_id") or "").strip()
+    sensor_type = (data.get("sensor_type") or "").strip()
+    if not device_id or not sensor_type:
+        return jsonify({"ok": False, "error": "device_id and sensor_type required"}), 400
+
+    device = _get_iot_device(device_id)
+    if not device and IOT_API_REQUIRE_REGISTER:
+        return jsonify({"ok": False, "error": "device_not_registered"}), 404
+
+    if not device and not IOT_API_REQUIRE_REGISTER:
+        auto_key = request.headers.get("X-IOT-API-KEY") or secrets.token_hex(16)
+        _register_iot_device_row(device_id, device_id, "", sensor_type, "", api_key=auto_key)
+        device = _get_iot_device(device_id)
+
+    supplied_key = request.headers.get("X-IOT-API-KEY") or data.get("api_key")
+    if not _verify_iot_api_key(device, supplied_key):
+        return jsonify({"ok": False, "error": "invalid_iot_api_key"}), 401
+
+    raw_value = data.get("value")
+    value_num = None
+    try:
+        value_num = float(raw_value)
+    except Exception:
+        pass
+
+    ts_val = _normalize_iot_ts(data.get("ts"))
+    metadata_json = json.dumps(data.get("meta") or {}, ensure_ascii=False)
+    with _get_ledger_db_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO iot_readings (device_id, sensor_type, value_text, value_num, unit, ts, metadata_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (device_id, sensor_type, str(raw_value), value_num, (data.get("unit") or "").strip(), ts_val, metadata_json, int(time.time())),
+        )
+
+    logger.info("[IOT] device=%s sensor=%s value=%s %s", device_id, sensor_type, raw_value, (data.get("unit") or "").strip())
+    return jsonify({"ok": True, "status": "stored", "device_id": device_id, "sensor_type": sensor_type, "ts": ts_val}), 200
+
+
+@app.route("/api/iot/readings", methods=["GET"])
+def api_iot_readings():
+    if not USE_SQLITE_LEDGER:
+        return jsonify({"ok": False, "error": "sqlite_iot_storage_disabled", "readings": []}), 503
+
+    device_id = (request.args.get("device_id") or "").strip()
+    limit = int(request.args.get("limit") or 20)
+    limit = max(1, min(limit, 200))
+
+    if not device_id:
+        return jsonify({"ok": False, "error": "device_id required", "readings": []}), 400
+
+    with _get_ledger_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, device_id, sensor_type, value_text, value_num, unit, ts, metadata_json
+            FROM iot_readings
+            WHERE device_id = ?
+            ORDER BY ts DESC, id DESC
+            LIMIT ?
+            """,
+            (device_id, limit),
+        ).fetchall()
+
+    readings = []
+    for r in rows:
+        value = r["value_num"] if r["value_num"] is not None else r["value_text"]
+        try:
+            meta_obj = json.loads(r["metadata_json"] or "{}")
+        except Exception:
+            meta_obj = {}
+        readings.append({
+            "id": r["id"],
+            "device_id": r["device_id"],
+            "sensor_type": r["sensor_type"],
+            "value": value,
+            "unit": r["unit"],
+            "ts": r["ts"],
+            "meta": meta_obj,
+        })
+
+    return jsonify({"ok": True, "device_id": device_id, "readings": readings}), 200
+
+
 @app.route("/api/iot/data")
 def iot_data():
     data = load_json(IOT_DATA_FILE, [])
@@ -10203,6 +10445,108 @@ def _build_chain_context_for_router(max_blocks: int = 8, max_tokens: int = 8, ma
         context["blueprints"] = []
     return context
 
+
+
+def _offline_corpus_health() -> tuple[bool, str | None]:
+    try:
+        if not os.path.exists(AI_CORPUS_FILE):
+            return False, f"missing_path:{AI_CORPUS_FILE}"
+        corpus = load_json(AI_CORPUS_FILE, [])
+        if not isinstance(corpus, list):
+            return False, "invalid_corpus_format"
+        return True, None
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _thrai_router_health() -> tuple[bool, str | None]:
+    router_url = (DIKO_MAS_MODEL_URL or "").strip()
+    if not router_url:
+        return False, "missing_router_url"
+
+    health_candidates = [router_url]
+    if router_url.endswith('/api/thrai/ask'):
+        base = router_url[: -len('/api/thrai/ask')]
+        health_candidates.extend([f"{base}/health", f"{base}/api/ai/health", f"{base}/ping"])
+
+    for candidate in health_candidates:
+        try:
+            r = requests.get(candidate, timeout=2.5)
+            if r.status_code < 500:
+                return True, None
+        except Exception:
+            pass
+
+    try:
+        r = requests.post(router_url, json={"ping": "thrai"}, timeout=3)
+        if r.status_code < 500:
+            return True, None
+    except Exception as exc:
+        return False, str(exc)
+    return False, "health_check_failed"
+
+
+def call_offline_corpus(corpus_path, messages, wallet, session_id, chain_context) -> str:
+    """Simple local retrieval over ai_offline_corpus.json / knowledge blocks."""
+    try:
+        corpus = load_json(corpus_path, []) or []
+    except Exception:
+        corpus = []
+
+    last_user = ""
+    for m in reversed(messages or []):
+        if isinstance(m, dict) and (m.get("role") or "").lower() == "user":
+            last_user = str(m.get("content") or "").strip()
+            if last_user:
+                break
+
+    if not last_user:
+        return "Offline corpus is ready, but no user prompt was provided."
+
+    query_tokens = [w.lower() for w in last_user.split() if len(w) > 2]
+    scored = []
+    for entry in corpus[-2000:]:
+        if not isinstance(entry, dict):
+            continue
+        blob = f"{entry.get('prompt','')}\n{entry.get('response','')}".lower()
+        score = sum(1 for t in query_tokens if t in blob)
+        if score:
+            scored.append((score, entry))
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    context_blocks = []
+    for _, item in scored[:4]:
+        context_blocks.append(
+            f"- [{item.get('timestamp','unknown')}] Q: {str(item.get('prompt',''))[:180]}\n  A: {str(item.get('response',''))[:260]}"
+        )
+
+    chain_summary = []
+    if isinstance(chain_context, dict):
+        chain_summary.append(f"blocks={len(chain_context.get('blocks') or [])}")
+        chain_summary.append(f"tokens={len(chain_context.get('tokens') or [])}")
+        chain_summary.append(f"blueprints={len(chain_context.get('blueprints') or [])}")
+
+    if context_blocks:
+        return (
+            "Offline corpus answer (local knowledge):\n\n"
+            + "\n".join(context_blocks)
+            + f"\n\nPrompt: {last_user}\nContext: {' | '.join(chain_summary)}"
+        )
+
+    return (
+        "Offline corpus has no directly matching archived blocks yet. "
+        f"Prompt received: {last_user}. Context: {' | '.join(chain_summary)}"
+    )
+
+
+def call_thrai_router(router_url: str, payload: dict) -> dict:
+    response = requests.post(router_url, json=payload, timeout=45)
+    response.raise_for_status()
+    try:
+        return response.json()
+    except Exception:
+        return {"response": response.text, "status": "secure", "provider": "thronos", "model": "thrai"}
+
 # ─── QUANTUM CHAT API (ενιαίο AI + αρχεία + offline corpus) ─────────────────
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
@@ -10481,16 +10825,39 @@ def api_chat():
         pass
     full_prompt = f"{context_str}User: {msg}" if context_str else msg
 
-    # --- Κλήση στον ThronosAI provider ---
-    # Pass model_key AND session_id to generate_response
+    # --- AI execution path ---
     call_started = time.time()
     resolved_info = _resolve_model(model_key)
     if resolved_info:
         call_meta["selected_model"] = resolved_info.id
         call_meta["resolved_provider"] = resolved_info.provider
+
+    chain_context = _build_chain_context_for_router()
     try:
         call_meta["call_attempted"] = True
-        raw = ai_agent.generate_response(full_prompt, wallet=wallet, model_key=model_key, session_id=session_id, chain_context=_build_chain_context_for_router())
+        if model_key == "offline_corpus":
+            text = call_offline_corpus(AI_CORPUS_FILE, data.get("messages") or [], wallet, session_id, chain_context)
+            logger.info("[AI_MODEL] offline_corpus answer wallet=%s session=%s", wallet, session_id)
+            raw = {
+                "response": text,
+                "status": "secure",
+                "provider": "local",
+                "model": "offline_corpus",
+                "meta": {"source": "offline_corpus"},
+            }
+        elif model_key == "thrai":
+            payload = {
+                "wallet": wallet,
+                "session_id": session_id,
+                "messages": data.get("messages") or [],
+                "chain_context": chain_context,
+                "model": "thrai",
+            }
+            router_url = (DIKO_MAS_MODEL_URL or "").strip() or "http://localhost:5000/api/thrai/ask"
+            logger.info("[AI_MODEL] thrai routed to %s wallet=%s session=%s", router_url, wallet, session_id)
+            raw = call_thrai_router(router_url, payload)
+        else:
+            raw = ai_agent.generate_response(full_prompt, wallet=wallet, model_key=model_key, session_id=session_id, chain_context=chain_context)
     except Exception as exc:
         app.logger.exception("AI chat generation failed")
         call_meta["failure_reason"] = str(exc)
@@ -10607,6 +10974,12 @@ def api_chat():
 
     resp = {
         "response": cleaned,
+        "message": {
+            "role": "assistant",
+            "content": cleaned,
+            "provider": provider,
+            "model_id": model,
+        },
         "quantum_key": quantum_key,
         "status": status,
         "provider": provider,
@@ -10628,6 +11001,8 @@ def api_chat():
 
     resp["routing"] = routing_meta
     resp["task_type"] = task_type_meta
+    if isinstance(raw, dict) and raw.get("meta"):
+        resp["meta"] = raw.get("meta")
 
     try:
         interaction_entry = record_ai_interaction(
@@ -16087,6 +16462,9 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
                      coalesce=True, max_instances=1, id="aggregator_step")
     scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30,
                      coalesce=True, max_instances=1, id="ai_knowledge_watcher")
+    scheduler.add_job(summarize_recent_iot_to_corpus, "interval",
+                     minutes=max(1, min(5, IOT_SUMMARY_WINDOW_MINUTES)),
+                     coalesce=True, max_instances=1, id="iot_to_corpus_summary")
     scheduler.add_job(distribute_ai_rewards_step, "interval",
                      minutes=int(_strip_env_quotes(os.getenv("AI_POOL_DISTRIBUTION_INTERVAL", "30"))),
                      coalesce=True, max_instances=1, id="ai_rewards")
@@ -20925,20 +21303,25 @@ def api_ai_models():
         default_model = get_default_model(None if mode == "all" else mode)
         default_model_id = default_model.id if default_model else None
 
+        provider_status = get_provider_status()
         models = []
         for provider_name, model_list in AI_MODEL_REGISTRY.items():
             if mode != "all" and provider_name != mode:
                 continue
+            pstatus = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
             for mi in model_list:
+                enabled = bool(mi.enabled)
+                degraded = bool(getattr(mi, "degraded", (not enabled)))
                 models.append(
                     {
                         "id": mi.id,
                         "label": mi.display_name,
                         "display_name": mi.display_name,
                         "provider": mi.provider,
-                        "enabled": mi.enabled,
-                        "degraded": bool(getattr(mi, "degraded", (not mi.enabled))),
-                        "mode": mode,
+                        "enabled": enabled,
+                        "degraded": degraded,
+                        "mode": "all",
+                        "health_reason": pstatus.get("last_error") if (degraded or not enabled) else None,
                     }
                 )
 
@@ -21275,12 +21658,30 @@ def api_ai_health():
         enabled_ids = list_enabled_model_ids()
     except Exception:
         enabled_ids = []
+
+    offline_ok, offline_reason = _offline_corpus_health()
+    thrai_ok, thrai_reason = _thrai_router_health()
+    offline_enabled = bool(THR_OFFLINE_CORPUS_ENABLED and offline_ok)
+    thrai_enabled = bool((THR_THAI_ENABLED or bool((DIKO_MAS_MODEL_URL or "").strip())) and thrai_ok)
+
     return jsonify({
         "ok": True,
         "node_role": NODE_ROLE,
         "thronos_ai_mode": os.getenv("THRONOS_AI_MODE", "all"),
         "enabled_model_ids": enabled_ids,
         "provider_status": get_provider_status(),
+        "offline_corpus": {
+            "enabled": offline_enabled,
+            "degraded": not offline_enabled,
+            "path": AI_CORPUS_FILE,
+            "reason": None if offline_enabled else (offline_reason or "disabled_by_flag"),
+        },
+        "thrai": {
+            "enabled": thrai_enabled,
+            "degraded": not thrai_enabled,
+            "router_url": (DIKO_MAS_MODEL_URL or "").strip(),
+            "reason": None if thrai_enabled else (thrai_reason or "disabled_by_flag"),
+        }
     }), 200
 
 

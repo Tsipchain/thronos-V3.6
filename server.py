@@ -966,6 +966,8 @@ os.makedirs(AI_FILES_DIR, exist_ok=True)
 AI_SESSIONS_FILE = os.path.join(DATA_DIR, "ai_sessions.json")
 AI_SESSIONS_DIR = os.path.join(DATA_DIR, "ai_sessions")
 SESSIONS_DIR = AI_SESSIONS_DIR
+AI_SESSION_BILLING_FILE = os.path.join(DATA_DIR, "ai_session_billing.json")
+AI_T2E_EVENTS_FILE = os.path.join(DATA_DIR, "ai_t2e_events.json")
 AI_FILES_INDEX = os.path.join(DATA_DIR, "ai_files_index.json")
 
 # FIX 9: Set SESSIONS_DIR to point to volume-backed AI_SESSIONS_DIR
@@ -5071,8 +5073,12 @@ def load_ai_sessions():
         updated = s.get("updated_at") or s.get("updated") or created
         meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
         selected_model_id = meta.get("selected_model_id") or s.get("selected_model_id") or _default_model_id()
-        session_type = meta.get("session_type") or s.get("session_type") or "chat"
+        session_type = (meta.get("session_type") or s.get("session_type") or "chat").lower()
+        if session_type not in {"chat", "architect", "train"}:
+            session_type = "chat"
+        billing_mode_locked = (meta.get("billing_mode_locked") or s.get("billing_mode_locked") or _session_billing_mode(session_type)).lower()
         meta["session_type"] = session_type
+        meta["billing_mode_locked"] = billing_mode_locked
         out.append({
             "id": sid,
             "wallet": wallet,
@@ -5085,6 +5091,7 @@ def load_ai_sessions():
             "meta": meta,
             "selected_model_id": selected_model_id,
             "session_type": session_type,
+            "billing_mode_locked": billing_mode_locked,
         })
     return out
 
@@ -5094,6 +5101,69 @@ def save_ai_sessions(sessions):
     if not isinstance(sessions, list):
         sessions = []
     save_json(AI_SESSIONS_FILE, sessions)
+
+
+def _session_billing_mode(session_type: str) -> str:
+    st = (session_type or "chat").strip().lower()
+    if st == "architect":
+        return "thr"
+    if st == "train":
+        return "none"
+    return "credits"
+
+
+def _load_billing_idempotency() -> dict:
+    data = load_json(AI_SESSION_BILLING_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+
+def _save_billing_idempotency(data: dict):
+    save_json(AI_SESSION_BILLING_FILE, data if isinstance(data, dict) else {})
+
+
+def _session_by_id(session_id: str) -> dict | None:
+    if not session_id:
+        return None
+    for s in load_ai_sessions():
+        if s.get("id") == session_id:
+            return s
+    return None
+
+
+def _create_session_record(session_type: str, wallet: str = "", title: str | None = None, session_id: str | None = None) -> dict:
+    st = (session_type or "chat").strip().lower()
+    if st not in {"chat", "architect", "train"}:
+        st = "chat"
+    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    sid = (session_id or "").strip() or uuid.uuid4().hex
+    billing_mode = _session_billing_mode(st)
+    existing = _session_by_id(sid)
+    if existing:
+        return existing
+
+    session = {
+        "id": sid,
+        "wallet": (wallet or "").strip(),
+        "title": title or ("Architect Session" if st == "architect" else ("Training Session" if st == "train" else "New Chat")),
+        "created_at": now,
+        "updated_at": now,
+        "archived": False,
+        "model": None,
+        "message_count": 0,
+        "meta": {
+            "session_type": st,
+            "billing_mode_locked": billing_mode,
+            "selected_model_id": _default_model_id(),
+        },
+        "selected_model_id": _default_model_id(),
+        "session_type": st,
+        "billing_mode_locked": billing_mode,
+    }
+    sessions = load_ai_sessions()
+    sessions.append(session)
+    save_ai_sessions(sessions)
+    ensure_session_messages_file(sid)
+    return session
 
 
 def _session_messages_path(session_id: str) -> str:
@@ -5370,10 +5440,22 @@ def ensure_session_exists(session_id: str, wallet: str | None, session_type: str
                         extra={"session_id": session_id, "expected": session_type, "found": existing_type},
                     )
                     return {}
+                expected_billing = _session_billing_mode(existing_type)
+                meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
+                changed = False
+                if (s.get("billing_mode_locked") or meta.get("billing_mode_locked")) != expected_billing:
+                    s["billing_mode_locked"] = expected_billing
+                    meta["billing_mode_locked"] = expected_billing
+                    s["meta"] = meta
+                    changed = True
+                if changed:
+                    s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                    save_ai_sessions(sessions)
                 ensure_session_messages_file(session_id)
                 return s
 
         now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        stype = (session_type or "chat").lower()
         recovered = {
             "id": session_id,
             "wallet": (wallet or "").strip(),
@@ -5383,8 +5465,9 @@ def ensure_session_exists(session_id: str, wallet: str | None, session_type: str
             "archived": False,
             "model": None,
             "message_count": 0,
-            "meta": {"recovered": True, "session_type": session_type or "chat"},
-            "session_type": session_type or "chat",
+            "meta": {"recovered": True, "session_type": stype, "billing_mode_locked": _session_billing_mode(stype)},
+            "session_type": stype,
+            "billing_mode_locked": _session_billing_mode(stype),
         }
         sessions.append(recovered)
         save_ai_sessions(sessions)
@@ -7879,6 +7962,8 @@ def api_architect_generate():
     project_spec = (data.get("spec") or data.get("specs") or "").strip() # Handle both keys just in case
     model_key   = (data.get("model_id") or data.get("model") or data.get("model_key") or "gpt-4o").strip()
     credits_value = 0
+    billing_precharged = bool(data.get("billing_precharged"))
+    precharged_request_id = (data.get("request_id") or "").strip()
 
     call_meta = {
         "endpoint": "api_architect_generate",
@@ -8053,28 +8138,33 @@ def api_architect_generate():
     architect_fee = billing.calculate_architect_fee(tokens_out=tokens_out, files_count=files_count, blueprint_complexity=1)
 
     # FIX 8: Charge THR (Architect billing mode - no credits)
-    charge_success, charge_error, charge_telemetry = billing.charge_thr(
-        wallet=wallet,
-        amount=architect_fee,
-        reason="architect_usage",
-        product="architect",
-        metadata={
-            "blueprint": blueprint,
-            "files_generated": files_count,
-            "tokens_out": tokens_out,
-            "model": model_key,
-            "session_id": session_id
-        }
-    )
+    if billing_precharged:
+        charge_success = True
+        charge_error = ""
+        charge_telemetry = {"tx_id": f"PRECHARGED-{precharged_request_id}" if precharged_request_id else "PRECHARGED"}
+    else:
+        charge_success, charge_error, charge_telemetry = billing.charge_thr(
+            wallet=wallet,
+            amount=architect_fee,
+            reason="architect_usage",
+            product="architect",
+            metadata={
+                "blueprint": blueprint,
+                "files_generated": files_count,
+                "tokens_out": tokens_out,
+                "model": model_key,
+                "session_id": session_id
+            }
+        )
 
-    if not charge_success:
-        # Insufficient THR - return error
-        return jsonify({
-            "error": charge_error,
-            "status": "insufficient_thr",
-            "thr_available": charge_telemetry.get("thr_available", 0),
-            "thr_needed": float(architect_fee)
-        }), 402  # Payment Required
+        if not charge_success:
+            # Insufficient THR - return error
+            return jsonify({
+                "error": charge_error,
+                "status": "insufficient_thr",
+                "thr_available": charge_telemetry.get("thr_available", 0),
+                "thr_needed": float(architect_fee)
+            }), 402  # Payment Required
 
     # FIX 8: Grant credits reward (1 THR → 10 credits)
     reward_telemetry = billing.grant_credits_from_thr_spend(wallet, architect_fee)
@@ -10056,6 +10146,7 @@ def api_chat():
     model_key = (data.get("model_id") or data.get("model") or data.get("model_key") or "").strip() or None
     attachments = data.get("attachments") or data.get("attachment_ids") or []
     ai_credits_spent = 0.0
+    billing_precharged = bool(data.get("billing_precharged"))
 
     call_meta = {
         "endpoint": "api_chat",
@@ -10370,7 +10461,7 @@ def api_chat():
         call_meta["failure_reason"] = raw_status
     can_charge = bool(wallet) and raw_status not in charge_block_statuses
 
-    if wallet and can_charge:
+    if wallet and can_charge and not billing_precharged:
         # Use billing module (clean separation, telemetry, cross-charge guard)
         success, error_msg, telemetry = billing.consume_credits(wallet, AI_CREDIT_COST_PER_MSG, product="chat")
         if not success:
@@ -10381,6 +10472,10 @@ def api_chat():
         else:
             credits_for_frontend = telemetry.get("credits_after", 0)
             ai_credits_spent = abs(telemetry.get("credits_delta", 0))
+    elif wallet and can_charge and billing_precharged:
+        credits_map_now = load_ai_credits()
+        credits_for_frontend = int(credits_map_now.get(wallet, 0) or 0)
+        ai_credits_spent = float(AI_CREDIT_COST_PER_MSG)
     elif wallet:
         # Wallet present but we skipped billing due to model gating
         credits_for_frontend = credits_value if credits_value is not None else 0
@@ -19947,28 +20042,20 @@ def api_ai_sessions_combined():
         title = (data.get("title") or "New Chat").strip()[:120]
         model = (data.get("model") or "auto").strip()
 
+        session = _create_session_record(session_type="chat", wallet=identity, title=title)
+        session["model"] = model
         sessions = load_ai_sessions()
-        session_id = f"sess_{secrets.token_hex(8)}"
-        now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-
-        session = {
-            "id": session_id,
-            "wallet": identity,
-            "title": title,
-            "model": model,
-            "created_at": now,
-            "updated_at": now,
-            "message_count": 0,
-            "archived": False,
-            "meta": {"session_type": "chat", "selected_model_id": model or _default_model_id()},
-            "session_type": "chat",
-            "selected_model_id": model or _default_model_id(),
-        }
-        sessions.append(session)
+        for item in sessions:
+            if item.get("id") == session.get("id"):
+                item["model"] = model
+                item["selected_model_id"] = model or _default_model_id()
+                meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+                meta["selected_model_id"] = item["selected_model_id"]
+                item["meta"] = meta
+                break
         save_ai_sessions(sessions)
-        ensure_session_messages_file(session_id)
 
-        resp = make_response(jsonify({"ok": True, "id": session_id, "session": session}))
+        resp = make_response(jsonify({"ok": True, "id": session.get("id"), "session": session}))
         if guest_id:
             resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
         return resp
@@ -20142,27 +20229,14 @@ def api_ai_session_start_v2():
     title = (data.get("title") or "New Chat").strip()[:120]
     model = (data.get("model") or "auto").strip()
 
+    session = _create_session_record(session_type="chat", wallet=identity, title=title)
+    session["model"] = model
     sessions = load_ai_sessions()
-    session_id = f"sess_{secrets.token_hex(8)}"
-    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-
-    default_model_id = _default_model_id()
-    session = {
-        "id": session_id,
-        "wallet": identity,
-        "title": title,
-        "model": model,
-        "created_at": now,
-        "updated_at": now,
-        "message_count": 0,
-        "archived": False,
-        "meta": {"selected_model_id": default_model_id, "session_type": "chat"},
-        "selected_model_id": default_model_id,
-        "session_type": "chat",
-    }
-    sessions.append(session)
+    for item in sessions:
+        if item.get("id") == session.get("id"):
+            item["model"] = model
+            break
     save_ai_sessions(sessions)
-    ensure_session_messages_file(session_id)
 
     resp = make_response(jsonify({"ok": True, "session": session}))
     if guest_id:
@@ -20182,30 +20256,32 @@ def api_chat_session_new():
     model = (data.get("model") or "auto").strip()
 
     identity, guest_id = _current_actor_id(wallet_in)
-    sessions = load_ai_sessions()
-    session_id = f"sess_{secrets.token_hex(8)}"
-    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-
-    default_model_id = _default_model_id()
-    session = {
-        "id": session_id,
-        "wallet": identity,
-        "title": title,
-        "created_at": now,
-        "updated_at": now,
-        "archived": False,
-        "meta": {"selected_model_id": default_model_id, "session_type": "chat"},
-        "selected_model_id": default_model_id,
-        "session_type": "chat",
-    }
-    sessions.append(session)
-    save_ai_sessions(sessions)
-    ensure_session_messages_file(session_id)
+    session = _create_session_record(session_type="chat", wallet=identity, title=title)
 
     resp = make_response(jsonify(ok=True, session=session))
     if guest_id:
         resp.set_cookie(GUEST_COOKIE_NAME, guest_id, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
     return resp, 200
+
+
+@app.route("/api/sessions/create", methods=["POST"])
+def api_sessions_create():
+    data = request.get_json(silent=True) or {}
+    session_type = (data.get("session_type") or "chat").strip().lower()
+    if session_type not in {"chat", "architect", "train"}:
+        return jsonify({"ok": False, "error": "invalid_session_type", "allowed": ["chat", "architect", "train"]}), 400
+
+    wallet = (data.get("wallet") or request.cookies.get("thr_address") or "").strip()
+    title = (data.get("title") or "").strip() or None
+    session = _create_session_record(session_type=session_type, wallet=wallet, title=title, session_id=data.get("session_id"))
+
+    return jsonify({
+        "ok": True,
+        "session_id": session.get("id"),
+        "session_type": session.get("session_type"),
+        "billing_mode_locked": session.get("billing_mode_locked"),
+        "session": session,
+    }), 201
 
 
 @app.route("/api/chat/session", methods=["POST"])
@@ -20821,19 +20897,89 @@ def api_ai_ask():
 
     data = request.get_json(silent=True) or {}
     product = (data.get("product") or "chat").strip().lower()
+    if product not in {"chat", "architect", "train"}:
+        return jsonify({"ok": False, "error": "invalid_product"}), 400
+
     request_id = data.get("request_id") or f"aiask-{int(time.time()*1000)}-{secrets.token_hex(4)}"
     start = time.time()
+
+    session_id = (data.get("session_id") or "").strip()
+    wallet = (data.get("wallet") or "").strip()
+    session = _session_by_id(session_id) if session_id else None
+    if not session:
+        session = _create_session_record(session_type=product, wallet=wallet, session_id=session_id or None)
+        session_id = session.get("id")
+
+    session_type = (session.get("session_type") or "chat").lower()
+    billing_mode_locked = (session.get("billing_mode_locked") or _session_billing_mode(session_type)).lower()
+
+    if product != session_type:
+        return jsonify({"ok": False, "error": "session_type_mismatch", "session_type": session_type, "product": product}), 409
+
+    billing_state = _load_billing_idempotency()
+    billing_entry = billing_state.get(request_id)
+    if not billing_entry:
+        billing_entry = {
+            "request_id": request_id,
+            "session_id": session_id,
+            "session_type": session_type,
+            "billing_mode_locked": billing_mode_locked,
+            "product": product,
+            "wallet": wallet,
+            "status": "pending",
+            "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        }
+
+        if session_type == "chat":
+            if not wallet:
+                return jsonify({"ok": False, "error": "wallet_required_for_chat_billing", "request_id": request_id}), 400
+            ok, err, telemetry = billing.consume_credits(wallet, AI_CREDIT_COST_PER_MSG, product="chat")
+            if not ok:
+                return jsonify({"ok": False, "error": "billing_failed", "detail": err, "telemetry": telemetry, "request_id": request_id}), 402
+            billing_entry.update({"status": "debited", "billing_channel": "credits", "telemetry": telemetry})
+        elif session_type == "architect":
+            if not wallet:
+                return jsonify({"ok": False, "error": "wallet_required_for_architect_billing", "request_id": request_id}), 400
+            base_fee = billing.calculate_architect_fee(tokens_out=0, files_count=0, blueprint_complexity=1)
+            ok, err, telemetry = billing.charge_thr(
+                wallet=wallet,
+                amount=base_fee,
+                reason="architect_usage_precharge",
+                product="architect",
+                metadata={"request_id": request_id, "session_id": session_id, "precharge": True},
+            )
+            if not ok:
+                return jsonify({"ok": False, "error": "billing_failed", "detail": err, "telemetry": telemetry, "request_id": request_id}), 402
+            billing_entry.update({"status": "debited", "billing_channel": "thr", "telemetry": telemetry, "amount_thr": float(base_fee)})
+        else:
+            billing_entry.update({"status": "skipped", "billing_channel": "train"})
+
+        billing_state[request_id] = billing_entry
+        _save_billing_idempotency(billing_state)
 
     proxy_mode = (os.getenv("THRONOS_AI_MODE") or "").strip().lower() == "proxy"
     if proxy_mode and AI_CORE_URL and not is_ai_core():
         proxied = dict(data)
-        proxied["request_id"] = request_id
+        proxied.update({"request_id": request_id, "session_id": session_id})
         result = call_ai_core("/api/ai/ask", proxied, timeout=60, method="POST")
         if isinstance(result, dict):
+            latency = int((time.time() - start) * 1000)
             result.setdefault("ok", True)
             result.setdefault("request_id", request_id)
             result.setdefault("ai_route", "core")
-            result.setdefault("latency_ms", int((time.time() - start) * 1000))
+            result.setdefault("latency_ms", latency)
+            app.logger.info("ai_ask_request", extra={"ai_request": {
+                "request_id": request_id,
+                "session_id": session_id,
+                "session_type": session_type,
+                "billing_mode_locked": billing_mode_locked,
+                "product": product,
+                "ai_route": result.get("ai_route"),
+                "provider_used": result.get("provider_used"),
+                "latency_ms": latency,
+                "model": result.get("model"),
+                "node_role": NODE_ROLE,
+            }})
             return jsonify(result), 200
 
     if product == "architect":
@@ -20846,17 +20992,19 @@ def api_ai_ask():
                     if user_text:
                         break
         payload = {
-            "wallet": (data.get("wallet") or "").strip(),
-            "session_id": data.get("session_id"),
+            "wallet": wallet,
+            "session_id": session_id,
             "blueprint": data.get("blueprint_id") or (data.get("options") or {}).get("blueprint") or "default",
             "spec": (data.get("options") or {}).get("spec") or user_text,
             "model": data.get("model") or "auto",
+            "billing_precharged": True,
+            "request_id": request_id,
         }
         with app.test_request_context("/api/architect_generate", method="POST", json=payload):
             response = api_architect_generate()
         body = response[0].get_json() if isinstance(response, tuple) else response.get_json()
         status_code = response[1] if isinstance(response, tuple) else 200
-        return jsonify({
+        payload_out = {
             "ok": status_code < 400,
             "request_id": request_id,
             "ai_route": "fallback",
@@ -20865,7 +21013,24 @@ def api_ai_ask():
             "model": (body or {}).get("model") or data.get("model") or "auto",
             "cost_estimate": {"billing_channel": (body or {}).get("billing_channel")},
             "output": body or {},
-        }), status_code
+            "session_id": session_id,
+            "session_type": session_type,
+            "billing_mode_locked": billing_mode_locked,
+            "product": product,
+        }
+        app.logger.info("ai_ask_request", extra={"ai_request": {
+            "request_id": request_id,
+            "session_id": session_id,
+            "session_type": session_type,
+            "billing_mode_locked": billing_mode_locked,
+            "product": product,
+            "ai_route": payload_out["ai_route"],
+            "provider_used": payload_out["provider_used"],
+            "latency_ms": payload_out["latency_ms"],
+            "model": payload_out["model"],
+            "node_role": NODE_ROLE,
+        }})
+        return jsonify(payload_out), status_code
 
     msgs = data.get("messages") or []
     if not isinstance(msgs, list) or not msgs:
@@ -20874,7 +21039,9 @@ def api_ai_ask():
     with app.test_request_context("/api/ai/providers/chat", method="POST", json={
         "messages": msgs,
         "model": data.get("model") or "auto",
-        "session_id": data.get("session_id"),
+        "session_id": session_id,
+        "wallet": wallet,
+        "billing_precharged": session_type == "chat",
     }):
         response = api_ai_provider_chat()
     body = response[0].get_json() if isinstance(response, tuple) else response.get_json()
@@ -20888,15 +21055,21 @@ def api_ai_ask():
         "model": (body or {}).get("model") or data.get("model") or "auto",
         "cost_estimate": {},
         "output": body or {},
+        "session_id": session_id,
+        "session_type": session_type,
+        "billing_mode_locked": billing_mode_locked,
+        "product": product,
     }
     app.logger.info("ai_ask_request", extra={"ai_request": {
         "request_id": request_id,
+        "session_id": session_id,
+        "session_type": session_type,
+        "billing_mode_locked": billing_mode_locked,
+        "product": product,
         "ai_route": payload["ai_route"],
         "provider_used": payload["provider_used"],
         "latency_ms": payload["latency_ms"],
         "model": payload["model"],
-        "session_id": data.get("session_id"),
-        "blueprint_id": data.get("blueprint_id"),
         "node_role": NODE_ROLE,
     }})
     return jsonify(payload), status_code
@@ -20917,12 +21090,44 @@ def api_t2e_submit():
     if not session_id and not data.get("diff") and not data.get("metadata"):
         return jsonify({"ok": False, "error": "training contribution required"}), 400
 
+    event_id = (data.get("event_id") or data.get("request_id") or f"t2e-{int(time.time()*1000)}-{secrets.token_hex(4)}").strip()
+    events = load_json(AI_T2E_EVENTS_FILE, {})
+    if not isinstance(events, dict):
+        events = {}
+
+    if event_id in events:
+        ev = events[event_id]
+        return jsonify({"ok": True, "idempotent": True, "event_id": event_id, "session_id": ev.get("session_id"), "session_type": "train", "credits_delta": ev.get("credits_delta", 0)}), 200
+
+    session = _session_by_id(session_id) if session_id else None
+    if not session:
+        session = _create_session_record(session_type="train", wallet=wallet, session_id=session_id or None)
+        session_id = session.get("id")
+
+    if (session.get("session_type") or "train") != "train":
+        return jsonify({"ok": False, "error": "session_type_mismatch", "expected": "train", "found": session.get("session_type")}), 409
+
     credits_map = load_ai_credits()
     before = int(credits_map.get(wallet, 0) or 0)
-    delta = 5
+    delta = int(data.get("credits_delta") or 5)
     after = before + delta
     credits_map[wallet] = after
     save_ai_credits(credits_map)
+
+    event = {
+        "event_id": event_id,
+        "wallet": wallet,
+        "session_id": session_id,
+        "session_type": "train",
+        "product": "train",
+        "direction": "credit",
+        "reference_id": event_id,
+        "credits_delta": delta,
+        "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "status": "credited",
+    }
+    events[event_id] = event
+    save_json(AI_T2E_EVENTS_FILE, events)
 
     try:
         record_ai_interaction(
@@ -20937,13 +21142,13 @@ def api_t2e_submit():
             cost_usd=0.0,
             latency_ms=0,
             ai_credits_spent=0.0,
-            metadata={"source": "t2e", "credits_delta": delta},
+            metadata=event,
             success=True,
         )
     except Exception:
         app.logger.exception("t2e_submit_record_failed")
 
-    return jsonify({"ok": True, "wallet": wallet, "credits_before": before, "credits_delta": delta, "credits_after": after}), 200
+    return jsonify({"ok": True, "event_id": event_id, "session_id": session_id, "session_type": "train", "credits_before": before, "credits_delta": delta, "credits_after": after}), 200
 
 
 @app.route("/api/ai/provider_status", methods=["GET"])

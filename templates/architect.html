@@ -376,8 +376,9 @@ if (downloadZipBtn) {
   });
 }
 
-// Language support
+// Language support (shared key with Chat)
 const DEFAULT_LANG = 'gr';
+const LANG_KEY = 'thr_lang';
 const LANG_SEQUENCE = ['gr', 'en', 'ja', 'es', 'ru'];
 const LANG_CLASS_MAP = { 'gr': 'lang-el', 'en': 'lang-en', 'ja': 'lang-ja', 'es': 'lang-es', 'ru': 'lang-ru' };
 const TRANSLATIONS_CACHE = window.TRANSLATIONS_CACHE || {};
@@ -387,13 +388,40 @@ function normalizeLang(lang) {
   return LANG_SEQUENCE.includes(val) ? val : DEFAULT_LANG;
 }
 
-function applyTranslations(langOverride) {
-  const lang = normalizeLang(langOverride || localStorage.getItem('thr_lang') || DEFAULT_LANG);
-  localStorage.setItem('thr_lang', lang);
-  document.body.className = LANG_CLASS_MAP[lang] || '';
-  const langSelect = document.getElementById('architectLanguageSelect');
-  if (langSelect) langSelect.value = lang;
-  return lang;
+function applyTranslations(lang) {
+  const normalized = normalizeLang(lang || localStorage.getItem(LANG_KEY) || DEFAULT_LANG);
+  localStorage.setItem(LANG_KEY, normalized);
+  document.body.className = LANG_CLASS_MAP[normalized] || '';
+  const sel = document.getElementById('architectLanguageSelect');
+  if (sel) sel.value = normalized;
+  try {
+    document.querySelectorAll('[data-i18n]').forEach((node) => {
+      const key = node.dataset.i18n;
+      const t = (TRANSLATIONS_CACHE[normalized] && TRANSLATIONS_CACHE[normalized][key])
+        || (TRANSLATIONS_CACHE.en && TRANSLATIONS_CACHE.en[key])
+        || null;
+      if (t) node.textContent = t;
+    });
+  } catch (err) {
+    console.warn('applyTranslations failed', err);
+  }
+  return normalized;
+}
+
+function initArchitectLanguage() {
+  const sel = document.getElementById('architectLanguageSelect');
+  if (!sel) return;
+  let lang = localStorage.getItem(LANG_KEY) || DEFAULT_LANG;
+  if (![...sel.options].some((o) => o.value === lang)) {
+    lang = DEFAULT_LANG;
+  }
+  sel.value = lang;
+  applyTranslations(lang);
+  sel.addEventListener('change', (e) => {
+    const newLang = normalizeLang(e.target.value);
+    localStorage.setItem(LANG_KEY, newLang);
+    applyTranslations(newLang);
+  });
 }
 
 async function api(url, opts) {
@@ -502,12 +530,8 @@ if (savedWallet) {
 }
 
 // Initialize
-(async () => {
-  applyTranslations();
-  const langSelect = document.getElementById('architectLanguageSelect');
-  if (langSelect) {
-    langSelect.addEventListener('change', (e) => applyTranslations(e.target.value));
-  }
+document.addEventListener('DOMContentLoaded', async () => {
+  initArchitectLanguage();
   try {
     await loadBlueprints();
     setStatus(true);
@@ -515,7 +539,7 @@ if (savedWallet) {
     setStatus(false);
     console.error("Failed to load blueprints:", e);
   }
-})();
+});
 </script>
 </body>
 </html>

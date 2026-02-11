@@ -10583,8 +10583,46 @@ def call_thrai_router(router_url: str, payload: dict) -> dict:
         return {"response": response.text, "status": "secure", "provider": "thronos", "model": "thrai"}
 
 # ─── QUANTUM CHAT API (ενιαίο AI + αρχεία + offline corpus) ─────────────────
+def _resolve_ai_proxy_upstream() -> str:
+    return (
+        (LEADER_URL or "").strip()
+        or (os.getenv("MASTER_URL") or "").strip()
+        or (os.getenv("API_URL") or "").strip()
+    )
+
+
+def _handle_ai_chat_proxy():
+    payload = request.get_json(force=True) or {}
+    upstream = _resolve_ai_proxy_upstream()
+    if not upstream:
+        logger.error("[AI_PROXY] missing upstream leader URL for /api/ai/chat")
+        return jsonify({
+            "error": "upstream_unreachable",
+            "message": "Quantum core cannot reach leader node right now.",
+        }), 503
+
+    target = upstream.rstrip("/") + "/api/ai/chat"
+    logger.info("[AI_PROXY] Forwarding /api/ai/chat to %s (mode=%s)", target, THRONOS_AI_MODE)
+    try:
+        resp = requests.post(target, json=payload, timeout=90)
+        return Response(resp.content, status=resp.status_code, mimetype="application/json")
+    except Exception as exc:
+        logger.error("[AI_PROXY] upstream %s unreachable: %s", target, exc)
+        return jsonify({
+            "error": "upstream_unreachable",
+            "message": "Quantum core cannot reach leader node right now.",
+        }), 502
+
+
+@app.route("/api/ai/chat", methods=["POST"])
 @app.route("/api/chat", methods=["POST"])
-def api_chat():
+def api_ai_chat():
+    if THRONOS_AI_MODE == "proxy":
+        return _handle_ai_chat_proxy()
+    return _handle_ai_chat_master()
+
+
+def _handle_ai_chat_master():
     """
     Unified AI chat endpoint με credits + sessions.
 
@@ -10593,22 +10631,7 @@ def api_chat():
     - Αν έχει wallet αλλά 0 credits, δεν προχωρά σε κλήση AI
     - Κάθε μήνυμα γράφεται στο ai_offline_corpus.json με session_id
     """
-    # ─── TASK 2: Proxy to Node 4 (AI Core) if configured ───
-    # If we're on Node 1/2 and AI_CORE_URL is set, proxy to Node 4
-    # If Node 4 fails or is_ai_core(), fall back to local handling
-    if not is_ai_core() and AI_CORE_URL:
-        try:
-            data = request.get_json(force=True) or {}
-            result = call_ai_core("/api/ai/chat", data, timeout=90)
-            if result:
-                logger.info("[AI_CORE] Successfully proxied /api/ai/chat to Node 4")
-                return jsonify(result), 200
-            else:
-                logger.warning("[AI_CORE] Node 4 call failed, falling back to local AI")
-        except Exception as e:
-            logger.exception(f"[AI_CORE] Error proxying to Node 4, falling back to local AI: {e}")
-
-    # ─── Local AI handling (fallback or when is_ai_core) ───
+    # ─── Master/local AI handling ───
     # PR-182: Enforce THRONOS_AI_MODE - worker nodes don't serve user-facing AI
     if THRONOS_AI_MODE == "worker":
         return jsonify({
@@ -16558,6 +16581,12 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
 
     # PYTHEIA Worker – system health monitoring & governance advice
     try:
+        os.makedirs("/app/logs", exist_ok=True)
+        with open("/app/logs/pytheia_worker.log", "a", encoding="utf-8"):
+            pass
+        os.makedirs("logs", exist_ok=True)
+        with open("logs/pytheia_worker.log", "a", encoding="utf-8"):
+            pass
         from pytheia_worker import PYTHEIAWorker
         _pytheia_instance = PYTHEIAWorker()
         scheduler.add_job(_pytheia_instance.run_cycle, "interval",
@@ -21218,10 +21247,6 @@ def api_ai_provider_chat():
     return jsonify({"ok": True, **result})
 
 
-@app.route("/api/ai/chat", methods=["POST"])
-def api_ai_chat_alias():
-    """Alias for /api/chat endpoint"""
-    return api_chat()
 
 
 # AI Wallet endpoint - returns current connected wallet info
@@ -21356,19 +21381,23 @@ def api_ai_models():
     Δεν σκάει αν κάποιος provider δεν έχει API key – απλά τον μαρκάρει ως disabled.
     NEVER returns 500 - always returns 200 with degraded mode fallback if needed.
     """
-    # ─── TASK 2: Proxy to Node 4 (AI Core) if configured ───
-    if not is_ai_core() and AI_CORE_URL and (os.getenv("THRONOS_AI_MODE", "").strip().lower() == "proxy"):
-        try:
-            # GET endpoint - pass query params as payload
-            params = {k: v for k, v in request.args.items()}
-            result = call_ai_core("/api/ai_models", params, timeout=30, method="GET")
-            if result:
-                logger.info("[AI_CORE] Successfully proxied /api/ai_models to Node 4")
-                return jsonify(result), 200
-            else:
-                logger.warning("[AI_CORE] Node 4 call failed, falling back to local model list")
-        except Exception as e:
-            logger.exception(f"[AI_CORE] Error proxying to Node 4, falling back to local model list: {e}")
+    # ─── Proxy mode: ai-core forwards model catalog to leader/master ───
+    if THRONOS_AI_MODE == "proxy":
+        upstream = _resolve_ai_proxy_upstream()
+        if upstream:
+            target = upstream.rstrip("/") + "/api/ai_models"
+            try:
+                resp = requests.get(target, params={k: v for k, v in request.args.items()}, timeout=30)
+                logger.info("[AI_PROXY] Forwarding /api/ai_models to %s (mode=%s)", target, THRONOS_AI_MODE)
+                return Response(resp.content, status=resp.status_code, mimetype="application/json")
+            except Exception as exc:
+                logger.error("[AI_PROXY] upstream %s unreachable: %s", target, exc)
+                return jsonify({
+                    "models": [{"id": "auto", "label": "Auto (Thronos chooses)", "provider": "system", "enabled": True, "degraded": True}],
+                    "default_model_id": "auto",
+                    "error": "upstream_unreachable",
+                    "message": "Quantum core cannot reach leader node right now.",
+                }), 502
 
     # ─── Local AI handling (fallback or when is_ai_core) ───
     try:
@@ -21727,6 +21756,53 @@ def api_t2e_submit():
 
 @app.route("/api/ai/health", methods=["GET"])
 def api_ai_health():
+    if THRONOS_AI_MODE == "proxy":
+        upstream = _resolve_ai_proxy_upstream()
+        if upstream:
+            target = upstream.rstrip("/") + "/api/ai/health"
+            try:
+                resp = requests.get(target, timeout=20)
+                data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+                data = data if isinstance(data, dict) else {}
+                data.setdefault("ok", True)
+                data["node_role"] = "ai_core"
+                data["thronos_ai_mode"] = "proxy"
+                data.setdefault("offline_corpus", {
+                    "enabled": False,
+                    "degraded": True,
+                    "path": AI_CORPUS_FILE,
+                    "reason": "proxy_node",
+                })
+                data.setdefault("thrai", {
+                    "enabled": False,
+                    "degraded": True,
+                    "router_url": (DIKO_MAS_MODEL_URL or "").strip(),
+                    "reason": "proxy_node",
+                })
+                return jsonify(data), resp.status_code
+            except Exception as exc:
+                logger.error("[AI_PROXY] upstream %s unreachable: %s", target, exc)
+
+        return jsonify({
+            "ok": True,
+            "node_role": "ai_core",
+            "thronos_ai_mode": "proxy",
+            "enabled_model_ids": [],
+            "provider_status": {},
+            "offline_corpus": {
+                "enabled": False,
+                "degraded": True,
+                "path": AI_CORPUS_FILE,
+                "reason": "proxy_node",
+            },
+            "thrai": {
+                "enabled": False,
+                "degraded": True,
+                "router_url": (DIKO_MAS_MODEL_URL or "").strip(),
+                "reason": "proxy_node",
+            }
+        }), 200
+
     try:
         enabled_ids = list_enabled_model_ids()
     except Exception:

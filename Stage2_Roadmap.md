@@ -1,53 +1,41 @@
 # Thronos Chain - Stage 2 Roadmap: Expansion & Utility
 
-This roadmap outlines the next phase of development for the Thronos Chain, focusing on utility, gaming integration, and real-world value connection.
+**Updated: February 2026 | V3.6 Survival Blueprint Edition**
 
-## ✅ Completed
-- [x] **Core Upgrade (v2.0)**: Implemented secure PDF contracts, steganography recovery, and bilingual UI.
-- [x] **Miner Kit**: Released CPU miner and Stratum proxy for ASIC support.
-- [x] **AI Agent Prototype**: Created the base for the autonomous agent "Pythia".
-- [x] **Fee Logic Update**: Implemented 80% Miner / 10% AI / 10% Burn reward split.
-- [x] **BTC Value Display**: Added BTC exchange rate display in Wallet and Home (Peg: 1 THR = 0.0001 BTC).
+This roadmap outlines the expansion phase of Thronos Chain. Most Stage 2 goals have been completed. See `Thronos_Roadmap.md` for the full 9-phase roadmap.
 
-## 🚧 In Progress
-- [ ] **Crypto Hunters Integration**:
-    - Deploy backend (`drx.js`) on the main server.
-    - Connect game economy to Thronos Chain (Play-to-Earn).
-    - Release Mobile App Demo (.apk).
-- [ ] **Watcher Service**:
-    - Fully implement `verify_btc_payment` to automate BTC deposit verification.
-    - Monitor BTC network for "Burn-to-Mint" transactions.
+## ✅ Stage 2 Completed
+- [x] **Core Upgrade (v2.0)**: Secure PDF contracts, steganography recovery, bilingual UI
+- [x] **Miner Kit**: CPU miner and Stratum proxy for ASIC support (Port 3334)
+- [x] **AI Agent Prototype**: Pythia autonomous agent with multi-provider support
+- [x] **Fee Logic Update**: 80% Miner / 10% AI / 10% Burn reward split
+- [x] **BTC Value Display**: BTC exchange rate (Peg: 1 THR = 0.0001 BTC)
+- [x] **Crypto Hunters Integration**: Backend deployed, game economy connected, P2E active
+- [x] **Watcher Service**: BTC deposit verification automated (Blockstream API + RPC fallback)
+- [x] **Atomic Swaps / Bridge**: BTC vault deposit → THR mint, THR burn → BTC release
+- [x] **AI Agent Evolution**: Autonomous trading, oracle services, PYTHEIA health monitor
+- [x] **Mobile SDK**: React Native SDK for Android/iOS
+- [x] **Decentralized Governance**: THR holders vote on network parameters, PYTHEIA governance advice
 
-## 🔮 BTC Fork & Off-Chain Cash Integration (The "Hard Fork" Goal)
+## 🚧 Stage 2 Remaining (Q2 2026)
+- [ ] **Automated BTC ↔ WBTC Bridge**: Multi-sig automated bridge
+- [ ] **Lightning Network**: Instant micropayments
+- [ ] **Android APK Deployment**: Finalize and publish for download
+- [ ] **iOS HD Native Wallet**: Based on HTML wallet widget
 
-Our ultimate vision is to function as a specialized execution layer (or "Fork") of Bitcoin, enabling instant liquidity and real-world utility.
+## 🔮 Stage 3: Off-Grid & Survival (Q2-Q4 2026)
+- [ ] **LoRa Antenna Integration**: 15km off-grid connectivity
+- [ ] **Solar Energy Controller**: Victron/RS485 with Full/Eco/Survival modes
+- [ ] **Peiko X9 Audio Bridge**: Bluetooth WAV transaction interface
+- [ ] **SDR Spectrum Monitor**: Jamming detection and spectrum analysis
+- [ ] **USB Block Erupter Validators**: PoW shares for VerifyID
 
-### 1. Atomic Swaps / Bridge
-*Objective: Instant, trustless conversion between BTC and THR.*
-- **Mechanism**: We will implement Hashed TimeLock Contracts (HTLCs) or a simplified "Vault" system.
-- **Flow**: Users lock BTC in a designated Vault address -> Thronos Chain mints equivalent THR. Conversely, burning THR releases BTC from the Vault.
-
-### 2. The Watcher Role
-*Objective: The bridge between on-chain Bitcoin and Thronos Chain.*
-- **Function**: The Watcher is a decentralized service that monitors the Bitcoin Mainnet.
-- **Verification**: It verifies payments to the Vault or specific "Burn" addresses and automatically triggers the release of THR assets or game items.
-
-### 3. Cash Out & Off-Chain Agents
-*Objective: Turning digital assets into physical reality.*
-- **Off-Chain Agents**: Trusted nodes (ATMs or human agents) that accept THR transfers and dispense cash.
-- **Integration**: The AI Agent will manage liquidity pools to ensure these agents are funded, effectively creating a distributed ATM network for Bitcoin via Thronos.
-
-## 📅 Upcoming Features (Q1 2025)
-
-### AI Agent Evolution ("Pythia")
-- **Autonomous Trading**: Allow the AI to manage its own 10% fee treasury to buy/sell assets or reward specific network behaviors.
-- **Oracle Services**: The AI will verify real-world data (e.g., BTC price, game results) and post it to the Thronos Chain.
-
-### Mobile Wallet App
-- Native Android/iOS app for managing THR, scanning QRs, and playing Crypto Hunters.
-
-### Decentralized Governance
-- Allow THR holders to vote on network parameters (fee rates, burn rates) using signed messages.
+## 🌍 Stage 4: Global Scaling (Q1 2027+)
+- [ ] **Multi-Region Node Network**: 5+ continents
+- [ ] **IBC Protocol**: Cross-chain messaging
+- [ ] **Layer 2 Rollups**: Optimistic & ZK rollups
+- [ ] **Autodriver AI**: Vehicle handshake, GPS/LoRa telemetry
+- [ ] **Distributed ATM Network**: Off-chain cash-out agents
 
 ---
-*Thronos Chain: Resistance is not futile. It is profitable.*
+*"In Crypto we Trust, in Survival we Mine." — Thronos Network V3.6*

@@ -38,16 +38,26 @@ else
   echo "=== Skipping MicroMiner demonstration (set ENABLE_MICRO_MINER=true to enable) ==="
 fi
 
+# Pytheia Worker: runs inline via APScheduler on master, but can also run
+# standalone when PYTHEIA_STANDALONE=true (e.g. on dedicated monitoring node)
+PYTHEIA_PID=""
+if [[ "${PYTHEIA_STANDALONE:-false}" == "true" ]]; then
+  echo "=== Starting PYTHEIA Worker (standalone health monitor) ==="
+  mkdir -p logs data
+  python3 pytheia_worker.py &
+  PYTHEIA_PID=$!
+else
+  echo "=== PYTHEIA Worker will run via APScheduler on master node ==="
+fi
+
 echo "=== Starting Flask app on HTTP port ${PORT} ==="
 # Use Gunicorn with proper lifecycle hooks for graceful scheduler shutdown
 # NOTE: Using config file which sets workers=1 to avoid APScheduler job duplication
 gunicorn -c gunicorn_config.py server:app
 
 echo "=== Shutting down background services ==="
-if [[ -n "$STRATUM_PID" && -n "$MINER_PID" ]]; then
-  kill $STRATUM_PID $MINER_PID || true
-elif [[ -n "$STRATUM_PID" ]]; then
-  kill $STRATUM_PID || true
-elif [[ -n "$MINER_PID" ]]; then
-  kill $MINER_PID || true
-fi
+for pid in $STRATUM_PID $MINER_PID $PYTHEIA_PID; do
+  if [[ -n "$pid" ]]; then
+    kill "$pid" 2>/dev/null || true
+  fi
+done

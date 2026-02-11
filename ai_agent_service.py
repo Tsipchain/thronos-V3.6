@@ -59,7 +59,7 @@ def _resolve_model(
     provider_status: Optional[dict] = None,
 ):
     raw_mode = normalized_mode or (os.getenv("THRONOS_AI_MODE", "all").strip().lower() or "all")
-    if raw_mode in ("router", "auto", "all", "hybrid"):
+    if raw_mode in ("router", "auto", "all", "hybrid", "proxy"):
         normalized_mode = "all"
     elif raw_mode == "openai_only":
         normalized_mode = "openai"
@@ -70,7 +70,17 @@ def _resolve_model(
 
     def _provider_configured(provider: str) -> bool:
         info = provider_status.get(provider) if isinstance(provider_status, dict) else None
-        if info and info.get("enabled") is False:
+
+        def _has_env_key(p: str) -> bool:
+            if p == "openai":
+                return bool((os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip())
+            if p == "anthropic":
+                return bool((os.getenv("ANTHROPIC_API_KEY") or "").strip())
+            if p == "gemini":
+                return bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
+            return False
+
+        if info and info.get("enabled") is False and not _has_env_key(provider):
             return False
 
         if provider == "local":
@@ -92,13 +102,7 @@ def _resolve_model(
             return True
 
         # Fallback directly to env detection if status payload is missing/empty
-        if provider == "openai":
-            return bool((os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip())
-        if provider == "anthropic":
-            return bool((os.getenv("ANTHROPIC_API_KEY") or "").strip())
-        if provider == "gemini":
-            return bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
-        return False
+        return _has_env_key(provider)
 
     def _match_alias(candidate: str):
         cand_norm = (candidate or "").strip().lower().replace(" ", "").replace("-", "")

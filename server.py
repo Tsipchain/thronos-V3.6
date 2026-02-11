@@ -7901,8 +7901,10 @@ def regenerate_pledges():
 # ─── AI ARCHITECT ROUTES (NEW) ──────────────────────────────────────────────
 
 @app.route("/architect", methods=["GET"])
+@app.route("/architect/", methods=["GET"])
 def architect_page():
     resp = make_response(render_template("architect.html"))
+    resp.mimetype = "text/html"
     resp.headers["Content-Type"] = "text/html; charset=utf-8"
     resp.headers["Cache-Control"] = "no-store, max-age=0"
     resp.headers["Pragma"] = "no-cache"

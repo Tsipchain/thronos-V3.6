@@ -27,7 +27,7 @@
       min-height: 100vh;
     }
 
-    /* Language toggle */
+    /* Language visibility */
     .lang-en, .lang-ja, .lang-ru, .lang-es { display: none; }
     body.lang-en .lang-el { display: none; }
     body.lang-en .lang-en { display: inline; }
@@ -91,21 +91,6 @@
       border-radius: 50%;
       background: var(--accent);
       box-shadow: 0 0 8px var(--accent);
-    }
-
-    .lang-toggle {
-      margin-left: auto;
-      background: var(--accent-soft);
-      border: 1px solid var(--border);
-      color: var(--accent);
-      padding: 6px 14px;
-      border-radius: 20px;
-      cursor: pointer;
-      font-size: 12px;
-    }
-
-    .lang-toggle:hover {
-      background: rgba(0, 255, 102, 0.2);
     }
 
     select, textarea, input, button {
@@ -294,7 +279,16 @@
         <option value="local">💾 Offline/Local</option>
       </select>
     </div>
-    <button class="lang-toggle" onclick="toggleLanguage()">🌐 GR</button>
+    <div class="input-row" style="margin-left:auto;">
+      <span class="section-title" style="margin: 0;">🌐</span>
+      <select id="architectLanguageSelect" style="width: 150px;">
+        <option value="gr">Ελληνικά</option>
+        <option value="en">English</option>
+        <option value="ja">日本語</option>
+        <option value="ru">Русский</option>
+        <option value="es">Español</option>
+      </select>
+    </div>
   </div>
 
   <div class="wrap">
@@ -383,21 +377,23 @@ if (downloadZipBtn) {
 }
 
 // Language support
-window.LANG_SEQUENCE = window.LANG_SEQUENCE || ['gr', 'en', 'ja', 'es', 'ru'];
+const DEFAULT_LANG = 'gr';
+const LANG_SEQUENCE = ['gr', 'en', 'ja', 'es', 'ru'];
 const LANG_CLASS_MAP = { 'gr': 'lang-el', 'en': 'lang-en', 'ja': 'lang-ja', 'es': 'lang-es', 'ru': 'lang-ru' };
+const TRANSLATIONS_CACHE = window.TRANSLATIONS_CACHE || {};
 
-function toggleLanguage() {
-  const current = localStorage.getItem("lang") || "gr";
-  const idx = window.LANG_SEQUENCE.indexOf(current);
-  const next = window.LANG_SEQUENCE[(idx + 1) % window.LANG_SEQUENCE.length];
-  localStorage.setItem("lang", next);
-  applyLanguage();
+function normalizeLang(lang) {
+  const val = String(lang || '').toLowerCase();
+  return LANG_SEQUENCE.includes(val) ? val : DEFAULT_LANG;
 }
 
-function applyLanguage() {
-  const lang = localStorage.getItem("lang") || "gr";
+function applyTranslations(langOverride) {
+  const lang = normalizeLang(langOverride || localStorage.getItem('thr_lang') || DEFAULT_LANG);
+  localStorage.setItem('thr_lang', lang);
   document.body.className = LANG_CLASS_MAP[lang] || '';
-  document.querySelector('.lang-toggle').textContent = '🌐 ' + lang.toUpperCase();
+  const langSelect = document.getElementById('architectLanguageSelect');
+  if (langSelect) langSelect.value = lang;
+  return lang;
 }
 
 async function api(url, opts) {
@@ -495,7 +491,7 @@ $("generate").onclick = async () => {
   } finally {
     btn.disabled = false;
     btn.innerHTML = '🚀 <span class="lang-el">ΔΗΜΙΟΥΡΓΙΑ ΑΡΧΙΤΕΚΤΟΝΙΚΗΣ</span><span class="lang-en">GENERATE ARCHITECTURE</span><span class="lang-ja">アーキテクチャ生成</span><span class="lang-ru">СОЗДАТЬ АРХИТЕКТУРУ</span><span class="lang-es">GENERAR ARQUITECTURA</span>';
-    applyLanguage();
+    applyTranslations();
   }
 };
 
@@ -507,7 +503,11 @@ if (savedWallet) {
 
 // Initialize
 (async () => {
-  applyLanguage();
+  applyTranslations();
+  const langSelect = document.getElementById('architectLanguageSelect');
+  if (langSelect) {
+    langSelect.addEventListener('change', (e) => applyTranslations(e.target.value));
+  }
   try {
     await loadBlueprints();
     setStatus(true);

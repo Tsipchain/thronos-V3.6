@@ -982,6 +982,7 @@
                   <select id="modelSelect" class="model-select">
                     <option value="auto">Auto (Thronos chooses)</option>
                   </select>
+                  <button id="openAIPacksBtn" class="attach-btn" type="button" title="Buy AI Credits">💳 AI Packs</button>
                 </div>
                 <button id="sendBtn" class="send-btn">
                   SEND
@@ -1040,6 +1041,19 @@
     </main>
   </div>
 
+
+  <div id="aiPacksModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.65); z-index:9999; align-items:center; justify-content:center;">
+    <div style="width:min(680px,92vw); background:#071810; border:1px solid #1a3b2e; border-radius:14px; padding:16px; box-shadow:0 20px 50px rgba(0,0,0,.45);">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:10px;">
+        <strong style="color:#00ff66;">AI Packs / Buy Credits</strong>
+        <button id="closeAIPacksBtn" class="btn-ghost" type="button">Close</button>
+      </div>
+      <div id="aiPacksWalletInfo" style="font-size:12px; color:#7aa398; margin-bottom:10px;"></div>
+      <div id="aiPacksStatus" style="font-size:12px; margin-bottom:10px;"></div>
+      <div id="aiPacksList" style="display:grid; gap:10px;"></div>
+    </div>
+  </div>
+
   <script>
     // --- Endpoint constants ---
     const API_WALLET = "/api/ai/wallet";
@@ -1054,6 +1068,9 @@
     const API_MODELS = "/api/ai_models";
     const API_SESSION_MODEL = (id) => `/api/ai_sessions/${id}/model`;
     const API_HEALTH = "/api/ai/providers/health";
+    const API_AI_PACKS = "/api/ai_packs";
+    const API_AI_PURCHASE_PACK = "/api/ai_purchase_pack";
+    const API_AI_CREDITS = "/api/ai_credits";
     const ADMIN_SECRET_KEY = "thronos_admin_secret";
     const ADMIN_MODE_KEY = "thronos_admin_mode";
     const ACTIVE_SESSION_KEY = "thronos_ai_active_session";
@@ -1082,7 +1099,13 @@
       hashrateLabelEl,
       pendingTxsLabelEl,
       difficultyLabelEl,
-      creditsLabelEl;
+      creditsLabelEl,
+      openAIPacksBtnEl,
+      aiPacksModalEl,
+      closeAIPacksBtnEl,
+      aiPacksListEl,
+      aiPacksStatusEl,
+      aiPacksWalletInfoEl;
 
     let sessionMessages = [];
     let messagesBySession = {};
@@ -1122,6 +1145,12 @@
       pendingTxsLabelEl = document.getElementById("pendingTxsLabel");
       difficultyLabelEl = document.getElementById("difficultyLabel");
       creditsLabelEl = document.getElementById("creditsLabel");
+      openAIPacksBtnEl = document.getElementById("openAIPacksBtn");
+      aiPacksModalEl = document.getElementById("aiPacksModal");
+      closeAIPacksBtnEl = document.getElementById("closeAIPacksBtn");
+      aiPacksListEl = document.getElementById("aiPacksList");
+      aiPacksStatusEl = document.getElementById("aiPacksStatus");
+      aiPacksWalletInfoEl = document.getElementById("aiPacksWalletInfo");
     }
 
     // --- State ---
@@ -1546,10 +1575,29 @@
 
     // --- API calls ---
 
+    function getCookieValue(name) {
+      const match = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/([.$?*|{}()\[\]\\/+^])/g, "\\$1") + '=([^;]*)'));
+      return match ? decodeURIComponent(match[1]) : '';
+    }
+
     async function loadWallet() {
       try {
         // Read wallet from localStorage (same as other pages)
-        const w = walletSession.getAddress() || "";
+        let w = walletSession.getAddress() || "";
+
+        // Fallback for new origin/domain migration: restore from cookie if local storage is empty
+        if (!w) {
+          const cookieWallet = getCookieValue("thr_address");
+          if (cookieWallet) {
+            w = cookieWallet;
+            try {
+              localStorage.setItem("thr_address", cookieWallet);
+            } catch (e) {
+              console.warn("Failed to store wallet fallback in localStorage", e);
+            }
+          }
+        }
+
         walletInputEl.value = w;
 
         // Update wallet label with connection status
@@ -1931,17 +1979,17 @@
       if (notice) notice.remove();
     }
 
+    let lastValidModelSelection = "auto";
+
     function applyModelSelection(preferred) {
       if (!modelSelectEl) return;
-      const target = preferred || pendingModelSelection || defaultModelId || "auto";
-      if (target && !modelSelectEl.querySelector(`option[value="${target}"]`)) {
-        const opt = document.createElement("option");
-        opt.value = target;
-        opt.textContent = target;
-        modelSelectEl.appendChild(opt);
-      }
+      const fallback = defaultModelId || "auto";
+      const desired = preferred || pendingModelSelection || fallback;
+      const hasDesired = !!modelSelectEl.querySelector(`option[value="${desired}"]`);
+      const target = hasDesired ? desired : fallback;
       modelSelectEl.value = target;
       pendingModelSelection = target;
+      lastValidModelSelection = target;
       if (modelStatusEl) modelStatusEl.textContent = target || "auto";
     }
 
@@ -2010,10 +2058,22 @@
           body: JSON.stringify({ model_id: modelId, wallet: walletInputEl.value.trim() || null }),
         });
 
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        let data = {};
+        try { data = await res.json(); } catch (_) { data = {}; }
 
-        const selected = data.selected_model_id || modelId;
+        if (!res.ok) {
+          if (res.status === 400 && data && data.code === "insufficient_ai_credits") {
+            usageStatusEl.textContent = "Δεν έχεις άλλα Quantum credits…";
+            if (lastValidModelSelection && modelSelectEl.querySelector(`option[value="${lastValidModelSelection}"]`)) {
+              modelSelectEl.value = lastValidModelSelection;
+              pendingModelSelection = lastValidModelSelection;
+            }
+            return;
+          }
+          throw new Error((data && data.error) || `HTTP ${res.status}`);
+        }
+
+        const selected = (data && data.selected_model_id) || modelId;
         applyModelSelection(selected);
 
         const idx = aiSessions.findIndex((s) => s.id === currentSessionId);
@@ -2024,7 +2084,10 @@
         pendingModelSelection = selected;
       } catch (e) {
         console.warn("Failed to persist model selection", e);
-        applyModelSelection(modelId || defaultModelId);
+        if (lastValidModelSelection && modelSelectEl.querySelector(`option[value="${lastValidModelSelection}"]`)) {
+          modelSelectEl.value = lastValidModelSelection;
+          pendingModelSelection = lastValidModelSelection;
+        }
       }
     }
 
@@ -2154,6 +2217,93 @@
       }
     }
 
+
+    function setAIPacksStatus(text, isError = false) {
+      if (!aiPacksStatusEl) return;
+      aiPacksStatusEl.textContent = text || "";
+      aiPacksStatusEl.style.color = isError ? "#ff4b81" : "#7aa398";
+    }
+
+    async function refreshCreditsForWallet(wallet) {
+      if (!wallet) return;
+      try {
+        const res = await fetch(`${API_AI_CREDITS}?wallet=${encodeURIComponent(wallet)}`);
+        const data = await res.json();
+        if (data && data.credits != null) {
+          creditsLabelEl.textContent = data.credits;
+          usageStatusEl.textContent = `AI Credits: ${data.credits}`;
+        }
+      } catch (_) {}
+    }
+
+    async function buyAIPack(code, btnEl) {
+      const wallet = walletInputEl.value.trim();
+      if (!wallet) {
+        setAIPacksStatus("Δώσε πρώτα THR wallet στη Quantum Chat για να αγοράσεις credits.", true);
+        return;
+      }
+      const original = btnEl ? btnEl.textContent : "";
+      if (btnEl) { btnEl.disabled = true; btnEl.textContent = "Processing…"; }
+      setAIPacksStatus(`Processing purchase for ${code}…`);
+      try {
+        const res = await fetch(API_AI_PURCHASE_PACK, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ wallet, pack: code }),
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== "granted") {
+          throw new Error((data && (data.message || data.error)) || `HTTP ${res.status}`);
+        }
+        setAIPacksStatus(`Purchased ${data.pack?.title || code}. Total credits: ${data.total_credits}`);
+        await refreshCreditsForWallet(wallet);
+      } catch (e) {
+        setAIPacksStatus(e.message || "Purchase failed", true);
+      } finally {
+        if (btnEl) { btnEl.disabled = false; btnEl.textContent = original || "Buy with THR"; }
+      }
+    }
+
+    async function openAIPacksModal() {
+      if (!aiPacksModalEl) return;
+      const wallet = walletInputEl.value.trim();
+      aiPacksModalEl.style.display = "flex";
+      aiPacksWalletInfoEl.textContent = wallet
+        ? `Bound wallet: ${wallet}`
+        : "Δώσε πρώτα THR wallet στη Quantum Chat για να αγοράσεις credits.";
+      setAIPacksStatus("");
+      aiPacksListEl.innerHTML = "Loading packs…";
+
+      try {
+        const res = await fetch(API_AI_PACKS);
+        const data = await res.json();
+        const packs = Array.isArray(data.packs) ? data.packs : [];
+        aiPacksListEl.innerHTML = "";
+        packs.forEach((p) => {
+          const row = document.createElement("div");
+          row.style.cssText = "display:flex; justify-content:space-between; align-items:center; gap:10px; border:1px solid #1a3b2e; border-radius:10px; padding:10px; background:rgba(0,255,102,.05);";
+          const info = document.createElement("div");
+          info.innerHTML = `<strong>${p.title || p.code}</strong><div style="font-size:12px;color:#7aa398">Credits: ${p.credits} • Price: ${p.price_thr} THR</div>`;
+          const btn = document.createElement("button");
+          btn.className = "btn-ghost";
+          btn.type = "button";
+          btn.textContent = "Buy with THR";
+          if (!wallet) btn.disabled = true;
+          btn.addEventListener("click", () => buyAIPack(p.code, btn));
+          row.appendChild(info);
+          row.appendChild(btn);
+          aiPacksListEl.appendChild(row);
+        });
+      } catch (e) {
+        aiPacksListEl.innerHTML = "";
+        setAIPacksStatus(`Failed to load packs: ${e.message}`, true);
+      }
+    }
+
+    function closeAIPacksModal() {
+      if (aiPacksModalEl) aiPacksModalEl.style.display = "none";
+    }
+
     // --- Events ---
     function bindEvents() {
       document
@@ -2169,6 +2319,9 @@
       if (cleanSessionsBtnEl) {
         cleanSessionsBtnEl.addEventListener("click", pruneSessions);
       }
+
+      if (openAIPacksBtnEl) openAIPacksBtnEl.addEventListener("click", openAIPacksModal);
+      if (closeAIPacksBtnEl) closeAIPacksBtnEl.addEventListener("click", closeAIPacksModal);
 
       fileInputEl.addEventListener("change", (e) => {
         const files = Array.from(e.target.files || []);
@@ -2206,6 +2359,11 @@
           e.preventDefault();
           sendMessage();
         }
+      });
+
+      document.addEventListener("keydown", (e) => {
+        // Escape closes modal
+        if (e.key === "Escape" && aiPacksModalEl && aiPacksModalEl.style.display !== "none") closeAIPacksModal();
       });
 
       // Save selected model to localStorage when it changes

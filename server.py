@@ -113,6 +113,7 @@ from llm_registry import (
     get_provider_status,
     get_default_model,
     list_enabled_model_ids,
+    find_model,
     _apply_env_flags,
 )
 from ai_models_config import base_model_config
@@ -7905,6 +7906,18 @@ def regenerate_pledges():
     except Exception as e:
         logger.error(f"Pledge regeneration error: {e}")
         return jsonify(error=str(e)), 500
+
+@app.route("/favicon.ico", methods=["GET"])
+def favicon():
+    """Serve favicon from static/img/logo.png (fallback), avoiding .ico dependency."""
+    try:
+        logo_dir = os.path.join(BASE_DIR, "static", "img")
+        if os.path.exists(os.path.join(logo_dir, "logo.png")):
+            return send_from_directory(logo_dir, "logo.png", mimetype="image/png")
+    except Exception:
+        pass
+    return "", 204
+
 
 # ─── AI ARCHITECT ROUTES (NEW) ──────────────────────────────────────────────
 
@@ -20167,11 +20180,12 @@ def api_ai_session_update(session_id):
 
 
 @app.route("/api/ai_sessions/<session_id>/model", methods=["POST"])
+@app.route("/api/chat/session/<session_id>/model", methods=["POST"])
 def api_ai_session_model_update(session_id):
     """Persist the selected model for a session."""
 
     data = request.get_json(silent=True) or {}
-    wallet_in = data.get("wallet") or request.args.get("wallet") or ""
+    wallet_in = (data.get("wallet") or request.args.get("wallet") or "").strip()
     model_id = (data.get("model_id") or "").strip()
 
     identity, guest_id = _current_actor_id(wallet_in)
@@ -20190,18 +20204,32 @@ def api_ai_session_model_update(session_id):
     if owner and not owner.startswith("GUEST:") and owner != identity:
         return jsonify({"ok": False, "error": "Not authorized"}), 403
 
-    enabled_ids = set(list_enabled_model_ids())
-    default_model_id = _default_model_id()
-    selected = model_id if model_id in enabled_ids else default_model_id
+    if not model_id:
+        return jsonify({"ok": False, "error": "model_id required"}), 400
 
-    _save_session_selected_model(session_id, selected)
+    model_info = find_model(model_id)
+    if not model_info or not bool(getattr(model_info, "enabled", False)):
+        return jsonify({"ok": False, "error": "Unknown or disabled model id", "code": "invalid_model"}), 400
+
+    # Credit sufficiency check for selected model/provider.
+    # Keep this conservative: at least one chat message cost must be available.
+    required_credits = max(1, int(AI_CREDIT_COST_PER_MSG or 1))
+    if wallet_in and not wallet_in.startswith("GUEST:"):
+        credits_map = load_ai_credits()
+        try:
+            wallet_credits = int(credits_map.get(wallet_in, 0) or 0)
+        except (TypeError, ValueError):
+            wallet_credits = 0
+        if wallet_credits < required_credits:
+            return jsonify({"error": "Insufficient AI credits", "code": "insufficient_ai_credits"}), 400
+
+    _save_session_selected_model(session_id, model_id)
 
     resp_payload = {
         "ok": True,
-        "selected_model_id": selected,
-        "default_model_id": default_model_id,
-        "enabled_model_ids": sorted(enabled_ids),
-        "reset": bool(model_id and selected != model_id),
+        "selected_model_id": model_id,
+        "required_credits": required_credits,
+        "provider": getattr(model_info, "provider", None),
     }
     resp = make_response(jsonify(resp_payload))
     if guest_id:
@@ -21166,6 +21194,21 @@ def api_t2e_submit():
         app.logger.exception("t2e_submit_record_failed")
 
     return jsonify({"ok": True, "event_id": event_id, "session_id": session_id, "session_type": "train", "credits_before": before, "credits_delta": delta, "credits_after": after}), 200
+
+
+@app.route("/api/ai/health", methods=["GET"])
+def api_ai_health():
+    try:
+        enabled_ids = list_enabled_model_ids()
+    except Exception:
+        enabled_ids = []
+    return jsonify({
+        "ok": True,
+        "node_role": NODE_ROLE,
+        "thronos_ai_mode": os.getenv("THRONOS_AI_MODE", "all"),
+        "enabled_model_ids": enabled_ids,
+        "provider_status": get_provider_status(),
+    }), 200
 
 
 @app.route("/api/ai/provider_status", methods=["GET"])

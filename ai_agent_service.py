@@ -19,6 +19,8 @@ from typing import Dict, Any, List, Optional
 
 import requests
 
+logger = logging.getLogger("thronos")
+
 # Optional Gemini provider
 try:
     import google.generativeai as genai
@@ -57,6 +59,7 @@ def _resolve_model(
     model: Optional[str],
     normalized_mode: Optional[str] = None,
     provider_status: Optional[dict] = None,
+    wallet: Optional[str] = None,
 ):
     raw_mode = normalized_mode or (os.getenv("THRONOS_AI_MODE", "all").strip().lower() or "all")
     if raw_mode in ("router", "auto", "all", "hybrid", "proxy"):
@@ -67,6 +70,8 @@ def _resolve_model(
         normalized_mode = raw_mode
 
     provider_status = provider_status or get_provider_status()
+
+    logger.info("[AI_MODEL] resolve model_id=%s raw_mode=%s normalized=%s wallet=%s", model, raw_mode, normalized_mode, wallet)
 
     def _provider_configured(provider: str) -> bool:
         info = provider_status.get(provider) if isinstance(provider_status, dict) else None
@@ -258,7 +263,7 @@ def call_llm(
 ) -> Dict[str, Any]:
     requested_model = model
     enabled_model_ids = list_enabled_model_ids()
-    resolved = _resolve_model(model)
+    resolved = _resolve_model(model, wallet=wallet)
     if not resolved:
         # QUEST: Better error messaging for disabled models
         from llm_registry import find_model

@@ -27,21 +27,14 @@
       min-height: 100vh;
     }
 
-    /* Language toggle - N2 FIX: Added body.lang-el rules for Greek */
+    /* Language toggle */
     .lang-en, .lang-ja, .lang-ru, .lang-es { display: none; }
-    /* Greek (default) */
-    body.lang-el .lang-en, body.lang-el .lang-ja, body.lang-el .lang-ru, body.lang-el .lang-es { display: none; }
-    body.lang-el .lang-el { display: inline; }
-    /* English */
     body.lang-en .lang-el { display: none; }
     body.lang-en .lang-en { display: inline; }
-    /* Japanese */
     body.lang-ja .lang-el { display: none; }
     body.lang-ja .lang-ja { display: inline; }
-    /* Russian */
     body.lang-ru .lang-el { display: none; }
     body.lang-ru .lang-ru { display: inline; }
-    /* Spanish */
     body.lang-es .lang-el { display: none; }
     body.lang-es .lang-es { display: inline; }
 
@@ -100,22 +93,19 @@
       box-shadow: 0 0 8px var(--accent);
     }
 
-    .lang-control {
+    .lang-toggle {
       margin-left: auto;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .lang-select {
-      min-width: 150px;
       background: var(--accent-soft);
       border: 1px solid var(--border);
       color: var(--accent);
-      padding: 6px 12px;
-      border-radius: 12px;
+      padding: 6px 14px;
+      border-radius: 20px;
       cursor: pointer;
       font-size: 12px;
+    }
+
+    .lang-toggle:hover {
+      background: rgba(0, 255, 102, 0.2);
     }
 
     select, textarea, input, button {
@@ -290,31 +280,21 @@
       <span class="lang-es">En línea</span>
     </div>
     <div class="input-row">
-      <span class="section-title" style="margin: 0;" data-i18n="label.wallet" data-i18n-default="Wallet">Wallet</span>
+      <span class="section-title" style="margin: 0;">Wallet</span>
       <input id="wallet" placeholder="THR..." style="width: 200px"/>
     </div>
     <div class="input-row">
-      <span class="section-title" style="margin: 0;" data-i18n="label.provider" data-i18n-default="Provider">Provider</span>
-      <select id="provider" onchange="filterModels()">
-        <option value="all">All Providers</option>
-      </select>
-    </div>
-    <div class="input-row">
-      <span class="section-title" style="margin: 0;" data-i18n="label.model" data-i18n-default="Model">Model</span>
+      <span class="section-title" style="margin: 0;">Model</span>
       <select id="model">
         <option value="auto">🔀 Auto (Pythia chooses)</option>
+        <option value="gpt-4o">🤖 GPT-4o</option>
+        <option value="claude-sonnet-4">🧠 Claude Sonnet 4</option>
+        <option value="gemini-2.5-pro">💎 Gemini 2.5 Pro</option>
+        <option value="gemini-2.5-flash">⚡ Gemini 2.5 Flash</option>
+        <option value="local">💾 Offline/Local</option>
       </select>
     </div>
-    <div class="lang-control">
-      <span class="section-title" style="margin: 0;" data-i18n="label.language" data-i18n-default="Language">Language</span>
-      <select id="languageSelect" class="lang-select" aria-label="Language">
-        <option value="gr">Ελληνικά</option>
-        <option value="en">English</option>
-        <option value="ja">日本語</option>
-        <option value="es">Español</option>
-        <option value="ru">Русский</option>
-      </select>
-    </div>
+    <button class="lang-toggle" onclick="toggleLanguage()">🌐 GR</button>
   </div>
 
   <div class="wrap">
@@ -367,7 +347,7 @@
         <span class="lang-ru">Журнал вывода Architect</span>
         <span class="lang-es">Registro de Salida</span>
       </div>
-      <pre id="out">// Generation output will appear here...</pre>
+      <pre id="out">// <span class="lang-el">Το αποτέλεσμα θα εμφανιστεί εδώ...</span><span class="lang-en">Generation output will appear here...</span><span class="lang-ja">生成結果がここに表示されます...</span><span class="lang-ru">Результат генерации появится здесь...</span><span class="lang-es">El resultado aparecerá aquí...</span></pre>
       <div class="files-output" id="files" style="display: none;"></div>
       <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
         <button id="downloadZipBtn" class="generate-btn" style="display: none; padding: 10px 16px;">⬇️ Download ZIP</button>
@@ -375,7 +355,7 @@
     </div>
   </div>
 
-<script type="text/javascript">
+<script>
 const $ = (id) => document.getElementById(id);
 const downloadZipBtn = document.getElementById("downloadZipBtn");
 
@@ -402,89 +382,22 @@ if (downloadZipBtn) {
   });
 }
 
-// Language support - data-i18n based with safe fallback
-const LANG_SEQUENCE = ['gr', 'en', 'ja', 'es', 'ru'];
-const LANG_ALIAS = { el: 'gr' };
-const DEFAULT_LANG = 'en';
-let TRANSLATIONS_CACHE = null;
-let lastArchitectFiles = []; // Store generated files for download
+// Language support
+window.LANG_SEQUENCE = window.LANG_SEQUENCE || ['gr', 'en', 'ja', 'es', 'ru'];
+const LANG_CLASS_MAP = { 'gr': 'lang-el', 'en': 'lang-en', 'ja': 'lang-ja', 'es': 'lang-es', 'ru': 'lang-ru' };
 
-function normalizeLang(lang) {
-  if (!lang) return DEFAULT_LANG;
-  const alias = LANG_ALIAS[lang];
-  const normalized = alias || lang;
-  return LANG_SEQUENCE.includes(normalized) ? normalized : DEFAULT_LANG;
+function toggleLanguage() {
+  const current = localStorage.getItem("lang") || "gr";
+  const idx = window.LANG_SEQUENCE.indexOf(current);
+  const next = window.LANG_SEQUENCE[(idx + 1) % window.LANG_SEQUENCE.length];
+  localStorage.setItem("lang", next);
+  applyLanguage();
 }
 
-function harvestTranslations() {
-  const store = {};
-  const langRegex = /lang-([a-z]+)/;
-  document.querySelectorAll('.lang-el, .lang-en, .lang-ja, .lang-ru, .lang-es').forEach((node) => {
-    const parent = node.parentElement;
-    if (!parent) return;
-    if (!parent.dataset.i18n) {
-      parent.dataset.i18n = `auto-i18n-${Object.keys(store).length}`;
-    }
-    const key = parent.dataset.i18n;
-    const match = node.className.match(langRegex);
-    const lang = normalizeLang(match && match[1]);
-    store[key] = store[key] || {};
-    store[key][lang] = node.textContent.trim();
-  });
-  document.querySelectorAll('[data-i18n]').forEach((node) => {
-    const key = node.dataset.i18n;
-    store[key] = store[key] || {};
-    const fallback = node.dataset.i18nDefault || node.textContent.trim();
-    if (!store[key][DEFAULT_LANG]) {
-      store[key][DEFAULT_LANG] = fallback;
-    }
-  });
-  return store;
-}
-
-function applyTranslations(langOverride) {
-  const lang = normalizeLang(langOverride || localStorage.getItem('lang'));
-  localStorage.setItem('lang', lang);
-  document.documentElement.lang = lang;
-
-  // FIX: Apply language class to body for CSS language toggle to work
-  // CSS rules use body.lang-el, body.lang-en, etc.
-  const langClass = 'lang-' + (lang === 'gr' ? 'el' : lang);
-  document.body.className = document.body.className.replace(/lang-\w+/g, '').trim();
-  document.body.classList.add(langClass);
-
-  if (!TRANSLATIONS_CACHE) {
-    TRANSLATIONS_CACHE = harvestTranslations();
-  }
-
-  try {
-    document.querySelectorAll('[data-i18n]').forEach((node) => {
-      const key = node.dataset.i18n;
-      const table = TRANSLATIONS_CACHE[key] || {};
-      const fallback = table[DEFAULT_LANG] || node.dataset.i18nDefault || node.textContent;
-      const value = table[lang] || fallback || key;
-      if (node.dataset.i18nAttr === 'placeholder') {
-        node.placeholder = value;
-      } else {
-        node.textContent = value;
-      }
-    });
-  } catch (err) {
-    console.warn('translation apply failed', err);
-    document.querySelectorAll('[data-i18n]').forEach((node) => {
-      const fallback = node.dataset.i18nDefault || node.textContent;
-      if (node.dataset.i18nAttr === 'placeholder') {
-        node.placeholder = fallback;
-      } else {
-        node.textContent = fallback;
-      }
-    });
-  }
-
-  const langSelect = document.getElementById('languageSelect');
-  if (langSelect && langSelect.value !== lang) {
-    langSelect.value = lang;
-  }
+function applyLanguage() {
+  const lang = localStorage.getItem("lang") || "gr";
+  document.body.className = LANG_CLASS_MAP[lang] || '';
+  document.querySelector('.lang-toggle').textContent = '🌐 ' + lang.toUpperCase();
 }
 
 async function api(url, opts) {
@@ -500,9 +413,7 @@ async function api(url, opts) {
 
 function setStatus(ok, text) {
   const pill = $("statusPill");
-  if (!pill) return;
   const dot = pill.querySelector('.pill-dot');
-  if (!dot) return;
   dot.style.background = ok ? "var(--accent)" : "var(--danger)";
   dot.style.boxShadow = ok ? "0 0 8px var(--accent)" : "0 0 8px var(--danger)";
 }
@@ -511,7 +422,6 @@ async function loadBlueprints() {
   const j = await api("/api/ai_blueprints");
   const list = j.blueprints || [];
   const sel = $("blueprint");
-  if (!sel) { console.warn("Blueprint selector element not found"); return; }
   sel.innerHTML = "";
 
   if (!list.length) {
@@ -528,7 +438,6 @@ async function loadBlueprints() {
     opt.textContent = "📁 " + b;
     sel.appendChild(opt);
   });
-  applyTranslations();
 }
 
 function parseFiles(lines) {
@@ -554,67 +463,39 @@ $("generate").onclick = async () => {
   btn.disabled = true;
   btn.innerHTML = "⏳ Generating...";
 
-  const outEl = $("out");
-  if (outEl) {
-    outEl.textContent = "🔄 Generating architecture...\n\nPlease wait while Pythia analyzes your specifications...";
-  }
-  const filesEl = $("files");
-  if (filesEl) {
-    filesEl.style.display = "none";
-    filesEl.textContent = "";
-  }
+  $("out").textContent = "🔄 Generating architecture...\n\nPlease wait while Pythia analyzes your specifications...";
+  $("files").style.display = "none";
+  $("files").textContent = "";
   lastArchitectFiles = [];
   resetDownloadBtn();
 
   try {
-    const j = await api("/api/ai/ask", {
+    const j = await api("/api/architect_generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ product: "architect", wallet, blueprint_id: blueprint, model, messages: [{ role: "user", content: spec }], options: { spec, blueprint } })
+      body: JSON.stringify({ wallet, blueprint, spec, model })
     });
-    setStatus(true,"Architect: online");
-    const outPayload = j.output || j;
-    $("out").textContent = outPayload.response || "";
 
-    let filesInfo = "";
-    const filesEl = $("files");
-    if(outPayload.files && outPayload.files.length){
-      lastArchitectFiles = outPayload.files;
-      filesInfo = `Files: ${outPayload.files_count || (outPayload.files || []).length || 0}\nTotal: ${outPayload.total_kb || 0} KB\nCost: ${outPayload.cost_thr || outPayload.thr_spent || 0} THR\n\n${parseFiles(outPayload.files)}`;
-      if (filesEl) {
-        filesEl.style.display = "block";
-      }
-      // Enable download button if zip_url is provided
-      if (outPayload.zip_url) {
-        enableDownloadBtn(outPayload.zip_url);
-      }
+    setStatus(true);
+    $("out").textContent = j.response || "No response received.";
+
+    if (j.files && j.files.length) {
+      $("files").style.display = "block";
+      $("files").innerHTML = "<strong>📁 Generated Files:</strong><br>" + parseFiles(j.files);
     }
 
-    if(outPayload.redirect_to_chat && outPayload.session_id){
-      filesInfo += `\n\n✅ Architecture complete!\n👉 Continue development in Chat: /chat?session=${outPayload.session_id}`;
-
-      // Auto-redirect option
-      if(confirm(`Architecture generated successfully!\n\nCost: ${outPayload.cost_thr || outPayload.thr_spent || 0} THR\nFiles: ${outPayload.files_count || (outPayload.files || []).length || 0}\n\nContinue in Chat for further development?`)){
-        window.location.href = `/chat?session=${outPayload.session_id}&from=architect`;
-      }
+    if (j.zip_url) {
+      enableDownloadBtn(j.zip_url);
+    } else {
+      resetDownloadBtn();
     }
-
-    if (filesEl) {
-      filesEl.textContent = filesInfo;
-    }
-  }catch(e){
-    setStatus(false,"Architect: offline");
-    $("out").textContent = "Σφάλμα: " + e.message;
+  } catch(e) {
+    setStatus(false);
+    $("out").textContent = "❌ Error: " + e.message;
   } finally {
-    // Re-enable the button
-    const btn = $("generate");
     btn.disabled = false;
-    btn.innerHTML = `🚀 <span class="lang-el">ΔΗΜΙΟΥΡΓΙΑ ΑΡΧΙΤΕΚΤΟΝΙΚΗΣ</span>
-        <span class="lang-en">GENERATE ARCHITECTURE</span>
-        <span class="lang-ja">アーキテクチャ生成</span>
-        <span class="lang-ru">СОЗДАТЬ АРХИТЕКТУРУ</span>
-        <span class="lang-es">GENERAR ARQUITECTURA</span>`;
-    applyTranslations();
+    btn.innerHTML = '🚀 <span class="lang-el">ΔΗΜΙΟΥΡΓΙΑ ΑΡΧΙΤΕΚΤΟΝΙΚΗΣ</span><span class="lang-en">GENERATE ARCHITECTURE</span><span class="lang-ja">アーキテクチャ生成</span><span class="lang-ru">СОЗДАТЬ АРХИТЕКТУРУ</span><span class="lang-es">GENERAR ARQUITECTURA</span>';
+    applyLanguage();
   }
 };
 
@@ -624,97 +505,15 @@ if (savedWallet) {
   $("wallet").value = savedWallet;
 }
 
-const langSelectEl = document.getElementById('languageSelect');
-if (langSelectEl) {
-  langSelectEl.addEventListener('change', (e) => applyTranslations(e.target.value));
-}
-
-// Load Models from API
-let _allModels = [];
-let _defaultModelId = "auto";
-
-async function loadModels() {
-  const modelSel = $("model");
-  const provSel = $("provider");
-  if (!modelSel) { console.warn("Model selector element not found"); return; }
-  const previousValue = modelSel.value || "auto";
-
-  modelSel.innerHTML = '<option value="auto">🔀 Auto (Pythia chooses)</option>';
-
-  try {
-    const providerFilter = provSel ? provSel.value : "all";
-    const modelUrl = providerFilter && providerFilter !== "all" ? `/api/ai/models?provider=${encodeURIComponent(providerFilter)}` : "/api/ai/models";
-    const res = await fetch(modelUrl);
-    let data = null;
-    try { data = await res.json(); } catch (e) {
-      console.error("Models API parse error", e);
-      setStatus(false, "Models unavailable");
-      return;
-    }
-
-    _allModels = Array.isArray(data.models) ? data.models : [];
-    _defaultModelId = data.default_model_id || "auto";
-
-    // Populate provider dropdown from backend providers API (no keys client-side)
-    if (provSel) {
-      provSel.innerHTML = '<option value="all">All Providers</option>';
-      try {
-        const pRes = await fetch('/api/ai/providers');
-        const pJson = await pRes.json();
-        (pJson.providers || []).filter(p => p && p.enabled).forEach(p => {
-          const opt = document.createElement('option');
-          opt.value = p.id;
-          opt.textContent = p.name || p.id;
-          provSel.appendChild(opt);
-        });
-      } catch (e) {
-        console.warn('Failed to load providers list:', e);
-      }
-    }
-
-    _renderModels(previousValue);
-  } catch (e) {
-    console.warn("Failed to load models from API:", e);
-    setStatus(false, "Models unavailable");
-  }
-  applyTranslations();
-}
-
-function _renderModels(selectValue) {
-  const modelSel = $("model");
-  const provSel = $("provider");
-  const provFilter = provSel ? provSel.value : "all";
-  modelSel.innerHTML = '<option value="auto">🔀 Auto (Pythia chooses)</option>';
-
-  const filtered = provFilter === "all" ? _allModels : _allModels.filter(m => m.provider === provFilter);
-  filtered.forEach(m => {
-    const opt = document.createElement("option");
-    opt.value = m.id;
-    opt.textContent = `${m.label || m.id} (${m.provider || '?'})`;
-    if (m.enabled === false) { opt.disabled = true; opt.textContent += " ⛔"; }
-    modelSel.appendChild(opt);
-  });
-
-  if (selectValue && Array.from(modelSel.options).some(o => o.value === selectValue)) {
-    modelSel.value = selectValue;
-  } else if (Array.from(modelSel.options).some(o => o.value === _defaultModelId)) {
-    modelSel.value = _defaultModelId;
-  }
-}
-
-function filterModels() {
-  _renderModels(null);
-}
-
 // Initialize
 (async () => {
-  applyTranslations();
+  applyLanguage();
   try {
-    await Promise.all([loadBlueprints(), loadModels()]);
+    await loadBlueprints();
     setStatus(true);
   } catch(e) {
     setStatus(false);
-    console.error("Failed to load data:", e);
+    console.error("Failed to load blueprints:", e);
   }
 })();
 </script>

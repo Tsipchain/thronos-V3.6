@@ -1362,8 +1362,10 @@
                 music_tip: 'music',
                 music_purchase: 'music',
                 music_stream: 'music',
+                music_royalty: 'music',
                 music_play_reward: 'music',
                 t2e_reward: 't2e',
+                t2e_reward_thr: 't2e_reward_thr',
                 train_reward: 't2e',
                 network_reward: 'network',
                 validator_reward: 'network',
@@ -1431,7 +1433,25 @@
             const category = getCanonicalCategory(tx);
             const meta = (tx && tx.meta && typeof tx.meta === 'object') ? tx.meta : {};
             const symbol = sanitizeTokenSymbol(tx.asset_symbol || tx.asset || tx.symbol);
-            return category === 'l2e' || String(meta.category || '').toLowerCase() === 'l2e' || symbol === 'L2E';
+            const rawCategory = String(tx.category || meta.category || '').toLowerCase();
+            return ['l2e', 'l2e_reward', 'quiz_reward', 'course_reward'].includes(category)
+                || ['l2e', 'l2e_reward', 'quiz_reward', 'course_reward'].includes(rawCategory)
+                || symbol === 'L2E';
+        }
+
+        function isMusicTx(tx) {
+            const category = getCanonicalCategory(tx);
+            const meta = (tx && tx.meta && typeof tx.meta === 'object') ? tx.meta : {};
+            const rawCategory = String(tx.category || '').toLowerCase();
+            return category === 'music'
+                || ['music_stream', 'music_royalty', 'music_tip'].includes(rawCategory)
+                || String(meta.source || '').toLowerCase() === 'music_player';
+        }
+
+        function isArchitectJobTx(tx) {
+            const category = getCanonicalCategory(tx);
+            const rawCategory = String(tx.category || '').toLowerCase();
+            return category === 'architect_job' || rawCategory === 'architect_job';
         }
 
         function shouldExcludeTx(tx) {
@@ -1517,12 +1537,16 @@
                 if (historyState.filter === 'ai_credits') return false;
                 if (historyState.filter === 'iot') return category === 'iot';
                 if (historyState.filter === 'bridge') return category === 'bridge';
-                if (historyState.filter === 'architect_ai_jobs') return category === 'architect_job';
+                if (historyState.filter === 'architect_ai_jobs') return isArchitectJobTx(tx);
                 if (historyState.filter === 'liquidity') return category === 'liquidity';
                 if (historyState.filter === 'gateway') return category === 'gateway';
-                if (historyState.filter === 'music') return category === 'music' || rawKind === 'music_play_reward' || rawKind === 'music_tip';
+                if (historyState.filter === 'music') return isMusicTx(tx);
                 return true;
             }).filter(tx => {
+                if (historyState.filter === 'thr') {
+                    const c = getCanonicalCategory(tx);
+                    return c === 'thr' && !isAICreditPseudoTx(tx) && !isArchitectJobTx(tx) && !isMusicTx(tx) && !isL2ETx(tx) && c !== 't2e_reward_thr';
+                }
                 if (historyState.filter !== 'tokens') return true;
                 if (historyState.tokenScope === 'crosschain' && !isCrossChainTokenTransfer(tx)) return false;
                 if (historyState.tokenScope === 'native' && isCrossChainTokenTransfer(tx)) return false;
@@ -1647,7 +1671,7 @@
                 const rawKind = (tx.kind || tx.type || '').toLowerCase();
                 const isIncoming = tx.direction === 'in' || tx.to === walletAddress;
                 const isSwap = kind === 'swap' || kind === 'pool_swap';
-                const isMusicReward = rawKind === 'music_play_reward' || rawKind === 'music_tip';
+                const isMusicReward = isMusicTx(tx);
                 const amountClass = isSwap ? 'swap' : (isIncoming ? 'incoming' : 'outgoing');
                 const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
                 const status = tx.status || 'confirmed';

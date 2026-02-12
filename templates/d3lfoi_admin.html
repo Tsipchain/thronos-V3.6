@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>D3lfoi Admin Console</title>
+  <style>
+    body { background:#07131d; color:#d8ffee; font-family:Inter,system-ui,sans-serif; margin:0; }
+    .wrap { padding:16px; }
+    .header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+    .grid { display:grid; grid-template-columns: 240px 1fr 320px; gap:12px; }
+    .card { border:1px solid #1b4d40; border-radius:12px; padding:12px; background:#081926; }
+    .chat-log { height:60vh; overflow:auto; border:1px solid #194636; border-radius:10px; padding:8px; background:#06141f; }
+    .msg { margin:6px 0; padding:8px; border-radius:8px; }
+    .msg-user { background:#0f2740; }
+    .msg-ai { background:#17331f; }
+    textarea, input, select, button { width:100%; box-sizing:border-box; background:#031018; color:#d8ffee; border:1px solid #1b4d40; border-radius:8px; padding:8px; }
+    button { cursor:pointer; margin-top:8px; }
+    .row { display:flex; gap:8px; }
+    .row button { width:auto; }
+    pre { white-space:pre-wrap; word-break:break-word; max-height:60vh; overflow:auto; }
+    #admin-main { display:none; }
+    .status { color:#86ffbc; font-size:12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <h2>D3lfoi / Pytheia Operator Console</h2>
+      <div id="operatorStatus" class="status">locked</div>
+    </div>
+
+    <div id="loginCard" class="card" style="max-width:420px;">
+      <label>Admin Secret</label>
+      <input id="adminSecret" type="password" placeholder="Enter ADMIN_SECRET" />
+      <button id="loginBtn">Login</button>
+      <div id="loginErr" style="color:#ff8e8e;font-size:12px;"></div>
+    </div>
+
+    <div id="admin-main" class="grid">
+      <div class="card">
+        <label>Model</label>
+        <select id="modelSelect"></select>
+        <small id="modelHint"></small>
+        <label style="display:block;margin-top:8px;">Language</label>
+        <select id="langSelect">
+          <option value="el">Ελληνικά</option>
+          <option value="en">English</option>
+        </select>
+        <label style="display:block;margin-top:8px;"><input id="logToggle" type="checkbox" checked style="width:auto;"> Log to offline corpus</label>
+        <button id="voiceBtn">🎙 Voice (coming soon)</button>
+        <div id="voiceStatus" class="status"></div>
+      </div>
+
+      <div class="card">
+        <div id="chatLog" class="chat-log"></div>
+        <textarea id="msgInput" rows="3" placeholder="Type operator command..."></textarea>
+        <button id="sendBtn">Send</button>
+      </div>
+
+      <div class="card">
+        <h4>Core Health</h4>
+        <pre id="healthPre">-</pre>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const state = { sessionId: null, adminSecret: '' };
+
+  function append(role, text) {
+    const d = document.createElement('div');
+    d.className = 'msg ' + (role === 'YOU' ? 'msg-user' : 'msg-ai');
+    d.textContent = `[${role}] ${text}`;
+    $('chatLog').appendChild(d);
+    $('chatLog').scrollTop = $('chatLog').scrollHeight;
+  }
+
+  async function api(path, opts = {}) {
+    const headers = { ...(opts.headers || {}) };
+    if (state.adminSecret) headers['X-Admin-Secret'] = state.adminSecret;
+    const res = await fetch(path, { ...opts, headers, credentials: 'include' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  }
+
+  async function loadModels() {
+    const data = await api('/api/ai_models');
+    const models = Array.isArray(data.models) ? data.models : [];
+    $('modelSelect').innerHTML = '';
+    models.forEach((m) => {
+      const o = document.createElement('option');
+      o.value = m.id;
+      o.textContent = `${m.display_name || m.label || m.id}${m.degraded ? ` (degraded: ${m.health_reason || 'unknown'})` : ''}`;
+      o.disabled = (m.enabled === false);
+      if (m.enabled === false) o.style.color = '#777';
+      $('modelSelect').appendChild(o);
+    });
+  }
+
+  async function loadHealth() {
+    const data = await api('/api/admin/ai/health');
+    $('healthPre').textContent = JSON.stringify(data, null, 2);
+  }
+
+  $('loginBtn').addEventListener('click', async () => {
+    $('loginErr').textContent = '';
+    state.adminSecret = $('adminSecret').value.trim();
+    if (!state.adminSecret) return;
+    try {
+      await api('/api/admin/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ secret: state.adminSecret })
+      });
+      $('loginCard').style.display = 'none';
+      $('admin-main').style.display = 'grid';
+      $('operatorStatus').textContent = 'operator session active';
+      await loadModels();
+      await loadHealth();
+    } catch (e) {
+      $('loginErr').textContent = e.message;
+    }
+  });
+
+  $('sendBtn').addEventListener('click', async () => {
+    const message = $('msgInput').value.trim();
+    if (!message) return;
+    const model_id = $('modelSelect').value || 'auto';
+    append('YOU', message);
+    $('msgInput').value = '';
+    try {
+      const data = await api('/api/admin/ai/chat', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          message,
+          model_id,
+          lang: $('langSelect').value || 'el',
+          session_id: state.sessionId,
+          meta: { offline_corpus_logging: $('logToggle').checked }
+        })
+      });
+      state.sessionId = data.session_id || state.sessionId;
+      append('PYTHEIA', data.assistant_message || data.response || JSON.stringify(data));
+      if (data.model_notice) $('modelHint').textContent = data.model_notice;
+      await loadHealth();
+    } catch (e) {
+      append('SYSTEM', e.message);
+    }
+  });
+
+  $('voiceBtn').addEventListener('click', async () => {
+    const out = $('voiceStatus');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      out.textContent = 'Mic ready. Voice relay hook is Phase-2 (x9/ASR/WebSocket).';
+      stream.getTracks().forEach(t => t.stop());
+    } catch (e) {
+      out.textContent = `Mic permission failed: ${e.message || e}`;
+    }
+  });
+})();
+</script>
+</body>
+</html>

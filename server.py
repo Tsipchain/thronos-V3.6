@@ -5034,9 +5034,46 @@ def get_ai_credits(wallet: str) -> int:
         return 0
     credits_map = load_ai_credits()
     try:
-        return int(credits_map.get(wallet, 0) or 0)
+        val = int(credits_map.get(wallet, 0) or 0)
     except (TypeError, ValueError):
+        val = 0
+    if val > 0:
+        return val
+    try:
+        ledger = load_ai_credits_ledger()
+        if isinstance(ledger, list):
+            for entry in reversed(ledger):
+                if not isinstance(entry, dict):
+                    continue
+                if (entry.get("wallet") or "").strip() != wallet:
+                    continue
+                if entry.get("balance_after") is not None:
+                    return max(0, int(entry.get("balance_after") or 0))
+    except Exception:
+        pass
+    return max(0, val)
+
+
+def get_available_ai_credits(wallet: str) -> int:
+    """Master-side AI credits view sourced primarily from ledger with safe fallbacks."""
+    wallet = (wallet or "").strip()
+    if not wallet:
         return 0
+    if is_ai_core():
+        return 0
+    try:
+        ledger = load_ai_credits_ledger()
+        if isinstance(ledger, list):
+            for entry in reversed(ledger):
+                if not isinstance(entry, dict):
+                    continue
+                if (entry.get("wallet") or "").strip() != wallet:
+                    continue
+                if entry.get("balance_after") is not None:
+                    return max(0, int(entry.get("balance_after") or 0))
+    except Exception:
+        logger.exception("[AI_CREDITS] failed ledger-based balance lookup")
+    return max(0, get_ai_credits(wallet))
 
 
 def add_ai_credits(wallet: str, delta: int, reason: str = "", metadata: dict | None = None) -> int:
@@ -5068,11 +5105,19 @@ def debit_ai_credits(wallet: str, cost: int, reason: str = "chat_message") -> tu
     amount = max(0, int(cost or 0))
     if not wallet:
         return False, 0
-    before = get_ai_credits(wallet)
+    before = get_available_ai_credits(wallet) if not is_ai_core() else get_ai_credits(wallet)
     if before < amount:
         logger.info("[AI_CREDITS] wallet=%s op=%s cost=%s before=%s after=%s", wallet, reason, amount, before, before)
         return False, before
-    after = add_ai_credits(wallet, -amount, reason=reason)
+    after = max(0, before - amount)
+    credits_map = load_ai_credits()
+    credits_map[wallet] = after
+    save_ai_credits(credits_map)
+    normalized_reason = (reason or "adjust").strip().lower()
+    if normalized_reason == "chat_message":
+        normalized_reason = "chat_usage"
+    logger.info("[AI_CREDITS] wallet=%s op=%s cost=%s before=%s after=%s", wallet, normalized_reason, amount, before, after)
+    append_ai_credits_ledger(wallet, -amount, normalized_reason, before, after)
     return True, after
 
 
@@ -5128,37 +5173,31 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
 
     fallback_notice = None
 
-    # Explicit local/router model requests are resolved separately from provider-key checks
-    if requested in {"offline_corpus", "thrai"}:
-        if requested == "offline_corpus":
-            offline_status = _offline_corpus_health()
-            if offline_status.get("enabled"):
-                return "offline_corpus", fallback_notice, None
-            err = {
-                "ok": False,
-                "error": "no_available_model",
-                "message": "Offline corpus is not available.",
-                "requested_model": requested,
-                "reason": offline_status.get("reason"),
-            }
-            return None, fallback_notice, (jsonify(err), 200)
-        if requested == "thrai":
-            thrai_status = _thrai_router_health()
-            if thrai_status.get("enabled"):
-                return "thrai", fallback_notice, None
-            err = {
-                "ok": False,
-                "error": "no_available_model",
-                "message": "Thrai router is not available.",
-                "requested_model": requested,
-                "reason": thrai_status.get("reason"),
-            }
-            return None, fallback_notice, (jsonify(err), 200)
+    hard_unavailable = {"o3", "gpt-o3", "o3-pro", "gpt-o3-preview"}
+    if requested in hard_unavailable:
+        error_payload = {
+            "ok": False,
+            "error": "model_unavailable",
+            "status": "model_unavailable",
+            "requested_model": requested,
+            "reason": "model_not_available_or_preview",
+            "models": catalog,
+        }
+        return None, fallback_notice, (jsonify(error_payload), 200)
 
     if requested not in callable_ids and requested != "auto":
-        # Gracefully fall back to default/auto instead of hard-failing
-        fallback_notice = f"Model '{requested}' not callable; using {default_model_id or 'auto'}"
-        requested = default_model_id or "auto"
+        error_payload = {
+            "ok": False,
+            "error": "model_unavailable",
+            "status": "model_unavailable",
+            "requested_model": requested,
+            "reason": "model_not_available_or_preview",
+            "models": catalog,
+        }
+        return None, fallback_notice, (jsonify(error_payload), 200)
+
+    if requested in {"offline_corpus", "thrai"} and requested in callable_ids:
+        return requested, fallback_notice, None
 
     if requested in {"offline_corpus", "thrai"} and requested in callable_ids:
         return requested, fallback_notice, None
@@ -6420,7 +6459,7 @@ def enforce_read_only():
         return None
     # Allow health/bootstrap even as POST (for monitoring tools)
     safe_paths = ("/health", "/bootstrap.json", "/api/whoami")
-    admin_ai_safe_paths = ("/api/admin/login", "/api/admin/ai/chat", "/api/admin/ai/voice_hook")
+    admin_ai_safe_paths = ("/api/admin/login", "/api/admin/ai/chat", "/api/admin/ai/voice_hook", "/api/voice/x9_webhook")
     if request.path.startswith(safe_paths):
         return None
     if NODE_ROLE == "ai_core" and request.path.startswith(admin_ai_safe_paths):
@@ -10917,6 +10956,75 @@ def _build_ai_model_catalog() -> list[dict]:
     return models
 
 
+def _build_ai_model_catalog() -> list[dict]:
+    provider_status = get_provider_status()
+    models: list[dict] = [{
+        "id": "auto",
+        "display_name": "Auto (Thronos chooses)",
+        "provider": "system",
+        "mode": "system",
+        "enabled": True,
+        "degraded": False,
+        "health_reason": None,
+    }]
+
+    for provider_name, model_list in AI_MODEL_REGISTRY.items():
+        pstatus = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
+        for mi in model_list:
+            enabled = bool(mi.enabled and pstatus.get("configured", True) and pstatus.get("library_loaded", True) is not False)
+            degraded = bool(getattr(mi, "degraded", (not enabled))) or not enabled
+            models.append({
+                "id": mi.id,
+                "display_name": mi.display_name,
+                "provider": mi.provider,
+                "mode": "provider",
+                "enabled": enabled,
+                "degraded": degraded,
+                "health_reason": None if enabled else (pstatus.get("last_error") or "provider_unavailable"),
+            })
+
+    preview_disabled = [
+        ("o3", "o3 (preview)", "openai"),
+        ("gpt-o3", "GPT-o3 (preview)", "openai"),
+    ]
+    known_ids = {m.get("id") for m in models if isinstance(m, dict)}
+    for mid, dname, provider in preview_disabled:
+        if mid in known_ids:
+            continue
+        models.append({
+            "id": mid,
+            "display_name": dname,
+            "provider": provider,
+            "mode": "provider",
+            "enabled": False,
+            "degraded": True,
+            "health_reason": "model_not_available_or_preview",
+        })
+
+    offline_ok, offline_reason = _offline_corpus_health()
+    models.append({
+        "id": "offline_corpus",
+        "display_name": "Offline Corpus",
+        "provider": "local",
+        "mode": "offline",
+        "enabled": bool(THR_OFFLINE_CORPUS_ENABLED and offline_ok),
+        "degraded": False if not THR_OFFLINE_CORPUS_ENABLED else (not offline_ok),
+        "health_reason": offline_reason,
+    })
+
+    thrai_ok, thrai_reason = _thrai_router_health()
+    models.append({
+        "id": "thrai",
+        "display_name": "Thrai Router",
+        "provider": "thronos",
+        "mode": "router",
+        "enabled": bool(THR_THAI_ENABLED and thrai_ok),
+        "degraded": bool(THR_THAI_ENABLED and not thrai_ok),
+        "health_reason": thrai_reason,
+    })
+    return models
+
+
 def call_offline_corpus(corpus_path, messages, wallet, session_id, chain_context) -> str:
     """Simple local retrieval over ai_offline_corpus.json / knowledge blocks."""
     try:
@@ -11234,6 +11342,65 @@ def api_admin_ai_voice_hook():
     }), 200
 
 
+@app.route("/api/voice/x9_status", methods=["GET"])
+def api_voice_x9_status():
+    return jsonify({"ok": True, "mode": "x9", "engine": "d3lfoi", "node_role": NODE_ROLE}), 200
+
+
+@app.route("/api/voice/x9_webhook", methods=["POST"])
+def api_voice_x9_webhook():
+    if NODE_ROLE != "ai_core":
+        return jsonify({"ok": False, "error": "x9_only_on_ai_core"}), 404
+    expected = (os.getenv("X9_VOICE_WEBHOOK_SECRET") or "").strip()
+    provided = (request.headers.get("X-X9-Secret") or "").strip()
+    if expected and provided != expected:
+        return jsonify({"ok": False, "error": "invalid_x9_secret"}), 401
+
+    body = request.get_json(silent=True) or {}
+    wallet = (body.get("wallet") or "").strip()
+    text = (body.get("text") or "").strip()
+    lang = (body.get("lang") or "el").strip()
+    if not text:
+        return jsonify({"ok": False, "error": "empty_text"}), 400
+
+    payload = {
+        "wallet": wallet,
+        "message": text,
+        "lang": lang,
+        "model_id": body.get("model_id") or "auto",
+        "session_id": body.get("session_id"),
+        "billing_precharged": True,
+    }
+    with app.test_request_context("/api/ai/chat", method="POST", json=payload):
+        resp = api_ai_chat()
+
+    if isinstance(resp, tuple):
+        body_out = resp[0].get_json() if hasattr(resp[0], "get_json") else {}
+        status = resp[1]
+    else:
+        body_out = resp.get_json() if hasattr(resp, "get_json") else {}
+        status = 200
+
+    if status >= 400:
+        return jsonify({
+            "ok": True,
+            "mode": "x9_stub",
+            "reply": f"[x9] {text}",
+            "session_id": payload.get("session_id"),
+            "model_id": payload.get("model_id"),
+            "note": "fallback_echo",
+            "raw_error": body_out,
+        }), 200
+
+    return jsonify({
+        "ok": status < 400,
+        "reply": body_out.get("response") or body_out.get("message") or "",
+        "session_id": body_out.get("session_id") or payload.get("session_id"),
+        "model_id": body_out.get("model") or payload.get("model_id"),
+        "raw": body_out,
+    }), status
+
+
 @app.route("/d3lfoi", methods=["GET"])
 @app.route("/d3lfoi_admin", methods=["GET"])
 def d3lfoi_admin_console():
@@ -11278,6 +11445,35 @@ def _handle_ai_chat_proxy():
             "error": "upstream_unreachable",
             "message": "Quantum core cannot reach leader node right now.",
         }), 503
+
+    wallet = (payload.get("wallet") or "").strip()
+    model_key = (payload.get("model_id") or payload.get("model") or "auto").strip() or "auto"
+    prompt_text = (payload.get("message") or payload.get("prompt") or payload.get("text") or "").strip()
+    message_credit_cost = _chat_credit_cost_for_model(model_key, prompt_text)
+
+    if wallet:
+        available = get_available_ai_credits(wallet)
+        if available < message_credit_cost:
+            return jsonify({
+                "error": "no_credits",
+                "message": "Δεν έχεις αρκετά AI credits για αυτό το μήνυμα.",
+                "required_credits": message_credit_cost,
+                "credits": available,
+                "wallet": wallet,
+                "code": "insufficient_ai_credits",
+            }), 400
+        ok, credits_after = debit_ai_credits(wallet, message_credit_cost, reason="chat_usage")
+        if not ok:
+            return jsonify({
+                "error": "no_credits",
+                "message": "Δεν έχεις αρκετά AI credits για αυτό το μήνυμα.",
+                "required_credits": message_credit_cost,
+                "credits": get_available_ai_credits(wallet),
+                "wallet": wallet,
+                "code": "insufficient_ai_credits",
+            }), 400
+        payload["billing_precharged"] = True
+        payload["credits"] = credits_after
 
     target = base_url.rstrip("/") + "/api/ai/chat"
     logger.info("[AI_PROXY] Forwarding %s to %s (mode=%s)", "/api/ai/chat", base_url, THRONOS_AI_MODE)
@@ -11478,16 +11674,20 @@ def _handle_ai_chat_master():
     # --- Credits check (Chat billing mode) ---
     credits_value = None
     if wallet:
-        credits_value = get_ai_credits(wallet)
-        if credits_value < message_credit_cost:
-            return jsonify(
-                error="insufficient_ai_credits",
-                message="Δεν έχεις άλλα Quantum credits γι' αυτό το THR wallet.",
-                required_credits=message_credit_cost,
-                credits=credits_value,
-                wallet=wallet,
-                session_id=session_id,
-            ), 400
+        if billing_precharged and is_ai_core():
+            credits_value = int(data.get("credits") or 0)
+        else:
+            credits_value = get_available_ai_credits(wallet) if not is_ai_core() else get_ai_credits(wallet)
+            if credits_value < message_credit_cost:
+                return jsonify(
+                    error="no_credits",
+                    code="insufficient_ai_credits",
+                    message="Δεν έχεις άλλα Quantum credits γι' αυτό το THR wallet.",
+                    required_credits=message_credit_cost,
+                    credits=credits_value,
+                    wallet=wallet,
+                    session_id=session_id,
+                ), 400
     else:
         # No wallet supplied: treat this as a free demo chat.  Look up how
         # many messages have already been consumed for this session.  Once
@@ -11672,7 +11872,7 @@ def _handle_ai_chat_master():
         call_meta["failure_reason"] = raw_status
     can_charge = bool(wallet) and raw_status not in charge_block_statuses
 
-    if wallet and can_charge and not billing_precharged:
+    if wallet and can_charge and not billing_precharged and not is_ai_core():
         success, credits_after = debit_ai_credits(wallet, message_credit_cost, reason="chat_usage")
         if not success:
             credits_for_frontend = get_ai_credits(wallet)

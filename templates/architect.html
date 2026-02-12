@@ -281,7 +281,7 @@
       </select>
     </div>
     <div class="input-row" style="margin-left:auto;">
-      <span class="section-title" style="margin: 0;">🌐</span>
+      <span class="section-title" style="margin: 0;"><img src="/static/img/globe.svg" alt="Language" style="width:14px;height:14px;vertical-align:middle;" onerror="this.style.display='none'"> 🌐</span>
       <select id="architectLanguageSelect" style="width: 150px;">
         <option value="gr">Ελληνικά</option>
         <option value="en">English</option>
@@ -378,7 +378,7 @@ if (downloadZipBtn) {
 }
 
 // Language support (shared key with Chat)
-const DEFAULT_LANG = 'gr';
+const DEFAULT_LANG = 'en';
 const LANG_KEY = 'thr_lang';
 const LANG_SEQUENCE = ['gr', 'en', 'ja', 'es', 'ru'];
 const LANG_CLASS_MAP = { 'gr': 'lang-el', 'en': 'lang-en', 'ja': 'lang-ja', 'es': 'lang-es', 'ru': 'lang-ru' };
@@ -386,13 +386,15 @@ const TRANSLATIONS_CACHE = window.TRANSLATIONS_CACHE || {};
 
 function normalizeLang(lang) {
   const val = String(lang || '').toLowerCase();
+  if (val === 'el') return 'gr';
   return LANG_SEQUENCE.includes(val) ? val : DEFAULT_LANG;
 }
 
 function applyTranslations(lang) {
   const normalized = normalizeLang(lang || localStorage.getItem(LANG_KEY) || DEFAULT_LANG);
   localStorage.setItem(LANG_KEY, normalized);
-  document.body.className = LANG_CLASS_MAP[normalized] || '';
+  document.body.classList.remove(...Object.values(LANG_CLASS_MAP));
+  if (LANG_CLASS_MAP[normalized]) document.body.classList.add(LANG_CLASS_MAP[normalized]);
   const sel = document.getElementById('architectLanguageSelect');
   if (sel) sel.value = normalized;
   try {
@@ -532,13 +534,15 @@ if (savedWallet) {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
-  initArchitectLanguage();
+  if (window.__architectInitDone) return;
+  window.__architectInitDone = true;
   try {
+    initArchitectLanguage();
     await loadBlueprints();
     setStatus(true);
   } catch(e) {
     setStatus(false);
-    console.error("Failed to load blueprints:", e);
+    console.error("Failed to initialize architect:", e);
   }
 });
 </script>

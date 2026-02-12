@@ -1412,13 +1412,35 @@
         const isIoTTx = (tx) => getKind(tx).startsWith('iot') || getKind(tx).includes('parking') || getKind(tx) === 'autopilot';
         const isAiCreditsTx = (tx) => getKind(tx).startsWith('ai') || getKind(tx).includes('credits');
 
+        function isAICreditPseudoTx(tx) {
+            const meta = (tx && tx.meta && typeof tx.meta === 'object') ? tx.meta : {};
+            const kind = getKind(tx);
+            const asset = getAssetSymbol(tx);
+            const note = String(tx.note || tx.description || '').toLowerCase();
+            return Boolean(
+                meta.is_ai_credit ||
+                meta.billing_unit === 'credits' ||
+                meta.category === 'ai_credits' ||
+                kind === 'ai_credits' ||
+                asset === 'CREDITS' ||
+                note.includes('ai credits')
+            );
+        }
+
+        function isL2ETx(tx) {
+            const category = getCanonicalCategory(tx);
+            const meta = (tx && tx.meta && typeof tx.meta === 'object') ? tx.meta : {};
+            const symbol = sanitizeTokenSymbol(tx.asset_symbol || tx.asset || tx.symbol);
+            return category === 'l2e' || String(meta.category || '').toLowerCase() === 'l2e' || symbol === 'L2E';
+        }
+
         function shouldExcludeTx(tx) {
             const kind = getKind(tx);
             const asset = getAssetSymbol(tx);
             if (kind === 'block') return true;
             if (!tx.from && !tx.to) return true;
             if (tx.amount === 0 && asset === 'THR' && kind !== 'thr_transfer') return true;
-            if (getCanonicalCategory(tx) === 'ai_credits') return true;
+            if (getCanonicalCategory(tx) === 'ai_credits' || isAICreditPseudoTx(tx)) return true;
             return false;
         }
 
@@ -1490,7 +1512,7 @@
                 if (historyState.filter === 'mining') return category === 'mining';
                 if (historyState.filter === 'tokens') return category === 'tokens';
                 if (historyState.filter === 'swaps') return category === 'swaps';
-                if (historyState.filter === 'l2e') return category === 'l2e';
+                if (historyState.filter === 'l2e') return isL2ETx(tx);
                 if (historyState.filter === 't2e') return category === 't2e_reward_thr';
                 if (historyState.filter === 'ai_credits') return false;
                 if (historyState.filter === 'iot') return category === 'iot';
@@ -1658,10 +1680,14 @@
                 const crossChain = getKind(tx) === 'token_transfer' && isCrossChainTokenTransfer(tx);
                 const tokenTransferLabel = crossChain ? 'Token Transfer (Cross-chain)' : (getKind(tx) === 'token_transfer' ? 'Token Transfer' : '');
                 const chainHint = meta.chain || meta.origin_chain || '';
+                const logoUrl = meta.logo_url || tx.logo_url || '';
+                const logoBadge = (getKind(tx) === 'token_transfer')
+                    ? (logoUrl ? `<img src="${logoUrl}" alt="${asset}" style="width:14px;height:14px;border-radius:50%;margin-right:6px;vertical-align:middle;" onerror="this.style.display='none'">` : `🪙 `)
+                    : '';
                 return `
                     <div class="tx-item">
                         <div class="tx-header">
-                            <span class="tx-amount ${amountClass}">${sign}${amountStr} ${asset}</span>
+                            <span class="tx-amount ${amountClass}">${logoBadge}${sign}${amountStr} ${asset}</span>
                             <span class="tx-status ${status}">${status.toUpperCase()}</span>
                         </div>
                         <div class="tx-details">

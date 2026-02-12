@@ -746,6 +746,10 @@ active_peers = PEERS  # Backward-compatible alias
 AI_PACKS_FILE       = os.path.join(DATA_DIR, "ai_packs.json")
 AI_CREDITS_FILE     = os.path.join(DATA_DIR, "ai_credits.json")
 AI_CREDITS_LEDGER_FILE = os.path.join(DATA_DIR, "ai_credits_ledger.json")
+AI_PROXY_HEALTH_CACHE = {"ts": 0.0, "payload": None}
+AI_PROXY_HEALTH_CACHE_TTL = float(_strip_env_quotes(os.getenv("AI_PROXY_HEALTH_CACHE_TTL", "15")) or 15)
+AI_PROXY_HEALTH_LOG_COOLDOWN = float(_strip_env_quotes(os.getenv("AI_PROXY_HEALTH_LOG_COOLDOWN", "60")) or 60)
+AI_PROXY_HEALTH_LAST_LOG_TS = 0.0
 AI_POOL_FILE        = os.path.join(DATA_DIR, "ai_pool.json")  # Phase 4: AI rewards pool
 NETWORK_POOL_FILE   = os.path.join(DATA_DIR, "network_pool.json")  # Phase 5: Network rewards pool (10% of music telemetry)
 T2E_REWARDS_FILE    = os.path.join(DATA_DIR, "t2e_rewards.json")  # Train-to-Earn rewards for IoT/ASIC miners
@@ -10591,6 +10595,11 @@ def _resolve_ai_proxy_upstream() -> str:
     )
 
 
+def _is_proxy_mode_enabled() -> bool:
+    """True only for non-ai_core nodes configured in proxy AI mode."""
+    return THRONOS_AI_MODE == "proxy" and not is_ai_core()
+
+
 def _handle_ai_chat_proxy():
     payload = request.get_json(force=True) or {}
     upstream = _resolve_ai_proxy_upstream()
@@ -10617,7 +10626,7 @@ def _handle_ai_chat_proxy():
 @app.route("/api/ai/chat", methods=["POST"])
 @app.route("/api/chat", methods=["POST"])
 def api_ai_chat():
-    if THRONOS_AI_MODE == "proxy":
+    if _is_proxy_mode_enabled():
         return _handle_ai_chat_proxy()
     return _handle_ai_chat_master()
 
@@ -11408,7 +11417,7 @@ def api_ai_credits():
 def api_ai_credits_ledger():
     wallet = (request.args.get("wallet") or "").strip()
     if not wallet:
-        return jsonify({"ok": False, "error": "wallet required", "entries": []}), 400
+        return jsonify({"error": "missing_wallet"}), 400
 
     try:
         limit = max(1, min(int(request.args.get("limit") or 200), 1000))
@@ -11419,27 +11428,33 @@ def api_ai_credits_ledger():
     if not isinstance(all_entries, list):
         all_entries = []
 
-    entries = [e for e in all_entries if isinstance(e, dict) and (e.get("wallet") or "") == wallet]
-    entries.sort(key=lambda e: str(e.get("timestamp") or ""), reverse=True)
-    entries = entries[:limit]
+    filtered = [e for e in all_entries if isinstance(e, dict) and (e.get("wallet") or "") == wallet]
+    filtered.sort(key=lambda e: str(e.get("timestamp") or ""), reverse=True)
 
-    reasons_summary = {
-        "pack_purchase": 0,
-        "chat_usage": 0,
-        "t2e_reward": 0,
-    }
-    for e in entries:
-        r = str(e.get("reason") or "").lower()
-        if r in reasons_summary:
-            reasons_summary[r] += int(e.get("delta") or 0)
+    items = []
+    for e in filtered[:limit]:
+        ts = e.get("ts") or e.get("timestamp") or datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        meta_val = e.get("meta") if isinstance(e.get("meta"), dict) else e.get("metadata")
+        if not isinstance(meta_val, dict):
+            meta_val = {}
+        items.append({
+            "id": e.get("id"),
+            "wallet": wallet,
+            "delta": int(e.get("delta") or 0),
+            "balance_after": int(e.get("balance_after") or 0),
+            "reason": str(e.get("reason") or "adjust").lower(),
+            "meta": meta_val,
+            "ts": ts,
+        })
 
+    logger.info("[AI_CREDITS_LEDGER] wallet=%s items=%d", wallet, len(items))
     return jsonify({
-        "ok": True,
         "wallet": wallet,
-        "unit": "credits",
+        "items": items,
         "balance": get_ai_credits(wallet),
-        "entries": entries,
-        "summary": reasons_summary,
+        "unit": "credits",
+        # Backward compatibility
+        "entries": items,
     }), 200
 
 
@@ -21382,7 +21397,7 @@ def api_ai_models():
     NEVER returns 500 - always returns 200 with degraded mode fallback if needed.
     """
     # ─── Proxy mode: ai-core forwards model catalog to leader/master ───
-    if THRONOS_AI_MODE == "proxy":
+    if _is_proxy_mode_enabled():
         upstream = _resolve_ai_proxy_upstream()
         if upstream:
             target = upstream.rstrip("/") + "/api/ai_models"
@@ -21756,12 +21771,19 @@ def api_t2e_submit():
 
 @app.route("/api/ai/health", methods=["GET"])
 def api_ai_health():
-    if THRONOS_AI_MODE == "proxy":
+    if _is_proxy_mode_enabled():
+        global AI_PROXY_HEALTH_LAST_LOG_TS
+        now_ts = time.time()
+        cached = AI_PROXY_HEALTH_CACHE.get("payload")
+        cache_age = now_ts - float(AI_PROXY_HEALTH_CACHE.get("ts", 0) or 0)
+        if cached and cache_age < AI_PROXY_HEALTH_CACHE_TTL:
+            return jsonify(cached), 200
+
         upstream = _resolve_ai_proxy_upstream()
         if upstream:
             target = upstream.rstrip("/") + "/api/ai/health"
             try:
-                resp = requests.get(target, timeout=20)
+                resp = requests.get(target, timeout=5)
                 data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
                 data = data if isinstance(data, dict) else {}
                 data.setdefault("ok", True)
@@ -21779,11 +21801,15 @@ def api_ai_health():
                     "router_url": (DIKO_MAS_MODEL_URL or "").strip(),
                     "reason": "proxy_node",
                 })
+                AI_PROXY_HEALTH_CACHE["ts"] = now_ts
+                AI_PROXY_HEALTH_CACHE["payload"] = data
                 return jsonify(data), resp.status_code
             except Exception as exc:
-                logger.error("[AI_PROXY] upstream %s unreachable: %s", target, exc)
+                if (now_ts - AI_PROXY_HEALTH_LAST_LOG_TS) >= AI_PROXY_HEALTH_LOG_COOLDOWN:
+                    logger.error("[AI_PROXY] upstream %s unreachable: %s", target, exc)
+                    AI_PROXY_HEALTH_LAST_LOG_TS = now_ts
 
-        return jsonify({
+        payload = {
             "ok": True,
             "node_role": "ai_core",
             "thronos_ai_mode": "proxy",
@@ -21801,7 +21827,10 @@ def api_ai_health():
                 "router_url": (DIKO_MAS_MODEL_URL or "").strip(),
                 "reason": "proxy_node",
             }
-        }), 200
+        }
+        AI_PROXY_HEALTH_CACHE["ts"] = now_ts
+        AI_PROXY_HEALTH_CACHE["payload"] = payload
+        return jsonify(payload), 200
 
     try:
         enabled_ids = list_enabled_model_ids()

@@ -1559,7 +1559,7 @@
                                 <span class="tx-status confirmed">${reasonLabel}</span>
                             </div>
                             <div class="tx-details">
-                                ${e.timestamp || 'Unknown time'}<br>
+                                ${e.ts || e.timestamp || 'Unknown time'}<br>
                                 Balance: ${e.balance_before ?? '-'} → ${e.balance_after ?? '-'}
                             </div>
                         </div>
@@ -1580,7 +1580,7 @@
                                 <span class="tx-amount incoming">+${Number(e.delta || 0)} credits</span>
                                 <span class="tx-status confirmed">T2E credit reward</span>
                             </div>
-                            <div class="tx-details">${e.timestamp || 'Unknown time'}<br>Balance: ${e.balance_before ?? '-'} → ${e.balance_after ?? '-'}</div>
+                            <div class="tx-details">${e.ts || e.timestamp || 'Unknown time'}<br>Balance: ${e.balance_before ?? '-'} → ${e.balance_after ?? '-'}</div>
                         </div>
                     `).join('');
                 }
@@ -1658,7 +1658,7 @@
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 15000);
 
-                const res = await fetch(`/wallet_data/${walletAddress}`, {
+                const res = await fetch(`/api/wallet/history?address=${encodeURIComponent(walletAddress)}&limit=500`, {
                     signal: controller.signal
                 });
                 clearTimeout(timeoutId);
@@ -1666,11 +1666,11 @@
                 if (!res.ok) throw new Error('Failed to load history');
                 const data = await res.json();
 
-                historyState.transactions = trimHistory((data.transactions || []).slice().reverse());
+                historyState.transactions = trimHistory(((data.transactions || data.items || [])).slice().reverse());
                 try {
                     const creditsRes = await fetch(`/api/ai_credits/ledger?wallet=${encodeURIComponent(walletAddress)}&limit=500`);
                     const creditsData = await creditsRes.json();
-                    historyState.aiCreditsLedger = Array.isArray(creditsData.entries) ? creditsData.entries : [];
+                    historyState.aiCreditsLedger = Array.isArray(creditsData.items) ? creditsData.items : (Array.isArray(creditsData.entries) ? creditsData.entries : []);
                 } catch (_) {
                     historyState.aiCreditsLedger = [];
                 }

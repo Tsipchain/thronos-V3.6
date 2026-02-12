@@ -5111,6 +5111,33 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
 
     fallback_notice = None
 
+    # Explicit local/router model requests are resolved separately from provider-key checks
+    if requested in {"offline_corpus", "thrai"}:
+        if requested == "offline_corpus":
+            offline_status = _offline_corpus_health()
+            if offline_status.get("enabled"):
+                return "offline_corpus", fallback_notice, None
+            err = {
+                "ok": False,
+                "error": "no_available_model",
+                "message": "Offline corpus is not available.",
+                "requested_model": requested,
+                "reason": offline_status.get("reason"),
+            }
+            return None, fallback_notice, (jsonify(err), 200)
+        if requested == "thrai":
+            thrai_status = _thrai_router_health()
+            if thrai_status.get("enabled"):
+                return "thrai", fallback_notice, None
+            err = {
+                "ok": False,
+                "error": "no_available_model",
+                "message": "Thrai router is not available.",
+                "requested_model": requested,
+                "reason": thrai_status.get("reason"),
+            }
+            return None, fallback_notice, (jsonify(err), 200)
+
     if requested not in callable_ids and requested != "auto":
         # Gracefully fall back to default/auto instead of hard-failing
         fallback_notice = f"Model '{requested}' not callable; using {default_model_id or 'auto'}"
@@ -6021,6 +6048,21 @@ def api_ai_generated_file(filename):
     )
 
 
+
+
+def _load_offline_corpus_entries() -> list:
+    raw = load_json(AI_CORPUS_FILE, {"conversations": []})
+    if isinstance(raw, dict):
+        conv = raw.get("conversations")
+        return conv if isinstance(conv, list) else []
+    if isinstance(raw, list):
+        return raw
+    return []
+
+
+def _save_offline_corpus_entries(entries: list) -> None:
+    save_json(AI_CORPUS_FILE, {"conversations": entries if isinstance(entries, list) else []})
+
 def enqueue_offline_corpus(wallet: str, prompt: str, response: str, files, session_id: str | None = None):
     """
     Ελαφρύ offline corpus για Whisper / training + sessions.
@@ -6038,10 +6080,10 @@ def enqueue_offline_corpus(wallet: str, prompt: str, response: str, files, sessi
         "session_id": sid,
     }
 
-    corpus = load_json(AI_CORPUS_FILE, [])
+    corpus = _load_offline_corpus_entries()
     corpus.append(entry)
     corpus = corpus[-1000:]
-    save_json(AI_CORPUS_FILE, corpus)
+    _save_offline_corpus_entries(corpus)
     append_session_transcript(sid, prompt, response, files, ts)
 
     # update / create session meta
@@ -10553,20 +10595,26 @@ def _offline_corpus_health() -> tuple[bool, str | None]:
             return True, None
         return False, "invalid_corpus_format"
     except Exception as exc:
-        return False, str(exc)
+        status["degraded"] = True
+        status["reason"] = str(exc)
+        return status
 
 
 def _thrai_router_health() -> tuple[bool, str | None]:
     if not THR_THAI_ENABLED:
         return False, "disabled_by_flag"
     router_url = (DIKO_MAS_MODEL_URL or "").strip()
-    if not router_url:
-        return False, "missing_router_url"
+    status = {
+        "enabled": False,
+        "degraded": False,
+        "health_ok": False,
+        "router_url": router_url,
+        "reason": None,
+    }
 
-    health_candidates = [router_url]
-    if router_url.endswith('/api/thrai/ask'):
-        base = router_url[: -len('/api/thrai/ask')]
-        health_candidates.extend([f"{base}/health", f"{base}/api/ai/health", f"{base}/ping"])
+    if not THR_THAI_ENABLED:
+        status["reason"] = "disabled_by_flag"
+        return status
 
     for candidate in health_candidates:
         try:
@@ -10589,8 +10637,76 @@ def _thrai_router_health() -> tuple[bool, str | None]:
     except requests.exceptions.ConnectionError:
         return False, "connection_refused"
     except Exception as exc:
-        return False, str(exc)
-    return False, "health_check_failed"
+        status.update({"degraded": True, "reason": f"HTTPConnectionError: {exc}"})
+
+    return status
+
+
+def _build_ai_models_catalog(provider_status: dict, offline_status: dict, thrai_status: dict) -> list:
+    models = [{
+        "id": "auto",
+        "label": "Auto (Thronos chooses)",
+        "display_name": "Auto (Thronos chooses)",
+        "provider": "system",
+        "enabled": True,
+        "degraded": False,
+        "mode": "core",
+        "health_reason": None,
+    }]
+
+    def provider_ok(name: str) -> bool:
+        info = provider_status.get(name, {}) if isinstance(provider_status, dict) else {}
+        configured = bool(info.get("configured"))
+        loaded = info.get("library_loaded", True) is not False
+        health_ok = info.get("health_ok", True) is not False
+        return configured and loaded and health_ok
+
+    catalog_map = {
+        "openai": ["gpt-4.1", "gpt-4.1-mini", "o3-mini"],
+        "anthropic": ["claude-3.5-sonnet", "claude-3.5-haiku"],
+        "gemini": ["gemini-2.5-pro", "gemini-2.0-flash"],
+    }
+    for provider, mids in catalog_map.items():
+        ok = provider_ok(provider)
+        pinfo = provider_status.get(provider, {}) if isinstance(provider_status, dict) else {}
+        reason = None if ok else (pinfo.get("last_error") or "provider_not_ready")
+        for mid in mids:
+            models.append({
+                "id": mid,
+                "label": mid,
+                "display_name": mid,
+                "provider": provider,
+                "enabled": ok,
+                "degraded": not ok,
+                "mode": "core",
+                "health_reason": reason,
+            })
+
+    if THR_OFFLINE_CORPUS_ENABLED or offline_status.get("health_ok"):
+        models.append({
+            "id": "offline_corpus",
+            "label": "Offline corpus (local)",
+            "display_name": "Offline corpus (local)",
+            "provider": "local",
+            "enabled": bool(offline_status.get("enabled")),
+            "degraded": bool(offline_status.get("degraded")),
+            "mode": "core",
+            "health_reason": offline_status.get("reason"),
+        })
+
+    if THR_THAI_ENABLED or (DIKO_MAS_MODEL_URL or "").strip():
+        models.append({
+            "id": "thrai",
+            "label": "Thronos / Thrai (custom)",
+            "display_name": "Thronos / Thrai (custom)",
+            "provider": "thronos",
+            "enabled": bool(thrai_status.get("enabled")),
+            "degraded": bool(thrai_status.get("degraded")),
+            "mode": "core",
+            "health_reason": thrai_status.get("reason"),
+        })
+
+    return models
 
 
 def _build_ai_model_catalog() -> list[dict]:
@@ -10647,7 +10763,13 @@ def _build_ai_model_catalog() -> list[dict]:
 def call_offline_corpus(corpus_path, messages, wallet, session_id, chain_context) -> str:
     """Simple local retrieval over ai_offline_corpus.json / knowledge blocks."""
     try:
-        corpus = load_json(corpus_path, []) or []
+        raw_corpus = load_json(corpus_path, {"conversations": []}) or {"conversations": []}
+        if isinstance(raw_corpus, dict):
+            corpus = raw_corpus.get("conversations") or []
+        elif isinstance(raw_corpus, list):
+            corpus = raw_corpus
+        else:
+            corpus = []
     except Exception:
         corpus = []
 
@@ -10989,7 +11111,7 @@ def _handle_ai_chat_master():
         history_limit = 10
         # Collect past messages as simple dicts of {role, content}
         context_messages = []
-        corpus = load_json(AI_CORPUS_FILE, []) or []
+        corpus = _load_offline_corpus_entries() or []
         # Determine the session identifier used in the corpus ("default" when empty)
         sid = session_id or "default"
         for entry in corpus:
@@ -11779,7 +11901,7 @@ def api_ai_history():
     Βασίζεται στο ai_offline_corpus.json.
     """
     wallet = (request.args.get("wallet") or "").strip()
-    corpus = load_json(AI_CORPUS_FILE, [])
+    corpus = _load_offline_corpus_entries()
 
     history = []
     for entry in corpus:
@@ -11935,7 +12057,7 @@ def api_ai_session_delete_legacy():
 
     # Remove entries from offline corpus for this session
     try:
-        corpus = load_json(AI_CORPUS_FILE, [])
+        corpus = _load_offline_corpus_entries()
         new_corpus = [
             entry
             for entry in corpus
@@ -11945,7 +12067,7 @@ def api_ai_session_delete_legacy():
             )
         ]
         if len(new_corpus) != len(corpus):
-            save_json(AI_CORPUS_FILE, new_corpus)
+            _save_offline_corpus_entries(new_corpus)
     except Exception as e:
         print("Corpus delete error", e)
 
@@ -11968,7 +12090,7 @@ def api_ai_session_history():
     limit_param = request.args.get("limit")
     all_flag = str(request.args.get("all", "")).lower() in ("1", "true", "yes", "all")
 
-    corpus = load_json(AI_CORPUS_FILE, [])
+    corpus = _load_offline_corpus_entries()
     history: list[dict] = []
 
     for entry in corpus:
@@ -20672,7 +20794,7 @@ def api_thrai_ask():
             messages.append({"role": role, "content": content})
 
         # Lightweight retrieval from offline corpus
-        corpus = load_json(AI_CORPUS_FILE, [])
+        corpus = _load_offline_corpus_entries()
         keywords = [w.lower() for w in prompt.split() if len(w) > 3]
         scored = []
         for entry in corpus:
@@ -21137,7 +21259,7 @@ def api_chat_session_get(session_id):
 
     _normalize_session_selected_model(session)
 
-    corpus = load_json(AI_CORPUS_FILE, [])
+    corpus = _load_offline_corpus_entries()
     history = []
     for entry in corpus:
         if (entry.get("wallet") or identity) != identity:

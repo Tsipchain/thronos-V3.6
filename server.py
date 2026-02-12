@@ -726,6 +726,9 @@ AI_INTERACTIONS_FILE = os.path.join(DATA_DIR, "ai_interactions.jsonl")
 WATCHER_LEDGER_FILE = os.path.join(DATA_DIR, "watcher_ledger.json")
 IOT_DATA_FILE       = os.path.join(DATA_DIR, "iot_data.json")
 IOT_PARKING_FILE    = os.path.join(DATA_DIR, "iot_parking.json")
+IOT_API_REQUIRE_REGISTER = _strip_env_quotes(os.getenv("IOT_API_REQUIRE_REGISTER", "true")).lower() in ("1", "true", "yes", "on")
+IOT_SUMMARY_WINDOW_MINUTES = int(_strip_env_quotes(os.getenv("IOT_SUMMARY_WINDOW_MINUTES", "5")) or 5)
+IOT_SUMMARY_LIMIT_PER_DEVICE = int(_strip_env_quotes(os.getenv("IOT_SUMMARY_LIMIT_PER_DEVICE", "50")) or 50)
 MEMPOOL_FILE        = os.path.join(DATA_DIR, "mempool.json")
 ATTEST_STORE_FILE   = os.path.join(DATA_DIR, "attest_store.json")
 TX_LOG_FILE         = os.path.join(DATA_DIR, "tx_ledger.json")
@@ -742,6 +745,11 @@ active_peers = PEERS  # Backward-compatible alias
 # AI commerce
 AI_PACKS_FILE       = os.path.join(DATA_DIR, "ai_packs.json")
 AI_CREDITS_FILE     = os.path.join(DATA_DIR, "ai_credits.json")
+AI_CREDITS_LEDGER_FILE = os.path.join(DATA_DIR, "ai_credits_ledger.json")
+AI_PROXY_HEALTH_CACHE = {"ts": 0.0, "payload": None}
+AI_PROXY_HEALTH_CACHE_TTL = float(_strip_env_quotes(os.getenv("AI_PROXY_HEALTH_CACHE_TTL", "15")) or 15)
+AI_PROXY_HEALTH_LOG_COOLDOWN = float(_strip_env_quotes(os.getenv("AI_PROXY_HEALTH_LOG_COOLDOWN", "60")) or 60)
+AI_PROXY_HEALTH_LAST_LOG_TS = 0.0
 AI_POOL_FILE        = os.path.join(DATA_DIR, "ai_pool.json")  # Phase 4: AI rewards pool
 NETWORK_POOL_FILE   = os.path.join(DATA_DIR, "network_pool.json")  # Phase 5: Network rewards pool (10% of music telemetry)
 T2E_REWARDS_FILE    = os.path.join(DATA_DIR, "t2e_rewards.json")  # Train-to-Earn rewards for IoT/ASIC miners
@@ -960,6 +968,13 @@ AI_FREE_USAGE_FILE  = os.path.join(DATA_DIR, "ai_free_usage.json")
 # AI extra storage
 AI_FILES_DIR   = os.path.join(DATA_DIR, "ai_files")
 AI_CORPUS_FILE = os.path.join(DATA_DIR, "ai_offline_corpus.json")
+THR_OFFLINE_CORPUS_ENABLED = _strip_env_quotes(os.getenv("THR_OFFLINE_CORPUS_ENABLED", "false")).lower() in ("1", "true", "yes", "on")
+THR_THAI_ENABLED = _strip_env_quotes(os.getenv("THR_THAI_ENABLED", "")).lower() in ("1", "true", "yes", "on")
+DIKO_MAS_MODEL_URL = (
+    _strip_env_quotes(os.getenv("DIKO_MAS_MODEL_URL", ""))
+    or _strip_env_quotes(os.getenv("CUSTOM_MODEL_URL", ""))
+    or _strip_env_quotes(os.getenv("CUSTOM_MODEL_URI", ""))
+)
 LAST_PROMPT_HASH: dict[str, str] = {}
 os.makedirs(AI_FILES_DIR, exist_ok=True)
 
@@ -1652,6 +1667,42 @@ def _init_ledger_db():
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_music_playlist_items_playlist ON music_playlist_items(playlist_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_music_playlist_items_position ON music_playlist_items(position)")
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS iot_devices (
+                device_id TEXT PRIMARY KEY,
+                label TEXT,
+                owner_wallet TEXT,
+                sensor_type TEXT,
+                location TEXT,
+                api_key TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_iot_devices_owner ON iot_devices(owner_wallet)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_iot_devices_sensor_type ON iot_devices(sensor_type)")
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS iot_readings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT NOT NULL,
+                sensor_type TEXT NOT NULL,
+                value_text TEXT,
+                value_num REAL,
+                unit TEXT,
+                ts INTEGER NOT NULL,
+                metadata_json TEXT,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (device_id) REFERENCES iot_devices(device_id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_iot_readings_device_ts ON iot_readings(device_id, ts DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_iot_readings_sensor_ts ON iot_readings(sensor_type, ts DESC)")
 
     with _get_ledger_db_connection() as conn:
         row = conn.execute("SELECT COUNT(1) AS count FROM balances").fetchone()
@@ -2626,7 +2677,7 @@ def distribute_t2e_rewards(min_contributions: int = 10) -> list:
         tx_id = _distribute_ai_pool_to_address(
             wallet,
             reward_amount,
-            category="t2e_reward",
+            category="t2e_reward_thr",
             details={
                 "device_id": dev_id,
                 "contributions": contributions,
@@ -3268,8 +3319,8 @@ def _canonical_kind(kind_raw: str) -> str:
         "playlist_add_track": "music",  # PR-5: Music/Playlists canonical kinds
         "playlist_remove_track": "music",  # PR-5: Music/Playlists canonical kinds
         "playlist_reorder": "music",  # PR-5: Music/Playlists canonical kinds
-        "t2e_reward": "t2e_reward",  # Phase 5: Train-to-Earn rewards
-        "train_reward": "t2e_reward",  # Phase 5: Train-to-Earn alias
+        "t2e_reward": "t2e_reward_thr",  # Phase 5: Train-to-Earn rewards (THR)
+        "train_reward": "t2e_reward_thr",  # Phase 5: Train-to-Earn alias
         "network_reward": "network_reward",  # Phase 5: Network pool rewards
         "validator_reward": "network_reward",  # Phase 5: Validator rewards alias
         "ai_reward": "ai_reward",  # AI pool distribution
@@ -4902,6 +4953,36 @@ def save_ai_packs(packs):
     save_json(AI_PACKS_FILE, packs)
 
 
+def load_ai_credits_ledger():
+    return load_json(AI_CREDITS_LEDGER_FILE, [])
+
+
+def save_ai_credits_ledger(entries):
+    save_json(AI_CREDITS_LEDGER_FILE, entries)
+
+
+def append_ai_credits_ledger(wallet: str, delta: int, reason: str, before: int, after: int, metadata: dict | None = None):
+    try:
+        ledger = load_ai_credits_ledger()
+        if not isinstance(ledger, list):
+            ledger = []
+        entry = {
+            "id": f"acl-{int(time.time()*1000)}-{secrets.token_hex(4)}",
+            "wallet": wallet,
+            "delta": int(delta or 0),
+            "reason": (reason or "adjust").strip().lower(),
+            "balance_before": int(before or 0),
+            "balance_after": int(after or 0),
+            "unit": "credits",
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "metadata": metadata or {},
+        }
+        ledger.append(entry)
+        save_ai_credits_ledger(ledger[-5000:])
+    except Exception:
+        logger.exception("[AI_CREDITS] failed to append ledger entry")
+
+
 def load_ai_credits():
     """wallet -> σύνολο credits"""
     return load_json(AI_CREDITS_FILE, {})
@@ -4922,7 +5003,7 @@ def get_ai_credits(wallet: str) -> int:
         return 0
 
 
-def add_ai_credits(wallet: str, delta: int, reason: str = "") -> int:
+def add_ai_credits(wallet: str, delta: int, reason: str = "", metadata: dict | None = None) -> int:
     wallet = (wallet or "").strip()
     if not wallet:
         return 0
@@ -4931,7 +5012,11 @@ def add_ai_credits(wallet: str, delta: int, reason: str = "") -> int:
     after = max(0, before + int(delta or 0))
     credits_map[wallet] = after
     save_ai_credits(credits_map)
-    logger.info("[AI_CREDITS] wallet=%s op=%s cost=%s before=%s after=%s", wallet, reason or "adjust", abs(int(delta or 0)), before, after)
+    normalized_reason = (reason or "adjust").strip().lower()
+    if normalized_reason == "chat_message":
+        normalized_reason = "chat_usage"
+    logger.info("[AI_CREDITS] wallet=%s op=%s cost=%s before=%s after=%s", wallet, normalized_reason, abs(int(delta or 0)), before, after)
+    append_ai_credits_ledger(wallet, int(delta or 0), normalized_reason, before, after, metadata=metadata)
     return after
 
 
@@ -6694,7 +6779,7 @@ def _categorize_transaction(tx: dict) -> str:
     if tx_type in ["architect_payment", "architect_service", "ai_job_created",
                    "ai_job_progress", "ai_job_completed", "ai_job_reward",
                    "ai_reward", "t2e_architect_reward"] or tx_type_lower.startswith("ai_job"):
-        return "architect"
+        return "architect_job"
 
     # Train2Earn contributions
     if "t2e" in tx_type_lower and "architect" not in tx_type_lower:
@@ -7005,8 +7090,8 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
         "music_tip": "music",
         "ai_reward": "architect",
         "ai_credits": "ai_credits",
-        "architect": "architect",
-        "t2e": "t2e",
+        "architect": "architect_job",
+        "t2e": "t2e_reward_thr",
         "l2e": "l2e",
         "iot_telemetry": "iot",
         "iot": "iot",
@@ -9868,6 +9953,202 @@ def api_bridge_withdraw():
         "new_balance": wrapped_ledger[wallet]
     }), 200
 
+
+
+def _normalize_iot_ts(raw_ts) -> int:
+    try:
+        if raw_ts is None:
+            return int(time.time())
+        return int(float(raw_ts))
+    except Exception:
+        return int(time.time())
+
+
+def _register_iot_device_row(device_id: str, label: str, owner_wallet: str, sensor_type: str, location: str, api_key: str | None = None) -> dict:
+    now_ts = int(time.time())
+    normalized = {
+        "device_id": (device_id or "").strip(),
+        "label": (label or "").strip(),
+        "owner_wallet": (owner_wallet or "").strip(),
+        "sensor_type": (sensor_type or "").strip(),
+        "location": location if isinstance(location, str) else json.dumps(location or {}, ensure_ascii=False),
+    }
+    with _get_ledger_db_connection() as conn:
+        existing = conn.execute("SELECT api_key, created_at FROM iot_devices WHERE device_id = ?", (normalized["device_id"],)).fetchone()
+        keep_api = (existing["api_key"] if existing and existing["api_key"] else None) or api_key or secrets.token_hex(16)
+        created_at = int(existing["created_at"]) if existing and existing["created_at"] else now_ts
+        conn.execute(
+            """
+            INSERT INTO iot_devices (device_id, label, owner_wallet, sensor_type, location, api_key, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(device_id)
+            DO UPDATE SET label=excluded.label, owner_wallet=excluded.owner_wallet, sensor_type=excluded.sensor_type,
+                          location=excluded.location, api_key=COALESCE(iot_devices.api_key, excluded.api_key), updated_at=excluded.updated_at
+            """,
+            (normalized["device_id"], normalized["label"], normalized["owner_wallet"], normalized["sensor_type"], normalized["location"], keep_api, created_at, now_ts),
+        )
+    normalized["created_at"] = created_at
+    normalized["updated_at"] = now_ts
+    normalized["api_key"] = keep_api
+    return normalized
+
+
+def _get_iot_device(device_id: str):
+    with _get_ledger_db_connection() as conn:
+        return conn.execute("SELECT * FROM iot_devices WHERE device_id = ?", (device_id,)).fetchone()
+
+
+def _verify_iot_api_key(device_row, supplied_key: str | None) -> bool:
+    expected = (device_row["api_key"] or "") if device_row else ""
+    if not expected:
+        return True
+    return bool(supplied_key and secrets.compare_digest(str(expected), str(supplied_key)))
+
+
+def summarize_recent_iot_to_corpus() -> None:
+    if not USE_SQLITE_LEDGER:
+        return
+    cutoff = int(time.time()) - (IOT_SUMMARY_WINDOW_MINUTES * 60)
+    with _get_ledger_db_connection() as conn:
+        devices = conn.execute("SELECT device_id, sensor_type FROM iot_devices ORDER BY updated_at DESC LIMIT 200").fetchall()
+        for dev in devices:
+            rows = conn.execute(
+                """
+                SELECT value_num, value_text, unit, ts FROM iot_readings
+                WHERE device_id = ? AND ts >= ?
+                ORDER BY ts DESC LIMIT ?
+                """,
+                (dev["device_id"], cutoff, IOT_SUMMARY_LIMIT_PER_DEVICE),
+            ).fetchall()
+            if not rows:
+                continue
+            numeric = [float(r["value_num"]) for r in rows if r["value_num"] is not None]
+            if numeric:
+                avg_val = round(sum(numeric) / len(numeric), 4)
+                trend = "rising" if len(numeric) > 1 and numeric[0] > numeric[-1] else "steady_or_falling"
+                summary = f"IoT summary device={dev['device_id']} sensor={dev['sensor_type']} count={len(rows)} avg={avg_val} trend={trend}"
+            else:
+                summary = f"IoT summary device={dev['device_id']} sensor={dev['sensor_type']} count={len(rows)} latest={rows[0]['value_text']}"
+            enqueue_offline_corpus(
+                wallet=f"IOT:{dev['device_id']}",
+                prompt=f"[IOT_SUMMARY] {dev['device_id']}",
+                response=summary,
+                files=[],
+                session_id=f"iot-{dev['device_id']}",
+            )
+
+
+@app.route("/api/iot/register_device", methods=["POST"])
+def api_iot_register_device():
+    if not USE_SQLITE_LEDGER:
+        return jsonify({"ok": False, "error": "sqlite_iot_storage_disabled"}), 503
+
+    data = request.get_json(silent=True) or {}
+    device_id = (data.get("device_id") or "").strip()
+    if not device_id:
+        return jsonify({"ok": False, "error": "device_id required"}), 400
+
+    normalized = _register_iot_device_row(
+        device_id=device_id,
+        label=data.get("label") or device_id,
+        owner_wallet=data.get("owner_wallet") or "",
+        sensor_type=data.get("sensor_type") or "unknown",
+        location=data.get("location") or "",
+        api_key=data.get("api_key"),
+    )
+    return jsonify({"ok": True, "status": "registered", "device": normalized}), 200
+
+
+@app.route("/api/iot/push_reading", methods=["POST"])
+def api_iot_push_reading():
+    if not USE_SQLITE_LEDGER:
+        return jsonify({"ok": False, "error": "sqlite_iot_storage_disabled"}), 503
+
+    data = request.get_json(silent=True) or {}
+    device_id = (data.get("device_id") or "").strip()
+    sensor_type = (data.get("sensor_type") or "").strip()
+    if not device_id or not sensor_type:
+        return jsonify({"ok": False, "error": "device_id and sensor_type required"}), 400
+
+    device = _get_iot_device(device_id)
+    if not device and IOT_API_REQUIRE_REGISTER:
+        return jsonify({"ok": False, "error": "device_not_registered"}), 404
+
+    if not device and not IOT_API_REQUIRE_REGISTER:
+        auto_key = request.headers.get("X-IOT-API-KEY") or secrets.token_hex(16)
+        _register_iot_device_row(device_id, device_id, "", sensor_type, "", api_key=auto_key)
+        device = _get_iot_device(device_id)
+
+    supplied_key = request.headers.get("X-IOT-API-KEY") or data.get("api_key")
+    if not _verify_iot_api_key(device, supplied_key):
+        return jsonify({"ok": False, "error": "invalid_iot_api_key"}), 401
+
+    raw_value = data.get("value")
+    value_num = None
+    try:
+        value_num = float(raw_value)
+    except Exception:
+        pass
+
+    ts_val = _normalize_iot_ts(data.get("ts"))
+    metadata_json = json.dumps(data.get("meta") or {}, ensure_ascii=False)
+    with _get_ledger_db_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO iot_readings (device_id, sensor_type, value_text, value_num, unit, ts, metadata_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (device_id, sensor_type, str(raw_value), value_num, (data.get("unit") or "").strip(), ts_val, metadata_json, int(time.time())),
+        )
+
+    logger.info("[IOT] device=%s sensor=%s value=%s %s", device_id, sensor_type, raw_value, (data.get("unit") or "").strip())
+    return jsonify({"ok": True, "status": "stored", "device_id": device_id, "sensor_type": sensor_type, "ts": ts_val}), 200
+
+
+@app.route("/api/iot/readings", methods=["GET"])
+def api_iot_readings():
+    if not USE_SQLITE_LEDGER:
+        return jsonify({"ok": False, "error": "sqlite_iot_storage_disabled", "readings": []}), 503
+
+    device_id = (request.args.get("device_id") or "").strip()
+    limit = int(request.args.get("limit") or 20)
+    limit = max(1, min(limit, 200))
+
+    if not device_id:
+        return jsonify({"ok": False, "error": "device_id required", "readings": []}), 400
+
+    with _get_ledger_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, device_id, sensor_type, value_text, value_num, unit, ts, metadata_json
+            FROM iot_readings
+            WHERE device_id = ?
+            ORDER BY ts DESC, id DESC
+            LIMIT ?
+            """,
+            (device_id, limit),
+        ).fetchall()
+
+    readings = []
+    for r in rows:
+        value = r["value_num"] if r["value_num"] is not None else r["value_text"]
+        try:
+            meta_obj = json.loads(r["metadata_json"] or "{}")
+        except Exception:
+            meta_obj = {}
+        readings.append({
+            "id": r["id"],
+            "device_id": r["device_id"],
+            "sensor_type": r["sensor_type"],
+            "value": value,
+            "unit": r["unit"],
+            "ts": r["ts"],
+            "meta": meta_obj,
+        })
+
+    return jsonify({"ok": True, "device_id": device_id, "readings": readings}), 200
+
+
 @app.route("/api/iot/data")
 def iot_data():
     data = load_json(IOT_DATA_FILE, [])
@@ -10203,9 +10484,155 @@ def _build_chain_context_for_router(max_blocks: int = 8, max_tokens: int = 8, ma
         context["blueprints"] = []
     return context
 
+
+
+def _offline_corpus_health() -> tuple[bool, str | None]:
+    try:
+        if not os.path.exists(AI_CORPUS_FILE):
+            return False, f"missing_path:{AI_CORPUS_FILE}"
+        corpus = load_json(AI_CORPUS_FILE, [])
+        if not isinstance(corpus, list):
+            return False, "invalid_corpus_format"
+        return True, None
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _thrai_router_health() -> tuple[bool, str | None]:
+    router_url = (DIKO_MAS_MODEL_URL or "").strip()
+    if not router_url:
+        return False, "missing_router_url"
+
+    health_candidates = [router_url]
+    if router_url.endswith('/api/thrai/ask'):
+        base = router_url[: -len('/api/thrai/ask')]
+        health_candidates.extend([f"{base}/health", f"{base}/api/ai/health", f"{base}/ping"])
+
+    for candidate in health_candidates:
+        try:
+            r = requests.get(candidate, timeout=2.5)
+            if r.status_code < 500:
+                return True, None
+        except Exception:
+            pass
+
+    try:
+        r = requests.post(router_url, json={"ping": "thrai"}, timeout=3)
+        if r.status_code < 500:
+            return True, None
+    except Exception as exc:
+        return False, str(exc)
+    return False, "health_check_failed"
+
+
+def call_offline_corpus(corpus_path, messages, wallet, session_id, chain_context) -> str:
+    """Simple local retrieval over ai_offline_corpus.json / knowledge blocks."""
+    try:
+        corpus = load_json(corpus_path, []) or []
+    except Exception:
+        corpus = []
+
+    last_user = ""
+    for m in reversed(messages or []):
+        if isinstance(m, dict) and (m.get("role") or "").lower() == "user":
+            last_user = str(m.get("content") or "").strip()
+            if last_user:
+                break
+
+    if not last_user:
+        return "Offline corpus is ready, but no user prompt was provided."
+
+    query_tokens = [w.lower() for w in last_user.split() if len(w) > 2]
+    scored = []
+    for entry in corpus[-2000:]:
+        if not isinstance(entry, dict):
+            continue
+        blob = f"{entry.get('prompt','')}\n{entry.get('response','')}".lower()
+        score = sum(1 for t in query_tokens if t in blob)
+        if score:
+            scored.append((score, entry))
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    context_blocks = []
+    for _, item in scored[:4]:
+        context_blocks.append(
+            f"- [{item.get('timestamp','unknown')}] Q: {str(item.get('prompt',''))[:180]}\n  A: {str(item.get('response',''))[:260]}"
+        )
+
+    chain_summary = []
+    if isinstance(chain_context, dict):
+        chain_summary.append(f"blocks={len(chain_context.get('blocks') or [])}")
+        chain_summary.append(f"tokens={len(chain_context.get('tokens') or [])}")
+        chain_summary.append(f"blueprints={len(chain_context.get('blueprints') or [])}")
+
+    if context_blocks:
+        return (
+            "Offline corpus answer (local knowledge):\n\n"
+            + "\n".join(context_blocks)
+            + f"\n\nPrompt: {last_user}\nContext: {' | '.join(chain_summary)}"
+        )
+
+    return (
+        "Offline corpus has no directly matching archived blocks yet. "
+        f"Prompt received: {last_user}. Context: {' | '.join(chain_summary)}"
+    )
+
+
+def call_thrai_router(router_url: str, payload: dict) -> dict:
+    response = requests.post(router_url, json=payload, timeout=45)
+    response.raise_for_status()
+    try:
+        return response.json()
+    except Exception:
+        return {"response": response.text, "status": "secure", "provider": "thronos", "model": "thrai"}
+
 # ─── QUANTUM CHAT API (ενιαίο AI + αρχεία + offline corpus) ─────────────────
+def _ai_proxy_base_url() -> str:
+    """Resolve proxy base URL for master proxy mode (prefer AI core URL)."""
+    return (
+        (AI_CORE_URL or "").strip()
+        or (os.getenv("MASTER_NODE_URL") or "").strip()
+        or (MASTER_PUBLIC_URL or "").strip()
+    )
+
+
+def _is_proxy_mode_enabled() -> bool:
+    """True only for non-ai_core nodes configured in proxy AI mode."""
+    return THRONOS_AI_MODE == "proxy" and not is_ai_core()
+
+
+def _handle_ai_chat_proxy():
+    payload = request.get_json(force=True) or {}
+    base_url = _ai_proxy_base_url()
+    if not base_url:
+        logger.error("[AI_PROXY] missing upstream leader URL for /api/ai/chat")
+        return jsonify({
+            "error": "upstream_unreachable",
+            "message": "Quantum core cannot reach leader node right now.",
+        }), 503
+
+    target = base_url.rstrip("/") + "/api/ai/chat"
+    logger.info("[AI_PROXY] Forwarding %s to %s (mode=%s)", "/api/ai/chat", base_url, THRONOS_AI_MODE)
+    try:
+        resp = requests.post(target, json=payload, timeout=90)
+        return Response(resp.content, status=resp.status_code, mimetype="application/json")
+    except Exception as exc:
+        logger.error("[AI_PROXY] upstream %s unreachable: %s", target, exc)
+        return jsonify({
+            "error": "upstream_unreachable",
+            "message": "Quantum core cannot reach leader node right now.",
+        }), 502
+
+
+@app.route("/api/ai/chat", methods=["POST"])
 @app.route("/api/chat", methods=["POST"])
-def api_chat():
+def api_ai_chat():
+    if _is_proxy_mode_enabled():
+        return _handle_ai_chat_proxy()
+    return _handle_ai_chat_master()
+
+
+def _handle_ai_chat_master():
     """
     Unified AI chat endpoint με credits + sessions.
 
@@ -10214,22 +10641,7 @@ def api_chat():
     - Αν έχει wallet αλλά 0 credits, δεν προχωρά σε κλήση AI
     - Κάθε μήνυμα γράφεται στο ai_offline_corpus.json με session_id
     """
-    # ─── TASK 2: Proxy to Node 4 (AI Core) if configured ───
-    # If we're on Node 1/2 and AI_CORE_URL is set, proxy to Node 4
-    # If Node 4 fails or is_ai_core(), fall back to local handling
-    if not is_ai_core() and AI_CORE_URL:
-        try:
-            data = request.get_json(force=True) or {}
-            result = call_ai_core("/api/ai/chat", data, timeout=90)
-            if result:
-                logger.info("[AI_CORE] Successfully proxied /api/ai/chat to Node 4")
-                return jsonify(result), 200
-            else:
-                logger.warning("[AI_CORE] Node 4 call failed, falling back to local AI")
-        except Exception as e:
-            logger.exception(f"[AI_CORE] Error proxying to Node 4, falling back to local AI: {e}")
-
-    # ─── Local AI handling (fallback or when is_ai_core) ───
+    # ─── Master/local AI handling ───
     # PR-182: Enforce THRONOS_AI_MODE - worker nodes don't serve user-facing AI
     if THRONOS_AI_MODE == "worker":
         return jsonify({
@@ -10481,16 +10893,39 @@ def api_chat():
         pass
     full_prompt = f"{context_str}User: {msg}" if context_str else msg
 
-    # --- Κλήση στον ThronosAI provider ---
-    # Pass model_key AND session_id to generate_response
+    # --- AI execution path ---
     call_started = time.time()
     resolved_info = _resolve_model(model_key)
     if resolved_info:
         call_meta["selected_model"] = resolved_info.id
         call_meta["resolved_provider"] = resolved_info.provider
+
+    chain_context = _build_chain_context_for_router()
     try:
         call_meta["call_attempted"] = True
-        raw = ai_agent.generate_response(full_prompt, wallet=wallet, model_key=model_key, session_id=session_id, chain_context=_build_chain_context_for_router())
+        if model_key == "offline_corpus":
+            text = call_offline_corpus(AI_CORPUS_FILE, data.get("messages") or [], wallet, session_id, chain_context)
+            logger.info("[AI_MODEL] offline_corpus answer wallet=%s session=%s", wallet, session_id)
+            raw = {
+                "response": text,
+                "status": "secure",
+                "provider": "local",
+                "model": "offline_corpus",
+                "meta": {"source": "offline_corpus"},
+            }
+        elif model_key == "thrai":
+            payload = {
+                "wallet": wallet,
+                "session_id": session_id,
+                "messages": data.get("messages") or [],
+                "chain_context": chain_context,
+                "model": "thrai",
+            }
+            router_url = (DIKO_MAS_MODEL_URL or "").strip() or "http://localhost:5000/api/thrai/ask"
+            logger.info("[AI_MODEL] thrai routed to %s wallet=%s session=%s", router_url, wallet, session_id)
+            raw = call_thrai_router(router_url, payload)
+        else:
+            raw = ai_agent.generate_response(full_prompt, wallet=wallet, model_key=model_key, session_id=session_id, chain_context=chain_context)
     except Exception as exc:
         app.logger.exception("AI chat generation failed")
         call_meta["failure_reason"] = str(exc)
@@ -10552,7 +10987,7 @@ def api_chat():
     can_charge = bool(wallet) and raw_status not in charge_block_statuses
 
     if wallet and can_charge and not billing_precharged:
-        success, credits_after = debit_ai_credits(wallet, AI_CREDIT_COST_PER_MSG, reason="chat_message")
+        success, credits_after = debit_ai_credits(wallet, AI_CREDIT_COST_PER_MSG, reason="chat_usage")
         if not success:
             credits_for_frontend = get_ai_credits(wallet)
             ai_credits_spent = 0.0
@@ -10607,6 +11042,12 @@ def api_chat():
 
     resp = {
         "response": cleaned,
+        "message": {
+            "role": "assistant",
+            "content": cleaned,
+            "provider": provider,
+            "model_id": model,
+        },
         "quantum_key": quantum_key,
         "status": status,
         "provider": provider,
@@ -10628,6 +11069,8 @@ def api_chat():
 
     resp["routing"] = routing_meta
     resp["task_type"] = task_type_meta
+    if isinstance(raw, dict) and raw.get("meta"):
+        resp["meta"] = raw.get("meta")
 
     try:
         interaction_entry = record_ai_interaction(
@@ -10969,6 +11412,51 @@ def api_ai_credits():
 
     value = get_ai_credits(wallet)
     return jsonify({"wallet": wallet, "credits": value}), 200
+
+
+@app.route("/api/ai_credits/ledger", methods=["GET"])
+def api_ai_credits_ledger():
+    wallet = (request.args.get("wallet") or "").strip()
+    if not wallet:
+        return jsonify({"error": "missing_wallet"}), 400
+
+    try:
+        limit = max(1, min(int(request.args.get("limit") or 200), 1000))
+    except Exception:
+        limit = 200
+
+    all_entries = load_ai_credits_ledger()
+    if not isinstance(all_entries, list):
+        all_entries = []
+
+    filtered = [e for e in all_entries if isinstance(e, dict) and (e.get("wallet") or "") == wallet]
+    filtered.sort(key=lambda e: str(e.get("timestamp") or ""), reverse=True)
+
+    items = []
+    for e in filtered[:limit]:
+        ts = e.get("ts") or e.get("timestamp") or datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        meta_val = e.get("meta") if isinstance(e.get("meta"), dict) else e.get("metadata")
+        if not isinstance(meta_val, dict):
+            meta_val = {}
+        items.append({
+            "id": e.get("id"),
+            "wallet": wallet,
+            "delta": int(e.get("delta") or 0),
+            "balance_after": int(e.get("balance_after") or 0),
+            "reason": str(e.get("reason") or "adjust").lower(),
+            "meta": meta_val,
+            "ts": ts,
+        })
+
+    logger.info("[AI_CREDITS_LEDGER] wallet=%s items=%d", wallet, len(items))
+    return jsonify({
+        "wallet": wallet,
+        "items": items,
+        "balance": get_ai_credits(wallet),
+        "unit": "credits",
+        # Backward compatibility
+        "entries": items,
+    }), 200
 
 
 @app.route("/api/ai/files", methods=["POST", "GET"])
@@ -11440,7 +11928,7 @@ def api_ai_purchase_pack():
 
     # --- Credits ledger ---
     add_credits = int(pack.get("credits", 0))
-    total_credits = add_ai_credits(wallet, add_credits, reason="pack_purchase")
+    total_credits = add_ai_credits(wallet, add_credits, reason="pack_purchase", metadata={"pack_code": pack.get("code"), "thr_spent": price})
 
     # --- Chain TX (service_payment) ---
     chain = load_json(CHAIN_FILE, [])
@@ -11747,7 +12235,8 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
         "liquidity": "Liquidity",
         "l2e": "Learn-to-Earn Reward",
         "ai_credits": "AI Credits",
-        "architect_ai_jobs": "Architect / AI Jobs",
+        "architect_job": "Architect / AI Jobs",
+        "t2e_reward_thr": "T2E Reward (THR)",
         "iot": "IoT",
         "autopilot": "Autopilot",
         "parking": "Parking",
@@ -11815,7 +12304,7 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
         if category_value is None:
             # PR-4: Normalize architect taxonomy - any tx with architect-related kind gets architect_ai_jobs category
             if is_architect_meta or kind in {"architect", "architect_job", "architect_payment", "architect_ai_jobs", "ai_job_created", "ai_job_progress", "ai_job_completed", "ai_job_reward"}:
-                category_value = "architect_ai_jobs"
+                category_value = "architect_job"
             elif is_chat_meta or kind in {"ai_credits_earned", "ai_credits_spent"}:
                 category_value = "ai_credits"
             else:
@@ -11827,6 +12316,7 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
                     "l2e": "l2e",
                     "ai_credits": "ai_credits",
                     "ai_credit": "ai_credits",
+                    "t2e_reward_thr": "t2e_reward_thr",
                     "iot": "iot",
                     "autopilot": "iot",
                     "parking": "iot",
@@ -16087,6 +16577,9 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
                      coalesce=True, max_instances=1, id="aggregator_step")
     scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30,
                      coalesce=True, max_instances=1, id="ai_knowledge_watcher")
+    scheduler.add_job(summarize_recent_iot_to_corpus, "interval",
+                     minutes=max(1, min(5, IOT_SUMMARY_WINDOW_MINUTES)),
+                     coalesce=True, max_instances=1, id="iot_to_corpus_summary")
     scheduler.add_job(distribute_ai_rewards_step, "interval",
                      minutes=int(_strip_env_quotes(os.getenv("AI_POOL_DISTRIBUTION_INTERVAL", "30"))),
                      coalesce=True, max_instances=1, id="ai_rewards")
@@ -16104,6 +16597,12 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
 
     # PYTHEIA Worker – system health monitoring & governance advice
     try:
+        os.makedirs("/app/logs", exist_ok=True)
+        with open("/app/logs/pytheia_worker.log", "a", encoding="utf-8"):
+            pass
+        os.makedirs("logs", exist_ok=True)
+        with open("logs/pytheia_worker.log", "a", encoding="utf-8"):
+            pass
         from pytheia_worker import PYTHEIAWorker
         _pytheia_instance = PYTHEIAWorker()
         scheduler.add_job(_pytheia_instance.run_cycle, "interval",
@@ -20764,10 +21263,6 @@ def api_ai_provider_chat():
     return jsonify({"ok": True, **result})
 
 
-@app.route("/api/ai/chat", methods=["POST"])
-def api_ai_chat_alias():
-    """Alias for /api/chat endpoint"""
-    return api_chat()
 
 
 # AI Wallet endpoint - returns current connected wallet info
@@ -20902,19 +21397,23 @@ def api_ai_models():
     Δεν σκάει αν κάποιος provider δεν έχει API key – απλά τον μαρκάρει ως disabled.
     NEVER returns 500 - always returns 200 with degraded mode fallback if needed.
     """
-    # ─── TASK 2: Proxy to Node 4 (AI Core) if configured ───
-    if not is_ai_core() and AI_CORE_URL and (os.getenv("THRONOS_AI_MODE", "").strip().lower() == "proxy"):
-        try:
-            # GET endpoint - pass query params as payload
-            params = {k: v for k, v in request.args.items()}
-            result = call_ai_core("/api/ai_models", params, timeout=30, method="GET")
-            if result:
-                logger.info("[AI_CORE] Successfully proxied /api/ai_models to Node 4")
-                return jsonify(result), 200
-            else:
-                logger.warning("[AI_CORE] Node 4 call failed, falling back to local model list")
-        except Exception as e:
-            logger.exception(f"[AI_CORE] Error proxying to Node 4, falling back to local model list: {e}")
+    # ─── Proxy mode: ai-core forwards model catalog to leader/master ───
+    if _is_proxy_mode_enabled():
+        base_url = _ai_proxy_base_url()
+        if base_url:
+            target = base_url.rstrip("/") + "/api/ai_models"
+            try:
+                resp = requests.get(target, params={k: v for k, v in request.args.items()}, timeout=30)
+                logger.info("[AI_PROXY] Forwarding %s to %s (mode=%s)", "/api/ai_models", base_url, THRONOS_AI_MODE)
+                return Response(resp.content, status=resp.status_code, mimetype="application/json")
+            except Exception as exc:
+                logger.error("[AI_PROXY] upstream %s unreachable: %s", target, exc)
+                return jsonify({
+                    "models": [{"id": "auto", "label": "Auto (Thronos chooses)", "provider": "system", "enabled": True, "degraded": True}],
+                    "default_model_id": "auto",
+                    "error": "upstream_unreachable",
+                    "message": "Quantum core cannot reach leader node right now.",
+                }), 502
 
     # ─── Local AI handling (fallback or when is_ai_core) ───
     try:
@@ -20925,20 +21424,25 @@ def api_ai_models():
         default_model = get_default_model(None if mode == "all" else mode)
         default_model_id = default_model.id if default_model else None
 
+        provider_status = get_provider_status()
         models = []
         for provider_name, model_list in AI_MODEL_REGISTRY.items():
             if mode != "all" and provider_name != mode:
                 continue
+            pstatus = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
             for mi in model_list:
+                enabled = bool(mi.enabled)
+                degraded = bool(getattr(mi, "degraded", (not enabled)))
                 models.append(
                     {
                         "id": mi.id,
                         "label": mi.display_name,
                         "display_name": mi.display_name,
                         "provider": mi.provider,
-                        "enabled": mi.enabled,
-                        "degraded": bool(getattr(mi, "degraded", (not mi.enabled))),
-                        "mode": mode,
+                        "enabled": enabled,
+                        "degraded": degraded,
+                        "mode": "all",
+                        "health_reason": pstatus.get("last_error") if (degraded or not enabled) else None,
                     }
                 )
 
@@ -21225,12 +21729,9 @@ def api_t2e_submit():
     if (session.get("session_type") or "train") != "train":
         return jsonify({"ok": False, "error": "session_type_mismatch", "expected": "train", "found": session.get("session_type")}), 409
 
-    credits_map = load_ai_credits()
-    before = int(credits_map.get(wallet, 0) or 0)
+    before = get_ai_credits(wallet)
     delta = int(data.get("credits_delta") or 5)
-    after = before + delta
-    credits_map[wallet] = after
-    save_ai_credits(credits_map)
+    after = add_ai_credits(wallet, delta, reason="t2e_reward", metadata={"event_id": event_id, "session_id": session_id})
 
     event = {
         "event_id": event_id,
@@ -21271,16 +21772,96 @@ def api_t2e_submit():
 
 @app.route("/api/ai/health", methods=["GET"])
 def api_ai_health():
+    if _is_proxy_mode_enabled():
+        global AI_PROXY_HEALTH_LAST_LOG_TS
+        now_ts = time.time()
+        cached = AI_PROXY_HEALTH_CACHE.get("payload")
+        cache_age = now_ts - float(AI_PROXY_HEALTH_CACHE.get("ts", 0) or 0)
+        if cached and cache_age < AI_PROXY_HEALTH_CACHE_TTL:
+            return jsonify(cached), 200
+
+        base_url = _ai_proxy_base_url()
+        if base_url:
+            target = base_url.rstrip("/") + "/api/ai/health"
+            logger.info("[AI_PROXY] Forwarding %s to %s (mode=%s)", "/api/ai/health", base_url, THRONOS_AI_MODE)
+            try:
+                resp = requests.get(target, timeout=5)
+                data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+                data = data if isinstance(data, dict) else {}
+                data.setdefault("ok", True)
+                data["node_role"] = "ai_core"
+                data["thronos_ai_mode"] = "proxy"
+                data.setdefault("offline_corpus", {
+                    "enabled": False,
+                    "degraded": True,
+                    "path": AI_CORPUS_FILE,
+                    "reason": "proxy_node",
+                })
+                data.setdefault("thrai", {
+                    "enabled": False,
+                    "degraded": True,
+                    "router_url": (DIKO_MAS_MODEL_URL or "").strip(),
+                    "reason": "proxy_node",
+                })
+                AI_PROXY_HEALTH_CACHE["ts"] = now_ts
+                AI_PROXY_HEALTH_CACHE["payload"] = data
+                return jsonify(data), resp.status_code
+            except Exception as exc:
+                if (now_ts - AI_PROXY_HEALTH_LAST_LOG_TS) >= AI_PROXY_HEALTH_LOG_COOLDOWN:
+                    logger.error("[AI_PROXY] upstream %s unreachable: %s", target, exc)
+                    AI_PROXY_HEALTH_LAST_LOG_TS = now_ts
+
+        payload = {
+            "ok": True,
+            "node_role": "ai_core",
+            "thronos_ai_mode": "proxy",
+            "enabled_model_ids": [],
+            "provider_status": {},
+            "offline_corpus": {
+                "enabled": False,
+                "degraded": True,
+                "path": AI_CORPUS_FILE,
+                "reason": "proxy_node",
+            },
+            "thrai": {
+                "enabled": False,
+                "degraded": True,
+                "router_url": (DIKO_MAS_MODEL_URL or "").strip(),
+                "reason": "proxy_node",
+            }
+        }
+        AI_PROXY_HEALTH_CACHE["ts"] = now_ts
+        AI_PROXY_HEALTH_CACHE["payload"] = payload
+        return jsonify(payload), 200
+
     try:
         enabled_ids = list_enabled_model_ids()
     except Exception:
         enabled_ids = []
+
+    offline_ok, offline_reason = _offline_corpus_health()
+    thrai_ok, thrai_reason = _thrai_router_health()
+    offline_enabled = bool(THR_OFFLINE_CORPUS_ENABLED and offline_ok)
+    thrai_enabled = bool((THR_THAI_ENABLED or bool((DIKO_MAS_MODEL_URL or "").strip())) and thrai_ok)
+
     return jsonify({
         "ok": True,
         "node_role": NODE_ROLE,
         "thronos_ai_mode": os.getenv("THRONOS_AI_MODE", "all"),
         "enabled_model_ids": enabled_ids,
         "provider_status": get_provider_status(),
+        "offline_corpus": {
+            "enabled": offline_enabled,
+            "degraded": not offline_enabled,
+            "path": AI_CORPUS_FILE,
+            "reason": None if offline_enabled else (offline_reason or "disabled_by_flag"),
+        },
+        "thrai": {
+            "enabled": thrai_enabled,
+            "degraded": not thrai_enabled,
+            "router_url": (DIKO_MAS_MODEL_URL or "").strip(),
+            "reason": None if thrai_enabled else (thrai_reason or "disabled_by_flag"),
+        }
     }), 200
 
 

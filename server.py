@@ -5273,7 +5273,7 @@ def load_ai_sessions():
         meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
         selected_model_id = meta.get("selected_model_id") or s.get("selected_model_id") or _default_model_id()
         session_type = (meta.get("session_type") or s.get("session_type") or "chat").lower()
-        if session_type not in {"chat", "architect", "codex", "train"}:
+        if session_type not in {"chat", "architect", "codex", "train", "admin"}:
             session_type = "chat"
         billing_mode_locked = (meta.get("billing_mode_locked") or s.get("billing_mode_locked") or _session_billing_mode(session_type)).lower()
         meta["session_type"] = session_type
@@ -5306,6 +5306,8 @@ def _session_billing_mode(session_type: str) -> str:
     chat_billing = (os.getenv("CHAT_BILLING_MODE") or "credits").strip().lower() or "credits"
     architect_billing = (os.getenv("ARCHITECT_BILLING_MODE") or "thr").strip().lower() or "thr"
     st = (session_type or "chat").strip().lower()
+    if st == "admin":
+        return "free"
     if st == "architect":
         return architect_billing
     if st == "train":
@@ -5335,7 +5337,7 @@ def _session_by_id(session_id: str) -> dict | None:
 
 def _create_session_record(session_type: str, wallet: str = "", title: str | None = None, session_id: str | None = None) -> dict:
     st = (session_type or "chat").strip().lower()
-    if st not in {"chat", "architect", "codex", "train"}:
+    if st not in {"chat", "architect", "codex", "train", "admin"}:
         st = "chat"
     now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
     sid = (session_id or "").strip() or uuid.uuid4().hex
@@ -5347,7 +5349,7 @@ def _create_session_record(session_type: str, wallet: str = "", title: str | Non
     session = {
         "id": sid,
         "wallet": (wallet or "").strip(),
-        "title": title or ("Architect Session" if st == "architect" else ("Training Session" if st == "train" else "New Chat")),
+        "title": title or ("Admin Operator Session" if st == "admin" else ("Architect Session" if st == "architect" else ("Training Session" if st == "train" else "New Chat"))),
         "created_at": now,
         "updated_at": now,
         "archived": False,
@@ -5357,6 +5359,7 @@ def _create_session_record(session_type: str, wallet: str = "", title: str | Non
             "session_type": st,
             "billing_mode_locked": billing_mode,
             "selected_model_id": _default_model_id(),
+            "origin": "d3lfoi_admin" if st == "admin" else "user",
         },
         "selected_model_id": _default_model_id(),
         "session_type": st,
@@ -6097,10 +6100,20 @@ def enqueue_offline_corpus(wallet: str, prompt: str, response: str, files, sessi
         "session_id": sid,
     }
 
-    corpus = _load_offline_corpus_entries()
+    raw_corpus = load_json(AI_CORPUS_FILE, [])
+    if isinstance(raw_corpus, dict):
+        corpus = raw_corpus.get("conversations") if isinstance(raw_corpus.get("conversations"), list) else []
+    elif isinstance(raw_corpus, list):
+        corpus = raw_corpus
+    else:
+        corpus = []
     corpus.append(entry)
     corpus = corpus[-1000:]
-    _save_offline_corpus_entries(corpus)
+    if isinstance(raw_corpus, dict):
+        raw_corpus["conversations"] = corpus
+        save_json(AI_CORPUS_FILE, raw_corpus)
+    else:
+        save_json(AI_CORPUS_FILE, corpus)
     append_session_transcript(sid, prompt, response, files, ts)
 
     # update / create session meta
@@ -6407,7 +6420,10 @@ def enforce_read_only():
         return None
     # Allow health/bootstrap even as POST (for monitoring tools)
     safe_paths = ("/health", "/bootstrap.json", "/api/whoami")
+    admin_ai_safe_paths = ("/api/admin/login", "/api/admin/ai/chat", "/api/admin/ai/voice_hook")
     if request.path.startswith(safe_paths):
+        return None
+    if NODE_ROLE == "ai_core" and request.path.startswith(admin_ai_safe_paths):
         return None
     return jsonify({
         "ok": False,
@@ -7309,8 +7325,27 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
         tx_from = tx.get("from") or tx.get("sender")
         tx_to = tx.get("to") or tx.get("recipient")
         tx_address = tx.get("address")  # IoT telemetry
+        tx_meta = tx.get("meta") if isinstance(tx.get("meta"), dict) else {}
 
-        parties = {str(tx_from or "").lower(), str(tx_to or "").lower(), str(tx_address or "").lower()}
+        parties = {
+            tx_from,
+            tx_to,
+            tx_address,
+            tx.get("thr_address"),
+            tx.get("wallet"),
+            tx.get("wallet_address"),
+            tx.get("owner"),
+            tx.get("user_wallet"),
+            tx.get("sender_wallet"),
+            tx.get("recipient_wallet"),
+            tx_meta.get("wallet"),
+            tx_meta.get("wallet_address"),
+            tx_meta.get("thr_address"),
+            tx_meta.get("owner"),
+            tx_meta.get("artist_wallet"),
+            tx_meta.get("tipper_wallet"),
+        }
+        parties = {str(p).lower() for p in parties if p}
         if addr_lower not in parties:
             continue
 
@@ -7357,7 +7392,10 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
     for tx in wallet_txs:
         category = tx.get("category", "other")
         direction = tx.get("direction", "related")
-        amount = float(tx.get("amount", 0))
+        try:
+            amount = float(tx.get("amount", 0) or 0)
+        except Exception:
+            amount = 0.0
 
         if category == "mining":
             summary["total_mining"] += amount
@@ -7473,12 +7511,12 @@ def api_wallet_history():
     - category: Optional filter (mining, ai_reward, music_tip, iot_telemetry, etc.)
     - limit: Max entries to return (default 200)
     - cursor: Offset cursor for pagination
-    - exclude_source: Comma-separated sources to hide (default: "architect")
+    - exclude_source: Comma-separated sources to hide (default: none)
     - status: Filter by "pending" or "confirmed"
     """
     address = (request.args.get("address") or request.args.get("wallet") or "").strip()
     category_filter = request.args.get("category", "").strip().lower()
-    exclude_source = request.args.get("exclude_source", "architect").strip().lower()
+    exclude_source = request.args.get("exclude_source", "").strip().lower()
     status_filter = request.args.get("status", "").strip().lower()
     try:
         limit = min(int(request.args.get("limit", 200)), 500)
@@ -10828,10 +10866,61 @@ def _build_ai_model_catalog() -> list[dict]:
     return models
 
 
+def _build_ai_model_catalog() -> list[dict]:
+    provider_status = get_provider_status()
+    models: list[dict] = [{
+        "id": "auto",
+        "display_name": "Auto (Thronos chooses)",
+        "provider": "system",
+        "mode": "system",
+        "enabled": True,
+        "degraded": False,
+        "health_reason": None,
+    }]
+
+    for provider_name, model_list in AI_MODEL_REGISTRY.items():
+        pstatus = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
+        for mi in model_list:
+            enabled = bool(mi.enabled and pstatus.get("configured", True) and pstatus.get("library_loaded", True) is not False)
+            degraded = bool(getattr(mi, "degraded", (not enabled))) or not enabled
+            models.append({
+                "id": mi.id,
+                "display_name": mi.display_name,
+                "provider": mi.provider,
+                "mode": "provider",
+                "enabled": enabled,
+                "degraded": degraded,
+                "health_reason": None if enabled else (pstatus.get("last_error") or "provider_unavailable"),
+            })
+
+    offline_ok, offline_reason = _offline_corpus_health()
+    models.append({
+        "id": "offline_corpus",
+        "display_name": "Offline Corpus",
+        "provider": "local",
+        "mode": "offline",
+        "enabled": bool(THR_OFFLINE_CORPUS_ENABLED and offline_ok),
+        "degraded": False if not THR_OFFLINE_CORPUS_ENABLED else (not offline_ok),
+        "health_reason": offline_reason,
+    })
+
+    thrai_ok, thrai_reason = _thrai_router_health()
+    models.append({
+        "id": "thrai",
+        "display_name": "Thrai Router",
+        "provider": "thronos",
+        "mode": "router",
+        "enabled": bool(THR_THAI_ENABLED and thrai_ok),
+        "degraded": bool(THR_THAI_ENABLED and not thrai_ok),
+        "health_reason": thrai_reason,
+    })
+    return models
+
+
 def call_offline_corpus(corpus_path, messages, wallet, session_id, chain_context) -> str:
     """Simple local retrieval over ai_offline_corpus.json / knowledge blocks."""
     try:
-        raw_corpus = load_json(corpus_path, {"conversations": []}) or {"conversations": []}
+        raw_corpus = load_json(corpus_path, []) or []
         if isinstance(raw_corpus, dict):
             corpus = raw_corpus.get("conversations") or []
         elif isinstance(raw_corpus, list):
@@ -10894,6 +10983,264 @@ def call_thrai_router(router_url: str, payload: dict) -> dict:
         return response.json()
     except Exception:
         return {"response": response.text, "status": "secure", "provider": "thronos", "model": "thrai"}
+
+# ─── D3LFOI ADMIN HELPERS ───────────────────────────────────────────────────
+def _admin_token_from_request(payload: dict | None = None) -> str:
+    payload = payload if isinstance(payload, dict) else {}
+    return (
+        (request.headers.get("X-Admin-Secret") or "").strip()
+        or (request.cookies.get("thr_admin_token") or "").strip()
+        or (request.args.get("secret") or "").strip()
+        or str(payload.get("secret") or "").strip()
+    )
+
+
+def require_admin(payload: dict | None = None):
+    admin_secret = (os.getenv("ADMIN_SECRET") or ADMIN_SECRET or "").strip()
+    if not admin_secret:
+        return jsonify({"error": "admin_not_configured"}), 403
+    token = _admin_token_from_request(payload)
+    if token != admin_secret:
+        return jsonify({"error": "admin_auth_required"}), 401
+    return None
+
+
+def _ensure_admin_session(session_id: str | None = None, title: str | None = None) -> dict:
+    sid = (session_id or "").strip() or uuid.uuid4().hex
+    session = ensure_session_exists(sid, wallet=None, session_type="admin")
+    if not session:
+        session = _create_session_record(session_type="admin", wallet="", title=title or "D3lfoi Operator", session_id=sid)
+    sessions = load_ai_sessions()
+    updated = False
+    for s in sessions:
+        if s.get("id") != sid:
+            continue
+        s["session_type"] = "admin"
+        s["billing_mode_locked"] = "free"
+        meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
+        meta["session_type"] = "admin"
+        meta["billing_mode_locked"] = "free"
+        meta["origin"] = "d3lfoi_admin"
+        s["meta"] = meta
+        s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        updated = True
+        session = s
+        break
+    if updated:
+        save_ai_sessions(sessions)
+    return session
+
+
+@app.route("/api/admin/login", methods=["POST"])
+def api_admin_login():
+    data = request.get_json(silent=True) or {}
+    denied = require_admin(data)
+    if denied:
+        return denied
+    resp = make_response(jsonify({"ok": True}))
+    secure_cookie = bool(request.is_secure or _strip_env_quotes(os.getenv("FORCE_SECURE_COOKIES", "1")) in ("1", "true", "yes", "on"))
+    resp.set_cookie(
+        "thr_admin_token",
+        (os.getenv("ADMIN_SECRET") or ADMIN_SECRET or "").strip(),
+        max_age=8 * 3600,
+        httponly=True,
+        secure=secure_cookie,
+        samesite="Lax",
+    )
+    return resp
+
+
+@app.route("/api/admin/ai/health", methods=["GET"])
+def api_admin_ai_health():
+    if NODE_ROLE != "ai_core":
+        return jsonify({"error": "admin_only_on_ai_core"}), 404
+    denied = require_admin()
+    if denied:
+        return denied
+
+    catalog = _build_ai_model_catalog()
+    offline_ok, offline_reason = _offline_corpus_health()
+    thrai_ok, thrai_reason = _thrai_router_health()
+    providers = get_provider_status()
+    payload = {
+        "ok": True,
+        "core_mode": "core",
+        "engine": "d3lfoi",
+        "models": catalog,
+        "offline_corpus": {
+            "enabled": bool(THR_OFFLINE_CORPUS_ENABLED and offline_ok),
+            "degraded": False if not THR_OFFLINE_CORPUS_ENABLED else (not offline_ok),
+            "reason": offline_reason,
+        },
+        "thrai": {
+            "enabled": bool(THR_THAI_ENABLED and thrai_ok),
+            "degraded": bool(THR_THAI_ENABLED and not thrai_ok),
+            "reason": thrai_reason,
+        },
+        "providers": providers,
+    }
+    return jsonify(payload), 200
+
+
+@app.route("/api/admin/ai/chat", methods=["POST"])
+def api_admin_ai_chat():
+    if NODE_ROLE != "ai_core":
+        return jsonify({"error": "admin_only_on_ai_core"}), 404
+    data = request.get_json(silent=True) or {}
+    denied = require_admin(data)
+    if denied:
+        return denied
+
+    message = (data.get("message") or "").strip()
+    if not message:
+        return jsonify({"error": "empty_message"}), 400
+
+    requested_model = (data.get("model_id") or "auto").strip()
+    session_id = (data.get("session_id") or "").strip() or None
+    system_prompt = (data.get("system_prompt") or "").strip()
+    lang = (data.get("lang") or "el").strip().lower()
+
+    # Explicit optional models: structured unavailable errors (no 500)
+    catalog = _build_ai_model_catalog()
+    catalog_by_id = {m.get("id"): m for m in catalog if isinstance(m, dict) and m.get("id")}
+    explicit = requested_model.lower()
+    if explicit in {"offline_corpus", "thrai"}:
+        info = catalog_by_id.get(explicit) or {}
+        if not info.get("enabled"):
+            return jsonify({
+                "error": "model_unavailable",
+                "model_id": explicit,
+                "reason": info.get("health_reason") or "disabled",
+                "models": catalog,
+            }), 200
+
+    selected_model, fallback_notice, error_resp = _select_callable_model(requested_model, session_type="admin")
+    if error_resp:
+        payload = error_resp[0].get_json() if isinstance(error_resp, tuple) and hasattr(error_resp[0], "get_json") else {"error": "no_available_model"}
+        payload["origin"] = "d3lfoi_admin"
+        return jsonify(payload), 200
+
+    model_id = selected_model or requested_model or "auto"
+    session = _ensure_admin_session(session_id=session_id, title="D3lfoi Operator")
+    sid = session.get("id") if isinstance(session, dict) else session_id
+
+    prompt = f"[LANG={lang}]\n{message}"
+    if system_prompt:
+        prompt = f"System: {system_prompt}\n\nUser: {prompt}"
+
+    chain_context = _build_chain_context_for_router()
+    try:
+        if model_id == "offline_corpus":
+            text = call_offline_corpus(AI_CORPUS_FILE, [{"role": "user", "content": message}], "", sid, chain_context)
+            raw = {"response": text, "provider": "local", "model": "offline_corpus", "status": "secure"}
+        elif model_id == "thrai":
+            thrai_ok, thrai_reason = _thrai_router_health()
+            if not (THR_THAI_ENABLED and thrai_ok):
+                return jsonify({
+                    "error": "model_unavailable",
+                    "model_id": "thrai",
+                    "reason": thrai_reason or "disabled",
+                    "models": catalog,
+                }), 200
+            raw = call_thrai_router((DIKO_MAS_MODEL_URL or "").strip() or "http://localhost:5000/api/thrai/ask", {
+                "session_id": sid,
+                "messages": [{"role": "user", "content": message}],
+                "chain_context": chain_context,
+                "model": "thrai",
+            })
+        else:
+            raw = ai_agent.generate_response(prompt, wallet="", model_key=model_id, session_id=sid, chain_context=chain_context)
+    except Exception as exc:
+        logger.exception("admin_ai_chat_failed")
+        return jsonify({"error": "provider_error", "reason": str(exc), "model_id": model_id}), 200
+
+    assistant_message = str(raw.get("response") if isinstance(raw, dict) else raw or "")
+    files = []
+    try:
+        files, _ = extract_ai_files_from_text(assistant_message)
+    except Exception:
+        files = []
+
+    if THR_OFFLINE_CORPUS_ENABLED:
+        try:
+            enqueue_offline_corpus("ADMIN:D3LFOI", message, assistant_message, files, session_id=sid)
+        except Exception:
+            logger.exception("admin_offline_corpus_write_failed")
+
+    try:
+        append_session_transcript(
+            sid,
+            message,
+            assistant_message,
+            files,
+            time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        )
+    except Exception:
+        logger.exception("admin_session_append_failed")
+
+    return jsonify({
+        "ok": True,
+        "session_id": sid,
+        "model_id": model_id,
+        "model_notice": fallback_notice,
+        "assistant_message": assistant_message,
+        "meta": {"origin": "d3lfoi_admin", "billing_mode": "free"},
+    }), 200
+
+
+@app.route("/api/admin/ai/voice_hook", methods=["POST"])
+def api_admin_ai_voice_hook():
+    if NODE_ROLE != "ai_core":
+        return jsonify({"error": "admin_only_on_ai_core"}), 404
+    data = request.get_json(silent=True) or {}
+    denied = require_admin(data)
+    if denied:
+        return denied
+
+    expected = (os.getenv("X9_VOICE_WEBHOOK_SECRET") or "").strip()
+    provided = (data.get("voice_secret") or "").strip()
+    if expected and provided != expected:
+        return jsonify({"error": "invalid_voice_secret"}), 401
+
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "empty_text"}), 400
+
+    payload = {
+        "message": text,
+        "model_id": data.get("model_id") or "auto",
+        "lang": data.get("lang") or "el",
+        "session_id": data.get("session_id"),
+        "secret": _admin_token_from_request(data),
+        "system_prompt": data.get("system_prompt") or "",
+    }
+    with app.test_request_context("/api/admin/ai/chat", method="POST", json=payload, headers={"X-Admin-Secret": _admin_token_from_request(data)}):
+        resp = api_admin_ai_chat()
+    if isinstance(resp, tuple):
+        body, status = resp
+        data_out = body.get_json() if hasattr(body, "get_json") else {}
+        return jsonify({
+            "ok": status == 200,
+            "session_id": data_out.get("session_id") or payload.get("session_id"),
+            "reply": data_out.get("assistant_message") or "",
+            "model_id": data_out.get("model_id"),
+        }), status
+    data_out = resp.get_json() if hasattr(resp, "get_json") else {}
+    return jsonify({
+        "ok": True,
+        "session_id": data_out.get("session_id") or payload.get("session_id"),
+        "reply": data_out.get("assistant_message") or "",
+        "model_id": data_out.get("model_id"),
+    }), 200
+
+
+@app.route("/d3lfoi", methods=["GET"])
+@app.route("/d3lfoi_admin", methods=["GET"])
+def d3lfoi_admin_console():
+    if NODE_ROLE != "ai_core":
+        return jsonify({"error": "admin_only_on_ai_core"}), 404
+    return render_template("d3lfoi_admin.html")
+
 
 # ─── QUANTUM CHAT API (ενιαίο AI + αρχεία + offline corpus) ─────────────────
 def _ai_proxy_base_url() -> str:
@@ -15352,6 +15699,7 @@ def stripe_webhook():
             }
             chain.append(tx)
             save_json(CHAIN_FILE, chain)
+            persist_normalized_tx(tx)
             update_last_block(tx, is_block=False)
             print(f"💰 Stripe Payment: {fiat_amount} USD -> {thr_amount} THR to {wallet}")
 
@@ -21234,7 +21582,7 @@ def api_chat_session_new():
 def api_sessions_create():
     data = request.get_json(silent=True) or {}
     session_type = (data.get("session_type") or "chat").strip().lower()
-    if session_type not in {"chat", "architect", "codex", "train"}:
+    if session_type not in {"chat", "architect", "codex", "train", "admin"}:
         return jsonify({"ok": False, "error": "invalid_session_type", "allowed": ["chat", "architect", "codex", "train"]}), 400
 
     wallet = (data.get("wallet") or request.cookies.get("thr_address") or "").strip()
@@ -22881,9 +23229,9 @@ def api_v1_music_play(track_id):
             # PR-5g: Record play royalty as on-chain transaction for wallet history
             chain = load_json(CHAIN_FILE, [])
             tx = {
-                "type": "music",
-                "kind": "music",
-                "category": "music",
+                "type": "music_royalty",
+                "kind": "music_royalty",
+                "category": "music_royalty",
                 "from": AI_WALLET_ADDRESS,
                 "to": artist_address,
                 "amount": PLAY_ROYALTY,

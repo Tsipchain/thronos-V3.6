@@ -2221,7 +2221,7 @@
         } else if (data.credits !== undefined) {
           const credits = Number(data.credits) || 0;
           window.aiCredits = credits;
-          usageStatusEl.textContent = `AI Credits: ${credits}`;
+          usageStatusEl.textContent = `${credits}`;
           creditsLabelEl.textContent = credits;
         }
 
@@ -2261,7 +2261,7 @@
           const credits = Number(data.credits) || 0;
           window.aiCredits = credits;
           creditsLabelEl.textContent = credits;
-          usageStatusEl.textContent = `AI Credits: ${credits}`;
+          usageStatusEl.textContent = `${credits}`;
           if (aiPacksWalletInfoEl && wallet) {
             aiPacksWalletInfoEl.textContent = `Bound wallet: ${wallet} • AI Credits: ${credits}`;
           }

@@ -1401,8 +1401,7 @@
 
         function isTokenTransfer(tx) {
             const kind = getKind(tx);
-            const asset = getAssetSymbol(tx);
-            return kind === 'token_transfer' && asset !== 'THR';
+            return kind === 'token_transfer';
         }
 
         const isThrTransfer = (tx) => {

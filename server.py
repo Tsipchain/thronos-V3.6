@@ -4959,6 +4959,23 @@ AI_DEFAULT_PACKS = [
 # Πόσα credits καίει κάθε AI μήνυμα
 AI_CREDIT_COST_PER_MSG = int(_strip_env_quotes(os.getenv("AI_CREDIT_COST_PER_MSG", "1")))
 
+
+def _chat_credit_cost_for_model(model_id: str | None, prompt_text: str | None = None) -> int:
+    """Phase-1 dynamic chat credit pricing with safe lower/upper bounds."""
+    base = max(1, int(_strip_env_quotes(os.getenv("AI_CREDIT_COST_PER_MSG", "1")) or 1))
+    model = (model_id or "auto").strip().lower()
+    text = (prompt_text or "").strip()
+
+    if model in {"gpt-4.1", "gpt-4.1-preview", "claude-3.5-sonnet", "claude-3-5-sonnet", "gemini-2.5-pro"}:
+        base += 1
+    if len(text) > 1000:
+        base += 1
+    if len(text) > 4000:
+        base += 1
+
+    cap = max(base, int(_strip_env_quotes(os.getenv("AI_CREDIT_COST_MAX", "5")) or 5))
+    return min(cap, max(1, base))
+
 def load_ai_packs():
     """Διαβάζει τα διαθέσιμα packs από αρχείο, αλλιώς επιστρέφει τα default."""
     data = load_json(AI_PACKS_FILE, None)
@@ -5071,7 +5088,7 @@ def _default_model_id():
 
 def _normalized_ai_mode() -> str:
     raw_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
-    if raw_mode in ("", "router", "auto", "hybrid", "all", "proxy"):
+    if raw_mode in ("", "router", "auto", "hybrid", "all", "proxy", "core"):
         return "all"
     if raw_mode == "openai_only":
         return "openai"
@@ -10760,6 +10777,57 @@ def _build_ai_model_catalog() -> list[dict]:
     return models
 
 
+def _build_ai_model_catalog() -> list[dict]:
+    provider_status = get_provider_status()
+    models: list[dict] = [{
+        "id": "auto",
+        "display_name": "Auto (Thronos chooses)",
+        "provider": "system",
+        "mode": "system",
+        "enabled": True,
+        "degraded": False,
+        "health_reason": None,
+    }]
+
+    for provider_name, model_list in AI_MODEL_REGISTRY.items():
+        pstatus = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
+        for mi in model_list:
+            enabled = bool(mi.enabled and pstatus.get("configured", True) and pstatus.get("library_loaded", True) is not False)
+            degraded = bool(getattr(mi, "degraded", (not enabled))) or not enabled
+            models.append({
+                "id": mi.id,
+                "display_name": mi.display_name,
+                "provider": mi.provider,
+                "mode": "provider",
+                "enabled": enabled,
+                "degraded": degraded,
+                "health_reason": None if enabled else (pstatus.get("last_error") or "provider_unavailable"),
+            })
+
+    offline_ok, offline_reason = _offline_corpus_health()
+    models.append({
+        "id": "offline_corpus",
+        "display_name": "Offline Corpus",
+        "provider": "local",
+        "mode": "offline",
+        "enabled": bool(THR_OFFLINE_CORPUS_ENABLED and offline_ok),
+        "degraded": False if not THR_OFFLINE_CORPUS_ENABLED else (not offline_ok),
+        "health_reason": offline_reason,
+    })
+
+    thrai_ok, thrai_reason = _thrai_router_health()
+    models.append({
+        "id": "thrai",
+        "display_name": "Thrai Router",
+        "provider": "thronos",
+        "mode": "router",
+        "enabled": bool(THR_THAI_ENABLED and thrai_ok),
+        "degraded": bool(THR_THAI_ENABLED and not thrai_ok),
+        "health_reason": thrai_reason,
+    })
+    return models
+
+
 def call_offline_corpus(corpus_path, messages, wallet, session_id, chain_context) -> str:
     """Simple local retrieval over ai_offline_corpus.json / knowledge blocks."""
     try:
@@ -11058,14 +11126,17 @@ def _handle_ai_chat_master():
     if not msg:
         return jsonify(error="Message required"), 400
 
+    message_credit_cost = _chat_credit_cost_for_model(model_key, msg)
+
     # --- Credits check (Chat billing mode) ---
     credits_value = None
     if wallet:
         credits_value = get_ai_credits(wallet)
-        if credits_value < AI_CREDIT_COST_PER_MSG:
+        if credits_value < message_credit_cost:
             return jsonify(
                 error="insufficient_ai_credits",
                 message="Δεν έχεις άλλα Quantum credits γι' αυτό το THR wallet.",
+                required_credits=message_credit_cost,
                 credits=credits_value,
                 wallet=wallet,
                 session_id=session_id,
@@ -11255,23 +11326,24 @@ def _handle_ai_chat_master():
     can_charge = bool(wallet) and raw_status not in charge_block_statuses
 
     if wallet and can_charge and not billing_precharged:
-        success, credits_after = debit_ai_credits(wallet, AI_CREDIT_COST_PER_MSG, reason="chat_usage")
+        success, credits_after = debit_ai_credits(wallet, message_credit_cost, reason="chat_usage")
         if not success:
             credits_for_frontend = get_ai_credits(wallet)
             ai_credits_spent = 0.0
             return jsonify({
                 "error": "insufficient_ai_credits",
                 "message": "Δεν έχεις άλλα Quantum credits γι' αυτό το THR wallet.",
+                "required_credits": message_credit_cost,
                 "credits": credits_for_frontend,
                 "wallet": wallet,
                 "session_id": session_id,
             }), 400
         credits_for_frontend = credits_after
-        ai_credits_spent = float(AI_CREDIT_COST_PER_MSG)
+        ai_credits_spent = float(message_credit_cost)
     elif wallet and can_charge and billing_precharged:
         credits_map_now = load_ai_credits()
         credits_for_frontend = int(credits_map_now.get(wallet, 0) or 0)
-        ai_credits_spent = float(AI_CREDIT_COST_PER_MSG)
+        ai_credits_spent = float(message_credit_cost)
     elif wallet:
         # Wallet present but we skipped billing due to model gating
         credits_for_frontend = credits_value if credits_value is not None else 0
@@ -13605,7 +13677,11 @@ def api_token_transfer():
     tx_id = f"TOKEN_TRANSFER-{symbol}-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
         "type": "token_transfer",
+        "kind": "token_transfer",
+        "category": "tokens",
         "token_symbol": symbol,
+        "asset_symbol": symbol,
+        "asset": symbol,
         "token_id": token_id,
         "from": from_thr,
         "to": to_thr,
@@ -13620,6 +13696,7 @@ def api_token_transfer():
     chain = load_json(CHAIN_FILE, [])
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
+    persist_normalized_tx(tx)
 
     logger.info(f"Token transfer: {amount} {symbol} from {from_thr[:10]}... to {to_thr[:10]}... (fee: {thr_fee} THR)")
 
@@ -14093,7 +14170,11 @@ def transfer_custom_token(symbol, from_thr, to_thr, amount_raw, auth_secret, pas
     tx_id = f"TOKEN_TRANSFER-{symbol}-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
         "type": "token_transfer",
+        "kind": "token_transfer",
+        "category": "tokens",
         "token_symbol": symbol,
+        "asset_symbol": symbol,
+        "asset": symbol,
         "token_id": token["id"],
         "from": from_thr,
         "to": to_thr,

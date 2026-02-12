@@ -408,6 +408,8 @@ function applyTranslations(lang) {
 }
 
 function initArchitectLanguage() {
+  if (window.__architectLangInitDone) return;
+  window.__architectLangInitDone = true;
   const sel = document.getElementById('architectLanguageSelect');
   if (!sel) return;
   let lang = localStorage.getItem(LANG_KEY) || DEFAULT_LANG;
@@ -415,11 +417,19 @@ function initArchitectLanguage() {
     lang = DEFAULT_LANG;
   }
   sel.value = lang;
-  applyTranslations(lang);
+  try {
+    applyTranslations(lang);
+  } catch (err) {
+    console.warn('initial applyTranslations failed', err);
+  }
   sel.addEventListener('change', (e) => {
-    const newLang = normalizeLang(e.target.value);
-    localStorage.setItem(LANG_KEY, newLang);
-    applyTranslations(newLang);
+    try {
+      const newLang = normalizeLang(e.target.value);
+      localStorage.setItem(LANG_KEY, newLang);
+      applyTranslations(newLang);
+    } catch (err) {
+      console.warn('language switch failed', err);
+    }
   });
 }
 

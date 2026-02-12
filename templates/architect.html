@@ -27,7 +27,7 @@
       min-height: 100vh;
     }
 
-    /* Language toggle */
+    /* Language visibility */
     .lang-en, .lang-ja, .lang-ru, .lang-es { display: none; }
     body.lang-en .lang-el { display: none; }
     body.lang-en .lang-en { display: inline; }
@@ -91,21 +91,6 @@
       border-radius: 50%;
       background: var(--accent);
       box-shadow: 0 0 8px var(--accent);
-    }
-
-    .lang-toggle {
-      margin-left: auto;
-      background: var(--accent-soft);
-      border: 1px solid var(--border);
-      color: var(--accent);
-      padding: 6px 14px;
-      border-radius: 20px;
-      cursor: pointer;
-      font-size: 12px;
-    }
-
-    .lang-toggle:hover {
-      background: rgba(0, 255, 102, 0.2);
     }
 
     select, textarea, input, button {
@@ -272,6 +257,7 @@
       <div class="logo-text">AI ARCHITECT</div>
     </div>
     <div class="pill" id="statusPill">
+      <span id="architectSessionType" style="margin-right:8px; font-weight:700;">Session: ARCHITECT</span>
       <div class="pill-dot"></div>
       <span class="lang-el">Online</span>
       <span class="lang-en">Online</span>
@@ -294,7 +280,16 @@
         <option value="local">💾 Offline/Local</option>
       </select>
     </div>
-    <button class="lang-toggle" onclick="toggleLanguage()">🌐 GR</button>
+    <div class="input-row" style="margin-left:auto;">
+      <span class="section-title" style="margin: 0;"><img src="/static/img/logo.png" alt="Language" style="width:14px;height:14px;vertical-align:middle;" onerror="this.style.display='none'"> 🌐</span>
+      <select id="architectLanguageSelect" style="width: 150px;">
+        <option value="gr">Ελληνικά</option>
+        <option value="en">English</option>
+        <option value="ja">日本語</option>
+        <option value="ru">Русский</option>
+        <option value="es">Español</option>
+      </select>
+    </div>
   </div>
 
   <div class="wrap">
@@ -382,22 +377,54 @@ if (downloadZipBtn) {
   });
 }
 
-// Language support
-window.LANG_SEQUENCE = window.LANG_SEQUENCE || ['gr', 'en', 'ja', 'es', 'ru'];
+// Language support (shared key with Chat)
+const DEFAULT_LANG = 'en';
+const LANG_KEY = 'thr_lang';
+const LANG_SEQUENCE = ['gr', 'en', 'ja', 'es', 'ru'];
 const LANG_CLASS_MAP = { 'gr': 'lang-el', 'en': 'lang-en', 'ja': 'lang-ja', 'es': 'lang-es', 'ru': 'lang-ru' };
+const TRANSLATIONS_CACHE = window.TRANSLATIONS_CACHE || {};
 
-function toggleLanguage() {
-  const current = localStorage.getItem("lang") || "gr";
-  const idx = window.LANG_SEQUENCE.indexOf(current);
-  const next = window.LANG_SEQUENCE[(idx + 1) % window.LANG_SEQUENCE.length];
-  localStorage.setItem("lang", next);
-  applyLanguage();
+function normalizeLang(lang) {
+  const val = String(lang || '').toLowerCase();
+  if (val === 'el') return 'gr';
+  return LANG_SEQUENCE.includes(val) ? val : DEFAULT_LANG;
 }
 
-function applyLanguage() {
-  const lang = localStorage.getItem("lang") || "gr";
-  document.body.className = LANG_CLASS_MAP[lang] || '';
-  document.querySelector('.lang-toggle').textContent = '🌐 ' + lang.toUpperCase();
+function applyTranslations(lang) {
+  const normalized = normalizeLang(lang || localStorage.getItem(LANG_KEY) || DEFAULT_LANG);
+  localStorage.setItem(LANG_KEY, normalized);
+  document.body.classList.remove(...Object.values(LANG_CLASS_MAP));
+  if (LANG_CLASS_MAP[normalized]) document.body.classList.add(LANG_CLASS_MAP[normalized]);
+  const sel = document.getElementById('architectLanguageSelect');
+  if (sel) sel.value = normalized;
+  try {
+    document.querySelectorAll('[data-i18n]').forEach((node) => {
+      const key = node.dataset.i18n;
+      const t = (TRANSLATIONS_CACHE[normalized] && TRANSLATIONS_CACHE[normalized][key])
+        || (TRANSLATIONS_CACHE.en && TRANSLATIONS_CACHE.en[key])
+        || null;
+      if (t) node.textContent = t;
+    });
+  } catch (err) {
+    console.warn('applyTranslations failed', err);
+  }
+  return normalized;
+}
+
+function initArchitectLanguage() {
+  const sel = document.getElementById('architectLanguageSelect');
+  if (!sel) return;
+  let lang = localStorage.getItem(LANG_KEY) || DEFAULT_LANG;
+  if (![...sel.options].some((o) => o.value === lang)) {
+    lang = DEFAULT_LANG;
+  }
+  sel.value = lang;
+  applyTranslations(lang);
+  sel.addEventListener('change', (e) => {
+    const newLang = normalizeLang(e.target.value);
+    localStorage.setItem(LANG_KEY, newLang);
+    applyTranslations(newLang);
+  });
 }
 
 async function api(url, opts) {
@@ -495,7 +522,7 @@ $("generate").onclick = async () => {
   } finally {
     btn.disabled = false;
     btn.innerHTML = '🚀 <span class="lang-el">ΔΗΜΙΟΥΡΓΙΑ ΑΡΧΙΤΕΚΤΟΝΙΚΗΣ</span><span class="lang-en">GENERATE ARCHITECTURE</span><span class="lang-ja">アーキテクチャ生成</span><span class="lang-ru">СОЗДАТЬ АРХИТЕКТУРУ</span><span class="lang-es">GENERAR ARQUITECTURA</span>';
-    applyLanguage();
+    applyTranslations();
   }
 };
 
@@ -506,16 +533,18 @@ if (savedWallet) {
 }
 
 // Initialize
-(async () => {
-  applyLanguage();
+document.addEventListener('DOMContentLoaded', async () => {
+  if (window.__architectInitDone) return;
+  window.__architectInitDone = true;
   try {
+    initArchitectLanguage();
     await loadBlueprints();
     setStatus(true);
   } catch(e) {
     setStatus(false);
-    console.error("Failed to load blueprints:", e);
+    console.error("Failed to initialize architect:", e);
   }
-})();
+});
 </script>
 </body>
 </html>

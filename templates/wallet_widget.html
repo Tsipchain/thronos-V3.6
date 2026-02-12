@@ -1292,7 +1292,9 @@
         const historyState = {
             filter: 'all',
             selectedToken: '',
-            transactions: [],
+            tokenScope: 'all',
+            walletTxs: [],
+            aiLedger: [],
         };
 
         // Memory optimization: limit transaction history to prevent unbounded growth
@@ -1343,12 +1345,12 @@
                 ai_credits: 'ai_credits',
                 ai_credits_earned: 'ai_credits',
                 ai_credits_spent: 'ai_credits',
-                architect: 'architect_ai_jobs',
-                architect_job: 'architect_ai_jobs',
-                ai_job_created: 'architect_ai_jobs',
-                ai_job_progress: 'architect_ai_jobs',
-                ai_job_completed: 'architect_ai_jobs',
-                ai_job_reward: 'architect_ai_jobs',
+                architect: 'architect_job',
+                architect_job: 'architect_job',
+                ai_job_created: 'architect_job',
+                ai_job_progress: 'architect_job',
+                ai_job_completed: 'architect_job',
+                ai_job_reward: 'architect_job',
                 iot: 'iot',
                 iot_parking: 'iot',
                 iot_parking_reservation: 'iot',
@@ -1410,12 +1412,35 @@
         const isIoTTx = (tx) => getKind(tx).startsWith('iot') || getKind(tx).includes('parking') || getKind(tx) === 'autopilot';
         const isAiCreditsTx = (tx) => getKind(tx).startsWith('ai') || getKind(tx).includes('credits');
 
+        function isAICreditPseudoTx(tx) {
+            const meta = (tx && tx.meta && typeof tx.meta === 'object') ? tx.meta : {};
+            const kind = getKind(tx);
+            const asset = getAssetSymbol(tx);
+            const note = String(tx.note || tx.description || '').toLowerCase();
+            return Boolean(
+                meta.is_ai_credit ||
+                meta.billing_unit === 'credits' ||
+                meta.category === 'ai_credits' ||
+                kind === 'ai_credits' ||
+                asset === 'CREDITS' ||
+                note.includes('ai credits')
+            );
+        }
+
+        function isL2ETx(tx) {
+            const category = getCanonicalCategory(tx);
+            const meta = (tx && tx.meta && typeof tx.meta === 'object') ? tx.meta : {};
+            const symbol = sanitizeTokenSymbol(tx.asset_symbol || tx.asset || tx.symbol);
+            return category === 'l2e' || String(meta.category || '').toLowerCase() === 'l2e' || symbol === 'L2E';
+        }
+
         function shouldExcludeTx(tx) {
             const kind = getKind(tx);
             const asset = getAssetSymbol(tx);
             if (kind === 'block') return true;
             if (!tx.from && !tx.to) return true;
             if (tx.amount === 0 && asset === 'THR' && kind !== 'thr_transfer') return true;
+            if (getCanonicalCategory(tx) === 'ai_credits' || isAICreditPseudoTx(tx)) return true;
             return false;
         }
 
@@ -1433,6 +1458,7 @@
             historyState.filter = filter;
             if (filter !== 'tokens') {
                 historyState.selectedToken = '';
+                historyState.tokenScope = 'all';
             }
             renderHistoryContent();
         }
@@ -1442,30 +1468,39 @@
             renderHistoryContent();
         }
 
+        function setTokenScope(scope) {
+            historyState.tokenScope = scope || 'all';
+            renderHistoryContent();
+        }
+
+        function isCrossChainTokenTransfer(tx) {
+            const meta = (tx && tx.meta && typeof tx.meta === 'object') ? tx.meta : {};
+            const chain = String(meta.chain || meta.origin_chain || '').toLowerCase();
+            return Boolean(meta.cross_chain || meta.is_cross_chain || (chain && chain !== 'thronos'));
+        }
+
         function resetHistoryState() {
             historyState.filter = 'all';
             historyState.selectedToken = '';
+            historyState.tokenScope = 'all';
         }
 
         function renderHistoryContent() {
             const container = document.getElementById('historyContent');
-            const txs = (historyState.transactions || []).filter(tx => !shouldExcludeTx(tx));
+            const txs = (historyState.walletTxs || []).filter(tx => !shouldExcludeTx(tx));
 
             if (!txs.length) {
                 container.innerHTML = '<p style="color: var(--widget-muted); text-align: center;">No transactions found</p>';
                 return;
             }
 
-            // Get all token-related transactions (transfers + swaps with tokens)
+            // Token transfer transactions (native + cross-chain)
             const tokenTxs = txs.filter(tx => {
                 const asset = getAssetSymbol(tx);
-                const isTokenTx = isTokenTransfer(tx) && isValidTokenSymbol(asset);
-                const isTokenSwap = isSwapTx(tx) && asset !== 'THR' && isValidTokenSymbol(asset);
-                return isTokenTx || isTokenSwap;
+                return isTokenTransfer(tx) && isValidTokenSymbol(asset);
             });
             const tokenSymbols = Array.from(new Set(
-                txs
-                    .filter(tx => isTokenTx(tx))
+                tokenTxs
                     .map(tx => sanitizeTokenSymbol(tx.asset_symbol || tx.asset || tx.symbol))
                     .filter(sym => sym)
             ));
@@ -1477,18 +1512,21 @@
                 if (historyState.filter === 'mining') return category === 'mining';
                 if (historyState.filter === 'tokens') return category === 'tokens';
                 if (historyState.filter === 'swaps') return category === 'swaps';
-                if (historyState.filter === 'l2e') return category === 'l2e';
-                if (historyState.filter === 't2e') return rawKind === 't2e_reward' || rawKind === 'ai_reward' && (tx.category === 't2e_reward' || tx.details?.device_id);
-                if (historyState.filter === 'ai_credits') return category === 'ai_credits';
+                if (historyState.filter === 'l2e') return isL2ETx(tx);
+                if (historyState.filter === 't2e') return category === 't2e_reward_thr';
+                if (historyState.filter === 'ai_credits') return false;
                 if (historyState.filter === 'iot') return category === 'iot';
                 if (historyState.filter === 'bridge') return category === 'bridge';
-                if (historyState.filter === 'architect_ai_jobs') return category === 'architect_ai_jobs';
+                if (historyState.filter === 'architect_ai_jobs') return category === 'architect_job';
                 if (historyState.filter === 'liquidity') return category === 'liquidity';
                 if (historyState.filter === 'gateway') return category === 'gateway';
                 if (historyState.filter === 'music') return category === 'music' || rawKind === 'music_play_reward' || rawKind === 'music_tip';
                 return true;
             }).filter(tx => {
-                if (historyState.filter !== 'tokens' || !historyState.selectedToken) return true;
+                if (historyState.filter !== 'tokens') return true;
+                if (historyState.tokenScope === 'crosschain' && !isCrossChainTokenTransfer(tx)) return false;
+                if (historyState.tokenScope === 'native' && isCrossChainTokenTransfer(tx)) return false;
+                if (!historyState.selectedToken) return true;
                 return sanitizeTokenSymbol(tx.asset_symbol || tx.asset || tx.symbol) === historyState.selectedToken;
             });
 
@@ -1499,7 +1537,7 @@
                 { id: 'tokens', label: 'Tokens' },
                 { id: 'l2e', label: 'L2E' },
                 { id: 't2e', label: '🎓 T2E' },
-                { id: 'ai_credits', label: 'AI Credits' },
+                { id: 'ai_credits', label: 'AI Credits (Chat)' },
                 { id: 'architect_ai_jobs', label: 'Architect / AI Jobs' },
                 { id: 'iot', label: 'IoT' },
                 { id: 'bridge', label: 'Bridge' },
@@ -1520,25 +1558,87 @@
                 </div>
             `;
 
-            if (historyState.filter === 'tokens' && tokenSymbols.length) {
+            if (historyState.filter === 'tokens') {
                 html += `
                     <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;">
-                        <button class="wallet-btn" style="padding:5px 10px; font-size:11px; ${!historyState.selectedToken ? 'border-color:#00ff66;' : ''}"
-                            onclick="setHistoryToken('')">
-                            All Tokens
-                        </button>
-                        ${tokenSymbols.map(sym => `
-                            <button class="wallet-btn" style="padding:5px 10px; font-size:11px; ${historyState.selectedToken === sym ? 'border-color:#00ff66;' : ''}"
-                                onclick="setHistoryToken('${sym}')">
-                                ${sym}
-                            </button>
-                        `).join('')}
+                        <button class="wallet-btn" style="padding:5px 10px; font-size:11px; ${historyState.tokenScope === 'all' ? 'border-color:#00ff66;' : ''}" onclick="setTokenScope('all')">All</button>
+                        <button class="wallet-btn" style="padding:5px 10px; font-size:11px; ${historyState.tokenScope === 'native' ? 'border-color:#00ff66;' : ''}" onclick="setTokenScope('native')">Native</button>
+                        <button class="wallet-btn" style="padding:5px 10px; font-size:11px; ${historyState.tokenScope === 'crosschain' ? 'border-color:#00ff66;' : ''}" onclick="setTokenScope('crosschain')">Cross-chain</button>
                     </div>
                 `;
+                if (tokenSymbols.length) {
+                    html += `
+                        <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;">
+                            <button class="wallet-btn" style="padding:5px 10px; font-size:11px; ${!historyState.selectedToken ? 'border-color:#00ff66;' : ''}" onclick="setHistoryToken('')">All Tokens</button>
+                            ${tokenSymbols.map(sym => `
+                                <button class="wallet-btn" style="padding:5px 10px; font-size:11px; ${historyState.selectedToken === sym ? 'border-color:#00ff66;' : ''}" onclick="setHistoryToken('${sym}')">${sym}</button>
+                            `).join('')}
+                        </div>
+                    `;
+                }
             }
 
-            if (!filtered.length) {
+            if (historyState.filter === 'ai_credits') {
+                const creditEntries = historyState.aiLedger || [];
+                if (!creditEntries.length) {
+                    container.innerHTML = html + '<p style="color: var(--widget-muted); text-align: center;">No AI Credits ledger entries</p>';
+                    return;
+                }
+                html += creditEntries.map(e => {
+                    const delta = Number(e.delta || 0);
+                    const isIncoming = delta > 0;
+                    const sign = isIncoming ? '+' : '';
+                    const reason = String(e.reason || 'adjust').toLowerCase();
+                    const reasonLabel = reason === 'pack_purchase'
+                        ? 'AI Pack purchase'
+                        : (reason === 'chat_usage'
+                            ? 'Chat usage'
+                            : (reason === 't2e_reward' ? 'T2E reward' : reason));
+                    const meta = (e.meta && typeof e.meta === 'object') ? e.meta : {};
+                    const metaHint = meta.pack_code
+                        ? `Pack: ${meta.pack_code}`
+                        : (meta.model ? `Model: ${meta.model}` : '');
+                    return `
+                        <div class="tx-item">
+                            <div class="tx-header">
+                                <span class="tx-amount ${isIncoming ? 'incoming' : 'outgoing'}">${sign}${delta} credits</span>
+                                <span class="tx-status confirmed">${reasonLabel}</span>
+                            </div>
+                            <div class="tx-details">
+                                ${e.ts || e.timestamp || 'Unknown time'}<br>
+                                Balance: ${e.balance_before ?? '-'} → ${e.balance_after ?? '-'}
+                                ${metaHint ? `<br>${metaHint}` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+                container.innerHTML = html;
+                return;
+            }
+
+            let t2eCreditCount = 0;
+            if (historyState.filter === 't2e') {
+                const t2eCredits = (historyState.aiLedger || []).filter(e => String(e.reason || '').toLowerCase() === 't2e_reward');
+                t2eCreditCount = t2eCredits.length;
+                if (t2eCredits.length) {
+                    html += t2eCredits.map(e => `
+                        <div class="tx-item">
+                            <div class="tx-header">
+                                <span class="tx-amount incoming">+${Number(e.delta || 0)} credits</span>
+                                <span class="tx-status confirmed">T2E credit reward</span>
+                            </div>
+                            <div class="tx-details">${e.ts || e.timestamp || 'Unknown time'}<br>Balance: ${e.balance_before ?? '-'} → ${e.balance_after ?? '-'}</div>
+                        </div>
+                    `).join('');
+                }
+            }
+
+            if (!filtered.length && historyState.filter !== 't2e') {
                 container.innerHTML = html + '<p style="color: var(--widget-muted); text-align: center;">No transactions match this filter</p>';
+                return;
+            }
+            if (historyState.filter === 't2e' && !filtered.length && t2eCreditCount === 0) {
+                container.innerHTML = html + '<p style="color: var(--widget-muted); text-align: center;">No T2E rewards found</p>';
                 return;
             }
 
@@ -1576,15 +1676,23 @@
                     trackInfo = `<br>🎵 Track: ${tx.track_title}`;
                 }
 
+                const meta = (tx.meta && typeof tx.meta === 'object') ? tx.meta : {};
+                const crossChain = getKind(tx) === 'token_transfer' && isCrossChainTokenTransfer(tx);
+                const tokenTransferLabel = crossChain ? 'Token Transfer (Cross-chain)' : (getKind(tx) === 'token_transfer' ? 'Token Transfer' : '');
+                const chainHint = meta.chain || meta.origin_chain || '';
+                const logoUrl = meta.logo_url || tx.logo_url || '';
+                const logoBadge = (getKind(tx) === 'token_transfer')
+                    ? (logoUrl ? `<img src="${logoUrl}" alt="${asset}" style="width:14px;height:14px;border-radius:50%;margin-right:6px;vertical-align:middle;" onerror="this.style.display='none'">` : `🪙 `)
+                    : '';
                 return `
                     <div class="tx-item">
                         <div class="tx-header">
-                            <span class="tx-amount ${amountClass}">${sign}${amountStr} ${asset}</span>
+                            <span class="tx-amount ${amountClass}">${logoBadge}${sign}${amountStr} ${asset}</span>
                             <span class="tx-status ${status}">${status.toUpperCase()}</span>
                         </div>
                         <div class="tx-details">
                             ${isSwap ? 'Trader: ' + (tx.from || walletAddress) : (isIncoming ? 'From: ' + (tx.from || '') : 'To: ' + (tx.to || ''))}${trackInfo}<br>
-                            ${tx.timestamp || 'Unknown time'}<br>
+                            ${tx.timestamp || 'Unknown time'}${tokenTransferLabel ? `<br>${tokenTransferLabel}` : ''}${chainHint ? `<br>Chain: ${chainHint}` : ''}<br>
                             TXID: ${(tx.tx_id || 'pending').substring(0, 16)}...
                             ${rewardSplitHtml}
                         </div>
@@ -1605,7 +1713,7 @@
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 15000);
 
-                const res = await fetch(`/wallet_data/${walletAddress}`, {
+                const res = await fetch(`/api/wallet/history?address=${encodeURIComponent(walletAddress)}&limit=500`, {
                     signal: controller.signal
                 });
                 clearTimeout(timeoutId);
@@ -1613,7 +1721,14 @@
                 if (!res.ok) throw new Error('Failed to load history');
                 const data = await res.json();
 
-                historyState.transactions = trimHistory((data.transactions || []).slice().reverse());
+                historyState.walletTxs = trimHistory(((data.transactions || data.items || [])).slice().reverse());
+                try {
+                    const creditsRes = await fetch(`/api/ai_credits/ledger?wallet=${encodeURIComponent(walletAddress)}&limit=500`);
+                    const creditsData = await creditsRes.json();
+                    historyState.aiLedger = Array.isArray(creditsData.items) ? creditsData.items : (Array.isArray(creditsData.entries) ? creditsData.entries : []);
+                } catch (_) {
+                    historyState.aiLedger = [];
+                }
                 renderHistoryContent();
             } catch (e) {
                 console.error('Error loading history:', e);

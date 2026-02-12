@@ -1990,6 +1990,7 @@
     }
 
     let lastValidModelSelection = "auto";
+    const modelMetaById = new Map();
 
     function applyModelSelection(preferred) {
       if (!modelSelectEl) return;
@@ -2029,6 +2030,7 @@
 
         const models = Array.isArray(data.models) ? data.models : [];
         defaultModelId = data.default_model_id || "auto";
+        modelMetaById.clear();
 
         if (!models.length) {
           autoOpt.textContent = "AUTO only (router available)";
@@ -2037,18 +2039,19 @@
         }
 
         models.forEach((model) => {
-          if ((model.id === "offline_corpus" || model.id === "thrai") && model.enabled !== true) {
-            return;
-          }
+          if (!model || !model.id || model.id === "auto") return;
+          modelMetaById.set(model.id, model);
           const opt = document.createElement("option");
           opt.value = model.id;
           const badge = model.id === "offline_corpus"
             ? " · [On-chain / local]"
             : (model.id === "thrai" ? " · [Router]" : "");
-          opt.textContent = `${model.label || model.id}${badge}`;
+          opt.textContent = `${model.label || model.display_name || model.id}${badge}`;
           if (model.enabled === false) {
             opt.disabled = true;
-            opt.textContent += " (disabled)";
+            opt.textContent += `${model.health_reason ? ` (disabled: ${model.health_reason})` : " (disabled)"}`;
+          } else if (model.degraded === true) {
+            opt.textContent += `${model.health_reason ? ` (degraded: ${model.health_reason})` : " (degraded)"}`;
           }
           modelSelectEl.appendChild(opt);
         });
@@ -2394,6 +2397,12 @@
       if (modelSelectEl) {
         modelSelectEl.addEventListener("change", (e) => {
           const selected = e.target.value || defaultModelId;
+          const meta = modelMetaById.get(selected) || {};
+          if (meta.enabled === false || meta.degraded === true) {
+            showDegradedModeNotice(`Model '${selected}' is degraded${meta.health_reason ? ` (${meta.health_reason})` : ""}`);
+          } else {
+            hideDegradedModeNotice();
+          }
           pendingModelSelection = selected;
           persistModelSelection(selected);
         });

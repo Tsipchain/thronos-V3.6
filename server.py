@@ -967,9 +967,13 @@ AI_FREE_USAGE_FILE  = os.path.join(DATA_DIR, "ai_free_usage.json")
 
 # AI extra storage
 AI_FILES_DIR   = os.path.join(DATA_DIR, "ai_files")
-THR_OFFLINE_CORPUS_PATH = _strip_env_quotes(os.getenv("THR_OFFLINE_CORPUS_PATH", "")).strip()
-AI_CORPUS_FILE = THR_OFFLINE_CORPUS_PATH or os.path.join((DATA_DIR or "/tmp"), "ai_offline_corpus.json")
 THR_OFFLINE_CORPUS_ENABLED = _strip_env_quotes(os.getenv("THR_OFFLINE_CORPUS_ENABLED", "false")).lower() in ("1", "true", "yes", "on")
+_offline_corpus_path_env = _strip_env_quotes(os.getenv("THR_OFFLINE_CORPUS_PATH", "")).strip()
+if _offline_corpus_path_env:
+    AI_CORPUS_FILE = _offline_corpus_path_env
+else:
+    _default_corpus_path = os.path.join(DATA_DIR, "ai_offline_corpus.json")
+    AI_CORPUS_FILE = _default_corpus_path if os.path.exists(_default_corpus_path) else "/tmp/ai_offline_corpus.json"
 THR_THAI_ENABLED = _strip_env_quotes(os.getenv("THR_THAI_ENABLED", "")).lower() in ("1", "true", "yes", "on")
 DIKO_MAS_MODEL_URL = (
     _strip_env_quotes(os.getenv("DIKO_MAS_MODEL_URL", ""))
@@ -2958,6 +2962,7 @@ def distribute_music_reward(total_amount: float, artist_address: str, listener_a
     # Create unified transaction record
     tx = {
         "type": "music_play_reward",
+        "category": "music_stream",
         "track_id": track_id,
         "track_title": track_title or track_id,
         "listener": listener_address,
@@ -3315,7 +3320,9 @@ def _canonical_kind(kind_raw: str) -> str:
         "token_burn": "burn",
         "music_offline_tip": "music",
         "music_tip": "music",
-        "music_play_reward": "music_play_reward",
+        "music_play_reward": "music_stream",
+        "music_stream": "music_stream",
+        "music_royalty": "music_royalty",
         "music_track_add": "music",  # PR-5: Music/Playlists canonical kinds
         "playlist_create": "music",  # PR-5: Music/Playlists canonical kinds
         "playlist_add_track": "music",  # PR-5: Music/Playlists canonical kinds
@@ -5076,27 +5083,8 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
 
     provider_status = get_provider_status()
     normalized_mode = _normalized_ai_mode()
-
-    def _provider_configured(name: str, info: dict | None) -> bool:
-        if info and info.get("configured") and info.get("library_loaded", True) is not False:
-            return True
-        if name == "openai":
-            return bool((os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip())
-        if name == "anthropic":
-            return bool((os.getenv("ANTHROPIC_API_KEY") or "").strip())
-        if name == "gemini":
-            return bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
-        return False
-
-    callable_ids = []
-    for provider_name, models in AI_MODEL_REGISTRY.items():
-        if normalized_mode != "all" and provider_name != normalized_mode:
-            continue
-        provider_info = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
-        if not _provider_configured(provider_name, provider_info):
-            continue
-        for m in models:
-            callable_ids.append(m.id)
+    catalog = _build_ai_model_catalog()
+    callable_ids = [m.get("id") for m in catalog if m.get("enabled") and m.get("id") not in {"auto"}]
 
     default_model_id = _default_model_id()
     if default_model_id not in callable_ids and callable_ids:
@@ -5104,6 +5092,22 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
 
     requested_raw = (model_id or "").strip()
     requested = requested_raw or default_model_id or "auto"
+
+    if requested == "auto" and callable_ids:
+        heuristic_order = [
+            "gpt-4.1-mini",
+            "o3-mini",
+            "claude-3.5-sonnet",
+            "claude-3-5-sonnet",
+            "gemini-2.0-flash",
+            "gemini-2.5-pro",
+            "offline_corpus",
+            "thrai",
+        ]
+        for candidate in heuristic_order:
+            if candidate in callable_ids:
+                requested = candidate
+                break
 
     fallback_notice = None
 
@@ -5139,6 +5143,9 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
         fallback_notice = f"Model '{requested}' not callable; using {default_model_id or 'auto'}"
         requested = default_model_id or "auto"
 
+    if requested in {"offline_corpus", "thrai"} and requested in callable_ids:
+        return requested, fallback_notice, None
+
     resolved = _resolve_model(requested, normalized_mode=normalized_mode, provider_status=provider_status) if requested else None
     if resolved:
         return resolved.id, fallback_notice, None
@@ -5168,7 +5175,9 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
         "ok": False,
         "status": "model_not_available",
         "error": "no_available_model",
-        "message": "No available AI model for current mode. Check ai-core provider keys and health.",
+        "enabled_models": callable_ids,
+        "node_role": "ai_core",
+        "thronos_ai_mode": "core",
         "suggested_model": default_model_id,
         "providers": provider_status,
         "provider_diagnostics": provider_diagnostics,
@@ -5277,14 +5286,16 @@ def save_ai_sessions(sessions):
 
 
 def _session_billing_mode(session_type: str) -> str:
+    chat_billing = (os.getenv("CHAT_BILLING_MODE") or "credits").strip().lower() or "credits"
+    architect_billing = (os.getenv("ARCHITECT_BILLING_MODE") or "thr").strip().lower() or "thr"
     st = (session_type or "chat").strip().lower()
     if st == "architect":
-        return "thr"
+        return architect_billing
     if st == "train":
         return "none"
     if st == "codex":
-        return "credits"
-    return "credits"
+        return chat_billing
+    return chat_billing
 
 
 def _load_billing_idempotency() -> dict:
@@ -6823,8 +6834,10 @@ def _categorize_transaction(tx: dict) -> str:
     tx_type = tx.get("type") or tx.get("kind") or ""
     tx_type_lower = tx_type.lower()
 
-    # Music tips
-    if "music" in tx_type_lower or "tip" in tx_type_lower:
+    # Music tips / stream / royalties
+    if tx.get("category") in {"music_stream", "music_royalty", "music_tip"}:
+        return str(tx.get("category"))
+    if "music" in tx_type_lower or tx_type_lower in {"music_tip", "music_play_reward", "music_stream", "music_royalty"}:
         return "music_tip"
 
     # AI Credits (Chat billing) - must check BEFORE generic "ai" match
@@ -8234,6 +8247,12 @@ def api_architect_generate():
         return error_resp
     if selected_model:
         model_key = selected_model
+        if requested_model_key == "thrai" and model_key != "thrai":
+            return jsonify({
+                "error": "thrai_unavailable",
+                "reason": "disabled_or_degraded",
+                "models": _build_ai_model_catalog(),
+            }), 503
         if session_id:
             _save_session_selected_model(session_id, model_key)
         call_meta["callable"] = True
@@ -10562,44 +10581,28 @@ def _build_chain_context_for_router(max_blocks: int = 8, max_tokens: int = 8, ma
 
 
 
-def _offline_corpus_health() -> dict:
-    path = (AI_CORPUS_FILE or "").strip() or os.path.join((DATA_DIR or "/tmp"), "ai_offline_corpus.json")
-    status = {
-        "enabled": False,
-        "degraded": False,
-        "health_ok": False,
-        "path": path,
-        "reason": None,
-    }
+def _offline_corpus_health() -> tuple[bool, str | None]:
     if not THR_OFFLINE_CORPUS_ENABLED:
-        status["reason"] = "disabled_by_flag"
-        return status
-
+        return False, "disabled_by_flag"
     try:
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        if not os.path.exists(path):
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump({"conversations": []}, f, ensure_ascii=False, indent=2)
-
-        corpus = load_json(path, {"conversations": []})
+        if not os.path.exists(AI_CORPUS_FILE):
+            save_json(AI_CORPUS_FILE, {"conversations": []})
+            return True, "auto_created"
+        corpus = load_json(AI_CORPUS_FILE, {"conversations": []})
+        if isinstance(corpus, dict) and isinstance(corpus.get("conversations"), list):
+            return True, None
         if isinstance(corpus, list):
-            # Backward-compatible legacy format
-            corpus = {"conversations": corpus}
-            save_json(path, corpus)
-        if not isinstance(corpus, dict) or not isinstance(corpus.get("conversations"), list):
-            status["degraded"] = True
-            status["reason"] = "invalid_corpus_format"
-            return status
-
-        status.update({"enabled": True, "degraded": False, "health_ok": True, "reason": None})
-        return status
+            return True, None
+        return False, "invalid_corpus_format"
     except Exception as exc:
         status["degraded"] = True
         status["reason"] = str(exc)
         return status
 
 
-def _thrai_router_health() -> dict:
+def _thrai_router_health() -> tuple[bool, str | None]:
+    if not THR_THAI_ENABLED:
+        return False, "disabled_by_flag"
     router_url = (DIKO_MAS_MODEL_URL or "").strip()
     status = {
         "enabled": False,
@@ -10613,19 +10616,26 @@ def _thrai_router_health() -> dict:
         status["reason"] = "disabled_by_flag"
         return status
 
-    if not router_url:
-        status.update({"degraded": True, "reason": "missing_router_url"})
-        return status
+    for candidate in health_candidates:
+        try:
+            r = requests.get(candidate, timeout=2)
+            if r.status_code < 500:
+                return True, None
+        except requests.exceptions.Timeout:
+            return False, "timeout"
+        except requests.exceptions.ConnectionError:
+            return False, "connection_refused"
+        except Exception:
+            pass
 
     try:
-        try:
-            r = requests.head(router_url, timeout=3)
-        except Exception:
-            r = requests.get(router_url, timeout=3)
-        if 200 <= int(r.status_code) < 300:
-            status.update({"enabled": True, "degraded": False, "health_ok": True, "reason": None})
-        else:
-            status.update({"degraded": True, "reason": f"http_status:{r.status_code}"})
+        r = requests.post(router_url, json={"ping": "thrai"}, timeout=2)
+        if r.status_code < 500:
+            return True, None
+    except requests.exceptions.Timeout:
+        return False, "timeout"
+    except requests.exceptions.ConnectionError:
+        return False, "connection_refused"
     except Exception as exc:
         status.update({"degraded": True, "reason": f"HTTPConnectionError: {exc}"})
 
@@ -10699,6 +10709,57 @@ def _build_ai_models_catalog(provider_status: dict, offline_status: dict, thrai_
     return models
 
 
+def _build_ai_model_catalog() -> list[dict]:
+    provider_status = get_provider_status()
+    models: list[dict] = [{
+        "id": "auto",
+        "display_name": "Auto (Thronos chooses)",
+        "provider": "system",
+        "mode": "system",
+        "enabled": True,
+        "degraded": False,
+        "health_reason": None,
+    }]
+
+    for provider_name, model_list in AI_MODEL_REGISTRY.items():
+        pstatus = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
+        for mi in model_list:
+            enabled = bool(mi.enabled and pstatus.get("configured", True) and pstatus.get("library_loaded", True) is not False)
+            degraded = bool(getattr(mi, "degraded", (not enabled))) or not enabled
+            models.append({
+                "id": mi.id,
+                "display_name": mi.display_name,
+                "provider": mi.provider,
+                "mode": "provider",
+                "enabled": enabled,
+                "degraded": degraded,
+                "health_reason": None if enabled else (pstatus.get("last_error") or "provider_unavailable"),
+            })
+
+    offline_ok, offline_reason = _offline_corpus_health()
+    models.append({
+        "id": "offline_corpus",
+        "display_name": "Offline Corpus",
+        "provider": "local",
+        "mode": "offline",
+        "enabled": bool(THR_OFFLINE_CORPUS_ENABLED and offline_ok),
+        "degraded": False if not THR_OFFLINE_CORPUS_ENABLED else (not offline_ok),
+        "health_reason": offline_reason,
+    })
+
+    thrai_ok, thrai_reason = _thrai_router_health()
+    models.append({
+        "id": "thrai",
+        "display_name": "Thrai Router",
+        "provider": "thronos",
+        "mode": "router",
+        "enabled": bool(THR_THAI_ENABLED and thrai_ok),
+        "degraded": bool(THR_THAI_ENABLED and not thrai_ok),
+        "health_reason": thrai_reason,
+    })
+    return models
+
+
 def call_offline_corpus(corpus_path, messages, wallet, session_id, chain_context) -> str:
     """Simple local retrieval over ai_offline_corpus.json / knowledge blocks."""
     try:
@@ -10769,16 +10830,28 @@ def call_thrai_router(router_url: str, payload: dict) -> dict:
 # ─── QUANTUM CHAT API (ενιαίο AI + αρχεία + offline corpus) ─────────────────
 def _ai_proxy_base_url() -> str:
     """Resolve proxy base URL for master proxy mode (prefer AI core URL)."""
-    return (
+    base = (
         (AI_CORE_URL or "").strip()
         or (os.getenv("MASTER_NODE_URL") or "").strip()
         or (MASTER_PUBLIC_URL or "").strip()
     )
+    if not base:
+        return ""
+    try:
+        parsed = urlparse(base)
+        host = (parsed.netloc or "").lower()
+        req_host = (request.host or "").lower()
+        if host and req_host and host == req_host:
+            logger.warning("[AI_PROXY] ignoring self-proxy target %s", base)
+            return ""
+    except Exception:
+        pass
+    return base
 
 
 def _is_proxy_mode_enabled() -> bool:
     """True only for non-ai_core nodes configured in proxy AI mode."""
-    return THRONOS_AI_MODE == "proxy" and not is_ai_core()
+    return THRONOS_AI_MODE == "proxy" and not is_ai_core() and bool(_ai_proxy_base_url())
 
 
 def _handle_ai_chat_proxy():
@@ -10882,6 +10955,7 @@ def _handle_ai_chat_master():
             session_id = session_id
         call_meta["session_id"] = session_id
 
+    requested_model_key = (model_key or "").strip().lower()
     selected_model, fallback_notice, error_resp = _select_callable_model(model_key, session_type="chat")
     if error_resp:
         # Model not callable – return JSON without consuming credits
@@ -10893,6 +10967,12 @@ def _handle_ai_chat_master():
         return error_resp
     if selected_model:
         model_key = selected_model
+        if requested_model_key == "thrai" and model_key != "thrai":
+            return jsonify({
+                "error": "thrai_unavailable",
+                "reason": "disabled_or_degraded",
+                "models": _build_ai_model_catalog(),
+            }), 503
         if session_id:
             _save_session_selected_model(session_id, model_key)
         resolved = _resolve_model(model_key)
@@ -11094,6 +11174,13 @@ def _handle_ai_chat_master():
                 "meta": {"source": "offline_corpus"},
             }
         elif model_key == "thrai":
+            thrai_ok, thrai_reason = _thrai_router_health()
+            if not (THR_THAI_ENABLED and thrai_ok):
+                return jsonify({
+                    "error": "thrai_unavailable",
+                    "reason": thrai_reason or "disabled_by_flag",
+                    "models": _build_ai_model_catalog(),
+                }), 503
             payload = {
                 "wallet": wallet,
                 "session_id": session_id,
@@ -11120,7 +11207,8 @@ def _handle_ai_chat_master():
             "credits": credits_value if credits_value is not None else 0,
             "session_id": session_id,
         }
-        return jsonify(resp), 200
+        return jsonify(resp), 500
+
     latency_ms = int((time.time() - call_started) * 1000)
 
     if isinstance(raw, dict):
@@ -21597,17 +21685,17 @@ def api_ai_models():
 
     # ─── Local AI handling (fallback or when is_ai_core) ───
     try:
-        provider_status = get_provider_status()
-        offline_status = _offline_corpus_health()
-        thrai_status = _thrai_router_health()
-
-        models = _build_ai_models_catalog(provider_status, offline_status, thrai_status)
-        enabled_ids = [m.get("id") for m in models if m.get("enabled") and m.get("id") != "auto"]
-        default_model_id = enabled_ids[0] if enabled_ids else "auto"
+        _apply_env_flags(get_provider_status())
+        models = _build_ai_model_catalog()
+        for m in models:
+            m.setdefault("label", m.get("display_name") or m.get("id"))
 
         payload = {
             "models": models,
-            "default_model_id": default_model_id,
+            "default_model_id": _default_model_id() or "auto",
+            "engine": "d3lfoi",
+            "mode": "core",
+            "node_role": NODE_ROLE,
         }
         return jsonify(payload), 200
 
@@ -21982,33 +22070,51 @@ def api_ai_health():
         AI_PROXY_HEALTH_CACHE["payload"] = payload
         return jsonify(payload), 200
 
-    provider_status = get_provider_status()
-    offline_status = _offline_corpus_health()
-    thrai_status = _thrai_router_health()
-    models = _build_ai_models_catalog(provider_status, offline_status, thrai_status)
-    enabled_ids = [m.get("id") for m in models if m.get("enabled") and m.get("id") != "auto"]
+    try:
+        catalog = _build_ai_model_catalog()
+        enabled_ids = [m.get("id") for m in catalog if m.get("enabled")]
+    except Exception:
+        catalog = []
+        enabled_ids = []
 
-    return jsonify({
+    offline_ok, offline_reason = _offline_corpus_health()
+    thrai_ok, thrai_reason = _thrai_router_health()
+    provider_status = get_provider_status()
+    providers_block = {}
+    for pname in ("openai", "anthropic", "gemini"):
+        info = provider_status.get(pname, {}) if isinstance(provider_status, dict) else {}
+        providers_block[pname] = {
+            "enabled": bool(info.get("configured") and info.get("library_loaded", True) is not False),
+            "degraded": bool(not info.get("configured") or info.get("library_loaded", True) is False),
+            "reason": info.get("last_error") or (None if info.get("configured") else "missing_api_key"),
+        }
+
+    payload = {
         "ok": True,
         "node_role": NODE_ROLE,
         "thronos_ai_mode": os.getenv("THRONOS_AI_MODE", "all"),
+        "mode": "core",
+        "engine": "d3lfoi",
         "enabled_model_ids": enabled_ids,
-        "provider_status": provider_status,
+        "models": catalog,
+        "providers": providers_block,
         "offline_corpus": {
-            "enabled": bool(offline_status.get("enabled")),
-            "degraded": bool(offline_status.get("degraded")),
-            "health_ok": bool(offline_status.get("health_ok")),
-            "path": offline_status.get("path") or AI_CORPUS_FILE,
-            "reason": offline_status.get("reason"),
+            "enabled": bool(THR_OFFLINE_CORPUS_ENABLED and offline_ok),
+            "degraded": False if not THR_OFFLINE_CORPUS_ENABLED else (not offline_ok),
+            "health_ok": bool(offline_ok),
+            "path": AI_CORPUS_FILE,
+            "reason": offline_reason,
         },
         "thrai": {
-            "enabled": bool(thrai_status.get("enabled")),
-            "degraded": bool(thrai_status.get("degraded")),
-            "health_ok": bool(thrai_status.get("health_ok")),
-            "router_url": thrai_status.get("router_url") or (DIKO_MAS_MODEL_URL or "").strip(),
-            "reason": thrai_status.get("reason"),
-        }
-    }), 200
+            "enabled": bool(THR_THAI_ENABLED and thrai_ok),
+            "degraded": bool(THR_THAI_ENABLED and not thrai_ok),
+            "health_ok": bool(thrai_ok),
+            "router_url": (DIKO_MAS_MODEL_URL or "").strip(),
+            "reason": thrai_reason,
+        },
+        "provider_status": provider_status,
+    }
+    return jsonify(payload), 200
 
 
 @app.route("/api/ai/provider_status", methods=["GET"])
@@ -22850,6 +22956,7 @@ def api_v1_music_tip():
     tx_id = f"MUSIC-TIP-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
         "type": "music_tip",
+        "category": "music_tip",
         "track_id": track_id,
         "track_title": track["title"],
         "from": from_address,

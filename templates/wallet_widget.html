@@ -1293,6 +1293,7 @@
             filter: 'all',
             selectedToken: '',
             transactions: [],
+            aiCreditsLedger: [],
         };
 
         // Memory optimization: limit transaction history to prevent unbounded growth
@@ -1343,12 +1344,12 @@
                 ai_credits: 'ai_credits',
                 ai_credits_earned: 'ai_credits',
                 ai_credits_spent: 'ai_credits',
-                architect: 'architect_ai_jobs',
-                architect_job: 'architect_ai_jobs',
-                ai_job_created: 'architect_ai_jobs',
-                ai_job_progress: 'architect_ai_jobs',
-                ai_job_completed: 'architect_ai_jobs',
-                ai_job_reward: 'architect_ai_jobs',
+                architect: 'architect_job',
+                architect_job: 'architect_job',
+                ai_job_created: 'architect_job',
+                ai_job_progress: 'architect_job',
+                ai_job_completed: 'architect_job',
+                ai_job_reward: 'architect_job',
                 iot: 'iot',
                 iot_parking: 'iot',
                 iot_parking_reservation: 'iot',
@@ -1478,11 +1479,11 @@
                 if (historyState.filter === 'tokens') return category === 'tokens';
                 if (historyState.filter === 'swaps') return category === 'swaps';
                 if (historyState.filter === 'l2e') return category === 'l2e';
-                if (historyState.filter === 't2e') return rawKind === 't2e_reward' || rawKind === 'ai_reward' && (tx.category === 't2e_reward' || tx.details?.device_id);
-                if (historyState.filter === 'ai_credits') return category === 'ai_credits';
+                if (historyState.filter === 't2e') return category === 't2e_reward_thr';
+                if (historyState.filter === 'ai_credits') return false;
                 if (historyState.filter === 'iot') return category === 'iot';
                 if (historyState.filter === 'bridge') return category === 'bridge';
-                if (historyState.filter === 'architect_ai_jobs') return category === 'architect_ai_jobs';
+                if (historyState.filter === 'architect_ai_jobs') return category === 'architect_job';
                 if (historyState.filter === 'liquidity') return category === 'liquidity';
                 if (historyState.filter === 'gateway') return category === 'gateway';
                 if (historyState.filter === 'music') return category === 'music' || rawKind === 'music_play_reward' || rawKind === 'music_tip';
@@ -1499,7 +1500,7 @@
                 { id: 'tokens', label: 'Tokens' },
                 { id: 'l2e', label: 'L2E' },
                 { id: 't2e', label: '🎓 T2E' },
-                { id: 'ai_credits', label: 'AI Credits' },
+                { id: 'ai_credits', label: 'AI Credits (Chat)' },
                 { id: 'architect_ai_jobs', label: 'Architect / AI Jobs' },
                 { id: 'iot', label: 'IoT' },
                 { id: 'bridge', label: 'Bridge' },
@@ -1537,8 +1538,60 @@
                 `;
             }
 
-            if (!filtered.length) {
+            if (historyState.filter === 'ai_credits') {
+                const creditEntries = (historyState.aiCreditsLedger || []).filter(e => {
+                    const reason = String(e.reason || '').toLowerCase();
+                    return reason === 'pack_purchase' || reason === 'chat_usage';
+                });
+                if (!creditEntries.length) {
+                    container.innerHTML = html + '<p style="color: var(--widget-muted); text-align: center;">No AI Credits ledger entries</p>';
+                    return;
+                }
+                html += creditEntries.map(e => {
+                    const delta = Number(e.delta || 0);
+                    const isIncoming = delta > 0;
+                    const sign = isIncoming ? '+' : '';
+                    const reasonLabel = e.reason === 'pack_purchase' ? 'Pack purchase top-up' : 'Chat usage';
+                    return `
+                        <div class="tx-item">
+                            <div class="tx-header">
+                                <span class="tx-amount ${isIncoming ? 'incoming' : 'outgoing'}">${sign}${delta} credits</span>
+                                <span class="tx-status confirmed">${reasonLabel}</span>
+                            </div>
+                            <div class="tx-details">
+                                ${e.ts || e.timestamp || 'Unknown time'}<br>
+                                Balance: ${e.balance_before ?? '-'} → ${e.balance_after ?? '-'}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+                container.innerHTML = html;
+                return;
+            }
+
+            let t2eCreditCount = 0;
+            if (historyState.filter === 't2e') {
+                const t2eCredits = (historyState.aiCreditsLedger || []).filter(e => String(e.reason || '').toLowerCase() === 't2e_reward');
+                t2eCreditCount = t2eCredits.length;
+                if (t2eCredits.length) {
+                    html += t2eCredits.map(e => `
+                        <div class="tx-item">
+                            <div class="tx-header">
+                                <span class="tx-amount incoming">+${Number(e.delta || 0)} credits</span>
+                                <span class="tx-status confirmed">T2E credit reward</span>
+                            </div>
+                            <div class="tx-details">${e.ts || e.timestamp || 'Unknown time'}<br>Balance: ${e.balance_before ?? '-'} → ${e.balance_after ?? '-'}</div>
+                        </div>
+                    `).join('');
+                }
+            }
+
+            if (!filtered.length && historyState.filter !== 't2e') {
                 container.innerHTML = html + '<p style="color: var(--widget-muted); text-align: center;">No transactions match this filter</p>';
+                return;
+            }
+            if (historyState.filter === 't2e' && !filtered.length && t2eCreditCount === 0) {
+                container.innerHTML = html + '<p style="color: var(--widget-muted); text-align: center;">No T2E rewards found</p>';
                 return;
             }
 
@@ -1605,7 +1658,7 @@
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 15000);
 
-                const res = await fetch(`/wallet_data/${walletAddress}`, {
+                const res = await fetch(`/api/wallet/history?address=${encodeURIComponent(walletAddress)}&limit=500`, {
                     signal: controller.signal
                 });
                 clearTimeout(timeoutId);
@@ -1613,7 +1666,14 @@
                 if (!res.ok) throw new Error('Failed to load history');
                 const data = await res.json();
 
-                historyState.transactions = trimHistory((data.transactions || []).slice().reverse());
+                historyState.transactions = trimHistory(((data.transactions || data.items || [])).slice().reverse());
+                try {
+                    const creditsRes = await fetch(`/api/ai_credits/ledger?wallet=${encodeURIComponent(walletAddress)}&limit=500`);
+                    const creditsData = await creditsRes.json();
+                    historyState.aiCreditsLedger = Array.isArray(creditsData.items) ? creditsData.items : (Array.isArray(creditsData.entries) ? creditsData.entries : []);
+                } catch (_) {
+                    historyState.aiCreditsLedger = [];
+                }
                 renderHistoryContent();
             } catch (e) {
                 console.error('Error loading history:', e);

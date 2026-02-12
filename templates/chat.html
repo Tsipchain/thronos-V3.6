@@ -2349,9 +2349,11 @@
       return ["gr", "en", "ja", "es", "ru"].includes(v) ? v : "en";
     }
 
-    function applyChatTranslations(langOverride) {
-      const lang = normalizeLang(langOverride || localStorage.getItem("thr_lang") || "en");
-      localStorage.setItem("thr_lang", lang);
+    const LANG_KEY = "thr_lang";
+
+    function applyTranslations(langOverride) {
+      const lang = normalizeLang(langOverride || localStorage.getItem(LANG_KEY) || "en");
+      localStorage.setItem(LANG_KEY, lang);
       if (chatLanguageSelectEl) chatLanguageSelectEl.value = lang;
       document.querySelectorAll("[data-i18n]").forEach((el) => {
         const key = el.dataset.i18n || "";
@@ -2378,7 +2380,7 @@
       }
 
       if (openAIPacksBtnEl) openAIPacksBtnEl.addEventListener("click", openAIPacksModal);
-      if (chatLanguageSelectEl) chatLanguageSelectEl.addEventListener("change", (e) => applyChatTranslations(e.target.value));
+      if (chatLanguageSelectEl) chatLanguageSelectEl.addEventListener("change", (e) => applyTranslations(e.target.value));
       if (closeAIPacksBtnEl) closeAIPacksBtnEl.addEventListener("click", closeAIPacksModal);
 
       fileInputEl.addEventListener("change", (e) => {
@@ -2439,7 +2441,7 @@
       initAdminAccess();
       hydrateSessionCache();
       bindEvents();
-      applyChatTranslations();
+      applyTranslations();
       await loadModels();
       await loadWallet();
       await loadSessions();

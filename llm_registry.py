@@ -4,6 +4,7 @@ import os
 import importlib.util
 import logging
 from dataclasses import dataclass
+import json
 from urllib import request as urllib_request
 from urllib.parse import urlsplit
 from typing import Dict, List, Optional
@@ -61,6 +62,42 @@ def _url_health_ok(url: str, timeout: float = 2.5) -> tuple[bool, Optional[str]]
             last = str(exc)
             continue
     return False, last if 'last' in locals() else "health_check_failed"
+
+
+def _offline_corpus_health(path: str) -> tuple[bool, Optional[str]]:
+    try:
+        if not path or not os.path.exists(path):
+            return False, f"missing_path:{path}"
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        if not isinstance(payload, list):
+            return False, "invalid_corpus_format"
+        return True, None
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _thrai_router_health(url: str, timeout: float = 2.5) -> tuple[bool, Optional[str]]:
+    ok, err = _url_health_ok(url, timeout=timeout)
+    if ok:
+        return True, None
+    target = (url or "").strip()
+    if not target:
+        return False, "missing_router_url"
+    try:
+        req = urllib_request.Request(
+            target,
+            data=b'{"ping":"thrai"}',
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib_request.urlopen(req, timeout=timeout) as resp:
+            status = int(getattr(resp, "status", 200) or 200)
+            if status < 500:
+                return True, None
+    except Exception as post_exc:
+        return False, str(post_exc)
+    return False, err
 
 try:
     import google.genai as genai
@@ -124,10 +161,10 @@ AI_MODEL_REGISTRY: Dict[str, List[ModelInfo]] = {
         ModelInfo(id="gemini-2.5-flash", display_name="Gemini 2.5 Flash", provider="gemini", tier="fast"),
     ],
     "local": [
-        ModelInfo(id="offline_corpus", display_name="Offline corpus (local)", provider="local", tier="local", default=False, enabled=True),
+        ModelInfo(id="offline_corpus", display_name="Offline corpus (local)", provider="local", tier="local", default=False, enabled=False),
     ],
     "thronos": [
-        ModelInfo(id="thrai", display_name="Thronos / Thrai (custom)", provider="thronos", tier="custom", default=False, enabled=True),
+        ModelInfo(id="thrai", display_name="Thronos / Thrai (custom)", provider="thronos", tier="custom", default=False, enabled=False),
     ],
 }
 
@@ -255,7 +292,8 @@ def get_provider_status() -> dict:
         offline_path = os.path.join(data_dir, "ai_offline_corpus.json")
     offline_flag = _env_truthy("THR_OFFLINE_CORPUS_ENABLED", default=False)
     offline_exists = os.path.exists(offline_path)
-    local_configured = bool(offline_flag and offline_exists)
+    offline_ok, offline_err = _offline_corpus_health(offline_path)
+    local_configured = bool(offline_flag and offline_ok)
     local_missing = []
     if not offline_flag:
         local_missing.append("THR_OFFLINE_CORPUS_ENABLED")
@@ -266,10 +304,11 @@ def get_provider_status() -> dict:
             local_configured,
             ["THR_OFFLINE_CORPUS_ENABLED", "THR_OFFLINE_CORPUS_PATH", "DATA_DIR"],
             library_loaded=True,
-            extra={"corpus_file": offline_path, "missing_env": local_missing},
+            last_error=None if offline_ok else offline_err,
+            extra={"corpus_file": offline_path, "missing_env": local_missing, "health_ok": offline_ok},
         )
     )
-    local_entry["checked_sources"].append({"source": "file", "path": offline_path, "present": offline_exists})
+    local_entry["checked_sources"].append({"source": "file", "path": offline_path, "present": offline_exists, "health_ok": offline_ok})
     local_entry["invalid_models"] = invalid_by_provider.get("local", [])
     if local_entry["invalid_models"] and not local_entry.get("last_error"):
         local_entry["last_error"] = local_entry["invalid_models"][0].get("reason")
@@ -283,7 +322,7 @@ def get_provider_status() -> dict:
         or ""
     ).strip()
     thai_flag = _env_truthy("THR_THAI_ENABLED", default=bool(diko_url))
-    thai_health_ok, thai_health_err = _url_health_ok(diko_url) if diko_url else (False, "missing_router_url")
+    thai_health_ok, thai_health_err = _thrai_router_health(diko_url) if diko_url else (False, "missing_router_url")
     thronos_configured = bool(diko_url and thai_flag and thai_health_ok)
     thronos_missing = []
     if not thai_flag:

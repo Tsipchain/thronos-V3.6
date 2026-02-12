@@ -7283,8 +7283,27 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
         tx_from = tx.get("from") or tx.get("sender")
         tx_to = tx.get("to") or tx.get("recipient")
         tx_address = tx.get("address")  # IoT telemetry
+        tx_meta = tx.get("meta") if isinstance(tx.get("meta"), dict) else {}
 
-        parties = {str(tx_from or "").lower(), str(tx_to or "").lower(), str(tx_address or "").lower()}
+        parties = {
+            tx_from,
+            tx_to,
+            tx_address,
+            tx.get("thr_address"),
+            tx.get("wallet"),
+            tx.get("wallet_address"),
+            tx.get("owner"),
+            tx.get("user_wallet"),
+            tx.get("sender_wallet"),
+            tx.get("recipient_wallet"),
+            tx_meta.get("wallet"),
+            tx_meta.get("wallet_address"),
+            tx_meta.get("thr_address"),
+            tx_meta.get("owner"),
+            tx_meta.get("artist_wallet"),
+            tx_meta.get("tipper_wallet"),
+        }
+        parties = {str(p).lower() for p in parties if p}
         if addr_lower not in parties:
             continue
 
@@ -7331,7 +7350,10 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
     for tx in wallet_txs:
         category = tx.get("category", "other")
         direction = tx.get("direction", "related")
-        amount = float(tx.get("amount", 0))
+        try:
+            amount = float(tx.get("amount", 0) or 0)
+        except Exception:
+            amount = 0.0
 
         if category == "mining":
             summary["total_mining"] += amount
@@ -7447,12 +7469,12 @@ def api_wallet_history():
     - category: Optional filter (mining, ai_reward, music_tip, iot_telemetry, etc.)
     - limit: Max entries to return (default 200)
     - cursor: Offset cursor for pagination
-    - exclude_source: Comma-separated sources to hide (default: "architect")
+    - exclude_source: Comma-separated sources to hide (default: none)
     - status: Filter by "pending" or "confirmed"
     """
     address = (request.args.get("address") or request.args.get("wallet") or "").strip()
     category_filter = request.args.get("category", "").strip().lower()
-    exclude_source = request.args.get("exclude_source", "architect").strip().lower()
+    exclude_source = request.args.get("exclude_source", "").strip().lower()
     status_filter = request.args.get("status", "").strip().lower()
     try:
         limit = min(int(request.args.get("limit", 200)), 500)

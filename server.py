@@ -985,6 +985,7 @@ SESSIONS_DIR = AI_SESSIONS_DIR
 AI_SESSION_BILLING_FILE = os.path.join(DATA_DIR, "ai_session_billing.json")
 AI_T2E_EVENTS_FILE = os.path.join(DATA_DIR, "ai_t2e_events.json")
 AI_FILES_INDEX = os.path.join(DATA_DIR, "ai_files_index.json")
+ARCHITECT_T2E_REWARD_CREDITS = int(_strip_env_quotes(os.getenv("ARCHITECT_T2E_REWARD_CREDITS", "0")) or 0)
 
 # FIX 9: Set SESSIONS_DIR to point to volume-backed AI_SESSIONS_DIR
 # This ensures all chat sessions persist across Railway deploys
@@ -3483,6 +3484,16 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
                 norm["amount"] = norm["display_amount"]
             except Exception:
                 pass
+        cross_chain = bool(tx.get("cross_chain") or tx.get("is_cross_chain") or tx.get("bridge_tx") or tx.get("origin_chain") or tx.get("chain"))
+        chain_name = tx.get("chain") or tx.get("origin_chain") or tx.get("source_chain") or "thronos"
+        norm.setdefault("meta", {})
+        if isinstance(norm["meta"], dict):
+            norm["meta"].setdefault("token_symbol", norm["asset"])
+            norm["meta"].setdefault("decimals", norm["decimals"])
+            norm["meta"].setdefault("cross_chain", cross_chain)
+            norm["meta"].setdefault("chain", chain_name)
+            if token_meta.get("logo_url"):
+                norm["meta"].setdefault("logo_url", token_meta.get("logo_url"))
         norm.setdefault("note", f"Token transfer {norm.get('display_amount', norm.get('amount', 0))} {norm['asset']}")
 
     # Swap / pool swap
@@ -5207,7 +5218,7 @@ def load_ai_sessions():
         meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
         selected_model_id = meta.get("selected_model_id") or s.get("selected_model_id") or _default_model_id()
         session_type = (meta.get("session_type") or s.get("session_type") or "chat").lower()
-        if session_type not in {"chat", "architect", "train"}:
+        if session_type not in {"chat", "architect", "codex", "train"}:
             session_type = "chat"
         billing_mode_locked = (meta.get("billing_mode_locked") or s.get("billing_mode_locked") or _session_billing_mode(session_type)).lower()
         meta["session_type"] = session_type
@@ -5242,6 +5253,8 @@ def _session_billing_mode(session_type: str) -> str:
         return "thr"
     if st == "train":
         return "none"
+    if st == "codex":
+        return "credits"
     return "credits"
 
 
@@ -5265,7 +5278,7 @@ def _session_by_id(session_id: str) -> dict | None:
 
 def _create_session_record(session_type: str, wallet: str = "", title: str | None = None, session_id: str | None = None) -> dict:
     st = (session_type or "chat").strip().lower()
-    if st not in {"chat", "architect", "train"}:
+    if st not in {"chat", "architect", "codex", "train"}:
         st = "chat"
     now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
     sid = (session_id or "").strip() or uuid.uuid4().hex
@@ -8331,6 +8344,24 @@ def api_architect_generate():
     # FIX 8: Grant credits reward (1 THR → 10 credits)
     reward_telemetry = billing.grant_credits_from_thr_spend(wallet, architect_fee)
 
+    # Optional T2E bonus for meaningful Architect completions
+    t2e_bonus = 0
+    if wallet and ARCHITECT_T2E_REWARD_CREDITS > 0 and files_count > 0 and len((cleaned or "").strip()) >= 200:
+        try:
+            t2e_bonus = add_ai_credits(
+                wallet,
+                ARCHITECT_T2E_REWARD_CREDITS,
+                reason="t2e_reward",
+                metadata={
+                    "source": "architect_completion",
+                    "session_id": session_id,
+                    "blueprint": blueprint,
+                    "files_generated": files_count,
+                },
+            )
+        except Exception as e:
+            app.logger.warning("architect_t2e_reward_failed: %s", e)
+
     resp_files = []
     for f in files or []:
         if isinstance(f, dict):
@@ -8375,6 +8406,7 @@ def api_architect_generate():
         # FIX 8: Billing info
         "thr_spent": float(architect_fee),
         "credits_granted": reward_telemetry.get("credits_delta", 0),
+        "t2e_reward_credits": ARCHITECT_T2E_REWARD_CREDITS if t2e_bonus else 0,
         "billing_channel": "thr",
         "tx_id": charge_telemetry.get("tx_id"),
     }), 200
@@ -20885,8 +20917,8 @@ def api_chat_session_new():
 def api_sessions_create():
     data = request.get_json(silent=True) or {}
     session_type = (data.get("session_type") or "chat").strip().lower()
-    if session_type not in {"chat", "architect", "train"}:
-        return jsonify({"ok": False, "error": "invalid_session_type", "allowed": ["chat", "architect", "train"]}), 400
+    if session_type not in {"chat", "architect", "codex", "train"}:
+        return jsonify({"ok": False, "error": "invalid_session_type", "allowed": ["chat", "architect", "codex", "train"]}), 400
 
     wallet = (data.get("wallet") or request.cookies.get("thr_address") or "").strip()
     title = (data.get("title") or "").strip() or None
@@ -21519,7 +21551,7 @@ def api_ai_ask():
 
     data = request.get_json(silent=True) or {}
     product = (data.get("product") or "chat").strip().lower()
-    if product not in {"chat", "architect", "train"}:
+    if product not in {"chat", "architect", "codex", "train"}:
         return jsonify({"ok": False, "error": "invalid_product"}), 400
 
     request_id = data.get("request_id") or f"aiask-{int(time.time()*1000)}-{secrets.token_hex(4)}"

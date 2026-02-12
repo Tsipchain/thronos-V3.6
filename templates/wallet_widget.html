@@ -1292,6 +1292,7 @@
         const historyState = {
             filter: 'all',
             selectedToken: '',
+            tokenScope: 'all',
             walletTxs: [],
             aiLedger: [],
         };
@@ -1417,6 +1418,7 @@
             if (kind === 'block') return true;
             if (!tx.from && !tx.to) return true;
             if (tx.amount === 0 && asset === 'THR' && kind !== 'thr_transfer') return true;
+            if (getCanonicalCategory(tx) === 'ai_credits') return true;
             return false;
         }
 
@@ -1434,6 +1436,7 @@
             historyState.filter = filter;
             if (filter !== 'tokens') {
                 historyState.selectedToken = '';
+                historyState.tokenScope = 'all';
             }
             renderHistoryContent();
         }
@@ -1443,9 +1446,21 @@
             renderHistoryContent();
         }
 
+        function setTokenScope(scope) {
+            historyState.tokenScope = scope || 'all';
+            renderHistoryContent();
+        }
+
+        function isCrossChainTokenTransfer(tx) {
+            const meta = (tx && tx.meta && typeof tx.meta === 'object') ? tx.meta : {};
+            const chain = String(meta.chain || meta.origin_chain || '').toLowerCase();
+            return Boolean(meta.cross_chain || meta.is_cross_chain || (chain && chain !== 'thronos'));
+        }
+
         function resetHistoryState() {
             historyState.filter = 'all';
             historyState.selectedToken = '';
+            historyState.tokenScope = 'all';
         }
 
         function renderHistoryContent() {
@@ -1457,16 +1472,13 @@
                 return;
             }
 
-            // Get all token-related transactions (transfers + swaps with tokens)
+            // Token transfer transactions (native + cross-chain)
             const tokenTxs = txs.filter(tx => {
                 const asset = getAssetSymbol(tx);
-                const isTokenTx = isTokenTransfer(tx) && isValidTokenSymbol(asset);
-                const isTokenSwap = isSwapTx(tx) && asset !== 'THR' && isValidTokenSymbol(asset);
-                return isTokenTx || isTokenSwap;
+                return isTokenTransfer(tx) && isValidTokenSymbol(asset);
             });
             const tokenSymbols = Array.from(new Set(
-                txs
-                    .filter(tx => isTokenTx(tx))
+                tokenTxs
                     .map(tx => sanitizeTokenSymbol(tx.asset_symbol || tx.asset || tx.symbol))
                     .filter(sym => sym)
             ));
@@ -1489,7 +1501,10 @@
                 if (historyState.filter === 'music') return category === 'music' || rawKind === 'music_play_reward' || rawKind === 'music_tip';
                 return true;
             }).filter(tx => {
-                if (historyState.filter !== 'tokens' || !historyState.selectedToken) return true;
+                if (historyState.filter !== 'tokens') return true;
+                if (historyState.tokenScope === 'crosschain' && !isCrossChainTokenTransfer(tx)) return false;
+                if (historyState.tokenScope === 'native' && isCrossChainTokenTransfer(tx)) return false;
+                if (!historyState.selectedToken) return true;
                 return sanitizeTokenSymbol(tx.asset_symbol || tx.asset || tx.symbol) === historyState.selectedToken;
             });
 
@@ -1521,21 +1536,24 @@
                 </div>
             `;
 
-            if (historyState.filter === 'tokens' && tokenSymbols.length) {
+            if (historyState.filter === 'tokens') {
                 html += `
                     <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;">
-                        <button class="wallet-btn" style="padding:5px 10px; font-size:11px; ${!historyState.selectedToken ? 'border-color:#00ff66;' : ''}"
-                            onclick="setHistoryToken('')">
-                            All Tokens
-                        </button>
-                        ${tokenSymbols.map(sym => `
-                            <button class="wallet-btn" style="padding:5px 10px; font-size:11px; ${historyState.selectedToken === sym ? 'border-color:#00ff66;' : ''}"
-                                onclick="setHistoryToken('${sym}')">
-                                ${sym}
-                            </button>
-                        `).join('')}
+                        <button class="wallet-btn" style="padding:5px 10px; font-size:11px; ${historyState.tokenScope === 'all' ? 'border-color:#00ff66;' : ''}" onclick="setTokenScope('all')">All</button>
+                        <button class="wallet-btn" style="padding:5px 10px; font-size:11px; ${historyState.tokenScope === 'native' ? 'border-color:#00ff66;' : ''}" onclick="setTokenScope('native')">Native</button>
+                        <button class="wallet-btn" style="padding:5px 10px; font-size:11px; ${historyState.tokenScope === 'crosschain' ? 'border-color:#00ff66;' : ''}" onclick="setTokenScope('crosschain')">Cross-chain</button>
                     </div>
                 `;
+                if (tokenSymbols.length) {
+                    html += `
+                        <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;">
+                            <button class="wallet-btn" style="padding:5px 10px; font-size:11px; ${!historyState.selectedToken ? 'border-color:#00ff66;' : ''}" onclick="setHistoryToken('')">All Tokens</button>
+                            ${tokenSymbols.map(sym => `
+                                <button class="wallet-btn" style="padding:5px 10px; font-size:11px; ${historyState.selectedToken === sym ? 'border-color:#00ff66;' : ''}" onclick="setHistoryToken('${sym}')">${sym}</button>
+                            `).join('')}
+                        </div>
+                    `;
+                }
             }
 
             if (historyState.filter === 'ai_credits') {
@@ -1636,6 +1654,10 @@
                     trackInfo = `<br>🎵 Track: ${tx.track_title}`;
                 }
 
+                const meta = (tx.meta && typeof tx.meta === 'object') ? tx.meta : {};
+                const crossChain = getKind(tx) === 'token_transfer' && isCrossChainTokenTransfer(tx);
+                const tokenTransferLabel = crossChain ? 'Token Transfer (Cross-chain)' : (getKind(tx) === 'token_transfer' ? 'Token Transfer' : '');
+                const chainHint = meta.chain || meta.origin_chain || '';
                 return `
                     <div class="tx-item">
                         <div class="tx-header">
@@ -1644,7 +1666,7 @@
                         </div>
                         <div class="tx-details">
                             ${isSwap ? 'Trader: ' + (tx.from || walletAddress) : (isIncoming ? 'From: ' + (tx.from || '') : 'To: ' + (tx.to || ''))}${trackInfo}<br>
-                            ${tx.timestamp || 'Unknown time'}<br>
+                            ${tx.timestamp || 'Unknown time'}${tokenTransferLabel ? `<br>${tokenTransferLabel}` : ''}${chainHint ? `<br>Chain: ${chainHint}` : ''}<br>
                             TXID: ${(tx.tx_id || 'pending').substring(0, 16)}...
                             ${rewardSplitHtml}
                         </div>

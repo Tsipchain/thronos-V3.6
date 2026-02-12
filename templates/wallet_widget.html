@@ -1292,8 +1292,8 @@
         const historyState = {
             filter: 'all',
             selectedToken: '',
-            transactions: [],
-            aiCreditsLedger: [],
+            walletTxs: [],
+            aiLedger: [],
         };
 
         // Memory optimization: limit transaction history to prevent unbounded growth
@@ -1450,7 +1450,7 @@
 
         function renderHistoryContent() {
             const container = document.getElementById('historyContent');
-            const txs = (historyState.transactions || []).filter(tx => !shouldExcludeTx(tx));
+            const txs = (historyState.walletTxs || []).filter(tx => !shouldExcludeTx(tx));
 
             if (!txs.length) {
                 container.innerHTML = '<p style="color: var(--widget-muted); text-align: center;">No transactions found</p>';
@@ -1539,10 +1539,7 @@
             }
 
             if (historyState.filter === 'ai_credits') {
-                const creditEntries = (historyState.aiCreditsLedger || []).filter(e => {
-                    const reason = String(e.reason || '').toLowerCase();
-                    return reason === 'pack_purchase' || reason === 'chat_usage';
-                });
+                const creditEntries = historyState.aiLedger || [];
                 if (!creditEntries.length) {
                     container.innerHTML = html + '<p style="color: var(--widget-muted); text-align: center;">No AI Credits ledger entries</p>';
                     return;
@@ -1551,7 +1548,16 @@
                     const delta = Number(e.delta || 0);
                     const isIncoming = delta > 0;
                     const sign = isIncoming ? '+' : '';
-                    const reasonLabel = e.reason === 'pack_purchase' ? 'Pack purchase top-up' : 'Chat usage';
+                    const reason = String(e.reason || 'adjust').toLowerCase();
+                    const reasonLabel = reason === 'pack_purchase'
+                        ? 'AI Pack purchase'
+                        : (reason === 'chat_usage'
+                            ? 'Chat usage'
+                            : (reason === 't2e_reward' ? 'T2E reward' : reason));
+                    const meta = (e.meta && typeof e.meta === 'object') ? e.meta : {};
+                    const metaHint = meta.pack_code
+                        ? `Pack: ${meta.pack_code}`
+                        : (meta.model ? `Model: ${meta.model}` : '');
                     return `
                         <div class="tx-item">
                             <div class="tx-header">
@@ -1561,6 +1567,7 @@
                             <div class="tx-details">
                                 ${e.ts || e.timestamp || 'Unknown time'}<br>
                                 Balance: ${e.balance_before ?? '-'} → ${e.balance_after ?? '-'}
+                                ${metaHint ? `<br>${metaHint}` : ''}
                             </div>
                         </div>
                     `;
@@ -1571,7 +1578,7 @@
 
             let t2eCreditCount = 0;
             if (historyState.filter === 't2e') {
-                const t2eCredits = (historyState.aiCreditsLedger || []).filter(e => String(e.reason || '').toLowerCase() === 't2e_reward');
+                const t2eCredits = (historyState.aiLedger || []).filter(e => String(e.reason || '').toLowerCase() === 't2e_reward');
                 t2eCreditCount = t2eCredits.length;
                 if (t2eCredits.length) {
                     html += t2eCredits.map(e => `
@@ -1666,13 +1673,13 @@
                 if (!res.ok) throw new Error('Failed to load history');
                 const data = await res.json();
 
-                historyState.transactions = trimHistory(((data.transactions || data.items || [])).slice().reverse());
+                historyState.walletTxs = trimHistory(((data.transactions || data.items || [])).slice().reverse());
                 try {
                     const creditsRes = await fetch(`/api/ai_credits/ledger?wallet=${encodeURIComponent(walletAddress)}&limit=500`);
                     const creditsData = await creditsRes.json();
-                    historyState.aiCreditsLedger = Array.isArray(creditsData.items) ? creditsData.items : (Array.isArray(creditsData.entries) ? creditsData.entries : []);
+                    historyState.aiLedger = Array.isArray(creditsData.items) ? creditsData.items : (Array.isArray(creditsData.entries) ? creditsData.entries : []);
                 } catch (_) {
-                    historyState.aiCreditsLedger = [];
+                    historyState.aiLedger = [];
                 }
                 renderHistoryContent();
             } catch (e) {

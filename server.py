@@ -10587,11 +10587,12 @@ def call_thrai_router(router_url: str, payload: dict) -> dict:
         return {"response": response.text, "status": "secure", "provider": "thronos", "model": "thrai"}
 
 # ─── QUANTUM CHAT API (ενιαίο AI + αρχεία + offline corpus) ─────────────────
-def _resolve_ai_proxy_upstream() -> str:
+def _ai_proxy_base_url() -> str:
+    """Resolve proxy base URL for master proxy mode (prefer AI core URL)."""
     return (
-        (LEADER_URL or "").strip()
-        or (os.getenv("MASTER_URL") or "").strip()
-        or (os.getenv("API_URL") or "").strip()
+        (AI_CORE_URL or "").strip()
+        or (os.getenv("MASTER_NODE_URL") or "").strip()
+        or (MASTER_PUBLIC_URL or "").strip()
     )
 
 
@@ -10602,16 +10603,16 @@ def _is_proxy_mode_enabled() -> bool:
 
 def _handle_ai_chat_proxy():
     payload = request.get_json(force=True) or {}
-    upstream = _resolve_ai_proxy_upstream()
-    if not upstream:
+    base_url = _ai_proxy_base_url()
+    if not base_url:
         logger.error("[AI_PROXY] missing upstream leader URL for /api/ai/chat")
         return jsonify({
             "error": "upstream_unreachable",
             "message": "Quantum core cannot reach leader node right now.",
         }), 503
 
-    target = upstream.rstrip("/") + "/api/ai/chat"
-    logger.info("[AI_PROXY] Forwarding /api/ai/chat to %s (mode=%s)", target, THRONOS_AI_MODE)
+    target = base_url.rstrip("/") + "/api/ai/chat"
+    logger.info("[AI_PROXY] Forwarding %s to %s (mode=%s)", "/api/ai/chat", base_url, THRONOS_AI_MODE)
     try:
         resp = requests.post(target, json=payload, timeout=90)
         return Response(resp.content, status=resp.status_code, mimetype="application/json")
@@ -21398,12 +21399,12 @@ def api_ai_models():
     """
     # ─── Proxy mode: ai-core forwards model catalog to leader/master ───
     if _is_proxy_mode_enabled():
-        upstream = _resolve_ai_proxy_upstream()
-        if upstream:
-            target = upstream.rstrip("/") + "/api/ai_models"
+        base_url = _ai_proxy_base_url()
+        if base_url:
+            target = base_url.rstrip("/") + "/api/ai_models"
             try:
                 resp = requests.get(target, params={k: v for k, v in request.args.items()}, timeout=30)
-                logger.info("[AI_PROXY] Forwarding /api/ai_models to %s (mode=%s)", target, THRONOS_AI_MODE)
+                logger.info("[AI_PROXY] Forwarding %s to %s (mode=%s)", "/api/ai_models", base_url, THRONOS_AI_MODE)
                 return Response(resp.content, status=resp.status_code, mimetype="application/json")
             except Exception as exc:
                 logger.error("[AI_PROXY] upstream %s unreachable: %s", target, exc)
@@ -21779,9 +21780,10 @@ def api_ai_health():
         if cached and cache_age < AI_PROXY_HEALTH_CACHE_TTL:
             return jsonify(cached), 200
 
-        upstream = _resolve_ai_proxy_upstream()
-        if upstream:
-            target = upstream.rstrip("/") + "/api/ai/health"
+        base_url = _ai_proxy_base_url()
+        if base_url:
+            target = base_url.rstrip("/") + "/api/ai/health"
+            logger.info("[AI_PROXY] Forwarding %s to %s (mode=%s)", "/api/ai/health", base_url, THRONOS_AI_MODE)
             try:
                 resp = requests.get(target, timeout=5)
                 data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}

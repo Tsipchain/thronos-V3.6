@@ -224,6 +224,7 @@ def charge_thr(wallet: str, amount: Decimal, reason: str, product: str = "archit
         tx_meta.update(metadata)
     tx = {
         "type": "architect_payment",
+        "category": "architect_job",
         "reason": reason,
         "from": wallet,
         "to": AI_WALLET_ADDRESS,

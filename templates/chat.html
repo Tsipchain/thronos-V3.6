@@ -1965,7 +1965,8 @@
           pendingTxsLabelEl.textContent = data.pending_txs;
         if (data.difficulty != null)
           difficultyLabelEl.textContent = data.difficulty;
-        if (data.ai_credits != null) creditsLabelEl.textContent = data.ai_credits;
+        const telemetryCredits = (data.ai_credits ?? data.credits);
+        if (telemetryCredits != null) creditsLabelEl.textContent = Number(telemetryCredits) || 0;
       } catch (e) {
         console.warn("telemetry error", e);
       }
@@ -2218,8 +2219,8 @@
         if (data.usage) {
           const u = data.usage;
           usageStatusEl.textContent = `Usage: in ${u.input_tokens || 0} / out ${u.output_tokens || 0}`;
-        } else if (data.credits !== undefined) {
-          const credits = Number(data.credits) || 0;
+        } else if ((data.ai_credits ?? data.credits) !== undefined) {
+          const credits = Number(data.ai_credits ?? data.credits) || 0;
           window.aiCredits = credits;
           usageStatusEl.textContent = `${credits}`;
           creditsLabelEl.textContent = credits;
@@ -2257,8 +2258,8 @@
       try {
         const res = await fetch(`${API_AI_CREDITS}?wallet=${encodeURIComponent(wallet)}`);
         const data = await res.json();
-        if (data && data.credits != null) {
-          const credits = Number(data.credits) || 0;
+        if (data && (data.ai_credits ?? data.credits) != null) {
+          const credits = Number(data.ai_credits ?? data.credits) || 0;
           window.aiCredits = credits;
           creditsLabelEl.textContent = credits;
           usageStatusEl.textContent = `${credits}`;

@@ -5054,8 +5054,28 @@ def get_ai_credits(wallet: str) -> int:
     return max(0, val)
 
 
+def _wallet_history_credits_fallback(wallet: str) -> int | None:
+    """Best-effort fallback from wallet history summary fields."""
+    try:
+        history = _build_wallet_history(wallet, "", limit=1, cursor=0)
+        summary = history.get("summary") if isinstance(history, dict) else {}
+        if not isinstance(summary, dict):
+            return None
+        for key in ("ai_credits", "credits"):
+            value = summary.get(key)
+            if value is None:
+                continue
+            try:
+                return max(0, int(value))
+            except Exception:
+                continue
+    except Exception:
+        return None
+    return None
+
+
 def get_available_ai_credits(wallet: str) -> int:
-    """Master-side AI credits view sourced primarily from ledger with safe fallbacks."""
+    """Master-side AI credits: ledger-first with summary/map fallback."""
     wallet = (wallet or "").strip()
     if not wallet:
         return 0
@@ -5073,6 +5093,10 @@ def get_available_ai_credits(wallet: str) -> int:
                     return max(0, int(entry.get("balance_after") or 0))
     except Exception:
         logger.exception("[AI_CREDITS] failed ledger-based balance lookup")
+
+    summary_balance = _wallet_history_credits_fallback(wallet)
+    if summary_balance is not None:
+        return summary_balance
     return max(0, get_ai_credits(wallet))
 
 
@@ -5195,9 +5219,6 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
             "models": catalog,
         }
         return None, fallback_notice, (jsonify(error_payload), 200)
-
-    if requested in {"offline_corpus", "thrai"} and requested in callable_ids:
-        return requested, fallback_notice, None
 
     if requested in {"offline_corpus", "thrai"} and requested in callable_ids:
         return requested, fallback_notice, None
@@ -5782,7 +5803,7 @@ def attach_uploaded_files_to_session(session_id: str, wallet: str, files: list):
         # Guest mode - return remaining free messages
         gid = get_or_set_guest_id()
         remaining = guest_remaining_free_messages(gid)
-        resp = jsonify({"mode": "guest", "credits": remaining, "max_free_messages": GUEST_MAX_FREE_MESSAGES})
+        resp = jsonify({"mode": "guest", "credits": remaining, "ai_credits": remaining, "max_free_messages": GUEST_MAX_FREE_MESSAGES})
         resp.set_cookie(GUEST_COOKIE_NAME, gid, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
         return resp, 200
 
@@ -7601,6 +7622,11 @@ def api_wallet_history():
 
     payload["transactions"] = filtered
     payload["total_transactions"] = len(filtered)
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    credits_balance = int(get_available_ai_credits(address) if not is_ai_core() else get_ai_credits(address))
+    summary["ai_credits"] = credits_balance
+    summary["credits"] = credits_balance
+    payload["summary"] = summary
 
     return jsonify({
         "ok": True,
@@ -11025,6 +11051,75 @@ def _build_ai_model_catalog() -> list[dict]:
     return models
 
 
+def _build_ai_model_catalog() -> list[dict]:
+    provider_status = get_provider_status()
+    models: list[dict] = [{
+        "id": "auto",
+        "display_name": "Auto (Thronos chooses)",
+        "provider": "system",
+        "mode": "system",
+        "enabled": True,
+        "degraded": False,
+        "health_reason": None,
+    }]
+
+    for provider_name, model_list in AI_MODEL_REGISTRY.items():
+        pstatus = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
+        for mi in model_list:
+            enabled = bool(mi.enabled and pstatus.get("configured", True) and pstatus.get("library_loaded", True) is not False)
+            degraded = bool(getattr(mi, "degraded", (not enabled))) or not enabled
+            models.append({
+                "id": mi.id,
+                "display_name": mi.display_name,
+                "provider": mi.provider,
+                "mode": "provider",
+                "enabled": enabled,
+                "degraded": degraded,
+                "health_reason": None if enabled else (pstatus.get("last_error") or "provider_unavailable"),
+            })
+
+    preview_disabled = [
+        ("o3", "o3 (preview)", "openai"),
+        ("gpt-o3", "GPT-o3 (preview)", "openai"),
+    ]
+    known_ids = {m.get("id") for m in models if isinstance(m, dict)}
+    for mid, dname, provider in preview_disabled:
+        if mid in known_ids:
+            continue
+        models.append({
+            "id": mid,
+            "display_name": dname,
+            "provider": provider,
+            "mode": "provider",
+            "enabled": False,
+            "degraded": True,
+            "health_reason": "model_not_available_or_preview",
+        })
+
+    offline_ok, offline_reason = _offline_corpus_health()
+    models.append({
+        "id": "offline_corpus",
+        "display_name": "Offline Corpus",
+        "provider": "local",
+        "mode": "offline",
+        "enabled": bool(THR_OFFLINE_CORPUS_ENABLED and offline_ok),
+        "degraded": False if not THR_OFFLINE_CORPUS_ENABLED else (not offline_ok),
+        "health_reason": offline_reason,
+    })
+
+    thrai_ok, thrai_reason = _thrai_router_health()
+    models.append({
+        "id": "thrai",
+        "display_name": "Thrai Router",
+        "provider": "thronos",
+        "mode": "router",
+        "enabled": bool(THR_THAI_ENABLED and thrai_ok),
+        "degraded": bool(THR_THAI_ENABLED and not thrai_ok),
+        "health_reason": thrai_reason,
+    })
+    return models
+
+
 def call_offline_corpus(corpus_path, messages, wallet, session_id, chain_context) -> str:
     """Simple local retrieval over ai_offline_corpus.json / knowledge blocks."""
     try:
@@ -12293,12 +12388,12 @@ def api_ai_credits():
     if not wallet:
         gid = get_or_set_guest_id()
         remaining = guest_remaining_free_messages(gid)
-        resp = jsonify({"mode": "guest", "credits": remaining, "max_free_messages": GUEST_MAX_FREE_MESSAGES})
+        resp = jsonify({"mode": "guest", "credits": remaining, "ai_credits": remaining, "max_free_messages": GUEST_MAX_FREE_MESSAGES})
         resp.set_cookie(GUEST_COOKIE_NAME, gid, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
         return resp, 200
 
     value = get_ai_credits(wallet)
-    return jsonify({"wallet": wallet, "credits": value}), 200
+    return jsonify({"wallet": wallet, "credits": value, "ai_credits": value}), 200
 
 
 @app.route("/api/ai_credits/ledger", methods=["GET"])
@@ -12340,6 +12435,8 @@ def api_ai_credits_ledger():
         "wallet": wallet,
         "items": items,
         "balance": get_ai_credits(wallet),
+        "credits": get_ai_credits(wallet),
+        "ai_credits": get_ai_credits(wallet),
         "unit": "credits",
         # Backward compatibility
         "entries": items,

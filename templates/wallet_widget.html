@@ -1295,6 +1295,7 @@
             tokenScope: 'all',
             walletTxs: [],
             aiLedger: [],
+            creditsBalance: null,
         };
 
         // Memory optimization: limit transaction history to prevent unbounded growth
@@ -1604,7 +1605,11 @@
             if (historyState.filter === 'ai_credits') {
                 const creditEntries = historyState.aiLedger || [];
                 if (!creditEntries.length) {
-                    container.innerHTML = html + '<p style="color: var(--widget-muted); text-align: center;">No AI Credits ledger entries</p>';
+                    const bal = historyState.creditsBalance;
+                    const balHtml = Number.isFinite(Number(bal))
+                        ? `<p style="color: var(--widget-text); text-align:center; margin-top:6px;">Current AI Credits: ${Number(bal) || 0}</p>`
+                        : '';
+                    container.innerHTML = html + '<p style="color: var(--widget-muted); text-align: center;">No AI Credits ledger entries</p>' + balHtml;
                     return;
                 }
                 html += creditEntries.map(e => {
@@ -1745,6 +1750,8 @@
                 const data = await res.json();
 
                 historyState.walletTxs = trimHistory(((data.transactions || data.items || [])).slice().reverse());
+                const summary = (data && typeof data.summary === 'object') ? data.summary : {};
+                historyState.creditsBalance = Number(summary.ai_credits ?? summary.credits);
                 try {
                     const creditsRes = await fetch(`/api/ai_credits/ledger?wallet=${encodeURIComponent(walletAddress)}&limit=500`);
                     const creditsData = await creditsRes.json();

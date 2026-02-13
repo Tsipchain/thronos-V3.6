@@ -2118,6 +2118,34 @@
       }
     }
 
+    function extractAIResponseFromText(raw) {
+      if (raw == null) return "";
+
+      if (typeof raw === "object") {
+        if (typeof raw.reply === "string") {
+          raw = raw.reply;
+        } else if (typeof raw.response === "string") {
+          raw = raw.response;
+        } else if (typeof raw.text === "string") {
+          raw = raw.text;
+        } else if (typeof raw.error === "string") {
+          raw = raw.error;
+        } else {
+          try {
+            raw = JSON.stringify(raw);
+          } catch (_) {
+            raw = String(raw);
+          }
+        }
+      }
+
+      if (typeof raw !== "string") {
+        raw = String(raw);
+      }
+
+      return raw.replace(/^"|"$/g, "").trim();
+    }
+
     async function sendMessage() {
       const text = messageInputEl.value.trim();
       if (!text && !pendingFiles.length) return;
@@ -2203,7 +2231,8 @@
           return;
         }
 
-        const aiText = data.message || data.response || "";
+        const rawReply = (data && (data.reply || data.message || data.response || data.text || data.error)) || data;
+        const aiText = extractAIResponseFromText(rawReply);
         if (aiText) {
           const assistantMessage = {
             role: "assistant",

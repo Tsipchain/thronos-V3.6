@@ -967,8 +967,13 @@ AI_FREE_USAGE_FILE  = os.path.join(DATA_DIR, "ai_free_usage.json")
 
 # AI extra storage
 AI_FILES_DIR   = os.path.join(DATA_DIR, "ai_files")
-AI_CORPUS_FILE = os.path.join(DATA_DIR, "ai_offline_corpus.json")
 THR_OFFLINE_CORPUS_ENABLED = _strip_env_quotes(os.getenv("THR_OFFLINE_CORPUS_ENABLED", "false")).lower() in ("1", "true", "yes", "on")
+_offline_corpus_path_env = _strip_env_quotes(os.getenv("THR_OFFLINE_CORPUS_PATH", "")).strip()
+if _offline_corpus_path_env:
+    AI_CORPUS_FILE = _offline_corpus_path_env
+else:
+    _default_corpus_path = os.path.join(DATA_DIR, "ai_offline_corpus.json")
+    AI_CORPUS_FILE = _default_corpus_path if os.path.exists(_default_corpus_path) else "/tmp/ai_offline_corpus.json"
 THR_THAI_ENABLED = _strip_env_quotes(os.getenv("THR_THAI_ENABLED", "")).lower() in ("1", "true", "yes", "on")
 DIKO_MAS_MODEL_URL = (
     _strip_env_quotes(os.getenv("DIKO_MAS_MODEL_URL", ""))
@@ -2957,6 +2962,7 @@ def distribute_music_reward(total_amount: float, artist_address: str, listener_a
     # Create unified transaction record
     tx = {
         "type": "music_play_reward",
+        "category": "music_stream",
         "track_id": track_id,
         "track_title": track_title or track_id,
         "listener": listener_address,
@@ -3314,7 +3320,9 @@ def _canonical_kind(kind_raw: str) -> str:
         "token_burn": "burn",
         "music_offline_tip": "music",
         "music_tip": "music",
-        "music_play_reward": "music_play_reward",
+        "music_play_reward": "music_stream",
+        "music_stream": "music_stream",
+        "music_royalty": "music_royalty",
         "music_track_add": "music",  # PR-5: Music/Playlists canonical kinds
         "playlist_create": "music",  # PR-5: Music/Playlists canonical kinds
         "playlist_add_track": "music",  # PR-5: Music/Playlists canonical kinds
@@ -4951,6 +4959,23 @@ AI_DEFAULT_PACKS = [
 # Πόσα credits καίει κάθε AI μήνυμα
 AI_CREDIT_COST_PER_MSG = int(_strip_env_quotes(os.getenv("AI_CREDIT_COST_PER_MSG", "1")))
 
+
+def _chat_credit_cost_for_model(model_id: str | None, prompt_text: str | None = None) -> int:
+    """Phase-1 dynamic chat credit pricing with safe lower/upper bounds."""
+    base = max(1, int(_strip_env_quotes(os.getenv("AI_CREDIT_COST_PER_MSG", "1")) or 1))
+    model = (model_id or "auto").strip().lower()
+    text = (prompt_text or "").strip()
+
+    if model in {"gpt-4.1", "gpt-4.1-preview", "claude-3.5-sonnet", "claude-3-5-sonnet", "gemini-2.5-pro"}:
+        base += 1
+    if len(text) > 1000:
+        base += 1
+    if len(text) > 4000:
+        base += 1
+
+    cap = max(base, int(_strip_env_quotes(os.getenv("AI_CREDIT_COST_MAX", "5")) or 5))
+    return min(cap, max(1, base))
+
 def load_ai_packs():
     """Διαβάζει τα διαθέσιμα packs από αρχείο, αλλιώς επιστρέφει τα default."""
     data = load_json(AI_PACKS_FILE, None)
@@ -5009,9 +5034,70 @@ def get_ai_credits(wallet: str) -> int:
         return 0
     credits_map = load_ai_credits()
     try:
-        return int(credits_map.get(wallet, 0) or 0)
+        val = int(credits_map.get(wallet, 0) or 0)
     except (TypeError, ValueError):
+        val = 0
+    if val > 0:
+        return val
+    try:
+        ledger = load_ai_credits_ledger()
+        if isinstance(ledger, list):
+            for entry in reversed(ledger):
+                if not isinstance(entry, dict):
+                    continue
+                if (entry.get("wallet") or "").strip() != wallet:
+                    continue
+                if entry.get("balance_after") is not None:
+                    return max(0, int(entry.get("balance_after") or 0))
+    except Exception:
+        pass
+    return max(0, val)
+
+
+def _wallet_history_credits_fallback(wallet: str) -> int | None:
+    """Best-effort fallback from wallet history summary fields."""
+    try:
+        history = _build_wallet_history(wallet, "", limit=1, cursor=0)
+        summary = history.get("summary") if isinstance(history, dict) else {}
+        if not isinstance(summary, dict):
+            return None
+        for key in ("ai_credits", "credits"):
+            value = summary.get(key)
+            if value is None:
+                continue
+            try:
+                return max(0, int(value))
+            except Exception:
+                continue
+    except Exception:
+        return None
+    return None
+
+
+def get_available_ai_credits(wallet: str) -> int:
+    """Master-side AI credits: ledger-first with summary/map fallback."""
+    wallet = (wallet or "").strip()
+    if not wallet:
         return 0
+    if is_ai_core():
+        return 0
+    try:
+        ledger = load_ai_credits_ledger()
+        if isinstance(ledger, list):
+            for entry in reversed(ledger):
+                if not isinstance(entry, dict):
+                    continue
+                if (entry.get("wallet") or "").strip() != wallet:
+                    continue
+                if entry.get("balance_after") is not None:
+                    return max(0, int(entry.get("balance_after") or 0))
+    except Exception:
+        logger.exception("[AI_CREDITS] failed ledger-based balance lookup")
+
+    summary_balance = _wallet_history_credits_fallback(wallet)
+    if summary_balance is not None:
+        return summary_balance
+    return max(0, get_ai_credits(wallet))
 
 
 def add_ai_credits(wallet: str, delta: int, reason: str = "", metadata: dict | None = None) -> int:
@@ -5043,11 +5129,19 @@ def debit_ai_credits(wallet: str, cost: int, reason: str = "chat_message") -> tu
     amount = max(0, int(cost or 0))
     if not wallet:
         return False, 0
-    before = get_ai_credits(wallet)
+    before = get_available_ai_credits(wallet) if not is_ai_core() else get_ai_credits(wallet)
     if before < amount:
         logger.info("[AI_CREDITS] wallet=%s op=%s cost=%s before=%s after=%s", wallet, reason, amount, before, before)
         return False, before
-    after = add_ai_credits(wallet, -amount, reason=reason)
+    after = max(0, before - amount)
+    credits_map = load_ai_credits()
+    credits_map[wallet] = after
+    save_ai_credits(credits_map)
+    normalized_reason = (reason or "adjust").strip().lower()
+    if normalized_reason == "chat_message":
+        normalized_reason = "chat_usage"
+    logger.info("[AI_CREDITS] wallet=%s op=%s cost=%s before=%s after=%s", wallet, normalized_reason, amount, before, after)
+    append_ai_credits_ledger(wallet, -amount, normalized_reason, before, after)
     return True, after
 
 
@@ -5063,7 +5157,7 @@ def _default_model_id():
 
 def _normalized_ai_mode() -> str:
     raw_mode = (os.getenv("THRONOS_AI_MODE") or "all").lower()
-    if raw_mode in ("", "router", "auto", "hybrid", "all", "proxy"):
+    if raw_mode in ("", "router", "auto", "hybrid", "all", "proxy", "core"):
         return "all"
     if raw_mode == "openai_only":
         return "openai"
@@ -5075,27 +5169,8 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
 
     provider_status = get_provider_status()
     normalized_mode = _normalized_ai_mode()
-
-    def _provider_configured(name: str, info: dict | None) -> bool:
-        if info and info.get("configured") and info.get("library_loaded", True) is not False:
-            return True
-        if name == "openai":
-            return bool((os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip())
-        if name == "anthropic":
-            return bool((os.getenv("ANTHROPIC_API_KEY") or "").strip())
-        if name == "gemini":
-            return bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
-        return False
-
-    callable_ids = []
-    for provider_name, models in AI_MODEL_REGISTRY.items():
-        if normalized_mode != "all" and provider_name != normalized_mode:
-            continue
-        provider_info = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
-        if not _provider_configured(provider_name, provider_info):
-            continue
-        for m in models:
-            callable_ids.append(m.id)
+    catalog = _build_ai_model_catalog()
+    callable_ids = [m.get("id") for m in catalog if m.get("enabled") and m.get("id") not in {"auto"}]
 
     default_model_id = _default_model_id()
     if default_model_id not in callable_ids and callable_ids:
@@ -5104,12 +5179,49 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
     requested_raw = (model_id or "").strip()
     requested = requested_raw or default_model_id or "auto"
 
+    if requested == "auto" and callable_ids:
+        heuristic_order = [
+            "gpt-4.1-mini",
+            "o3-mini",
+            "claude-3.5-sonnet",
+            "claude-3-5-sonnet",
+            "gemini-2.0-flash",
+            "gemini-2.5-pro",
+            "offline_corpus",
+            "thrai",
+        ]
+        for candidate in heuristic_order:
+            if candidate in callable_ids:
+                requested = candidate
+                break
+
     fallback_notice = None
 
+    hard_unavailable = {"o3", "gpt-o3", "o3-pro", "gpt-o3-preview"}
+    if requested in hard_unavailable:
+        error_payload = {
+            "ok": False,
+            "error": "model_unavailable",
+            "status": "model_unavailable",
+            "requested_model": requested,
+            "reason": "model_not_available_or_preview",
+            "models": catalog,
+        }
+        return None, fallback_notice, (jsonify(error_payload), 200)
+
     if requested not in callable_ids and requested != "auto":
-        # Gracefully fall back to default/auto instead of hard-failing
-        fallback_notice = f"Model '{requested}' not callable; using {default_model_id or 'auto'}"
-        requested = default_model_id or "auto"
+        error_payload = {
+            "ok": False,
+            "error": "model_unavailable",
+            "status": "model_unavailable",
+            "requested_model": requested,
+            "reason": "model_not_available_or_preview",
+            "models": catalog,
+        }
+        return None, fallback_notice, (jsonify(error_payload), 200)
+
+    if requested in {"offline_corpus", "thrai"} and requested in callable_ids:
+        return requested, fallback_notice, None
 
     resolved = _resolve_model(requested, normalized_mode=normalized_mode, provider_status=provider_status) if requested else None
     if resolved:
@@ -5139,7 +5251,10 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
     error_payload = {
         "ok": False,
         "status": "model_not_available",
-        "error": "No callable AI model in current mode",
+        "error": "no_available_model",
+        "enabled_models": callable_ids,
+        "node_role": "ai_core",
+        "thronos_ai_mode": "core",
         "suggested_model": default_model_id,
         "providers": provider_status,
         "provider_diagnostics": provider_diagnostics,
@@ -5218,7 +5333,7 @@ def load_ai_sessions():
         meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
         selected_model_id = meta.get("selected_model_id") or s.get("selected_model_id") or _default_model_id()
         session_type = (meta.get("session_type") or s.get("session_type") or "chat").lower()
-        if session_type not in {"chat", "architect", "codex", "train"}:
+        if session_type not in {"chat", "architect", "codex", "train", "admin"}:
             session_type = "chat"
         billing_mode_locked = (meta.get("billing_mode_locked") or s.get("billing_mode_locked") or _session_billing_mode(session_type)).lower()
         meta["session_type"] = session_type
@@ -5248,14 +5363,18 @@ def save_ai_sessions(sessions):
 
 
 def _session_billing_mode(session_type: str) -> str:
+    chat_billing = (os.getenv("CHAT_BILLING_MODE") or "credits").strip().lower() or "credits"
+    architect_billing = (os.getenv("ARCHITECT_BILLING_MODE") or "thr").strip().lower() or "thr"
     st = (session_type or "chat").strip().lower()
+    if st == "admin":
+        return "free"
     if st == "architect":
-        return "thr"
+        return architect_billing
     if st == "train":
         return "none"
     if st == "codex":
-        return "credits"
-    return "credits"
+        return chat_billing
+    return chat_billing
 
 
 def _load_billing_idempotency() -> dict:
@@ -5278,7 +5397,7 @@ def _session_by_id(session_id: str) -> dict | None:
 
 def _create_session_record(session_type: str, wallet: str = "", title: str | None = None, session_id: str | None = None) -> dict:
     st = (session_type or "chat").strip().lower()
-    if st not in {"chat", "architect", "codex", "train"}:
+    if st not in {"chat", "architect", "codex", "train", "admin"}:
         st = "chat"
     now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
     sid = (session_id or "").strip() or uuid.uuid4().hex
@@ -5290,7 +5409,7 @@ def _create_session_record(session_type: str, wallet: str = "", title: str | Non
     session = {
         "id": sid,
         "wallet": (wallet or "").strip(),
-        "title": title or ("Architect Session" if st == "architect" else ("Training Session" if st == "train" else "New Chat")),
+        "title": title or ("Admin Operator Session" if st == "admin" else ("Architect Session" if st == "architect" else ("Training Session" if st == "train" else "New Chat"))),
         "created_at": now,
         "updated_at": now,
         "archived": False,
@@ -5300,6 +5419,7 @@ def _create_session_record(session_type: str, wallet: str = "", title: str | Non
             "session_type": st,
             "billing_mode_locked": billing_mode,
             "selected_model_id": _default_model_id(),
+            "origin": "d3lfoi_admin" if st == "admin" else "user",
         },
         "selected_model_id": _default_model_id(),
         "session_type": st,
@@ -5683,7 +5803,7 @@ def attach_uploaded_files_to_session(session_id: str, wallet: str, files: list):
         # Guest mode - return remaining free messages
         gid = get_or_set_guest_id()
         remaining = guest_remaining_free_messages(gid)
-        resp = jsonify({"mode": "guest", "credits": remaining, "max_free_messages": GUEST_MAX_FREE_MESSAGES})
+        resp = jsonify({"mode": "guest", "credits": remaining, "ai_credits": remaining, "max_free_messages": GUEST_MAX_FREE_MESSAGES})
         resp.set_cookie(GUEST_COOKIE_NAME, gid, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
         return resp, 200
 
@@ -6025,10 +6145,20 @@ def enqueue_offline_corpus(wallet: str, prompt: str, response: str, files, sessi
         "session_id": sid,
     }
 
-    corpus = load_json(AI_CORPUS_FILE, [])
+    raw_corpus = load_json(AI_CORPUS_FILE, [])
+    if isinstance(raw_corpus, dict):
+        corpus = raw_corpus.get("conversations") if isinstance(raw_corpus.get("conversations"), list) else []
+    elif isinstance(raw_corpus, list):
+        corpus = raw_corpus
+    else:
+        corpus = []
     corpus.append(entry)
     corpus = corpus[-1000:]
-    save_json(AI_CORPUS_FILE, corpus)
+    if isinstance(raw_corpus, dict):
+        raw_corpus["conversations"] = corpus
+        save_json(AI_CORPUS_FILE, raw_corpus)
+    else:
+        save_json(AI_CORPUS_FILE, corpus)
     append_session_transcript(sid, prompt, response, files, ts)
 
     # update / create session meta
@@ -6335,7 +6465,10 @@ def enforce_read_only():
         return None
     # Allow health/bootstrap even as POST (for monitoring tools)
     safe_paths = ("/health", "/bootstrap.json", "/api/whoami")
+    admin_ai_safe_paths = ("/api/admin/login", "/api/admin/ai/chat", "/api/admin/ai/voice_hook", "/api/voice/x9_webhook")
     if request.path.startswith(safe_paths):
+        return None
+    if NODE_ROLE == "ai_core" and request.path.startswith(admin_ai_safe_paths):
         return None
     return jsonify({
         "ok": False,
@@ -6779,8 +6912,10 @@ def _categorize_transaction(tx: dict) -> str:
     tx_type = tx.get("type") or tx.get("kind") or ""
     tx_type_lower = tx_type.lower()
 
-    # Music tips
-    if "music" in tx_type_lower or "tip" in tx_type_lower:
+    # Music tips / stream / royalties
+    if tx.get("category") in {"music_stream", "music_royalty", "music_tip"}:
+        return str(tx.get("category"))
+    if "music" in tx_type_lower or tx_type_lower in {"music_tip", "music_play_reward", "music_stream", "music_royalty"}:
         return "music_tip"
 
     # AI Credits (Chat billing) - must check BEFORE generic "ai" match
@@ -7235,8 +7370,27 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
         tx_from = tx.get("from") or tx.get("sender")
         tx_to = tx.get("to") or tx.get("recipient")
         tx_address = tx.get("address")  # IoT telemetry
+        tx_meta = tx.get("meta") if isinstance(tx.get("meta"), dict) else {}
 
-        parties = {str(tx_from or "").lower(), str(tx_to or "").lower(), str(tx_address or "").lower()}
+        parties = {
+            tx_from,
+            tx_to,
+            tx_address,
+            tx.get("thr_address"),
+            tx.get("wallet"),
+            tx.get("wallet_address"),
+            tx.get("owner"),
+            tx.get("user_wallet"),
+            tx.get("sender_wallet"),
+            tx.get("recipient_wallet"),
+            tx_meta.get("wallet"),
+            tx_meta.get("wallet_address"),
+            tx_meta.get("thr_address"),
+            tx_meta.get("owner"),
+            tx_meta.get("artist_wallet"),
+            tx_meta.get("tipper_wallet"),
+        }
+        parties = {str(p).lower() for p in parties if p}
         if addr_lower not in parties:
             continue
 
@@ -7283,7 +7437,10 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
     for tx in wallet_txs:
         category = tx.get("category", "other")
         direction = tx.get("direction", "related")
-        amount = float(tx.get("amount", 0))
+        try:
+            amount = float(tx.get("amount", 0) or 0)
+        except Exception:
+            amount = 0.0
 
         if category == "mining":
             summary["total_mining"] += amount
@@ -7399,12 +7556,12 @@ def api_wallet_history():
     - category: Optional filter (mining, ai_reward, music_tip, iot_telemetry, etc.)
     - limit: Max entries to return (default 200)
     - cursor: Offset cursor for pagination
-    - exclude_source: Comma-separated sources to hide (default: "architect")
+    - exclude_source: Comma-separated sources to hide (default: none)
     - status: Filter by "pending" or "confirmed"
     """
     address = (request.args.get("address") or request.args.get("wallet") or "").strip()
     category_filter = request.args.get("category", "").strip().lower()
-    exclude_source = request.args.get("exclude_source", "architect").strip().lower()
+    exclude_source = request.args.get("exclude_source", "").strip().lower()
     status_filter = request.args.get("status", "").strip().lower()
     try:
         limit = min(int(request.args.get("limit", 200)), 500)
@@ -7450,6 +7607,11 @@ def api_wallet_history():
 
     payload["transactions"] = filtered
     payload["total_transactions"] = len(filtered)
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    credits_balance = int(get_available_ai_credits(address) if not is_ai_core() else get_ai_credits(address))
+    summary["ai_credits"] = credits_balance
+    summary["credits"] = credits_balance
+    payload["summary"] = summary
 
     return jsonify({
         "ok": True,
@@ -8190,6 +8352,12 @@ def api_architect_generate():
         return error_resp
     if selected_model:
         model_key = selected_model
+        if requested_model_key == "thrai" and model_key != "thrai":
+            return jsonify({
+                "error": "thrai_unavailable",
+                "reason": "disabled_or_degraded",
+                "models": _build_ai_model_catalog(),
+            }), 503
         if session_id:
             _save_session_selected_model(session_id, model_key)
         call_meta["callable"] = True
@@ -10519,18 +10687,25 @@ def _build_chain_context_for_router(max_blocks: int = 8, max_tokens: int = 8, ma
 
 
 def _offline_corpus_health() -> tuple[bool, str | None]:
+    if not THR_OFFLINE_CORPUS_ENABLED:
+        return False, "disabled_by_flag"
     try:
         if not os.path.exists(AI_CORPUS_FILE):
-            return False, f"missing_path:{AI_CORPUS_FILE}"
-        corpus = load_json(AI_CORPUS_FILE, [])
-        if not isinstance(corpus, list):
-            return False, "invalid_corpus_format"
-        return True, None
+            save_json(AI_CORPUS_FILE, {"conversations": []})
+            return True, "auto_created"
+        corpus = load_json(AI_CORPUS_FILE, {"conversations": []})
+        if isinstance(corpus, dict) and isinstance(corpus.get("conversations"), list):
+            return True, None
+        if isinstance(corpus, list):
+            return True, None
+        return False, "invalid_corpus_format"
     except Exception as exc:
         return False, str(exc)
 
 
 def _thrai_router_health() -> tuple[bool, str | None]:
+    if not THR_THAI_ENABLED:
+        return False, "disabled_by_flag"
     router_url = (DIKO_MAS_MODEL_URL or "").strip()
     if not router_url:
         return False, "missing_router_url"
@@ -10542,25 +10717,108 @@ def _thrai_router_health() -> tuple[bool, str | None]:
 
     for candidate in health_candidates:
         try:
-            r = requests.get(candidate, timeout=2.5)
+            r = requests.get(candidate, timeout=2)
             if r.status_code < 500:
                 return True, None
+        except requests.exceptions.Timeout:
+            return False, "timeout"
+        except requests.exceptions.ConnectionError:
+            return False, "connection_refused"
         except Exception:
             pass
 
     try:
-        r = requests.post(router_url, json={"ping": "thrai"}, timeout=3)
+        r = requests.post(router_url, json={"ping": "thrai"}, timeout=2)
         if r.status_code < 500:
             return True, None
+    except requests.exceptions.Timeout:
+        return False, "timeout"
+    except requests.exceptions.ConnectionError:
+        return False, "connection_refused"
     except Exception as exc:
         return False, str(exc)
     return False, "health_check_failed"
 
 
+def _build_ai_model_catalog() -> list[dict]:
+    provider_status = get_provider_status()
+    models: list[dict] = [{
+        "id": "auto",
+        "display_name": "Auto (Thronos chooses)",
+        "provider": "system",
+        "mode": "system",
+        "enabled": True,
+        "degraded": False,
+        "health_reason": None,
+    }]
+
+    for provider_name, model_list in AI_MODEL_REGISTRY.items():
+        pstatus = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
+        for mi in model_list:
+            enabled = bool(mi.enabled and pstatus.get("configured", True) and pstatus.get("library_loaded", True) is not False)
+            degraded = bool(getattr(mi, "degraded", (not enabled))) or not enabled
+            models.append({
+                "id": mi.id,
+                "display_name": mi.display_name,
+                "provider": mi.provider,
+                "mode": "provider",
+                "enabled": enabled,
+                "degraded": degraded,
+                "health_reason": None if enabled else (pstatus.get("last_error") or "provider_unavailable"),
+            })
+
+    preview_disabled = [
+        ("o3", "o3 (preview)", "openai"),
+        ("gpt-o3", "GPT-o3 (preview)", "openai"),
+    ]
+    known_ids = {m.get("id") for m in models if isinstance(m, dict)}
+    for mid, dname, provider in preview_disabled:
+        if mid in known_ids:
+            continue
+        models.append({
+            "id": mid,
+            "display_name": dname,
+            "provider": provider,
+            "mode": "provider",
+            "enabled": False,
+            "degraded": True,
+            "health_reason": "model_not_available_or_preview",
+        })
+
+    offline_ok, offline_reason = _offline_corpus_health()
+    models.append({
+        "id": "offline_corpus",
+        "display_name": "Offline Corpus",
+        "provider": "local",
+        "mode": "offline",
+        "enabled": bool(THR_OFFLINE_CORPUS_ENABLED and offline_ok),
+        "degraded": False if not THR_OFFLINE_CORPUS_ENABLED else (not offline_ok),
+        "health_reason": offline_reason,
+    })
+
+    thrai_ok, thrai_reason = _thrai_router_health()
+    models.append({
+        "id": "thrai",
+        "display_name": "Thrai Router",
+        "provider": "thronos",
+        "mode": "router",
+        "enabled": bool(THR_THAI_ENABLED and thrai_ok),
+        "degraded": bool(THR_THAI_ENABLED and not thrai_ok),
+        "health_reason": thrai_reason,
+    })
+    return models
+
+
 def call_offline_corpus(corpus_path, messages, wallet, session_id, chain_context) -> str:
     """Simple local retrieval over ai_offline_corpus.json / knowledge blocks."""
     try:
-        corpus = load_json(corpus_path, []) or []
+        raw_corpus = load_json(corpus_path, []) or []
+        if isinstance(raw_corpus, dict):
+            corpus = raw_corpus.get("conversations") or []
+        elif isinstance(raw_corpus, list):
+            corpus = raw_corpus
+        else:
+            corpus = []
     except Exception:
         corpus = []
 
@@ -10618,19 +10876,348 @@ def call_thrai_router(router_url: str, payload: dict) -> dict:
     except Exception:
         return {"response": response.text, "status": "secure", "provider": "thronos", "model": "thrai"}
 
+# ─── D3LFOI ADMIN HELPERS ───────────────────────────────────────────────────
+def _admin_token_from_request(payload: dict | None = None) -> str:
+    payload = payload if isinstance(payload, dict) else {}
+    return (
+        (request.headers.get("X-Admin-Secret") or "").strip()
+        or (request.cookies.get("thr_admin_token") or "").strip()
+        or (request.args.get("secret") or "").strip()
+        or str(payload.get("secret") or "").strip()
+    )
+
+
+def require_admin(payload: dict | None = None):
+    admin_secret = (os.getenv("ADMIN_SECRET") or ADMIN_SECRET or "").strip()
+    if not admin_secret:
+        return jsonify({"error": "admin_not_configured"}), 403
+    token = _admin_token_from_request(payload)
+    if token != admin_secret:
+        return jsonify({"error": "admin_auth_required"}), 401
+    return None
+
+
+def _ensure_admin_session(session_id: str | None = None, title: str | None = None) -> dict:
+    sid = (session_id or "").strip() or uuid.uuid4().hex
+    session = ensure_session_exists(sid, wallet=None, session_type="admin")
+    if not session:
+        session = _create_session_record(session_type="admin", wallet="", title=title or "D3lfoi Operator", session_id=sid)
+    sessions = load_ai_sessions()
+    updated = False
+    for s in sessions:
+        if s.get("id") != sid:
+            continue
+        s["session_type"] = "admin"
+        s["billing_mode_locked"] = "free"
+        meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
+        meta["session_type"] = "admin"
+        meta["billing_mode_locked"] = "free"
+        meta["origin"] = "d3lfoi_admin"
+        s["meta"] = meta
+        s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        updated = True
+        session = s
+        break
+    if updated:
+        save_ai_sessions(sessions)
+    return session
+
+
+@app.route("/api/admin/login", methods=["POST"])
+def api_admin_login():
+    data = request.get_json(silent=True) or {}
+    denied = require_admin(data)
+    if denied:
+        return denied
+    resp = make_response(jsonify({"ok": True}))
+    secure_cookie = bool(request.is_secure or _strip_env_quotes(os.getenv("FORCE_SECURE_COOKIES", "1")) in ("1", "true", "yes", "on"))
+    resp.set_cookie(
+        "thr_admin_token",
+        (os.getenv("ADMIN_SECRET") or ADMIN_SECRET or "").strip(),
+        max_age=8 * 3600,
+        httponly=True,
+        secure=secure_cookie,
+        samesite="Lax",
+    )
+    return resp
+
+
+@app.route("/api/admin/ai/health", methods=["GET"])
+def api_admin_ai_health():
+    if NODE_ROLE != "ai_core":
+        return jsonify({"error": "admin_only_on_ai_core"}), 404
+    denied = require_admin()
+    if denied:
+        return denied
+
+    catalog = _build_ai_model_catalog()
+    offline_ok, offline_reason = _offline_corpus_health()
+    thrai_ok, thrai_reason = _thrai_router_health()
+    providers = get_provider_status()
+    payload = {
+        "ok": True,
+        "core_mode": "core",
+        "engine": "d3lfoi",
+        "models": catalog,
+        "offline_corpus": {
+            "enabled": bool(THR_OFFLINE_CORPUS_ENABLED and offline_ok),
+            "degraded": False if not THR_OFFLINE_CORPUS_ENABLED else (not offline_ok),
+            "reason": offline_reason,
+        },
+        "thrai": {
+            "enabled": bool(THR_THAI_ENABLED and thrai_ok),
+            "degraded": bool(THR_THAI_ENABLED and not thrai_ok),
+            "reason": thrai_reason,
+        },
+        "providers": providers,
+    }
+    return jsonify(payload), 200
+
+
+@app.route("/api/admin/ai/chat", methods=["POST"])
+def api_admin_ai_chat():
+    if NODE_ROLE != "ai_core":
+        return jsonify({"error": "admin_only_on_ai_core"}), 404
+    data = request.get_json(silent=True) or {}
+    denied = require_admin(data)
+    if denied:
+        return denied
+
+    message = (data.get("message") or "").strip()
+    if not message:
+        return jsonify({"error": "empty_message"}), 400
+
+    requested_model = (data.get("model_id") or "auto").strip()
+    session_id = (data.get("session_id") or "").strip() or None
+    system_prompt = (data.get("system_prompt") or "").strip()
+    lang = (data.get("lang") or "el").strip().lower()
+
+    # Explicit optional models: structured unavailable errors (no 500)
+    catalog = _build_ai_model_catalog()
+    catalog_by_id = {m.get("id"): m for m in catalog if isinstance(m, dict) and m.get("id")}
+    explicit = requested_model.lower()
+    if explicit in {"offline_corpus", "thrai"}:
+        info = catalog_by_id.get(explicit) or {}
+        if not info.get("enabled"):
+            return jsonify({
+                "error": "model_unavailable",
+                "model_id": explicit,
+                "reason": info.get("health_reason") or "disabled",
+                "models": catalog,
+            }), 200
+
+    selected_model, fallback_notice, error_resp = _select_callable_model(requested_model, session_type="admin")
+    if error_resp:
+        payload = error_resp[0].get_json() if isinstance(error_resp, tuple) and hasattr(error_resp[0], "get_json") else {"error": "no_available_model"}
+        payload["origin"] = "d3lfoi_admin"
+        return jsonify(payload), 200
+
+    model_id = selected_model or requested_model or "auto"
+    session = _ensure_admin_session(session_id=session_id, title="D3lfoi Operator")
+    sid = session.get("id") if isinstance(session, dict) else session_id
+
+    prompt = f"[LANG={lang}]\n{message}"
+    if system_prompt:
+        prompt = f"System: {system_prompt}\n\nUser: {prompt}"
+
+    chain_context = _build_chain_context_for_router()
+    try:
+        if model_id == "offline_corpus":
+            text = call_offline_corpus(AI_CORPUS_FILE, [{"role": "user", "content": message}], "", sid, chain_context)
+            raw = {"response": text, "provider": "local", "model": "offline_corpus", "status": "secure"}
+        elif model_id == "thrai":
+            thrai_ok, thrai_reason = _thrai_router_health()
+            if not (THR_THAI_ENABLED and thrai_ok):
+                return jsonify({
+                    "error": "model_unavailable",
+                    "model_id": "thrai",
+                    "reason": thrai_reason or "disabled",
+                    "models": catalog,
+                }), 200
+            raw = call_thrai_router((DIKO_MAS_MODEL_URL or "").strip() or "http://localhost:5000/api/thrai/ask", {
+                "session_id": sid,
+                "messages": [{"role": "user", "content": message}],
+                "chain_context": chain_context,
+                "model": "thrai",
+            })
+        else:
+            raw = ai_agent.generate_response(prompt, wallet="", model_key=model_id, session_id=sid, chain_context=chain_context)
+    except Exception as exc:
+        logger.exception("admin_ai_chat_failed")
+        return jsonify({"error": "provider_error", "reason": str(exc), "model_id": model_id}), 200
+
+    assistant_message = str(raw.get("response") if isinstance(raw, dict) else raw or "")
+    files = []
+    try:
+        files, _ = extract_ai_files_from_text(assistant_message)
+    except Exception:
+        files = []
+
+    if THR_OFFLINE_CORPUS_ENABLED:
+        try:
+            enqueue_offline_corpus("ADMIN:D3LFOI", message, assistant_message, files, session_id=sid)
+        except Exception:
+            logger.exception("admin_offline_corpus_write_failed")
+
+    try:
+        append_session_transcript(
+            sid,
+            message,
+            assistant_message,
+            files,
+            time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        )
+    except Exception:
+        logger.exception("admin_session_append_failed")
+
+    return jsonify({
+        "ok": True,
+        "session_id": sid,
+        "model_id": model_id,
+        "model_notice": fallback_notice,
+        "assistant_message": assistant_message,
+        "meta": {"origin": "d3lfoi_admin", "billing_mode": "free"},
+    }), 200
+
+
+@app.route("/api/admin/ai/voice_hook", methods=["POST"])
+def api_admin_ai_voice_hook():
+    if NODE_ROLE != "ai_core":
+        return jsonify({"error": "admin_only_on_ai_core"}), 404
+    data = request.get_json(silent=True) or {}
+    denied = require_admin(data)
+    if denied:
+        return denied
+
+    expected = (os.getenv("X9_VOICE_WEBHOOK_SECRET") or "").strip()
+    provided = (data.get("voice_secret") or "").strip()
+    if expected and provided != expected:
+        return jsonify({"error": "invalid_voice_secret"}), 401
+
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "empty_text"}), 400
+
+    payload = {
+        "message": text,
+        "model_id": data.get("model_id") or "auto",
+        "lang": data.get("lang") or "el",
+        "session_id": data.get("session_id"),
+        "secret": _admin_token_from_request(data),
+        "system_prompt": data.get("system_prompt") or "",
+    }
+    with app.test_request_context("/api/admin/ai/chat", method="POST", json=payload, headers={"X-Admin-Secret": _admin_token_from_request(data)}):
+        resp = api_admin_ai_chat()
+    if isinstance(resp, tuple):
+        body, status = resp
+        data_out = body.get_json() if hasattr(body, "get_json") else {}
+        return jsonify({
+            "ok": status == 200,
+            "session_id": data_out.get("session_id") or payload.get("session_id"),
+            "reply": data_out.get("assistant_message") or "",
+            "model_id": data_out.get("model_id"),
+        }), status
+    data_out = resp.get_json() if hasattr(resp, "get_json") else {}
+    return jsonify({
+        "ok": True,
+        "session_id": data_out.get("session_id") or payload.get("session_id"),
+        "reply": data_out.get("assistant_message") or "",
+        "model_id": data_out.get("model_id"),
+    }), 200
+
+
+@app.route("/api/voice/x9_status", methods=["GET"])
+def api_voice_x9_status():
+    return jsonify({"ok": True, "mode": "x9", "engine": "d3lfoi", "node_role": NODE_ROLE}), 200
+
+
+@app.route("/api/voice/x9_webhook", methods=["POST"])
+def api_voice_x9_webhook():
+    if NODE_ROLE != "ai_core":
+        return jsonify({"ok": False, "error": "x9_only_on_ai_core"}), 404
+    expected = (os.getenv("X9_VOICE_WEBHOOK_SECRET") or "").strip()
+    provided = (request.headers.get("X-X9-Secret") or "").strip()
+    if expected and provided != expected:
+        return jsonify({"ok": False, "error": "invalid_x9_secret"}), 401
+
+    body = request.get_json(silent=True) or {}
+    wallet = (body.get("wallet") or "").strip()
+    text = (body.get("text") or "").strip()
+    lang = (body.get("lang") or "el").strip()
+    if not text:
+        return jsonify({"ok": False, "error": "empty_text"}), 400
+
+    payload = {
+        "wallet": wallet,
+        "message": text,
+        "lang": lang,
+        "model_id": body.get("model_id") or "auto",
+        "session_id": body.get("session_id"),
+        "billing_precharged": True,
+    }
+    with app.test_request_context("/api/ai/chat", method="POST", json=payload):
+        resp = api_ai_chat()
+
+    if isinstance(resp, tuple):
+        body_out = resp[0].get_json() if hasattr(resp[0], "get_json") else {}
+        status = resp[1]
+    else:
+        body_out = resp.get_json() if hasattr(resp, "get_json") else {}
+        status = 200
+
+    if status >= 400:
+        return jsonify({
+            "ok": True,
+            "mode": "x9_stub",
+            "reply": f"[x9] {text}",
+            "session_id": payload.get("session_id"),
+            "model_id": payload.get("model_id"),
+            "note": "fallback_echo",
+            "raw_error": body_out,
+        }), 200
+
+    return jsonify({
+        "ok": status < 400,
+        "reply": body_out.get("response") or body_out.get("message") or "",
+        "session_id": body_out.get("session_id") or payload.get("session_id"),
+        "model_id": body_out.get("model") or payload.get("model_id"),
+        "raw": body_out,
+    }), status
+
+
+@app.route("/d3lfoi", methods=["GET"])
+@app.route("/d3lfoi_admin", methods=["GET"])
+def d3lfoi_admin_console():
+    if NODE_ROLE != "ai_core":
+        return jsonify({"error": "admin_only_on_ai_core"}), 404
+    return render_template("d3lfoi_admin.html")
+
+
 # ─── QUANTUM CHAT API (ενιαίο AI + αρχεία + offline corpus) ─────────────────
 def _ai_proxy_base_url() -> str:
     """Resolve proxy base URL for master proxy mode (prefer AI core URL)."""
-    return (
+    base = (
         (AI_CORE_URL or "").strip()
         or (os.getenv("MASTER_NODE_URL") or "").strip()
         or (MASTER_PUBLIC_URL or "").strip()
     )
+    if not base:
+        return ""
+    try:
+        parsed = urlparse(base)
+        host = (parsed.netloc or "").lower()
+        req_host = (request.host or "").lower()
+        if host and req_host and host == req_host:
+            logger.warning("[AI_PROXY] ignoring self-proxy target %s", base)
+            return ""
+    except Exception:
+        pass
+    return base
 
 
 def _is_proxy_mode_enabled() -> bool:
     """True only for non-ai_core nodes configured in proxy AI mode."""
-    return THRONOS_AI_MODE == "proxy" and not is_ai_core()
+    return THRONOS_AI_MODE == "proxy" and not is_ai_core() and bool(_ai_proxy_base_url())
 
 
 def _handle_ai_chat_proxy():
@@ -10642,6 +11229,35 @@ def _handle_ai_chat_proxy():
             "error": "upstream_unreachable",
             "message": "Quantum core cannot reach leader node right now.",
         }), 503
+
+    wallet = (payload.get("wallet") or "").strip()
+    model_key = (payload.get("model_id") or payload.get("model") or "auto").strip() or "auto"
+    prompt_text = (payload.get("message") or payload.get("prompt") or payload.get("text") or "").strip()
+    message_credit_cost = _chat_credit_cost_for_model(model_key, prompt_text)
+
+    if wallet:
+        available = get_available_ai_credits(wallet)
+        if available < message_credit_cost:
+            return jsonify({
+                "error": "no_credits",
+                "message": "Δεν έχεις αρκετά AI credits για αυτό το μήνυμα.",
+                "required_credits": message_credit_cost,
+                "credits": available,
+                "wallet": wallet,
+                "code": "insufficient_ai_credits",
+            }), 400
+        ok, credits_after = debit_ai_credits(wallet, message_credit_cost, reason="chat_usage")
+        if not ok:
+            return jsonify({
+                "error": "no_credits",
+                "message": "Δεν έχεις αρκετά AI credits για αυτό το μήνυμα.",
+                "required_credits": message_credit_cost,
+                "credits": get_available_ai_credits(wallet),
+                "wallet": wallet,
+                "code": "insufficient_ai_credits",
+            }), 400
+        payload["billing_precharged"] = True
+        payload["credits"] = credits_after
 
     target = base_url.rstrip("/") + "/api/ai/chat"
     logger.info("[AI_PROXY] Forwarding %s to %s (mode=%s)", "/api/ai/chat", base_url, THRONOS_AI_MODE)
@@ -10734,6 +11350,7 @@ def _handle_ai_chat_master():
             session_id = session_id
         call_meta["session_id"] = session_id
 
+    requested_model_key = (model_key or "").strip().lower()
     selected_model, fallback_notice, error_resp = _select_callable_model(model_key, session_type="chat")
     if error_resp:
         # Model not callable – return JSON without consuming credits
@@ -10745,6 +11362,12 @@ def _handle_ai_chat_master():
         return error_resp
     if selected_model:
         model_key = selected_model
+        if requested_model_key == "thrai" and model_key != "thrai":
+            return jsonify({
+                "error": "thrai_unavailable",
+                "reason": "disabled_or_degraded",
+                "models": _build_ai_model_catalog(),
+            }), 503
         if session_id:
             _save_session_selected_model(session_id, model_key)
         resolved = _resolve_model(model_key)
@@ -10830,18 +11453,25 @@ def _handle_ai_chat_master():
     if not msg:
         return jsonify(error="Message required"), 400
 
+    message_credit_cost = _chat_credit_cost_for_model(model_key, msg)
+
     # --- Credits check (Chat billing mode) ---
     credits_value = None
     if wallet:
-        credits_value = get_ai_credits(wallet)
-        if credits_value < AI_CREDIT_COST_PER_MSG:
-            return jsonify(
-                error="insufficient_ai_credits",
-                message="Δεν έχεις άλλα Quantum credits γι' αυτό το THR wallet.",
-                credits=credits_value,
-                wallet=wallet,
-                session_id=session_id,
-            ), 400
+        if billing_precharged and is_ai_core():
+            credits_value = int(data.get("credits") or 0)
+        else:
+            credits_value = get_available_ai_credits(wallet) if not is_ai_core() else get_ai_credits(wallet)
+            if credits_value < message_credit_cost:
+                return jsonify(
+                    error="no_credits",
+                    code="insufficient_ai_credits",
+                    message="Δεν έχεις άλλα Quantum credits γι' αυτό το THR wallet.",
+                    required_credits=message_credit_cost,
+                    credits=credits_value,
+                    wallet=wallet,
+                    session_id=session_id,
+                ), 400
     else:
         # No wallet supplied: treat this as a free demo chat.  Look up how
         # many messages have already been consumed for this session.  Once
@@ -10946,6 +11576,13 @@ def _handle_ai_chat_master():
                 "meta": {"source": "offline_corpus"},
             }
         elif model_key == "thrai":
+            thrai_ok, thrai_reason = _thrai_router_health()
+            if not (THR_THAI_ENABLED and thrai_ok):
+                return jsonify({
+                    "error": "thrai_unavailable",
+                    "reason": thrai_reason or "disabled_by_flag",
+                    "models": _build_ai_model_catalog(),
+                }), 503
             payload = {
                 "wallet": wallet,
                 "session_id": session_id,
@@ -10973,6 +11610,7 @@ def _handle_ai_chat_master():
             "session_id": session_id,
         }
         return jsonify(resp), 500
+
     latency_ms = int((time.time() - call_started) * 1000)
 
     if isinstance(raw, dict):
@@ -11018,24 +11656,25 @@ def _handle_ai_chat_master():
         call_meta["failure_reason"] = raw_status
     can_charge = bool(wallet) and raw_status not in charge_block_statuses
 
-    if wallet and can_charge and not billing_precharged:
-        success, credits_after = debit_ai_credits(wallet, AI_CREDIT_COST_PER_MSG, reason="chat_usage")
+    if wallet and can_charge and not billing_precharged and not is_ai_core():
+        success, credits_after = debit_ai_credits(wallet, message_credit_cost, reason="chat_usage")
         if not success:
             credits_for_frontend = get_ai_credits(wallet)
             ai_credits_spent = 0.0
             return jsonify({
                 "error": "insufficient_ai_credits",
                 "message": "Δεν έχεις άλλα Quantum credits γι' αυτό το THR wallet.",
+                "required_credits": message_credit_cost,
                 "credits": credits_for_frontend,
                 "wallet": wallet,
                 "session_id": session_id,
             }), 400
         credits_for_frontend = credits_after
-        ai_credits_spent = float(AI_CREDIT_COST_PER_MSG)
+        ai_credits_spent = float(message_credit_cost)
     elif wallet and can_charge and billing_precharged:
         credits_map_now = load_ai_credits()
         credits_for_frontend = int(credits_map_now.get(wallet, 0) or 0)
-        ai_credits_spent = float(AI_CREDIT_COST_PER_MSG)
+        ai_credits_spent = float(message_credit_cost)
     elif wallet:
         # Wallet present but we skipped billing due to model gating
         credits_for_frontend = credits_value if credits_value is not None else 0
@@ -11438,12 +12077,12 @@ def api_ai_credits():
     if not wallet:
         gid = get_or_set_guest_id()
         remaining = guest_remaining_free_messages(gid)
-        resp = jsonify({"mode": "guest", "credits": remaining, "max_free_messages": GUEST_MAX_FREE_MESSAGES})
+        resp = jsonify({"mode": "guest", "credits": remaining, "ai_credits": remaining, "max_free_messages": GUEST_MAX_FREE_MESSAGES})
         resp.set_cookie(GUEST_COOKIE_NAME, gid, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
         return resp, 200
 
     value = get_ai_credits(wallet)
-    return jsonify({"wallet": wallet, "credits": value}), 200
+    return jsonify({"wallet": wallet, "credits": value, "ai_credits": value}), 200
 
 
 @app.route("/api/ai_credits/ledger", methods=["GET"])
@@ -11485,6 +12124,8 @@ def api_ai_credits_ledger():
         "wallet": wallet,
         "items": items,
         "balance": get_ai_credits(wallet),
+        "credits": get_ai_credits(wallet),
+        "ai_credits": get_ai_credits(wallet),
         "unit": "credits",
         # Backward compatibility
         "entries": items,
@@ -13369,7 +14010,11 @@ def api_token_transfer():
     tx_id = f"TOKEN_TRANSFER-{symbol}-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
         "type": "token_transfer",
+        "kind": "token_transfer",
+        "category": "tokens",
         "token_symbol": symbol,
+        "asset_symbol": symbol,
+        "asset": symbol,
         "token_id": token_id,
         "from": from_thr,
         "to": to_thr,
@@ -13384,6 +14029,7 @@ def api_token_transfer():
     chain = load_json(CHAIN_FILE, [])
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
+    persist_normalized_tx(tx)
 
     logger.info(f"Token transfer: {amount} {symbol} from {from_thr[:10]}... to {to_thr[:10]}... (fee: {thr_fee} THR)")
 
@@ -13857,7 +14503,11 @@ def transfer_custom_token(symbol, from_thr, to_thr, amount_raw, auth_secret, pas
     tx_id = f"TOKEN_TRANSFER-{symbol}-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
         "type": "token_transfer",
+        "kind": "token_transfer",
+        "category": "tokens",
         "token_symbol": symbol,
+        "asset_symbol": symbol,
+        "asset": symbol,
         "token_id": token["id"],
         "from": from_thr,
         "to": to_thr,
@@ -15035,6 +15685,7 @@ def stripe_webhook():
             }
             chain.append(tx)
             save_json(CHAIN_FILE, chain)
+            persist_normalized_tx(tx)
             update_last_block(tx, is_block=False)
             print(f"💰 Stripe Payment: {fiat_amount} USD -> {thr_amount} THR to {wallet}")
 
@@ -20917,7 +21568,7 @@ def api_chat_session_new():
 def api_sessions_create():
     data = request.get_json(silent=True) or {}
     session_type = (data.get("session_type") or "chat").strip().lower()
-    if session_type not in {"chat", "architect", "codex", "train"}:
+    if session_type not in {"chat", "architect", "codex", "train", "admin"}:
         return jsonify({"ok": False, "error": "invalid_session_type", "allowed": ["chat", "architect", "codex", "train"]}), 400
 
     wallet = (data.get("wallet") or request.cookies.get("thr_address") or "").strip()
@@ -21450,48 +22101,16 @@ def api_ai_models():
     # ─── Local AI handling (fallback or when is_ai_core) ───
     try:
         _apply_env_flags(get_provider_status())
-
-        mode = _normalized_ai_mode()
-
-        default_model = get_default_model(None if mode == "all" else mode)
-        default_model_id = default_model.id if default_model else None
-
-        provider_status = get_provider_status()
-        models = []
-        for provider_name, model_list in AI_MODEL_REGISTRY.items():
-            if mode != "all" and provider_name != mode:
-                continue
-            pstatus = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
-            for mi in model_list:
-                enabled = bool(mi.enabled)
-                degraded = bool(getattr(mi, "degraded", (not enabled)))
-                models.append(
-                    {
-                        "id": mi.id,
-                        "label": mi.display_name,
-                        "display_name": mi.display_name,
-                        "provider": mi.provider,
-                        "enabled": enabled,
-                        "degraded": degraded,
-                        "mode": "all",
-                        "health_reason": pstatus.get("last_error") if (degraded or not enabled) else None,
-                    }
-                )
-
-        if not models:
-            models = [{
-                "id": "auto",
-                "label": "Auto (Thronos chooses)",
-                "display_name": "Auto (Thronos chooses)",
-                "provider": "system",
-                "enabled": True,
-                "degraded": False,
-                "mode": mode,
-            }]
+        models = _build_ai_model_catalog()
+        for m in models:
+            m.setdefault("label", m.get("display_name") or m.get("id"))
 
         payload = {
             "models": models,
-            "default_model_id": default_model_id or "auto",
+            "default_model_id": _default_model_id() or "auto",
+            "engine": "d3lfoi",
+            "mode": "core",
+            "node_role": NODE_ROLE,
         }
         return jsonify(payload), 200
 
@@ -21867,34 +22486,50 @@ def api_ai_health():
         return jsonify(payload), 200
 
     try:
-        enabled_ids = list_enabled_model_ids()
+        catalog = _build_ai_model_catalog()
+        enabled_ids = [m.get("id") for m in catalog if m.get("enabled")]
     except Exception:
+        catalog = []
         enabled_ids = []
 
     offline_ok, offline_reason = _offline_corpus_health()
     thrai_ok, thrai_reason = _thrai_router_health()
-    offline_enabled = bool(THR_OFFLINE_CORPUS_ENABLED and offline_ok)
-    thrai_enabled = bool((THR_THAI_ENABLED or bool((DIKO_MAS_MODEL_URL or "").strip())) and thrai_ok)
+    provider_status = get_provider_status()
+    providers_block = {}
+    for pname in ("openai", "anthropic", "gemini"):
+        info = provider_status.get(pname, {}) if isinstance(provider_status, dict) else {}
+        providers_block[pname] = {
+            "enabled": bool(info.get("configured") and info.get("library_loaded", True) is not False),
+            "degraded": bool(not info.get("configured") or info.get("library_loaded", True) is False),
+            "reason": info.get("last_error") or (None if info.get("configured") else "missing_api_key"),
+        }
 
-    return jsonify({
+    payload = {
         "ok": True,
         "node_role": NODE_ROLE,
         "thronos_ai_mode": os.getenv("THRONOS_AI_MODE", "all"),
+        "mode": "core",
+        "engine": "d3lfoi",
         "enabled_model_ids": enabled_ids,
-        "provider_status": get_provider_status(),
+        "models": catalog,
+        "providers": providers_block,
         "offline_corpus": {
-            "enabled": offline_enabled,
-            "degraded": not offline_enabled,
+            "enabled": bool(THR_OFFLINE_CORPUS_ENABLED and offline_ok),
+            "degraded": False if not THR_OFFLINE_CORPUS_ENABLED else (not offline_ok),
+            "health_ok": bool(offline_ok),
             "path": AI_CORPUS_FILE,
-            "reason": None if offline_enabled else (offline_reason or "disabled_by_flag"),
+            "reason": offline_reason,
         },
         "thrai": {
-            "enabled": thrai_enabled,
-            "degraded": not thrai_enabled,
+            "enabled": bool(THR_THAI_ENABLED and thrai_ok),
+            "degraded": bool(THR_THAI_ENABLED and not thrai_ok),
+            "health_ok": bool(thrai_ok),
             "router_url": (DIKO_MAS_MODEL_URL or "").strip(),
-            "reason": None if thrai_enabled else (thrai_reason or "disabled_by_flag"),
-        }
-    }), 200
+            "reason": thrai_reason,
+        },
+        "provider_status": provider_status,
+    }
+    return jsonify(payload), 200
 
 
 @app.route("/api/ai/provider_status", methods=["GET"])
@@ -22580,9 +23215,9 @@ def api_v1_music_play(track_id):
             # PR-5g: Record play royalty as on-chain transaction for wallet history
             chain = load_json(CHAIN_FILE, [])
             tx = {
-                "type": "music",
-                "kind": "music",
-                "category": "music",
+                "type": "music_royalty",
+                "kind": "music_royalty",
+                "category": "music_royalty",
                 "from": AI_WALLET_ADDRESS,
                 "to": artist_address,
                 "amount": PLAY_ROYALTY,
@@ -22736,6 +23371,7 @@ def api_v1_music_tip():
     tx_id = f"MUSIC-TIP-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
         "type": "music_tip",
+        "category": "music_tip",
         "track_id": track_id,
         "track_title": track["title"],
         "from": from_address,

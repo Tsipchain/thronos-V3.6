@@ -1965,7 +1965,8 @@
           pendingTxsLabelEl.textContent = data.pending_txs;
         if (data.difficulty != null)
           difficultyLabelEl.textContent = data.difficulty;
-        if (data.ai_credits != null) creditsLabelEl.textContent = data.ai_credits;
+        const telemetryCredits = (data.ai_credits ?? data.credits);
+        if (telemetryCredits != null) creditsLabelEl.textContent = Number(telemetryCredits) || 0;
       } catch (e) {
         console.warn("telemetry error", e);
       }
@@ -1990,6 +1991,7 @@
     }
 
     let lastValidModelSelection = "auto";
+    const modelMetaById = new Map();
 
     function applyModelSelection(preferred) {
       if (!modelSelectEl) return;
@@ -2029,6 +2031,7 @@
 
         const models = Array.isArray(data.models) ? data.models : [];
         defaultModelId = data.default_model_id || "auto";
+        modelMetaById.clear();
 
         if (!models.length) {
           autoOpt.textContent = "AUTO only (router available)";
@@ -2037,18 +2040,19 @@
         }
 
         models.forEach((model) => {
-          if ((model.id === "offline_corpus" || model.id === "thrai") && model.enabled !== true) {
-            return;
-          }
+          if (!model || !model.id || model.id === "auto") return;
+          modelMetaById.set(model.id, model);
           const opt = document.createElement("option");
           opt.value = model.id;
           const badge = model.id === "offline_corpus"
             ? " · [On-chain / local]"
             : (model.id === "thrai" ? " · [Router]" : "");
-          opt.textContent = `${model.label || model.id}${badge}`;
+          opt.textContent = `${model.label || model.display_name || model.id}${badge}`;
           if (model.enabled === false) {
             opt.disabled = true;
-            opt.textContent += " (disabled)";
+            opt.textContent += `${model.health_reason ? ` (disabled: ${model.health_reason})` : " (disabled)"}`;
+          } else if (model.degraded === true) {
+            opt.textContent += `${model.health_reason ? ` (degraded: ${model.health_reason})` : " (degraded)"}`;
           }
           modelSelectEl.appendChild(opt);
         });
@@ -2215,10 +2219,10 @@
         if (data.usage) {
           const u = data.usage;
           usageStatusEl.textContent = `Usage: in ${u.input_tokens || 0} / out ${u.output_tokens || 0}`;
-        } else if (data.credits !== undefined) {
-          const credits = Number(data.credits) || 0;
+        } else if ((data.ai_credits ?? data.credits) !== undefined) {
+          const credits = Number(data.ai_credits ?? data.credits) || 0;
           window.aiCredits = credits;
-          usageStatusEl.textContent = `AI Credits: ${credits}`;
+          usageStatusEl.textContent = `${credits}`;
           creditsLabelEl.textContent = credits;
         }
 
@@ -2254,11 +2258,11 @@
       try {
         const res = await fetch(`${API_AI_CREDITS}?wallet=${encodeURIComponent(wallet)}`);
         const data = await res.json();
-        if (data && data.credits != null) {
-          const credits = Number(data.credits) || 0;
+        if (data && (data.ai_credits ?? data.credits) != null) {
+          const credits = Number(data.ai_credits ?? data.credits) || 0;
           window.aiCredits = credits;
           creditsLabelEl.textContent = credits;
-          usageStatusEl.textContent = `AI Credits: ${credits}`;
+          usageStatusEl.textContent = `${credits}`;
           if (aiPacksWalletInfoEl && wallet) {
             aiPacksWalletInfoEl.textContent = `Bound wallet: ${wallet} • AI Credits: ${credits}`;
           }
@@ -2394,6 +2398,12 @@
       if (modelSelectEl) {
         modelSelectEl.addEventListener("change", (e) => {
           const selected = e.target.value || defaultModelId;
+          const meta = modelMetaById.get(selected) || {};
+          if (meta.enabled === false || meta.degraded === true) {
+            showDegradedModeNotice(`Model '${selected}' is degraded${meta.health_reason ? ` (${meta.health_reason})` : ""}`);
+          } else {
+            hideDegradedModeNotice();
+          }
           pendingModelSelection = selected;
           persistModelSelection(selected);
         });

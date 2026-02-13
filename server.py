@@ -11825,6 +11825,154 @@ def _build_ai_model_catalog() -> list[dict]:
     return [dedup["auto"]] + [v for k, v in dedup.items() if k != "auto"] if "auto" in dedup else list(dedup.values())
 
 
+def _model_catalog_snapshot_path() -> str:
+    return os.path.join(DATA_DIR, "model_catalog_snapshot.json")
+
+
+def _model_overrides_path() -> str:
+    return os.path.join(DATA_DIR, "model_overrides.json")
+
+
+def _load_model_catalog_snapshot() -> dict:
+    return load_json(_model_catalog_snapshot_path(), {}) or {}
+
+
+def _load_model_overrides() -> dict:
+    return load_json(_model_overrides_path(), {"models": {}, "updated_at": None}) or {"models": {}}
+
+
+def _save_model_overrides(payload: dict) -> None:
+    save_json(_model_overrides_path(), payload or {"models": {}})
+
+
+def _build_ai_model_catalog() -> list[dict]:
+    provider_status = get_provider_status()
+    snapshot = _load_model_catalog_snapshot()
+    overrides_payload = _load_model_overrides()
+    overrides = overrides_payload.get("models", {}) if isinstance(overrides_payload, dict) else {}
+    models: list[dict] = [{
+        "id": "auto",
+        "display_name": "Auto (Thronos chooses)",
+        "provider": "system",
+        "mode": "system",
+        "enabled": True,
+        "degraded": False,
+        "health_reason": None,
+    }]
+
+    def append_model(entry: dict):
+        model_id = entry.get("id")
+        if not model_id:
+            return
+        provider = entry.get("provider") or "unknown"
+        provider_info = provider_status.get(provider, {}) if isinstance(provider_status, dict) else {}
+        has_key = bool(provider_info.get("configured", True))
+        allowed = _is_provider_allowed(provider)
+        model_override = overrides.get(model_id, {}) if isinstance(overrides, dict) else {}
+        override_enabled = model_override.get("enabled") if isinstance(model_override, dict) else None
+        effective_enabled = bool(entry.get("enabled", True) and has_key and allowed)
+        if override_enabled is not None:
+            effective_enabled = bool(override_enabled and has_key and allowed)
+        degraded = bool(entry.get("degraded", False) or not effective_enabled)
+        reason = entry.get("health_reason")
+        if not has_key:
+            reason = "missing_api_key"
+        elif not allowed:
+            reason = "provider_blocked_by_mode"
+        elif override_enabled is False:
+            reason = "disabled_by_admin"
+        models.append({
+            **entry,
+            "enabled": effective_enabled,
+            "degraded": degraded,
+            "health_reason": reason,
+            "allowed_by_mode": allowed,
+            "disabled_by_admin": bool(override_enabled is False),
+        })
+
+    for provider_name, model_list in AI_MODEL_REGISTRY.items():
+        pstatus = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
+        for mi in model_list:
+            enabled = bool(mi.enabled and pstatus.get("configured", True) and pstatus.get("library_loaded", True) is not False)
+            degraded = bool(getattr(mi, "degraded", (not enabled))) or not enabled
+            append_model({
+                "id": mi.id,
+                "display_name": mi.display_name,
+                "provider": mi.provider,
+                "mode": "provider",
+                "enabled": enabled,
+                "degraded": degraded,
+                "health_reason": None if enabled else (pstatus.get("last_error") or "provider_unavailable"),
+            })
+
+    # Merge snapshot-discovered models as source-of-truth for provider listings.
+    snapshot_providers = (snapshot.get("providers") or {}) if isinstance(snapshot, dict) else {}
+    existing_ids = {m.get("id") for m in models if isinstance(m, dict)}
+    for provider_name, data in snapshot_providers.items():
+        for item in (data.get("models") or []):
+            model_id = (item.get("id") or "").strip()
+            if not model_id or model_id in existing_ids:
+                continue
+            append_model({
+                "id": model_id,
+                "display_name": model_id.replace("-", " ").title(),
+                "provider": provider_name,
+                "mode": "provider",
+                "enabled": bool(item.get("enabled", True)),
+                "degraded": bool(item.get("degraded", False)),
+                "health_reason": item.get("reason") or item.get("health_reason"),
+                "preview": bool(item.get("preview", False)),
+                "voice_friendly": bool(item.get("voice_friendly", False)),
+                "type": item.get("type") or "chat",
+            })
+            existing_ids.add(model_id)
+
+    preview_disabled = [
+        ("o3", "o3 (preview)", "openai"),
+        ("gpt-o3", "GPT-o3 (preview)", "openai"),
+    ]
+    known_ids = {m.get("id") for m in models if isinstance(m, dict)}
+    for mid, dname, provider in preview_disabled:
+        if mid in known_ids:
+            continue
+        append_model({
+            "id": mid,
+            "display_name": dname,
+            "provider": provider,
+            "mode": "provider",
+            "enabled": False,
+            "degraded": True,
+            "health_reason": "model_not_available_or_preview",
+        })
+
+    offline_ok, offline_reason = _offline_corpus_health()
+    append_model({
+        "id": "offline_corpus",
+        "display_name": "Offline Corpus",
+        "provider": "local",
+        "mode": "offline",
+        "enabled": bool(THR_OFFLINE_CORPUS_ENABLED and offline_ok),
+        "degraded": False if not THR_OFFLINE_CORPUS_ENABLED else (not offline_ok),
+        "health_reason": offline_reason,
+    })
+
+    thrai_ok, thrai_reason = _thrai_router_health()
+    append_model({
+        "id": "thrai",
+        "display_name": "Thrai Router",
+        "provider": "thronos",
+        "mode": "router",
+        "enabled": bool(THR_THAI_ENABLED and thrai_ok),
+        "degraded": bool(THR_THAI_ENABLED and not thrai_ok),
+        "health_reason": thrai_reason,
+    })
+    dedup = {}
+    for item in models:
+        if isinstance(item, dict) and item.get("id"):
+            dedup[item["id"]] = item
+    return [dedup["auto"]] + [v for k, v in dedup.items() if k != "auto"] if "auto" in dedup else list(dedup.values())
+
+
 def call_offline_corpus(corpus_path, messages, wallet, session_id, chain_context) -> str:
     """Simple local retrieval over ai_offline_corpus.json / knowledge blocks."""
     try:

@@ -43,8 +43,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration
-BASE_URL = os.getenv("PYTHEIA_BASE_URL", "http://localhost:5000")
-GOVERNANCE_API = f"{BASE_URL}/api/governance/pytheia/advice"
+def _resolve_base_url() -> str:
+    explicit = (os.getenv("PYTHEIA_BASE_URL") or "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+
+    render_url = (os.getenv("RENDER_EXTERNAL_URL") or "").strip()
+    if render_url:
+        return render_url.rstrip("/")
+
+    port = (os.getenv("PORT") or "").strip()
+    if port:
+        return f"http://127.0.0.1:{port}"
+
+    return "http://localhost:5000"
+
+
+BASE_URL = _resolve_base_url()
 CHECK_INTERVAL = int(os.getenv("PYTHEIA_CHECK_INTERVAL", "300"))  # 5 minutes default
 STATE_FILE = os.getenv("PYTHEIA_STATE_FILE", "data/pytheia_state.json")
 MODEL_SNAPSHOT_FILE = os.path.join(os.getenv("DATA_DIR", "data"), "model_catalog_snapshot.json")
@@ -76,6 +91,8 @@ class PYTHEIAWorker:
 
     def __init__(self):
         self.state = self.load_state()
+        self.base_url = BASE_URL
+        self.governance_api = f"{self.base_url}/api/governance/pytheia/advice"
         self.last_post_time = self.state.get("last_post_time", 0)
         self.last_status = self.state.get("last_status", {})
         self.consecutive_failures = self.state.get("consecutive_failures", {})
@@ -150,7 +167,7 @@ class PYTHEIAWorker:
 
         for path in ("/api/ai_models", "/api/ai/models"):
             try:
-                r = requests.get(f"{BASE_URL}{path}", timeout=10)
+                r = requests.get(f"{self.base_url}{path}", timeout=10)
                 if r.status_code != 200:
                     out["errors"].append(f"{path}:HTTP {r.status_code}")
                     continue
@@ -164,7 +181,7 @@ class PYTHEIAWorker:
                 out["errors"].append(f"{path}:{exc}")
 
         try:
-            hr = requests.get(f"{BASE_URL}/api/ai/health", timeout=10)
+            hr = requests.get(f"{self.base_url}/api/ai/health", timeout=10)
             if hr.status_code == 200:
                 hdata = hr.json() if "application/json" in (hr.headers.get("content-type") or "") else {}
                 if isinstance(hdata, dict):
@@ -197,7 +214,7 @@ class PYTHEIAWorker:
             {"name": str, "status": "ok"|"degraded"|"down", "status_code": int,
              "response_time_ms": float, "error": str|None}
         """
-        url = f"{BASE_URL}{endpoint['path']}"
+        url = f"{self.base_url}{endpoint['path']}"
         start_time = time.time()
         result = {
             "name": endpoint["name"],
@@ -447,7 +464,7 @@ class PYTHEIAWorker:
                 ],
                 "rollback": "No code changes made. Recovery actions are non-destructive."
             },
-            "governance_url": f"{BASE_URL}/governance",
+            "governance_url": f"{self.base_url}/governance",
             "requires_approval": False,
             "auto_executable": current_status == "healthy",
             "ai_models_snapshot": {
@@ -467,9 +484,9 @@ class PYTHEIAWorker:
             True if posted successfully, False otherwise
         """
         try:
-            logger.info(f"Posting PYTHEIA_ADVICE to {GOVERNANCE_API}...")
+            logger.info(f"Posting PYTHEIA_ADVICE to {self.governance_api}...")
             response = requests.post(
-                GOVERNANCE_API,
+                self.governance_api,
                 json=advice,
                 headers={"Content-Type": "application/json"},
                 timeout=30
@@ -491,7 +508,7 @@ class PYTHEIAWorker:
                 return False
 
         except Exception as e:
-            logger.exception(f"Exception posting PYTHEIA_ADVICE: {e}")
+            logger.warning(f"PYTHEIA advice post skipped (unreachable governance API): {e}")
             return False
 
     def run_cycle(self):
@@ -547,7 +564,7 @@ class PYTHEIAWorker:
         """Run worker in continuous loop."""
         logger.info("PYTHEIA Worker starting in continuous mode")
         logger.info(f"Check interval: {CHECK_INTERVAL}s")
-        logger.info(f"Base URL: {BASE_URL}")
+        logger.info(f"Base URL: {self.base_url}")
 
         while True:
             try:

@@ -11841,6 +11841,86 @@ def _load_model_overrides() -> dict:
     return load_json(_model_overrides_path(), {"models": {}, "updated_at": None}) or {"models": {}}
 
 
+def _offline_corpus_health() -> tuple[bool, str | None]:
+    if not THR_OFFLINE_CORPUS_ENABLED:
+        return False, "disabled_by_flag"
+    try:
+        if not os.path.exists(AI_CORPUS_FILE):
+            save_json(AI_CORPUS_FILE, {"conversations": []})
+            return True, "auto_created"
+        corpus = load_json(AI_CORPUS_FILE, {"conversations": []})
+        if isinstance(corpus, dict) and isinstance(corpus.get("conversations"), list):
+            return True, None
+        if isinstance(corpus, list):
+            return True, None
+        return False, "invalid_corpus_format"
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _thrai_router_health() -> tuple[bool, str | None]:
+    if not THR_THAI_ENABLED:
+        return False, "disabled_by_flag"
+    router_url = (DIKO_MAS_MODEL_URL or "").strip()
+    if not router_url:
+        return False, "missing_router_url"
+
+    for provider_name, model_list in AI_MODEL_REGISTRY.items():
+        pstatus = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
+        for mi in model_list:
+            enabled = bool(mi.enabled and pstatus.get("configured", True) and pstatus.get("library_loaded", True) is not False)
+            degraded = bool(getattr(mi, "degraded", (not enabled))) or not enabled
+            append_model({
+                "id": mi.id,
+                "display_name": mi.display_name,
+                "provider": mi.provider,
+                "mode": "provider",
+                "enabled": enabled,
+                "degraded": degraded,
+                "health_reason": None if enabled else (pstatus.get("last_error") or "provider_unavailable"),
+            })
+
+    for candidate in health_candidates:
+        try:
+            r = requests.get(candidate, timeout=2)
+            if r.status_code < 500:
+                return True, None
+        except requests.exceptions.Timeout:
+            return False, "timeout"
+        except requests.exceptions.ConnectionError:
+            return False, "connection_refused"
+        except Exception:
+            pass
+
+    try:
+        r = requests.post(router_url, json={"ping": "thrai"}, timeout=2)
+        if r.status_code < 500:
+            return True, None
+    except requests.exceptions.Timeout:
+        return False, "timeout"
+    except requests.exceptions.ConnectionError:
+        return False, "connection_refused"
+    except Exception as exc:
+        return False, str(exc)
+    return False, "health_check_failed"
+
+
+def _model_catalog_snapshot_path() -> str:
+    return os.path.join(DATA_DIR, "model_catalog_snapshot.json")
+
+
+def _model_overrides_path() -> str:
+    return os.path.join(DATA_DIR, "model_overrides.json")
+
+
+def _load_model_catalog_snapshot() -> dict:
+    return load_json(_model_catalog_snapshot_path(), {}) or {}
+
+
+def _load_model_overrides() -> dict:
+    return load_json(_model_overrides_path(), {"models": {}, "updated_at": None}) or {"models": {}}
+
+
 def _save_model_overrides(payload: dict) -> None:
     save_json(_model_overrides_path(), payload or {"models": {}})
 
@@ -12116,8 +12196,12 @@ def _ensure_admin_session(session_id: str | None = None, title: str | None = Non
     return session
 
 
-@app.route("/api/admin/login", methods=["POST"])
+@app.route("/api/admin/login", methods=["GET", "POST"])
 def api_admin_login():
+    if request.method == "GET":
+        expected = (os.getenv("ADMIN_SECRET") or ADMIN_SECRET or "").strip()
+        return jsonify({"ok": True, "configured": bool(expected), "hint": "Use POST with JSON {secret}", "method": "POST"}), 200
+
     data = request.get_json(silent=True) or {}
     secret = (data.get("secret") or "").strip()
     expected = (os.getenv("ADMIN_SECRET") or ADMIN_SECRET or "").strip()

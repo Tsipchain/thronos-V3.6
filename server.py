@@ -11205,6 +11205,17 @@ def api_voice_x9_webhook():
 
     model_id = body.get("model_id") or "auto"
     message_credit_cost = _chat_credit_cost_for_model(model_id, text)
+    if wallet:
+        available_before = get_ai_credits(wallet)
+        if available_before < message_credit_cost:
+            return jsonify({
+                "ok": False,
+                "error": "no_credits",
+                "code": "insufficient_ai_credits",
+                "required_credits": message_credit_cost,
+                "credits": available_before,
+                "wallet": wallet,
+            }), 400
 
     payload = {
         "wallet": wallet,

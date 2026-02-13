@@ -115,6 +115,9 @@ from llm_registry import (
     list_enabled_model_ids,
     find_model,
     _apply_env_flags,
+    discover_openai_models,
+    discover_anthropic_models,
+    discover_gemini_models,
 )
 from ai_models_config import base_model_config
 # CRITICAL FIX #6: Import compute_model_stats and create_ai_transfer_from_ledger_entry from ai_interaction_ledger
@@ -5171,6 +5174,30 @@ def _normalized_ai_mode() -> str:
     return raw_mode
 
 
+def _allowed_providers() -> set[str]:
+    raw = os.getenv("THR_ALLOWED_PROVIDERS", "")
+    if not raw.strip():
+        return {"openai", "offline"}
+    return {p.strip().lower() for p in raw.split(",") if p.strip()}
+
+
+def _is_provider_allowed(provider: str) -> bool:
+    providers = _allowed_providers()
+    key = (provider or "").strip().lower()
+    mapping = {
+        "openai": "openai",
+        "anthropic": "anthropic",
+        "gemini": "gemini",
+        "google": "gemini",
+        "local": "offline",
+        "offline_corpus": "offline",
+        "thrai": "thrai",
+        "thronos": "thrai",
+    }
+    normalized = mapping.get(key, key)
+    return normalized in providers
+
+
 def _select_callable_model(model_id: str | None, session_type: str | None = None):
     """Return a callable model id (or error response) respecting mode/provider availability."""
 
@@ -5185,6 +5212,24 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
 
     requested_raw = (model_id or "").strip()
     requested = requested_raw or default_model_id or "auto"
+    catalog_by_id = {m.get("id"): m for m in catalog if isinstance(m, dict) and m.get("id")}
+
+    if requested == "auto" and callable_ids:
+        heuristic_order = [
+            "gpt-4.1-mini",
+            "o3-mini",
+            "claude-3.5-sonnet",
+            "claude-3-5-sonnet",
+            "gemini-2.0-flash",
+            "gemini-2.5-pro",
+            "offline_corpus",
+            "thrai",
+        ]
+        for candidate in heuristic_order:
+            cinfo = catalog_by_id.get(candidate) or {}
+            if candidate in callable_ids and _is_provider_allowed(cinfo.get("provider") or ""):
+                requested = candidate
+                break
 
     if requested == "auto" and callable_ids:
         heuristic_order = [
@@ -5216,6 +5261,19 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
         }
         return None, fallback_notice, (jsonify(error_payload), 200)
 
+    requested_info = catalog_by_id.get(requested) if requested and requested != "auto" else None
+    if requested_info and not _is_provider_allowed(requested_info.get("provider") or ""):
+        blocked_provider = requested_info.get("provider") or "unknown"
+        error_payload = {
+            "ok": False,
+            "error": "provider_blocked_by_mode",
+            "provider": blocked_provider,
+            "model_id": requested,
+            "reason": "THRONOS_AI_MODE policy",
+            "allowed_providers": sorted(list(_allowed_providers())),
+        }
+        return None, fallback_notice, (jsonify(error_payload), 200)
+
     if requested not in callable_ids and requested != "auto":
         error_payload = {
             "ok": False,
@@ -5235,6 +5293,9 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
         return resolved.id, fallback_notice, None
 
     for mid in callable_ids:
+        info = catalog_by_id.get(mid) or {}
+        if not _is_provider_allowed(info.get("provider") or ""):
+            continue
         resolved = _resolve_model(mid, normalized_mode=normalized_mode, provider_status=provider_status)
         if resolved:
             notice = fallback_notice or f"Model '{requested or 'auto'}' not available; using {resolved.id}"
@@ -6487,7 +6548,7 @@ def enforce_read_only():
         return None
     # Allow health/bootstrap even as POST (for monitoring tools)
     safe_paths = ("/health", "/bootstrap.json", "/api/whoami")
-    admin_ai_safe_paths = ("/api/admin/login", "/api/admin/ai/chat", "/api/admin/ai/voice_hook", "/api/voice/x9_webhook")
+    admin_ai_safe_paths = ("/api/admin/login", "/api/admin/ai/chat", "/api/admin/ai/health", "/api/admin/models", "/api/admin/models/toggle", "/api/admin/agents", "/api/admin/ai/voice_hook", "/api/voice/x9_webhook")
     if request.path.startswith(safe_paths):
         return None
     if NODE_ROLE == "ai_core" and request.path.startswith(admin_ai_safe_paths):
@@ -11452,6 +11513,154 @@ def _build_ai_model_catalog() -> list[dict]:
     return models
 
 
+def _model_catalog_snapshot_path() -> str:
+    return os.path.join(DATA_DIR, "model_catalog_snapshot.json")
+
+
+def _model_overrides_path() -> str:
+    return os.path.join(DATA_DIR, "model_overrides.json")
+
+
+def _load_model_catalog_snapshot() -> dict:
+    return load_json(_model_catalog_snapshot_path(), {}) or {}
+
+
+def _load_model_overrides() -> dict:
+    return load_json(_model_overrides_path(), {"models": {}, "updated_at": None}) or {"models": {}}
+
+
+def _save_model_overrides(payload: dict) -> None:
+    save_json(_model_overrides_path(), payload or {"models": {}})
+
+
+def _build_ai_model_catalog() -> list[dict]:
+    provider_status = get_provider_status()
+    snapshot = _load_model_catalog_snapshot()
+    overrides_payload = _load_model_overrides()
+    overrides = overrides_payload.get("models", {}) if isinstance(overrides_payload, dict) else {}
+    models: list[dict] = [{
+        "id": "auto",
+        "display_name": "Auto (Thronos chooses)",
+        "provider": "system",
+        "mode": "system",
+        "enabled": True,
+        "degraded": False,
+        "health_reason": None,
+    }]
+
+    def append_model(entry: dict):
+        model_id = entry.get("id")
+        if not model_id:
+            return
+        provider = entry.get("provider") or "unknown"
+        provider_info = provider_status.get(provider, {}) if isinstance(provider_status, dict) else {}
+        has_key = bool(provider_info.get("configured", True))
+        allowed = _is_provider_allowed(provider)
+        model_override = overrides.get(model_id, {}) if isinstance(overrides, dict) else {}
+        override_enabled = model_override.get("enabled") if isinstance(model_override, dict) else None
+        effective_enabled = bool(entry.get("enabled", True) and has_key and allowed)
+        if override_enabled is not None:
+            effective_enabled = bool(override_enabled and has_key and allowed)
+        degraded = bool(entry.get("degraded", False) or not effective_enabled)
+        reason = entry.get("health_reason")
+        if not has_key:
+            reason = "missing_api_key"
+        elif not allowed:
+            reason = "provider_blocked_by_mode"
+        elif override_enabled is False:
+            reason = "disabled_by_admin"
+        models.append({
+            **entry,
+            "enabled": effective_enabled,
+            "degraded": degraded,
+            "health_reason": reason,
+            "allowed_by_mode": allowed,
+            "disabled_by_admin": bool(override_enabled is False),
+        })
+
+    for provider_name, model_list in AI_MODEL_REGISTRY.items():
+        pstatus = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
+        for mi in model_list:
+            enabled = bool(mi.enabled and pstatus.get("configured", True) and pstatus.get("library_loaded", True) is not False)
+            degraded = bool(getattr(mi, "degraded", (not enabled))) or not enabled
+            append_model({
+                "id": mi.id,
+                "display_name": mi.display_name,
+                "provider": mi.provider,
+                "mode": "provider",
+                "enabled": enabled,
+                "degraded": degraded,
+                "health_reason": None if enabled else (pstatus.get("last_error") or "provider_unavailable"),
+            })
+
+    # Merge snapshot-discovered models as source-of-truth for provider listings.
+    snapshot_providers = (snapshot.get("providers") or {}) if isinstance(snapshot, dict) else {}
+    existing_ids = {m.get("id") for m in models if isinstance(m, dict)}
+    for provider_name, data in snapshot_providers.items():
+        for item in (data.get("models") or []):
+            model_id = (item.get("id") or "").strip()
+            if not model_id or model_id in existing_ids:
+                continue
+            append_model({
+                "id": model_id,
+                "display_name": model_id.replace("-", " ").title(),
+                "provider": provider_name,
+                "mode": "provider",
+                "enabled": bool(item.get("enabled", True)),
+                "degraded": bool(item.get("degraded", False)),
+                "health_reason": item.get("reason") or item.get("health_reason"),
+                "preview": bool(item.get("preview", False)),
+                "voice_friendly": bool(item.get("voice_friendly", False)),
+                "type": item.get("type") or "chat",
+            })
+            existing_ids.add(model_id)
+
+    preview_disabled = [
+        ("o3", "o3 (preview)", "openai"),
+        ("gpt-o3", "GPT-o3 (preview)", "openai"),
+    ]
+    known_ids = {m.get("id") for m in models if isinstance(m, dict)}
+    for mid, dname, provider in preview_disabled:
+        if mid in known_ids:
+            continue
+        append_model({
+            "id": mid,
+            "display_name": dname,
+            "provider": provider,
+            "mode": "provider",
+            "enabled": False,
+            "degraded": True,
+            "health_reason": "model_not_available_or_preview",
+        })
+
+    offline_ok, offline_reason = _offline_corpus_health()
+    append_model({
+        "id": "offline_corpus",
+        "display_name": "Offline Corpus",
+        "provider": "local",
+        "mode": "offline",
+        "enabled": bool(THR_OFFLINE_CORPUS_ENABLED and offline_ok),
+        "degraded": False if not THR_OFFLINE_CORPUS_ENABLED else (not offline_ok),
+        "health_reason": offline_reason,
+    })
+
+    thrai_ok, thrai_reason = _thrai_router_health()
+    append_model({
+        "id": "thrai",
+        "display_name": "Thrai Router",
+        "provider": "thronos",
+        "mode": "router",
+        "enabled": bool(THR_THAI_ENABLED and thrai_ok),
+        "degraded": bool(THR_THAI_ENABLED and not thrai_ok),
+        "health_reason": thrai_reason,
+    })
+    dedup = {}
+    for item in models:
+        if isinstance(item, dict) and item.get("id"):
+            dedup[item["id"]] = item
+    return [dedup["auto"]] + [v for k, v in dedup.items() if k != "auto"] if "auto" in dedup else list(dedup.values())
+
+
 def call_offline_corpus(corpus_path, messages, wallet, session_id, chain_context) -> str:
     """Simple local retrieval over ai_offline_corpus.json / knowledge blocks."""
     try:
@@ -11615,6 +11824,64 @@ def api_admin_ai_health():
         "providers": providers,
     }
     return jsonify(payload), 200
+
+
+@app.route("/api/admin/models", methods=["GET"])
+def api_admin_models():
+    denied = require_admin()
+    if denied:
+        return denied
+    snapshot = _load_model_catalog_snapshot()
+    catalog = _build_ai_model_catalog()
+    overrides = _load_model_overrides()
+    return jsonify({
+        "ok": True,
+        "catalog": catalog,
+        "snapshot": snapshot,
+        "overrides": overrides,
+        "allowed_providers": sorted(list(_allowed_providers())),
+    }), 200
+
+
+@app.route("/api/admin/models/toggle", methods=["POST"])
+def api_admin_models_toggle():
+    data = request.get_json(silent=True) or {}
+    denied = require_admin(data)
+    if denied:
+        return denied
+    model_id = (data.get("model_id") or "").strip()
+    if not model_id:
+        return jsonify({"ok": False, "error": "model_id_required"}), 400
+    enabled = data.get("enabled")
+    if enabled is None:
+        return jsonify({"ok": False, "error": "enabled_required"}), 400
+    payload = _load_model_overrides()
+    if not isinstance(payload, dict):
+        payload = {"models": {}}
+    payload.setdefault("models", {})
+    payload["models"][model_id] = {
+        "enabled": bool(enabled),
+        "updated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+    payload["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    _save_model_overrides(payload)
+    return jsonify({"ok": True, "model_id": model_id, "enabled": bool(enabled)}), 200
+
+
+@app.route("/api/admin/agents", methods=["GET"])
+def api_admin_agents():
+    denied = require_admin()
+    if denied:
+        return denied
+    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    status = {
+        "ai_core": {"status": "ok" if NODE_ROLE == "ai_core" else "running", "last_heartbeat": now},
+        "pytheia": {"status": "ok" if str(os.getenv("PYTHEIA_ENABLED", "1")).lower() in {"1","true","yes","on"} else "disabled", "last_heartbeat": now},
+        "x9_bridge": {"status": "ok" if bool((os.getenv("X9_VOICE_WEBHOOK_SECRET") or "").strip()) else "degraded", "last_heartbeat": now},
+        "music_worker": {"status": "unknown", "last_heartbeat": None},
+        "iot_worker": {"status": "unknown", "last_heartbeat": None},
+    }
+    return jsonify({"ok": True, "agents": status}), 200
 
 
 @app.route("/api/admin/ai/chat", methods=["POST"])
@@ -23200,6 +23467,8 @@ def api_ai_health():
             "reason": thrai_reason,
         },
         "provider_status": provider_status,
+        "model_snapshot": _load_model_catalog_snapshot(),
+        "pytheia": (lambda: (lambda st: {"status": "ok" if st else "unknown", "last_run": st.get("last_update") if isinstance(st, dict) else None, "last_error": None})(load_json(os.getenv("PYTHEIA_STATE_FILE", os.path.join(DATA_DIR, "pytheia_state.json")), {})))(),
     }
     return jsonify(payload), 200
 

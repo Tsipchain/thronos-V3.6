@@ -29,6 +29,7 @@ import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from pathlib import Path
+from llm_registry import discover_openai_models, discover_anthropic_models, discover_gemini_models
 
 # Configure logging
 logging.basicConfig(
@@ -46,6 +47,7 @@ BASE_URL = os.getenv("PYTHEIA_BASE_URL", "http://localhost:5000")
 GOVERNANCE_API = f"{BASE_URL}/api/governance/pytheia/advice"
 CHECK_INTERVAL = int(os.getenv("PYTHEIA_CHECK_INTERVAL", "300"))  # 5 minutes default
 STATE_FILE = os.getenv("PYTHEIA_STATE_FILE", "data/pytheia_state.json")
+MODEL_SNAPSHOT_FILE = os.path.join(os.getenv("DATA_DIR", "data"), "model_catalog_snapshot.json")
 REPO_URL = "https://github.com/Tsipchain/thronos-V3.6"
 
 # Health check endpoints
@@ -78,6 +80,7 @@ class PYTHEIAWorker:
         self.last_status = self.state.get("last_status", {})
         self.consecutive_failures = self.state.get("consecutive_failures", {})
         self.last_model_snapshot = self.state.get("last_model_snapshot", {})
+        self.last_provider_scan_ts = float(self.state.get("last_provider_scan_ts", 0) or 0)
 
     def load_state(self) -> Dict:
         """Load persistent state from file."""
@@ -99,10 +102,39 @@ class PYTHEIAWorker:
                     "last_status": self.last_status,
                     "consecutive_failures": self.consecutive_failures,
                     "last_model_snapshot": self.last_model_snapshot,
+                    "last_provider_scan_ts": self.last_provider_scan_ts,
                     "last_update": datetime.utcnow().isoformat()
                 }, f, indent=2)
         except Exception as e:
             logger.error(f"Failed to save state: {e}")
+
+    def scan_provider_models(self) -> Dict[str, Any]:
+        openai_key = (os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip()
+        anthropic_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+        gemini_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+
+        providers = {
+            "openai": {"models": discover_openai_models(openai_key)},
+            "anthropic": {"models": discover_anthropic_models(anthropic_key)},
+            "gemini": {"models": discover_gemini_models(gemini_key)},
+        }
+        for provider_name, payload in providers.items():
+            models = payload.get("models") or []
+            ok = any(bool(m.get("enabled")) for m in models if isinstance(m, dict))
+            payload["status"] = "ok" if ok else "degraded"
+
+        snapshot = {
+            "last_scan_ts": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "providers": providers,
+        }
+
+        try:
+            os.makedirs(os.path.dirname(MODEL_SNAPSHOT_FILE), exist_ok=True)
+            with open(MODEL_SNAPSHOT_FILE, "w", encoding="utf-8") as f:
+                json.dump(snapshot, f, indent=2, ensure_ascii=False)
+        except Exception as exc:
+            logger.error(f"Failed to write model snapshot file: {exc}")
+        return snapshot
 
     def fetch_ai_model_snapshot(self) -> Dict[str, Any]:
         """Collect dynamic AI model/provider availability snapshot from APIs."""
@@ -472,6 +504,12 @@ class PYTHEIAWorker:
         health_report = self.run_health_checks()
         logger.info(f"Overall Status: {health_report['overall_status'].upper()}")
         logger.info(f"Summary: {health_report['summary']}")
+
+        if (time.time() - self.last_provider_scan_ts) > 3600:
+            provider_snapshot = self.scan_provider_models()
+            if self._snapshot_changed(self.last_model_snapshot, {"models": [m for p in provider_snapshot.get("providers", {}).values() for m in (p.get("models") or [])], "providers": provider_snapshot.get("providers", {})}):
+                logger.info("Provider catalog changed (scanner)")
+            self.last_provider_scan_ts = time.time()
 
         # Update state
         self.last_status = {

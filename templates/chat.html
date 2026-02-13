@@ -2205,6 +2205,16 @@
         }
 
         if (!res.ok || (data && (data.ok === false || data.error))) {
+          if (data && data.error === "provider_blocked_by_mode") {
+            const blockedProvider = String(data.provider || "Unknown");
+            appendMessage({
+              role: "assistant",
+              content: `Ο provider ${blockedProvider} είναι κλειδωμένος από τις ρυθμίσεις THRONOS. Άνοιξέ τον από το Admin ή δοκίμασε άλλο μοντέλο.`,
+              model: "system",
+            });
+            setSessionStatus("Provider blocked");
+            return;
+          }
           if (data && data.error === "insufficient_ai_credits") {
             usageStatusEl.textContent = "Δεν έχεις άλλα Quantum credits…";
             await refreshCreditsForWallet(wallet);

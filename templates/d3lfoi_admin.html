@@ -8,7 +8,7 @@
     body { background:#07131d; color:#d8ffee; font-family:Inter,system-ui,sans-serif; margin:0; }
     .wrap { padding:16px; }
     .header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
-    .grid { display:grid; grid-template-columns: 240px 1fr 320px; gap:12px; }
+    .grid { display:grid; grid-template-columns: 240px 1fr 360px; gap:12px; }
     .card { border:1px solid #1b4d40; border-radius:12px; padding:12px; background:#081926; }
     .chat-log { height:60vh; overflow:auto; border:1px solid #194636; border-radius:10px; padding:8px; background:#06141f; }
     .msg { margin:6px 0; padding:8px; border-radius:8px; }
@@ -19,6 +19,10 @@
     .row { display:flex; gap:8px; }
     .row button { width:auto; }
     pre { white-space:pre-wrap; word-break:break-word; max-height:60vh; overflow:auto; }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th, td { border-bottom:1px solid #17343f; padding:6px; text-align:left; }
+    .tabs { display:flex; gap:8px; margin-bottom:8px; }
+    .tabs button { width:auto; margin:0; }
     #admin-main { display:none; }
     .status { color:#86ffbc; font-size:12px; }
   </style>
@@ -59,8 +63,29 @@
       </div>
 
       <div class="card">
-        <h4>Core Health</h4>
-        <pre id="healthPre">-</pre>
+        <div class="tabs">
+          <button id="tabHealth">Health</button>
+          <button id="tabModels">Models</button>
+          <button id="tabAgents">Agents</button>
+        </div>
+        <div id="panelHealth">
+          <h4>Core Health</h4>
+          <pre id="healthPre">-</pre>
+        </div>
+        <div id="panelModels" style="display:none;">
+          <h4>Models</h4>
+          <table>
+            <thead><tr><th>Provider</th><th>Model</th><th>Enabled</th><th>Allowed</th><th>Action</th></tr></thead>
+            <tbody id="modelsBody"></tbody>
+          </table>
+        </div>
+        <div id="panelAgents" style="display:none;">
+          <h4>Agents</h4>
+          <table>
+            <thead><tr><th>Name</th><th>Status</th><th>Heartbeat</th></tr></thead>
+            <tbody id="agentsBody"></tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -106,6 +131,43 @@
     $('healthPre').textContent = JSON.stringify(data, null, 2);
   }
 
+  async function loadAdminModels() {
+    const data = await api('/api/admin/models');
+    const rows = Array.isArray(data.catalog) ? data.catalog : [];
+    $('modelsBody').innerHTML = '';
+    rows.filter((m) => m.id !== 'auto').forEach((m) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${m.provider || '-'}</td><td>${m.id}</td><td>${m.enabled ? 'yes' : 'no'}</td><td>${m.allowed_by_mode === false ? 'no' : 'yes'}</td><td><button data-model="${m.id}" data-enabled="${m.enabled ? '0' : '1'}">${m.enabled ? 'Disable' : 'Enable'}</button></td>`;
+      const btn = tr.querySelector('button');
+      btn.addEventListener('click', async () => {
+        await api('/api/admin/models/toggle', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ model_id: btn.dataset.model, enabled: btn.dataset.enabled === '1' })
+        });
+        await loadAdminModels();
+      });
+      $('modelsBody').appendChild(tr);
+    });
+  }
+
+  async function loadAdminAgents() {
+    const data = await api('/api/admin/agents');
+    const agents = data.agents || {};
+    $('agentsBody').innerHTML = '';
+    Object.entries(agents).forEach(([name, info]) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${name}</td><td>${info.status || 'unknown'}</td><td>${info.last_heartbeat || '-'}</td>`;
+      $('agentsBody').appendChild(tr);
+    });
+  }
+
+  function showTab(name) {
+    $('panelHealth').style.display = name === 'health' ? 'block' : 'none';
+    $('panelModels').style.display = name === 'models' ? 'block' : 'none';
+    $('panelAgents').style.display = name === 'agents' ? 'block' : 'none';
+  }
+
   $('loginBtn').addEventListener('click', async () => {
     $('loginErr').textContent = '';
     state.adminSecret = $('adminSecret').value.trim();
@@ -121,10 +183,16 @@
       $('operatorStatus').textContent = 'operator session active';
       await loadModels();
       await loadHealth();
+      await loadAdminModels();
+      await loadAdminAgents();
     } catch (e) {
       $('loginErr').textContent = e.message;
     }
   });
+
+  $('tabHealth').addEventListener('click', () => showTab('health'));
+  $('tabModels').addEventListener('click', async () => { showTab('models'); await loadAdminModels(); });
+  $('tabAgents').addEventListener('click', async () => { showTab('agents'); await loadAdminAgents(); });
 
   $('sendBtn').addEventListener('click', async () => {
     const message = $('msgInput').value.trim();

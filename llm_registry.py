@@ -169,6 +169,112 @@ AI_MODEL_REGISTRY: Dict[str, List[ModelInfo]] = {
 }
 
 
+def _http_json_get(url: str, headers: Optional[dict] = None, timeout: float = 7.5) -> dict:
+    req = urllib_request.Request(url, headers=headers or {}, method="GET")
+    with urllib_request.urlopen(req, timeout=timeout) as resp:
+        data = resp.read()
+    return json.loads(data.decode("utf-8")) if data else {}
+
+
+def _fallback_provider_models(provider: str) -> list[dict]:
+    items = []
+    for m in AI_MODEL_REGISTRY.get(provider, []):
+        items.append({
+            "id": m.id,
+            "type": "chat",
+            "enabled": bool(m.enabled),
+            "degraded": not bool(m.enabled),
+            "health_reason": None if m.enabled else "fallback_disabled",
+            "preview": ("preview" in m.id or "preview" in (m.tier or "")),
+            "voice_friendly": any(t in m.id for t in ("mini", "haiku", "flash")),
+        })
+    return items
+
+
+def discover_openai_models(api_key: str) -> list[dict]:
+    if not (api_key or "").strip():
+        return [{**m, "enabled": False, "degraded": True, "health_reason": "missing_api_key"} for m in _fallback_provider_models("openai")]
+    try:
+        payload = _http_json_get(
+            "https://api.openai.com/v1/models",
+            headers={"Authorization": f"Bearer {api_key.strip()}"},
+        )
+        out = []
+        for item in payload.get("data", []) if isinstance(payload, dict) else []:
+            mid = str((item or {}).get("id") or "").strip()
+            if not mid or not (mid.startswith("gpt-") or mid.startswith("o3")):
+                continue
+            preview = any(token in mid for token in ("preview", "beta"))
+            unsupported = mid in {"o3", "gpt-o3", "o3-pro", "gpt-o3-preview"}
+            out.append({
+                "id": mid,
+                "type": "chat",
+                "enabled": not (preview or unsupported),
+                "degraded": bool(preview or unsupported),
+                "health_reason": "preview_only" if (preview or unsupported) else None,
+                "preview": bool(preview or unsupported),
+                "voice_friendly": any(t in mid for t in ("mini", "nano")),
+            })
+        return sorted(out, key=lambda x: x.get("id") or "") or _fallback_provider_models("openai")
+    except Exception:
+        return _fallback_provider_models("openai")
+
+
+def discover_anthropic_models(api_key: str) -> list[dict]:
+    if not (api_key or "").strip():
+        return [{**m, "enabled": False, "degraded": True, "health_reason": "missing_api_key"} for m in _fallback_provider_models("anthropic")]
+    try:
+        payload = _http_json_get(
+            "https://api.anthropic.com/v1/models",
+            headers={"x-api-key": api_key.strip(), "anthropic-version": "2023-06-01"},
+        )
+        out = []
+        models = payload.get("data") if isinstance(payload, dict) else []
+        for item in models or []:
+            mid = str((item or {}).get("id") or (item or {}).get("name") or "").strip()
+            if not mid or not mid.startswith("claude"):
+                continue
+            out.append({
+                "id": mid,
+                "type": "chat",
+                "enabled": True,
+                "degraded": False,
+                "health_reason": None,
+                "preview": "preview" in mid,
+                "voice_friendly": any(t in mid for t in ("haiku", "sonnet")),
+            })
+        return sorted(out, key=lambda x: x.get("id") or "") or _fallback_provider_models("anthropic")
+    except Exception:
+        return _fallback_provider_models("anthropic")
+
+
+def discover_gemini_models(api_key: str) -> list[dict]:
+    if not (api_key or "").strip():
+        return [{**m, "enabled": False, "degraded": True, "health_reason": "missing_api_key"} for m in _fallback_provider_models("gemini")]
+    try:
+        payload = _http_json_get(
+            f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key.strip()}",
+        )
+        out = []
+        for item in payload.get("models", []) if isinstance(payload, dict) else []:
+            name = str((item or {}).get("name") or "")
+            mid = name.split("/")[-1].strip()
+            if not mid.startswith("gemini"):
+                continue
+            out.append({
+                "id": mid,
+                "type": "chat",
+                "enabled": True,
+                "degraded": False,
+                "health_reason": None,
+                "preview": "preview" in mid,
+                "voice_friendly": any(t in mid for t in ("flash", "lite")),
+            })
+        return sorted(out, key=lambda x: x.get("id") or "") or _fallback_provider_models("gemini")
+    except Exception:
+        return _fallback_provider_models("gemini")
+
+
 def find_model(model_id: str) -> Optional[ModelInfo]:
     for provider_models in AI_MODEL_REGISTRY.values():
         for m in provider_models:

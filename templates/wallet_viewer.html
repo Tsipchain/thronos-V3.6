@@ -463,7 +463,17 @@
         const asset = tokenSymbol || 'THR';
         const decimals = tx.decimals || tokenDecimals;
         const formattedAmount = formatTokenAmount(tx.display_amount ?? tx.amount ?? 0, decimals);
-        const label = (tx.category_label || tx.kind || tx.type || '').toString().toUpperCase();
+        const category = getCanonicalCategory(tx);
+        const meta = (tx.meta && typeof tx.meta === 'object') ? tx.meta : {};
+        let label = (tx.category_label || tx.kind || tx.type || '').toString().toUpperCase();
+        if (category === 'ai_credits') {
+          const reason = String(meta.reason || tx.reason || '').toLowerCase();
+          if (reason === 'voice_usage' || String(meta.channel || '').toLowerCase() === 'voice') {
+            label = 'AI CREDITS · VOICE (X9)';
+          } else if (reason === 'chat_usage') {
+            label = 'AI CREDITS · WEB CHAT';
+          }
+        }
 
         html += `
             <div class="tx">

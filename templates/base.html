@@ -3484,6 +3484,7 @@ let WALLET_HISTORY_CACHE = [];
 let historyLoading = false;
 let currentHistoryFilter = 'all';
 let currentTokenFilter = null;
+let AI_LEDGER_CACHE = [];
 
 function resetHistoryFilters() {
     currentHistoryFilter = 'all';
@@ -3566,7 +3567,7 @@ function getTxType(tx) {
 
     // === T2E (Train-to-Earn - IoT/ASIC miners) ===
     if (raw === 't2e' || raw === 't2e_reward' || raw === 'train_reward' ||
-        raw.startsWith('t2e_') || category === 't2e' || symbol === 'T2E') {
+        raw.startsWith('t2e_') || category === 't2e' || category === 't2e_reward_thr' || symbol === 'T2E') {
         return 't2e';
     }
 
@@ -3588,7 +3589,7 @@ function getTxType(tx) {
     if (raw.startsWith('ai_job') || raw === 'architect_job' || raw === 'architect' ||
         raw === 'architect_service' || raw === 'architect_payment' ||
         raw === 'ai_reward' || category === 'architect_ai_jobs' ||
-        category === 'architect' || category === 'ai_reward') {
+        category === 'architect' || category === 'architect_job' || category === 'ai_reward') {
         return 'architect';
     }
 
@@ -3625,7 +3626,7 @@ function getTxType(tx) {
     }
 
     // === TOKENS (non-THR token transfers) ===
-    if (raw === 'token_transfer' || category === 'tokens' ||
+    if (raw === 'token_transfer' || category === 'tokens' || category === 'token_transfer' ||
         (symbol && symbol !== 'THR' && (raw === 'transfer' || !raw))) {
         return 'tokens';
     }
@@ -3784,8 +3785,13 @@ function renderHistory() {
 
     // Filter transactions
     let filtered = allTransactions;
-    if (currentHistoryFilter !== 'all') {
+    if (currentHistoryFilter === 'ai_credits') {
+        filtered = [];
+    } else if (currentHistoryFilter !== 'all') {
         filtered = allTransactions.filter(tx => getTxType(tx) === currentHistoryFilter);
+    }
+    if (currentHistoryFilter === 'all' || currentHistoryFilter === 'thr') {
+        filtered = filtered.filter(tx => getTxType(tx) !== 'ai_credits' && !((tx.meta||{}).is_ai_credit));
     }
 
     if (currentHistoryFilter === 'tokens' && currentTokenFilter) {
@@ -3799,6 +3805,30 @@ function renderHistory() {
             const sym = (tx.symbol || tx.asset_symbol || tx.asset || '').toUpperCase();
             return sym && !HIDDEN_TOKENS_LIST.includes(sym);
         });
+    }
+
+    if (currentHistoryFilter === 'ai_credits') {
+        const rows = AI_LEDGER_CACHE || [];
+        if (!rows.length) {
+            content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No AI credit movements</div>';
+            return;
+        }
+        let html = '<div style="display:flex;flex-direction:column;gap:8px;">';
+        rows.slice(0, 80).forEach(entry => {
+            const delta = Number(entry.delta || 0);
+            const color = delta >= 0 ? '#66ff66' : '#ff6666';
+            const sign = delta >= 0 ? '+' : '';
+            html += `<div class="tx-item" style="padding:10px;border:1px solid rgba(0,255,102,.2);border-radius:8px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <strong style="color:${color};">${sign}${delta} credits</strong>
+                    <span style="font-size:11px;opacity:.85;">${escapeHtml(String(entry.reason || 'adjust'))}</span>
+                </div>
+                <div style="font-size:11px;opacity:.8;margin-top:4px;">${escapeHtml(entry.ts || '')} • Balance: ${Number(entry.balance_after || 0)}</div>
+            </div>`;
+        });
+        html += '</div>';
+        content.innerHTML = html;
+        return;
     }
 
     if (filtered.length === 0) {
@@ -4031,12 +4061,27 @@ async function loadWalletHistory(thrAddress) {
     }
 }
 
+async function loadAICreditsLedger(thrAddress) {
+    if (!thrAddress || typeof thrAddress !== 'string') return [];
+    const url = `/api/ai_credits/ledger?wallet=${encodeURIComponent(thrAddress.trim())}&limit=200`;
+    try {
+        const res = await fetch(url);
+        if (!res.ok) return [];
+        const data = await res.json();
+        return Array.isArray(data?.items) ? data.items : (Array.isArray(data?.entries) ? data.entries : []);
+    } catch (err) {
+        console.warn('[WalletHistory] AI ledger fetch failed:', err);
+        return [];
+    }
+}
+
 async function hydrateHistory(thrAddress) {
     const content = document.getElementById('historyContent');
     try {
         historyLoading = true;
         content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">Loading...</div>';
         WALLET_HISTORY_CACHE = await loadWalletHistory(thrAddress);
+        AI_LEDGER_CACHE = await loadAICreditsLedger(thrAddress);
         allTransactions = WALLET_HISTORY_CACHE || [];
         historyLoading = false;
         if (!allTransactions.length) {

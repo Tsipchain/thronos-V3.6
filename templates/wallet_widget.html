@@ -1295,6 +1295,7 @@
             tokenScope: 'all',
             walletTxs: [],
             aiLedger: [],
+            creditsBalance: null,
         };
 
         // Memory optimization: limit transaction history to prevent unbounded growth
@@ -1362,8 +1363,10 @@
                 music_tip: 'music',
                 music_purchase: 'music',
                 music_stream: 'music',
+                music_royalty: 'music',
                 music_play_reward: 'music',
                 t2e_reward: 't2e',
+                t2e_reward_thr: 't2e_reward_thr',
                 train_reward: 't2e',
                 network_reward: 'network',
                 validator_reward: 'network',
@@ -1399,8 +1402,7 @@
 
         function isTokenTransfer(tx) {
             const kind = getKind(tx);
-            const asset = getAssetSymbol(tx);
-            return kind === 'token_transfer' && asset !== 'THR';
+            return kind === 'token_transfer';
         }
 
         const isThrTransfer = (tx) => {
@@ -1431,7 +1433,25 @@
             const category = getCanonicalCategory(tx);
             const meta = (tx && tx.meta && typeof tx.meta === 'object') ? tx.meta : {};
             const symbol = sanitizeTokenSymbol(tx.asset_symbol || tx.asset || tx.symbol);
-            return category === 'l2e' || String(meta.category || '').toLowerCase() === 'l2e' || symbol === 'L2E';
+            const rawCategory = String(tx.category || meta.category || '').toLowerCase();
+            return ['l2e', 'l2e_reward', 'quiz_reward', 'course_reward'].includes(category)
+                || ['l2e', 'l2e_reward', 'quiz_reward', 'course_reward'].includes(rawCategory)
+                || symbol === 'L2E';
+        }
+
+        function isMusicTx(tx) {
+            const category = getCanonicalCategory(tx);
+            const meta = (tx && tx.meta && typeof tx.meta === 'object') ? tx.meta : {};
+            const rawCategory = String(tx.category || '').toLowerCase();
+            return category === 'music'
+                || ['music_stream', 'music_royalty', 'music_tip'].includes(rawCategory)
+                || String(meta.source || '').toLowerCase() === 'music_player';
+        }
+
+        function isArchitectJobTx(tx) {
+            const category = getCanonicalCategory(tx);
+            const rawCategory = String(tx.category || '').toLowerCase();
+            return category === 'architect_job' || rawCategory === 'architect_job';
         }
 
         function shouldExcludeTx(tx) {
@@ -1517,12 +1537,16 @@
                 if (historyState.filter === 'ai_credits') return false;
                 if (historyState.filter === 'iot') return category === 'iot';
                 if (historyState.filter === 'bridge') return category === 'bridge';
-                if (historyState.filter === 'architect_ai_jobs') return category === 'architect_job';
+                if (historyState.filter === 'architect_ai_jobs') return isArchitectJobTx(tx);
                 if (historyState.filter === 'liquidity') return category === 'liquidity';
                 if (historyState.filter === 'gateway') return category === 'gateway';
-                if (historyState.filter === 'music') return category === 'music' || rawKind === 'music_play_reward' || rawKind === 'music_tip';
+                if (historyState.filter === 'music') return isMusicTx(tx);
                 return true;
             }).filter(tx => {
+                if (historyState.filter === 'thr') {
+                    const c = getCanonicalCategory(tx);
+                    return c === 'thr' && !isAICreditPseudoTx(tx) && !isArchitectJobTx(tx) && !isMusicTx(tx) && !isL2ETx(tx) && c !== 't2e_reward_thr';
+                }
                 if (historyState.filter !== 'tokens') return true;
                 if (historyState.tokenScope === 'crosschain' && !isCrossChainTokenTransfer(tx)) return false;
                 if (historyState.tokenScope === 'native' && isCrossChainTokenTransfer(tx)) return false;
@@ -1581,7 +1605,11 @@
             if (historyState.filter === 'ai_credits') {
                 const creditEntries = historyState.aiLedger || [];
                 if (!creditEntries.length) {
-                    container.innerHTML = html + '<p style="color: var(--widget-muted); text-align: center;">No AI Credits ledger entries</p>';
+                    const bal = historyState.creditsBalance;
+                    const balHtml = Number.isFinite(Number(bal))
+                        ? `<p style="color: var(--widget-text); text-align:center; margin-top:6px;">Current AI Credits: ${Number(bal) || 0}</p>`
+                        : '';
+                    container.innerHTML = html + '<p style="color: var(--widget-muted); text-align: center;">No AI Credits ledger entries</p>' + balHtml;
                     return;
                 }
                 html += creditEntries.map(e => {
@@ -1592,9 +1620,12 @@
                     const reasonLabel = reason === 'pack_purchase'
                         ? 'AI Pack purchase'
                         : (reason === 'chat_usage'
-                            ? 'Chat usage'
-                            : (reason === 't2e_reward' ? 'T2E reward' : reason));
+                            ? 'Web chat usage'
+                            : (reason === 'voice_usage'
+                                ? 'Voice usage (X9)'
+                                : (reason === 't2e_reward' ? 'T2E reward' : reason)));
                     const meta = (e.meta && typeof e.meta === 'object') ? e.meta : {};
+                    const usageChannel = reason === 'voice_usage' ? 'voice' : (reason === 'chat_usage' ? 'web' : 'system');
                     const metaHint = meta.pack_code
                         ? `Pack: ${meta.pack_code}`
                         : (meta.model ? `Model: ${meta.model}` : '');
@@ -1604,10 +1635,10 @@
                                 <span class="tx-amount ${isIncoming ? 'incoming' : 'outgoing'}">${sign}${delta} credits</span>
                                 <span class="tx-status confirmed">${reasonLabel}</span>
                             </div>
+                            <div class="tx-details">Channel: ${usageChannel}${metaHint ? ` • ${metaHint}` : ''}</div>
                             <div class="tx-details">
                                 ${e.ts || e.timestamp || 'Unknown time'}<br>
                                 Balance: ${e.balance_before ?? '-'} → ${e.balance_after ?? '-'}
-                                ${metaHint ? `<br>${metaHint}` : ''}
                             </div>
                         </div>
                     `;
@@ -1647,7 +1678,7 @@
                 const rawKind = (tx.kind || tx.type || '').toLowerCase();
                 const isIncoming = tx.direction === 'in' || tx.to === walletAddress;
                 const isSwap = kind === 'swap' || kind === 'pool_swap';
-                const isMusicReward = rawKind === 'music_play_reward' || rawKind === 'music_tip';
+                const isMusicReward = isMusicTx(tx);
                 const amountClass = isSwap ? 'swap' : (isIncoming ? 'incoming' : 'outgoing');
                 const sign = isSwap ? '↔︎' : (isIncoming ? '+' : '-');
                 const status = tx.status || 'confirmed';
@@ -1722,6 +1753,8 @@
                 const data = await res.json();
 
                 historyState.walletTxs = trimHistory(((data.transactions || data.items || [])).slice().reverse());
+                const summary = (data && typeof data.summary === 'object') ? data.summary : {};
+                historyState.creditsBalance = Number(summary.ai_credits ?? summary.credits);
                 try {
                     const creditsRes = await fetch(`/api/ai_credits/ledger?wallet=${encodeURIComponent(walletAddress)}&limit=500`);
                     const creditsData = await creditsRes.json();

@@ -173,11 +173,23 @@
     state.adminSecret = $('adminSecret').value.trim();
     if (!state.adminSecret) return;
     try {
-      await api('/api/admin/login', {
+      const res = await fetch('/api/admin/login', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
+        credentials: 'include',
         body: JSON.stringify({ secret: state.adminSecret })
       });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        if (data.error === 'invalid_admin_secret') {
+          $('loginErr').textContent = 'Λάθος μυστικό.';
+        } else if (data.error === 'admin_not_configured') {
+          $('loginErr').textContent = 'Admin not configured.';
+        } else {
+          $('loginErr').textContent = data.error || `HTTP ${res.status}`;
+        }
+        return;
+      }
       $('loginCard').style.display = 'none';
       $('admin-main').style.display = 'grid';
       $('operatorStatus').textContent = 'operator session active';

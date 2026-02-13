@@ -4964,20 +4964,25 @@ AI_CREDIT_COST_PER_MSG = int(_strip_env_quotes(os.getenv("AI_CREDIT_COST_PER_MSG
 
 
 def _chat_credit_cost_for_model(model_id: str | None, prompt_text: str | None = None) -> int:
-    """Phase-1 dynamic chat credit pricing with safe lower/upper bounds."""
-    base = max(1, int(_strip_env_quotes(os.getenv("AI_CREDIT_COST_PER_MSG", "1")) or 1))
-    model = (model_id or "auto").strip().lower()
-    text = (prompt_text or "").strip()
-
-    if model in {"gpt-4.1", "gpt-4.1-preview", "claude-3.5-sonnet", "claude-3-5-sonnet", "gemini-2.5-pro"}:
-        base += 1
-    if len(text) > 1000:
-        base += 1
-    if len(text) > 4000:
-        base += 1
-
-    cap = max(base, int(_strip_env_quotes(os.getenv("AI_CREDIT_COST_MAX", "5")) or 5))
-    return min(cap, max(1, base))
+    """Stable per-model pricing for chat/voice requests."""
+    mid = (model_id or "gpt-4.1-mini").strip().lower()
+    cheap = {
+        "gpt-4.1-mini",
+        "claude-3.5-haiku",
+        "claude-3-haiku",
+        "gemini-2.0-flash",
+        "auto",
+    }
+    medium = {
+        "gpt-4.1",
+        "claude-3.7-sonnet",
+        "gemini-2.5-pro",
+    }
+    if mid in cheap:
+        return 1
+    if mid in medium:
+        return 2
+    return 3
 
 def load_ai_packs():
     """Διαβάζει τα διαθέσιμα packs από αρχείο, αλλιώς επιστρέφει τα default."""
@@ -5134,25 +5139,52 @@ def require_ai_credits(wallet: str, cost: int) -> bool:
     return get_ai_credits(wallet) >= max(0, int(cost or 0))
 
 
-def debit_ai_credits(wallet: str, cost: int, reason: str = "chat_message") -> tuple[bool, int]:
+def debit_ai_credits(
+    wallet: str,
+    cost: int | None = None,
+    reason: str = "chat_message",
+    *,
+    delta: int | None = None,
+    meta: dict | None = None,
+    require: bool = False,
+):
+    """Debit/adjust AI credits with backward-compatible return style.
+
+    Legacy callers (`cost`) receive `(ok, balance_after)`.
+    New callers (`delta`) receive `balance_after` or `None` (when require=True and insufficient).
+    """
     wallet = (wallet or "").strip()
-    amount = max(0, int(cost or 0))
     if not wallet:
-        return False, 0
+        return (False, 0) if delta is None else None
+
+    legacy_mode = delta is None
+    if delta is None:
+        amount = max(0, int(cost or 0))
+        delta = -amount
+    try:
+        delta_i = int(delta or 0)
+    except Exception:
+        delta_i = 0
+
     before = get_available_ai_credits(wallet) if not is_ai_core() else get_ai_credits(wallet)
-    if before < amount:
-        logger.info("[AI_CREDITS] wallet=%s op=%s cost=%s before=%s after=%s", wallet, reason, amount, before, before)
-        return False, before
-    after = max(0, before - amount)
+    after = max(0, before + delta_i)
+
+    if require and (before + delta_i) < 0:
+        logger.info("[AI_CREDITS] wallet=%s op=%s delta=%s before=%s after=%s", wallet, reason, delta_i, before, before)
+        return (False, before) if legacy_mode else None
+
     credits_map = load_ai_credits()
     credits_map[wallet] = after
     save_ai_credits(credits_map)
+
     normalized_reason = (reason or "adjust").strip().lower()
     if normalized_reason == "chat_message":
         normalized_reason = "chat_usage"
-    logger.info("[AI_CREDITS] wallet=%s op=%s cost=%s before=%s after=%s", wallet, normalized_reason, amount, before, after)
-    append_ai_credits_ledger(wallet, -amount, normalized_reason, before, after)
-    return True, after
+
+    logger.info("[AI_CREDITS] wallet=%s op=%s delta=%s before=%s after=%s", wallet, normalized_reason, delta_i, before, after)
+    append_ai_credits_ledger(wallet, delta_i, normalized_reason, before, after, metadata=meta)
+
+    return (True, after) if legacy_mode else after
 
 
 def _default_model_id():
@@ -5228,22 +5260,6 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
         for candidate in heuristic_order:
             cinfo = catalog_by_id.get(candidate) or {}
             if candidate in callable_ids and _is_provider_allowed(cinfo.get("provider") or ""):
-                requested = candidate
-                break
-
-    if requested == "auto" and callable_ids:
-        heuristic_order = [
-            "gpt-4.1-mini",
-            "o3-mini",
-            "claude-3.5-sonnet",
-            "claude-3-5-sonnet",
-            "gemini-2.0-flash",
-            "gemini-2.5-pro",
-            "offline_corpus",
-            "thrai",
-        ]
-        for candidate in heuristic_order:
-            if candidate in callable_ids:
                 requested = candidate
                 break
 
@@ -11661,6 +11677,154 @@ def _build_ai_model_catalog() -> list[dict]:
     return [dedup["auto"]] + [v for k, v in dedup.items() if k != "auto"] if "auto" in dedup else list(dedup.values())
 
 
+def _model_catalog_snapshot_path() -> str:
+    return os.path.join(DATA_DIR, "model_catalog_snapshot.json")
+
+
+def _model_overrides_path() -> str:
+    return os.path.join(DATA_DIR, "model_overrides.json")
+
+
+def _load_model_catalog_snapshot() -> dict:
+    return load_json(_model_catalog_snapshot_path(), {}) or {}
+
+
+def _load_model_overrides() -> dict:
+    return load_json(_model_overrides_path(), {"models": {}, "updated_at": None}) or {"models": {}}
+
+
+def _save_model_overrides(payload: dict) -> None:
+    save_json(_model_overrides_path(), payload or {"models": {}})
+
+
+def _build_ai_model_catalog() -> list[dict]:
+    provider_status = get_provider_status()
+    snapshot = _load_model_catalog_snapshot()
+    overrides_payload = _load_model_overrides()
+    overrides = overrides_payload.get("models", {}) if isinstance(overrides_payload, dict) else {}
+    models: list[dict] = [{
+        "id": "auto",
+        "display_name": "Auto (Thronos chooses)",
+        "provider": "system",
+        "mode": "system",
+        "enabled": True,
+        "degraded": False,
+        "health_reason": None,
+    }]
+
+    def append_model(entry: dict):
+        model_id = entry.get("id")
+        if not model_id:
+            return
+        provider = entry.get("provider") or "unknown"
+        provider_info = provider_status.get(provider, {}) if isinstance(provider_status, dict) else {}
+        has_key = bool(provider_info.get("configured", True))
+        allowed = _is_provider_allowed(provider)
+        model_override = overrides.get(model_id, {}) if isinstance(overrides, dict) else {}
+        override_enabled = model_override.get("enabled") if isinstance(model_override, dict) else None
+        effective_enabled = bool(entry.get("enabled", True) and has_key and allowed)
+        if override_enabled is not None:
+            effective_enabled = bool(override_enabled and has_key and allowed)
+        degraded = bool(entry.get("degraded", False) or not effective_enabled)
+        reason = entry.get("health_reason")
+        if not has_key:
+            reason = "missing_api_key"
+        elif not allowed:
+            reason = "provider_blocked_by_mode"
+        elif override_enabled is False:
+            reason = "disabled_by_admin"
+        models.append({
+            **entry,
+            "enabled": effective_enabled,
+            "degraded": degraded,
+            "health_reason": reason,
+            "allowed_by_mode": allowed,
+            "disabled_by_admin": bool(override_enabled is False),
+        })
+
+    for provider_name, model_list in AI_MODEL_REGISTRY.items():
+        pstatus = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
+        for mi in model_list:
+            enabled = bool(mi.enabled and pstatus.get("configured", True) and pstatus.get("library_loaded", True) is not False)
+            degraded = bool(getattr(mi, "degraded", (not enabled))) or not enabled
+            append_model({
+                "id": mi.id,
+                "display_name": mi.display_name,
+                "provider": mi.provider,
+                "mode": "provider",
+                "enabled": enabled,
+                "degraded": degraded,
+                "health_reason": None if enabled else (pstatus.get("last_error") or "provider_unavailable"),
+            })
+
+    # Merge snapshot-discovered models as source-of-truth for provider listings.
+    snapshot_providers = (snapshot.get("providers") or {}) if isinstance(snapshot, dict) else {}
+    existing_ids = {m.get("id") for m in models if isinstance(m, dict)}
+    for provider_name, data in snapshot_providers.items():
+        for item in (data.get("models") or []):
+            model_id = (item.get("id") or "").strip()
+            if not model_id or model_id in existing_ids:
+                continue
+            append_model({
+                "id": model_id,
+                "display_name": model_id.replace("-", " ").title(),
+                "provider": provider_name,
+                "mode": "provider",
+                "enabled": bool(item.get("enabled", True)),
+                "degraded": bool(item.get("degraded", False)),
+                "health_reason": item.get("reason") or item.get("health_reason"),
+                "preview": bool(item.get("preview", False)),
+                "voice_friendly": bool(item.get("voice_friendly", False)),
+                "type": item.get("type") or "chat",
+            })
+            existing_ids.add(model_id)
+
+    preview_disabled = [
+        ("o3", "o3 (preview)", "openai"),
+        ("gpt-o3", "GPT-o3 (preview)", "openai"),
+    ]
+    known_ids = {m.get("id") for m in models if isinstance(m, dict)}
+    for mid, dname, provider in preview_disabled:
+        if mid in known_ids:
+            continue
+        append_model({
+            "id": mid,
+            "display_name": dname,
+            "provider": provider,
+            "mode": "provider",
+            "enabled": False,
+            "degraded": True,
+            "health_reason": "model_not_available_or_preview",
+        })
+
+    offline_ok, offline_reason = _offline_corpus_health()
+    append_model({
+        "id": "offline_corpus",
+        "display_name": "Offline Corpus",
+        "provider": "local",
+        "mode": "offline",
+        "enabled": bool(THR_OFFLINE_CORPUS_ENABLED and offline_ok),
+        "degraded": False if not THR_OFFLINE_CORPUS_ENABLED else (not offline_ok),
+        "health_reason": offline_reason,
+    })
+
+    thrai_ok, thrai_reason = _thrai_router_health()
+    append_model({
+        "id": "thrai",
+        "display_name": "Thrai Router",
+        "provider": "thronos",
+        "mode": "router",
+        "enabled": bool(THR_THAI_ENABLED and thrai_ok),
+        "degraded": bool(THR_THAI_ENABLED and not thrai_ok),
+        "health_reason": thrai_reason,
+    })
+    dedup = {}
+    for item in models:
+        if isinstance(item, dict) and item.get("id"):
+            dedup[item["id"]] = item
+    return [dedup["auto"]] + [v for k, v in dedup.items() if k != "auto"] if "auto" in dedup else list(dedup.values())
+
+
 def call_offline_corpus(corpus_path, messages, wallet, session_id, chain_context) -> str:
     """Simple local retrieval over ai_offline_corpus.json / knowledge blocks."""
     try:
@@ -11729,11 +11893,37 @@ def call_thrai_router(router_url: str, payload: dict) -> dict:
         return {"response": response.text, "status": "secure", "provider": "thronos", "model": "thrai"}
 
 # ─── D3LFOI ADMIN HELPERS ───────────────────────────────────────────────────
+_ADMIN_TOKENS: dict[str, float] = {}
+_ADMIN_TOKEN_TTL_SECONDS = 3600
+
+
+def _generate_admin_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def _cache_admin_token(token: str) -> None:
+    if not token:
+        return
+    _ADMIN_TOKENS[token] = time.time() + _ADMIN_TOKEN_TTL_SECONDS
+
+
+def _is_admin_authenticated() -> bool:
+    token = (request.cookies.get("d3lfoi_admin") or "").strip()
+    if not token:
+        return False
+    exp = _ADMIN_TOKENS.get(token)
+    if not exp:
+        return False
+    if exp < time.time():
+        _ADMIN_TOKENS.pop(token, None)
+        return False
+    return True
+
+
 def _admin_token_from_request(payload: dict | None = None) -> str:
     payload = payload if isinstance(payload, dict) else {}
     return (
         (request.headers.get("X-Admin-Secret") or "").strip()
-        or (request.cookies.get("thr_admin_token") or "").strip()
         or (request.args.get("secret") or "").strip()
         or str(payload.get("secret") or "").strip()
     )
@@ -11742,11 +11932,14 @@ def _admin_token_from_request(payload: dict | None = None) -> str:
 def require_admin(payload: dict | None = None):
     admin_secret = (os.getenv("ADMIN_SECRET") or ADMIN_SECRET or "").strip()
     if not admin_secret:
-        return jsonify({"error": "admin_not_configured"}), 403
+        return jsonify({"error": "admin_not_configured", "ok": False}), 503
+    if _is_admin_authenticated():
+        return None
+    # Fallback for non-browser operators / curl
     token = _admin_token_from_request(payload)
-    if token != admin_secret:
-        return jsonify({"error": "admin_auth_required"}), 401
-    return None
+    if token == admin_secret:
+        return None
+    return jsonify({"error": "admin_auth_required", "ok": False}), 401
 
 
 def _ensure_admin_session(session_id: str | None = None, title: str | None = None) -> dict:
@@ -11778,18 +11971,25 @@ def _ensure_admin_session(session_id: str | None = None, title: str | None = Non
 @app.route("/api/admin/login", methods=["POST"])
 def api_admin_login():
     data = request.get_json(silent=True) or {}
-    denied = require_admin(data)
-    if denied:
-        return denied
+    secret = (data.get("secret") or "").strip()
+    expected = (os.getenv("ADMIN_SECRET") or ADMIN_SECRET or "").strip()
+
+    if not expected:
+        return jsonify({"ok": False, "error": "admin_not_configured"}), 503
+
+    if not secret or secret != expected:
+        return jsonify({"ok": False, "error": "invalid_admin_secret"}), 401
+
+    token = _generate_admin_token()
+    _cache_admin_token(token)
     resp = make_response(jsonify({"ok": True}))
-    secure_cookie = bool(request.is_secure or _strip_env_quotes(os.getenv("FORCE_SECURE_COOKIES", "1")) in ("1", "true", "yes", "on"))
     resp.set_cookie(
-        "thr_admin_token",
-        (os.getenv("ADMIN_SECRET") or ADMIN_SECRET or "").strip(),
-        max_age=8 * 3600,
+        "d3lfoi_admin",
+        token,
+        max_age=_ADMIN_TOKEN_TTL_SECONDS,
         httponly=True,
-        secure=secure_cookie,
-        samesite="Lax",
+        secure=True,
+        samesite="Strict",
     )
     return resp
 
@@ -12043,41 +12243,46 @@ def api_voice_x9_status():
 
 @app.route("/api/voice/x9_webhook", methods=["POST"])
 def api_voice_x9_webhook():
-    if NODE_ROLE != "ai_core":
-        return jsonify({"ok": False, "error": "x9_only_on_ai_core"}), 404
     expected = (os.getenv("X9_VOICE_WEBHOOK_SECRET") or "").strip()
     provided = (request.headers.get("X-X9-Secret") or "").strip()
     if expected and provided != expected:
         return jsonify({"ok": False, "error": "invalid_x9_secret"}), 401
 
-    body = request.get_json(silent=True) or {}
-    wallet = (body.get("wallet") or "").strip()
-    text = (body.get("text") or "").strip()
-    lang = (body.get("lang") or "el").strip()
+    data = request.get_json(silent=True) or {}
+    wallet = (data.get("wallet") or "").strip()
+    text = (data.get("text") or "").strip()
+    lang = (data.get("lang") or "el").strip()
+    model_id = (data.get("model_id") or "gpt-4.1-mini").strip()
     if not text:
         return jsonify({"ok": False, "error": "empty_text"}), 400
 
-    model_id = body.get("model_id") or "auto"
     message_credit_cost = _chat_credit_cost_for_model(model_id, text)
-    if wallet:
-        available_before = get_ai_credits(wallet)
-        if available_before < message_credit_cost:
-            return jsonify({
-                "ok": False,
-                "error": "no_credits",
-                "code": "insufficient_ai_credits",
-                "required_credits": message_credit_cost,
-                "credits": available_before,
-                "wallet": wallet,
-            }), 400
+    precharged = bool(data.get("billing_precharged"))
+
+    if wallet and not precharged:
+        available = get_available_ai_credits(wallet) if not is_ai_core() else get_ai_credits(wallet)
+        if available < message_credit_cost:
+            return jsonify({"ok": False, "error": "no_credits", "required": message_credit_cost, "available": available}), 402
+        credits_after = debit_ai_credits(
+            wallet,
+            delta=-message_credit_cost,
+            reason="voice_usage",
+            meta={"channel": "voice", "device": "x9", "model_id": model_id},
+            require=True,
+        )
+        if credits_after is None:
+            return jsonify({"ok": False, "error": "no_credits", "required": message_credit_cost, "available": get_available_ai_credits(wallet)}), 402
+        data["billing_precharged"] = True
+        data["credits_after"] = credits_after
 
     payload = {
         "wallet": wallet,
         "message": text,
         "lang": lang,
         "model_id": model_id,
-        "session_id": body.get("session_id"),
-        "billing_precharged": True,
+        "session_id": data.get("session_id"),
+        "billing_precharged": bool(data.get("billing_precharged")),
+        "credits_after": data.get("credits_after"),
     }
     with app.test_request_context("/api/ai/chat", method="POST", json=payload):
         resp = api_ai_chat()
@@ -12100,26 +12305,12 @@ def api_voice_x9_webhook():
             "raw_error": body_out,
         }), 200
 
-    if wallet:
-        success, credits_after = debit_ai_credits(wallet, message_credit_cost, reason="voice_usage")
-        if not success:
-            return jsonify({
-                "ok": False,
-                "error": "no_credits",
-                "code": "insufficient_ai_credits",
-                "required_credits": message_credit_cost,
-                "credits": get_ai_credits(wallet),
-                "wallet": wallet,
-            }), 400
-        body_out["credits"] = credits_after
-        body_out["ai_credits"] = credits_after
-
     return jsonify({
         "ok": status < 400,
         "reply": body_out.get("response") or body_out.get("message") or "",
         "session_id": body_out.get("session_id") or payload.get("session_id"),
         "model_id": body_out.get("model") or payload.get("model_id"),
-        "credits": body_out.get("ai_credits", body_out.get("credits")),
+        "credits": body_out.get("ai_credits", body_out.get("credits", payload.get("credits_after"))),
         "raw": body_out,
     }), status
 
@@ -12174,29 +12365,31 @@ def _handle_ai_chat_proxy():
     prompt_text = (payload.get("message") or payload.get("prompt") or payload.get("text") or "").strip()
     message_credit_cost = _chat_credit_cost_for_model(model_key, prompt_text)
 
-    if wallet:
+    if wallet and not bool(payload.get("billing_precharged")):
         available = get_available_ai_credits(wallet)
         if available < message_credit_cost:
             return jsonify({
+                "ok": False,
                 "error": "no_credits",
-                "message": "Δεν έχεις αρκετά AI credits για αυτό το μήνυμα.",
-                "required_credits": message_credit_cost,
-                "credits": available,
-                "wallet": wallet,
-                "code": "insufficient_ai_credits",
-            }), 400
-        ok, credits_after = debit_ai_credits(wallet, message_credit_cost, reason="chat_usage")
-        if not ok:
+                "required": message_credit_cost,
+                "available": available,
+            }), 402
+        credits_after = debit_ai_credits(
+            wallet,
+            delta=-message_credit_cost,
+            reason="chat_usage",
+            meta={"channel": "web", "model_id": model_key},
+            require=True,
+        )
+        if credits_after is None:
             return jsonify({
+                "ok": False,
                 "error": "no_credits",
-                "message": "Δεν έχεις αρκετά AI credits για αυτό το μήνυμα.",
-                "required_credits": message_credit_cost,
-                "credits": get_available_ai_credits(wallet),
-                "wallet": wallet,
-                "code": "insufficient_ai_credits",
-            }), 400
+                "required": message_credit_cost,
+                "available": get_available_ai_credits(wallet),
+            }), 402
         payload["billing_precharged"] = True
-        payload["credits"] = credits_after
+        payload["credits_after"] = credits_after
 
     target = base_url.rstrip("/") + "/api/ai/chat"
     logger.info("[AI_PROXY] Forwarding %s to %s (mode=%s)", "/api/ai/chat", base_url, THRONOS_AI_MODE)
@@ -12396,21 +12589,21 @@ def _handle_ai_chat_master():
 
     # --- Credits check (Chat billing mode) ---
     credits_value = None
+    is_core_node = (os.getenv("NODE_ROLE") == "ai_core")
     if wallet:
-        if billing_precharged and is_ai_core():
-            credits_value = int(data.get("credits") or 0)
+        if billing_precharged:
+            credits_value = int(data.get("credits_after") or data.get("credits") or 0)
         else:
-            credits_value = get_available_ai_credits(wallet) if not is_ai_core() else get_ai_credits(wallet)
+            credits_value = get_available_ai_credits(wallet) if not is_core_node else get_ai_credits(wallet)
             if credits_value < message_credit_cost:
                 return jsonify(
+                    ok=False,
                     error="no_credits",
-                    code="insufficient_ai_credits",
-                    message="Δεν έχεις άλλα Quantum credits γι' αυτό το THR wallet.",
-                    required_credits=message_credit_cost,
-                    credits=credits_value,
+                    required=message_credit_cost,
+                    available=credits_value,
                     wallet=wallet,
                     session_id=session_id,
-                ), 400
+                ), 402
     else:
         # No wallet supplied: treat this as a free demo chat.  Look up how
         # many messages have already been consumed for this session.  Once
@@ -12595,24 +12788,29 @@ def _handle_ai_chat_master():
         call_meta["failure_reason"] = raw_status
     can_charge = bool(wallet) and raw_status not in charge_block_statuses
 
-    if wallet and can_charge and not billing_precharged and not is_ai_core():
-        success, credits_after = debit_ai_credits(wallet, message_credit_cost, reason="chat_usage")
-        if not success:
-            credits_for_frontend = get_ai_credits(wallet)
+    if wallet and can_charge and billing_precharged:
+        credits_for_frontend = int(data.get("credits_after") or data.get("credits") or credits_value or 0)
+        ai_credits_spent = float(message_credit_cost)
+    elif wallet and can_charge and not billing_precharged:
+        credits_after = debit_ai_credits(
+            wallet,
+            delta=-message_credit_cost,
+            reason="chat_usage",
+            meta={"channel": "web", "model_id": model_key or "auto"},
+            require=True,
+        )
+        if credits_after is None:
+            credits_for_frontend = get_available_ai_credits(wallet) if not is_core_node else get_ai_credits(wallet)
             ai_credits_spent = 0.0
             return jsonify({
-                "error": "insufficient_ai_credits",
-                "message": "Δεν έχεις άλλα Quantum credits γι' αυτό το THR wallet.",
-                "required_credits": message_credit_cost,
-                "credits": credits_for_frontend,
+                "ok": False,
+                "error": "no_credits",
+                "required": message_credit_cost,
+                "available": credits_for_frontend,
                 "wallet": wallet,
                 "session_id": session_id,
-            }), 400
+            }), 402
         credits_for_frontend = credits_after
-        ai_credits_spent = float(message_credit_cost)
-    elif wallet and can_charge and billing_precharged:
-        credits_map_now = load_ai_credits()
-        credits_for_frontend = int(credits_map_now.get(wallet, 0) or 0)
         ai_credits_spent = float(message_credit_cost)
     elif wallet:
         # Wallet present but we skipped billing due to model gating

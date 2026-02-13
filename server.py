@@ -4964,20 +4964,25 @@ AI_CREDIT_COST_PER_MSG = int(_strip_env_quotes(os.getenv("AI_CREDIT_COST_PER_MSG
 
 
 def _chat_credit_cost_for_model(model_id: str | None, prompt_text: str | None = None) -> int:
-    """Phase-1 dynamic chat credit pricing with safe lower/upper bounds."""
-    base = max(1, int(_strip_env_quotes(os.getenv("AI_CREDIT_COST_PER_MSG", "1")) or 1))
-    model = (model_id or "auto").strip().lower()
-    text = (prompt_text or "").strip()
-
-    if model in {"gpt-4.1", "gpt-4.1-preview", "claude-3.5-sonnet", "claude-3-5-sonnet", "gemini-2.5-pro"}:
-        base += 1
-    if len(text) > 1000:
-        base += 1
-    if len(text) > 4000:
-        base += 1
-
-    cap = max(base, int(_strip_env_quotes(os.getenv("AI_CREDIT_COST_MAX", "5")) or 5))
-    return min(cap, max(1, base))
+    """Stable per-model pricing for chat/voice requests."""
+    mid = (model_id or "gpt-4.1-mini").strip().lower()
+    cheap = {
+        "gpt-4.1-mini",
+        "claude-3.5-haiku",
+        "claude-3-haiku",
+        "gemini-2.0-flash",
+        "auto",
+    }
+    medium = {
+        "gpt-4.1",
+        "claude-3.7-sonnet",
+        "gemini-2.5-pro",
+    }
+    if mid in cheap:
+        return 1
+    if mid in medium:
+        return 2
+    return 3
 
 def load_ai_packs():
     """Διαβάζει τα διαθέσιμα packs από αρχείο, αλλιώς επιστρέφει τα default."""
@@ -5134,25 +5139,52 @@ def require_ai_credits(wallet: str, cost: int) -> bool:
     return get_ai_credits(wallet) >= max(0, int(cost or 0))
 
 
-def debit_ai_credits(wallet: str, cost: int, reason: str = "chat_message") -> tuple[bool, int]:
+def debit_ai_credits(
+    wallet: str,
+    cost: int | None = None,
+    reason: str = "chat_message",
+    *,
+    delta: int | None = None,
+    meta: dict | None = None,
+    require: bool = False,
+):
+    """Debit/adjust AI credits with backward-compatible return style.
+
+    Legacy callers (`cost`) receive `(ok, balance_after)`.
+    New callers (`delta`) receive `balance_after` or `None` (when require=True and insufficient).
+    """
     wallet = (wallet or "").strip()
-    amount = max(0, int(cost or 0))
     if not wallet:
-        return False, 0
+        return (False, 0) if delta is None else None
+
+    legacy_mode = delta is None
+    if delta is None:
+        amount = max(0, int(cost or 0))
+        delta = -amount
+    try:
+        delta_i = int(delta or 0)
+    except Exception:
+        delta_i = 0
+
     before = get_available_ai_credits(wallet) if not is_ai_core() else get_ai_credits(wallet)
-    if before < amount:
-        logger.info("[AI_CREDITS] wallet=%s op=%s cost=%s before=%s after=%s", wallet, reason, amount, before, before)
-        return False, before
-    after = max(0, before - amount)
+    after = max(0, before + delta_i)
+
+    if require and (before + delta_i) < 0:
+        logger.info("[AI_CREDITS] wallet=%s op=%s delta=%s before=%s after=%s", wallet, reason, delta_i, before, before)
+        return (False, before) if legacy_mode else None
+
     credits_map = load_ai_credits()
     credits_map[wallet] = after
     save_ai_credits(credits_map)
+
     normalized_reason = (reason or "adjust").strip().lower()
     if normalized_reason == "chat_message":
         normalized_reason = "chat_usage"
-    logger.info("[AI_CREDITS] wallet=%s op=%s cost=%s before=%s after=%s", wallet, normalized_reason, amount, before, after)
-    append_ai_credits_ledger(wallet, -amount, normalized_reason, before, after)
-    return True, after
+
+    logger.info("[AI_CREDITS] wallet=%s op=%s delta=%s before=%s after=%s", wallet, normalized_reason, delta_i, before, after)
+    append_ai_credits_ledger(wallet, delta_i, normalized_reason, before, after, metadata=meta)
+
+    return (True, after) if legacy_mode else after
 
 
 def _default_model_id():
@@ -11407,41 +11439,46 @@ def api_voice_x9_status():
 
 @app.route("/api/voice/x9_webhook", methods=["POST"])
 def api_voice_x9_webhook():
-    if NODE_ROLE != "ai_core":
-        return jsonify({"ok": False, "error": "x9_only_on_ai_core"}), 404
     expected = (os.getenv("X9_VOICE_WEBHOOK_SECRET") or "").strip()
     provided = (request.headers.get("X-X9-Secret") or "").strip()
     if expected and provided != expected:
         return jsonify({"ok": False, "error": "invalid_x9_secret"}), 401
 
-    body = request.get_json(silent=True) or {}
-    wallet = (body.get("wallet") or "").strip()
-    text = (body.get("text") or "").strip()
-    lang = (body.get("lang") or "el").strip()
+    data = request.get_json(silent=True) or {}
+    wallet = (data.get("wallet") or "").strip()
+    text = (data.get("text") or "").strip()
+    lang = (data.get("lang") or "el").strip()
+    model_id = (data.get("model_id") or "gpt-4.1-mini").strip()
     if not text:
         return jsonify({"ok": False, "error": "empty_text"}), 400
 
-    model_id = body.get("model_id") or "auto"
     message_credit_cost = _chat_credit_cost_for_model(model_id, text)
-    if wallet:
-        available_before = get_ai_credits(wallet)
-        if available_before < message_credit_cost:
-            return jsonify({
-                "ok": False,
-                "error": "no_credits",
-                "code": "insufficient_ai_credits",
-                "required_credits": message_credit_cost,
-                "credits": available_before,
-                "wallet": wallet,
-            }), 400
+    precharged = bool(data.get("billing_precharged"))
+
+    if wallet and not precharged:
+        available = get_available_ai_credits(wallet) if not is_ai_core() else get_ai_credits(wallet)
+        if available < message_credit_cost:
+            return jsonify({"ok": False, "error": "no_credits", "required": message_credit_cost, "available": available}), 402
+        credits_after = debit_ai_credits(
+            wallet,
+            delta=-message_credit_cost,
+            reason="voice_usage",
+            meta={"channel": "voice", "device": "x9", "model_id": model_id},
+            require=True,
+        )
+        if credits_after is None:
+            return jsonify({"ok": False, "error": "no_credits", "required": message_credit_cost, "available": get_available_ai_credits(wallet)}), 402
+        data["billing_precharged"] = True
+        data["credits_after"] = credits_after
 
     payload = {
         "wallet": wallet,
         "message": text,
         "lang": lang,
         "model_id": model_id,
-        "session_id": body.get("session_id"),
-        "billing_precharged": True,
+        "session_id": data.get("session_id"),
+        "billing_precharged": bool(data.get("billing_precharged")),
+        "credits_after": data.get("credits_after"),
     }
     with app.test_request_context("/api/ai/chat", method="POST", json=payload):
         resp = api_ai_chat()
@@ -11464,26 +11501,12 @@ def api_voice_x9_webhook():
             "raw_error": body_out,
         }), 200
 
-    if wallet:
-        success, credits_after = debit_ai_credits(wallet, message_credit_cost, reason="voice_usage")
-        if not success:
-            return jsonify({
-                "ok": False,
-                "error": "no_credits",
-                "code": "insufficient_ai_credits",
-                "required_credits": message_credit_cost,
-                "credits": get_ai_credits(wallet),
-                "wallet": wallet,
-            }), 400
-        body_out["credits"] = credits_after
-        body_out["ai_credits"] = credits_after
-
     return jsonify({
         "ok": status < 400,
         "reply": body_out.get("response") or body_out.get("message") or "",
         "session_id": body_out.get("session_id") or payload.get("session_id"),
         "model_id": body_out.get("model") or payload.get("model_id"),
-        "credits": body_out.get("ai_credits", body_out.get("credits")),
+        "credits": body_out.get("ai_credits", body_out.get("credits", payload.get("credits_after"))),
         "raw": body_out,
     }), status
 
@@ -11538,29 +11561,31 @@ def _handle_ai_chat_proxy():
     prompt_text = (payload.get("message") or payload.get("prompt") or payload.get("text") or "").strip()
     message_credit_cost = _chat_credit_cost_for_model(model_key, prompt_text)
 
-    if wallet:
+    if wallet and not bool(payload.get("billing_precharged")):
         available = get_available_ai_credits(wallet)
         if available < message_credit_cost:
             return jsonify({
+                "ok": False,
                 "error": "no_credits",
-                "message": "Δεν έχεις αρκετά AI credits για αυτό το μήνυμα.",
-                "required_credits": message_credit_cost,
-                "credits": available,
-                "wallet": wallet,
-                "code": "insufficient_ai_credits",
-            }), 400
-        ok, credits_after = debit_ai_credits(wallet, message_credit_cost, reason="chat_usage")
-        if not ok:
+                "required": message_credit_cost,
+                "available": available,
+            }), 402
+        credits_after = debit_ai_credits(
+            wallet,
+            delta=-message_credit_cost,
+            reason="chat_usage",
+            meta={"channel": "web", "model_id": model_key},
+            require=True,
+        )
+        if credits_after is None:
             return jsonify({
+                "ok": False,
                 "error": "no_credits",
-                "message": "Δεν έχεις αρκετά AI credits για αυτό το μήνυμα.",
-                "required_credits": message_credit_cost,
-                "credits": get_available_ai_credits(wallet),
-                "wallet": wallet,
-                "code": "insufficient_ai_credits",
-            }), 400
+                "required": message_credit_cost,
+                "available": get_available_ai_credits(wallet),
+            }), 402
         payload["billing_precharged"] = True
-        payload["credits"] = credits_after
+        payload["credits_after"] = credits_after
 
     target = base_url.rstrip("/") + "/api/ai/chat"
     logger.info("[AI_PROXY] Forwarding %s to %s (mode=%s)", "/api/ai/chat", base_url, THRONOS_AI_MODE)
@@ -11760,21 +11785,21 @@ def _handle_ai_chat_master():
 
     # --- Credits check (Chat billing mode) ---
     credits_value = None
+    is_core_node = (os.getenv("NODE_ROLE") == "ai_core")
     if wallet:
-        if billing_precharged and is_ai_core():
-            credits_value = int(data.get("credits") or 0)
+        if billing_precharged:
+            credits_value = int(data.get("credits_after") or data.get("credits") or 0)
         else:
-            credits_value = get_available_ai_credits(wallet) if not is_ai_core() else get_ai_credits(wallet)
+            credits_value = get_available_ai_credits(wallet) if not is_core_node else get_ai_credits(wallet)
             if credits_value < message_credit_cost:
                 return jsonify(
+                    ok=False,
                     error="no_credits",
-                    code="insufficient_ai_credits",
-                    message="Δεν έχεις άλλα Quantum credits γι' αυτό το THR wallet.",
-                    required_credits=message_credit_cost,
-                    credits=credits_value,
+                    required=message_credit_cost,
+                    available=credits_value,
                     wallet=wallet,
                     session_id=session_id,
-                ), 400
+                ), 402
     else:
         # No wallet supplied: treat this as a free demo chat.  Look up how
         # many messages have already been consumed for this session.  Once
@@ -11959,24 +11984,29 @@ def _handle_ai_chat_master():
         call_meta["failure_reason"] = raw_status
     can_charge = bool(wallet) and raw_status not in charge_block_statuses
 
-    if wallet and can_charge and not billing_precharged and not is_ai_core():
-        success, credits_after = debit_ai_credits(wallet, message_credit_cost, reason="chat_usage")
-        if not success:
-            credits_for_frontend = get_ai_credits(wallet)
+    if wallet and can_charge and billing_precharged:
+        credits_for_frontend = int(data.get("credits_after") or data.get("credits") or credits_value or 0)
+        ai_credits_spent = float(message_credit_cost)
+    elif wallet and can_charge and not billing_precharged:
+        credits_after = debit_ai_credits(
+            wallet,
+            delta=-message_credit_cost,
+            reason="chat_usage",
+            meta={"channel": "web", "model_id": model_key or "auto"},
+            require=True,
+        )
+        if credits_after is None:
+            credits_for_frontend = get_available_ai_credits(wallet) if not is_core_node else get_ai_credits(wallet)
             ai_credits_spent = 0.0
             return jsonify({
-                "error": "insufficient_ai_credits",
-                "message": "Δεν έχεις άλλα Quantum credits γι' αυτό το THR wallet.",
-                "required_credits": message_credit_cost,
-                "credits": credits_for_frontend,
+                "ok": False,
+                "error": "no_credits",
+                "required": message_credit_cost,
+                "available": credits_for_frontend,
                 "wallet": wallet,
                 "session_id": session_id,
-            }), 400
+            }), 402
         credits_for_frontend = credits_after
-        ai_credits_spent = float(message_credit_cost)
-    elif wallet and can_charge and billing_precharged:
-        credits_map_now = load_ai_credits()
-        credits_for_frontend = int(credits_map_now.get(wallet, 0) or 0)
         ai_credits_spent = float(message_credit_cost)
     elif wallet:
         # Wallet present but we skipped billing due to model gating

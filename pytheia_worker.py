@@ -77,6 +77,7 @@ class PYTHEIAWorker:
         self.last_post_time = self.state.get("last_post_time", 0)
         self.last_status = self.state.get("last_status", {})
         self.consecutive_failures = self.state.get("consecutive_failures", {})
+        self.last_model_snapshot = self.state.get("last_model_snapshot", {})
 
     def load_state(self) -> Dict:
         """Load persistent state from file."""
@@ -97,10 +98,64 @@ class PYTHEIAWorker:
                     "last_post_time": self.last_post_time,
                     "last_status": self.last_status,
                     "consecutive_failures": self.consecutive_failures,
+                    "last_model_snapshot": self.last_model_snapshot,
                     "last_update": datetime.utcnow().isoformat()
                 }, f, indent=2)
         except Exception as e:
             logger.error(f"Failed to save state: {e}")
+
+    def fetch_ai_model_snapshot(self) -> Dict[str, Any]:
+        """Collect dynamic AI model/provider availability snapshot from APIs."""
+        out: Dict[str, Any] = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "models": [],
+            "enabled_model_ids": [],
+            "providers": {},
+            "engine": None,
+            "mode": None,
+            "errors": [],
+        }
+
+        for path in ("/api/ai_models", "/api/ai/models"):
+            try:
+                r = requests.get(f"{BASE_URL}{path}", timeout=10)
+                if r.status_code != 200:
+                    out["errors"].append(f"{path}:HTTP {r.status_code}")
+                    continue
+                data = r.json() if "application/json" in (r.headers.get("content-type") or "") else {}
+                if isinstance(data, dict) and data.get("models"):
+                    out["models"] = data.get("models") or []
+                    out["engine"] = data.get("engine")
+                    out["mode"] = data.get("mode")
+                    break
+            except Exception as exc:
+                out["errors"].append(f"{path}:{exc}")
+
+        try:
+            hr = requests.get(f"{BASE_URL}/api/ai/health", timeout=10)
+            if hr.status_code == 200:
+                hdata = hr.json() if "application/json" in (hr.headers.get("content-type") or "") else {}
+                if isinstance(hdata, dict):
+                    out["providers"] = hdata.get("providers") or hdata.get("provider_status") or {}
+                    out["enabled_model_ids"] = hdata.get("enabled_model_ids") or []
+                    out["engine"] = out["engine"] or hdata.get("engine")
+                    out["mode"] = out["mode"] or hdata.get("mode")
+            else:
+                out["errors"].append(f"/api/ai/health:HTTP {hr.status_code}")
+        except Exception as exc:
+            out["errors"].append(f"/api/ai/health:{exc}")
+
+        return out
+
+    @staticmethod
+    def _snapshot_changed(prev: Dict[str, Any], curr: Dict[str, Any]) -> bool:
+        prev_enabled = sorted(prev.get("enabled_model_ids") or [])
+        curr_enabled = sorted(curr.get("enabled_model_ids") or [])
+        prev_models = sorted([m.get("id") for m in (prev.get("models") or []) if isinstance(m, dict)])
+        curr_models = sorted([m.get("id") for m in (curr.get("models") or []) if isinstance(m, dict)])
+        prev_providers = sorted(list((prev.get("providers") or {}).keys()))
+        curr_providers = sorted(list((curr.get("providers") or {}).keys()))
+        return (prev_enabled != curr_enabled) or (prev_models != curr_models) or (prev_providers != curr_providers)
 
     def check_endpoint(self, endpoint: Dict) -> Dict[str, Any]:
         """
@@ -195,6 +250,8 @@ class PYTHEIAWorker:
         else:
             overall_status = "healthy"
 
+        ai_snapshot = self.fetch_ai_model_snapshot()
+
         return {
             "timestamp": datetime.utcnow().isoformat(),
             "overall_status": overall_status,
@@ -204,7 +261,9 @@ class PYTHEIAWorker:
                 "ok": ok_count,
                 "degraded": degraded_count,
                 "down": down_count
-            }
+            },
+            "ai_models": ai_snapshot,
+            "ai_catalog_changed": self._snapshot_changed(self.last_model_snapshot, ai_snapshot),
         }
 
     def should_post_advice(self, health_report: Dict) -> bool:
@@ -242,6 +301,10 @@ class PYTHEIAWorker:
             if (current_time - degraded_duration) > THRESHOLDS["degraded_mode_duration"]:
                 logger.warning("Degraded mode persisting beyond threshold")
                 return True
+
+        if health_report.get("ai_catalog_changed"):
+            logger.info("AI model/provider catalog changed - recommend PYTHEIA advice update")
+            return True
 
         return False
 
@@ -354,7 +417,12 @@ class PYTHEIAWorker:
             },
             "governance_url": f"{BASE_URL}/governance",
             "requires_approval": False,
-            "auto_executable": current_status == "healthy"
+            "auto_executable": current_status == "healthy",
+            "ai_models_snapshot": {
+                "changed": bool(health_report.get("ai_catalog_changed")),
+                "enabled_model_ids": (health_report.get("ai_models") or {}).get("enabled_model_ids", []),
+                "providers": list(((health_report.get("ai_models") or {}).get("providers") or {}).keys()),
+            }
         }
 
         return advice
@@ -410,6 +478,7 @@ class PYTHEIAWorker:
             "overall_status": health_report["overall_status"],
             "timestamp": health_report["timestamp"]
         }
+        self.last_model_snapshot = health_report.get("ai_models") or {}
 
         # Determine if we should post advice
         if self.should_post_advice(health_report):

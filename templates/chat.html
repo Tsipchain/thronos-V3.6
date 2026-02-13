@@ -959,6 +959,10 @@
                 AI Credits:
                 <strong id="usageStatus">–</strong>
               </div>
+              <div class="badge">
+                Voice:
+                <strong id="voiceDeviceStatus">checking…</strong>
+              </div>
             </div>
           </div>
 
@@ -1078,6 +1082,7 @@
     const API_AI_PACKS = "/api/ai_packs";
     const API_AI_PURCHASE_PACK = "/api/ai_purchase_pack";
     const API_AI_CREDITS = "/api/ai_credits";
+    const API_X9_STATUS = "/api/voice/x9_status";
     const ADMIN_SECRET_KEY = "thronos_admin_secret";
     const ADMIN_MODE_KEY = "thronos_admin_mode";
     const ACTIVE_SESSION_KEY = "thronos_ai_active_session";
@@ -1108,6 +1113,7 @@
       pendingTxsLabelEl,
       difficultyLabelEl,
       creditsLabelEl,
+      voiceDeviceStatusEl,
       chatLanguageSelectEl,
       openAIPacksBtnEl,
       aiPacksModalEl,
@@ -1154,6 +1160,7 @@
       pendingTxsLabelEl = document.getElementById("pendingTxsLabel");
       difficultyLabelEl = document.getElementById("difficultyLabel");
       creditsLabelEl = document.getElementById("creditsLabel");
+      voiceDeviceStatusEl = document.getElementById("voiceDeviceStatus");
       chatLanguageSelectEl = document.getElementById("chatLanguageSelect");
       openAIPacksBtnEl = document.getElementById("openAIPacksBtn");
       aiPacksModalEl = document.getElementById("aiPacksModal");
@@ -2367,6 +2374,21 @@
       });
     }
 
+
+    async function refreshVoiceDeviceStatus() {
+      if (!voiceDeviceStatusEl) return;
+      try {
+        const res = await fetch(API_X9_STATUS);
+        const data = await res.json();
+        const active = !!(res.ok && data && data.ok && data.mode === "x9");
+        voiceDeviceStatusEl.textContent = active ? "active" : "offline";
+        voiceDeviceStatusEl.style.color = active ? "#00ff66" : "#ff4b81";
+      } catch (_) {
+        voiceDeviceStatusEl.textContent = "offline";
+        voiceDeviceStatusEl.style.color = "#ff4b81";
+      }
+    }
+
     // --- Events ---
     function bindEvents() {
       document
@@ -2456,7 +2478,11 @@
       await loadWallet();
       await loadSessions();
       loadTelemetry();
-      telemetryInterval = setInterval(loadTelemetry, 15000);
+      await refreshVoiceDeviceStatus();
+      telemetryInterval = setInterval(() => {
+        loadTelemetry();
+        refreshVoiceDeviceStatus();
+      }, 15000);
       setSending(true);
     }
 

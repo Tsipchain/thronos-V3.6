@@ -11245,6 +11245,75 @@ def _build_ai_model_catalog() -> list[dict]:
     return models
 
 
+def _build_ai_model_catalog() -> list[dict]:
+    provider_status = get_provider_status()
+    models: list[dict] = [{
+        "id": "auto",
+        "display_name": "Auto (Thronos chooses)",
+        "provider": "system",
+        "mode": "system",
+        "enabled": True,
+        "degraded": False,
+        "health_reason": None,
+    }]
+
+    for provider_name, model_list in AI_MODEL_REGISTRY.items():
+        pstatus = provider_status.get(provider_name, {}) if isinstance(provider_status, dict) else {}
+        for mi in model_list:
+            enabled = bool(mi.enabled and pstatus.get("configured", True) and pstatus.get("library_loaded", True) is not False)
+            degraded = bool(getattr(mi, "degraded", (not enabled))) or not enabled
+            models.append({
+                "id": mi.id,
+                "display_name": mi.display_name,
+                "provider": mi.provider,
+                "mode": "provider",
+                "enabled": enabled,
+                "degraded": degraded,
+                "health_reason": None if enabled else (pstatus.get("last_error") or "provider_unavailable"),
+            })
+
+    preview_disabled = [
+        ("o3", "o3 (preview)", "openai"),
+        ("gpt-o3", "GPT-o3 (preview)", "openai"),
+    ]
+    known_ids = {m.get("id") for m in models if isinstance(m, dict)}
+    for mid, dname, provider in preview_disabled:
+        if mid in known_ids:
+            continue
+        models.append({
+            "id": mid,
+            "display_name": dname,
+            "provider": provider,
+            "mode": "provider",
+            "enabled": False,
+            "degraded": True,
+            "health_reason": "model_not_available_or_preview",
+        })
+
+    offline_ok, offline_reason = _offline_corpus_health()
+    models.append({
+        "id": "offline_corpus",
+        "display_name": "Offline Corpus",
+        "provider": "local",
+        "mode": "offline",
+        "enabled": bool(THR_OFFLINE_CORPUS_ENABLED and offline_ok),
+        "degraded": False if not THR_OFFLINE_CORPUS_ENABLED else (not offline_ok),
+        "health_reason": offline_reason,
+    })
+
+    thrai_ok, thrai_reason = _thrai_router_health()
+    models.append({
+        "id": "thrai",
+        "display_name": "Thrai Router",
+        "provider": "thronos",
+        "mode": "router",
+        "enabled": bool(THR_THAI_ENABLED and thrai_ok),
+        "degraded": bool(THR_THAI_ENABLED and not thrai_ok),
+        "health_reason": thrai_reason,
+    })
+    return models
+
+
 def call_offline_corpus(corpus_path, messages, wallet, session_id, chain_context) -> str:
     """Simple local retrieval over ai_offline_corpus.json / knowledge blocks."""
     try:
@@ -11583,11 +11652,25 @@ def api_voice_x9_webhook():
     if not text:
         return jsonify({"ok": False, "error": "empty_text"}), 400
 
+    model_id = body.get("model_id") or "auto"
+    message_credit_cost = _chat_credit_cost_for_model(model_id, text)
+    if wallet:
+        available_before = get_ai_credits(wallet)
+        if available_before < message_credit_cost:
+            return jsonify({
+                "ok": False,
+                "error": "no_credits",
+                "code": "insufficient_ai_credits",
+                "required_credits": message_credit_cost,
+                "credits": available_before,
+                "wallet": wallet,
+            }), 400
+
     payload = {
         "wallet": wallet,
         "message": text,
         "lang": lang,
-        "model_id": body.get("model_id") or "auto",
+        "model_id": model_id,
         "session_id": body.get("session_id"),
         "billing_precharged": True,
     }
@@ -11612,11 +11695,26 @@ def api_voice_x9_webhook():
             "raw_error": body_out,
         }), 200
 
+    if wallet:
+        success, credits_after = debit_ai_credits(wallet, message_credit_cost, reason="voice_usage")
+        if not success:
+            return jsonify({
+                "ok": False,
+                "error": "no_credits",
+                "code": "insufficient_ai_credits",
+                "required_credits": message_credit_cost,
+                "credits": get_ai_credits(wallet),
+                "wallet": wallet,
+            }), 400
+        body_out["credits"] = credits_after
+        body_out["ai_credits"] = credits_after
+
     return jsonify({
         "ok": status < 400,
         "reply": body_out.get("response") or body_out.get("message") or "",
         "session_id": body_out.get("session_id") or payload.get("session_id"),
         "model_id": body_out.get("model") or payload.get("model_id"),
+        "credits": body_out.get("ai_credits", body_out.get("credits")),
         "raw": body_out,
     }), status
 

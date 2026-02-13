@@ -1620,9 +1620,12 @@
                     const reasonLabel = reason === 'pack_purchase'
                         ? 'AI Pack purchase'
                         : (reason === 'chat_usage'
-                            ? 'Chat usage'
-                            : (reason === 't2e_reward' ? 'T2E reward' : reason));
+                            ? 'Web chat usage'
+                            : (reason === 'voice_usage'
+                                ? 'Voice usage (X9)'
+                                : (reason === 't2e_reward' ? 'T2E reward' : reason)));
                     const meta = (e.meta && typeof e.meta === 'object') ? e.meta : {};
+                    const usageChannel = reason === 'voice_usage' ? 'voice' : (reason === 'chat_usage' ? 'web' : 'system');
                     const metaHint = meta.pack_code
                         ? `Pack: ${meta.pack_code}`
                         : (meta.model ? `Model: ${meta.model}` : '');
@@ -1632,10 +1635,10 @@
                                 <span class="tx-amount ${isIncoming ? 'incoming' : 'outgoing'}">${sign}${delta} credits</span>
                                 <span class="tx-status confirmed">${reasonLabel}</span>
                             </div>
+                            <div class="tx-details">Channel: ${usageChannel}${metaHint ? ` • ${metaHint}` : ''}</div>
                             <div class="tx-details">
                                 ${e.ts || e.timestamp || 'Unknown time'}<br>
                                 Balance: ${e.balance_before ?? '-'} → ${e.balance_after ?? '-'}
-                                ${metaHint ? `<br>${metaHint}` : ''}
                             </div>
                         </div>
                     `;

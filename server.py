@@ -585,12 +585,14 @@ HEARTBEAT_ENABLED = _strip_env_quotes(os.getenv("HEARTBEAT_ENABLED", "1")).lower
 HEARTBEAT_LOG_ERRORS = _strip_env_quotes(os.getenv("HEARTBEAT_LOG_ERRORS", "0")).lower() in ("1", "true", "yes")
 MUSIC_MODAL_ENABLED = _strip_env_quotes(os.getenv("MUSIC_MODAL_ENABLED", "1")).lower() in ("1", "true", "yes")
 
+_bootstrap_logger = logging.getLogger("thronos")
+
 if NODE_ROLE == "replica" and not READ_ONLY:
-    logger.warning("[CONFIG] Forcing READ_ONLY=1 on replica node")
+    _bootstrap_logger.warning("[CONFIG] Forcing READ_ONLY=1 on replica node")
     READ_ONLY = True
 
 if NODE_ROLE not in ("master", "ai_core") and SCHEDULER_ENABLED:
-    logger.warning("[CONFIG] Disabling SCHEDULER_ENABLED on non-master/non-ai-core node")
+    _bootstrap_logger.warning("[CONFIG] Disabling SCHEDULER_ENABLED on non-master/non-ai-core node")
     SCHEDULER_ENABLED = False
 
 # Improved fallback logic for MASTER_INTERNAL_URL

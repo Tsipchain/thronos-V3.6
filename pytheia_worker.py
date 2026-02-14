@@ -31,6 +31,18 @@ from typing import Dict, List, Any, Optional
 from pathlib import Path
 from llm_registry import discover_openai_models, discover_anthropic_models, discover_gemini_models
 
+
+def _default_admin_control() -> Dict[str, Any]:
+    return {
+        "codex_mode": "monitor",
+        "governance_approved": False,
+        "repo_write_enabled": False,
+        "directive": "",
+        "attachment_refs": [],
+        "page_paths": [],
+        "updated_at": None,
+    }
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -91,6 +103,8 @@ class PYTHEIAWorker:
 
     def __init__(self):
         self.state = self.load_state()
+        self.admin_control = self._normalize_admin_control(self.state.get("admin_control"))
+        self.admin_instruction_history = self._normalize_instruction_history(self.state.get("admin_instruction_history"))
         self.base_url = BASE_URL
         self.governance_api = f"{self.base_url}/api/governance/pytheia/advice"
         self.last_post_time = self.state.get("last_post_time", 0)
@@ -98,6 +112,57 @@ class PYTHEIAWorker:
         self.consecutive_failures = self.state.get("consecutive_failures", {})
         self.last_model_snapshot = self.state.get("last_model_snapshot", {})
         self.last_provider_scan_ts = float(self.state.get("last_provider_scan_ts", 0) or 0)
+
+    @staticmethod
+    def _normalize_instruction_history(history: Any) -> List[Dict[str, Any]]:
+        if not isinstance(history, list):
+            return []
+        out: List[Dict[str, Any]] = []
+        for item in history[-20:]:
+            if not isinstance(item, dict):
+                continue
+            out.append({
+                "instruction": str(item.get("instruction") or "").strip(),
+                "attachment_refs": item.get("attachment_refs") if isinstance(item.get("attachment_refs"), list) else [],
+                "page_paths": item.get("page_paths") if isinstance(item.get("page_paths"), list) else [],
+                "submitted_by": str(item.get("submitted_by") or "admin").strip() or "admin",
+                "submitted_at": str(item.get("submitted_at") or "").strip() or datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            })
+        return out
+
+    @staticmethod
+    def _normalize_admin_control(control: Any) -> Dict[str, Any]:
+        base = _default_admin_control()
+        if not isinstance(control, dict):
+            return base
+        for key in ("codex_mode", "directive", "updated_at"):
+            if control.get(key) is not None:
+                base[key] = str(control.get(key)).strip()
+        for key in ("governance_approved", "repo_write_enabled"):
+            base[key] = bool(control.get(key))
+        for key in ("attachment_refs", "page_paths"):
+            vals = control.get(key)
+            if isinstance(vals, list):
+                base[key] = [str(v).strip() for v in vals if str(v).strip()]
+        if base["repo_write_enabled"] and not base["governance_approved"]:
+            base["repo_write_enabled"] = False
+        return base
+
+    def refresh_admin_control(self) -> None:
+        latest = self.load_state()
+        self.admin_control = self._normalize_admin_control(latest.get("admin_control"))
+        self.admin_instruction_history = self._normalize_instruction_history(latest.get("admin_instruction_history"))
+
+    def _effective_endpoints(self) -> List[Dict[str, Any]]:
+        effective = list(HEALTH_ENDPOINTS)
+        existing_paths = {ep.get("path") for ep in effective}
+        for path in self.admin_control.get("page_paths") or []:
+            clean = "/" + str(path).strip().lstrip("/")
+            if not clean or clean in existing_paths:
+                continue
+            effective.append({"path": clean, "name": f"Custom: {clean}", "expected_status": 200})
+            existing_paths.add(clean)
+        return effective
 
     def load_state(self) -> Dict:
         """Load persistent state from file."""
@@ -120,6 +185,8 @@ class PYTHEIAWorker:
                     "consecutive_failures": self.consecutive_failures,
                     "last_model_snapshot": self.last_model_snapshot,
                     "last_provider_scan_ts": self.last_provider_scan_ts,
+                    "admin_control": self.admin_control,
+                    "admin_instruction_history": self.admin_instruction_history,
                     "last_update": datetime.utcnow().isoformat()
                 }, f, indent=2)
         except Exception as e:
@@ -275,7 +342,8 @@ class PYTHEIAWorker:
         degraded_count = 0
         down_count = 0
 
-        for endpoint in HEALTH_ENDPOINTS:
+        endpoints = self._effective_endpoints()
+        for endpoint in endpoints:
             result = self.check_endpoint(endpoint)
             checks.append(result)
 
@@ -292,9 +360,10 @@ class PYTHEIAWorker:
             logger.info(f"  {endpoint['name']}: {result['status']} ({result.get('status_code', 'N/A')})")
 
         # Determine overall status
-        if down_count >= len(HEALTH_ENDPOINTS) * 0.5:
+        total = max(1, len(endpoints))
+        if down_count >= total * 0.5:
             overall_status = "critical"
-        elif down_count > 0 or degraded_count >= len(HEALTH_ENDPOINTS) * 0.3:
+        elif down_count > 0 or degraded_count >= total * 0.3:
             overall_status = "degraded"
         else:
             overall_status = "healthy"
@@ -306,13 +375,14 @@ class PYTHEIAWorker:
             "overall_status": overall_status,
             "checks": checks,
             "summary": {
-                "total": len(HEALTH_ENDPOINTS),
+                "total": len(endpoints),
                 "ok": ok_count,
                 "degraded": degraded_count,
                 "down": down_count
             },
             "ai_models": ai_snapshot,
             "ai_catalog_changed": self._snapshot_changed(self.last_model_snapshot, ai_snapshot),
+            "effective_paths": [ep.get("path") for ep in endpoints],
         }
 
     def should_post_advice(self, health_report: Dict) -> bool:
@@ -471,7 +541,10 @@ class PYTHEIAWorker:
                 "changed": bool(health_report.get("ai_catalog_changed")),
                 "enabled_model_ids": (health_report.get("ai_models") or {}).get("enabled_model_ids", []),
                 "providers": list(((health_report.get("ai_models") or {}).get("providers") or {}).keys()),
-            }
+            },
+            "admin_control": self.admin_control,
+            "instruction_history": self.admin_instruction_history[-5:],
+            "dynamic_scan_paths": health_report.get("effective_paths") or [],
         }
 
         return advice
@@ -518,6 +591,7 @@ class PYTHEIAWorker:
         logger.info("="*60)
 
         # Run health checks
+        self.refresh_admin_control()
         health_report = self.run_health_checks()
         logger.info(f"Overall Status: {health_report['overall_status'].upper()}")
         logger.info(f"Summary: {health_report['summary']}")

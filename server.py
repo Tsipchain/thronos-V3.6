@@ -6564,7 +6564,7 @@ def enforce_read_only():
         return None
     # Allow health/bootstrap even as POST (for monitoring tools)
     safe_paths = ("/health", "/bootstrap.json", "/api/whoami")
-    admin_ai_safe_paths = ("/api/admin/login", "/api/admin/ai/chat", "/api/admin/ai/health", "/api/admin/models", "/api/admin/models/toggle", "/api/admin/agents", "/api/admin/ai/voice_hook", "/api/voice/x9_webhook")
+    admin_ai_safe_paths = ("/api/admin/login", "/api/admin/ai/chat", "/api/admin/ai/health", "/api/admin/models", "/api/admin/models/toggle", "/api/admin/agents", "/api/admin/pytheia/state", "/api/admin/pytheia/control", "/api/admin/ai/voice_hook", "/api/voice/x9_webhook")
     if request.path.startswith(safe_paths):
         return None
     if NODE_ROLE == "ai_core" and request.path.startswith(admin_ai_safe_paths):
@@ -12196,6 +12196,67 @@ def _ensure_admin_session(session_id: str | None = None, title: str | None = Non
     return session
 
 
+def _pytheia_state_file() -> str:
+    return os.getenv("PYTHEIA_STATE_FILE", os.path.join(DATA_DIR, "pytheia_state.json"))
+
+
+def _default_pytheia_admin_control() -> dict:
+    return {
+        "codex_mode": "monitor",
+        "governance_approved": False,
+        "repo_write_enabled": False,
+        "directive": "",
+        "attachment_refs": [],
+        "page_paths": [],
+        "updated_at": None,
+    }
+
+
+def _load_pytheia_control_state() -> dict:
+    state = load_json(_pytheia_state_file(), {})
+    if not isinstance(state, dict):
+        state = {}
+    control = _default_pytheia_admin_control()
+    if isinstance(state.get("admin_control"), dict):
+        for key in ("codex_mode", "directive", "updated_at"):
+            if state["admin_control"].get(key) is not None:
+                control[key] = str(state["admin_control"].get(key) or "").strip()
+        for key in ("governance_approved", "repo_write_enabled"):
+            control[key] = bool(state["admin_control"].get(key))
+        for key in ("attachment_refs", "page_paths"):
+            vals = state["admin_control"].get(key)
+            if isinstance(vals, list):
+                control[key] = [str(v).strip() for v in vals if str(v).strip()]
+    if control["repo_write_enabled"] and not control["governance_approved"]:
+        control["repo_write_enabled"] = False
+
+    history = state.get("admin_instruction_history")
+    if not isinstance(history, list):
+        history = []
+    compact_history = []
+    for item in history[-20:]:
+        if not isinstance(item, dict):
+            continue
+        compact_history.append({
+            "instruction": str(item.get("instruction") or "").strip(),
+            "attachment_refs": item.get("attachment_refs") if isinstance(item.get("attachment_refs"), list) else [],
+            "page_paths": item.get("page_paths") if isinstance(item.get("page_paths"), list) else [],
+            "submitted_by": str(item.get("submitted_by") or "admin").strip() or "admin",
+            "submitted_at": str(item.get("submitted_at") or "").strip(),
+        })
+
+    state["admin_control"] = control
+    state["admin_instruction_history"] = compact_history
+    return state
+
+
+def _save_pytheia_control_state(state: dict) -> None:
+    if not isinstance(state, dict):
+        return
+    state["last_update"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    save_json(_pytheia_state_file(), state)
+
+
 @app.route("/api/admin/login", methods=["GET", "POST"])
 def api_admin_login():
     if request.method == "GET":
@@ -12314,6 +12375,90 @@ def api_admin_agents():
         "iot_worker": {"status": "unknown", "last_heartbeat": None},
     }
     return jsonify({"ok": True, "agents": status}), 200
+
+
+@app.route("/api/admin/pytheia/state", methods=["GET"])
+def api_admin_pytheia_state():
+    denied = require_admin()
+    if denied:
+        return denied
+
+    state = _load_pytheia_control_state()
+    return jsonify({
+        "ok": True,
+        "admin_control": state.get("admin_control") or _default_pytheia_admin_control(),
+        "instruction_history": state.get("admin_instruction_history") or [],
+        "updated_at": state.get("last_update"),
+    }), 200
+
+
+@app.route("/api/admin/pytheia/control", methods=["POST"])
+def api_admin_pytheia_control():
+    data = request.get_json(silent=True) or {}
+    denied = require_admin(data)
+    if denied:
+        return denied
+
+    state = _load_pytheia_control_state()
+    current = state.get("admin_control") or _default_pytheia_admin_control()
+
+    codex_mode = str(data.get("codex_mode") or current.get("codex_mode") or "monitor").strip() or "monitor"
+    governance_approved = bool(data.get("governance_approved", current.get("governance_approved")))
+    repo_write_enabled = bool(data.get("repo_write_enabled", current.get("repo_write_enabled")))
+    directive = str(data.get("directive") or current.get("directive") or "").strip()
+
+    attachment_refs = data.get("attachment_refs", current.get("attachment_refs") or [])
+    if isinstance(attachment_refs, str):
+        attachment_refs = [x.strip() for x in attachment_refs.split(",") if x.strip()]
+    if not isinstance(attachment_refs, list):
+        attachment_refs = []
+    attachment_refs = [str(x).strip() for x in attachment_refs if str(x).strip()][:20]
+
+    page_paths = data.get("page_paths", current.get("page_paths") or [])
+    if isinstance(page_paths, str):
+        page_paths = [x.strip() for x in page_paths.split(",") if x.strip()]
+    if not isinstance(page_paths, list):
+        page_paths = []
+    clean_paths = []
+    for entry in page_paths:
+        val = "/" + str(entry).strip().lstrip("/")
+        if val == "/" or val in clean_paths:
+            continue
+        clean_paths.append(val)
+
+    if repo_write_enabled and not governance_approved:
+        return jsonify({"ok": False, "error": "governance_approval_required_for_repo_write"}), 403
+
+    updated_control = {
+        "codex_mode": codex_mode,
+        "governance_approved": governance_approved,
+        "repo_write_enabled": repo_write_enabled,
+        "directive": directive,
+        "attachment_refs": attachment_refs,
+        "page_paths": clean_paths,
+        "updated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+    state["admin_control"] = updated_control
+
+    instruction = str(data.get("instruction") or "").strip()
+    if instruction:
+        history = state.get("admin_instruction_history") if isinstance(state.get("admin_instruction_history"), list) else []
+        history.append({
+            "instruction": instruction,
+            "attachment_refs": attachment_refs,
+            "page_paths": clean_paths,
+            "submitted_by": "d3lfoi_admin",
+            "submitted_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        })
+        state["admin_instruction_history"] = history[-20:]
+
+    _save_pytheia_control_state(state)
+
+    return jsonify({
+        "ok": True,
+        "admin_control": state.get("admin_control"),
+        "instruction_history": state.get("admin_instruction_history") or [],
+    }), 200
 
 
 @app.route("/api/admin/ai/chat", methods=["POST"])

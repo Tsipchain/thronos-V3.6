@@ -67,6 +67,7 @@
           <button id="tabHealth">Health</button>
           <button id="tabModels">Models</button>
           <button id="tabAgents">Agents</button>
+          <button id="tabPytheia">PYTHEIA</button>
         </div>
         <div id="panelHealth">
           <h4>Core Health</h4>
@@ -85,6 +86,30 @@
             <thead><tr><th>Name</th><th>Status</th><th>Heartbeat</th></tr></thead>
             <tbody id="agentsBody"></tbody>
           </table>
+        </div>
+        <div id="panelPytheia" style="display:none;">
+          <h4>PYTHEIA Codex Control</h4>
+          <label>Codex mode</label>
+          <select id="pyCodexMode">
+            <option value="monitor">monitor</option>
+            <option value="assist">assist</option>
+            <option value="active">active</option>
+          </select>
+          <label style="display:block;margin-top:8px;"><input id="pyGovApproved" type="checkbox" style="width:auto;"> governance approved</label>
+          <label style="display:block;margin-top:4px;"><input id="pyRepoWrite" type="checkbox" style="width:auto;"> repo write enabled</label>
+          <label style="display:block;margin-top:8px;">Directive</label>
+          <textarea id="pyDirective" rows="3" placeholder="Runtime directive..."></textarea>
+          <label style="display:block;margin-top:8px;">Instruction (adds history row)</label>
+          <textarea id="pyInstruction" rows="2" placeholder="Operator instruction for PYTHEIA advice"></textarea>
+          <label style="display:block;margin-top:8px;">Attachment refs (comma separated)</label>
+          <input id="pyAttachments" placeholder="governance/proposal.md, docs/incident-42.txt" />
+          <label style="display:block;margin-top:8px;">Extra page paths (comma separated)</label>
+          <input id="pyPagePaths" placeholder="/status, /api/custom/health" />
+          <button id="savePytheiaBtn">Save PYTHEIA control</button>
+          <div id="pytheiaUpdatedAt" class="status"></div>
+          <div id="pytheiaErr" style="color:#ff8e8e;font-size:12px;"></div>
+          <h5>Recent Instruction History</h5>
+          <pre id="pyHistory">[]</pre>
         </div>
       </div>
     </div>
@@ -166,7 +191,54 @@
     $('panelHealth').style.display = name === 'health' ? 'block' : 'none';
     $('panelModels').style.display = name === 'models' ? 'block' : 'none';
     $('panelAgents').style.display = name === 'agents' ? 'block' : 'none';
+    $('panelPytheia').style.display = name === 'pytheia' ? 'block' : 'none';
   }
+
+  async function loadPytheiaState() {
+    const data = await api('/api/admin/pytheia/state');
+    const c = data.admin_control || {};
+    $('pyCodexMode').value = c.codex_mode || 'monitor';
+    $('pyGovApproved').checked = !!c.governance_approved;
+    $('pyRepoWrite').checked = !!c.repo_write_enabled;
+    $('pyDirective').value = c.directive || '';
+    $('pyAttachments').value = Array.isArray(c.attachment_refs) ? c.attachment_refs.join(', ') : '';
+    $('pyPagePaths').value = Array.isArray(c.page_paths) ? c.page_paths.join(', ') : '';
+    $('pyRepoWrite').disabled = !$('pyGovApproved').checked;
+    $('pyHistory').textContent = JSON.stringify(data.instruction_history || [], null, 2);
+    $('pytheiaUpdatedAt').textContent = data.updated_at ? `Updated: ${data.updated_at}` : '';
+  }
+
+  async function savePytheiaControl() {
+    $('pytheiaErr').textContent = '';
+    const payload = {
+      codex_mode: $('pyCodexMode').value || 'monitor',
+      governance_approved: $('pyGovApproved').checked,
+      repo_write_enabled: $('pyRepoWrite').checked,
+      directive: $('pyDirective').value.trim(),
+      instruction: $('pyInstruction').value.trim(),
+      attachment_refs: $('pyAttachments').value.split(',').map(s => s.trim()).filter(Boolean),
+      page_paths: $('pyPagePaths').value.split(',').map(s => s.trim()).filter(Boolean),
+    };
+    try {
+      await api('/api/admin/pytheia/control', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+      $('pyInstruction').value = '';
+      await loadPytheiaState();
+      $('pytheiaErr').textContent = 'Saved';
+    } catch (e) {
+      $('pytheiaErr').textContent = e.message;
+    }
+  }
+
+  $('pyGovApproved').addEventListener('change', () => {
+    if (!$('pyGovApproved').checked) {
+      $('pyRepoWrite').checked = false;
+    }
+    $('pyRepoWrite').disabled = !$('pyGovApproved').checked;
+  });
 
   $('loginBtn').addEventListener('click', async () => {
     $('loginErr').textContent = '';
@@ -197,6 +269,7 @@
       await loadHealth();
       await loadAdminModels();
       await loadAdminAgents();
+      await loadPytheiaState();
     } catch (e) {
       $('loginErr').textContent = e.message;
     }
@@ -205,6 +278,8 @@
   $('tabHealth').addEventListener('click', () => showTab('health'));
   $('tabModels').addEventListener('click', async () => { showTab('models'); await loadAdminModels(); });
   $('tabAgents').addEventListener('click', async () => { showTab('agents'); await loadAdminAgents(); });
+  $('tabPytheia').addEventListener('click', async () => { showTab('pytheia'); await loadPytheiaState(); });
+  $('savePytheiaBtn').addEventListener('click', savePytheiaControl);
 
   $('sendBtn').addEventListener('click', async () => {
     const message = $('msgInput').value.trim();

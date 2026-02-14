@@ -12457,7 +12457,11 @@ def api_admin_pytheia_control():
     clean_paths = _normalize_string_list(page_paths, normalize_paths=True)
 
     if repo_write_enabled and not (governance_approved or d3lfoi_trusted_mode):
-        return jsonify({"ok": False, "error": "governance_or_d3lfoi_trusted_mode_required_for_repo_write"}), 403
+        return jsonify({
+            "ok": False,
+            "error": "governance_or_d3lfoi_trusted_mode_required_for_repo_write",
+            "legacy_error": "governance_approval_required_for_repo_write",
+        }), 403
 
     updated_control = {
         "codex_mode": codex_mode,

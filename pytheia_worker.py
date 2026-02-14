@@ -37,13 +37,12 @@ def _default_admin_control() -> Dict[str, Any]:
         "codex_mode": "monitor",
         "governance_approved": False,
         "repo_write_enabled": False,
+        "d3lfoi_trusted_mode": False,
         "directive": "",
         "attachment_refs": [],
         "page_paths": [],
         "updated_at": None,
     }
-
-<<<<<<< HEAD
 
 def _coerce_bool(value: Any) -> bool:
     if isinstance(value, bool):
@@ -68,8 +67,6 @@ def _build_log_handlers() -> List[logging.Handler]:
         pass
     return handlers
 
-=======
->>>>>>> origin/main
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -162,28 +159,19 @@ class PYTHEIAWorker:
         for key in ("codex_mode", "directive", "updated_at"):
             if control.get(key) is not None:
                 base[key] = str(control.get(key)).strip()
-        for key in ("governance_approved", "repo_write_enabled"):
-<<<<<<< HEAD
+        for key in ("governance_approved", "repo_write_enabled", "d3lfoi_trusted_mode"):
             base[key] = _coerce_bool(control.get(key))
         if base["codex_mode"] not in {"monitor", "assist", "active"}:
             base["codex_mode"] = "monitor"
-=======
-            base[key] = bool(control.get(key))
->>>>>>> origin/main
         for key in ("attachment_refs", "page_paths"):
             vals = control.get(key)
             if isinstance(vals, list):
                 base[key] = [str(v).strip() for v in vals if str(v).strip()]
-        if base["repo_write_enabled"] and not base["governance_approved"]:
+        trusted_mode = bool(base.get("d3lfoi_trusted_mode"))
+        if base["repo_write_enabled"] and not (base["governance_approved"] or trusted_mode):
             base["repo_write_enabled"] = False
         return base
 
-<<<<<<< HEAD
-    # NOTE: Keep admin-control normalization and endpoint expansion together
-    # to reduce merge conflicts with server-side PYTHEIA control evolution.
-
-=======
->>>>>>> origin/main
     def refresh_admin_control(self) -> None:
         latest = self.load_state()
         self.admin_control = self._normalize_admin_control(latest.get("admin_control"))
@@ -228,20 +216,7 @@ class PYTHEIAWorker:
                 "last_update": datetime.utcnow().isoformat()
             })
             with open(STATE_FILE, 'w') as f:
-<<<<<<< HEAD
                 json.dump(current, f, indent=2)
-=======
-                json.dump({
-                    "last_post_time": self.last_post_time,
-                    "last_status": self.last_status,
-                    "consecutive_failures": self.consecutive_failures,
-                    "last_model_snapshot": self.last_model_snapshot,
-                    "last_provider_scan_ts": self.last_provider_scan_ts,
-                    "admin_control": self.admin_control,
-                    "admin_instruction_history": self.admin_instruction_history,
-                    "last_update": datetime.utcnow().isoformat()
-                }, f, indent=2)
->>>>>>> origin/main
         except Exception as e:
             logger.error(f"Failed to save state: {e}")
 

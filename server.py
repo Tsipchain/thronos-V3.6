@@ -12208,7 +12208,6 @@ def _default_pytheia_admin_control() -> dict:
         "codex_mode": "monitor",
         "governance_approved": False,
         "repo_write_enabled": False,
-        "d3lfoi_trusted_mode": False,
         "directive": "",
         "attachment_refs": [],
         "page_paths": [],
@@ -12255,15 +12254,14 @@ def _load_pytheia_control_state() -> dict:
         for key in ("codex_mode", "directive", "updated_at"):
             if state["admin_control"].get(key) is not None:
                 control[key] = str(state["admin_control"].get(key) or "").strip()
-        for key in ("governance_approved", "repo_write_enabled", "d3lfoi_trusted_mode"):
+        for key in ("governance_approved", "repo_write_enabled"):
             control[key] = _coerce_bool_payload(state["admin_control"].get(key))
         if control["codex_mode"] not in {"monitor", "assist", "active"}:
             control["codex_mode"] = "monitor"
         for key in ("attachment_refs", "page_paths"):
             vals = state["admin_control"].get(key)
             control[key] = _normalize_string_list(vals, normalize_paths=(key == "page_paths"))
-    trusted_mode = bool(control.get("d3lfoi_trusted_mode"))
-    if control["repo_write_enabled"] and not (control["governance_approved"] or trusted_mode):
+    if control["repo_write_enabled"] and not control["governance_approved"]:
         control["repo_write_enabled"] = False
 
     history = state.get("admin_instruction_history")
@@ -12447,7 +12445,6 @@ def api_admin_pytheia_control():
         codex_mode = "monitor"
     governance_approved = _coerce_bool_payload(data.get("governance_approved", current.get("governance_approved")))
     repo_write_enabled = _coerce_bool_payload(data.get("repo_write_enabled", current.get("repo_write_enabled")))
-    d3lfoi_trusted_mode = _coerce_bool_payload(data.get("d3lfoi_trusted_mode", current.get("d3lfoi_trusted_mode")))
     directive = str(data.get("directive") or current.get("directive") or "").strip()
 
     attachment_refs = data.get("attachment_refs", current.get("attachment_refs") or [])
@@ -12456,18 +12453,13 @@ def api_admin_pytheia_control():
     page_paths = data.get("page_paths", current.get("page_paths") or [])
     clean_paths = _normalize_string_list(page_paths, normalize_paths=True)
 
-    if repo_write_enabled and not (governance_approved or d3lfoi_trusted_mode):
-        return jsonify({
-            "ok": False,
-            "error": "governance_or_d3lfoi_trusted_mode_required_for_repo_write",
-            "legacy_error": "governance_approval_required_for_repo_write",
-        }), 403
+    if repo_write_enabled and not governance_approved:
+        return jsonify({"ok": False, "error": "governance_approval_required_for_repo_write"}), 403
 
     updated_control = {
         "codex_mode": codex_mode,
         "governance_approved": governance_approved,
         "repo_write_enabled": repo_write_enabled,
-        "d3lfoi_trusted_mode": d3lfoi_trusted_mode,
         "directive": directive,
         "attachment_refs": attachment_refs,
         "page_paths": clean_paths,

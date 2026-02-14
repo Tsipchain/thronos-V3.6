@@ -97,7 +97,6 @@
           </select>
           <label style="display:block;margin-top:8px;"><input id="pyGovApproved" type="checkbox" style="width:auto;"> governance approved</label>
           <label style="display:block;margin-top:4px;"><input id="pyRepoWrite" type="checkbox" style="width:auto;"> repo write enabled</label>
-          <label style="display:block;margin-top:4px;"><input id="pyTrustedMode" type="checkbox" style="width:auto;"> d3lfoi trusted mode (Codex full rights)</label>
           <label style="display:block;margin-top:8px;">Directive</label>
           <textarea id="pyDirective" rows="3" placeholder="Runtime directive..."></textarea>
           <label style="display:block;margin-top:8px;">Instruction (adds history row)</label>
@@ -201,11 +200,10 @@
     $('pyCodexMode').value = c.codex_mode || 'monitor';
     $('pyGovApproved').checked = !!c.governance_approved;
     $('pyRepoWrite').checked = !!c.repo_write_enabled;
-    $('pyTrustedMode').checked = !!c.d3lfoi_trusted_mode;
     $('pyDirective').value = c.directive || '';
     $('pyAttachments').value = Array.isArray(c.attachment_refs) ? c.attachment_refs.join(', ') : '';
     $('pyPagePaths').value = Array.isArray(c.page_paths) ? c.page_paths.join(', ') : '';
-    $('pyRepoWrite').disabled = !$('pyGovApproved').checked && !$('pyTrustedMode').checked;
+    $('pyRepoWrite').disabled = !$('pyGovApproved').checked;
     $('pyHistory').textContent = JSON.stringify(data.instruction_history || [], null, 2);
     $('pytheiaUpdatedAt').textContent = data.updated_at ? `Updated: ${data.updated_at}` : '';
   }
@@ -216,7 +214,6 @@
       codex_mode: $('pyCodexMode').value || 'monitor',
       governance_approved: $('pyGovApproved').checked,
       repo_write_enabled: $('pyRepoWrite').checked,
-      d3lfoi_trusted_mode: $('pyTrustedMode').checked,
       directive: $('pyDirective').value.trim(),
       instruction: $('pyInstruction').value.trim(),
       attachment_refs: $('pyAttachments').value.split(',').map(s => s.trim()).filter(Boolean),
@@ -236,16 +233,12 @@
     }
   }
 
-  function syncRepoWriteToggleState() {
-    const allowed = $('pyGovApproved').checked || $('pyTrustedMode').checked;
-    if (!allowed) {
+  $('pyGovApproved').addEventListener('change', () => {
+    if (!$('pyGovApproved').checked) {
       $('pyRepoWrite').checked = false;
     }
-    $('pyRepoWrite').disabled = !allowed;
-  }
-
-  $('pyGovApproved').addEventListener('change', syncRepoWriteToggleState);
-  $('pyTrustedMode').addEventListener('change', syncRepoWriteToggleState);
+    $('pyRepoWrite').disabled = !$('pyGovApproved').checked;
+  });
 
   $('loginBtn').addEventListener('click', async () => {
     $('loginErr').textContent = '';

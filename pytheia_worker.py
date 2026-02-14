@@ -37,12 +37,12 @@ def _default_admin_control() -> Dict[str, Any]:
         "codex_mode": "monitor",
         "governance_approved": False,
         "repo_write_enabled": False,
-        "d3lfoi_trusted_mode": False,
         "directive": "",
         "attachment_refs": [],
         "page_paths": [],
         "updated_at": None,
     }
+
 
 def _coerce_bool(value: Any) -> bool:
     if isinstance(value, bool):
@@ -159,7 +159,7 @@ class PYTHEIAWorker:
         for key in ("codex_mode", "directive", "updated_at"):
             if control.get(key) is not None:
                 base[key] = str(control.get(key)).strip()
-        for key in ("governance_approved", "repo_write_enabled", "d3lfoi_trusted_mode"):
+        for key in ("governance_approved", "repo_write_enabled"):
             base[key] = _coerce_bool(control.get(key))
         if base["codex_mode"] not in {"monitor", "assist", "active"}:
             base["codex_mode"] = "monitor"
@@ -167,8 +167,7 @@ class PYTHEIAWorker:
             vals = control.get(key)
             if isinstance(vals, list):
                 base[key] = [str(v).strip() for v in vals if str(v).strip()]
-        trusted_mode = bool(base.get("d3lfoi_trusted_mode"))
-        if base["repo_write_enabled"] and not (base["governance_approved"] or trusted_mode):
+        if base["repo_write_enabled"] and not base["governance_approved"]:
             base["repo_write_enabled"] = False
         return base
 

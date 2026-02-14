@@ -62,7 +62,7 @@ def _resolve_model(
     wallet: Optional[str] = None,
 ):
     raw_mode = normalized_mode or (os.getenv("THRONOS_AI_MODE", "all").strip().lower() or "all")
-    if raw_mode in ("router", "auto", "all", "hybrid", "proxy"):
+    if raw_mode in ("router", "auto", "all", "hybrid", "proxy", "core"):
         normalized_mode = "all"
     elif raw_mode == "openai_only":
         normalized_mode = "openai"
@@ -290,7 +290,7 @@ def call_llm(
     tier = resolved.tier
 
     mode = (os.getenv("THRONOS_AI_MODE", "all").strip().lower() or "all")
-    if mode in ("router", "auto", "all", "hybrid", "proxy"):
+    if mode in ("router", "auto", "all", "hybrid", "proxy", "core"):
         normalized_mode = "all"
     elif mode == "openai_only":
         normalized_mode = "openai"

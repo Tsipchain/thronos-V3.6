@@ -29,6 +29,7 @@ import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from pathlib import Path
+from llm_registry import discover_openai_models, discover_anthropic_models, discover_gemini_models
 
 # Configure logging
 logging.basicConfig(
@@ -42,10 +43,26 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration
-BASE_URL = os.getenv("PYTHEIA_BASE_URL", "http://localhost:5000")
-GOVERNANCE_API = f"{BASE_URL}/api/governance/pytheia/advice"
+def _resolve_base_url() -> str:
+    explicit = (os.getenv("PYTHEIA_BASE_URL") or "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+
+    render_url = (os.getenv("RENDER_EXTERNAL_URL") or "").strip()
+    if render_url:
+        return render_url.rstrip("/")
+
+    port = (os.getenv("PORT") or "").strip()
+    if port:
+        return f"http://127.0.0.1:{port}"
+
+    return "http://localhost:5000"
+
+
+BASE_URL = _resolve_base_url()
 CHECK_INTERVAL = int(os.getenv("PYTHEIA_CHECK_INTERVAL", "300"))  # 5 minutes default
 STATE_FILE = os.getenv("PYTHEIA_STATE_FILE", "data/pytheia_state.json")
+MODEL_SNAPSHOT_FILE = os.path.join(os.getenv("DATA_DIR", "data"), "model_catalog_snapshot.json")
 REPO_URL = "https://github.com/Tsipchain/thronos-V3.6"
 
 # Health check endpoints
@@ -74,9 +91,15 @@ class PYTHEIAWorker:
 
     def __init__(self):
         self.state = self.load_state()
+        self.base_url = BASE_URL
+        self.governance_api = f"{self.base_url}/api/governance/pytheia/advice"
         self.last_post_time = self.state.get("last_post_time", 0)
         self.last_status = self.state.get("last_status", {})
         self.consecutive_failures = self.state.get("consecutive_failures", {})
+        self.last_model_snapshot = self.state.get("last_model_snapshot", {})
+        self.last_provider_scan_ts = float(self.state.get("last_provider_scan_ts", 0) or 0)
+        self.admin_control = self.state.get("admin_control", {}) if isinstance(self.state.get("admin_control"), dict) else {}
+        self.admin_instruction_history = self.state.get("admin_instruction_history", []) if isinstance(self.state.get("admin_instruction_history"), list) else []
 
     def load_state(self) -> Dict:
         """Load persistent state from file."""
@@ -97,10 +120,109 @@ class PYTHEIAWorker:
                     "last_post_time": self.last_post_time,
                     "last_status": self.last_status,
                     "consecutive_failures": self.consecutive_failures,
+                    "last_model_snapshot": self.last_model_snapshot,
+                    "last_provider_scan_ts": self.last_provider_scan_ts,
+                    "admin_control": self.admin_control,
+                    "admin_instruction_history": self.admin_instruction_history[-50:],
                     "last_update": datetime.utcnow().isoformat()
                 }, f, indent=2)
         except Exception as e:
             logger.error(f"Failed to save state: {e}")
+
+    def scan_provider_models(self) -> Dict[str, Any]:
+        openai_key = (os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip()
+        anthropic_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+        gemini_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+
+        providers = {
+            "openai": {"models": discover_openai_models(openai_key)},
+            "anthropic": {"models": discover_anthropic_models(anthropic_key)},
+            "gemini": {"models": discover_gemini_models(gemini_key)},
+        }
+        for provider_name, payload in providers.items():
+            models = payload.get("models") or []
+            ok = any(bool(m.get("enabled")) for m in models if isinstance(m, dict))
+            payload["status"] = "ok" if ok else "degraded"
+
+        snapshot = {
+            "last_scan_ts": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "providers": providers,
+        }
+
+        try:
+            os.makedirs(os.path.dirname(MODEL_SNAPSHOT_FILE), exist_ok=True)
+            with open(MODEL_SNAPSHOT_FILE, "w", encoding="utf-8") as f:
+                json.dump(snapshot, f, indent=2, ensure_ascii=False)
+        except Exception as exc:
+            logger.error(f"Failed to write model snapshot file: {exc}")
+        return snapshot
+
+    def fetch_ai_model_snapshot(self) -> Dict[str, Any]:
+        """Collect dynamic AI model/provider availability snapshot from APIs."""
+        out: Dict[str, Any] = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "models": [],
+            "enabled_model_ids": [],
+            "providers": {},
+            "engine": None,
+            "mode": None,
+            "errors": [],
+        }
+
+        for path in ("/api/ai_models", "/api/ai/models"):
+            try:
+                r = requests.get(f"{self.base_url}{path}", timeout=10)
+                if r.status_code != 200:
+                    out["errors"].append(f"{path}:HTTP {r.status_code}")
+                    continue
+                data = r.json() if "application/json" in (r.headers.get("content-type") or "") else {}
+                if isinstance(data, dict) and data.get("models"):
+                    out["models"] = data.get("models") or []
+                    out["engine"] = data.get("engine")
+                    out["mode"] = data.get("mode")
+                    break
+            except Exception as exc:
+                out["errors"].append(f"{path}:{exc}")
+
+        try:
+            hr = requests.get(f"{self.base_url}/api/ai/health", timeout=10)
+            if hr.status_code == 200:
+                hdata = hr.json() if "application/json" in (hr.headers.get("content-type") or "") else {}
+                if isinstance(hdata, dict):
+                    out["providers"] = hdata.get("providers") or hdata.get("provider_status") or {}
+                    out["enabled_model_ids"] = hdata.get("enabled_model_ids") or []
+                    out["engine"] = out["engine"] or hdata.get("engine")
+                    out["mode"] = out["mode"] or hdata.get("mode")
+            else:
+                out["errors"].append(f"/api/ai/health:HTTP {hr.status_code}")
+        except Exception as exc:
+            out["errors"].append(f"/api/ai/health:{exc}")
+
+        return out
+
+    @staticmethod
+    def _snapshot_changed(prev: Dict[str, Any], curr: Dict[str, Any]) -> bool:
+        prev_enabled = sorted(prev.get("enabled_model_ids") or [])
+        curr_enabled = sorted(curr.get("enabled_model_ids") or [])
+        prev_models = sorted([m.get("id") for m in (prev.get("models") or []) if isinstance(m, dict)])
+        curr_models = sorted([m.get("id") for m in (curr.get("models") or []) if isinstance(m, dict)])
+        prev_providers = sorted(list((prev.get("providers") or {}).keys()))
+        curr_providers = sorted(list((curr.get("providers") or {}).keys()))
+        return (prev_enabled != curr_enabled) or (prev_models != curr_models) or (prev_providers != curr_providers)
+
+    def _effective_endpoints(self) -> List[Dict[str, Any]]:
+        endpoints = list(HEALTH_ENDPOINTS)
+        control = self.admin_control if isinstance(self.admin_control, dict) else {}
+        extra_paths = control.get("page_paths") if isinstance(control.get("page_paths"), list) else []
+        for raw in extra_paths:
+            path = str(raw or "").strip()
+            if not path.startswith("/"):
+                continue
+            if any(e.get("path") == path for e in endpoints):
+                continue
+            endpoints.append({"path": path, "name": f"Admin Path {path}", "expected_status": 200})
+        return endpoints
+
 
     def check_endpoint(self, endpoint: Dict) -> Dict[str, Any]:
         """
@@ -110,7 +232,7 @@ class PYTHEIAWorker:
             {"name": str, "status": "ok"|"degraded"|"down", "status_code": int,
              "response_time_ms": float, "error": str|None}
         """
-        url = f"{BASE_URL}{endpoint['path']}"
+        url = f"{self.base_url}{endpoint['path']}"
         start_time = time.time()
         result = {
             "name": endpoint["name"],
@@ -171,7 +293,8 @@ class PYTHEIAWorker:
         degraded_count = 0
         down_count = 0
 
-        for endpoint in HEALTH_ENDPOINTS:
+        endpoints = self._effective_endpoints()
+        for endpoint in endpoints:
             result = self.check_endpoint(endpoint)
             checks.append(result)
 
@@ -188,23 +311,27 @@ class PYTHEIAWorker:
             logger.info(f"  {endpoint['name']}: {result['status']} ({result.get('status_code', 'N/A')})")
 
         # Determine overall status
-        if down_count >= len(HEALTH_ENDPOINTS) * 0.5:
+        if down_count >= len(endpoints) * 0.5:
             overall_status = "critical"
-        elif down_count > 0 or degraded_count >= len(HEALTH_ENDPOINTS) * 0.3:
+        elif down_count > 0 or degraded_count >= len(endpoints) * 0.3:
             overall_status = "degraded"
         else:
             overall_status = "healthy"
+
+        ai_snapshot = self.fetch_ai_model_snapshot()
 
         return {
             "timestamp": datetime.utcnow().isoformat(),
             "overall_status": overall_status,
             "checks": checks,
             "summary": {
-                "total": len(HEALTH_ENDPOINTS),
+                "total": len(endpoints),
                 "ok": ok_count,
                 "degraded": degraded_count,
                 "down": down_count
-            }
+            },
+            "ai_models": ai_snapshot,
+            "ai_catalog_changed": self._snapshot_changed(self.last_model_snapshot, ai_snapshot),
         }
 
     def should_post_advice(self, health_report: Dict) -> bool:
@@ -242,6 +369,10 @@ class PYTHEIAWorker:
             if (current_time - degraded_duration) > THRESHOLDS["degraded_mode_duration"]:
                 logger.warning("Degraded mode persisting beyond threshold")
                 return True
+
+        if health_report.get("ai_catalog_changed"):
+            logger.info("AI model/provider catalog changed - recommend PYTHEIA advice update")
+            return True
 
         return False
 
@@ -352,9 +483,22 @@ class PYTHEIAWorker:
                 ],
                 "rollback": "No code changes made. Recovery actions are non-destructive."
             },
-            "governance_url": f"{BASE_URL}/governance",
+            "governance_url": f"{self.base_url}/governance",
             "requires_approval": False,
-            "auto_executable": current_status == "healthy"
+            "auto_executable": current_status == "healthy",
+            "admin_control": {
+                "codex_mode": bool((self.admin_control or {}).get("codex_mode", False)),
+                "repo_write_enabled": bool((self.admin_control or {}).get("repo_write_enabled", False)),
+                "governance_approved": bool((self.admin_control or {}).get("governance_approved", False)),
+                "last_instruction": (self.admin_control or {}).get("last_instruction"),
+                "attachment_refs": (self.admin_control or {}).get("attachment_refs", []),
+                "instruction_history": self.admin_instruction_history[-5:],
+            },
+            "ai_models_snapshot": {
+                "changed": bool(health_report.get("ai_catalog_changed")),
+                "enabled_model_ids": (health_report.get("ai_models") or {}).get("enabled_model_ids", []),
+                "providers": list(((health_report.get("ai_models") or {}).get("providers") or {}).keys()),
+            }
         }
 
         return advice
@@ -367,9 +511,9 @@ class PYTHEIAWorker:
             True if posted successfully, False otherwise
         """
         try:
-            logger.info(f"Posting PYTHEIA_ADVICE to {GOVERNANCE_API}...")
+            logger.info(f"Posting PYTHEIA_ADVICE to {self.governance_api}...")
             response = requests.post(
-                GOVERNANCE_API,
+                self.governance_api,
                 json=advice,
                 headers={"Content-Type": "application/json"},
                 timeout=30
@@ -391,7 +535,7 @@ class PYTHEIAWorker:
                 return False
 
         except Exception as e:
-            logger.exception(f"Exception posting PYTHEIA_ADVICE: {e}")
+            logger.warning(f"PYTHEIA advice post skipped (unreachable governance API): {e}")
             return False
 
     def run_cycle(self):
@@ -400,16 +544,28 @@ class PYTHEIAWorker:
         logger.info("PYTHEIA Worker Cycle Starting")
         logger.info("="*60)
 
+        # Reload control state (admin can update live)
+        self.state = self.load_state()
+        self.admin_control = self.state.get("admin_control", {}) if isinstance(self.state.get("admin_control"), dict) else {}
+        self.admin_instruction_history = self.state.get("admin_instruction_history", []) if isinstance(self.state.get("admin_instruction_history"), list) else []
+
         # Run health checks
         health_report = self.run_health_checks()
         logger.info(f"Overall Status: {health_report['overall_status'].upper()}")
         logger.info(f"Summary: {health_report['summary']}")
+
+        if (time.time() - self.last_provider_scan_ts) > 3600:
+            provider_snapshot = self.scan_provider_models()
+            if self._snapshot_changed(self.last_model_snapshot, {"models": [m for p in provider_snapshot.get("providers", {}).values() for m in (p.get("models") or [])], "providers": provider_snapshot.get("providers", {})}):
+                logger.info("Provider catalog changed (scanner)")
+            self.last_provider_scan_ts = time.time()
 
         # Update state
         self.last_status = {
             "overall_status": health_report["overall_status"],
             "timestamp": health_report["timestamp"]
         }
+        self.last_model_snapshot = health_report.get("ai_models") or {}
 
         # Determine if we should post advice
         if self.should_post_advice(health_report):
@@ -440,7 +596,7 @@ class PYTHEIAWorker:
         """Run worker in continuous loop."""
         logger.info("PYTHEIA Worker starting in continuous mode")
         logger.info(f"Check interval: {CHECK_INTERVAL}s")
-        logger.info(f"Base URL: {BASE_URL}")
+        logger.info(f"Base URL: {self.base_url}")
 
         while True:
             try:

@@ -541,7 +541,7 @@ def _strip_env_quotes(value: str) -> str:
 # AI provider/model caches
 MODEL_CATALOG: dict = {}
 MODEL_CATALOG_LAST_REFRESH = 0.0
-MODEL_REFRESH_INTERVAL_SECONDS = float(_strip_env_quotes(os.getenv("MODEL_REFRESH_INTERVAL_SECONDS", str(6 * 3600))))
+MODEL_REFRESH_INTERVAL_SECONDS = float(_strip_env_quotes(os.getenv("MODEL_REFRESH_INTERVAL_SECONDS", str(30 * 24 * 3600))))
 PROVIDER_HEALTH_CACHE: dict = {}
 PROVIDER_HEALTH_TTL = 300  # seconds
 
@@ -4970,6 +4970,7 @@ def _chat_credit_cost_for_model(model_id: str | None, prompt_text: str | None = 
     mid = (model_id or "gpt-4.1-mini").strip().lower()
     cheap = {
         "gpt-4.1-mini",
+        "claude-3-5-haiku-latest",
         "claude-3.5-haiku",
         "claude-3-haiku",
         "gemini-2.0-flash",
@@ -4978,6 +4979,7 @@ def _chat_credit_cost_for_model(model_id: str | None, prompt_text: str | None = 
     medium = {
         "gpt-4.1",
         "claude-3.7-sonnet",
+        "claude-3-5-sonnet-latest",
         "gemini-2.5-pro",
     }
     if mid in cheap:
@@ -5246,14 +5248,21 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
 
     requested_raw = (model_id or "").strip()
     requested = requested_raw or default_model_id or "auto"
+    requested_aliases = {
+        "claude-3.5-sonnet": "claude-3-5-sonnet-latest",
+        "claude-3.5-haiku": "claude-3-5-haiku-latest",
+        "claude-3-5-sonnet": "claude-3-5-sonnet-latest",
+        "claude-3-5-haiku": "claude-3-5-haiku-latest",
+    }
+    requested = requested_aliases.get(requested, requested)
     catalog_by_id = {m.get("id"): m for m in catalog if isinstance(m, dict) and m.get("id")}
 
     if requested == "auto" and callable_ids:
         heuristic_order = [
             "gpt-4.1-mini",
             "o3-mini",
+            "claude-3-5-sonnet-latest",
             "claude-3.5-sonnet",
-            "claude-3-5-sonnet",
             "gemini-2.0-flash",
             "gemini-2.5-pro",
             "offline_corpus",
@@ -10918,7 +10927,7 @@ def _build_ai_models_catalog(provider_status: dict, offline_status: dict, thrai_
 
     catalog_map = {
         "openai": ["gpt-4.1", "gpt-4.1-mini", "o3-mini"],
-        "anthropic": ["claude-3.5-sonnet", "claude-3.5-haiku"],
+        "anthropic": ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
         "gemini": ["gemini-2.5-pro", "gemini-2.0-flash"],
     }
     for provider, mids in catalog_map.items():
@@ -12198,10 +12207,7 @@ def _ensure_admin_session(session_id: str | None = None, title: str | None = Non
     return session
 
 
-<<<<<<< HEAD
 # ─── PYTHEIA CONTROL PLANE (ADMIN) ─────────────────────────────────────────
-=======
->>>>>>> origin/main
 def _pytheia_state_file() -> str:
     return os.getenv("PYTHEIA_STATE_FILE", os.path.join(DATA_DIR, "pytheia_state.json"))
 
@@ -12218,7 +12224,6 @@ def _default_pytheia_admin_control() -> dict:
     }
 
 
-<<<<<<< HEAD
 def _coerce_bool_payload(value) -> bool:
     if isinstance(value, bool):
         return value
@@ -12249,9 +12254,6 @@ def _normalize_string_list(values, *, limit: int = 20, normalize_paths: bool = F
             break
     return out
 
-
-=======
->>>>>>> origin/main
 def _load_pytheia_control_state() -> dict:
     state = load_json(_pytheia_state_file(), {})
     if not isinstance(state, dict):
@@ -12262,20 +12264,12 @@ def _load_pytheia_control_state() -> dict:
             if state["admin_control"].get(key) is not None:
                 control[key] = str(state["admin_control"].get(key) or "").strip()
         for key in ("governance_approved", "repo_write_enabled"):
-<<<<<<< HEAD
             control[key] = _coerce_bool_payload(state["admin_control"].get(key))
         if control["codex_mode"] not in {"monitor", "assist", "active"}:
             control["codex_mode"] = "monitor"
         for key in ("attachment_refs", "page_paths"):
             vals = state["admin_control"].get(key)
             control[key] = _normalize_string_list(vals, normalize_paths=(key == "page_paths"))
-=======
-            control[key] = bool(state["admin_control"].get(key))
-        for key in ("attachment_refs", "page_paths"):
-            vals = state["admin_control"].get(key)
-            if isinstance(vals, list):
-                control[key] = [str(v).strip() for v in vals if str(v).strip()]
->>>>>>> origin/main
     if control["repo_write_enabled"] and not control["governance_approved"]:
         control["repo_write_enabled"] = False
 
@@ -12428,11 +12422,8 @@ def api_admin_agents():
 
 @app.route("/api/admin/pytheia/state", methods=["GET"])
 def api_admin_pytheia_state():
-<<<<<<< HEAD
     if NODE_ROLE != "ai_core":
         return jsonify({"error": "admin_only_on_ai_core"}), 404
-=======
->>>>>>> origin/main
     denied = require_admin()
     if denied:
         return denied
@@ -12448,11 +12439,8 @@ def api_admin_pytheia_state():
 
 @app.route("/api/admin/pytheia/control", methods=["POST"])
 def api_admin_pytheia_control():
-<<<<<<< HEAD
     if NODE_ROLE != "ai_core":
         return jsonify({"error": "admin_only_on_ai_core"}), 404
-=======
->>>>>>> origin/main
     data = request.get_json(silent=True) or {}
     denied = require_admin(data)
     if denied:
@@ -12462,7 +12450,6 @@ def api_admin_pytheia_control():
     current = state.get("admin_control") or _default_pytheia_admin_control()
 
     codex_mode = str(data.get("codex_mode") or current.get("codex_mode") or "monitor").strip() or "monitor"
-<<<<<<< HEAD
     if codex_mode not in {"monitor", "assist", "active"}:
         codex_mode = "monitor"
     governance_approved = _coerce_bool_payload(data.get("governance_approved", current.get("governance_approved")))
@@ -12474,30 +12461,6 @@ def api_admin_pytheia_control():
 
     page_paths = data.get("page_paths", current.get("page_paths") or [])
     clean_paths = _normalize_string_list(page_paths, normalize_paths=True)
-=======
-    governance_approved = bool(data.get("governance_approved", current.get("governance_approved")))
-    repo_write_enabled = bool(data.get("repo_write_enabled", current.get("repo_write_enabled")))
-    directive = str(data.get("directive") or current.get("directive") or "").strip()
-
-    attachment_refs = data.get("attachment_refs", current.get("attachment_refs") or [])
-    if isinstance(attachment_refs, str):
-        attachment_refs = [x.strip() for x in attachment_refs.split(",") if x.strip()]
-    if not isinstance(attachment_refs, list):
-        attachment_refs = []
-    attachment_refs = [str(x).strip() for x in attachment_refs if str(x).strip()][:20]
-
-    page_paths = data.get("page_paths", current.get("page_paths") or [])
-    if isinstance(page_paths, str):
-        page_paths = [x.strip() for x in page_paths.split(",") if x.strip()]
-    if not isinstance(page_paths, list):
-        page_paths = []
-    clean_paths = []
-    for entry in page_paths:
-        val = "/" + str(entry).strip().lstrip("/")
-        if val == "/" or val in clean_paths:
-            continue
-        clean_paths.append(val)
->>>>>>> origin/main
 
     if repo_write_enabled and not governance_approved:
         return jsonify({"ok": False, "error": "governance_approval_required_for_repo_write"}), 403
@@ -12534,12 +12497,8 @@ def api_admin_pytheia_control():
     }), 200
 
 
-<<<<<<< HEAD
 # ─── END PYTHEIA CONTROL PLANE (ADMIN) ─────────────────────────────────────
 
-
-=======
->>>>>>> origin/main
 @app.route("/api/admin/ai/chat", methods=["POST"])
 def api_admin_ai_chat():
     if NODE_ROLE != "ai_core":

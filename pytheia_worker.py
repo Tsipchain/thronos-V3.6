@@ -492,6 +492,7 @@ class PYTHEIAWorker:
                 "governance_approved": bool((self.admin_control or {}).get("governance_approved", False)),
                 "last_instruction": (self.admin_control or {}).get("last_instruction"),
                 "attachment_refs": (self.admin_control or {}).get("attachment_refs", []),
+                "page_paths": (self.admin_control or {}).get("page_paths", []),
                 "instruction_history": self.admin_instruction_history[-5:],
             },
             "ai_models_snapshot": {

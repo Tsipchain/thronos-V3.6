@@ -215,11 +215,14 @@
       page_paths: linesToArray($('pyPaths').value),
     };
     try {
-      await api('/api/admin/pytheia/control', {
+      const data = await api('/api/admin/pytheia/control', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(payload),
       });
+      if (Array.isArray(data.instruction_history)) {
+        $('pyHistory').textContent = JSON.stringify(data.instruction_history, null, 2);
+      }
       await loadPytheiaState();
     } catch (e) {
       $('pytheiaErr').textContent = e.message;

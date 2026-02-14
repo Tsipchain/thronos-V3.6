@@ -11379,7 +11379,11 @@ def api_admin_pytheia_control():
     state["admin_control"] = control
     _save_pytheia_state(state)
 
-    return jsonify({"ok": True, "pytheia_state": _compact_pytheia_control(control)}), 200
+    return jsonify({
+        "ok": True,
+        "pytheia_state": _compact_pytheia_control(control),
+        "instruction_history": _compact_instruction_history(state.get("admin_instruction_history"), limit=10),
+    }), 200
 
 
 @app.route("/api/admin/ai/chat", methods=["POST"])

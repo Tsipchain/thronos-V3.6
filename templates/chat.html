@@ -2211,9 +2211,12 @@
         if (!res.ok || (data && (data.ok === false || data.error))) {
           if (data && data.error === "provider_blocked_by_mode") {
             const blockedProvider = String(data.provider || "Unknown");
+            const allowed = Array.isArray(data.allowed_providers) && data.allowed_providers.length
+              ? ` Επιτρεπόμενοι τώρα: ${data.allowed_providers.join(", ")}.`
+              : "";
             appendMessage({
               role: "assistant",
-              content: `Ο provider ${blockedProvider} είναι κλειδωμένος από τις ρυθμίσεις THRONOS. Άνοιξέ τον από το Admin ή δοκίμασε άλλο μοντέλο.`,
+              content: `Ο provider ${blockedProvider} είναι κλειδωμένος από τις ρυθμίσεις THRONOS. Άνοιξέ τον από το Admin ή δοκίμασε άλλο μοντέλο.${allowed}`,
               model: "system",
             });
             setSessionStatus("Provider blocked");

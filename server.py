@@ -585,12 +585,14 @@ HEARTBEAT_ENABLED = _strip_env_quotes(os.getenv("HEARTBEAT_ENABLED", "1")).lower
 HEARTBEAT_LOG_ERRORS = _strip_env_quotes(os.getenv("HEARTBEAT_LOG_ERRORS", "0")).lower() in ("1", "true", "yes")
 MUSIC_MODAL_ENABLED = _strip_env_quotes(os.getenv("MUSIC_MODAL_ENABLED", "1")).lower() in ("1", "true", "yes")
 
+_bootstrap_logger = logging.getLogger("thronos")
+
 if NODE_ROLE == "replica" and not READ_ONLY:
-    logger.warning("[CONFIG] Forcing READ_ONLY=1 on replica node")
+    _bootstrap_logger.warning("[CONFIG] Forcing READ_ONLY=1 on replica node")
     READ_ONLY = True
 
 if NODE_ROLE not in ("master", "ai_core") and SCHEDULER_ENABLED:
-    logger.warning("[CONFIG] Disabling SCHEDULER_ENABLED on non-master/non-ai-core node")
+    _bootstrap_logger.warning("[CONFIG] Disabling SCHEDULER_ENABLED on non-master/non-ai-core node")
     SCHEDULER_ENABLED = False
 
 # Improved fallback logic for MASTER_INTERNAL_URL
@@ -12196,6 +12198,10 @@ def _ensure_admin_session(session_id: str | None = None, title: str | None = Non
     return session
 
 
+<<<<<<< HEAD
+# ─── PYTHEIA CONTROL PLANE (ADMIN) ─────────────────────────────────────────
+=======
+>>>>>>> origin/main
 def _pytheia_state_file() -> str:
     return os.getenv("PYTHEIA_STATE_FILE", os.path.join(DATA_DIR, "pytheia_state.json"))
 
@@ -12212,6 +12218,40 @@ def _default_pytheia_admin_control() -> dict:
     }
 
 
+<<<<<<< HEAD
+def _coerce_bool_payload(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _normalize_string_list(values, *, limit: int = 20, normalize_paths: bool = False) -> list[str]:
+    if isinstance(values, str):
+        values = [x.strip() for x in values.split(",") if x.strip()]
+    if not isinstance(values, list):
+        return []
+
+    out: list[str] = []
+    for entry in values:
+        val = str(entry).strip()
+        if not val:
+            continue
+        if normalize_paths:
+            val = "/" + val.lstrip("/")
+            if val == "/":
+                continue
+        if val in out:
+            continue
+        out.append(val)
+        if len(out) >= limit:
+            break
+    return out
+
+
+=======
+>>>>>>> origin/main
 def _load_pytheia_control_state() -> dict:
     state = load_json(_pytheia_state_file(), {})
     if not isinstance(state, dict):
@@ -12222,11 +12262,20 @@ def _load_pytheia_control_state() -> dict:
             if state["admin_control"].get(key) is not None:
                 control[key] = str(state["admin_control"].get(key) or "").strip()
         for key in ("governance_approved", "repo_write_enabled"):
+<<<<<<< HEAD
+            control[key] = _coerce_bool_payload(state["admin_control"].get(key))
+        if control["codex_mode"] not in {"monitor", "assist", "active"}:
+            control["codex_mode"] = "monitor"
+        for key in ("attachment_refs", "page_paths"):
+            vals = state["admin_control"].get(key)
+            control[key] = _normalize_string_list(vals, normalize_paths=(key == "page_paths"))
+=======
             control[key] = bool(state["admin_control"].get(key))
         for key in ("attachment_refs", "page_paths"):
             vals = state["admin_control"].get(key)
             if isinstance(vals, list):
                 control[key] = [str(v).strip() for v in vals if str(v).strip()]
+>>>>>>> origin/main
     if control["repo_write_enabled"] and not control["governance_approved"]:
         control["repo_write_enabled"] = False
 
@@ -12379,6 +12428,11 @@ def api_admin_agents():
 
 @app.route("/api/admin/pytheia/state", methods=["GET"])
 def api_admin_pytheia_state():
+<<<<<<< HEAD
+    if NODE_ROLE != "ai_core":
+        return jsonify({"error": "admin_only_on_ai_core"}), 404
+=======
+>>>>>>> origin/main
     denied = require_admin()
     if denied:
         return denied
@@ -12394,6 +12448,11 @@ def api_admin_pytheia_state():
 
 @app.route("/api/admin/pytheia/control", methods=["POST"])
 def api_admin_pytheia_control():
+<<<<<<< HEAD
+    if NODE_ROLE != "ai_core":
+        return jsonify({"error": "admin_only_on_ai_core"}), 404
+=======
+>>>>>>> origin/main
     data = request.get_json(silent=True) or {}
     denied = require_admin(data)
     if denied:
@@ -12403,6 +12462,19 @@ def api_admin_pytheia_control():
     current = state.get("admin_control") or _default_pytheia_admin_control()
 
     codex_mode = str(data.get("codex_mode") or current.get("codex_mode") or "monitor").strip() or "monitor"
+<<<<<<< HEAD
+    if codex_mode not in {"monitor", "assist", "active"}:
+        codex_mode = "monitor"
+    governance_approved = _coerce_bool_payload(data.get("governance_approved", current.get("governance_approved")))
+    repo_write_enabled = _coerce_bool_payload(data.get("repo_write_enabled", current.get("repo_write_enabled")))
+    directive = str(data.get("directive") or current.get("directive") or "").strip()
+
+    attachment_refs = data.get("attachment_refs", current.get("attachment_refs") or [])
+    attachment_refs = _normalize_string_list(attachment_refs)
+
+    page_paths = data.get("page_paths", current.get("page_paths") or [])
+    clean_paths = _normalize_string_list(page_paths, normalize_paths=True)
+=======
     governance_approved = bool(data.get("governance_approved", current.get("governance_approved")))
     repo_write_enabled = bool(data.get("repo_write_enabled", current.get("repo_write_enabled")))
     directive = str(data.get("directive") or current.get("directive") or "").strip()
@@ -12425,6 +12497,7 @@ def api_admin_pytheia_control():
         if val == "/" or val in clean_paths:
             continue
         clean_paths.append(val)
+>>>>>>> origin/main
 
     if repo_write_enabled and not governance_approved:
         return jsonify({"ok": False, "error": "governance_approval_required_for_repo_write"}), 403
@@ -12461,6 +12534,12 @@ def api_admin_pytheia_control():
     }), 200
 
 
+<<<<<<< HEAD
+# ─── END PYTHEIA CONTROL PLANE (ADMIN) ─────────────────────────────────────
+
+
+=======
+>>>>>>> origin/main
 @app.route("/api/admin/ai/chat", methods=["POST"])
 def api_admin_ai_chat():
     if NODE_ROLE != "ai_core":

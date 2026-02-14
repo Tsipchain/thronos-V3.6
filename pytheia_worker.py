@@ -43,14 +43,38 @@ def _default_admin_control() -> Dict[str, Any]:
         "updated_at": None,
     }
 
+<<<<<<< HEAD
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes", "on"}
+
+
+def _state_parent_dir(path: str) -> str:
+    return os.path.dirname(path) or "."
+
+
+def _build_log_handlers() -> List[logging.Handler]:
+    handlers: List[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    try:
+        os.makedirs("logs", exist_ok=True)
+        handlers.append(logging.FileHandler("logs/pytheia_worker.log", mode="a"))
+    except Exception:
+        # Keep worker import-safe even on restricted/readonly filesystems.
+        pass
+    return handlers
+
+=======
+>>>>>>> origin/main
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - PYTHEIA - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('logs/pytheia_worker.log', mode='a')
-    ]
+    handlers=_build_log_handlers(),
 )
 logger = logging.getLogger(__name__)
 
@@ -139,7 +163,13 @@ class PYTHEIAWorker:
             if control.get(key) is not None:
                 base[key] = str(control.get(key)).strip()
         for key in ("governance_approved", "repo_write_enabled"):
+<<<<<<< HEAD
+            base[key] = _coerce_bool(control.get(key))
+        if base["codex_mode"] not in {"monitor", "assist", "active"}:
+            base["codex_mode"] = "monitor"
+=======
             base[key] = bool(control.get(key))
+>>>>>>> origin/main
         for key in ("attachment_refs", "page_paths"):
             vals = control.get(key)
             if isinstance(vals, list):
@@ -148,6 +178,12 @@ class PYTHEIAWorker:
             base["repo_write_enabled"] = False
         return base
 
+<<<<<<< HEAD
+    # NOTE: Keep admin-control normalization and endpoint expansion together
+    # to reduce merge conflicts with server-side PYTHEIA control evolution.
+
+=======
+>>>>>>> origin/main
     def refresh_admin_control(self) -> None:
         latest = self.load_state()
         self.admin_control = self._normalize_admin_control(latest.get("admin_control"))
@@ -177,8 +213,24 @@ class PYTHEIAWorker:
     def save_state(self):
         """Save persistent state to file."""
         try:
-            os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+            os.makedirs(_state_parent_dir(STATE_FILE), exist_ok=True)
+            current = self.load_state()
+            if not isinstance(current, dict):
+                current = {}
+            current.update({
+                "last_post_time": self.last_post_time,
+                "last_status": self.last_status,
+                "consecutive_failures": self.consecutive_failures,
+                "last_model_snapshot": self.last_model_snapshot,
+                "last_provider_scan_ts": self.last_provider_scan_ts,
+                "admin_control": self.admin_control,
+                "admin_instruction_history": self.admin_instruction_history,
+                "last_update": datetime.utcnow().isoformat()
+            })
             with open(STATE_FILE, 'w') as f:
+<<<<<<< HEAD
+                json.dump(current, f, indent=2)
+=======
                 json.dump({
                     "last_post_time": self.last_post_time,
                     "last_status": self.last_status,
@@ -189,6 +241,7 @@ class PYTHEIAWorker:
                     "admin_instruction_history": self.admin_instruction_history,
                     "last_update": datetime.utcnow().isoformat()
                 }, f, indent=2)
+>>>>>>> origin/main
         except Exception as e:
             logger.error(f"Failed to save state: {e}")
 

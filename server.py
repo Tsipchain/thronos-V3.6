@@ -12198,6 +12198,7 @@ def _ensure_admin_session(session_id: str | None = None, title: str | None = Non
     return session
 
 
+# ─── PYTHEIA CONTROL PLANE (ADMIN) ─────────────────────────────────────────
 def _pytheia_state_file() -> str:
     return os.getenv("PYTHEIA_STATE_FILE", os.path.join(DATA_DIR, "pytheia_state.json"))
 
@@ -12486,6 +12487,9 @@ def api_admin_pytheia_control():
         "admin_control": state.get("admin_control"),
         "instruction_history": state.get("admin_instruction_history") or [],
     }), 200
+
+
+# ─── END PYTHEIA CONTROL PLANE (ADMIN) ─────────────────────────────────────
 
 
 @app.route("/api/admin/ai/chat", methods=["POST"])

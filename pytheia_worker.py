@@ -171,6 +171,9 @@ class PYTHEIAWorker:
             base["repo_write_enabled"] = False
         return base
 
+    # NOTE: Keep admin-control normalization and endpoint expansion together
+    # to reduce merge conflicts with server-side PYTHEIA control evolution.
+
     def refresh_admin_control(self) -> None:
         latest = self.load_state()
         self.admin_control = self._normalize_admin_control(latest.get("admin_control"))

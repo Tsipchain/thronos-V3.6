@@ -53,16 +53,25 @@ def _coerce_bool(value: Any) -> bool:
     return text in {"1", "true", "yes", "on"}
 
 
-os.makedirs("logs", exist_ok=True)
+def _state_parent_dir(path: str) -> str:
+    return os.path.dirname(path) or "."
+
+
+def _build_log_handlers() -> List[logging.Handler]:
+    handlers: List[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    try:
+        os.makedirs("logs", exist_ok=True)
+        handlers.append(logging.FileHandler("logs/pytheia_worker.log", mode="a"))
+    except Exception:
+        # Keep worker import-safe even on restricted/readonly filesystems.
+        pass
+    return handlers
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - PYTHEIA - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('logs/pytheia_worker.log', mode='a')
-    ]
+    handlers=_build_log_handlers(),
 )
 logger = logging.getLogger(__name__)
 
@@ -191,7 +200,7 @@ class PYTHEIAWorker:
     def save_state(self):
         """Save persistent state to file."""
         try:
-            os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+            os.makedirs(_state_parent_dir(STATE_FILE), exist_ok=True)
             current = self.load_state()
             if not isinstance(current, dict):
                 current = {}

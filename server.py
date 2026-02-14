@@ -12222,6 +12222,29 @@ def _coerce_bool_payload(value) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _normalize_string_list(values, *, limit: int = 20, normalize_paths: bool = False) -> list[str]:
+    if isinstance(values, str):
+        values = [x.strip() for x in values.split(",") if x.strip()]
+    if not isinstance(values, list):
+        return []
+
+    out: list[str] = []
+    for entry in values:
+        val = str(entry).strip()
+        if not val:
+            continue
+        if normalize_paths:
+            val = "/" + val.lstrip("/")
+            if val == "/":
+                continue
+        if val in out:
+            continue
+        out.append(val)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _load_pytheia_control_state() -> dict:
     state = load_json(_pytheia_state_file(), {})
     if not isinstance(state, dict):
@@ -12237,8 +12260,7 @@ def _load_pytheia_control_state() -> dict:
             control["codex_mode"] = "monitor"
         for key in ("attachment_refs", "page_paths"):
             vals = state["admin_control"].get(key)
-            if isinstance(vals, list):
-                control[key] = [str(v).strip() for v in vals if str(v).strip()]
+            control[key] = _normalize_string_list(vals, normalize_paths=(key == "page_paths"))
     if control["repo_write_enabled"] and not control["governance_approved"]:
         control["repo_write_enabled"] = False
 
@@ -12426,23 +12448,10 @@ def api_admin_pytheia_control():
     directive = str(data.get("directive") or current.get("directive") or "").strip()
 
     attachment_refs = data.get("attachment_refs", current.get("attachment_refs") or [])
-    if isinstance(attachment_refs, str):
-        attachment_refs = [x.strip() for x in attachment_refs.split(",") if x.strip()]
-    if not isinstance(attachment_refs, list):
-        attachment_refs = []
-    attachment_refs = [str(x).strip() for x in attachment_refs if str(x).strip()][:20]
+    attachment_refs = _normalize_string_list(attachment_refs)
 
     page_paths = data.get("page_paths", current.get("page_paths") or [])
-    if isinstance(page_paths, str):
-        page_paths = [x.strip() for x in page_paths.split(",") if x.strip()]
-    if not isinstance(page_paths, list):
-        page_paths = []
-    clean_paths = []
-    for entry in page_paths:
-        val = "/" + str(entry).strip().lstrip("/")
-        if val == "/" or val in clean_paths:
-            continue
-        clean_paths.append(val)
+    clean_paths = _normalize_string_list(page_paths, normalize_paths=True)
 
     if repo_write_enabled and not governance_approved:
         return jsonify({"ok": False, "error": "governance_approval_required_for_repo_write"}), 403

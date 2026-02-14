@@ -541,7 +541,7 @@ def _strip_env_quotes(value: str) -> str:
 # AI provider/model caches
 MODEL_CATALOG: dict = {}
 MODEL_CATALOG_LAST_REFRESH = 0.0
-MODEL_REFRESH_INTERVAL_SECONDS = float(_strip_env_quotes(os.getenv("MODEL_REFRESH_INTERVAL_SECONDS", str(6 * 3600))))
+MODEL_REFRESH_INTERVAL_SECONDS = float(_strip_env_quotes(os.getenv("MODEL_REFRESH_INTERVAL_SECONDS", str(30 * 24 * 3600))))
 PROVIDER_HEALTH_CACHE: dict = {}
 PROVIDER_HEALTH_TTL = 300  # seconds
 
@@ -4970,6 +4970,7 @@ def _chat_credit_cost_for_model(model_id: str | None, prompt_text: str | None = 
     mid = (model_id or "gpt-4.1-mini").strip().lower()
     cheap = {
         "gpt-4.1-mini",
+        "claude-3-5-haiku-latest",
         "claude-3.5-haiku",
         "claude-3-haiku",
         "gemini-2.0-flash",
@@ -4978,6 +4979,7 @@ def _chat_credit_cost_for_model(model_id: str | None, prompt_text: str | None = 
     medium = {
         "gpt-4.1",
         "claude-3.7-sonnet",
+        "claude-3-5-sonnet-latest",
         "gemini-2.5-pro",
     }
     if mid in cheap:
@@ -5246,14 +5248,21 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
 
     requested_raw = (model_id or "").strip()
     requested = requested_raw or default_model_id or "auto"
+    requested_aliases = {
+        "claude-3.5-sonnet": "claude-3-5-sonnet-latest",
+        "claude-3.5-haiku": "claude-3-5-haiku-latest",
+        "claude-3-5-sonnet": "claude-3-5-sonnet-latest",
+        "claude-3-5-haiku": "claude-3-5-haiku-latest",
+    }
+    requested = requested_aliases.get(requested, requested)
     catalog_by_id = {m.get("id"): m for m in catalog if isinstance(m, dict) and m.get("id")}
 
     if requested == "auto" and callable_ids:
         heuristic_order = [
             "gpt-4.1-mini",
             "o3-mini",
+            "claude-3-5-sonnet-latest",
             "claude-3.5-sonnet",
-            "claude-3-5-sonnet",
             "gemini-2.0-flash",
             "gemini-2.5-pro",
             "offline_corpus",
@@ -10918,7 +10927,7 @@ def _build_ai_models_catalog(provider_status: dict, offline_status: dict, thrai_
 
     catalog_map = {
         "openai": ["gpt-4.1", "gpt-4.1-mini", "o3-mini"],
-        "anthropic": ["claude-3.5-sonnet", "claude-3.5-haiku"],
+        "anthropic": ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
         "gemini": ["gemini-2.5-pro", "gemini-2.0-flash"],
     }
     for provider, mids in catalog_map.items():

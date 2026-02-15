@@ -367,6 +367,37 @@
         <tbody id="musicBody"><tr><td colspan="4" style="text-align:center;color:#9fdfb4">Loading tracks…</td></tr></tbody>
       </table>
     </div>
+    <div class="grid" style="margin-top:12px">
+      <div class="card">
+        <h4>Music Tips (THR)</h4>
+        <div class="big" id="musicTipsThr">0</div>
+        <div class="small muted">tips contributed</div>
+      </div>
+      <div class="card">
+        <h4>AI Credits from Music</h4>
+        <div class="big" id="musicAiPool">0 THR</div>
+        <div class="small muted">AI pool balance</div>
+      </div>
+      <div class="card">
+        <h4>Network Pool from Music</h4>
+        <div class="big" id="musicNetworkPool">0 THR</div>
+        <div class="small muted">node rewards pool</div>
+      </div>
+      <div class="card">
+        <h4>T2E from Telemetry</h4>
+        <div class="big" id="musicT2eDistributed">0 THR</div>
+        <div class="small muted">distributed from telemetry</div>
+      </div>
+    </div>
+    <div class="panel" style="margin-top:12px">
+      <h4 style="margin:0 0 10px 0;color:var(--muted)">Recent Music Transactions / Telemetry Rewards</h4>
+      <table id="musicTxTable">
+        <thead>
+          <tr><th>Type</th><th>Track</th><th>From</th><th>To</th><th>Amount</th><th>When</th></tr>
+        </thead>
+        <tbody id="musicTxBody"><tr><td colspan="6" style="text-align:center;color:#9fdfb4">Loading music transactions…</td></tr></tbody>
+      </table>
+    </div>
   </section>
 
   <!-- VerifyID / T2E (Train-to-Earn) -->
@@ -1194,11 +1225,17 @@ async function loadMusic(){
       statusJ = await statusR.json();
     }
 
-    const tracksR = await fetch('/api/music/tracks?limit=12');
+    const [tracksR, telemR, transfersR] = await Promise.all([
+      fetch('/api/music/tracks?limit=12'),
+      fetch('/api/music/telemetry/stats'),
+      fetch('/api/transfers?limit=180')
+    ]);
     const body = el('#musicBody');
+    const txBody = el('#musicTxBody');
     body.innerHTML = '';
     if(!tracksR.ok){
       body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#ff5577">Unable to load tracks</td></tr>';
+      if (txBody) txBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#ff5577">Unable to load music transactions</td></tr>';
       return;
     }
     const tracksJ = await tracksR.json();
@@ -1215,6 +1252,37 @@ async function loadMusic(){
     el('#musicStatus').style.color = connected ? '#16ff57' : '#ffd166';
     const note = statusJ?.status_note || (connected ? 'tracks loaded' : 'partial data');
     el('#musicStatusNote').textContent = note;
+
+    const telemJ = telemR.ok ? await telemR.json() : {};
+    const pools = telemJ.pools || {};
+    el('#musicTipsThr').textContent = ((pools.ai_pool?.total_music_contributions || 0)).toLocaleString();
+    el('#musicAiPool').textContent = `${((pools.ai_pool?.balance || 0)).toLocaleString()} THR`;
+    el('#musicNetworkPool').textContent = `${((pools.network_pool?.balance || 0)).toLocaleString()} THR`;
+    el('#musicT2eDistributed').textContent = `${((telemJ.t2e?.total_distributed || 0)).toLocaleString()} THR`;
+
+    if (txBody) {
+      txBody.innerHTML = '';
+      const txJ = transfersR.ok ? await transfersR.json() : {};
+      const txRowsRaw = Array.isArray(txJ.transfers) ? txJ.transfers : [];
+      const musicTx = txRowsRaw.filter(tx => {
+        const t = String(tx.type || tx.kind || '').toLowerCase();
+        const c = String(tx.category || '').toLowerCase();
+        return t.includes('music') || c.includes('music') || t.includes('telemetry') || c.includes('iot');
+      }).slice(0, 18);
+      if (!musicTx.length) {
+        txBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#9fdfb4">No music/telemetry transactions yet</td></tr>';
+      } else {
+        musicTx.forEach(tx => {
+          const tr = document.createElement('tr');
+          const from = tx.from ? `${tx.from.slice(0,8)}...${tx.from.slice(-6)}` : '—';
+          const to = tx.to ? `${tx.to.slice(0,8)}...${tx.to.slice(-6)}` : '—';
+          const amount = Number(tx.amount || tx.display_amount || 0) || 0;
+          const asset = tx.symbol || tx.asset_symbol || tx.token_symbol || 'THR';
+          tr.innerHTML = `<td>${tx.type || tx.kind || 'music'}</td><td>${tx.track_title || tx.track_id || '—'}</td><td class="mono">${from}</td><td class="mono">${to}</td><td>${amount.toFixed(6)} ${asset}</td><td>${tx.timestamp || '—'}</td>`;
+          txBody.appendChild(tr);
+        });
+      }
+    }
     if(tracks.length === 0){
       body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#9fdfb4">No tracks published yet</td></tr>';
       return;
@@ -1235,6 +1303,12 @@ async function loadMusic(){
     el('#musicStatusNote').textContent = 'music endpoints unavailable';
     const body = el('#musicBody');
     body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#ff5577">Music service unavailable</td></tr>';
+    const txBody = el('#musicTxBody');
+    if (txBody) txBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#ff5577">Music transaction feed unavailable</td></tr>';
+    el('#musicTipsThr').textContent = '0';
+    el('#musicAiPool').textContent = '0 THR';
+    el('#musicNetworkPool').textContent = '0 THR';
+    el('#musicT2eDistributed').textContent = '0 THR';
   }
 }
 

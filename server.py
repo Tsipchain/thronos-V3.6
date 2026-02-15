@@ -8457,6 +8457,7 @@ def api_architect_generate():
     blueprint   = (data.get("blueprint") or "").strip()
     project_spec = (data.get("spec") or data.get("specs") or "").strip() # Handle both keys just in case
     model_key   = (data.get("model_id") or data.get("model") or data.get("model_key") or "gpt-4o").strip()
+    requested_model_key = (model_key or "").strip().lower()
     credits_value = 0
     billing_precharged = bool(data.get("billing_precharged"))
     precharged_request_id = (data.get("request_id") or "").strip()
@@ -8489,6 +8490,10 @@ def api_architect_generate():
                 ),
                 409,
             )
+    else:
+        session_id = f"arch_{secrets.token_hex(8)}"
+
+    ensure_session_exists(session_id, wallet, "architect")
 
     selected_model, fallback_notice, error_resp = _select_callable_model(model_key, session_type="architect")
     if error_resp:
@@ -8719,6 +8724,18 @@ def api_architect_generate():
             zip_url = url_for("api_ai_generated_file", filename=zip_name, _external=False)
         except Exception as e:
             app.logger.error("Architect zip build failed: %s", e)
+
+    if session_id:
+        try:
+            append_session_transcript(
+                session_id=session_id,
+                prompt=project_spec,
+                response=cleaned,
+                files=resp_files,
+                timestamp=datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            )
+        except Exception as exc:
+            app.logger.warning("architect_session_transcript_failed: %s", exc)
 
     call_meta["response_status"] = status
     _log_ai_call(call_meta)

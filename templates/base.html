@@ -3824,7 +3824,10 @@ function renderHistory() {
     }
 
     if (currentHistoryFilter === 'tokens' && currentTokenFilter) {
-        filtered = filtered.filter(tx => (tx.symbol || '').toUpperCase() === currentTokenFilter.toUpperCase());
+        filtered = filtered.filter(tx => {
+            const sym = (tx.symbol || tx.asset_symbol || tx.asset || '').toUpperCase();
+            return sym === currentTokenFilter.toUpperCase();
+        });
     }
 
     // Hide experimental/invalid tokens from display
@@ -3865,7 +3868,7 @@ function renderHistory() {
             const txType = getTxType(tx);
             if (currentHistoryFilter === 'all') return true;
             if (currentHistoryFilter === 'tokens' && currentTokenFilter) {
-                return txType === 'tokens' && ((tx.symbol || tx.asset_symbol || '').toUpperCase() === currentTokenFilter.toUpperCase());
+                return txType === 'tokens' && ((tx.symbol || tx.asset_symbol || tx.asset || '').toUpperCase() === currentTokenFilter.toUpperCase());
             }
             return txType === currentHistoryFilter;
         });
@@ -4091,8 +4094,7 @@ async function loadWalletHistory(thrAddress) {
         return [];
     }
 
-    // Use direct URL to avoid any base URL issues
-    const url = `/api/wallet/history?address=${encodeURIComponent(cleanAddress)}&limit=200`;
+    const url = buildWalletMusicApiUrl(`/api/wallet/history?address=${encodeURIComponent(cleanAddress)}&limit=200`);
     console.log('[WalletHistory] Fetching:', url);
 
     try {
@@ -4107,11 +4109,16 @@ async function loadWalletHistory(thrAddress) {
         const data = await res.json();
         console.log('[WalletHistory] Response ok:', data?.ok, 'txCount:', data?.transactions?.length || 0);
 
-        // Extract transactions array from response
+        // Extract transactions array from response (supports multiple backend shapes)
         const txs = Array.isArray(data)
             ? data
-            : (data?.transactions || data?.history || data?.txs || data?.items || []);
-        return txs;
+            : (Array.isArray(data?.transactions) ? data.transactions
+                : (Array.isArray(data?.history) ? data.history
+                    : (Array.isArray(data?.txs) ? data.txs
+                        : (Array.isArray(data?.items) ? data.items : []))));
+        const normalized = Array.isArray(txs) ? txs : [];
+        console.log('[WalletHistory] Parsed tx rows:', normalized.length, 'address:', cleanAddress);
+        return normalized;
     } catch (err) {
         console.error('[WalletHistory] Fetch error:', err);
         return [];
@@ -4134,7 +4141,7 @@ async function loadNetworkHistory(limit = 200) {
 
 async function loadAICreditsLedger(thrAddress) {
     if (!thrAddress || typeof thrAddress !== 'string') return [];
-    const url = `/api/ai_credits/ledger?wallet=${encodeURIComponent(thrAddress.trim())}&limit=200`;
+    const url = buildWalletMusicApiUrl(`/api/ai_credits/ledger?wallet=${encodeURIComponent(thrAddress.trim())}&limit=200`);
     try {
         const res = await fetch(url);
         if (!res.ok) return [];
@@ -4488,7 +4495,7 @@ async function refreshHistoryFromApi() {
     try {
         const _ctrl = new AbortController();
         const _t = setTimeout(() => _ctrl.abort(), 15000);
-        const response = await fetch(`/api/wallet/history?address=${encodeURIComponent(addr)}&limit=200`, { signal: _ctrl.signal });
+        const response = await fetch(buildWalletMusicApiUrl(`/api/wallet/history?address=${encodeURIComponent(addr)}&limit=200`), { signal: _ctrl.signal });
         clearTimeout(_t);
 
         if (!response.ok) {
@@ -4496,8 +4503,11 @@ async function refreshHistoryFromApi() {
         }
 
         const data = await response.json();
-        const txs = Array.isArray(data.transactions) ? data.transactions : (data.history || []);
+        const txs = Array.isArray(data?.transactions)
+            ? data.transactions
+            : (Array.isArray(data?.history) ? data.history : []);
         if (Array.isArray(txs)) {
+            WALLET_HISTORY_CACHE = txs;
             allTransactions = txs;
             renderHistory();
 

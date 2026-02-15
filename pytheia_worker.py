@@ -29,7 +29,7 @@ import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from pathlib import Path
-from llm_registry import discover_openai_models, discover_anthropic_models, discover_gemini_models
+from llm_registry import discover_openai_models, discover_anthropic_models, discover_gemini_models, refresh_registry_from_provider_discovery
 
 
 def _default_admin_control() -> Dict[str, Any]:
@@ -300,6 +300,11 @@ class PYTHEIAWorker:
         anthropic_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
         gemini_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
 
+        registry_refresh = refresh_registry_from_provider_discovery(
+            openai_key=openai_key,
+            anthropic_key=anthropic_key,
+            gemini_key=gemini_key,
+        )
         providers = {
             "openai": {"models": discover_openai_models(openai_key)},
             "anthropic": {"models": discover_anthropic_models(anthropic_key)},
@@ -313,6 +318,7 @@ class PYTHEIAWorker:
         snapshot = {
             "last_scan_ts": datetime.utcnow().isoformat(timespec="seconds") + "Z",
             "providers": providers,
+            "registry_refresh": registry_refresh,
         }
 
         try:

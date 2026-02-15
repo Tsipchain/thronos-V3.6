@@ -5,6 +5,7 @@ import importlib.util
 import logging
 from dataclasses import dataclass
 import json
+import time
 from urllib import request as urllib_request
 from urllib.parse import urlsplit
 from typing import Dict, List, Optional
@@ -283,6 +284,60 @@ def discover_gemini_models(api_key: str) -> list[dict]:
     except Exception:
         return _fallback_provider_models("gemini")
 
+
+
+
+def refresh_registry_from_provider_discovery(openai_key: str = "", anthropic_key: str = "", gemini_key: str = "") -> dict:
+    """Refresh in-memory AI_MODEL_REGISTRY from live provider discovery results.
+
+    Only updates remote providers (openai/anthropic/gemini) and keeps local/thronos
+    entries untouched. Returns metadata for telemetry/logging.
+    """
+    now = int(time.time())
+    snapshot = {
+        "ok": True,
+        "updated_at": now,
+        "providers": {},
+    }
+
+    provider_payloads = {
+        "openai": discover_openai_models((openai_key or "").strip()),
+        "anthropic": discover_anthropic_models((anthropic_key or "").strip()),
+        "gemini": discover_gemini_models((gemini_key or "").strip()),
+    }
+
+    for provider_name, models in provider_payloads.items():
+        discovered = [m for m in models if isinstance(m, dict) and (m.get("id") or "").strip()]
+        new_models: list[ModelInfo] = []
+
+        for idx, model in enumerate(discovered):
+            mid = str(model.get("id") or "").strip()
+            if not mid:
+                continue
+            display = str(model.get("display_name") or model.get("label") or mid).strip() or mid
+            tier = "preview" if bool(model.get("preview")) else ("fast" if bool(model.get("voice_friendly")) else "standard")
+            enabled = bool(model.get("enabled", True))
+            new_models.append(
+                ModelInfo(
+                    id=mid,
+                    display_name=display,
+                    provider=provider_name,
+                    tier=tier,
+                    default=(idx == 0),
+                    enabled=enabled,
+                )
+            )
+
+        if new_models:
+            AI_MODEL_REGISTRY[provider_name] = new_models
+
+        snapshot["providers"][provider_name] = {
+            "models_count": len(new_models),
+            "enabled_count": sum(1 for m in new_models if m.enabled),
+            "updated": bool(new_models),
+        }
+
+    return snapshot
 
 def find_model(model_id: str) -> Optional[ModelInfo]:
     lookup = str(model_id or "").strip()

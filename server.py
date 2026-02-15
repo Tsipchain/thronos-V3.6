@@ -632,10 +632,10 @@ ENABLE_CHAIN = _strip_env_quotes(os.getenv("ENABLE_CHAIN", "1")) == "1"
 
 # ─── BOOTSTRAP / SERVICE DISCOVERY CONSTANTS ──────────────────────────────
 _BOOTSTRAP_PRIMARY   = os.getenv("BOOTSTRAP_PRIMARY",   "https://api.thronoschain.org")
-_BOOTSTRAP_READONLY  = os.getenv("BOOTSTRAP_READONLY",  "https://node2.thronoschain.org")
+_BOOTSTRAP_READONLY  = os.getenv("BOOTSTRAP_READONLY",  "https://ro.api.thronoschain.org")
 _BOOTSTRAP_EXPLORER  = os.getenv("BOOTSTRAP_EXPLORER",  "https://explorer.thronoschain.org")
 _BOOTSTRAP_VERIFYID  = os.getenv("BOOTSTRAP_VERIFYID",  "https://verifyid.thronoschain.org")
-_BOOTSTRAP_VERIFYID_API = os.getenv("BOOTSTRAP_VERIFYID_API", "https://api.thronoschain.org/api/verifyid")
+_BOOTSTRAP_VERIFYID_API = os.getenv("BOOTSTRAP_VERIFYID_API", "https://verifyid-api.thronoschain.org")
 _BOOTSTRAP_AI_CORE   = os.getenv("BOOTSTRAP_AI_CORE",   "https://ai.thronoschain.org")
 _BOOTSTRAP_SENTINEL  = os.getenv("BOOTSTRAP_SENTINEL",  "https://sentinel.thronoschain.org")
 _BOOTSTRAP_BTC_API   = os.getenv("BOOTSTRAP_BTC_API",   "https://btc-api.thronoschain.org")
@@ -6870,15 +6870,37 @@ def api_whoami():
 @app.route("/bootstrap.json", methods=["GET"])
 def bootstrap_json():
     """Service discovery endpoint – canonical URLs for all Thronos services."""
+    services = {
+        "api": _BOOTSTRAP_PRIMARY,
+        "ro_api": _BOOTSTRAP_READONLY,
+        "verifyid": _BOOTSTRAP_VERIFYID,
+        "verifyid_api": _BOOTSTRAP_VERIFYID_API,
+        "ai": _BOOTSTRAP_AI_CORE,
+        "explorer": _BOOTSTRAP_EXPLORER,
+        "sentinel": _BOOTSTRAP_SENTINEL,
+        "btc_api": _BOOTSTRAP_BTC_API,
+    }
+
+    health_refs = {}
+    for key, base in services.items():
+        root = str(base or "").rstrip("/")
+        if not root:
+            continue
+        # Static front-ends may not expose dynamic /health handlers.
+        health_refs[key] = f"{root}/health.json" if key in {"verifyid", "explorer"} else f"{root}/health"
+
     return jsonify({
         "primary":      _BOOTSTRAP_PRIMARY,
         "readonly":     _BOOTSTRAP_READONLY,
+        "ro_api":       _BOOTSTRAP_READONLY,
         "explorer":     _BOOTSTRAP_EXPLORER,
         "verifyid":     _BOOTSTRAP_VERIFYID,
         "verifyid_api": _BOOTSTRAP_VERIFYID_API,
         "ai_core":      _BOOTSTRAP_AI_CORE,
+        "ai":           _BOOTSTRAP_AI_CORE,
         "sentinel":     _BOOTSTRAP_SENTINEL,
         "btc_api":      _BOOTSTRAP_BTC_API,
+        "health":       health_refs,
         "node_role": NODE_ROLE,
         "version": "3.6",
     }), 200

@@ -100,6 +100,23 @@ def home(): return render_template("index.html")
 @app.route("/docs")
 def docs(): return render_template("tokenomics.html")
 
+@app.route("/health", methods=["GET", "OPTIONS"])
+def health_root():
+    if request.method == "OPTIONS":
+        resp = jsonify({"ok": True})
+        resp.status_code = 204
+    else:
+        resp = jsonify({
+            "ok": True,
+            "service": "serv3r",
+            "ts": int(time.time()),
+        })
+        resp.status_code = 200
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "GET,OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+    return resp
+
 @app.route("/pledge")
 def pledge_form(): return render_template("pledge_form.html")
 

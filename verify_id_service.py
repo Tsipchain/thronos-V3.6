@@ -1559,6 +1559,24 @@ def register_verify_id_routes(app):
 
     service = get_verify_id_service()
 
+    @app.route("/health", methods=["GET", "OPTIONS"])
+    def verifyid_health_root():
+        """Canonical root health endpoint with CORS for status-board probes."""
+        if request.method == "OPTIONS":
+            resp = jsonify({"ok": True})
+            resp.status_code = 204
+        else:
+            resp = jsonify({
+                "ok": True,
+                "service": "verifyid-api",
+                "ts": int(time.time()),
+            })
+            resp.status_code = 200
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET,OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+        return resp
+
     @app.route("/api/verify/register", methods=["POST"])
     def api_verify_register():
         """Register a new device for verification"""

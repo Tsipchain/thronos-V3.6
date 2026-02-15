@@ -1239,3 +1239,28 @@ For issues and questions:
 - GitHub Issues: https://github.com/Tsipchain/thronos-V3.6/issues
 - Documentation: Coming soon
 - Community: Discord (link coming soon)
+
+---
+
+## STATUS / Health Smoke Checks
+
+Run local syntax + conflict sanity checks:
+
+```bash
+python3 -m py_compile server.py verify_id_service.py serv3r.py scripts/smoke_subdomains_health.py
+rg -n "^(<<<<<<<|=======|>>>>>>>)" .
+```
+
+Run production smoke checks for subdomains:
+
+```bash
+python3 scripts/smoke_subdomains_health.py --timeout 20 --retries 3
+```
+
+Optional strict mode (enforces CORS `*` + stricter payload contract):
+
+```bash
+python3 scripts/smoke_subdomains_health.py --timeout 20 --retries 3 --strict
+```
+
+Targets: `api`, `ro.api`, `verifyid`, `verifyid-api`, `ai`, `explorer`, `sentinel`, `btc-api`.

@@ -12404,6 +12404,33 @@ def api_admin_models_toggle():
     return jsonify({"ok": True, "model_id": model_id, "enabled": bool(enabled)}), 200
 
 
+def _scan_repo_agent_files(limit: int = 120):
+    matches = []
+    seen = set()
+    patterns = ("agent", "worker", "watcher", "pytheia", "quorum", "architect", "llm_router")
+    for dirpath, dirnames, filenames in os.walk(BASE_DIR):
+        rel_dir = os.path.relpath(dirpath, BASE_DIR)
+        parts = rel_dir.split(os.sep)
+        if any(part.startswith('.') for part in parts if part not in {'.'}):
+            dirnames[:] = []
+            continue
+        dirnames[:] = [d for d in dirnames if d not in {".git", "node_modules", "venv", "__pycache__"}]
+        for fn in filenames:
+            if not fn.endswith((".py", ".md", ".html")):
+                continue
+            rel = os.path.relpath(os.path.join(dirpath, fn), BASE_DIR)
+            lname = rel.lower()
+            if not any(tok in lname for tok in patterns):
+                continue
+            if rel in seen:
+                continue
+            seen.add(rel)
+            matches.append(rel)
+            if len(matches) >= limit:
+                return matches
+    return matches
+
+
 @app.route("/api/admin/agents", methods=["GET"])
 def api_admin_agents():
     denied = require_admin()
@@ -12417,7 +12444,7 @@ def api_admin_agents():
         "music_worker": {"status": "unknown", "last_heartbeat": None},
         "iot_worker": {"status": "unknown", "last_heartbeat": None},
     }
-    return jsonify({"ok": True, "agents": status}), 200
+    return jsonify({"ok": True, "agents": status, "repo_agent_files": _scan_repo_agent_files()}), 200
 
 
 @app.route("/api/admin/pytheia/state", methods=["GET"])
@@ -12429,11 +12456,21 @@ def api_admin_pytheia_state():
         return denied
 
     state = _load_pytheia_control_state()
+    runtime_report = {
+        "last_status": state.get("last_status") or {},
+        "provider_refresh": {
+            "last_provider_scan_ts": state.get("last_provider_scan_ts"),
+            "next_provider_scan_ts": state.get("next_provider_scan_ts"),
+        },
+        "last_advice": state.get("last_advice") or {},
+        "apk_builder_simulation": ((state.get("last_advice") or {}).get("apk_builder_simulation") or {}),
+    }
     return jsonify({
         "ok": True,
         "admin_control": state.get("admin_control") or _default_pytheia_admin_control(),
         "instruction_history": state.get("admin_instruction_history") or [],
         "updated_at": state.get("last_update"),
+        "runtime_report": runtime_report,
     }), 200
 
 
@@ -12516,6 +12553,7 @@ def api_admin_ai_chat():
     session_id = (data.get("session_id") or "").strip() or None
     system_prompt = (data.get("system_prompt") or "").strip()
     lang = (data.get("lang") or "el").strip().lower()
+    attachments = data.get("attachments") or data.get("attachment_ids") or []
 
     # Explicit optional models: structured unavailable errors (no 500)
     catalog = _build_ai_model_catalog()
@@ -12542,6 +12580,21 @@ def api_admin_ai_chat():
     sid = session.get("id") if isinstance(session, dict) else session_id
 
     prompt = f"[LANG={lang}]\n{message}"
+    if attachments:
+        idx = load_upload_index()
+        parts = []
+        for fid in attachments if isinstance(attachments, list) else []:
+            meta = idx.get(str(fid)) if isinstance(idx, dict) else None
+            if not meta:
+                continue
+            file_path = meta.get("path", "")
+            if not file_path or not os.path.exists(file_path):
+                continue
+            text = read_text_file_for_prompt(file_path)
+            filename = meta.get("filename") or meta.get("original_name") or str(fid)
+            parts.append(f"\n\n[📎 Attachment: {filename} | ID: {fid}]\n{text}")
+        if parts:
+            prompt += "".join(parts)
     if system_prompt:
         prompt = f"System: {system_prompt}\n\nUser: {prompt}"
 
@@ -12601,7 +12654,7 @@ def api_admin_ai_chat():
         "model_id": model_id,
         "model_notice": fallback_notice,
         "assistant_message": assistant_message,
-        "meta": {"origin": "d3lfoi_admin", "billing_mode": "free"},
+        "meta": {"origin": "d3lfoi_admin", "billing_mode": "free", "attachments_count": len(attachments) if isinstance(attachments, list) else 0},
     }), 200
 
 

@@ -25,6 +25,13 @@
     .tabs button { width:auto; margin:0; }
     #admin-main { display:none; }
     .status { color:#86ffbc; font-size:12px; }
+    .chat-tools { display:flex; gap:8px; margin:8px 0; align-items:center; }
+    .chat-tools button { width:auto; margin:0; }
+    .dropzone { border:1px dashed #2b7b68; border-radius:8px; padding:10px; font-size:12px; color:#9fdcc8; }
+    .dropzone.active { border-color:#86ffbc; background:#0b2331; }
+    .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+    .chip { border:1px solid #1b4d40; border-radius:14px; padding:4px 8px; font-size:11px; }
+    .chip button { width:auto; margin:0 0 0 6px; padding:1px 5px; }
   </style>
 </head>
 <body>
@@ -46,6 +53,7 @@
         <label>Model</label>
         <select id="modelSelect"></select>
         <small id="modelHint"></small>
+        <button id="refreshModelsBtn" title="Refresh model list">↻ Refresh Models</button>
         <label style="display:block;margin-top:8px;">Language</label>
         <select id="langSelect">
           <option value="el">Ελληνικά</option>
@@ -58,6 +66,13 @@
 
       <div class="card">
         <div id="chatLog" class="chat-log"></div>
+        <div class="chat-tools">
+          <button id="attachBtn" type="button">📎 Attach files</button>
+          <input id="fileInput" type="file" multiple style="display:none;" />
+          <span id="uploadStatus" class="status"></span>
+        </div>
+        <div id="dropzone" class="dropzone">Drop files here for PYTHEIA context (or use Attach files).</div>
+        <div id="attachmentChips" class="chips"></div>
         <textarea id="msgInput" rows="3" placeholder="Type operator command..."></textarea>
         <button id="sendBtn">Send</button>
       </div>
@@ -82,6 +97,7 @@
         </div>
         <div id="panelAgents" style="display:none;">
           <h4>Agents</h4>
+          <pre id="agentScanPre">[]</pre>
           <table>
             <thead><tr><th>Name</th><th>Status</th><th>Heartbeat</th></tr></thead>
             <tbody id="agentsBody"></tbody>
@@ -110,6 +126,8 @@
           <div id="pytheiaErr" style="color:#ff8e8e;font-size:12px;"></div>
           <h5>Recent Instruction History</h5>
           <pre id="pyHistory">[]</pre>
+          <h5>Latest PYTHEIA runtime report</h5>
+          <pre id="pyRuntimeReport">-</pre>
         </div>
       </div>
     </div>
@@ -118,7 +136,7 @@
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
-  const state = { sessionId: null, adminSecret: '' };
+  const state = { sessionId: null, adminSecret: '', attachments: [] };
 
   function append(role, text) {
     const d = document.createElement('div');
@@ -180,6 +198,7 @@
     const data = await api('/api/admin/agents');
     const agents = data.agents || {};
     $('agentsBody').innerHTML = '';
+    $('agentScanPre').textContent = JSON.stringify(data.repo_agent_files || [], null, 2);
     Object.entries(agents).forEach(([name, info]) => {
       const tr = document.createElement('tr');
       tr.innerHTML = `<td>${name}</td><td>${info.status || 'unknown'}</td><td>${info.last_heartbeat || '-'}</td>`;
@@ -206,6 +225,7 @@
     $('pyRepoWrite').disabled = !$('pyGovApproved').checked;
     $('pyHistory').textContent = JSON.stringify(data.instruction_history || [], null, 2);
     $('pytheiaUpdatedAt').textContent = data.updated_at ? `Updated: ${data.updated_at}` : '';
+    $('pyRuntimeReport').textContent = JSON.stringify(data.runtime_report || {}, null, 2);
   }
 
   async function savePytheiaControl() {
@@ -227,6 +247,8 @@
       });
       $('pyInstruction').value = '';
       await loadPytheiaState();
+      state.attachments = [];
+      renderAttachments();
       $('pytheiaErr').textContent = 'Saved';
     } catch (e) {
       $('pytheiaErr').textContent = e.message;
@@ -270,6 +292,8 @@
       await loadAdminModels();
       await loadAdminAgents();
       await loadPytheiaState();
+      state.attachments = [];
+      renderAttachments();
     } catch (e) {
       $('loginErr').textContent = e.message;
     }
@@ -280,6 +304,62 @@
   $('tabAgents').addEventListener('click', async () => { showTab('agents'); await loadAdminAgents(); });
   $('tabPytheia').addEventListener('click', async () => { showTab('pytheia'); await loadPytheiaState(); });
   $('savePytheiaBtn').addEventListener('click', savePytheiaControl);
+  $('refreshModelsBtn').addEventListener('click', async () => {
+    await loadModels();
+    await loadAdminModels();
+    await loadHealth();
+  });
+
+
+  function renderAttachments() {
+    const host = $('attachmentChips');
+    host.innerHTML = '';
+    state.attachments.forEach((f, idx) => {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.innerHTML = `${f.name || f.id}<button type="button" data-idx="${idx}">x</button>`;
+      chip.querySelector('button').addEventListener('click', () => {
+        state.attachments.splice(idx, 1);
+        renderAttachments();
+      });
+      host.appendChild(chip);
+    });
+  }
+
+  async function uploadFiles(files) {
+    if (!files || !files.length) return;
+    const form = new FormData();
+    Array.from(files).forEach((f) => form.append('files', f));
+    form.append('session_id', state.sessionId || '');
+    form.append('purpose', 'd3lfoi_admin_chat');
+    $('uploadStatus').textContent = 'Uploading...';
+    try {
+      const headers = {};
+      if (state.adminSecret) headers['X-Admin-Secret'] = state.adminSecret;
+      const res = await fetch('/api/ai/files/upload', { method: 'POST', body: form, headers, credentials: 'include' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      const uploaded = Array.isArray(data.files) ? data.files : [];
+      uploaded.forEach((f) => state.attachments.push({ id: f.id, name: f.name }));
+      renderAttachments();
+      $('uploadStatus').textContent = `Attached ${uploaded.length} file(s)`;
+    } catch (e) {
+      $('uploadStatus').textContent = `Upload failed: ${e.message}`;
+    }
+  }
+
+  $('attachBtn').addEventListener('click', () => $('fileInput').click());
+  $('fileInput').addEventListener('change', async (ev) => {
+    await uploadFiles(ev.target.files);
+    ev.target.value = '';
+  });
+  ['dragenter','dragover'].forEach((evName) => $('dropzone').addEventListener(evName, (ev) => { ev.preventDefault(); $('dropzone').classList.add('active'); }));
+  ['dragleave','drop'].forEach((evName) => $('dropzone').addEventListener(evName, (ev) => { ev.preventDefault(); if (evName !== 'drop') $('dropzone').classList.remove('active'); }));
+  $('dropzone').addEventListener('drop', async (ev) => {
+    $('dropzone').classList.remove('active');
+    const dt = ev.dataTransfer;
+    await uploadFiles(dt && dt.files ? dt.files : []);
+  });
 
   $('sendBtn').addEventListener('click', async () => {
     const message = $('msgInput').value.trim();
@@ -296,6 +376,7 @@
           model_id,
           lang: $('langSelect').value || 'el',
           session_id: state.sessionId,
+          attachments: state.attachments.map((f) => f.id),
           meta: { offline_corpus_logging: $('logToggle').checked }
         })
       });
@@ -303,6 +384,9 @@
       append('PYTHEIA', data.assistant_message || data.response || JSON.stringify(data));
       if (data.model_notice) $('modelHint').textContent = data.model_notice;
       await loadHealth();
+      state.attachments = [];
+      renderAttachments();
+      $('uploadStatus').textContent = '';
     } catch (e) {
       append('SYSTEM', e.message);
     }

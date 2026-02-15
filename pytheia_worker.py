@@ -186,6 +186,8 @@ class PYTHEIAWorker:
         self.last_status = self.state.get("last_status", {})
         self.consecutive_failures = self.state.get("consecutive_failures", {})
         self.last_model_snapshot = self.state.get("last_model_snapshot", {})
+        self.last_health_report = self.state.get("last_health_report", {})
+        self.last_advice = self.state.get("last_advice", {})
         self.last_provider_scan_ts = float(self.state.get("last_provider_scan_ts", 0) or 0)
         self.provider_scan_interval_s = PROVIDER_SCAN_INTERVAL_SECONDS
         self.next_provider_scan_ts = float(self.state.get("next_provider_scan_ts", 0) or 0)
@@ -278,6 +280,8 @@ class PYTHEIAWorker:
                 "last_status": self.last_status,
                 "consecutive_failures": self.consecutive_failures,
                 "last_model_snapshot": self.last_model_snapshot,
+                "last_health_report": self.last_health_report,
+                "last_advice": self.last_advice,
                 "last_provider_scan_ts": self.last_provider_scan_ts,
                 "next_provider_scan_ts": self.next_provider_scan_ts,
                 "admin_control": self.admin_control,
@@ -742,11 +746,13 @@ class PYTHEIAWorker:
             "timestamp": health_report["timestamp"]
         }
         self.last_model_snapshot = health_report.get("ai_models") or {}
+        self.last_health_report = health_report
 
         # Determine if we should post advice
         if self.should_post_advice(health_report):
             logger.info("Threshold met - generating PYTHEIA_ADVICE...")
             advice = self.generate_pytheia_advice(health_report)
+            self.last_advice = advice
 
             # Save advice locally
             advice_file = f"governance/pytheia_advice_{int(time.time())}.json"

@@ -152,8 +152,8 @@ AI_MODEL_REGISTRY: Dict[str, List[ModelInfo]] = {
         ModelInfo(id="o3-mini", display_name="o3-mini (reasoning)", provider="openai", tier="reasoning"),
     ],
     "anthropic": [
-        ModelInfo(id="claude-3.5-sonnet", display_name="Claude 3.7 Sonnet", provider="anthropic", tier="premium", default=True),
-        ModelInfo(id="claude-3.5-haiku", display_name="Claude 3.5 Haiku", provider="anthropic", tier="fast"),
+        ModelInfo(id="claude-3-5-sonnet-latest", display_name="Claude 3.5 Sonnet", provider="anthropic", tier="premium", default=True),
+        ModelInfo(id="claude-3-5-haiku-latest", display_name="Claude 3.5 Haiku", provider="anthropic", tier="fast"),
     ],
     "gemini": [
         ModelInfo(id="gemini-2.0-flash", display_name="Gemini 2.0 Flash", provider="gemini", tier="fast", default=True),
@@ -166,6 +166,15 @@ AI_MODEL_REGISTRY: Dict[str, List[ModelInfo]] = {
     "thronos": [
         ModelInfo(id="thrai", display_name="Thronos / Thrai (custom)", provider="thronos", tier="custom", default=False, enabled=False),
     ],
+}
+
+
+MODEL_ID_ALIASES: Dict[str, str] = {
+    # Anthropic legacy ids -> current canonical ids
+    "claude-3.5-sonnet": "claude-3-5-sonnet-latest",
+    "claude-3.5-haiku": "claude-3-5-haiku-latest",
+    "claude-3-5-sonnet": "claude-3-5-sonnet-latest",
+    "claude-3-5-haiku": "claude-3-5-haiku-latest",
 }
 
 
@@ -276,9 +285,13 @@ def discover_gemini_models(api_key: str) -> list[dict]:
 
 
 def find_model(model_id: str) -> Optional[ModelInfo]:
+    lookup = str(model_id or "").strip()
+    if not lookup:
+        return None
+    lookup = MODEL_ID_ALIASES.get(lookup, lookup)
     for provider_models in AI_MODEL_REGISTRY.values():
         for m in provider_models:
-            if m.id == model_id:
+            if m.id == lookup:
                 return m
     return None
 

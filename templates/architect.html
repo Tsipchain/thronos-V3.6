@@ -349,6 +349,10 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const downloadZipBtn = document.getElementById("downloadZipBtn");
+const ARCHITECT_SESSION_KEY = "thronos_architect_session_id";
+const ARCHITECT_WALLET_KEY = "thr_address";
+const ARCHITECT_MODEL_KEY = "thronos_architect_model";
+let architectSessionId = localStorage.getItem(ARCHITECT_SESSION_KEY) || "";
 
 function resetDownloadBtn() {
   if (!downloadZipBtn) return;
@@ -451,6 +455,43 @@ function setStatus(ok, text) {
   dot.style.boxShadow = ok ? "0 0 8px var(--accent)" : "0 0 8px var(--danger)";
 }
 
+
+function updateArchitectSessionBadge() {
+  const badge = $("architectSessionType");
+  if (!badge) return;
+  const suffix = architectSessionId ? ` #${architectSessionId.slice(0, 10)}` : "";
+  badge.textContent = `Session: ARCHITECT${suffix}`;
+}
+
+async function ensureArchitectSession(wallet) {
+  const payload = {
+    session_type: "architect",
+    wallet: wallet || null,
+    session_id: architectSessionId || undefined,
+    title: "Architect Session",
+  };
+  try {
+    const res = await fetch('/api/sessions/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(txt || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    architectSessionId = data.session_id || (data.session && data.session.id) || architectSessionId || "";
+  } catch (err) {
+    console.warn('ensureArchitectSession fallback:', err);
+    architectSessionId = architectSessionId || `arch_local_${Date.now().toString(36)}`;
+  }
+  if (architectSessionId) {
+    localStorage.setItem(ARCHITECT_SESSION_KEY, architectSessionId);
+  }
+  updateArchitectSessionBadge();
+}
+
 async function loadBlueprints() {
   const j = await api("/api/ai_blueprints");
   const list = j.blueprints || [];
@@ -496,8 +537,11 @@ async function loadModels() {
   } catch (e) {
     console.warn('loadModels failed', e);
   }
-  sel.value = [...sel.options].some((o) => o.value === previous) ? previous : 'auto';
+  const saved = localStorage.getItem(ARCHITECT_MODEL_KEY);
+  const target = saved || previous;
+  sel.value = [...sel.options].some((o) => o.value === target) ? target : 'auto';
   sel.addEventListener('change', () => {
+    localStorage.setItem(ARCHITECT_MODEL_KEY, sel.value || 'auto');
     const selected = sel.options[sel.selectedIndex];
     const meta = modelMetaById[sel.value] || {};
     if (selected && (selected.disabled || meta.degraded === true || meta.enabled === false)) {
@@ -508,6 +552,26 @@ async function loadModels() {
       warning.textContent = '';
     }
   });
+}
+
+async function generateArchitectureRequest(payload, retryOnSessionMismatch = true) {
+  try {
+    return await api("/api/architect_generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    const message = String((err && err.message) || err || "");
+    if (retryOnSessionMismatch && message.toLowerCase().includes("session type mismatch")) {
+      architectSessionId = "";
+      localStorage.removeItem(ARCHITECT_SESSION_KEY);
+      await ensureArchitectSession(payload.wallet || "");
+      const retryPayload = { ...payload, session_id: architectSessionId || undefined };
+      return await generateArchitectureRequest(retryPayload, false);
+    }
+    throw err;
+  }
 }
 
 function parseFiles(lines) {
@@ -540,11 +604,12 @@ $("generate").onclick = async () => {
   resetDownloadBtn();
 
   try {
-    const j = await api("/api/architect_generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ wallet, blueprint, spec, model })
-    });
+    const j = await generateArchitectureRequest({ wallet, blueprint, spec, model, session_id: architectSessionId || undefined });
+    if (j && j.session_id) {
+      architectSessionId = j.session_id;
+      localStorage.setItem(ARCHITECT_SESSION_KEY, architectSessionId);
+      updateArchitectSessionBadge();
+    }
 
     setStatus(true);
     $("out").textContent = j.response || "No response received.";
@@ -570,10 +635,11 @@ $("generate").onclick = async () => {
 };
 
 // Load wallet from localStorage
-const savedWallet = localStorage.getItem('thr_address');
+const savedWallet = localStorage.getItem(ARCHITECT_WALLET_KEY);
 if (savedWallet) {
   $("wallet").value = savedWallet;
 }
+updateArchitectSessionBadge();
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
@@ -583,6 +649,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     initArchitectLanguage();
     await loadModels();
     await loadBlueprints();
+    const wallet = $("wallet").value.trim() || localStorage.getItem(ARCHITECT_WALLET_KEY) || '';
+    if (wallet) {
+      $("wallet").value = wallet;
+      localStorage.setItem(ARCHITECT_WALLET_KEY, wallet);
+    }
+    await ensureArchitectSession(wallet);
+    $("wallet").addEventListener('change', async () => {
+      const nextWallet = $("wallet").value.trim();
+      if (nextWallet) localStorage.setItem(ARCHITECT_WALLET_KEY, nextWallet);
+      await ensureArchitectSession(nextWallet);
+    });
     setStatus(true);
   } catch(e) {
     setStatus(false);

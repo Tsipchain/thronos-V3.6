@@ -5,6 +5,7 @@ import importlib.util
 import logging
 from dataclasses import dataclass
 import json
+import time
 from urllib import request as urllib_request
 from urllib.parse import urlsplit
 from typing import Dict, List, Optional
@@ -152,8 +153,8 @@ AI_MODEL_REGISTRY: Dict[str, List[ModelInfo]] = {
         ModelInfo(id="o3-mini", display_name="o3-mini (reasoning)", provider="openai", tier="reasoning"),
     ],
     "anthropic": [
-        ModelInfo(id="claude-3.5-sonnet", display_name="Claude 3.7 Sonnet", provider="anthropic", tier="premium", default=True),
-        ModelInfo(id="claude-3.5-haiku", display_name="Claude 3.5 Haiku", provider="anthropic", tier="fast"),
+        ModelInfo(id="claude-3-5-sonnet-latest", display_name="Claude 3.5 Sonnet", provider="anthropic", tier="premium", default=True),
+        ModelInfo(id="claude-3-5-haiku-latest", display_name="Claude 3.5 Haiku", provider="anthropic", tier="fast"),
     ],
     "gemini": [
         ModelInfo(id="gemini-2.0-flash", display_name="Gemini 2.0 Flash", provider="gemini", tier="fast", default=True),
@@ -166,6 +167,15 @@ AI_MODEL_REGISTRY: Dict[str, List[ModelInfo]] = {
     "thronos": [
         ModelInfo(id="thrai", display_name="Thronos / Thrai (custom)", provider="thronos", tier="custom", default=False, enabled=False),
     ],
+}
+
+
+MODEL_ID_ALIASES: Dict[str, str] = {
+    # Anthropic legacy ids -> current canonical ids
+    "claude-3.5-sonnet": "claude-3-5-sonnet-latest",
+    "claude-3.5-haiku": "claude-3-5-haiku-latest",
+    "claude-3-5-sonnet": "claude-3-5-sonnet-latest",
+    "claude-3-5-haiku": "claude-3-5-haiku-latest",
 }
 
 
@@ -275,10 +285,68 @@ def discover_gemini_models(api_key: str) -> list[dict]:
         return _fallback_provider_models("gemini")
 
 
+
+
+def refresh_registry_from_provider_discovery(openai_key: str = "", anthropic_key: str = "", gemini_key: str = "") -> dict:
+    """Refresh in-memory AI_MODEL_REGISTRY from live provider discovery results.
+
+    Only updates remote providers (openai/anthropic/gemini) and keeps local/thronos
+    entries untouched. Returns metadata for telemetry/logging.
+    """
+    now = int(time.time())
+    snapshot = {
+        "ok": True,
+        "updated_at": now,
+        "providers": {},
+    }
+
+    provider_payloads = {
+        "openai": discover_openai_models((openai_key or "").strip()),
+        "anthropic": discover_anthropic_models((anthropic_key or "").strip()),
+        "gemini": discover_gemini_models((gemini_key or "").strip()),
+    }
+
+    for provider_name, models in provider_payloads.items():
+        discovered = [m for m in models if isinstance(m, dict) and (m.get("id") or "").strip()]
+        new_models: list[ModelInfo] = []
+
+        for idx, model in enumerate(discovered):
+            mid = str(model.get("id") or "").strip()
+            if not mid:
+                continue
+            display = str(model.get("display_name") or model.get("label") or mid).strip() or mid
+            tier = "preview" if bool(model.get("preview")) else ("fast" if bool(model.get("voice_friendly")) else "standard")
+            enabled = bool(model.get("enabled", True))
+            new_models.append(
+                ModelInfo(
+                    id=mid,
+                    display_name=display,
+                    provider=provider_name,
+                    tier=tier,
+                    default=(idx == 0),
+                    enabled=enabled,
+                )
+            )
+
+        if new_models:
+            AI_MODEL_REGISTRY[provider_name] = new_models
+
+        snapshot["providers"][provider_name] = {
+            "models_count": len(new_models),
+            "enabled_count": sum(1 for m in new_models if m.enabled),
+            "updated": bool(new_models),
+        }
+
+    return snapshot
+
 def find_model(model_id: str) -> Optional[ModelInfo]:
+    lookup = str(model_id or "").strip()
+    if not lookup:
+        return None
+    lookup = MODEL_ID_ALIASES.get(lookup, lookup)
     for provider_models in AI_MODEL_REGISTRY.values():
         for m in provider_models:
-            if m.id == model_id:
+            if m.id == lookup:
                 return m
     return None
 

@@ -29,7 +29,7 @@ import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from pathlib import Path
-from llm_registry import discover_openai_models, discover_anthropic_models, discover_gemini_models
+from llm_registry import discover_openai_models, discover_anthropic_models, discover_gemini_models, refresh_registry_from_provider_discovery
 
 
 def _default_admin_control() -> Dict[str, Any]:
@@ -43,7 +43,6 @@ def _default_admin_control() -> Dict[str, Any]:
         "updated_at": None,
     }
 
-<<<<<<< HEAD
 
 def _coerce_bool(value: Any) -> bool:
     if isinstance(value, bool):
@@ -68,8 +67,6 @@ def _build_log_handlers() -> List[logging.Handler]:
         pass
     return handlers
 
-=======
->>>>>>> origin/main
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -101,11 +98,67 @@ STATE_FILE = os.getenv("PYTHEIA_STATE_FILE", "data/pytheia_state.json")
 MODEL_SNAPSHOT_FILE = os.path.join(os.getenv("DATA_DIR", "data"), "model_catalog_snapshot.json")
 REPO_URL = "https://github.com/Tsipchain/thronos-V3.6"
 
+
+def _provider_scan_interval_seconds() -> int:
+    raw = (os.getenv("PYTHEIA_PROVIDER_SCAN_INTERVAL_SECONDS") or "2592000").strip()
+    try:
+        value = int(raw)
+    except Exception:
+        value = 2592000
+    return max(3600, value)
+
+
+PROVIDER_SCAN_INTERVAL_SECONDS = _provider_scan_interval_seconds()
+
+def _parse_csv_env(name: str) -> List[str]:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return []
+    out: List[str] = []
+    for part in raw.split(","):
+        v = part.strip()
+        if v and v not in out:
+            out.append(v)
+    return out
+
+
+def _external_health_targets() -> List[Dict[str, str]]:
+    """
+    Parse PYTHEIA_EXTERNAL_HEALTH_TARGETS JSON.
+
+    Example:
+    [{"name":"trader-sentinel","base_url":"https://trader-sentinel.example.com","path":"/health"}]
+    """
+    raw = (os.getenv("PYTHEIA_EXTERNAL_HEALTH_TARGETS") or "").strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except Exception:
+        logger.warning("Invalid PYTHEIA_EXTERNAL_HEALTH_TARGETS JSON; ignoring")
+        return []
+    if not isinstance(data, list):
+        return []
+
+    out: List[Dict[str, str]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        base_url = str(item.get("base_url") or "").strip().rstrip("/")
+        if not base_url:
+            continue
+        name = str(item.get("name") or base_url).strip()
+        path = "/" + str(item.get("path") or "/health").strip().lstrip("/")
+        out.append({"name": name, "base_url": base_url, "path": path})
+    return out
+
 # Health check endpoints
 HEALTH_ENDPOINTS = [
     {"path": "/chat", "name": "Chat Page", "expected_status": 200},
     {"path": "/architect", "name": "Architect Page", "expected_status": 200},
     {"path": "/api/ai/models", "name": "AI Models API", "expected_status": 200},
+    {"path": "/api/ai/telemetry", "name": "AI Telemetry API", "expected_status": 200},
+    {"path": "/api/music/telemetry/stats", "name": "Music Telemetry Stats", "expected_status": 200},
     {"path": "/api/bridge/status", "name": "Bridge Status API", "expected_status": 200},
     {"path": "/tokens", "name": "Tokens Page", "expected_status": 200},
     {"path": "/nft", "name": "NFT Page", "expected_status": 200},
@@ -135,7 +188,13 @@ class PYTHEIAWorker:
         self.last_status = self.state.get("last_status", {})
         self.consecutive_failures = self.state.get("consecutive_failures", {})
         self.last_model_snapshot = self.state.get("last_model_snapshot", {})
+        self.last_health_report = self.state.get("last_health_report", {})
+        self.last_advice = self.state.get("last_advice", {})
         self.last_provider_scan_ts = float(self.state.get("last_provider_scan_ts", 0) or 0)
+        self.provider_scan_interval_s = PROVIDER_SCAN_INTERVAL_SECONDS
+        self.next_provider_scan_ts = float(self.state.get("next_provider_scan_ts", 0) or 0)
+        if self.next_provider_scan_ts <= 0:
+            self.next_provider_scan_ts = time.time() + self.provider_scan_interval_s
 
     @staticmethod
     def _normalize_instruction_history(history: Any) -> List[Dict[str, Any]]:
@@ -163,13 +222,9 @@ class PYTHEIAWorker:
             if control.get(key) is not None:
                 base[key] = str(control.get(key)).strip()
         for key in ("governance_approved", "repo_write_enabled"):
-<<<<<<< HEAD
             base[key] = _coerce_bool(control.get(key))
         if base["codex_mode"] not in {"monitor", "assist", "active"}:
             base["codex_mode"] = "monitor"
-=======
-            base[key] = bool(control.get(key))
->>>>>>> origin/main
         for key in ("attachment_refs", "page_paths"):
             vals = control.get(key)
             if isinstance(vals, list):
@@ -178,12 +233,6 @@ class PYTHEIAWorker:
             base["repo_write_enabled"] = False
         return base
 
-<<<<<<< HEAD
-    # NOTE: Keep admin-control normalization and endpoint expansion together
-    # to reduce merge conflicts with server-side PYTHEIA control evolution.
-
-=======
->>>>>>> origin/main
     def refresh_admin_control(self) -> None:
         latest = self.load_state()
         self.admin_control = self._normalize_admin_control(latest.get("admin_control"))
@@ -199,6 +248,17 @@ class PYTHEIAWorker:
             effective.append({"path": clean, "name": f"Custom: {clean}", "expected_status": 200})
             existing_paths.add(clean)
         return effective
+
+    def _external_endpoints(self) -> List[Dict[str, Any]]:
+        endpoints: List[Dict[str, Any]] = []
+        for t in _external_health_targets():
+            endpoints.append({
+                "name": f"External: {t['name']}",
+                "path": t["path"],
+                "base_url": t["base_url"],
+                "expected_status": 200,
+            })
+        return endpoints
 
     def load_state(self) -> Dict:
         """Load persistent state from file."""
@@ -222,26 +282,16 @@ class PYTHEIAWorker:
                 "last_status": self.last_status,
                 "consecutive_failures": self.consecutive_failures,
                 "last_model_snapshot": self.last_model_snapshot,
+                "last_health_report": self.last_health_report,
+                "last_advice": self.last_advice,
                 "last_provider_scan_ts": self.last_provider_scan_ts,
+                "next_provider_scan_ts": self.next_provider_scan_ts,
                 "admin_control": self.admin_control,
                 "admin_instruction_history": self.admin_instruction_history,
                 "last_update": datetime.utcnow().isoformat()
             })
             with open(STATE_FILE, 'w') as f:
-<<<<<<< HEAD
                 json.dump(current, f, indent=2)
-=======
-                json.dump({
-                    "last_post_time": self.last_post_time,
-                    "last_status": self.last_status,
-                    "consecutive_failures": self.consecutive_failures,
-                    "last_model_snapshot": self.last_model_snapshot,
-                    "last_provider_scan_ts": self.last_provider_scan_ts,
-                    "admin_control": self.admin_control,
-                    "admin_instruction_history": self.admin_instruction_history,
-                    "last_update": datetime.utcnow().isoformat()
-                }, f, indent=2)
->>>>>>> origin/main
         except Exception as e:
             logger.error(f"Failed to save state: {e}")
 
@@ -250,6 +300,11 @@ class PYTHEIAWorker:
         anthropic_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
         gemini_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
 
+        registry_refresh = refresh_registry_from_provider_discovery(
+            openai_key=openai_key,
+            anthropic_key=anthropic_key,
+            gemini_key=gemini_key,
+        )
         providers = {
             "openai": {"models": discover_openai_models(openai_key)},
             "anthropic": {"models": discover_anthropic_models(anthropic_key)},
@@ -263,6 +318,7 @@ class PYTHEIAWorker:
         snapshot = {
             "last_scan_ts": datetime.utcnow().isoformat(timespec="seconds") + "Z",
             "providers": providers,
+            "registry_refresh": registry_refresh,
         }
 
         try:
@@ -334,11 +390,13 @@ class PYTHEIAWorker:
             {"name": str, "status": "ok"|"degraded"|"down", "status_code": int,
              "response_time_ms": float, "error": str|None}
         """
-        url = f"{self.base_url}{endpoint['path']}"
+        base_url = str(endpoint.get("base_url") or self.base_url).rstrip("/")
+        url = f"{base_url}{endpoint['path']}"
         start_time = time.time()
         result = {
             "name": endpoint["name"],
             "path": endpoint["path"],
+            "base_url": base_url,
             "status": "unknown",
             "status_code": None,
             "response_time_ms": None,
@@ -395,7 +453,7 @@ class PYTHEIAWorker:
         degraded_count = 0
         down_count = 0
 
-        endpoints = self._effective_endpoints()
+        endpoints = self._effective_endpoints() + self._external_endpoints()
         for endpoint in endpoints:
             result = self.check_endpoint(endpoint)
             checks.append(result)
@@ -436,7 +494,35 @@ class PYTHEIAWorker:
             "ai_models": ai_snapshot,
             "ai_catalog_changed": self._snapshot_changed(self.last_model_snapshot, ai_snapshot),
             "effective_paths": [ep.get("path") for ep in endpoints],
+            "repo_targets": _parse_csv_env("PYTHEIA_REPO_TARGETS"),
+            "apk_simulation": {
+                "enabled": _coerce_bool(os.getenv("PYTHEIA_APK_SIMULATION", "0")),
+                "sdks": _parse_csv_env("PYTHEIA_APK_SDKS"),
+                "module": (os.getenv("PYTHEIA_APK_MODULE") or "app").strip() or "app",
+            },
+            "provider_refresh": {
+                "interval_seconds": self.provider_scan_interval_s,
+                "last_scan_ts": self.last_provider_scan_ts,
+                "next_scan_ts": self.next_provider_scan_ts,
+            },
         }
+
+    @staticmethod
+    def _build_apk_simulation_plan(apk_cfg: Dict[str, Any]) -> Dict[str, Any]:
+        enabled = bool(apk_cfg.get("enabled"))
+        sdks = apk_cfg.get("sdks") if isinstance(apk_cfg.get("sdks"), list) else []
+        module = str(apk_cfg.get("module") or "app").strip() or "app"
+        if not enabled:
+            return {"enabled": False, "steps": []}
+        if not sdks:
+            sdks = ["34"]
+        steps = [
+            f"Setup Android SDK / Gradle toolchain for module '{module}'",
+            f"Build debug APK for SDK targets: {', '.join(sdks)}",
+            "Run instrumentation simulation and smoke tests",
+            "Publish APK artifact and health report",
+        ]
+        return {"enabled": True, "module": module, "sdks": sdks, "steps": steps}
 
     def should_post_advice(self, health_report: Dict) -> bool:
         """
@@ -598,6 +684,9 @@ class PYTHEIAWorker:
             "admin_control": self.admin_control,
             "instruction_history": self.admin_instruction_history[-5:],
             "dynamic_scan_paths": health_report.get("effective_paths") or [],
+            "repo_targets": health_report.get("repo_targets") or [],
+            "apk_builder_simulation": self._build_apk_simulation_plan(health_report.get("apk_simulation") or {}),
+            "provider_refresh": health_report.get("provider_refresh") or {},
         }
 
         return advice
@@ -649,11 +738,15 @@ class PYTHEIAWorker:
         logger.info(f"Overall Status: {health_report['overall_status'].upper()}")
         logger.info(f"Summary: {health_report['summary']}")
 
-        if (time.time() - self.last_provider_scan_ts) > 3600:
+        now_ts = time.time()
+        if now_ts >= self.next_provider_scan_ts:
             provider_snapshot = self.scan_provider_models()
             if self._snapshot_changed(self.last_model_snapshot, {"models": [m for p in provider_snapshot.get("providers", {}).values() for m in (p.get("models") or [])], "providers": provider_snapshot.get("providers", {})}):
                 logger.info("Provider catalog changed (scanner)")
-            self.last_provider_scan_ts = time.time()
+            self.last_provider_scan_ts = now_ts
+            while self.next_provider_scan_ts <= now_ts:
+                self.next_provider_scan_ts += self.provider_scan_interval_s
+            logger.info("Next provider model refresh scheduled at %s", datetime.utcfromtimestamp(self.next_provider_scan_ts).isoformat() + "Z")
 
         # Update state
         self.last_status = {
@@ -661,11 +754,13 @@ class PYTHEIAWorker:
             "timestamp": health_report["timestamp"]
         }
         self.last_model_snapshot = health_report.get("ai_models") or {}
+        self.last_health_report = health_report
 
         # Determine if we should post advice
         if self.should_post_advice(health_report):
             logger.info("Threshold met - generating PYTHEIA_ADVICE...")
             advice = self.generate_pytheia_advice(health_report)
+            self.last_advice = advice
 
             # Save advice locally
             advice_file = f"governance/pytheia_advice_{int(time.time())}.json"

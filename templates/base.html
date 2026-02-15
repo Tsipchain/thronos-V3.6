@@ -5490,6 +5490,7 @@ if (typeof MusicModule === 'undefined') {
             <button class="global-player-btn" onclick="GlobalMusicPlayer.toggleShuffle()" id="globalShuffleBtn" title="Shuffle">🔀</button>
             <button class="global-player-btn" onclick="GlobalMusicPlayer.toggleRepeat()" id="globalRepeatBtn" title="Repeat">🔁</button>
             <button class="global-player-btn" onclick="GlobalMusicPlayer.toggleQueue()" title="Queue">📋</button>
+            <button class="global-player-btn" onclick="openGlobalTipModal()" title="Tip Artist">💸</button>
             <button class="global-player-btn" onclick="GlobalMusicPlayer.close()" title="Close">✖</button>
         </div>
     </div>
@@ -5505,6 +5506,22 @@ if (typeof MusicModule === 'undefined') {
     </div>
 </div>
 
+<div id="globalTipModal" class="global-tip-modal" style="display:none;">
+  <div class="global-tip-panel">
+    <h4>💸 Tip current artist</h4>
+    <div id="globalTipTrackMeta" class="global-tip-track">-</div>
+    <label>Asset</label>
+    <select id="globalTipAsset"></select>
+    <label>Amount</label>
+    <input id="globalTipAmount" type="number" min="0" step="0.000001" placeholder="1.0" />
+    <div id="globalTipHint" class="global-tip-hint"></div>
+    <div class="global-tip-actions">
+      <button class="global-player-btn" type="button" onclick="submitGlobalTip()">Send Tip</button>
+      <button class="global-player-btn" type="button" onclick="closeGlobalTipModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <style>
 .global-music-player {
     position: fixed;
@@ -5517,6 +5534,32 @@ if (typeof MusicModule === 'undefined') {
     z-index: 10000;
     font-family: "Courier New", monospace;
 }
+
+.global-tip-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.72);
+    z-index: 10002;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.global-tip-panel {
+    width: min(460px, 92vw);
+    border: 1px solid #ff6600;
+    border-radius: 12px;
+    background: #120b07;
+    padding: 14px;
+    color: #ffcc99;
+}
+
+.global-tip-panel h4 { margin: 0 0 8px 0; color: #ffd277; }
+.global-tip-panel label { display:block; margin-top:8px; margin-bottom:4px; font-size:12px; color:#56ff9a; }
+.global-tip-panel input, .global-tip-panel select { width:100%; background:#1a120d; color:#ffd8b0; border:1px solid #704020; border-radius:8px; padding:8px; }
+.global-tip-track { font-size:12px; color:#ff9966; margin-bottom:6px; }
+.global-tip-hint { margin-top:8px; font-size:12px; color:#8de8b2; min-height:16px; }
+.global-tip-actions { margin-top:10px; display:flex; gap:8px; justify-content:flex-end; }
 
 .global-player-bar {
     display: flex;
@@ -6193,6 +6236,7 @@ window.GlobalMusicPlayer = (function() {
 
     function close() {
         const playerEl = document.getElementById('globalMusicPlayer');
+        _globalTipAuth = null;
         if (playerEl) {
             playerEl.style.display = 'none';
         }
@@ -6237,6 +6281,89 @@ window.GlobalMusicPlayer = (function() {
         isPlaying: () => isPlaying
     };
 })();
+</script>
+
+
+<script>
+let _globalTipAssets = [];
+let _globalTipAuth = null;
+
+async function openGlobalTipModal() {
+    const track = window.GlobalMusicPlayer?.getCurrentTrack?.();
+    if (!track) { alert('No active track'); return; }
+    try {
+        const auth = _globalTipAuth || await window.WalletAuth.requireUnlockedWallet();
+        _globalTipAuth = auth;
+        const address = auth.address;
+        const r = await fetch(buildWalletMusicApiUrl(`/api/balances?address=${encodeURIComponent(address)}&show_zero=false`));
+        const j = await r.json();
+        const balances = (j && j.balances) || {};
+        const items = Object.entries(balances).map(([symbol, balance]) => ({ symbol, balance: Number(balance || 0) })).filter(x => x.balance > 0);
+        _globalTipAssets = items;
+        const sel = document.getElementById('globalTipAsset');
+        sel.innerHTML = '';
+        items.forEach((it) => {
+            const opt = document.createElement('option');
+            opt.value = it.symbol;
+            opt.textContent = `${it.symbol} (balance: ${it.balance})`;
+            sel.appendChild(opt);
+        });
+        if (!items.length) {
+            const opt = document.createElement('option');
+            opt.value = 'THR';
+            opt.textContent = 'THR (0)';
+            sel.appendChild(opt);
+        }
+        document.getElementById('globalTipTrackMeta').textContent = `${track.title || '-'} • ${track.artist_name || track.artist || '-'}`;
+        document.getElementById('globalTipAmount').value = '';
+        document.getElementById('globalTipHint').textContent = 'Choose asset + amount to send independent tip.';
+        document.getElementById('globalTipModal').style.display = 'flex';
+    } catch (e) {
+        alert(`Tip unavailable: ${e.message || e}`);
+    }
+}
+
+function closeGlobalTipModal() {
+    const el = document.getElementById('globalTipModal');
+    if (el) el.style.display = 'none';
+}
+
+async function submitGlobalTip() {
+    const track = window.GlobalMusicPlayer?.getCurrentTrack?.();
+    if (!track) return;
+    const asset = (document.getElementById('globalTipAsset')?.value || 'THR').trim().toUpperCase();
+    const amount = parseFloat(document.getElementById('globalTipAmount')?.value || '0');
+    if (!amount || amount <= 0) { alert('Invalid amount'); return; }
+
+    try {
+        const auth = _globalTipAuth || await window.WalletAuth.requireUnlockedWallet();
+        _globalTipAuth = auth;
+        const { address, authSecret } = auth;
+        const res = await fetch(buildWalletMusicApiUrl('/api/v1/music/tip'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                track_id: track.id || track.track_id,
+                from_address: address,
+                amount,
+                token_symbol: asset,
+                auth_secret: authSecret,
+                passphrase: ''
+            })
+        });
+        const data = await res.json();
+        if (data.status !== 'success') {
+            throw new Error(data.message || data.error || data.primary || 'tip_failed');
+        }
+        const hint = document.getElementById('globalTipHint');
+        if (hint) hint.textContent = `✅ Sent ${amount} ${asset} tip`;
+        closeGlobalTipModal();
+        if (typeof loadTracks === 'function') loadTracks();
+    } catch (e) {
+        const hint = document.getElementById('globalTipHint');
+        if (hint) hint.textContent = `❌ ${e.message || e}`;
+    }
+}
 </script>
 
 <script>

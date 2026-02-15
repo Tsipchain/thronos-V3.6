@@ -2728,7 +2728,8 @@ const walletMusicState = {
     library: [],
     playlists: [],
     libraryError: null,
-    playlistsError: null
+    playlistsError: null,
+    insights: { summary: {}, rows: [] }
 };
 
 function getWalletMusicApiBase() {
@@ -2868,6 +2869,16 @@ async function loadMusicTab() {
         walletMusicState.playlistsError = playlistsResult.error;
     }
 
+    try {
+        const hist = await loadWalletHistory(wallet);
+        const musicRows = (hist || []).filter(tx => getTxType(tx) === 'music').slice(0, 20);
+        const sent = musicRows.filter(tx => tx.from === wallet).reduce((a, tx) => a + (Number(tx.amount || 0) || 0), 0);
+        const received = musicRows.filter(tx => tx.to === wallet).reduce((a, tx) => a + (Number(tx.amount || 0) || 0), 0);
+        walletMusicState.insights = { summary: { sent, received, total: musicRows.length }, rows: musicRows };
+    } catch (_e) {
+        walletMusicState.insights = { summary: {}, rows: [] };
+    }
+
     renderMusicTab();
 }
 
@@ -2952,6 +2963,19 @@ function renderMusicTab() {
         ? `<div style="margin-top: 8px; font-size: 11px; color: #b6ffcc;">${isGreek ? 'Συνεδρία ενεργή' : 'Session started'}: ${sessionId}</div>`
         : '';
 
+    const insights = walletMusicState.insights || { summary: {}, rows: [] };
+    const musicRows = Array.isArray(insights.rows) ? insights.rows : [];
+    const summary = insights.summary || {};
+    const insightsTitle = isGreek ? 'Συναλλαγές Μουσικής & Credits' : 'Music Transactions & Credits';
+    const insightsHtml = musicRows.length
+      ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:10px;">
+            <div class="music-track-item"><div class="music-track-title">${isGreek ? 'Tips Sent' : 'Tips Sent'}</div><div class="music-track-artist">${(Number(summary.sent||0)).toFixed(4)} THR</div></div>
+            <div class="music-track-item"><div class="music-track-title">${isGreek ? 'Tips Received' : 'Tips Received'}</div><div class="music-track-artist">${(Number(summary.received||0)).toFixed(4)} THR</div></div>
+            <div class="music-track-item"><div class="music-track-title">${isGreek ? 'Music TX Count' : 'Music TX Count'}</div><div class="music-track-artist">${musicRows.length}</div></div>
+         </div>
+         <div style="display:flex;flex-direction:column;gap:6px;max-height:220px;overflow:auto;">${musicRows.slice(0,12).map(tx => `<div class="music-track-item"><div class="music-track-title">${escapeHtml(tx.track_title || tx.type || tx.kind || 'music')}</div><div class="music-track-artist">${(Number(tx.amount||0)||0).toFixed(6)} ${escapeHtml(tx.symbol || tx.asset_symbol || tx.token_symbol || 'THR')} • ${escapeHtml(formatTxDate(tx.timestamp||''))}</div></div>`).join('')}</div>`
+      : `<div class="music-empty">${isGreek ? 'Δεν βρέθηκαν κινήσεις μουσικής για αυτό το wallet.' : 'No music transactions found for this wallet yet.'}</div>`;
+
     const html = `
         <!-- Session Controls -->
         <div class="music-section" style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid rgba(0,255,102,0.2);">
@@ -2976,6 +3000,10 @@ function renderMusicTab() {
                 </button>
             </div>
             ${playlistsHtml}
+        </div>
+        <div class="music-section">
+            <div class="music-section-title">${insightsTitle}</div>
+            ${insightsHtml}
         </div>
     `;
 
@@ -3485,6 +3513,7 @@ let historyLoading = false;
 let currentHistoryFilter = 'all';
 let currentTokenFilter = null;
 let AI_LEDGER_CACHE = [];
+let NETWORK_HISTORY_CACHE = [];
 
 function resetHistoryFilters() {
     currentHistoryFilter = 'all';
@@ -3832,6 +3861,34 @@ function renderHistory() {
     }
 
     if (filtered.length === 0) {
+        const networkRows = (NETWORK_HISTORY_CACHE || []).filter(tx => {
+            const txType = getTxType(tx);
+            if (currentHistoryFilter === 'all') return true;
+            if (currentHistoryFilter === 'tokens' && currentTokenFilter) {
+                return txType === 'tokens' && ((tx.symbol || tx.asset_symbol || '').toUpperCase() === currentTokenFilter.toUpperCase());
+            }
+            return txType === currentHistoryFilter;
+        });
+        if (networkRows.length > 0) {
+            const preview = networkRows.slice(0, 20).map(tx => {
+                const txType = getTxType(tx);
+                const amount = Number(tx.amount || tx.display_amount || tx.value || 0) || 0;
+                const sym = tx.symbol || tx.asset_symbol || tx.asset || 'THR';
+                const stamp = formatTxDate(tx.timestamp || tx.time || tx.created_at || '');
+                const from = tx.from ? `${tx.from.slice(0,8)}...${tx.from.slice(-6)}` : '—';
+                const to = tx.to ? `${tx.to.slice(0,8)}...${tx.to.slice(-6)}` : '—';
+                return `<div style="padding:10px;border:1px solid rgba(0,255,102,.18);border-radius:8px;background:rgba(0,255,102,.03)">
+                  <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
+                    <strong style="color:#7fffd4;">${txType.toUpperCase()}</strong>
+                    <span style="color:#00ff66;">${amount.toFixed(6)} ${escapeHtml(String(sym))}</span>
+                  </div>
+                  <div style="font-size:11px;opacity:.8;margin-top:4px;">${escapeHtml(from)} → ${escapeHtml(to)}</div>
+                  <div style="font-size:10px;opacity:.6;margin-top:2px;">${escapeHtml(stamp)}</div>
+                </div>`;
+            }).join('');
+            content.innerHTML = `<div style="margin-bottom:8px;font-size:12px;color:#9adf9a;">No wallet-matched rows in this category. Showing recent network activity:</div><div style="display:flex;flex-direction:column;gap:8px;">${preview}</div>`;
+            return;
+        }
         content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">No transactions in this category</div>';
         return;
     }
@@ -4061,6 +4118,20 @@ async function loadWalletHistory(thrAddress) {
     }
 }
 
+async function loadNetworkHistory(limit = 200) {
+    try {
+        const url = buildWalletMusicApiUrl(`/api/transfers?limit=${Math.max(20, Math.min(limit, 500))}`);
+        const res = await fetch(url);
+        if (!res.ok) return [];
+        const data = await res.json();
+        const rows = Array.isArray(data?.transfers) ? data.transfers : (Array.isArray(data?.transactions) ? data.transactions : []);
+        return rows;
+    } catch (err) {
+        console.warn('[WalletHistory] network history fetch failed:', err);
+        return [];
+    }
+}
+
 async function loadAICreditsLedger(thrAddress) {
     if (!thrAddress || typeof thrAddress !== 'string') return [];
     const url = `/api/ai_credits/ledger?wallet=${encodeURIComponent(thrAddress.trim())}&limit=200`;
@@ -4082,6 +4153,7 @@ async function hydrateHistory(thrAddress) {
         content.innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.7;">Loading...</div>';
         WALLET_HISTORY_CACHE = await loadWalletHistory(thrAddress);
         AI_LEDGER_CACHE = await loadAICreditsLedger(thrAddress);
+        NETWORK_HISTORY_CACHE = await loadNetworkHistory(220);
         allTransactions = WALLET_HISTORY_CACHE || [];
         historyLoading = false;
         if (!allTransactions.length) {

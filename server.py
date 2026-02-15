@@ -30,7 +30,7 @@ from __future__ import annotations
 # - Real Fiat Gateway (Stripe + Bank Withdrawals) (V5.0)
 # - Admin Withdrawal Panel (V5.1)
 
-import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil, sqlite3, base64
+import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil, sqlite3, base64, hmac
 import sys
 import atexit
 from collections import Counter
@@ -758,6 +758,12 @@ AI_PROXY_HEALTH_LAST_LOG_TS = 0.0
 AI_POOL_FILE        = os.path.join(DATA_DIR, "ai_pool.json")  # Phase 4: AI rewards pool
 NETWORK_POOL_FILE   = os.path.join(DATA_DIR, "network_pool.json")  # Phase 5: Network rewards pool (10% of music telemetry)
 T2E_REWARDS_FILE    = os.path.join(DATA_DIR, "t2e_rewards.json")  # Train-to-Earn rewards for IoT/ASIC miners
+
+# Crosschain/event-bus & treasury stability files
+TOKENS_REGISTRY_FILE = os.path.join(DATA_DIR, "tokens_registry.json")
+EVENT_BUS_FILE = os.path.join(DATA_DIR, "crosschain_event_bus.json")
+TREASURY_STATE_FILE = os.path.join(DATA_DIR, "treasury_state.json")
+X9_NONCE_CACHE_FILE = os.path.join(DATA_DIR, "x9_nonce_cache.json")
 
 # Register optional EVM routes (if module exists)
 if register_evm_routes is not None:
@@ -2106,6 +2112,106 @@ def atomic_write_json(path: str, data) -> None:
 
 
 _init_ledger_db()
+
+
+def _default_tokens_registry() -> dict:
+    return {
+        "tokens": {
+            "THR": {"decimals": 6, "chain": "thronos", "rpc_env": "THR_RPC_URL", "treasury_address": AI_WALLET_ADDRESS},
+            "WBTC": {"decimals": 8, "chain": "bitcoin", "rpc_env": "BTC_RPC_URL", "treasury_address": os.getenv("TREASURY_WBTC_ADDRESS", AI_WALLET_ADDRESS)},
+            "L2E": {"decimals": 6, "chain": "thronos", "rpc_env": "THR_RPC_URL", "treasury_address": AI_WALLET_ADDRESS},
+            "T2E": {"decimals": 6, "chain": "thronos", "rpc_env": "THR_RPC_URL", "treasury_address": AI_WALLET_ADDRESS},
+        },
+        "updated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+
+
+def load_tokens_registry() -> dict:
+    data = load_json(TOKENS_REGISTRY_FILE, {})
+    if not isinstance(data, dict) or not isinstance(data.get("tokens"), dict) or not data.get("tokens"):
+        data = _default_tokens_registry()
+        save_json(TOKENS_REGISTRY_FILE, data)
+    return data
+
+
+def _token_decimals(symbol: str) -> int:
+    registry = load_tokens_registry()
+    token_meta = (registry.get("tokens") or {}).get((symbol or "THR").upper(), {})
+    try:
+        return max(0, int(token_meta.get("decimals", 6)))
+    except Exception:
+        return 6
+
+
+def _normalize_decimal_amount(raw_amount, symbol: str) -> Decimal:
+    dec = _token_decimals(symbol)
+    quant = Decimal("1").scaleb(-dec)
+    amount = Decimal(str(raw_amount or "0")).quantize(quant, rounding=ROUND_DOWN)
+    if amount <= Decimal("0"):
+        raise ValueError("invalid_amount")
+    return amount
+
+
+def emit_crosschain_event(event_type: str, payload: dict, status: str = "PENDING") -> dict:
+    event_bus = load_json(EVENT_BUS_FILE, {"events": []})
+    if not isinstance(event_bus, dict):
+        event_bus = {"events": []}
+    events = event_bus.get("events")
+    if not isinstance(events, list):
+        events = []
+    event = {
+        "event_id": f"EVT-{int(time.time()*1000)}-{secrets.token_hex(4)}",
+        "type": str(event_type or "UNKNOWN").upper(),
+        "status": str(status or "PENDING").upper(),
+        "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "payload": payload if isinstance(payload, dict) else {},
+    }
+    events.append(event)
+    event_bus["events"] = events[-5000:]
+    event_bus["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    save_json(EVENT_BUS_FILE, event_bus)
+    return event
+
+
+def settle_pending_crosschain_events(limit: int = 100) -> int:
+    event_bus = load_json(EVENT_BUS_FILE, {"events": []})
+    events = event_bus.get("events") if isinstance(event_bus, dict) else []
+    if not isinstance(events, list):
+        return 0
+    settled = 0
+    for ev in events:
+        if settled >= limit:
+            break
+        if not isinstance(ev, dict):
+            continue
+        if str(ev.get("status") or "").upper() != "PENDING":
+            continue
+        ev["status"] = "SETTLED"
+        ev["settled_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        settled += 1
+    if settled:
+        event_bus["events"] = events
+        event_bus["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        save_json(EVENT_BUS_FILE, event_bus)
+    return settled
+
+
+def _x9_nonce_seen(nonce: str) -> bool:
+    nonce = str(nonce or "").strip()
+    if not nonce:
+        return True
+    bucket = load_json(X9_NONCE_CACHE_FILE, {"nonces": {}})
+    nonces = bucket.get("nonces") if isinstance(bucket, dict) else {}
+    if not isinstance(nonces, dict):
+        nonces = {}
+    now = int(time.time())
+    # prune old entries (5 min)
+    nonces = {k: int(v) for k, v in nonces.items() if int(v) >= now - 300}
+    if nonce in nonces:
+        return True
+    nonces[nonce] = now
+    save_json(X9_NONCE_CACHE_FILE, {"nonces": nonces})
+    return False
 
 
 # ─── Whitelist Wallet System ───────────────────────────────────────────────────
@@ -7947,6 +8053,11 @@ def whitepaper_page():
 def roadmap_page():
     return render_template("roadmap.html")
 
+@app.route("/wallet")
+def legacy_wallet_redirect():
+    return redirect("https://thronoschain.org/downloads/", code=302)
+
+
 @app.route("/downloads")
 @app.route("/apps")
 @app.route("/wallet/download")
@@ -9578,6 +9689,29 @@ def api_health():
     }
     HEALTH_CACHE.update({"ts": now, "data": payload})
     return jsonify(payload), 200
+
+
+@app.route("/health", methods=["GET", "OPTIONS"])
+def health_root():
+    if request.method == "OPTIONS":
+        resp = make_response("", 204)
+    else:
+        now = time.time()
+        cached = HEALTH_CACHE.get("data") if isinstance(HEALTH_CACHE.get("data"), dict) else {}
+        payload = {
+            "ok": True,
+            "role": NODE_ROLE,
+            "chain_height": int(CHAIN_META.get("height") or cached.get("chain_height") or 0),
+            "last_hash": CHAIN_META.get("last_hash") or cached.get("last_hash") or "0" * 64,
+            "ts": int(now),
+            "version": APP_VERSION,
+            "service": request.host.split(":")[0],
+        }
+        resp = make_response(jsonify(payload), 200)
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "GET,OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+    return resp
 
 
 @app.route("/api/replica_health")
@@ -12733,6 +12867,46 @@ def api_voice_x9_webhook():
     if expected and provided != expected:
         return jsonify({"ok": False, "error": "invalid_x9_secret"}), 401
 
+    # Hardening: origin allowlist + short-lived signed envelope + basic per-IP rate limiting
+    allowlist = [o.strip() for o in (os.getenv("X9_ALLOWED_ORIGINS") or "").split(",") if o.strip()]
+    req_origin = (request.headers.get("Origin") or "").strip()
+    if allowlist and req_origin and req_origin not in allowlist:
+        return jsonify({"ok": False, "error": "origin_not_allowed"}), 403
+
+    rate_state = load_json(TREASURY_STATE_FILE, {})
+    if not isinstance(rate_state, dict):
+        rate_state = {}
+    rate_cache = rate_state.get("x9_rate") if isinstance(rate_state.get("x9_rate"), dict) else {}
+    ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "x9").split(",")[0].strip()
+    now_ts = int(time.time())
+    hits = [int(ts) for ts in rate_cache.get(ip, []) if int(ts) >= now_ts - 60]
+    max_per_min = int(os.getenv("X9_RATE_LIMIT_PER_MIN", "60") or 60)
+    if len(hits) >= max_per_min:
+        return jsonify({"ok": False, "error": "rate_limited"}), 429
+    hits.append(now_ts)
+    rate_cache[ip] = hits[-max_per_min:]
+    rate_state["x9_rate"] = rate_cache
+    save_json(TREASURY_STATE_FILE, rate_state)
+
+    nonce = (request.headers.get("X-X9-Nonce") or "").strip()
+    ts_raw = (request.headers.get("X-X9-Timestamp") or "").strip()
+    sig = (request.headers.get("X-X9-Signature") or "").strip()
+    if nonce and _x9_nonce_seen(nonce):
+        return jsonify({"ok": False, "error": "nonce_reused"}), 401
+    if ts_raw and sig and expected:
+        try:
+            ts_i = int(ts_raw)
+        except Exception:
+            return jsonify({"ok": False, "error": "invalid_timestamp"}), 401
+        skew = abs(int(time.time()) - ts_i)
+        if skew > int(os.getenv("X9_MAX_SKEW_SECONDS", "120") or 120):
+            return jsonify({"ok": False, "error": "timestamp_skew"}), 401
+        body = request.get_data(cache=True, as_text=True) or ""
+        message = f"{ts_raw}.{nonce}.{body}".encode("utf-8")
+        expected_sig = hmac.new(expected.encode("utf-8"), message, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected_sig):
+            return jsonify({"ok": False, "error": "invalid_signature"}), 401
+
     data = request.get_json(silent=True) or {}
     wallet = (data.get("wallet") or "").strip()
     text = (data.get("text") or "").strip()
@@ -12787,7 +12961,7 @@ def api_voice_x9_webhook():
             "session_id": payload.get("session_id"),
             "model_id": payload.get("model_id"),
             "note": "fallback_echo",
-            "raw_error": body_out,
+            "raw_error": {"status": body_out.get("status") if isinstance(body_out, dict) else "error"},
         }), 200
 
     return jsonify({
@@ -12796,8 +12970,45 @@ def api_voice_x9_webhook():
         "session_id": body_out.get("session_id") or payload.get("session_id"),
         "model_id": body_out.get("model") or payload.get("model_id"),
         "credits": body_out.get("ai_credits", body_out.get("credits", payload.get("credits_after"))),
-        "raw": body_out,
+        "meta": {"status": body_out.get("status") if isinstance(body_out, dict) else "ok"},
     }), status
+
+
+@app.route("/treasury/health", methods=["GET"])
+def api_treasury_health():
+    state = load_json(TREASURY_STATE_FILE, {})
+    if not isinstance(state, dict):
+        state = {}
+    settled = settle_pending_crosschain_events(limit=50)
+    if settled:
+        state["last_settle_count"] = settled
+        state["last_settle_ts"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        save_json(TREASURY_STATE_FILE, state)
+    return jsonify({
+        "ok": True,
+        "node_role": NODE_ROLE,
+        "settled_in_cycle": settled,
+        "last_settle_ts": state.get("last_settle_ts"),
+    }), 200
+
+
+@app.route("/treasury/balances", methods=["GET"])
+def api_treasury_balances():
+    treasury_thr = (os.getenv("TREASURY_THR_ADDRESS") or AI_WALLET_ADDRESS).strip()
+    treasury_wbtc = (os.getenv("TREASURY_WBTC_ADDRESS") or treasury_thr).strip()
+    ledger = load_json(LEDGER_FILE, {})
+    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+    return jsonify({
+        "ok": True,
+        "addresses": {
+            "THR": treasury_thr,
+            "WBTC": treasury_wbtc,
+        },
+        "balances": {
+            "THR": float((ledger or {}).get(treasury_thr, 0.0)),
+            "WBTC": float((wbtc_ledger or {}).get(treasury_wbtc, 0.0)),
+        },
+    }), 200
 
 
 @app.route("/d3lfoi", methods=["GET"])
@@ -24903,8 +25114,12 @@ def api_v1_music_tip():
     data = request.get_json() or {}
     track_id = (data.get("track_id") or "").strip()
     from_address = (data.get("from_address") or "").strip()
-    amount = float(data.get("amount", 0) or 0)
     token_symbol = (data.get("token_symbol") or "THR").strip().upper() or "THR"
+    try:
+        amount_dec = _normalize_decimal_amount(data.get("amount", 0), token_symbol)
+    except Exception:
+        return jsonify({"status": "error", "message": "Invalid tip amount"}), 400
+    amount = float(amount_dec)
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
 
@@ -24912,7 +25127,7 @@ def api_v1_music_tip():
     gps_lng = data.get("gps_lng")
     duration_seconds = data.get("duration_seconds")
 
-    if not track_id or not from_address or amount <= 0:
+    if not track_id or not from_address or amount_dec <= Decimal("0"):
         return jsonify({"status": "error", "message": "Invalid tip parameters"}), 400
 
     registry = load_music_registry()
@@ -24948,12 +25163,14 @@ def api_v1_music_tip():
         if sender_balance < amount:
             return jsonify({"status": "error", "message": "Insufficient balance"}), 400
 
-        artist_amount = round(amount * MUSIC_REWARD_ARTIST_PERCENT, 6)
-        network_amount = round(amount * MUSIC_REWARD_NETWORK_PERCENT, 6)
-        ai_pool_amount = round(amount * MUSIC_REWARD_AI_PERCENT, 6)
-        actual_total = artist_amount + network_amount + ai_pool_amount
-        if actual_total != amount:
-            artist_amount = round(amount - network_amount - ai_pool_amount, 6)
+        thr_dec = _token_decimals("THR")
+        quant = Decimal("1").scaleb(-thr_dec)
+        artist_amount = float((amount_dec * Decimal(str(MUSIC_REWARD_ARTIST_PERCENT))).quantize(quant, rounding=ROUND_DOWN))
+        network_amount = float((amount_dec * Decimal(str(MUSIC_REWARD_NETWORK_PERCENT))).quantize(quant, rounding=ROUND_DOWN))
+        ai_pool_amount = float((amount_dec * Decimal(str(MUSIC_REWARD_AI_PERCENT))).quantize(quant, rounding=ROUND_DOWN))
+        actual_total = Decimal(str(artist_amount)) + Decimal(str(network_amount)) + Decimal(str(ai_pool_amount))
+        if actual_total != amount_dec:
+            artist_amount = float((amount_dec - Decimal(str(network_amount)) - Decimal(str(ai_pool_amount))).quantize(quant, rounding=ROUND_DOWN))
 
         ledger[from_address] = round(sender_balance - amount, 6)
         ledger[artist_address] = round(float(ledger.get(artist_address, 0)) + artist_amount, 6)
@@ -24986,8 +25203,9 @@ def api_v1_music_tip():
         if sender_balance < amount:
             return jsonify({"status": "error", "message": f"Insufficient {token_symbol} balance"}), 400
 
-        token_balances[token_symbol][from_address] = round(sender_balance - amount, 6)
-        token_balances[token_symbol][artist_address] = round(float(token_balances[token_symbol].get(artist_address, 0.0)) + amount, 6)
+        tok_dec = _token_decimals(token_symbol)
+        token_balances[token_symbol][from_address] = round(sender_balance - amount, tok_dec)
+        token_balances[token_symbol][artist_address] = round(float(token_balances[token_symbol].get(artist_address, 0.0)) + amount, tok_dec)
         save_token_balances(token_balances)
         new_balance = token_balances[token_symbol][from_address]
 
@@ -25026,7 +25244,7 @@ def api_v1_music_tip():
         "ai_pool_amount": ai_pool_amount,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
         "tx_id": tx_id,
-        "status": "confirmed"
+        "status": "PENDING"
     }
     if reward_split:
         tx["reward_split"] = reward_split
@@ -25059,8 +25277,19 @@ def api_v1_music_tip():
             gps_data=gps_data
         )
 
+    event = emit_crosschain_event("MUSIC_TIP", {
+        "tx_id": tx_id,
+        "track_id": track_id,
+        "from": from_address,
+        "to": artist_address,
+        "token_symbol": token_symbol,
+        "amount": str(amount_dec),
+    }, status="PENDING")
+
     return jsonify({
         "status": "success",
+        "tx_status": "PENDING",
+        "event_id": event.get("event_id"),
         "tx_id": tx_id,
         "token_symbol": token_symbol,
         "amount": amount,

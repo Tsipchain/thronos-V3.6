@@ -1,0 +1,10 @@
+{
+  "version": "1.0",
+  "events": [
+    {"type": "MUSIC_TIP", "required": ["tx_id", "track_id", "from", "to", "token_symbol", "amount"]},
+    {"type": "PLAY_BATCH_ROOT", "required": ["root", "batch_size", "source"]},
+    {"type": "TELEMETRY_ROOT", "required": ["root", "device_count", "source"]},
+    {"type": "BRIDGE_DEPOSIT", "required": ["tx_id", "from_chain", "to_chain", "amount", "token_symbol"]},
+    {"type": "SETTLED", "required": ["event_id", "settled_at"]}
+  ]
+}

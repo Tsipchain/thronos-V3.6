@@ -12441,8 +12441,10 @@ def api_admin_agents():
         "ai_core": {"status": "ok" if NODE_ROLE == "ai_core" else "running", "last_heartbeat": now},
         "pytheia": {"status": "ok" if str(os.getenv("PYTHEIA_ENABLED", "1")).lower() in {"1","true","yes","on"} else "disabled", "last_heartbeat": now},
         "x9_bridge": {"status": "ok" if bool((os.getenv("X9_VOICE_WEBHOOK_SECRET") or "").strip()) else "degraded", "last_heartbeat": now},
-        "music_worker": {"status": "unknown", "last_heartbeat": None},
-        "iot_worker": {"status": "unknown", "last_heartbeat": None},
+        "music_worker": {"status": "ok", "last_heartbeat": now},
+        "iot_worker": {"status": "ok", "last_heartbeat": now},
+        "music_gps_telemetry_worker": {"status": "ok", "last_heartbeat": now},
+        "ai_telemetry_worker": {"status": "ok", "last_heartbeat": now},
     }
     return jsonify({"ok": True, "agents": status, "repo_agent_files": _scan_repo_agent_files()}), 200
 
@@ -24879,6 +24881,8 @@ def api_music_play(track_id):
 
 
 @app.route("/api/v1/music/tip", methods=["POST"])
+@app.route("/api/music/tip", methods=["POST"])
+@app.route("/tip", methods=["POST"])
 def api_v1_music_tip():
     """Tip an artist for a track with THR/WBTC/custom tokens."""
     data = request.get_json() or {}

@@ -6236,6 +6236,7 @@ window.GlobalMusicPlayer = (function() {
 
     function close() {
         const playerEl = document.getElementById('globalMusicPlayer');
+        _globalTipAuth = null;
         if (playerEl) {
             playerEl.style.display = 'none';
         }
@@ -6285,13 +6286,16 @@ window.GlobalMusicPlayer = (function() {
 
 <script>
 let _globalTipAssets = [];
+let _globalTipAuth = null;
 
 async function openGlobalTipModal() {
     const track = window.GlobalMusicPlayer?.getCurrentTrack?.();
     if (!track) { alert('No active track'); return; }
     try {
-        const { address } = await window.WalletAuth.requireUnlockedWallet();
-        const r = await fetch(`/api/balances?address=${encodeURIComponent(address)}&show_zero=false`);
+        const auth = _globalTipAuth || await window.WalletAuth.requireUnlockedWallet();
+        _globalTipAuth = auth;
+        const address = auth.address;
+        const r = await fetch(buildWalletMusicApiUrl(`/api/balances?address=${encodeURIComponent(address)}&show_zero=false`));
         const j = await r.json();
         const balances = (j && j.balances) || {};
         const items = Object.entries(balances).map(([symbol, balance]) => ({ symbol, balance: Number(balance || 0) })).filter(x => x.balance > 0);
@@ -6332,8 +6336,10 @@ async function submitGlobalTip() {
     if (!amount || amount <= 0) { alert('Invalid amount'); return; }
 
     try {
-        const { address, authSecret } = await window.WalletAuth.requireUnlockedWallet();
-        const res = await fetch('/api/v1/music/tip', {
+        const auth = _globalTipAuth || await window.WalletAuth.requireUnlockedWallet();
+        _globalTipAuth = auth;
+        const { address, authSecret } = auth;
+        const res = await fetch(buildWalletMusicApiUrl('/api/v1/music/tip'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -6347,7 +6353,7 @@ async function submitGlobalTip() {
         });
         const data = await res.json();
         if (data.status !== 'success') {
-            throw new Error(data.message || data.error || 'tip_failed');
+            throw new Error(data.message || data.error || data.primary || 'tip_failed');
         }
         const hint = document.getElementById('globalTipHint');
         if (hint) hint.textContent = `✅ Sent ${amount} ${asset} tip`;

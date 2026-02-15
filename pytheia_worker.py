@@ -157,6 +157,8 @@ HEALTH_ENDPOINTS = [
     {"path": "/chat", "name": "Chat Page", "expected_status": 200},
     {"path": "/architect", "name": "Architect Page", "expected_status": 200},
     {"path": "/api/ai/models", "name": "AI Models API", "expected_status": 200},
+    {"path": "/api/ai/telemetry", "name": "AI Telemetry API", "expected_status": 200},
+    {"path": "/api/music/telemetry/stats", "name": "Music Telemetry Stats", "expected_status": 200},
     {"path": "/api/bridge/status", "name": "Bridge Status API", "expected_status": 200},
     {"path": "/tokens", "name": "Tokens Page", "expected_status": 200},
     {"path": "/nft", "name": "NFT Page", "expected_status": 200},

@@ -6882,12 +6882,19 @@ def bootstrap_json():
     }
 
     health_refs = {}
+    health_live_refs = {}
     for key, base in services.items():
         root = str(base or "").rstrip("/")
         if not root:
             continue
-        # Static front-ends may not expose dynamic /health handlers.
-        health_refs[key] = f"{root}/health.json" if key in {"verifyid", "explorer"} else f"{root}/health"
+        health_refs[key] = f"{root}/health"
+        # Static front-ends and legacy backends may still expose only fallback paths.
+        if key in {"verifyid", "explorer"}:
+            health_live_refs[key] = f"{root}/health.json"
+        elif key in {"api", "ro_api", "ai", "sentinel", "btc_api"}:
+            health_live_refs[key] = f"{root}/api/health"
+        else:
+            health_live_refs[key] = f"{root}/health"
 
     return jsonify({
         "primary":      _BOOTSTRAP_PRIMARY,
@@ -6901,6 +6908,7 @@ def bootstrap_json():
         "sentinel":     _BOOTSTRAP_SENTINEL,
         "btc_api":      _BOOTSTRAP_BTC_API,
         "health":       health_refs,
+        "health_live":  health_live_refs,
         "node_role": NODE_ROLE,
         "version": "3.6",
     }), 200

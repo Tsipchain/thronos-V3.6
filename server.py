@@ -24880,24 +24880,15 @@ def api_music_play(track_id):
 
 @app.route("/api/v1/music/tip", methods=["POST"])
 def api_v1_music_tip():
-    """
-    Tip an artist for a track.
-
-    Optional GPS telemetry for music-while-traveling integration:
-    - gps_lat/gps_lng: Current location (for trip telemetry)
-    - duration_seconds: How long the track was played
-
-    This data helps train autopilot routes by correlating music listening
-    patterns with travel routes.
-    """
+    """Tip an artist for a track with THR/WBTC/custom tokens."""
     data = request.get_json() or {}
     track_id = (data.get("track_id") or "").strip()
     from_address = (data.get("from_address") or "").strip()
-    amount = float(data.get("amount", 0))
+    amount = float(data.get("amount", 0) or 0)
+    token_symbol = (data.get("token_symbol") or "THR").strip().upper() or "THR"
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
 
-    # GPS telemetry for music-while-traveling (optional)
     gps_lat = data.get("gps_lat")
     gps_lng = data.get("gps_lng")
     duration_seconds = data.get("duration_seconds")
@@ -24907,13 +24898,11 @@ def api_v1_music_tip():
 
     registry = load_music_registry()
     track = next((t for t in registry["tracks"] if t["id"] == track_id), None)
-
     if not track:
         return jsonify({"status": "error", "message": "Track not found"}), 404
 
     artist_address = track["artist_address"]
 
-    # Verify auth
     ok, _, error_key = validate_effective_auth(from_address, auth_secret, passphrase)
     if not ok:
         if error_key == "no_effective_pledge":
@@ -24929,53 +24918,81 @@ def api_v1_music_tip():
         if error_key == "invalid_auth":
             return jsonify({"status": "error", "message": "Invalid auth"}), 403
 
-    # Transfer THR with 80/10/10 split (Phase 5: Music Telemetry Rewards)
-    # 80% to artist, 10% to network pool, 10% to AI/T2E pool
-    ledger = load_json(LEDGER_FILE, {})
-    sender_balance = float(ledger.get(from_address, 0))
+    reward_split = None
+    artist_amount = amount
+    network_amount = 0.0
+    ai_pool_amount = 0.0
 
-    if sender_balance < amount:
-        return jsonify({"status": "error", "message": "Insufficient balance"}), 400
+    if token_symbol == "THR":
+        ledger = load_json(LEDGER_FILE, {})
+        sender_balance = float(ledger.get(from_address, 0))
+        if sender_balance < amount:
+            return jsonify({"status": "error", "message": "Insufficient balance"}), 400
 
-    # Calculate splits using global constants
-    artist_amount = round(amount * MUSIC_REWARD_ARTIST_PERCENT, 6)    # 80%
-    network_amount = round(amount * MUSIC_REWARD_NETWORK_PERCENT, 6)  # 10%
-    ai_pool_amount = round(amount * MUSIC_REWARD_AI_PERCENT, 6)       # 10%
+        artist_amount = round(amount * MUSIC_REWARD_ARTIST_PERCENT, 6)
+        network_amount = round(amount * MUSIC_REWARD_NETWORK_PERCENT, 6)
+        ai_pool_amount = round(amount * MUSIC_REWARD_AI_PERCENT, 6)
+        actual_total = artist_amount + network_amount + ai_pool_amount
+        if actual_total != amount:
+            artist_amount = round(amount - network_amount - ai_pool_amount, 6)
 
-    # Ensure no rounding errors
-    actual_total = artist_amount + network_amount + ai_pool_amount
-    if actual_total != amount:
-        artist_amount = round(amount - network_amount - ai_pool_amount, 6)
+        ledger[from_address] = round(sender_balance - amount, 6)
+        ledger[artist_address] = round(float(ledger.get(artist_address, 0)) + artist_amount, 6)
+        save_json(LEDGER_FILE, ledger)
 
-    # Debit sender
-    ledger[from_address] = round(sender_balance - amount, 6)
+        credit_network_pool(network_amount, source="music_tip")
+        credit_ai_pool(ai_pool_amount, music_tip_amount=amount)
+        reward_split = {"artist": artist_amount, "network": network_amount, "ai_t2e": ai_pool_amount}
+        new_balance = ledger[from_address]
+    elif token_symbol == "WBTC":
+        wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+        sender_balance = float(wbtc_ledger.get(from_address, 0.0))
+        if sender_balance < amount:
+            return jsonify({"status": "error", "message": "Insufficient WBTC balance"}), 400
+        wbtc_ledger[from_address] = round(sender_balance - amount, 8)
+        wbtc_ledger[artist_address] = round(float(wbtc_ledger.get(artist_address, 0.0)) + amount, 8)
+        save_json(WBTC_LEDGER_FILE, wbtc_ledger)
+        new_balance = wbtc_ledger[from_address]
+    else:
+        token_balances = load_token_balances()
+        token_registry = load_json(CUSTOM_TOKENS_FILE, {}).get("tokens", [])
+        token_meta = next((t for t in token_registry if str(t.get("symbol") or "").upper() == token_symbol), None)
+        if not token_meta:
+            return jsonify({"status": "error", "message": f"Unknown token: {token_symbol}"}), 400
+        if not token_meta.get("transferable", True):
+            return jsonify({"status": "error", "message": f"Token {token_symbol} is not transferable"}), 400
 
-    # Credit artist (80%)
-    ledger[artist_address] = round(float(ledger.get(artist_address, 0)) + artist_amount, 6)
-    save_json(LEDGER_FILE, ledger)
+        token_balances.setdefault(token_symbol, {})
+        sender_balance = float(token_balances[token_symbol].get(from_address, 0.0))
+        if sender_balance < amount:
+            return jsonify({"status": "error", "message": f"Insufficient {token_symbol} balance"}), 400
 
-    # Credit network pool (10%)
-    credit_network_pool(network_amount, source="music_tip")
+        token_balances[token_symbol][from_address] = round(sender_balance - amount, 6)
+        token_balances[token_symbol][artist_address] = round(float(token_balances[token_symbol].get(artist_address, 0.0)) + amount, 6)
+        save_token_balances(token_balances)
+        new_balance = token_balances[token_symbol][from_address]
 
-    # Credit AI/T2E pool (10%)
-    credit_ai_pool(ai_pool_amount, music_tip_amount=amount)
-
-    # Update track tips (total amount)
     for t in registry["tracks"]:
         if t["id"] == track_id:
-            t["tips_total"] = float(t.get("tips_total", 0)) + amount
+            if token_symbol == "THR":
+                t["tips_total"] = float(t.get("tips_total", 0)) + amount
+            token_totals = t.get("tips_by_token") if isinstance(t.get("tips_by_token"), dict) else {}
+            token_totals[token_symbol] = round(float(token_totals.get(token_symbol, 0.0)) + amount, 6)
+            t["tips_by_token"] = token_totals
             break
 
-    # Update artist earnings (only their 80% portion)
     if artist_address in registry["artists"]:
-        registry["artists"][artist_address]["total_earnings"] = \
-            float(registry["artists"][artist_address].get("total_earnings", 0)) + artist_amount
+        earnings = registry["artists"][artist_address].get("token_earnings")
+        earnings = earnings if isinstance(earnings, dict) else {}
+        earnings[token_symbol] = round(float(earnings.get(token_symbol, 0.0)) + artist_amount, 6)
+        registry["artists"][artist_address]["token_earnings"] = earnings
+        if token_symbol == "THR":
+            registry["artists"][artist_address]["total_earnings"] = float(registry["artists"][artist_address].get("total_earnings", 0)) + artist_amount
 
     save_music_registry(registry)
 
-    # Record transaction with full reward split info
     chain = load_json(CHAIN_FILE, [])
-    tx_id = f"MUSIC-TIP-{int(time.time())}-{secrets.token_hex(4)}"
+    tx_id = f"MUSIC-TIP-{token_symbol}-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
         "type": "music_tip",
         "category": "music_tip",
@@ -24984,21 +25001,17 @@ def api_v1_music_tip():
         "from": from_address,
         "to": artist_address,
         "amount": amount,
-        "reward_split": {
-            "artist": artist_amount,
-            "network": network_amount,
-            "ai_t2e": ai_pool_amount
-        },
-        # Legacy fields for backward compatibility
+        "token_symbol": token_symbol,
         "artist_amount": artist_amount,
-        "ai_pool_amount": ai_pool_amount,
         "network_amount": network_amount,
+        "ai_pool_amount": ai_pool_amount,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
         "tx_id": tx_id,
         "status": "confirmed"
     }
+    if reward_split:
+        tx["reward_split"] = reward_split
 
-    # Add GPS data if provided
     gps_data = None
     if gps_lat is not None and gps_lng is not None:
         gps_data = {"lat": gps_lat, "lng": gps_lng}
@@ -25008,7 +25021,6 @@ def api_v1_music_tip():
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
 
-    # Track music play with GPS telemetry (for autopilot route training)
     _track_music_play(
         track_id=track_id,
         wallet_address=from_address,
@@ -25016,10 +25028,9 @@ def api_v1_music_tip():
         duration_seconds=duration_seconds,
         gps_lat=gps_lat,
         gps_lng=gps_lng,
-        tip_amount=amount
+        tip_amount=amount if token_symbol == "THR" else 0.0,
     )
 
-    # Record T2E contribution if GPS data provided (driver training)
     if gps_data:
         record_training_contribution(
             device_id=f"TIPPER-{from_address[:16]}",
@@ -25029,23 +25040,16 @@ def api_v1_music_tip():
             gps_data=gps_data
         )
 
-    logger.info(f"Music tip: {amount} THR from {from_address} for track {track_id} "
-                f"(artist={artist_amount}, network={network_amount}, ai={ai_pool_amount})" +
-                (f" @ GPS({gps_lat:.4f}, {gps_lng:.4f})" if gps_lat and gps_lng else ""))
-
     return jsonify({
         "status": "success",
         "tx_id": tx_id,
+        "token_symbol": token_symbol,
         "amount": amount,
-        "reward_split": {
-            "artist": artist_amount,
-            "network": network_amount,
-            "ai_t2e": ai_pool_amount
-        },
         "artist_amount": artist_amount,
         "network_amount": network_amount,
         "ai_pool_amount": ai_pool_amount,
-        "new_balance": ledger[from_address],
+        "reward_split": reward_split,
+        "new_balance": new_balance,
         "gps_recorded": bool(gps_lat and gps_lng),
         "t2e_contribution_recorded": bool(gps_data)
     }), 200

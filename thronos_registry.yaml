@@ -1,0 +1,502 @@
+# ============================================================
+# THRONOS MASTER ECOSYSTEM REGISTRY
+# Canonical source-of-truth for every service, app, game, and
+# integration in the Thronos FlexCo operating system.
+#
+# Owner : Thronos FlexCo (Austria)
+# Version : 2026.2
+# Updated : 2026-02-15
+# Generator: scripts/generate_bootstrap.py reads this file
+#            and outputs portal/bootstrap.json
+# ============================================================
+
+meta:
+  version: "2026.2"
+  updated: "2026-02-15"
+  owner: "Thronos FlexCo e.U. (Austria)"
+  contact: "admin@thronoschain.org"
+  license: "Proprietary + Open-Source Components"
+
+# ----------------------------------------------------------
+# INFRASTRUCTURE NODES
+# ----------------------------------------------------------
+nodes:
+  - id: node1-master
+    name: "Master Blockchain Node"
+    role: master
+    platform: railway
+    url: "https://thrchain.up.railway.app"
+    health: "/api/health"
+    tier: critical
+    owner: core-team
+    data_store: sqlite3 (ledger.sqlite3)
+    repo: "Tsipchain/thronos-V3.6"
+    responsibilities:
+      - chain-write
+      - scheduler
+      - mempool
+      - smart-contracts
+      - ai-proxy
+
+  - id: node2-replica
+    name: "Replica + Cross-Chain Watchers"
+    role: replica
+    platform: railway
+    url: "https://node-2.up.railway.app"
+    health: "/api/health"
+    tier: critical
+    owner: core-team
+    data_store: sqlite3 (ledger.sqlite3, read-only)
+    repo: "Tsipchain/thronos-V3.6"
+    responsibilities:
+      - read-only-queries
+      - btc-pledge-watcher
+      - cross-chain-rpc
+      - heartbeat-sender
+
+  - id: node3-vercel
+    name: "Static Frontend / Native Wallet CDN"
+    role: cdn
+    platform: vercel
+    url: "https://thronoschain.org"
+    health: "/"
+    tier: high
+    owner: core-team
+    data_store: none (static)
+    repo: "Tsipchain/thronos-portal"
+    responsibilities:
+      - static-frontend
+      - wallet-widget
+      - landing-pages
+
+  - id: node4-ai-core
+    name: "AI Core / LLM Inference / Pytheia"
+    role: ai-core
+    platform: render
+    url: "https://thronos-v3-6.onrender.com"
+    health: "/api/health"
+    tier: high
+    owner: core-team
+    data_store: sqlite3 (ai_sessions.db)
+    repo: "Tsipchain/thronos-V3.6"
+    responsibilities:
+      - llm-inference
+      - pytheia-agent
+      - autonomous-trading
+      - oracle-services
+
+# ----------------------------------------------------------
+# CORE SERVICES
+# ----------------------------------------------------------
+services:
+  - id: blockchain-core
+    name: "Thronos Blockchain Engine"
+    subdomain: "thrchain"
+    node: node1-master
+    port: 5000
+    tier: critical
+    category: chain
+    endpoints:
+      - "/api/health"
+      - "/api/block/latest"
+      - "/api/tx/submit"
+      - "/api/balance/{address}"
+      - "/api/mempool"
+    owner: core-team
+
+  - id: wallet-service
+    name: "HD Wallet & Address Management"
+    subdomain: "thrchain"
+    node: node1-master
+    tier: critical
+    category: wallet
+    endpoints:
+      - "/api/wallet/create"
+      - "/api/wallet/balance"
+      - "/api/wallet/send"
+      - "/api/wallet/history"
+      - "/api/wallet/qr"
+    owner: core-team
+
+  - id: verify-id
+    name: "VerifyID – Device & Identity Verification"
+    subdomain: "verify"
+    node: node1-master
+    tier: critical
+    category: identity
+    endpoints:
+      - "/api/verify/challenge"
+      - "/api/verify/register"
+      - "/api/verify/status"
+      - "/api/verify/telemetry"
+    owner: core-team
+    compliance:
+      - "AML-light"
+      - "KYC-boundary"
+    notes: "ASIC attestation + GPS device registration"
+
+  - id: btc-bridge
+    name: "BTC Bridge & Pledge System"
+    subdomain: "thrchain"
+    node: node1-master
+    tier: critical
+    category: bridge
+    endpoints:
+      - "/api/bridge/pledge"
+      - "/api/bridge/status"
+      - "/api/bridge/withdraw"
+    watcher_node: node2-replica
+    owner: core-team
+
+  - id: btc-api-adapter
+    name: "Thronos BTC API (Independent)"
+    subdomain: "btc-api"
+    custom_domain: "btc-api.thronoschain.org"
+    tier: high
+    category: bridge
+    endpoints:
+      - "/api/btc/utxo/{address}"
+      - "/api/btc/tx/{txid}"
+      - "/api/btc/broadcast"
+    owner: core-team
+
+  - id: ai-chat
+    name: "AI Chat & Sessions (Multi-Provider)"
+    subdomain: "thrchain"
+    node: node1-master
+    proxy_to: node4-ai-core
+    tier: high
+    category: ai
+    endpoints:
+      - "/api/ai/chat"
+      - "/api/ai/sessions"
+      - "/api/ai/models"
+    providers:
+      - openai
+      - anthropic
+      - google-gemini
+    owner: core-team
+
+  - id: pytheia
+    name: "Pytheia – AI Autonomous Agent"
+    subdomain: "ai-core"
+    node: node4-ai-core
+    tier: high
+    category: ai
+    endpoints:
+      - "/api/pytheia/status"
+      - "/api/pytheia/health-scan"
+      - "/api/pytheia/advice"
+    owner: core-team
+
+  - id: defi-amm
+    name: "AMM / Liquidity Pools / DEX"
+    subdomain: "thrchain"
+    node: node1-master
+    tier: high
+    category: defi
+    endpoints:
+      - "/api/pool/list"
+      - "/api/pool/swap"
+      - "/api/pool/add-liquidity"
+      - "/api/pool/remove-liquidity"
+    owner: core-team
+
+  - id: token-factory
+    name: "Custom Token Creation & Management"
+    subdomain: "thrchain"
+    node: node1-master
+    tier: medium
+    category: defi
+    endpoints:
+      - "/api/token/create"
+      - "/api/token/mint"
+      - "/api/token/burn"
+      - "/api/token/transfer"
+    owner: core-team
+
+  - id: fiat-gateway
+    name: "Fiat Gateway (Stripe)"
+    subdomain: "thrchain"
+    node: node1-master
+    tier: high
+    category: payments
+    endpoints:
+      - "/api/gateway/buy"
+      - "/api/gateway/status"
+    owner: core-team
+    compliance:
+      - "PCI-DSS-delegated"
+
+  - id: stratum-mining
+    name: "Stratum Mining Server (SHA256)"
+    subdomain: "thrchain"
+    node: node1-master
+    port: 3334
+    tier: high
+    category: mining
+    protocol: stratum
+    compatible:
+      - "Block Erupter"
+      - "Antminer"
+      - "CPU/GPU"
+    owner: core-team
+
+  - id: evm-contracts
+    name: "EVM Smart Contracts Engine"
+    subdomain: "thrchain"
+    node: node1-master
+    tier: medium
+    category: contracts
+    endpoints:
+      - "/evm/deploy"
+      - "/evm/call"
+      - "/evm/verify"
+    owner: core-team
+
+  - id: quorum-consensus
+    name: "Quorum BFT Consensus & Validators"
+    subdomain: "thrchain"
+    node: node1-master
+    tier: critical
+    category: consensus
+    endpoints:
+      - "/api/validators/list"
+      - "/api/validators/vote"
+      - "/api/quorum/status"
+    owner: core-team
+
+# ----------------------------------------------------------
+# APPLICATIONS
+# ----------------------------------------------------------
+apps:
+  - id: decent-music
+    name: "Decent Music – Decentralized Streaming"
+    subdomain: "music"
+    node: node1-master
+    tier: high
+    category: music
+    endpoints:
+      - "/api/music/artists"
+      - "/api/music/tracks"
+      - "/api/music/upload"
+      - "/api/music/tip"
+      - "/api/music/royalties"
+    revenue_split:
+      artist: 80
+      network: 10
+      ai_t2e: 10
+    owner: music-team
+
+  - id: learn-to-earn
+    name: "Learn-to-Earn (L2E) Platform"
+    subdomain: "thrchain"
+    node: node1-master
+    tier: medium
+    category: education
+    endpoints:
+      - "/api/l2e/courses"
+      - "/api/l2e/enroll"
+      - "/api/l2e/complete"
+      - "/api/l2e/rewards"
+    owner: core-team
+
+  - id: driver-telemetry
+    name: "GPS Driver Telemetry & T2E"
+    subdomain: "thrchain"
+    node: node1-master
+    tier: high
+    category: telemetry
+    endpoints:
+      - "/api/telemetry/submit"
+      - "/api/telemetry/rewards"
+      - "/api/driver/register"
+      - "/api/driver/stats"
+    privacy:
+      - "GPS hashed on-device"
+      - "No raw coordinates stored"
+      - "Proof-of-route only"
+    owner: core-team
+
+  - id: iot-mining
+    name: "IoT Mining & Smart Parking"
+    subdomain: "iot"
+    node: node1-master
+    tier: medium
+    category: iot
+    endpoints:
+      - "/api/iot/register"
+      - "/api/iot/telemetry"
+      - "/api/iot/parking/status"
+      - "/api/iot/parking/pay"
+    owner: core-team
+
+  - id: wallet-widget
+    name: "HTML Wallet Widget (14-Tab)"
+    subdomain: "portal"
+    node: node3-vercel
+    tier: high
+    category: wallet-ui
+    tabs:
+      - THR
+      - Mining
+      - Tokens
+      - Swaps
+      - L2E
+      - T2E
+      - AI_Credits
+      - Architect
+      - IoT
+      - Bridge
+      - Liquidity
+      - Gateway
+      - Music
+      - History
+    owner: core-team
+
+  - id: explorer
+    name: "Blockchain Explorer"
+    subdomain: "explorer"
+    node: node3-vercel
+    tier: medium
+    category: explorer
+    owner: core-team
+
+  - id: chrome-extension
+    name: "Chrome Extension Wallet"
+    platform: chromium
+    tier: medium
+    category: wallet-ext
+    features:
+      - wallet
+      - balances
+      - send
+      - dapp-provider
+    owner: core-team
+
+# ----------------------------------------------------------
+# GAMES
+# ----------------------------------------------------------
+games:
+  - id: crypto-hunters
+    name: "Crypto Hunters – Play-to-Earn"
+    subdomain: "thrchain"
+    node: node1-master
+    tier: medium
+    category: gaming
+    endpoints:
+      - "/api/game/hunters/register"
+      - "/api/game/hunters/location"
+      - "/api/game/hunters/leaderboard"
+      - "/api/game/hunters/nft-drop"
+    features:
+      - geolocation
+      - leaderboards
+      - nft-drops
+      - p2e-rewards
+    owner: gaming-team
+
+# ----------------------------------------------------------
+# SURVIVAL / OFF-GRID PROTOCOLS
+# ----------------------------------------------------------
+protocols:
+  - id: whisper-note
+    name: "WhisperNote – Audio-Fi TX Transmission"
+    tier: high
+    category: survival
+    modulation: FSK
+    frequencies: [1000, 2000, 4000]
+    owner: core-team
+
+  - id: radio-node
+    name: "RadioNode – RF Block Propagation"
+    tier: high
+    category: survival
+    bands: ["433MHz", "868MHz", "915MHz"]
+    modulation: ["FSK", "OOK", "LoRa"]
+    owner: core-team
+
+  - id: phantom-face
+    name: "PhantomFace – Steganography TXs"
+    tier: medium
+    category: survival
+    method: "LSB image encoding + AES"
+    owner: core-team
+
+  - id: solar-controller
+    name: "Solar Energy Controller (Victron/RS485)"
+    tier: medium
+    category: survival
+    modes: ["full", "eco", "survival"]
+    owner: core-team
+
+# ----------------------------------------------------------
+# LANDING PAGES (Portal)
+# ----------------------------------------------------------
+landings:
+  - id: app-hub
+    name: "App Hub"
+    path: "/hub"
+    node: node3-vercel
+    copy_voice: "unified"
+
+  - id: ai-core-landing
+    name: "AI Core"
+    path: "/ai"
+    node: node3-vercel
+    copy_voice: "unified"
+
+  - id: sentinel-landing
+    name: "Sentinel (Monitoring)"
+    path: "/sentinel"
+    node: node3-vercel
+    copy_voice: "unified"
+
+  - id: verifyid-landing
+    name: "VerifyID"
+    path: "/verify"
+    node: node3-vercel
+    copy_voice: "unified"
+
+  - id: explorer-landing
+    name: "Explorer"
+    path: "/explorer"
+    node: node3-vercel
+    copy_voice: "unified"
+
+# ----------------------------------------------------------
+# CUSTOM DOMAINS
+# ----------------------------------------------------------
+domains:
+  - domain: "thronoschain.org"
+    target: node3-vercel
+    type: apex
+    dns: vercel
+
+  - domain: "btc-api.thronoschain.org"
+    target: btc-api-adapter
+    type: cname
+    dns: railway
+
+  - domain: "thrchain.up.railway.app"
+    target: node1-master
+    type: platform
+    dns: railway
+
+  - domain: "thronos-v3-6.onrender.com"
+    target: node4-ai-core
+    type: platform
+    dns: render
+
+# ----------------------------------------------------------
+# HEALTH CHECK CONFIGURATION
+# ----------------------------------------------------------
+health:
+  scan_interval_seconds: 300
+  alert_channels:
+    - pytheia-internal
+    - admin-webhook
+  thresholds:
+    response_time_warn_ms: 2000
+    response_time_critical_ms: 5000
+    consecutive_failures_alert: 3

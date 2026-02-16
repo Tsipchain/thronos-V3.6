@@ -1,0 +1,79 @@
+# Pytheia Monitor Configuration
+# Controls daemon behavior, alerting, and incident management.
+
+monitor:
+  mode: daemon
+  scan_interval_seconds: 300
+  http_timeout_seconds: 10
+  registry_path: "../thronos_registry.yaml"
+
+# Health thresholds
+thresholds:
+  response_time_warn_ms: 2000
+  response_time_critical_ms: 5000
+  consecutive_failures_alert: 3
+  consecutive_failures_sev1: 5
+
+# Incident card settings
+incidents:
+  directory: "incidents/"
+  retention_days: 90
+  auto_resolve_after_healthy: 3  # resolve after N consecutive healthy checks
+
+# Alerting (future: webhook, email, Slack)
+alerts:
+  enabled: true
+  channels:
+    - type: log
+      target: "pytheia_monitor.log"
+    - type: webhook
+      target: ""  # set to admin webhook URL when ready
+      enabled: false
+
+# Application checklist — Pytheia tracks these are all present in registry
+checklist:
+  - id: wallet-service
+    label: "Wallet (HD, QR, Send/Receive)"
+    required: true
+  - id: decent-music
+    label: "Music Player / Decent Music Label"
+    required: true
+  - id: driver-telemetry
+    label: "GPS / Driver Telemetry (T2E)"
+    required: true
+  - id: iot-mining
+    label: "IoT Miners / Smart Parking"
+    required: true
+  - id: verify-id
+    label: "VerifyID (Hosting + Mail Vision)"
+    required: true
+  - id: crypto-hunters
+    label: "Crypto Hunters (P2E Game)"
+    required: true
+  - id: btc-bridge
+    label: "BTC Bridge (Pledge/Watcher)"
+    required: true
+  - id: ai-chat
+    label: "AI Core (LLM Inference)"
+    required: true
+  - id: pytheia
+    label: "Pytheia (Autonomous Agent)"
+    required: true
+  - id: defi-amm
+    label: "AMM / DEX (Liquidity Pools)"
+    required: true
+  - id: fiat-gateway
+    label: "Fiat Gateway (Stripe)"
+    required: true
+  - id: stratum-mining
+    label: "Stratum Mining (SHA256)"
+    required: true
+  - id: learn-to-earn
+    label: "Learn-to-Earn (L2E)"
+    required: false
+  - id: explorer
+    label: "Blockchain Explorer"
+    required: true
+  - id: chrome-extension
+    label: "Chrome Extension Wallet"
+    required: false

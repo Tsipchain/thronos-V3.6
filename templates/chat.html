@@ -1646,6 +1646,7 @@
     async function loadSessions() {
       try {
         setSessionStatus("Loading sessions…");
+        const cachedSessions = Array.isArray(aiSessions) ? aiSessions.slice() : [];
         const wallet = walletInputEl.value.trim();
         const url = wallet
           ? `${API_SESSIONS}?wallet=${encodeURIComponent(wallet)}`
@@ -1657,6 +1658,10 @@
           const count = (messagesBySession[s.id] || []).length;
           return { ...s, message_count: count || s.message_count || 0 };
         });
+
+        if (!aiSessions.length && cachedSessions.length) {
+          aiSessions = cachedSessions;
+        }
 
         if (currentSessionId && !aiSessions.find((s) => s.id === currentSessionId)) {
           currentSessionId = null;

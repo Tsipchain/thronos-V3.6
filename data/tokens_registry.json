@@ -1,0 +1,8 @@
+{
+  "tokens": {
+    "THR": {"decimals": 6, "chain": "thronos", "rpc_env": "THR_RPC_URL", "treasury_address": "THR_AI_AGENT_WALLET_V1"},
+    "WBTC": {"decimals": 8, "chain": "bitcoin", "rpc_env": "BTC_RPC_URL", "treasury_address": "THR_AI_AGENT_WALLET_V1"},
+    "L2E": {"decimals": 6, "chain": "thronos", "rpc_env": "THR_RPC_URL", "treasury_address": "THR_AI_AGENT_WALLET_V1"},
+    "T2E": {"decimals": 6, "chain": "thronos", "rpc_env": "THR_RPC_URL", "treasury_address": "THR_AI_AGENT_WALLET_V1"}
+  }
+}

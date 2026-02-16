@@ -1,0 +1,7 @@
+{
+  "ok": true,
+  "service": "thronos-static",
+  "role": "frontend",
+  "version": "3.6",
+  "ts": 0
+}

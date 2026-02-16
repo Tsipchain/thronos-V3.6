@@ -1,0 +1,10 @@
+{
+  "api": "https://api.thronoschain.org",
+  "ro_api": "https://ro.api.thronoschain.org",
+  "verifyid": "https://verifyid.thronoschain.org",
+  "verifyid_api": "https://verifyid-api.thronoschain.org",
+  "ai": "https://ai.thronoschain.org",
+  "explorer": "https://explorer.thronoschain.org",
+  "sentinel": "https://sentinel.thronoschain.org",
+  "btc_api": "https://btc-api.thronoschain.org"
+}

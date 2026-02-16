@@ -504,6 +504,13 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 # Unified API contract
 API_BASE_PREFIX = os.getenv("API_BASE_PREFIX", "/api")
 APP_VERSION     = os.getenv("APP_VERSION", "v3.6")
+APP_BUILD_TIME  = os.getenv("BUILD_TIME", os.getenv("RENDER_GIT_COMMIT_TIME", ""))
+APP_GIT_SHA     = (
+    os.getenv("RAILWAY_GIT_COMMIT_SHA")
+    or os.getenv("RENDER_GIT_COMMIT")
+    or os.getenv("SOURCE_COMMIT")
+    or "unknown"
+)
 
 AI_LOG_API_KEY = os.getenv("AI_LOG_API_KEY", os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW"))
 
@@ -639,6 +646,27 @@ _BOOTSTRAP_VERIFYID_API = os.getenv("BOOTSTRAP_VERIFYID_API", "https://verifyid-
 _BOOTSTRAP_AI_CORE   = os.getenv("BOOTSTRAP_AI_CORE",   "https://ai.thronoschain.org")
 _BOOTSTRAP_SENTINEL  = os.getenv("BOOTSTRAP_SENTINEL",  "https://sentinel.thronoschain.org")
 _BOOTSTRAP_BTC_API   = os.getenv("BOOTSTRAP_BTC_API",   "https://btc-api.thronoschain.org")
+_BOOTSTRAP_MAP_FILE = os.path.join(DATA_DIR, "subdomain_service_map.json")
+
+
+def _bootstrap_service_map() -> dict:
+    defaults = {
+        "api": _BOOTSTRAP_PRIMARY,
+        "ro_api": _BOOTSTRAP_READONLY,
+        "verifyid": _BOOTSTRAP_VERIFYID,
+        "verifyid_api": _BOOTSTRAP_VERIFYID_API,
+        "ai": _BOOTSTRAP_AI_CORE,
+        "explorer": _BOOTSTRAP_EXPLORER,
+        "sentinel": _BOOTSTRAP_SENTINEL,
+        "btc_api": _BOOTSTRAP_BTC_API,
+    }
+    custom = load_json(_BOOTSTRAP_MAP_FILE, {})
+    if isinstance(custom, dict):
+        for k in list(defaults.keys()):
+            v = custom.get(k)
+            if isinstance(v, str) and v.strip():
+                defaults[k] = v.strip().rstrip("/")
+    return defaults
 
 # Redis cache configuration (optional)
 REDIS_CACHE_ENABLED = _strip_env_quotes(os.getenv("REDIS_CACHE_ENABLED", "1")).lower() in ("1", "true", "yes")
@@ -6870,16 +6898,7 @@ def api_whoami():
 @app.route("/bootstrap.json", methods=["GET"])
 def bootstrap_json():
     """Service discovery endpoint – canonical URLs for all Thronos services."""
-    services = {
-        "api": _BOOTSTRAP_PRIMARY,
-        "ro_api": _BOOTSTRAP_READONLY,
-        "verifyid": _BOOTSTRAP_VERIFYID,
-        "verifyid_api": _BOOTSTRAP_VERIFYID_API,
-        "ai": _BOOTSTRAP_AI_CORE,
-        "explorer": _BOOTSTRAP_EXPLORER,
-        "sentinel": _BOOTSTRAP_SENTINEL,
-        "btc_api": _BOOTSTRAP_BTC_API,
-    }
+    services = _bootstrap_service_map()
 
     health_refs = {}
     health_live_refs = {}
@@ -6909,6 +6928,19 @@ def bootstrap_json():
         "btc_api":      _BOOTSTRAP_BTC_API,
         "health":       health_refs,
         "health_live":  health_live_refs,
+        "source_of_truth": {
+            "map_file": _BOOTSTRAP_MAP_FILE,
+            "dns_expectations": {
+                "api": "CNAME/ALIAS -> Railway primary API",
+                "ro_api": "CNAME/ALIAS -> Railway read-only API",
+                "verifyid": "CNAME -> Vercel VerifyID frontend",
+                "verifyid_api": "CNAME/ALIAS -> Railway VerifyID API",
+                "ai": "CNAME -> Render AI service",
+                "explorer": "CNAME -> Vercel Explorer frontend",
+                "sentinel": "CNAME -> Render Sentinel service",
+                "btc_api": "CNAME/ALIAS -> Railway BTC API",
+            },
+        },
         "node_role": NODE_ROLE,
         "version": "3.6",
     }), 200
@@ -9741,6 +9773,19 @@ def health_root():
     resp.headers["Access-Control-Allow-Methods"] = "GET,OPTIONS"
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
     return resp
+
+
+@app.route("/version", methods=["GET"])
+def version_root():
+    return jsonify({
+        "ok": True,
+        "service": request.host.split(":")[0],
+        "role": NODE_ROLE,
+        "version": APP_VERSION,
+        "git_sha": APP_GIT_SHA,
+        "build_time": APP_BUILD_TIME,
+        "ts": int(time.time()),
+    }), 200
 
 
 @app.route("/api/replica_health")

@@ -1263,4 +1263,6 @@ Optional strict mode (enforces CORS `*` + stricter payload contract):
 python3 scripts/smoke_subdomains_health.py --timeout 20 --retries 3 --strict
 ```
 
+CI workflow: `.github/workflows/production-health-smoke.yml` runs strict smoke checks on `main`, on schedule, and via manual dispatch.
+
 Targets: `api`, `ro.api`, `verifyid`, `verifyid-api`, `ai`, `explorer`, `sentinel`, `btc-api`.

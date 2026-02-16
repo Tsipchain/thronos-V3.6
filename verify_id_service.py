@@ -1558,6 +1558,14 @@ def register_verify_id_routes(app):
     from flask import request, jsonify
 
     service = get_verify_id_service()
+    app_version = os.getenv("APP_VERSION", "v3.6")
+    app_git_sha = (
+        os.getenv("RAILWAY_GIT_COMMIT_SHA")
+        or os.getenv("RENDER_GIT_COMMIT")
+        or os.getenv("SOURCE_COMMIT")
+        or "unknown"
+    )
+    app_build_time = os.getenv("BUILD_TIME", os.getenv("RENDER_GIT_COMMIT_TIME", ""))
 
     @app.route("/health", methods=["GET", "OPTIONS"])
     def verifyid_health_root():
@@ -1576,6 +1584,18 @@ def register_verify_id_routes(app):
         resp.headers["Access-Control-Allow-Methods"] = "GET,OPTIONS"
         resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
         return resp
+
+    @app.route("/version", methods=["GET"])
+    def verifyid_version_root():
+        return jsonify({
+            "ok": True,
+            "service": "verifyid-api",
+            "role": os.getenv("NODE_ROLE", "verifyid"),
+            "version": app_version,
+            "git_sha": app_git_sha,
+            "build_time": app_build_time,
+            "ts": int(time.time()),
+        }), 200
 
     @app.route("/api/verify/register", methods=["POST"])
     def api_verify_register():

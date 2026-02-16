@@ -50,6 +50,14 @@ os.makedirs(CONTRACTS_DIR, exist_ok=True)
 # ─── LOGGER ───
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("pledge")
+APP_VERSION = os.getenv("APP_VERSION", "v3.6")
+APP_GIT_SHA = (
+    os.getenv("RAILWAY_GIT_COMMIT_SHA")
+    or os.getenv("RENDER_GIT_COMMIT")
+    or os.getenv("SOURCE_COMMIT")
+    or "unknown"
+)
+APP_BUILD_TIME = os.getenv("BUILD_TIME", os.getenv("RENDER_GIT_COMMIT_TIME", ""))
 
 # ─── HELPERS ───
 def load_json(path, default):
@@ -116,6 +124,19 @@ def health_root():
     resp.headers["Access-Control-Allow-Methods"] = "GET,OPTIONS"
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
     return resp
+
+
+@app.route("/version", methods=["GET"])
+def version_root():
+    return jsonify({
+        "ok": True,
+        "service": "serv3r",
+        "role": os.getenv("NODE_ROLE", "legacy"),
+        "version": APP_VERSION,
+        "git_sha": APP_GIT_SHA,
+        "build_time": APP_BUILD_TIME,
+        "ts": int(time.time()),
+    }), 200
 
 @app.route("/pledge")
 def pledge_form(): return render_template("pledge_form.html")

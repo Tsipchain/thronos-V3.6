@@ -2,6 +2,9 @@
 
 ## 1) Domain → service mapping
 
+Single source of truth in repo:
+- `data/subdomain_service_map.json` (consumed by `/bootstrap.json` in `server.py`).
+
 | Domain | Platform | Service | Health URL (canonical) | Fallback(s) |
 |---|---|---|---|---|
 | `api.thronoschain.org` | Railway (Flask) | Primary API | `https://api.thronoschain.org/health` | `/api/health` |
@@ -39,6 +42,20 @@ Requirements:
 Static services:
 - Provide `/health.json` with at least `{ "ok": true, "service": "...", "ts": ... }`.
 
+Version endpoint (`/version`) for dynamic services should include:
+
+```json
+{
+  "ok": true,
+  "service": "<service-name>",
+  "role": "<node-role>",
+  "version": "<app-version>",
+  "git_sha": "<commit>",
+  "build_time": "<iso8601>",
+  "ts": 1710000000
+}
+```
+
 ---
 
 ## 3) Deployment checklist
@@ -69,6 +86,12 @@ Run from repo root:
 
 ```bash
 python3 scripts/smoke_subdomains_health.py --timeout 20 --retries 3
+```
+
+CI strict mode (used by `.github/workflows/production-health-smoke.yml`):
+
+```bash
+python3 scripts/smoke_subdomains_health.py --timeout 20 --retries 3 --strict
 ```
 
 Expected:

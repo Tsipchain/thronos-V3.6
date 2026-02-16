@@ -66,6 +66,8 @@ Version endpoint (`/version`) for dynamic services should include:
 3. Custom domain attached and SSL certificate issued.
 4. Env vars include any host allowlists (if enforced):
    - e.g. `ALLOWED_HOSTS`, `X9_ALLOWED_ORIGINS`.
+5. For `btc-api`, keep `/health` independent from upstream RPC checks so health stays `200` even if BTC RPC is degraded (expose upstream status in payload fields, not HTTP failure).
+6. Verify `startCommand` boots the app process on `$PORT` (e.g. `gunicorn -c gunicorn_config.py server:app`) and does not block on optional worker startup.
 
 ### Render (ai / sentinel)
 1. Custom domains attached (`ai`, `sentinel`).
@@ -77,6 +79,7 @@ Version endpoint (`/version`) for dynamic services should include:
 1. Add `public/health.json` to deployed artifact.
 2. Custom domain attached and certificate valid.
 3. If rewrites are used, ensure `/health.json` bypasses app routing.
+4. For `verifyid.thronoschain.org`, route `/health` to VerifyID API (`verifyid-api`) and keep `/health.json` as static fallback.
 
 ---
 

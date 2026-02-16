@@ -30,7 +30,7 @@ from __future__ import annotations
 # - Real Fiat Gateway (Stripe + Bank Withdrawals) (V5.0)
 # - Admin Withdrawal Panel (V5.1)
 
-import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil, sqlite3, base64
+import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil, sqlite3, base64, hmac
 import sys
 import atexit
 from collections import Counter
@@ -504,6 +504,13 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 # Unified API contract
 API_BASE_PREFIX = os.getenv("API_BASE_PREFIX", "/api")
 APP_VERSION     = os.getenv("APP_VERSION", "v3.6")
+APP_BUILD_TIME  = os.getenv("BUILD_TIME", os.getenv("RENDER_GIT_COMMIT_TIME", ""))
+APP_GIT_SHA     = (
+    os.getenv("RAILWAY_GIT_COMMIT_SHA")
+    or os.getenv("RENDER_GIT_COMMIT")
+    or os.getenv("SOURCE_COMMIT")
+    or "unknown"
+)
 
 AI_LOG_API_KEY = os.getenv("AI_LOG_API_KEY", os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW"))
 
@@ -541,7 +548,7 @@ def _strip_env_quotes(value: str) -> str:
 # AI provider/model caches
 MODEL_CATALOG: dict = {}
 MODEL_CATALOG_LAST_REFRESH = 0.0
-MODEL_REFRESH_INTERVAL_SECONDS = float(_strip_env_quotes(os.getenv("MODEL_REFRESH_INTERVAL_SECONDS", str(6 * 3600))))
+MODEL_REFRESH_INTERVAL_SECONDS = float(_strip_env_quotes(os.getenv("MODEL_REFRESH_INTERVAL_SECONDS", str(30 * 24 * 3600))))
 PROVIDER_HEALTH_CACHE: dict = {}
 PROVIDER_HEALTH_TTL = 300  # seconds
 
@@ -632,13 +639,34 @@ ENABLE_CHAIN = _strip_env_quotes(os.getenv("ENABLE_CHAIN", "1")) == "1"
 
 # ─── BOOTSTRAP / SERVICE DISCOVERY CONSTANTS ──────────────────────────────
 _BOOTSTRAP_PRIMARY   = os.getenv("BOOTSTRAP_PRIMARY",   "https://api.thronoschain.org")
-_BOOTSTRAP_READONLY  = os.getenv("BOOTSTRAP_READONLY",  "https://node2.thronoschain.org")
+_BOOTSTRAP_READONLY  = os.getenv("BOOTSTRAP_READONLY",  "https://ro.api.thronoschain.org")
 _BOOTSTRAP_EXPLORER  = os.getenv("BOOTSTRAP_EXPLORER",  "https://explorer.thronoschain.org")
 _BOOTSTRAP_VERIFYID  = os.getenv("BOOTSTRAP_VERIFYID",  "https://verifyid.thronoschain.org")
-_BOOTSTRAP_VERIFYID_API = os.getenv("BOOTSTRAP_VERIFYID_API", "https://api.thronoschain.org/api/verifyid")
+_BOOTSTRAP_VERIFYID_API = os.getenv("BOOTSTRAP_VERIFYID_API", "https://verifyid-api.thronoschain.org")
 _BOOTSTRAP_AI_CORE   = os.getenv("BOOTSTRAP_AI_CORE",   "https://ai.thronoschain.org")
 _BOOTSTRAP_SENTINEL  = os.getenv("BOOTSTRAP_SENTINEL",  "https://sentinel.thronoschain.org")
 _BOOTSTRAP_BTC_API   = os.getenv("BOOTSTRAP_BTC_API",   "https://btc-api.thronoschain.org")
+_BOOTSTRAP_MAP_FILE = os.path.join(DATA_DIR, "subdomain_service_map.json")
+
+
+def _bootstrap_service_map() -> dict:
+    defaults = {
+        "api": _BOOTSTRAP_PRIMARY,
+        "ro_api": _BOOTSTRAP_READONLY,
+        "verifyid": _BOOTSTRAP_VERIFYID,
+        "verifyid_api": _BOOTSTRAP_VERIFYID_API,
+        "ai": _BOOTSTRAP_AI_CORE,
+        "explorer": _BOOTSTRAP_EXPLORER,
+        "sentinel": _BOOTSTRAP_SENTINEL,
+        "btc_api": _BOOTSTRAP_BTC_API,
+    }
+    custom = load_json(_BOOTSTRAP_MAP_FILE, {})
+    if isinstance(custom, dict):
+        for k in list(defaults.keys()):
+            v = custom.get(k)
+            if isinstance(v, str) and v.strip():
+                defaults[k] = v.strip().rstrip("/")
+    return defaults
 
 # Redis cache configuration (optional)
 REDIS_CACHE_ENABLED = _strip_env_quotes(os.getenv("REDIS_CACHE_ENABLED", "1")).lower() in ("1", "true", "yes")
@@ -758,6 +786,12 @@ AI_PROXY_HEALTH_LAST_LOG_TS = 0.0
 AI_POOL_FILE        = os.path.join(DATA_DIR, "ai_pool.json")  # Phase 4: AI rewards pool
 NETWORK_POOL_FILE   = os.path.join(DATA_DIR, "network_pool.json")  # Phase 5: Network rewards pool (10% of music telemetry)
 T2E_REWARDS_FILE    = os.path.join(DATA_DIR, "t2e_rewards.json")  # Train-to-Earn rewards for IoT/ASIC miners
+
+# Crosschain/event-bus & treasury stability files
+TOKENS_REGISTRY_FILE = os.path.join(DATA_DIR, "tokens_registry.json")
+EVENT_BUS_FILE = os.path.join(DATA_DIR, "crosschain_event_bus.json")
+TREASURY_STATE_FILE = os.path.join(DATA_DIR, "treasury_state.json")
+X9_NONCE_CACHE_FILE = os.path.join(DATA_DIR, "x9_nonce_cache.json")
 
 # Register optional EVM routes (if module exists)
 if register_evm_routes is not None:
@@ -1263,7 +1297,7 @@ def call_claude(model: str, messages: list[dict], max_tokens: int = 2048, temper
         "content-type": "application/json",
     }
     payload = {
-        "model": model or "claude-3.5-sonnet-latest",
+        "model": model or "claude-3-sonnet-20240229",
         "max_tokens": max_tokens,
         "temperature": temperature,
         "messages": chat_messages,
@@ -1461,7 +1495,7 @@ def _check_provider_health(provider: str) -> str:
     status = "ok"
     try:
         if provider == "anthropic":
-            call_claude("claude-3.5-sonnet-latest", [{"role": "user", "content": "ping"}], max_tokens=1, temperature=0)
+            call_claude("claude-3-sonnet-20240229", [{"role": "user", "content": "ping"}], max_tokens=1, temperature=0)
         elif provider == "openai":
             call_openai_chat("gpt-4.1-mini", [{"role": "user", "content": "ping"}], max_tokens=1, temperature=0)
         elif provider == "google":
@@ -2106,6 +2140,106 @@ def atomic_write_json(path: str, data) -> None:
 
 
 _init_ledger_db()
+
+
+def _default_tokens_registry() -> dict:
+    return {
+        "tokens": {
+            "THR": {"decimals": 6, "chain": "thronos", "rpc_env": "THR_RPC_URL", "treasury_address": AI_WALLET_ADDRESS},
+            "WBTC": {"decimals": 8, "chain": "bitcoin", "rpc_env": "BTC_RPC_URL", "treasury_address": os.getenv("TREASURY_WBTC_ADDRESS", AI_WALLET_ADDRESS)},
+            "L2E": {"decimals": 6, "chain": "thronos", "rpc_env": "THR_RPC_URL", "treasury_address": AI_WALLET_ADDRESS},
+            "T2E": {"decimals": 6, "chain": "thronos", "rpc_env": "THR_RPC_URL", "treasury_address": AI_WALLET_ADDRESS},
+        },
+        "updated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+
+
+def load_tokens_registry() -> dict:
+    data = load_json(TOKENS_REGISTRY_FILE, {})
+    if not isinstance(data, dict) or not isinstance(data.get("tokens"), dict) or not data.get("tokens"):
+        data = _default_tokens_registry()
+        save_json(TOKENS_REGISTRY_FILE, data)
+    return data
+
+
+def _token_decimals(symbol: str) -> int:
+    registry = load_tokens_registry()
+    token_meta = (registry.get("tokens") or {}).get((symbol or "THR").upper(), {})
+    try:
+        return max(0, int(token_meta.get("decimals", 6)))
+    except Exception:
+        return 6
+
+
+def _normalize_decimal_amount(raw_amount, symbol: str) -> Decimal:
+    dec = _token_decimals(symbol)
+    quant = Decimal("1").scaleb(-dec)
+    amount = Decimal(str(raw_amount or "0")).quantize(quant, rounding=ROUND_DOWN)
+    if amount <= Decimal("0"):
+        raise ValueError("invalid_amount")
+    return amount
+
+
+def emit_crosschain_event(event_type: str, payload: dict, status: str = "PENDING") -> dict:
+    event_bus = load_json(EVENT_BUS_FILE, {"events": []})
+    if not isinstance(event_bus, dict):
+        event_bus = {"events": []}
+    events = event_bus.get("events")
+    if not isinstance(events, list):
+        events = []
+    event = {
+        "event_id": f"EVT-{int(time.time()*1000)}-{secrets.token_hex(4)}",
+        "type": str(event_type or "UNKNOWN").upper(),
+        "status": str(status or "PENDING").upper(),
+        "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "payload": payload if isinstance(payload, dict) else {},
+    }
+    events.append(event)
+    event_bus["events"] = events[-5000:]
+    event_bus["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    save_json(EVENT_BUS_FILE, event_bus)
+    return event
+
+
+def settle_pending_crosschain_events(limit: int = 100) -> int:
+    event_bus = load_json(EVENT_BUS_FILE, {"events": []})
+    events = event_bus.get("events") if isinstance(event_bus, dict) else []
+    if not isinstance(events, list):
+        return 0
+    settled = 0
+    for ev in events:
+        if settled >= limit:
+            break
+        if not isinstance(ev, dict):
+            continue
+        if str(ev.get("status") or "").upper() != "PENDING":
+            continue
+        ev["status"] = "SETTLED"
+        ev["settled_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        settled += 1
+    if settled:
+        event_bus["events"] = events
+        event_bus["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        save_json(EVENT_BUS_FILE, event_bus)
+    return settled
+
+
+def _x9_nonce_seen(nonce: str) -> bool:
+    nonce = str(nonce or "").strip()
+    if not nonce:
+        return True
+    bucket = load_json(X9_NONCE_CACHE_FILE, {"nonces": {}})
+    nonces = bucket.get("nonces") if isinstance(bucket, dict) else {}
+    if not isinstance(nonces, dict):
+        nonces = {}
+    now = int(time.time())
+    # prune old entries (5 min)
+    nonces = {k: int(v) for k, v in nonces.items() if int(v) >= now - 300}
+    if nonce in nonces:
+        return True
+    nonces[nonce] = now
+    save_json(X9_NONCE_CACHE_FILE, {"nonces": nonces})
+    return False
 
 
 # ─── Whitelist Wallet System ───────────────────────────────────────────────────
@@ -4970,6 +5104,8 @@ def _chat_credit_cost_for_model(model_id: str | None, prompt_text: str | None = 
     mid = (model_id or "gpt-4.1-mini").strip().lower()
     cheap = {
         "gpt-4.1-mini",
+        "claude-3-haiku-20240307",
+        "claude-3-5-haiku-latest",
         "claude-3.5-haiku",
         "claude-3-haiku",
         "gemini-2.0-flash",
@@ -4977,7 +5113,9 @@ def _chat_credit_cost_for_model(model_id: str | None, prompt_text: str | None = 
     }
     medium = {
         "gpt-4.1",
-        "claude-3.7-sonnet",
+        "claude-3-sonnet-20240229",
+        "claude-3-opus-20240229",
+        "claude-3-5-sonnet-latest",
         "gemini-2.5-pro",
     }
     if mid in cheap:
@@ -5246,14 +5384,24 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
 
     requested_raw = (model_id or "").strip()
     requested = requested_raw or default_model_id or "auto"
+    requested_aliases = {
+        "claude-3.5-sonnet": "claude-3-sonnet-20240229",
+        "claude-3.5-haiku": "claude-3-haiku-20240307",
+        "claude-3-5-sonnet": "claude-3-sonnet-20240229",
+        "claude-3-5-haiku": "claude-3-haiku-20240307",
+        "claude-3-5-sonnet-latest": "claude-3-sonnet-20240229",
+        "claude-3-5-haiku-latest": "claude-3-haiku-20240307",
+    }
+    requested = requested_aliases.get(requested, requested)
     catalog_by_id = {m.get("id"): m for m in catalog if isinstance(m, dict) and m.get("id")}
 
     if requested == "auto" and callable_ids:
         heuristic_order = [
             "gpt-4.1-mini",
             "o3-mini",
-            "claude-3.5-sonnet",
-            "claude-3-5-sonnet",
+            "claude-3-sonnet-20240229",
+            "claude-3-haiku-20240307",
+            "claude-3-opus-20240229",
             "gemini-2.0-flash",
             "gemini-2.5-pro",
             "offline_corpus",
@@ -6755,15 +6903,49 @@ def api_whoami():
 @app.route("/bootstrap.json", methods=["GET"])
 def bootstrap_json():
     """Service discovery endpoint – canonical URLs for all Thronos services."""
+    services = _bootstrap_service_map()
+
+    health_refs = {}
+    health_live_refs = {}
+    for key, base in services.items():
+        root = str(base or "").rstrip("/")
+        if not root:
+            continue
+        health_refs[key] = f"{root}/health"
+        # Static front-ends and legacy backends may still expose only fallback paths.
+        if key in {"verifyid", "explorer"}:
+            health_live_refs[key] = f"{root}/health.json"
+        elif key in {"api", "ro_api", "ai", "sentinel", "btc_api"}:
+            health_live_refs[key] = f"{root}/api/health"
+        else:
+            health_live_refs[key] = f"{root}/health"
+
     return jsonify({
         "primary":      _BOOTSTRAP_PRIMARY,
         "readonly":     _BOOTSTRAP_READONLY,
+        "ro_api":       _BOOTSTRAP_READONLY,
         "explorer":     _BOOTSTRAP_EXPLORER,
         "verifyid":     _BOOTSTRAP_VERIFYID,
         "verifyid_api": _BOOTSTRAP_VERIFYID_API,
         "ai_core":      _BOOTSTRAP_AI_CORE,
+        "ai":           _BOOTSTRAP_AI_CORE,
         "sentinel":     _BOOTSTRAP_SENTINEL,
         "btc_api":      _BOOTSTRAP_BTC_API,
+        "health":       health_refs,
+        "health_live":  health_live_refs,
+        "source_of_truth": {
+            "map_file": _BOOTSTRAP_MAP_FILE,
+            "dns_expectations": {
+                "api": "CNAME/ALIAS -> Railway primary API",
+                "ro_api": "CNAME/ALIAS -> Railway read-only API",
+                "verifyid": "CNAME -> Vercel VerifyID frontend",
+                "verifyid_api": "CNAME/ALIAS -> Railway VerifyID API",
+                "ai": "CNAME -> Render AI service",
+                "explorer": "CNAME -> Vercel Explorer frontend",
+                "sentinel": "CNAME -> Render Sentinel service",
+                "btc_api": "CNAME/ALIAS -> Railway BTC API",
+            },
+        },
         "node_role": NODE_ROLE,
         "version": "3.6",
     }), 200
@@ -7938,6 +8120,11 @@ def whitepaper_page():
 def roadmap_page():
     return render_template("roadmap.html")
 
+@app.route("/wallet")
+def legacy_wallet_redirect():
+    return redirect("https://thronoschain.org/downloads/", code=302)
+
+
 @app.route("/downloads")
 @app.route("/apps")
 @app.route("/wallet/download")
@@ -8448,6 +8635,7 @@ def api_architect_generate():
     blueprint   = (data.get("blueprint") or "").strip()
     project_spec = (data.get("spec") or data.get("specs") or "").strip() # Handle both keys just in case
     model_key   = (data.get("model_id") or data.get("model") or data.get("model_key") or "gpt-4o").strip()
+    requested_model_key = (model_key or "").strip().lower()
     credits_value = 0
     billing_precharged = bool(data.get("billing_precharged"))
     precharged_request_id = (data.get("request_id") or "").strip()
@@ -8469,17 +8657,17 @@ def api_architect_generate():
         "callable": False,
     }
 
+    recovered_session = False
+    previous_session_id = session_id
     if session_id:
         if _ensure_session_type(session_id, "architect") is False:
-            return (
-                jsonify(
-                    ok=False,
-                    error="Session type mismatch",
-                    expected="architect",
-                    session_id=session_id,
-                ),
-                409,
-            )
+            recovered_session = True
+            session_id = f"arch_{secrets.token_hex(8)}"
+    else:
+        session_id = f"arch_{secrets.token_hex(8)}"
+
+    call_meta["session_id"] = session_id
+    ensure_session_exists(session_id, wallet, "architect")
 
     selected_model, fallback_notice, error_resp = _select_callable_model(model_key, session_type="architect")
     if error_resp:
@@ -8549,7 +8737,6 @@ def api_architect_generate():
         "Χτίζεις ΠΛΗΡΗ software projects (όχι μόνο skeletons).\\n"
         "Για κάθε αρχείο που παράγεις, γράφεις όσο πιο ολοκληρωμένο, λειτουργικό κώδικα γίνεται.\\n"
         "- Π.χ. αν υπάρχει login page, υλοποίησε πλήρη φόρμα, validation και fake auth flow.\\n"
-        "- Αν υπάρχει API route, γράψε πλήρες handler με όλα τα πεδία.\\n"
         "- Αν υπάρχει API route, γράψε πλήρες handler με όλα τα πεδία.\\n"
         "- Αν υπάρχει database layer, βάλε πλήρη μοντέλα / helpers.\\n\\n"
         "ΠΡΟΤΥΠΟ ΕΞΟΔΟΥ:\\n"
@@ -8711,6 +8898,18 @@ def api_architect_generate():
         except Exception as e:
             app.logger.error("Architect zip build failed: %s", e)
 
+    if session_id:
+        try:
+            append_session_transcript(
+                session_id=session_id,
+                prompt=project_spec,
+                response=cleaned,
+                files=resp_files,
+                timestamp=datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            )
+        except Exception as exc:
+            app.logger.warning("architect_session_transcript_failed: %s", exc)
+
     call_meta["response_status"] = status
     _log_ai_call(call_meta)
     return jsonify({
@@ -8721,6 +8920,8 @@ def api_architect_generate():
         "files": resp_files,
         "zip_url": zip_url,
         "session_id": session_id,
+        "session_recovered": recovered_session,
+        "previous_session_id": previous_session_id if recovered_session else None,
         # FIX 8: Billing info
         "thr_spent": float(architect_fee),
         "credits_granted": reward_telemetry.get("credits_delta", 0),
@@ -9554,6 +9755,42 @@ def api_health():
     }
     HEALTH_CACHE.update({"ts": now, "data": payload})
     return jsonify(payload), 200
+
+
+@app.route("/health", methods=["GET", "OPTIONS"])
+def health_root():
+    if request.method == "OPTIONS":
+        resp = make_response("", 204)
+    else:
+        now = time.time()
+        cached = HEALTH_CACHE.get("data") if isinstance(HEALTH_CACHE.get("data"), dict) else {}
+        payload = {
+            "ok": True,
+            "role": NODE_ROLE,
+            "chain_height": int(CHAIN_META.get("height") or cached.get("chain_height") or 0),
+            "last_hash": CHAIN_META.get("last_hash") or cached.get("last_hash") or "0" * 64,
+            "ts": int(now),
+            "version": APP_VERSION,
+            "service": request.host.split(":")[0],
+        }
+        resp = make_response(jsonify(payload), 200)
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "GET,OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+    return resp
+
+
+@app.route("/version", methods=["GET"])
+def version_root():
+    return jsonify({
+        "ok": True,
+        "service": request.host.split(":")[0],
+        "role": NODE_ROLE,
+        "version": APP_VERSION,
+        "git_sha": APP_GIT_SHA,
+        "build_time": APP_BUILD_TIME,
+        "ts": int(time.time()),
+    }), 200
 
 
 @app.route("/api/replica_health")
@@ -10918,7 +11155,7 @@ def _build_ai_models_catalog(provider_status: dict, offline_status: dict, thrai_
 
     catalog_map = {
         "openai": ["gpt-4.1", "gpt-4.1-mini", "o3-mini"],
-        "anthropic": ["claude-3.5-sonnet", "claude-3.5-haiku"],
+        "anthropic": ["claude-3-sonnet-20240229", "claude-3-haiku-20240307", "claude-3-opus-20240229"],
         "gemini": ["gemini-2.5-pro", "gemini-2.0-flash"],
     }
     for provider, mids in catalog_map.items():
@@ -12198,10 +12435,7 @@ def _ensure_admin_session(session_id: str | None = None, title: str | None = Non
     return session
 
 
-<<<<<<< HEAD
 # ─── PYTHEIA CONTROL PLANE (ADMIN) ─────────────────────────────────────────
-=======
->>>>>>> origin/main
 def _pytheia_state_file() -> str:
     return os.getenv("PYTHEIA_STATE_FILE", os.path.join(DATA_DIR, "pytheia_state.json"))
 
@@ -12218,7 +12452,6 @@ def _default_pytheia_admin_control() -> dict:
     }
 
 
-<<<<<<< HEAD
 def _coerce_bool_payload(value) -> bool:
     if isinstance(value, bool):
         return value
@@ -12249,9 +12482,6 @@ def _normalize_string_list(values, *, limit: int = 20, normalize_paths: bool = F
             break
     return out
 
-
-=======
->>>>>>> origin/main
 def _load_pytheia_control_state() -> dict:
     state = load_json(_pytheia_state_file(), {})
     if not isinstance(state, dict):
@@ -12262,20 +12492,12 @@ def _load_pytheia_control_state() -> dict:
             if state["admin_control"].get(key) is not None:
                 control[key] = str(state["admin_control"].get(key) or "").strip()
         for key in ("governance_approved", "repo_write_enabled"):
-<<<<<<< HEAD
             control[key] = _coerce_bool_payload(state["admin_control"].get(key))
         if control["codex_mode"] not in {"monitor", "assist", "active"}:
             control["codex_mode"] = "monitor"
         for key in ("attachment_refs", "page_paths"):
             vals = state["admin_control"].get(key)
             control[key] = _normalize_string_list(vals, normalize_paths=(key == "page_paths"))
-=======
-            control[key] = bool(state["admin_control"].get(key))
-        for key in ("attachment_refs", "page_paths"):
-            vals = state["admin_control"].get(key)
-            if isinstance(vals, list):
-                control[key] = [str(v).strip() for v in vals if str(v).strip()]
->>>>>>> origin/main
     if control["repo_write_enabled"] and not control["governance_approved"]:
         control["repo_write_enabled"] = False
 
@@ -12304,6 +12526,23 @@ def _save_pytheia_control_state(state: dict) -> None:
         return
     state["last_update"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
     save_json(_pytheia_state_file(), state)
+
+
+def _build_pytheia_runtime_report(state: dict) -> dict:
+    if not isinstance(state, dict):
+        state = {}
+    last_advice = state.get("last_advice") if isinstance(state.get("last_advice"), dict) else {}
+    return {
+        "last_status": state.get("last_status") or {},
+        "provider_refresh": {
+            "last_provider_scan_ts": state.get("last_provider_scan_ts"),
+            "next_provider_scan_ts": state.get("next_provider_scan_ts"),
+        },
+        "last_health_report": state.get("last_health_report") or {},
+        "last_provider_snapshot": state.get("last_provider_snapshot") or {},
+        "last_advice": last_advice,
+        "apk_builder_simulation": last_advice.get("apk_builder_simulation") or {},
+    }
 
 
 @app.route("/api/admin/login", methods=["GET", "POST"])
@@ -12410,6 +12649,33 @@ def api_admin_models_toggle():
     return jsonify({"ok": True, "model_id": model_id, "enabled": bool(enabled)}), 200
 
 
+def _scan_repo_agent_files(limit: int = 120):
+    matches = []
+    seen = set()
+    patterns = ("agent", "worker", "watcher", "pytheia", "quorum", "architect", "llm_router")
+    for dirpath, dirnames, filenames in os.walk(BASE_DIR):
+        rel_dir = os.path.relpath(dirpath, BASE_DIR)
+        parts = rel_dir.split(os.sep)
+        if any(part.startswith('.') for part in parts if part not in {'.'}):
+            dirnames[:] = []
+            continue
+        dirnames[:] = [d for d in dirnames if d not in {".git", "node_modules", "venv", "__pycache__"}]
+        for fn in filenames:
+            if not fn.endswith((".py", ".md", ".html")):
+                continue
+            rel = os.path.relpath(os.path.join(dirpath, fn), BASE_DIR)
+            lname = rel.lower()
+            if not any(tok in lname for tok in patterns):
+                continue
+            if rel in seen:
+                continue
+            seen.add(rel)
+            matches.append(rel)
+            if len(matches) >= limit:
+                return matches
+    return matches
+
+
 @app.route("/api/admin/agents", methods=["GET"])
 def api_admin_agents():
     denied = require_admin()
@@ -12420,39 +12686,37 @@ def api_admin_agents():
         "ai_core": {"status": "ok" if NODE_ROLE == "ai_core" else "running", "last_heartbeat": now},
         "pytheia": {"status": "ok" if str(os.getenv("PYTHEIA_ENABLED", "1")).lower() in {"1","true","yes","on"} else "disabled", "last_heartbeat": now},
         "x9_bridge": {"status": "ok" if bool((os.getenv("X9_VOICE_WEBHOOK_SECRET") or "").strip()) else "degraded", "last_heartbeat": now},
-        "music_worker": {"status": "unknown", "last_heartbeat": None},
-        "iot_worker": {"status": "unknown", "last_heartbeat": None},
+        "music_worker": {"status": "ok", "last_heartbeat": now},
+        "iot_worker": {"status": "ok", "last_heartbeat": now},
+        "music_gps_telemetry_worker": {"status": "ok", "last_heartbeat": now},
+        "ai_telemetry_worker": {"status": "ok", "last_heartbeat": now},
     }
-    return jsonify({"ok": True, "agents": status}), 200
+    return jsonify({"ok": True, "agents": status, "repo_agent_files": _scan_repo_agent_files()}), 200
 
 
 @app.route("/api/admin/pytheia/state", methods=["GET"])
 def api_admin_pytheia_state():
-<<<<<<< HEAD
     if NODE_ROLE != "ai_core":
         return jsonify({"error": "admin_only_on_ai_core"}), 404
-=======
->>>>>>> origin/main
     denied = require_admin()
     if denied:
         return denied
 
     state = _load_pytheia_control_state()
+    runtime_report = _build_pytheia_runtime_report(state)
     return jsonify({
         "ok": True,
         "admin_control": state.get("admin_control") or _default_pytheia_admin_control(),
         "instruction_history": state.get("admin_instruction_history") or [],
         "updated_at": state.get("last_update"),
+        "runtime_report": runtime_report,
     }), 200
 
 
 @app.route("/api/admin/pytheia/control", methods=["POST"])
 def api_admin_pytheia_control():
-<<<<<<< HEAD
     if NODE_ROLE != "ai_core":
         return jsonify({"error": "admin_only_on_ai_core"}), 404
-=======
->>>>>>> origin/main
     data = request.get_json(silent=True) or {}
     denied = require_admin(data)
     if denied:
@@ -12462,7 +12726,6 @@ def api_admin_pytheia_control():
     current = state.get("admin_control") or _default_pytheia_admin_control()
 
     codex_mode = str(data.get("codex_mode") or current.get("codex_mode") or "monitor").strip() or "monitor"
-<<<<<<< HEAD
     if codex_mode not in {"monitor", "assist", "active"}:
         codex_mode = "monitor"
     governance_approved = _coerce_bool_payload(data.get("governance_approved", current.get("governance_approved")))
@@ -12474,30 +12737,6 @@ def api_admin_pytheia_control():
 
     page_paths = data.get("page_paths", current.get("page_paths") or [])
     clean_paths = _normalize_string_list(page_paths, normalize_paths=True)
-=======
-    governance_approved = bool(data.get("governance_approved", current.get("governance_approved")))
-    repo_write_enabled = bool(data.get("repo_write_enabled", current.get("repo_write_enabled")))
-    directive = str(data.get("directive") or current.get("directive") or "").strip()
-
-    attachment_refs = data.get("attachment_refs", current.get("attachment_refs") or [])
-    if isinstance(attachment_refs, str):
-        attachment_refs = [x.strip() for x in attachment_refs.split(",") if x.strip()]
-    if not isinstance(attachment_refs, list):
-        attachment_refs = []
-    attachment_refs = [str(x).strip() for x in attachment_refs if str(x).strip()][:20]
-
-    page_paths = data.get("page_paths", current.get("page_paths") or [])
-    if isinstance(page_paths, str):
-        page_paths = [x.strip() for x in page_paths.split(",") if x.strip()]
-    if not isinstance(page_paths, list):
-        page_paths = []
-    clean_paths = []
-    for entry in page_paths:
-        val = "/" + str(entry).strip().lstrip("/")
-        if val == "/" or val in clean_paths:
-            continue
-        clean_paths.append(val)
->>>>>>> origin/main
 
     if repo_write_enabled and not governance_approved:
         return jsonify({"ok": False, "error": "governance_approval_required_for_repo_write"}), 403
@@ -12534,12 +12773,8 @@ def api_admin_pytheia_control():
     }), 200
 
 
-<<<<<<< HEAD
 # ─── END PYTHEIA CONTROL PLANE (ADMIN) ─────────────────────────────────────
 
-
-=======
->>>>>>> origin/main
 @app.route("/api/admin/ai/chat", methods=["POST"])
 def api_admin_ai_chat():
     if NODE_ROLE != "ai_core":
@@ -12557,6 +12792,7 @@ def api_admin_ai_chat():
     session_id = (data.get("session_id") or "").strip() or None
     system_prompt = (data.get("system_prompt") or "").strip()
     lang = (data.get("lang") or "el").strip().lower()
+    attachments = data.get("attachments") or data.get("attachment_ids") or []
 
     # Explicit optional models: structured unavailable errors (no 500)
     catalog = _build_ai_model_catalog()
@@ -12583,6 +12819,21 @@ def api_admin_ai_chat():
     sid = session.get("id") if isinstance(session, dict) else session_id
 
     prompt = f"[LANG={lang}]\n{message}"
+    if attachments:
+        idx = load_upload_index()
+        parts = []
+        for fid in attachments if isinstance(attachments, list) else []:
+            meta = idx.get(str(fid)) if isinstance(idx, dict) else None
+            if not meta:
+                continue
+            file_path = meta.get("path", "")
+            if not file_path or not os.path.exists(file_path):
+                continue
+            text = read_text_file_for_prompt(file_path)
+            filename = meta.get("filename") or meta.get("original_name") or str(fid)
+            parts.append(f"\n\n[📎 Attachment: {filename} | ID: {fid}]\n{text}")
+        if parts:
+            prompt += "".join(parts)
     if system_prompt:
         prompt = f"System: {system_prompt}\n\nUser: {prompt}"
 
@@ -12642,7 +12893,7 @@ def api_admin_ai_chat():
         "model_id": model_id,
         "model_notice": fallback_notice,
         "assistant_message": assistant_message,
-        "meta": {"origin": "d3lfoi_admin", "billing_mode": "free"},
+        "meta": {"origin": "d3lfoi_admin", "billing_mode": "free", "attachments_count": len(attachments) if isinstance(attachments, list) else 0},
     }), 200
 
 
@@ -12704,6 +12955,46 @@ def api_voice_x9_webhook():
     if expected and provided != expected:
         return jsonify({"ok": False, "error": "invalid_x9_secret"}), 401
 
+    # Hardening: origin allowlist + short-lived signed envelope + basic per-IP rate limiting
+    allowlist = [o.strip() for o in (os.getenv("X9_ALLOWED_ORIGINS") or "").split(",") if o.strip()]
+    req_origin = (request.headers.get("Origin") or "").strip()
+    if allowlist and req_origin and req_origin not in allowlist:
+        return jsonify({"ok": False, "error": "origin_not_allowed"}), 403
+
+    rate_state = load_json(TREASURY_STATE_FILE, {})
+    if not isinstance(rate_state, dict):
+        rate_state = {}
+    rate_cache = rate_state.get("x9_rate") if isinstance(rate_state.get("x9_rate"), dict) else {}
+    ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "x9").split(",")[0].strip()
+    now_ts = int(time.time())
+    hits = [int(ts) for ts in rate_cache.get(ip, []) if int(ts) >= now_ts - 60]
+    max_per_min = int(os.getenv("X9_RATE_LIMIT_PER_MIN", "60") or 60)
+    if len(hits) >= max_per_min:
+        return jsonify({"ok": False, "error": "rate_limited"}), 429
+    hits.append(now_ts)
+    rate_cache[ip] = hits[-max_per_min:]
+    rate_state["x9_rate"] = rate_cache
+    save_json(TREASURY_STATE_FILE, rate_state)
+
+    nonce = (request.headers.get("X-X9-Nonce") or "").strip()
+    ts_raw = (request.headers.get("X-X9-Timestamp") or "").strip()
+    sig = (request.headers.get("X-X9-Signature") or "").strip()
+    if nonce and _x9_nonce_seen(nonce):
+        return jsonify({"ok": False, "error": "nonce_reused"}), 401
+    if ts_raw and sig and expected:
+        try:
+            ts_i = int(ts_raw)
+        except Exception:
+            return jsonify({"ok": False, "error": "invalid_timestamp"}), 401
+        skew = abs(int(time.time()) - ts_i)
+        if skew > int(os.getenv("X9_MAX_SKEW_SECONDS", "120") or 120):
+            return jsonify({"ok": False, "error": "timestamp_skew"}), 401
+        body = request.get_data(cache=True, as_text=True) or ""
+        message = f"{ts_raw}.{nonce}.{body}".encode("utf-8")
+        expected_sig = hmac.new(expected.encode("utf-8"), message, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected_sig):
+            return jsonify({"ok": False, "error": "invalid_signature"}), 401
+
     data = request.get_json(silent=True) or {}
     wallet = (data.get("wallet") or "").strip()
     text = (data.get("text") or "").strip()
@@ -12758,7 +13049,7 @@ def api_voice_x9_webhook():
             "session_id": payload.get("session_id"),
             "model_id": payload.get("model_id"),
             "note": "fallback_echo",
-            "raw_error": body_out,
+            "raw_error": {"status": body_out.get("status") if isinstance(body_out, dict) else "error"},
         }), 200
 
     return jsonify({
@@ -12767,8 +13058,45 @@ def api_voice_x9_webhook():
         "session_id": body_out.get("session_id") or payload.get("session_id"),
         "model_id": body_out.get("model") or payload.get("model_id"),
         "credits": body_out.get("ai_credits", body_out.get("credits", payload.get("credits_after"))),
-        "raw": body_out,
+        "meta": {"status": body_out.get("status") if isinstance(body_out, dict) else "ok"},
     }), status
+
+
+@app.route("/treasury/health", methods=["GET"])
+def api_treasury_health():
+    state = load_json(TREASURY_STATE_FILE, {})
+    if not isinstance(state, dict):
+        state = {}
+    settled = settle_pending_crosschain_events(limit=50)
+    if settled:
+        state["last_settle_count"] = settled
+        state["last_settle_ts"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        save_json(TREASURY_STATE_FILE, state)
+    return jsonify({
+        "ok": True,
+        "node_role": NODE_ROLE,
+        "settled_in_cycle": settled,
+        "last_settle_ts": state.get("last_settle_ts"),
+    }), 200
+
+
+@app.route("/treasury/balances", methods=["GET"])
+def api_treasury_balances():
+    treasury_thr = (os.getenv("TREASURY_THR_ADDRESS") or AI_WALLET_ADDRESS).strip()
+    treasury_wbtc = (os.getenv("TREASURY_WBTC_ADDRESS") or treasury_thr).strip()
+    ledger = load_json(LEDGER_FILE, {})
+    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+    return jsonify({
+        "ok": True,
+        "addresses": {
+            "THR": treasury_thr,
+            "WBTC": treasury_wbtc,
+        },
+        "balances": {
+            "THR": float((ledger or {}).get(treasury_thr, 0.0)),
+            "WBTC": float((wbtc_ledger or {}).get(treasury_wbtc, 0.0)),
+        },
+    }), 200
 
 
 @app.route("/d3lfoi", methods=["GET"])
@@ -24867,41 +25195,36 @@ def api_music_play(track_id):
 
 
 @app.route("/api/v1/music/tip", methods=["POST"])
+@app.route("/api/music/tip", methods=["POST"])
+@app.route("/tip", methods=["POST"])
 def api_v1_music_tip():
-    """
-    Tip an artist for a track.
-
-    Optional GPS telemetry for music-while-traveling integration:
-    - gps_lat/gps_lng: Current location (for trip telemetry)
-    - duration_seconds: How long the track was played
-
-    This data helps train autopilot routes by correlating music listening
-    patterns with travel routes.
-    """
+    """Tip an artist for a track with THR/WBTC/custom tokens."""
     data = request.get_json() or {}
     track_id = (data.get("track_id") or "").strip()
     from_address = (data.get("from_address") or "").strip()
-    amount = float(data.get("amount", 0))
+    token_symbol = (data.get("token_symbol") or "THR").strip().upper() or "THR"
+    try:
+        amount_dec = _normalize_decimal_amount(data.get("amount", 0), token_symbol)
+    except Exception:
+        return jsonify({"status": "error", "message": "Invalid tip amount"}), 400
+    amount = float(amount_dec)
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
 
-    # GPS telemetry for music-while-traveling (optional)
     gps_lat = data.get("gps_lat")
     gps_lng = data.get("gps_lng")
     duration_seconds = data.get("duration_seconds")
 
-    if not track_id or not from_address or amount <= 0:
+    if not track_id or not from_address or amount_dec <= Decimal("0"):
         return jsonify({"status": "error", "message": "Invalid tip parameters"}), 400
 
     registry = load_music_registry()
     track = next((t for t in registry["tracks"] if t["id"] == track_id), None)
-
     if not track:
         return jsonify({"status": "error", "message": "Track not found"}), 404
 
     artist_address = track["artist_address"]
 
-    # Verify auth
     ok, _, error_key = validate_effective_auth(from_address, auth_secret, passphrase)
     if not ok:
         if error_key == "no_effective_pledge":
@@ -24917,53 +25240,84 @@ def api_v1_music_tip():
         if error_key == "invalid_auth":
             return jsonify({"status": "error", "message": "Invalid auth"}), 403
 
-    # Transfer THR with 80/10/10 split (Phase 5: Music Telemetry Rewards)
-    # 80% to artist, 10% to network pool, 10% to AI/T2E pool
-    ledger = load_json(LEDGER_FILE, {})
-    sender_balance = float(ledger.get(from_address, 0))
+    reward_split = None
+    artist_amount = amount
+    network_amount = 0.0
+    ai_pool_amount = 0.0
 
-    if sender_balance < amount:
-        return jsonify({"status": "error", "message": "Insufficient balance"}), 400
+    if token_symbol == "THR":
+        ledger = load_json(LEDGER_FILE, {})
+        sender_balance = float(ledger.get(from_address, 0))
+        if sender_balance < amount:
+            return jsonify({"status": "error", "message": "Insufficient balance"}), 400
 
-    # Calculate splits using global constants
-    artist_amount = round(amount * MUSIC_REWARD_ARTIST_PERCENT, 6)    # 80%
-    network_amount = round(amount * MUSIC_REWARD_NETWORK_PERCENT, 6)  # 10%
-    ai_pool_amount = round(amount * MUSIC_REWARD_AI_PERCENT, 6)       # 10%
+        thr_dec = _token_decimals("THR")
+        quant = Decimal("1").scaleb(-thr_dec)
+        artist_amount = float((amount_dec * Decimal(str(MUSIC_REWARD_ARTIST_PERCENT))).quantize(quant, rounding=ROUND_DOWN))
+        network_amount = float((amount_dec * Decimal(str(MUSIC_REWARD_NETWORK_PERCENT))).quantize(quant, rounding=ROUND_DOWN))
+        ai_pool_amount = float((amount_dec * Decimal(str(MUSIC_REWARD_AI_PERCENT))).quantize(quant, rounding=ROUND_DOWN))
+        actual_total = Decimal(str(artist_amount)) + Decimal(str(network_amount)) + Decimal(str(ai_pool_amount))
+        if actual_total != amount_dec:
+            artist_amount = float((amount_dec - Decimal(str(network_amount)) - Decimal(str(ai_pool_amount))).quantize(quant, rounding=ROUND_DOWN))
 
-    # Ensure no rounding errors
-    actual_total = artist_amount + network_amount + ai_pool_amount
-    if actual_total != amount:
-        artist_amount = round(amount - network_amount - ai_pool_amount, 6)
+        ledger[from_address] = round(sender_balance - amount, 6)
+        ledger[artist_address] = round(float(ledger.get(artist_address, 0)) + artist_amount, 6)
+        save_json(LEDGER_FILE, ledger)
 
-    # Debit sender
-    ledger[from_address] = round(sender_balance - amount, 6)
+        credit_network_pool(network_amount, source="music_tip")
+        credit_ai_pool(ai_pool_amount, music_tip_amount=amount)
+        reward_split = {"artist": artist_amount, "network": network_amount, "ai_t2e": ai_pool_amount}
+        new_balance = ledger[from_address]
+    elif token_symbol == "WBTC":
+        wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+        sender_balance = float(wbtc_ledger.get(from_address, 0.0))
+        if sender_balance < amount:
+            return jsonify({"status": "error", "message": "Insufficient WBTC balance"}), 400
+        wbtc_ledger[from_address] = round(sender_balance - amount, 8)
+        wbtc_ledger[artist_address] = round(float(wbtc_ledger.get(artist_address, 0.0)) + amount, 8)
+        save_json(WBTC_LEDGER_FILE, wbtc_ledger)
+        new_balance = wbtc_ledger[from_address]
+    else:
+        token_balances = load_token_balances()
+        token_registry = load_json(CUSTOM_TOKENS_FILE, {}).get("tokens", [])
+        token_meta = next((t for t in token_registry if str(t.get("symbol") or "").upper() == token_symbol), None)
+        if not token_meta:
+            return jsonify({"status": "error", "message": f"Unknown token: {token_symbol}"}), 400
+        if not token_meta.get("transferable", True):
+            return jsonify({"status": "error", "message": f"Token {token_symbol} is not transferable"}), 400
 
-    # Credit artist (80%)
-    ledger[artist_address] = round(float(ledger.get(artist_address, 0)) + artist_amount, 6)
-    save_json(LEDGER_FILE, ledger)
+        token_balances.setdefault(token_symbol, {})
+        sender_balance = float(token_balances[token_symbol].get(from_address, 0.0))
+        if sender_balance < amount:
+            return jsonify({"status": "error", "message": f"Insufficient {token_symbol} balance"}), 400
 
-    # Credit network pool (10%)
-    credit_network_pool(network_amount, source="music_tip")
+        tok_dec = _token_decimals(token_symbol)
+        token_balances[token_symbol][from_address] = round(sender_balance - amount, tok_dec)
+        token_balances[token_symbol][artist_address] = round(float(token_balances[token_symbol].get(artist_address, 0.0)) + amount, tok_dec)
+        save_token_balances(token_balances)
+        new_balance = token_balances[token_symbol][from_address]
 
-    # Credit AI/T2E pool (10%)
-    credit_ai_pool(ai_pool_amount, music_tip_amount=amount)
-
-    # Update track tips (total amount)
     for t in registry["tracks"]:
         if t["id"] == track_id:
-            t["tips_total"] = float(t.get("tips_total", 0)) + amount
+            if token_symbol == "THR":
+                t["tips_total"] = float(t.get("tips_total", 0)) + amount
+            token_totals = t.get("tips_by_token") if isinstance(t.get("tips_by_token"), dict) else {}
+            token_totals[token_symbol] = round(float(token_totals.get(token_symbol, 0.0)) + amount, 6)
+            t["tips_by_token"] = token_totals
             break
 
-    # Update artist earnings (only their 80% portion)
     if artist_address in registry["artists"]:
-        registry["artists"][artist_address]["total_earnings"] = \
-            float(registry["artists"][artist_address].get("total_earnings", 0)) + artist_amount
+        earnings = registry["artists"][artist_address].get("token_earnings")
+        earnings = earnings if isinstance(earnings, dict) else {}
+        earnings[token_symbol] = round(float(earnings.get(token_symbol, 0.0)) + artist_amount, 6)
+        registry["artists"][artist_address]["token_earnings"] = earnings
+        if token_symbol == "THR":
+            registry["artists"][artist_address]["total_earnings"] = float(registry["artists"][artist_address].get("total_earnings", 0)) + artist_amount
 
     save_music_registry(registry)
 
-    # Record transaction with full reward split info
     chain = load_json(CHAIN_FILE, [])
-    tx_id = f"MUSIC-TIP-{int(time.time())}-{secrets.token_hex(4)}"
+    tx_id = f"MUSIC-TIP-{token_symbol}-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
         "type": "music_tip",
         "category": "music_tip",
@@ -24972,21 +25326,17 @@ def api_v1_music_tip():
         "from": from_address,
         "to": artist_address,
         "amount": amount,
-        "reward_split": {
-            "artist": artist_amount,
-            "network": network_amount,
-            "ai_t2e": ai_pool_amount
-        },
-        # Legacy fields for backward compatibility
+        "token_symbol": token_symbol,
         "artist_amount": artist_amount,
-        "ai_pool_amount": ai_pool_amount,
         "network_amount": network_amount,
+        "ai_pool_amount": ai_pool_amount,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
         "tx_id": tx_id,
-        "status": "confirmed"
+        "status": "PENDING"
     }
+    if reward_split:
+        tx["reward_split"] = reward_split
 
-    # Add GPS data if provided
     gps_data = None
     if gps_lat is not None and gps_lng is not None:
         gps_data = {"lat": gps_lat, "lng": gps_lng}
@@ -24996,7 +25346,6 @@ def api_v1_music_tip():
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
 
-    # Track music play with GPS telemetry (for autopilot route training)
     _track_music_play(
         track_id=track_id,
         wallet_address=from_address,
@@ -25004,10 +25353,9 @@ def api_v1_music_tip():
         duration_seconds=duration_seconds,
         gps_lat=gps_lat,
         gps_lng=gps_lng,
-        tip_amount=amount
+        tip_amount=amount if token_symbol == "THR" else 0.0,
     )
 
-    # Record T2E contribution if GPS data provided (driver training)
     if gps_data:
         record_training_contribution(
             device_id=f"TIPPER-{from_address[:16]}",
@@ -25017,23 +25365,27 @@ def api_v1_music_tip():
             gps_data=gps_data
         )
 
-    logger.info(f"Music tip: {amount} THR from {from_address} for track {track_id} "
-                f"(artist={artist_amount}, network={network_amount}, ai={ai_pool_amount})" +
-                (f" @ GPS({gps_lat:.4f}, {gps_lng:.4f})" if gps_lat and gps_lng else ""))
+    event = emit_crosschain_event("MUSIC_TIP", {
+        "tx_id": tx_id,
+        "track_id": track_id,
+        "from": from_address,
+        "to": artist_address,
+        "token_symbol": token_symbol,
+        "amount": str(amount_dec),
+    }, status="PENDING")
 
     return jsonify({
         "status": "success",
+        "tx_status": "PENDING",
+        "event_id": event.get("event_id"),
         "tx_id": tx_id,
+        "token_symbol": token_symbol,
         "amount": amount,
-        "reward_split": {
-            "artist": artist_amount,
-            "network": network_amount,
-            "ai_t2e": ai_pool_amount
-        },
         "artist_amount": artist_amount,
         "network_amount": network_amount,
         "ai_pool_amount": ai_pool_amount,
-        "new_balance": ledger[from_address],
+        "reward_split": reward_split,
+        "new_balance": new_balance,
         "gps_recorded": bool(gps_lat and gps_lng),
         "t2e_contribution_recorded": bool(gps_data)
     }), 200

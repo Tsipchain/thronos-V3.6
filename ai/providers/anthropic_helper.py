@@ -10,7 +10,8 @@ def _client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=api_key)
 
 def default_model() -> str:
-    return os.getenv("ANTHROPIC_DEFAULT_MODEL", "claude-3-5-sonnet-latest")
+    # Use stable, API-recognized Anthropic ids by default (avoid ambiguous '*-latest').
+    return os.getenv("ANTHROPIC_DEFAULT_MODEL", "claude-3-sonnet-20240229")
 
 def generate(prompt: str, model: Optional[str] = None, system_prompt: Optional[str] = None,
              metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

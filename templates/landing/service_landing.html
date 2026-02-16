@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ service_name }} — Thronos</title>
+    <style>
+        /* ===== Thronos Design Tokens (from BRANDING.md) ===== */
+        :root {
+            --text-primary: #00ff00;
+            --text-secondary: #00ff66;
+            --border-glow: #00ff66;
+            --circuit-green: #1a3b2e;
+            --gold: #ffd700;
+            --gold-light: #ffed4e;
+            --gold-dark: #d4af37;
+            --bg-dark: #000000;
+            --bg-panel: #0a0a0a;
+            --bg-secondary: #111111;
+            --accent: #ff6600;
+            --text-muted: #666666;
+            --font-primary: 'Courier New', monospace;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            font-family: var(--font-primary);
+            line-height: 1.6;
+        }
+
+        /* ===== Nav Bar (shared) ===== */
+        .thronos-nav {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1rem 2rem;
+            background: var(--bg-panel);
+            border-bottom: 1px solid var(--circuit-green);
+        }
+        .nav-logo {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: var(--gold);
+            text-decoration: none;
+        }
+        .nav-links { display: flex; gap: 1.5rem; }
+        .nav-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.9rem;
+        }
+        .nav-links a:hover { color: var(--gold); }
+        .nav-wallet-btn {
+            background: linear-gradient(135deg, var(--gold-dark), var(--text-primary));
+            color: var(--bg-dark);
+            border: none;
+            padding: 0.5rem 1.5rem;
+            font-family: var(--font-primary);
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        /* ===== Hero Section ===== */
+        .hero {
+            text-align: center;
+            padding: 6rem 2rem 4rem;
+            background: linear-gradient(135deg, var(--bg-dark) 0%, var(--bg-secondary) 50%, var(--bg-dark) 100%);
+        }
+        .hero-title {
+            font-size: 3rem;
+            background: linear-gradient(135deg, var(--gold) 0%, var(--text-primary) 50%, var(--gold-light) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 1rem;
+        }
+        .hero-subtitle {
+            font-size: 1.2rem;
+            color: var(--text-muted);
+            margin-bottom: 2rem;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .btn-primary {
+            display: inline-block;
+            background: linear-gradient(135deg, var(--gold-dark), var(--text-primary));
+            color: var(--bg-dark);
+            padding: 0.8rem 2rem;
+            text-decoration: none;
+            font-family: var(--font-primary);
+            font-weight: bold;
+            font-size: 1rem;
+            border: 1px solid var(--border-glow);
+        }
+        .btn-primary:hover { box-shadow: 0 0 20px var(--border-glow); }
+
+        /* ===== Features Grid ===== */
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 2rem;
+            padding: 4rem 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .feature-card {
+            background: var(--bg-panel);
+            border: 1px solid var(--circuit-green);
+            padding: 2rem;
+            text-align: center;
+        }
+        .feature-icon { font-size: 2rem; margin-bottom: 1rem; }
+        .feature-card h3 {
+            color: var(--gold);
+            margin-bottom: 0.5rem;
+            font-size: 1.1rem;
+        }
+        .feature-card p { color: var(--text-muted); font-size: 0.9rem; }
+
+        /* ===== How It Works ===== */
+        .how-it-works {
+            padding: 4rem 2rem;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .how-it-works h2 {
+            text-align: center;
+            color: var(--gold);
+            margin-bottom: 2rem;
+        }
+        .step {
+            display: flex;
+            align-items: flex-start;
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        .step-number {
+            background: var(--gold-dark);
+            color: var(--bg-dark);
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+        .step h3 { color: var(--text-secondary); margin-bottom: 0.3rem; }
+        .step p { color: var(--text-muted); font-size: 0.9rem; }
+
+        /* ===== Footer (standard) ===== */
+        .thronos-footer {
+            text-align: center;
+            padding: 3rem 2rem;
+            border-top: 1px solid var(--circuit-green);
+            background: var(--bg-panel);
+        }
+        .footer-brand { color: var(--gold); font-size: 1.2rem; font-weight: bold; }
+        .footer-tagline { color: var(--text-muted); margin: 0.5rem 0 1rem; font-size: 0.9rem; }
+        .footer-links { display: flex; justify-content: center; gap: 2rem; margin-bottom: 1rem; }
+        .footer-links a { color: var(--text-secondary); text-decoration: none; font-size: 0.85rem; }
+        .footer-links a:hover { color: var(--gold); }
+        .footer-copy { color: var(--text-muted); font-size: 0.75rem; }
+
+        /* ===== Responsive ===== */
+        @media (max-width: 768px) {
+            .hero-title { font-size: 2rem; }
+            .thronos-nav { flex-wrap: wrap; gap: 1rem; }
+            .nav-links { flex-wrap: wrap; gap: 0.8rem; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Nav Bar (shared across all landings) -->
+    <nav class="thronos-nav">
+        <a href="/" class="nav-logo">THRONOS</a>
+        <div class="nav-links">
+            <a href="/hub">App Hub</a>
+            <a href="/ai">AI Core</a>
+            <a href="/sentinel">Sentinel</a>
+            <a href="/verify">VerifyID</a>
+            <a href="/explorer">Explorer</a>
+        </div>
+        <button class="nav-wallet-btn" onclick="openWallet()">Connect Wallet</button>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <h1 class="hero-title">{{ service_name }}</h1>
+        <p class="hero-subtitle">{{ subtitle }}</p>
+        <a href="{{ cta_link }}" class="btn-primary">{{ cta_text }}</a>
+    </section>
+
+    <!-- Features Grid -->
+    <section class="features">
+        {% for feature in features %}
+        <div class="feature-card">
+            <div class="feature-icon">{{ feature.icon }}</div>
+            <h3>{{ feature.title }}</h3>
+            <p>{{ feature.description }}</p>
+        </div>
+        {% endfor %}
+    </section>
+
+    <!-- How It Works -->
+    <section class="how-it-works">
+        <h2>How It Works</h2>
+        {% for step in steps %}
+        <div class="step">
+            <div class="step-number">{{ loop.index }}</div>
+            <div>
+                <h3>{{ step.title }}</h3>
+                <p>{{ step.description }}</p>
+            </div>
+        </div>
+        {% endfor %}
+    </section>
+
+    <!-- Footer (standard) -->
+    <footer class="thronos-footer">
+        <div class="footer-brand">THRONOS</div>
+        <div class="footer-tagline">Pledge to the unburnable</div>
+        <div class="footer-links">
+            <a href="/wallet">Wallet</a>
+            <a href="/explorer">Explorer</a>
+            <a href="/docs">Docs</a>
+            <a href="https://github.com/Tsipchain">GitHub</a>
+        </div>
+        <div class="footer-copy">Thronos FlexCo e.U. (Austria) &copy; 2026. All rights reserved.</div>
+    </footer>
+
+    <script>
+        function openWallet() {
+            window.location.href = '/wallet';
+        }
+    </script>
+</body>
+</html>

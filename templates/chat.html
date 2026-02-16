@@ -1087,7 +1087,6 @@
     const ADMIN_MODE_KEY = "thronos_admin_mode";
     const ACTIVE_SESSION_KEY = "thronos_ai_active_session";
     const SESSION_CACHE_KEY = "thronos_ai_session_cache_v1";
-    const CHAT_LAST_WALLET_KEY = "thronos_chat_last_wallet";
     const SELECTED_MODEL_KEY = "thronos_ai_selected_model_v1";
     window.aiCredits = Number.NaN;
 
@@ -1612,15 +1611,6 @@
         // Read wallet from localStorage (same as other pages)
         let w = walletSession.getAddress() || "";
 
-        // Strong fallback: read direct localStorage keys in case wallet session
-        // helper isn't ready yet during first paint after refresh.
-        if (!w) {
-          w =
-            localStorage.getItem("thr_address") ||
-            localStorage.getItem(CHAT_LAST_WALLET_KEY) ||
-            "";
-        }
-
         // Fallback for new origin/domain migration: restore from cookie if local storage is empty
         if (!w) {
           const cookieWallet = getCookieValue("thr_address");
@@ -1635,9 +1625,6 @@
         }
 
         walletInputEl.value = w;
-        if (w) {
-          localStorage.setItem(CHAT_LAST_WALLET_KEY, w);
-        }
 
         // Update wallet label with connection status
         const walletPill = walletLabelEl.parentElement;
@@ -1660,15 +1647,7 @@
       try {
         setSessionStatus("Loading sessions…");
         const cachedSessions = Array.isArray(aiSessions) ? aiSessions.slice() : [];
-        const wallet =
-          walletInputEl.value.trim() ||
-          localStorage.getItem("thr_address") ||
-          localStorage.getItem(CHAT_LAST_WALLET_KEY) ||
-          "";
-        if (wallet && !walletInputEl.value.trim()) {
-          walletInputEl.value = wallet;
-          localStorage.setItem(CHAT_LAST_WALLET_KEY, wallet);
-        }
+        const wallet = walletInputEl.value.trim();
         const url = wallet
           ? `${API_SESSIONS}?wallet=${encodeURIComponent(wallet)}`
           : API_SESSIONS;
@@ -1688,7 +1667,7 @@
           currentSessionId = null;
         }
 
-        if (!aiSessions.length && !currentSessionId) {
+        if (!aiSessions.length) {
           await createSession("New mesh session");
         }
 
@@ -1753,14 +1732,7 @@
     async function loadSessionMessages(id) {
       setSessionStatus("Loading messages…");
       try {
-        const wallet =
-          walletInputEl.value.trim() ||
-          localStorage.getItem("thr_address") ||
-          localStorage.getItem(CHAT_LAST_WALLET_KEY) ||
-          "";
-        if (wallet) {
-          localStorage.setItem(CHAT_LAST_WALLET_KEY, wallet);
-        }
+        const wallet = walletInputEl.value.trim();
         const url = wallet
           ? `${API_SESSION_MESSAGES(id)}?wallet=${encodeURIComponent(wallet)}`
           : API_SESSION_MESSAGES(id);
@@ -1848,14 +1820,7 @@
 
     async function createSession(title = "New mesh session") {
       try {
-        const wallet =
-          walletInputEl.value.trim() ||
-          localStorage.getItem("thr_address") ||
-          localStorage.getItem(CHAT_LAST_WALLET_KEY) ||
-          "";
-        if (wallet) {
-          localStorage.setItem(CHAT_LAST_WALLET_KEY, wallet);
-        }
+        const wallet = walletInputEl.value.trim();
         const res = await fetch(API_SESSION_CREATE, {
           method: "POST",
           headers: { "Content-Type": "application/json" },

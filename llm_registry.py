@@ -153,9 +153,8 @@ AI_MODEL_REGISTRY: Dict[str, List[ModelInfo]] = {
         ModelInfo(id="o3-mini", display_name="o3-mini (reasoning)", provider="openai", tier="reasoning"),
     ],
     "anthropic": [
-        ModelInfo(id="claude-3-sonnet-20240229", display_name="Claude 3 Sonnet", provider="anthropic", tier="premium", default=True),
-        ModelInfo(id="claude-3-haiku-20240307", display_name="Claude 3 Haiku", provider="anthropic", tier="fast"),
-        ModelInfo(id="claude-3-opus-20240229", display_name="Claude 3 Opus", provider="anthropic", tier="premium"),
+        ModelInfo(id="claude-3-5-sonnet-latest", display_name="Claude 3.5 Sonnet", provider="anthropic", tier="premium", default=True),
+        ModelInfo(id="claude-3-5-haiku-latest", display_name="Claude 3.5 Haiku", provider="anthropic", tier="fast"),
     ],
     "gemini": [
         ModelInfo(id="gemini-2.0-flash", display_name="Gemini 2.0 Flash", provider="gemini", tier="fast", default=True),
@@ -172,15 +171,11 @@ AI_MODEL_REGISTRY: Dict[str, List[ModelInfo]] = {
 
 
 MODEL_ID_ALIASES: Dict[str, str] = {
-    # Anthropic legacy/non-canonical ids -> stable canonical ids
-    "claude-3.5-sonnet": "claude-3-sonnet-20240229",
-    "claude-3.5-haiku": "claude-3-haiku-20240307",
-    "claude-3-5-sonnet": "claude-3-sonnet-20240229",
-    "claude-3-5-haiku": "claude-3-haiku-20240307",
-    "claude-3-5-sonnet-latest": "claude-3-sonnet-20240229",
-    "claude-3-5-haiku-latest": "claude-3-haiku-20240307",
-    "claude-3-5-sonnet-20240620": "claude-3-sonnet-20240229",
-    "claude-3-5-haiku-20241022": "claude-3-haiku-20240307",
+    # Anthropic legacy ids -> current canonical ids
+    "claude-3.5-sonnet": "claude-3-5-sonnet-latest",
+    "claude-3.5-haiku": "claude-3-5-haiku-latest",
+    "claude-3-5-sonnet": "claude-3-5-sonnet-latest",
+    "claude-3-5-haiku": "claude-3-5-haiku-latest",
 }
 
 

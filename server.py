@@ -30,7 +30,7 @@ from __future__ import annotations
 # - Real Fiat Gateway (Stripe + Bank Withdrawals) (V5.0)
 # - Admin Withdrawal Panel (V5.1)
 
-import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil, sqlite3, base64, hmac
+import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil, sqlite3, base64
 import sys
 import atexit
 from collections import Counter
@@ -504,13 +504,6 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 # Unified API contract
 API_BASE_PREFIX = os.getenv("API_BASE_PREFIX", "/api")
 APP_VERSION     = os.getenv("APP_VERSION", "v3.6")
-APP_BUILD_TIME  = os.getenv("BUILD_TIME", os.getenv("RENDER_GIT_COMMIT_TIME", ""))
-APP_GIT_SHA     = (
-    os.getenv("RAILWAY_GIT_COMMIT_SHA")
-    or os.getenv("RENDER_GIT_COMMIT")
-    or os.getenv("SOURCE_COMMIT")
-    or "unknown"
-)
 
 AI_LOG_API_KEY = os.getenv("AI_LOG_API_KEY", os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW"))
 
@@ -639,34 +632,13 @@ ENABLE_CHAIN = _strip_env_quotes(os.getenv("ENABLE_CHAIN", "1")) == "1"
 
 # ─── BOOTSTRAP / SERVICE DISCOVERY CONSTANTS ──────────────────────────────
 _BOOTSTRAP_PRIMARY   = os.getenv("BOOTSTRAP_PRIMARY",   "https://api.thronoschain.org")
-_BOOTSTRAP_READONLY  = os.getenv("BOOTSTRAP_READONLY",  "https://ro.api.thronoschain.org")
+_BOOTSTRAP_READONLY  = os.getenv("BOOTSTRAP_READONLY",  "https://node2.thronoschain.org")
 _BOOTSTRAP_EXPLORER  = os.getenv("BOOTSTRAP_EXPLORER",  "https://explorer.thronoschain.org")
 _BOOTSTRAP_VERIFYID  = os.getenv("BOOTSTRAP_VERIFYID",  "https://verifyid.thronoschain.org")
-_BOOTSTRAP_VERIFYID_API = os.getenv("BOOTSTRAP_VERIFYID_API", "https://verifyid-api.thronoschain.org")
+_BOOTSTRAP_VERIFYID_API = os.getenv("BOOTSTRAP_VERIFYID_API", "https://api.thronoschain.org/api/verifyid")
 _BOOTSTRAP_AI_CORE   = os.getenv("BOOTSTRAP_AI_CORE",   "https://ai.thronoschain.org")
 _BOOTSTRAP_SENTINEL  = os.getenv("BOOTSTRAP_SENTINEL",  "https://sentinel.thronoschain.org")
 _BOOTSTRAP_BTC_API   = os.getenv("BOOTSTRAP_BTC_API",   "https://btc-api.thronoschain.org")
-_BOOTSTRAP_MAP_FILE = os.path.join(DATA_DIR, "subdomain_service_map.json")
-
-
-def _bootstrap_service_map() -> dict:
-    defaults = {
-        "api": _BOOTSTRAP_PRIMARY,
-        "ro_api": _BOOTSTRAP_READONLY,
-        "verifyid": _BOOTSTRAP_VERIFYID,
-        "verifyid_api": _BOOTSTRAP_VERIFYID_API,
-        "ai": _BOOTSTRAP_AI_CORE,
-        "explorer": _BOOTSTRAP_EXPLORER,
-        "sentinel": _BOOTSTRAP_SENTINEL,
-        "btc_api": _BOOTSTRAP_BTC_API,
-    }
-    custom = load_json(_BOOTSTRAP_MAP_FILE, {})
-    if isinstance(custom, dict):
-        for k in list(defaults.keys()):
-            v = custom.get(k)
-            if isinstance(v, str) and v.strip():
-                defaults[k] = v.strip().rstrip("/")
-    return defaults
 
 # Redis cache configuration (optional)
 REDIS_CACHE_ENABLED = _strip_env_quotes(os.getenv("REDIS_CACHE_ENABLED", "1")).lower() in ("1", "true", "yes")
@@ -786,12 +758,6 @@ AI_PROXY_HEALTH_LAST_LOG_TS = 0.0
 AI_POOL_FILE        = os.path.join(DATA_DIR, "ai_pool.json")  # Phase 4: AI rewards pool
 NETWORK_POOL_FILE   = os.path.join(DATA_DIR, "network_pool.json")  # Phase 5: Network rewards pool (10% of music telemetry)
 T2E_REWARDS_FILE    = os.path.join(DATA_DIR, "t2e_rewards.json")  # Train-to-Earn rewards for IoT/ASIC miners
-
-# Crosschain/event-bus & treasury stability files
-TOKENS_REGISTRY_FILE = os.path.join(DATA_DIR, "tokens_registry.json")
-EVENT_BUS_FILE = os.path.join(DATA_DIR, "crosschain_event_bus.json")
-TREASURY_STATE_FILE = os.path.join(DATA_DIR, "treasury_state.json")
-X9_NONCE_CACHE_FILE = os.path.join(DATA_DIR, "x9_nonce_cache.json")
 
 # Register optional EVM routes (if module exists)
 if register_evm_routes is not None:
@@ -2140,106 +2106,6 @@ def atomic_write_json(path: str, data) -> None:
 
 
 _init_ledger_db()
-
-
-def _default_tokens_registry() -> dict:
-    return {
-        "tokens": {
-            "THR": {"decimals": 6, "chain": "thronos", "rpc_env": "THR_RPC_URL", "treasury_address": AI_WALLET_ADDRESS},
-            "WBTC": {"decimals": 8, "chain": "bitcoin", "rpc_env": "BTC_RPC_URL", "treasury_address": os.getenv("TREASURY_WBTC_ADDRESS", AI_WALLET_ADDRESS)},
-            "L2E": {"decimals": 6, "chain": "thronos", "rpc_env": "THR_RPC_URL", "treasury_address": AI_WALLET_ADDRESS},
-            "T2E": {"decimals": 6, "chain": "thronos", "rpc_env": "THR_RPC_URL", "treasury_address": AI_WALLET_ADDRESS},
-        },
-        "updated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
-    }
-
-
-def load_tokens_registry() -> dict:
-    data = load_json(TOKENS_REGISTRY_FILE, {})
-    if not isinstance(data, dict) or not isinstance(data.get("tokens"), dict) or not data.get("tokens"):
-        data = _default_tokens_registry()
-        save_json(TOKENS_REGISTRY_FILE, data)
-    return data
-
-
-def _token_decimals(symbol: str) -> int:
-    registry = load_tokens_registry()
-    token_meta = (registry.get("tokens") or {}).get((symbol or "THR").upper(), {})
-    try:
-        return max(0, int(token_meta.get("decimals", 6)))
-    except Exception:
-        return 6
-
-
-def _normalize_decimal_amount(raw_amount, symbol: str) -> Decimal:
-    dec = _token_decimals(symbol)
-    quant = Decimal("1").scaleb(-dec)
-    amount = Decimal(str(raw_amount or "0")).quantize(quant, rounding=ROUND_DOWN)
-    if amount <= Decimal("0"):
-        raise ValueError("invalid_amount")
-    return amount
-
-
-def emit_crosschain_event(event_type: str, payload: dict, status: str = "PENDING") -> dict:
-    event_bus = load_json(EVENT_BUS_FILE, {"events": []})
-    if not isinstance(event_bus, dict):
-        event_bus = {"events": []}
-    events = event_bus.get("events")
-    if not isinstance(events, list):
-        events = []
-    event = {
-        "event_id": f"EVT-{int(time.time()*1000)}-{secrets.token_hex(4)}",
-        "type": str(event_type or "UNKNOWN").upper(),
-        "status": str(status or "PENDING").upper(),
-        "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
-        "payload": payload if isinstance(payload, dict) else {},
-    }
-    events.append(event)
-    event_bus["events"] = events[-5000:]
-    event_bus["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-    save_json(EVENT_BUS_FILE, event_bus)
-    return event
-
-
-def settle_pending_crosschain_events(limit: int = 100) -> int:
-    event_bus = load_json(EVENT_BUS_FILE, {"events": []})
-    events = event_bus.get("events") if isinstance(event_bus, dict) else []
-    if not isinstance(events, list):
-        return 0
-    settled = 0
-    for ev in events:
-        if settled >= limit:
-            break
-        if not isinstance(ev, dict):
-            continue
-        if str(ev.get("status") or "").upper() != "PENDING":
-            continue
-        ev["status"] = "SETTLED"
-        ev["settled_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-        settled += 1
-    if settled:
-        event_bus["events"] = events
-        event_bus["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-        save_json(EVENT_BUS_FILE, event_bus)
-    return settled
-
-
-def _x9_nonce_seen(nonce: str) -> bool:
-    nonce = str(nonce or "").strip()
-    if not nonce:
-        return True
-    bucket = load_json(X9_NONCE_CACHE_FILE, {"nonces": {}})
-    nonces = bucket.get("nonces") if isinstance(bucket, dict) else {}
-    if not isinstance(nonces, dict):
-        nonces = {}
-    now = int(time.time())
-    # prune old entries (5 min)
-    nonces = {k: int(v) for k, v in nonces.items() if int(v) >= now - 300}
-    if nonce in nonces:
-        return True
-    nonces[nonce] = now
-    save_json(X9_NONCE_CACHE_FILE, {"nonces": nonces})
-    return False
 
 
 # ─── Whitelist Wallet System ───────────────────────────────────────────────────
@@ -6898,49 +6764,15 @@ def api_whoami():
 @app.route("/bootstrap.json", methods=["GET"])
 def bootstrap_json():
     """Service discovery endpoint – canonical URLs for all Thronos services."""
-    services = _bootstrap_service_map()
-
-    health_refs = {}
-    health_live_refs = {}
-    for key, base in services.items():
-        root = str(base or "").rstrip("/")
-        if not root:
-            continue
-        health_refs[key] = f"{root}/health"
-        # Static front-ends and legacy backends may still expose only fallback paths.
-        if key in {"verifyid", "explorer"}:
-            health_live_refs[key] = f"{root}/health.json"
-        elif key in {"api", "ro_api", "ai", "sentinel", "btc_api"}:
-            health_live_refs[key] = f"{root}/api/health"
-        else:
-            health_live_refs[key] = f"{root}/health"
-
     return jsonify({
         "primary":      _BOOTSTRAP_PRIMARY,
         "readonly":     _BOOTSTRAP_READONLY,
-        "ro_api":       _BOOTSTRAP_READONLY,
         "explorer":     _BOOTSTRAP_EXPLORER,
         "verifyid":     _BOOTSTRAP_VERIFYID,
         "verifyid_api": _BOOTSTRAP_VERIFYID_API,
         "ai_core":      _BOOTSTRAP_AI_CORE,
-        "ai":           _BOOTSTRAP_AI_CORE,
         "sentinel":     _BOOTSTRAP_SENTINEL,
         "btc_api":      _BOOTSTRAP_BTC_API,
-        "health":       health_refs,
-        "health_live":  health_live_refs,
-        "source_of_truth": {
-            "map_file": _BOOTSTRAP_MAP_FILE,
-            "dns_expectations": {
-                "api": "CNAME/ALIAS -> Railway primary API",
-                "ro_api": "CNAME/ALIAS -> Railway read-only API",
-                "verifyid": "CNAME -> Vercel VerifyID frontend",
-                "verifyid_api": "CNAME/ALIAS -> Railway VerifyID API",
-                "ai": "CNAME -> Render AI service",
-                "explorer": "CNAME -> Vercel Explorer frontend",
-                "sentinel": "CNAME -> Render Sentinel service",
-                "btc_api": "CNAME/ALIAS -> Railway BTC API",
-            },
-        },
         "node_role": NODE_ROLE,
         "version": "3.6",
     }), 200
@@ -8115,11 +7947,6 @@ def whitepaper_page():
 def roadmap_page():
     return render_template("roadmap.html")
 
-@app.route("/wallet")
-def legacy_wallet_redirect():
-    return redirect("https://thronoschain.org/downloads/", code=302)
-
-
 @app.route("/downloads")
 @app.route("/apps")
 @app.route("/wallet/download")
@@ -8652,16 +8479,20 @@ def api_architect_generate():
         "callable": False,
     }
 
-    recovered_session = False
-    previous_session_id = session_id
     if session_id:
         if _ensure_session_type(session_id, "architect") is False:
-            recovered_session = True
-            session_id = f"arch_{secrets.token_hex(8)}"
+            return (
+                jsonify(
+                    ok=False,
+                    error="Session type mismatch",
+                    expected="architect",
+                    session_id=session_id,
+                ),
+                409,
+            )
     else:
         session_id = f"arch_{secrets.token_hex(8)}"
 
-    call_meta["session_id"] = session_id
     ensure_session_exists(session_id, wallet, "architect")
 
     selected_model, fallback_notice, error_resp = _select_callable_model(model_key, session_type="architect")
@@ -8732,6 +8563,7 @@ def api_architect_generate():
         "Χτίζεις ΠΛΗΡΗ software projects (όχι μόνο skeletons).\\n"
         "Για κάθε αρχείο που παράγεις, γράφεις όσο πιο ολοκληρωμένο, λειτουργικό κώδικα γίνεται.\\n"
         "- Π.χ. αν υπάρχει login page, υλοποίησε πλήρη φόρμα, validation και fake auth flow.\\n"
+        "- Αν υπάρχει API route, γράψε πλήρες handler με όλα τα πεδία.\\n"
         "- Αν υπάρχει API route, γράψε πλήρες handler με όλα τα πεδία.\\n"
         "- Αν υπάρχει database layer, βάλε πλήρη μοντέλα / helpers.\\n\\n"
         "ΠΡΟΤΥΠΟ ΕΞΟΔΟΥ:\\n"
@@ -8915,8 +8747,6 @@ def api_architect_generate():
         "files": resp_files,
         "zip_url": zip_url,
         "session_id": session_id,
-        "session_recovered": recovered_session,
-        "previous_session_id": previous_session_id if recovered_session else None,
         # FIX 8: Billing info
         "thr_spent": float(architect_fee),
         "credits_granted": reward_telemetry.get("credits_delta", 0),
@@ -9750,42 +9580,6 @@ def api_health():
     }
     HEALTH_CACHE.update({"ts": now, "data": payload})
     return jsonify(payload), 200
-
-
-@app.route("/health", methods=["GET", "OPTIONS"])
-def health_root():
-    if request.method == "OPTIONS":
-        resp = make_response("", 204)
-    else:
-        now = time.time()
-        cached = HEALTH_CACHE.get("data") if isinstance(HEALTH_CACHE.get("data"), dict) else {}
-        payload = {
-            "ok": True,
-            "role": NODE_ROLE,
-            "chain_height": int(CHAIN_META.get("height") or cached.get("chain_height") or 0),
-            "last_hash": CHAIN_META.get("last_hash") or cached.get("last_hash") or "0" * 64,
-            "ts": int(now),
-            "version": APP_VERSION,
-            "service": request.host.split(":")[0],
-        }
-        resp = make_response(jsonify(payload), 200)
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    resp.headers["Access-Control-Allow-Methods"] = "GET,OPTIONS"
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
-    return resp
-
-
-@app.route("/version", methods=["GET"])
-def version_root():
-    return jsonify({
-        "ok": True,
-        "service": request.host.split(":")[0],
-        "role": NODE_ROLE,
-        "version": APP_VERSION,
-        "git_sha": APP_GIT_SHA,
-        "build_time": APP_BUILD_TIME,
-        "ts": int(time.time()),
-    }), 200
 
 
 @app.route("/api/replica_health")
@@ -12523,23 +12317,6 @@ def _save_pytheia_control_state(state: dict) -> None:
     save_json(_pytheia_state_file(), state)
 
 
-def _build_pytheia_runtime_report(state: dict) -> dict:
-    if not isinstance(state, dict):
-        state = {}
-    last_advice = state.get("last_advice") if isinstance(state.get("last_advice"), dict) else {}
-    return {
-        "last_status": state.get("last_status") or {},
-        "provider_refresh": {
-            "last_provider_scan_ts": state.get("last_provider_scan_ts"),
-            "next_provider_scan_ts": state.get("next_provider_scan_ts"),
-        },
-        "last_health_report": state.get("last_health_report") or {},
-        "last_provider_snapshot": state.get("last_provider_snapshot") or {},
-        "last_advice": last_advice,
-        "apk_builder_simulation": last_advice.get("apk_builder_simulation") or {},
-    }
-
-
 @app.route("/api/admin/login", methods=["GET", "POST"])
 def api_admin_login():
     if request.method == "GET":
@@ -12698,7 +12475,15 @@ def api_admin_pytheia_state():
         return denied
 
     state = _load_pytheia_control_state()
-    runtime_report = _build_pytheia_runtime_report(state)
+    runtime_report = {
+        "last_status": state.get("last_status") or {},
+        "provider_refresh": {
+            "last_provider_scan_ts": state.get("last_provider_scan_ts"),
+            "next_provider_scan_ts": state.get("next_provider_scan_ts"),
+        },
+        "last_advice": state.get("last_advice") or {},
+        "apk_builder_simulation": ((state.get("last_advice") or {}).get("apk_builder_simulation") or {}),
+    }
     return jsonify({
         "ok": True,
         "admin_control": state.get("admin_control") or _default_pytheia_admin_control(),
@@ -12950,46 +12735,6 @@ def api_voice_x9_webhook():
     if expected and provided != expected:
         return jsonify({"ok": False, "error": "invalid_x9_secret"}), 401
 
-    # Hardening: origin allowlist + short-lived signed envelope + basic per-IP rate limiting
-    allowlist = [o.strip() for o in (os.getenv("X9_ALLOWED_ORIGINS") or "").split(",") if o.strip()]
-    req_origin = (request.headers.get("Origin") or "").strip()
-    if allowlist and req_origin and req_origin not in allowlist:
-        return jsonify({"ok": False, "error": "origin_not_allowed"}), 403
-
-    rate_state = load_json(TREASURY_STATE_FILE, {})
-    if not isinstance(rate_state, dict):
-        rate_state = {}
-    rate_cache = rate_state.get("x9_rate") if isinstance(rate_state.get("x9_rate"), dict) else {}
-    ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "x9").split(",")[0].strip()
-    now_ts = int(time.time())
-    hits = [int(ts) for ts in rate_cache.get(ip, []) if int(ts) >= now_ts - 60]
-    max_per_min = int(os.getenv("X9_RATE_LIMIT_PER_MIN", "60") or 60)
-    if len(hits) >= max_per_min:
-        return jsonify({"ok": False, "error": "rate_limited"}), 429
-    hits.append(now_ts)
-    rate_cache[ip] = hits[-max_per_min:]
-    rate_state["x9_rate"] = rate_cache
-    save_json(TREASURY_STATE_FILE, rate_state)
-
-    nonce = (request.headers.get("X-X9-Nonce") or "").strip()
-    ts_raw = (request.headers.get("X-X9-Timestamp") or "").strip()
-    sig = (request.headers.get("X-X9-Signature") or "").strip()
-    if nonce and _x9_nonce_seen(nonce):
-        return jsonify({"ok": False, "error": "nonce_reused"}), 401
-    if ts_raw and sig and expected:
-        try:
-            ts_i = int(ts_raw)
-        except Exception:
-            return jsonify({"ok": False, "error": "invalid_timestamp"}), 401
-        skew = abs(int(time.time()) - ts_i)
-        if skew > int(os.getenv("X9_MAX_SKEW_SECONDS", "120") or 120):
-            return jsonify({"ok": False, "error": "timestamp_skew"}), 401
-        body = request.get_data(cache=True, as_text=True) or ""
-        message = f"{ts_raw}.{nonce}.{body}".encode("utf-8")
-        expected_sig = hmac.new(expected.encode("utf-8"), message, hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(sig, expected_sig):
-            return jsonify({"ok": False, "error": "invalid_signature"}), 401
-
     data = request.get_json(silent=True) or {}
     wallet = (data.get("wallet") or "").strip()
     text = (data.get("text") or "").strip()
@@ -13044,7 +12789,7 @@ def api_voice_x9_webhook():
             "session_id": payload.get("session_id"),
             "model_id": payload.get("model_id"),
             "note": "fallback_echo",
-            "raw_error": {"status": body_out.get("status") if isinstance(body_out, dict) else "error"},
+            "raw_error": body_out,
         }), 200
 
     return jsonify({
@@ -13053,45 +12798,8 @@ def api_voice_x9_webhook():
         "session_id": body_out.get("session_id") or payload.get("session_id"),
         "model_id": body_out.get("model") or payload.get("model_id"),
         "credits": body_out.get("ai_credits", body_out.get("credits", payload.get("credits_after"))),
-        "meta": {"status": body_out.get("status") if isinstance(body_out, dict) else "ok"},
+        "raw": body_out,
     }), status
-
-
-@app.route("/treasury/health", methods=["GET"])
-def api_treasury_health():
-    state = load_json(TREASURY_STATE_FILE, {})
-    if not isinstance(state, dict):
-        state = {}
-    settled = settle_pending_crosschain_events(limit=50)
-    if settled:
-        state["last_settle_count"] = settled
-        state["last_settle_ts"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-        save_json(TREASURY_STATE_FILE, state)
-    return jsonify({
-        "ok": True,
-        "node_role": NODE_ROLE,
-        "settled_in_cycle": settled,
-        "last_settle_ts": state.get("last_settle_ts"),
-    }), 200
-
-
-@app.route("/treasury/balances", methods=["GET"])
-def api_treasury_balances():
-    treasury_thr = (os.getenv("TREASURY_THR_ADDRESS") or AI_WALLET_ADDRESS).strip()
-    treasury_wbtc = (os.getenv("TREASURY_WBTC_ADDRESS") or treasury_thr).strip()
-    ledger = load_json(LEDGER_FILE, {})
-    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
-    return jsonify({
-        "ok": True,
-        "addresses": {
-            "THR": treasury_thr,
-            "WBTC": treasury_wbtc,
-        },
-        "balances": {
-            "THR": float((ledger or {}).get(treasury_thr, 0.0)),
-            "WBTC": float((wbtc_ledger or {}).get(treasury_wbtc, 0.0)),
-        },
-    }), 200
 
 
 @app.route("/d3lfoi", methods=["GET"])
@@ -25197,12 +24905,8 @@ def api_v1_music_tip():
     data = request.get_json() or {}
     track_id = (data.get("track_id") or "").strip()
     from_address = (data.get("from_address") or "").strip()
+    amount = float(data.get("amount", 0) or 0)
     token_symbol = (data.get("token_symbol") or "THR").strip().upper() or "THR"
-    try:
-        amount_dec = _normalize_decimal_amount(data.get("amount", 0), token_symbol)
-    except Exception:
-        return jsonify({"status": "error", "message": "Invalid tip amount"}), 400
-    amount = float(amount_dec)
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
 
@@ -25210,7 +24914,7 @@ def api_v1_music_tip():
     gps_lng = data.get("gps_lng")
     duration_seconds = data.get("duration_seconds")
 
-    if not track_id or not from_address or amount_dec <= Decimal("0"):
+    if not track_id or not from_address or amount <= 0:
         return jsonify({"status": "error", "message": "Invalid tip parameters"}), 400
 
     registry = load_music_registry()
@@ -25246,14 +24950,12 @@ def api_v1_music_tip():
         if sender_balance < amount:
             return jsonify({"status": "error", "message": "Insufficient balance"}), 400
 
-        thr_dec = _token_decimals("THR")
-        quant = Decimal("1").scaleb(-thr_dec)
-        artist_amount = float((amount_dec * Decimal(str(MUSIC_REWARD_ARTIST_PERCENT))).quantize(quant, rounding=ROUND_DOWN))
-        network_amount = float((amount_dec * Decimal(str(MUSIC_REWARD_NETWORK_PERCENT))).quantize(quant, rounding=ROUND_DOWN))
-        ai_pool_amount = float((amount_dec * Decimal(str(MUSIC_REWARD_AI_PERCENT))).quantize(quant, rounding=ROUND_DOWN))
-        actual_total = Decimal(str(artist_amount)) + Decimal(str(network_amount)) + Decimal(str(ai_pool_amount))
-        if actual_total != amount_dec:
-            artist_amount = float((amount_dec - Decimal(str(network_amount)) - Decimal(str(ai_pool_amount))).quantize(quant, rounding=ROUND_DOWN))
+        artist_amount = round(amount * MUSIC_REWARD_ARTIST_PERCENT, 6)
+        network_amount = round(amount * MUSIC_REWARD_NETWORK_PERCENT, 6)
+        ai_pool_amount = round(amount * MUSIC_REWARD_AI_PERCENT, 6)
+        actual_total = artist_amount + network_amount + ai_pool_amount
+        if actual_total != amount:
+            artist_amount = round(amount - network_amount - ai_pool_amount, 6)
 
         ledger[from_address] = round(sender_balance - amount, 6)
         ledger[artist_address] = round(float(ledger.get(artist_address, 0)) + artist_amount, 6)
@@ -25286,9 +24988,8 @@ def api_v1_music_tip():
         if sender_balance < amount:
             return jsonify({"status": "error", "message": f"Insufficient {token_symbol} balance"}), 400
 
-        tok_dec = _token_decimals(token_symbol)
-        token_balances[token_symbol][from_address] = round(sender_balance - amount, tok_dec)
-        token_balances[token_symbol][artist_address] = round(float(token_balances[token_symbol].get(artist_address, 0.0)) + amount, tok_dec)
+        token_balances[token_symbol][from_address] = round(sender_balance - amount, 6)
+        token_balances[token_symbol][artist_address] = round(float(token_balances[token_symbol].get(artist_address, 0.0)) + amount, 6)
         save_token_balances(token_balances)
         new_balance = token_balances[token_symbol][from_address]
 
@@ -25327,7 +25028,7 @@ def api_v1_music_tip():
         "ai_pool_amount": ai_pool_amount,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
         "tx_id": tx_id,
-        "status": "PENDING"
+        "status": "confirmed"
     }
     if reward_split:
         tx["reward_split"] = reward_split
@@ -25360,19 +25061,8 @@ def api_v1_music_tip():
             gps_data=gps_data
         )
 
-    event = emit_crosschain_event("MUSIC_TIP", {
-        "tx_id": tx_id,
-        "track_id": track_id,
-        "from": from_address,
-        "to": artist_address,
-        "token_symbol": token_symbol,
-        "amount": str(amount_dec),
-    }, status="PENDING")
-
     return jsonify({
         "status": "success",
-        "tx_status": "PENDING",
-        "event_id": event.get("event_id"),
         "tx_id": tx_id,
         "token_symbol": token_symbol,
         "amount": amount,

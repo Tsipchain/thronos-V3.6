@@ -353,7 +353,6 @@ const ARCHITECT_SESSION_KEY = "thronos_architect_session_id";
 const ARCHITECT_WALLET_KEY = "thr_address";
 const ARCHITECT_MODEL_KEY = "thronos_architect_model";
 let architectSessionId = localStorage.getItem(ARCHITECT_SESSION_KEY) || "";
-let lastArchitectFiles = [];
 
 function resetDownloadBtn() {
   if (!downloadZipBtn) return;
@@ -555,26 +554,6 @@ async function loadModels() {
   });
 }
 
-async function generateArchitectureRequest(payload, retryOnSessionMismatch = true) {
-  try {
-    return await api("/api/architect_generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-  } catch (err) {
-    const message = String((err && err.message) || err || "");
-    if (retryOnSessionMismatch && message.toLowerCase().includes("session type mismatch")) {
-      architectSessionId = "";
-      localStorage.removeItem(ARCHITECT_SESSION_KEY);
-      await ensureArchitectSession(payload.wallet || "");
-      const retryPayload = { ...payload, session_id: architectSessionId || undefined };
-      return await generateArchitectureRequest(retryPayload, false);
-    }
-    throw err;
-  }
-}
-
 function parseFiles(lines) {
   return (lines || []).map(f => `📄 ${f.filename} (${f.size} bytes)`).join("\n");
 }
@@ -605,18 +584,16 @@ $("generate").onclick = async () => {
   resetDownloadBtn();
 
   try {
-    const j = await generateArchitectureRequest({ wallet, blueprint, spec, model, session_id: architectSessionId || undefined });
-    if (j && j.session_id) {
-      architectSessionId = j.session_id;
-      localStorage.setItem(ARCHITECT_SESSION_KEY, architectSessionId);
-      updateArchitectSessionBadge();
-    }
+    const j = await api("/api/architect_generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wallet, blueprint, spec, model, session_id: architectSessionId || undefined })
+    });
 
     setStatus(true);
     $("out").textContent = j.response || "No response received.";
 
     if (j.files && j.files.length) {
-      lastArchitectFiles = j.files;
       $("files").style.display = "block";
       $("files").innerHTML = "<strong>📁 Generated Files:</strong><br>" + parseFiles(j.files);
     }

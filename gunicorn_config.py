@@ -13,6 +13,11 @@ threads = 32  # Match CPU cores for maximum concurrency
 timeout = 120
 graceful_timeout = 30
 
+# Preload the app in the master process BEFORE the worker forks.
+# This ensures the HTTP port is responsive immediately when gunicorn binds,
+# preventing Render/Railway port-scan timeouts on large apps like server.py.
+preload_app = True
+
 # Logging
 accesslog = "-"
 errorlog = "-"

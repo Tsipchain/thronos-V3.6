@@ -1297,7 +1297,7 @@ def call_claude(model: str, messages: list[dict], max_tokens: int = 2048, temper
         "content-type": "application/json",
     }
     payload = {
-        "model": model or "claude-3.5-sonnet-latest",
+        "model": model or "claude-sonnet-4-5-20250929",
         "max_tokens": max_tokens,
         "temperature": temperature,
         "messages": chat_messages,
@@ -1495,7 +1495,7 @@ def _check_provider_health(provider: str) -> str:
     status = "ok"
     try:
         if provider == "anthropic":
-            call_claude("claude-3.5-sonnet-latest", [{"role": "user", "content": "ping"}], max_tokens=1, temperature=0)
+            call_claude("claude-sonnet-4-5-20250929", [{"role": "user", "content": "ping"}], max_tokens=1, temperature=0)
         elif provider == "openai":
             call_openai_chat("gpt-4.1-mini", [{"role": "user", "content": "ping"}], max_tokens=1, temperature=0)
         elif provider == "google":
@@ -5104,6 +5104,7 @@ def _chat_credit_cost_for_model(model_id: str | None, prompt_text: str | None = 
     mid = (model_id or "gpt-4.1-mini").strip().lower()
     cheap = {
         "gpt-4.1-mini",
+        "claude-haiku-4-5-20251001",
         "claude-3-5-haiku-latest",
         "claude-3.5-haiku",
         "claude-3-haiku",
@@ -5112,8 +5113,9 @@ def _chat_credit_cost_for_model(model_id: str | None, prompt_text: str | None = 
     }
     medium = {
         "gpt-4.1",
-        "claude-3.7-sonnet",
+        "claude-sonnet-4-5-20250929",
         "claude-3-5-sonnet-latest",
+        "claude-3.7-sonnet",
         "gemini-2.5-pro",
     }
     if mid in cheap:
@@ -5383,10 +5385,12 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
     requested_raw = (model_id or "").strip()
     requested = requested_raw or default_model_id or "auto"
     requested_aliases = {
-        "claude-3.5-sonnet": "claude-3-5-sonnet-latest",
-        "claude-3.5-haiku": "claude-3-5-haiku-latest",
+        "claude-3.5-sonnet": "claude-sonnet-4-5-20250929",
+        "claude-3.5-haiku": "claude-haiku-4-5-20251001",
         "claude-3-5-sonnet": "claude-3-5-sonnet-latest",
         "claude-3-5-haiku": "claude-3-5-haiku-latest",
+        "claude-4.5-sonnet": "claude-sonnet-4-5-20250929",
+        "claude-4.5-haiku": "claude-haiku-4-5-20251001",
     }
     requested = requested_aliases.get(requested, requested)
     catalog_by_id = {m.get("id"): m for m in catalog if isinstance(m, dict) and m.get("id")}
@@ -5395,8 +5399,8 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
         heuristic_order = [
             "gpt-4.1-mini",
             "o3-mini",
+            "claude-sonnet-4-5-20250929",
             "claude-3-5-sonnet-latest",
-            "claude-3.5-sonnet",
             "gemini-2.0-flash",
             "gemini-2.5-pro",
             "offline_corpus",
@@ -11146,7 +11150,7 @@ def _build_ai_models_catalog(provider_status: dict, offline_status: dict, thrai_
 
     catalog_map = {
         "openai": ["gpt-4.1", "gpt-4.1-mini", "o3-mini"],
-        "anthropic": ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
+        "anthropic": ["claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001", "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
         "gemini": ["gemini-2.5-pro", "gemini-2.0-flash"],
     }
     for provider, mids in catalog_map.items():
@@ -16910,7 +16914,10 @@ def fetch_precious_metals_prices():
     # Try to use Google AI grounding for real-time data (with 5s timeout to prevent blocking)
     if ai_agent and ai_agent.gemini_enabled:
         try:
-            import google.generativeai as genai
+            try:
+                import google.genai as genai
+            except Exception:
+                import google.generativeai as genai  # fallback for older installs
             from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
             def _fetch_metals_from_gemini():
@@ -23155,7 +23162,7 @@ def api_thrai_ask():
 
         messages.append({"role": "user", "content": prompt})
 
-        model = os.getenv("THRAI_MODEL", "claude-3-sonnet-20240229")
+        model = os.getenv("THRAI_MODEL", "claude-3-5-sonnet-latest")
         resp = client.messages.create(
             model=model,
             max_tokens=2048,

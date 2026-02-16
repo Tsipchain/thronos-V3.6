@@ -23,8 +23,10 @@ CURATED_MODELS: Dict[str, dict] = {
     },
     "anthropic": {
         "models": [
-            {"id": "claude-3.5-sonnet-latest", "label": "Claude 3.5 Sonnet", "default": True},
-            {"id": "claude-3.5-haiku-latest", "label": "Claude 3.5 Haiku"},
+            {"id": "claude-sonnet-4-5-20250929", "label": "Claude Sonnet 4.5", "default": True},
+            {"id": "claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5"},
+            {"id": "claude-3-5-sonnet-latest", "label": "Claude 3.5 Sonnet (prev)"},
+            {"id": "claude-3-5-haiku-latest", "label": "Claude 3.5 Haiku (prev)"},
         ],
     },
     "google": {

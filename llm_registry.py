@@ -153,6 +153,7 @@ AI_MODEL_REGISTRY: Dict[str, List[ModelInfo]] = {
         ModelInfo(id="o3-mini", display_name="o3-mini (reasoning)", provider="openai", tier="reasoning"),
     ],
     "anthropic": [
+        ModelInfo(id="claude-opus-4-6", display_name="Claude Opus 4.6", provider="anthropic", tier="flagship"),
         ModelInfo(id="claude-sonnet-4-5-20250929", display_name="Claude Sonnet 4.5", provider="anthropic", tier="premium", default=True),
         ModelInfo(id="claude-haiku-4-5-20251001", display_name="Claude Haiku 4.5", provider="anthropic", tier="fast"),
         ModelInfo(id="claude-3-5-sonnet-latest", display_name="Claude 3.5 Sonnet (prev)", provider="anthropic", tier="premium"),

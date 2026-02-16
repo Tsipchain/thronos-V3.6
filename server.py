@@ -5385,6 +5385,9 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
     requested_raw = (model_id or "").strip()
     requested = requested_raw or default_model_id or "auto"
     requested_aliases = {
+        "claude-opus": "claude-opus-4-6",
+        "claude-4-opus": "claude-opus-4-6",
+        "claude-4.6-opus": "claude-opus-4-6",
         "claude-3.5-sonnet": "claude-sonnet-4-5-20250929",
         "claude-3.5-haiku": "claude-haiku-4-5-20251001",
         "claude-3-5-sonnet": "claude-3-5-sonnet-latest",
@@ -11150,7 +11153,7 @@ def _build_ai_models_catalog(provider_status: dict, offline_status: dict, thrai_
 
     catalog_map = {
         "openai": ["gpt-4.1", "gpt-4.1-mini", "o3-mini"],
-        "anthropic": ["claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001", "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
+        "anthropic": ["claude-opus-4-6", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001", "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
         "gemini": ["gemini-2.5-pro", "gemini-2.0-flash"],
     }
     for provider, mids in catalog_map.items():

@@ -7275,6 +7275,10 @@ def _categorize_transaction(tx: dict) -> str:
     if tx_type in ["token_transfer", "token_create", "token_mint", "token_burn"]:
         return "token_transfer"
 
+    # NFT operations (mint, buy, transfer)
+    if "nft" in tx_type_lower or tx_type in ["nft_mint", "nft_buy", "nft_transfer"]:
+        return "nft"
+
     # VerifyID / verification rewards
     if "verifyid" in tx_type_lower or "verify_id" in tx_type_lower or tx_type in [
         "hash_verification", "verifyid_reward", "device_verification", "device_registration"
@@ -7543,9 +7547,12 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
         "thr": "thr",
         "token_transfer": "tokens",
         "music_tip": "music",
+        "music_stream": "music",
+        "music_royalty": "music",
         "ai_reward": "architect",
         "ai_credits": "ai_credits",
         "architect": "architect_job",
+        "architect_job": "architect",
         "t2e": "t2e_reward_thr",
         "l2e": "l2e",
         "iot_telemetry": "iot",
@@ -7556,6 +7563,9 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
         "swaps": "swaps",
         "swap": "swaps",
         "liquidity": "liquidity",
+        "nft": "nft",
+        "nft_mint": "nft",
+        "nft_buy": "nft",
         "verifyid": "verifyid",
         "other": "other",
     }
@@ -23317,12 +23327,16 @@ def api_ai_session_messages(session_id):
             s.get("id") == session_id
             and not s.get("archived")
             and s.get("wallet") == identity
-            and (s.get("session_type") or (s.get("meta") or {}).get("session_type") or "chat") == "chat"
         ):
             session = s
             break
 
-    if not session:
+    # Even if session metadata is missing, try to load messages from disk
+    # (they may exist from architect sessions or cross-type transitions)
+    ensure_session_messages_file(session_id)
+    messages = load_session_messages(session_id)
+
+    if not session and not messages:
         resp = make_response(jsonify({"ok": True, "session": None, "messages": []}))
         if guest_id:
             resp.set_cookie(
@@ -23333,9 +23347,6 @@ def api_ai_session_messages(session_id):
                 samesite="Lax",
             )
         return resp, 200
-
-    ensure_session_messages_file(session_id)
-    messages = load_session_messages(session_id)
     _normalize_session_selected_model(session)
 
     resp = make_response(jsonify({"ok": True, "session": session, "messages": messages}))
@@ -23655,11 +23666,15 @@ def api_chat_sessions_list():
     identity, guest_id = _current_actor_id(wallet_in)
 
     sessions = load_ai_sessions()
+    # Include both chat and architect sessions so architect projects
+    # appear in the chat UI for continued development (architect → chat flow)
+    allowed_types = {"chat", "architect", "t2e"}
     out = []
     for s in sessions:
         if s.get("wallet") != identity or s.get("archived"):
             continue
-        if (s.get("session_type") or (s.get("meta") or {}).get("session_type") or "chat") != "chat":
+        stype = s.get("session_type") or (s.get("meta") or {}).get("session_type") or "chat"
+        if stype not in allowed_types:
             continue
         out.append(s)
 
@@ -27007,36 +27022,73 @@ def api_v1_nfts():
     return jsonify({"status": "success", "nfts": nfts}), 200
 
 
+NFT_MINT_FEE = float(_strip_env_quotes(os.getenv("NFT_MINT_FEE", "1.0")))  # 1 THR mint fee
+
+
 @app.route("/api/v1/nfts/mint", methods=["POST"])
 def api_v1_nfts_mint():
-    """Mint a new NFT"""
+    """Mint a new NFT with network fee, auth validation, and chain recording."""
     name = request.form.get("name", "").strip()
     description = request.form.get("description", "").strip()
     category = request.form.get("category", "art")
     price = float(request.form.get("price", 0))
     royalties = int(request.form.get("royalties", 10))
     creator = request.form.get("creator", "").strip()
+    auth_secret = request.form.get("auth_secret", "").strip()
+    passphrase = request.form.get("passphrase", "").strip()
 
     if not name or not creator:
         return jsonify({"status": "error", "message": "Name and creator required"}), 400
 
+    # --- Auth validation ---
+    ok, _, error_key = validate_effective_auth(creator, auth_secret, passphrase)
+    if not ok:
+        error_msgs = {
+            "no_effective_pledge": "No effective pledge access",
+            "missing_auth_secret": "Auth secret required",
+            "missing_pledge": "Wallet has not pledged",
+            "send_not_enabled": "Send not enabled for this wallet",
+            "passphrase_required": "Passphrase required",
+            "invalid_auth": "Invalid auth",
+        }
+        return jsonify({"status": "error", "message": error_msgs.get(error_key, "Auth failed")}), 403
+
+    # --- Check THR balance for mint fee ---
+    mint_fee = NFT_MINT_FEE
+    ledger = load_json(LEDGER_FILE, {})
+    user_balance = float(ledger.get(creator, 0.0))
+    if user_balance < mint_fee:
+        return jsonify({
+            "status": "error",
+            "message": f"Insufficient THR. Mint fee: {mint_fee} THR, Balance: {user_balance:.6f} THR"
+        }), 402
+
     # Handle image upload
     image_url = None
+    nft_id = f"NFT{int(time.time() * 1000)}"
     if "image" in request.files:
         file = request.files["image"]
         if file and file.filename:
             ext = file.filename.rsplit(".", 1)[-1].lower()
             if ext in ("png", "jpg", "jpeg", "gif", "webp"):
-                nft_id = f"NFT{int(time.time() * 1000)}"
                 filename = f"{nft_id}.{ext}"
                 upload_dir = NFT_IMAGES_DIR
                 os.makedirs(upload_dir, exist_ok=True)
                 file.save(os.path.join(upload_dir, filename))
                 image_url = f"/media/nft_images/{filename}"
 
+    # --- Deduct mint fee from creator ---
+    ledger[creator] = round(user_balance - mint_fee, 6)
+    # Fee is burned (sent to network)
+    network_wallet = os.getenv("NETWORK_FEE_WALLET", "THR_NETWORK_FEES_00001")
+    network_balance = float(ledger.get(network_wallet, 0.0))
+    ledger[network_wallet] = round(network_balance + mint_fee, 6)
+    save_json(LEDGER_FILE, ledger)
+
     # Create NFT
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     nft = {
-        "id": f"NFT{int(time.time() * 1000)}",
+        "id": nft_id,
         "name": name,
         "description": description,
         "category": category,
@@ -27045,28 +27097,64 @@ def api_v1_nfts_mint():
         "creator": creator,
         "owner": creator,
         "image_url": image_url,
-        "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-        "for_sale": True
+        "created_at": timestamp,
+        "for_sale": True,
+        "mint_fee": mint_fee,
     }
 
     registry = load_nft_registry()
     registry["nfts"].append(nft)
     save_nft_registry(registry)
 
+    # --- Record on chain ---
+    chain = load_json(CHAIN_FILE, [])
+    tx = {
+        "type": "nft_mint",
+        "category": "nft_mint",
+        "from": creator,
+        "to": network_wallet,
+        "amount": mint_fee,
+        "fee": mint_fee,
+        "fee_burned": mint_fee,
+        "symbol": "THR",
+        "token_symbol": "THR",
+        "asset_symbol": "THR",
+        "nft_id": nft_id,
+        "nft_name": name,
+        "timestamp": timestamp,
+        "status": "confirmed",
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+
+    logger.info(f"NFT Mint: {creator} → {nft_id} '{name}' | Fee: {mint_fee} THR")
+
     nft["image_url"] = normalize_media_url(nft.get("image_url") or nft.get("image"))
-    return jsonify({"status": "success", "nft": nft}), 201
+    return jsonify({
+        "status": "success",
+        "nft": nft,
+        "mint_fee": mint_fee,
+        "new_balance": ledger.get(creator, 0.0),
+    }), 201
 
 
 @app.route("/api/v1/nfts/buy", methods=["POST"])
 def api_v1_nfts_buy():
-    """Buy an NFT"""
+    """Buy an NFT with THR payment, chain recording, and royalties."""
     data = request.get_json() or {}
     nft_id = data.get("nft_id", "").strip()
     buyer = data.get("buyer", "").strip()
     auth_secret = data.get("auth_secret", "").strip()
+    passphrase = data.get("passphrase", "").strip()
 
-    if not nft_id or not buyer or not auth_secret:
+    if not nft_id or not buyer:
         return jsonify({"status": "error", "message": "Missing required fields"}), 400
+
+    # --- Auth validation ---
+    ok, _, error_key = validate_effective_auth(buyer, auth_secret, passphrase)
+    if not ok:
+        return jsonify({"status": "error", "message": "Invalid auth"}), 403
 
     registry = load_nft_registry()
     nft = next((n for n in registry["nfts"] if n["id"] == nft_id), None)
@@ -27080,16 +27168,78 @@ def api_v1_nfts_buy():
     if nft["owner"] == buyer:
         return jsonify({"status": "error", "message": "You already own this NFT"}), 400
 
-    # Transfer ownership
+    price = float(nft.get("price", 0))
+    if price <= 0:
+        return jsonify({"status": "error", "message": "NFT has no price set"}), 400
+
+    # --- Check buyer balance ---
+    ledger = load_json(LEDGER_FILE, {})
+    buyer_balance = float(ledger.get(buyer, 0.0))
+    if buyer_balance < price:
+        return jsonify({
+            "status": "error",
+            "message": f"Insufficient THR. Price: {price} THR, Balance: {buyer_balance:.6f} THR"
+        }), 402
+
+    # --- Calculate royalties ---
+    royalty_pct = min(50, max(0, int(nft.get("royalties", 10)))) / 100.0
+    royalty_amount = round(price * royalty_pct, 6)
+    seller_amount = round(price - royalty_amount, 6)
     old_owner = nft["owner"]
+    creator_addr = nft.get("creator", old_owner)
+
+    # --- Transfer THR ---
+    ledger[buyer] = round(buyer_balance - price, 6)
+    # Seller gets price minus royalties
+    seller_balance = float(ledger.get(old_owner, 0.0))
+    ledger[old_owner] = round(seller_balance + seller_amount, 6)
+    # Creator gets royalties (if different from seller)
+    if creator_addr != old_owner and royalty_amount > 0:
+        creator_balance = float(ledger.get(creator_addr, 0.0))
+        ledger[creator_addr] = round(creator_balance + royalty_amount, 6)
+    elif royalty_amount > 0:
+        # Creator is seller, they get the full amount
+        ledger[old_owner] = round(float(ledger.get(old_owner, 0.0)) + royalty_amount, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    # --- Transfer ownership ---
     nft["owner"] = buyer
     nft["for_sale"] = False
     save_nft_registry(registry)
 
+    # --- Record on chain ---
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    chain = load_json(CHAIN_FILE, [])
+    tx = {
+        "type": "nft_buy",
+        "category": "nft_buy",
+        "from": buyer,
+        "to": old_owner,
+        "amount": price,
+        "fee": 0.0,
+        "symbol": "THR",
+        "token_symbol": "THR",
+        "asset_symbol": "THR",
+        "nft_id": nft_id,
+        "nft_name": nft.get("name", ""),
+        "royalty_amount": royalty_amount,
+        "royalty_to": creator_addr,
+        "timestamp": timestamp,
+        "status": "confirmed",
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+
+    logger.info(f"NFT Buy: {buyer} → {old_owner} | {price} THR for '{nft.get('name')}' | Royalty: {royalty_amount} THR → {creator_addr}")
+
     return jsonify({
         "status": "success",
-        "message": f"NFT transferred from {old_owner} to {buyer}",
-        "nft": nft
+        "message": f"NFT purchased for {price} THR",
+        "nft": nft,
+        "price": price,
+        "royalty": royalty_amount,
+        "new_balance": ledger.get(buyer, 0.0),
     }), 200
 
 

@@ -646,7 +646,7 @@ function previewImage(input) {
     }
 }
 
-// Mint NFT
+// Mint NFT (with auth, PIN confirmation, fee deduction, chain recording)
 async function mintNFT() {
     const name = $('nftName').value.trim();
     const description = $('nftDescription').value.trim();
@@ -660,6 +660,27 @@ async function mintNFT() {
         return;
     }
 
+    // Get auth secret from wallet session
+    const storedSecret = (window.walletSession && typeof window.walletSession.getSendSeed === 'function')
+        ? window.walletSession.getSendSeed()
+        : (localStorage.getItem('send_secret') || localStorage.getItem('send_seed') || localStorage.getItem('thr_secret'));
+    if (!storedSecret) {
+        alert('Wallet secret not found. Please reconnect your wallet with your send seed.');
+        return;
+    }
+
+    // PIN confirmation before minting
+    const storedPin = localStorage.getItem('wallet_pin') ||
+        (window.walletSession && window.walletSession.getPin ? window.walletSession.getPin() : '');
+    if (storedPin) {
+        const enteredPin = prompt('🔐 Confirm PIN to mint NFT (1 THR fee):');
+        if (enteredPin === null) return;
+        if (enteredPin !== storedPin) {
+            alert('Wrong PIN.');
+            return;
+        }
+    }
+
     const formData = new FormData();
     formData.append('name', name);
     formData.append('description', description);
@@ -667,6 +688,7 @@ async function mintNFT() {
     formData.append('price', price);
     formData.append('royalties', royalties);
     formData.append('creator', connectedWallet);
+    formData.append('auth_secret', storedSecret);
     if (imageFile) formData.append('image', imageFile);
 
     try {
@@ -677,7 +699,8 @@ async function mintNFT() {
         const data = await res.json();
 
         if (data.status === 'success') {
-            alert('NFT minted successfully!');
+            const fee = data.mint_fee || 1;
+            alert(`NFT minted successfully! Fee: ${fee} THR`);
             $('nftName').value = '';
             $('nftDescription').value = '';
             $('nftPrice').value = '';
@@ -726,8 +749,10 @@ async function buyNFT(nftId) {
         return;
     }
 
-    // Get auth secret from wallet session (if using PIN system) or prompt securely
-    const storedSecret = localStorage.getItem('thr_secret') || localStorage.getItem('send_seed');
+    // Get auth secret from wallet session (checks all storage keys)
+    const storedSecret = (window.walletSession && typeof window.walletSession.getSendSeed === 'function')
+        ? window.walletSession.getSendSeed()
+        : (localStorage.getItem('send_secret') || localStorage.getItem('send_seed') || localStorage.getItem('thr_secret'));
     if (!storedSecret) {
         // Show inline input instead of ugly prompt
         const secretInput = document.createElement('div');

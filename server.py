@@ -7703,6 +7703,12 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
         raw_category = _categorize_transaction(tx)
         tx_copy["category"] = category_map.get(raw_category, raw_category)
 
+        # Normalize symbol: ensure 'symbol' is always set for frontend rendering
+        if not tx_copy.get("symbol") and tx_copy.get("token_symbol"):
+            tx_copy["symbol"] = tx_copy["token_symbol"]
+        if not tx_copy.get("asset_symbol") and tx_copy.get("token_symbol"):
+            tx_copy["asset_symbol"] = tx_copy["token_symbol"]
+
         if tx_to and str(tx_to).lower() == addr_lower:
             tx_copy["direction"] = "received"
         elif tx_from and str(tx_from).lower() == addr_lower:
@@ -25348,6 +25354,8 @@ def api_v1_music_tip():
         "from": from_address,
         "to": artist_address,
         "amount": amount,
+        "symbol": token_symbol,
+        "asset_symbol": token_symbol,
         "token_symbol": token_symbol,
         "artist_amount": artist_amount,
         "network_amount": network_amount,

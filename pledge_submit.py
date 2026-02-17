@@ -49,17 +49,13 @@ def pledge_submit():
     send_seed      = secrets.token_hex(16)
     send_seed_hash = hashlib.sha256(send_seed.encode()).hexdigest()
 
-    # Αν ο χρήστης δώσει προσωπική φράση, τότε:
-    # send_secret = sha256(send_seed | phrase)
-    # αλλιώς για απλότητα: send_secret = send_seed
+    # Auth hash: SHA256(send_seed:auth) - consistent with server.py validate_effective_auth
     if recovery_phrase:
-        base = f"{send_seed}|{recovery_phrase}"
-        send_secret = hashlib.sha256(base.encode()).hexdigest()
+        auth_string = f"{send_seed}:{recovery_phrase}:auth"
     else:
-        send_secret = send_seed
-
-    # Αυτό το hash χρησιμοποιείται στα /send_thr
-    send_auth_hash = hashlib.sha256(send_secret.encode()).hexdigest()
+        auth_string = f"{send_seed}:auth"
+    send_secret = send_seed  # The raw seed is what the user stores
+    send_auth_hash = hashlib.sha256(auth_string.encode()).hexdigest()
 
     pledge_entry = {
         "btc_address": btc_address,

@@ -2397,6 +2397,17 @@ def get_effective_pledge_state(thr_address: str) -> dict:
 
 
 def validate_effective_auth(thr_address: str, auth_secret: str, passphrase: str) -> tuple[bool, dict, str | None]:
+    """
+    Validate wallet auth for transactions.
+
+    Handles multiple hash formats due to historical code paths:
+    - server.py pledge_submit: SHA256(f"{send_seed}:auth")
+    - pledge_submit.py:        SHA256(send_seed)
+    - legacy pledges:          no send_auth_hash at all
+
+    For legacy pledges without send_auth_hash, auto-registers the
+    auth_secret on first use (one-time migration).
+    """
     state = get_effective_pledge_state(thr_address)
     if not state["effective_pledge_ok"]:
         return False, state, "no_effective_pledge"
@@ -2408,17 +2419,49 @@ def validate_effective_auth(thr_address: str, auth_secret: str, passphrase: str)
     if not pledge:
         return False, state, "missing_pledge"
     stored_auth_hash = pledge.get("send_auth_hash")
+    stored_seed_hash = pledge.get("send_seed_hash")
+
+    # --- Legacy pledge: no send_auth_hash → auto-register on first auth ---
     if not stored_auth_hash:
-        return False, state, "send_not_enabled"
+        new_auth_hash = hashlib.sha256(f"{auth_secret}:auth".encode()).hexdigest()
+        new_seed_hash = hashlib.sha256(auth_secret.encode()).hexdigest()
+        pledges = load_json(PLEDGE_CHAIN, [])
+        for p in pledges:
+            if p.get("thr_address") == thr_address:
+                p["send_auth_hash"] = new_auth_hash
+                p["send_seed_hash"] = new_seed_hash
+                p["has_passphrase"] = False
+                p["auth_migrated_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+                break
+        save_json(PLEDGE_CHAIN, pledges)
+        logger.info(f"[AUTH] Auto-migrated send_auth_hash for {thr_address}")
+        return True, state, None
+
+    # --- Passphrase handling ---
     if pledge.get("has_passphrase"):
         if not passphrase:
             return False, state, "passphrase_required"
-        auth_string = f"{auth_secret}:{passphrase}:auth"
+        auth_candidates = [
+            f"{auth_secret}:{passphrase}:auth",   # server.py format
+            f"{auth_secret}|{passphrase}",         # pledge_submit.py format with phrase
+        ]
     else:
-        auth_string = f"{auth_secret}:auth"
-    if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-        return False, state, "invalid_auth"
-    return True, state, None
+        auth_candidates = [
+            f"{auth_secret}:auth",                 # server.py format
+            auth_secret,                           # pledge_submit.py format (raw seed)
+        ]
+
+    # --- Check all hash formats against stored_auth_hash ---
+    for candidate in auth_candidates:
+        if hashlib.sha256(candidate.encode()).hexdigest() == stored_auth_hash:
+            return True, state, None
+
+    # --- Fallback: check against send_seed_hash ---
+    if stored_seed_hash:
+        if hashlib.sha256(auth_secret.encode()).hexdigest() == stored_seed_hash:
+            return True, state, None
+
+    return False, state, "invalid_auth"
 
 
 def get_pledge_for_auth(thr_address: str) -> dict | None:

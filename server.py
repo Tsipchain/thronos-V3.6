@@ -5700,7 +5700,12 @@ def _save_session_selected_model(session_id: str, selected_model_id: str):
 
 
 def _ensure_session_type(session_id: str, session_type: str):
-    """Ensure a session carries the expected immutable session_type."""
+    """Ensure a session carries the expected session_type, upgrading if needed.
+
+    Allows type upgrades (e.g. chat → architect) so architect/T2E sessions
+    can continue from existing chat sessions and earn credits back.
+    Returns True if session matches or was upgraded, False only on error.
+    """
     if not session_id:
         return False
     sessions = load_ai_sessions()
@@ -5710,12 +5715,20 @@ def _ensure_session_type(session_id: str, session_type: str):
             meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
             current = (s.get("session_type") or meta.get("session_type") or "chat").lower()
             if current != session_type:
-                logger.warning(
-                    "session_type_mismatch",
-                    extra={"session_id": session_id, "expected": session_type, "found": current},
+                # Upgrade the session type instead of rejecting
+                logger.info(
+                    "session_type_upgrade",
+                    extra={"session_id": session_id, "from": current, "to": session_type},
                 )
-                return False
-            if meta.get("session_type") is None:
+                meta["session_type"] = session_type
+                meta["upgraded_from"] = current
+                s["meta"] = meta
+                s["session_type"] = session_type
+                s["billing_mode_locked"] = _session_billing_mode(session_type)
+                meta["billing_mode_locked"] = _session_billing_mode(session_type)
+                s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                changed = True
+            elif meta.get("session_type") is None:
                 meta["session_type"] = session_type
                 s["meta"] = meta
                 s["session_type"] = session_type
@@ -5724,7 +5737,7 @@ def _ensure_session_type(session_id: str, session_type: str):
             break
     if changed:
         save_ai_sessions(sessions)
-    return changed
+    return True
 
 
 def _normalize_session_selected_model(session: dict):
@@ -5937,11 +5950,19 @@ def ensure_session_exists(session_id: str, wallet: str | None, session_type: str
             if s.get("id") == session_id:
                 existing_type = (s.get("session_type") or (s.get("meta") or {}).get("session_type") or "chat").lower()
                 if session_type and existing_type != session_type:
-                    logger.warning(
-                        "session_type_conflict",
-                        extra={"session_id": session_id, "expected": session_type, "found": existing_type},
+                    # Upgrade session type (e.g. chat → architect, architect → t2e)
+                    # instead of rejecting — this allows architect sessions to be
+                    # properly tagged for T2E credit flow.
+                    logger.info(
+                        "session_type_upgrade",
+                        extra={"session_id": session_id, "from": existing_type, "to": session_type},
                     )
-                    return {}
+                    s["session_type"] = session_type
+                    meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
+                    meta["session_type"] = session_type
+                    meta["upgraded_from"] = existing_type
+                    s["meta"] = meta
+                    existing_type = session_type
                 expected_billing = _session_billing_mode(existing_type)
                 meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
                 changed = False

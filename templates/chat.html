@@ -1224,7 +1224,9 @@
 
     function persistSessionCache() {
       try {
+        const wallet = (walletInputEl && walletInputEl.value ? walletInputEl.value.trim() : "") || "";
         const payload = {
+          wallet: wallet,
           sessions: aiSessions || [],
           messagesBySession: messagesBySession || {},
         };
@@ -1261,6 +1263,17 @@
         const raw = localStorage.getItem(SESSION_CACHE_KEY);
         if (!raw) return;
         const parsed = JSON.parse(raw);
+
+        // Check wallet match: don't hydrate sessions from a different wallet
+        const cachedWallet = parsed.wallet || "";
+        const currentWallet = (walletInputEl && walletInputEl.value ? walletInputEl.value.trim() : "") || (walletSession ? walletSession.getAddress() || "" : "");
+        if (cachedWallet && currentWallet && cachedWallet !== currentWallet) {
+          localStorage.removeItem(SESSION_CACHE_KEY);
+          localStorage.removeItem(ACTIVE_SESSION_KEY);
+          currentSessionId = null;
+          return;
+        }
+
         aiSessions = parsed.sessions || [];
         messagesBySession = parsed.messagesBySession || {};
         if (!currentSessionId && aiSessions.length) {
@@ -2526,12 +2539,24 @@
     async function init() {
       cacheDom();
       initAdminAccess();
-      hydrateSessionCache();
       bindEvents();
       applyTranslations();
       await loadModels();
       await loadWallet();
+
+      // Hydrate cached data first for instant UI, then validate against server.
+      // This order ensures: (1) user sees cached chat immediately,
+      // (2) loadSessions re-validates with server and corrects stale state.
+      hydrateSessionCache();
       await loadSessions();
+
+      // After server validation, persist the authoritative state so the next
+      // refresh picks up correct session_id + wallet + messages.
+      if (currentSessionId) {
+        localStorage.setItem(ACTIVE_SESSION_KEY, currentSessionId);
+      }
+      persistSessionCache();
+
       loadTelemetry();
       await refreshVoiceDeviceStatus();
       telemetryInterval = setInterval(() => {

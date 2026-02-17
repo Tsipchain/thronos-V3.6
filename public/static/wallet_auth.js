@@ -31,7 +31,10 @@
             }
 
             // Check if secret is in localStorage (wallet unlocked)
-            const storedSecret = localStorage.getItem('thr_secret');
+            // walletSession stores under send_secret / send_seed / thr_secret
+            const storedSecret = (window.walletSession && typeof window.walletSession.getSendSeed === 'function')
+                ? window.walletSession.getSendSeed()
+                : (localStorage.getItem('send_secret') || localStorage.getItem('send_seed') || localStorage.getItem('thr_secret'));
             if (storedSecret) {
                 // Cache in session for this tab
                 sessionStorage.setItem('thr_auth_secret', storedSecret);
@@ -47,10 +50,13 @@
             }
 
             // Use existing walletSession unlock if available
-            if (window.walletSession && typeof window.walletSession.unlockWithPin === 'function') {
+            if (window.walletSession && typeof window.walletSession.unlockWallet === 'function') {
                 try {
-                    const authSecret = await window.walletSession.unlockWithPin(pin);
-                    if (!authSecret) throw new Error('Invalid PIN');
+                    const ok = await window.walletSession.unlockWallet({ pin });
+                    if (!ok) throw new Error('Invalid PIN');
+                    // After unlock, retrieve the seed from walletSession
+                    const authSecret = window.walletSession.getSendSeed();
+                    if (!authSecret) throw new Error('No send seed found after unlock');
 
                     sessionStorage.setItem('thr_auth_secret', authSecret);
                     return { address, authSecret };
@@ -62,11 +68,16 @@
             }
 
             // Fallback: basic PIN verification (if walletSession not available)
-            // This assumes PIN is stored as wallet_pin in localStorage
             const storedPin = localStorage.getItem('wallet_pin');
             if (storedPin === pin) {
-                // In production, you'd decrypt the secret here
-                // For now, we'll return an error asking to reconnect
+                // PIN matched - retrieve secret from all possible storage keys
+                const authSecret = localStorage.getItem('send_secret')
+                    || localStorage.getItem('send_seed')
+                    || localStorage.getItem('thr_secret');
+                if (authSecret) {
+                    sessionStorage.setItem('thr_auth_secret', authSecret);
+                    return { address, authSecret };
+                }
                 const err = new Error('Please reconnect your wallet with secret to enable mutations.');
                 err.code = 'UNLOCK_FAILED';
                 throw err;
@@ -84,7 +95,9 @@
         isUnlocked() {
             return !!(
                 sessionStorage.getItem('thr_auth_secret') ||
-                localStorage.getItem('thr_secret')
+                (window.walletSession && typeof window.walletSession.getSendSeed === 'function'
+                    ? window.walletSession.getSendSeed()
+                    : (localStorage.getItem('send_secret') || localStorage.getItem('send_seed') || localStorage.getItem('thr_secret')))
             );
         },
 

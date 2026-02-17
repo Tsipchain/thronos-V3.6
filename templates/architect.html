@@ -598,6 +598,31 @@ $("generate").onclick = async () => {
       $("files").innerHTML = "<strong>📁 Generated Files:</strong><br>" + parseFiles(j.files);
     }
 
+    // Show THR cost and T2E earned
+    if (j.cost_thr || j.earned_t2e) {
+      const costInfo = document.createElement('div');
+      costInfo.style.cssText = 'margin-top:12px;padding:12px 16px;background:#1a0f2e;border:1px solid #3d2066;border-radius:8px;color:#d7ffe6;';
+      let html = '';
+      if (j.cost_thr) html += `<span style="color:#FF6B6B;">-${j.cost_thr} THR</span> `;
+      if (j.earned_t2e) html += `<span style="color:#3CFF7A;">+${j.earned_t2e} T2E</span> `;
+      if (j.t2e_multiplier) html += `<span style="opacity:0.6;">(${j.t2e_multiplier}x multiplier)</span>`;
+      costInfo.innerHTML = html;
+      $("files").parentElement.insertBefore(costInfo, $("files").nextSibling);
+    }
+
+    // Show "Continue in Chat" button for further development
+    if (j.session_id) {
+      const chatBtn = document.createElement('button');
+      chatBtn.className = 'btn-primary';
+      chatBtn.style.cssText = 'margin-top:12px;';
+      chatBtn.innerHTML = '💬 <span class="lang-el">Συνέχεια στο Chat</span><span class="lang-en">Continue in Chat</span>';
+      chatBtn.onclick = () => {
+        localStorage.setItem('thronos_ai_active_session', j.session_id);
+        window.location.href = '/chat';
+      };
+      $("files").parentElement.insertBefore(chatBtn, $("files").nextSibling?.nextSibling || null);
+    }
+
     if (j.zip_url) {
       enableDownloadBtn(j.zip_url);
     } else {

@@ -1865,6 +1865,9 @@
             <button class="history-tab-btn" data-filter="music" onclick="filterHistory('music')" style="flex: 1; min-width: 60px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
                 🎵 <span class="lang-el">Μουσική</span><span class="lang-en">Music</span>
             </button>
+            <button class="history-tab-btn" data-filter="nft" onclick="filterHistory('nft')" style="flex: 1; min-width: 45px; padding: 6px 8px; background: rgba(0,255,102,0.05); border: 1px solid rgba(0,255,102,0.2); border-radius: 6px; color: #00ff66; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                🎨 NFT
+            </button>
         </div>
 
         <div id="tokenIndexBar" style="display:none; margin: 0 4px 10px 4px;">
@@ -3648,6 +3651,12 @@ function getTxType(tx) {
         return 'bridge';
     }
 
+    // === NFT ===
+    if (raw === 'nft_mint' || raw === 'nft_buy' || raw === 'nft_transfer' ||
+        raw.startsWith('nft_') || category === 'nft' || category === 'nft_mint' || category === 'nft_buy') {
+        return 'nft';
+    }
+
     // === GATEWAY (Fiat on/off ramp) ===
     if (raw === 'fiat_onramp' || raw === 'fiat_offramp' || raw === 'gateway' ||
         raw === 'onramp' || raw === 'offramp' || category === 'gateway') {
@@ -4017,15 +4026,24 @@ function renderHistory() {
                 detailLines.push(tipLabel);
             }
         }
-        if (txType === 'architect_ai_jobs') {
-            if (meta.job_id) detailLines.push(`Job: ${escapeHtml(meta.job_id)}`);
-            if (meta.files_count != null) detailLines.push(`Files: ${meta.files_count}`);
-            if (meta.bytes_total != null) detailLines.push(`Size: ${formatBytes(meta.bytes_total)}`);
-            if (meta.reward_thr != null) detailLines.push(`Reward: ${Number(meta.reward_thr).toFixed(6)} THR`);
-            if (meta.pct != null) detailLines.push(`Progress: ${Number(meta.pct).toFixed(1)}%`);
-            if (meta.bytes_done != null && meta.bytes_total) {
-                detailLines.push(`Progress: ${formatBytes(meta.bytes_done)} / ${formatBytes(meta.bytes_total)}`);
+        if (txType === 'architect' || txType === 'architect_ai_jobs') {
+            const rawType = (tx.kind || tx.type || '').toLowerCase();
+            if (rawType === 'architect_service') {
+                detailLines.push(isGreek ? '🏗️ Αρχιτεκτονική' : '🏗️ Architect Service');
+            } else if (rawType === 't2e_architect_reward') {
+                detailLines.push(isGreek ? '🎓 T2E Ανταμοιβή' : '🎓 T2E Reward');
             }
+            // Check both tx-level and meta-level fields
+            const blueprint = tx.blueprint || meta.blueprint;
+            const filesCount = tx.files_count ?? meta.files_count;
+            const totalBytes = tx.total_bytes ?? meta.bytes_total;
+            if (blueprint) detailLines.push(`Blueprint: ${escapeHtml(blueprint)}`);
+            if (meta.job_id) detailLines.push(`Job: ${escapeHtml(meta.job_id)}`);
+            if (filesCount != null) detailLines.push(`Files: ${filesCount}`);
+            if (totalBytes != null) detailLines.push(`Size: ${formatBytes(totalBytes)}`);
+            if (meta.reward_thr != null) detailLines.push(`Reward: ${Number(meta.reward_thr).toFixed(6)} THR`);
+            if (tx.reason) detailLines.push(escapeHtml(tx.reason));
+            if (meta.pct != null) detailLines.push(`Progress: ${Number(meta.pct).toFixed(1)}%`);
             if ((tx.kind || '').toLowerCase().startsWith('ai_job_')) {
                 detailLines.push(`Status: ${(tx.kind || '').replace(/_/g, ' ')}`);
             }
@@ -4035,6 +4053,17 @@ function renderHistory() {
             if (meta.session_id) detailLines.push(`Session: ${escapeHtml(meta.session_id)}`);
             if (meta.reason) detailLines.push(`Reason: ${escapeHtml(meta.reason)}`);
             if (meta.tokens_used != null) detailLines.push(`Tokens: ${meta.tokens_used}`);
+        }
+        // NFT transaction details
+        if (txType === 'nft') {
+            if (tx.nft_name) detailLines.push(`🎨 "${escapeHtml(tx.nft_name)}"`);
+            else if (tx.nft_id) detailLines.push(`NFT: ${escapeHtml(tx.nft_id)}`);
+            const rawType = (tx.kind || tx.type || '').toLowerCase();
+            if (rawType === 'nft_mint') detailLines.push(isGreek ? 'Mint NFT' : 'Mint NFT');
+            else if (rawType === 'nft_buy') {
+                detailLines.push(isSent ? (isGreek ? 'Αγορά NFT' : 'NFT Purchase') : (isGreek ? 'Πώληση NFT' : 'NFT Sale'));
+                if (tx.royalty_amount) detailLines.push(`Royalty: ${Number(tx.royalty_amount).toFixed(6)} THR`);
+            }
         }
         // PR-5g: IoT purchase details
         if (txType === 'iot') {
@@ -6445,6 +6474,24 @@ async function submitGlobalTip() {
     const asset = (document.getElementById('globalTipAsset')?.value || 'THR').trim().toUpperCase();
     const amount = parseFloat(document.getElementById('globalTipAmount')?.value || '0');
     if (!amount || amount <= 0) { alert('Invalid amount'); return; }
+
+    // PIN confirmation before sending (require for every tip)
+    const storedPin = localStorage.getItem('wallet_pin');
+    if (storedPin) {
+        const enteredPin = prompt(`🔐 Confirm PIN to send ${amount} ${asset} tip:`);
+        if (enteredPin === null) return; // Cancelled
+        if (enteredPin !== storedPin) {
+            alert('Wrong PIN.');
+            return;
+        }
+    } else if (window.walletSession && window.walletSession.getPin && window.walletSession.getPin()) {
+        const enteredPin = prompt(`🔐 Confirm PIN to send ${amount} ${asset} tip:`);
+        if (enteredPin === null) return;
+        if (enteredPin !== window.walletSession.getPin()) {
+            alert('Wrong PIN.');
+            return;
+        }
+    }
 
     const hint = document.getElementById('globalTipHint');
     if (hint) hint.textContent = `Sending ${amount} ${asset}...`;

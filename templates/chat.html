@@ -1264,13 +1264,13 @@
         if (!raw) return;
         const parsed = JSON.parse(raw);
 
-        // Check wallet match: don't hydrate sessions from a different wallet
+        // Check wallet match: skip hydration if wallet changed, but DON'T
+        // destroy localStorage. The server fetch in loadSessions() will
+        // provide the authoritative data and persistSessionCache() will update.
         const cachedWallet = parsed.wallet || "";
         const currentWallet = (walletInputEl && walletInputEl.value ? walletInputEl.value.trim() : "") || (walletSession ? walletSession.getAddress() || "" : "");
         if (cachedWallet && currentWallet && cachedWallet !== currentWallet) {
-          localStorage.removeItem(SESSION_CACHE_KEY);
-          localStorage.removeItem(ACTIVE_SESSION_KEY);
-          currentSessionId = null;
+          // Wallet changed - let loadSessions() handle from server
           return;
         }
 
@@ -1756,11 +1756,14 @@
         }
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
-        if (!data.session && (!data.messages || data.messages.length === 0)) {
+        if (data.error && data.error.toLowerCase().includes('session not found')) {
           await handleMissingSession(id);
           return;
         }
-        if (data.error && data.error.toLowerCase().includes('session not found')) {
+        // Only treat as missing if BOTH server session is null AND no messages
+        // (server now returns messages from disk even without session metadata)
+        if (!data.session && (!data.messages || data.messages.length === 0)
+            && (!messagesBySession[id] || messagesBySession[id].length === 0)) {
           await handleMissingSession(id);
           return;
         }

@@ -53,8 +53,9 @@ fi
 echo "=== Starting Flask app on HTTP port ${PORT} ==="
 # Use Gunicorn with proper lifecycle hooks for graceful scheduler shutdown
 # NOTE: Using config file which sets workers=1 to avoid APScheduler job duplication
-# --preload loads the app before binding so Render/Railway port scans succeed
-gunicorn -c gunicorn_config.py --preload server:app
+# Do NOT use --preload: it delays port binding until the full module loads,
+# causing Render/Railway "No open HTTP ports" timeouts on large apps.
+gunicorn -c gunicorn_config.py server:app
 
 echo "=== Shutting down background services ==="
 for pid in $STRATUM_PID $MINER_PID $PYTHEIA_PID; do

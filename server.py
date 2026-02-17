@@ -1213,13 +1213,15 @@ REDIS_CLIENT = None
 if REDIS_CACHE_ENABLED and (REDIS_URL or REDIS_HOST):
     try:
         if REDIS_URL:
-            REDIS_CLIENT = redis.Redis.from_url(REDIS_URL)
+            REDIS_CLIENT = redis.Redis.from_url(REDIS_URL, socket_timeout=5, socket_connect_timeout=5)
         else:
             REDIS_CLIENT = redis.Redis(
                 host=REDIS_HOST,
                 port=REDIS_PORT,
                 db=REDIS_DB,
                 password=REDIS_PASSWORD or None,
+                socket_timeout=5,
+                socket_connect_timeout=5,
             )
         REDIS_CLIENT.ping()
         logger.info("[REDIS] Balance cache enabled")

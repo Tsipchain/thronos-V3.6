@@ -6476,6 +6476,12 @@ async function submitGlobalTip() {
         setTimeout(() => closeGlobalTipModal(), 1500);
         if (typeof loadTracks === 'function') loadTracks();
     } catch (e) {
+        const msg = (e.message || e || '').toString().toLowerCase();
+        // On auth failures, clear cached auth so user can re-authenticate
+        if (msg.includes('invalid auth') || msg.includes('missing auth') || msg.includes('not enabled')) {
+            _globalTipAuth = null;
+            sessionStorage.removeItem('thr_auth_secret');
+        }
         if (hint) hint.textContent = `❌ ${e.message || e}`;
     }
 }

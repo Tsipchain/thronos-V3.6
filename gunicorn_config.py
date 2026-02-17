@@ -13,10 +13,12 @@ threads = 32  # Match CPU cores for maximum concurrency
 timeout = 120
 graceful_timeout = 30
 
-# Preload the app in the master process BEFORE the worker forks.
-# This ensures the HTTP port is responsive immediately when gunicorn binds,
-# preventing Render/Railway port-scan timeouts on large apps like server.py.
-preload_app = True
+# Do NOT preload: with preload_app=True, gunicorn imports the WSGI app
+# BEFORE binding the port. server.py module-level init (Redis, AI, file I/O)
+# can take 30-60s, causing Render/Railway "No open HTTP ports" timeout.
+# With preload_app=False and workers=1, gunicorn binds the port first,
+# then the single worker imports server.py. No scheduler duplication risk.
+preload_app = False
 
 # Logging
 accesslog = "-"

@@ -23,9 +23,12 @@ logger = logging.getLogger("thronos")
 
 # Optional Gemini provider
 try:
-    import google.generativeai as genai
+    import google.genai as genai
 except Exception:
-    genai = None
+    try:
+        import google.generativeai as genai  # fallback for older installs
+    except Exception:
+        genai = None
 
 # Optional OpenAI provider
 try:
@@ -480,7 +483,7 @@ class ThronosAI:
         # Default models
         self.gemini_model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
         self.openai_model_name = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
-        self.anthropic_model_name = os.getenv("ANTHROPIC_MODEL", "claude-3-sonnet")
+        self.anthropic_model_name = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-latest")
         self.custom_model_name = os.getenv("CUSTOM_MODEL", "custom-default")
 
         # Data dir

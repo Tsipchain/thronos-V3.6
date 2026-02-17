@@ -1297,7 +1297,7 @@ def call_claude(model: str, messages: list[dict], max_tokens: int = 2048, temper
         "content-type": "application/json",
     }
     payload = {
-        "model": model or "claude-3.5-sonnet-latest",
+        "model": model or "claude-sonnet-4-5-20250929",
         "max_tokens": max_tokens,
         "temperature": temperature,
         "messages": chat_messages,
@@ -1495,7 +1495,7 @@ def _check_provider_health(provider: str) -> str:
     status = "ok"
     try:
         if provider == "anthropic":
-            call_claude("claude-3.5-sonnet-latest", [{"role": "user", "content": "ping"}], max_tokens=1, temperature=0)
+            call_claude("claude-sonnet-4-5-20250929", [{"role": "user", "content": "ping"}], max_tokens=1, temperature=0)
         elif provider == "openai":
             call_openai_chat("gpt-4.1-mini", [{"role": "user", "content": "ping"}], max_tokens=1, temperature=0)
         elif provider == "google":
@@ -5104,6 +5104,7 @@ def _chat_credit_cost_for_model(model_id: str | None, prompt_text: str | None = 
     mid = (model_id or "gpt-4.1-mini").strip().lower()
     cheap = {
         "gpt-4.1-mini",
+        "claude-haiku-4-5-20251001",
         "claude-3-5-haiku-latest",
         "claude-3.5-haiku",
         "claude-3-haiku",
@@ -5112,8 +5113,9 @@ def _chat_credit_cost_for_model(model_id: str | None, prompt_text: str | None = 
     }
     medium = {
         "gpt-4.1",
-        "claude-3.7-sonnet",
+        "claude-sonnet-4-5-20250929",
         "claude-3-5-sonnet-latest",
+        "claude-3.7-sonnet",
         "gemini-2.5-pro",
     }
     if mid in cheap:
@@ -5383,10 +5385,15 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
     requested_raw = (model_id or "").strip()
     requested = requested_raw or default_model_id or "auto"
     requested_aliases = {
-        "claude-3.5-sonnet": "claude-3-5-sonnet-latest",
-        "claude-3.5-haiku": "claude-3-5-haiku-latest",
+        "claude-opus": "claude-opus-4-6",
+        "claude-4-opus": "claude-opus-4-6",
+        "claude-4.6-opus": "claude-opus-4-6",
+        "claude-3.5-sonnet": "claude-sonnet-4-5-20250929",
+        "claude-3.5-haiku": "claude-haiku-4-5-20251001",
         "claude-3-5-sonnet": "claude-3-5-sonnet-latest",
         "claude-3-5-haiku": "claude-3-5-haiku-latest",
+        "claude-4.5-sonnet": "claude-sonnet-4-5-20250929",
+        "claude-4.5-haiku": "claude-haiku-4-5-20251001",
     }
     requested = requested_aliases.get(requested, requested)
     catalog_by_id = {m.get("id"): m for m in catalog if isinstance(m, dict) and m.get("id")}
@@ -5395,8 +5402,8 @@ def _select_callable_model(model_id: str | None, session_type: str | None = None
         heuristic_order = [
             "gpt-4.1-mini",
             "o3-mini",
+            "claude-sonnet-4-5-20250929",
             "claude-3-5-sonnet-latest",
-            "claude-3.5-sonnet",
             "gemini-2.0-flash",
             "gemini-2.5-pro",
             "offline_corpus",
@@ -5693,7 +5700,12 @@ def _save_session_selected_model(session_id: str, selected_model_id: str):
 
 
 def _ensure_session_type(session_id: str, session_type: str):
-    """Ensure a session carries the expected immutable session_type."""
+    """Ensure a session carries the expected session_type, upgrading if needed.
+
+    Allows type upgrades (e.g. chat → architect) so architect/T2E sessions
+    can continue from existing chat sessions and earn credits back.
+    Returns True if session matches or was upgraded, False only on error.
+    """
     if not session_id:
         return False
     sessions = load_ai_sessions()
@@ -5703,12 +5715,20 @@ def _ensure_session_type(session_id: str, session_type: str):
             meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
             current = (s.get("session_type") or meta.get("session_type") or "chat").lower()
             if current != session_type:
-                logger.warning(
-                    "session_type_mismatch",
-                    extra={"session_id": session_id, "expected": session_type, "found": current},
+                # Upgrade the session type instead of rejecting
+                logger.info(
+                    "session_type_upgrade",
+                    extra={"session_id": session_id, "from": current, "to": session_type},
                 )
-                return False
-            if meta.get("session_type") is None:
+                meta["session_type"] = session_type
+                meta["upgraded_from"] = current
+                s["meta"] = meta
+                s["session_type"] = session_type
+                s["billing_mode_locked"] = _session_billing_mode(session_type)
+                meta["billing_mode_locked"] = _session_billing_mode(session_type)
+                s["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                changed = True
+            elif meta.get("session_type") is None:
                 meta["session_type"] = session_type
                 s["meta"] = meta
                 s["session_type"] = session_type
@@ -5717,7 +5737,7 @@ def _ensure_session_type(session_id: str, session_type: str):
             break
     if changed:
         save_ai_sessions(sessions)
-    return changed
+    return True
 
 
 def _normalize_session_selected_model(session: dict):
@@ -5930,11 +5950,19 @@ def ensure_session_exists(session_id: str, wallet: str | None, session_type: str
             if s.get("id") == session_id:
                 existing_type = (s.get("session_type") or (s.get("meta") or {}).get("session_type") or "chat").lower()
                 if session_type and existing_type != session_type:
-                    logger.warning(
-                        "session_type_conflict",
-                        extra={"session_id": session_id, "expected": session_type, "found": existing_type},
+                    # Upgrade session type (e.g. chat → architect, architect → t2e)
+                    # instead of rejecting — this allows architect sessions to be
+                    # properly tagged for T2E credit flow.
+                    logger.info(
+                        "session_type_upgrade",
+                        extra={"session_id": session_id, "from": existing_type, "to": session_type},
                     )
-                    return {}
+                    s["session_type"] = session_type
+                    meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
+                    meta["session_type"] = session_type
+                    meta["upgraded_from"] = existing_type
+                    s["meta"] = meta
+                    existing_type = session_type
                 expected_billing = _session_billing_mode(existing_type)
                 meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
                 changed = False
@@ -7674,6 +7702,12 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
         tx_copy = dict(tx)
         raw_category = _categorize_transaction(tx)
         tx_copy["category"] = category_map.get(raw_category, raw_category)
+
+        # Normalize symbol: ensure 'symbol' is always set for frontend rendering
+        if not tx_copy.get("symbol") and tx_copy.get("token_symbol"):
+            tx_copy["symbol"] = tx_copy["token_symbol"]
+        if not tx_copy.get("asset_symbol") and tx_copy.get("token_symbol"):
+            tx_copy["asset_symbol"] = tx_copy["token_symbol"]
 
         if tx_to and str(tx_to).lower() == addr_lower:
             tx_copy["direction"] = "received"
@@ -11146,7 +11180,7 @@ def _build_ai_models_catalog(provider_status: dict, offline_status: dict, thrai_
 
     catalog_map = {
         "openai": ["gpt-4.1", "gpt-4.1-mini", "o3-mini"],
-        "anthropic": ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
+        "anthropic": ["claude-opus-4-6", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001", "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
         "gemini": ["gemini-2.5-pro", "gemini-2.0-flash"],
     }
     for provider, mids in catalog_map.items():
@@ -16910,7 +16944,10 @@ def fetch_precious_metals_prices():
     # Try to use Google AI grounding for real-time data (with 5s timeout to prevent blocking)
     if ai_agent and ai_agent.gemini_enabled:
         try:
-            import google.generativeai as genai
+            try:
+                import google.genai as genai
+            except Exception:
+                import google.generativeai as genai  # fallback for older installs
             from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
             def _fetch_metals_from_gemini():
@@ -23155,7 +23192,7 @@ def api_thrai_ask():
 
         messages.append({"role": "user", "content": prompt})
 
-        model = os.getenv("THRAI_MODEL", "claude-3-sonnet-20240229")
+        model = os.getenv("THRAI_MODEL", "claude-3-5-sonnet-latest")
         resp = client.messages.create(
             model=model,
             max_tokens=2048,
@@ -25317,6 +25354,8 @@ def api_v1_music_tip():
         "from": from_address,
         "to": artist_address,
         "amount": amount,
+        "symbol": token_symbol,
+        "asset_symbol": token_symbol,
         "token_symbol": token_symbol,
         "artist_amount": artist_amount,
         "network_amount": network_amount,

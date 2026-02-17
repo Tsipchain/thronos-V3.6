@@ -3717,7 +3717,7 @@ function buildTokenIndexData() {
     const counts = {};
     allTransactions.forEach(tx => {
         if (getTxType(tx) === 'tokens') {
-            const sym = (tx.symbol || tx.asset_symbol || tx.asset || '').toUpperCase();
+            const sym = (tx.symbol || tx.asset_symbol || tx.token_symbol || tx.asset || '').toUpperCase();
             // Skip hidden/experimental tokens
             if (sym && !HIDDEN_TOKENS.includes(sym)) {
                 counts[sym] = (counts[sym] || 0) + 1;
@@ -3825,7 +3825,7 @@ function renderHistory() {
 
     if (currentHistoryFilter === 'tokens' && currentTokenFilter) {
         filtered = filtered.filter(tx => {
-            const sym = (tx.symbol || tx.asset_symbol || tx.asset || '').toUpperCase();
+            const sym = (tx.symbol || tx.asset_symbol || tx.token_symbol || tx.asset || '').toUpperCase();
             return sym === currentTokenFilter.toUpperCase();
         });
     }
@@ -3834,7 +3834,7 @@ function renderHistory() {
     const HIDDEN_TOKENS_LIST = ['TOKEN', 'UNKNOWN', 'TEST', 'NULL'];
     if (currentHistoryFilter === 'tokens') {
         filtered = filtered.filter(tx => {
-            const sym = (tx.symbol || tx.asset_symbol || tx.asset || '').toUpperCase();
+            const sym = (tx.symbol || tx.asset_symbol || tx.token_symbol || tx.asset || '').toUpperCase();
             return sym && !HIDDEN_TOKENS_LIST.includes(sym);
         });
     }
@@ -3876,7 +3876,7 @@ function renderHistory() {
             const preview = networkRows.slice(0, 20).map(tx => {
                 const txType = getTxType(tx);
                 const amount = Number(tx.amount || tx.display_amount || tx.value || 0) || 0;
-                const sym = tx.symbol || tx.asset_symbol || tx.asset || 'THR';
+                const sym = tx.symbol || tx.asset_symbol || tx.token_symbol || tx.asset || 'THR';
                 const stamp = formatTxDate(tx.timestamp || tx.time || tx.created_at || '');
                 const from = tx.from ? `${tx.from.slice(0,8)}...${tx.from.slice(-6)}` : '—';
                 const to = tx.to ? `${tx.to.slice(0,8)}...${tx.to.slice(-6)}` : '—';
@@ -3946,10 +3946,10 @@ function renderHistory() {
 
         // Determine correct asset symbol for display (avoid experimental 'TOKEN')
         const rawAsset = txType === 'tokens'
-            ? (tx.asset_symbol || tx.asset || tx.symbol || '')
+            ? (tx.asset_symbol || tx.asset || tx.symbol || tx.token_symbol || '')
             : txType === 't2e' ? 'T2E'
             : txType === 'ai_credits' ? (tx.unit || tx.asset || tx.symbol || (amountIn > 0 && !tx.amount ? 'Credits' : 'THR'))
-            : (tx.symbol || tx.asset_symbol || tx.asset || 'THR');
+            : (tx.symbol || tx.asset_symbol || tx.token_symbol || tx.asset || 'THR');
         const HIDDEN_TOKENS = ['TOKEN', 'UNKNOWN', 'TEST', 'NULL'];
         const displayAsset = HIDDEN_TOKENS.includes(rawAsset.toUpperCase()) ? 'THR' : (rawAsset || 'THR');
 
@@ -6369,25 +6369,47 @@ window.GlobalMusicPlayer = (function() {
 <script>
 let _globalTipAssets = [];
 let _globalTipAuth = null;
+let _globalTipTrack = null;  // Stores the track being tipped (from GlobalPlayer OR music page)
 
-async function openGlobalTipModal() {
-    const track = window.GlobalMusicPlayer?.getCurrentTrack?.();
+/**
+ * Open the global tip modal.
+ * @param {Object} [trackOverride] - Optional track object passed from music.html or other pages.
+ *   If not provided, falls back to GlobalMusicPlayer.getCurrentTrack().
+ */
+async function openGlobalTipModal(trackOverride) {
+    const track = trackOverride || window.GlobalMusicPlayer?.getCurrentTrack?.();
     if (!track) { alert('No active track'); return; }
+    _globalTipTrack = track;  // Store for submitGlobalTip()
     try {
         const auth = _globalTipAuth || await window.WalletAuth.requireUnlockedWallet();
         _globalTipAuth = auth;
         const address = auth.address;
-        const r = await fetch(buildWalletMusicApiUrl(`/api/balances?address=${encodeURIComponent(address)}&show_zero=false`));
+        const apiBase = typeof buildWalletMusicApiUrl === 'function'
+            ? buildWalletMusicApiUrl('/api/balances')
+            : '/api/balances';
+        const r = await fetch(`${apiBase}${apiBase.includes('?') ? '&' : '?'}address=${encodeURIComponent(address)}&show_zero=false`);
         const j = await r.json();
         const balances = (j && j.balances) || {};
-        const items = Object.entries(balances).map(([symbol, balance]) => ({ symbol, balance: Number(balance || 0) })).filter(x => x.balance > 0);
+        const items = Object.entries(balances)
+            .map(([symbol, balance]) => ({ symbol, balance: Number(balance || 0) }))
+            .filter(x => x.balance > 0);
         _globalTipAssets = items;
         const sel = document.getElementById('globalTipAsset');
         sel.innerHTML = '';
+        // Always show THR first, then WBTC, then rest (crosschain-friendly order)
+        const sortOrder = ['THR', 'WBTC', 'L2E'];
+        items.sort((a, b) => {
+            const ai = sortOrder.indexOf(a.symbol);
+            const bi = sortOrder.indexOf(b.symbol);
+            if (ai !== -1 && bi !== -1) return ai - bi;
+            if (ai !== -1) return -1;
+            if (bi !== -1) return 1;
+            return a.symbol.localeCompare(b.symbol);
+        });
         items.forEach((it) => {
             const opt = document.createElement('option');
             opt.value = it.symbol;
-            opt.textContent = `${it.symbol} (balance: ${it.balance})`;
+            opt.textContent = `${it.symbol} (${it.balance})`;
             sel.appendChild(opt);
         });
         if (!items.length) {
@@ -6398,30 +6420,43 @@ async function openGlobalTipModal() {
         }
         document.getElementById('globalTipTrackMeta').textContent = `${track.title || '-'} • ${track.artist_name || track.artist || '-'}`;
         document.getElementById('globalTipAmount').value = '';
-        document.getElementById('globalTipHint').textContent = 'Choose asset + amount to send independent tip.';
+        document.getElementById('globalTipHint').textContent = 'Choose asset + amount to tip the artist.';
         document.getElementById('globalTipModal').style.display = 'flex';
     } catch (e) {
-        alert(`Tip unavailable: ${e.message || e}`);
+        if (e.code === 'WALLET_NOT_CONNECTED') {
+            alert('Please connect your wallet first!');
+        } else if (e.code === 'WALLET_LOCKED') {
+            alert('Wallet is locked. Please unlock with your PIN.');
+        } else {
+            alert(`Tip unavailable: ${e.message || e}`);
+        }
     }
 }
 
 function closeGlobalTipModal() {
     const el = document.getElementById('globalTipModal');
     if (el) el.style.display = 'none';
+    _globalTipTrack = null;
 }
 
 async function submitGlobalTip() {
-    const track = window.GlobalMusicPlayer?.getCurrentTrack?.();
-    if (!track) return;
+    const track = _globalTipTrack || window.GlobalMusicPlayer?.getCurrentTrack?.();
+    if (!track) { alert('No track selected'); return; }
     const asset = (document.getElementById('globalTipAsset')?.value || 'THR').trim().toUpperCase();
     const amount = parseFloat(document.getElementById('globalTipAmount')?.value || '0');
     if (!amount || amount <= 0) { alert('Invalid amount'); return; }
+
+    const hint = document.getElementById('globalTipHint');
+    if (hint) hint.textContent = `Sending ${amount} ${asset}...`;
 
     try {
         const auth = _globalTipAuth || await window.WalletAuth.requireUnlockedWallet();
         _globalTipAuth = auth;
         const { address, authSecret } = auth;
-        const res = await fetch(buildWalletMusicApiUrl('/api/v1/music/tip'), {
+        const tipUrl = typeof buildWalletMusicApiUrl === 'function'
+            ? buildWalletMusicApiUrl('/api/v1/music/tip')
+            : '/api/v1/music/tip';
+        const res = await fetch(tipUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -6437,12 +6472,10 @@ async function submitGlobalTip() {
         if (data.status !== 'success') {
             throw new Error(data.message || data.error || data.primary || 'tip_failed');
         }
-        const hint = document.getElementById('globalTipHint');
-        if (hint) hint.textContent = `✅ Sent ${amount} ${asset} tip`;
-        closeGlobalTipModal();
+        if (hint) hint.textContent = `✅ Sent ${amount} ${asset} tip!`;
+        setTimeout(() => closeGlobalTipModal(), 1500);
         if (typeof loadTracks === 'function') loadTracks();
     } catch (e) {
-        const hint = document.getElementById('globalTipHint');
         if (hint) hint.textContent = `❌ ${e.message || e}`;
     }
 }

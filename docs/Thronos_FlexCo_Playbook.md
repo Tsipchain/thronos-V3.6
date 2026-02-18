@@ -14,6 +14,7 @@
 3. [C — Ops Runbook](#c--ops-runbook)
 4. [D — Product Packaging (German-First)](#d--product-packaging-german-first)
 5. [E — 2026 Roadmap & Grant Narrative](#e--2026-roadmap--grant-narrative)
+6. [F — Driver Platform & Autopilot Telemetry](#f--driver-platform--autopilot-telemetry)
 
 ---
 
@@ -37,6 +38,7 @@
 | `thronoschain.org` | `Tsipchain/thronos-portal` | — | Git (Vercel auto-deploy) |
 | `thronos-v3-6.onrender.com` | `Tsipchain/thronos-V3.6` | `ai_sessions.db` | Node 4 local |
 | `btc-api.thronoschain.org` | `Tsipchain/thronos-V3.6` | Blockstream + local cache | External BTC RPCs |
+| `driver-platform-production.up.railway.app` | `Tsipchain/driver-platform` | `driver_service.db` (Node-2 volume) | driver-platform (edge API, separate Railway service) |
 
 ### A.3 Data Ownership & Source-of-Truth
 
@@ -50,6 +52,9 @@
 | Frontend assets (HTML, JS, CSS) | Git → Vercel | Auto-deploy on push | CDN-cached globally |
 | Custom tokens & EVM contracts | Node 1 `ledger.sqlite3` | — | On-chain via Node 1 |
 | IoT telemetry & parking | Node 1 `ledger.sqlite3` | — | Device → API → DB |
+| Driver telemetry (raw) | driver-platform `driver_service.db` (Node-2 volume) | Export job → AI Core | PII stripped before export; 90-day retention on Node-2 |
+| Driver telemetry (features) | AI Core (Node 4) feature store / training bucket | — | Pseudonymized; ML-ready; source: driver-platform + music/IoT |
+| VerifyID driver identity | VerifyID Postgres (separate Railway service) | Identity bridge → AI Core pseudonymous key | Canonical identity; phone/email never leave VerifyID Postgres |
 
 ### A.4 Replication Rules
 
@@ -442,5 +447,220 @@ Thronos ist ein in Österreich entwickeltes Blockchain-Betriebssystem, das KI, I
 **Nächste Schritte**: 3 kommerzielle Bundles (VerifyID, Driver Telemetry, IoT+AI) mit ersten zahlenden Kunden bis Q4 2026. FFG-Förderung beschleunigt die Markteinführung um 6 Monate.
 
 *"Pledge to the unburnable — Stärke in jedem Block."*
+
+---
+
+## F — Driver Platform & Autopilot Telemetry
+
+### F.1 Overview
+
+The **Driver Platform** (`Tsipchain/driver-platform`) is a FastAPI/SQLite edge API deployed on Railway. It is the operational ingestion point for GPS telemetry, trip events, and voice/CB messages from three tenant categories:
+
+| Tenant | Location | Mode |
+|:-------|:---------|:-----|
+| Independent taxi drivers | Thessaloniki | standard |
+| Taxi companies (fleet) | TH / regional | fleet |
+| Driving schools | Volos | lesson (opt-in) |
+
+All raw data lands in `driver_service.db` on the **Node-2 Railway volume** (`node-2-volume` mounted at `/app/data`). This is the **operational store**. AI Core (Node 4) is the **analytical / ML store**; PII is stripped before any export.
+
+---
+
+### F.2 Data Collected
+
+#### F.2.1 Mandatory fields (every trip event)
+
+| Field | Type | Description |
+|:------|:-----|:------------|
+| `trip_id` | UUID | Unique trip identifier |
+| `session_id` | UUID | Driving session (may span multiple trips) |
+| `driver_id` | String | Pseudonymous identifier linked via VerifyID |
+| `gps_lat` / `gps_lng` | Float | Raw GPS coordinates (operational DB only) |
+| `speed_kmh` | Float | Current speed |
+
+#### F.2.2 Optional fields
+
+| Field | Mandatory | Notes |
+|:------|:----------|:------|
+| `harsh_events` | No | JSON: harsh braking, sharp turns, rapid acceleration |
+| `weather` | No | Ambient conditions at time of event |
+| `comment` | No | Free-text driver note (driver-initiated) |
+| `voice_message_ref` | No | Reference to a CB/voice message recorded during the trip |
+
+#### F.2.3 Lesson mode (driving schools — opt-in)
+
+When a tenant is configured in `lesson` mode, additional fields are captured:
+
+| Field | Description |
+|:------|:-----------|
+| `instructor_id` | Pseudonymous instructor identifier |
+| `student_id` | Pseudonymous student identifier |
+
+Lesson mode requires **explicit tenant opt-in** in the driver-platform configuration. Data handling rules are identical to standard mode (PII stripped before ML export).
+
+---
+
+### F.3 Retention Policy
+
+| Store | Data | Retention |
+|:------|:-----|:----------|
+| Node-2 volume (`driver_service.db`) | All raw telemetry including GPS | **90 days** |
+| AI Core feature store (training bucket) | Pseudonymized, PII-free features | **Long-term archive** (indefinite, governance-controlled) |
+| VerifyID Postgres | Driver identity (phone, email) | Per GDPR right-to-erasure on request |
+
+After 90 days, raw records in `driver_service.db` are purged via a scheduled cleanup job. Pseudonymized feature records in AI Core are retained for the duration of the model training lifecycle.
+
+---
+
+### F.4 Privacy & Safety
+
+#### F.4.1 PII boundary
+
+- `phone` and `email` are stored **only** in the operational SQLite DB (`driver_service.db`) at driver registration time.
+- They are **never** included in API responses, telemetry event payloads, or ML exports.
+- Cross-service joins use `hashed(phone)` or `verifyid_driver_id` as pseudonymous link keys.
+
+#### F.4.2 AI training pipeline
+
+- The export job reads from `driver_telemetry_raw`, **excludes** `phone`, `email`, and raw `gps_lat`/`gps_lng`.
+- GPS data may be aggregated or rounded (configurable precision) before landing in the AI Core feature store.
+- The resulting `driver_telemetry_features` dataset contains only pseudonymized IDs and derived metrics.
+
+#### F.4.3 Identity bridge
+
+A dedicated identity bridge service:
+- Reads from VerifyID Postgres and driver-platform SQLite.
+- Produces a stable pseudonymous mapping table (`verifyid_driver_id` ↔ `driver_platform_driver_id`).
+- The mapping table lives in AI Core (pseudonymized; no raw PII).
+- The same bridge enables consistent cross-ecosystem identity for music module IoT miners who are also registered drivers.
+
+#### F.4.4 Driving schools
+
+- Lesson mode is **tenant opt-in only** — not enabled by default.
+- `instructor_id` and `student_id` are pseudonymous in all telemetry.
+- School administrators may request data erasure per GDPR; the identity bridge mapping is deleted alongside the operational record.
+
+---
+
+### F.5 Ops Runbook — Driver Platform
+
+#### F.5.1 Environment variables (driver-platform Railway service)
+
+```
+DRIVER_DB_PATH=/app/data/driver_service.db
+RAILWAY_VOLUME_MOUNT=/app/data
+VERIFYID_API_URL=<verifyid service URL>
+AI_CORE_EXPORT_URL=<ai-core export endpoint>
+EXPORT_SCHEDULE=daily          # or: streaming
+EXPORT_GPS_PRECISION=2         # decimal places for GPS aggregation (0=strip)
+LOG_LEVEL=INFO
+```
+
+#### F.5.2 Backup & restore — `driver_service.db`
+
+**Manual snapshot from Railway volume**:
+```bash
+# SSH into Railway shell or use Railway CLI
+railway run --service driver-platform-production \
+  sqlite3 /app/data/driver_service.db \
+  ".backup '/app/data/backups/driver_$(date +%Y%m%d_%H%M%S).db'"
+```
+
+**Download backup to local machine**:
+```bash
+# Via Railway CLI (if volume export is available)
+railway volume download node-2-volume ./backups/
+
+# Or: trigger a backup endpoint (if implemented)
+curl -X POST https://driver-platform-production.up.railway.app/admin/backup \
+     -H "Authorization: Bearer $ADMIN_SECRET"
+```
+
+**Restore procedure**:
+1. Stop any active export jobs: set `EXPORT_SCHEDULE=disabled` in Railway env vars and redeploy.
+2. Copy the backup file to the volume: upload via Railway shell or volume CLI.
+3. Rename the backup to `driver_service.db` at `/app/data/`.
+4. Redeploy the driver-platform service to pick up the restored DB.
+5. Verify: `GET /health` → check `db_ok: true` and record count.
+6. Re-enable export: restore `EXPORT_SCHEDULE` and redeploy.
+
+#### F.5.3 Re-sync exports to AI Core after a restore
+
+After restoring `driver_service.db`, the AI Core feature store may be ahead of or behind the operational DB. To re-sync:
+
+```bash
+# Trigger a full re-export (replace <from_date> with restore point)
+curl -X POST https://driver-platform-production.up.railway.app/admin/export/resync \
+     -H "Authorization: Bearer $ADMIN_SECRET" \
+     -H "Content-Type: application/json" \
+     -d '{"from_date": "2026-01-01", "strip_pii": true}'
+```
+
+Steps:
+1. Confirm the restore point date (last known-good backup timestamp).
+2. Call the resync endpoint (or run the export job manually with `--full-resync` flag).
+3. Monitor AI Core ingestion logs for duplicate-key errors; the export job should be idempotent (upsert by `trip_id`).
+4. Notify the AI team that feature store records before the restore point may need re-validation.
+
+#### F.5.4 Disable exports temporarily (data incident)
+
+If a data incident is detected (e.g., PII leak suspected in export pipeline):
+
+1. **Immediate**: Set `EXPORT_SCHEDULE=disabled` in Railway env vars → redeploy driver-platform.
+2. **Verify**: Confirm no export jobs are running: `GET /admin/export/status`.
+3. **Isolate**: Block AI Core from accepting new driver telemetry records (coordinate with AI team).
+4. **Investigate**: Query the export audit log to determine which records were exported.
+5. **Remediate**: If PII was exported, trigger deletion in AI Core feature store for affected `driver_id` range.
+6. **Re-enable**: After remediation sign-off, restore `EXPORT_SCHEDULE` and redeploy.
+7. **Post-mortem**: Document within 48 hours; update export pipeline PII checks.
+
+#### F.5.5 Health monitoring
+
+| Check | Endpoint | Expected |
+|:------|:---------|:---------|
+| Service liveness | `GET /health` | `200 OK`, `db_ok: true` |
+| Export job status | `GET /admin/export/status` | `last_export_at`, `records_exported` |
+| Volume free space | Railway dashboard → Volumes | > 20% free |
+
+Pytheia monitors the `/health` endpoint every 5 minutes. Alert is triggered after 3 consecutive failures (SEV-2).
+
+---
+
+### F.6 Autopilot / Driver AI Training Pipeline
+
+```
+mobile_app (driver)
+        │
+        │  GPS, speed, events, voice/CB
+        ▼
+[driver-platform]  (FastAPI, Railway, Node-2 volume)
+        │
+        │  SQLite write → driver_telemetry_raw
+        │
+        ├──────────────────────────────────────┐
+        │  (batch/streaming export, PII stripped)│
+        ▼                                       │
+[ai-core]  (Node 4, Render)                    │
+        │                                       │
+        │  driver_telemetry_features             │
+        │  (feature store / training bucket)     │
+        │                                       │
+        ├── verifyid_identity (pseudonymous key) ┘
+        │   (VerifyID Postgres → identity bridge)
+        │
+        ├── music_route_telemetry join
+        │   (when session has music/IoT signals)
+        │
+        ▼
+  Autopilot / Driver Scoring / Route Analytics Models
+```
+
+**AI outputs**:
+- Driver scoring model (safety, efficiency, route quality)
+- Route analytics (traffic patterns, Thessaloniki / Volos regional data)
+- Lesson mode assessment (driving school student progress — pseudonymized)
+- T2E reward multiplier calculation
+
+**Model governance**: All training runs are logged in the AI audit ledger. Models that consume driver telemetry features must carry a `pii_free: true` attestation in the model registry.
 
 ---

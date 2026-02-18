@@ -84,6 +84,10 @@ nodes:
       - pytheia-agent
       - autonomous-trading
       - oracle-services
+      - driver-telemetry-feature-store   # ingests from driver-platform export pipeline
+      - voice-signal-indexing            # stores voice_message_emitted metadata for NLP/autopilot
+      - autopilot-model-training         # future: Thronos Autopilot + safety scoring models
+      - music-iot-session-join           # joins driver + music/IoT signals on session_id
 
 # ----------------------------------------------------------
 # CORE SERVICES
@@ -326,6 +330,7 @@ apps:
     tier: high
     category: telemetry
     owner: core-team
+    public_url: "https://driverinteligent.thronoschain.org"
     deployments:
       - platform: railway
         service: driver-platform-production
@@ -342,6 +347,43 @@ apps:
         Node-2 volume is the operational store for all driver sessions
         (taxi, taxi companies, driving schools in lesson mode). Raw data
         is retained here for 90 days before archival to AI Core.
+    event_types:
+      - id: driver_telemetry
+        description: "GPS position, speed, and harsh-event data emitted on every telemetry tick"
+        payload_fields: [trip_id, session_id, driver_id, gps_lat, gps_lng, speed_kmh, harsh_events, weather]
+        pii_in_payload: false
+        training_signal: true
+      - id: voice_message_emitted
+        description: "CB / voice message recorded during a trip; stored as reference + metadata"
+        payload_fields: [trip_id, session_id, driver_id, voice_message_ref, duration_s, language_hint]
+        pii_in_payload: false
+        training_signal: true
+        notes: "Raw audio stays in operational store; only the reference and metadata are exported to AI Core"
+      - id: safe_driving_score
+        description: "Computed safety score for a completed trip (0–100); derived from telemetry and harsh events"
+        payload_fields: [trip_id, driver_id, score, score_components, distance_km, duration_s]
+        pii_in_payload: false
+        training_signal: true
+        notes: "Score is computed by the driver-platform service after trip close; also used as T2E reward multiplier input"
+    training_sink:
+      service: ai-core
+      dataset: driver_telemetry_features
+      mechanism: "batch export job (daily cron); streaming connector planned"
+      signals_exported:
+        - driver_telemetry       # GPS-aggregated features, speed, harsh events
+        - voice_message_emitted  # message ref + metadata (no raw audio)
+        - safe_driving_score     # computed per-trip score
+      pii_strip: true
+      future_uses:
+        - "Thronos Autopilot model training (route + behaviour patterns)"
+        - "Safety scoring model (harsh events + voice tone analysis)"
+        - "Music-IoT mining reward enrichment (session_id join with music_route_telemetry)"
+      chain_coupling: none
+      chain_coupling_note: >
+        The main Thronos chain (Node 1) has NO direct dependency on driver_service.db.
+        All signals reach AI Core via the export pipeline only. The chain records
+        only on-chain proof-of-route hashes and T2E reward attestations — never
+        raw driver telemetry or voice data.
     endpoints:
       - "POST /trips"
       - "POST /trips/{id}/events"
@@ -548,6 +590,12 @@ domains:
     target: node4-ai-core
     type: platform
     dns: render
+
+  - domain: "driverinteligent.thronoschain.org"
+    target: driver-platform
+    type: cname
+    dns: railway
+    notes: "Public-facing custom domain for driver-platform; CNAME → driver-platform-production.up.railway.app"
 
   - domain: "driver-platform-production.up.railway.app"
     target: driver-platform

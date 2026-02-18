@@ -3095,8 +3095,16 @@ def validate_t2e_eligibility(device_info: dict, gps_data: dict) -> tuple[bool, s
     }
 
 
-# ─── Music Telemetry Reward Distribution (80/10/10) ─────────────────────────────
-MUSIC_REWARD_ARTIST_PERCENT = 0.80   # 80% to artist
+# ─── Music / Tip Fee Philosophy ──────────────────────────────────────────────────
+# Tips: Artist gets 100% of tip.  Sender pays network fee ON TOP.
+# Fee split: 50% burned (deflationary), 50% to AI Agent wallet (IoT miner rewards).
+# Music plays: Artist royalty paid from AI Agent pool (funded by fees).
+MUSIC_TIP_FEE_RATE          = 0.005   # 0.5% network fee on tips (same as send_thr)
+MUSIC_TIP_MIN_FEE           = 0.001   # Minimum fee in THR
+FEE_AGENT_SHARE             = 0.50    # 50% of all network fees → AI Agent wallet
+FEE_BURN_SHARE              = 0.50    # 50% of all network fees → burned (deflation)
+# Legacy constants kept for backward compat in music telemetry session splits
+MUSIC_REWARD_ARTIST_PERCENT = 0.80   # 80% to artist (from play telemetry sessions)
 MUSIC_REWARD_NETWORK_PERCENT = 0.10  # 10% to network pool
 MUSIC_REWARD_AI_PERCENT = 0.10       # 10% to AI/T2E pool
 
@@ -4813,6 +4821,24 @@ def calculate_fixed_burn_fee(amount: float, speed: str = "fast") -> float:
         fee_rate = FEE_RATE  # fixed 0.5%
     fee = amount * fee_rate
     return round(max(MIN_FEE, fee), 6)
+
+
+def split_and_credit_fee(fee: float, source: str = "transfer") -> dict:
+    """
+    Split a network fee: 50% burned (deflation), 50% credited to AI Agent wallet.
+    The AI Agent wallet uses its balance to fund IoT miner rewards in blocks.
+    Returns dict with amounts for logging.
+    """
+    agent_share = round(fee * FEE_AGENT_SHARE, 6)
+    burn_share = round(fee - agent_share, 6)  # remainder to avoid rounding loss
+
+    if agent_share > 0:
+        ledger = load_json(LEDGER_FILE, {})
+        ledger[AI_WALLET_ADDRESS] = round(float(ledger.get(AI_WALLET_ADDRESS, 0)) + agent_share, 6)
+        save_json(LEDGER_FILE, ledger)
+        logger.info(f"[FEE_SPLIT] {fee} THR fee from {source}: {agent_share} → AI Agent, {burn_share} → burned")
+
+    return {"fee_total": fee, "agent_share": agent_share, "burn_share": burn_share, "source": source}
 
 # ─── Input Validation Helpers ───────────────────────────────────────────
 
@@ -7262,6 +7288,15 @@ def _categorize_transaction(tx: dict) -> str:
     tx_type = tx.get("type") or tx.get("kind") or ""
     tx_type_lower = tx_type.lower()
 
+    # IoT (GPS telemetry, autopilot, parking, vehicle data) - check BEFORE music
+    # because music_gps_telemetry contains "music" but belongs in IoT
+    if tx_type_lower in {"iot_telemetry", "music_gps_telemetry", "iot_reward", "iot_mining_reward",
+                         "gps_mining", "route_contribution", "autopilot", "parking",
+                         "iot_autopilot", "iot_parking", "iot_parking_reservation"}:
+        return "iot"
+    if tx.get("category") == "iot" or "telemetry" in tx_type_lower:
+        return "iot"
+
     # Music tips / stream / royalties
     if tx.get("category") in {"music_stream", "music_royalty", "music_tip"}:
         return str(tx.get("category"))
@@ -7287,11 +7322,8 @@ def _categorize_transaction(tx: dict) -> str:
     if "l2e" in tx_type_lower or tx_type in ["l2e_reward", "l2e"]:
         return "l2e"
 
-    # IoT (GPS telemetry, autopilot, parking, vehicle data)
-    # Includes: GPS route data for autopilot training, parking reservations, autonomous driving
-    if ("iot" in tx_type_lower or "telemetry" in tx_type_lower or "gps" in tx_type_lower or
-        tx_type in ["autopilot", "parking", "iot_autopilot", "iot_parking",
-                    "iot_parking_reservation", "gps_mining", "route_contribution"]):
+    # IoT fallback (catch anything with "iot" or "gps" not caught earlier)
+    if "iot" in tx_type_lower or "gps" in tx_type_lower:
         return "iot"
 
     # Bridge operations
@@ -7609,6 +7641,10 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
         "nft": "nft",
         "nft_mint": "nft",
         "nft_buy": "nft",
+        "iot_reward": "iot",
+        "iot_mining_reward": "iot",
+        "music_gps_telemetry": "iot",
+        "gps_mining": "iot",
         "verifyid": "verifyid",
         "other": "other",
     }
@@ -16324,40 +16360,10 @@ def send_thr_internal(from_thr, to_thr, amount_raw, auth_secret, passphrase="", 
     except (TypeError, ValueError):
         return _reject_tx(tx_id, "invalid_amount", 400, {"from": from_thr, "to": to_thr, "amount": amount_raw})
 
-    # Check pledge access (whitelist or BTC pledge)
-    if not has_pledge_access(from_thr):
-        return _reject_tx(tx_id, "no_pledge_access", 403, {"from": from_thr, "to": to_thr, "amount": amount})
-
-    pledge_mode = get_wallet_pledge_mode(from_thr)
-
-    # Whitelist wallets don't need auth_secret
-    if pledge_mode == "whitelist":
-        # Whitelisted - no auth needed
-        pass
-    elif pledge_mode == "btc_pledge":
-        # BTC pledge - verify auth_secret
-        if not auth_secret:
-            return _reject_tx(tx_id, "missing_auth_secret", 400, {"from": from_thr, "to": to_thr, "amount": amount})
-
-        sender_pledge = get_pledge_for_auth(from_thr)
-        if not sender_pledge:
-            return _reject_tx(tx_id, "unknown_sender_thr", 404, {"from": from_thr, "to": to_thr, "amount": amount})
-
-        stored_auth_hash = sender_pledge.get("send_auth_hash")
-        if not stored_auth_hash:
-            return _reject_tx(tx_id, "send_not_enabled_for_this_thr", 400, {"from": from_thr, "to": to_thr, "amount": amount})
-
-        if sender_pledge.get("has_passphrase"):
-            if not passphrase:
-                return _reject_tx(tx_id, "passphrase_required", 400, {"from": from_thr, "to": to_thr, "amount": amount})
-            auth_string = f"{auth_secret}:{passphrase}:auth"
-        else:
-            auth_string = f"{auth_secret}:auth"
-
-        if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-            return _reject_tx(tx_id, "invalid_auth", 403, {"from": from_thr, "to": to_thr, "amount": amount})
-    else:
-        return _reject_tx(tx_id, "no_pledge_access", 403, {"from": from_thr, "to": to_thr, "amount": amount})
+    # Validate auth using unified validate_effective_auth (supports legacy migration)
+    ok, _, error_key = validate_effective_auth(from_thr, auth_secret, passphrase)
+    if not ok:
+        return _reject_tx(tx_id, error_key or "invalid_auth", 403, {"from": from_thr, "to": to_thr, "amount": amount})
 
     fee = calculate_fixed_burn_fee(amount, speed)
     if expected_fee is not None:
@@ -16388,6 +16394,8 @@ def send_thr_internal(from_thr, to_thr, amount_raw, auth_secret, passphrase="", 
     ledger[from_thr] = round(sender_balance - total_cost, 6)
     ledger[to_thr] = round(float(ledger.get(to_thr, 0.0)) + amount, 6)
     save_json(LEDGER_FILE, ledger)
+    # Split fee: 50% to AI Agent wallet (IoT miner rewards), 50% burned
+    fee_split_info = split_and_credit_fee(fee, source="transfer_internal")
 
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     tx = {
@@ -16397,6 +16405,7 @@ def send_thr_internal(from_thr, to_thr, amount_raw, auth_secret, passphrase="", 
         "to": to_thr,
         "amount": round(amount, 6),
         "fee_burned": fee,
+        "fee_split": fee_split_info,
         "speed": speed,
         "tx_id": tx_id or f"TX-{int(time.time())}-{secrets.token_hex(4)}",
         "status": "confirmed"
@@ -16413,7 +16422,8 @@ def send_thr_internal(from_thr, to_thr, amount_raw, auth_secret, passphrase="", 
         "tx": tx,
         "tx_id": tx.get("tx_id"),
         "new_balance": ledger[from_thr],
-        "fee": fee
+        "fee": fee,
+        "fee_split": fee_split_info
     }), 200
 
 
@@ -16698,40 +16708,10 @@ def send_thr():
     except (TypeError,ValueError):
         return _reject_tx(tx_id, "invalid_amount", 400, {"from": from_thr, "to": to_thr, "amount": amount_raw})
 
-    # Check pledge access (whitelist or BTC pledge)
-    if not has_pledge_access(from_thr):
-        return _reject_tx(tx_id, "no_pledge_access", 403, {"from": from_thr, "to": to_thr, "amount": amount})
-
-    pledge_mode = get_wallet_pledge_mode(from_thr)
-
-    # Whitelist wallets don't need auth_secret
-    if pledge_mode == "whitelist":
-        # Whitelisted - no auth needed
-        pass
-    elif pledge_mode == "btc_pledge":
-        # BTC pledge - verify auth_secret
-        if not auth_secret:
-            return _reject_tx(tx_id, "missing_auth_secret", 400, {"from": from_thr, "to": to_thr, "amount": amount})
-
-        sender_pledge = get_pledge_for_auth(from_thr)
-        if not sender_pledge:
-            return _reject_tx(tx_id, "unknown_sender_thr", 404, {"from": from_thr, "to": to_thr, "amount": amount})
-
-        stored_auth_hash = sender_pledge.get("send_auth_hash")
-        if not stored_auth_hash:
-            return _reject_tx(tx_id, "send_not_enabled_for_this_thr", 400, {"from": from_thr, "to": to_thr, "amount": amount})
-
-        if sender_pledge.get("has_passphrase"):
-            if not passphrase:
-                return _reject_tx(tx_id, "passphrase_required", 400, {"from": from_thr, "to": to_thr, "amount": amount})
-            auth_string = f"{auth_secret}:{passphrase}:auth"
-        else:
-            auth_string = f"{auth_secret}:auth"
-
-        if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-            return _reject_tx(tx_id, "invalid_auth", 403, {"from": from_thr, "to": to_thr, "amount": amount})
-    else:
-        return _reject_tx(tx_id, "no_pledge_access", 403, {"from": from_thr, "to": to_thr, "amount": amount})
+    # Validate auth using unified validate_effective_auth (supports legacy migration)
+    ok, _, error_key = validate_effective_auth(from_thr, auth_secret, passphrase)
+    if not ok:
+        return _reject_tx(tx_id, error_key or "invalid_auth", 403, {"from": from_thr, "to": to_thr, "amount": amount})
 
     # --- Fee Calculation Based on Speed ---
     fee = calculate_fixed_burn_fee(amount, speed)
@@ -16762,7 +16742,11 @@ def send_thr():
             {"from": from_thr, "to": to_thr, "amount": amount, "fee_burned": fee}
         )
     ledger[from_thr]=round(sender_balance-total_cost,6)
+    # Credit recipient
+    ledger[to_thr]=round(float(ledger.get(to_thr,0.0))+amount,6)
     save_json(LEDGER_FILE,ledger)
+    # Split fee: 50% to AI Agent wallet (IoT miner rewards), 50% burned
+    fee_split_info = split_and_credit_fee(fee, source="transfer")
     chain=load_json(CHAIN_FILE,[])
     tx={
         "type":"transfer",
@@ -16772,6 +16756,7 @@ def send_thr():
         "to":to_thr,
         "amount":round(amount,6),
         "fee_burned":fee,
+        "fee_split": fee_split_info,
         "tx_id":tx_id or f"TX-{int(time.time())}-{secrets.token_hex(4)}",
         "thr_address":from_thr,
         "status":"pending",
@@ -18229,6 +18214,98 @@ def _get_job_or_stale(job_id: str, thr_address: str | None, now: float):
     return job, None
 
 
+# ─── IoT MINER BLOCK REWARDS ──────────────────────────
+IOT_REWARD_PER_BLOCK = 0.001   # Max THR per block for IoT miners
+IOT_MAX_REWARDS_PER_BLOCK = 5  # Max IoT wallets rewarded per block
+
+def _distribute_iot_block_rewards(block_height: int, block_hash: str) -> int:
+    """
+    Distribute IoT miner rewards from AI Agent wallet, embedded in each new block.
+    Checks T2E pending rewards and pays out from the agent's accumulated fee balance.
+    Returns number of rewards paid.
+    """
+    try:
+        state = get_t2e_state()
+        pending = state.get("pending_rewards", [])
+        if not pending:
+            return 0
+
+        ledger = load_json(LEDGER_FILE, {})
+        ai_balance = float(ledger.get(AI_WALLET_ADDRESS, 0))
+        if ai_balance < IOT_REWARD_PER_BLOCK:
+            return 0
+
+        # Group pending by wallet, pick top contributors
+        wallet_points = {}
+        for entry in pending:
+            w = entry.get("wallet")
+            if not w:
+                continue
+            wallet_points[w] = wallet_points.get(w, 0) + int(entry.get("data_points", 1))
+
+        # Sort by contribution points, take top N
+        sorted_wallets = sorted(wallet_points.items(), key=lambda x: x[1], reverse=True)[:IOT_MAX_REWARDS_PER_BLOCK]
+        if not sorted_wallets:
+            return 0
+
+        total_points = sum(pts for _, pts in sorted_wallets)
+        rewards_paid = 0
+        chain = load_json(CHAIN_FILE, [])
+        ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+        for wallet, points in sorted_wallets:
+            # Proportional reward based on contribution
+            share = round(IOT_REWARD_PER_BLOCK * (points / total_points), 6)
+            if share <= 0 or ai_balance < share:
+                continue
+
+            ledger[AI_WALLET_ADDRESS] = round(float(ledger.get(AI_WALLET_ADDRESS, 0)) - share, 6)
+            ledger[wallet] = round(float(ledger.get(wallet, 0)) + share, 6)
+            ai_balance = float(ledger.get(AI_WALLET_ADDRESS, 0))
+
+            # Record IoT reward on chain
+            reward_tx = {
+                "type": "iot_reward",
+                "kind": "iot_mining_reward",
+                "category": "iot",
+                "from": AI_WALLET_ADDRESS,
+                "to": wallet,
+                "amount": share,
+                "block_height": block_height,
+                "block_hash": block_hash,
+                "timestamp": ts,
+                "tx_id": f"IOT-REWARD-{block_height}-{secrets.token_hex(4)}",
+                "status": "confirmed",
+                "thr_address": wallet,
+                "note": f"IoT miner reward: {points} data points in block #{block_height}",
+                "meta": {
+                    "block_height": block_height,
+                    "data_points": points,
+                    "reward_type": "iot_block_reward",
+                    "pool_source": "AI_WALLET_FEE_SHARE",
+                }
+            }
+            chain.append(reward_tx)
+            persist_normalized_tx(reward_tx)
+            rewards_paid += 1
+
+        save_json(LEDGER_FILE, ledger)
+        save_json(CHAIN_FILE, chain)
+
+        # Clear processed pending rewards
+        state["pending_rewards"] = []
+        state["last_reward_block"] = block_height
+        save_t2e_state(state)
+
+        if rewards_paid > 0:
+            logger.info(f"[IOT_REWARDS] Distributed {rewards_paid} IoT rewards in block #{block_height}")
+
+        return rewards_paid
+    except Exception as e:
+        logger.warning(f"[IOT_REWARDS] Failed to distribute: {e}")
+        return 0
+
+
 # ─── MINING ENDPOINT ───────────────────────────────
 def _process_mining_submission(data: dict, require_job_id: bool = False):
     start = time.time()
@@ -18565,6 +18642,10 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
 
     save_json(CHAIN_FILE, chain)
     update_last_block(new_block, is_block=True)
+
+    # IoT miner rewards: AI Agent distributes pending IoT rewards embedded in block
+    iot_rewards_paid = _distribute_iot_block_rewards(height, pow_hash)
+
     # Broadcast the newly mined block to peers.  This is best‑effort
     # and failures are ignored.  It allows other nodes to update
     # their chains without polling.
@@ -18572,9 +18653,9 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
         broadcast_block(new_block)
     except Exception:
         pass
-    print(f"⛏️ Miner {thr_address} found block #{height}! R={total_reward} (m/a/b: {miner_share}/{ai_share}/{burn_share}) | TXs: {len(included)} | Stratum={is_stratum}")
+    print(f"⛏️ Miner {thr_address} found block #{height}! R={total_reward} (m/a/b: {miner_share}/{ai_share}/{burn_share}) | TXs: {len(included)} | IoT rewards: {iot_rewards_paid} | Stratum={is_stratum}")
     logger.debug("submit_block handler took %.3fs", time.time() - start)
-    return jsonify(status="accepted", height=height, reward=miner_share, tx_included=len(included)), 200
+    return jsonify(status="accepted", height=height, reward=miner_share, tx_included=len(included), iot_rewards=iot_rewards_paid), 200
 
 
 @app.route("/submit_block", methods=["POST"])
@@ -24909,18 +24990,24 @@ def api_music_gps_telemetry():
         return jsonify({"ok": False, "error": "latitude and longitude required"}), 400
 
     entry_id = f"MUSIC-GPS-{int(time.time())}-{secrets.token_hex(4)}"
+    ts_now = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    session_id = payload.get("session_id") or f"MSESS-{int(time.time())}-{secrets.token_hex(4)}"
+    address = (payload.get("address") or "").strip()
+    track_id = payload.get("track_id")
+    artist_address = (payload.get("artist_address") or "").strip()
 
-    # Legacy: Save to JSON file (backward compatibility)
+    # Build GPS entry
     entry = {
-        "session_id": payload.get("session_id"),
-        "address": payload.get("address"),
+        "session_id": session_id,
+        "address": address,
         "latitude": latitude,
         "longitude": longitude,
         "altitude": payload.get("altitude"),
         "speed": payload.get("speed"),
         "heading": payload.get("heading"),
-        "timestamp": payload.get("timestamp") or time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "timestamp": payload.get("timestamp") or ts_now,
         "entry_id": entry_id,
+        "track_id": track_id,
     }
     gps_data = load_json(MUSIC_GPS_FILE, [])
     gps_data.append(entry)
@@ -24928,22 +25015,116 @@ def api_music_gps_telemetry():
         gps_data = gps_data[-1000:]
     save_json(MUSIC_GPS_FILE, gps_data)
 
-    # NEW: Track in DB if track info provided
-    track_id = payload.get("track_id")
-    address = payload.get("address")
+    # Hash the GPS data point for IoT chain verification
+    telemetry_payload = f"{address}:{latitude}:{longitude}:{entry.get('altitude','')}:{entry.get('speed','')}:{ts_now}"
+    telemetry_hash = hashlib.sha256(telemetry_payload.encode()).hexdigest()
+
+    # Record telemetry hash on IoT chain for ASIC verification
+    chain = load_json(CHAIN_FILE, [])
+    iot_tx = {
+        "type": "iot_telemetry",
+        "kind": "music_gps_telemetry",
+        "category": "iot",
+        "from": address or "anonymous",
+        "to": AI_WALLET_ADDRESS,
+        "amount": 0,
+        "telemetry_hash": telemetry_hash,
+        "session_id": session_id,
+        "track_id": track_id,
+        "timestamp": ts_now,
+        "tx_id": entry_id,
+        "status": "confirmed",
+        "thr_address": address,
+        "meta": {
+            "data_type": "music_gps_telemetry",
+            "lat": latitude,
+            "lng": longitude,
+            "telemetry_hash": telemetry_hash,
+            "session_id": session_id,
+        }
+    }
+    chain.append(iot_tx)
+    save_json(CHAIN_FILE, chain)
+
+    # Record T2E training contribution (route data for autopilot AI)
+    if address:
+        record_training_contribution(
+            device_id=f"LISTENER-{address[:16]}",
+            wallet_address=address,
+            data_type="music_telemetry",
+            data_points=1,
+            gps_data={"lat": latitude, "lng": longitude, "speed": payload.get("speed"), "heading": payload.get("heading")}
+        )
+
+    # Track music play in DB if track info provided
     if track_id and address:
         try:
             _track_music_play(
                 track_id=track_id,
                 wallet_address=address,
-                artist_address=payload.get("artist_address"),
+                artist_address=artist_address,
                 gps_lat=float(latitude),
                 gps_lng=float(longitude),
             )
         except Exception as e:
             logger.warning(f"Failed to track GPS telemetry in DB: {e}")
 
-    return jsonify({"ok": True, "entry_id": entry_id}), 200
+    # Count session GPS points - reward artist from plays when enough accumulate
+    session_points = sum(1 for g in gps_data if g.get("session_id") == session_id)
+    artist_reward_paid = 0.0
+    PLAY_ROYALTY = 0.0001  # THR per play/session tick
+
+    # Every 10 GPS samples in a session = 1 play reward to artist
+    if session_points > 0 and session_points % 10 == 0 and artist_address and track_id:
+        try:
+            ledger = load_json(LEDGER_FILE, {})
+            ai_balance = float(ledger.get(AI_WALLET_ADDRESS, 0))
+            if ai_balance >= PLAY_ROYALTY:
+                ledger[AI_WALLET_ADDRESS] = round(ai_balance - PLAY_ROYALTY, 6)
+                ledger[artist_address] = round(float(ledger.get(artist_address, 0)) + PLAY_ROYALTY, 6)
+                save_json(LEDGER_FILE, ledger)
+                artist_reward_paid = PLAY_ROYALTY
+
+                # Record artist play reward on chain
+                reward_tx = {
+                    "type": "music_royalty",
+                    "kind": "music_royalty",
+                    "category": "music_royalty",
+                    "from": AI_WALLET_ADDRESS,
+                    "to": artist_address,
+                    "amount": PLAY_ROYALTY,
+                    "track_id": track_id,
+                    "session_id": session_id,
+                    "timestamp": ts_now,
+                    "tx_id": f"PLAY-REWARD-{int(time.time())}-{secrets.token_hex(4)}",
+                    "status": "confirmed",
+                    "thr_address": artist_address,
+                    "note": f"Play royalty from music telemetry session",
+                    "meta": {
+                        "track_id": track_id,
+                        "session_id": session_id,
+                        "session_gps_points": session_points,
+                        "royalty_type": "play_reward",
+                        "pool_source": "AI_WALLET",
+                        "listener": address,
+                    }
+                }
+                chain = load_json(CHAIN_FILE, [])
+                chain.append(reward_tx)
+                save_json(CHAIN_FILE, chain)
+                persist_normalized_tx(reward_tx)
+                logger.info(f"[MUSIC_TELEMETRY] Play reward {PLAY_ROYALTY} THR to artist {artist_address} (session {session_id}, {session_points} points)")
+        except Exception as e:
+            logger.warning(f"Failed to pay play royalty: {e}")
+
+    return jsonify({
+        "ok": True,
+        "entry_id": entry_id,
+        "session_id": session_id,
+        "telemetry_hash": telemetry_hash,
+        "session_gps_points": session_points,
+        "artist_reward_paid": artist_reward_paid,
+    }), 200
 
 
 @app.route("/api/music/tracks")
@@ -25328,33 +25509,30 @@ def api_v1_music_tip():
         if error_key == "invalid_auth":
             return jsonify({"status": "error", "message": "Invalid auth"}), 403
 
-    reward_split = None
+    # New tip philosophy: Artist gets 100% of tip.  Sender pays network fee ON TOP.
+    # Fee split: 50% burned, 50% → AI Agent wallet (funds IoT miner rewards).
     artist_amount = amount
-    network_amount = 0.0
-    ai_pool_amount = 0.0
+    network_fee = 0.0
+    fee_split_info = {}
 
     if token_symbol == "THR":
+        # Calculate network fee on top of tip amount
+        network_fee = round(max(MUSIC_TIP_MIN_FEE, amount * MUSIC_TIP_FEE_RATE), 6)
+        total_cost = round(amount + network_fee, 6)
+
         ledger = load_json(LEDGER_FILE, {})
         sender_balance = float(ledger.get(from_address, 0))
-        if sender_balance < amount:
-            return jsonify({"status": "error", "message": "Insufficient balance"}), 400
+        if sender_balance < total_cost:
+            return jsonify({"status": "error", "message": f"Insufficient balance (need {total_cost} THR: {amount} tip + {network_fee} fee)"}), 400
 
-        thr_dec = _token_decimals("THR")
-        quant = Decimal("1").scaleb(-thr_dec)
-        artist_amount = float((amount_dec * Decimal(str(MUSIC_REWARD_ARTIST_PERCENT))).quantize(quant, rounding=ROUND_DOWN))
-        network_amount = float((amount_dec * Decimal(str(MUSIC_REWARD_NETWORK_PERCENT))).quantize(quant, rounding=ROUND_DOWN))
-        ai_pool_amount = float((amount_dec * Decimal(str(MUSIC_REWARD_AI_PERCENT))).quantize(quant, rounding=ROUND_DOWN))
-        actual_total = Decimal(str(artist_amount)) + Decimal(str(network_amount)) + Decimal(str(ai_pool_amount))
-        if actual_total != amount_dec:
-            artist_amount = float((amount_dec - Decimal(str(network_amount)) - Decimal(str(ai_pool_amount))).quantize(quant, rounding=ROUND_DOWN))
-
-        ledger[from_address] = round(sender_balance - amount, 6)
-        ledger[artist_address] = round(float(ledger.get(artist_address, 0)) + artist_amount, 6)
+        # Debit sender: tip + fee
+        ledger[from_address] = round(sender_balance - total_cost, 6)
+        # Credit artist: 100% of tip amount
+        ledger[artist_address] = round(float(ledger.get(artist_address, 0)) + amount, 6)
         save_json(LEDGER_FILE, ledger)
 
-        credit_network_pool(network_amount, source="music_tip")
-        credit_ai_pool(ai_pool_amount, music_tip_amount=amount)
-        reward_split = {"artist": artist_amount, "network": network_amount, "ai_t2e": ai_pool_amount}
+        # Split the fee: 50% agent wallet, 50% burned
+        fee_split_info = split_and_credit_fee(network_fee, source="music_tip")
         new_balance = ledger[from_address]
     elif token_symbol == "WBTC":
         wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
@@ -25404,28 +25582,41 @@ def api_v1_music_tip():
 
     save_music_registry(registry)
 
+    # Record on-chain transaction
     chain = load_json(CHAIN_FILE, [])
     tx_id = f"MUSIC-TIP-{token_symbol}-{int(time.time())}-{secrets.token_hex(4)}"
+    ts_now = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     tx = {
         "type": "music_tip",
+        "kind": "music_tip",
         "category": "music_tip",
         "track_id": track_id,
         "track_title": track["title"],
         "from": from_address,
         "to": artist_address,
         "amount": amount,
+        "artist_amount": artist_amount,
+        "fee_burned": network_fee,
+        "fee_split": fee_split_info if fee_split_info else None,
         "symbol": token_symbol,
         "asset_symbol": token_symbol,
         "token_symbol": token_symbol,
-        "artist_amount": artist_amount,
-        "network_amount": network_amount,
-        "ai_pool_amount": ai_pool_amount,
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "timestamp": ts_now,
         "tx_id": tx_id,
-        "status": "PENDING"
+        "status": "confirmed",
+        "thr_address": from_address,
+        "note": f"Music tip: {track['title']} ({amount} {token_symbol})",
+        "meta": {
+            "track_id": track_id,
+            "track_title": track.get("title"),
+            "artist_address": artist_address,
+            "artist_name": track.get("artist_name", "Unknown"),
+            "tip_type": "music_tip",
+            "fee": network_fee,
+            "fee_agent_share": fee_split_info.get("agent_share", 0) if fee_split_info else 0,
+            "fee_burned": fee_split_info.get("burn_share", 0) if fee_split_info else 0,
+        }
     }
-    if reward_split:
-        tx["reward_split"] = reward_split
 
     gps_data = None
     if gps_lat is not None and gps_lng is not None:
@@ -25435,6 +25626,9 @@ def api_v1_music_tip():
 
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
+    # Also persist to tx_log for wallet history
+    persist_normalized_tx(tx)
+    update_last_block(tx, is_block=False)
 
     _track_music_play(
         track_id=track_id,
@@ -25462,19 +25656,19 @@ def api_v1_music_tip():
         "to": artist_address,
         "token_symbol": token_symbol,
         "amount": str(amount_dec),
-    }, status="PENDING")
+        "fee": str(network_fee),
+    }, status="confirmed")
 
     return jsonify({
         "status": "success",
-        "tx_status": "PENDING",
+        "tx_status": "confirmed",
         "event_id": event.get("event_id"),
         "tx_id": tx_id,
         "token_symbol": token_symbol,
         "amount": amount,
         "artist_amount": artist_amount,
-        "network_amount": network_amount,
-        "ai_pool_amount": ai_pool_amount,
-        "reward_split": reward_split,
+        "network_fee": network_fee,
+        "fee_split": fee_split_info,
         "new_balance": new_balance,
         "gps_recorded": bool(gps_lat and gps_lng),
         "t2e_contribution_recorded": bool(gps_data)

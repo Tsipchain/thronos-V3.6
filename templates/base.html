@@ -3626,7 +3626,8 @@ function getTxType(tx) {
     }
 
     // === IoT / TELEMETRY ===
-    if (raw === 'iot' || raw === 'iot_telemetry' || raw === 'autopilot' || raw === 'parking' ||
+    if (raw === 'iot' || raw === 'iot_telemetry' || raw === 'iot_reward' || raw === 'iot_mining_reward' ||
+        raw === 'music_gps_telemetry' || raw === 'gps_mining' || raw === 'autopilot' || raw === 'parking' ||
         raw === 'telemetry' || category === 'iot' || category === 'iot_telemetry') {
         return 'iot';
     }
@@ -4018,12 +4019,18 @@ function renderHistory() {
                 const earnLabel = isGreek ? '🎵 Κέρδη από Plays' : '🎵 Pool Earnings';
                 detailLines.push(earnLabel);
                 if (playNum) detailLines.push(`Play #${playNum}`);
+                if (meta.session_id) detailLines.push(`Session: ${escapeHtml(meta.session_id.substring(0, 12))}`);
             } else {
-                // Direct tip from fan
+                // Direct tip from fan - artist gets 100%
                 const tipLabel = isSent
                     ? (isGreek ? '💝 Tip για καλλιτέχνη' : '💝 Tip to artist')
                     : (isGreek ? '💝 Tip από fan' : '💝 Tip from fan');
                 detailLines.push(tipLabel);
+                // Show fee if sender
+                if (isSent && tx.fee_burned) {
+                    detailLines.push(`Fee: ${Number(tx.fee_burned).toFixed(6)} THR`);
+                }
+                if (meta.artist_name) detailLines.push(`Artist: ${escapeHtml(meta.artist_name)}`);
             }
         }
         if (txType === 'architect' || txType === 'architect_ai_jobs') {
@@ -4065,13 +4072,24 @@ function renderHistory() {
                 if (tx.royalty_amount) detailLines.push(`Royalty: ${Number(tx.royalty_amount).toFixed(6)} THR`);
             }
         }
-        // PR-5g: IoT purchase details
+        // IoT / telemetry details
         if (txType === 'iot') {
-            if (tx.pack_name) detailLines.push(`${escapeHtml(tx.pack_name)}`);
-            else if (tx.pack_id) detailLines.push(`Pack: ${escapeHtml(tx.pack_id)}`);
-            if (tx.fiat_amount && tx.currency) {
-                const currSymbol = tx.currency === 'EUR' ? '€' : tx.currency === 'USD' ? '$' : tx.currency;
-                detailLines.push(`${currSymbol}${Number(tx.fiat_amount).toFixed(2)}`);
+            const rawType = (tx.kind || tx.type || '').toLowerCase();
+            if (rawType === 'iot_mining_reward' || rawType === 'iot_reward') {
+                if (meta.data_points) detailLines.push(`Data points: ${meta.data_points}`);
+                if (meta.block_height) detailLines.push(`Block #${meta.block_height}`);
+                detailLines.push(isGreek ? 'Ανταμοιβή IoT Miner' : 'IoT Miner Reward');
+            } else if (rawType === 'music_gps_telemetry' || rawType === 'iot_telemetry') {
+                if (tx.telemetry_hash) detailLines.push(`Hash: ${escapeHtml(tx.telemetry_hash.substring(0, 12))}…`);
+                if (tx.session_id) detailLines.push(`Session: ${escapeHtml(tx.session_id.substring(0, 16))}`);
+                detailLines.push(isGreek ? 'GPS Τηλεμετρία' : 'GPS Telemetry');
+            } else {
+                if (tx.pack_name) detailLines.push(`${escapeHtml(tx.pack_name)}`);
+                else if (tx.pack_id) detailLines.push(`Pack: ${escapeHtml(tx.pack_id)}`);
+                if (tx.fiat_amount && tx.currency) {
+                    const currSymbol = tx.currency === 'EUR' ? '€' : tx.currency === 'USD' ? '$' : tx.currency;
+                    detailLines.push(`${currSymbol}${Number(tx.fiat_amount).toFixed(2)}`);
+                }
             }
             if (meta.payment_status) detailLines.push(`Payment: ${escapeHtml(meta.payment_status)}`);
         }
@@ -5992,6 +6010,60 @@ window.GlobalMusicPlayer = (function() {
         }
     }
 
+    // ─── Music GPS Telemetry Session ────────────────────────────────
+    // Sends GPS data every 30s during playback for route collection + IoT chain
+    let telemetryInterval = null;
+    let telemetrySessionId = null;
+
+    function startTelemetrySession() {
+        if (telemetryInterval) return;
+        telemetrySessionId = 'MSESS-' + Date.now() + '-' + Math.random().toString(16).slice(2, 10);
+        telemetryInterval = setInterval(sendTelemetryPing, 30000);
+        // Send first ping immediately
+        sendTelemetryPing();
+    }
+
+    function stopTelemetrySession() {
+        if (telemetryInterval) {
+            clearInterval(telemetryInterval);
+            telemetryInterval = null;
+        }
+    }
+
+    function sendTelemetryPing() {
+        if (!audio || audio.paused || !isPlaying) return;
+        if (!navigator.geolocation) return;
+        const track = queue[currentIndex];
+        if (!track) return;
+        const wallet = localStorage.getItem('thr_address') || '';
+
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                const payload = {
+                    session_id: telemetrySessionId,
+                    address: wallet,
+                    track_id: track.id || track.track_id || '',
+                    artist_address: track.artist_address || '',
+                    latitude: pos.coords.latitude,
+                    longitude: pos.coords.longitude,
+                    altitude: pos.coords.altitude,
+                    speed: pos.coords.speed,
+                    heading: pos.coords.heading,
+                };
+                const url = typeof buildWalletMusicApiUrl === 'function'
+                    ? buildWalletMusicApiUrl('/api/music/gps_telemetry')
+                    : '/api/music/gps_telemetry';
+                fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                }).catch(e => console.debug('[Telemetry] GPS ping failed:', e));
+            },
+            () => { /* GPS unavailable - silently skip */ },
+            { enableHighAccuracy: true, timeout: 10000 }
+        );
+    }
+
     function playTrack(track) {
         if (!track || !track.audio_url) {
             console.error('[GlobalMusicPlayer] Invalid track:', track);
@@ -6049,6 +6121,9 @@ window.GlobalMusicPlayer = (function() {
 
             // PR-5g: Start periodic position saving
             startPositionSaving();
+
+            // Start GPS telemetry session for route data collection + IoT chain
+            startTelemetrySession();
 
             // Record play
             const wallet = localStorage.getItem('thr_address');
@@ -6145,6 +6220,7 @@ window.GlobalMusicPlayer = (function() {
                 isPlaying = true;
                 updateUI();
                 startPositionSaving(); // Resume position saving
+                startTelemetrySession(); // Resume GPS telemetry
                 // PR-5f: Update MediaSession state
                 if ('mediaSession' in navigator) {
                     navigator.mediaSession.playbackState = 'playing';
@@ -6154,6 +6230,7 @@ window.GlobalMusicPlayer = (function() {
             audio.pause();
             isPlaying = false;
             stopPositionSaving(); // Stop position saving when paused
+            stopTelemetrySession(); // Stop GPS telemetry when paused
             updateUI();
             saveState(); // Save final state on pause
             // PR-5f: Update MediaSession state
@@ -6519,8 +6596,13 @@ async function submitGlobalTip() {
         if (data.status !== 'success') {
             throw new Error(data.message || data.error || data.primary || 'tip_failed');
         }
-        if (hint) hint.textContent = `✅ Sent ${amount} ${asset} tip!`;
-        setTimeout(() => closeGlobalTipModal(), 1500);
+        const feeMsg = data.network_fee ? ` (fee: ${data.network_fee} THR)` : '';
+        if (hint) hint.textContent = `✅ Sent ${amount} ${asset} tip!${feeMsg}`;
+        setTimeout(() => closeGlobalTipModal(), 2000);
+        // Refresh wallet history to show the new tip transaction
+        if (typeof hydrateHistory === 'function' && window.walletSession?.getAddress?.()) {
+            hydrateHistory(window.walletSession.getAddress());
+        }
         if (typeof loadTracks === 'function') loadTracks();
     } catch (e) {
         const msg = (e.message || e || '').toString().toLowerCase();

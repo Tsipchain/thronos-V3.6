@@ -38,7 +38,8 @@
 | `thronoschain.org` | `Tsipchain/thronos-portal` | — | Git (Vercel auto-deploy) |
 | `thronos-v3-6.onrender.com` | `Tsipchain/thronos-V3.6` | `ai_sessions.db` | Node 4 local |
 | `btc-api.thronoschain.org` | `Tsipchain/thronos-V3.6` | Blockstream + local cache | External BTC RPCs |
-| `driver-platform-production.up.railway.app` | `Tsipchain/driver-platform` | `driver_service.db` (Node-2 volume) | driver-platform (edge API, separate Railway service) |
+| `driverinteligent.thronoschain.org` | `Tsipchain/driver-platform` | `driver_service.db` (Node-2 volume) | driver-platform public URL (CNAME → Railway); events: driver_telemetry, voice_message_emitted, safe_driving_score |
+| `driver-platform-production.up.railway.app` | `Tsipchain/driver-platform` | `driver_service.db` (Node-2 volume) | driver-platform Railway origin (internal) |
 
 ### A.3 Data Ownership & Source-of-Truth
 
@@ -187,6 +188,7 @@ Retention: 365 days minimum. Export: JSON via `/api/admin/audit-export`.
 | `thronoschain.org` | A (Apex) | Vercel IP | Vercel |
 | `www.thronoschain.org` | CNAME | `cname.vercel-dns.com` | Vercel |
 | `btc-api.thronoschain.org` | CNAME | Railway custom domain | Railway |
+| `driverinteligent.thronoschain.org` | CNAME | `driver-platform-production.up.railway.app` | Railway |
 | `thrchain.up.railway.app` | Platform | Railway auto | Railway |
 | `thronos-v3-6.onrender.com` | Platform | Render auto | Render |
 

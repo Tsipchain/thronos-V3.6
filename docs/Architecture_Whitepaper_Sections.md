@@ -28,14 +28,17 @@ AI L2 is Thronos's on-chain intelligence layer. It sits above the base blockchai
 - **Oracle services**: AI-verified data points signed on-chain for use by smart contracts.
 - **Anomaly detection**: Real-time analysis of IoT sensor streams, flagging outliers.
 - **Model catalog management**: Automatic refresh and routing across provider models.
+- **Driver & voice signal ingestion**: Receives pseudonymized `driver_telemetry`, `voice_message_emitted`, and `safe_driving_score` events from the driver-platform export pipeline. These signals feed future Autopilot models and safety scoring without any direct dependency on the operational driver DB.
+- **Music-IoT session enrichment**: Joins driver session signals with music play and IoT mining events (matched on `session_id`) to produce combined T2E reward multipliers and richer training datasets.
 
 ### 1.2 What AI L2 Does NOT Do
 
 - **Does not replace human decision-making**: All autonomous actions by Pytheia are logged and can be overridden by admin/quorum vote.
-- **Does not store or train on personal data**: No PII enters the AI pipeline. GPS data is hashed client-side.
+- **Does not store or train on personal data**: No PII enters the AI pipeline. GPS data is hashed client-side; `phone` and `email` never leave the driver-platform operational DB.
 - **Is not a general-purpose chatbot service**: AI L2 serves ecosystem-specific tasks (chain analytics, device verification, trading signals), not arbitrary chat.
 - **Does not guarantee AI output correctness**: Oracle signatures attest to provenance, not truth. Consumers must validate.
 - **Does not run on-chain inference directly**: Inference runs on Node 4 (Render/local Ryzen 7). Results are posted on-chain as signed attestations.
+- **Does not couple the main chain to the driver DB**: The Thronos L1 chain (Node 1) has zero direct dependency on `driver_service.db`. Driver telemetry and voice signals reach AI Core exclusively through the driver-platform export pipeline. The chain records only on-chain proof-of-route hashes and T2E reward attestations — never raw telemetry or voice data.
 
 ### 1.3 Architecture
 
@@ -45,27 +48,51 @@ User / dApp / IoT Device
         ▼
 [Node 1 Master] ── /api/ai/* proxy ──▶ [Node 4 AI Core]
         │                                     │
-        │                               ┌─────┴─────┐
-        │                               │ OpenAI    │
-        │                               │ Anthropic │
-        │                               │ Gemini    │
-        │                               └─────┬─────┘
+        │                               ┌─────┴──────────────────────────┐
+        │                               │ OpenAI / Anthropic / Gemini    │
+        │                               ├────────────────────────────────┤
+        │                               │ driver_telemetry_features      │
+        │                               │  ← driver-platform export job  │
+        │                               │  (driver_telemetry,            │
+        │                               │   voice_message_emitted,       │
+        │                               │   safe_driving_score)          │
+        │                               ├────────────────────────────────┤
+        │                               │ music_route_telemetry join     │
+        │                               │  (session_id → T2E multiplier) │
+        │                               └─────┬──────────────────────────┘
         │                                     │
         │◀── signed result ───────────────────┘
         │
         ▼
 [On-chain attestation] → block N
+(proof-of-route hash + T2E reward — NO raw telemetry on chain)
+
+[driver-platform]  ──export pipeline──▶  [AI Core feature store]
+(driverinteligent.thronoschain.org)        (no PII; chain not involved)
 ```
 
-### 1.4 AI L2 — GR (Ελληνικά)
+### 1.4 Driver & Voice Signals — Training Pipeline Note
+
+The following event types emitted by `driver-platform` (`driverinteligent.thronoschain.org`) are consumed by AI Core as training signals. The main blockchain is **not involved** in this flow at any point:
+
+| Event | Training Use | Chain involvement |
+|:------|:------------|:-----------------|
+| `driver_telemetry` | Route patterns, road conditions, speed profiling for Autopilot | None — chain receives route hash only |
+| `voice_message_emitted` | NLP/tone analysis for driver communication quality; future in-cab assistant | None |
+| `safe_driving_score` | Safety model ground truth; T2E multiplier input; insurance telematics | Chain records T2E reward attestation only |
+
+**Decoupling guarantee**: AI Core pulls from the export pipeline asynchronously. If the export job is disabled (e.g. during a data incident), AI Core simply receives no new records — the chain continues operating normally, miners keep earning rewards via proof-of-route hashes, and no data is lost from the operational DB.
+
+### 1.5 AI L2 — GR (Ελληνικά)
 
 Το AI L2 είναι το επίπεδο τεχνητής νοημοσύνης του Thronos. Λειτουργεί πάνω από το βασικό blockchain (L1) και παρέχει:
 
 - **Πολυ-πάροχο LLM inference**: Δρομολογεί αιτήματα σε OpenAI, Anthropic ή Gemini.
 - **Pytheia**: Αυτόνομος AI agent που παρακολουθεί το δίκτυο, βελτιστοποιεί pools, εντοπίζει bugs.
 - **Oracle υπηρεσίες**: Υπογεγραμμένα δεδομένα on-chain για smart contracts.
+- **Driver & Voice signals**: Λαμβάνει pseudonymized `driver_telemetry`, `voice_message_emitted` και `safe_driving_score` από το driver-platform για εκπαίδευση μοντέλων Autopilot και safety scoring.
 
-**Τι ΔΕΝ κάνει**: Δεν αντικαθιστά ανθρώπινες αποφάσεις, δεν αποθηκεύει προσωπικά δεδομένα, δεν εγγυάται ορθότητα εξόδων AI.
+**Τι ΔΕΝ κάνει**: Δεν αντικαθιστά ανθρώπινες αποφάσεις, δεν αποθηκεύει προσωπικά δεδομένα, δεν εγγυάται ορθότητα εξόδων AI. **Το κύριο chain δεν έχει άμεση εξάρτηση από τη βάση δεδομένων του driver-platform** — τα signals φτάνουν στο AI Core μόνο μέσω του export pipeline.
 
 ---
 

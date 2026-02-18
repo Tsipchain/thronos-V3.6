@@ -11,8 +11,8 @@
 # ============================================================
 
 meta:
-  version: "2026.2"
-  updated: "2026-02-15"
+  version: "2026.3"
+  updated: "2026-02-18"
   owner: "Thronos FlexCo e.U. (Austria)"
   contact: "admin@thronoschain.org"
   license: "Proprietary + Open-Source Components"
@@ -318,6 +318,67 @@ apps:
       - "Proof-of-route only"
     owner: core-team
 
+  - id: driver-platform
+    name: "Driver Platform – Edge API (Taxi, Fleet & Driving Schools)"
+    type: edge-api
+    repo: "Tsipchain/driver-platform"
+    runtime: "Python / FastAPI, Uvicorn"
+    tier: high
+    category: telemetry
+    owner: core-team
+    deployments:
+      - platform: railway
+        service: driver-platform-production
+        url: "https://driver-platform-production.up.railway.app"
+        volume:
+          name: node-2-volume
+          mount: /app/data
+    env:
+      DRIVER_DB_PATH: /app/data/driver_service.db
+    data_store:
+      type: sqlite
+      path: /app/data/driver_service.db
+      operational_note: >
+        Node-2 volume is the operational store for all driver sessions
+        (taxi, taxi companies, driving schools in lesson mode). Raw data
+        is retained here for 90 days before archival to AI Core.
+    endpoints:
+      - "POST /trips"
+      - "POST /trips/{id}/events"
+      - "POST /gps"
+      - "POST /voice"
+      - "POST /cb-message"
+      - "GET  /drivers/{id}/stats"
+      - "GET  /health"
+    tenants:
+      - id: taxi-individual
+        description: "Independent taxi drivers (Thessaloniki)"
+        mode: standard
+      - id: taxi-company
+        description: "Taxi companies (fleet mode)"
+        mode: fleet
+      - id: driving-school
+        description: "Driving schools (Volos) – lesson mode"
+        mode: lesson
+        opt_in: true
+        notes: "Lesson mode requires explicit tenant opt-in; extra fields: instructor_id, student_id"
+    depends_on:
+      - service: verifyid-api
+        reason: "Identity enrichment — maps driver_id to verified device/human identity"
+      - service: ai-core
+        reason: "Batch/streaming telemetry export for model training"
+    privacy:
+      pii_fields:
+        - phone
+        - email
+      policy: >
+        phone and email are stored only in the operational SQLite DB on Node-2 volume.
+        They MUST NOT be exported to AI Core or any ML dataset.
+        Pseudonymous driver_id (hashed key) is used for all cross-service joins.
+    compliance:
+      - GDPR
+      - AML-light
+
   - id: iot-mining
     name: "IoT Mining & Smart Parking"
     subdomain: "iot"
@@ -487,6 +548,209 @@ domains:
     target: node4-ai-core
     type: platform
     dns: render
+
+  - domain: "driver-platform-production.up.railway.app"
+    target: driver-platform
+    type: platform
+    dns: railway
+
+# ----------------------------------------------------------
+# DATA DOMAINS
+# Canonical source-of-truth declarations for every data entity
+# that flows through the Thronos ecosystem.
+# ----------------------------------------------------------
+data_domains:
+
+  - id: driver_telemetry_raw
+    name: "Driver Telemetry – Raw Operational Store"
+    source: driver-platform
+    store_type: sqlite
+    store_location: "node-2-volume:/app/data/driver_service.db"
+    operational_store: node-2-volume
+    retention_days: 90
+    fields:
+      - name: trip_id
+        type: uuid
+        pii: false
+      - name: session_id
+        type: uuid
+        pii: false
+      - name: driver_id
+        type: string
+        pii: false
+        note: "pseudonymous; maps to verifyid_driver_id via identity bridge"
+      - name: gps_lat
+        type: float
+        pii: true
+        export_policy: strip_before_ml
+      - name: gps_lng
+        type: float
+        pii: true
+        export_policy: strip_before_ml
+      - name: speed_kmh
+        type: float
+        pii: false
+      - name: harsh_events
+        type: json
+        pii: false
+        note: "harsh braking, sharp turns, rapid acceleration"
+      - name: weather
+        type: string
+        pii: false
+        mandatory: false
+      - name: comment
+        type: string
+        pii: false
+        mandatory: false
+        note: "free-text driver note; optional, driver-initiated"
+      - name: voice_message_ref
+        type: string
+        pii: false
+        mandatory: false
+        note: "reference to stored CB/voice message; content is not PII but is optional"
+      - name: phone
+        type: string
+        pii: true
+        export_policy: never_export
+      - name: email
+        type: string
+        pii: true
+        export_policy: never_export
+    mandatory_fields:
+      - trip_id
+      - session_id
+      - driver_id
+      - gps_lat
+      - gps_lng
+      - speed_kmh
+    optional_fields:
+      - harsh_events
+      - weather
+      - comment
+      - voice_message_ref
+
+  - id: driver_telemetry_features
+    name: "Driver Telemetry – ML Feature Store"
+    source_of_truth: ai-core
+    derived_from:
+      - driver_telemetry_raw
+      - music_route_telemetry
+      - iot_telemetry
+    store_type: feature_store
+    store_location: "AI Core (Node 4) – training bucket"
+    pii_policy: >
+      All PII (phone, email, raw GPS) is stripped before export from driver_telemetry_raw.
+      Only pseudonymized driver_id is used as join key.
+    usage:
+      - "Autopilot / Driver AI training"
+      - "Driver scoring and ranking"
+      - "Route analytics and optimization"
+      - "Reward multiplier calculation"
+    update_cadence: "batch export (daily) or streaming (configurable per tenant)"
+
+  - id: verifyid_identity
+    name: "VerifyID – Canonical Identity Store"
+    source_of_truth: verifyid-api
+    store_type: postgresql
+    store_location: "VerifyID Postgres (separate repo / Railway service)"
+    repo: "Tsipchain/verifyid"
+    link_key:
+      options:
+        - "hashed(phone)"
+        - "verifyid_driver_id"
+      policy: >
+        Use pseudonymous link key only. Never store raw phone/email outside
+        the VerifyID Postgres instance. The identity bridge generates a
+        stable pseudonymous mapping table for cross-service joins.
+
+  - id: music_route_telemetry
+    name: "Music / IoT Route Telemetry"
+    source: "music/iot-service (Node 1 ledger)"
+    store_type: sqlite
+    store_location: "Node 1 ledger.sqlite3"
+    join_key: session_id
+    join_condition: >
+      Joins with driver_telemetry_features when a session has both
+      route telemetry (from driver-platform) AND music / artist signals
+      (from Decent Music or IoT mining session). Used to compute combined
+      T2E reward multiplier.
+
+# ----------------------------------------------------------
+# DATA FLOWS
+# End-to-end pipeline declarations modelling how data moves
+# between services, storage layers, and AI Core.
+# ----------------------------------------------------------
+data_flows:
+
+  - id: flow-mobile-to-driver-platform
+    name: "Mobile App → Driver Platform → Operational Store"
+    description: >
+      Driver mobile app (taxi, fleet, driving school) submits GPS telemetry,
+      trip events, and optional voice/CB messages to the driver-platform edge API.
+      Raw data is persisted in the SQLite operational store on Node-2 volume.
+    steps:
+      - source: "mobile_app (driver device)"
+        destination: driver-platform
+        protocol: HTTPS / REST
+        data: "gps_lat, gps_lng, speed_kmh, harsh_events, weather, comment, trip events"
+        note: "phone & email stored at registration only, never in telemetry payloads"
+      - source: driver-platform
+        destination: driver_telemetry_raw
+        protocol: SQLite write
+        data: "all telemetry fields per schema above"
+        store: "node-2-volume:/app/data/driver_service.db"
+
+  - id: flow-driver-platform-to-ai-core
+    name: "Driver Platform → AI Core (Export Job)"
+    description: >
+      Batch or streaming export job reads from driver_telemetry_raw (SQLite),
+      strips PII, and pushes pseudonymized feature records to AI Core.
+    steps:
+      - source: driver_telemetry_raw
+        destination: ai-core
+        mechanism: "batch export job (daily cron) or streaming connector (future)"
+        pii_handling: "phone and email fields EXCLUDED; raw GPS aggregated/rounded before export"
+        output: driver_telemetry_features
+      - source: ai-core
+        destination: driver_telemetry_features
+        protocol: "Feature store write (training bucket)"
+        data: "pseudonymized trip features ready for model training"
+
+  - id: flow-verifyid-join
+    name: "VerifyID Identity → Driver Telemetry Features (Pseudonymous Join)"
+    description: >
+      VerifyID Postgres is the canonical identity store. An identity bridge
+      service reads from VerifyID and driver-platform, generates a pseudonymous
+      mapping table, and enables cross-service joins without exposing PII.
+    steps:
+      - source: verifyid-api
+        destination: verifyid_identity
+        protocol: "Postgres read"
+        data: "driver identity records"
+      - source: verifyid_identity
+        destination: driver_telemetry_features
+        mechanism: "identity bridge (pseudonymous key join)"
+        join_key: "hashed(phone) or verifyid_driver_id"
+        note: >
+          Join is always via pseudonymous key. Raw PII never leaves VerifyID Postgres.
+          The identity bridge mapping table lives in AI Core (pseudonymous).
+
+  - id: flow-music-iot-join
+    name: "Music / IoT Telemetry → Driver Features (Combined Session Join)"
+    description: >
+      When a driver session carries both route telemetry (driver-platform)
+      and music / artist signals or IoT mining events, both streams are joined
+      in AI Core to produce enriched features and combined T2E reward signals.
+    steps:
+      - source: "music/iot-service (Decent Music, IoT Mining)"
+        destination: music_route_telemetry
+        protocol: "Node 1 ledger write"
+        data: "music play events, IoT mining session, artist reward signals"
+      - source: music_route_telemetry
+        destination: driver_telemetry_features
+        mechanism: "AI Core join on session_id"
+        condition: "session has both route telemetry AND music/artist signals"
+        output: "enriched feature record with combined T2E reward multiplier"
 
 # ----------------------------------------------------------
 # HEALTH CHECK CONFIGURATION

@@ -12,7 +12,7 @@
 2. [Bridge & Cross-Chain Events Lifecycle](#2-bridge--cross-chain-events-lifecycle)
 3. [Utilities via Mining (Treasury Splits & Incentives)](#3-utilities-via-mining)
 4. [Music Economy (Tips vs Plays)](#4-music-economy)
-5. [Driver / Telemetry (Proofs & Privacy)](#5-driver--telemetry)
+5. [Driver Platform & Autopilot Telemetry](#5-driver-platform--autopilot-telemetry)
 6. [Gaming Layer (Crypto Hunters & Beyond)](#6-gaming-layer)
 
 ---
@@ -241,84 +241,218 @@ Music streams double as data transport:
 
 ---
 
-## 5. Driver / Telemetry
+## 5. Driver Platform & Autopilot Telemetry
 
 ### 5.1 Overview
 
-The Driver Telemetry system collects vehicle route data for autonomous driving AI training. It is designed with **privacy-by-design** principles — no raw GPS coordinates are ever stored on-chain.
+The **Driver Platform** (`Tsipchain/driver-platform`) is a FastAPI/SQLite edge API deployed on Railway. It is the primary ingestion service for real-world driving data from three tenant categories:
 
-### 5.2 Proof Architecture
+| Tenant | Region | Mode |
+|:-------|:-------|:-----|
+| Independent taxi drivers | Thessaloniki | standard |
+| Taxi companies (fleet) | TH / regional | fleet |
+| Driving schools | Volos | lesson (opt-in) |
+
+This platform feeds the **Thronos Autopilot / Driver AI** training pipeline and also drives the T2E (Train-to-Earn) reward system. The existing on-chain `driver-telemetry` module (Node 1, proof-of-route hashes) continues to handle chain-level reward attestations; `driver-platform` is the **off-chain operational layer** that collects the richest raw signal.
+
+---
+
+### 5.2 Two-Layer Architecture
 
 ```
-┌─────────────────┐
-│  Driver's Device │
-│  (Phone/OBD-II)  │
-│                   │
-│  1. Collect GPS   │
-│  2. Hash locally  │──── SHA256(lat,lon,timestamp,device_id)
-│  3. Generate      │
-│     proof-of-route│
-└───────┬───────────┘
+Layer 1 — Operational (driver-platform)          Layer 2 — Analytical (ai-core)
+─────────────────────────────────────────        ───────────────────────────────
+mobile_app (driver)                              AI Core (Node 4 / Render)
+        │                                                │
+        │ GPS, speed, events, voice, CB                  │
+        ▼                                                │
+[driver-platform]  FastAPI / Railway                     │
+        │                                                │
+        │ SQLite write                                   │
+        ▼                                                │
+[driver_service.db]  ← node-2-volume                    │
+  /app/data/                                             │
+  (90-day retention)                                     │
+        │                                                │
+        │ batch export job (daily)                       │
+        │ PII stripped, GPS rounded/aggregated           │
+        └────────────────────────────────────────────────▶
+                                                 [driver_telemetry_features]
+                                                  feature store / training bucket
+                                                         │
+                                           ┌─────────────┴────────────┐
+                                           │                           │
+                                  verifyid_identity             music_route_telemetry
+                                  (pseudonymous join)           (session_id join)
+```
+
+**Node-2 volume** is the operational store (raw data, PII present, 90-day retention).
+**AI Core** is the analytical/ML store (PII-free, pseudonymized, long-term archive).
+
+---
+
+### 5.3 Data Collected
+
+#### 5.3.1 Mandatory fields (every trip event)
+
+| Field | Type | Description |
+|:------|:-----|:------------|
+| `trip_id` | UUID | Unique trip identifier |
+| `session_id` | UUID | Driving session (spans multiple events) |
+| `driver_id` | String | Pseudonymous; maps to VerifyID via identity bridge |
+| `gps_lat` / `gps_lng` | Float | Raw GPS (operational DB only; stripped before ML export) |
+| `speed_kmh` | Float | Vehicle speed at event time |
+
+#### 5.3.2 Optional fields
+
+| Field | Description | Notes |
+|:------|:------------|:------|
+| `harsh_events` | JSON: harsh braking, sharp turns, rapid acceleration | For safety scoring |
+| `weather` | Ambient conditions | Enriches road-condition model |
+| `comment` | Free-text driver note | Driver-initiated, unstructured |
+| `voice_message_ref` | Reference to CB/voice audio message | Content analyzed separately |
+
+#### 5.3.3 Lesson mode (driving schools, Volos — opt-in)
+
+| Field | Description |
+|:------|:-----------|
+| `instructor_id` | Pseudonymous instructor identifier |
+| `student_id` | Pseudonymous student identifier |
+
+Lesson mode requires **explicit tenant configuration**. It is never enabled by default.
+
+---
+
+### 5.4 Proof Architecture (On-Chain Layer)
+
+The existing on-chain proof-of-route system (Node 1) remains the canonical reward attestation layer:
+
+```
+Driver Device
         │
-        ▼ (only hash + metadata sent)
-┌───────────────────┐
-│  Node 1 API       │
-│  /api/telemetry/  │
-│  submit           │
-│                   │
-│  Stores:          │
-│  - route_hash     │
-│  - distance_km    │
-│  - duration_s     │
-│  - quality_score  │
-│  - device_id      │
-│  (verified via    │
-│   VerifyID)       │
-└───────┬───────────┘
-        │
+        │  1. Collect GPS
+        │  2. Hash locally: SHA256(lat, lon, timestamp, device_id)
+        │  3. Generate proof-of-route
         ▼
-┌───────────────────┐
-│  T2E Reward       │
-│  Calculation      │
-│                   │
-│  THR = f(distance,│
-│    quality, time) │
-└───────────────────┘
+Node 1 API  /api/telemetry/submit
+        │
+        │  Stores on-chain:
+        │    route_hash, distance_km, duration_s,
+        │    quality_score, device_id (VerifyID-attested)
+        ▼
+T2E Reward Calculation
+  reward_thr = base_rate × distance_km × quality_multiplier × time_bonus
 ```
 
-### 5.3 What is Stored vs What is NOT
+Driver-platform extends this by capturing the **full raw signal** off-chain for AI training, while the on-chain layer retains privacy-preserving proofs only.
 
-| Stored On-Chain | NOT Stored |
-|:----------------|:-----------|
-| Route hash (SHA256) | Raw GPS coordinates |
-| Distance (km) | Street names or addresses |
-| Duration (seconds) | Speed at specific points |
-| Quality score (0-100) | Passenger information |
-| Device ID (VerifyID-attested) | Driver personal identity |
-| Timestamp (block height) | Photos or video |
+---
 
-### 5.4 Privacy Guarantees
+### 5.5 What is Stored, Where, and What is NOT Exported
 
-1. **Client-side hashing**: GPS → SHA256 hash happens on the device. Server never sees raw coordinates.
-2. **Proof-of-route**: Mathematical proof that a route was driven, without revealing the route.
-3. **No PII on-chain**: Device ID is a pseudonymous identifier linked via VerifyID.
-4. **GDPR compliance**: Off-chain data (device registration) subject to right-to-erasure.
-5. **No third-party sharing**: Aggregated training data is anonymized before feeding AI models.
+| Data | Operational DB (Node-2 vol.) | AI Core Feature Store | On-Chain |
+|:-----|:----------------------------:|:---------------------:|:--------:|
+| Raw GPS coordinates | ✅ | ✗ stripped | ✗ |
+| Speed, harsh events | ✅ | ✅ | ✗ |
+| Weather, comment | ✅ | ✅ | ✗ |
+| Voice/CB message ref | ✅ | ✅ (ref only) | ✗ |
+| `phone`, `email` | ✅ (registration only) | ✗ never | ✗ |
+| Route hash (SHA256) | ✅ | ✅ | ✅ |
+| Distance, quality score | ✅ | ✅ | ✅ |
+| `driver_id` (pseudonymous) | ✅ | ✅ | ✅ |
+| Photos / video | ✗ | ✗ | ✗ |
 
-### 5.5 T2E Reward Formula
+---
+
+### 5.6 Privacy Guarantees
+
+1. **PII boundary**: `phone` and `email` never leave `driver_service.db`. They are collected at registration and never included in telemetry payloads or exports.
+2. **Pseudonymous IDs**: All cross-service joins use `hashed(phone)` or `verifyid_driver_id`. Raw identity never crosses the PII boundary.
+3. **GPS precision control**: Raw GPS is stored operationally; before ML export, coordinates are aggregated or rounded to configurable precision (default: 2 decimal places ≈ ~1 km grid).
+4. **Identity bridge**: A dedicated service generates a pseudonymous mapping between `driver-platform.driver_id` and `verifyid.drivers.id`. The mapping lives in AI Core (pseudonymous only).
+5. **GDPR right-to-erasure**: Operational records in `driver_service.db` are deleted on request. The identity bridge mapping is purged simultaneously. AI Core retains only pseudonymized features; if the mapping is deleted, pseudonymous features become permanently unlinked.
+6. **Lesson mode isolation**: Driving school sessions are partitioned by `tenant_id` and `session_type=lesson`. Instructor and student IDs are pseudonymous throughout.
+
+---
+
+### 5.7 Data Flows
+
+#### Flow 1 — Mobile → Operational Store
+```
+mobile_app → POST /trips, /gps, /voice, /cb-message
+          → driver-platform (FastAPI)
+          → driver_service.db (node-2-volume)
+```
+
+#### Flow 2 — Export to AI Core (daily batch)
+```
+driver_service.db → export job (PII stripped)
+                  → ai-core ingest endpoint
+                  → driver_telemetry_features (feature store)
+```
+
+#### Flow 3 — Identity Join (VerifyID)
+```
+verifyid_api (Postgres) → identity bridge
+                        → pseudonymous mapping table (AI Core)
+                        → JOIN with driver_telemetry_features via driver_id
+```
+
+#### Flow 4 — Music + Route Session Join
+```
+music/iot-service → music_route_telemetry (Node 1 ledger)
+                  → AI Core JOIN on session_id
+                  → enriched feature: route + music/artist signals
+                  → combined T2E reward multiplier
+```
+
+---
+
+### 5.8 T2E Reward Formula
 
 ```
-reward_thr = base_rate × distance_km × quality_multiplier × time_bonus
+reward_thr = base_rate × distance_km × quality_multiplier × time_bonus × session_bonus
 
 Where:
-  base_rate         = 0.01 THR/km (adjustable by governance)
-  quality_multiplier = 0.5 to 2.0 (based on data completeness, consistency)
-  time_bonus        = 1.0 to 1.5 (off-peak hours bonus)
+  base_rate          = 0.01 THR/km (governance-adjustable)
+  quality_multiplier = 0.5 to 2.0  (data completeness, consistency, harsh events)
+  time_bonus         = 1.0 to 1.5  (off-peak hours incentive)
+  session_bonus      = 1.0 to 1.2  (bonus when session has combined music/IoT signals)
 ```
 
-### 5.6 Driver/Telemetry — GR (Ελληνικά)
+Lesson mode sessions may carry an additional `lesson_quality_bonus` factor, set by driving school governance parameters.
 
-Το σύστημα Driver Telemetry συλλέγει δεδομένα διαδρομών για εκπαίδευση AI αυτόνομης οδήγησης. **Κανένα raw GPS δεν αποθηκεύεται** — μόνο SHA256 hash της διαδρομής. Οι οδηγοί κερδίζουν THR (Train-to-Earn) ανάλογα με απόσταση και ποιότητα δεδομένων.
+---
+
+### 5.9 Autopilot / Driver AI Pipeline
+
+The driver telemetry features feed the following model training goals:
+
+| Model | Input Features | Output |
+|:------|:--------------|:-------|
+| **Safety Scorer** | speed, harsh_events, weather, route_hash | Safety score 0–100 |
+| **Route Efficiency** | GPS (aggregated), speed, trip duration | Optimal route suggestions |
+| **Driving School Assessment** | lesson sessions (pseudonymized) | Student progress score |
+| **T2E Multiplier Model** | quality_score, session_bonus, completeness | Dynamic reward multiplier |
+| **Autopilot Training** | all features (enriched with music/IoT join) | Driving behavior model |
+
+All models that consume driver telemetry features carry a `pii_free: true` attestation in the AI Core model registry. Training runs are logged in the AI audit ledger.
+
+---
+
+### 5.10 Driver Platform — GR (Ελληνικά)
+
+Το **Driver Platform** είναι το κεντρικό σύστημα συλλογής τηλεμετρίας οδήγησης. Συλλέγει GPS, ταχύτητα, events και φωνητικά μηνύματα από:
+
+- Ανεξάρτητους ταξιτζήδες (Θεσσαλονίκη)
+- Εταιρείες ταξί (fleet mode)
+- Σχολές Οδηγών Βόλου (lesson mode — opt-in)
+
+**Αποθήκευση**: Raw δεδομένα (συμπεριλαμβανομένου GPS) στο `driver_service.db` στο Node-2 volume (Railway). Διατήρηση: **90 ημέρες**. Μετά, τα δεδομένα αρχειοθετούνται στο AI Core (Node 4).
+
+**Privacy**: `phone` και `email` **δεν εξάγονται ποτέ** σε ML pipelines. Χρησιμοποιούμε pseudonymous IDs για όλα τα cross-service joins. Το GPS ακατέργαστο ανωνυμοποιείται/συγκεντρώνεται πριν από κάθε export στο AI Core.
+
+**AI Training**: Το AI Core χρησιμοποιεί τα features για εκπαίδευση μοντέλων Autopilot, αξιολόγηση οδηγών και route analytics.
 
 ---
 

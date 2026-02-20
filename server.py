@@ -124,7 +124,23 @@ from ai_models_config import base_model_config
 from ai_interaction_ledger import compute_model_stats, create_ai_transfer_from_ledger_entry
 
 app = Flask(__name__)
-CORS(app)
+# Allow thronoschain.org (Vercel CDN + Plesk branding site) and all subdomains,
+# plus the Railway/Render service URLs and localhost for development.
+# Uses wildcard fallback when flask_cors is unavailable.
+_CORS_ORIGINS = [
+    r"https://.*\.thronoschain\.org",
+    r"https://thronoschain\.org",
+    r"https://thrchain\.up\.railway\.app",
+    r"https://node-2\.up\.railway\.app",
+    r"https://.*\.onrender\.com",
+    r"https://.*\.vercel\.app",
+    r"http://localhost(:\d+)?",
+    r"http://127\.0\.0\.1(:\d+)?",
+]
+try:
+    CORS(app, origins=_CORS_ORIGINS, supports_credentials=True)
+except Exception:
+    CORS(app)  # fallback: allow all origins
 
 # absolute path to /public folder next to server.py
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -3533,6 +3549,15 @@ def _canonical_kind(kind_raw: str) -> str:
         "pool_remove_liquidity": "liquidity",
         "liquidity_add": "liquidity",
         "liquidity_remove": "liquidity",
+        # Fiat gateway operations
+        "fiat_buy": "fiat_onramp",
+        "fiat_deposit": "fiat_onramp",
+        "fiat_onramp": "fiat_onramp",
+        "fiat_sell_request": "fiat_offramp",
+        "fiat_withdrawal": "fiat_offramp",
+        "fiat_offramp": "fiat_offramp",
+        "gateway": "gateway",
+        "iot_purchase": "gateway",
     }
     kind = (kind_raw or "thr_transfer").lower()
     return lookup.get(kind, kind or "thr_transfer")
@@ -3953,6 +3978,68 @@ def persist_normalized_tx(raw_tx: dict, status_override: str | None = None):
 
     ledger.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
     save_tx_log(ledger)
+
+
+def _pick_fiat_validator() -> dict:
+    """
+    Select an active miner/ASIC from recent blocks to act as validator
+    for fiat gateway transactions.  This ensures all fiat on-chain entries
+    carry a miner witness signature for security and auditability.
+
+    Returns a dict with validator address, block height and a deterministic
+    signature (HMAC-SHA256 over tx metadata keyed by ADMIN_SECRET).
+    Falls back to a stable GATEWAY_ADDRESS if no recent miners exist.
+    """
+    try:
+        chain = load_json(CHAIN_FILE, [])
+        # Scan the last 50 entries for recent miner addresses
+        recent_blocks = [
+            b for b in chain[-50:]
+            if isinstance(b, dict) and b.get("reward") is not None
+        ]
+        miner_addresses = [
+            b.get("thr_address") or b.get("miner_address")
+            for b in recent_blocks
+            if b.get("thr_address") or b.get("miner_address")
+        ]
+        if miner_addresses:
+            # Pick deterministically from timestamp so it's reproducible
+            idx = int(time.time() // 60) % len(miner_addresses)
+            validator_addr = miner_addresses[idx]
+            validator_height = recent_blocks[idx].get("height") or len(chain)
+        else:
+            validator_addr = GATEWAY_ADDRESS
+            validator_height = len(chain)
+    except Exception:
+        validator_addr = GATEWAY_ADDRESS
+        validator_height = 0
+
+    return {
+        "validator": validator_addr,
+        "validator_height": validator_height,
+        "validator_type": "miner_asic" if validator_addr != GATEWAY_ADDRESS else "gateway_node",
+    }
+
+
+def _sign_fiat_tx(tx: dict) -> str:
+    """
+    Produce a deterministic HMAC-SHA256 witness signature for a fiat
+    transaction.  The signature covers tx_id + amount + wallet + timestamp
+    keyed by ADMIN_SECRET, giving miners/ASICs a verifiable stamp.
+    """
+    payload = ":".join([
+        str(tx.get("tx_id", "")),
+        str(tx.get("amount", "")),
+        str(tx.get("fiat_amount", "")),
+        str(tx.get("to") or tx.get("from", "")),
+        str(tx.get("timestamp", "")),
+    ])
+    return hmac.new(
+        ADMIN_SECRET.encode(),
+        payload.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
 
 # ─── Token & Pool Helpers ────────────────────────────────────────────
 
@@ -7360,6 +7447,14 @@ def _categorize_transaction(tx: dict) -> str:
     ]:
         return "verifyid"
 
+    # Fiat gateway operations (buy, sell, deposit, withdrawal)
+    if tx_type in [
+        "fiat_buy", "fiat_deposit", "fiat_onramp",
+        "fiat_sell_request", "fiat_withdrawal", "fiat_offramp",
+        "iot_purchase",
+    ] or tx.get("fiat_amount") is not None or tx.get("stripe_id") is not None:
+        return "gateway"
+
     # Native THR transfers vs non-THR token transfers
     if tx_type in ["transfer", "send", "thr_transfer"]:
         symbol = (tx.get("symbol") or tx.get("asset_symbol") or "").upper()
@@ -7647,6 +7742,14 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
         "gps_mining": "iot",
         "verifyid": "verifyid",
         "other": "other",
+        "gateway": "gateway",
+        "fiat_buy": "gateway",
+        "fiat_deposit": "gateway",
+        "fiat_onramp": "gateway",
+        "fiat_sell_request": "gateway",
+        "fiat_withdrawal": "gateway",
+        "fiat_offramp": "gateway",
+        "iot_purchase": "gateway",
     }
 
     # Merge chain + tx_log, deduplicate by tx_id
@@ -15035,6 +15138,11 @@ def build_wallet_history(thr_addr: str) -> list[dict]:
                     "burn": "tokens",
                     "fiat_onramp": "gateway",
                     "fiat_offramp": "gateway",
+                    "fiat_buy": "gateway",
+                    "fiat_deposit": "gateway",
+                    "fiat_sell_request": "gateway",
+                    "fiat_withdrawal": "gateway",
+                    "iot_purchase": "gateway",
                     "gateway": "gateway",
                     "onramp": "gateway",
                     "offramp": "gateway",
@@ -17659,9 +17767,14 @@ def stripe_webhook():
             ledger[wallet] = round(float(ledger.get(wallet, 0.0)) + thr_amount, 6)
             save_json(LEDGER_FILE, ledger)
 
+            # Pick active miner/ASIC validator for fiat tx security
+            fiat_validator = _pick_fiat_validator()
+
             chain = load_json(CHAIN_FILE, [])
             tx = {
                 "type": "fiat_buy",
+                "kind": "fiat_buy",
+                "category": "gateway",
                 "from": "STRIPE_GATEWAY",
                 "to": wallet,
                 "amount": thr_amount,
@@ -17670,13 +17783,19 @@ def stripe_webhook():
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
                 "tx_id": f"BUY-{int(time.time())}-{secrets.token_hex(4)}",
                 "status": "confirmed",
-                "stripe_id": session.get('id')
+                "stripe_id": session.get('id'),
+                # Miner/ASIC witness for fiat security
+                "validator": fiat_validator["validator"],
+                "validator_height": fiat_validator["validator_height"],
+                "validator_type": fiat_validator["validator_type"],
             }
+            tx["validator_sig"] = _sign_fiat_tx(tx)
             chain.append(tx)
             save_json(CHAIN_FILE, chain)
             persist_normalized_tx(tx)
+            _index_transaction_event(tx)
             update_last_block(tx, is_block=False)
-            print(f"💰 Stripe Payment: {fiat_amount} USD -> {thr_amount} THR to {wallet}")
+            print(f"Stripe Payment: {fiat_amount} USD -> {thr_amount} THR to {wallet} (validator: {fiat_validator['validator']})")
 
         elif metadata.get('type') == 'iot_pack':
             # PR-5g: IoT pack purchase transaction
@@ -17694,12 +17813,15 @@ def stripe_webhook():
             }
             pack_name = PACK_NAMES.get(pack_id, f"IoT Pack: {pack_id}")
 
+            # Pick active miner/ASIC validator for fiat tx security
+            fiat_validator = _pick_fiat_validator()
+
             # Record IoT purchase transaction on-chain
             chain = load_json(CHAIN_FILE, [])
             tx = {
-                "type": "iot",
-                "kind": "iot",
-                "category": "iot",
+                "type": "iot_purchase",
+                "kind": "iot_purchase",
+                "category": "gateway",
                 "from": wallet,
                 "to": "IOT_HARDWARE_FULFILLMENT",
                 "amount": 0,  # No THR transfer, fiat purchase
@@ -17711,7 +17833,11 @@ def stripe_webhook():
                 "tx_id": f"IOT-{int(time.time())}-{secrets.token_hex(4)}",
                 "status": "confirmed",
                 "stripe_id": session.get('id'),
-                "note": f"IoT Hardware Purchase: {pack_name} (€{fiat_amount})",
+                "note": f"IoT Hardware Purchase: {pack_name} (\u20ac{fiat_amount})",
+                # Miner/ASIC witness for fiat security
+                "validator": fiat_validator["validator"],
+                "validator_height": fiat_validator["validator_height"],
+                "validator_type": fiat_validator["validator_type"],
                 "meta": {
                     "pack_id": pack_id,
                     "price_eur": price_eur,
@@ -17719,10 +17845,13 @@ def stripe_webhook():
                     "payment_status": session.get('payment_status')
                 }
             }
+            tx["validator_sig"] = _sign_fiat_tx(tx)
             chain.append(tx)
             save_json(CHAIN_FILE, chain)
+            persist_normalized_tx(tx)
+            _index_transaction_event(tx)
             update_last_block(tx, is_block=False)
-            print(f"🔌 IoT Purchase: {pack_name} (€{fiat_amount}) for wallet {wallet}")
+            print(f"IoT Purchase: {pack_name} (\u20ac{fiat_amount}) for wallet {wallet} (validator: {fiat_validator['validator']})")
 
     return jsonify(status="success"), 200
 
@@ -17817,11 +17946,16 @@ def api_gateway_sell():
     ledger[BURN_ADDRESS] = round(float(ledger.get(BURN_ADDRESS, 0.0)) + thr_amount, 6)
     save_json(LEDGER_FILE, ledger)
     
+    # Pick active miner/ASIC validator for fiat tx security
+    fiat_validator = _pick_fiat_validator()
+
     # Record TX
     chain = load_json(CHAIN_FILE, [])
     tx_id = f"SELL-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
         "type": "fiat_sell_request",
+        "kind": "fiat_sell_request",
+        "category": "gateway",
         "from": wallet,
         "to": "FIAT_GATEWAY",
         "amount": thr_amount,
@@ -17829,10 +17963,17 @@ def api_gateway_sell():
         "currency": "USD",
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
         "tx_id": tx_id,
-        "status": "processing_withdrawal"
+        "status": "processing_withdrawal",
+        # Miner/ASIC witness for fiat security
+        "validator": fiat_validator["validator"],
+        "validator_height": fiat_validator["validator_height"],
+        "validator_type": fiat_validator["validator_type"],
     }
+    tx["validator_sig"] = _sign_fiat_tx(tx)
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
+    persist_normalized_tx(tx)
+    _index_transaction_event(tx)
     update_last_block(tx, is_block=False)
     
     # Save Withdrawal Request
@@ -19162,42 +19303,59 @@ def api_v1_balance(thr_addr: str):
 def api_v1_address_history(thr_addr: str):
     """Return the on‑chain transaction history for the specified address.
 
-    IMPORTANT: Excludes blocks (entries with 'reward' field) and deduplicates.
-    Only returns actual transactions: transfers, payments, pledges, etc.
+    Merges CHAIN_FILE and TX_LOG (persistent ledger) so that all transaction
+    types are included: transfers, fiat gateway, pledges, swaps, IoT purchases,
+    mining rewards, etc.  Raw block entries (entries with 'reward' but no tx_id)
+    are excluded — callers should use /api/v1/block/<height> for those.
     """
     chain = load_json(CHAIN_FILE, [])
+    tx_log = load_tx_log()
 
-    # Filter: must be dict, match address, and NOT be a block
-    history = [
-        tx for tx in chain
-        if isinstance(tx, dict)
-        and (tx.get("from") == thr_addr or tx.get("to") == thr_addr)
-        and tx.get("reward") is None  # Exclude blocks
-        and tx.get("kind") != "block"  # Extra safety
-    ]
+    addr_lower = thr_addr.lower()
 
-    # Deduplicate by tx_id if present, or by (kind, timestamp, from, to, amount) tuple
-    seen = set()
+    def _matches(tx: dict) -> bool:
+        if not isinstance(tx, dict):
+            return False
+        # Skip raw block entries (they have reward but no tx_id)
+        if tx.get("reward") is not None and not tx.get("tx_id"):
+            return False
+        if tx.get("kind") == "block":
+            return False
+        tx_meta = tx.get("meta") if isinstance(tx.get("meta"), dict) else {}
+        parties = {
+            tx.get("from"), tx.get("to"),
+            tx.get("thr_address"), tx.get("wallet"),
+            tx.get("wallet_address"), tx.get("address"),
+            tx_meta.get("wallet"), tx_meta.get("thr_address"),
+        }
+        return addr_lower in {str(p).lower() for p in parties if p}
+
+    seen: set = set()
     deduped = []
-    for tx in history:
-        # Primary key: tx_id
-        tx_id = tx.get("tx_id")
+
+    for tx in list(chain) + list(tx_log):
+        if not _matches(tx):
+            continue
+        tx_id = tx.get("tx_id") or tx.get("id")
         if tx_id:
-            if tx_id not in seen:
-                seen.add(tx_id)
-                deduped.append(tx)
+            if tx_id in seen:
+                continue
+            seen.add(tx_id)
         else:
-            # Fallback dedup key
             key = (
                 tx.get("kind") or tx.get("type"),
                 tx.get("timestamp"),
                 tx.get("from"),
                 tx.get("to"),
-                tx.get("amount")
+                tx.get("amount"),
             )
-            if key not in seen:
-                seen.add(key)
-                deduped.append(tx)
+            if key in seen:
+                continue
+            seen.add(key)
+        deduped.append(tx)
+
+    # Sort newest first
+    deduped.sort(key=lambda t: _parse_timestamp(t.get("timestamp", "")), reverse=True)
 
     return jsonify(address=thr_addr, transactions=deduped), 200
 

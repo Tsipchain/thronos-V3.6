@@ -3660,7 +3660,9 @@ function getTxType(tx) {
 
     // === GATEWAY (Fiat on/off ramp) ===
     if (raw === 'fiat_onramp' || raw === 'fiat_offramp' || raw === 'gateway' ||
-        raw === 'onramp' || raw === 'offramp' || category === 'gateway') {
+        raw === 'onramp' || raw === 'offramp' || raw === 'fiat_buy' ||
+        raw === 'fiat_deposit' || raw === 'fiat_sell_request' || raw === 'fiat_withdrawal' ||
+        raw === 'iot_purchase' || category === 'gateway') {
         return 'gateway';
     }
 

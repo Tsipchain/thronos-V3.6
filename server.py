@@ -1,8 +1,10 @@
-from flask import Flask
+from flask import Flask, request, Response
 
-# ... all your existing imports ...
+# ... all your existing imports ... 
 
-# ... your existing Flask app creation and routes ...
+app = Flask(__name__)
+
+# ... all your existing app setup, routes, blueprints, config ...
 
 # --- AI Core integration (add at the end, after all routes are defined) ---
 

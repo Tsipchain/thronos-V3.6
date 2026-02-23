@@ -9,7 +9,7 @@ Single source of truth in repo:
 |---|---|---|---|---|
 | `api.thronoschain.org` | Railway (Flask) | Primary API | `https://api.thronoschain.org/health` | `/api/health` |
 | `ro.api.thronoschain.org` | Railway (Flask) | Read-only API | `https://ro.api.thronoschain.org/health` | `/api/health` |
-| `verifyid-api.thronoschain.org` | Railway (Flask) | VerifyID API | `https://verifyid-api.thronoschain.org/health` | none |
+| `verifyid-api.thronoschain.org` | Railway (FastAPI) | VerifyID API | `https://verifyid-api.thronoschain.org/api/v1/health` | `/health` |
 | `btc-api.thronoschain.org` | Railway (Flask) | BTC Adapter API | `https://btc-api.thronoschain.org/health` | `/api/health` |
 | `ai.thronoschain.org` | Render (FastAPI/Flask edge) | AI Core | `https://ai.thronoschain.org/health` | `/api/health` |
 | `sentinel.thronoschain.org` | Render (FastAPI) | Sentinel | `https://sentinel.thronoschain.org/health` | `/api/health` |

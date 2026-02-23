@@ -129,7 +129,14 @@ def stats_summary():
 
     try:
         from server import CHAIN_FILE, HEIGHT_OFFSET, LEDGER_FILE, PLEDGE_CHAIN, load_json
+    except ImportError:
+        # Not a blockchain node (e.g. running as AI Core via serv3r.py)
+        return jsonify({
+            "error": "stats_unavailable",
+            "message": "Chain stats are only available on blockchain nodes",
+        }), 503
 
+    try:
         ledger = load_json(LEDGER_FILE, {})
         chain = load_json(CHAIN_FILE, [])
         pledges = load_json(PLEDGE_CHAIN, [])

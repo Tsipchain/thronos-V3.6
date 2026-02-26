@@ -781,6 +781,7 @@ IOT_SUMMARY_LIMIT_PER_DEVICE = int(_strip_env_quotes(os.getenv("IOT_SUMMARY_LIMI
 MEMPOOL_FILE        = os.path.join(DATA_DIR, "mempool.json")
 ATTEST_STORE_FILE   = os.path.join(DATA_DIR, "attest_store.json")
 MAIL_ATTESTATIONS_FILE = os.path.join(DATA_DIR, "mail_attestations.json")
+MAIL_ATTEST_MIN_SIGNERS = int(os.getenv("MAIL_ATTEST_MIN_SIGNERS", "2") or 2)
 TX_LOG_FILE         = os.path.join(DATA_DIR, "tx_ledger.json")
 WITHDRAWALS_FILE    = os.path.join(DATA_DIR, "withdrawals.json") # NEW
 VOTING_FILE         = os.path.join(DATA_DIR, "voting.json") # Feature voting for Crypto Hunters
@@ -3515,6 +3516,7 @@ def _canonical_kind(kind_raw: str) -> str:
         "ai_credits_earned": "ai_credits",
         "ai_credits_spent": "ai_credits",
         "ai_credits_refund": "ai_credits",
+        "mail_attestation": "mail_attestation",
         "ai_job_created": "architect_ai_jobs",
         "ai_job_progress": "architect_ai_jobs",
         "ai_job_completed": "architect_ai_jobs",
@@ -3829,6 +3831,29 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         norm["asset"] = "L2E"
         norm["token_symbol"] = "L2E"
         norm["display_amount"] = amount or tx.get("reward", 0)
+
+    if tx_type_raw == "mail_attestation":
+        details_payload = tx.get("details") if isinstance(tx.get("details"), dict) else {}
+        tenant_id = tx.get("tenantId") or details_payload.get("tenantId")
+        order_id = tx.get("orderId") or details_payload.get("orderId")
+        mail_subject = tx.get("subject") or details_payload.get("subject")
+        mail_hash = tx.get("mail_attestation_hash")
+
+        norm["kind"] = norm["type"] = "mail_attestation"
+        norm["asset"] = "MAIL"
+        norm["token_symbol"] = "MAIL"
+        norm["is_system"] = True
+        norm["meta"].update({
+            "tenantId": tenant_id,
+            "orderId": order_id,
+            "subject": mail_subject,
+            "mailHash": mail_hash,
+        })
+        norm["tenantId"] = tenant_id
+        norm["orderId"] = order_id
+        norm["subject"] = mail_subject
+        norm["mailHash"] = mail_hash
+        norm["display_amount"] = 0.0
 
     # AI credits / services
     if tx_type_raw in ("credits_consume", "service_payment", "ai_knowledge", "ai_credit", "ai_credits", "ai_credits_earned", "ai_credits_spent", "ai_credits_refund"):
@@ -4787,6 +4812,19 @@ def load_mail_attestations():
 
 def save_mail_attestations(items):
     save_json(MAIL_ATTESTATIONS_FILE, items)
+
+
+def _require_commerce_api_key(payload_key: str = ""):
+    expected_api_key = _strip_env_quotes(os.getenv("THRONOS_COMMERCE_API_KEY", ""))
+    provided_api_key = (
+        request.headers.get("X-API-Key")
+        or request.headers.get("Authorization", "").replace("Bearer ", "", 1)
+        or payload_key
+        or ""
+    ).strip()
+    if not expected_api_key or not provided_api_key or provided_api_key != expected_api_key:
+        return False
+    return True
 
 # ─── Voting Helpers ─────────────────────────────────────────────────────
 
@@ -6631,6 +6669,7 @@ def get_blocks_for_viewer():
     # Pre-index transactions by height for O(1) lookup instead of O(n) per block
     _TX_TYPES = frozenset((
         "transfer", "coinbase", "service_payment", "ai_knowledge",
+        "mail_attestation",
         "token_transfer", "token_create", "token_mint", "token_burn",
         "swap", "bridge",
     ))
@@ -6770,6 +6809,7 @@ def get_transactions_for_viewer():
         "swap",
         "bridge",
         "ai_credits",
+        "mail_attestation",
         "l2e",
         "iot",
         "autopilot",
@@ -18189,16 +18229,14 @@ def api_mail_attest():
     recipients = data.get("to")
     subject = (data.get("subject") or "").strip()
     timestamp = (data.get("timestamp") or "").strip()
-    canonical_hash = (data.get("hash") or "").strip()
+    canonical_hash = (data.get("canonicalHash") or data.get("hash") or "").strip()
+    tenant_id = (data.get("tenantId") or "").strip()
 
-    if not sender or not subject or not timestamp or not canonical_hash:
-        return jsonify(error="missing_fields", required=["from", "to", "subject", "timestamp", "hash"]), 400
+    if not sender or not subject or not timestamp or not canonical_hash or not tenant_id:
+        return jsonify(error="missing_fields", required=["from", "to", "subject", "timestamp", "canonicalHash", "tenantId"]), 400
     if not isinstance(recipients, list) or not recipients:
         return jsonify(error="invalid_to", details="'to' must be a non-empty list"), 400
-
-    expected_api_key = _strip_env_quotes(os.getenv("THRONOS_COMMERCE_API_KEY", ""))
-    provided_api_key = (data.get("apiKey") or "").strip()
-    if provided_api_key and expected_api_key and provided_api_key != expected_api_key:
+    if not _require_commerce_api_key(str(data.get("apiKey") or "")):
         return jsonify(error="unauthorized"), 401
 
     canonical_payload = {
@@ -18207,9 +18245,9 @@ def api_mail_attest():
         "subject": subject,
         "messageId": data.get("messageId"),
         "timestamp": timestamp,
-        "hash": canonical_hash,
+        "canonicalHash": canonical_hash,
         "orderId": data.get("orderId"),
-        "tenantId": data.get("tenantId"),
+        "tenantId": tenant_id,
         "meta": data.get("meta") if isinstance(data.get("meta"), dict) else {},
     }
     canonical_json = json.dumps(canonical_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -18217,18 +18255,15 @@ def api_mail_attest():
 
     attestation_id = f"mailatt-{uuid.uuid4().hex[:16]}"
     mail_attestation = {
-        "id": attestation_id,
+        "attestationId": attestation_id,
         "from": sender,
         "to": recipients,
         "subject": subject,
-        "messageId": data.get("messageId"),
-        "orderId": data.get("orderId"),
-        "tenantId": data.get("tenantId"),
         "timestamp": timestamp,
+        "tenantId": tenant_id,
         "canonicalHash": canonical_hash,
         "finalHash": final_hash,
         "meta": canonical_payload["meta"],
-        "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 
     attestations = load_mail_attestations()
@@ -18239,7 +18274,7 @@ def api_mail_attest():
     pool.append({
         "type": "mail_attestation",
         "height": None,
-        "timestamp": mail_attestation["createdAt"],
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "from": sender,
         "to": AI_WALLET_ADDRESS,
         "amount": 0.0,
@@ -18248,18 +18283,48 @@ def api_mail_attest():
         "mail_attestation_id": attestation_id,
         "mail_attestation_hash": final_hash,
         "mail_attestation_payload": canonical_json,
+        "details": {
+            "kind": "mail_attestation",
+            "tenantId": tenant_id,
+            "orderId": data.get("orderId"),
+            "subject": subject,
+        },
+        "note": f"Mail attestation for {tenant_id}",
         "status": "pending",
-        "confirmation_policy": "FAST",
-        "min_signers": 0,
+        "confirmation_policy": "QUORUM",
+        "min_signers": max(1, MAIL_ATTEST_MIN_SIGNERS),
     })
     save_mempool(pool)
 
     logger.info(
-        f"[MAIL_ATTEST] tenant={mail_attestation.get('tenantId') or '-'} "
-        f"order={mail_attestation.get('orderId') or '-'} hash={final_hash}"
+        f"[MAIL_ATTEST] tenant={tenant_id} order={data.get('orderId') or '-'} hash={final_hash}"
     )
 
     return jsonify(ok=True, attestationId=attestation_id, hash=final_hash), 200
+
+
+@app.route("/api/mail/attestations", methods=["GET"])
+def api_mail_attestations():
+    if not _require_commerce_api_key(str(request.args.get("apiKey") or "")):
+        return jsonify(error="unauthorized"), 401
+
+    tenant_id = (request.args.get("tenant") or "").strip()
+    if not tenant_id:
+        return jsonify(error="missing_tenant"), 400
+
+    try:
+        limit = int(request.args.get("limit", 50))
+    except Exception:
+        limit = 50
+    limit = max(1, min(limit, 200))
+
+    tenant_rows = [
+        row for row in load_mail_attestations()
+        if isinstance(row, dict) and (row.get("tenantId") or "").strip() == tenant_id
+    ]
+    tenant_rows.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+
+    return jsonify(ok=True, tenant=tenant_id, count=min(len(tenant_rows), limit), items=tenant_rows[:limit]), 200
 
 @app.route("/api/tx/<tx_id>/verify", methods=["GET"])
 def api_verify_tx_sig(tx_id):

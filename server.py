@@ -530,7 +530,7 @@ APP_GIT_SHA     = (
 
 AI_LOG_API_KEY = os.getenv("AI_LOG_API_KEY", os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW"))
 
-DATA_DIR = os.getenv("THRC_DATA_ROOT", os.getenv("MUSIC_VOLUME", os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data"))))
+DATA_DIR = os.getenv("MUSIC_VOLUME", os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data")))
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # Unified media root (persists on Railway volume)

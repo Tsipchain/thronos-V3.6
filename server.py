@@ -530,7 +530,7 @@ APP_GIT_SHA     = (
 
 AI_LOG_API_KEY = os.getenv("AI_LOG_API_KEY", os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW"))
 
-DATA_DIR = os.getenv("MUSIC_VOLUME", os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data")))
+DATA_DIR = os.getenv("THRC_DATA_ROOT", os.getenv("MUSIC_VOLUME", os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data"))))
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # Unified media root (persists on Railway volume)
@@ -634,6 +634,7 @@ if "localhost" in MASTER_INTERNAL_URL.lower() or "127.0.0.1" in MASTER_INTERNAL_
 
 MASTER_PUBLIC_URL = os.getenv("MASTER_PUBLIC_URL", MASTER_INTERNAL_URL)
 READ_NODE_URL = os.getenv("READ_NODE_URL", MASTER_PUBLIC_URL)
+THRONOS_NODE_URL = os.getenv("THRONOS_NODE_URL", MASTER_PUBLIC_URL)
 PUBLIC_URL = os.getenv("PUBLIC_URL", "")
 MEDIA_URL = os.getenv("MEDIA_URL", MASTER_PUBLIC_URL)
 LEADER_URL = os.getenv("LEADER_URL", MASTER_INTERNAL_URL)
@@ -780,6 +781,7 @@ IOT_SUMMARY_WINDOW_MINUTES = int(_strip_env_quotes(os.getenv("IOT_SUMMARY_WINDOW
 IOT_SUMMARY_LIMIT_PER_DEVICE = int(_strip_env_quotes(os.getenv("IOT_SUMMARY_LIMIT_PER_DEVICE", "50")) or 50)
 MEMPOOL_FILE        = os.path.join(DATA_DIR, "mempool.json")
 ATTEST_STORE_FILE   = os.path.join(DATA_DIR, "attest_store.json")
+MAIL_ATTESTATIONS_FILE = os.path.join(DATA_DIR, "mail_attestations.json")
 TX_LOG_FILE         = os.path.join(DATA_DIR, "tx_ledger.json")
 WITHDRAWALS_FILE    = os.path.join(DATA_DIR, "withdrawals.json") # NEW
 VOTING_FILE         = os.path.join(DATA_DIR, "voting.json") # Feature voting for Crypto Hunters
@@ -4780,6 +4782,12 @@ def load_attest_store():
 
 def save_attest_store(store):
     save_json(ATTEST_STORE_FILE, store)
+
+def load_mail_attestations():
+    return load_json(MAIL_ATTESTATIONS_FILE, [])
+
+def save_mail_attestations(items):
+    save_json(MAIL_ATTESTATIONS_FILE, items)
 
 # ─── Voting Helpers ─────────────────────────────────────────────────────
 
@@ -18173,6 +18181,99 @@ def api_attest():
         tx["status"]="quoruming"
     save_mempool([t if t.get("tx_id")!=tx_id else tx for t in pool])
     return jsonify(status="accepted", collected=len(bucket["items"]), scheme=bucket["scheme"]),200
+
+@app.route("/api/mail/attest", methods=["POST"])
+def api_mail_attest():
+    data = request.get_json() or {}
+
+    sender = (data.get("from") or "").strip()
+    recipients = data.get("to")
+    subject = (data.get("subject") or "").strip()
+    timestamp = (data.get("timestamp") or "").strip()
+    canonical_hash = (data.get("hash") or "").strip()
+    tenant_id = (data.get("tenantId") or "").strip()
+    order_id = str(data.get("orderId") or "").strip()
+
+    if not sender or not subject or not timestamp or not canonical_hash:
+        return jsonify(error="missing_fields", required=["from", "to", "subject", "timestamp", "hash"]), 400
+    if not isinstance(recipients, list) or not recipients:
+        return jsonify(error="invalid_to", details="'to' must be a non-empty list"), 400
+
+    expected_api_key = _strip_env_quotes(os.getenv("THRONOS_COMMERCE_API_KEY", ""))
+    provided_api_key = (data.get("apiKey") or "").strip()
+    if (not expected_api_key) or provided_api_key != expected_api_key:
+        return jsonify(error="unauthorized"), 401
+
+    canonical_payload = {
+        "from": sender,
+        "to": recipients,
+        "subject": subject,
+        "timestamp": timestamp,
+        "tenantId": tenant_id,
+        "canonicalHash": canonical_hash,
+        "meta": data.get("meta") if isinstance(data.get("meta"), dict) else {},
+    }
+    canonical_json = json.dumps(canonical_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    final_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+    attestation_id = f"mailatt-{uuid.uuid4().hex[:16]}"
+    mail_attestation = {
+        "attestationId": attestation_id,
+        "from": sender,
+        "to": recipients,
+        "subject": subject,
+        "timestamp": timestamp,
+        "tenantId": tenant_id,
+        "canonicalHash": canonical_hash,
+        "finalHash": final_hash,
+        "meta": canonical_payload["meta"],
+    }
+
+    attestations = load_mail_attestations()
+    attestations.append(mail_attestation)
+    save_mail_attestations(attestations)
+
+    pool = load_mempool()
+    pool.append({
+        "type": "mail_attestation",
+        "height": None,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "from": sender,
+        "to": AI_WALLET_ADDRESS,
+        "amount": 0.0,
+        "fee_burned": 0.0,
+        "tx_id": f"MAIL-{attestation_id}",
+        "mail_attestation_id": attestation_id,
+        "mail_attestation_hash": final_hash,
+        "mail_attestation_payload": json.dumps(mail_attestation, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        "status": "pending",
+        "confirmation_policy": "FAST",
+        "min_signers": 0,
+    })
+    save_mempool(pool)
+
+    logger.info(
+        f"[MAIL_ATTEST] tenant={tenant_id or '-'} "
+        f"order={order_id or '-'} hash={final_hash}"
+    )
+
+    return jsonify(ok=True, attestationId=attestation_id, hash=final_hash), 200
+
+@app.route("/api/mail/attestations", methods=["GET"])
+def api_mail_attestations():
+    tenant_id = (request.args.get("tenant") or "").strip()
+    limit_raw = (request.args.get("limit") or "50").strip()
+
+    try:
+        limit = max(1, min(int(limit_raw), 200))
+    except Exception:
+        limit = 50
+
+    items = load_mail_attestations()
+    if tenant_id:
+        items = [it for it in items if str(it.get("tenantId") or "").strip() == tenant_id]
+
+    return jsonify(ok=True, items=list(reversed(items[-limit:])), count=min(limit, len(items))), 200
 
 @app.route("/api/tx/<tx_id>/verify", methods=["GET"])
 def api_verify_tx_sig(tx_id):

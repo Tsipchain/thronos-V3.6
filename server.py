@@ -781,6 +781,7 @@ IOT_SUMMARY_LIMIT_PER_DEVICE = int(_strip_env_quotes(os.getenv("IOT_SUMMARY_LIMI
 MEMPOOL_FILE        = os.path.join(DATA_DIR, "mempool.json")
 ATTEST_STORE_FILE   = os.path.join(DATA_DIR, "attest_store.json")
 MAIL_ATTESTATIONS_FILE = os.path.join(DATA_DIR, "mail_attestations.json")
+MAIL_ATTEST_MIN_SIGNERS = int(os.getenv("MAIL_ATTEST_MIN_SIGNERS", "2") or 2)
 TX_LOG_FILE         = os.path.join(DATA_DIR, "tx_ledger.json")
 WITHDRAWALS_FILE    = os.path.join(DATA_DIR, "withdrawals.json") # NEW
 VOTING_FILE         = os.path.join(DATA_DIR, "voting.json") # Feature voting for Crypto Hunters
@@ -3830,6 +3831,29 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         norm["asset"] = "L2E"
         norm["token_symbol"] = "L2E"
         norm["display_amount"] = amount or tx.get("reward", 0)
+
+    if tx_type_raw == "mail_attestation":
+        details_payload = tx.get("details") if isinstance(tx.get("details"), dict) else {}
+        tenant_id = tx.get("tenantId") or details_payload.get("tenantId")
+        order_id = tx.get("orderId") or details_payload.get("orderId")
+        mail_subject = tx.get("subject") or details_payload.get("subject")
+        mail_hash = tx.get("mail_attestation_hash")
+
+        norm["kind"] = norm["type"] = "mail_attestation"
+        norm["asset"] = "MAIL"
+        norm["token_symbol"] = "MAIL"
+        norm["is_system"] = True
+        norm["meta"].update({
+            "tenantId": tenant_id,
+            "orderId": order_id,
+            "subject": mail_subject,
+            "mailHash": mail_hash,
+        })
+        norm["tenantId"] = tenant_id
+        norm["orderId"] = order_id
+        norm["subject"] = mail_subject
+        norm["mailHash"] = mail_hash
+        norm["display_amount"] = 0.0
 
     # AI credits / services
     if tx_type_raw in ("credits_consume", "service_payment", "ai_knowledge", "ai_credit", "ai_credits", "ai_credits_earned", "ai_credits_spent", "ai_credits_refund"):
@@ -18267,8 +18291,8 @@ def api_mail_attest():
         },
         "note": f"Mail attestation for {tenant_id}",
         "status": "pending",
-        "confirmation_policy": "FAST",
-        "min_signers": 0,
+        "confirmation_policy": "QUORUM",
+        "min_signers": max(1, MAIL_ATTEST_MIN_SIGNERS),
     })
     save_mempool(pool)
 

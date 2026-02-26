@@ -4789,6 +4789,19 @@ def load_mail_attestations():
 def save_mail_attestations(items):
     save_json(MAIL_ATTESTATIONS_FILE, items)
 
+
+def _require_commerce_api_key(payload_key: str = ""):
+    expected_api_key = _strip_env_quotes(os.getenv("THRONOS_COMMERCE_API_KEY", ""))
+    provided_api_key = (
+        request.headers.get("X-API-Key")
+        or request.headers.get("Authorization", "").replace("Bearer ", "", 1)
+        or payload_key
+        or ""
+    ).strip()
+    if not expected_api_key or not provided_api_key or provided_api_key != expected_api_key:
+        return False
+    return True
+
 # ─── Voting Helpers ─────────────────────────────────────────────────────
 
 def load_voting():
@@ -18192,21 +18205,14 @@ def api_mail_attest():
     recipients = data.get("to")
     subject = (data.get("subject") or "").strip()
     timestamp = (data.get("timestamp") or "").strip()
-    canonical_hash = (data.get("hash") or "").strip()
+    canonical_hash = (data.get("canonicalHash") or data.get("hash") or "").strip()
+    tenant_id = (data.get("tenantId") or "").strip()
 
-    if not sender or not subject or not timestamp or not canonical_hash:
-        return jsonify(error="missing_fields", required=["from", "to", "subject", "timestamp", "hash"]), 400
+    if not sender or not subject or not timestamp or not canonical_hash or not tenant_id:
+        return jsonify(error="missing_fields", required=["from", "to", "subject", "timestamp", "canonicalHash", "tenantId"]), 400
     if not isinstance(recipients, list) or not recipients:
         return jsonify(error="invalid_to", details="'to' must be a non-empty list"), 400
-
-    expected_api_key = _strip_env_quotes(os.getenv("THRONOS_COMMERCE_API_KEY", ""))
-    provided_api_key = (
-        request.headers.get("X-API-Key")
-        or request.headers.get("Authorization", "").replace("Bearer ", "", 1)
-        or data.get("apiKey")
-        or ""
-    ).strip()
-    if not expected_api_key or not provided_api_key or provided_api_key != expected_api_key:
+    if not _require_commerce_api_key(str(data.get("apiKey") or "")):
         return jsonify(error="unauthorized"), 401
 
     canonical_payload = {
@@ -18215,9 +18221,9 @@ def api_mail_attest():
         "subject": subject,
         "messageId": data.get("messageId"),
         "timestamp": timestamp,
-        "hash": canonical_hash,
+        "canonicalHash": canonical_hash,
         "orderId": data.get("orderId"),
-        "tenantId": data.get("tenantId"),
+        "tenantId": tenant_id,
         "meta": data.get("meta") if isinstance(data.get("meta"), dict) else {},
     }
     canonical_json = json.dumps(canonical_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -18230,7 +18236,7 @@ def api_mail_attest():
         "to": recipients,
         "subject": subject,
         "timestamp": timestamp,
-        "tenantId": data.get("tenantId"),
+        "tenantId": tenant_id,
         "canonicalHash": canonical_hash,
         "finalHash": final_hash,
         "meta": canonical_payload["meta"],
@@ -18255,11 +18261,11 @@ def api_mail_attest():
         "mail_attestation_payload": canonical_json,
         "details": {
             "kind": "mail_attestation",
-            "tenantId": data.get("tenantId"),
+            "tenantId": tenant_id,
             "orderId": data.get("orderId"),
             "subject": subject,
         },
-        "note": f"Mail attestation for {data.get('tenantId') or 'unknown-tenant'}",
+        "note": f"Mail attestation for {tenant_id}",
         "status": "pending",
         "confirmation_policy": "FAST",
         "min_signers": 0,
@@ -18267,8 +18273,7 @@ def api_mail_attest():
     save_mempool(pool)
 
     logger.info(
-        f"[MAIL_ATTEST] tenant={mail_attestation.get('tenantId') or '-'} "
-        f"order={data.get('orderId') or '-'} hash={final_hash}"
+        f"[MAIL_ATTEST] tenant={tenant_id} order={data.get('orderId') or '-'} hash={final_hash}"
     )
 
     return jsonify(ok=True, attestationId=attestation_id, hash=final_hash), 200
@@ -18276,14 +18281,7 @@ def api_mail_attest():
 
 @app.route("/api/mail/attestations", methods=["GET"])
 def api_mail_attestations():
-    expected_api_key = _strip_env_quotes(os.getenv("THRONOS_COMMERCE_API_KEY", ""))
-    provided_api_key = (
-        request.headers.get("X-API-Key")
-        or request.headers.get("Authorization", "").replace("Bearer ", "", 1)
-        or request.args.get("apiKey")
-        or ""
-    ).strip()
-    if not expected_api_key or not provided_api_key or provided_api_key != expected_api_key:
+    if not _require_commerce_api_key(str(request.args.get("apiKey") or "")):
         return jsonify(error="unauthorized"), 401
 
     tenant_id = (request.args.get("tenant") or "").strip()

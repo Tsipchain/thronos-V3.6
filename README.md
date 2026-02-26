@@ -489,6 +489,8 @@ NODE_ROLE=replica python server.py
    NODE_ROLE=master
    THRONOS_AI_MODE=production
    SCHEDULER_ENABLED=1
+   THRONOS_NODE_URL=https://thrchain.up.railway.app
+   THRONOS_COMMERCE_API_KEY=<shared-secret-with-commerce>
    [... other env vars ...]
    ```
 

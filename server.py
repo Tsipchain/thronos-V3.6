@@ -781,6 +781,9 @@ IOT_SUMMARY_LIMIT_PER_DEVICE = int(_strip_env_quotes(os.getenv("IOT_SUMMARY_LIMI
 MEMPOOL_FILE        = os.path.join(DATA_DIR, "mempool.json")
 ATTEST_STORE_FILE   = os.path.join(DATA_DIR, "attest_store.json")
 MAIL_ATTESTATIONS_FILE = os.path.join(DATA_DIR, "mail_attestations.json")
+MAIL_ATTEST_MIN_SIGNERS = int(os.getenv("MAIL_ATTEST_MIN_SIGNERS", "2") or 2)
+REFERRAL_ACCOUNTS_FILE = os.path.join(DATA_DIR, "referral_accounts.json")
+REFERRAL_EARNINGS_FILE = os.path.join(DATA_DIR, "referral_earnings.json")
 TX_LOG_FILE         = os.path.join(DATA_DIR, "tx_ledger.json")
 WITHDRAWALS_FILE    = os.path.join(DATA_DIR, "withdrawals.json") # NEW
 VOTING_FILE         = os.path.join(DATA_DIR, "voting.json") # Feature voting for Crypto Hunters
@@ -3515,6 +3518,8 @@ def _canonical_kind(kind_raw: str) -> str:
         "ai_credits_earned": "ai_credits",
         "ai_credits_spent": "ai_credits",
         "ai_credits_refund": "ai_credits",
+        "mail_attestation": "mail_attestation",
+        "referral_earning": "referral_earning",
         "ai_job_created": "architect_ai_jobs",
         "ai_job_progress": "architect_ai_jobs",
         "ai_job_completed": "architect_ai_jobs",
@@ -3830,8 +3835,48 @@ def _normalize_tx_for_display(tx: dict) -> dict | None:
         norm["token_symbol"] = "L2E"
         norm["display_amount"] = amount or tx.get("reward", 0)
 
+    if tx_type_raw == "mail_attestation":
+        details_payload = tx.get("details") if isinstance(tx.get("details"), dict) else {}
+        tenant_id = tx.get("tenantId") or details_payload.get("tenantId")
+        order_id = tx.get("orderId") or details_payload.get("orderId")
+        mail_subject = tx.get("subject") or details_payload.get("subject")
+        mail_hash = tx.get("mail_attestation_hash")
+
+        norm["kind"] = norm["type"] = "mail_attestation"
+        norm["asset"] = "MAIL"
+        norm["token_symbol"] = "MAIL"
+        norm["is_system"] = True
+        norm["meta"].update({
+            "tenantId": tenant_id,
+            "orderId": order_id,
+            "subject": mail_subject,
+            "mailHash": mail_hash,
+        })
+        norm["tenantId"] = tenant_id
+        norm["orderId"] = order_id
+        norm["subject"] = mail_subject
+        norm["mailHash"] = mail_hash
+        norm["display_amount"] = 0.0
+
+    if tx_type_raw == "referral_earning" or kind == "referral_earning" or (tx.get("kind") or "").lower() == "referral_earning":
+        details_payload = tx.get("details") if isinstance(tx.get("details"), dict) else {}
+        norm["kind"] = norm["type"] = "referral_earning"
+        norm["asset"] = "REF"
+        norm["token_symbol"] = "REF"
+        norm["is_system"] = True
+        norm["amount"] = 0.0
+        norm["display_amount"] = 0.0
+        norm["meta"].update({
+            "tenantId": details_payload.get("tenantId") or tx.get("tenantId"),
+            "refCode": details_payload.get("refCode") or tx.get("refCode"),
+            "amountFiat": details_payload.get("amountFiat"),
+            "currency": details_payload.get("currency"),
+            "source": details_payload.get("source"),
+            "externalId": details_payload.get("externalId"),
+        })
+
     # AI credits / services
-    if tx_type_raw in ("credits_consume", "service_payment", "ai_knowledge", "ai_credit", "ai_credits", "ai_credits_earned", "ai_credits_spent", "ai_credits_refund"):
+    if tx_type_raw in ("credits_consume", "service_payment", "ai_knowledge", "ai_credit", "ai_credits", "ai_credits_earned", "ai_credits_spent", "ai_credits_refund") and (tx.get("kind") or "").lower() != "referral_earning":
         norm["kind"] = norm["type"] = "ai_credits"
         norm["asset"] = norm.get("token_symbol") or asset_symbol
         norm["display_amount"] = amount
@@ -4787,6 +4832,52 @@ def load_mail_attestations():
 
 def save_mail_attestations(items):
     save_json(MAIL_ATTESTATIONS_FILE, items)
+
+
+def load_referral_accounts():
+    return load_json(REFERRAL_ACCOUNTS_FILE, {})
+
+
+def save_referral_accounts(data):
+    save_json(REFERRAL_ACCOUNTS_FILE, data)
+
+
+def load_referral_earnings():
+    return load_json(REFERRAL_EARNINGS_FILE, [])
+
+
+def save_referral_earnings(rows):
+    save_json(REFERRAL_EARNINGS_FILE, rows)
+
+
+def _require_commerce_api_key(payload_key: str = ""):
+    expected_api_key = _strip_env_quotes(os.getenv("THRONOS_COMMERCE_API_KEY", ""))
+    provided_api_key = (
+        request.headers.get("X-API-Key")
+        or request.headers.get("Authorization", "").replace("Bearer ", "", 1)
+        or payload_key
+        or ""
+    ).strip()
+    if not expected_api_key or not provided_api_key or provided_api_key != expected_api_key:
+        return False
+    return True
+
+
+def _require_commerce_or_admin_key(payload_key: str = ""):
+    if _require_commerce_api_key(payload_key):
+        return True
+
+    provided = (
+        request.headers.get("X-Admin-Secret")
+        or request.headers.get("X-API-Key")
+        or request.headers.get("Authorization", "").replace("Bearer ", "", 1)
+        or request.args.get("adminSecret")
+        or request.args.get("secret")
+        or payload_key
+        or ""
+    ).strip()
+    expected_admin = (_strip_env_quotes(os.getenv("ADMIN_SECRET", "")) or ADMIN_SECRET or "").strip()
+    return bool(expected_admin and provided and provided == expected_admin)
 
 # ─── Voting Helpers ─────────────────────────────────────────────────────
 
@@ -6631,6 +6722,7 @@ def get_blocks_for_viewer():
     # Pre-index transactions by height for O(1) lookup instead of O(n) per block
     _TX_TYPES = frozenset((
         "transfer", "coinbase", "service_payment", "ai_knowledge",
+        "mail_attestation",
         "token_transfer", "token_create", "token_mint", "token_burn",
         "swap", "bridge",
     ))
@@ -6770,6 +6862,8 @@ def get_transactions_for_viewer():
         "swap",
         "bridge",
         "ai_credits",
+        "mail_attestation",
+        "referral_earning",
         "l2e",
         "iot",
         "autopilot",
@@ -18189,16 +18283,14 @@ def api_mail_attest():
     recipients = data.get("to")
     subject = (data.get("subject") or "").strip()
     timestamp = (data.get("timestamp") or "").strip()
-    canonical_hash = (data.get("hash") or "").strip()
+    canonical_hash = (data.get("canonicalHash") or data.get("hash") or "").strip()
+    tenant_id = (data.get("tenantId") or "").strip()
 
-    if not sender or not subject or not timestamp or not canonical_hash:
-        return jsonify(error="missing_fields", required=["from", "to", "subject", "timestamp", "hash"]), 400
+    if not sender or not subject or not timestamp or not canonical_hash or not tenant_id:
+        return jsonify(error="missing_fields", required=["from", "to", "subject", "timestamp", "canonicalHash", "tenantId"]), 400
     if not isinstance(recipients, list) or not recipients:
         return jsonify(error="invalid_to", details="'to' must be a non-empty list"), 400
-
-    expected_api_key = _strip_env_quotes(os.getenv("THRONOS_COMMERCE_API_KEY", ""))
-    provided_api_key = (data.get("apiKey") or "").strip()
-    if provided_api_key and expected_api_key and provided_api_key != expected_api_key:
+    if not _require_commerce_api_key(str(data.get("apiKey") or "")):
         return jsonify(error="unauthorized"), 401
 
     canonical_payload = {
@@ -18207,9 +18299,9 @@ def api_mail_attest():
         "subject": subject,
         "messageId": data.get("messageId"),
         "timestamp": timestamp,
-        "hash": canonical_hash,
+        "canonicalHash": canonical_hash,
         "orderId": data.get("orderId"),
-        "tenantId": data.get("tenantId"),
+        "tenantId": tenant_id,
         "meta": data.get("meta") if isinstance(data.get("meta"), dict) else {},
     }
     canonical_json = json.dumps(canonical_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -18217,18 +18309,15 @@ def api_mail_attest():
 
     attestation_id = f"mailatt-{uuid.uuid4().hex[:16]}"
     mail_attestation = {
-        "id": attestation_id,
+        "attestationId": attestation_id,
         "from": sender,
         "to": recipients,
         "subject": subject,
-        "messageId": data.get("messageId"),
-        "orderId": data.get("orderId"),
-        "tenantId": data.get("tenantId"),
         "timestamp": timestamp,
+        "tenantId": tenant_id,
         "canonicalHash": canonical_hash,
         "finalHash": final_hash,
         "meta": canonical_payload["meta"],
-        "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 
     attestations = load_mail_attestations()
@@ -18239,7 +18328,7 @@ def api_mail_attest():
     pool.append({
         "type": "mail_attestation",
         "height": None,
-        "timestamp": mail_attestation["createdAt"],
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "from": sender,
         "to": AI_WALLET_ADDRESS,
         "amount": 0.0,
@@ -18248,18 +18337,246 @@ def api_mail_attest():
         "mail_attestation_id": attestation_id,
         "mail_attestation_hash": final_hash,
         "mail_attestation_payload": canonical_json,
+        "details": {
+            "kind": "mail_attestation",
+            "tenantId": tenant_id,
+            "orderId": data.get("orderId"),
+            "subject": subject,
+        },
+        "note": f"Mail attestation for {tenant_id}",
         "status": "pending",
-        "confirmation_policy": "FAST",
-        "min_signers": 0,
+        "confirmation_policy": "QUORUM",
+        "min_signers": max(1, MAIL_ATTEST_MIN_SIGNERS),
     })
     save_mempool(pool)
 
     logger.info(
-        f"[MAIL_ATTEST] tenant={mail_attestation.get('tenantId') or '-'} "
-        f"order={mail_attestation.get('orderId') or '-'} hash={final_hash}"
+        f"[MAIL_ATTEST] tenant={tenant_id} order={data.get('orderId') or '-'} hash={final_hash}"
     )
 
     return jsonify(ok=True, attestationId=attestation_id, hash=final_hash), 200
+
+
+@app.route("/api/mail/attestations", methods=["GET"])
+def api_mail_attestations():
+    if not _require_commerce_api_key(str(request.args.get("apiKey") or "")):
+        return jsonify(error="unauthorized"), 401
+
+    tenant_id = (request.args.get("tenant") or "").strip()
+    if not tenant_id:
+        return jsonify(error="missing_tenant"), 400
+
+    try:
+        limit = int(request.args.get("limit", 50))
+    except Exception:
+        limit = 50
+    limit = max(1, min(limit, 200))
+
+    tenant_rows = [
+        row for row in load_mail_attestations()
+        if isinstance(row, dict) and (row.get("tenantId") or "").strip() == tenant_id
+    ]
+    tenant_rows.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+
+    return jsonify(ok=True, tenant=tenant_id, count=min(len(tenant_rows), limit), items=tenant_rows[:limit]), 200
+
+@app.route(f"{API_BASE_PREFIX}/referrals/register", methods=["POST"])
+def api_referrals_register():
+    data = request.get_json() or {}
+    if not _require_commerce_api_key(str(data.get("apiKey") or "")):
+        return jsonify(error="unauthorized"), 401
+
+    tenant_id = (data.get("tenantId") or "").strip()
+    ref_code = (data.get("refCode") or "").strip()
+    if not tenant_id or not ref_code:
+        return jsonify(error="missing_fields", required=["tenantId", "refCode"]), 400
+
+    percent_raw = data.get("percent")
+    accounts = load_referral_accounts()
+    account = accounts.get(ref_code) if isinstance(accounts, dict) else None
+    if not isinstance(accounts, dict):
+        accounts = {}
+    if not isinstance(account, dict):
+        account = {
+            "code": ref_code,
+            "percent": 0.10,
+            "payoutMode": "offchain_fiat",
+            "wallet": None,
+            "fiatMethod": {},
+            "tenants": [],
+            "totals": {
+                "earnedFiat": 0.0,
+                "paidFiat": 0.0,
+                "earnedTHR": 0.0,
+                "paidTHR": 0.0,
+            },
+        }
+
+    if percent_raw is not None:
+        try:
+            account["percent"] = float(percent_raw)
+        except Exception:
+            return jsonify(error="invalid_percent"), 400
+
+    tenants = account.get("tenants") if isinstance(account.get("tenants"), list) else []
+    if tenant_id not in tenants:
+        tenants.append(tenant_id)
+    account["tenants"] = tenants
+
+    account.setdefault("payoutMode", "offchain_fiat")
+    account.setdefault("totals", {
+        "earnedFiat": 0.0,
+        "paidFiat": 0.0,
+        "earnedTHR": 0.0,
+        "paidTHR": 0.0,
+    })
+    accounts[ref_code] = account
+    save_referral_accounts(accounts)
+
+    return jsonify(ok=True, refCode=ref_code, tenants=tenants), 200
+
+
+@app.route(f"{API_BASE_PREFIX}/referrals/earn", methods=["POST"])
+def api_referrals_earn():
+    data = request.get_json() or {}
+    if not _require_commerce_api_key(str(data.get("apiKey") or "")):
+        return jsonify(error="unauthorized"), 401
+
+    tenant_id = (data.get("tenantId") or "").strip()
+    ref_code = (data.get("refCode") or "").strip()
+    currency = (data.get("currency") or "EUR").strip().upper()
+    source = (data.get("source") or "").strip() or "unknown"
+    external_id = (data.get("externalId") or "").strip()
+    payout_mode = (data.get("payoutMode") or "offchain_fiat").strip() or "offchain_fiat"
+
+    try:
+        amount_fiat = float(data.get("amountFiat") or 0.0)
+    except Exception:
+        return jsonify(error="invalid_amount"), 400
+
+    if not tenant_id or not ref_code or amount_fiat <= 0:
+        return jsonify(error="missing_fields", required=["tenantId", "refCode", "amountFiat"]), 400
+
+    accounts = load_referral_accounts()
+    if not isinstance(accounts, dict):
+        accounts = {}
+    account = accounts.get(ref_code)
+    if not isinstance(account, dict):
+        account = {
+            "code": ref_code,
+            "percent": 0.10,
+            "payoutMode": payout_mode,
+            "wallet": None,
+            "fiatMethod": {},
+            "tenants": [],
+            "totals": {
+                "earnedFiat": 0.0,
+                "paidFiat": 0.0,
+                "earnedTHR": 0.0,
+                "paidTHR": 0.0,
+            },
+        }
+
+    tenants = account.get("tenants") if isinstance(account.get("tenants"), list) else []
+    if tenant_id not in tenants:
+        tenants.append(tenant_id)
+    account["tenants"] = tenants
+    account["payoutMode"] = payout_mode
+
+    earning_id = f"re_{uuid.uuid4().hex[:16]}"
+    now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    row = {
+        "id": earning_id,
+        "tenantId": tenant_id,
+        "refCode": ref_code,
+        "amountFiat": round(amount_fiat, 2),
+        "currency": currency,
+        "source": source,
+        "externalId": external_id,
+        "status": "pending",
+        "payoutMode": payout_mode,
+        "createdAt": now_iso,
+        "paidAt": None,
+        "paidVia": None,
+        "txId": None,
+    }
+
+    earnings = load_referral_earnings()
+    if not isinstance(earnings, list):
+        earnings = []
+    earnings.append(row)
+    save_referral_earnings(earnings)
+
+    totals = account.get("totals") if isinstance(account.get("totals"), dict) else {}
+    totals["earnedFiat"] = round(float(totals.get("earnedFiat", 0.0) or 0.0) + float(row["amountFiat"]), 2)
+    totals.setdefault("paidFiat", 0.0)
+    totals.setdefault("earnedTHR", 0.0)
+    totals.setdefault("paidTHR", 0.0)
+    account["totals"] = totals
+    accounts[ref_code] = account
+    save_referral_accounts(accounts)
+
+    treasury_wallet = (os.getenv("TREASURY_THR_ADDRESS") or AI_WALLET_ADDRESS).strip() or AI_WALLET_ADDRESS
+    pool = load_mempool()
+    pool.append({
+        "type": "service_payment",
+        "kind": "referral_earning",
+        "height": None,
+        "timestamp": now_iso,
+        "from": treasury_wallet,
+        "to": None,
+        "amount": 0.0,
+        "fee_burned": 0.0,
+        "tx_id": f"REF-{earning_id}",
+        "details": {
+            "tenantId": tenant_id,
+            "refCode": ref_code,
+            "amountFiat": row["amountFiat"],
+            "currency": currency,
+            "source": source,
+            "externalId": external_id,
+            "meta": data.get("meta") if isinstance(data.get("meta"), dict) else {},
+        },
+        "status": "pending",
+        "confirmation_policy": "KNOWLEDGE",
+        "min_signers": 0,
+    })
+    save_mempool(pool)
+
+    logger.info(f"[REFERRAL_EARNING] tenant={tenant_id} ref={ref_code} amount={row['amountFiat']} {currency}")
+    return jsonify(ok=True, earning=row), 200
+
+
+@app.route(f"{API_BASE_PREFIX}/referrals/summary", methods=["GET"])
+def api_referrals_summary():
+    if not _require_commerce_or_admin_key(str(request.args.get("apiKey") or "")):
+        return jsonify(error="unauthorized"), 401
+
+    ref_code = (request.args.get("refCode") or "").strip()
+    if not ref_code:
+        return jsonify(error="missing_refCode"), 400
+
+    accounts = load_referral_accounts()
+    account = accounts.get(ref_code) if isinstance(accounts, dict) else None
+    if not isinstance(account, dict):
+        return jsonify(error="unknown_refCode"), 404
+
+    earnings = load_referral_earnings()
+    rows = [r for r in earnings if isinstance(r, dict) and (r.get("refCode") or "").strip() == ref_code] if isinstance(earnings, list) else []
+    rows.sort(key=lambda x: x.get("createdAt", ""), reverse=True)
+
+    pending = [r for r in rows if (r.get("status") or "").lower() == "pending"][:50]
+    paid = [r for r in rows if (r.get("status") or "").lower() == "paid"][:50]
+
+    return jsonify(
+        ok=True,
+        refCode=ref_code,
+        totals=account.get("totals") or {},
+        tenants=account.get("tenants") or [],
+        pending=pending,
+        paid=paid,
+    ), 200
+
 
 @app.route("/api/tx/<tx_id>/verify", methods=["GET"])
 def api_verify_tx_sig(tx_id):

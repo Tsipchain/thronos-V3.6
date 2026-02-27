@@ -6721,10 +6721,22 @@ def get_blocks_for_viewer():
 
     # Pre-index transactions by height for O(1) lookup instead of O(n) per block
     _TX_TYPES = frozenset((
-        "transfer", "coinbase", "service_payment", "ai_knowledge",
+        "transfer",
+        "coinbase",
+        "service_payment",
+        "ai_knowledge",
+        "token_transfer",
+        "token_create",
+        "token_mint",
+        "token_burn",
+        "swap",
+        "bridge",
+        "ai_credits",
         "mail_attestation",
-        "token_transfer", "token_create", "token_mint", "token_burn",
-        "swap", "bridge",
+        "referral_earning",
+        "l2e",
+        "iot",
+        "autopilot",
     ))
     txs_by_height = {}
     raw_blocks = []
@@ -6855,10 +6867,15 @@ def _tx_feed(include_pending: bool = True, include_bridge: bool = True) -> list[
 
 def get_transactions_for_viewer():
     out = []
-    allowed_kinds = {
-        "thr_transfer",
+    _TX_TYPES = frozenset((
         "transfer",
+        "coinbase",
+        "service_payment",
+        "ai_knowledge",
         "token_transfer",
+        "token_create",
+        "token_mint",
+        "token_burn",
         "swap",
         "bridge",
         "ai_credits",
@@ -6867,14 +6884,12 @@ def get_transactions_for_viewer():
         "l2e",
         "iot",
         "autopilot",
-        "parking",
-        "music",
-    }
+    ))
     for norm in _tx_feed():
         kind = _canonical_kind(norm.get("kind") or norm.get("type") or "")
         norm["kind"] = kind or "transfer"
         norm.setdefault("type", norm["kind"])
-        if norm["kind"] not in allowed_kinds:
+        if norm["kind"] not in _TX_TYPES:
             continue
 
         raw_note = norm.get("note") or ""
@@ -18287,9 +18302,14 @@ def api_mail_attest():
     tenant_id = (data.get("tenantId") or "").strip()
 
     if not sender or not subject or not timestamp or not canonical_hash or not tenant_id:
-        return jsonify(error="missing_fields", required=["from", "to", "subject", "timestamp", "canonicalHash", "tenantId"]), 400
+        return jsonify(
+            error="missing_fields",
+            required=["from", "to", "subject", "timestamp", "canonicalHash", "tenantId"],
+        ), 400
+
     if not isinstance(recipients, list) or not recipients:
         return jsonify(error="invalid_to", details="'to' must be a non-empty list"), 400
+
     if not _require_commerce_api_key(str(data.get("apiKey") or "")):
         return jsonify(error="unauthorized"), 401
 
@@ -18304,7 +18324,12 @@ def api_mail_attest():
         "tenantId": tenant_id,
         "meta": data.get("meta") if isinstance(data.get("meta"), dict) else {},
     }
-    canonical_json = json.dumps(canonical_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    canonical_json = json.dumps(
+        canonical_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     final_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
     attestation_id = f"mailatt-{uuid.uuid4().hex[:16]}"
@@ -18313,14 +18338,19 @@ def api_mail_attest():
         "from": sender,
         "to": recipients,
         "subject": subject,
-        "timestamp": timestamp,
+        "messageId": data.get("messageId"),
+        "orderId": data.get("orderId"),
         "tenantId": tenant_id,
+        "timestamp": timestamp,
         "canonicalHash": canonical_hash,
         "finalHash": final_hash,
         "meta": canonical_payload["meta"],
+        "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 
     attestations = load_mail_attestations()
+    if not isinstance(attestations, list):
+        attestations = []
     attestations.append(mail_attestation)
     save_mail_attestations(attestations)
 
@@ -18328,7 +18358,7 @@ def api_mail_attest():
     pool.append({
         "type": "mail_attestation",
         "height": None,
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "timestamp": mail_attestation["createdAt"],
         "from": sender,
         "to": AI_WALLET_ADDRESS,
         "amount": 0.0,
@@ -18373,12 +18403,19 @@ def api_mail_attestations():
     limit = max(1, min(limit, 200))
 
     tenant_rows = [
-        row for row in load_mail_attestations()
+        row
+        for row in load_mail_attestations()
         if isinstance(row, dict) and (row.get("tenantId") or "").strip() == tenant_id
     ]
     tenant_rows.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
 
-    return jsonify(ok=True, tenant=tenant_id, count=min(len(tenant_rows), limit), items=tenant_rows[:limit]), 200
+    return jsonify(
+        ok=True,
+        tenant=tenant_id,
+        count=min(len(tenant_rows), limit),
+        items=tenant_rows[:limit],
+    ), 200
+
 
 @app.route(f"{API_BASE_PREFIX}/referrals/register", methods=["POST"])
 def api_referrals_register():
@@ -18393,9 +18430,10 @@ def api_referrals_register():
 
     percent_raw = data.get("percent")
     accounts = load_referral_accounts()
-    account = accounts.get(ref_code) if isinstance(accounts, dict) else None
     if not isinstance(accounts, dict):
         accounts = {}
+
+    account = accounts.get(ref_code) if isinstance(accounts, dict) else None
     if not isinstance(account, dict):
         account = {
             "code": ref_code,
@@ -18455,7 +18493,10 @@ def api_referrals_earn():
         return jsonify(error="invalid_amount"), 400
 
     if not tenant_id or not ref_code or amount_fiat <= 0:
-        return jsonify(error="missing_fields", required=["tenantId", "refCode", "amountFiat"]), 400
+        return jsonify(
+            error="missing_fields",
+            required=["tenantId", "refCode", "amountFiat"],
+        ), 400
 
     accounts = load_referral_accounts()
     if not isinstance(accounts, dict):
@@ -18562,7 +18603,10 @@ def api_referrals_summary():
         return jsonify(error="unknown_refCode"), 404
 
     earnings = load_referral_earnings()
-    rows = [r for r in earnings if isinstance(r, dict) and (r.get("refCode") or "").strip() == ref_code] if isinstance(earnings, list) else []
+    rows = [
+        r for r in earnings
+        if isinstance(r, dict) and (r.get("refCode") or "").strip() == ref_code
+    ] if isinstance(earnings, list) else []
     rows.sort(key=lambda x: x.get("createdAt", ""), reverse=True)
 
     pending = [r for r in rows if (r.get("status") or "").lower() == "pending"][:50]

@@ -29267,13 +29267,14 @@ def _check_aicore_key() -> bool:
 
 def _ai_call(messages: list, system: str = "", max_tokens: int = 1024, temperature: float = 0.3) -> str:
     mode = (os.getenv("THRONOS_AI_MODE") or "anthropic").lower()
+    # Inject system prompt as a leading system-role message so call_claude() picks it up
+    non_system = [m for m in messages if m.get("role") != "system"]
+    all_msgs = ([{"role": "system", "content": system}] if system else []) + non_system
     if mode == "openai":
-        if system:
-            messages = [{"role": "system", "content": system}] + [m for m in messages if m.get("role") != "system"]
-        res = call_openai_chat(os.getenv("AI_CORE_MODEL", "gpt-4o-mini"), messages,
+        res = call_openai_chat(os.getenv("AI_CORE_MODEL", "gpt-4o-mini"), all_msgs,
                                max_tokens=max_tokens, temperature=temperature)
     else:
-        res = call_claude(os.getenv("AI_CORE_MODEL", "claude-sonnet-4-6"), messages,
+        res = call_claude(os.getenv("AI_CORE_MODEL", "claude-sonnet-4-6"), all_msgs,
                           max_tokens=max_tokens, temperature=temperature)
     return (res or {}).get("content", "")
 
@@ -29329,11 +29330,21 @@ def aicore_assistant_ask():
     if not _check_aicore_key():
         return jsonify({"error": "unauthorized"}), 401
     body = request.get_json(silent=True) or {}
+    role = body.get("role", "agent")
+    context = body.get("context", "")
+    prompt = body.get("prompt", body.get("message", ""))
+    user_content = f"Context: {context}\n\nQuestion: {prompt}" if context else prompt
+    system = (
+        f"You are VerifyID Assistant, a specialized KYC and identity verification AI for {role}s. "
+        "You assist with: document verification, fraud detection, KYC/AML compliance, "
+        "identity checks, risk assessment, and regulatory requirements. "
+        "Provide concise, professional, actionable answers. "
+        "Do not identify yourself as Claude, GPT, or any third-party AI."
+    )
     try:
         answer = _ai_call(
-            [{"role": "user", "content": f"Context: {body.get('context','')}\n\nQuestion: {body.get('prompt','')}"}],
-            system=f"You are a professional KYC assistant for a {body.get('role','agent')}. Be concise and professional.",
-            max_tokens=600, temperature=0.3)
+            [{"role": "user", "content": user_content}],
+            system=system, max_tokens=700, temperature=0.3)
         return jsonify({"answer": answer, "confidence": 0.9, "sources": []})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500

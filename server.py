@@ -29248,6 +29248,205 @@ print("✓ AI Session fixes loaded - supports guest mode and file uploads")
 print("✓ Token Explorer, NFT Marketplace and Governance pages loaded")
 print("✓ Decent Music Platform loaded - artist registration, uploads, and royalties")
 
+# ─── CareerForge + AI-Core external API ──────────────────────────────────────
+# Called by careerForgeThronos-AI (Authorization: Bearer <APP_AI_KEY>)
+# and thronos-verifyid (X-API-Key: <APP_AI_KEY>).
+# LLM keys never leave this node.
+
+_APP_AI_KEY: str = os.getenv("APP_AI_KEY", "").strip()
+
+
+def _check_aicore_key() -> bool:
+    if not _APP_AI_KEY:
+        return True
+    auth = request.headers.get("Authorization", "")
+    bearer = auth[len("Bearer "):].strip() if auth.lower().startswith("bearer ") else ""
+    provided = request.headers.get("X-Internal-Key") or request.headers.get("X-API-Key") or bearer or ""
+    return provided == _APP_AI_KEY
+
+
+def _ai_call(messages: list, system: str = "", max_tokens: int = 1024, temperature: float = 0.3) -> str:
+    mode = (os.getenv("THRONOS_AI_MODE") or "anthropic").lower()
+    if mode == "openai":
+        if system:
+            messages = [{"role": "system", "content": system}] + [m for m in messages if m.get("role") != "system"]
+        res = call_openai_chat(os.getenv("AI_CORE_MODEL", "gpt-4o-mini"), messages,
+                               max_tokens=max_tokens, temperature=temperature)
+    else:
+        res = call_claude(os.getenv("AI_CORE_MODEL", "claude-sonnet-4-6"), messages,
+                          max_tokens=max_tokens, temperature=temperature)
+    return (res or {}).get("content", "")
+
+
+@app.route("/v1/chat/completions", methods=["POST"])
+def aicore_openai_compat():
+    """OpenAI-compatible chat completions proxy (verifyid aihub / OpenAI SDK)."""
+    if not _check_aicore_key():
+        return jsonify({"error": {"message": "Unauthorized", "type": "invalid_api_key"}}), 401
+    body = request.get_json(silent=True) or {}
+    if body.get("stream"):
+        return jsonify({"error": {"message": "Streaming not supported"}}), 400
+    msgs = body.get("messages", [])
+    system = next((m.get("content", "") for m in msgs if m.get("role") == "system"), "")
+    user_msgs = [m for m in msgs if m.get("role") != "system"]
+    try:
+        content = _ai_call(user_msgs, system=system,
+                           max_tokens=int(body.get("max_tokens", 1024)),
+                           temperature=float(body.get("temperature", 0.7)))
+    except Exception as exc:
+        return jsonify({"error": {"message": str(exc)}}), 500
+    import time as _t
+    ts = int(_t.time())
+    return jsonify({"id": f"chatcmpl-thr-{ts}", "object": "chat.completion", "created": ts,
+                    "model": os.getenv("AI_CORE_MODEL", "thronos-ai"),
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": content},
+                                 "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}})
+
+
+@app.route("/v1/fraud/document", methods=["POST"])
+def aicore_fraud_document():
+    """KYC document fraud analysis — thronos-verifyid."""
+    if not _check_aicore_key():
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    try:
+        import json as _j
+        raw = _ai_call([{"role": "user", "content": (
+            f"Analyze document metadata for fraud.\n{_j.dumps(body)[:2000]}\n\n"
+            'Return JSON only: {"fraud_score":0-100,"risk_level":"low|medium|high|critical","explanation":"","flags":[]}'
+        )}], system="You are a document fraud detection AI. Return only valid JSON.",
+            max_tokens=400, temperature=0.1)
+        return jsonify(_j.loads(raw))
+    except Exception as exc:
+        return jsonify({"fraud_score": 50, "risk_level": "medium",
+                        "explanation": f"AI unavailable: {exc}", "flags": []}), 200
+
+
+@app.route("/v1/assistant/ask", methods=["POST"])
+def aicore_assistant_ask():
+    """AI assistant for KYC agents — thronos-verifyid."""
+    if not _check_aicore_key():
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    try:
+        answer = _ai_call(
+            [{"role": "user", "content": f"Context: {body.get('context','')}\n\nQuestion: {body.get('prompt','')}"}],
+            system=f"You are a professional KYC assistant for a {body.get('role','agent')}. Be concise and professional.",
+            max_tokens=600, temperature=0.3)
+        return jsonify({"answer": answer, "confidence": 0.9, "sources": []})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/v1/ats/score", methods=["POST"])
+def aicore_ats_score():
+    """ATS keyword scoring — careerForge."""
+    if not _check_aicore_key():
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    cv = body.get("cv_text", "")
+    kws = ((body.get("job") or {}).get("keywords") or {}).get("hard", [])
+    try:
+        import json as _j
+        raw = _ai_call([{"role": "user", "content": (
+            f"Score CV against job.\nCV:\n{cv[:3000]}\nKeywords: {', '.join(kws[:30])}\n\n"
+            'Return JSON only: {"ats_score":0-100,"keyword_coverage_pct":0.0-1.0,'
+            '"missing_keywords":[],"format_flags":[],'
+            '"evidence_map":[{"requirement":"","covered":true,"where":""}],"recommendations":[]}'
+        )}], system="You are an ATS scoring engine. Return only valid JSON.", max_tokens=800, temperature=0.1)
+        return jsonify(_j.loads(raw))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/v1/job/parse", methods=["POST"])
+def aicore_job_parse():
+    """Parse job description — careerForge."""
+    if not _check_aicore_key():
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    try:
+        import json as _j
+        raw = _ai_call([{"role": "user", "content": (
+            f"Parse job description.\n\n{body.get('raw_text','')[:4000]}\n\n"
+            'Return JSON only: {"company":"","title":"","location":"","employment_type":"",'
+            '"seniority":"","responsibilities":[],"requirements_must":[],'
+            '"requirements_nice":[],"keywords":{"hard":[],"soft":[]}}'
+        )}], system="You are a job description parser. Return only valid JSON.", max_tokens=800, temperature=0.1)
+        return jsonify(_j.loads(raw))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/v1/kit/generate", methods=["POST"])
+def aicore_kit_generate():
+    """Full career kit (CV, cover, outreach, interview) — careerForge."""
+    if not _check_aicore_key():
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    profile = body.get("profile", {})
+    job_parsed = (body.get("job") or {}).get("parsed") or {}
+    name = (profile.get("identity") or {}).get("full_name", "Candidate")
+    kws = ((job_parsed.get("keywords") or {}).get("hard") or [])
+    try:
+        import json as _j
+        raw = _ai_call([{"role": "user", "content": (
+            f"Career kit for {name} → {job_parsed.get('title','role')} at {job_parsed.get('company','company')}.\n"
+            f"Keywords: {', '.join(kws[:20])}\nProfile: {str(profile)[:1500]}\n\n"
+            'Return JSON only: {"cv":{"summary":"","bullets":[],"ats_notes":[]},'
+            '"cover_letter":"","outreach_pack":{"day_0":"","day_5":""},'
+            '"interview_pack":{"technical_topics":[],"behavioral_questions":[],'
+            '"star_stories":[],"questions_to_ask":[]}}'
+        )}], system="You are a professional career coach. Return only valid JSON.", max_tokens=2000, temperature=0.4)
+        return jsonify(_j.loads(raw))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/v1/interview/prepare", methods=["POST"])
+def aicore_interview_prepare():
+    """Interview prep guide — careerForge."""
+    if not _check_aicore_key():
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    ctx = body.get("company_context", {})
+    try:
+        import json as _j
+        raw = _ai_call([{"role": "user", "content": (
+            f"Interview guide for {ctx.get('company','company')} in {ctx.get('domain','tech')}.\n"
+            f"Profile: {str(body.get('profile',{}))[:1000]}\n\n"
+            'Return JSON only: {"technical_topics":[],"behavioral_questions":[],'
+            '"star_stories":[{"title":"","situation":"","task":"","action":"","result":""}],'
+            '"questions_to_ask":[]}'
+        )}], system="You are an expert interview coach. Return only valid JSON.", max_tokens=1200, temperature=0.4)
+        return jsonify(_j.loads(raw))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/v1/outreach/generate", methods=["POST"])
+def aicore_outreach_generate():
+    """Outreach message sequence — careerForge."""
+    if not _check_aicore_key():
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    profile = body.get("profile", {})
+    job_parsed = (body.get("job") or {}).get("parsed") or {}
+    name = (profile.get("identity") or {}).get("full_name", "Candidate")
+    try:
+        import json as _j
+        raw = _ai_call([{"role": "user", "content": (
+            f"{body.get('tone','professional')} {body.get('channel','email')} outreach for "
+            f"{name} → {job_parsed.get('title','role')} at {job_parsed.get('company','company')}.\n"
+            f"Cadence days: {body.get('cadence_days',[0,5,10])}\n\n"
+            'Return JSON array only: [{"day":0,"subject":"","body":""}]'
+        )}], system="You are an expert job application writer. Return only valid JSON array.", max_tokens=800, temperature=0.5)
+        return jsonify(_j.loads(raw))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 # ─── VerifyID Service Integration ─────────────────────────────────────────────
 # Device verification for ASICs, GPS nodes, vehicle nodes, and AI trainers
 try:

@@ -62,7 +62,10 @@ def _check_key(req) -> bool:
     """
     if not INTERNAL_KEY:
         return True
-    provided = req.headers.get("X-Internal-Key") or req.headers.get("X-API-Key") or ""
+    # Accept X-Internal-Key, X-API-Key, or Authorization: Bearer <key>
+    auth_header = req.headers.get("Authorization", "")
+    bearer = auth_header[len("Bearer "):].strip() if auth_header.lower().startswith("bearer ") else ""
+    provided = req.headers.get("X-Internal-Key") or req.headers.get("X-API-Key") or bearer or ""
     return provided == INTERNAL_KEY
 
 
@@ -678,12 +681,234 @@ def create_app() -> Flask:  # noqa: C901
         else:
             return jsonify({"accepted": False, "error": f"UNKNOWN_TX_TYPE: {tx_type}"}), 400
 
+    # ── CareerForge AI endpoints ─────────────────────────────────────────────
+    # careerForgeThronos-AI calls these paths with Authorization: Bearer <key>.
+    # All inference is performed here so LLM keys never leave this node.
+
+    @app.route("/v1/ats/score", methods=["POST"])
+    def careerforge_ats_score():
+        """ATS keyword scoring — score a CV against a parsed job description."""
+        if not _check_key(request):
+            return jsonify({"error": "unauthorized"}), 401
+        body = request.get_json(silent=True) or {}
+        cv_text = body.get("cv_text", "")
+        job = body.get("job", {})
+        keywords = job.get("keywords", {}).get("hard", [])
+        try:
+            result = _call_ai(
+                [{"role": "user", "content": (
+                    f"Score this CV against the job requirements.\n\n"
+                    f"CV:\n{cv_text[:3000]}\n\n"
+                    f"Required keywords: {', '.join(keywords[:30])}\n\n"
+                    "Return JSON only with keys: ats_score (0-100), keyword_coverage_pct (0.0-1.0), "
+                    "missing_keywords (list), format_flags (list), evidence_map (list of {requirement,covered,where}), "
+                    "recommendations (list of strings). No markdown."
+                )}],
+                system="You are an ATS (Applicant Tracking System) scoring engine. Return only valid JSON.",
+                max_tokens=800,
+                temperature=0.1,
+            )
+            import json as _json
+            return jsonify(_json.loads(result["content"]))
+        except Exception as exc:
+            logger.error("[careerforge/ats_score] %s", exc)
+            return jsonify({"error": str(exc)}), 500
+
+    @app.route("/v1/job/parse", methods=["POST"])
+    def careerforge_job_parse():
+        """Parse a raw job description into structured fields."""
+        if not _check_key(request):
+            return jsonify({"error": "unauthorized"}), 401
+        body = request.get_json(silent=True) or {}
+        raw_text = body.get("raw_text", "")
+        try:
+            result = _call_ai(
+                [{"role": "user", "content": (
+                    f"Parse this job description into structured JSON.\n\n{raw_text[:4000]}\n\n"
+                    "Return JSON only with keys: company, title, location, employment_type, seniority, "
+                    "responsibilities (list), requirements_must (list), requirements_nice (list), "
+                    "keywords:{hard:[], soft:[]}. No markdown."
+                )}],
+                system="You are a job description parser. Return only valid JSON.",
+                max_tokens=800,
+                temperature=0.1,
+            )
+            import json as _json
+            return jsonify(_json.loads(result["content"]))
+        except Exception as exc:
+            logger.error("[careerforge/job_parse] %s", exc)
+            return jsonify({"error": str(exc)}), 500
+
+    @app.route("/v1/kit/generate", methods=["POST"])
+    def careerforge_kit_generate():
+        """Generate full career kit: CV bullets, cover letter, outreach, interview prep."""
+        if not _check_key(request):
+            return jsonify({"error": "unauthorized"}), 401
+        body = request.get_json(silent=True) or {}
+        profile = body.get("profile", {})
+        job = body.get("job", {})
+        name = (profile.get("identity") or {}).get("full_name", "Candidate")
+        job_parsed = job.get("parsed", {}) or {}
+        title = job_parsed.get("title", "the role")
+        company = job_parsed.get("company", "the company")
+        keywords = (job_parsed.get("keywords") or {}).get("hard", [])
+        try:
+            result = _call_ai(
+                [{"role": "user", "content": (
+                    f"Generate a complete career application kit for {name} applying to {title} at {company}.\n"
+                    f"Keywords to include: {', '.join(keywords[:20])}\n"
+                    f"Profile summary: {str(profile)[:1500]}\n\n"
+                    "Return JSON only with keys: cv:{summary,bullets(list),ats_notes(list)}, "
+                    "cover_letter (string), outreach_pack:{day_0,day_5} (subject+body strings), "
+                    "interview_pack:{technical_topics,behavioral_questions,star_stories,questions_to_ask}. No markdown."
+                )}],
+                system="You are a professional career coach and CV writer. Return only valid JSON.",
+                max_tokens=2000,
+                temperature=0.4,
+            )
+            import json as _json
+            return jsonify(_json.loads(result["content"]))
+        except Exception as exc:
+            logger.error("[careerforge/kit_generate] %s", exc)
+            return jsonify({"error": str(exc)}), 500
+
+    @app.route("/v1/interview/prepare", methods=["POST"])
+    def careerforge_interview_prepare():
+        """Generate interview preparation pack for a specific role."""
+        if not _check_key(request):
+            return jsonify({"error": "unauthorized"}), 401
+        body = request.get_json(silent=True) or {}
+        profile = body.get("profile", {})
+        company_context = body.get("company_context", {})
+        company = company_context.get("company", "the company")
+        domain = company_context.get("domain", "technology")
+        try:
+            result = _call_ai(
+                [{"role": "user", "content": (
+                    f"Create an interview preparation guide for {company} in the {domain} space.\n"
+                    f"Candidate profile: {str(profile)[:1000]}\n\n"
+                    "Return JSON only with keys: technical_topics (list), behavioral_questions (list), "
+                    "star_stories (list of {title,situation,task,action,result}), "
+                    "questions_to_ask (list). No markdown."
+                )}],
+                system="You are an expert interview coach. Return only valid JSON.",
+                max_tokens=1200,
+                temperature=0.4,
+            )
+            import json as _json
+            return jsonify(_json.loads(result["content"]))
+        except Exception as exc:
+            logger.error("[careerforge/interview_prepare] %s", exc)
+            return jsonify({"error": str(exc)}), 500
+
+    @app.route("/v1/outreach/generate", methods=["POST"])
+    def careerforge_outreach_generate():
+        """Generate outreach message sequence for a job application."""
+        if not _check_key(request):
+            return jsonify({"error": "unauthorized"}), 401
+        body = request.get_json(silent=True) or {}
+        profile = body.get("profile", {})
+        job = body.get("job", {})
+        channel = body.get("channel", "email")
+        tone = body.get("tone", "professional")
+        cadence_days = body.get("cadence_days", [0, 5, 10])
+        name = (profile.get("identity") or {}).get("full_name", "Candidate")
+        job_parsed = (job.get("parsed") or {})
+        title = job_parsed.get("title", "the role")
+        company = job_parsed.get("company", "the company")
+        try:
+            result = _call_ai(
+                [{"role": "user", "content": (
+                    f"Write a {tone} outreach sequence on {channel} for {name} applying to {title} at {company}.\n"
+                    f"Cadence days: {cadence_days}\n\n"
+                    "Return JSON array of objects with keys: day (int), subject (string), body (string). No markdown."
+                )}],
+                system="You are an expert job application outreach writer. Return only valid JSON array.",
+                max_tokens=800,
+                temperature=0.5,
+            )
+            import json as _json
+            return jsonify(_json.loads(result["content"]))
+        except Exception as exc:
+            logger.error("[careerforge/outreach_generate] %s", exc)
+            return jsonify({"error": str(exc)}), 500
+
     @app.route("/tx/registry", methods=["GET"])
     def tx_registry():
         """List registered AI services (pubkeys + scopes). Admin view."""
         if not _check_key(request):
             return jsonify({"error": "unauthorized"}), 401
         return jsonify({"registry": _ai_registry, "count": len(_ai_registry)})
+
+    # ── OpenAI-compatible proxy (/v1/chat/completions) ───────────────────────
+    # Allows services that use the OpenAI SDK (e.g. verifyid aihub) to point
+    # APP_AI_BASE_URL at this node.  LLM API keys never leave this node.
+    @app.route("/v1/chat/completions", methods=["POST"])
+    def openai_compat_chat():
+        """OpenAI-compatible chat completions proxy.
+
+        Accepts the standard OpenAI /v1/chat/completions request body and
+        routes it through _call_ai().  Auth: X-Internal-Key or X-API-Key.
+
+        Request body (subset supported):
+          model        – ignored; model is set by AI_CORE_MODEL env var
+          messages     – list of {role, content}
+          max_tokens   – optional, default 1024
+          temperature  – optional, default 0.7
+          stream       – must be false (streaming not supported here)
+        """
+        if not _check_key(request):
+            return jsonify({"error": {"message": "Unauthorized", "type": "invalid_api_key", "code": 401}}), 401
+
+        body = request.get_json(silent=True) or {}
+
+        if body.get("stream"):
+            return jsonify({"error": {"message": "Streaming not supported on this proxy", "type": "invalid_request_error", "code": 400}}), 400
+
+        messages = body.get("messages", [])
+        max_tokens = int(body.get("max_tokens", 1024))
+        temperature = float(body.get("temperature", 0.7))
+
+        # Extract system prompt from messages list (OpenAI format)
+        system = ""
+        user_messages = []
+        for m in messages:
+            if m.get("role") == "system":
+                system = m.get("content", "")
+            else:
+                user_messages.append(m)
+
+        try:
+            result = _call_ai(
+                user_messages,
+                system=system,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        except Exception as exc:
+            logger.error("[v1/chat/completions] LLM error: %s", exc)
+            return jsonify({"error": {"message": str(exc), "type": "api_error", "code": 500}}), 500
+
+        # Return OpenAI-compatible response envelope
+        import time
+        return jsonify({
+            "id": f"chatcmpl-thr-{int(time.time())}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": result.get("model", "thronos-ai"),
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": result.get("content", "")},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": result.get("tokens_used", 0),
+                "total_tokens": result.get("tokens_used", 0),
+            },
+        })
 
     return app
 

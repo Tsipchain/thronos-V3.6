@@ -11,6 +11,8 @@ Endpoints:
   POST /api/v1/assistant/ask   AI assistant for agents       (X-API-Key)
   POST /api/ai/chat            App-aware chat (X-Thronos-App header)
   GET  /api/ai/chat            Service info / endpoint map
+  POST /tx/submit              AI tx types: AI_SERVICE_REGISTER, AI_ATTESTATION
+  GET  /tx/registry            List registered AI services (requires X-API-Key)
 
 Auth:
   Internal endpoints require the header X-Internal-Key (or X-API-Key)
@@ -511,6 +513,177 @@ def create_app() -> Flask:  # noqa: C901
         except Exception as exc:
             logger.exception("[AI Core] /api/ai/chat error (app=%s)", app_id)
             return jsonify({"ok": False, "error": str(exc)}), 500
+
+    # ── CareerForge AI tx types ──────────────────────────────────────────────
+    # Endpoint: POST /tx/submit
+    # Handles AI_SERVICE_REGISTER and AI_ATTESTATION tx types for CareerForge
+    # L2 microservice integration. Only hashes + metadata are stored (no PII).
+
+    import hashlib as _hashlib
+    import time as _time
+    import secrets as _secrets
+
+    # In-memory AI service registry (persisted to file for restarts)
+    _REGISTRY_FILE = os.getenv("AI_REGISTRY_FILE", "ai_registry.json")
+    _ai_registry: dict = {}  # pubkey_hex -> {service_name, scopes, registered_at}
+
+    def _load_registry():
+        nonlocal _ai_registry
+        try:
+            with open(_REGISTRY_FILE, "r") as f:
+                _ai_registry = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            _ai_registry = {}
+
+    def _save_registry():
+        with open(_REGISTRY_FILE, "w") as f:
+            json.dump(_ai_registry, f, indent=2)
+
+    def _canonical_bytes(payload: dict) -> bytes:
+        return json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+
+    def _verify_compact_sig(pubkey_hex: str, msg: bytes, sig_hex: str) -> bool:
+        """Verify secp256k1 compact 64-byte signature using ecdsa library."""
+        try:
+            from ecdsa import VerifyingKey, SECP256k1
+            from ecdsa.util import sigdecode_string
+
+            pub_bytes = bytes.fromhex(pubkey_hex)
+            digest = _hashlib.sha256(msg).digest()
+
+            if len(pub_bytes) == 33:
+                # Compressed pubkey → decompress
+                prefix = pub_bytes[0]
+                x = int.from_bytes(pub_bytes[1:], "big")
+                p = SECP256k1.curve.p()
+                y_sq = (pow(x, 3, p) + 7) % p
+                y = pow(y_sq, (p + 1) // 4, p)
+                if (y % 2) != (prefix - 2):
+                    y = p - y
+                uncompressed = b"\x04" + x.to_bytes(32, "big") + y.to_bytes(32, "big")
+                vk = VerifyingKey.from_string(uncompressed[1:], curve=SECP256k1)
+            else:
+                vk = VerifyingKey.from_string(pub_bytes[1:] if pub_bytes[0] == 4 else pub_bytes, curve=SECP256k1)
+
+            sig_bytes = bytes.fromhex(sig_hex)
+            return vk.verify_digest(sig_bytes, digest, sigdecode=sigdecode_string)
+        except Exception as e:
+            logger.warning("[tx/submit] sig verify failed: %s", e)
+            return False
+
+    _load_registry()
+
+    @app.route("/tx/submit", methods=["POST"])
+    def tx_submit():
+        """
+        Accept AI_SERVICE_REGISTER and AI_ATTESTATION transactions from
+        CareerForge (and other L2 services). Validates:
+          1. tx_type is known
+          2. canonical txid matches sha256(prefix + payload_bytes)
+          3. signature is valid secp256k1 compact 64-byte
+          4. for AI_ATTESTATION: pubkey must be in registry with ai:attest scope
+        """
+        body = request.get_json(force=True) or {}
+        tx_type = (body.get("payload") or {}).get("tx_type") or body.get("tx_type", "")
+
+        if tx_type == "AI_SERVICE_REGISTER":
+            payload = body.get("payload", {})
+            pubkey = payload.get("pubkey", "").lower()
+            service_name = payload.get("service_name", "")
+            scopes = payload.get("scopes", [])
+            sig_hex = body.get("registrant_signature", "")
+            txid = body.get("txid", "")
+
+            if not pubkey or not service_name or not sig_hex:
+                return jsonify({"accepted": False, "error": "MISSING_FIELDS"}), 400
+
+            prefix = os.getenv("SERVICE_PREFIX_REGISTER", "THRONOS|AI_SERVICE_REGISTER|V1|").encode("utf-8")
+            payload_bytes = _canonical_bytes(payload)
+            signing_bytes = prefix + payload_bytes
+            expected_txid = _hashlib.sha256(signing_bytes).hexdigest()
+
+            if txid and txid != expected_txid:
+                return jsonify({"accepted": False, "error": "TXID_MISMATCH"}), 400
+
+            # Allowlist mode: if REGISTRY_OPEN_REGISTRATION=false, reject unknown pubkeys
+            if os.getenv("REGISTRY_OPEN_REGISTRATION", "true").lower() == "false":
+                if pubkey not in _ai_registry:
+                    return jsonify({"accepted": False, "error": "PUBKEY_NOT_ALLOWLISTED"}), 403
+
+            if not _verify_compact_sig(pubkey, signing_bytes, sig_hex):
+                return jsonify({"accepted": False, "error": "BAD_SIGNATURE"}), 400
+
+            _ai_registry[pubkey] = {
+                "service_name": service_name,
+                "scopes": scopes,
+                "registered_at": int(_time.time()),
+                "txid": expected_txid,
+            }
+            _save_registry()
+            logger.info("[tx/submit] AI_SERVICE_REGISTER: service=%s pubkey=%s...", service_name, pubkey[:12])
+            return jsonify({"accepted": True, "mempool_txid": expected_txid, "tx_type": "AI_SERVICE_REGISTER"})
+
+        elif tx_type == "AI_ATTESTATION":
+            payload = body.get("payload", {})
+            pubkey = body.get("attestor_pubkey", "").lower()
+            sig_hex = body.get("attestor_signature", "")
+            txid = body.get("txid", "")
+            service = payload.get("service", "")
+
+            if not pubkey or not sig_hex:
+                return jsonify({"accepted": False, "error": "MISSING_FIELDS"}), 400
+
+            # 1. Registry enforcement
+            reg = _ai_registry.get(pubkey)
+            if not reg:
+                return jsonify({"accepted": False, "error": "UNREGISTERED_SERVICE"}), 403
+            if "ai:attest" not in reg.get("scopes", []):
+                return jsonify({"accepted": False, "error": "MISSING_SCOPE"}), 403
+
+            # 2. Canonical bytes + txid check
+            prefix_str = os.getenv("SERVICE_PREFIX", f"THRONOS|AI_ATTESTATION|V1|{service}|")
+            prefix = prefix_str.encode("utf-8")
+            payload_bytes = _canonical_bytes(payload)
+            signing_bytes = prefix + payload_bytes
+            expected_txid = _hashlib.sha256(signing_bytes).hexdigest()
+
+            if txid and txid != expected_txid:
+                return jsonify({"accepted": False, "error": "TXID_MISMATCH"}), 400
+
+            # 3. Payload size limit
+            if len(payload_bytes) > 2048:
+                return jsonify({"accepted": False, "error": "PAYLOAD_TOO_LARGE"}), 400
+
+            # 4. Time drift check (±10 min)
+            created_at = payload.get("created_at", 0)
+            now = int(_time.time())
+            if abs(now - created_at) > 600:
+                return jsonify({"accepted": False, "error": "TIME_DRIFT"}), 400
+
+            # 5. Signature verify
+            if not _verify_compact_sig(pubkey, signing_bytes, sig_hex):
+                return jsonify({"accepted": False, "error": "BAD_SIGNATURE"}), 400
+
+            logger.info(
+                "[tx/submit] AI_ATTESTATION: service=%s type=%s tenant=%s txid=%s...",
+                service,
+                payload.get("artifact_type"),
+                payload.get("tenant_id"),
+                expected_txid[:12],
+            )
+            return jsonify({"accepted": True, "mempool_txid": expected_txid, "tx_type": "AI_ATTESTATION"})
+
+        else:
+            return jsonify({"accepted": False, "error": f"UNKNOWN_TX_TYPE: {tx_type}"}), 400
+
+    @app.route("/tx/registry", methods=["GET"])
+    def tx_registry():
+        """List registered AI services (pubkeys + scopes). Admin view."""
+        if not _check_key(request):
+            return jsonify({"error": "unauthorized"}), 401
+        return jsonify({"registry": _ai_registry, "count": len(_ai_registry)})
 
     return app
 

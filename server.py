@@ -19936,6 +19936,183 @@ def api_v1_receive_block():
     update_last_block(block, is_block=True)
     return jsonify(status="added"), 201
 
+
+# ─── CareerForge L2 AI tx types ─────────────────────────────────────────────
+# POST /tx/submit      — accept AI_SERVICE_REGISTER and AI_ATTESTATION
+# GET  /tx/registry    — list registered AI services (admin, X-API-Key)
+# No PII is accepted: only hashes, metadata, and secp256k1 signatures.
+
+_AI_REGISTRY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ai_registry.json")
+_ai_service_registry: dict = {}
+
+
+def _load_ai_registry():
+    global _ai_service_registry
+    try:
+        with open(_AI_REGISTRY_FILE, "r") as _f:
+            _ai_service_registry = json.load(_f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        _ai_service_registry = {}
+
+
+def _save_ai_registry():
+    try:
+        with open(_AI_REGISTRY_FILE, "w") as _f:
+            json.dump(_ai_service_registry, _f, indent=2)
+    except Exception as _e:
+        logger.warning("[ai_registry] save failed: %s", _e)
+
+
+def _canonical_ai_bytes(payload: dict) -> bytes:
+    return json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+
+
+def _verify_ai_sig(pubkey_hex: str, signing_bytes: bytes, sig_hex: str) -> bool:
+    """Verify secp256k1 compact 64-byte (r||s) signature over sha256(signing_bytes)."""
+    try:
+        import hashlib as _hlib
+        from ecdsa import SECP256k1, VerifyingKey
+        from ecdsa.util import sigdecode_string
+
+        digest = _hlib.sha256(signing_bytes).digest()
+        pub_bytes = bytes.fromhex(pubkey_hex)
+
+        if len(pub_bytes) == 33:
+            prefix_byte = pub_bytes[0]
+            x = int.from_bytes(pub_bytes[1:], "big")
+            _p = SECP256k1.curve.p()
+            y_sq = (pow(x, 3, _p) + 7) % _p
+            y = pow(y_sq, (_p + 1) // 4, _p)
+            if (y % 2) != (prefix_byte - 2):
+                y = _p - y
+            raw_pub = x.to_bytes(32, "big") + y.to_bytes(32, "big")
+            vk = VerifyingKey.from_string(raw_pub, curve=SECP256k1)
+        else:
+            raw_pub = pub_bytes[1:] if len(pub_bytes) == 65 else pub_bytes
+            vk = VerifyingKey.from_string(raw_pub, curve=SECP256k1)
+
+        return vk.verify_digest(bytes.fromhex(sig_hex), digest, sigdecode=sigdecode_string)
+    except Exception as _e:
+        logger.warning("[tx/submit] signature verify error: %s", _e)
+        return False
+
+
+_load_ai_registry()
+
+
+@app.route("/tx/submit", methods=["POST"])
+def tx_submit():
+    """Submit AI_SERVICE_REGISTER or AI_ATTESTATION transactions from
+    CareerForge L2 microservice. Only hashes + metadata stored, no PII."""
+    import hashlib as _hlib
+    import time as _time
+
+    body = request.get_json(force=True) or {}
+    payload = body.get("payload", {})
+    tx_type = payload.get("tx_type", "")
+
+    # ── AI_SERVICE_REGISTER ──────────────────────────────────────────────────
+    if tx_type == "AI_SERVICE_REGISTER":
+        pubkey = payload.get("pubkey", "").lower()
+        service_name = payload.get("service_name", "")
+        scopes = payload.get("scopes", [])
+        sig_hex = body.get("registrant_signature", "")
+        submitted_txid = body.get("txid", "")
+
+        if not pubkey or not service_name or not sig_hex:
+            return jsonify(accepted=False, error="MISSING_FIELDS"), 400
+
+        prefix = os.getenv(
+            "SERVICE_PREFIX_REGISTER", "THRONOS|AI_SERVICE_REGISTER|V1|"
+        ).encode("utf-8")
+        payload_bytes = _canonical_ai_bytes(payload)
+        signing_bytes = prefix + payload_bytes
+        expected_txid = _hlib.sha256(signing_bytes).hexdigest()
+
+        if submitted_txid and submitted_txid != expected_txid:
+            return jsonify(accepted=False, error="TXID_MISMATCH"), 400
+
+        if os.getenv("REGISTRY_OPEN_REGISTRATION", "true").lower() == "false":
+            if pubkey not in _ai_service_registry:
+                return jsonify(accepted=False, error="PUBKEY_NOT_ALLOWLISTED"), 403
+
+        if not _verify_ai_sig(pubkey, signing_bytes, sig_hex):
+            return jsonify(accepted=False, error="BAD_SIGNATURE"), 400
+
+        _ai_service_registry[pubkey] = {
+            "service_name": service_name,
+            "scopes": scopes,
+            "registered_at": int(_time.time()),
+            "txid": expected_txid,
+        }
+        _save_ai_registry()
+        logger.info(
+            "[tx/submit] AI_SERVICE_REGISTER service=%s pubkey=%s…",
+            service_name, pubkey[:12]
+        )
+        return jsonify(accepted=True, mempool_txid=expected_txid, tx_type="AI_SERVICE_REGISTER")
+
+    # ── AI_ATTESTATION ───────────────────────────────────────────────────────
+    elif tx_type == "AI_ATTESTATION":
+        pubkey = body.get("attestor_pubkey", "").lower()
+        sig_hex = body.get("attestor_signature", "")
+        submitted_txid = body.get("txid", "")
+        service = payload.get("service", "")
+
+        if not pubkey or not sig_hex:
+            return jsonify(accepted=False, error="MISSING_FIELDS"), 400
+
+        # 1. Registry enforcement
+        reg = _ai_service_registry.get(pubkey)
+        if not reg:
+            return jsonify(accepted=False, error="UNREGISTERED_SERVICE"), 403
+        if "ai:attest" not in reg.get("scopes", []):
+            return jsonify(accepted=False, error="MISSING_SCOPE"), 403
+
+        # 2. Canonical bytes + txid check
+        prefix_str = os.getenv("SERVICE_PREFIX", f"THRONOS|AI_ATTESTATION|V1|{service}|")
+        signing_bytes = prefix_str.encode("utf-8") + _canonical_ai_bytes(payload)
+        expected_txid = _hlib.sha256(signing_bytes).hexdigest()
+
+        if submitted_txid and submitted_txid != expected_txid:
+            return jsonify(accepted=False, error="TXID_MISMATCH"), 400
+
+        # 3. Payload size limit (2 KB)
+        if len(_canonical_ai_bytes(payload)) > 2048:
+            return jsonify(accepted=False, error="PAYLOAD_TOO_LARGE"), 400
+
+        # 4. Time drift ±10 min
+        created_at = payload.get("created_at", 0)
+        if abs(int(_time.time()) - int(created_at)) > 600:
+            return jsonify(accepted=False, error="TIME_DRIFT"), 400
+
+        # 5. Signature verify
+        if not _verify_ai_sig(pubkey, signing_bytes, sig_hex):
+            return jsonify(accepted=False, error="BAD_SIGNATURE"), 400
+
+        logger.info(
+            "[tx/submit] AI_ATTESTATION service=%s type=%s tenant=%s txid=%s…",
+            service, payload.get("artifact_type"),
+            payload.get("tenant_id"), expected_txid[:12],
+        )
+        return jsonify(accepted=True, mempool_txid=expected_txid, tx_type="AI_ATTESTATION")
+
+    else:
+        return jsonify(accepted=False, error=f"UNKNOWN_TX_TYPE: {tx_type}"), 400
+
+
+@app.route("/tx/registry", methods=["GET"])
+def tx_registry_view():
+    """Admin view of registered AI services. Requires X-API-Key or X-Internal-Key."""
+    key = request.headers.get("X-API-Key", "") or request.headers.get("X-Internal-Key", "")
+    expected = os.getenv("APP_SECRET_KEY", os.getenv("ADMIN_SECRET", ""))
+    if expected and key != expected:
+        return jsonify(error="unauthorized"), 401
+    return jsonify(registry=_ai_service_registry, count=len(_ai_service_registry))
+
+
 # ─── SCHEDULER ─────────────────────────────────────
 # Start scheduler only on master nodes.
 if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:

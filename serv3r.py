@@ -685,6 +685,76 @@ def create_app() -> Flask:  # noqa: C901
             return jsonify({"error": "unauthorized"}), 401
         return jsonify({"registry": _ai_registry, "count": len(_ai_registry)})
 
+    # ── OpenAI-compatible proxy (/v1/chat/completions) ───────────────────────
+    # Allows services that use the OpenAI SDK (e.g. verifyid aihub) to point
+    # APP_AI_BASE_URL at this node.  LLM API keys never leave this node.
+    @app.route("/v1/chat/completions", methods=["POST"])
+    def openai_compat_chat():
+        """OpenAI-compatible chat completions proxy.
+
+        Accepts the standard OpenAI /v1/chat/completions request body and
+        routes it through _call_ai().  Auth: X-Internal-Key or X-API-Key.
+
+        Request body (subset supported):
+          model        – ignored; model is set by AI_CORE_MODEL env var
+          messages     – list of {role, content}
+          max_tokens   – optional, default 1024
+          temperature  – optional, default 0.7
+          stream       – must be false (streaming not supported here)
+        """
+        if not _check_key(request):
+            return jsonify({"error": {"message": "Unauthorized", "type": "invalid_api_key", "code": 401}}), 401
+
+        body = request.get_json(silent=True) or {}
+
+        if body.get("stream"):
+            return jsonify({"error": {"message": "Streaming not supported on this proxy", "type": "invalid_request_error", "code": 400}}), 400
+
+        messages = body.get("messages", [])
+        max_tokens = int(body.get("max_tokens", 1024))
+        temperature = float(body.get("temperature", 0.7))
+
+        # Extract system prompt from messages list (OpenAI format)
+        system = ""
+        user_messages = []
+        for m in messages:
+            if m.get("role") == "system":
+                system = m.get("content", "")
+            else:
+                user_messages.append(m)
+
+        try:
+            result = _call_ai(
+                user_messages,
+                system=system,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        except Exception as exc:
+            logger.error("[v1/chat/completions] LLM error: %s", exc)
+            return jsonify({"error": {"message": str(exc), "type": "api_error", "code": 500}}), 500
+
+        # Return OpenAI-compatible response envelope
+        import time
+        return jsonify({
+            "id": f"chatcmpl-thr-{int(time.time())}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": result.get("model", "thronos-ai"),
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": result.get("content", "")},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": result.get("tokens_used", 0),
+                "total_tokens": result.get("tokens_used", 0),
+            },
+        })
+
     return app
 
 

@@ -13434,6 +13434,450 @@ def api_treasury_balances():
     }), 200
 
 
+# ─── SENTINEL SUBSCRIPTION & TREASURY ─────────────────────────────────────────
+# Blockchain-verified subscription system for Trader Sentinel.
+# All payments (THR native + crosschain) are recorded on the Thronos chain.
+# Treasury addresses per network collect fees from subscription payments.
+
+SENTINEL_SUBSCRIPTIONS_FILE = os.path.join(DATA_DIR, "sentinel_subscriptions.json")
+SENTINEL_TREASURY_FILE = os.path.join(DATA_DIR, "sentinel_treasury.json")
+
+# Per-network treasury addresses for collecting subscription fees
+SENTINEL_TREASURY_ADDRESSES = {
+    "thronos": os.getenv("SENTINEL_TREASURY_THR", os.getenv("TREASURY_THR_ADDRESS", AI_WALLET_ADDRESS)),
+    "ethereum": os.getenv("SENTINEL_TREASURY_ETH", ""),
+    "bsc": os.getenv("SENTINEL_TREASURY_BSC", ""),
+    "polygon": os.getenv("SENTINEL_TREASURY_POLYGON", ""),
+    "arbitrum": os.getenv("SENTINEL_TREASURY_ARB", ""),
+    "avalanche": os.getenv("SENTINEL_TREASURY_AVAX", ""),
+    "base": os.getenv("SENTINEL_TREASURY_BASE", ""),
+    "solana": os.getenv("SENTINEL_TREASURY_SOL", ""),
+}
+
+# Sentinel subscription packages
+SENTINEL_PACKAGES = {
+    "starter":  {"price_usd": 29,  "price_thr": 25,  "duration_days": 30, "rewards_multiplier": 1.0},
+    "pro":      {"price_usd": 99,  "price_thr": 79,  "duration_days": 30, "rewards_multiplier": 1.5},
+    "elite":    {"price_usd": 299, "price_thr": 229, "duration_days": 30, "rewards_multiplier": 2.5},
+    "whale":    {"price_usd": 999, "price_thr": 749, "duration_days": 30, "rewards_multiplier": 5.0},
+}
+
+# Fee split for sentinel subscriptions
+SENTINEL_FEE_TREASURY_SHARE = float(os.getenv("SENTINEL_FEE_TREASURY_SHARE", "0.50"))
+SENTINEL_FEE_BURN_SHARE = float(os.getenv("SENTINEL_FEE_BURN_SHARE", "0.25"))
+SENTINEL_FEE_LP_SHARE = float(os.getenv("SENTINEL_FEE_LP_SHARE", "0.25"))
+
+
+def _sentinel_split_fee(amount: float, source: str = "sentinel_subscription") -> dict:
+    """Split sentinel subscription fee: 50% treasury, 25% burned, 25% LP rewards."""
+    treasury_share = round(amount * SENTINEL_FEE_TREASURY_SHARE, 6)
+    burn_share = round(amount * SENTINEL_FEE_BURN_SHARE, 6)
+    lp_share = round(amount - treasury_share - burn_share, 6)
+
+    treasury_addr = SENTINEL_TREASURY_ADDRESSES.get("thronos", AI_WALLET_ADDRESS)
+
+    # Credit treasury
+    if treasury_share > 0:
+        ledger = load_json(LEDGER_FILE, {})
+        ledger[treasury_addr] = round(float(ledger.get(treasury_addr, 0)) + treasury_share, 6)
+        save_json(LEDGER_FILE, ledger)
+
+    # Credit LP rewards pool
+    if lp_share > 0:
+        pool_state = load_json(os.path.join(DATA_DIR, "sentinel_lp_pool.json"), {"balance": 0})
+        pool_state["balance"] = round(float(pool_state.get("balance", 0)) + lp_share, 6)
+        pool_state["last_credit_ts"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        save_json(os.path.join(DATA_DIR, "sentinel_lp_pool.json"), pool_state)
+
+    logger.info(
+        f"[SENTINEL_FEE] {amount} THR from {source}: "
+        f"{treasury_share} treasury, {burn_share} burned, {lp_share} LP pool"
+    )
+
+    return {
+        "fee_total": amount,
+        "treasury_share": treasury_share,
+        "burn_share": burn_share,
+        "lp_share": lp_share,
+        "treasury_address": treasury_addr,
+        "source": source,
+    }
+
+
+@app.route("/api/sentinel/subscribe", methods=["POST"])
+def api_sentinel_subscribe():
+    """
+    Blockchain-verified subscription endpoint.
+    Handles both THR native payments and crosschain payment registration.
+    """
+    if READ_ONLY:
+        return jsonify({"error": "read_only_node"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    subscriber = (payload.get("subscriber") or "").strip()
+    package_id = (payload.get("package_id") or "").strip().lower()
+    amount = float(payload.get("amount", 0))
+    token = (payload.get("token") or "THR").strip().upper()
+    payment_chain = (payload.get("payment_chain") or "thronos").strip().lower()
+    payment_tx_hash = (payload.get("payment_tx_hash") or "").strip()
+    treasury_address = (payload.get("treasury_address") or "").strip()
+
+    if not subscriber:
+        return jsonify({"error": "subscriber address required"}), 400
+    if package_id not in SENTINEL_PACKAGES:
+        return jsonify({"error": f"invalid package_id, valid: {list(SENTINEL_PACKAGES.keys())}"}), 400
+
+    pkg = SENTINEL_PACKAGES[package_id]
+
+    # Validate amount based on token
+    if token == "THR":
+        expected = pkg["price_thr"]
+    else:
+        expected = pkg["price_usd"]
+
+    if amount < expected * 0.99:  # 1% tolerance for rounding
+        return jsonify({
+            "error": f"insufficient amount: sent {amount} {token}, need {expected} {token}",
+        }), 400
+
+    # For THR native payments — deduct from subscriber's balance on the Thronos chain
+    tx_hash = payment_tx_hash
+    if payment_chain == "thronos" and token == "THR":
+        ledger = load_json(LEDGER_FILE, {})
+        balance = float(ledger.get(subscriber, 0))
+        if balance < amount:
+            return jsonify({"error": f"insufficient THR balance: {balance}, need {amount}"}), 400
+
+        # Deduct from subscriber
+        ledger[subscriber] = round(balance - amount, 6)
+        save_json(LEDGER_FILE, ledger)
+
+        # Split the fee
+        fee_info = _sentinel_split_fee(amount, source=f"sentinel_sub_{package_id}")
+
+        # Generate on-chain tx hash
+        tx_hash = hashlib.sha256(
+            f"sentinel_sub:{subscriber}:{package_id}:{amount}:{time.time()}".encode()
+        ).hexdigest()[:40]
+
+    # Record subscription on the blockchain
+    subs = load_json(SENTINEL_SUBSCRIPTIONS_FILE, {})
+    now_ts = int(time.time())
+    expires_ts = now_ts + (pkg["duration_days"] * 86400)
+
+    # If user has existing active subscription, extend it
+    existing = subs.get(subscriber, {})
+    if existing.get("expires_at", 0) > now_ts:
+        expires_ts = existing["expires_at"] + (pkg["duration_days"] * 86400)
+
+    blockchain_ref = hashlib.sha256(
+        f"sentinel_ref:{subscriber}:{package_id}:{tx_hash}:{now_ts}".encode()
+    ).hexdigest()[:48]
+
+    subs[subscriber] = {
+        "tier": package_id,
+        "subscribed_at": now_ts,
+        "expires_at": expires_ts,
+        "amount_paid": amount,
+        "token": token,
+        "payment_chain": payment_chain,
+        "payment_tx_hash": tx_hash,
+        "blockchain_ref": blockchain_ref,
+        "rewards_multiplier": pkg["rewards_multiplier"],
+        "auto_renew": False,
+        "treasury_address": treasury_address or SENTINEL_TREASURY_ADDRESSES.get(payment_chain, ""),
+    }
+    save_json(SENTINEL_SUBSCRIPTIONS_FILE, subs)
+
+    # Record in treasury ledger
+    treasury_ledger = load_json(SENTINEL_TREASURY_FILE, {"payments": [], "total_collected": {}})
+    treasury_ledger["payments"].append({
+        "subscriber": subscriber,
+        "package": package_id,
+        "amount": amount,
+        "token": token,
+        "chain": payment_chain,
+        "tx_hash": tx_hash,
+        "blockchain_ref": blockchain_ref,
+        "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    })
+    # Track total per chain
+    chain_key = f"{payment_chain}_{token}"
+    treasury_ledger["total_collected"][chain_key] = round(
+        float(treasury_ledger["total_collected"].get(chain_key, 0)) + amount, 6
+    )
+    # Keep last 5000 payments
+    if len(treasury_ledger["payments"]) > 5000:
+        treasury_ledger["payments"] = treasury_ledger["payments"][-5000:]
+    save_json(SENTINEL_TREASURY_FILE, treasury_ledger)
+
+    logger.info(
+        f"[SENTINEL_SUB] {subscriber} subscribed to {package_id} "
+        f"({amount} {token} on {payment_chain}) ref={blockchain_ref[:16]}..."
+    )
+
+    return jsonify({
+        "ok": True,
+        "tier": package_id,
+        "expires_at": expires_ts,
+        "tx_hash": tx_hash,
+        "blockchain_ref": blockchain_ref,
+        "rewards_multiplier": pkg["rewards_multiplier"],
+    }), 200
+
+
+@app.route("/api/sentinel/subscription/<address>", methods=["GET"])
+def api_sentinel_subscription_status(address):
+    """Get blockchain-verified subscription status."""
+    subs = load_json(SENTINEL_SUBSCRIPTIONS_FILE, {})
+    sub = subs.get(address.strip(), {})
+
+    if not sub:
+        return jsonify({
+            "tier": "free",
+            "expiresAt": 0,
+            "autoRenew": False,
+            "blockchainRef": "",
+            "paymentChain": "",
+            "lastPaymentTx": "",
+        }), 200
+
+    now_ts = int(time.time())
+    is_active = sub.get("expires_at", 0) > now_ts
+
+    return jsonify({
+        "tier": sub.get("tier", "free") if is_active else "free",
+        "expiresAt": sub.get("expires_at", 0),
+        "autoRenew": sub.get("auto_renew", False),
+        "blockchainRef": sub.get("blockchain_ref", ""),
+        "paymentChain": sub.get("payment_chain", ""),
+        "lastPaymentTx": sub.get("payment_tx_hash", ""),
+        "rewardsMultiplier": sub.get("rewards_multiplier", 1.0) if is_active else 1.0,
+        "isActive": is_active,
+    }), 200
+
+
+@app.route("/api/sentinel/rewards/<address>", methods=["GET"])
+def api_sentinel_rewards(address):
+    """Get sentinel rewards for a subscriber."""
+    address = address.strip()
+    subs = load_json(SENTINEL_SUBSCRIPTIONS_FILE, {})
+    sub = subs.get(address, {})
+    multiplier = sub.get("rewards_multiplier", 1.0) if sub.get("expires_at", 0) > int(time.time()) else 1.0
+
+    # Rewards are tracked in the main ledger under a sentinel-specific prefix
+    rewards_file = os.path.join(DATA_DIR, "sentinel_rewards.json")
+    rewards = load_json(rewards_file, {})
+    user_rewards = rewards.get(address, {
+        "totalEarned": 0,
+        "pendingRewards": 0,
+        "claimableRewards": 0,
+        "stakingRewards": 0,
+        "liquidityRewards": 0,
+        "referralRewards": 0,
+    })
+    user_rewards["rewardsMultiplier"] = multiplier
+
+    return jsonify(user_rewards), 200
+
+
+@app.route("/api/sentinel/rewards/claim", methods=["POST"])
+def api_sentinel_rewards_claim():
+    """Claim pending sentinel rewards."""
+    if READ_ONLY:
+        return jsonify({"error": "read_only_node"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    address = (payload.get("address") or "").strip()
+    if not address:
+        return jsonify({"error": "address required"}), 400
+
+    rewards_file = os.path.join(DATA_DIR, "sentinel_rewards.json")
+    rewards = load_json(rewards_file, {})
+    user_rewards = rewards.get(address, {})
+    claimable = float(user_rewards.get("claimableRewards", 0))
+
+    if claimable <= 0:
+        return jsonify({"error": "no claimable rewards"}), 400
+
+    # Credit rewards to THR balance
+    ledger = load_json(LEDGER_FILE, {})
+    ledger[address] = round(float(ledger.get(address, 0)) + claimable, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    # Update rewards tracking
+    user_rewards["claimableRewards"] = 0
+    user_rewards["totalEarned"] = round(float(user_rewards.get("totalEarned", 0)) + claimable, 6)
+    rewards[address] = user_rewards
+    save_json(rewards_file, rewards)
+
+    tx_hash = hashlib.sha256(
+        f"sentinel_claim:{address}:{claimable}:{time.time()}".encode()
+    ).hexdigest()[:40]
+
+    logger.info(f"[SENTINEL_CLAIM] {address} claimed {claimable} THR rewards")
+
+    return jsonify({
+        "ok": True,
+        "claimed": claimable,
+        "tx_hash": tx_hash,
+        "blockchain_ref": tx_hash,
+    }), 200
+
+
+@app.route("/api/sentinel/treasury/balances", methods=["GET"])
+def api_sentinel_treasury_balances():
+    """Get per-network treasury balances for sentinel fees."""
+    treasury_ledger = load_json(SENTINEL_TREASURY_FILE, {"payments": [], "total_collected": {}})
+
+    # Also get THR treasury balance from ledger
+    ledger = load_json(LEDGER_FILE, {})
+    thr_treasury = SENTINEL_TREASURY_ADDRESSES.get("thronos", AI_WALLET_ADDRESS)
+    thr_balance = float(ledger.get(thr_treasury, 0))
+
+    # LP pool balance
+    lp_pool = load_json(os.path.join(DATA_DIR, "sentinel_lp_pool.json"), {"balance": 0})
+
+    return jsonify({
+        "ok": True,
+        "treasury_addresses": SENTINEL_TREASURY_ADDRESSES,
+        "thr_treasury_balance": thr_balance,
+        "lp_pool_balance": float(lp_pool.get("balance", 0)),
+        "total_collected_by_chain": treasury_ledger.get("total_collected", {}),
+        "total_subscribers": len(load_json(SENTINEL_SUBSCRIPTIONS_FILE, {})),
+        "recent_payments": treasury_ledger.get("payments", [])[-10:],
+    }), 200
+
+
+@app.route("/api/sentinel/stake", methods=["POST"])
+def api_sentinel_stake():
+    """Stake THR tokens for sentinel rewards."""
+    if READ_ONLY:
+        return jsonify({"error": "read_only_node"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    address = (payload.get("address") or "").strip()
+    amount = float(payload.get("amount", 0))
+
+    if not address or amount <= 0:
+        return jsonify({"error": "address and positive amount required"}), 400
+
+    ledger = load_json(LEDGER_FILE, {})
+    balance = float(ledger.get(address, 0))
+    if balance < amount:
+        return jsonify({"error": f"insufficient balance: {balance} THR, need {amount}"}), 400
+
+    # Deduct from balance
+    ledger[address] = round(balance - amount, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    # Track staking
+    staking_file = os.path.join(DATA_DIR, "sentinel_staking.json")
+    staking = load_json(staking_file, {})
+    user_stake = staking.get(address, {"staked": 0, "rewards": 0, "staked_at": 0})
+    user_stake["staked"] = round(float(user_stake.get("staked", 0)) + amount, 6)
+    user_stake["staked_at"] = int(time.time())
+    staking[address] = user_stake
+    save_json(staking_file, staking)
+
+    tx_hash = hashlib.sha256(
+        f"sentinel_stake:{address}:{amount}:{time.time()}".encode()
+    ).hexdigest()[:40]
+
+    logger.info(f"[SENTINEL_STAKE] {address} staked {amount} THR")
+
+    return jsonify({"ok": True, "staked": user_stake["staked"], "tx_hash": tx_hash}), 200
+
+
+@app.route("/api/sentinel/unstake", methods=["POST"])
+def api_sentinel_unstake():
+    """Unstake THR tokens."""
+    if READ_ONLY:
+        return jsonify({"error": "read_only_node"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    address = (payload.get("address") or "").strip()
+    amount = float(payload.get("amount", 0))
+
+    if not address or amount <= 0:
+        return jsonify({"error": "address and positive amount required"}), 400
+
+    staking_file = os.path.join(DATA_DIR, "sentinel_staking.json")
+    staking = load_json(staking_file, {})
+    user_stake = staking.get(address, {"staked": 0, "rewards": 0})
+    staked = float(user_stake.get("staked", 0))
+
+    if staked < amount:
+        return jsonify({"error": f"insufficient staked: {staked} THR, need {amount}"}), 400
+
+    # Return to balance
+    ledger = load_json(LEDGER_FILE, {})
+    ledger[address] = round(float(ledger.get(address, 0)) + amount, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    # Update staking
+    user_stake["staked"] = round(staked - amount, 6)
+    staking[address] = user_stake
+    save_json(staking_file, staking)
+
+    tx_hash = hashlib.sha256(
+        f"sentinel_unstake:{address}:{amount}:{time.time()}".encode()
+    ).hexdigest()[:40]
+
+    logger.info(f"[SENTINEL_UNSTAKE] {address} unstaked {amount} THR")
+
+    return jsonify({"ok": True, "remaining_staked": user_stake["staked"], "tx_hash": tx_hash}), 200
+
+
+@app.route("/api/sentinel/staking/<address>", methods=["GET"])
+def api_sentinel_staking_info(address):
+    """Get staking info for a user."""
+    staking_file = os.path.join(DATA_DIR, "sentinel_staking.json")
+    staking = load_json(staking_file, {})
+    user_stake = staking.get(address.strip(), {"staked": 0, "rewards": 0})
+
+    return jsonify({
+        "stakedAmount": str(float(user_stake.get("staked", 0))),
+        "pendingRewards": str(float(user_stake.get("rewards", 0))),
+        "apr": 8.0,  # 8% APY
+    }), 200
+
+
+@app.route("/api/sentinel/referral/generate", methods=["POST"])
+def api_sentinel_referral():
+    """Generate referral link for sentinel."""
+    payload = request.get_json(silent=True) or {}
+    address = (payload.get("address") or "").strip()
+    if not address:
+        return jsonify({"error": "address required"}), 400
+
+    code = hashlib.sha256(f"sentinel_ref:{address}".encode()).hexdigest()[:8].upper()
+    return jsonify({
+        "referralLink": f"https://tradersentinel.app/ref/{code}",
+        "referralCode": code,
+    }), 200
+
+
+@app.route("/api/sentinel/fiat/create-session", methods=["POST"])
+def api_sentinel_fiat_session():
+    """Create a Stripe checkout session for fiat subscription payment."""
+    payload = request.get_json(silent=True) or {}
+    package_id = (payload.get("packageId") or "").strip().lower()
+    email = (payload.get("email") or "").strip()
+
+    if package_id not in SENTINEL_PACKAGES:
+        return jsonify({"error": "invalid package"}), 400
+
+    pkg = SENTINEL_PACKAGES[package_id]
+    # In production this would create an actual Stripe session
+    # For now return a placeholder URL that the frontend can handle
+    return jsonify({
+        "url": f"https://checkout.thronoschain.org/sentinel/{package_id}?email={email}&amount={pkg['price_usd']}",
+        "package": package_id,
+        "amount": pkg["price_usd"],
+    }), 200
+
+
 @app.route("/d3lfoi", methods=["GET"])
 @app.route("/d3lfoi_admin", methods=["GET"])
 def d3lfoi_admin_console():

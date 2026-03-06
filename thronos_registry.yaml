@@ -89,6 +89,52 @@ nodes:
       - autopilot-model-training         # future: Thronos Autopilot + safety scoring models
       - music-iot-session-join           # joins driver + music/IoT signals on session_id
 
+  - id: node5-trader-sentinel
+    name: "Trader Sentinel – Market Intelligence (Pytheia)"
+    role: sentinel
+    platform: railway
+    url: "https://sentinel.thronoschain.org"
+    health: "/health"
+    tier: high
+    owner: core-team
+    data_store: none (stateless)
+    repo: "Tsipchain/trader-sentinel"
+    responsibilities:
+      - cex-dex-price-aggregation
+      - technical-analysis
+      - risk-scoring
+      - geopolitical-sentiment
+      - arbitrage-detection
+
+  - id: node6-sentinel-analyst
+    name: "Sentinel Analyst – LLM Market Briefings"
+    role: analyst
+    platform: railway
+    url: "https://sentinel-analyst.up.railway.app"
+    health: "/health"
+    tier: medium
+    owner: core-team
+    data_store: none (stateless)
+    repo: "Tsipchain/trader-sentinel"
+    responsibilities:
+      - market-briefings
+      - natural-language-qa
+
+  - id: node7-sentinel-brain
+    name: "Sentinel Brain – Neural Prediction Engine"
+    role: brain
+    platform: railway
+    url: "https://alanisys.up.railway.app"
+    health: "/health"
+    tier: medium
+    owner: core-team
+    data_store: sqlite3 (trades + models)
+    repo: "Tsipchain/trader-sentinel"
+    responsibilities:
+      - ml-prediction
+      - auto-trading
+      - trade-history
+
 # ----------------------------------------------------------
 # CORE SERVICES
 # ----------------------------------------------------------

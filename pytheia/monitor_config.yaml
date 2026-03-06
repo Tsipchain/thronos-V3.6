@@ -77,3 +77,28 @@ checklist:
   - id: chrome-extension
     label: "Chrome Extension Wallet"
     required: false
+  - id: trader-sentinel
+    label: "Trader Sentinel (Market Intelligence)"
+    required: true
+  - id: sentinel-analyst
+    label: "Sentinel Analyst (LLM Briefings)"
+    required: true
+  - id: sentinel-brain
+    label: "Sentinel Brain (ML Prediction)"
+    required: false
+
+# Trader Sentinel integration — Pytheia monitors exchange health
+sentinel_exchange_monitoring:
+  enabled: true
+  check_interval_seconds: 600
+  exchanges:
+    - id: binance
+      geo_blocked: true
+      fallback: okx
+    - id: bybit
+      geo_blocked: true
+      fallback: okx
+    - id: okx
+      geo_blocked: false
+    - id: mexc
+      geo_blocked: false

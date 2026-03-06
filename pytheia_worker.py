@@ -166,6 +166,15 @@ HEALTH_ENDPOINTS = [
     {"path": "/wallet_viewer", "name": "Wallet Viewer", "expected_status": 200},
 ]
 
+# Trader Sentinel endpoints (external service monitoring)
+SENTINEL_BASE_URL = os.getenv("SENTINEL_BASE_URL", "https://sentinel.thronoschain.org")
+SENTINEL_ENDPOINTS = [
+    {"path": "/health", "name": "Sentinel Health", "expected_status": 200, "base_url": SENTINEL_BASE_URL},
+    {"path": "/api/sentinel/technicals?symbol=BTC/USDT", "name": "Sentinel Technicals", "expected_status": 200, "base_url": SENTINEL_BASE_URL},
+    {"path": "/api/sentinel/risk?symbol=BTC/USDT", "name": "Sentinel Risk", "expected_status": 200, "base_url": SENTINEL_BASE_URL},
+    {"path": "/api/sentinel/geo", "name": "Sentinel Geo", "expected_status": 200, "base_url": SENTINEL_BASE_URL},
+]
+
 # Error thresholds
 THRESHOLDS = {
     "consecutive_failures": 3,  # Trigger alert after 3 consecutive failures
@@ -258,6 +267,9 @@ class PYTHEIAWorker:
                 "base_url": t["base_url"],
                 "expected_status": 200,
             })
+        # Add Trader Sentinel endpoints
+        for ep in SENTINEL_ENDPOINTS:
+            endpoints.append(ep)
         return endpoints
 
     def load_state(self) -> Dict:

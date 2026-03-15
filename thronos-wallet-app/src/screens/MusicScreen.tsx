@@ -63,24 +63,7 @@ async function postJSON<T = any>(endpoint: string, body: any): Promise<T> {
   return res.json();
 }
 
-// ── Mock Data (until backend connects) ───────────────────────────────────────
-
-const MOCK_TRACKS: Track[] = [
-  { id: '1', title: 'Neon Genesis', artist: 'Thronos Audio', duration: 234, genre: 'Electronic', plays: 12450, tips_earned: 45.2 },
-  { id: '2', title: 'Chain Reaction', artist: 'BlockBeat', duration: 198, genre: 'DnB', plays: 8920, tips_earned: 32.1 },
-  { id: '3', title: 'Decentralize', artist: 'CryptoWave', duration: 312, genre: 'Ambient', plays: 15680, tips_earned: 78.5 },
-  { id: '4', title: 'Node Runner', artist: 'Hash Function', duration: 267, genre: 'Techno', plays: 6340, tips_earned: 18.9 },
-  { id: '5', title: 'Validator\'s Dream', artist: 'Consensus', duration: 189, genre: 'Chill', plays: 9870, tips_earned: 56.3 },
-  { id: '6', title: 'Block Height', artist: 'Miner\'s Guild', duration: 245, genre: 'Lo-Fi', plays: 4210, tips_earned: 12.7 },
-  { id: '7', title: 'Gas Fee Blues', artist: 'EVM Express', duration: 278, genre: 'Blues', plays: 3150, tips_earned: 8.4 },
-  { id: '8', title: 'Smart Contract', artist: 'Solidity Sound', duration: 201, genre: 'House', plays: 7890, tips_earned: 41.6 },
-];
-
-const MOCK_PLAYLISTS: Playlist[] = [
-  { id: 'p1', name: 'Thronos Originals', track_count: 24, total_duration: 5400, created_at: '2026-01-15' },
-  { id: 'p2', name: 'DeFi Beats', track_count: 18, total_duration: 3960, created_at: '2026-02-08' },
-  { id: 'p3', name: 'Mining Anthems', track_count: 12, total_duration: 2880, created_at: '2026-03-01' },
-];
+// No mock data — all music data fetched from chain API
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -102,9 +85,9 @@ type TabType = 'tracks' | 'playlists' | 'earnings' | 'offline';
 export default function MusicScreen({ navigation }: any) {
   const { wallet } = useStore();
   const [activeTab, setActiveTab] = useState<TabType>('tracks');
-  const [tracks, setTracks] = useState<Track[]>(MOCK_TRACKS);
-  const [playlists, setPlaylists] = useState<Playlist[]>(MOCK_PLAYLISTS);
-  const [loading, setLoading] = useState(false);
+  const [tracks, setTracks] = useState<Track[]>([]);
+  const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -112,7 +95,7 @@ export default function MusicScreen({ navigation }: any) {
   const [tipAmount, setTipAmount] = useState(1);
   const [tipTarget, setTipTarget] = useState<Track | null>(null);
   const [earnings, setEarnings] = useState<ArtistEarnings>({
-    total_tips: 293.7, total_plays: 68510, total_tracks: 8, top_track: 'Decentralize',
+    total_tips: 0, total_plays: 0, total_tracks: 0, top_track: undefined,
   });
 
   const progressAnim = useRef(new Animated.Value(0)).current;
@@ -136,9 +119,10 @@ export default function MusicScreen({ navigation }: any) {
     if (!wallet.address) return;
     setLoading(true);
     try {
-      const [trackRes, playlistRes] = await Promise.allSettled([
+      const [trackRes, playlistRes, earningsRes] = await Promise.allSettled([
         fetchJSON(`/api/v1/music/tracks?address=${wallet.address}`),
         fetchJSON(`/api/music/playlists?address=${wallet.address}`),
+        fetchJSON(`/api/v1/music/earnings?address=${wallet.address}`),
       ]);
       if (trackRes.status === 'fulfilled' && trackRes.value?.tracks) {
         setTracks(trackRes.value.tracks);
@@ -146,8 +130,11 @@ export default function MusicScreen({ navigation }: any) {
       if (playlistRes.status === 'fulfilled' && playlistRes.value?.playlists) {
         setPlaylists(playlistRes.value.playlists);
       }
-    } catch {
-      // Fallback to mock data
+      if (earningsRes.status === 'fulfilled' && earningsRes.value) {
+        setEarnings(earningsRes.value);
+      }
+    } catch (err) {
+      console.warn('Failed to load music data:', err);
     } finally {
       setLoading(false);
     }

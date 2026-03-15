@@ -190,6 +190,127 @@ export async function getT2EHistory(
   return request(`/api/architect_t2e_history/${address}?limit=${limit}`);
 }
 
+// ── Music (Decent Music) ─────────────────────────────────────────────────────
+
+export interface MusicTrack {
+  id: string;
+  title: string;
+  artist: string;
+  album?: string;
+  duration: number;
+  genre?: string;
+  plays: number;
+  tips_earned: number;
+  artwork_url?: string;
+  stream_url?: string;
+  is_offline?: boolean;
+}
+
+export interface MusicPlaylist {
+  id: string;
+  name: string;
+  track_count: number;
+  total_duration: number;
+  created_at: string;
+}
+
+export async function getMusicTracks(
+  address?: string,
+): Promise<{ tracks: MusicTrack[] }> {
+  const q = address ? `?address=${address}` : '';
+  return request(`/api/v1/music/tracks${q}`);
+}
+
+export async function recordPlay(
+  trackId: string,
+  address: string,
+): Promise<{ success: boolean }> {
+  return request(`/api/v1/music/play/${trackId}`, {
+    method: 'POST',
+    body: JSON.stringify({ address }),
+  });
+}
+
+export async function tipArtist(params: {
+  address: string;
+  track_id: string;
+  artist: string;
+  amount: number;
+}): Promise<{ success: boolean; tx_hash?: string }> {
+  return request('/api/v1/music/tip', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export async function getMusicPlaylists(
+  address: string,
+): Promise<{ playlists: MusicPlaylist[] }> {
+  return request(`/api/music/playlists?address=${address}`);
+}
+
+export async function saveOfflineTrack(
+  trackId: string,
+  address: string,
+): Promise<{ success: boolean }> {
+  return request('/api/music/offline', {
+    method: 'POST',
+    body: JSON.stringify({ track_id: trackId, address }),
+  });
+}
+
+// ── Cross-Chain / ACIC ───────────────────────────────────────────────────────
+
+export interface ChainStatus {
+  chain: string;
+  block_height: number;
+  tps: number;
+  latency_ms: number;
+  acic_enabled: boolean;
+  peers: number;
+  status: 'online' | 'degraded' | 'offline';
+}
+
+export async function getCrossChainStatus(): Promise<{ chains: ChainStatus[] }> {
+  return request('/api/network/chains');
+}
+
+export async function getAcicMetrics(): Promise<{
+  acic_tps: number;
+  acic_latency_ms: number;
+  acic_nodes: number;
+  finality_seconds: number;
+}> {
+  return request('/api/network/acic');
+}
+
+// ── IoT / Telemetry ──────────────────────────────────────────────────────────
+
+export async function submitGpsTelemetry(params: {
+  address: string;
+  latitude: number;
+  longitude: number;
+  speed?: number;
+  heading?: number;
+  altitude?: number;
+}): Promise<{ success: boolean }> {
+  return request('/api/iot/submit_gps', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export async function getLiveTelemetry(
+  address: string,
+): Promise<{
+  gps: { lat: number; lng: number; speed: number; heading: number };
+  battery: number;
+  lidar_distance?: number;
+  lane_deviation?: number;
+}> {
+  return request(`/api/iot/telemetry/live?address=${address}`);
+}
+
 // ── Bridge ──────────────────────────────────────────────────────────────────
 
 export interface BridgeQuote {

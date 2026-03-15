@@ -23,6 +23,12 @@ interface T2EState {
   projectsCompleted: number;
 }
 
+interface MusicState {
+  currentTrackId: string | null;
+  isPlaying: boolean;
+  queue: string[];
+}
+
 interface AppStore {
   // Wallet
   wallet: WalletState;
@@ -54,6 +60,10 @@ interface AppStore {
   // Bridge history
   bridgeHistory: any[];
   setBridgeHistory: (txs: any[]) => void;
+
+  // Music (Decent Music)
+  music: MusicState;
+  setMusic: (data: Partial<MusicState>) => void;
 }
 
 export const useStore = create<AppStore>()(
@@ -121,6 +131,9 @@ export const useStore = create<AppStore>()(
 
       bridgeHistory: [],
       setBridgeHistory: (txs) => set({ bridgeHistory: txs }),
+
+      music: { currentTrackId: null, isPlaying: false, queue: [] },
+      setMusic: (data) => set((s) => ({ music: { ...s.music, ...data } })),
     }),
     {
       name: 'thronos-wallet-storage',

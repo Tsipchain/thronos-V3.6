@@ -94,8 +94,11 @@ export async function sendToken(params: {
 export async function getTransactionHistory(
   address: string,
   limit = 50,
-): Promise<any[]> {
-  return request(`/api/transactions/${address}?limit=${limit}`);
+  category?: string,
+): Promise<any> {
+  const params = new URLSearchParams({ wallet: address, limit: String(limit) });
+  if (category && category !== 'all') params.set('category', category);
+  return request(`/api/wallet/history?${params}`);
 }
 
 export async function getTransactionsByCategory(
@@ -103,7 +106,7 @@ export async function getTransactionsByCategory(
   category = 'all',
   limit = 50,
 ): Promise<{ transactions: any[] }> {
-  return request(`/wallet_data/${address}?category=${category}&limit=${limit}`);
+  return request(`/api/v1/address/${address}/history?category=${category}&limit=${limit}`);
 }
 
 // ── Chain Info ─────────────────────────────────────────────────────────────────
@@ -113,7 +116,11 @@ export async function getChainTokens(): Promise<{ tokens: any[] }> {
 }
 
 export async function getNetworkStatus(): Promise<any> {
-  return request('/api/network/status');
+  return request('/api/v1/status');
+}
+
+export async function getTokenPrices(): Promise<any> {
+  return request('/api/token/prices');
 }
 
 // ── Staking / Pledge ──────────────────────────────────────────────────────────
@@ -265,9 +272,107 @@ export async function saveOfflineTrack(
   trackId: string,
   address: string,
 ): Promise<{ success: boolean }> {
-  return request('/api/music/offline', {
+  return request('/api/music/offline/save', {
     method: 'POST',
     body: JSON.stringify({ track_id: trackId, address }),
+  });
+}
+
+export async function getOfflineTracks(
+  address: string,
+): Promise<{ tracks: MusicTrack[] }> {
+  return request(`/api/music/offline/${address}`);
+}
+
+export async function startMusicSession(params: {
+  address: string;
+  latitude?: number;
+  longitude?: number;
+  carplay?: boolean;
+  android_auto?: boolean;
+}): Promise<{ session_id: string; success: boolean }> {
+  return request('/api/music/session/start', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export async function endMusicSession(
+  sessionId: string,
+  address: string,
+): Promise<{ success: boolean; plays: number; rewards?: number }> {
+  return request('/api/music/session/end', {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sessionId, address }),
+  });
+}
+
+export async function submitMusicGpsTelemetry(params: {
+  address: string;
+  session_id: string;
+  latitude: number;
+  longitude: number;
+  speed?: number;
+}): Promise<{ success: boolean }> {
+  return request('/api/music/gps_telemetry', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export async function getMusicEarnings(
+  address: string,
+): Promise<{
+  total_tips: number;
+  total_plays: number;
+  total_tracks: number;
+  top_track?: string;
+}> {
+  return request(`/api/v1/music/earnings?address=${address}`);
+}
+
+export async function searchMusic(query: string): Promise<{ tracks: MusicTrack[] }> {
+  return request(`/api/music/search?q=${encodeURIComponent(query)}`);
+}
+
+// ── Governance ──────────────────────────────────────────────────────────────
+
+export async function getGovernanceProposals(): Promise<{ proposals: any[] }> {
+  return request('/api/v1/governance/proposals');
+}
+
+export async function voteOnProposal(params: {
+  address: string;
+  proposal_id: string;
+  vote: 'yes' | 'no' | 'abstain';
+  secret: string;
+}): Promise<{ success: boolean }> {
+  return request('/api/v1/governance/vote', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+// ── AI Credits ──────────────────────────────────────────────────────────────
+
+export async function getAiSessionHistory(address: string): Promise<{ sessions: any[] }> {
+  return request(`/api/ai_session_history?address=${address}`);
+}
+
+// ── Gateway (Fiat On/Off Ramp) ─────────────────────────────────────────────
+
+export async function getGatewayLimits(): Promise<any> {
+  return request('/api/gateway/limits');
+}
+
+export async function createCheckout(params: {
+  address: string;
+  amount: number;
+  currency: string;
+}): Promise<{ checkout_url: string }> {
+  return request('/api/gateway/create-checkout-session', {
+    method: 'POST',
+    body: JSON.stringify(params),
   });
 }
 
@@ -488,7 +593,7 @@ export async function getLiquidityPools(): Promise<{
     volume_24h: number;
   }>;
 }> {
-  return request('/api/v1/pools/list');
+  return request('/api/v1/pools');
 }
 
 export async function getLPPositions(address: string): Promise<{
@@ -538,7 +643,7 @@ export async function getMiningInfo(address: string): Promise<{
   blocks_found: number;
   last_payout: string;
 }> {
-  return request(`/api/mining/info/${address}`);
+  return request(`/api/mining/info?address=${address}`);
 }
 
 // ── Wallet Data (categorized history from mainchain) ─────────────────────────

@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView,
-  RefreshControl, ActivityIndicator, Modal, Animated, Dimensions,
+  RefreshControl, ActivityIndicator, Modal, Animated, Dimensions, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Location from 'expo-location';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { useStore } from '../store/useStore';
 import { CONFIG } from '../constants/config';
@@ -98,6 +99,11 @@ export default function MusicScreen({ navigation }: any) {
     total_tips: 0, total_plays: 0, total_tracks: 0, top_track: undefined,
   });
 
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [gpsEnabled, setGpsEnabled] = useState(false);
+  const [isCarMode, setIsCarMode] = useState(false);
+  const gpsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const progressAnim = useRef(new Animated.Value(0)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
@@ -114,6 +120,62 @@ export default function MusicScreen({ navigation }: any) {
       pulseAnim.setValue(1);
     }
   }, [isPlaying]);
+
+  // Start music session with GPS when playing begins
+  const startSession = useCallback(async () => {
+    if (!wallet.address) return;
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      const hasGps = status === 'granted';
+      setGpsEnabled(hasGps);
+      let coords: { latitude: number; longitude: number } | undefined;
+      if (hasGps) {
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
+      }
+      const res = await postJSON('/api/music/session/start', {
+        address: wallet.address,
+        ...coords,
+        carplay: Platform.OS === 'ios' && isCarMode,
+        android_auto: Platform.OS === 'android' && isCarMode,
+      });
+      if (res.session_id) setSessionId(res.session_id);
+
+      // GPS telemetry every 30s while playing
+      if (hasGps) {
+        gpsIntervalRef.current = setInterval(async () => {
+          try {
+            const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+            await postJSON('/api/music/gps_telemetry', {
+              address: wallet.address,
+              session_id: res.session_id,
+              latitude: loc.coords.latitude,
+              longitude: loc.coords.longitude,
+              speed: loc.coords.speed ?? 0,
+            });
+          } catch { /* silent */ }
+        }, 30000);
+      }
+    } catch { /* silent */ }
+  }, [wallet.address, isCarMode]);
+
+  const endSession = useCallback(async () => {
+    if (gpsIntervalRef.current) {
+      clearInterval(gpsIntervalRef.current);
+      gpsIntervalRef.current = null;
+    }
+    if (sessionId && wallet.address) {
+      postJSON('/api/music/session/end', { session_id: sessionId, address: wallet.address }).catch(() => {});
+      setSessionId(null);
+    }
+  }, [sessionId, wallet.address]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (gpsIntervalRef.current) clearInterval(gpsIntervalRef.current);
+    };
+  }, []);
 
   const loadData = useCallback(async () => {
     if (!wallet.address) return;
@@ -149,6 +211,7 @@ export default function MusicScreen({ navigation }: any) {
   }, [loadData]);
 
   const playTrack = (track: Track) => {
+    const wasPlaying = currentTrack != null;
     setCurrentTrack(track);
     setIsPlaying(true);
     progressAnim.setValue(0);
@@ -159,6 +222,8 @@ export default function MusicScreen({ navigation }: any) {
     }).start();
     // Record play
     postJSON('/api/v1/music/play/' + track.id, { address: wallet.address }).catch(() => {});
+    // Start GPS session on first play
+    if (!wasPlaying) startSession();
   };
 
   const togglePlayPause = () => setIsPlaying(!isPlaying);
@@ -314,10 +379,34 @@ export default function MusicScreen({ navigation }: any) {
           <Ionicons name="chevron-back" size={24} color={COLORS.text} />
         </TouchableOpacity>
         <Text style={styles.title}>Decent Music</Text>
-        <TouchableOpacity>
-          <Ionicons name="search" size={22} color={COLORS.textSecondary} />
-        </TouchableOpacity>
+        <View style={styles.headerRight}>
+          <TouchableOpacity
+            style={[styles.carModeBtn, isCarMode && styles.carModeBtnActive]}
+            onPress={() => setIsCarMode(!isCarMode)}
+          >
+            <Ionicons name="car" size={18} color={isCarMode ? COLORS.gold : COLORS.textMuted} />
+          </TouchableOpacity>
+          <TouchableOpacity>
+            <Ionicons name="search" size={22} color={COLORS.textSecondary} />
+          </TouchableOpacity>
+        </View>
       </View>
+
+      {/* CarPlay / Android Auto Mode Banner */}
+      {isCarMode && (
+        <View style={styles.carBanner}>
+          <Ionicons name="car" size={16} color={COLORS.gold} />
+          <Text style={styles.carBannerText}>
+            {Platform.OS === 'ios' ? 'CarPlay' : 'Android Auto'} Mode
+          </Text>
+          {gpsEnabled && (
+            <>
+              <View style={styles.gpsDot} />
+              <Text style={styles.carBannerText}>GPS Active</Text>
+            </>
+          )}
+        </View>
+      )}
 
       {/* Tab Bar */}
       <View style={styles.tabBar}>
@@ -344,20 +433,35 @@ export default function MusicScreen({ navigation }: any) {
         <View style={styles.center}><ActivityIndicator color={COLORS.gold} size="large" /></View>
       ) : activeTab === 'tracks' ? (
         <FlatList
+          key="tracks-list"
           data={tracks}
           keyExtractor={(t) => t.id}
           renderItem={renderTrack}
           contentContainerStyle={styles.list}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.gold} />}
+          ListEmptyComponent={
+            <View style={styles.center}>
+              <Ionicons name="musical-notes-outline" size={56} color={COLORS.textMuted} />
+              <Text style={styles.emptyText}>No tracks available</Text>
+              <Text style={styles.emptySubText}>Pull to refresh or check back later</Text>
+            </View>
+          }
         />
       ) : activeTab === 'playlists' ? (
         <FlatList
+          key="playlists-grid"
           data={playlists}
           keyExtractor={(p) => p.id}
           renderItem={renderPlaylist}
           numColumns={2}
           columnWrapperStyle={{ gap: SPACING.sm }}
           contentContainerStyle={styles.list}
+          ListEmptyComponent={
+            <View style={styles.center}>
+              <Ionicons name="list-outline" size={56} color={COLORS.textMuted} />
+              <Text style={styles.emptyText}>No playlists yet</Text>
+            </View>
+          }
         />
       ) : activeTab === 'earnings' ? (
         renderEarnings()
@@ -383,6 +487,11 @@ export default function MusicScreen({ navigation }: any) {
               <Text style={styles.nowPlayingArtist} numberOfLines={1}>{currentTrack.artist}</Text>
             </View>
             <View style={styles.nowPlayingControls}>
+              {gpsEnabled && sessionId && (
+                <View style={styles.gpsIndicator}>
+                  <Ionicons name="navigate" size={12} color={COLORS.success} />
+                </View>
+              )}
               <TouchableOpacity onPress={() => { /* prev */ }}>
                 <Ionicons name="play-skip-back" size={20} color={COLORS.text} />
               </TouchableOpacity>
@@ -444,7 +553,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.lg, paddingVertical: SPACING.md,
   },
   backBtn: { padding: SPACING.xs },
-  title: { fontSize: FONT_SIZES.xxl, fontWeight: '700', color: COLORS.text },
+  title: { fontSize: FONT_SIZES.xxl, fontWeight: '700', color: COLORS.text, flex: 1 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: SPACING.sm },
+  carModeBtn: { padding: 6, borderRadius: BORDER_RADIUS.sm },
+  carModeBtnActive: { backgroundColor: COLORS.gold + '20' },
+  carBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: SPACING.xs,
+    marginHorizontal: SPACING.lg, marginBottom: SPACING.sm,
+    backgroundColor: COLORS.gold + '10', borderRadius: BORDER_RADIUS.md,
+    paddingHorizontal: SPACING.md, paddingVertical: SPACING.xs,
+    borderWidth: 1, borderColor: COLORS.gold + '30',
+  },
+  carBannerText: { fontSize: FONT_SIZES.xs, color: COLORS.gold, fontWeight: '600' },
+  gpsDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: COLORS.success, marginLeft: SPACING.sm },
+  gpsIndicator: { marginRight: SPACING.xs },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: SPACING.md, paddingHorizontal: SPACING.xl },
   emptyText: { fontSize: FONT_SIZES.lg, color: COLORS.textMuted, fontWeight: '600' },
   emptySubText: { fontSize: FONT_SIZES.sm, color: COLORS.textMuted, textAlign: 'center' },

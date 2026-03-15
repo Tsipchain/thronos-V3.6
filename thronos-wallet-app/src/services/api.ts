@@ -148,7 +148,7 @@ export async function executeSwap(params: {
   });
 }
 
-// ── Wallet Verify ─────────────────────────────────────────────────────────────
+// ── Wallet Verify ────────────────────────────────────────────────────────────
 
 export async function verifySignature(
   message: string,
@@ -159,4 +159,94 @@ export async function verifySignature(
     method: 'POST',
     body: JSON.stringify({ message, signature, address }),
   });
+}
+
+// ── T2E (Train to Earn) ─────────────────────────────────────────────────────
+
+export interface T2EBalance {
+  balance: number;
+  total_earned: number;
+  multiplier: number;
+  projects_completed: number;
+  rank?: string;
+}
+
+export interface T2EEarning {
+  id: string;
+  type: 'training' | 'rating' | 'contribution' | 'architect' | 'bonus';
+  amount: number;
+  description: string;
+  timestamp: string;
+}
+
+export async function getT2EBalance(address: string): Promise<T2EBalance> {
+  return request(`/api/t2e/balance/${address}`);
+}
+
+export async function getT2EHistory(
+  address: string,
+  limit = 20,
+): Promise<{ earnings: T2EEarning[] }> {
+  return request(`/api/architect_t2e_history/${address}?limit=${limit}`);
+}
+
+// ── Bridge ──────────────────────────────────────────────────────────────────
+
+export interface BridgeQuote {
+  from_chain: string;
+  to_chain: string;
+  from_token: string;
+  to_token: string;
+  amount_in: number;
+  amount_out: number;
+  fee: number;
+  estimated_time_min: number;
+}
+
+export interface BridgeTransfer {
+  id: string;
+  from_chain: string;
+  to_chain: string;
+  from_token: string;
+  to_token: string;
+  amount: number;
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  created_at: string;
+  tx_hash?: string;
+}
+
+export async function getBridgeQuote(params: {
+  from_chain: string;
+  to_chain: string;
+  token: string;
+  amount: number;
+}): Promise<BridgeQuote> {
+  const q = new URLSearchParams({
+    from: params.from_chain,
+    to: params.to_chain,
+    token: params.token,
+    amount: String(params.amount),
+  });
+  return request(`/api/bridge/quote?${q}`);
+}
+
+export async function executeBridge(params: {
+  from_chain: string;
+  to_chain: string;
+  token: string;
+  amount: number;
+  from_address: string;
+  to_address: string;
+  secret: string;
+}): Promise<{ success: boolean; transfer?: BridgeTransfer; error?: string }> {
+  return request('/api/bridge/execute', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export async function getBridgeHistory(
+  address: string,
+): Promise<{ transfers: BridgeTransfer[] }> {
+  return request(`/api/bridge/history/${address}`);
 }

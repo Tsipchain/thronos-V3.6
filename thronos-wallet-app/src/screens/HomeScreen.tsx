@@ -10,11 +10,35 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { useStore } from '../store/useStore';
-import { getTokenBalances } from '../services/api';
+import { getTokenBalances, getNetworkStatus } from '../services/api';
 import { shortenAddress } from '../services/wallet';
+import { CONFIG } from '../constants/config';
 import type { RootStackParamList } from '../../App';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
+
+// Token icon mapping
+const TOKEN_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
+  THR: 'diamond',
+  WBTC: 'logo-bitcoin',
+  BTC: 'logo-bitcoin',
+  L2E: 'school',
+  T2E: 'sparkles',
+  ETH: 'logo-web-component',
+  AIC: 'flash',
+  CRYPT: 'game-controller',
+};
+
+const TOKEN_COLORS: Record<string, string> = {
+  THR: COLORS.gold,
+  WBTC: '#F7931A',
+  BTC: '#F7931A',
+  L2E: '#3B82F6',
+  T2E: '#8B5CF6',
+  ETH: '#627EEA',
+  AIC: '#EC4899',
+  CRYPT: '#10B981',
+};
 
 export default function HomeScreen() {
   const navigation = useNavigation<Nav>();
@@ -22,12 +46,21 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [networkInfo, setNetworkInfo] = useState<any>(null);
 
   const loadBalances = useCallback(async () => {
     if (!wallet.address) return;
     try {
-      const data = await getTokenBalances(wallet.address);
-      setTokens(data.tokens || []);
+      const [balData, netData] = await Promise.allSettled([
+        getTokenBalances(wallet.address),
+        getNetworkStatus(),
+      ]);
+      if (balData.status === 'fulfilled') {
+        setTokens(balData.value.tokens || []);
+      }
+      if (netData.status === 'fulfilled') {
+        setNetworkInfo(netData.value);
+      }
     } catch (error) {
       console.warn('Failed to load balances:', error);
     } finally {
@@ -84,11 +117,38 @@ export default function HomeScreen() {
             {loading ? (
               <ActivityIndicator color={COLORS.background} size="large" />
             ) : (
-              <Text style={styles.balanceValue}>{thrBalance.toLocaleString(undefined, { maximumFractionDigits: 4 })}</Text>
+              <>
+                <Text style={styles.balanceValue}>{thrBalance.toLocaleString(undefined, { maximumFractionDigits: 4 })}</Text>
+                <Text style={styles.btcValue}>
+                  {(thrBalance * CONFIG.THR_BTC_RATE).toFixed(8)} BTC
+                </Text>
+              </>
             )}
             <Text style={styles.balanceSub}>THRONOS</Text>
           </View>
         </LinearGradient>
+
+        {/* Network Status */}
+        {networkInfo && (
+          <View style={styles.networkBar}>
+            <View style={styles.networkDot} />
+            <Text style={styles.networkText}>
+              Block #{networkInfo.block_height?.toLocaleString() ?? '—'}
+            </Text>
+            <Text style={styles.networkText}>|</Text>
+            <Text style={styles.networkText}>
+              {networkInfo.tps ?? '—'} TPS
+            </Text>
+            {networkInfo.acic_enabled && (
+              <>
+                <Text style={styles.networkText}>|</Text>
+                <View style={styles.acicBadge}>
+                  <Text style={styles.acicText}>ACIC</Text>
+                </View>
+              </>
+            )}
+          </View>
+        )}
 
         {/* Multi-Chain Selector */}
         <View style={styles.chainSelector}>
@@ -143,24 +203,31 @@ export default function HomeScreen() {
           ) : tokens.length === 0 ? (
             <View style={styles.emptyBox}><Ionicons name="wallet-outline" size={40} color={COLORS.textMuted} /><Text style={styles.emptyText}>No tokens yet</Text></View>
           ) : (
-            tokens.filter((t) => t.balance > 0 || t.symbol === 'THR').map((token, i) => (
-              <View key={i} style={styles.tokenRow}>
-                <View style={[styles.tokenIcon, { backgroundColor: token.symbol === 'THR' ? COLORS.gold + '20' : COLORS.primary + '20' }]}>
-                  <Ionicons
-                    name={token.symbol === 'THR' ? 'planet' : token.symbol === 'WBTC' ? 'logo-bitcoin' : 'cube'}
-                    size={24}
-                    color={token.symbol === 'THR' ? COLORS.gold : COLORS.primary}
-                  />
+            tokens.filter((t) => t.balance > 0 || t.symbol === 'THR').map((token, i) => {
+              const iconName = TOKEN_ICONS[token.symbol] || 'cube';
+              const iconColor = TOKEN_COLORS[token.symbol] || COLORS.primary;
+              return (
+                <View key={i} style={styles.tokenRow}>
+                  <View style={[styles.tokenIcon, { backgroundColor: iconColor + '20' }]}>
+                    <Ionicons name={iconName} size={24} color={iconColor} />
+                  </View>
+                  <View style={styles.tokenInfo}>
+                    <Text style={styles.tokenName}>{token.name || token.symbol}</Text>
+                    <Text style={styles.tokenCategory}>{token.category || 'Token'}</Text>
+                  </View>
+                  <View style={styles.tokenRight}>
+                    <Text style={styles.tokenBalance}>
+                      {token.balance.toLocaleString(undefined, { maximumFractionDigits: 4 })} {token.symbol}
+                    </Text>
+                    {token.symbol === 'THR' && (
+                      <Text style={styles.tokenBtcVal}>
+                        {(token.balance * CONFIG.THR_BTC_RATE).toFixed(8)} BTC
+                      </Text>
+                    )}
+                  </View>
                 </View>
-                <View style={styles.tokenInfo}>
-                  <Text style={styles.tokenName}>{token.name || token.symbol}</Text>
-                  <Text style={styles.tokenCategory}>{token.category || 'Token'}</Text>
-                </View>
-                <Text style={styles.tokenBalance}>
-                  {token.balance.toLocaleString(undefined, { maximumFractionDigits: 4 })} {token.symbol}
-                </Text>
-              </View>
-            ))
+              );
+            })
           )}
         </View>
 
@@ -182,6 +249,7 @@ const styles = StyleSheet.create({
   balanceArea: { alignItems: 'center', paddingVertical: SPACING.lg },
   balanceLabel: { fontSize: FONT_SIZES.sm, color: 'rgba(0,0,0,0.6)' },
   balanceValue: { fontSize: FONT_SIZES.display, fontWeight: '700', color: COLORS.background },
+  btcValue: { fontSize: FONT_SIZES.sm, color: 'rgba(0,0,0,0.5)', fontWeight: '500', marginTop: 2 },
   balanceSub: { fontSize: FONT_SIZES.md, color: 'rgba(0,0,0,0.5)', fontWeight: '600' },
   chainSelector: { flexDirection: 'row', gap: SPACING.sm, marginBottom: SPACING.md },
   chainChip: {
@@ -215,5 +283,20 @@ const styles = StyleSheet.create({
   tokenInfo: { flex: 1 },
   tokenName: { fontSize: FONT_SIZES.md, fontWeight: '600', color: COLORS.text },
   tokenCategory: { fontSize: FONT_SIZES.xs, color: COLORS.textMuted },
+  tokenRight: { alignItems: 'flex-end' as const },
   tokenBalance: { fontSize: FONT_SIZES.md, fontWeight: '600', color: COLORS.text },
+  tokenBtcVal: { fontSize: FONT_SIZES.xs, color: COLORS.textMuted, marginTop: 2 },
+  networkBar: {
+    flexDirection: 'row' as const, alignItems: 'center' as const, gap: SPACING.xs,
+    paddingHorizontal: SPACING.md, paddingVertical: SPACING.sm,
+    backgroundColor: COLORS.surface, borderRadius: BORDER_RADIUS.md,
+    marginBottom: SPACING.md, borderWidth: 1, borderColor: COLORS.border,
+  },
+  networkDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.success },
+  networkText: { fontSize: FONT_SIZES.xs, color: COLORS.textMuted, fontWeight: '500' },
+  acicBadge: {
+    backgroundColor: COLORS.gold + '20', paddingHorizontal: SPACING.xs,
+    paddingVertical: 2, borderRadius: BORDER_RADIUS.sm,
+  },
+  acicText: { fontSize: FONT_SIZES.xs, color: COLORS.gold, fontWeight: '700' },
 });

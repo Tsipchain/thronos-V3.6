@@ -1,21 +1,33 @@
 // Thronos Wallet API Service
 // Communicates with the Thronos blockchain backend
+// Node 1 (master) primary, Node 2 (replica) fallback
 
 import { CONFIG } from '../constants/config';
 
 const BASE = CONFIG.API_URL;
+const BASE_REPLICA = CONFIG.API_URL_REPLICA;
 
 async function request<T = any>(endpoint: string, options?: RequestInit): Promise<T> {
-  const url = `${BASE}${endpoint}`;
-  const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    ...options,
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: 'Request failed' }));
-    throw new Error(err.error || `HTTP ${res.status}`);
+  // Try Node 1 (master) first, fallback to Node 2 (replica)
+  for (const baseUrl of [BASE, BASE_REPLICA]) {
+    try {
+      const url = `${baseUrl}${endpoint}`;
+      const res = await fetch(url, {
+        headers: { 'Content-Type': 'application/json', ...options?.headers },
+        ...options,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Request failed' }));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      return res.json();
+    } catch (err) {
+      if (baseUrl === BASE_REPLICA) throw err;
+      // Node 1 failed, try Node 2
+      continue;
+    }
   }
-  return res.json();
+  throw new Error('All nodes unreachable');
 }
 
 // ── Wallet ────────────────────────────────────────────────────────────────────
@@ -370,4 +382,171 @@ export async function getBridgeHistory(
   address: string,
 ): Promise<{ transfers: BridgeTransfer[] }> {
   return request(`/api/bridge/history/${address}`);
+}
+
+// ── Bridge Burn (THR → BTC) ──────────────────────────────────────────────────
+
+export async function bridgeBurn(params: {
+  wallet: string;
+  amount: number;
+  btc_destination: string;
+  secret: string;
+}): Promise<{ success: boolean; tx_hash?: string; btc_amount?: number; error?: string }> {
+  return request('/api/bridge/burn', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export async function getBridgeStats(): Promise<{
+  total_burned_thr: number;
+  total_locked_btc: number;
+  transaction_count: number;
+  exchange_rate: number;
+}> {
+  return request('/api/bridge/stats');
+}
+
+// ── Pledge System (BTC Entry Flow) ──────────────────────────────────────────
+
+export async function submitPledge(params: {
+  btc_address: string;
+  pledge_text: string;
+  recovery_phrase?: string;
+}): Promise<{
+  success: boolean;
+  thr_address?: string;
+  send_secret?: string;
+  pledge_hash?: string;
+  pdf_filename?: string;
+  error?: string;
+}> {
+  return request('/api/pledge/submit', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export async function verifyBtcPayment(
+  btc_address: string,
+): Promise<{
+  verified: boolean;
+  amount?: number;
+  txid?: string;
+}> {
+  return request(`/api/pledge/verify_btc/${btc_address}`);
+}
+
+export async function downloadPledgePdf(
+  thr_address: string,
+): Promise<{ pdf_url: string }> {
+  return request(`/api/pledge/pdf/${thr_address}`);
+}
+
+export async function recoverWallet(params: {
+  pdf_filename?: string;
+  recovery_phrase?: string;
+}): Promise<{
+  success: boolean;
+  thr_address?: string;
+  send_secret?: string;
+  error?: string;
+}> {
+  return request('/recovery', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+// ── Phantom Network ──────────────────────────────────────────────────────────
+
+export async function getPhantomTxChain(): Promise<{
+  transactions: any[];
+  chain_height: number;
+}> {
+  return request('/api/phantom/tx_chain');
+}
+
+export async function getPhantomNodeStatus(): Promise<{
+  nodes_online: number;
+  phantom_height: number;
+  last_sync: string;
+  consensus: string;
+}> {
+  return request('/api/phantom/status');
+}
+
+// ── Liquidity Pools ──────────────────────────────────────────────────────────
+
+export async function getLiquidityPools(): Promise<{
+  pools: Array<{
+    id: string;
+    token_a: string;
+    token_b: string;
+    total_liquidity: number;
+    apy: number;
+    volume_24h: number;
+  }>;
+}> {
+  return request('/api/v1/pools/list');
+}
+
+export async function getLPPositions(address: string): Promise<{
+  positions: Array<{
+    pool_id: string;
+    token_a: string;
+    token_b: string;
+    liquidity_share: number;
+    value: number;
+    pending_rewards: number;
+  }>;
+}> {
+  return request(`/api/v1/pools/positions/${address}`);
+}
+
+export async function addLiquidity(params: {
+  address: string;
+  pool_id: string;
+  amount_a: number;
+  amount_b: number;
+  secret: string;
+}): Promise<{ success: boolean; shares?: number; error?: string }> {
+  return request('/api/v1/pools/add_liquidity', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export async function removeLiquidity(params: {
+  address: string;
+  pool_id: string;
+  shares: number;
+  secret: string;
+}): Promise<{ success: boolean; amount_a?: number; amount_b?: number; error?: string }> {
+  return request('/api/v1/pools/remove_liquidity', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+// ── Mining Rewards ───────────────────────────────────────────────────────────
+
+export async function getMiningInfo(address: string): Promise<{
+  hashrate: number;
+  pending_reward: number;
+  total_mined: number;
+  blocks_found: number;
+  last_payout: string;
+}> {
+  return request(`/api/mining/info/${address}`);
+}
+
+// ── Wallet Data (categorized history from mainchain) ─────────────────────────
+
+export async function getWalletData(
+  address: string,
+  category = 'all',
+  limit = 50,
+): Promise<any> {
+  return request(`/wallet_data/${address}?category=${category}&limit=${limit}`);
 }

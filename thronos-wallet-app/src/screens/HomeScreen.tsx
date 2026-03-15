@@ -90,6 +90,27 @@ export default function HomeScreen() {
           </View>
         </LinearGradient>
 
+        {/* Multi-Chain Selector */}
+        <View style={styles.chainSelector}>
+          {(['thronos', 'bitcoin', 'ethereum'] as const).map((chain) => {
+            const active = wallet.activeChain === chain;
+            const labels = { thronos: 'THR', bitcoin: 'BTC', ethereum: 'ETH' };
+            const icons: Record<string, keyof typeof Ionicons.glyphMap> = { thronos: 'planet', bitcoin: 'logo-bitcoin', ethereum: 'diamond' };
+            return (
+              <TouchableOpacity
+                key={chain}
+                style={[styles.chainChip, active && styles.chainChipActive]}
+                onPress={() => useStore.getState().setActiveChain(chain)}
+              >
+                <Ionicons name={icons[chain]} size={16} color={active ? COLORS.gold : COLORS.textMuted} />
+                <Text style={[styles.chainChipText, active && styles.chainChipTextActive]}>
+                  {labels[chain]}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
         {/* Quick Actions */}
         <View style={styles.quickActions}>
           <TouchableOpacity style={styles.quickAction} onPress={() => navigation.navigate('Send')}>
@@ -103,6 +124,10 @@ export default function HomeScreen() {
           <TouchableOpacity style={styles.quickAction} onPress={() => navigation.navigate('Swap')}>
             <View style={styles.qaIcon}><Ionicons name="swap-horizontal" size={24} color={COLORS.info} /></View>
             <Text style={styles.qaText}>Swap</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.quickAction} onPress={() => navigation.navigate('Bridge')}>
+            <View style={styles.qaIcon}><Ionicons name="git-compare" size={24} color={COLORS.warning} /></View>
+            <Text style={styles.qaText}>Bridge</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.quickAction} onPress={() => navigation.navigate('Stake')}>
             <View style={styles.qaIcon}><Ionicons name="layers" size={24} color={COLORS.gold} /></View>
@@ -158,6 +183,16 @@ const styles = StyleSheet.create({
   balanceLabel: { fontSize: FONT_SIZES.sm, color: 'rgba(0,0,0,0.6)' },
   balanceValue: { fontSize: FONT_SIZES.display, fontWeight: '700', color: COLORS.background },
   balanceSub: { fontSize: FONT_SIZES.md, color: 'rgba(0,0,0,0.5)', fontWeight: '600' },
+  chainSelector: { flexDirection: 'row', gap: SPACING.sm, marginBottom: SPACING.md },
+  chainChip: {
+    flexDirection: 'row', alignItems: 'center', gap: SPACING.xs,
+    paddingHorizontal: SPACING.md, paddingVertical: SPACING.sm,
+    borderRadius: BORDER_RADIUS.full, backgroundColor: COLORS.surface,
+    borderWidth: 1, borderColor: COLORS.border,
+  },
+  chainChipActive: { borderColor: COLORS.gold, backgroundColor: COLORS.gold + '15' },
+  chainChipText: { fontSize: FONT_SIZES.sm, color: COLORS.textMuted, fontWeight: '600' },
+  chainChipTextActive: { color: COLORS.gold },
   quickActions: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: SPACING.lg },
   quickAction: { alignItems: 'center' },
   qaIcon: {

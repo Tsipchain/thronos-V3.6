@@ -9,7 +9,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
-import { createNewWallet, markBackedUp } from '../services/wallet';
+import { createNewWallet, markBackedUp, generateMnemonic } from '../services/wallet';
 import { useStore } from '../store/useStore';
 import type { RootStackParamList } from '../../App';
 
@@ -19,19 +19,29 @@ export default function CreateWalletScreen() {
   const navigation = useNavigation<Nav>();
   const { setWallet } = useStore();
   const [loading, setLoading] = useState(false);
-  const [wallet, setCreatedWallet] = useState<{ address: string; secret: string } | null>(null);
+  const [wallet, setCreatedWallet] = useState<{ address: string; secret: string; mnemonic?: string } | null>(null);
   const [secretCopied, setSecretCopied] = useState(false);
   const [addressCopied, setAddressCopied] = useState(false);
+  const [mnemonicCopied, setMnemonicCopied] = useState(false);
 
   const handleCreate = async () => {
     setLoading(true);
     try {
-      const result = await createNewWallet();
+      const mnemonic = generateMnemonic();
+      const result = await createNewWallet(mnemonic);
       setCreatedWallet(result);
     } catch (error: any) {
       Alert.alert('Error', error.message || 'Failed to create wallet. Check your connection.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const copyMnemonic = async () => {
+    if (wallet?.mnemonic) {
+      await Clipboard.setStringAsync(wallet.mnemonic);
+      setMnemonicCopied(true);
+      setTimeout(() => setMnemonicCopied(false), 3000);
     }
   };
 
@@ -54,7 +64,14 @@ export default function CreateWalletScreen() {
   const handleContinue = async () => {
     if (!wallet) return;
     await markBackedUp();
-    setWallet({ isConnected: true, address: wallet.address, backedUp: true });
+    setWallet({
+      isConnected: true,
+      address: wallet.address,
+      backedUp: true,
+      hasMnemonic: !!wallet.mnemonic,
+      activeChain: 'thronos',
+      chainAddresses: { thronos: wallet.address, bitcoin: null, ethereum: null },
+    });
     navigation.reset({ index: 0, routes: [{ name: 'MainTabs' }] });
   };
 
@@ -134,13 +151,34 @@ export default function CreateWalletScreen() {
             </View>
           </TouchableOpacity>
 
+          {/* Recovery Phrase */}
+          {wallet.mnemonic && (
+            <TouchableOpacity style={[styles.credBox, styles.mnemonicBox]} onPress={copyMnemonic}>
+              <Text style={styles.credLabel}>
+                <Ionicons name="shield-checkmark" size={14} color={COLORS.primary} /> Recovery Phrase (12 words)
+              </Text>
+              <View style={styles.mnemonicGrid}>
+                {wallet.mnemonic.split(' ').map((word, i) => (
+                  <View key={i} style={styles.mnemonicWord}>
+                    <Text style={styles.mnemonicIndex}>{i + 1}.</Text>
+                    <Text style={styles.mnemonicText}>{word}</Text>
+                  </View>
+                ))}
+              </View>
+              <View style={styles.copyRow}>
+                <Ionicons name={mnemonicCopied ? 'checkmark' : 'copy-outline'} size={16} color={COLORS.primary} />
+                <Text style={[styles.copyText, { color: COLORS.primary }]}>{mnemonicCopied ? 'Copied!' : 'Tap to copy'}</Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
           {/* Warning */}
           <View style={styles.warningBox}>
             <Ionicons name="alert-circle" size={24} color={COLORS.error} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.warningTitle}>IMPORTANT - Save Your Secret Key!</Text>
+              <Text style={styles.warningTitle}>IMPORTANT - Save Your Recovery Phrase!</Text>
               <Text style={styles.warningText}>
-                Write it down on paper and store it safely. If you lose your secret key, you lose access to your funds forever. We do NOT store your keys.
+                Write down your 12-word recovery phrase on paper and store it safely. This is the ONLY way to recover your wallet. We do NOT store your keys or phrase.
               </Text>
             </View>
           </View>
@@ -190,6 +228,16 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: COLORS.border,
   },
   secretBox: { borderColor: COLORS.warning + '50', backgroundColor: COLORS.warning + '08' },
+  mnemonicBox: { borderColor: COLORS.primary + '50', backgroundColor: COLORS.primary + '08' },
+  mnemonicGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACING.xs, marginTop: SPACING.sm },
+  mnemonicWord: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: COLORS.surface, borderRadius: BORDER_RADIUS.sm,
+    paddingHorizontal: SPACING.sm, paddingVertical: SPACING.xs,
+    borderWidth: 1, borderColor: COLORS.border,
+  },
+  mnemonicIndex: { fontSize: FONT_SIZES.xs, color: COLORS.textMuted, fontWeight: '600' },
+  mnemonicText: { fontSize: FONT_SIZES.sm, color: COLORS.text, fontWeight: '500' },
   credLabel: { fontSize: FONT_SIZES.sm, color: COLORS.textSecondary, fontWeight: '600', marginBottom: SPACING.xs },
   credValue: { fontSize: FONT_SIZES.md, color: COLORS.text, fontFamily: 'monospace' },
   copyRow: { flexDirection: 'row', alignItems: 'center', gap: SPACING.xs, marginTop: SPACING.sm },

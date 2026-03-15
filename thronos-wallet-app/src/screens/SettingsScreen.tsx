@@ -105,7 +105,7 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>About</Text>
 
-          <TouchableOpacity style={styles.settingRow} onPress={() => Linking.openURL('https://thronos.io')}>
+          <TouchableOpacity style={styles.settingRow} onPress={() => Linking.openURL('https://api.thronoschain.org')}>
             <Ionicons name="globe" size={20} color={COLORS.primary} />
             <Text style={styles.settingText}>Website</Text>
             <Ionicons name="chevron-forward" size={20} color={COLORS.textMuted} />

@@ -19,7 +19,7 @@ export const CONFIG = {
   // App
   APP_NAME: 'Thronos Wallet',
   APP_VERSION: '1.1.0',
-  SUPPORT_EMAIL: 'support@thronos.io',
+  SUPPORT_EMAIL: 'support@thronoschain.org',
 
   // Deep-link scheme
   SCHEME: 'thronoswallet',

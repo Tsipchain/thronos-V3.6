@@ -115,8 +115,35 @@ export async function getChainTokens(): Promise<{ tokens: any[] }> {
   return request('/api/tokens/list');
 }
 
-export async function getNetworkStatus(): Promise<any> {
-  return request('/api/v1/status');
+export async function getNetworkStatus(): Promise<{
+  block_height: number;
+  tps: number;
+  peers: number;
+  mempool: number;
+  total_supply: number;
+  chain_height: number;
+  [key: string]: any;
+}> {
+  // Fetch status and peers in parallel
+  const [status, peersRes, liveRes] = await Promise.allSettled([
+    request<any>('/api/v1/status'),
+    request<any>('/api/peers/list').catch(() => ({ peers: [] })),
+    request<any>('/api/network_stats').catch(() => ({})),
+  ]);
+
+  const statusData = status.status === 'fulfilled' ? status.value : {};
+  const peersData = peersRes.status === 'fulfilled' ? peersRes.value : {};
+  const liveData = liveRes.status === 'fulfilled' ? liveRes.value : {};
+
+  return {
+    ...statusData,
+    block_height: statusData.chain_height || statusData.block_count || statusData.height || 0,
+    tps: statusData.tps || liveData.tps || 0,
+    peers: Array.isArray(peersData.peers) ? peersData.peers.length : (peersData.active_peers?.length ?? 0),
+    mempool: statusData.mempool || 0,
+    total_supply: statusData.total_supply || 0,
+    chain_height: statusData.chain_height || 0,
+  };
 }
 
 export async function getTokenPrices(): Promise<any> {

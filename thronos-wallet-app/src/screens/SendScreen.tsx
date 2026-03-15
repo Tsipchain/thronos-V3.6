@@ -35,6 +35,27 @@ const NETWORKS: NetworkInfo[] = [
   { key: 'xrp', label: 'XRP Ledger', icon: '◆', color: '#23292F', available: true },
 ];
 
+// Token options per network (matching mainchain send modal)
+const NETWORK_TOKENS: Record<Network, Array<{ symbol: string; name: string }>> = {
+  thronos: [
+    { symbol: 'THR', name: 'Thronos' },
+    { symbol: 'WBTC', name: 'Wrapped Bitcoin' },
+    { symbol: 'L2E', name: 'Learn-to-Earn' },
+  ],
+  bitcoin: [{ symbol: 'BTC', name: 'Bitcoin' }],
+  ethereum: [{ symbol: 'ETH', name: 'Ethereum' }],
+  bnb: [{ symbol: 'BNB', name: 'BNB' }],
+  xrp: [{ symbol: 'XRP', name: 'XRP' }],
+};
+
+const NETWORK_PLACEHOLDERS: Record<Network, string> = {
+  thronos: 'THR...',
+  bitcoin: 'bc1... or 1... or 3...',
+  ethereum: '0x...',
+  bnb: '0x...',
+  xrp: 'r...',
+};
+
 // ── Component ────────────────────────────────────────────────────────────────
 
 export default function SendScreen() {
@@ -57,6 +78,16 @@ export default function SendScreen() {
   const availableBalance = currentToken?.balance ?? 0;
   const feePercent = speed === 'fast' ? 0.5 : 0.09;
 
+  // Build token list: static NETWORK_TOKENS + dynamic wallet tokens for thronos
+  const tokenOptions = selectedNetwork === 'thronos'
+    ? [
+        ...NETWORK_TOKENS.thronos,
+        ...tokens
+          .filter((t) => t.balance > 0 && !NETWORK_TOKENS.thronos.some(nt => nt.symbol === t.symbol))
+          .map((t) => ({ symbol: t.symbol, name: t.name || t.symbol })),
+      ]
+    : NETWORK_TOKENS[selectedNetwork];
+
   useEffect(() => {
     return () => {
       if (sound) sound.unloadAsync();
@@ -65,17 +96,10 @@ export default function SendScreen() {
 
   const selectNetwork = (network: Network) => {
     setSelectedNetwork(network);
-    // Reset token if changing away from thronos
-    if (network !== 'thronos') {
-      const networkTokenMap: Record<string, string> = {
-        bitcoin: 'WBTC',
-        ethereum: 'WETH',
-        bnb: 'WBNB',
-        xrp: 'WXRP',
-      };
-      setSelectedToken(networkTokenMap[network] || 'THR');
-    } else {
-      setSelectedToken('THR');
+    // Auto-select first token for the selected network
+    const networkTokens = NETWORK_TOKENS[network];
+    if (networkTokens.length > 0) {
+      setSelectedToken(networkTokens[0].symbol);
     }
   };
 
@@ -161,10 +185,6 @@ export default function SendScreen() {
     }
   };
 
-  const tokenList = selectedNetwork === 'thronos'
-    ? ['THR', ...tokens.filter((t) => t.symbol !== 'THR' && t.balance > 0).map((t) => t.symbol)]
-    : [selectedToken];
-
   return (
     <SafeAreaView style={styles.container}>
       <LinearGradient colors={[COLORS.background, COLORS.backgroundLight]} style={styles.gradient}>
@@ -179,44 +199,48 @@ export default function SendScreen() {
         </View>
 
         <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-          {/* Network Selector */}
+          {/* Network Selector — 2-column grid matching mainchain */}
           <Text style={styles.label}>Network</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.networkScroll}>
-            <View style={styles.networkRow}>
-              {NETWORKS.map((net) => (
-                <TouchableOpacity
-                  key={net.key}
-                  style={[
-                    styles.networkChip,
-                    selectedNetwork === net.key && styles.networkChipActive,
-                    selectedNetwork === net.key && { borderColor: net.color },
-                  ]}
-                  onPress={() => selectNetwork(net.key)}
-                >
-                  <Text style={styles.networkIcon}>{net.icon}</Text>
-                  <Text style={[
-                    styles.networkText,
-                    selectedNetwork === net.key && { color: net.color },
-                  ]}>
-                    {net.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </ScrollView>
-
-          {/* Token selector */}
-          <Text style={styles.label}>Token</Text>
-          <View style={styles.tokenRow}>
-            {tokenList.map((sym) => (
+          <View style={styles.networkGrid}>
+            {NETWORKS.map((net) => (
               <TouchableOpacity
-                key={sym}
-                style={[styles.tokenChip, selectedToken === sym && styles.tokenChipActive]}
-                onPress={() => setSelectedToken(sym)}
+                key={net.key}
+                style={[
+                  styles.networkGridItem,
+                  selectedNetwork === net.key && styles.networkGridItemActive,
+                  selectedNetwork === net.key && { borderColor: net.color },
+                ]}
+                onPress={() => selectNetwork(net.key)}
               >
-                <Text style={[styles.tokenChipText, selectedToken === sym && styles.tokenChipTextActive]}>{sym}</Text>
+                <Text style={styles.networkIcon}>{net.icon}</Text>
+                <Text style={[
+                  styles.networkText,
+                  selectedNetwork === net.key && { color: net.color },
+                ]}>
+                  {net.label}
+                </Text>
               </TouchableOpacity>
             ))}
+          </View>
+
+          {/* Token Selector — dropdown style matching mainchain */}
+          <Text style={styles.label}>Token</Text>
+          <View style={styles.tokenDropdown}>
+            {tokenOptions.map((tok) => {
+              const isActive = selectedToken === tok.symbol;
+              return (
+                <TouchableOpacity
+                  key={tok.symbol}
+                  style={[styles.tokenDropdownItem, isActive && styles.tokenDropdownItemActive]}
+                  onPress={() => setSelectedToken(tok.symbol)}
+                >
+                  <Text style={[styles.tokenDropdownText, isActive && { color: COLORS.gold }]}>
+                    {tok.symbol} - {tok.name}
+                  </Text>
+                  {isActive && <Ionicons name="checkmark" size={16} color={COLORS.gold} />}
+                </TouchableOpacity>
+              );
+            })}
           </View>
           <Text style={styles.balanceInfo}>Available: {availableBalance.toLocaleString()} {selectedToken}</Text>
 
@@ -224,7 +248,7 @@ export default function SendScreen() {
           <Text style={styles.label}>Recipient Address</Text>
           <TextInput
             style={styles.input}
-            placeholder={selectedNetwork === 'thronos' ? 'THR...' : `${selectedNetwork} address...`}
+            placeholder={NETWORK_PLACEHOLDERS[selectedNetwork]}
             placeholderTextColor={COLORS.textMuted}
             value={recipient}
             onChangeText={setRecipient}
@@ -291,19 +315,25 @@ export default function SendScreen() {
             </View>
           )}
 
-          {/* Send button */}
-          <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={sending}>
-            <LinearGradient colors={[COLORS.gold, COLORS.goldDark]} style={styles.btnGradient}>
-              {sending ? (
-                <ActivityIndicator color={COLORS.background} />
-              ) : (
-                <>
-                  <Ionicons name="send" size={20} color={COLORS.background} />
-                  <Text style={styles.btnText}>Send {selectedToken}</Text>
-                </>
-              )}
-            </LinearGradient>
-          </TouchableOpacity>
+          {/* Action Buttons — Cancel + Send matching mainchain */}
+          <View style={styles.actionRow}>
+            <TouchableOpacity style={styles.cancelBtn} onPress={() => navigation.goBack()}>
+              <Text style={styles.cancelBtnText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.sendBtn, sending && { opacity: 0.6 }]}
+              onPress={handleSend}
+              disabled={sending}
+            >
+              <LinearGradient colors={[COLORS.gold, COLORS.goldDark]} style={styles.btnGradient}>
+                {sending ? (
+                  <ActivityIndicator color={COLORS.background} />
+                ) : (
+                  <Text style={styles.btnText}>Send</Text>
+                )}
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
 
           <View style={{ height: 40 }} />
         </ScrollView>
@@ -400,29 +430,32 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.xs, marginTop: SPACING.lg,
   },
 
-  // Network
-  networkScroll: { marginBottom: SPACING.xs },
-  networkRow: { flexDirection: 'row', gap: SPACING.sm },
-  networkChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: SPACING.md, paddingVertical: SPACING.sm,
+  // Network Grid — 2 columns matching mainchain
+  networkGrid: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: SPACING.sm,
+  },
+  networkGridItem: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    width: '48%' as any, paddingHorizontal: SPACING.md, paddingVertical: SPACING.md,
     borderRadius: BORDER_RADIUS.lg, borderWidth: 1, borderColor: COLORS.border,
     backgroundColor: COLORS.surface,
   },
-  networkChipActive: { backgroundColor: COLORS.gold + '15' },
-  networkIcon: { fontSize: 16 },
-  networkText: { fontSize: FONT_SIZES.xs, fontWeight: '600', color: COLORS.textSecondary },
+  networkGridItemActive: { backgroundColor: COLORS.gold + '15' },
+  networkIcon: { fontSize: 18 },
+  networkText: { fontSize: FONT_SIZES.sm, fontWeight: '600', color: COLORS.textSecondary },
 
-  // Token
-  tokenRow: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACING.sm },
-  tokenChip: {
-    paddingHorizontal: SPACING.md, paddingVertical: SPACING.sm,
-    borderRadius: BORDER_RADIUS.full, borderWidth: 1, borderColor: COLORS.border,
-    backgroundColor: COLORS.surface,
+  // Token Dropdown
+  tokenDropdown: {
+    backgroundColor: COLORS.surface, borderRadius: BORDER_RADIUS.lg,
+    borderWidth: 1, borderColor: COLORS.border, overflow: 'hidden',
   },
-  tokenChipActive: { borderColor: COLORS.gold, backgroundColor: COLORS.gold + '20' },
-  tokenChipText: { fontSize: FONT_SIZES.sm, color: COLORS.textSecondary, fontWeight: '600' },
-  tokenChipTextActive: { color: COLORS.gold },
+  tokenDropdownItem: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: SPACING.md, paddingVertical: SPACING.md,
+    borderBottomWidth: 1, borderBottomColor: COLORS.border + '40',
+  },
+  tokenDropdownItemActive: { backgroundColor: COLORS.gold + '10' },
+  tokenDropdownText: { fontSize: FONT_SIZES.md, color: COLORS.textSecondary, fontWeight: '500' },
   balanceInfo: { fontSize: FONT_SIZES.xs, color: COLORS.textMuted, marginTop: SPACING.xs },
 
   // Input
@@ -461,8 +494,15 @@ const styles = StyleSheet.create({
   resultText: { fontSize: FONT_SIZES.sm, color: COLORS.text, fontWeight: '600' },
   resultTxId: { fontSize: FONT_SIZES.xs, color: COLORS.textMuted, fontFamily: 'monospace', marginTop: 2 },
 
-  // Send Button
-  sendBtn: { borderRadius: BORDER_RADIUS.lg, overflow: 'hidden', marginTop: SPACING.xl },
+  // Action Buttons — Cancel + Send
+  actionRow: { flexDirection: 'row', gap: SPACING.sm, marginTop: SPACING.xl },
+  cancelBtn: {
+    flex: 1, paddingVertical: SPACING.md, borderRadius: BORDER_RADIUS.lg,
+    borderWidth: 1, borderColor: COLORS.border, backgroundColor: COLORS.surface,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  cancelBtnText: { fontSize: FONT_SIZES.lg, fontWeight: '600', color: COLORS.textSecondary },
+  sendBtn: { flex: 1, borderRadius: BORDER_RADIUS.lg, overflow: 'hidden' },
   btnGradient: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     paddingVertical: SPACING.md, gap: SPACING.sm,

@@ -68,13 +68,15 @@ async function postJSON<T = any>(endpoint: string, body: any): Promise<T> {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function formatDuration(s: number): string {
+function formatDuration(s: number | undefined): string {
+  if (s == null || isNaN(s)) return '0:00';
   const m = Math.floor(s / 60);
   const sec = s % 60;
   return `${m}:${sec.toString().padStart(2, '0')}`;
 }
 
-function formatNumber(n: number): string {
+function formatNumber(n: number | undefined): string {
+  if (n == null || isNaN(n)) return '0';
   if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
   return String(n);
 }
@@ -283,7 +285,7 @@ export default function MusicScreen({ navigation }: any) {
         </View>
         <TouchableOpacity style={styles.tipBtn} onPress={() => openTipModal(item)}>
           <Ionicons name="heart" size={16} color={COLORS.gold} />
-          <Text style={styles.tipBtnText}>{item.tips_earned.toFixed(1)}</Text>
+          <Text style={styles.tipBtnText}>{(item.tips_earned ?? 0).toFixed(1)}</Text>
         </TouchableOpacity>
       </TouchableOpacity>
     );
@@ -310,7 +312,7 @@ export default function MusicScreen({ navigation }: any) {
     <ScrollView style={styles.earningsContainer}>
       <LinearGradient colors={['#2A1A0A', '#1A1A33']} style={styles.earningsCard}>
         <Text style={styles.earningsLabel}>Total Tips Earned</Text>
-        <Text style={styles.earningsAmount}>{earnings.total_tips.toFixed(1)} THR</Text>
+        <Text style={styles.earningsAmount}>{(earnings.total_tips ?? 0).toFixed(1)} THR</Text>
         <View style={styles.earningsGrid}>
           <View style={styles.earningStat}>
             <Ionicons name="play-circle" size={24} color={COLORS.info} />

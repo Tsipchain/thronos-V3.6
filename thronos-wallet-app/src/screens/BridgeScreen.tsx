@@ -17,6 +17,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { useStore } from '../store/useStore';
+import {
+  getTokenBalances,
+  getBridgeQuote,
+  executeBridge as executeBridgeAPI,
+  getBridgeHistory,
+} from '../services/api';
+import { getWallet } from '../services/wallet';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -94,65 +101,7 @@ const BRIDGE_PAIRS: BridgePair[] = [
   { from: 'ETH', to: 'THR', fee: 0.2, estimatedMinutes: 10, available: false },
 ];
 
-// Mock balances
-const MOCK_BALANCES: Record<string, number> = {
-  THR: 12500.0,
-  WBTC: 0.035,
-  BTC: 0.042,
-  ETH: 1.25,
-};
-
-// Mock recent bridge transfers
-const MOCK_TRANSFERS: BridgeTransfer[] = [
-  {
-    id: 'br_001',
-    fromChain: 'thronos',
-    toChain: 'bitcoin',
-    token: 'WBTC',
-    amount: 0.005,
-    fee: 0.0000075,
-    status: 'completed',
-    txHash: '0xab3f…e91c',
-    timestamp: Date.now() - 3_600_000,
-    estimatedTime: 900,
-  },
-  {
-    id: 'br_002',
-    fromChain: 'bitcoin',
-    toChain: 'thronos',
-    token: 'BTC',
-    amount: 0.01,
-    fee: 0.000015,
-    status: 'confirming',
-    txHash: '0x7d2e…4a0b',
-    timestamp: Date.now() - 600_000,
-    estimatedTime: 900,
-  },
-  {
-    id: 'br_003',
-    fromChain: 'thronos',
-    toChain: 'thronos',
-    token: 'THR',
-    amount: 500,
-    fee: 0.5,
-    status: 'pending',
-    txHash: '0xc12d…83fe',
-    timestamp: Date.now() - 120_000,
-    estimatedTime: 300,
-  },
-  {
-    id: 'br_004',
-    fromChain: 'thronos',
-    toChain: 'ethereum',
-    token: 'THR',
-    amount: 1000,
-    fee: 2.0,
-    status: 'failed',
-    txHash: '0xf4a1…02cc',
-    timestamp: Date.now() - 86_400_000,
-    estimatedTime: 600,
-  },
-];
+// No mock data — all balances and transfers fetched from chain API
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -214,7 +163,7 @@ function timeAgo(timestamp: number): string {
 // ---------------------------------------------------------------------------
 
 export default function BridgeScreen({ navigation }: { navigation: any }) {
-  const { wallet, bridgeHistory, setBridgeHistory } = useStore();
+  const { wallet, tokens, bridgeHistory, setBridgeHistory } = useStore();
 
   // State
   const [sourceChain, setSourceChain] = useState<ChainId>('thronos');
@@ -224,9 +173,47 @@ export default function BridgeScreen({ navigation }: { navigation: any }) {
   const [loading, setLoading] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [showTokenPicker, setShowTokenPicker] = useState(false);
+  const [balances, setBalances] = useState<Record<string, number>>({});
 
   // Animated rotation for the swap button
   const rotateAnim = useRef(new Animated.Value(0)).current;
+
+  // Load real balances and bridge history from chain
+  useEffect(() => {
+    async function loadData() {
+      if (!wallet.address) return;
+      try {
+        const [balRes, histRes] = await Promise.allSettled([
+          getTokenBalances(wallet.address),
+          getBridgeHistory(wallet.address),
+        ]);
+        if (balRes.status === 'fulfilled' && balRes.value?.tokens) {
+          const bals: Record<string, number> = {};
+          for (const t of balRes.value.tokens) {
+            bals[t.symbol] = t.balance;
+          }
+          setBalances(bals);
+        }
+        if (histRes.status === 'fulfilled' && histRes.value?.transfers) {
+          setBridgeHistory(histRes.value.transfers.map((t: any) => ({
+            id: t.id,
+            fromChain: t.from_chain || 'thronos',
+            toChain: t.to_chain || 'bitcoin',
+            token: t.from_token || t.token || 'THR',
+            amount: t.amount,
+            fee: t.fee || 0,
+            status: t.status || 'pending',
+            txHash: t.tx_hash || '',
+            timestamp: new Date(t.created_at || Date.now()).getTime(),
+            estimatedTime: 300,
+          })));
+        }
+      } catch (err) {
+        console.warn('Bridge: Failed to load data', err);
+      }
+    }
+    loadData();
+  }, [wallet.address]);
 
   // Derived
   const sourceChainData = getChain(sourceChain);
@@ -247,7 +234,7 @@ export default function BridgeScreen({ navigation }: { navigation: any }) {
     return undefined;
   }, [selectedToken, destChain]);
 
-  const balance = MOCK_BALANCES[selectedToken] ?? 0;
+  const balance = balances[selectedToken] ?? tokens.find((t) => t.symbol === selectedToken)?.balance ?? 0;
 
   const parsedAmount = parseFloat(amount) || 0;
   const feeAmount = currentPair ? parsedAmount * (currentPair.fee / 100) : 0;
@@ -323,30 +310,47 @@ export default function BridgeScreen({ navigation }: { navigation: any }) {
     setShowConfirm(false);
     setLoading(true);
     try {
-      // Simulate bridge operation
-      await new Promise((r) => setTimeout(r, 2000));
+      const creds = await getWallet();
+      if (!creds) {
+        Alert.alert('Error', 'Wallet credentials not found.');
+        return;
+      }
 
-      const newTransfer: BridgeTransfer = {
-        id: `br_${Date.now()}`,
-        fromChain: sourceChain,
-        toChain: destChain,
+      const result = await executeBridgeAPI({
+        from_chain: sourceChain,
+        to_chain: destChain,
         token: selectedToken,
         amount: parsedAmount,
-        fee: feeAmount,
-        status: 'pending',
-        txHash: `0x${Math.random().toString(16).slice(2, 6)}…${Math.random().toString(16).slice(2, 6)}`,
-        timestamp: Date.now(),
-        estimatedTime: (currentPair?.estimatedMinutes ?? 5) * 60,
-      };
+        from_address: creds.address,
+        to_address: wallet.chainAddresses?.[destChain] || creds.address,
+        secret: creds.secret,
+      });
 
-      setBridgeHistory([newTransfer, ...(bridgeHistory || [])]);
+      if (result.success && result.transfer) {
+        const newTransfer: BridgeTransfer = {
+          id: result.transfer.id || `br_${Date.now()}`,
+          fromChain: sourceChain,
+          toChain: destChain,
+          token: selectedToken,
+          amount: parsedAmount,
+          fee: feeAmount,
+          status: 'pending',
+          txHash: result.transfer.tx_hash || '',
+          timestamp: Date.now(),
+          estimatedTime: (currentPair?.estimatedMinutes ?? 5) * 60,
+        };
 
-      Alert.alert(
-        'Bridge Initiated',
-        `Bridging ${parsedAmount} ${selectedToken} from ${sourceChainData.name} to ${destChainData.name}.\n\nEstimated time: ${formatTime(currentPair?.estimatedMinutes ?? 5)}`,
-        [{ text: 'OK' }],
-      );
-      setAmount('');
+        setBridgeHistory([newTransfer, ...(bridgeHistory || [])]);
+
+        Alert.alert(
+          'Bridge Initiated',
+          `Bridging ${parsedAmount} ${selectedToken} from ${sourceChainData.name} to ${destChainData.name}.\n\nEstimated time: ${formatTime(currentPair?.estimatedMinutes ?? 5)}`,
+          [{ text: 'OK' }],
+        );
+        setAmount('');
+      } else {
+        Alert.alert('Bridge Failed', result.error || 'Bridge operation failed.');
+      }
     } catch (error: any) {
       Alert.alert('Bridge Failed', error.message || 'An unexpected error occurred.');
     } finally {
@@ -361,6 +365,7 @@ export default function BridgeScreen({ navigation }: { navigation: any }) {
     currentPair,
     sourceChainData,
     destChainData,
+    wallet,
     bridgeHistory,
     setBridgeHistory,
   ]);
@@ -376,7 +381,7 @@ export default function BridgeScreen({ navigation }: { navigation: any }) {
   const transfers: BridgeTransfer[] =
     bridgeHistory && bridgeHistory.length > 0
       ? (bridgeHistory as BridgeTransfer[])
-      : MOCK_TRANSFERS;
+      : [];
 
   const renderChainChip = (
     chain: Chain,
@@ -737,7 +742,7 @@ export default function BridgeScreen({ navigation }: { navigation: any }) {
                   </View>
                   <View style={{ alignItems: 'flex-end' }}>
                     <Text style={styles.pickerBalance}>
-                      {(MOCK_BALANCES[token.symbol] ?? 0).toLocaleString(undefined, {
+                      {(balances[token.symbol] ?? tokens.find((t) => t.symbol === token.symbol)?.balance ?? 0).toLocaleString(undefined, {
                         maximumFractionDigits: 8,
                       })}
                     </Text>

@@ -12,19 +12,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { useStore } from '../store/useStore';
+import { getT2EBalance, getT2EHistory } from '../services/api';
+import { CONFIG } from '../constants/config';
 
 // ── Types ───────────────────────────────────────────────────────────────────────
 
-interface T2EBalance {
-  balance: number;
-  totalEarned: number;
-  multiplier: number;
-  projectsCompleted: number;
-}
-
 interface EarningEntry {
   id: string;
-  type: 'training' | 'rating' | 'data' | 'bonus';
+  type: 'training' | 'rating' | 'data' | 'bonus' | 'contribution' | 'architect';
   amount: number;
   description: string;
   timestamp: string;
@@ -36,88 +31,11 @@ interface ArchitectProject {
   status: 'active' | 'completed' | 'pending';
   earned: number;
   contributions: number;
+  progress?: number;
   completedAt?: string;
 }
 
-// ── Mock Data (replace with API calls when backend is ready) ────────────────
-
-const MOCK_T2E_BALANCE: T2EBalance = {
-  balance: 12_847.52,
-  totalEarned: 34_291.08,
-  multiplier: 2.4,
-  projectsCompleted: 17,
-};
-
-const MOCK_RECENT_EARNINGS: EarningEntry[] = [
-  {
-    id: 'e1',
-    type: 'training',
-    amount: 45.0,
-    description: 'AI Model Fine-tuning Session',
-    timestamp: '2026-03-15T10:23:00Z',
-  },
-  {
-    id: 'e2',
-    type: 'rating',
-    amount: 12.5,
-    description: 'Response Quality Rating (Batch #412)',
-    timestamp: '2026-03-15T08:15:00Z',
-  },
-  {
-    id: 'e3',
-    type: 'data',
-    amount: 78.25,
-    description: 'Dataset Contribution — NLP Corpus',
-    timestamp: '2026-03-14T19:45:00Z',
-  },
-  {
-    id: 'e4',
-    type: 'bonus',
-    amount: 150.0,
-    description: 'Weekly Streak Bonus (7-day)',
-    timestamp: '2026-03-14T00:00:00Z',
-  },
-  {
-    id: 'e5',
-    type: 'training',
-    amount: 32.0,
-    description: 'Reinforcement Learning Feedback',
-    timestamp: '2026-03-13T14:30:00Z',
-  },
-];
-
-const MOCK_PROJECTS: ArchitectProject[] = [
-  {
-    id: 'p1',
-    name: 'Pytheia Language Model v4',
-    status: 'active',
-    earned: 2_340.0,
-    contributions: 128,
-  },
-  {
-    id: 'p2',
-    name: 'Thronos Sentiment Engine',
-    status: 'active',
-    earned: 890.5,
-    contributions: 47,
-  },
-  {
-    id: 'p3',
-    name: 'DeFi Risk Classifier',
-    status: 'completed',
-    earned: 1_575.0,
-    contributions: 93,
-    completedAt: '2026-03-10',
-  },
-  {
-    id: 'p4',
-    name: 'On-Chain Anomaly Detector',
-    status: 'completed',
-    earned: 3_120.0,
-    contributions: 215,
-    completedAt: '2026-02-28',
-  },
-];
+// No mock data — all data fetched from chain API
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
 
@@ -162,14 +80,37 @@ export default function T2EDashboardScreen({ navigation }: Props) {
   const fetchDashboardData = useCallback(async () => {
     if (!wallet.address) return;
     try {
-      // TODO: Replace mock data with real API calls when backend endpoints are ready
-      // const balanceRes = await api.getT2EBalance(wallet.address);
-      // const earningsRes = await api.getRecentEarnings(wallet.address);
-      // const projectsRes = await api.getArchitectProjects(wallet.address);
-      await new Promise((resolve) => setTimeout(resolve, 600));
-      setT2E(MOCK_T2E_BALANCE);
-      setRecentEarnings(MOCK_RECENT_EARNINGS);
-      setProjects(MOCK_PROJECTS);
+      const [balanceRes, earningsRes, projectsRes] = await Promise.allSettled([
+        getT2EBalance(wallet.address),
+        getT2EHistory(wallet.address, 20),
+        fetch(`${CONFIG.API_URL}/api/t2e/projects/${wallet.address}`, {
+          headers: { 'Content-Type': 'application/json' },
+        }).then((r) => r.ok ? r.json() : { projects: [] }),
+      ]);
+
+      if (balanceRes.status === 'fulfilled' && balanceRes.value) {
+        const b = balanceRes.value;
+        setT2E({
+          balance: b.balance ?? 0,
+          totalEarned: b.total_earned ?? 0,
+          multiplier: b.multiplier ?? 1.0,
+          projectsCompleted: b.projects_completed ?? 0,
+        });
+      }
+
+      if (earningsRes.status === 'fulfilled' && earningsRes.value?.earnings) {
+        setRecentEarnings(earningsRes.value.earnings.map((e: any) => ({
+          id: e.id,
+          type: e.type || 'training',
+          amount: e.amount,
+          description: e.description,
+          timestamp: e.timestamp,
+        })));
+      }
+
+      if (projectsRes.status === 'fulfilled' && projectsRes.value?.projects) {
+        setProjects(projectsRes.value.projects);
+      }
     } catch (error) {
       console.warn('T2E Dashboard: Failed to load data', error);
     } finally {
@@ -371,7 +312,7 @@ export default function T2EDashboardScreen({ navigation }: Props) {
                 </View>
               </View>
               <View style={styles.projectProgressBar}>
-                <View style={[styles.projectProgressFill, { width: '65%' }]} />
+                <View style={[styles.projectProgressFill, { width: `${Math.min(project.progress ?? 0, 100)}%` }]} />
               </View>
             </TouchableOpacity>
           ))}

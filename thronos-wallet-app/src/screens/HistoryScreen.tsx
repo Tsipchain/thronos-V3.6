@@ -77,26 +77,7 @@ const CHAIN_INFO: Record<string, { label: string; color: string; icon: keyof typ
   base: { label: 'Base', color: '#0052FF', icon: 'ellipse' },
 };
 
-// ── Mock Data ────────────────────────────────────────────────────────────────
-
-const MOCK_TXS: Transaction[] = [
-  { type: 'receive', category: 'mining', from: 'THR_Mining_Pool', to: 'THR...user', amount: 125.5, token: 'THR', timestamp: '2026-03-15T08:12:00Z', status: 'confirmed', chain: 'thronos', service: 'Micro Miner', description: 'Mining reward - Block #284901' },
-  { type: 'send', category: 'music', from: 'THR...user', to: 'THR...artist', amount: 5.0, token: 'THR', timestamp: '2026-03-15T07:45:00Z', status: 'confirmed', chain: 'thronos', service: 'Decent Music', description: 'Tip to CryptoWave - "Decentralize"' },
-  { type: 'receive', category: 'l2e', from: 'THR_T2E_Pool', to: 'THR...user', amount: 42.0, token: 'T2E', timestamp: '2026-03-15T06:30:00Z', status: 'confirmed', chain: 'thronos', service: 'Architect T2E', description: 'Pytheia Language Model training reward' },
-  { type: 'send', category: 'bridge', from: 'THR...user', to: '0x...bridge', amount: 500.0, token: 'THR', fee: 0.5, timestamp: '2026-03-14T22:15:00Z', status: 'confirmed', chain: 'thronos', service: 'BTC Bridge', description: 'Bridge THR → WBTC' },
-  { type: 'receive', category: 'bridge', from: '0x...bridge', to: 'THR...user', amount: 0.015, token: 'WBTC', timestamp: '2026-03-14T22:20:00Z', status: 'confirmed', chain: 'bitcoin', service: 'BTC Bridge', description: 'Bridge receive WBTC' },
-  { type: 'send', category: 'swaps', from: 'THR...user', to: 'THR_Swap_Pool', amount: 200.0, token: 'THR', fee: 0.3, timestamp: '2026-03-14T18:00:00Z', status: 'confirmed', chain: 'thronos', service: 'Thronos DEX', description: 'Swap THR → WBTC' },
-  { type: 'receive', category: 'gateway', from: 'THR_Gateway_Node', to: 'THR...user', amount: 15.8, token: 'THR', timestamp: '2026-03-14T14:00:00Z', status: 'confirmed', chain: 'thronos', service: 'Phantom Gateway', description: 'Gateway relay reward' },
-  { type: 'send', category: 'ai_credits', from: 'THR...user', to: 'THR_Pytheia', amount: 10.0, token: 'AIC', timestamp: '2026-03-14T12:30:00Z', status: 'confirmed', chain: 'thronos', service: 'Pytheia AI', description: 'AI credit purchase - 100 credits' },
-  { type: 'receive', category: 'liquidity', from: 'THR_LP_Pool', to: 'THR...user', amount: 8.2, token: 'THR', timestamp: '2026-03-14T10:00:00Z', status: 'confirmed', chain: 'thronos', service: 'Liquidity Pool', description: 'LP rewards THR/WBTC pool' },
-  { type: 'send', category: 'thr', from: 'THR...user', to: 'THR9a3b...c4f2', amount: 50.0, token: 'THR', fee: 0.1, timestamp: '2026-03-13T20:00:00Z', status: 'confirmed', chain: 'thronos', description: 'Transfer to THR9a3b...c4f2' },
-  { type: 'receive', category: 'iot', from: 'THR_IoT_Pool', to: 'THR...user', amount: 3.2, token: 'THR', timestamp: '2026-03-13T16:00:00Z', status: 'confirmed', chain: 'thronos', service: 'IoT Vehicle Node', description: 'GPS telemetry reward - 24h uptime' },
-  { type: 'receive', category: 'staking', from: 'THR_Pledge', to: 'THR...user', amount: 22.5, token: 'THR', timestamp: '2026-03-13T12:00:00Z', status: 'confirmed', chain: 'thronos', service: 'Pledge System', description: 'Staking reward - Epoch 1847' },
-  { type: 'send', category: 'governance', from: 'THR...user', to: 'THR_Governance', amount: 0.1, token: 'THR', timestamp: '2026-03-13T08:00:00Z', status: 'confirmed', chain: 'thronos', service: 'Governance', description: 'Vote: Proposal #47 - Fee reduction' },
-  { type: 'receive', category: 'tokens', from: 'THR_Airdrop', to: 'THR...user', amount: 100.0, token: 'CRYPT', timestamp: '2026-03-12T18:00:00Z', status: 'confirmed', chain: 'thronos', service: 'Crypto Hunters', description: 'Crypto Hunters quest reward' },
-  { type: 'send', category: 'bridge', from: 'THR...user', to: '0x...eth_bridge', amount: 1000.0, token: 'THR', fee: 2.0, timestamp: '2026-03-12T14:00:00Z', status: 'pending', chain: 'ethereum', service: 'ETH Bridge', description: 'Bridge THR → ETH (processing)' },
-  { type: 'receive', category: 'mining', from: 'THR_Stratum', to: 'THR...user', amount: 87.3, token: 'THR', timestamp: '2026-03-12T08:00:00Z', status: 'confirmed', chain: 'thronos', service: 'Stratum Pool', description: 'Stratum mining payout' },
-];
+// No mock data — all transactions fetched from chain API
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -129,7 +110,7 @@ export default function HistoryScreen() {
   const [activeChainFilter, setActiveChainFilter] = useState<string | null>(null);
   const [txDetailVisible, setTxDetailVisible] = useState(false);
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
-  const [allTxs, setAllTxs] = useState<Transaction[]>(MOCK_TXS);
+  const [allTxs, setAllTxs] = useState<Transaction[]>([]);
   const [stats, setStats] = useState({ total: 0, volume: 0, services: 0 });
 
   const load = useCallback(async () => {
@@ -141,12 +122,10 @@ export default function HistoryScreen() {
         : await getTransactionsByCategory(wallet.address, activeCategory, 100);
 
       const txList = Array.isArray(endpoint) ? endpoint : (endpoint as any)?.transactions || [];
-      if (txList.length > 0) {
-        setAllTxs(txList);
-        setRecentTxs(txList.slice(0, 50));
-      }
-    } catch {
-      // Keep mock data
+      setAllTxs(txList);
+      setRecentTxs(txList.slice(0, 50));
+    } catch (err) {
+      console.warn('Failed to load transaction history:', err);
     } finally {
       setLoading(false);
     }

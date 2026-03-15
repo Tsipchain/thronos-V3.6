@@ -22,6 +22,7 @@ import StakeScreen from './src/screens/StakeScreen';
 import ScanScreen from './src/screens/ScanScreen';
 import T2EDashboardScreen from './src/screens/T2EDashboardScreen';
 import BridgeScreen from './src/screens/BridgeScreen';
+import MusicScreen from './src/screens/MusicScreen';
 
 import { useStore } from './src/store/useStore';
 import { COLORS } from './src/constants/theme';
@@ -39,11 +40,13 @@ export type RootStackParamList = {
   Scan: undefined;
   T2E: undefined;
   Bridge: undefined;
+  Music: undefined;
 };
 
 export type TabParamList = {
   Home: undefined;
   T2E: undefined;
+  Music: undefined;
   History: undefined;
   Settings: undefined;
 };
@@ -62,6 +65,7 @@ function MainTabs() {
           switch (route.name) {
             case 'Home': iconName = focused ? 'wallet' : 'wallet-outline'; break;
             case 'T2E': iconName = focused ? 'sparkles' : 'sparkles-outline'; break;
+            case 'Music': iconName = focused ? 'musical-notes' : 'musical-notes-outline'; break;
             case 'History': iconName = focused ? 'time' : 'time-outline'; break;
             case 'Settings': iconName = focused ? 'settings' : 'settings-outline'; break;
           }
@@ -85,6 +89,7 @@ function MainTabs() {
     >
       <Tab.Screen name="Home" component={HomeScreen} options={{ title: 'Wallet' }} />
       <Tab.Screen name="T2E" component={T2EDashboardScreen} options={{ title: 'Earn' }} />
+      <Tab.Screen name="Music" component={MusicScreen} options={{ title: 'Music' }} />
       <Tab.Screen name="History" component={HistoryScreen} options={{ title: 'History' }} />
       <Tab.Screen name="Settings" component={SettingsScreen} options={{ title: 'Settings' }} />
     </Tab.Navigator>
@@ -154,6 +159,7 @@ export default function App() {
               <Stack.Screen name="Stake" component={StakeScreen} options={{ presentation: 'modal' }} />
               <Stack.Screen name="Scan" component={ScanScreen} options={{ presentation: 'fullScreenModal' }} />
               <Stack.Screen name="Bridge" component={BridgeScreen} options={{ presentation: 'modal' }} />
+              <Stack.Screen name="Music" component={MusicScreen} options={{ presentation: 'modal' }} />
             </>
           )}
         </Stack.Navigator>

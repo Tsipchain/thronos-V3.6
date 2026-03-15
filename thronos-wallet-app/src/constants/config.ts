@@ -3,10 +3,13 @@
 
 export const CONFIG = {
   // Primary API — Node 1 (master)
-  API_URL: 'https://thronoschain.org',
+  API_URL: 'https://api.thronoschain.org',
 
-  // Replica API — Node 2 (replica, fallback)
-  API_URL_REPLICA: 'https://thrchain.up.railway.app',
+  // Replica API — Node 2 (replica, crosschain events, fallback)
+  API_URL_REPLICA: 'https://ro.api.thronoschain.org',
+
+  // Explorer
+  EXPLORER_URL: 'https://explorer.thronoschain.org',
 
   // Network
   NETWORK: 'mainnet',
@@ -35,6 +38,7 @@ export const CONFIG = {
     WBTC: { decimals: 8, chain: 'bitcoin', name: 'Wrapped Bitcoin' },
     L2E: { decimals: 6, chain: 'thronos', name: 'Learn to Earn' },
     T2E: { decimals: 6, chain: 'thronos', name: 'Train to Earn' },
+    JAM: { decimals: 9, chain: 'thronos', name: 'tzamaikan' },
   },
 
   // Cross-Chain RPC Endpoints (from multichain_wallet.py)
@@ -72,7 +76,7 @@ export const CONFIG = {
   ],
 
   // Phantom Network
-  PHANTOM_GATEWAY: 'https://thronoschain.org',
+  PHANTOM_GATEWAY: 'https://api.thronoschain.org',
 
   // Cache durations (ms)
   BALANCE_CACHE_MS: 60_000,     // 1 minute

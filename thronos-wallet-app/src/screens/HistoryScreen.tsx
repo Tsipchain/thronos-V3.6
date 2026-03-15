@@ -117,11 +117,14 @@ export default function HistoryScreen() {
     if (!wallet.address) return;
     setLoading(true);
     try {
-      const endpoint = activeCategory === 'all'
+      const result = activeCategory === 'all'
         ? await getTransactionHistory(wallet.address, 100)
         : await getTransactionsByCategory(wallet.address, activeCategory, 100);
 
-      const txList = Array.isArray(endpoint) ? endpoint : (endpoint as any)?.transactions || [];
+      // Handle various API response shapes
+      const txList = Array.isArray(result)
+        ? result
+        : (result as any)?.transactions || (result as any)?.history || [];
       setAllTxs(txList);
       setRecentTxs(txList.slice(0, 50));
     } catch (err) {

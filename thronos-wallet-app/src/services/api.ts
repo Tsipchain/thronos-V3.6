@@ -96,7 +96,7 @@ export async function getTransactionHistory(
   limit = 50,
   category?: string,
 ): Promise<any> {
-  const params = new URLSearchParams({ wallet: address, limit: String(limit) });
+  const params = new URLSearchParams({ address, limit: String(limit) });
   if (category && category !== 'all') params.set('category', category);
   return request(`/api/wallet/history?${params}`);
 }

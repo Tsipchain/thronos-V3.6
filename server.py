@@ -7563,6 +7563,10 @@ def _categorize_transaction(tx: dict) -> str:
     ]:
         return "verifyid"
 
+    # Sentinel subscription payments
+    if "sentinel" in tx_type_lower or tx_type in ["sentinel_subscription", "sentinel_fee", "sentinel_gift"]:
+        return "sentinel"
+
     # Fiat gateway operations (buy, sell, deposit, withdrawal)
     if tx_type in [
         "fiat_buy", "fiat_deposit", "fiat_onramp",
@@ -7866,6 +7870,10 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
         "fiat_withdrawal": "gateway",
         "fiat_offramp": "gateway",
         "iot_purchase": "gateway",
+        "sentinel": "sentinel",
+        "sentinel_subscription": "sentinel",
+        "sentinel_fee": "sentinel",
+        "sentinel_gift": "sentinel",
     }
 
     # Merge chain + tx_log, deduplicate by tx_id
@@ -8078,6 +8086,9 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
         elif category == "iot_telemetry":
             # IoT txs represent work done, rewards come via ai_reward
             summary["iot_count"] += 1
+        elif category == "sentinel":
+            summary["total_sentinel_spent"] += amount
+            summary["sentinel_count"] += 1
 
         if direction == "received":
             summary["total_received"] += amount
@@ -8116,12 +8127,14 @@ def _empty_wallet_history_summary() -> dict:
         "total_music_tips_sent": 0.0,
         "total_music_tips_received": 0.0,
         "total_iot_rewards": 0.0,
+        "total_sentinel_spent": 0.0,
         "total_sent": 0.0,
         "total_received": 0.0,
         "mining_count": 0,
         "ai_reward_count": 0,
         "music_tip_count": 0,
         "iot_count": 0,
+        "sentinel_count": 0,
     }
 
 
@@ -13610,6 +13623,44 @@ def api_sentinel_subscribe():
     if len(treasury_ledger["payments"]) > 5000:
         treasury_ledger["payments"] = treasury_ledger["payments"][-5000:]
     save_json(SENTINEL_TREASURY_FILE, treasury_ledger)
+
+    # ── Record in TX_LOG so subscription payments appear in wallet history ──
+    sub_timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    sentinel_tx_entry = {
+        "tx_id": tx_hash or blockchain_ref,
+        "type": "sentinel_subscription",
+        "kind": "sentinel_subscription",
+        "category": "sentinel",
+        "from": subscriber,
+        "to": SENTINEL_TREASURY_ADDRESSES.get(payment_chain, ""),
+        "amount": amount,
+        "symbol": token,
+        "asset_symbol": token,
+        "token_symbol": token,
+        "timestamp": sub_timestamp,
+        "status": "confirmed",
+        "direction": "sent",
+        "block_hash": blockchain_ref,
+        "fee": 0,
+        "fee_burned": round(amount * 0.25, 6) if (payment_chain == "thronos" and token == "THR") else 0,
+        "meta": {
+            "service": "sentinel",
+            "package_id": package_id,
+            "tier": package_id,
+            "duration_days": pkg["duration_days"],
+            "payment_chain": payment_chain,
+            "blockchain_ref": blockchain_ref,
+            "treasury_address": treasury_address or SENTINEL_TREASURY_ADDRESSES.get(payment_chain, ""),
+            "expires_at": expires_ts,
+        },
+        "note": f"Sentinel {package_id.upper()} subscription ({pkg['duration_days']}d)",
+    }
+    try:
+        tx_log_data = load_tx_log()
+        tx_log_data.insert(0, sentinel_tx_entry)  # newest first
+        save_tx_log(tx_log_data)
+    except Exception as tx_log_err:
+        logger.warning("[SENTINEL_SUB] failed to write tx_log entry: %s", tx_log_err)
 
     logger.info(
         f"[SENTINEL_SUB] {subscriber} subscribed to {package_id} "

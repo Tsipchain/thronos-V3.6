@@ -115,8 +115,35 @@ export async function getChainTokens(): Promise<{ tokens: any[] }> {
   return request('/api/tokens/list');
 }
 
-export async function getNetworkStatus(): Promise<any> {
-  return request('/api/v1/status');
+export async function getNetworkStatus(): Promise<{
+  block_height: number;
+  tps: number;
+  peers: number;
+  mempool: number;
+  total_supply: number;
+  chain_height: number;
+  [key: string]: any;
+}> {
+  // Fetch status and peers in parallel
+  const [status, peersRes, liveRes] = await Promise.allSettled([
+    request<any>('/api/v1/status'),
+    request<any>('/api/peers/list').catch(() => ({ peers: [] })),
+    request<any>('/api/network_stats').catch(() => ({})),
+  ]);
+
+  const statusData = status.status === 'fulfilled' ? status.value : {};
+  const peersData = peersRes.status === 'fulfilled' ? peersRes.value : {};
+  const liveData = liveRes.status === 'fulfilled' ? liveRes.value : {};
+
+  return {
+    ...statusData,
+    block_height: statusData.chain_height || statusData.block_count || statusData.height || 0,
+    tps: statusData.tps || liveData.tps || 0,
+    peers: Array.isArray(peersData.peers) ? peersData.peers.length : (peersData.active_peers?.length ?? 0),
+    mempool: statusData.mempool || 0,
+    total_supply: statusData.total_supply || 0,
+    chain_height: statusData.chain_height || 0,
+  };
 }
 
 export async function getTokenPrices(): Promise<any> {
@@ -214,15 +241,16 @@ export async function getT2EHistory(
 export interface MusicTrack {
   id: string;
   title: string;
-  artist: string;
-  album?: string;
-  duration: number;
+  artist_name?: string;
+  artist_address?: string;
   genre?: string;
-  plays: number;
-  tips_earned: number;
-  artwork_url?: string;
-  stream_url?: string;
-  is_offline?: boolean;
+  description?: string;
+  audio_url?: string;
+  cover_url?: string;
+  play_count?: number;
+  tips_total?: number;
+  uploaded_at?: string;
+  published?: boolean;
 }
 
 export interface MusicPlaylist {
@@ -323,12 +351,11 @@ export async function submitMusicGpsTelemetry(params: {
 export async function getMusicEarnings(
   address: string,
 ): Promise<{
-  total_tips: number;
-  total_plays: number;
-  total_tracks: number;
-  top_track?: string;
+  stats: { total_tracks: number; total_plays: number; total_earnings_thr: number };
+  artist?: { name: string; bio?: string };
+  tracks?: any[];
 }> {
-  return request(`/api/v1/music/earnings?address=${address}`);
+  return request(`/api/v1/music/artist/${address}`);
 }
 
 export async function searchMusic(query: string): Promise<{ tracks: MusicTrack[] }> {

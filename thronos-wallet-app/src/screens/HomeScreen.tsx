@@ -170,30 +170,24 @@ export default function HomeScreen() {
         </LinearGradient>
 
         {/* Network Status */}
-        {networkInfo && (
-          <View style={styles.networkBar}>
-            <View style={styles.networkDot} />
-            <Text style={styles.networkText}>
-              Block #{networkInfo.block_height?.toLocaleString() ?? '—'}
-            </Text>
-            <Text style={styles.networkSep}>|</Text>
-            <Text style={styles.networkText}>
-              {networkInfo.tps ?? '—'} TPS
-            </Text>
-            {networkInfo.acic_enabled && (
-              <>
-                <Text style={styles.networkSep}>|</Text>
-                <View style={styles.acicBadge}>
-                  <Text style={styles.acicText}>ACIC</Text>
-                </View>
-              </>
-            )}
-            <View style={{ flex: 1 }} />
-            <Text style={styles.networkText}>
-              {networkInfo.peers ?? '—'} peers
-            </Text>
+        <View style={styles.networkBar}>
+          <View style={[styles.networkDot, { backgroundColor: networkInfo ? COLORS.success : COLORS.textMuted }]} />
+          <Text style={styles.networkText}>
+            Block #{networkInfo?.block_height?.toLocaleString() ?? '—'}
+          </Text>
+          <Text style={styles.networkSep}>|</Text>
+          <Text style={styles.networkText}>
+            {networkInfo?.tps ?? '—'} TPS
+          </Text>
+          <Text style={styles.networkSep}>|</Text>
+          <View style={styles.acicBadge}>
+            <Text style={styles.acicText}>ACIC</Text>
           </View>
-        )}
+          <View style={{ flex: 1 }} />
+          <Text style={styles.networkText}>
+            {networkInfo?.peers ?? '—'} peers
+          </Text>
+        </View>
 
         {/* Multi-Chain Selector */}
         <View style={styles.chainSelector}>

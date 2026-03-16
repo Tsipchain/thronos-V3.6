@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView,
   RefreshControl, ActivityIndicator, Modal, Animated, Dimensions, Platform,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -18,30 +19,32 @@ const { width: SCREEN_W } = Dimensions.get('window');
 interface Track {
   id: string;
   title: string;
-  artist: string;
-  album?: string;
-  duration: number; // seconds
+  artist_name?: string;
+  artist_address?: string;
   genre?: string;
-  plays: number;
-  tips_earned: number;
-  artwork_url?: string;
-  stream_url?: string;
-  is_offline?: boolean;
+  description?: string;
+  audio_url?: string;
+  cover_url?: string;
+  play_count?: number;
+  tips_total?: number;
+  uploaded_at?: string;
+  published?: boolean;
 }
 
 interface Playlist {
   id: string;
-  name: string;
-  track_count: number;
-  total_duration: number;
-  created_at: string;
+  name?: string;
+  title?: string;
+  track_count?: number;
+  total_duration?: number;
+  track_ids?: string[];
+  created_at?: string;
 }
 
-interface ArtistEarnings {
-  total_tips: number;
-  total_plays: number;
+interface ArtistStats {
   total_tracks: number;
-  top_track?: string;
+  total_plays: number;
+  total_earnings_thr: number;
 }
 
 // ── API Helpers ──────────────────────────────────────────────────────────────
@@ -64,8 +67,6 @@ async function postJSON<T = any>(endpoint: string, body: any): Promise<T> {
   return res.json();
 }
 
-// No mock data — all music data fetched from chain API
-
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function formatDuration(s: number | undefined): string {
@@ -81,6 +82,12 @@ function formatNumber(n: number | undefined): string {
   return String(n);
 }
 
+function resolveMediaUrl(url?: string): string | undefined {
+  if (!url) return undefined;
+  if (url.startsWith('http')) return url;
+  return `${CONFIG.API_URL}${url.startsWith('/') ? '' : '/'}${url}`;
+}
+
 // ── Component ────────────────────────────────────────────────────────────────
 
 type TabType = 'tracks' | 'playlists' | 'earnings' | 'offline';
@@ -89,6 +96,7 @@ export default function MusicScreen({ navigation }: any) {
   const { wallet } = useStore();
   const [activeTab, setActiveTab] = useState<TabType>('tracks');
   const [tracks, setTracks] = useState<Track[]>([]);
+  const [offlineTracks, setOfflineTracks] = useState<Track[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -97,9 +105,10 @@ export default function MusicScreen({ navigation }: any) {
   const [tipModalVisible, setTipModalVisible] = useState(false);
   const [tipAmount, setTipAmount] = useState(1);
   const [tipTarget, setTipTarget] = useState<Track | null>(null);
-  const [earnings, setEarnings] = useState<ArtistEarnings>({
-    total_tips: 0, total_plays: 0, total_tracks: 0, top_track: undefined,
+  const [artistStats, setArtistStats] = useState<ArtistStats>({
+    total_tracks: 0, total_plays: 0, total_earnings_thr: 0,
   });
+  const [artistName, setArtistName] = useState<string>('');
 
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [gpsEnabled, setGpsEnabled] = useState(false);
@@ -183,10 +192,11 @@ export default function MusicScreen({ navigation }: any) {
     if (!wallet.address) return;
     setLoading(true);
     try {
-      const [trackRes, playlistRes, earningsRes] = await Promise.allSettled([
-        fetchJSON(`/api/v1/music/tracks?address=${wallet.address}`),
+      const [trackRes, playlistRes, artistRes, offlineRes] = await Promise.allSettled([
+        fetchJSON(`/api/v1/music/tracks`),
         fetchJSON(`/api/music/playlists?address=${wallet.address}`),
-        fetchJSON(`/api/v1/music/earnings?address=${wallet.address}`),
+        fetchJSON(`/api/v1/music/artist/${wallet.address}`),
+        fetchJSON(`/api/music/offline/${wallet.address}`),
       ]);
       if (trackRes.status === 'fulfilled' && trackRes.value?.tracks) {
         setTracks(trackRes.value.tracks);
@@ -194,8 +204,14 @@ export default function MusicScreen({ navigation }: any) {
       if (playlistRes.status === 'fulfilled' && playlistRes.value?.playlists) {
         setPlaylists(playlistRes.value.playlists);
       }
-      if (earningsRes.status === 'fulfilled' && earningsRes.value) {
-        setEarnings(earningsRes.value);
+      if (artistRes.status === 'fulfilled' && artistRes.value?.stats) {
+        setArtistStats(artistRes.value.stats);
+        if (artistRes.value.artist?.name) {
+          setArtistName(artistRes.value.artist.name);
+        }
+      }
+      if (offlineRes.status === 'fulfilled' && offlineRes.value?.tracks) {
+        setOfflineTracks(offlineRes.value.tracks);
       }
     } catch (err) {
       console.warn('Failed to load music data:', err);
@@ -219,7 +235,7 @@ export default function MusicScreen({ navigation }: any) {
     progressAnim.setValue(0);
     Animated.timing(progressAnim, {
       toValue: 1,
-      duration: track.duration * 1000,
+      duration: 180000, // 3 min default since API tracks don't have duration
       useNativeDriver: false,
     }).start();
     // Record play
@@ -242,11 +258,11 @@ export default function MusicScreen({ navigation }: any) {
       await postJSON('/api/v1/music/tip', {
         address: wallet.address,
         track_id: tipTarget.id,
-        artist: tipTarget.artist,
+        artist: tipTarget.artist_address,
         amount: tipAmount,
       });
     } catch {
-      // Silent fail for demo
+      // Silent fail
     }
     setTipModalVisible(false);
   };
@@ -255,6 +271,7 @@ export default function MusicScreen({ navigation }: any) {
 
   const renderTrack = ({ item, index }: { item: Track; index: number }) => {
     const isCurrent = currentTrack?.id === item.id;
+    const coverUri = resolveMediaUrl(item.cover_url);
     return (
       <TouchableOpacity
         style={[styles.trackRow, isCurrent && styles.trackRowActive]}
@@ -266,6 +283,8 @@ export default function MusicScreen({ navigation }: any) {
             <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
               <Ionicons name="musical-notes" size={18} color={COLORS.gold} />
             </Animated.View>
+          ) : coverUri ? (
+            <Image source={{ uri: coverUri }} style={styles.trackCover} />
           ) : (
             <Text style={styles.trackNumText}>{index + 1}</Text>
           )}
@@ -274,18 +293,18 @@ export default function MusicScreen({ navigation }: any) {
           <Text style={[styles.trackTitle, isCurrent && { color: COLORS.gold }]} numberOfLines={1}>
             {item.title}
           </Text>
-          <Text style={styles.trackArtist} numberOfLines={1}>{item.artist}</Text>
+          <Text style={styles.trackArtist} numberOfLines={1}>{item.artist_name ?? 'Unknown'}</Text>
+          {item.genre ? <Text style={styles.trackGenre}>{item.genre}</Text> : null}
         </View>
         <View style={styles.trackMeta}>
-          <Text style={styles.trackDuration}>{formatDuration(item.duration)}</Text>
           <View style={styles.trackStats}>
             <Ionicons name="play" size={10} color={COLORS.textMuted} />
-            <Text style={styles.trackPlays}>{formatNumber(item.plays)}</Text>
+            <Text style={styles.trackPlays}>{formatNumber(item.play_count)}</Text>
           </View>
         </View>
         <TouchableOpacity style={styles.tipBtn} onPress={() => openTipModal(item)}>
           <Ionicons name="heart" size={16} color={COLORS.gold} />
-          <Text style={styles.tipBtnText}>{(item.tips_earned ?? 0).toFixed(1)}</Text>
+          <Text style={styles.tipBtnText}>{(item.tips_total ?? 0).toFixed(1)}</Text>
         </TouchableOpacity>
       </TouchableOpacity>
     );
@@ -300,9 +319,9 @@ export default function MusicScreen({ navigation }: any) {
         end={{ x: 1, y: 1 }}
       >
         <Ionicons name="musical-notes" size={32} color={COLORS.primaryLight} />
-        <Text style={styles.playlistName} numberOfLines={1}>{item.name}</Text>
+        <Text style={styles.playlistName} numberOfLines={1}>{item.name || item.title || 'Untitled'}</Text>
         <Text style={styles.playlistMeta}>
-          {item.track_count} tracks &middot; {Math.floor(item.total_duration / 60)} min
+          {item.track_count ?? item.track_ids?.length ?? 0} tracks
         </Text>
       </LinearGradient>
     </TouchableOpacity>
@@ -311,23 +330,30 @@ export default function MusicScreen({ navigation }: any) {
   const renderEarnings = () => (
     <ScrollView style={styles.earningsContainer}>
       <LinearGradient colors={['#2A1A0A', '#1A1A33']} style={styles.earningsCard}>
-        <Text style={styles.earningsLabel}>Total Tips Earned</Text>
-        <Text style={styles.earningsAmount}>{(earnings.total_tips ?? 0).toFixed(1)} THR</Text>
+        <Text style={styles.earningsLabel}>Total Earned</Text>
+        <Text style={styles.earningsAmount}>
+          {(artistStats.total_earnings_thr ?? 0).toFixed(4)} THR
+        </Text>
+        {artistName ? (
+          <Text style={styles.artistNameLabel}>{artistName}</Text>
+        ) : null}
         <View style={styles.earningsGrid}>
           <View style={styles.earningStat}>
             <Ionicons name="play-circle" size={24} color={COLORS.info} />
-            <Text style={styles.earningStatVal}>{formatNumber(earnings.total_plays)}</Text>
+            <Text style={styles.earningStatVal}>{formatNumber(artistStats.total_plays)}</Text>
             <Text style={styles.earningStatLabel}>Total Plays</Text>
           </View>
           <View style={styles.earningStat}>
             <Ionicons name="disc" size={24} color={COLORS.primary} />
-            <Text style={styles.earningStatVal}>{earnings.total_tracks}</Text>
+            <Text style={styles.earningStatVal}>{artistStats.total_tracks ?? 0}</Text>
             <Text style={styles.earningStatLabel}>Tracks</Text>
           </View>
           <View style={styles.earningStat}>
-            <Ionicons name="trophy" size={24} color={COLORS.gold} />
-            <Text style={styles.earningStatVal} numberOfLines={1}>{earnings.top_track}</Text>
-            <Text style={styles.earningStatLabel}>Top Track</Text>
+            <Ionicons name="cash-outline" size={24} color={COLORS.gold} />
+            <Text style={styles.earningStatVal}>
+              {(artistStats.total_earnings_thr ?? 0).toFixed(2)}
+            </Text>
+            <Text style={styles.earningStatLabel}>THR Earned</Text>
           </View>
         </View>
       </LinearGradient>
@@ -336,10 +362,10 @@ export default function MusicScreen({ navigation }: any) {
       <View style={styles.decentCard}>
         <Ionicons name="globe-outline" size={24} color={COLORS.primary} />
         <View style={{ flex: 1, marginLeft: SPACING.md }}>
-          <Text style={styles.decentTitle}>Direct Artist Payments</Text>
+          <Text style={styles.decentTitle}>80/10/10 Revenue Split</Text>
           <Text style={styles.decentDesc}>
-            All tips go directly to artists via THR — no middlemen, no platform fees.
-            Artists earn 100% of listener tips on Decent Music.
+            80% to artists, 10% to network, 10% to AI/T2E rewards.
+            Artists earn directly via THR with every play and tip.
           </Text>
         </View>
       </View>
@@ -364,6 +390,24 @@ export default function MusicScreen({ navigation }: any) {
         </View>
       </View>
     </ScrollView>
+  );
+
+  const renderOffline = () => (
+    <FlatList
+      key="offline-list"
+      data={offlineTracks}
+      keyExtractor={(t) => t.id}
+      renderItem={renderTrack}
+      contentContainerStyle={styles.list}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.gold} />}
+      ListEmptyComponent={
+        <View style={styles.center}>
+          <Ionicons name="cloud-download-outline" size={56} color={COLORS.textMuted} />
+          <Text style={styles.emptyText}>No offline tracks</Text>
+          <Text style={styles.emptySubText}>Saved tracks will appear here for offline playback</Text>
+        </View>
+      }
+    />
   );
 
   const tabs: { key: TabType; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
@@ -468,11 +512,7 @@ export default function MusicScreen({ navigation }: any) {
       ) : activeTab === 'earnings' ? (
         renderEarnings()
       ) : (
-        <View style={styles.center}>
-          <Ionicons name="cloud-download-outline" size={56} color={COLORS.textMuted} />
-          <Text style={styles.emptyText}>No offline tracks</Text>
-          <Text style={styles.emptySubText}>Tap the download icon on any track to save for offline playback</Text>
-        </View>
+        renderOffline()
       )}
 
       {/* Now Playing Bar */}
@@ -486,7 +526,9 @@ export default function MusicScreen({ navigation }: any) {
           <View style={styles.nowPlayingContent}>
             <View style={styles.nowPlayingInfo}>
               <Text style={styles.nowPlayingTitle} numberOfLines={1}>{currentTrack.title}</Text>
-              <Text style={styles.nowPlayingArtist} numberOfLines={1}>{currentTrack.artist}</Text>
+              <Text style={styles.nowPlayingArtist} numberOfLines={1}>
+                {currentTrack.artist_name ?? 'Unknown'}
+              </Text>
             </View>
             <View style={styles.nowPlayingControls}>
               {gpsEnabled && sessionId && (
@@ -513,7 +555,7 @@ export default function MusicScreen({ navigation }: any) {
         <View style={styles.modalOverlay}>
           <View style={styles.tipModal}>
             <Text style={styles.tipModalTitle}>Tip Artist</Text>
-            <Text style={styles.tipModalArtist}>{tipTarget?.artist}</Text>
+            <Text style={styles.tipModalArtist}>{tipTarget?.artist_name ?? 'Unknown'}</Text>
             <Text style={styles.tipModalTrack}>&quot;{tipTarget?.title}&quot;</Text>
 
             <View style={styles.tipAmounts}>
@@ -593,11 +635,13 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: COLORS.border,
   },
   trackRowActive: { borderColor: COLORS.gold + '40', backgroundColor: COLORS.gold + '08' },
-  trackNumber: { width: 28, alignItems: 'center' },
+  trackNumber: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  trackCover: { width: 40, height: 40, borderRadius: BORDER_RADIUS.sm },
   trackNumText: { fontSize: FONT_SIZES.sm, color: COLORS.textMuted, fontWeight: '600' },
   trackInfo: { flex: 1, marginLeft: SPACING.sm },
   trackTitle: { fontSize: FONT_SIZES.md, fontWeight: '600', color: COLORS.text },
   trackArtist: { fontSize: FONT_SIZES.xs, color: COLORS.textSecondary, marginTop: 2 },
+  trackGenre: { fontSize: 10, color: COLORS.gold, marginTop: 2, opacity: 0.7 },
   trackMeta: { alignItems: 'flex-end', marginRight: SPACING.sm },
   trackDuration: { fontSize: FONT_SIZES.xs, color: COLORS.textMuted, fontFamily: 'monospace' },
   trackStats: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
@@ -626,6 +670,7 @@ const styles = StyleSheet.create({
   },
   earningsLabel: { fontSize: FONT_SIZES.sm, color: COLORS.textSecondary },
   earningsAmount: { fontSize: FONT_SIZES.xxxl, fontWeight: '800', color: COLORS.gold, marginTop: SPACING.xs },
+  artistNameLabel: { fontSize: FONT_SIZES.md, color: COLORS.textSecondary, marginTop: SPACING.xs },
   earningsGrid: { flexDirection: 'row', justifyContent: 'space-around', marginTop: SPACING.lg },
   earningStat: { alignItems: 'center', gap: SPACING.xs },
   earningStatVal: { fontSize: FONT_SIZES.lg, fontWeight: '700', color: COLORS.text },

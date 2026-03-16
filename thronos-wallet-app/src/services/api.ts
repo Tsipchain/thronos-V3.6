@@ -178,7 +178,12 @@ export async function getSwapQuote(
   to: string,
   amount: number,
 ): Promise<{ rate: number; amount_out: number; fee: number }> {
-  return request(`/api/swap/quote?from=${from}&to=${to}&amount=${amount}`);
+  const data = await request(`/api/swap/quote?token_in=${from}&token_out=${to}&amount_in=${amount}`);
+  // API returns amount_out but not rate — compute rate for display
+  const amountOut = Number(data.amount_out) || 0;
+  const fee = Number(data.fee) || 0;
+  const rate = amount > 0 ? amountOut / amount : 0;
+  return { rate, amount_out: amountOut, fee };
 }
 
 export async function executeSwap(params: {
@@ -190,7 +195,13 @@ export async function executeSwap(params: {
 }): Promise<{ success: boolean; transaction?: any }> {
   return request('/api/swap/execute', {
     method: 'POST',
-    body: JSON.stringify(params),
+    body: JSON.stringify({
+      token_in: params.from_token,
+      token_out: params.to_token,
+      amount_in: params.amount,
+      trader_thr: params.address,
+      auth_secret: params.secret,
+    }),
   });
 }
 

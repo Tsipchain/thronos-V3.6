@@ -107,9 +107,9 @@ export default function SwapScreen() {
 
           {quote && (
             <View style={styles.quoteBox}>
-              <Text style={styles.quoteText}>Rate: 1 {fromToken} = {quote.rate.toFixed(6)} {toToken}</Text>
-              <Text style={styles.quoteText}>You receive: {quote.amount_out.toFixed(6)} {toToken}</Text>
-              <Text style={styles.quoteText}>Fee: {quote.fee} THR</Text>
+              <Text style={styles.quoteText}>Rate: 1 {fromToken} = {(quote.rate ?? 0).toFixed(6)} {toToken}</Text>
+              <Text style={styles.quoteText}>You receive: {(quote.amount_out ?? 0).toFixed(6)} {toToken}</Text>
+              <Text style={styles.quoteText}>Fee: {quote.fee ?? 0} THR</Text>
             </View>
           )}
 

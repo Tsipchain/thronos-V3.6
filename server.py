@@ -1177,10 +1177,12 @@ TOKEN_BALANCES_FILE = os.path.join(DATA_DIR, "token_balances.json")
 POOLS_FILE          = os.path.join(DATA_DIR, "pools.json")
 
 # --- Stripe Config ---
-# PLEASE UPDATE THESE WITH YOUR REAL KEYS
-STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "sk_live_...Tuhr") 
-STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "pk_live_n7kIflBg8OTy2FJLsp80DY0M")
-STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "whsec_PLACEHOLDER")
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+
+if not STRIPE_SECRET_KEY or not STRIPE_PUBLISHABLE_KEY:
+    logging.warning("Stripe is not configured: STRIPE_SECRET_KEY and/or STRIPE_PUBLISHABLE_KEY are missing. Payment features will be unavailable.")
 DOMAIN_URL = os.getenv("DOMAIN_URL", "http://localhost:3334")
 
 

@@ -1,3 +1,13 @@
 
 __pycache__/
-
+*.pyc
+*.pyo
+*.db
+*.sqlite3
+.env
+.env.*
+!.env.example
+data/
+node_modules/
+*.log
+.DS_Store

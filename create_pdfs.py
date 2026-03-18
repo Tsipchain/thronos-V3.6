@@ -65,12 +65,11 @@ def create_pdf(text_file, pdf_file):
     print(f"Created {pdf_file}")
 
 if __name__ == "__main__":
-    # Install fpdf if missing
     try:
         import fpdf
     except ImportError:
-        os.system("pip install fpdf")
-        import fpdf
+        print("Error: 'fpdf' package is not installed. Please run: pip install fpdf")
+        exit(1)
 
     base_dir = "/workspace/thronos-V3"
     static_dir = os.path.join(base_dir, "static")

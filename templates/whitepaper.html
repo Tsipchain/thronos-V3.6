@@ -13,17 +13,18 @@
     .wp-header {
         text-align: center;
         padding: 50px 30px;
-        background: linear-gradient(135deg, #071510 0%, #0a2518 50%, #071510 100%);
-        border: 1px solid #1a5a2f;
+        background: linear-gradient(135deg, #000000 0%, #0a0a0a 50%, #000000 100%);
+        border: 1px solid #00ff66;
         border-radius: 20px;
         margin-bottom: 40px;
     }
     .wp-header h1 {
-        color: #3CFF7A;
+        color: #00ff66;
         font-size: 3em;
         margin: 0;
-        text-shadow: 0 0 30px rgba(60, 255, 122, 0.4);
+        text-shadow: 0 0 30px rgba(0, 255, 102, 0.4);
         letter-spacing: 3px;
+        font-family: 'Courier New', monospace;
     }
     .wp-header .subtitle {
         color: #d7ffe6;
@@ -32,7 +33,7 @@
         opacity: 0.9;
     }
     .wp-header .tagline {
-        color: #3CFF7A;
+        color: #00ff66;
         font-style: italic;
         margin-top: 20px;
         font-size: 1.1em;
@@ -40,7 +41,7 @@
     .btn-download {
         display: inline-block;
         background: #06140b;
-        color: #3CFF7A;
+        color: #00ff66;
         padding: 12px 25px;
         margin-top: 25px;
         font-weight: bold;
@@ -52,7 +53,7 @@
     .btn-download:hover {
         background: #3CFF7A;
         color: #000;
-        box-shadow: 0 0 20px rgba(60, 255, 122, 0.4);
+        box-shadow: 0 0 20px rgba(0, 255, 102, 0.4);
     }
     .section {
         background: #07120b;
@@ -62,7 +63,7 @@
         margin-bottom: 25px;
     }
     .section h2 {
-        color: #3CFF7A;
+        color: #00ff66;
         margin-top: 0;
         font-size: 1.8em;
         display: flex;
@@ -86,7 +87,7 @@
         margin-bottom: 12px;
     }
     .highlight-box {
-        background: rgba(60, 255, 122, 0.1);
+        background: rgba(0, 255, 102, 0.1);
         border-left: 4px solid #3CFF7A;
         padding: 20px;
         margin: 20px 0;
@@ -106,7 +107,7 @@
         text-align: center;
     }
     .stat-card .value {
-        color: #3CFF7A;
+        color: #00ff66;
         font-size: 2em;
         font-weight: bold;
     }
@@ -144,10 +145,10 @@
         height: 12px;
         background: #3CFF7A;
         border-radius: 50%;
-        box-shadow: 0 0 10px rgba(60, 255, 122, 0.5);
+        box-shadow: 0 0 10px rgba(0, 255, 102, 0.5);
     }
     .timeline-item .year {
-        color: #3CFF7A;
+        color: #00ff66;
         font-weight: bold;
         font-size: 1.1em;
     }
@@ -165,11 +166,11 @@
         transition: all 0.3s;
     }
     .feature-card:hover {
-        border-color: #3CFF7A;
+        border-color: #00ff66;
         transform: translateY(-3px);
     }
     .feature-card h4 {
-        color: #3CFF7A;
+        color: #00ff66;
         margin: 0 0 10px 0;
         display: flex;
         align-items: center;
@@ -192,16 +193,16 @@
     }
     th {
         background: #050b07;
-        color: #3CFF7A;
+        color: #00ff66;
     }
     td {
         background: #07120b;
     }
     code {
-        background: rgba(60, 255, 122, 0.1);
+        background: rgba(0, 255, 102, 0.1);
         padding: 2px 6px;
         border-radius: 4px;
-        color: #3CFF7A;
+        color: #00ff66;
         font-family: monospace;
     }
     .toc {
@@ -212,7 +213,7 @@
         margin-bottom: 30px;
     }
     .toc h3 {
-        color: #3CFF7A;
+        color: #00ff66;
         margin-top: 0;
     }
     .toc ul {
@@ -230,7 +231,7 @@
         transition: color 0.3s;
     }
     .toc a:hover {
-        color: #3CFF7A;
+        color: #00ff66;
     }
     @media (max-width: 768px) {
         .toc ul { columns: 1; }
@@ -265,6 +266,7 @@
             <li><a href="#tech">⚙️ <span class="lang-el">Τεχνολογία</span><span class="lang-en">Technology</span></a></li>
             <li><a href="#economy">💰 <span class="lang-el">Οικονομία</span><span class="lang-en">Economy</span></a></li>
             <li><a href="#ecosystem">🌐 <span class="lang-el">Οικοσύστημα</span><span class="lang-en">Ecosystem</span></a></li>
+            <li><a href="#services">🔗 <span class="lang-el">Ecosystem Services</span><span class="lang-en">Ecosystem Services</span></a></li>
             <li><a href="#ai">🤖 <span class="lang-el">AI & Machine Learning</span><span class="lang-en">AI & Machine Learning</span></a></li>
             <li><a href="#smartcity">🏙️ <span class="lang-el">Smart City</span><span class="lang-en">Smart City</span></a></li>
             <li><a href="#tokenomics">📈 Tokenomics</a></li>
@@ -307,8 +309,8 @@
             <div class="timeline-item">
                 <div class="year">2025-2026 - <span class="lang-el">Mainnet & Οικοσύστημα</span><span class="lang-en">Mainnet & Ecosystem</span></div>
                 <p>
-                    <span class="lang-el">100+ API endpoints, 47+ σελίδες, πλήρες DeFi ecosystem, BTC Pledge system, VerifyID, Pythia AI training, Stratum mining (ASIC/CPU/GPU), Mobile SDKs, Chrome Extension, 3 live nodes (Railway + Render), 24000+ γραμμές κώδικα.</span>
-                    <span class="lang-en">100+ API endpoints, 47+ pages, complete DeFi ecosystem, BTC Pledge system, VerifyID, Pythia AI training, Stratum mining (ASIC/CPU/GPU), Mobile SDKs, Chrome Extension, 3 live nodes (Railway + Render), 24000+ lines of code.</span>
+                    <span class="lang-el">100+ API endpoints, 47+ σελίδες, πλήρες DeFi ecosystem, BTC Pledge system, VerifyID, Pythia AI training, Stratum mining (ASIC/CPU/GPU), Mobile SDKs, Chrome Extension, 4+ live nodes (Master, Replica, Vercel, AI Core) + ecosystem services (Gateway, Sentinel, Commerce, CareerForge, Builder), 50K+ γραμμές κώδικα, 435+ PRs.</span>
+                    <span class="lang-en">100+ API endpoints, 47+ pages, complete DeFi ecosystem, BTC Pledge system, VerifyID, Pythia AI training, Stratum mining (ASIC/CPU/GPU), Mobile SDKs, Chrome Extension, 4+ live nodes (Master, Replica, Vercel, AI Core) + ecosystem services (Gateway, Sentinel, Commerce, CareerForge, Builder), 50K+ lines of code, 435+ PRs.</span>
                 </p>
             </div>
         </div>
@@ -458,6 +460,56 @@
         </div>
     </div>
 
+    <!-- Ecosystem Services -->
+    <div class="section" id="services">
+        <h2>🔗 <span class="lang-el">Ecosystem Services</span><span class="lang-en">Ecosystem Services</span></h2>
+        <p>
+            <span class="lang-el">Το Thronos ecosystem αποτελείται από 10+ αυτόνομα repositories που λειτουργούν ως microservices:</span>
+            <span class="lang-en">The Thronos ecosystem consists of 10+ autonomous repositories operating as microservices:</span>
+        </p>
+
+        <div class="feature-grid">
+            <div class="feature-card">
+                <h4>💳 Thronos Gateway</h4>
+                <p><span class="lang-el">Payment orchestration, Stripe integration, fiat on/off ramp, subscription management</span><span class="lang-en">Payment orchestration, Stripe integration, fiat on/off ramp, subscription management</span></p>
+            </div>
+            <div class="feature-card">
+                <h4>📈 Trader Sentinel</h4>
+                <p><span class="lang-el">AI AutoTrader με Sleep Mode (48h), hedge/DCA protection, multi-exchange (MEXC, Binance, Bybit, OKX), spot & futures trading</span><span class="lang-en">AI AutoTrader with Sleep Mode (48h), hedge/DCA protection, multi-exchange (MEXC, Binance, Bybit, OKX), spot & futures trading</span></p>
+            </div>
+            <div class="feature-card">
+                <h4>🛒 Thronos Commerce</h4>
+                <p><span class="lang-el">E-commerce platform με THR πληρωμές, product catalog, order management</span><span class="lang-en">E-commerce platform with THR payments, product catalog, order management</span></p>
+            </div>
+            <div class="feature-card">
+                <h4>📱 ThronosBuilder</h4>
+                <p><span class="lang-el">Mobile app builder, APK generation pipeline, signing & distribution</span><span class="lang-en">Mobile app builder, APK generation pipeline, signing & distribution</span></p>
+            </div>
+            <div class="feature-card">
+                <h4>💼 CareerForge AI</h4>
+                <p><span class="lang-el">AI job matching, CV analysis, interview prep, AI credits integration</span><span class="lang-en">AI job matching, CV analysis, interview prep, AI credits integration</span></p>
+            </div>
+            <div class="feature-card">
+                <h4>🆔 VerifyID</h4>
+                <p><span class="lang-el">On-chain KYC με BTC pledge, steganographic contracts, ASIC PoW attestation</span><span class="lang-en">On-chain KYC with BTC pledge, steganographic contracts, ASIC PoW attestation</span></p>
+            </div>
+            <div class="feature-card">
+                <h4>🚗 Driver Platform</h4>
+                <p><span class="lang-el">GPS telemetry, autonomous driving training data, T2E rewards, vehicle nodes</span><span class="lang-en">GPS telemetry, autonomous driving training data, T2E rewards, vehicle nodes</span></p>
+            </div>
+            <div class="feature-card">
+                <h4>🤖 Discord Bot</h4>
+                <p><span class="lang-el">Community integration, THR balance queries, governance notifications</span><span class="lang-en">Community integration, THR balance queries, governance notifications</span></p>
+            </div>
+        </div>
+
+        <div class="highlight-box">
+            <strong><span class="lang-el">Multi-Chain Υποστήριξη:</span><span class="lang-en">Multi-Chain Support:</span></strong>
+            <span class="lang-el">Ethereum, BSC, Polygon, Arbitrum μέσω EVM bridge integration.</span>
+            <span class="lang-en">Ethereum, BSC, Polygon, Arbitrum via EVM bridge integration.</span>
+        </div>
+    </div>
+
     <!-- AI -->
     <div class="section" id="ai">
         <h2>🤖 AI & Machine Learning</h2>
@@ -534,7 +586,7 @@
         <p>
             <span class="lang-el">Για λεπτομερές roadmap με progress bars, επισκεφθείτε:</span>
             <span class="lang-en">For detailed roadmap with progress bars, visit:</span>
-            <a href="/roadmap" style="color: #3CFF7A;"> /roadmap</a>
+            <a href="/roadmap" style="color: #00ff66;"> /roadmap</a>
         </p>
 
         <div class="highlight-box">
@@ -559,7 +611,7 @@
 
     <!-- Footer -->
     <div style="text-align: center; margin-top: 50px; padding: 30px; opacity: 0.8;">
-        <p style="font-style: italic; font-size: 1.2em; color: #3CFF7A;">
+        <p style="font-style: italic; font-size: 1.2em; color: #00ff66;">
             "Forged in Fire, Secured by Code"
         </p>
         <p>

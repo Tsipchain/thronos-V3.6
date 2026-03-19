@@ -46,6 +46,19 @@ Transaction JSON -> QR Code -> WAV (FSK modulation) -> broadcast via wireless/Lo
 - **Crypto Hunters**: Play-to-Earn geolocation game
 - **VerifyID**: On-chain KYC with BTC pledge + steganography
 
+### Ecosystem Services
+10+ autonomous repositories operating as microservices:
+- **Core Chain** (thronos-V3.6): 100+ API endpoints, wallet, DeFi, mining (90%)
+- **Thronos Gateway**: Payment orchestration, Stripe, fiat on/off ramp (95%)
+- **Trader Sentinel**: AI AutoTrader, Sleep Mode, hedge/DCA, multi-exchange (85%)
+- **ThronosBuilder**: Mobile app builder, APK generation pipeline (20%)
+- **Thronos Commerce**: E-commerce with THR payments (60%)
+- **CareerForge AI**: AI job matching, CV analysis, AI credits (60%)
+- **VerifyID**: On-chain KYC, BTC pledge, steganography (75%)
+- **Driver Platform**: GPS telemetry, T2E rewards, autonomous driving data (40%)
+
+Total: 50K+ lines of code, 435+ pull requests, 4+ active nodes.
+
 ### Conclusion
 Decentralization, security, speed, survivability, and innovation.
 
@@ -93,6 +106,19 @@ Decentralization, security, speed, survivability, and innovation.
 - **L2E/T2E**: Learn-to-Earn μαθήματα, Train-to-Earn GPS τηλεμετρία
 - **Crypto Hunters**: Play-to-Earn παιχνίδι γεωεντοπισμού
 - **VerifyID**: On-chain KYC με BTC pledge + steganography
+
+### Υπηρεσίες Οικοσυστήματος
+10+ αυτόνομα repositories ως microservices:
+- **Core Chain** (thronos-V3.6): 100+ API endpoints, πορτοφόλι, DeFi, mining (90%)
+- **Thronos Gateway**: Ενορχήστρωση πληρωμών, Stripe, fiat on/off ramp (95%)
+- **Trader Sentinel**: AI AutoTrader, Sleep Mode, hedge/DCA, multi-exchange (85%)
+- **ThronosBuilder**: Mobile app builder, APK generation pipeline (20%)
+- **Thronos Commerce**: E-commerce με πληρωμές THR (60%)
+- **CareerForge AI**: AI εύρεση εργασίας, ανάλυση CV, AI credits (60%)
+- **VerifyID**: On-chain KYC, BTC pledge, steganography (75%)
+- **Driver Platform**: GPS τηλεμετρία, T2E ανταμοιβές, δεδομένα αυτόνομης οδήγησης (40%)
+
+Σύνολο: 50K+ γραμμές κώδικα, 435+ pull requests, 4+ ενεργοί κόμβοι.
 
 ### Συμπέρασμα
 Αποκέντρωση, ασφάλεια, ταχύτητα, επιβιωσιμότητα και καινοτομία.

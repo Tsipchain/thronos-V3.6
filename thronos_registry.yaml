@@ -135,6 +135,42 @@ nodes:
       - auto-trading
       - trade-history
 
+  - id: node8-payment-gateway
+    name: "Thronos Payment Gateway"
+    role: gateway
+    platform: railway
+    url: "https://gateway.thronoschain.org"
+    health: "/health"
+    tier: critical
+    owner: core-team
+    data_store: postgresql
+    repo: "Tsipchain/thronos-gateway"
+    responsibilities:
+      - stripe-fiat-payments
+      - crosschain-rpc-payments
+      - webhook-processing
+      - fee-distribution
+      - service-orchestration
+      - payment-confirmation
+
+  - id: node9-app-builder
+    name: "Thronos App Builder"
+    role: builder
+    platform: railway
+    url: "https://builder.thronoschain.org"
+    health: "/health"
+    tier: high
+    owner: core-team
+    data_store: postgresql
+    repo: "Tsipchain/thronosbuilder"
+    responsibilities:
+      - android-apk-builds
+      - android-aab-builds
+      - ios-ipa-builds
+      - build-queue-processing
+      - artifact-storage-s3-ipfs
+      - thron-token-pricing
+
 # ----------------------------------------------------------
 # CORE SERVICES
 # ----------------------------------------------------------
@@ -277,6 +313,67 @@ services:
     owner: core-team
     compliance:
       - "PCI-DSS-delegated"
+
+  - id: payment-gateway
+    name: "Thronos Payment Gateway – Stripe, Fiat, Crosschain"
+    subdomain: "gateway"
+    custom_domain: "gateway.thronoschain.org"
+    node: node8-payment-gateway
+    port: 3000
+    tier: critical
+    category: payments
+    endpoints:
+      - "/health"
+      - "/api/payments/create"
+      - "/api/payments/status"
+      - "/api/payments/confirm"
+      - "/api/services/register"
+      - "/api/services/health"
+      - "/webhooks/stripe"
+      - "/webhooks/chain"
+    owner: core-team
+    compliance:
+      - "PCI-DSS-delegated"
+    depends_on:
+      - postgresql
+      - redis
+      - stripe
+    fee_distribution:
+      treasury: 50
+      burn: 25
+      lp: 25
+    chains_supported:
+      - ethereum
+      - bsc
+      - polygon
+      - arbitrum
+      - bitcoin
+
+  - id: app-builder
+    name: "Thronos App Builder – Mobile Build Automation"
+    subdomain: "builder"
+    custom_domain: "builder.thronoschain.org"
+    node: node9-app-builder
+    port: 3000
+    tier: high
+    category: devtools
+    endpoints:
+      - "/health"
+      - "/api/builds/create"
+      - "/api/builds/status"
+      - "/api/builds/download"
+      - "/api/builds/list"
+    owner: core-team
+    depends_on:
+      - postgresql
+      - redis
+    pricing:
+      android_apk: 10  # THRON tokens
+      android_aab: 10
+      ios_ipa: 50
+    storage:
+      primary: ipfs
+      fallback: s3
 
   - id: stratum-mining
     name: "Stratum Mining Server (SHA256)"
@@ -636,6 +733,18 @@ domains:
     target: node4-ai-core
     type: platform
     dns: render
+
+  - domain: "gateway.thronoschain.org"
+    target: node8-payment-gateway
+    type: cname
+    dns: railway
+    notes: "Thronos Payment Gateway — Stripe, Fiat, Crosschain RPC payments"
+
+  - domain: "builder.thronoschain.org"
+    target: node9-app-builder
+    type: cname
+    dns: railway
+    notes: "Thronos App Builder — Mobile build automation service"
 
   - domain: "driverinteligent.thronoschain.org"
     target: driver-platform

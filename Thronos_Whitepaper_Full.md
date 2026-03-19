@@ -219,7 +219,39 @@ Thronos Chain uses a decentralized governance model:
 
 ---
 
-## 10. Use Cases
+## 10. Ecosystem Services
+
+The Thronos ecosystem spans 10+ autonomous repositories, each operating as a microservice within the broader network:
+
+| Service | Status | Description |
+|:--------|:-------|:------------|
+| **Core Chain** (thronos-V3.6) | 90% | Main blockchain, 100+ API endpoints, wallet, DeFi, mining |
+| **Thronos Gateway** | 95% | Payment orchestration, Stripe integration, fiat on/off ramp |
+| **Trader Sentinel** | 85% | AI AutoTrader, Sleep Mode (48h), hedge/DCA, multi-exchange |
+| **ThronosBuilder** | 20% | Mobile app builder, APK generation pipeline |
+| **Thronos Commerce** | 60% | E-commerce with THR payments |
+| **CareerForge AI** | 60% | AI job matching, CV analysis, AI credits |
+| **VerifyID** | 75% | On-chain KYC, BTC pledge, steganography |
+| **Driver Platform** | 40% | GPS telemetry, T2E rewards, autonomous driving data |
+| **Discord Bot** | 70% | Community integration, balance queries |
+| **BTC API Adapter** | 90% | Independent BTC data at btc-api.thronoschain.org |
+
+### Multi-Chain Support
+- Ethereum, BSC, Polygon, Arbitrum via EVM bridge integration
+- HD wallet generation supporting BTC, ETH, SOL, THR
+
+### Deployment Architecture
+- **Master Node**: Railway (G1 Mini Ryzen 9) — chain writer, API, scheduler
+- **Replica Node**: Railway Cloud — read-only workers, background jobs
+- **Vercel CDN**: Static frontend, native wallet hosting
+- **AI Core**: Local (Ryzen 7) — LLM inference, Pytheia monitoring
+- **Ecosystem Services**: Railway + Render — Gateway, Sentinel, Commerce, CareerForge
+
+**Total Codebase**: 50K+ lines of code across all repositories, 435+ pull requests.
+
+---
+
+## 11. Use Cases
 
 ### Crypto Hunters (Play-to-Earn)
 A location-based game where players physically move to geo-locations to find hidden "chests". Rewards are paid in THR, driving real-world adoption.
@@ -247,7 +279,7 @@ Real-time parking management with THR payments. Device verification through on-c
 
 ---
 
-## 11. PhantomFace (Steganography Layer)
+## 12. PhantomFace (Steganography Layer)
 
 The PhantomFace module allows encoding of signed TX data into images (e.g., KYC selfies). Using LSB-based steganography, the block payload is undetectably embedded into visual files.
 
@@ -258,7 +290,7 @@ The PhantomFace module allows encoding of signed TX data into images (e.g., KYC 
 
 ---
 
-## 12. Mobile & Native Wallet
+## 13. Mobile & Native Wallet
 
 ### Mobile SDK (React Native)
 - Full Android and iOS support
@@ -282,7 +314,7 @@ The PhantomFace module allows encoding of signed TX data into images (e.g., KYC 
 
 ---
 
-## 13. Blockchain Explorer
+## 14. Blockchain Explorer
 
 Comprehensive block explorer with 9 interactive tabs:
 1. **Blocks**: Mining history, rewards, pool burns, AI rewards
@@ -297,7 +329,7 @@ Comprehensive block explorer with 9 interactive tabs:
 
 ---
 
-## 14. Deployment Infrastructure
+## 15. Deployment Infrastructure
 
 | Service | Platform | Purpose |
 |:--------|:---------|:--------|
@@ -310,7 +342,7 @@ Comprehensive block explorer with 9 interactive tabs:
 
 ---
 
-## 15. Roadmap Summary
+## 16. Roadmap Summary
 
 | Phase | Version | Status | Key Features |
 |:------|:--------|:-------|:-------------|
@@ -328,7 +360,7 @@ Comprehensive block explorer with 9 interactive tabs:
 
 ---
 
-## 16. Hardware Shopping List / Checklist
+## 17. Hardware Shopping List / Checklist
 
 - [ ] Powered USB Hub (7+ ports) - for ASIC validators
 - [ ] RTL-SDR v4 Dongle - for spectrum monitoring

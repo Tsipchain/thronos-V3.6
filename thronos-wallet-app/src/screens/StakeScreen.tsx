@@ -69,15 +69,15 @@ export default function StakeScreen() {
             <View style={styles.infoCard}>
               <View style={styles.infoRow}>
                 <Text style={styles.infoLabel}>Staked</Text>
-                <Text style={styles.infoValue}>{pledgeInfo.pledged_amount.toLocaleString()} THR</Text>
+                <Text style={styles.infoValue}>{(pledgeInfo.pledged_amount ?? 0).toLocaleString()} THR</Text>
               </View>
               <View style={styles.infoRow}>
                 <Text style={styles.infoLabel}>Rewards</Text>
-                <Text style={[styles.infoValue, { color: COLORS.success }]}>{pledgeInfo.rewards.toFixed(4)} THR</Text>
+                <Text style={[styles.infoValue, { color: COLORS.success }]}>{(pledgeInfo.rewards ?? 0).toFixed(4)} THR</Text>
               </View>
               <View style={styles.infoRow}>
                 <Text style={styles.infoLabel}>APR</Text>
-                <Text style={[styles.infoValue, { color: COLORS.gold }]}>{(pledgeInfo.apr * 100).toFixed(1)}%</Text>
+                <Text style={[styles.infoValue, { color: COLORS.gold }]}>{((pledgeInfo.apr ?? 0) * 100).toFixed(1)}%</Text>
               </View>
             </View>
           ) : null}

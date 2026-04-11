@@ -840,6 +840,7 @@ GUEST_COOKIE_NAME = "thr_guest_id"
 GUEST_TTL_SECONDS = int(_strip_env_quotes(os.getenv("GUEST_TTL_SECONDS", str(7*24*3600))))  # 7 days
 
 GUEST_STATE_FILE = os.path.join(DATA_DIR, "guest_state.json")
+_GUEST_STATE_LOCK = threading.Lock()  # guards read-modify-write on guest_state.json
 
 def _now_ts() -> int:
     return int(time.time())
@@ -873,10 +874,11 @@ def guest_state_get(gid: str) -> dict:
     return g
 
 def guest_state_set(gid: str, g: dict):
-    state = load_guest_state()
-    g["expires_at"] = _now_ts() + GUEST_TTL_SECONDS
-    state[gid] = g
-    save_guest_state(state)
+    with _GUEST_STATE_LOCK:
+        state = load_guest_state()
+        g["expires_at"] = _now_ts() + GUEST_TTL_SECONDS
+        state[gid] = g
+        save_guest_state(state)
 
 def guest_decrement_free_messages(gid: str) -> int:
     g = guest_state_get(gid)
@@ -5519,11 +5521,12 @@ def add_ai_credits(wallet: str, delta: int, reason: str = "", metadata: dict | N
     wallet = (wallet or "").strip()
     if not wallet:
         return 0
-    credits_map = load_ai_credits()
-    before = get_ai_credits(wallet)
-    after = max(0, before + int(delta or 0))
-    credits_map[wallet] = after
-    save_ai_credits(credits_map)
+    with _AI_CREDITS_LOCK:
+        credits_map = load_ai_credits()
+        before = get_ai_credits(wallet)
+        after = max(0, before + int(delta or 0))
+        credits_map[wallet] = after
+        save_ai_credits(credits_map)
     normalized_reason = (reason or "adjust").strip().lower()
     if normalized_reason == "chat_message":
         normalized_reason = "chat_usage"

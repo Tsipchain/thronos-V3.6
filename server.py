@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil, sqlite3, base64, hmac
 import sys
+import threading
 import atexit
 from collections import Counter
 from decimal import Decimal, ROUND_DOWN
@@ -798,6 +799,7 @@ active_peers = PEERS  # Backward-compatible alias
 # AI commerce
 AI_PACKS_FILE       = os.path.join(DATA_DIR, "ai_packs.json")
 AI_CREDITS_FILE     = os.path.join(DATA_DIR, "ai_credits.json")
+_AI_CREDITS_LOCK    = threading.Lock()  # guards read-modify-write in debit_ai_credits
 AI_CREDITS_LEDGER_FILE = os.path.join(DATA_DIR, "ai_credits_ledger.json")
 AI_PROXY_HEALTH_CACHE = {"ts": 0.0, "payload": None}
 AI_PROXY_HEALTH_CACHE_TTL = float(_strip_env_quotes(os.getenv("AI_PROXY_HEALTH_CACHE_TTL", "15")) or 15)
@@ -5571,9 +5573,10 @@ def debit_ai_credits(
         logger.info("[AI_CREDITS] wallet=%s op=%s delta=%s before=%s after=%s", wallet, reason, delta_i, before, before)
         return (False, before) if legacy_mode else None
 
-    credits_map = load_ai_credits()
-    credits_map[wallet] = after
-    save_ai_credits(credits_map)
+    with _AI_CREDITS_LOCK:
+        credits_map = load_ai_credits()
+        credits_map[wallet] = after
+        save_ai_credits(credits_map)
 
     normalized_reason = (reason or "adjust").strip().lower()
     if normalized_reason == "chat_message":
@@ -14205,6 +14208,7 @@ def _handle_ai_chat_master():
 
     # --- Credits check (Chat billing mode) ---
     credits_value = None
+    demo_key = None  # set in the else-branch (no wallet) for cookie-based guest tracking
     is_core_node = (os.getenv("NODE_ROLE") == "ai_core")
     if wallet:
         if billing_precharged:
@@ -14225,15 +14229,17 @@ def _handle_ai_chat_master():
         # many messages have already been consumed for this session.  Once
         # the limit is reached, deny further requests until the user
         # supplies a wallet address.
-        demo_key = session_id or "default"
-        counters = load_ai_free_usage()
-        used = int(counters.get(demo_key, 0))
+        # Use cookie-based guest ID so the limit cannot be bypassed by
+        # sending different session_id values in the JSON body.
+        demo_key = get_or_set_guest_id()
+        _gs = guest_state_get(demo_key)
+        used = int(_gs.get("used_messages", 0))
         if used >= AI_FREE_MESSAGES_LIMIT:
             warning_text = (
                 "Έχεις εξαντλήσει το όριο των δωρεάν μηνυμάτων χωρίς THR wallet.\\n"
                 "Σύνδεσε ένα πορτοφόλι THR για να συνεχίσεις ή αγόρασε AI pack."
             )
-            return jsonify(
+            resp_obj = make_response(jsonify(
                 response=warning_text,
                 quantum_key=ai_agent.generate_quantum_key(),
                 status="no_credits",
@@ -14241,11 +14247,11 @@ def _handle_ai_chat_master():
                 credits=0,
                 files=[],
                 session_id=session_id,
-            ), 200
-        # Increment the counter and persist.  This ensures each demo call
-        # counts towards the free limit.
-        counters[demo_key] = used + 1
-        save_ai_free_usage(counters)
+            ), 200)
+            resp_obj.set_cookie(GUEST_COOKIE_NAME, demo_key, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+            return resp_obj
+        # Increment using cookie-keyed guest state (not user-controlled session_id).
+        guest_decrement_free_messages(demo_key)
 
     # --- Build context for conversation memory ---
     # To provide better continuity between messages, construct a short context
@@ -14438,10 +14444,7 @@ def _handle_ai_chat_master():
         # send before needing to attach a wallet.  Note: the counter was
         # incremented above, so we subtract from the limit.
         try:
-            counters = load_ai_free_usage()
-            demo_key = session_id or "default"
-            used_now = int(counters.get(demo_key, 0))
-            credits_for_frontend = max(0, AI_FREE_MESSAGES_LIMIT - used_now)
+            credits_for_frontend = guest_remaining_free_messages(demo_key)
         except Exception:
             credits_for_frontend = "infinite"
         ai_credits_spent = 0.0
@@ -14543,7 +14546,10 @@ def _handle_ai_chat_master():
             logger.exception("Failed to append AI score")
     call_meta["response_status"] = status
     _log_ai_call(call_meta)
-    return jsonify(resp), 200
+    final_response = make_response(jsonify(resp), 200)
+    if demo_key:
+        final_response.set_cookie(GUEST_COOKIE_NAME, demo_key, max_age=GUEST_TTL_SECONDS, httponly=True, samesite="Lax")
+    return final_response
 
 
 @app.route("/api/v1/ai/log", methods=["POST"])

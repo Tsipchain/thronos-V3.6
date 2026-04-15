@@ -5295,6 +5295,18 @@ def save_live_sessions(sessions):
     save_json(L2E_LIVE_SESSIONS_FILE, sessions)
 
 
+L2E_CERT_AUDIT_FILE = os.path.join(DATA_DIR, "l2e_certificate_audit.json")
+
+
+def load_certificate_audit() -> dict:
+    raw = load_json(L2E_CERT_AUDIT_FILE, {})
+    return raw if isinstance(raw, dict) else {}
+
+
+def save_certificate_audit(audit: dict):
+    save_json(L2E_CERT_AUDIT_FILE, audit if isinstance(audit, dict) else {})
+
+
 def _is_http_url(value: str) -> bool:
     try:
         parsed = urlparse(value or "")
@@ -5380,6 +5392,76 @@ def _compute_certificate_status(enrollment: dict, course: dict | None = None) ->
     return "issuable"
 
 
+def _compute_certificate_lifecycle_state(enrollment: dict, course: dict | None = None) -> str:
+    """
+    Certificate lifecycle model (phase-2 skeleton), kept separate from reward/completion:
+      - not_enabled
+      - eligible
+      - pending_approval
+      - issuable
+      - issued
+      - rejected
+    """
+    e = enrollment if isinstance(enrollment, dict) else {}
+    c = course if isinstance(course, dict) else {}
+    if not bool(c.get("certificate_enabled")):
+        return "not_enabled"
+    if e.get("certificate_rejected"):
+        return "rejected"
+    if e.get("issued_at") or e.get("certificate_id"):
+        return "issued"
+    if not bool(e.get("certificate_eligibility")):
+        return "not_enabled"
+
+    approval_mode = (c.get("certificate_approval_mode") or "manual").strip().lower()
+    if approval_mode in {"teacher_approval", "admin_approval"}:
+        if not bool(e.get("certificate_approval_requested")):
+            return "eligible"
+        return "issuable" if bool(e.get("certificate_approved")) else "pending_approval"
+    if bool(e.get("certificate_ready_for_issue")):
+        return "issuable"
+    return "eligible"
+
+
+def _build_academic_result_state(enrollment: dict | None, course: dict | None = None) -> dict:
+    """Build explicit, separated result states for academic/reward/certificate views."""
+    e = enrollment if isinstance(enrollment, dict) else {}
+    c = course if isinstance(course, dict) else {}
+    passing_score = int(c.get("metadata", {}).get("quiz", {}).get("pass_score", c.get("pass_score", 80)) or 80)
+    certificate_threshold = int(c.get("certificate_threshold_score", passing_score) or passing_score)
+    quiz_score = e.get("quiz_score")
+    pass_fail_status = e.get("pass_fail_status") or ("pass" if isinstance(quiz_score, (int, float)) and quiz_score >= passing_score else "fail" if isinstance(quiz_score, (int, float)) else "not_attempted")
+
+    return {
+        "score": {
+            "quiz_score": quiz_score,
+            "quiz_pass_threshold": passing_score,
+            "certificate_threshold": certificate_threshold,
+        },
+        "states": {
+            "completion_status": "completed" if bool(e.get("completed")) else "not_completed",
+            "pass_fail_status": pass_fail_status,
+            "certificate_eligibility": bool(e.get("certificate_eligibility")),
+            "certificate_status": e.get("certificate_status") or _compute_certificate_status(e, c),
+            "certificate_lifecycle_state": e.get("certificate_lifecycle_state") or _compute_certificate_lifecycle_state(e, c),
+            "reward_eligibility": e.get("reward_eligibility") or ("eligible" if bool(e.get("reward_eligible")) else "not_eligible"),
+            "reward_claimability": e.get("reward_claimability") or "not_claimable",
+            "reward_state": e.get("reward_state") or _compute_reward_state(e),
+        },
+        "policies": {
+            "reward_policy": (e.get("reward_policy") or c.get("reward_policy") or "manual_claim"),
+            "certificate_approval_mode": (c.get("certificate_approval_mode") or "manual"),
+        },
+        "tenant": {
+            "tenant_id": e.get("tenant_id") or c.get("tenant_id"),
+            "institution_id": e.get("institution_id") or c.get("institution_id"),
+            "issuer_identity": e.get("certificate_issuer_identity") or c.get("certificate_issuer_identity") or c.get("teacher"),
+            "branding_name": c.get("tenant_branding_name"),
+            "tenant_course_notes": c.get("tenant_course_notes") or "",
+        }
+    }
+
+
 def _refresh_certificate_flags(enrollment: dict, course: dict | None = None) -> dict:
     e = enrollment if isinstance(enrollment, dict) else {}
     c = course if isinstance(course, dict) else {}
@@ -5388,6 +5470,7 @@ def _refresh_certificate_flags(enrollment: dict, course: dict | None = None) -> 
     e["tenant_id"] = e.get("tenant_id") or c.get("tenant_id")
     e["institution_id"] = e.get("institution_id") or c.get("institution_id")
     e["certificate_status"] = _compute_certificate_status(e, c)
+    e["certificate_lifecycle_state"] = _compute_certificate_lifecycle_state(e, c)
     return e
 
 
@@ -21812,6 +21895,7 @@ def api_v1_get_courses():
         c["certificate_issuer_identity"] = c.get("certificate_issuer_identity") or c.get("teacher")
         c["certificate_approval_mode"] = c.get("certificate_approval_mode") or "manual"
         c["tenant_branding_name"] = c.get("tenant_branding_name")
+        c["tenant_course_notes"] = c.get("tenant_course_notes") or ""
         normalized.append(c)
     return jsonify(courses=normalized), 200
 
@@ -21974,6 +22058,8 @@ def api_v1_create_course():
     certificate_template_name = (data.get("certificate_template_name") or "").strip() or None
     certificate_approval_mode = (data.get("certificate_approval_mode") or "manual").strip().lower()
     tenant_branding_name = (data.get("tenant_branding_name") or "").strip() or None
+    tenant_course_notes = (data.get("tenant_course_notes") or "").strip()
+    certificate_issuer_identity = (data.get("certificate_issuer_identity") or teacher).strip() or teacher
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
     description = (data.get("description") or "").strip()
@@ -22083,9 +22169,10 @@ def api_v1_create_course():
         "certificate_enabled": certificate_enabled,
         "certificate_threshold_score": int(data.get("certificate_threshold_score", data.get("passing_score", 80)) or 80),
         "certificate_template_name": certificate_template_name,
-        "certificate_issuer_identity": teacher,
+        "certificate_issuer_identity": certificate_issuer_identity,
         "certificate_approval_mode": certificate_approval_mode,
         "tenant_branding_name": tenant_branding_name,
+        "tenant_course_notes": tenant_course_notes,
         "students": [],
         "completed": []
     }
@@ -22252,9 +22339,14 @@ def api_v1_enroll_course(course_id: str):
     reward_eligible = bool(student)
 
     # Enroll student
-    course.setdefault("students", []).append(learner_key)
+    students = course.get("students")
+    if not isinstance(students, list):
+        students = list(students or [])
+        course["students"] = students
+    students.append(learner_key)
     enrollments = load_enrollments()
-    enrollments.setdefault(course_id, {})[learner_key] = {
+    course_enrollments = enrollments.setdefault(course_id, {})
+    course_enrollments[learner_key] = {
         "learner_id": learner_key,
         "student_thr": student or None,
         "payment_method": payment_method,
@@ -22265,7 +22357,22 @@ def api_v1_enroll_course(course_id: str):
         "completed": False,
         "access_only": payment_method == "stripe" and not reward_eligible,
     }
-    enrollments[course_id][learner_key] = _refresh_enrollment_reward_flags(enrollments[course_id][learner_key], course=course)
+    try:
+        course_enrollments[learner_key] = _refresh_enrollment_reward_flags(course_enrollments[learner_key], course=course)
+    except Exception as exc:
+        app.logger.warning("Enrollment reward hydration failed; keeping base enrollment record", extra={
+            "course_id": course_id,
+            "learner_id": learner_key,
+            "payment_method": payment_method,
+            "error": str(exc),
+        })
+        course_enrollments[learner_key]["reward_state"] = _compute_reward_state(course_enrollments[learner_key])
+        course_enrollments[learner_key]["reward_claimability"] = "not_claimable"
+        course_enrollments[learner_key]["reward_policy"] = (
+            (course.get("reward_policy") or "manual_claim")
+            if isinstance(course, dict)
+            else "manual_claim"
+        )
     save_enrollments(enrollments)
     save_courses(courses)
     return jsonify(
@@ -22379,6 +22486,12 @@ def api_v1_claim_course_reward(course_id: str):
     ), 200
 
 
+@app.route("/api/courses/<string:course_id>/claim_reward", methods=["POST"])
+def api_courses_claim_reward_alias(course_id: str):
+    """Alias for reward claim without versioned prefix."""
+    return api_v1_claim_course_reward(course_id)
+
+
 @app.route("/api/v1/courses/<string:course_id>/live_sessions", methods=["GET"])
 def api_v1_list_live_sessions(course_id: str):
     sessions = load_live_sessions().get(course_id, [])
@@ -22392,6 +22505,12 @@ def api_v1_list_live_sessions(course_id: str):
             item["seats_remaining"] = None
         hydrated.append(item)
     return jsonify(status="success", course_id=course_id, sessions=hydrated), 200
+
+
+@app.route("/api/courses/<string:course_id>/live_sessions", methods=["GET"])
+def api_courses_list_live_sessions_alias(course_id: str):
+    """Alias for listing live sessions without versioned prefix."""
+    return api_v1_list_live_sessions(course_id)
 
 
 @app.route("/api/v1/courses/<string:course_id>/live_sessions", methods=["POST"])
@@ -22560,7 +22679,7 @@ def api_v1_delete_live_session(course_id: str, session_id: str):
     return jsonify(status="success", deleted=True), 200
 
 
-@app.route("/api/v1/courses/<string:course_id>/enrollment/<string:learner_id>", methods=["GET"])
+@app.route("/api/v1/courses/<string:course_id>/enrollment/<path:learner_id>", methods=["GET"])
 def api_v1_enrollment_status(course_id: str, learner_id: str):
     enrollment = (load_enrollments().get(course_id) or {}).get(learner_id)
     if not enrollment:
@@ -22568,7 +22687,727 @@ def api_v1_enrollment_status(course_id: str, learner_id: str):
     course = next((c for c in load_courses() if c.get("id") == course_id), None)
     enrollment = _refresh_enrollment_reward_flags(enrollment.copy(), course=course)
     enrollment = _refresh_certificate_flags(enrollment, course=course)
-    return jsonify(status="success", enrollment=enrollment), 200
+    result_state = _build_academic_result_state(enrollment, course=course)
+    return jsonify(status="success", enrollment=enrollment, result_state=result_state), 200
+
+
+@app.route("/api/courses/<string:course_id>/enrollment/<path:learner_id>", methods=["GET"])
+def api_courses_enrollment_status_alias(course_id: str, learner_id: str):
+    """Alias for enrollment status without versioned prefix."""
+    return api_v1_enrollment_status(course_id, learner_id)
+
+
+L2E_ALLOWED_ROLES = {"student", "teacher", "course_owner", "tenant_admin", "global_admin", "delegate_operator"}
+
+
+def _resolve_l2e_actor_role(course: dict, payload: dict, learner_id: str | None = None) -> tuple[str, str]:
+    """Resolve actor identity + explicit RBAC role boundary for Phase 4."""
+    data = payload if isinstance(payload, dict) else {}
+    actor = (data.get("actor_thr") or data.get("teacher_thr") or "").strip()
+    requested_role = (data.get("actor_role") or "").strip().lower()
+    if requested_role not in L2E_ALLOWED_ROLES:
+        requested_role = ""
+    is_admin = require_admin(data) is None
+    if is_admin:
+        if requested_role in {"tenant_admin", "global_admin", "delegate_operator"}:
+            return (requested_role, actor or "admin")
+        return ("global_admin", actor or "admin")
+
+    if actor and actor == course.get("teacher"):
+        if requested_role in {"teacher", "course_owner", "delegate_operator"}:
+            return (requested_role, actor)
+        return ("teacher", actor)
+
+    if learner_id and actor and actor == learner_id:
+        return ("student", actor)
+    return ("student", actor or learner_id or "unknown")
+
+
+def _is_action_allowed_for_role(role: str, action: str, course: dict, payload: dict, actor_identity: str) -> tuple[bool, str | None]:
+    data = payload if isinstance(payload, dict) else {}
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+    action_to_roles = {
+        "request_approval": {"student", "teacher", "course_owner", "tenant_admin", "global_admin", "delegate_operator"},
+        "approve": {"teacher", "course_owner", "tenant_admin", "global_admin", "delegate_operator"},
+        "reject": {"teacher", "course_owner", "tenant_admin", "global_admin", "delegate_operator"},
+        "issue": {"teacher", "course_owner", "tenant_admin", "global_admin", "delegate_operator"},
+        "view_queue": {"teacher", "course_owner", "tenant_admin", "global_admin", "delegate_operator"},
+        "view_history": {"teacher", "course_owner", "tenant_admin", "global_admin", "delegate_operator"},
+    }
+    allowed = action_to_roles.get(action, set())
+    if role not in allowed:
+        return False, "Role not allowed for action"
+
+    if role in {"teacher", "course_owner"}:
+        teacher = (course.get("teacher") or "").strip()
+        if not actor_identity or actor_identity != teacher:
+            return False, "Teacher/course owner identity required"
+        ok, _, error_key = validate_effective_auth(actor_identity, auth_secret, passphrase)
+        if not ok:
+            return False, f"Teacher auth failed: {error_key}"
+
+    if role in {"tenant_admin", "delegate_operator"}:
+        requested_tenant = (data.get("tenant_id") or "").strip()
+        if not requested_tenant:
+            return False, "tenant_id required for tenant-scoped role"
+        course_tenant = (course.get("tenant_id") or "").strip()
+        if course_tenant and requested_tenant != course_tenant:
+            return False, "tenant_id mismatch for course"
+        if role == "delegate_operator":
+            delegates = course.get("delegate_operators") or []
+            if actor_identity and actor_identity in delegates:
+                return True, None
+            return False, "Delegate operator not authorized for course"
+    return True, None
+
+
+def _evaluate_l2e_policy(action: str, role: str, course: dict, payload: dict, actor_identity: str, learner_id: str | None = None) -> dict:
+    """
+    Internal policy evaluation structure for future external policy-engine compatibility.
+    This function is intentionally pure-data and export-friendly.
+    """
+    data = payload if isinstance(payload, dict) else {}
+    allowed, reason = _is_action_allowed_for_role(role, action, course, data, actor_identity)
+    requested_tenant = (data.get("tenant_id") or "").strip()
+    requested_institution = (data.get("institution_id") or "").strip()
+    constraints = {
+        "tenant_required": role in {"tenant_admin", "delegate_operator"},
+        "tenant_match_required": role in {"tenant_admin", "delegate_operator"},
+        "institution_match_required": bool(requested_institution),
+        "delegate_list_required": role == "delegate_operator",
+        "learner_context_present": bool(learner_id),
+    }
+    return {
+        "policy_version": "l2e_policy_v1",
+        "action": action,
+        "actor_role": role,
+        "actor_identity": actor_identity,
+        "course_id": course.get("id"),
+        "tenant_context": {
+            "requested_tenant_id": requested_tenant,
+            "requested_institution_id": requested_institution,
+            "course_tenant_id": course.get("tenant_id"),
+            "course_institution_id": course.get("institution_id"),
+        },
+        "constraints": constraints,
+        "allowed": bool(allowed),
+        "denial_reason": reason,
+    }
+
+
+def _enforce_certificate_actor(course: dict, payload: dict, *, action: str, learner_id: str | None = None) -> tuple[str | None, str | None, str | None]:
+    """Return (actor_role, actor_identity, error_message)."""
+    role, identity = _resolve_l2e_actor_role(course, payload, learner_id=learner_id)
+    policy_eval = _evaluate_l2e_policy(action, role, course, payload, identity, learner_id=learner_id)
+    if not policy_eval.get("allowed"):
+        return None, identity, policy_eval.get("denial_reason") or "Policy denied"
+    return role, identity, None
+
+
+def _append_certificate_audit(
+    *,
+    course: dict,
+    learner_id: str,
+    action: str,
+    actor_identity: str,
+    actor_role: str,
+    enrollment_before: dict | None,
+    enrollment_after: dict | None,
+    reason: str | None = None,
+):
+    audit = load_certificate_audit()
+    course_id = str(course.get("id") or "")
+    if not course_id:
+        return
+    audit.setdefault(course_id, {})
+    audit[course_id].setdefault(learner_id, [])
+    before_state = (enrollment_before or {}).get("certificate_lifecycle_state")
+    after_state = (enrollment_after or {}).get("certificate_lifecycle_state")
+    entry = {
+        "action": action,
+        "actor_identity": actor_identity,
+        "actor_role": actor_role,
+        "tenant_id": (enrollment_after or enrollment_before or {}).get("tenant_id") or course.get("tenant_id"),
+        "institution_id": (enrollment_after or enrollment_before or {}).get("institution_id") or course.get("institution_id"),
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "reason": reason or None,
+        "from_state": before_state,
+        "to_state": after_state,
+        "certificate_id": (enrollment_after or {}).get("certificate_id"),
+    }
+    audit[course_id][learner_id].append(entry)
+    save_certificate_audit(audit)
+
+
+def _is_tenant_scoped_role(role: str | None) -> bool:
+    return (role or "") in {"tenant_admin", "delegate_operator"}
+
+
+def _enforce_tenant_ownership(course: dict, enrollment: dict, payload: dict) -> str | None:
+    """Tenant/institution consistency hook (groundwork, not full RBAC)."""
+    data = payload if isinstance(payload, dict) else {}
+    requested_tenant = (data.get("tenant_id") or "").strip()
+    requested_institution = (data.get("institution_id") or "").strip()
+    course_tenant = (course.get("tenant_id") or "").strip()
+    course_institution = (course.get("institution_id") or "").strip()
+
+    if requested_tenant and requested_tenant != course_tenant:
+        return "Tenant ownership mismatch"
+    if requested_institution and requested_institution != course_institution:
+        return "Institution ownership mismatch"
+
+    enrollment_tenant = (enrollment.get("tenant_id") or course_tenant or "").strip()
+    enrollment_institution = (enrollment.get("institution_id") or course_institution or "").strip()
+    if course_tenant and enrollment_tenant and enrollment_tenant != course_tenant:
+        return "Enrollment tenant mismatch"
+    if course_institution and enrollment_institution and enrollment_institution != course_institution:
+        return "Enrollment institution mismatch"
+    return None
+
+
+@app.route("/api/v1/courses/<string:course_id>/certificates/queue", methods=["GET"])
+def api_v1_certificate_queue(course_id: str):
+    """List pending/issuable/rejected/issued certificate cases for teacher/admin ops."""
+    course = next((c for c in load_courses() if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+
+    payload = {
+        "actor_thr": request.args.get("actor_thr", ""),
+        "auth_secret": request.args.get("auth_secret", ""),
+        "passphrase": request.args.get("passphrase", ""),
+        "tenant_id": request.args.get("tenant_id", ""),
+        "institution_id": request.args.get("institution_id", ""),
+    }
+    actor_role, actor_identity, auth_error = _enforce_certificate_actor(course, payload, action="view_queue")
+    if auth_error:
+        return jsonify(status="error", message=auth_error), 403
+
+    enrollments = load_enrollments().get(course_id, {})
+    include_states = {s.strip() for s in (request.args.get("states") or "pending_approval,issuable,issued,rejected").split(",") if s.strip()}
+    rows = []
+    for learner_id, raw in enrollments.items():
+        if not isinstance(raw, dict):
+            continue
+        row = _refresh_enrollment_reward_flags(raw.copy(), course=course)
+        row = _refresh_certificate_flags(row, course=course)
+        lifecycle = row.get("certificate_lifecycle_state", "not_enabled")
+        if lifecycle not in include_states:
+            continue
+        rows.append({
+            "learner_id": learner_id,
+            "quiz_score": row.get("quiz_score"),
+            "quiz_pass_threshold": int(course.get("metadata", {}).get("quiz", {}).get("pass_score", course.get("pass_score", 80)) or 80),
+            "certificate_threshold": int(course.get("certificate_threshold_score", 80) or 80),
+            "certificate_eligibility": bool(row.get("certificate_eligibility")),
+            "certificate_lifecycle_state": lifecycle,
+            "certificate_status": row.get("certificate_status"),
+            "approval_reason": row.get("certificate_approval_reason"),
+            "rejection_reason": row.get("certificate_rejection_reason"),
+            "issued_at": row.get("issued_at"),
+            "certificate_id": row.get("certificate_id"),
+        })
+
+    return jsonify(status="success", course_id=course_id, queue=rows), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/certificates/<path:learner_id>/request_approval", methods=["POST"])
+def api_v1_certificate_request_approval(course_id: str, learner_id: str):
+    data = request.get_json() or {}
+    course = next((c for c in load_courses() if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    actor_role, actor_identity, auth_error = _enforce_certificate_actor(course, data, action="request_approval", learner_id=learner_id)
+    if auth_error:
+        return jsonify(status="error", message=auth_error), 403
+
+    enrollments = load_enrollments()
+    enrollment = (enrollments.get(course_id) or {}).get(learner_id)
+    if not enrollment:
+        return jsonify(status="error", message="Enrollment not found"), 404
+    mismatch = _enforce_tenant_ownership(course, enrollment, data)
+    if mismatch:
+        return jsonify(status="error", message=mismatch), 403
+
+    before = _refresh_certificate_flags(enrollment.copy(), course=course)
+    enrollment = before.copy()
+    if not enrollment.get("certificate_eligibility"):
+        return jsonify(status="error", message="Certificate not eligible"), 400
+    if enrollment.get("certificate_lifecycle_state") not in {"eligible", "pending_approval"}:
+        return jsonify(status="error", message="Invalid lifecycle transition"), 409
+
+    enrollment["certificate_approval_requested"] = True
+    enrollment["certificate_approval_requested_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    enrollment["certificate_approval_reason"] = (data.get("approval_reason") or "").strip() or None
+    enrollment = _refresh_certificate_flags(enrollment, course=course)
+    enrollments.setdefault(course_id, {})[learner_id] = enrollment
+    save_enrollments(enrollments)
+    _append_certificate_audit(
+        course=course,
+        learner_id=learner_id,
+        action="approval_requested",
+        actor_identity=actor_identity or learner_id,
+        actor_role=actor_role or "student",
+        enrollment_before=before,
+        enrollment_after=enrollment,
+        reason=enrollment.get("certificate_approval_reason"),
+    )
+    return jsonify(status="success", learner_id=learner_id, certificate_lifecycle_state=enrollment.get("certificate_lifecycle_state")), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/certificates/<path:learner_id>/approve", methods=["POST"])
+def api_v1_certificate_approve(course_id: str, learner_id: str):
+    data = request.get_json() or {}
+    course = next((c for c in load_courses() if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    actor_role, actor_identity, auth_error = _enforce_certificate_actor(course, data, action="approve", learner_id=learner_id)
+    if auth_error:
+        return jsonify(status="error", message=auth_error), 403
+
+    enrollments = load_enrollments()
+    enrollment = (enrollments.get(course_id) or {}).get(learner_id)
+    if not enrollment:
+        return jsonify(status="error", message="Enrollment not found"), 404
+    mismatch = _enforce_tenant_ownership(course, enrollment, data)
+    if mismatch:
+        return jsonify(status="error", message=mismatch), 403
+
+    before = _refresh_certificate_flags(enrollment.copy(), course=course)
+    enrollment = before.copy()
+    if not enrollment.get("certificate_eligibility"):
+        return jsonify(status="error", message="Certificate not eligible"), 400
+
+    mode = (course.get("certificate_approval_mode") or "manual").strip().lower()
+    lifecycle = enrollment.get("certificate_lifecycle_state")
+    if mode in {"teacher_approval", "admin_approval"}:
+        if lifecycle not in {"pending_approval", "eligible"}:
+            return jsonify(status="error", message="Invalid lifecycle transition"), 409
+        enrollment["certificate_approval_requested"] = True
+        enrollment["certificate_approved"] = True
+    else:
+        if lifecycle not in {"eligible", "issuable"}:
+            return jsonify(status="error", message="Invalid lifecycle transition"), 409
+        enrollment["certificate_ready_for_issue"] = True
+
+    enrollment["certificate_approved_by_role"] = actor_role
+    enrollment["certificate_approved_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    enrollment["certificate_approval_reason"] = (data.get("approval_reason") or "").strip() or enrollment.get("certificate_approval_reason")
+    enrollment["certificate_rejected"] = False
+    enrollment["certificate_rejection_reason"] = None
+    enrollment = _refresh_certificate_flags(enrollment, course=course)
+    enrollments.setdefault(course_id, {})[learner_id] = enrollment
+    save_enrollments(enrollments)
+    _append_certificate_audit(
+        course=course,
+        learner_id=learner_id,
+        action="approved",
+        actor_identity=actor_identity or "unknown",
+        actor_role=actor_role or "unknown",
+        enrollment_before=before,
+        enrollment_after=enrollment,
+        reason=enrollment.get("certificate_approval_reason"),
+    )
+
+    return jsonify(status="success", learner_id=learner_id, certificate_lifecycle_state=enrollment.get("certificate_lifecycle_state")), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/certificates/<path:learner_id>/reject", methods=["POST"])
+def api_v1_certificate_reject(course_id: str, learner_id: str):
+    data = request.get_json() or {}
+    course = next((c for c in load_courses() if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    actor_role, actor_identity, auth_error = _enforce_certificate_actor(course, data, action="reject", learner_id=learner_id)
+    if auth_error:
+        return jsonify(status="error", message=auth_error), 403
+
+    enrollments = load_enrollments()
+    enrollment = (enrollments.get(course_id) or {}).get(learner_id)
+    if not enrollment:
+        return jsonify(status="error", message="Enrollment not found"), 404
+    mismatch = _enforce_tenant_ownership(course, enrollment, data)
+    if mismatch:
+        return jsonify(status="error", message=mismatch), 403
+
+    before = _refresh_certificate_flags(enrollment.copy(), course=course)
+    enrollment = enrollment.copy()
+    enrollment["certificate_rejected"] = True
+    enrollment["certificate_rejected_by_role"] = actor_role
+    enrollment["certificate_rejected_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    enrollment["certificate_rejection_reason"] = (data.get("rejection_reason") or "").strip() or "rejected_by_policy"
+    enrollment["certificate_approved"] = False
+    enrollment["certificate_ready_for_issue"] = False
+    enrollment = _refresh_certificate_flags(enrollment, course=course)
+    enrollments.setdefault(course_id, {})[learner_id] = enrollment
+    save_enrollments(enrollments)
+    _append_certificate_audit(
+        course=course,
+        learner_id=learner_id,
+        action="rejected",
+        actor_identity=actor_identity or "unknown",
+        actor_role=actor_role or "unknown",
+        enrollment_before=before,
+        enrollment_after=enrollment,
+        reason=enrollment.get("certificate_rejection_reason"),
+    )
+    return jsonify(status="success", learner_id=learner_id, certificate_lifecycle_state=enrollment.get("certificate_lifecycle_state")), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/certificates/<path:learner_id>/issue", methods=["POST"])
+def api_v1_certificate_issue(course_id: str, learner_id: str):
+    data = request.get_json() or {}
+    course = next((c for c in load_courses() if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    actor_role, actor_identity, auth_error = _enforce_certificate_actor(course, data, action="issue", learner_id=learner_id)
+    if auth_error:
+        return jsonify(status="error", message=auth_error), 403
+
+    enrollments = load_enrollments()
+    enrollment = (enrollments.get(course_id) or {}).get(learner_id)
+    if not enrollment:
+        return jsonify(status="error", message="Enrollment not found"), 404
+    mismatch = _enforce_tenant_ownership(course, enrollment, data)
+    if mismatch:
+        return jsonify(status="error", message=mismatch), 403
+
+    before = _refresh_certificate_flags(enrollment.copy(), course=course)
+    enrollment = before.copy()
+    if enrollment.get("certificate_lifecycle_state") != "issuable":
+        return jsonify(status="error", message="Certificate not issuable"), 409
+
+    issuer_identity = (data.get("issuer_identity") or enrollment.get("certificate_issuer_identity") or course.get("certificate_issuer_identity") or course.get("teacher") or "").strip()
+    expected_issuer = (course.get("certificate_issuer_identity") or course.get("teacher") or "").strip()
+    if expected_issuer and issuer_identity != expected_issuer:
+        return jsonify(status="error", message="Issuer identity mismatch"), 403
+
+    enrollment["certificate_id"] = enrollment.get("certificate_id") or f"CERT-{course_id}-{int(time.time())}-{secrets.token_hex(3)}"
+    enrollment["issued_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    enrollment["certificate_issued_by_role"] = actor_role
+    enrollment["certificate_issuer_identity"] = issuer_identity
+    enrollment["certificate_rejected"] = False
+    enrollment["certificate_rejection_reason"] = None
+    enrollment = _refresh_certificate_flags(enrollment, course=course)
+    enrollments.setdefault(course_id, {})[learner_id] = enrollment
+    save_enrollments(enrollments)
+    _append_certificate_audit(
+        course=course,
+        learner_id=learner_id,
+        action="issued",
+        actor_identity=actor_identity or "unknown",
+        actor_role=actor_role or "unknown",
+        enrollment_before=before,
+        enrollment_after=enrollment,
+        reason=(data.get("approval_reason") or "").strip() or None,
+    )
+
+    result_state = _build_academic_result_state(enrollment, course=course)
+    return jsonify(
+        status="success",
+        learner_id=learner_id,
+        certificate_id=enrollment["certificate_id"],
+        issued_at=enrollment["issued_at"],
+        issuer_identity=issuer_identity,
+        certificate_lifecycle_state=enrollment.get("certificate_lifecycle_state"),
+        result_state=result_state
+    ), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/certificates/<path:learner_id>/history", methods=["GET"])
+def api_v1_certificate_history_for_learner(course_id: str, learner_id: str):
+    course = next((c for c in load_courses() if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    payload = {
+        "actor_thr": request.args.get("actor_thr", ""),
+        "auth_secret": request.args.get("auth_secret", ""),
+        "passphrase": request.args.get("passphrase", ""),
+        "tenant_id": request.args.get("tenant_id", ""),
+        "institution_id": request.args.get("institution_id", ""),
+        "actor_role": request.args.get("actor_role", ""),
+    }
+    _, _, auth_error = _enforce_certificate_actor(course, payload, action="view_history", learner_id=learner_id)
+    if auth_error:
+        return jsonify(status="error", message=auth_error), 403
+
+    audit = load_certificate_audit()
+    rows = ((audit.get(course_id) or {}).get(learner_id) or [])
+    return jsonify(status="success", course_id=course_id, learner_id=learner_id, history=rows), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/certificates/history", methods=["GET"])
+def api_v1_certificate_history_for_course(course_id: str):
+    course = next((c for c in load_courses() if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    payload = {
+        "actor_thr": request.args.get("actor_thr", ""),
+        "auth_secret": request.args.get("auth_secret", ""),
+        "passphrase": request.args.get("passphrase", ""),
+        "tenant_id": request.args.get("tenant_id", ""),
+        "institution_id": request.args.get("institution_id", ""),
+        "actor_role": request.args.get("actor_role", ""),
+    }
+    actor_role, _, auth_error = _enforce_certificate_actor(course, payload, action="view_history")
+    if auth_error:
+        return jsonify(status="error", message=auth_error), 403
+
+    audit = load_certificate_audit().get(course_id, {})
+    state_filter = {s.strip() for s in (request.args.get("states") or "").split(",") if s.strip()}
+    out = []
+    for learner_id, rows in audit.items():
+        for row in (rows or []):
+            if state_filter and row.get("to_state") not in state_filter:
+                continue
+            out.append({"learner_id": learner_id, **row})
+    return jsonify(status="success", course_id=course_id, history=out), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/certificates/history/export", methods=["GET"])
+def api_v1_certificate_history_export(course_id: str):
+    course = next((c for c in load_courses() if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    payload = {
+        "actor_thr": request.args.get("actor_thr", ""),
+        "auth_secret": request.args.get("auth_secret", ""),
+        "passphrase": request.args.get("passphrase", ""),
+        "tenant_id": request.args.get("tenant_id", ""),
+        "institution_id": request.args.get("institution_id", ""),
+        "actor_role": request.args.get("actor_role", ""),
+    }
+    actor_role, actor_identity, auth_error = _enforce_certificate_actor(course, payload, action="view_history")
+    if auth_error:
+        return jsonify(status="error", message=auth_error), 403
+    history_resp = api_v1_certificate_history_for_course(course_id)
+    body = history_resp[0].get_json()
+    return jsonify(
+        status="success",
+        export={
+            "schema_version": "l2e_cert_history_v1",
+            "generated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "course_id": course_id,
+            "tenant_id": course.get("tenant_id"),
+            "institution_id": course.get("institution_id"),
+            "requested_by": actor_identity,
+            "requested_role": actor_role,
+            "rows": body.get("history", []),
+        }
+    ), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/certificates/dashboard", methods=["GET"])
+def api_v1_certificate_dashboard(course_id: str):
+    course = next((c for c in load_courses() if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    payload = {
+        "actor_thr": request.args.get("actor_thr", ""),
+        "auth_secret": request.args.get("auth_secret", ""),
+        "passphrase": request.args.get("passphrase", ""),
+        "tenant_id": request.args.get("tenant_id", ""),
+        "institution_id": request.args.get("institution_id", ""),
+        "actor_role": request.args.get("actor_role", ""),
+    }
+    _, _, auth_error = _enforce_certificate_actor(course, payload, action="view_queue")
+    if auth_error:
+        return jsonify(status="error", message=auth_error), 403
+    queue_rows = api_v1_certificate_queue(course_id)[0].get_json().get("queue", [])
+    summary = {"pending_approval": 0, "issuable": 0, "issued": 0, "rejected": 0}
+    for row in queue_rows:
+        st = row.get("certificate_lifecycle_state")
+        if st in summary:
+            summary[st] += 1
+    return jsonify(status="success", course_id=course_id, summary=summary, queue=queue_rows), 200
+
+
+@app.route("/api/v1/tenants/<string:tenant_id>/audit/history", methods=["GET"])
+def api_v1_tenant_audit_history(tenant_id: str):
+    payload = {
+        "actor_thr": request.args.get("actor_thr", ""),
+        "auth_secret": request.args.get("auth_secret", ""),
+        "passphrase": request.args.get("passphrase", ""),
+        "tenant_id": request.args.get("tenant_id", ""),
+        "institution_id": request.args.get("institution_id", ""),
+        "actor_role": request.args.get("actor_role", ""),
+    }
+    # tenant-scoped visibility: tenant_admin/delegate_operator for same tenant or global_admin
+    role = (payload.get("actor_role") or "").strip().lower()
+    is_admin = require_admin(payload) is None
+    if is_admin and role not in {"tenant_admin", "delegate_operator"}:
+        role = "global_admin"
+    requested_tenant = (payload.get("tenant_id") or "").strip()
+    if role in {"tenant_admin", "delegate_operator"}:
+        if not requested_tenant or requested_tenant != tenant_id:
+            return jsonify(status="error", message="Tenant visibility mismatch"), 403
+    elif role != "global_admin":
+        return jsonify(status="error", message="Role not allowed for tenant history"), 403
+
+    courses = [c for c in load_courses() if (c.get("tenant_id") or "") == tenant_id]
+    allowed_course_ids = {c.get("id") for c in courses if c.get("id")}
+    audit = load_certificate_audit()
+    out = []
+    for course_id, learners in (audit or {}).items():
+        if course_id not in allowed_course_ids:
+            continue
+        course = next((c for c in courses if c.get("id") == course_id), {})
+        for learner_id, rows in (learners or {}).items():
+            for row in (rows or []):
+                out.append({
+                    "course_id": course_id,
+                    "learner_id": learner_id,
+                    "tenant_id": course.get("tenant_id"),
+                    "institution_id": course.get("institution_id"),
+                    **row,
+                })
+    return jsonify(
+        status="success",
+        tenant_id=tenant_id,
+        history=out,
+        export_ready={
+            "schema_version": "l2e_tenant_audit_v1",
+            "generated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "row_count": len(out),
+        }
+    ), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/policy/evaluate", methods=["POST"])
+def api_v1_l2e_policy_evaluate(course_id: str):
+    """Expose internal policy evaluation model for compliance/debug integrations."""
+    data = request.get_json() or {}
+    action = (data.get("action") or "view_history").strip()
+    learner_id = (data.get("learner_id") or "").strip() or None
+    course = next((c for c in load_courses() if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    role, identity = _resolve_l2e_actor_role(course, data, learner_id=learner_id)
+    evaluation = _evaluate_l2e_policy(action, role, course, data, identity, learner_id=learner_id)
+    return jsonify(status="success", evaluation=evaluation), 200
+
+
+@app.route("/api/v1/tenants/<string:tenant_id>/reports/operational", methods=["GET"])
+def api_v1_tenant_operational_report(tenant_id: str):
+    """Compliance-ready tenant operational report payload (export-friendly)."""
+    payload = {
+        "actor_thr": request.args.get("actor_thr", ""),
+        "auth_secret": request.args.get("auth_secret", ""),
+        "passphrase": request.args.get("passphrase", ""),
+        "tenant_id": request.args.get("tenant_id", ""),
+        "institution_id": request.args.get("institution_id", ""),
+        "actor_role": request.args.get("actor_role", ""),
+    }
+    role = (payload.get("actor_role") or "").strip().lower()
+    is_admin = require_admin(payload) is None
+    if is_admin and role not in {"tenant_admin", "delegate_operator"}:
+        role = "global_admin"
+    if role in {"tenant_admin", "delegate_operator"}:
+        if (payload.get("tenant_id") or "").strip() != tenant_id:
+            return jsonify(status="error", message="Tenant visibility mismatch"), 403
+    elif role != "global_admin":
+        return jsonify(status="error", message="Role not allowed for tenant report"), 403
+
+    audit_resp = api_v1_tenant_audit_history(tenant_id)[0].get_json()
+    rows = audit_resp.get("history", [])
+    counters = {
+        "approval_requested": 0,
+        "approved": 0,
+        "rejected": 0,
+        "issued": 0,
+    }
+    for row in rows:
+        action = row.get("action")
+        if action in counters:
+            counters[action] += 1
+
+    return jsonify(
+        status="success",
+        tenant_id=tenant_id,
+        report={
+            "schema_version": "l2e_operational_report_v1",
+            "generated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "requested_role": role,
+            "counts": counters,
+            "rows": rows,
+        }
+    ), 200
+
+
+@app.route("/api/v1/tenants/<string:tenant_id>/dashboard/compliance", methods=["GET"])
+def api_v1_tenant_compliance_dashboard(tenant_id: str):
+    report_resp = api_v1_tenant_operational_report(tenant_id)
+    resp_obj, status = report_resp
+    if status != 200:
+        return report_resp
+    report = resp_obj.get_json().get("report", {})
+    rows = report.get("rows", [])
+    pending = sum(1 for r in rows if r.get("to_state") == "pending_approval")
+    issuable = sum(1 for r in rows if r.get("to_state") == "issuable")
+    issued = sum(1 for r in rows if r.get("to_state") == "issued")
+    rejected = sum(1 for r in rows if r.get("to_state") == "rejected")
+    return jsonify(
+        status="success",
+        tenant_id=tenant_id,
+        dashboard={
+            "pending_approvals": pending,
+            "issuable_certificates": issuable,
+            "issued_certificates": issued,
+            "rejected_certificates": rejected,
+            "report_schema": report.get("schema_version"),
+        }
+    ), 200
+
+
+@app.route("/api/v1/admin/dashboard/l2e", methods=["GET"])
+def api_v1_global_l2e_dashboard():
+    payload = request.args.to_dict()
+    if require_admin(payload) is not None:
+        return jsonify(status="error", message="Admin authorization required"), 403
+    courses = load_courses()
+    audit = load_certificate_audit()
+    totals = {"courses": len(courses), "tenants": len({c.get("tenant_id") for c in courses if c.get("tenant_id")})}
+    action_counts = {"approval_requested": 0, "approved": 0, "rejected": 0, "issued": 0}
+    for _, learners in (audit or {}).items():
+        for _, rows in (learners or {}).items():
+            for row in (rows or []):
+                action = row.get("action")
+                if action in action_counts:
+                    action_counts[action] += 1
+    return jsonify(status="success", totals=totals, action_counts=action_counts), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/results/<path:learner_id>/history", methods=["GET"])
+def api_v1_learner_result_history(course_id: str, learner_id: str):
+    course = next((c for c in load_courses() if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    payload = {
+        "actor_thr": request.args.get("actor_thr", ""),
+        "auth_secret": request.args.get("auth_secret", ""),
+        "passphrase": request.args.get("passphrase", ""),
+        "tenant_id": request.args.get("tenant_id", ""),
+        "institution_id": request.args.get("institution_id", ""),
+        "actor_role": request.args.get("actor_role", ""),
+    }
+    _, _, auth_error = _enforce_certificate_actor(course, payload, action="view_history", learner_id=learner_id)
+    if auth_error:
+        return jsonify(status="error", message=auth_error), 403
+
+    attempts = load_json(os.path.join(DATA_DIR, "quiz_attempts.json"), {}).get(course_id, {}).get(learner_id, {})
+    cert_history = ((load_certificate_audit().get(course_id) or {}).get(learner_id) or [])
+    enrollment = (load_enrollments().get(course_id) or {}).get(learner_id) or {}
+    enrollment = _refresh_enrollment_reward_flags(enrollment.copy(), course=course)
+    enrollment = _refresh_certificate_flags(enrollment, course=course)
+    return jsonify(
+        status="success",
+        course_id=course_id,
+        learner_id=learner_id,
+        attempts=attempts,
+        certificate_history=cert_history,
+        result_state=_build_academic_result_state(enrollment, course=course),
+    ), 200
 
 
 @app.route("/api/v1/courses/<string:course_id>/complete", methods=["POST"])
@@ -23291,6 +24130,12 @@ def api_v1_get_quiz(course_id: str):
     }), 200
 
 
+@app.route("/api/courses/<string:course_id>/quiz", methods=["GET"])
+def api_courses_get_quiz_alias(course_id: str):
+    """Alias for quiz retrieval without versioned prefix."""
+    return api_v1_get_quiz(course_id)
+
+
 @app.route("/api/v1/courses/<string:course_id>/quiz/edit", methods=["POST"])
 def api_v1_get_quiz_for_edit(course_id: str):
     """Return the quiz for editing (includes correct answers). Teacher only."""
@@ -23707,6 +24552,7 @@ def api_v1_submit_quiz(course_id: str):
     enrollments[course_id][student] = _refresh_certificate_flags(enrollments[course_id][student], course=course)
     reward_claimability = enrollments[course_id][student].get("reward_claimability", "not_claimable")
     certificate_status = enrollments[course_id][student].get("certificate_status", "not_enabled")
+    result_state = _build_academic_result_state(enrollments[course_id][student], course=course)
     save_enrollments(enrollments)
 
     return jsonify(
@@ -23729,7 +24575,8 @@ def api_v1_submit_quiz(course_id: str):
         auto_completed=auto_completed,
         reward_credited=reward_credited,
         reward_amount=reward_amount,
-        reward_txid=reward_txid
+        reward_txid=reward_txid,
+        result_state=result_state
     ), 200
 
 

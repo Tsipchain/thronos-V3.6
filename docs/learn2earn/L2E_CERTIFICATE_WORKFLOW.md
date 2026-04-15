@@ -1,9 +1,10 @@
-# L2E Certificate Workflow (Skeleton Layer)
+# Learn2Earn Certificate Workflow (Phase 2)
 
-## Goal
-Add non-destructive certificate workflow readiness on top of existing L2E completion and quiz foundations.
+## Scope
+Phase 2 introduces a **non-automatic certificate workflow skeleton** on top of the stabilized Learn2Earn foundation.
 
-## Lifecycle states
+## Explicit Lifecycle States
+`certificate_lifecycle_state` values in this phase:
 - `not_enabled`
 - `eligible`
 - `pending_approval`
@@ -11,17 +12,14 @@ Add non-destructive certificate workflow readiness on top of existing L2E comple
 - `issued`
 - `rejected`
 
-## Rules
-1. Certificate issuance is never automatic on course completion.
-2. Completion and certificate issuance remain separate operations.
-3. Eligibility depends on:
-   - course `certificate_enabled`
-   - score >= `certificate_threshold_score`
-4. Approval mode support:
-   - `manual` => `issuable` when eligible
-   - `teacher_approval` => `pending_approval` until approved
-   - `admin_approval` => `pending_approval` until approved
+## Design Rules
+- Certificate issuance is **not automatic**.
+- Completion, pass/fail, certificate status, and reward states are separate.
+- Approval modes (`manual`, `teacher_approval`, `admin_approval`) are modeled for workflow readiness.
 
-## Current phase
-- Approval mode semantics are modeled.
-- Final approval queue UI and issuing endpoints are pending future phase.
+## Course-Level Configuration
+- `certificate_enabled`
+- `certificate_threshold_score`
+- `certificate_approval_mode`
+- `certificate_template_name`
+- `certificate_issuer_identity`

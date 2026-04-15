@@ -22827,10 +22827,46 @@ def _external_policy_compat_envelope(internal_eval: dict, *, engine_name: str = 
     }
 
 
+def _evaluate_policy_with_provider(
+    provider: str,
+    *,
+    action: str,
+    role: str,
+    course: dict,
+    payload: dict,
+    actor_identity: str,
+    learner_id: str | None = None,
+) -> dict:
+    """
+    Pluggable runtime evaluation wrapper.
+    For Phase 8, external adapters (OPA/Cedar) are activated as adapter-compatible wrappers
+    over the internal policy model while preserving current enforcement semantics.
+    """
+    normalized = (provider or "internal").strip().lower()
+    if normalized not in {"internal", "opa", "cedar"}:
+        normalized = "internal"
+    internal_eval = _evaluate_l2e_policy(action, role, course, payload, actor_identity, learner_id=learner_id)
+    return {
+        "provider": normalized,
+        "decision": internal_eval,
+        "external_compat": _external_policy_compat_envelope(internal_eval, engine_name=normalized),
+    }
+
+
 def _enforce_certificate_actor(course: dict, payload: dict, *, action: str, learner_id: str | None = None) -> tuple[str | None, str | None, str | None]:
     """Return (actor_role, actor_identity, error_message)."""
     role, identity = _resolve_l2e_actor_role(course, payload, learner_id=learner_id)
-    policy_eval = _evaluate_l2e_policy(action, role, course, payload, identity, learner_id=learner_id)
+    provider = (payload.get("engine") if isinstance(payload, dict) else None) or "internal"
+    runtime_eval = _evaluate_policy_with_provider(
+        provider,
+        action=action,
+        role=role,
+        course=course,
+        payload=payload if isinstance(payload, dict) else {},
+        actor_identity=identity,
+        learner_id=learner_id,
+    )
+    policy_eval = runtime_eval.get("decision", {})
     if not policy_eval.get("allowed"):
         return None, identity, policy_eval.get("denial_reason") or "Policy denied"
     return role, identity, None
@@ -23315,10 +23351,22 @@ def api_v1_l2e_policy_evaluate(course_id: str):
     if not course:
         return jsonify(status="error", message="Course not found"), 404
     role, identity = _resolve_l2e_actor_role(course, data, learner_id=learner_id)
-    evaluation = _evaluate_l2e_policy(action, role, course, data, identity, learner_id=learner_id)
     engine = (data.get("engine") or "internal").strip() or "internal"
-    external_compat = _external_policy_compat_envelope(evaluation, engine_name=engine)
-    return jsonify(status="success", evaluation=evaluation, external_compat=external_compat), 200
+    runtime_eval = _evaluate_policy_with_provider(
+        engine,
+        action=action,
+        role=role,
+        course=course,
+        payload=data,
+        actor_identity=identity,
+        learner_id=learner_id,
+    )
+    return jsonify(
+        status="success",
+        provider=runtime_eval.get("provider"),
+        evaluation=runtime_eval.get("decision"),
+        external_compat=runtime_eval.get("external_compat"),
+    ), 200
 
 
 @app.route("/api/v1/policy/engine/providers", methods=["GET"])
@@ -23412,6 +23460,18 @@ def api_v1_create_report_delivery(tenant_id: str):
         "filters": data.get("filters") if isinstance(data.get("filters"), dict) else {},
         "delivery_channel": (data.get("delivery_channel") or "api_pull").strip(),
         "schema_version": "l2e_delivery_v1",
+        "delivery_state": "queued",
+        "delivery_attempts": [],
+        "delivery_outcome": None,
+        "delivery_audit_trail": [
+            {
+                "event": "created",
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+                "actor_role": role,
+                "actor_identity": (data.get("actor_thr") or "admin").strip() or "admin",
+                "note": "Delivery request created",
+            }
+        ],
     }
     deliveries[tenant_id].append(delivery)
     save_report_deliveries(deliveries)
@@ -23432,6 +23492,70 @@ def api_v1_list_report_deliveries(tenant_id: str):
         return jsonify(status="error", message="Role not allowed for delivery listing"), 403
     deliveries = load_report_deliveries().get(tenant_id, [])
     return jsonify(status="success", tenant_id=tenant_id, deliveries=deliveries), 200
+
+
+@app.route("/api/v1/tenants/<string:tenant_id>/reports/deliveries/<string:delivery_id>/process", methods=["POST"])
+def api_v1_process_report_delivery(tenant_id: str, delivery_id: str):
+    data = request.get_json() or {}
+    role = (data.get("actor_role") or "").strip().lower()
+    is_admin = require_admin(data) is None
+    if is_admin and role not in {"tenant_admin", "delegate_operator"}:
+        role = "global_admin"
+    if role in {"tenant_admin", "delegate_operator"}:
+        if (data.get("tenant_id") or "").strip() != tenant_id:
+            return jsonify(status="error", message="Tenant delivery mismatch"), 403
+    elif role != "global_admin":
+        return jsonify(status="error", message="Role not allowed for delivery processing"), 403
+
+    deliveries = load_report_deliveries()
+    items = deliveries.get(tenant_id, [])
+    delivery = next((d for d in items if d.get("delivery_id") == delivery_id), None)
+    if not delivery:
+        return jsonify(status="error", message="Delivery not found"), 404
+
+    action = (data.get("action") or "attempt").strip().lower()
+    actor_identity = (data.get("actor_thr") or "admin").strip() or "admin"
+    now_ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    if action == "attempt":
+        attempt = {
+            "attempt_id": f"ATT-{int(time.time())}-{secrets.token_hex(2)}",
+            "timestamp": now_ts,
+            "actor_role": role,
+            "actor_identity": actor_identity,
+            "status": "processing",
+            "channel": delivery.get("delivery_channel"),
+        }
+        delivery.setdefault("delivery_attempts", []).append(attempt)
+        delivery["delivery_state"] = "processing"
+        delivery["status"] = "processing"
+        delivery.setdefault("delivery_audit_trail", []).append({
+            "event": "attempt_started",
+            "timestamp": now_ts,
+            "actor_role": role,
+            "actor_identity": actor_identity,
+        })
+    elif action in {"succeeded", "failed"}:
+        delivery["delivery_state"] = "succeeded" if action == "succeeded" else "failed"
+        delivery["status"] = delivery["delivery_state"]
+        delivery["delivery_outcome"] = {
+            "state": delivery["delivery_state"],
+            "timestamp": now_ts,
+            "actor_role": role,
+            "actor_identity": actor_identity,
+            "note": (data.get("note") or "").strip() or None,
+        }
+        delivery.setdefault("delivery_audit_trail", []).append({
+            "event": f"delivery_{delivery['delivery_state']}",
+            "timestamp": now_ts,
+            "actor_role": role,
+            "actor_identity": actor_identity,
+            "note": (data.get("note") or "").strip() or None,
+        })
+    else:
+        return jsonify(status="error", message="Invalid action"), 400
+
+    save_report_deliveries(deliveries)
+    return jsonify(status="success", delivery=delivery), 200
 
 
 @app.route("/api/v1/tenants/<string:tenant_id>/dashboard/compliance", methods=["GET"])
@@ -23489,7 +23613,22 @@ def api_v1_tenant_observability(tenant_id: str):
     by_course = {}
     for row in rows:
         by_course[row.get("course_id")] = by_course.get(row.get("course_id"), 0) + 1
-    return jsonify(status="success", tenant_id=tenant_id, observability={"counts": report.get("counts", {}), "by_course": by_course, "row_count": len(rows)}), 200
+    deliveries = load_report_deliveries().get(tenant_id, [])
+    delivery_states = {"queued": 0, "processing": 0, "succeeded": 0, "failed": 0}
+    for d in deliveries:
+        st = d.get("delivery_state") or d.get("status")
+        if st in delivery_states:
+            delivery_states[st] += 1
+    return jsonify(
+        status="success",
+        tenant_id=tenant_id,
+        observability={
+            "counts": report.get("counts", {}),
+            "by_course": by_course,
+            "row_count": len(rows),
+            "delivery_states": delivery_states,
+        }
+    ), 200
 
 
 @app.route("/api/v1/admin/dashboard/l2e", methods=["GET"])
@@ -23507,7 +23646,19 @@ def api_v1_global_l2e_dashboard():
                 action = row.get("action")
                 if action in action_counts:
                     action_counts[action] += 1
-    return jsonify(status="success", totals=totals, action_counts=action_counts), 200
+    deliveries = load_report_deliveries()
+    delivery_state_counts = {"queued": 0, "processing": 0, "succeeded": 0, "failed": 0}
+    for _, items in (deliveries or {}).items():
+        for item in (items or []):
+            st = item.get("delivery_state") or item.get("status")
+            if st in delivery_state_counts:
+                delivery_state_counts[st] += 1
+    return jsonify(
+        status="success",
+        totals=totals,
+        action_counts=action_counts,
+        delivery_state_counts=delivery_state_counts,
+    ), 200
 
 
 @app.route("/api/v1/courses/<string:course_id>/results/<path:learner_id>/history", methods=["GET"])

@@ -3,28 +3,37 @@
 ## Launch Position
 Learn2Earn launches as a **core Thronos Chain service** with completed Phases 1–8 foundation controls.
 
-## What Launches Now
+## What Is Complete
 - Tenant-aware course operations with wallet-native learner interactions
 - Stateful academic progression and certificate lifecycle governance
-- RBAC/tenant policy enforcement for certificate, history, and reporting actions
+- RBAC/tenant policy enforcement for certificate, history, reporting, and observability actions
 - Compliance reporting, delivery tracking, and observability dashboards
 - Policy-evaluation provider compatibility (`internal`, `opa`, `cedar`) with stable internal enforcement semantics
 
+## Intentionally Future Refinement
+- deeper external policy execution beyond compatibility wrappers
+- richer analytics/SLO depth
+- broader delivery transport channel hardening and advanced retries
+- additional UX/operator tooling polish
+
 ## Explicitly Unchanged at Launch
 - THR-first pricing model remains unchanged
-- Controlled reward issuance remains unchanged and non-automatic
-- Approval/issuance boundaries remain explicit and role-governed
+- controlled reward issuance remains unchanged and non-automatic
+- approval/issuance boundaries remain explicit and role-governed
 
-## Rollout Sequence
-1. Validate production smoke checklist completion.
-2. Perform controlled tenant pilot validation.
-3. Capture launch screenshots/demo artifacts.
-4. Enable broad tenant access under existing governance controls.
-5. Monitor operational dashboards during launch window.
+## What Must Be Confirmed Before Public Rollout
+1. Final launch checklist completion (`L2E_PRODUCTION_SMOKE_CHECKLIST.md`).
+2. Final screenshot/demo checklist completion (`L2E_PRODUCTION_SMOKE_CHECKLIST.md`).
+3. No tenant/RBAC/audit/policy boundary regressions.
+4. No automatic reward/certificate behavior regressions.
 
-## Launch Success Signals
-- Smoke checklist passes without boundary regressions.
-- No unauthorized cross-tenant data visibility.
-- No bypass of approval/issuance controls.
-- Stable policy evaluation responses for supported providers.
-- Report delivery lifecycle events are auditable end-to-end.
+## Go / No-Go Criteria
+### Go
+- all required checklist items pass
+- no high-severity boundary or governance regressions
+- launch artifacts are captured and archived for handoff
+
+### No-Go
+- any failed boundary/security/governance check
+- unresolved lifecycle/audit/reporting integrity issue
+- incomplete launch or demo evidence for required flows

@@ -547,6 +547,7 @@ COURSE_FILES_DIR = os.path.join(COURSE_MEDIA_DIR, "files")
 MUSIC_AUDIO_DIR = os.path.join(MEDIA_DIR, "music_audio")
 MUSIC_COVER_DIR = os.path.join(MEDIA_DIR, "music_covers")
 L2E_ENROLLMENTS_FILE = os.path.join(DATA_DIR, "l2e_enrollments.json")
+L2E_LIVE_SESSIONS_FILE = os.path.join(DATA_DIR, "l2e_live_sessions.json")
 
 for _dir in [MEDIA_DIR, TOKEN_LOGOS_DIR, NFT_IMAGES_DIR, COURSE_MEDIA_DIR,
              TRACKS_DIR, COVERS_DIR, COURSE_COVERS_DIR, COURSE_FILES_DIR, MUSIC_AUDIO_DIR, MUSIC_COVER_DIR]:
@@ -5276,6 +5277,262 @@ def save_courses(courses):
 
 def save_enrollments(enrollments):
     save_json(L2E_ENROLLMENTS_FILE, enrollments)
+
+
+def load_enrollments():
+    """Load L2E enrollments keyed by course_id then learner_id."""
+    raw = load_json(L2E_ENROLLMENTS_FILE, {})
+    return raw if isinstance(raw, dict) else {}
+
+
+def load_live_sessions():
+    """Load Learn2Earn live sessions keyed by course_id."""
+    raw = load_json(L2E_LIVE_SESSIONS_FILE, {})
+    return raw if isinstance(raw, dict) else {}
+
+
+def save_live_sessions(sessions):
+    save_json(L2E_LIVE_SESSIONS_FILE, sessions)
+
+
+def _is_http_url(value: str) -> bool:
+    try:
+        parsed = urlparse(value or "")
+        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+    except Exception:
+        return False
+
+
+def _compute_reward_state(enrollment: dict | None) -> str:
+    e = enrollment if isinstance(enrollment, dict) else {}
+    if e.get("reward_rejected"):
+        return "rejected"
+    if e.get("reward_claimed"):
+        return "claimed"
+    if e.get("completed") and not e.get("reward_eligible"):
+        return "completed_without_wallet"
+    if e.get("completed") and e.get("reward_eligible"):
+        return "claimable"
+    if e.get("reward_eligible"):
+        return "eligible"
+    return "not_eligible"
+
+
+def _get_thr_usd_estimate() -> float:
+    try:
+        return max(0.0, float(os.getenv("THR_USD_ESTIMATE", "1.0")))
+    except Exception:
+        return 1.0
+
+
+def _to_fiat_mirror(price_thr: float) -> float:
+    return round(max(0.0, float(price_thr or 0.0)) * _get_thr_usd_estimate(), 2)
+
+
+def _refresh_enrollment_reward_flags(enrollment: dict, course: dict | None = None) -> dict:
+    e = enrollment if isinstance(enrollment, dict) else {}
+    c = course if isinstance(course, dict) else {}
+    reward_policy = (e.get("reward_policy") or c.get("reward_policy") or "manual_claim").strip().lower()
+    completion_status = "completed" if e.get("completed") else "not_completed"
+    reward_eligibility = "eligible" if e.get("reward_eligible") else "not_eligible"
+    reward_claimed_status = "claimed" if e.get("reward_claimed") else ("rejected" if e.get("reward_rejected") else "not_claimed")
+    policy_allows_claim = False
+    if reward_policy == "manual_claim":
+        policy_allows_claim = True
+    elif reward_policy in {"teacher_approval", "admin_approval"}:
+        policy_allows_claim = bool(e.get("reward_policy_approved"))
+        if not e.get("reward_policy_pending_note"):
+            e["reward_policy_pending_note"] = f"{reward_policy} modeled but pending workflow implementation"
+    reward_claimability = "claimable" if (
+        completion_status == "completed"
+        and reward_eligibility == "eligible"
+        and reward_claimed_status == "not_claimed"
+        and bool(e.get("student_thr"))
+        and policy_allows_claim
+    ) else "not_claimable"
+    e["completion_status"] = completion_status
+    e["reward_eligibility"] = reward_eligibility
+    e["reward_claimability"] = reward_claimability
+    e["reward_claimed_status"] = reward_claimed_status
+    e["reward_policy"] = reward_policy
+    e["reward_policy_allows_claim"] = policy_allows_claim
+    e["reward_state"] = _compute_reward_state(e)
+    return e
+
+
+def _compute_certificate_status(enrollment: dict, course: dict | None = None) -> str:
+    e = enrollment if isinstance(enrollment, dict) else {}
+    c = course if isinstance(course, dict) else {}
+    if not bool(c.get("certificate_enabled")):
+        return "not_enabled"
+    if e.get("certificate_rejected"):
+        return "rejected"
+    if e.get("issued_at") or e.get("certificate_id"):
+        return "issued"
+    if not e.get("certificate_eligibility"):
+        return "not_enabled"
+
+    approval_mode = (c.get("certificate_approval_mode") or "manual").strip().lower()
+    if approval_mode in {"teacher_approval", "admin_approval"}:
+        if e.get("certificate_approved"):
+            return "issuable"
+        return "pending_approval"
+    return "issuable"
+
+
+def _refresh_certificate_flags(enrollment: dict, course: dict | None = None) -> dict:
+    e = enrollment if isinstance(enrollment, dict) else {}
+    c = course if isinstance(course, dict) else {}
+    e["certificate_template_name"] = e.get("certificate_template_name") or c.get("certificate_template_name")
+    e["certificate_issuer_identity"] = e.get("certificate_issuer_identity") or c.get("certificate_issuer_identity") or c.get("teacher")
+    e["tenant_id"] = e.get("tenant_id") or c.get("tenant_id")
+    e["institution_id"] = e.get("institution_id") or c.get("institution_id")
+    e["certificate_status"] = _compute_certificate_status(e, c)
+    return e
+
+
+def _validate_enrollment_payload(payload: dict) -> tuple[dict, str | None]:
+    data = payload if isinstance(payload, dict) else {}
+    payment_method = (data.get("payment_method") or "thr").strip().lower()
+    student_thr = (data.get("student_thr") or "").strip()
+    learner_id = (data.get("learner_id") or "").strip()
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+    stripe_pi = (data.get("stripe_payment_intent") or "").strip()
+
+    if payment_method not in {"thr", "stripe"}:
+        return {}, "Unsupported payment_method"
+    if payment_method == "thr":
+        if not student_thr:
+            return {}, "student_thr required for THR payment"
+        if not auth_secret:
+            return {}, "auth_secret required for THR payment"
+    if payment_method == "stripe" and not (student_thr or learner_id):
+        return {}, "Provide learner_id or student_thr"
+    if learner_id and len(learner_id) > 128:
+        return {}, "learner_id too long"
+    if student_thr and len(student_thr) > 128:
+        return {}, "student_thr too long"
+    if stripe_pi and not re.match(r"^pi_[A-Za-z0-9_]{6,}$", stripe_pi):
+        return {}, "Invalid stripe_payment_intent format"
+
+    return {
+        "payment_method": payment_method,
+        "student_thr": student_thr,
+        "learner_id": learner_id,
+        "auth_secret": auth_secret,
+        "passphrase": passphrase,
+        "stripe_payment_intent": stripe_pi,
+    }, None
+
+
+def _validate_live_session_payload(payload: dict, partial: bool = False) -> tuple[dict, str | None]:
+    data = payload if isinstance(payload, dict) else {}
+
+    normalized = {
+        "title": (data.get("title") or "").strip(),
+        "description": (data.get("description") or "").strip(),
+        "date": (data.get("date") or "").strip(),
+        "time": (data.get("time") or "").strip(),
+        "timezone": (data.get("timezone") or "").strip() or "UTC",
+        "duration": data.get("duration"),
+        "max_seats": data.get("max_seats"),
+        "access_type": (data.get("access_type") or "").strip().lower(),
+        "stream_url": (data.get("stream_url") or "").strip(),
+        "replay_url": (data.get("replay_url") or "").strip(),
+        "reward_amount": data.get("reward_amount"),
+        "invitees": data.get("invitees"),
+    }
+
+    required_fields = ["title", "date", "time", "stream_url", "access_type"]
+    if not partial:
+        for field in required_fields:
+            if not normalized.get(field):
+                return {}, f"Missing required field: {field}"
+
+    if normalized["title"] and len(normalized["title"]) > 140:
+        return {}, "title too long"
+    if normalized["description"] and len(normalized["description"]) > 2000:
+        return {}, "description too long"
+
+    if normalized["date"]:
+        try:
+            datetime.datetime.strptime(normalized["date"], "%Y-%m-%d")
+        except Exception:
+            return {}, "Invalid date format (expected YYYY-MM-DD)"
+
+    if normalized["time"] and not re.match(r"^\d{2}:\d{2}$", normalized["time"]):
+        return {}, "Invalid time format (expected HH:MM)"
+
+    if normalized["timezone"] and len(normalized["timezone"]) > 64:
+        return {}, "timezone too long"
+
+    if normalized.get("duration") is not None and str(normalized["duration"]).strip() != "":
+        try:
+            normalized["duration"] = int(normalized["duration"])
+        except Exception:
+            return {}, "duration must be an integer"
+        if normalized["duration"] < 5 or normalized["duration"] > 720:
+            return {}, "duration must be between 5 and 720 minutes"
+
+    if normalized.get("max_seats") is not None and str(normalized["max_seats"]).strip() != "":
+        try:
+            normalized["max_seats"] = int(normalized["max_seats"])
+        except Exception:
+            return {}, "max_seats must be an integer"
+        if normalized["max_seats"] < 0 or normalized["max_seats"] > 100000:
+            return {}, "max_seats must be between 0 and 100000"
+
+    if normalized["stream_url"] and not _is_http_url(normalized["stream_url"]):
+        return {}, "Invalid stream_url"
+    if normalized["replay_url"] and not _is_http_url(normalized["replay_url"]):
+        return {}, "Invalid replay_url"
+
+    if normalized.get("reward_amount") is not None and str(normalized["reward_amount"]).strip() != "":
+        try:
+            normalized["reward_amount"] = float(normalized["reward_amount"])
+        except Exception:
+            return {}, "reward_amount must be numeric"
+        if normalized["reward_amount"] < 0:
+            return {}, "reward_amount must be >= 0"
+    else:
+        normalized["reward_amount"] = 0.0
+
+    allowed_access = {"public", "enrolled-only", "thr-wallet-only", "pledge-only", "invite-only"}
+    if normalized["access_type"] and normalized["access_type"] not in allowed_access:
+        return {}, "Invalid access_type"
+
+    invitees = normalized.get("invitees")
+    if invitees is None:
+        normalized["invitees"] = []
+    elif not isinstance(invitees, list):
+        return {}, "invitees must be a list"
+    else:
+        normalized["invitees"] = [str(v).strip() for v in invitees if str(v).strip()]
+
+    return normalized, None
+
+
+def _is_live_session_access_allowed(access_type: str, enrollment: dict | None, learner_id: str, student_thr: str, invitees: list | None) -> tuple[bool, str | None]:
+    if access_type == "public":
+        return True, None
+    if access_type == "invite-only":
+        if learner_id in (invitees or []):
+            return True, None
+        return False, "Invite required"
+    if not enrollment:
+        return False, "Enrollment required"
+    if access_type == "enrolled-only":
+        return True, None
+    if access_type == "thr-wallet-only":
+        if enrollment.get("reward_eligible") and student_thr:
+            return True, None
+        return False, "THR wallet required"
+    if access_type == "pledge-only":
+        if enrollment.get("reward_eligible") and student_thr and has_pledge_access(student_thr):
+            return True, None
+        return False, "Pledge required"
+    return False, "Unsupported access type"
 
 # -------------------------------------------------------------------------
 # Peer registry and broadcast helpers
@@ -21544,6 +21801,17 @@ def api_v1_get_courses():
             c["reward_l2e"] = float(c.get("reward_l2e") or c.get("reward") or 0)
         except Exception:
             c["reward_l2e"] = 0.0
+        c["price_fiat_estimate_usd"] = float(c.get("price_fiat_estimate_usd") or _to_fiat_mirror(c.get("price_thr", 0)))
+        c["reward_policy"] = (c.get("reward_policy") or "manual_claim")
+        c["reward_policy_notes"] = c.get("reward_policy_notes") or ""
+        c["tenant_id"] = c.get("tenant_id") or "default"
+        c["institution_id"] = c.get("institution_id") or c["tenant_id"]
+        c["certificate_enabled"] = bool(c.get("certificate_enabled", False))
+        c["certificate_threshold_score"] = int(c.get("certificate_threshold_score", 80) or 80)
+        c["certificate_template_name"] = c.get("certificate_template_name")
+        c["certificate_issuer_identity"] = c.get("certificate_issuer_identity") or c.get("teacher")
+        c["certificate_approval_mode"] = c.get("certificate_approval_mode") or "manual"
+        c["tenant_branding_name"] = c.get("tenant_branding_name")
         normalized.append(c)
     return jsonify(courses=normalized), 200
 
@@ -21698,6 +21966,14 @@ def api_v1_create_course():
     teacher = (data.get("teacher") or "").strip()
     price_thr_raw = data.get("price_thr", 0)
     reward_raw = data.get("reward_l2e", 0)
+    reward_policy = (data.get("reward_policy") or "manual_claim").strip().lower()
+    reward_notes = (data.get("reward_policy_notes") or "").strip()
+    tenant_id = (data.get("tenant_id") or "default").strip() or "default"
+    institution_id = (data.get("institution_id") or tenant_id).strip() or "default"
+    certificate_enabled = str(data.get("certificate_enabled", "false")).lower() in {"1", "true", "yes", "on"}
+    certificate_template_name = (data.get("certificate_template_name") or "").strip() or None
+    certificate_approval_mode = (data.get("certificate_approval_mode") or "manual").strip().lower()
+    tenant_branding_name = (data.get("tenant_branding_name") or "").strip() or None
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
     description = (data.get("description") or "").strip()
@@ -21709,6 +21985,10 @@ def api_v1_create_course():
         reward_l2e = float(reward_raw)
     except (TypeError, ValueError):
         return jsonify(status="error", message="Invalid price or reward"), 400
+    if reward_policy not in {"manual_claim", "teacher_approval", "admin_approval"}:
+        return jsonify(status="error", message="Invalid reward_policy"), 400
+    if certificate_approval_mode not in {"manual", "teacher_approval", "admin_approval"}:
+        return jsonify(status="error", message="Invalid certificate_approval_mode"), 400
     if not title or not teacher or price_thr < 0 or reward_l2e <= 0:
         return jsonify(status="error", message="Missing or invalid fields"), 400
 
@@ -21794,7 +22074,18 @@ def api_v1_create_course():
         "description": description,
         "teacher": teacher,
         "price_thr": round(price_thr, 6),
+        "price_fiat_estimate_usd": _to_fiat_mirror(price_thr),
         "reward_l2e": round(reward_l2e, 6),
+        "reward_policy": reward_policy,
+        "reward_policy_notes": reward_notes,
+        "tenant_id": tenant_id,
+        "institution_id": institution_id,
+        "certificate_enabled": certificate_enabled,
+        "certificate_threshold_score": int(data.get("certificate_threshold_score", data.get("passing_score", 80)) or 80),
+        "certificate_template_name": certificate_template_name,
+        "certificate_issuer_identity": teacher,
+        "certificate_approval_mode": certificate_approval_mode,
+        "tenant_branding_name": tenant_branding_name,
         "students": [],
         "completed": []
     }
@@ -21844,100 +22135,146 @@ def api_courses_create_alias():
 def api_v1_enroll_course(course_id: str):
     """
     Enroll a student in a course.  The payload must include:
-        - student_thr: the enrolling student's THR address
-        - auth_secret & optional passphrase: authentication for student
+        - payment_method: "thr" | "stripe"
+        - learner_id: optional external learner ID (email/session UUID)
+        - student_thr: optional THR address (required for "thr" payments)
+        - auth_secret & optional passphrase: authentication when paying in THR
+        - stripe_payment_intent: optional Stripe payment reference for card flow
 
-    The student's THR balance is debited by the course price plus burn fee,
-    and the teacher's balance is credited by the price minus fee.  A
-    ``course_payment`` transaction is added to the mempool.  The student
-    is added to the course's ``students`` list.  Duplicate enrollments
-    return a no‑op success.
+    Enrollment is now payment-layer agnostic:
+      - THR payment deducts THR and records on-chain course_payment tx.
+      - Stripe payment grants course access only (no THR transfer).
+      - Reward eligibility is independent and based on whether a THR wallet
+        is connected at enrollment time.
     """
-    data = request.get_json() or {}
-    student = (data.get("student_thr") or "").strip()
-    auth_secret = (data.get("auth_secret") or "").strip()
-    passphrase = (data.get("passphrase") or "").strip()
-    if not student:
-        return jsonify(status="error", message="Missing student"), 400
+    parsed, error = _validate_enrollment_payload(request.get_json() or {})
+    if error:
+        return jsonify(status="error", message=error), 400
+    student = parsed["student_thr"]
+    learner_id = parsed["learner_id"]
+    auth_secret = parsed["auth_secret"]
+    passphrase = parsed["passphrase"]
+    payment_method = parsed["payment_method"]
+    stripe_payment_intent = parsed["stripe_payment_intent"]
+
+    learner_key = student or learner_id
+
     # Fetch the course
     courses = load_courses()
     course = next((c for c in courses if c.get("id") == course_id), None)
     if not course:
         return jsonify(status="error", message="Course not found"), 404
-    if student in course.get("students", []):
-        return jsonify(status="success", message="Already enrolled"), 200
-    # Validate student's pledge and auth
-    ok, _, error_key = validate_effective_auth(student, auth_secret, passphrase)
-    if not ok:
-        if error_key == "no_effective_pledge":
-            return jsonify(status="error", message="Student has no effective pledge access"), 403
-        if error_key == "missing_auth_secret":
-            return jsonify(status="error", message="Missing auth_secret"), 400
-        if error_key == "missing_pledge":
-            return jsonify(status="error", message="Student has not pledged"), 404
-        if error_key == "send_not_enabled":
-            return jsonify(status="error", message="Student send not enabled"), 400
-        if error_key == "passphrase_required":
-            return jsonify(status="error", message="Passphrase required"), 400
-        if error_key == "invalid_auth":
-            return jsonify(status="error", message="Invalid auth"), 403
+    if learner_key in course.get("students", []):
+        return jsonify(status="error", message="Duplicate enrollment"), 409
+
     # Determine cost and fee
     price = float(course.get("price_thr", 0.0))
     fee = calculate_dynamic_fee(price)
-    total_cost = price + fee
-    # Load THR ledger
-    ledger = load_json(LEDGER_FILE, {})
-    student_balance = float(ledger.get(student, 0.0))
-    if student_balance < total_cost:
-        return jsonify(
-            status="error",
-            message="Insufficient balance",
-            balance=round(student_balance, 6),
-            required=round(total_cost, 6)
-        ), 400
-    # Deduct from student and credit teacher
-    ledger[student] = round(student_balance - total_cost, 6)
-    teacher = course.get("teacher")
-    ledger[teacher] = round(float(ledger.get(teacher, 0.0)) + price, 6)
-    save_json(LEDGER_FILE, ledger)
-    # Record transaction
-    chain = load_json(CHAIN_FILE, [])
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-    tx_id = f"COURSE-PAY-{len(chain)}-{int(time.time())}-{secrets.token_hex(4)}"
-    tx = {
-        "type": "course_payment",
-        "from": student,
-        "to": teacher,
-        "thr_address": student,
-        "amount": round(price, 6),
-        "fee_burned": fee,
-        "course_id": course_id,
-        "timestamp": ts,
-        "tx_id": tx_id,
-        "status": "pending",
-        "confirmation_policy": "FAST",
-        "min_signers": 1,
-    }
-    # Burn the fee by sending to the burn address (deducted in ledger)
-    # Note: We do not credit the fee anywhere; it is effectively removed.
-    pool = load_mempool()
-    pool.append(tx)
-    save_mempool(pool)
-    update_last_block(tx, is_block=False)
-    try:
-        broadcast_tx(tx)
-    except Exception:
-        pass
+    tx = None
+    new_balance_from = None
+
+    if payment_method == "thr":
+        # Validate student auth only for THR transfer flow
+        ok, _, error_key = validate_effective_auth(student, auth_secret, passphrase)
+        if not ok:
+            if error_key == "no_effective_pledge":
+                return jsonify(status="error", message="Student has no effective pledge access"), 403
+            if error_key == "missing_auth_secret":
+                return jsonify(status="error", message="Missing auth_secret"), 400
+            if error_key == "missing_pledge":
+                return jsonify(status="error", message="Student has not pledged"), 404
+            if error_key == "send_not_enabled":
+                return jsonify(status="error", message="Student send not enabled"), 400
+            if error_key == "passphrase_required":
+                return jsonify(status="error", message="Passphrase required"), 400
+            if error_key == "invalid_auth":
+                return jsonify(status="error", message="Invalid auth"), 403
+
+        total_cost = price + fee
+        ledger = load_json(LEDGER_FILE, {})
+        student_balance = float(ledger.get(student, 0.0))
+        if student_balance < total_cost:
+            return jsonify(
+                status="error",
+                message="Insufficient balance",
+                balance=round(student_balance, 6),
+                required=round(total_cost, 6)
+            ), 400
+
+        teacher = course.get("teacher")
+        ledger[student] = round(student_balance - total_cost, 6)
+        ledger[teacher] = round(float(ledger.get(teacher, 0.0)) + price, 6)
+        save_json(LEDGER_FILE, ledger)
+
+        chain = load_json(CHAIN_FILE, [])
+        tx_id = f"COURSE-PAY-{len(chain)}-{int(time.time())}-{secrets.token_hex(4)}"
+        tx = {
+            "type": "course_payment",
+            "payment_method": "thr",
+            "from": student,
+            "to": teacher,
+            "thr_address": student,
+            "amount": round(price, 6),
+            "fee_burned": fee,
+            "course_id": course_id,
+            "timestamp": ts,
+            "tx_id": tx_id,
+            "status": "pending",
+            "confirmation_policy": "FAST",
+            "min_signers": 1,
+        }
+        pool = load_mempool()
+        pool.append(tx)
+        save_mempool(pool)
+        update_last_block(tx, is_block=False)
+        try:
+            broadcast_tx(tx)
+        except Exception:
+            pass
+        new_balance_from = ledger.get(student)
+    else:
+        # Stripe grants access only; payment reference is optional in dev mode.
+        tx = {
+            "type": "course_payment",
+            "payment_method": "stripe",
+            "from": learner_key,
+            "to": course.get("teacher"),
+            "course_id": course_id,
+            "stripe_payment_intent": stripe_payment_intent or None,
+            "amount": round(price, 6),
+            "fiat_mirror_usd": _to_fiat_mirror(price),
+            "timestamp": ts,
+            "tx_id": f"COURSE-STRIPE-{int(time.time())}-{secrets.token_hex(4)}",
+            "status": "recorded",
+        }
+
+    reward_eligible = bool(student)
+
     # Enroll student
-    course.setdefault("students", []).append(student)
+    course.setdefault("students", []).append(learner_key)
     enrollments = load_enrollments()
-    enrollments.setdefault(course_id, {})[student] = {
+    enrollments.setdefault(course_id, {})[learner_key] = {
+        "learner_id": learner_key,
+        "student_thr": student or None,
+        "payment_method": payment_method,
+        "stripe_payment_intent": stripe_payment_intent or None,
+        "reward_eligible": reward_eligible,
+        "wallet_connected": bool(student),
         "enrolled_at": ts,
-        "completed": False
+        "completed": False,
+        "access_only": payment_method == "stripe" and not reward_eligible,
     }
+    enrollments[course_id][learner_key] = _refresh_enrollment_reward_flags(enrollments[course_id][learner_key], course=course)
     save_enrollments(enrollments)
     save_courses(courses)
-    return jsonify(status="success", tx=tx, new_balance_from=ledger[student]), 200
+    return jsonify(
+        status="success",
+        tx=tx,
+        reward_eligible=reward_eligible,
+        learner_id=learner_key,
+        new_balance_from=new_balance_from
+    ), 200
 
 
 @app.route("/api/courses/enroll", methods=["POST"])
@@ -21954,6 +22291,284 @@ def api_courses_enroll_alias():
 def api_courses_enroll_path_alias(course_id: str):
     """Alias for enrollment without versioned prefix."""
     return api_v1_enroll_course(course_id)
+
+
+@app.route("/api/v1/courses/<string:course_id>/claim_reward", methods=["POST"])
+def api_v1_claim_course_reward(course_id: str):
+    """
+    Claim THR/L2E completion rewards only if enrollment is reward-eligible.
+    Enrollment access (e.g. Stripe) and reward eligibility are separate layers.
+    """
+    data = request.get_json() or {}
+    learner_id = (data.get("learner_id") or data.get("student_thr") or "").strip()
+    if not learner_id:
+        return jsonify(status="error", message="Missing learner_id"), 400
+    if len(learner_id) > 128:
+        return jsonify(status="error", message="Invalid learner_id"), 400
+
+    enrollments = load_enrollments()
+    enrollment = (enrollments.get(course_id) or {}).get(learner_id)
+    if not enrollment:
+        return jsonify(status="error", message="Enrollment not found"), 404
+    course = next((c for c in load_courses() if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    reward_state = _compute_reward_state(enrollment)
+    if reward_state == "claimed":
+        return jsonify(status="error", message="Duplicate reward claim", reward_state=reward_state), 409
+    if reward_state != "claimable":
+        return jsonify(
+            status="error",
+            message="Reward is not claimable",
+            reward_state=reward_state,
+            reward_claimability=enrollment.get("reward_claimability"),
+            reward_policy=enrollment.get("reward_policy") or course.get("reward_policy", "manual_claim"),
+            pending_note=enrollment.get("reward_policy_pending_note")
+        ), 403
+
+    reward_amount = float(course.get("reward_l2e", 0.0))
+    if reward_amount <= 0:
+        enrollment["reward_rejected"] = True
+        enrollment["reward_rejected_reason"] = "invalid_reward_amount"
+        enrollment = _refresh_enrollment_reward_flags(enrollment, course=course)
+        save_enrollments(enrollments)
+        return jsonify(status="error", message="Reward rejected by policy", reward_state=enrollment["reward_state"]), 400
+
+    reward_wallet = (enrollment.get("student_thr") or "").strip()
+    if not reward_wallet:
+        return jsonify(status="error", message="THR wallet required", reward_state=reward_state), 403
+
+    # Controlled issuance occurs at claim time.
+    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
+    l2e_ledger[reward_wallet] = round(float(l2e_ledger.get(reward_wallet, 0.0)) + reward_amount, 6)
+    save_json(L2E_LEDGER_FILE, l2e_ledger)
+
+    chain = load_json(CHAIN_FILE, [])
+    claim_ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    reward_tx = {
+        "type": "l2e_reward",
+        "from": "course_reward_pool",
+        "to": reward_wallet,
+        "course_id": course_id,
+        "amount": round(reward_amount, 6),
+        "reward_policy": course.get("reward_policy", "manual_claim"),
+        "timestamp": claim_ts,
+        "tx_id": f"L2E-CLAIM-{len(chain)}-{int(time.time())}-{secrets.token_hex(4)}",
+        "status": "confirmed",
+    }
+    chain.append(reward_tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(reward_tx, is_block=False)
+    try:
+        broadcast_tx(reward_tx)
+    except Exception:
+        pass
+
+    enrollment["reward_claimed"] = True
+    enrollment["reward_claimed_at"] = claim_ts
+    enrollment["reward_paid"] = True
+    enrollment["reward_txid"] = reward_tx["tx_id"]
+    enrollment = _refresh_enrollment_reward_flags(enrollment, course=course)
+    save_enrollments(enrollments)
+    return jsonify(
+        status="success",
+        reward_claimed=True,
+        learner_id=learner_id,
+        reward_state=enrollment["reward_state"],
+        reward_tx=reward_tx
+    ), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/live_sessions", methods=["GET"])
+def api_v1_list_live_sessions(course_id: str):
+    sessions = load_live_sessions().get(course_id, [])
+    hydrated = []
+    for s in sessions:
+        item = s.copy() if isinstance(s, dict) else {}
+        item["attendance_count"] = len(item.get("attendance") or [])
+        if item.get("max_seats", 0):
+            item["seats_remaining"] = max(0, int(item.get("max_seats", 0)) - item["attendance_count"])
+        else:
+            item["seats_remaining"] = None
+        hydrated.append(item)
+    return jsonify(status="success", course_id=course_id, sessions=hydrated), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/live_sessions", methods=["POST"])
+def api_v1_create_live_session(course_id: str):
+    """Create teacher live sessions with modular access policies."""
+    data = request.get_json() or {}
+    course = next((c for c in load_courses() if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    teacher_thr = (data.get("teacher_thr") or "").strip()
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+
+    # Admins may manage all sessions; otherwise require course teacher auth.
+    is_admin = require_admin(data) is None
+    if not is_admin:
+        if not teacher_thr or teacher_thr != course.get("teacher"):
+            return jsonify(status="error", message="Teacher authorization required"), 403
+        ok, _, error_key = validate_effective_auth(teacher_thr, auth_secret, passphrase)
+        if not ok:
+            return jsonify(status="error", message=f"Teacher auth failed: {error_key}"), 403
+
+    parsed, error = _validate_live_session_payload(data, partial=False)
+    if error:
+        return jsonify(status="error", message=error), 400
+
+    payload = {
+        "id": f"live-{int(time.time())}-{secrets.token_hex(3)}",
+        "title": parsed["title"],
+        "description": parsed["description"],
+        "date": parsed["date"],
+        "time": parsed["time"],
+        "timezone": parsed["timezone"],
+        "duration": parsed["duration"] if parsed["duration"] is not None else 60,
+        "max_seats": parsed["max_seats"] if parsed["max_seats"] is not None else 0,
+        "access_type": parsed["access_type"],
+        "stream_url": parsed["stream_url"],
+        "replay_url": parsed["replay_url"] or None,
+        "reward_amount": parsed["reward_amount"],
+        "attendance": [],
+        "invitees": parsed["invitees"] or [],
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "created_by": teacher_thr or "admin",
+    }
+
+    sessions = load_live_sessions()
+    sessions.setdefault(course_id, []).append(payload)
+    save_live_sessions(sessions)
+    return jsonify(status="success", session=payload), 201
+
+
+@app.route("/api/v1/courses/<string:course_id>/live_sessions/<string:session_id>/join", methods=["POST"])
+def api_v1_join_live_session(course_id: str, session_id: str):
+    """
+    Join live session with layered checks:
+      - enrolled-only checks enrollment
+      - thr-wallet-only checks wallet presence
+      - pledge-only checks pledge access only for that feature
+      - invite-only checks invite list
+    """
+    data = request.get_json() or {}
+    learner_id = (data.get("learner_id") or data.get("student_thr") or "").strip()
+    student_thr = (data.get("student_thr") or "").strip()
+    if not learner_id:
+        return jsonify(status="error", message="Missing learner_id"), 400
+    if len(learner_id) > 128:
+        return jsonify(status="error", message="Invalid learner_id"), 400
+    if student_thr and len(student_thr) > 128:
+        return jsonify(status="error", message="Invalid student_thr"), 400
+
+    sessions = load_live_sessions()
+    session = next((s for s in sessions.get(course_id, []) if s.get("id") == session_id), None)
+    if not session:
+        return jsonify(status="error", message="Live session not found"), 404
+
+    access_type = session.get("access_type", "public")
+    enrollments = load_enrollments()
+    enrollment = (enrollments.get(course_id) or {}).get(learner_id)
+    allowed, reason = _is_live_session_access_allowed(
+        access_type=access_type,
+        enrollment=enrollment,
+        learner_id=learner_id,
+        student_thr=student_thr,
+        invitees=session.get("invitees") or [],
+    )
+    if not allowed:
+        return jsonify(status="error", message=reason or "Access denied"), 403
+
+    attendance = session.setdefault("attendance", [])
+    if learner_id not in attendance:
+        if session.get("max_seats", 0) > 0 and len(attendance) >= session["max_seats"]:
+            return jsonify(status="error", message="No seats available"), 409
+        attendance.append(learner_id)
+        session["last_joined_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        session["attendance_count"] = len(attendance)
+        save_live_sessions(sessions)
+    else:
+        return jsonify(status="error", message="Duplicate join"), 409
+
+    return jsonify(status="success", join_url=session.get("stream_url"), session=session), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/live_sessions/<string:session_id>", methods=["PATCH"])
+def api_v1_update_live_session(course_id: str, session_id: str):
+    data = request.get_json() or {}
+    course = next((c for c in load_courses() if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+
+    teacher_thr = (data.get("teacher_thr") or "").strip()
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+    is_admin = require_admin(data) is None
+    if not is_admin:
+        if not teacher_thr or teacher_thr != course.get("teacher"):
+            return jsonify(status="error", message="Teacher authorization required"), 403
+        ok, _, error_key = validate_effective_auth(teacher_thr, auth_secret, passphrase)
+        if not ok:
+            return jsonify(status="error", message=f"Teacher auth failed: {error_key}"), 403
+
+    parsed, error = _validate_live_session_payload(data, partial=True)
+    if error:
+        return jsonify(status="error", message=error), 400
+
+    sessions = load_live_sessions()
+    items = sessions.get(course_id, [])
+    session = next((s for s in items if s.get("id") == session_id), None)
+    if not session:
+        return jsonify(status="error", message="Live session not found"), 404
+
+    updatable_keys = {"title", "description", "date", "time", "timezone", "duration", "max_seats", "access_type", "stream_url", "replay_url", "reward_amount", "invitees"}
+    for key in updatable_keys:
+        if key in data and (parsed.get(key) is not None or key in {"replay_url", "invitees"}):
+            session[key] = parsed.get(key)
+    session["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    save_live_sessions(sessions)
+    return jsonify(status="success", session=session), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/live_sessions/<string:session_id>", methods=["DELETE"])
+def api_v1_delete_live_session(course_id: str, session_id: str):
+    data = request.get_json(silent=True) or {}
+    course = next((c for c in load_courses() if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+
+    teacher_thr = (data.get("teacher_thr") or "").strip()
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+    is_admin = require_admin(data) is None
+    if not is_admin:
+        if not teacher_thr or teacher_thr != course.get("teacher"):
+            return jsonify(status="error", message="Teacher authorization required"), 403
+        ok, _, error_key = validate_effective_auth(teacher_thr, auth_secret, passphrase)
+        if not ok:
+            return jsonify(status="error", message=f"Teacher auth failed: {error_key}"), 403
+
+    sessions = load_live_sessions()
+    items = sessions.get(course_id, [])
+    before = len(items)
+    items = [s for s in items if s.get("id") != session_id]
+    if len(items) == before:
+        return jsonify(status="error", message="Live session not found"), 404
+    sessions[course_id] = items
+    save_live_sessions(sessions)
+    return jsonify(status="success", deleted=True), 200
+
+
+@app.route("/api/v1/courses/<string:course_id>/enrollment/<string:learner_id>", methods=["GET"])
+def api_v1_enrollment_status(course_id: str, learner_id: str):
+    enrollment = (load_enrollments().get(course_id) or {}).get(learner_id)
+    if not enrollment:
+        return jsonify(status="error", message="Enrollment not found"), 404
+    course = next((c for c in load_courses() if c.get("id") == course_id), None)
+    enrollment = _refresh_enrollment_reward_flags(enrollment.copy(), course=course)
+    enrollment = _refresh_certificate_flags(enrollment, course=course)
+    return jsonify(status="success", enrollment=enrollment), 200
 
 
 @app.route("/api/v1/courses/<string:course_id>/complete", methods=["POST"])
@@ -21973,7 +22588,7 @@ def api_v1_complete_course(course_id: str):
     ``completed`` list of the course.
     """
     data = request.get_json() or {}
-    student = (data.get("student_thr") or "").strip()
+    student = (data.get("student_thr") or data.get("learner_id") or "").strip()
     teacher = (data.get("teacher_thr") or "").strip()
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
@@ -22013,30 +22628,26 @@ def api_v1_complete_course(course_id: str):
     if student_completion.get("reward_paid", False):
         return jsonify(status="success", message="Reward already paid"), 200
 
-    # Determine reward
-    reward = float(course.get("reward_l2e", 0.0))
-    if reward <= 0:
-        return jsonify(status="error", message="Invalid reward"), 500
+    enrollments = load_enrollments()
+    enrollment = (enrollments.get(course_id) or {}).get(student, {})
 
-    # Update L2E ledger
-    l2e_ledger = load_json(L2E_LEDGER_FILE, {})
-    l2e_ledger[student] = round(float(l2e_ledger.get(student, 0.0)) + reward, 6)
-    save_json(L2E_LEDGER_FILE, l2e_ledger)
-
-    # Record reward transaction
+    # Controlled issuance: completion records eligibility only.
+    # Reward is minted only when learner explicitly claims and policy allows it.
     chain = load_json(CHAIN_FILE, [])
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-    tx_id = f"L2E-REWARD-{len(chain)}-{int(time.time())}-{secrets.token_hex(4)}"
+    tx_id = f"COURSE-COMPLETE-{len(chain)}-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
-        "type": "l2e_reward",
+        "type": "course_completion",
         "from": "course",
         "to": student,
         "thr_address": teacher,
-        "amount": round(reward, 6),
+        "amount": 0.0,
         "course_id": course_id,
+        "reward_eligible": enrollment.get("reward_eligible", False),
         "timestamp": ts,
         "tx_id": tx_id,
-        "status": "confirmed"
+        "status": "recorded",
+        "reward_policy": course.get("reward_policy", "manual_claim")
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
@@ -22049,11 +22660,21 @@ def api_v1_complete_course(course_id: str):
     # QUEST: Mark as completed with reward tracking
     completions[student] = {
         "completed": True,
-        "reward_paid": True,
+        "reward_paid": False,
         "reward_txid": tx_id,
         "best_score": student_completion.get("best_score", 100),
         "completion_date": ts
     }
+
+    enrollments.setdefault(course_id, {}).setdefault(student, {})
+    enrollments[course_id][student]["completed"] = True
+    enrollments[course_id][student]["completed_at"] = ts
+    enrollments[course_id][student]["reward_paid"] = False
+    enrollments[course_id][student]["reward_policy"] = course.get("reward_policy", "manual_claim")
+    if course.get("reward_policy") in {"teacher_approval", "admin_approval"}:
+        enrollments[course_id][student]["reward_policy_approved"] = False
+    enrollments[course_id][student] = _refresh_enrollment_reward_flags(enrollments[course_id][student], course=course)
+    save_enrollments(enrollments)
 
     # Legacy support: also append to completed list
     if student not in course.get("completed", []):
@@ -22844,9 +23465,12 @@ def api_v1_create_quiz(course_id: str):
             "type": qtype,
             "question": question_text,
             "question_el": q.get("question_el", question_text),
+            "weight": float(q.get("weight", 1.0) or 1.0),
             "explanation": q.get("explanation", ""),  # Teacher's explanation for the answer
             "explanation_el": q.get("explanation_el", q.get("explanation", ""))  # Greek explanation
         }
+        if base_question["weight"] <= 0:
+            return jsonify(status="error", message=f"Question #{i+1}: weight must be > 0"), 400
 
         # Validate based on type
         if qtype == "multiple_choice":
@@ -22906,6 +23530,7 @@ def api_v1_create_quiz(course_id: str):
         "title": data.get("title", "Course Quiz"),
         "title_el": data.get("title_el", "Quiz Μαθήματος"),
         "passing_score": int(data.get("passing_score", 80)),
+        "pass_threshold_score": int(data.get("pass_threshold_score", data.get("passing_score", 80))),
         "questions": validated_questions,
         "created_at": existing_quiz.get("created_at", time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())),
         "updated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
@@ -22948,12 +23573,18 @@ def api_v1_submit_quiz(course_id: str):
         return jsonify(status="error", message="Quiz has no questions"), 500
 
     correct = 0
+    weighted_correct = 0.0
+    weighted_total = 0.0
     results = []
 
     for q in questions:
         qid = str(q.get("id"))
         qtype = normalize_quiz_question_type(q.get("type"), course_id=course_id, question_id=q.get("id"))
         user_answer = answers.get(qid)
+        q_weight = float(q.get("weight", 1.0) or 1.0)
+        if q_weight <= 0:
+            q_weight = 1.0
+        weighted_total += q_weight
 
         if qtype not in QuestionType.ALL_TYPES:
             return jsonify(status="error", message=f"Unsupported question type '{qtype}'"), 400
@@ -22966,10 +23597,12 @@ def api_v1_submit_quiz(course_id: str):
 
         if is_correct:
             correct += 1
+            weighted_correct += q_weight
 
         results.append({
             "question_id": qid,
             "type": qtype,
+            "weight": q_weight,
             "correct": is_correct,
             "your_answer": user_answer,
             "correct_answer": correct_answer,
@@ -22977,8 +23610,10 @@ def api_v1_submit_quiz(course_id: str):
             "explanation_el": q.get("explanation_el", q.get("explanation", ""))
         })
 
-    score = round((correct / total) * 100)
-    passing_score = quiz.get("pass_score", 80)
+    if weighted_total <= 0:
+        weighted_total = float(total or 1)
+    score = round((weighted_correct / weighted_total) * 100)
+    passing_score = int(quiz.get("pass_threshold_score", quiz.get("pass_score", 80)))
     passed = score >= passing_score
 
     # Record quiz attempt
@@ -22986,6 +23621,11 @@ def api_v1_submit_quiz(course_id: str):
     if course_id not in quiz_attempts:
         quiz_attempts[course_id] = {}
     quiz_attempts[course_id][student] = {
+        "completion_status": "completed" if passed else "incomplete",
+        "quiz_score": score,
+        "pass_fail_status": "pass" if passed else "fail",
+        "certificate_eligibility": False,
+        "reward_eligibility": bool(student),
         "score": score,
         "passed": passed,
         "attempts": quiz_attempts.get(course_id, {}).get(student, {}).get("attempts", 0) + 1,
@@ -22993,11 +23633,29 @@ def api_v1_submit_quiz(course_id: str):
     }
     save_json(os.path.join(DATA_DIR, "quiz_attempts.json"), quiz_attempts)
 
-    # QUEST: AUTO-COMPLETE + AUTO-REWARD (with proper reward_paid tracking)
+    # Extend completion/result states without auto-reward issuance.
     auto_completed = False
     reward_credited = False
     reward_amount = 0.0
     reward_txid = None
+    certificate_eligibility = False
+    certificate_status = "not_eligible"
+    pass_fail_status = "pass" if passed else "fail"
+    completion_status = "completed" if passed else "incomplete"
+    reward_claimability = "not_claimable"
+
+    enrollments = load_enrollments()
+    enrollments.setdefault(course_id, {}).setdefault(student, {})
+    enrollments[course_id][student]["quiz_score"] = score
+    enrollments[course_id][student]["pass_fail_status"] = pass_fail_status
+    enrollments[course_id][student]["completion_status"] = completion_status
+    enrollments[course_id][student]["reward_eligibility"] = "eligible" if bool(student) else "not_eligible"
+    enrollments[course_id][student]["reward_eligible"] = bool(student)
+    enrollments[course_id][student]["reward_policy"] = course.get("reward_policy", "manual_claim")
+    enrollments[course_id][student]["certificate_template_name"] = course.get("certificate_template_name")
+    enrollments[course_id][student]["certificate_issuer_identity"] = course.get("certificate_issuer_identity") or course.get("teacher")
+    enrollments[course_id][student]["tenant_id"] = course.get("tenant_id")
+    enrollments[course_id][student]["institution_id"] = course.get("institution_id")
 
     if passed:
         # Mark as quiz_passed in course
@@ -23006,80 +23664,65 @@ def api_v1_submit_quiz(course_id: str):
         if student not in course["quiz_passed"]:
             course["quiz_passed"].append(student)
 
-        # Check if student already received reward (use completions tracking)
-        completions = course.setdefault("completions", {})
-        student_completion = completions.get(student, {})
-        already_paid = student_completion.get("reward_paid", False)
-
         # Mark course completed
         course.setdefault("completed", [])
         if student not in course["completed"]:
             course["completed"].append(student)
 
-        # Update enrollments
-        enrollments_file = os.path.join(DATA_DIR, "course_enrollments.json")
-        enrollments = load_json(enrollments_file, {})
-        if course_id in enrollments and student in enrollments[course_id]:
-            enrollments[course_id][student]["completed"] = True
-            enrollments[course_id][student]["completed_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-            save_json(enrollments_file, enrollments)
+        # Update enrollments state (completion + claimability), but do not issue rewards here.
+        enrollments[course_id][student]["completed"] = True
+        enrollments[course_id][student]["completed_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        enrollments[course_id][student]["quiz_score"] = score
+        enrollments[course_id][student]["pass_fail_status"] = pass_fail_status
+        enrollments[course_id][student]["reward_policy"] = course.get("reward_policy", "manual_claim")
+        if course.get("reward_policy") in {"teacher_approval", "admin_approval"}:
+            enrollments[course_id][student]["reward_policy_approved"] = False
+        enrollments[course_id][student] = _refresh_enrollment_reward_flags(enrollments[course_id][student], course=course)
+        reward_claimability = enrollments[course_id][student].get("reward_claimability", "not_claimable")
+
+        threshold = int(course.get("certificate_threshold_score", passing_score) or passing_score)
+        certificate_eligibility = bool(course.get("certificate_enabled")) and score >= threshold
+        enrollments[course_id][student]["certificate_eligibility"] = certificate_eligibility
 
         save_courses(courses)
         auto_completed = True
         app.logger.info(f"QUEST: AUTO-COMPLETE: Student {student} completed course {course_id}")
+        completions = course.setdefault("completions", {})
+        prior = completions.get(student, {})
+        completions[student] = {
+            "completed": True,
+            "reward_paid": prior.get("reward_paid", False),
+            "reward_txid": prior.get("reward_txid"),
+            "best_score": max(score, prior.get("best_score", 0)),
+            "completion_date": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "certificate_eligibility": certificate_eligibility,
+            "certificate_status": certificate_status,
+        }
+        save_courses(courses)
 
-        # QUEST: AUTO-REWARD - Only pay if not already paid
-        reward_amount = float(course.get("metadata", {}).get("reward_thr", 0.0) or course.get("reward_l2e", 0.0))
-
-        if reward_amount > 0 and not already_paid:
-            # Update L2E ledger
-            l2e_ledger = load_json(L2E_LEDGER_FILE, {})
-            l2e_ledger[student] = round(float(l2e_ledger.get(student, 0.0)) + reward_amount, 6)
-            save_json(L2E_LEDGER_FILE, l2e_ledger)
-
-            # Create L2E reward transaction
-            chain = load_json(CHAIN_FILE, [])
-            ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-            reward_txid = f"L2E-AUTO-{course_id}-{int(time.time())}-{secrets.token_hex(4)}"
-
-            reward_tx = {
-                "tx_id": reward_txid,
-                "type": "l2e_reward",
-                "from": "course_auto",
-                "to": student,
-                "thr_address": course.get("teacher", "system"),
-                "amount": round(reward_amount, 6),
-                "course_id": course_id,
-                "quiz_score": score,
-                "timestamp": ts,
-                "status": "confirmed"
-            }
-            chain.append(reward_tx)
-            save_json(CHAIN_FILE, chain)
-            update_last_block(reward_tx, is_block=False)
-            try:
-                broadcast_tx(reward_tx)
-            except Exception:
-                pass
-
-            # Update completion record with reward tracking
-            completions[student] = {
-                "completed": True,
-                "reward_paid": True,
-                "reward_txid": reward_txid,
-                "best_score": max(score, student_completion.get("best_score", 0)),
-                "completion_date": ts
-            }
-            save_courses(courses)
-
-            reward_credited = True
-            app.logger.info(f"QUEST: AUTO-REWARD: Credited {reward_amount} L2E to {student} for course {course_id}, tx: {reward_txid}")
+    # Certificate + reward flags refreshed for both pass and fail states.
+    if not passed:
+        enrollments[course_id][student]["certificate_eligibility"] = False
+    enrollments[course_id][student] = _refresh_enrollment_reward_flags(enrollments[course_id][student], course=course)
+    enrollments[course_id][student] = _refresh_certificate_flags(enrollments[course_id][student], course=course)
+    reward_claimability = enrollments[course_id][student].get("reward_claimability", "not_claimable")
+    certificate_status = enrollments[course_id][student].get("certificate_status", "not_enabled")
+    save_enrollments(enrollments)
 
     return jsonify(
         status="success",
+        completion_status=completion_status,
+        quiz_score=score,
+        pass_fail_status=pass_fail_status,
+        certificate_eligibility=certificate_eligibility,
+        certificate_status=certificate_status,
+        reward_eligibility=bool(student),
+        reward_claimability=reward_claimability,
         score=score,
         correct=correct,
         total=total,
+        weighted_total=weighted_total,
+        weighted_correct=weighted_correct,
         passed=passed,
         passing_score=passing_score,
         results=results,
@@ -23092,134 +23735,12 @@ def api_v1_submit_quiz(course_id: str):
 
 @app.route("/api/l2e/submit_quiz", methods=["POST"])
 def api_l2e_submit_quiz():
-    """Grade a quiz attempt, record completion, and award L2E tokens."""
+    """Alias to v1 quiz submit endpoint (extended model, no auto-reward issuance)."""
     data = request.get_json() or {}
     course_id = (data.get("course_id") or data.get("id") or "").strip()
-    student = (data.get("student_thr") or "").strip()
-    answers = data.get("answers", {})
-
-    if not course_id or not student:
-        return jsonify(status="error", message="Missing course or student"), 400
-
-    courses = load_courses()
-    course = next((c for c in courses if c.get("id") == course_id), None)
-    if not course:
-        return jsonify(status="error", message="Course not found"), 404
-
-    enrollments = load_enrollments()
-    if student not in enrollments.get(course_id, {}) and student not in course.get("students", []):
-        return jsonify(status="error", message="Not enrolled"), 403
-
-    quiz = get_course_quiz(course_id)
-    if not quiz:
-        return jsonify(status="error", message="No quiz for this course"), 404
-
-    questions = quiz.get("questions", [])
-    total = len(questions)
-    if total == 0:
-        return jsonify(status="error", message="Quiz has no questions"), 500
-
-    correct = 0
-    results = []
-    for q in questions:
-        qid = str(q.get("id"))
-        user_answer = answers.get(qid)
-        is_correct = user_answer is not None and int(user_answer) == q.get("correct_index")
-        if is_correct:
-            correct += 1
-        results.append({
-            "question_id": qid,
-            "correct": is_correct,
-            "your_answer": user_answer,
-            "correct_answer": q.get("correct_index"),
-            "explanation": q.get("explanation", ""),  # Teacher's explanation
-            "explanation_el": q.get("explanation_el", q.get("explanation", ""))
-        })
-
-    score = round((correct / total) * 100)
-    passing_score = quiz.get("pass_score", 80)
-    passed = score >= passing_score
-
-    quiz_attempts = load_json(os.path.join(DATA_DIR, "quiz_attempts.json"), {})
-    if course_id not in quiz_attempts:
-        quiz_attempts[course_id] = {}
-    quiz_attempts[course_id][student] = {
-        "score": score,
-        "passed": passed,
-        "attempts": quiz_attempts.get(course_id, {}).get(student, {}).get("attempts", 0) + 1,
-        "last_attempt": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-    }
-    save_json(os.path.join(DATA_DIR, "quiz_attempts.json"), quiz_attempts)
-
-    # FIX B2: AUTO-COMPLETE + AUTO-REWARD
-    auto_completed = False
-    reward_credited = False
-    reward_amount = 0.0
-
-    if passed:
-        # Mark course completed in enrollments
-        enrollments.setdefault(course_id, {}).setdefault(student, {})["completed"] = True
-        enrollments[course_id][student]["completed_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-        save_enrollments(enrollments)
-
-        # Mark in course object
-        course.setdefault("completed", [])
-        if student not in course["completed"]:
-            course["completed"].append(student)
-            save_courses(courses)
-
-        auto_completed = True
-        app.logger.info(f"AUTO-COMPLETE: Student {student} completed course {course_id}")
-
-        # AUTO-REWARD: Credit L2E reward
-        reward_amount = float(course.get("metadata", {}).get("reward_thr", 0.0) or course.get("reward_l2e", 0.0))
-        if reward_amount > 0:
-            # Credit to main wallet ledger
-            ledger = load_json(LEDGER_FILE, {})
-            ledger[student] = round(float(ledger.get(student, 0.0)) + reward_amount, 6)
-            save_json(LEDGER_FILE, ledger)
-
-            # Also credit to L2E ledger for tracking
-            l2e_ledger = load_json(L2E_LEDGER_FILE, {})
-            l2e_ledger[student] = round(float(l2e_ledger.get(student, 0.0)) + reward_amount, 6)
-            save_json(L2E_LEDGER_FILE, l2e_ledger)
-
-            # Write transaction entry to wallet history
-            chain = load_json(CHAIN_FILE, [])
-            reward_tx = {
-                "tx_id": f"L2E_{course_id}_{int(time.time())}",
-                "type": "L2E_REWARD",
-                "from": "SYSTEM_L2E_POOL",
-                "to": student,
-                "amount": reward_amount,
-                "course_id": course_id,
-                "quiz_score": score,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-                "block": len(chain) + 1
-            }
-            chain.append(reward_tx)
-            save_json(CHAIN_FILE, chain)
-
-            reward_credited = True
-            app.logger.info(f"AUTO-REWARD: Credited {reward_amount} THR to {student} for completing {course_id}")
-
-        # Save updates
-        save_enrollments(enrollments)
-        save_courses(courses)
-
-    return jsonify(
-        status="success",
-        score=score,
-        total=total,
-        correct=correct,
-        passed=passed,
-        passing_score=passing_score,
-        results=results,
-        message=f"Quiz graded. Score: {score}% ({correct}/{total})" + (" - PASSED!" if passed else ""),
-        auto_completed=auto_completed,
-        reward_credited=reward_credited,
-        reward_amount=reward_amount
-    ), 200
+    if not course_id:
+        return jsonify(status="error", message="Missing course_id"), 400
+    return api_v1_submit_quiz(course_id)
 
 
 @app.route("/api/courses/quiz/submit", methods=["POST"])
@@ -23242,7 +23763,12 @@ def api_v1_quiz_status(course_id: str, student: str):
         has_attempted=bool(attempt),
         passed=attempt.get("passed", False),
         score=attempt.get("score", 0),
-        attempts=attempt.get("attempts", 0)
+        attempts=attempt.get("attempts", 0),
+        completion_status=attempt.get("completion_status"),
+        quiz_score=attempt.get("quiz_score", attempt.get("score", 0)),
+        pass_fail_status=attempt.get("pass_fail_status"),
+        certificate_eligibility=attempt.get("certificate_eligibility", False),
+        reward_eligibility=attempt.get("reward_eligibility", False)
     ), 200
 
 

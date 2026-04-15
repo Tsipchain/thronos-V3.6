@@ -1,36 +1,30 @@
 # Learn2Earn Core Service Summary
 
 ## Official Position
-Learn2Earn (L2E) is a **core Thronos Chain service**.
+Learn2Earn (L2E) is a **completed core Thronos Chain service foundation**.
 
-## Implemented Philosophy
-- THR-first course pricing and THR-denominated instructor settlement.
-- Reward distribution remains controlled and policy-mediated (not automatic).
-- Academic progression is stateful: completion, score, pass/fail, certificate eligibility, and reward eligibility are separated.
-- Certificates are non-automatic and require explicit approval/issuance actions.
-- Live classroom support and weighted quiz evaluation are part of the core service behavior.
-- Wallet-native learner participation is integrated with tenant/issuer-aware metadata.
-- RBAC/tenant enforcement hooks and audit trail/history are in service.
+## Core Service Contract (Finalized)
+- THR-first pricing remains fixed.
+- Reward issuance remains controlled and non-automatic.
+- Certificate issuance remains explicit and non-automatic.
+- RBAC, tenant, audit, and policy boundaries are mandatory controls.
 
-## Implemented vs Future Refinement
-### Implemented now
-- pricing and enrollment model
-- reward control
-- live classroom support
-- academic result states
-- certificate lifecycle
-- approval/issuance workflow
-- RBAC and tenant enforcement hooks
-- audit trail/history
+## Core Infrastructure Included
+- wallet-native enrollment and learner operations
+- academic result-state lifecycle
+- certificate request/approve/reject/issue workflow
+- role-aware and tenant-aware action enforcement
+- tenant/global audit and compliance reporting endpoints
+- report delivery tracking and lifecycle controls
+- policy evaluation with provider compatibility envelope
+- observability summaries for course, tenant, and global operations
 
-### Future-phase refinement
-- richer dashboards
-- broader delegated governance
-- stronger tenant partitioning
-- advanced compliance/export/reporting
+## Completion Boundary
+Phases 1–8 constitute the completed foundation. Future work is refinement only and must not reopen settled pricing, reward, or boundary controls.
 
-## Delivery History
-- Phase 1: core foundation
-- Phase 2: academic operations
-- Phase 3: approval and issuance
-- Phase 4: RBAC, tenant enforcement, audit trail
+## Related Closeout Docs
+- `L2E_CORE_SERVICE_CLOSEOUT.md`
+- `L2E_LAUNCH_NOTE.md`
+- `L2E_INTERNAL_HANDOFF.md`
+- `L2E_PRODUCTION_SMOKE_CHECKLIST.md`
+- `L2E_PHASES_1_8_IMPLEMENTATION_MAP.md`

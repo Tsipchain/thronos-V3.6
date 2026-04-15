@@ -964,3 +964,195 @@ def test_certificate_pending_when_approval_mode_modeled(monkeypatch):
     body = resp.get_json()
     assert body["certificate_eligibility"] is True
     assert body["certificate_status"] == "pending_approval"
+
+
+def test_l2e_rollout_verification_course_end_to_end_flow(monkeypatch):
+    """Go-live verification flow using a dedicated rollout course and lesson."""
+    courses = []
+    enrollments = {}
+    audit_store = {}
+    deliveries_store = {}
+    mempool = []
+    json_store = {
+        server.LEDGER_FILE: {"THR_STUDENT_ROLLOUT": 500.0, "THR_TEACHER_ROLLOUT": 0.0},
+        server.CHAIN_FILE: [],
+        str(Path(server.DATA_DIR) / "quiz_attempts.json"): {},
+    }
+
+    def _load_json(path, default=None):
+        if path in json_store:
+            return copy.deepcopy(json_store[path])
+        return copy.deepcopy(default if default is not None else {})
+
+    def _save_json(path, value):
+        json_store[path] = copy.deepcopy(value)
+
+    def _save_courses(data):
+        snap = copy.deepcopy(data)
+        courses.clear()
+        courses.extend(snap)
+
+    def _save_enrollments(data):
+        snap = copy.deepcopy(data)
+        enrollments.clear()
+        enrollments.update(snap)
+
+    def _save_audit(data):
+        snap = copy.deepcopy(data)
+        audit_store.clear()
+        audit_store.update(snap)
+
+    def _save_deliveries(data):
+        snap = copy.deepcopy(data)
+        deliveries_store.clear()
+        deliveries_store.update(snap)
+
+    monkeypatch.setattr(server, "load_courses", lambda: courses)
+    monkeypatch.setattr(server, "save_courses", _save_courses)
+    monkeypatch.setattr(server, "load_enrollments", lambda: enrollments)
+    monkeypatch.setattr(server, "save_enrollments", _save_enrollments)
+    monkeypatch.setattr(server, "load_certificate_audit", lambda: audit_store)
+    monkeypatch.setattr(server, "save_certificate_audit", _save_audit)
+    monkeypatch.setattr(server, "load_report_deliveries", lambda: deliveries_store)
+    monkeypatch.setattr(server, "save_report_deliveries", _save_deliveries)
+    monkeypatch.setattr(server, "load_json", _load_json)
+    monkeypatch.setattr(server, "save_json", _save_json)
+    monkeypatch.setattr(server, "load_mempool", lambda: copy.deepcopy(mempool))
+    monkeypatch.setattr(server, "save_mempool", lambda p: (mempool.clear(), mempool.extend(copy.deepcopy(p))))
+    monkeypatch.setattr(server, "broadcast_tx", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(server, "update_last_block", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(server, "validate_effective_auth", lambda *_args, **_kwargs: (True, None, None))
+    monkeypatch.setattr(server, "require_admin", lambda payload=None: None if (payload or {}).get("auth_secret") == "admin-ok" else "auth_required")
+
+    # 1) Create verification course + lesson content + quiz
+    create_resp = _client().post("/api/v1/courses", json={
+        "title": "L2E Rollout Verification Course",
+        "description": "Final go-live verification path",
+        "teacher": "THR_TEACHER_ROLLOUT",
+        "price_thr": 15,
+        "reward_l2e": 5,
+        "reward_policy": "manual_claim",
+        "tenant_id": "tenant-rollout",
+        "institution_id": "inst-rollout",
+        "certificate_enabled": True,
+        "certificate_threshold_score": 80,
+        "certificate_approval_mode": "teacher_approval",
+        "certificate_template_name": "L2E Rollout Completion Certificate",
+        "certificate_issuer_identity": "THR_TEACHER_ROLLOUT",
+        "content_type": "external",
+        "content_url": "https://example.org/l2e-rollout-lesson-1",
+        "quiz": {
+            "title": "Rollout Quiz",
+            "pass_score": 70,
+            "questions": [
+                {
+                    "question": "What remains mandatory in L2E rollout?",
+                    "options": ["Automatic issuance", "RBAC + tenant boundaries", "No policy checks", "Skip audit controls"],
+                    "correct": 1,
+                    "type": "multiple_choice",
+                    "weight": 1,
+                }
+            ],
+        },
+        "auth_secret": "ok",
+    })
+    assert create_resp.status_code == 201
+    created_payload = create_resp.get_json()
+    course_id = created_payload.get("course_id") or (created_payload.get("course") or {}).get("id") or created_payload.get("id")
+    assert course_id
+
+    # 2) Verify THR price and optional card mirror path
+    course_details = _client().get(f"/api/v1/courses/{course_id}")
+    assert course_details.status_code == 200
+    assert float(course_details.get_json()["course"]["price_thr"]) == 15.0
+
+    card_path = _client().post(f"/api/v1/courses/{course_id}/enroll", json={
+        "payment_method": "stripe",
+        "learner_id": "guest-rollout-card",
+        "stripe_payment_intent": "pi_rollout_card_001",
+    })
+    assert card_path.status_code == 200
+    assert card_path.get_json()["tx"]["payment_method"] == "stripe"
+
+    # 3) Enroll THR learner for full certificate + result-state path
+    enroll_thr = _client().post(f"/api/v1/courses/{course_id}/enroll", json={
+        "payment_method": "thr",
+        "student_thr": "THR_STUDENT_ROLLOUT",
+        "auth_secret": "ok",
+    })
+    assert enroll_thr.status_code == 200
+
+    # 4) Open lesson / course
+    open_lesson = _client().get(f"/api/v1/courses/{course_id}")
+    assert open_lesson.status_code == 200
+
+    # 5) Submit quiz and verify result state + completion
+    quiz = _client().post(f"/api/v1/courses/{course_id}/quiz/submit", json={
+        "student_thr": "THR_STUDENT_ROLLOUT",
+        "answers": {"1": 0},
+    })
+    assert quiz.status_code == 200
+    quiz_body = quiz.get_json()
+    assert quiz_body["passed"] is True
+    assert quiz_body["completion_status"] == "completed"
+    assert quiz_body["result_state"]["states"]["pass_fail_status"] == "pass"
+    assert quiz_body["result_state"]["states"]["certificate_eligibility"] is True
+
+    # Ensure no automatic reward/certificate behavior
+    assert quiz_body["reward_credited"] is False
+    assert quiz_body["certificate_status"] != "issued"
+
+    # 6) Certificate lifecycle: request -> approve -> issue (manual)
+    req = _client().post(f"/api/v1/courses/{course_id}/certificates/THR_STUDENT_ROLLOUT/request_approval", json={
+        "actor_thr": "THR_TEACHER_ROLLOUT",
+        "auth_secret": "ok",
+        "tenant_id": "tenant-rollout",
+        "institution_id": "inst-rollout",
+    })
+    assert req.status_code == 200
+
+    approve = _client().post(f"/api/v1/courses/{course_id}/certificates/THR_STUDENT_ROLLOUT/approve", json={
+        "actor_thr": "THR_TEACHER_ROLLOUT",
+        "auth_secret": "ok",
+        "tenant_id": "tenant-rollout",
+        "institution_id": "inst-rollout",
+        "approval_reason": "rollout verification pass",
+    })
+    assert approve.status_code == 200
+    assert approve.get_json()["certificate_lifecycle_state"] == "issuable"
+
+    issue = _client().post(f"/api/v1/courses/{course_id}/certificates/THR_STUDENT_ROLLOUT/issue", json={
+        "actor_thr": "THR_TEACHER_ROLLOUT",
+        "auth_secret": "ok",
+        "tenant_id": "tenant-rollout",
+        "institution_id": "inst-rollout",
+        "issuer_identity": "THR_TEACHER_ROLLOUT",
+    })
+    assert issue.status_code == 200
+    assert issue.get_json()["certificate_lifecycle_state"] == "issued"
+
+    # 7) Verify audit trail and dashboard/report visibility
+    history = _client().get(
+        f"/api/v1/courses/{course_id}/certificates/THR_STUDENT_ROLLOUT/history",
+        query_string={
+            "actor_thr": "THR_TEACHER_ROLLOUT",
+            "auth_secret": "ok",
+            "tenant_id": "tenant-rollout",
+            "institution_id": "inst-rollout",
+        },
+    )
+    assert history.status_code == 200
+    actions = {r["action"] for r in history.get_json()["history"]}
+    assert {"approval_requested", "approved", "issued"}.issubset(actions)
+
+    report = _client().get(
+        "/api/v1/tenants/tenant-rollout/reports/operational",
+        query_string={"actor_role": "tenant_admin", "tenant_id": "tenant-rollout"},
+    )
+    assert report.status_code == 200
+
+    observability = _client().get(
+        "/api/v1/tenants/tenant-rollout/observability",
+        query_string={"actor_role": "tenant_admin", "tenant_id": "tenant-rollout"},
+    )
+    assert observability.status_code == 200

@@ -657,6 +657,85 @@ def test_audit_report_consistency(monkeypatch):
     assert counts["issued"] == 1
 
 
+def test_external_policy_compatible_evaluation_structure(monkeypatch):
+    course_id = "c_phase7_policy_compat"
+    courses = [{"id": course_id, "teacher": "T7", "tenant_id": "tenant7", "institution_id": "inst7"}]
+    monkeypatch.setattr(server, "load_courses", lambda: courses)
+    monkeypatch.setattr(server, "validate_effective_auth", lambda *_: (True, None, None))
+    monkeypatch.setattr(server, "require_admin", lambda *_: object())
+    resp = _client().post(f"/api/v1/courses/{course_id}/policy/evaluate", json={
+        "action": "approve",
+        "actor_thr": "T7",
+        "auth_secret": "ok",
+        "actor_role": "teacher",
+        "tenant_id": "tenant7",
+        "institution_id": "inst7",
+        "engine": "opa",
+    })
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["external_compat"]["engine_name"] == "opa"
+    assert body["external_compat"]["policy_version"] == "l2e_policy_v1"
+
+
+def test_governed_report_delivery_boundaries(monkeypatch):
+    monkeypatch.setattr(server, "require_admin", lambda *_: None)
+    created = _client().post(
+        "/api/v1/tenants/tenantZ/reports/deliveries",
+        json={"actor_role": "tenant_admin", "tenant_id": "tenantZ", "report_type": "operational"},
+    )
+    assert created.status_code == 201
+
+    denied = _client().post(
+        "/api/v1/tenants/tenantZ/reports/deliveries",
+        json={"actor_role": "tenant_admin", "tenant_id": "tenantX", "report_type": "operational"},
+    )
+    assert denied.status_code == 403
+
+
+def test_dashboard_observability_restrictions(monkeypatch):
+    course_id = "c_phase7_obs"
+    courses = [{"id": course_id, "teacher": "T7", "tenant_id": "tenant7", "institution_id": "inst7"}]
+    monkeypatch.setattr(server, "load_courses", lambda: courses)
+    monkeypatch.setattr(server, "load_certificate_audit", lambda: {course_id: {"L1": [{"action": "approved", "actor_role": "teacher"}]}})
+    monkeypatch.setattr(server, "require_admin", lambda *_: object())
+    denied = _client().get(f"/api/v1/courses/{course_id}/observability", query_string={"actor_thr": "L1", "actor_role": "student"})
+    assert denied.status_code == 403
+
+
+def test_tenant_admin_delivery_separation(monkeypatch):
+    monkeypatch.setattr(server, "require_admin", lambda *_: None)
+    save_store = {}
+    monkeypatch.setattr(server, "load_report_deliveries", lambda: save_store)
+    monkeypatch.setattr(server, "save_report_deliveries", lambda d: save_store.update(copy.deepcopy(d)))
+    ok = _client().post(
+        "/api/v1/tenants/tenantA/reports/deliveries",
+        json={"actor_role": "tenant_admin", "tenant_id": "tenantA", "report_type": "audit_history"},
+    )
+    assert ok.status_code == 201
+    bad = _client().get(
+        "/api/v1/tenants/tenantA/reports/deliveries",
+        query_string={"actor_role": "tenant_admin", "tenant_id": "tenantB"},
+    )
+    assert bad.status_code == 403
+
+
+def test_audit_and_report_integrity(monkeypatch):
+    courses = [{"id": "c_phase7_int", "teacher": "T7", "tenant_id": "tenant7", "institution_id": "inst7"}]
+    audit = {"c_phase7_int": {"L1": [{"action": "approval_requested"}, {"action": "issued"}]}}
+    monkeypatch.setattr(server, "load_courses", lambda: courses)
+    monkeypatch.setattr(server, "load_certificate_audit", lambda: audit)
+    monkeypatch.setattr(server, "require_admin", lambda *_: None)
+    rep = _client().get(
+        "/api/v1/tenants/tenant7/reports/operational",
+        query_string={"actor_role": "tenant_admin", "tenant_id": "tenant7"},
+    )
+    assert rep.status_code == 200
+    counts = rep.get_json()["report"]["counts"]
+    assert counts["approval_requested"] == 1
+    assert counts["issued"] == 1
+
+
 def test_duplicate_join_protection(monkeypatch):
     course_id = "c3"
     session_id = "s1"

@@ -1600,6 +1600,9 @@ function courseCard(c) {
                 const tenantDash = await apiGet(`/api/v1/tenants/${encodeURIComponent(c.tenant_id || 'default')}/dashboard/compliance?${params.toString()}`);
                 const td = tenantDash.dashboard || {};
                 log(`Tenant compliance dashboard → pending:${td.pending_approvals || 0}, issuable:${td.issuable_certificates || 0}, issued:${td.issued_certificates || 0}, rejected:${td.rejected_certificates || 0}`);
+                const obs = await apiGet(`/api/v1/courses/${c.id}/observability?${params.toString()}`);
+                const byAction = obs.observability?.by_action || {};
+                log(`Course observability actions: ${JSON.stringify(byAction)}`);
             } catch (e) {
                 log(`Certificate dashboard error: ${e.message}`, true);
             }

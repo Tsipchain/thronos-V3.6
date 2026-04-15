@@ -1,0 +1,43 @@
+{
+  "course_template": {
+    "title": "L2E Rollout Verification Course",
+    "description": "End-to-end operational verification course for Learn2Earn go-live.",
+    "teacher": "THR_TEACHER_ROLLOUT",
+    "price_thr": 15,
+    "reward_l2e": 5,
+    "reward_policy": "manual_claim",
+    "tenant_id": "tenant-rollout",
+    "institution_id": "inst-rollout",
+    "certificate_enabled": true,
+    "certificate_threshold_score": 80,
+    "certificate_approval_mode": "teacher_approval",
+    "certificate_template_name": "L2E Rollout Completion Certificate",
+    "certificate_issuer_identity": "THR_TEACHER_ROLLOUT",
+    "content_type": "external",
+    "content_url": "https://example.org/l2e-rollout-lesson-1",
+    "quiz": {
+      "title": "Rollout Verification Quiz",
+      "pass_score": 70,
+      "questions": [
+        {
+          "question": "What remains mandatory in L2E rollout?",
+          "options": [
+            "Automatic issuance",
+            "RBAC + tenant boundaries",
+            "No policy checks",
+            "Skip audit controls"
+          ],
+          "correct": 1,
+          "type": "multiple_choice",
+          "weight": 1
+        }
+      ]
+    }
+  },
+  "verification_objectives": [
+    "full enrollment verification",
+    "quiz/result-state verification",
+    "certificate approval/issuance verification",
+    "dashboard/report/audit verification"
+  ]
+}

@@ -531,6 +531,30 @@
                 </select>
                 <input id="rewardPolicyNotes" class="input-field" placeholder="Reward policy notes (optional)" />
             </div>
+            <div class="input-group">
+                <label style="display:flex;align-items:center;gap:8px;">
+                    <input id="certificateEnabled" type="checkbox" />
+                    Enable certificate track
+                </label>
+                <input id="certificateThresholdScore" class="input-field" type="number" min="0" max="100" value="80" placeholder="Certificate threshold (%)" />
+            </div>
+            <div class="input-group">
+                <select id="certificateApprovalMode" class="input-field">
+                    <option value="manual">Certificate Approval: manual</option>
+                    <option value="teacher_approval">Certificate Approval: teacher_approval</option>
+                    <option value="admin_approval">Certificate Approval: admin_approval</option>
+                </select>
+                <input id="certificateTemplateName" class="input-field" placeholder="Certificate template name (optional)" />
+            </div>
+            <div class="input-group">
+                <input id="tenantId" class="input-field" placeholder="Tenant ID (default)" />
+                <input id="institutionId" class="input-field" placeholder="Institution ID (optional)" />
+            </div>
+            <div class="input-group">
+                <input id="tenantBrandingName" class="input-field" placeholder="Tenant branding display name (optional)" />
+                <input id="certificateIssuerIdentity" class="input-field" placeholder="Issuer identity override (optional)" />
+            </div>
+            <textarea id="tenantCourseNotes" class="input-field" placeholder="Tenant-owned course notes (optional)" style="width:100%; min-height:70px;"></textarea>
             <div style="margin: 15px 0; padding: 12px; border:1px solid #1a5a2f; border-radius: 10px;">
                 <h4 style="margin-top:0;">📂 Course Content</h4>
                 <div style="display:flex; gap:10px; margin-bottom:10px; flex-wrap:wrap;">
@@ -674,8 +698,14 @@ let liveSessionEditorState = { mode: "create", courseId: null, sessionId: null }
 // API Helpers
 async function apiGet(url) {
     const r = await fetch(url);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return await r.json();
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+        const err = new Error(body.message || `HTTP ${r.status}`);
+        err.status = r.status;
+        err.body = body;
+        throw err;
+    }
+    return body;
 }
 
 async function apiPost(url, body) {
@@ -684,8 +714,14 @@ async function apiPost(url, body) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
     });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return await r.json();
+    const payload = await r.json().catch(() => ({}));
+    if (!r.ok) {
+        const err = new Error(payload.message || `HTTP ${r.status}`);
+        err.status = r.status;
+        err.body = payload;
+        throw err;
+    }
+    return payload;
 }
 
 // Logging
@@ -1241,6 +1277,7 @@ function courseCard(c) {
     const quizScore = enrollmentMeta?.quiz_score;
     const passFailStatus = enrollmentMeta?.pass_fail_status;
     const certificateStatus = enrollmentMeta?.certificate_status;
+    const certificateLifecycleState = enrollmentMeta?.certificate_lifecycle_state;
     const certThreshold = c.certificate_threshold_score ?? 80;
     const liveSessions = Array.isArray(c.live_sessions) ? c.live_sessions : [];
 
@@ -1275,9 +1312,12 @@ function courseCard(c) {
                 <div class="course-meta">💰 ${currentLang === 'el' ? 'Επίσημη Τιμή' : 'Official Price'}: <strong>${c.price_thr}</strong> THR · ≈ $${Number(c.price_fiat_estimate_usd ?? c.price_thr ?? 0).toFixed(2)} USD · 🎁 ${currentLang === 'el' ? 'Ανταμοιβή' : 'Reward'}: <strong>${c.reward_l2e}</strong> L2E (${c.reward_policy || 'manual_claim'})</div>
                 <div class="course-meta">⚠️ Rewards are not automatic earnings. Participation + eligibility + claim flow required. No THR wallet = no THR reward payout.</div>
                 <div class="course-meta">🏷️ Reward State: <strong>${escapeHtml(rewardState || 'not_eligible')}</strong> ${rewardState === 'claimable' ? '· You can claim now' : ''}</div>
-                <div class="course-meta">📝 Quiz: <strong>${quizScore ?? '—'}</strong> / threshold <strong>${certThreshold}</strong> · ${passFailStatus || 'not_attempted'}</div>
-                <div class="course-meta">🎓 Certificate: <strong>${certificateStatus || (c.certificate_enabled ? 'not_attempted' : 'not_enabled')}</strong></div>
+                <div class="course-meta">📝 Quiz: <strong>${quizScore ?? '—'}</strong> · pass threshold <strong>${c.metadata?.quiz?.pass_score ?? 80}</strong> · certificate threshold <strong>${certThreshold}</strong> · ${passFailStatus || 'not_attempted'}</div>
+                <div class="course-meta">🎓 Certificate: <strong>${certificateStatus || (c.certificate_enabled ? 'not_attempted' : 'not_enabled')}</strong> · lifecycle <strong>${certificateLifecycleState || 'not_available'}</strong> · approval mode <strong>${c.certificate_approval_mode || 'manual'}</strong></div>
                 ${(c.reward_policy && c.reward_policy !== 'manual_claim') ? `<div class="course-meta">🛡️ Reward policy <strong>${escapeHtml(c.reward_policy)}</strong> is modeled-but-pending approval workflow.</div>` : ''}
+                ${(c.certificate_approval_mode && c.certificate_approval_mode !== 'manual') ? `<div class="course-meta">🧾 Certificate approval mode <strong>${escapeHtml(c.certificate_approval_mode)}</strong> is modeled for workflow readiness.</div>` : ''}
+                <div class="course-meta">🏢 Tenant: <strong>${escapeHtml(c.tenant_id || 'default')}</strong> · Institution: <strong>${escapeHtml(c.institution_id || c.tenant_id || 'default')}</strong> · Issuer: <strong>${escapeHtml(c.certificate_issuer_identity || c.teacher)}</strong> · Branding: <strong>${escapeHtml(c.tenant_branding_name || 'pending')}</strong></div>
+                ${(c.tenant_course_notes || '').trim() ? `<div class="course-meta">🗒️ Tenant Notes: ${escapeHtml(c.tenant_course_notes)}</div>` : ''}
                 <div class="course-stats">
                     <span>👥 ${(c.students || []).length} ${currentLang === 'el' ? 'μαθητές' : 'students'}</span>
                     <span>✅ ${(c.completed || []).length} ${currentLang === 'el' ? 'ολοκλήρωσαν' : 'completed'}</span>
@@ -1302,6 +1342,8 @@ function courseCard(c) {
                 ${isTeacher ? `
                     <button class="btn-secondary btn-live-create" ${teacherActionDisabled ? 'disabled' : ''} title="${teacherActionReason}">📡 ${currentLang === 'el' ? 'Νέο Live' : 'Create Live Session'}</button>
                     <button class="btn-secondary btn-live-manage" ${teacherActionDisabled ? 'disabled' : ''} title="${teacherActionReason}">🛠️ ${currentLang === 'el' ? 'Διαχείριση Live' : 'Manage Live Sessions'}</button>
+                    <button class="btn-secondary btn-cert-queue" ${teacherActionDisabled ? 'disabled' : ''} title="${teacherActionReason}">🎓 ${currentLang === 'el' ? 'Ουρά Πιστοποιητικών' : 'Certificate Queue'}</button>
+                    <button class="btn-secondary btn-cert-dashboard" ${teacherActionDisabled ? 'disabled' : ''} title="${teacherActionReason}">📊 ${currentLang === 'el' ? 'Πίνακας Πιστοποιητικών' : 'Certificate Dashboard'}</button>
                     <button class="btn-secondary" onclick="openCreateQuiz('${c.id}')">
                         ⚙️ ${currentLang === 'el' ? 'Quiz Ρυθμίσεις' : 'Quiz Settings'}
                     </button>
@@ -1344,6 +1386,11 @@ function courseCard(c) {
                     log(`Enrollment failed: ${result.message || 'Unknown error'}`, true);
                 }
             } catch (e) {
+                if (e.status === 409) {
+                    log(`Already enrolled in "${c.title}".`);
+                    await refresh();
+                    return;
+                }
                 log(`Enrollment error: ${e.message}`, true);
             }
         };
@@ -1362,12 +1409,20 @@ function courseCard(c) {
                     stripe_payment_intent: `pi_demo_${Date.now()}`
                 });
                 if (result.status === "success") {
-                    log(`Card enrollment recorded for "${c.title}". Access granted.`);
+                    const modeMsg = result.reward_eligible
+                        ? "reward-eligible enrollment recorded."
+                        : "mirror-only access enrollment recorded (no wallet reward eligibility yet).";
+                    log(`Card enrollment recorded for "${c.title}" — ${modeMsg}`);
                     await refresh();
                 } else {
                     log(`Card enrollment failed: ${result.message || 'Unknown error'}`, true);
                 }
             } catch (e) {
+                if (e.status === 409) {
+                    log(`Already enrolled in "${c.title}". Access is active.`);
+                    await refresh();
+                    return;
+                }
                 log(`Card enrollment error: ${e.message}`, true);
             }
         };
@@ -1439,6 +1494,117 @@ function courseCard(c) {
                 openLiveSessionModal(c.id, "edit", first);
             } catch (e) {
                 log(`Live manage error: ${e.message}`, true);
+            }
+        };
+    }
+
+    const certQueueBtn = el.querySelector(".btn-cert-queue");
+    if (certQueueBtn) {
+        certQueueBtn.onclick = async () => {
+            try {
+                const params = new URLSearchParams({
+                    actor_thr: connectedWallet || "",
+                    auth_secret: connectedSecret || "",
+                    passphrase: connectedPassphrase || "",
+                    states: "pending_approval,issuable,issued,rejected"
+                });
+                const queueRes = await apiGet(`/api/v1/courses/${c.id}/certificates/queue?${params.toString()}`);
+                const queue = queueRes.queue || [];
+                if (!queue.length) {
+                    log(`No certificate cases currently queued for "${c.title}".`);
+                    return;
+                }
+                const preview = queue.slice(0, 8).map((row, idx) => `${idx + 1}) ${row.learner_id} | score ${row.quiz_score ?? '—'} | cert:${row.certificate_lifecycle_state}`).join('\n');
+                const input = prompt(`Certificate cases for "${c.title}":\n${preview}\n\nEnter learner_id to manage:`);
+                if (!input) return;
+                const learnerId = input.trim();
+                const selected = queue.find((q) => q.learner_id === learnerId);
+                if (!selected) {
+                    log(`Learner "${learnerId}" not found in queue snapshot.`, true);
+                    return;
+                }
+                let action = "request";
+                if (selected.certificate_lifecycle_state === "pending_approval") action = "approve";
+                if (selected.certificate_lifecycle_state === "issuable") action = "issue";
+                if (selected.certificate_lifecycle_state === "rejected" || selected.certificate_lifecycle_state === "issued") {
+                    log(`Selected case is ${selected.certificate_lifecycle_state}; no action required.`);
+                    return;
+                }
+                const chosen = prompt(`Action for ${learnerId}? [request|approve|reject|issue|history]`, action);
+                if (!chosen) return;
+                const normalizedAction = chosen.trim().toLowerCase();
+                if (!["request", "approve", "reject", "issue", "history"].includes(normalizedAction)) {
+                    log("Invalid action.", true);
+                    return;
+                }
+                if (normalizedAction === "history") {
+                    const historyParams = new URLSearchParams({
+                        actor_thr: connectedWallet || "",
+                        auth_secret: connectedSecret || "",
+                        passphrase: connectedPassphrase || "",
+                        tenant_id: c.tenant_id || "",
+                        institution_id: c.institution_id || "",
+                    });
+                    const historyRes = await apiGet(`/api/v1/courses/${c.id}/certificates/${encodeURIComponent(learnerId)}/history?${historyParams.toString()}`);
+                    const history = historyRes.history || [];
+                    if (!history.length) {
+                        log(`No certificate history found for ${learnerId}.`);
+                    } else {
+                        const lines = history.slice(-8).map((h) => `${h.timestamp} | ${h.action} | ${h.from_state || '—'} -> ${h.to_state || '—'} | role:${h.actor_role}`).join('\n');
+                        log(`Certificate history for ${learnerId}:\n${lines}`);
+                    }
+                    return;
+                }
+                const reason = (normalizedAction === "reject")
+                    ? (prompt("Rejection reason:", "criteria_not_met") || "")
+                    : (prompt("Approval note (optional):", "") || "");
+                const endpoint = normalizedAction === "request"
+                    ? `/api/v1/courses/${c.id}/certificates/${encodeURIComponent(learnerId)}/request_approval`
+                    : `/api/v1/courses/${c.id}/certificates/${encodeURIComponent(learnerId)}/${normalizedAction}`;
+                const payload = {
+                    actor_thr: connectedWallet,
+                    auth_secret: connectedSecret,
+                    passphrase: connectedPassphrase,
+                    tenant_id: c.tenant_id || "",
+                    institution_id: c.institution_id || "",
+                };
+                if (normalizedAction === "reject") payload.rejection_reason = reason;
+                else payload.approval_reason = reason;
+                if (normalizedAction === "issue") payload.issuer_identity = c.certificate_issuer_identity || c.teacher;
+                const op = await apiPost(endpoint, payload);
+                log(`Certificate action "${normalizedAction}" applied for ${learnerId}. New state: ${op.certificate_lifecycle_state || 'updated'}`);
+                await refresh();
+            } catch (e) {
+                log(`Certificate queue error: ${e.message}`, true);
+            }
+        };
+    }
+
+    const certDashboardBtn = el.querySelector(".btn-cert-dashboard");
+    if (certDashboardBtn) {
+        certDashboardBtn.onclick = async () => {
+            try {
+                const params = new URLSearchParams({
+                    actor_thr: connectedWallet || "",
+                    auth_secret: connectedSecret || "",
+                    passphrase: connectedPassphrase || "",
+                    tenant_id: c.tenant_id || "",
+                    institution_id: c.institution_id || "",
+                    actor_role: "teacher"
+                });
+                const dash = await apiGet(`/api/v1/courses/${c.id}/certificates/dashboard?${params.toString()}`);
+                const s = dash.summary || {};
+                log(`Certificate dashboard "${c.title}" → pending:${s.pending_approval || 0}, issuable:${s.issuable || 0}, issued:${s.issued || 0}, rejected:${s.rejected || 0}`);
+                const tenantHistory = await apiGet(`/api/v1/tenants/${encodeURIComponent(c.tenant_id || 'default')}/audit/history?${params.toString()}`);
+                log(`Tenant audit rows visible: ${(tenantHistory.history || []).length}`);
+                const tenantDash = await apiGet(`/api/v1/tenants/${encodeURIComponent(c.tenant_id || 'default')}/dashboard/compliance?${params.toString()}`);
+                const td = tenantDash.dashboard || {};
+                log(`Tenant compliance dashboard → pending:${td.pending_approvals || 0}, issuable:${td.issuable_certificates || 0}, issued:${td.issued_certificates || 0}, rejected:${td.rejected_certificates || 0}`);
+                const obs = await apiGet(`/api/v1/courses/${c.id}/observability?${params.toString()}`);
+                const byAction = obs.observability?.by_action || {};
+                log(`Course observability actions: ${JSON.stringify(byAction)}`);
+            } catch (e) {
+                log(`Certificate dashboard error: ${e.message}`, true);
             }
         };
     }
@@ -1625,6 +1791,15 @@ $("create").onclick = async () => {
     const reward = parseFloat($("reward").value || "0");
     const rewardPolicy = $("rewardPolicy").value;
     const rewardPolicyNotes = $("rewardPolicyNotes").value.trim();
+    const certificateEnabled = $("certificateEnabled").checked;
+    const certificateThresholdScore = parseInt($("certificateThresholdScore").value || "80", 10);
+    const certificateApprovalMode = $("certificateApprovalMode").value;
+    const certificateTemplateName = $("certificateTemplateName").value.trim();
+    const tenantId = $("tenantId").value.trim() || "default";
+    const institutionId = $("institutionId").value.trim() || tenantId;
+    const tenantBrandingName = $("tenantBrandingName").value.trim();
+    const certificateIssuerIdentity = $("certificateIssuerIdentity").value.trim();
+    const tenantCourseNotes = $("tenantCourseNotes").value.trim();
     const description = $("description").value.trim();
     const titleEl = $("titleEl").value.trim();
     const contentType = (document.querySelector('input[name="contentType"]:checked') || {}).value || 'pdf';
@@ -1662,6 +1837,15 @@ $("create").onclick = async () => {
         formData.append('reward_l2e', reward);
         formData.append('reward_policy', rewardPolicy);
         formData.append('reward_policy_notes', rewardPolicyNotes);
+        formData.append('certificate_enabled', String(certificateEnabled));
+        formData.append('certificate_threshold_score', String(Number.isFinite(certificateThresholdScore) ? certificateThresholdScore : 80));
+        formData.append('certificate_approval_mode', certificateApprovalMode);
+        formData.append('certificate_template_name', certificateTemplateName);
+        formData.append('tenant_id', tenantId);
+        formData.append('institution_id', institutionId);
+        formData.append('tenant_branding_name', tenantBrandingName);
+        formData.append('certificate_issuer_identity', certificateIssuerIdentity);
+        formData.append('tenant_course_notes', tenantCourseNotes);
         formData.append('auth_secret', connectedSecret);
         formData.append('passphrase', connectedPassphrase);
         formData.append('content_type', contentType);
@@ -1685,6 +1869,15 @@ $("create").onclick = async () => {
             $("reward").value = "";
             $("rewardPolicy").value = "manual_claim";
             $("rewardPolicyNotes").value = "";
+            $("certificateEnabled").checked = false;
+            $("certificateThresholdScore").value = "80";
+            $("certificateApprovalMode").value = "manual";
+            $("certificateTemplateName").value = "";
+            $("tenantId").value = "";
+            $("institutionId").value = "";
+            $("tenantBrandingName").value = "";
+            $("certificateIssuerIdentity").value = "";
+            $("tenantCourseNotes").value = "";
             $("slidesFile").value = "";
             $("videoUrl").value = "";
             $("contentUrl").value = "";

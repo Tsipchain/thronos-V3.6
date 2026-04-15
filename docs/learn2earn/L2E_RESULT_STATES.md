@@ -1,23 +1,21 @@
-# L2E Result States
+# Learn2Earn Result States (Phase 2)
 
-This document defines explicit, separable academic/result state dimensions.
+## Objective
+Keep academic outcomes explicit and decoupled.
 
-## Quiz/result axis
-- `quiz_score` (weighted)
-- `pass_fail_status` (`pass|fail`)
+## Required Separated Dimensions
+- `completion_status`
+- `quiz_score`
+- `pass_fail_status`
+- `certificate_eligibility`
+- `reward_eligibility`
 
-## Completion axis
-- `completion_status` (`completed|incomplete`)
+## Additive Envelope
+Endpoints expose `result_state` with:
+- score thresholds (`quiz_pass_threshold`, `certificate_threshold`)
+- separated state fields (completion/pass-fail/certificate/reward)
+- policy context (reward policy, certificate approval mode)
+- tenant context (tenant/institution/issuer/branding/tenant notes)
 
-## Certificate axis
-- `certificate_eligibility` (bool)
-- `certificate_status` (`not_enabled|eligible|pending_approval|issuable|issued|rejected`)
-
-## Reward axis
-- `reward_eligibility` (eligible/not_eligible)
-- reward claimability/claimed states handled separately in reward lifecycle model
-
-## Why this separation matters
-- Passing quiz does not automatically mean certificate issued.
-- Completion does not automatically mean reward paid.
-- Academic evidence, certification, and token rewards remain modular but linked.
+## Compatibility
+Legacy response fields remain; `result_state` is additive.

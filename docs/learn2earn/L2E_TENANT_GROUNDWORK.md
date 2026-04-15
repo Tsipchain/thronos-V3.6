@@ -1,19 +1,16 @@
-# L2E Tenant Groundwork
+# Learn2Earn Tenant Groundwork (Phase 2)
 
-## Scope
-Groundwork only (no full tenant boundary enforcement in this phase).
+## Structural Support Added
+- `tenant_id`
+- `institution_id`
+- `certificate_issuer_identity`
+- `tenant_branding_name`
+- `tenant_course_notes`
 
-## Structural fields
-- `tenant_id` (optional)
-- `institution_id` (optional)
-- tenant branding placeholders (template/name metadata)
+## Intended Use
+Metadata-first tenant ownership and issuer modeling for future tenant-facing operations.
 
-## Ownership model notes
-- Courses are tenant-ownable.
-- Teachers can be tenant-associated.
-- Certificates can be tenant/institution branded.
-- Certificate issuer identity can be tenant/institution scoped.
-
-## Deferred behavior
-- Tenant permission boundaries and isolation policy checks.
-- Tenant-level approval queue routing and policy administration UI.
+## Deferred by Design
+- strict tenant runtime isolation
+- tenant RBAC enforcement
+- tenant-branded issuance pipeline

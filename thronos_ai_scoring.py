@@ -22,13 +22,16 @@ MODEL_DIR = os.getenv("AI_MODEL_DIR", os.path.join(os.getenv("DATA_DIR", os.path
 
 
 def _safe_load_model(path: str):
+    # SECURITY: Pickle deserialization gated — Phase 0 hardening
+    # pickle.load() executes arbitrary code. Until HMAC-SHA256 signature
+    # verification is implemented for model files, refuse to load them.
     if not os.path.exists(path):
         return None
-    try:
-        with open(path, "rb") as f:
-            return pickle.load(f)
-    except Exception:
-        return None
+    raise RuntimeError(
+        f"Refusing to unpickle '{path}': HMAC-SHA256 signature verification "
+        "is not yet implemented. Deploy signed models and add verification "
+        "before enabling this code path."
+    )
 
 
 def _extract_features(prompt: str) -> Tuple[float, float, float]:

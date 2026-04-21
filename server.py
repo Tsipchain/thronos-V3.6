@@ -62,8 +62,36 @@ from flask import Flask, request, jsonify, send_from_directory, render_template,
 try:
     from flask_cors import CORS
 except ImportError:  # Railway ή env χωρίς flask_cors
+    # SECURITY: CORS wildcard fallback restricted — Phase 0 hardening
+    ALLOWED_ORIGINS = [
+        "https://thronoschain.org",
+        "https://*.thronoschain.org",
+        "https://careerforge-ai.thronoschain.org",
+        "https://commerce.thronoschain.org",
+        "https://explorer.thronoschain.org",
+        "https://api.thronoschain.org",
+    ]
+
+    def _origin_allowed(origin: str) -> bool:
+        """Check if origin matches any allowed pattern."""
+        if not origin:
+            return False
+        import fnmatch
+        for pattern in ALLOWED_ORIGINS:
+            if fnmatch.fnmatch(origin, pattern):
+                return True
+        return False
+
     def CORS(app, *args, **kwargs):
-        # απλό no-op fallback ώστε ο server να μην σκάει
+        @app.after_request
+        def _cors_headers(response):
+            origin = request.headers.get("Origin", "")
+            if _origin_allowed(origin):
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-API-Key, X-Internal-Key, X-Admin-Secret"
+                response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+                response.headers["Access-Control-Allow-Credentials"] = "true"
+            return response
         return app
 
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -141,7 +169,8 @@ _CORS_ORIGINS = [
 try:
     CORS(app, origins=_CORS_ORIGINS, supports_credentials=True)
 except Exception:
-    CORS(app)  # fallback: allow all origins
+    # SECURITY: Never fall back to allow-all origins — Phase 0 hardening
+    CORS(app, origins=_CORS_ORIGINS)
 
 # absolute path to /public folder next to server.py
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

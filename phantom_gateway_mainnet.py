@@ -28,16 +28,9 @@ def fetch_all_confirmed(btc_address: str) -> List[dict]:
 def get_btc_txns(
     btc_address: str,
     btc_receiver: str = None,
-    skip_verification: bool = False
 ) -> List[Dict]:
-    if skip_verification:
-        return [{
-            'txid':       f'verified_{btc_address}_{int(time.time())}',
-            'to':         btc_receiver or 'VERIFIED_ADDRESS',
-            'from':       btc_address,
-            'amount_btc': MIN_AMOUNT,
-            'timestamp':  int(time.time())
-        }]
+    # SECURITY: Verification bypass removed — Phase 0 hardening
+    # skip_verification parameter has been removed; verification is always performed.
 
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     logger = logging.getLogger("phantom_gateway")

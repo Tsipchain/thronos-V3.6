@@ -830,6 +830,8 @@ active_peers = PEERS  # Backward-compatible alias
 AI_PACKS_FILE       = os.path.join(DATA_DIR, "ai_packs.json")
 AI_CREDITS_FILE     = os.path.join(DATA_DIR, "ai_credits.json")
 _AI_CREDITS_LOCK    = threading.Lock()  # guards read-modify-write in debit_ai_credits
+_LEDGER_LOCK        = threading.Lock()  # guards ledger read-check-write to prevent double-spend
+_TOKEN_LEDGER_LOCK  = threading.Lock()  # guards token balance read-check-write
 AI_CREDITS_LEDGER_FILE = os.path.join(DATA_DIR, "ai_credits_ledger.json")
 AI_PROXY_HEALTH_CACHE = {"ts": 0.0, "payload": None}
 AI_PROXY_HEALTH_CACHE_TTL = float(_strip_env_quotes(os.getenv("AI_PROXY_HEALTH_CACHE_TTL", "15")) or 15)
@@ -871,6 +873,21 @@ GUEST_TTL_SECONDS = int(_strip_env_quotes(os.getenv("GUEST_TTL_SECONDS", str(7*2
 
 GUEST_STATE_FILE = os.path.join(DATA_DIR, "guest_state.json")
 _GUEST_STATE_LOCK = threading.Lock()  # guards read-modify-write on guest_state.json
+
+# ── Rate Limiter ─────────────────────────────────────────────────────────
+_RATE_LIMITS: dict[str, list[float]] = {}
+_RATE_LOCK = threading.Lock()
+
+def _rate_limited(key: str, max_per_min: int = 10) -> bool:
+    """Return True if the caller identified by `key` has exceeded `max_per_min` requests."""
+    now = time.time()
+    with _RATE_LOCK:
+        hits = _RATE_LIMITS.setdefault(key, [])
+        hits[:] = [t for t in hits if now - t < 60]
+        if len(hits) >= max_per_min:
+            return True
+        hits.append(now)
+        return False
 
 def _now_ts() -> int:
     return int(time.time())
@@ -17489,21 +17506,23 @@ def send_thr_internal(from_thr, to_thr, amount_raw, auth_secret, passphrase="", 
             )
 
     total_cost = amount + fee
-    ledger = load_json(LEDGER_FILE, {})
-    sender_balance = float(ledger.get(from_thr, 0.0))
 
-    if sender_balance < total_cost:
-        return _reject_tx(
-            tx_id,
-            "insufficient_balance",
-            400,
-            {"from": from_thr, "to": to_thr, "amount": amount, "fee_burned": fee}
-        )
+    with _LEDGER_LOCK:
+        ledger = load_json(LEDGER_FILE, {})
+        sender_balance = float(ledger.get(from_thr, 0.0))
 
-    ledger[from_thr] = round(sender_balance - total_cost, 6)
-    ledger[to_thr] = round(float(ledger.get(to_thr, 0.0)) + amount, 6)
-    save_json(LEDGER_FILE, ledger)
-    # Split fee: 50% to AI Agent wallet (IoT miner rewards), 50% burned
+        if sender_balance < total_cost:
+            return _reject_tx(
+                tx_id,
+                "insufficient_balance",
+                400,
+                {"from": from_thr, "to": to_thr, "amount": amount, "fee_burned": fee}
+            )
+
+        ledger[from_thr] = round(sender_balance - total_cost, 6)
+        ledger[to_thr] = round(float(ledger.get(to_thr, 0.0)) + amount, 6)
+        save_json(LEDGER_FILE, ledger)
+
     fee_split_info = split_and_credit_fee(fee, source="transfer_internal")
 
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
@@ -17791,6 +17810,8 @@ def api_tokens_stats():
 
 @app.route("/send_thr", methods=["POST"])
 def send_thr():
+    if _rate_limited(f"send_thr:{request.remote_addr}", max_per_min=20):
+        return jsonify(error="rate_limited", message="Too many transfer requests"), 429
     data = request.get_json() or {}
     from_thr=(data.get("from_thr") or "").strip()
     to_thr=(data.get("to_thr") or "").strip()
@@ -17840,23 +17861,22 @@ def send_thr():
 
     total_cost = amount + fee
 
-    ledger=load_json(LEDGER_FILE,{})
-    sender_balance=float(ledger.get(from_thr,0.0))
+    with _LEDGER_LOCK:
+        ledger=load_json(LEDGER_FILE,{})
+        sender_balance=float(ledger.get(from_thr,0.0))
 
-    if sender_balance<total_cost:
-        return _reject_tx(
-            tx_id,
-            "insufficient_balance",
-            400,
-            {"from": from_thr, "to": to_thr, "amount": amount, "fee_burned": fee}
-        )
-    ledger[from_thr]=round(sender_balance-total_cost,6)
-    # Credit recipient
-    ledger[to_thr]=round(float(ledger.get(to_thr,0.0))+amount,6)
-    save_json(LEDGER_FILE,ledger)
-    # Split fee: 50% to AI Agent wallet (IoT miner rewards), 50% burned
+        if sender_balance<total_cost:
+            return _reject_tx(
+                tx_id,
+                "insufficient_balance",
+                400,
+                {"from": from_thr, "to": to_thr, "amount": amount, "fee_burned": fee}
+            )
+        ledger[from_thr]=round(sender_balance-total_cost,6)
+        ledger[to_thr]=round(float(ledger.get(to_thr,0.0))+amount,6)
+        save_json(LEDGER_FILE,ledger)
+
     fee_split_info = split_and_credit_fee(fee, source="transfer")
-    chain=load_json(CHAIN_FILE,[])
     tx={
         "type":"transfer",
         "height":None,
@@ -17878,8 +17898,6 @@ def send_thr():
     save_mempool(pool)
     persist_normalized_tx(tx, status_override="pending")
     update_last_block(tx, is_block=False)
-    # Broadcast the new pending transaction to peers.  Best effort –
-    # failures are ignored.
     try:
         broadcast_tx(tx)
     except Exception:
@@ -17896,6 +17914,8 @@ def send_thr():
 # ─── SEND CUSTOM TOKENS API ────────────────────────────────────
 @app.route("/api/send_token", methods=["POST"])
 def send_token():
+    if _rate_limited(f"send_token:{request.remote_addr}", max_per_min=20):
+        return jsonify(error="rate_limited", message="Too many transfer requests"), 429
     """
     Send custom tokens (like JAM, DOGE, etc.) with fee.
 
@@ -17981,30 +18001,25 @@ def send_token():
 
     total_cost = amount + fee
 
-    # Load token balances
-    token_balances = load_token_balances()
+    with _TOKEN_LEDGER_LOCK:
+        token_balances = load_token_balances()
 
-    # Check if token exists
-    if token_symbol not in token_balances:
-        return jsonify(error="token_not_found", message=f"Token {token_symbol} does not exist"), 404
+        if token_symbol not in token_balances:
+            return jsonify(error="token_not_found", message=f"Token {token_symbol} does not exist"), 404
 
-    sender_balance = float(token_balances[token_symbol].get(from_thr, 0.0))
+        sender_balance = float(token_balances[token_symbol].get(from_thr, 0.0))
 
-    if sender_balance < total_cost:
-        return jsonify(
-            error="insufficient_balance",
-            balance=round(sender_balance, 6),
-            required=total_cost,
-            fee=fee
-        ), 400
+        if sender_balance < total_cost:
+            return jsonify(
+                error="insufficient_balance",
+                balance=round(sender_balance, 6),
+                required=total_cost,
+                fee=fee
+            ), 400
 
-    # Deduct from sender (including fee)
-    token_balances[token_symbol][from_thr] = round(sender_balance - total_cost, 6)
-
-    # Credit receiver (without fee - fee is burned)
-    token_balances[token_symbol][to_thr] = round(float(token_balances[token_symbol].get(to_thr, 0.0)) + amount, 6)
-
-    save_token_balances(token_balances)
+        token_balances[token_symbol][from_thr] = round(sender_balance - total_cost, 6)
+        token_balances[token_symbol][to_thr] = round(float(token_balances[token_symbol].get(to_thr, 0.0)) + amount, 6)
+        save_token_balances(token_balances)
 
     # Record transaction in chain
     chain = load_json(CHAIN_FILE, [])

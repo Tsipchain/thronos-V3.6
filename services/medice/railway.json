@@ -1,0 +1,21 @@
+# ---------------------------------------------------------------
+# Railway service definitions
+# One project, four services:
+#   1. medice-api      (this repo, 3 replicas)
+#   2. medice-nginx    (nginx load balancer)
+#   3. PostgreSQL      (Railway managed plugin)
+#   4. Redis           (Railway managed plugin)
+# ---------------------------------------------------------------
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "services/medice/Dockerfile"
+  },
+  "deploy": {
+    "numReplicas": 3,
+    "startCommand": "uvicorn main:app --host 0.0.0.0 --port $PORT --workers 8 --loop uvloop",
+    "healthcheckPath": "/health",
+    "restartPolicyType": "ON_FAILURE"
+  }
+}

@@ -1,0 +1,10 @@
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+sqlalchemy==2.0.25
+psycopg2-binary==2.9.9
+pydantic==2.5.3
+web3==6.14.0
+httpx==0.26.0
+python-dotenv==1.0.0
+bleak==0.21.1
+redis[hiredis]==5.0.1

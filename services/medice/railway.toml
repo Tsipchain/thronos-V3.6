@@ -1,0 +1,30 @@
+# Railway v3 - ThronomedICE API Service
+# Place this file inside services/medice/ and point Railway to it.
+
+[build]
+builder         = "DOCKERFILE"
+dockerfilePath  = "Dockerfile"
+
+[deploy]
+# Railway runs this command inside the container.
+# $PORT is injected automatically by Railway.
+startCommand    = "uvicorn main:app --host 0.0.0.0 --port $PORT --workers 8 --loop uvloop"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType  = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+# Scale horizontally - Railway Pro supports multiple replicas.
+# Each replica connects to the SAME Redis and PostgreSQL.
+numReplicas = 3
+
+# ---------------------------------------------------------------
+# Environment variables (set secrets in Railway dashboard)
+# ---------------------------------------------------------------
+# DATABASE_URL           = ${{Postgres.DATABASE_URL}}
+# REDIS_URL              = ${{Redis.REDIS_URL}}
+# THRONOS_RPC_URL        = https://your-thronos-node
+# MEDICE_PRIVATE_KEY     = <set in dashboard, never commit>
+# FEVER_CONTRACT_ADDRESS = 0x...
+# FCM_SERVER_KEY         = <set in dashboard>
+# HOSPITAL_API_KEY       = <set in dashboard>

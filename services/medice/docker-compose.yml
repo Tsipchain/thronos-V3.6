@@ -1,0 +1,37 @@
+version: "3.9"
+
+services:
+  temp-monitor:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL:           postgresql://medice:medice@postgres:5432/medicedb
+      THRONOS_RPC_URL:        ${THRONOS_RPC_URL:-http://thronos-node:8545}
+      MEDICE_PRIVATE_KEY:     ${MEDICE_PRIVATE_KEY}
+      FEVER_CONTRACT_ADDRESS: ${FEVER_CONTRACT_ADDRESS}
+      FCM_SERVER_KEY:         ${FCM_SERVER_KEY}
+      HOSPITAL_API_KEY:       ${HOSPITAL_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    # network_mode: host   # uncomment on Raspberry Pi for BLE access
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER:     medice
+      POSTGRES_PASSWORD: medice
+      POSTGRES_DB:       medicedb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medice"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

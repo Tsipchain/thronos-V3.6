@@ -11,15 +11,16 @@ from models import (
     Patient, Guardian, TempReading, FeverEvent,
     TempReadingIn, TempReadingOut, PatientCreate, GuardianCreate, FeverEventOut,
 )
-from fever_analyzer import FeverAnalyzer
+from fever_analyzer_redis import RedisFeverAnalyzer
 from blockchain import BlockchainService
 from notifications import NotificationService
 from hospital_api import router as hospital_router
+from thronos_integration import router as thronos_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-fever_analyzer       = FeverAnalyzer()
+fever_analyzer       = RedisFeverAnalyzer()
 blockchain_service   = BlockchainService()
 notification_service = NotificationService()
 
@@ -27,15 +28,19 @@ notification_service = NotificationService()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
-    logger.info("ThronomedICE service started | blockchain=%s",
-                blockchain_service.is_connected)
+    await fever_analyzer.connect()
+    logger.info(
+        "ThronomedICE started | blockchain=%s",
+        blockchain_service.is_connected,
+    )
     yield
+    await fever_analyzer.close()
 
 
 app = FastAPI(
     title="ThronomedICE - Temperature Monitoring",
-    description="IoT fever monitoring with blockchain-secured patient history",
-    version="1.0.0",
+    description="IoT fever monitoring with Redis state + Thronos blockchain",
+    version="2.0.0",
     lifespan=lifespan,
 )
 app.add_middleware(
@@ -45,6 +50,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(hospital_router)
+app.include_router(thronos_router)
 
 
 # ---------------------------------------------------------------------------
@@ -57,13 +63,12 @@ async def submit_reading(
     bg: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    """Receive a temperature reading from the BLE gateway or mobile app."""
     patient = db.query(Patient).filter(Patient.device_id == reading.device_id).first()
     if not patient:
         raise HTTPException(404, f"No patient for device {reading.device_id}")
 
     ts       = reading.timestamp or datetime.utcnow()
-    analysis = fever_analyzer.analyze(patient.id, reading.object_temp, ts)
+    analysis = await fever_analyzer.analyze(patient.id, reading.object_temp, ts)
 
     db_reading = TempReading(
         patient_id   = patient.id,
@@ -78,45 +83,54 @@ async def submit_reading(
     # ---- fever lifecycle ----
     if analysis["is_new_fever"]:
         event = FeverEvent(
-            patient_id    = patient.id,
-            started_at    = ts,
-            peak_temp     = reading.object_temp,
+            patient_id     = patient.id,
+            started_at     = ts,
+            peak_temp      = reading.object_temp,
             readings_count = 1,
         )
         db.add(event)
-        db.flush()   # get event.id
-        fever_analyzer.register_fever_started(patient.id, event.id)
-
-        bg.add_task(_handle_new_fever, patient, event, reading.object_temp,
-                    analysis["fever_level"])
+        db.flush()
+        await fever_analyzer.register_fever_started(patient.id, event.id)
+        bg.add_task(
+            _handle_new_fever,
+            patient, event, reading.object_temp, analysis["fever_level"],
+        )
 
     elif analysis["is_fever"] and analysis["active_fever_id"]:
-        ev = db.query(FeverEvent).filter(FeverEvent.id == analysis["active_fever_id"]).first()
+        ev = db.query(FeverEvent).filter(
+            FeverEvent.id == analysis["active_fever_id"]
+        ).first()
         if ev:
             ev.readings_count += 1
             if reading.object_temp > ev.peak_temp:
                 ev.peak_temp = reading.object_temp
 
     elif analysis["is_fever_ending"] and analysis["active_fever_id"]:
-        ev = db.query(FeverEvent).filter(FeverEvent.id == analysis["active_fever_id"]).first()
+        ev = db.query(FeverEvent).filter(
+            FeverEvent.id == analysis["active_fever_id"]
+        ).first()
         if ev:
             ev.ended_at = ts
-        fever_analyzer.register_fever_ended(patient.id)
+        await fever_analyzer.register_fever_ended(patient.id)
         if patient.guardian and patient.guardian.fcm_token:
-            bg.add_task(notification_service.send_fever_ended,
-                        patient.guardian.fcm_token, patient.name)
+            bg.add_task(
+                notification_service.send_fever_ended,
+                patient.guardian.fcm_token, patient.name,
+            )
 
     if analysis["send_antipyretic_reminder"] and patient.guardian:
-        bg.add_task(notification_service.send_antipyretic_reminder,
-                    patient.guardian.fcm_token, patient.name, reading.object_temp)
+        bg.add_task(
+            notification_service.send_antipyretic_reminder,
+            patient.guardian.fcm_token, patient.name, reading.object_temp,
+        )
 
     db.commit()
     db.refresh(db_reading)
 
-    # record fever readings on-chain asynchronously
     if analysis["is_fever"]:
-        bg.add_task(_record_on_chain, db_reading.id, patient.id,
-                    reading.object_temp, ts)
+        bg.add_task(
+            _record_on_chain, db_reading.id, patient.id, reading.object_temp, ts,
+        )
 
     return db_reading
 
@@ -125,11 +139,12 @@ async def _handle_new_fever(patient, event, temp: float, level: str):
     if patient.guardian and patient.guardian.fcm_token:
         if level == "high_fever":
             await notification_service.send_high_fever_alert(
-                patient.guardian.fcm_token, patient.name, temp)
+                patient.guardian.fcm_token, patient.name, temp
+            )
         else:
             await notification_service.send_fever_alert(
-                patient.guardian.fcm_token, patient.name, temp)
-
+                patient.guardian.fcm_token, patient.name, temp
+            )
     tx = await blockchain_service.record_fever_event(patient.id, temp, datetime.utcnow())
     if tx:
         from models import SessionLocal
@@ -141,7 +156,9 @@ async def _handle_new_fever(patient, event, temp: float, level: str):
                 db.commit()
 
 
-async def _record_on_chain(reading_id: str, patient_id: str, temp: float, ts: datetime):
+async def _record_on_chain(
+    reading_id: str, patient_id: str, temp: float, ts: datetime
+):
     tx = await blockchain_service.record_fever_event(patient_id, temp, ts)
     if tx:
         from models import SessionLocal
@@ -153,7 +170,7 @@ async def _record_on_chain(reading_id: str, patient_id: str, temp: float, ts: da
 
 
 # ---------------------------------------------------------------------------
-# Patient / Guardian management
+# Guardian / Patient management
 # ---------------------------------------------------------------------------
 
 @app.post("/guardians", status_code=201)
@@ -166,7 +183,9 @@ def create_guardian(g: GuardianCreate, db: Session = Depends(get_db)):
 
 
 @app.put("/guardians/{guardian_id}/fcm-token")
-def update_fcm_token(guardian_id: str, fcm_token: str, db: Session = Depends(get_db)):
+def update_fcm_token(
+    guardian_id: str, fcm_token: str, db: Session = Depends(get_db)
+):
     row = db.query(Guardian).filter(Guardian.id == guardian_id).first()
     if not row:
         raise HTTPException(404, "Guardian not found")
@@ -207,7 +226,7 @@ async def blockchain_history(patient_id: str):
 
 
 @app.get("/patients/{patient_id}/current-temp")
-def current_temp(patient_id: str, db: Session = Depends(get_db)):
+async def current_temp(patient_id: str, db: Session = Depends(get_db)):
     r = (
         db.query(TempReading)
         .filter(TempReading.patient_id == patient_id)
@@ -217,31 +236,32 @@ def current_temp(patient_id: str, db: Session = Depends(get_db)):
     if not r:
         raise HTTPException(404, "No readings found")
     return {
-        "patient_id":          patient_id,
-        "current_temp":        r.object_temp,
-        "is_fever":            r.is_fever,
-        "last_reading":        r.timestamp.isoformat(),
-        "has_active_fever":    patient_id in fever_analyzer.active_fever_patients,
+        "patient_id":       patient_id,
+        "current_temp":     r.object_temp,
+        "is_fever":         r.is_fever,
+        "last_reading":     r.timestamp.isoformat(),
+        "has_active_fever": await fever_analyzer.is_fever_active(patient_id),
     }
 
 
 @app.put("/fever-events/{event_id}/antipyretic")
-def record_antipyretic(event_id: str, db: Session = Depends(get_db)):
-    """Call this when a parent confirms they gave antipyretic medication."""
+async def record_antipyretic(event_id: str, db: Session = Depends(get_db)):
     ev = db.query(FeverEvent).filter(FeverEvent.id == event_id).first()
     if not ev:
         raise HTTPException(404, "Fever event not found")
     ev.antipyretic_given    = True
     ev.antipyretic_given_at = datetime.utcnow()
     db.commit()
-    fever_analyzer.register_antipyretic_given(ev.patient_id, ev.antipyretic_given_at)
+    await fever_analyzer.register_antipyretic_given(
+        ev.patient_id, ev.antipyretic_given_at
+    )
     return {"status": "recorded", "at": ev.antipyretic_given_at.isoformat()}
 
 
 @app.get("/health")
-def health():
+async def health():
     return {
-        "status":                 "ok",
-        "blockchain_connected":   blockchain_service.is_connected,
-        "active_fever_patients":  len(fever_analyzer.active_fever_patients),
+        "status":               "ok",
+        "blockchain_connected": blockchain_service.is_connected,
+        "active_fever_patients": await fever_analyzer.active_fever_count(),
     }

@@ -1,0 +1,148 @@
+version: "3.9"
+
+# ---------------------------------------------------------------
+# ThronomedICE - Production Stack
+#
+# Services:
+#   nginx        - load balancer (port 80)
+#   api          - FastAPI, 3 replicas
+#   redis        - fever state (shared across replicas)
+#   timescaledb  - time-series PostgreSQL
+#
+# Usage:
+#   docker-compose -f docker-compose.prod.yml up -d --scale api=3
+# ---------------------------------------------------------------
+
+services:
+
+  # ---- Load Balancer ----------------------------------------
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - medice_net
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 512M
+
+  # ---- FastAPI API (scaled to 3 replicas) -------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: >-
+      uvicorn main:app
+      --host 0.0.0.0
+      --port 8000
+      --workers 8
+      --loop uvloop
+      --log-level info
+    environment:
+      DATABASE_URL:           postgresql://medice:${DB_PASSWORD}@timescaledb:5432/medicedb
+      REDIS_URL:              redis://redis:6379/0
+      THRONOS_RPC_URL:        ${THRONOS_RPC_URL}
+      MEDICE_PRIVATE_KEY:     ${MEDICE_PRIVATE_KEY}
+      FEVER_CONTRACT_ADDRESS: ${FEVER_CONTRACT_ADDRESS}
+      FCM_SERVER_KEY:         ${FCM_SERVER_KEY}
+      HOSPITAL_API_KEY:       ${HOSPITAL_API_KEY}
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - medice_net
+    # No port exposure - nginx is the only entry point
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: "6"     # 6 of 24 vCPUs per replica
+          memory: 4G    # 4 of 24 GB RAM per replica
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ---- Redis (fever state cache) ----------------------------
+  redis:
+    image: redis:7-alpine
+    command: >
+      redis-server
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --appendonly yes
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - medice_net
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2.5G
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ---- TimescaleDB (PostgreSQL + time-series extension) -----
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    environment:
+      POSTGRES_USER:     medice
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB:       medicedb
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+      - ./timescale_init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    restart: unless-stopped
+    networks:
+      - medice_net
+    deploy:
+      resources:
+        limits:
+          cpus: "8"
+          memory: 14G   # TimescaleDB loves RAM for caching
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medice -d medicedb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    command: >
+      postgres
+      -c shared_buffers=4GB
+      -c effective_cache_size=10GB
+      -c work_mem=64MB
+      -c maintenance_work_mem=512MB
+      -c max_connections=200
+      -c wal_buffers=64MB
+      -c checkpoint_completion_target=0.9
+      -c random_page_cost=1.1
+
+networks:
+  medice_net:
+    driver: bridge
+
+volumes:
+  timescale_data:
+  redis_data:

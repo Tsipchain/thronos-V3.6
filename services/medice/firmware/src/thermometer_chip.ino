@@ -1,101 +1,164 @@
 #include <Arduino.h>
 #include <NimBLEDevice.h>
-#include <NimBLEServer.h>
-#include <NimBLEUtils.h>
 #include <Wire.h>
 #include <Adafruit_MLX90614.h>
+#include <MAX30105.h>          // SparkFun MAX3010x library
+#include <heartRate.h>
+#include <spo2_algorithm.h>
+#include <ArduinoJson.h>
 #include "config.h"
 
-Adafruit_MLX90614 mlx;
-NimBLEServer*         pServer   = nullptr;
-NimBLECharacteristic* pTempChar  = nullptr;
-NimBLECharacteristic* pAlertChar = nullptr;
-bool     deviceConnected = false;
-uint32_t lastMeasureTime = 0;
+// ── BLE ────────────────────────────────────────────────────────────────────
+NimBLEServer*         pServer         = nullptr;
+NimBLECharacteristic* pTempChar       = nullptr;
+NimBLECharacteristic* pVitalChar      = nullptr;
+NimBLECharacteristic* pAlertChar      = nullptr;
+bool                  deviceConnected = false;
 
-class ConnCallbacks : public NimBLEServerCallbacks {
-    void onConnect(NimBLEServer* s) override {
-        deviceConnected = true;
-        Serial.println("Mobile app connected");
-    }
-    void onDisconnect(NimBLEServer* s) override {
-        deviceConnected = false;
-        NimBLEDevice::startAdvertising();
-    }
+// ── Sensors ────────────────────────────────────────────────────────────────
+Adafruit_MLX90614 mlx;
+MAX30105          particleSensor;
+
+// ── Timing ─────────────────────────────────────────────────────────────────
+unsigned long lastTempMs  = 0;
+unsigned long lastVitalMs = 0;
+
+// ── SpO2 buffers (MAX30102 algo needs 100 samples) ─────────────────────────
+uint32_t irBuffer[100],  redBuffer[100];
+int32_t  spo2;           int8_t  validSPO2;
+int32_t  heartRate;      int8_t  validHR;
+
+class ConnectCB : public NimBLEServerCallbacks {
+  void onConnect(NimBLEServer*) override    { deviceConnected = true; }
+  void onDisconnect(NimBLEServer*) override {
+    deviceConnected = false;
+    NimBLEDevice::startAdvertising();
+  }
 };
 
 void setupBLE() {
-    NimBLEDevice::init(DEVICE_NAME);
-    NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+  NimBLEDevice::init(DEVICE_NAME);
+  pServer = NimBLEDevice::createServer();
+  pServer->setCallbacks(new ConnectCB());
 
-    pServer = NimBLEDevice::createServer();
-    pServer->setCallbacks(new ConnCallbacks());
+  auto* svc   = pServer->createService(TEMP_SERVICE_UUID);
+  pTempChar   = svc->createCharacteristic(TEMP_CHARACTERISTIC_UUID,
+                  NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  pVitalChar  = svc->createCharacteristic(VITAL_CHARACTERISTIC_UUID,
+                  NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  pAlertChar  = svc->createCharacteristic(ALERT_CHARACTERISTIC_UUID,
+                  NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  svc->start();
 
-    NimBLEService* pSvc = pServer->createService(TEMP_SERVICE_UUID);
+  auto* adv = NimBLEDevice::getAdvertising();
+  adv->addServiceUUID(TEMP_SERVICE_UUID);
+  adv->start();
+}
 
-    pTempChar = pSvc->createCharacteristic(
-        TEMP_CHARACTERISTIC_UUID,
-        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
-    );
-    pAlertChar = pSvc->createCharacteristic(
-        ALERT_CHARACTERISTIC_UUID,
-        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
-    );
+bool setupMAX30102() {
+  if (!particleSensor.begin(Wire, I2C_SPEED_FAST)) return false;
+  particleSensor.setup(60, 4, 2, 200, 411, 4096);  // brightness, avg, mode, rate, width, ADC
+  particleSensor.setPulseAmplitudeRed(0x0A);
+  particleSensor.setPulseAmplitudeGreen(0);
+  return true;
+}
 
-    pSvc->start();
+void readSpO2() {
+  // Fill 100-sample buffer
+  for (byte i = 0; i < 100; i++) {
+    while (!particleSensor.available()) particleSensor.check();
+    redBuffer[i] = particleSensor.getRed();
+    irBuffer[i]  = particleSensor.getIR();
+    particleSensor.nextSample();
+  }
+  maxim_heart_rate_and_oxygen_saturation(
+    irBuffer, 100, redBuffer, &spo2, &validSPO2, &heartRate, &validHR);
+}
 
-    NimBLEAdvertising* pAdv = NimBLEDevice::getAdvertising();
-    pAdv->addServiceUUID(TEMP_SERVICE_UUID);
-    pAdv->setScanResponse(true);
-    NimBLEDevice::startAdvertising();
+void sendVitalJSON(float tempC) {
+  StaticJsonDocument<256> doc;
+  doc["temperature"]  = tempC;
+  doc["spo2"]         = validSPO2 ? spo2  : -1;
+  doc["bpm"]          = validHR   ? heartRate : -1;
+  doc["spo2_valid"]   = (bool)validSPO2;
+  doc["bpm_valid"]    = (bool)validHR;
+  doc["ts"]           = millis();
 
-    Serial.println("BLE advertising started");
+  char buf[256];
+  serializeJson(doc, buf);
+  pTempChar->setValue((uint8_t*)buf, strlen(buf));
+  pTempChar->notify();
+
+  // Vital char gets compact SpO2+BPM only
+  StaticJsonDocument<128> vdoc;
+  vdoc["spo2"] = validSPO2 ? spo2      : -1;
+  vdoc["bpm"]  = validHR   ? heartRate : -1;
+  char vbuf[128];
+  serializeJson(vdoc, vbuf);
+  pVitalChar->setValue((uint8_t*)vbuf, strlen(vbuf));
+  pVitalChar->notify();
+}
+
+void sendAlert(const char* type, float value) {
+  StaticJsonDocument<128> doc;
+  doc["alert"] = type;
+  doc["value"] = value;
+  char buf[128];
+  serializeJson(doc, buf);
+  pAlertChar->setValue((uint8_t*)buf, strlen(buf));
+  pAlertChar->notify();
 }
 
 void setup() {
-    Serial.begin(115200);
-    Wire.begin(SDA_PIN, SCL_PIN);
+  Serial.begin(115200);
+  Wire.begin();
+  setupBLE();
 
-    if (!mlx.begin()) {
-        Serial.println("FATAL: MLX90614 sensor not found - check wiring");
-        while (true) delay(1000);
-    }
-    Serial.printf("MLX90614 ready. Ambient: %.2f C\n", mlx.readAmbientTempC());
+  if (!mlx.begin()) Serial.println("MLX90614 not found");
+  if (!setupMAX30102()) Serial.println("MAX30102 not found");
 
-    setupBLE();
-    Serial.println("ThronomedICE ready");
+  Serial.println("ThronomedICE ready");
 }
 
 void loop() {
-    uint32_t now = millis();
+  unsigned long now = millis();
 
-    // Wait for connection and interval
-    if (!deviceConnected || (now - lastMeasureTime < MEASUREMENT_INTERVAL_MS)) {
-        delay(100);
-        return;
+  // ── Temperature (every 5 min) ───────────────────────────────────────────
+  if (now - lastTempMs >= MEASUREMENT_INTERVAL_MS) {
+    lastTempMs = now;
+    float tempC = mlx.readObjectTempC();
+
+    if (!isnan(tempC)) {
+      readSpO2();
+      if (deviceConnected) sendVitalJSON(tempC);
+
+      if (tempC >= HIGH_FEVER_THRESHOLD)
+        sendAlert("HIGH_FEVER", tempC);
+      else if (tempC >= FEVER_THRESHOLD)
+        sendAlert("FEVER", tempC);
+
+      if (validSPO2 && spo2 < SPO2_CRITICAL)
+        sendAlert("SPO2_CRITICAL", spo2);
+      else if (validSPO2 && spo2 < SPO2_LOW_THRESHOLD)
+        sendAlert("SPO2_LOW", spo2);
+
+      if (validHR && (heartRate < BPM_LOW_CHILD || heartRate > BPM_HIGH_CHILD))
+        sendAlert("HR_ABNORMAL", heartRate);
     }
-    lastMeasureTime = now;
+  }
 
-    float objTemp = mlx.readObjectTempC();
-    float ambTemp = mlx.readAmbientTempC();
-
-    // JSON payload to mobile app
-    char buf[160];
-    snprintf(buf, sizeof(buf),
-        "{\"device_id\":\"%s\",\"object_temp\":%.2f,\"ambient_temp\":%.2f,\"ts\":%lu}",
-        DEVICE_ID, objTemp, ambTemp, (unsigned long)(now / 1000));
-
-    pTempChar->setValue(buf);
-    pTempChar->notify();
-    Serial.printf("Sent: %s\n", buf);
-
-    // Immediate alert on fever
-    if (objTemp >= FEVER_THRESHOLD) {
-        char alert[64];
-        snprintf(alert, sizeof(alert),
-            "{\"alert\":\"FEVER\",\"temp\":%.2f}", objTemp);
-        pAlertChar->setValue(alert);
-        pAlertChar->notify();
-        Serial.printf("FEVER ALERT sent: %.2f C\n", objTemp);
+  // ── Pulse quick-check (every 1 min, light sampling) ────────────────────
+  if (now - lastVitalMs >= VITAL_INTERVAL_MS) {
+    lastVitalMs = now;
+    readSpO2();
+    if (deviceConnected && (validSPO2 || validHR)) {
+      StaticJsonDocument<128> vdoc;
+      vdoc["spo2"] = validSPO2 ? spo2      : -1;
+      vdoc["bpm"]  = validHR   ? heartRate : -1;
+      char vbuf[128];
+      serializeJson(vdoc, vbuf);
+      pVitalChar->setValue((uint8_t*)vbuf, strlen(vbuf));
+      pVitalChar->notify();
     }
+  }
 }

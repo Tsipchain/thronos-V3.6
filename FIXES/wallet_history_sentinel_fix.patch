@@ -1,0 +1,13 @@
+--- a/server.py
++++ b/server.py
+@@ -8447,7 +8447,9 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
+         "mining_count": 0,
+         "ai_reward_count": 0,
+         "music_tip_count": 0,
+-        "iot_count": 0
++        "iot_count": 0,
++        "total_sentinel_spent": 0.0,
++        "sentinel_count": 0,
+     }
+ 
+     for tx in wallet_txs:

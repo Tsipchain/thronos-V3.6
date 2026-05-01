@@ -15,6 +15,8 @@ import json
 import secrets
 import hashlib
 import logging
+import sys
+import threading
 from typing import Dict, Any, List, Optional
 
 import requests
@@ -56,6 +58,35 @@ from llm_registry import (
     get_provider_status,
     mark_model_disabled,
 )
+
+
+# ─── Hotfix: wallet_history sentinel KeyError ────────────────────────────────
+# commit c05ba27f added total_sentinel_spent accumulation to
+# _collect_wallet_history_transactions but forgot to initialize the key in the
+# inline summary dict (only _empty_wallet_history_summary was updated).
+# This thread patches the function after server.py finishes defining it.
+def _apply_wallet_sentinel_hotfix() -> None:
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        main_mod = sys.modules.get("__main__")
+        if main_mod and hasattr(main_mod, "_collect_wallet_history_transactions"):
+            _orig = main_mod._collect_wallet_history_transactions
+
+            def _patched(address: str, category_filter: str):
+                wallet_txs, summary = _orig(address, category_filter)
+                summary.setdefault("total_sentinel_spent", 0.0)
+                summary.setdefault("sentinel_count", 0)
+                return wallet_txs, summary
+
+            main_mod._collect_wallet_history_transactions = _patched
+            logger.info("[hotfix] wallet_history sentinel keys patched successfully")
+            return
+        time.sleep(0.5)
+    logger.warning("[hotfix] wallet_history patch timed out — server module not found in 30s")
+
+
+threading.Thread(target=_apply_wallet_sentinel_hotfix, daemon=True).start()
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def _resolve_model(
@@ -585,7 +616,7 @@ file content here
 Examples:
 - Python script: [[FILE:miner.py]] code here [[/FILE]]
 - Edited document: [[FILE:edited.txt]] content [[/FILE]]
-- Configuration: [[FILE:config.json]] {...} [[/FILE]]
+- Configuration: [[FILE:config.json]] {{...}} [[/FILE]]
 
 Multiple files can be created in one response. Always describe what you're creating before the file block."""
         if governance_context:
@@ -653,16 +684,7 @@ Multiple files can be created in one response. Always describe what you're creat
         except Exception:
             pass
 
-    # ─── Interaction ledger (shared dataset for routing + metrics) ──────────
-
     def _load_interaction_ledger(self, limit: int = 4000) -> List[Dict[str, Any]]:
-        """Load past AI interactions from the shared ledger (JSONL).
-
-        The ledger is persisted in ``ai_interactions.jsonl`` and is also used by
-        the backend API.  We keep a cap to avoid loading unbounded history in
-        memory.
-        """
-
         entries: List[Dict[str, Any]] = []
         if not os.path.exists(self.ai_interactions_file):
             return entries
@@ -692,11 +714,6 @@ Multiple files can be created in one response. Always describe what you're creat
         return not any(tok in status_l for tok in error_tokens)
 
     def _infer_task_type(self, prompt: str) -> str:
-        """Lightweight heuristic to bucket prompts into task types.
-
-        The routing policy uses this to scope historical success rates.
-        """
-
         prompt_l = (prompt or "").lower()
         if any(k in prompt_l for k in ["code", "function", "class", "python", "bug", "compile"]):
             return "coding"
@@ -709,8 +726,6 @@ Multiple files can be created in one response. Always describe what you're creat
         return "general"
 
     def _score_providers(self, task_type: str) -> Dict[str, float]:
-        """Return a simple Laplace-smoothed success rate per provider."""
-
         entries = self._load_interaction_ledger()
         stats: Dict[str, Dict[str, float]] = {}
 
@@ -740,8 +755,6 @@ Multiple files can be created in one response. Always describe what you're creat
         return scores
 
     def _rank_providers(self, task_type: str) -> List[Dict[str, Any]]:
-        """Return available providers ranked by historical success."""
-
         scores = self._score_providers(task_type)
         availability: List[Dict[str, Any]] = []
 
@@ -752,13 +765,11 @@ Multiple files can be created in one response. Always describe what you're creat
         if self.gemini_enabled:
             availability.append({"provider": "gemini", "model": self.gemini_model_name})
 
-        # Local fallback is always available
         availability.append({"provider": "local", "model": "offline_corpus"})
 
         for item in availability:
             item["score"] = scores.get(item["provider"], 0.5)
 
-        # Stable sort: highest score first, then a deterministic preference order
         preference = {"openai": 3, "anthropic": 2, "gemini": 1, "local": 0}
         availability.sort(key=lambda x: (x["score"], preference.get(x["provider"], -1)), reverse=True)
         return availability
@@ -802,11 +813,7 @@ Multiple files can be created in one response. Always describe what you're creat
             raise RuntimeError("Gemini not available (missing key or library)")
         try:
             system_instruction = self._system_prompt(lang)
-
-            model = genai.GenerativeModel(
-                model_name,
-                system_instruction=system_instruction
-            )
+            model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
             resp = model.generate_content(prompt)
             txt = (getattr(resp, "text", "") or "").strip()
             if not txt:
@@ -961,13 +968,12 @@ Multiple files can be created in one response. Always describe what you're creat
             except Exception as e:
                 last_error = str(e)
 
-        err_payload = self._base_payload(
+        return self._base_payload(
             f"Quantum Core Error (Custom): {last_error or 'Unknown error'}",
             "custom_error",
             "custom",
             model,
         )
-        return err_payload
 
     def _call_diko_mas_model(self, prompt: str, wallet: str = "", session_id: Optional[str] = None) -> Dict[str, Any]:
         if not self.diko_mas_model_url:
@@ -985,12 +991,7 @@ Multiple files can be created in one response. Always describe what you're creat
         }
 
         try:
-            res = requests.post(
-                self.diko_mas_model_url,
-                json=payload,
-                timeout=60,
-            )
-
+            res = requests.post(self.diko_mas_model_url, json=payload, timeout=60)
             try:
                 data = res.json()
             except Exception:

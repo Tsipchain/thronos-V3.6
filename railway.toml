@@ -1,0 +1,29 @@
+# Railway v3 - Thronos Chain Core Node
+# Custom domain: api.thronoschain.org
+
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand           = "bash start.sh"
+healthcheckPath        = "/health"
+healthcheckTimeout     = 300
+restartPolicyType      = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+# Environment variables — set in Railway dashboard, never commit secrets.
+# The values below are reference only:
+#
+# PUBLIC_URL              = https://api.thronoschain.org
+# MASTER_URL              = https://thronos-core.up.railway.app   (internal Railway URL)
+# MASTER_PUBLIC_URL       = https://api.thronoschain.org
+# BOOTSTRAP_PRIMARY       = https://api.thronoschain.org
+# BOOTSTRAP_READONLY      = https://node2.thronoschain.org
+# BOOTSTRAP_EXPLORER      = https://explorer.thronoschain.org
+# BOOTSTRAP_VERIFYID      = https://verifyid.thronoschain.org
+# BOOTSTRAP_AI_CORE       = https://ai.thronoschain.org
+# DOMAIN_URL              = https://api.thronoschain.org
+# STRIPE_SECRET_KEY       = ${{Railway secret}}
+# ANTHROPIC_API_KEY       = ${{Railway secret}}
+# REDIS_URL               = ${{Redis.REDIS_URL}}
+# DATABASE_URL            = ${{Postgres.DATABASE_URL}}

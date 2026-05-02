@@ -13,6 +13,10 @@ threads = 32  # Match CPU cores for maximum concurrency
 timeout = 120
 graceful_timeout = 30
 
+# Trust Railway's proxy so ProxyFix sees real client IPs and correct scheme.
+# Railway terminates TLS and forwards requests via its internal load balancer.
+forwarded_allow_ips = "*"
+
 # Do NOT preload: with preload_app=True, gunicorn imports the WSGI app
 # BEFORE binding the port. server.py module-level init (Redis, AI, file I/O)
 # can take 30-60s, causing Render/Railway "No open HTTP ports" timeout.

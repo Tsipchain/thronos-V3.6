@@ -70,6 +70,8 @@ except ImportError:  # Railway ή env χωρίς flask_cors
         "https://commerce.thronoschain.org",
         "https://explorer.thronoschain.org",
         "https://api.thronoschain.org",
+        "https://builder.thronoschain.org",
+        "https://thronosbuilder-production.up.railway.app",
     ]
 
     def _origin_allowed(origin: str) -> bool:
@@ -161,6 +163,9 @@ _CORS_ORIGINS = [
     r"https://thronoschain\.org",
     r"https://thrchain\.up\.railway\.app",
     r"https://node-2\.up\.railway\.app",
+    # ThronosBuild — mobile app build service
+    r"https://builder\.thronoschain\.org",
+    r"https://thronosbuilder-production\.up\.railway\.app",
     r"https://.*\.onrender\.com",
     r"https://.*\.vercel\.app",
     r"http://localhost(:\d+)?",
@@ -693,6 +698,7 @@ _BOOTSTRAP_VERIFYID_API = os.getenv("BOOTSTRAP_VERIFYID_API", "https://api.thron
 _BOOTSTRAP_AI_CORE   = os.getenv("BOOTSTRAP_AI_CORE",   "https://ai.thronoschain.org")
 _BOOTSTRAP_SENTINEL  = os.getenv("BOOTSTRAP_SENTINEL",  "https://sentinel.thronoschain.org")
 _BOOTSTRAP_BTC_API   = os.getenv("BOOTSTRAP_BTC_API",   "https://btc-api.thronoschain.org")
+_BOOTSTRAP_BUILDER   = os.getenv("BOOTSTRAP_BUILDER",   "https://builder.thronoschain.org")
 _BOOTSTRAP_MAP_FILE = os.path.join(DATA_DIR, "subdomain_service_map.json")
 
 
@@ -706,6 +712,7 @@ def _bootstrap_service_map() -> dict:
         "explorer": _BOOTSTRAP_EXPLORER,
         "sentinel": _BOOTSTRAP_SENTINEL,
         "btc_api": _BOOTSTRAP_BTC_API,
+        "builder": _BOOTSTRAP_BUILDER,
     }
     custom = load_json(_BOOTSTRAP_MAP_FILE, {})
     if isinstance(custom, dict):
@@ -7614,6 +7621,7 @@ def bootstrap_json():
         "ai":           _BOOTSTRAP_AI_CORE,
         "sentinel":     _BOOTSTRAP_SENTINEL,
         "btc_api":      _BOOTSTRAP_BTC_API,
+        "builder":      _BOOTSTRAP_BUILDER,
         "health":       health_refs,
         "health_live":  health_live_refs,
         "source_of_truth": {

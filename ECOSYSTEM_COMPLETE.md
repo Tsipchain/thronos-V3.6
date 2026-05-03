@@ -389,6 +389,33 @@ We've built:
 
 ---
 
-_Last updated: February 22, 2026_  
-_Version: 1.0.0_  
+## 🏗️ ThronosBuild (builder.thronoschain.org)
+
+**URL:** https://builder.thronoschain.org  
+**Fallback:** https://thronosbuilder-production.up.railway.app  
+**Status:** 🟢 Production  
+**Payment Token:** THR
+
+**Product Line:** Build Mobile Apps on ThronosChain
+
+**Description:**  
+ThronosBuild lets developers submit source code, pay with THR, and receive production-ready APK/AAB builds.
+
+**Supported Outputs:**
+- Android APK
+- Android AAB
+- iOS IPA (planned — requires signing certificate)
+- GitHub source export
+- ZIP upload source
+- Unity Android (in progress)
+
+**Integration Notes:**
+- CORS allowed on wallet/payment API endpoints (builder.thronoschain.org + thronosbuilder-production.up.railway.app)
+- Service key `builder` added to bootstrap service map (`/bootstrap.json`)
+- Ecosystem card added to main ThronosChain homepage
+
+---
+
+_Last updated: May 3, 2026_  
+_Version: 1.1.0_  
 _Status: Production Ready_

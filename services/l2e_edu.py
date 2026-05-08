@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import logging
 import os
 import sqlite3
@@ -24,12 +23,16 @@ logger = logging.getLogger(__name__)
 l2e_edu_bp = Blueprint("l2e_edu", __name__, url_prefix="/api/l2e/edu")
 
 # ---------------------------------------------------------------------------
-# Config (read from env at import time)
+# Config
 # ---------------------------------------------------------------------------
 
 EDU_API_KEY: str = os.environ.get("EDU_API_KEY", "")
 EDU_DB_PATH: str = os.environ.get("EDU_DB_PATH", "/app/data/l2e_edu.db")
 ATTENDANCE_THRESHOLD_PCT: int = int(os.environ.get("L2E_ATTENDANCE_THRESHOLD_PCT", "80"))
+
+# URL of the main chain's own L2E certificate API (self-referencing for auto-issue)
+SELF_L2E_API_BASE: str = os.environ.get("SELF_API_BASE", "http://localhost:8000")
+AUTO_ISSUE_CERTS: bool = os.environ.get("EDU_AUTO_ISSUE_CERTS", "true").lower() in {"1", "true", "yes"}
 
 # ---------------------------------------------------------------------------
 # Database helpers
@@ -79,6 +82,7 @@ def _init_db() -> None:
                 reward_eligible INTEGER NOT NULL DEFAULT 0,
                 cert_eligible   INTEGER NOT NULL DEFAULT 0,
                 certificate_id  TEXT    NOT NULL DEFAULT '',
+                l2e_cert_issued INTEGER NOT NULL DEFAULT 0,
                 completed_at    TEXT    NOT NULL,
                 processed_at    TEXT    NOT NULL DEFAULT ''
             );
@@ -108,34 +112,11 @@ def _require_api_key(f):
 
 # ---------------------------------------------------------------------------
 # POST /api/l2e/edu/attendance
-# Called by EduPresence when a lesson is closed.
 # ---------------------------------------------------------------------------
 
 @l2e_edu_bp.route("/attendance", methods=["POST"])
 @_require_api_key
 def receive_attendance():
-    """
-    Expected payload (from app/l2e_bridge.py in thronos-edupresence):
-    {
-      "tenant_id": "ministry_edu",
-      "l2e_course_id": "COURSE-001",
-      "classroom_id": "uuid",
-      "lesson_id": "uuid",
-      "lesson_date": "2026-05-08",
-      "lesson_title": "Εισαγωγή",
-      "students": [
-        {
-          "student_external_ref": "uuid",
-          "student_name_hash": "abc123",
-          "thr_wallet": "0x...",
-          "tax_id": "123456789",
-          "attendance_status": "present",
-          "confirmation_method": "qr",
-          "attestation_hash": "sha256hex"
-        }
-      ]
-    }
-    """
     data = request.get_json(force=True, silent=True)
     if not data:
         return jsonify({"ok": False, "error": "invalid JSON"}), 400
@@ -158,20 +139,13 @@ def receive_attendance():
     if not isinstance(students, list):
         return jsonify({"ok": False, "error": "students must be a list"}), 400
 
-    rows = []
-    for s in students:
-        rows.append((
-            tenant_id, course_id, classroom_id, lesson_id,
-            lesson_date, lesson_title,
-            s.get("student_external_ref", ""),
-            s.get("student_name_hash", ""),
-            s.get("thr_wallet", ""),
-            s.get("tax_id", ""),
-            s.get("attendance_status", "absent"),
-            s.get("confirmation_method", ""),
-            s.get("attestation_hash", ""),
-            now,
-        ))
+    rows = [(
+        tenant_id, course_id, classroom_id, lesson_id, lesson_date, lesson_title,
+        s.get("student_external_ref", ""), s.get("student_name_hash", ""),
+        s.get("thr_wallet", ""), s.get("tax_id", ""),
+        s.get("attendance_status", "absent"), s.get("confirmation_method", ""),
+        s.get("attestation_hash", ""), now,
+    ) for s in students]
 
     with _get_db() as conn:
         conn.executemany(
@@ -185,40 +159,17 @@ def receive_attendance():
             rows,
         )
 
-    logger.info(
-        "L2E EDU: recorded %d attendance rows | course=%s lesson=%s",
-        len(rows), course_id, lesson_id,
-    )
+    logger.info("L2E EDU: recorded %d rows | course=%s lesson=%s", len(rows), course_id, lesson_id)
     return jsonify({"ok": True, "recorded": len(rows)}), 201
 
 
 # ---------------------------------------------------------------------------
 # POST /api/l2e/edu/complete
-# Called by EduPresence when a classroom reaches its target hours.
 # ---------------------------------------------------------------------------
 
 @l2e_edu_bp.route("/complete", methods=["POST"])
 @_require_api_key
 def receive_completion():
-    """
-    Expected payload:
-    {
-      "tenant_id": "ministry_edu",
-      "l2e_course_id": "COURSE-001",
-      "classroom_id": "uuid",
-      "completed_at": "2026-05-08T...",
-      "students": [
-        {
-          "student_external_ref": "uuid",
-          "student_name_hash": "abc123",
-          "thr_wallet": "0x...",
-          "tax_id": "123456789",
-          "attendance_pct": 87.5,
-          "reward_eligible": true
-        }
-      ]
-    }
-    """
     data = request.get_json(force=True, silent=True)
     if not data:
         return jsonify({"ok": False, "error": "invalid JSON"}), 400
@@ -240,24 +191,28 @@ def receive_completion():
 
     eligible_count = 0
     cert_ids: dict[str, str] = {}
+    issued_certs: list[dict] = []
 
     with _get_db() as conn:
         for s in students:
-            ref             = s.get("student_external_ref", "")
-            name_hash       = s.get("student_name_hash", "")
-            thr_wallet      = s.get("thr_wallet", "")
-            tax_id          = s.get("tax_id", "")
-            attendance_pct  = float(s.get("attendance_pct", 0))
-            reward_eligible = bool(s.get("reward_eligible", False))
-            cert_eligible   = attendance_pct >= ATTENDANCE_THRESHOLD_PCT
+            ref            = s.get("student_external_ref", "")
+            name_hash      = s.get("student_name_hash", "")
+            thr_wallet     = s.get("thr_wallet", "")
+            tax_id         = s.get("tax_id", "")
+            attendance_pct = float(s.get("attendance_pct", 0))
+            reward_elig    = bool(s.get("reward_eligible", False))
+            cert_eligible  = attendance_pct >= ATTENDANCE_THRESHOLD_PCT
 
             cert_id = ""
             if cert_eligible:
                 eligible_count += 1
-                cert_id = _generate_certificate_id(
-                    tenant_id, course_id, ref, completed_at
-                )
+                cert_id = _generate_certificate_id(tenant_id, course_id, ref, completed_at)
                 cert_ids[ref] = cert_id
+                issued_certs.append({
+                    "student_ref": ref, "tax_id": tax_id, "thr_wallet": thr_wallet,
+                    "course_id": course_id, "cert_id": cert_id,
+                    "attendance_pct": attendance_pct,
+                })
 
             conn.execute(
                 """
@@ -274,18 +229,16 @@ def receive_completion():
                     certificate_id  = excluded.certificate_id,
                     processed_at    = excluded.processed_at
                 """,
-                (
-                    tenant_id, course_id, classroom_id, ref,
-                    name_hash, thr_wallet, tax_id, attendance_pct,
-                    int(reward_eligible), int(cert_eligible), cert_id,
-                    completed_at, now,
-                ),
+                (tenant_id, course_id, classroom_id, ref, name_hash, thr_wallet, tax_id,
+                 attendance_pct, int(reward_elig), int(cert_eligible), cert_id,
+                 completed_at, now),
             )
 
-    logger.info(
-        "L2E EDU: completion recorded | course=%s eligible=%d/%d",
-        course_id, eligible_count, len(students),
-    )
+    logger.info("L2E EDU: completion | course=%s eligible=%d/%d", course_id, eligible_count, len(students))
+
+    # Auto-push eligible students into the main chain L2E certificate pipeline
+    if AUTO_ISSUE_CERTS and issued_certs:
+        _push_to_l2e_certificate_pipeline(course_id, issued_certs)
 
     return jsonify({
         "ok": True,
@@ -297,7 +250,77 @@ def receive_completion():
 
 
 # ---------------------------------------------------------------------------
-# GET /api/l2e/edu/course/<course_id>/completions  (admin / internal)
+# POST /api/l2e/edu/complete  — auto-push to existing L2E certificate pipeline
+# ---------------------------------------------------------------------------
+
+def _push_to_l2e_certificate_pipeline(course_id: str, issued_certs: list[dict]) -> None:
+    """
+    For each eligible student, ensure they have an L2E enrollment with
+    certificate_eligibility=True, then auto-approve and issue.
+    Uses the main chain's own internal REST API (loopback).
+    """
+    import urllib.request
+    import urllib.error
+    import json
+
+    base = SELF_L2E_API_BASE.rstrip("/")
+    # Use the internal admin key (same EDU_API_KEY or dedicated APP_AI_KEY)
+    admin_key = os.environ.get("APP_AI_KEY", EDU_API_KEY)
+
+    for cert in issued_certs:
+        learner_id = cert["tax_id"] or cert["student_ref"]
+        if not learner_id:
+            continue
+        try:
+            # 1. Approve certificate
+            _internal_post(
+                f"{base}/api/v1/courses/{course_id}/certificates/{learner_id}/approve",
+                {"actor_role": "system", "issuer_identity": "thronos-edupresence",
+                 "approval_reason": f"Auto-approved: attendance {cert['attendance_pct']:.0f}%"},
+                admin_key,
+            )
+            # 2. Issue certificate
+            resp = _internal_post(
+                f"{base}/api/v1/courses/{course_id}/certificates/{learner_id}/issue",
+                {"issuer_identity": "thronos-edupresence",
+                 "actor_role": "system"},
+                admin_key,
+            )
+            issued_id = (resp or {}).get("certificate_id", "")
+            if issued_id:
+                # Store the issued L2E cert ID back in our DB
+                with _get_db() as conn:
+                    conn.execute(
+                        "UPDATE edu_completions SET l2e_cert_issued=1, certificate_id=? "
+                        "WHERE course_id=? AND student_ref=?",
+                        (issued_id, course_id, cert["student_ref"]),
+                    )
+                logger.info("L2E EDU: issued cert %s for student %s course %s",
+                            issued_id, learner_id, course_id)
+        except Exception as exc:
+            logger.warning("L2E EDU: cert auto-issue failed for %s: %s", learner_id, exc)
+
+
+def _internal_post(url: str, payload: dict, api_key: str) -> dict | None:
+    import urllib.request
+    import json
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request(
+        url, data=body,
+        headers={"Content-Type": "application/json",
+                 "X-Internal-API-Key": api_key},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return json.loads(r.read())
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# GET /api/l2e/edu/course/<course_id>/completions
+# GET /api/l2e/edu/course/<course_id>/attendance
 # ---------------------------------------------------------------------------
 
 @l2e_edu_bp.route("/course/<course_id>/completions", methods=["GET"])
@@ -305,7 +328,7 @@ def receive_completion():
 def get_course_completions(course_id: str):
     with _get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM edu_completions WHERE course_id = ? ORDER BY attendance_pct DESC",
+            "SELECT * FROM edu_completions WHERE course_id=? ORDER BY attendance_pct DESC",
             (course_id,),
         ).fetchall()
     return jsonify({"ok": True, "completions": [dict(r) for r in rows]})
@@ -320,10 +343,8 @@ def get_course_attendance(course_id: str):
             SELECT student_ref, student_hash, thr_wallet,
                    COUNT(*) AS total_lessons,
                    SUM(CASE WHEN status='present' THEN 1 ELSE 0 END) AS present_count
-            FROM edu_attendance_events
-            WHERE course_id = ?
-            GROUP BY student_ref
-            ORDER BY present_count DESC
+            FROM edu_attendance_events WHERE course_id=?
+            GROUP BY student_ref ORDER BY present_count DESC
             """,
             (course_id,),
         ).fetchall()

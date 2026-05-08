@@ -1,13 +1,20 @@
-
 __pycache__/
 *.pyc
 *.pyo
 *.db
 *.sqlite3
+
+# Environment secrets — NEVER commit real .env
 .env
 .env.*
 !.env.example
+
 data/
 node_modules/
 *.log
 .DS_Store
+
+# Large binaries
+*.png
+!system_architecture.png
+!btc_pledge_qr.png

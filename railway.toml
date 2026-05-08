@@ -11,11 +11,15 @@ healthcheckTimeout     = 300
 restartPolicyType      = "ON_FAILURE"
 restartPolicyMaxRetries = 3
 
-# Environment variables — set in Railway dashboard, never commit secrets.
-# The values below are reference only:
+# Persistent volume — prevents SQLite data loss on redeploy.
+# In Railway dashboard: Add Volume → Mount path: /app/data
+[[volumes]]
+mountPath = "/app/data"
+
+# Environment variables — set in Railway dashboard, NEVER commit real secrets.
 #
 # PUBLIC_URL              = https://api.thronoschain.org
-# MASTER_URL              = https://thronos-core.up.railway.app   (internal Railway URL)
+# MASTER_URL              = https://thronos-core.up.railway.app
 # MASTER_PUBLIC_URL       = https://api.thronoschain.org
 # BOOTSTRAP_PRIMARY       = https://api.thronoschain.org
 # BOOTSTRAP_READONLY      = https://node2.thronoschain.org

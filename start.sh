@@ -2,10 +2,7 @@
 set -e
 
 # Activate the Nixpacks virtual-env so gunicorn & all pip packages are on PATH.
-# This is needed because Nixpacks writes PATH to /root/.profile which is only
-# sourced for login shells, and $NIXPACKS_PATH may be undefined.
 if [[ -f /opt/venv/bin/activate ]]; then
-  # shellcheck disable=SC1091
   source /opt/venv/bin/activate
 fi
 
@@ -38,8 +35,6 @@ else
   echo "=== Skipping MicroMiner demonstration (set ENABLE_MICRO_MINER=true to enable) ==="
 fi
 
-# Pytheia Worker: runs inline via APScheduler on master, but can also run
-# standalone when PYTHEIA_STANDALONE=true (e.g. on dedicated monitoring node)
 PYTHEIA_PID=""
 if [[ "${PYTHEIA_STANDALONE:-false}" == "true" ]]; then
   echo "=== Starting PYTHEIA Worker (standalone health monitor) ==="
@@ -50,12 +45,9 @@ else
   echo "=== PYTHEIA Worker will run via APScheduler on master node ==="
 fi
 
-echo "=== Starting Flask app on HTTP port ${PORT} ==="
-# Use Gunicorn with proper lifecycle hooks for graceful scheduler shutdown
-# NOTE: Using config file which sets workers=1 to avoid APScheduler job duplication
-# Do NOT use --preload: it delays port binding until the full module loads,
-# causing Render/Railway "No open HTTP ports" timeouts on large apps.
-gunicorn -c gunicorn_config.py server:app
+echo "=== Starting Flask app on HTTP port ${PORT} (server_ext:app) ==="
+# server_ext:app wraps server:app and registers additional blueprints (L2E EDU etc.)
+gunicorn -c gunicorn_config.py server_ext:app
 
 echo "=== Shutting down background services ==="
 for pid in $STRATUM_PID $MINER_PID $PYTHEIA_PID; do

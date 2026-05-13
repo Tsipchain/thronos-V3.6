@@ -6920,14 +6920,54 @@ def get_last_block_snapshot() -> dict:
         )
     return LAST_BLOCK_SNAPSHOT
 
-def verify_btc_payment(btc_address, min_amount=MIN_AMOUNT):
-    try:
-        txns = get_btc_txns(btc_address, BTC_RECEIVER)
-        paid = any(tx["to"] == BTC_RECEIVER and tx["amount_btc"] >= min_amount for tx in txns)
-        return paid, txns
-    except Exception as e:
-        logger.error(f"Watcher Error: {e}")
-        return False, []
+def verify_btc_payment(btc_address, min_amount=MIN_AMOUNT, require_confirmation=False):
+    """Verify if a BTC address has sent payment to the vault.
+
+    Args:
+        btc_address: Source BTC address
+        min_amount: Minimum BTC amount required
+        require_confirmation: If True, require at least 1 confirmation
+
+    Returns:
+        (paid: bool, txns: list of transactions)
+    """
+    max_retries = 3
+    retry_delay = 1
+
+    for attempt in range(max_retries):
+        try:
+            txns = get_btc_txns(btc_address, BTC_RECEIVER)
+            valid_txns = []
+
+            for tx in txns:
+                if tx.get("to") == BTC_RECEIVER and tx.get("amount_btc", 0) >= min_amount:
+                    # Check confirmation requirement
+                    confirmations = tx.get("confirmations", 0)
+                    if require_confirmation and confirmations < 1:
+                        logger.debug(f"Tx {tx.get('txid')} has {confirmations} confirmations, skipping")
+                        continue
+                    valid_txns.append(tx)
+
+            if valid_txns or attempt == max_retries - 1:
+                # Return if we found valid transactions or this is the last attempt
+                paid = len(valid_txns) > 0
+                return paid, txns
+
+            # Retry if no transactions found (might be indexing lag)
+            if attempt < max_retries - 1:
+                logger.debug(f"No payment found for {btc_address}, retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+                retry_delay *= 2
+
+        except Exception as e:
+            logger.warning(f"Error verifying payment (attempt {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+                retry_delay *= 2
+            elif attempt == max_retries - 1:
+                logger.error(f"Failed to verify payment after {max_retries} attempts")
+
+    return False, []
 
 def get_mining_target():
     blocks = get_reward_blocks()
@@ -15893,7 +15933,19 @@ def pledge_submit():
             recovery_url="/recovery",
         ),200
     free_list=load_json(WHITELIST_FILE,[])
-    paid, txns = (True,[]) if btc_address in free_list else verify_btc_payment(btc_address)
+    is_whitelisted = btc_address in free_list
+
+    # Verify payment (tries up to 3 times with retries for blockstream.info indexing lag)
+    paid, txns = (True,[]) if is_whitelisted else verify_btc_payment(btc_address, require_confirmation=False)
+
+    # Track if payment is pending confirmation (found but unconfirmed)
+    pending_confirmation = False
+    if not paid and not is_whitelisted and txns:
+        # We found transactions but they might not be confirmed yet
+        pending_confirmation = True
+        paid = True  # Allow pledge creation
+        app.logger.info(f"Found unconfirmed BTC transaction(s) for {btc_address}, creating pledge with pending confirmation flag")
+
     if not paid:
         return jsonify(status="pending",message="Waiting for BTC payment",txns=txns),200
 
@@ -15914,7 +15966,8 @@ def pledge_submit():
             "thr_address":thr_addr,
             "send_seed_hash":send_seed_hash,
             "send_auth_hash":send_auth_hash,
-            "has_passphrase":bool(passphrase)
+            "has_passphrase":bool(passphrase),
+            "pending_confirmation":pending_confirmation
         }
         chain=load_json(CHAIN_FILE,[])
         height=len(chain)
@@ -15982,13 +16035,17 @@ def api_pledge_status():
     exists = next((p for p in pledges if p["btc_address"] == btc_address), None)
 
     if exists:
+        status = "verified"
+        if exists.get("pending_confirmation"):
+            status = "pending_confirmation"
         return jsonify(
             ok=True,
-            status="verified",
+            status=status,
             thr_address=exists["thr_address"],
             pledge_hash=exists["pledge_hash"],
             timestamp=exists.get("timestamp"),
             has_passphrase=exists.get("has_passphrase", False),
+            pending_confirmation=exists.get("pending_confirmation", False),
         ), 200
 
     # Not pledged yet – check if there's a payment pending

@@ -60,18 +60,27 @@ def get_btc_txns(
                 r_d.raise_for_status()
                 info = r_d.json()
 
+                # Calculate confirmations: if block_height is set, we have confirmations
+                status = info.get("status", {})
+                block_height = status.get("block_height")
+                confirmations = 0
+                if block_height:
+                    confirmations = max(0, 1)  # At least 1 if in a block
+
                 for vout in info.get("vout", []):
                     addr   = vout.get("scriptpubkey_address")
                     amount = vout.get("value", 0) / 1e8
                     if (btc_receiver is None or addr == btc_receiver) and amount >= MIN_AMOUNT:
                         txs.append({
-                            "txid":       txid,
-                            "to":         addr,
-                            "from":       btc_address,
-                            "amount_btc": amount,
-                            "timestamp":  ts
+                            "txid":           txid,
+                            "to":             addr,
+                            "from":           btc_address,
+                            "amount_btc":     amount,
+                            "timestamp":      ts,
+                            "confirmations":  confirmations,
+                            "block_height":   block_height,
                         })
-                        logger.info(f"→ {txid}: {amount:.8f} BTC to {addr}")
+                        logger.info(f"→ {txid}: {amount:.8f} BTC to {addr} ({confirmations} confirmations)")
                         seen.add(txid)
                         break
 

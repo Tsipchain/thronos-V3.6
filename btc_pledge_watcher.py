@@ -434,6 +434,23 @@ def call_master_node_api(endpoint: str, data: Dict) -> Optional[Dict]:
         return None
 
 
+def clear_pending_confirmation(btc_address: str):
+    """Clear the pending_confirmation flag from pledge_chain when BTC is confirmed"""
+    pledge_chain_file = os.path.join(DATA_DIR, "pledge_chain.json")
+    try:
+        if os.path.exists(pledge_chain_file):
+            with open(pledge_chain_file, 'r') as f:
+                pledges = json.load(f)
+            for pledge in pledges:
+                if pledge.get("btc_address") == btc_address and pledge.get("pending_confirmation"):
+                    pledge["pending_confirmation"] = False
+                    logger.info(f"Cleared pending_confirmation flag for {btc_address}")
+            with open(pledge_chain_file, 'w') as f:
+                json.dump(pledges, f, indent=2)
+    except Exception as e:
+        logger.error(f"Error clearing pending confirmation: {e}")
+
+
 def create_pledge_transaction(
     user_info: Dict,
     btc_amount: float,
@@ -471,6 +488,9 @@ def create_pledge_transaction(
 
     if result and result.get("ok"):
         logger.info(f"Pledge transaction created successfully: {result}")
+
+        # Clear pending_confirmation flag now that BTC is confirmed
+        clear_pending_confirmation(user_info["btc_address"])
 
         # Also activate wallet for KYC-verified users
         if user_info.get("kyc_verified"):

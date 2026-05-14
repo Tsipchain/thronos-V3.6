@@ -206,7 +206,8 @@ def _fetch_vault_txs_adapter(vault_address: str) -> List[Dict]:
         timeout=15
     )
     resp.raise_for_status()
-    all_txs = resp.json() if isinstance(resp.json(), list) else []
+    txs_data = resp.json()
+    all_txs = txs_data if isinstance(txs_data, list) else []
 
     # Also check mempool
     try:
@@ -215,10 +216,11 @@ def _fetch_vault_txs_adapter(vault_address: str) -> List[Dict]:
             timeout=10
         )
         mem_resp.raise_for_status()
-        mem_txs = mem_resp.json() if isinstance(mem_resp.json(), list) else []
+        mem_txs_data = mem_resp.json()
+        mem_txs = mem_txs_data if isinstance(mem_txs_data, list) else []
         all_txs.extend(mem_txs)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to fetch mempool txs for {vault_address}: {e}")
 
     for raw_tx in all_txs:
         txid = raw_tx.get("txid")

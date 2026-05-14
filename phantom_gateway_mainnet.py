@@ -36,6 +36,16 @@ def get_btc_txns(
     logger = logging.getLogger("phantom_gateway")
 
     try:
+        # Fetch current block height for confirmation calculation
+        current_block_height = 0
+        try:
+            r_blocks = requests.get(f"{BASE_URL}/blocks/tip/height", timeout=10)
+            r_blocks.raise_for_status()
+            current_block_height = int(r_blocks.text.strip())
+            logger.info(f"Current block height: {current_block_height}")
+        except Exception as e:
+            logger.warning(f"Could not fetch current block height: {e}")
+
         logger.info(f"Fetching confirmed txs for {btc_address}")
         confirmed = fetch_all_confirmed(btc_address)
 
@@ -60,12 +70,12 @@ def get_btc_txns(
                 r_d.raise_for_status()
                 info = r_d.json()
 
-                # Calculate confirmations: if block_height is set, we have confirmations
+                # Calculate confirmations: if block_height is set, calculate real confirmations
                 status = info.get("status", {})
                 block_height = status.get("block_height")
                 confirmations = 0
-                if block_height:
-                    confirmations = max(0, 1)  # At least 1 if in a block
+                if block_height and current_block_height:
+                    confirmations = max(1, current_block_height - block_height + 1)
 
                 for vout in info.get("vout", []):
                     addr   = vout.get("scriptpubkey_address")

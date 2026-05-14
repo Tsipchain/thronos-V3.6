@@ -474,8 +474,8 @@
 
     .msg-row {
       display: flex;
-      margin-bottom: 10px;
-      gap: 6px;
+      margin-bottom: 14px;
+      gap: 8px;
     }
 
     .msg-row.user {
@@ -498,14 +498,14 @@
 
     .msg-bubble {
       max-width: 100%;
-      padding: 7px 9px;
+      padding: 10px 12px;
       border-radius: var(--radius-md);
       border: 1px solid rgba(20, 50, 80, 0.9);
       background: rgba(5, 16, 32, 0.98);
       box-shadow: 0 0 10px rgba(0, 0, 0, 0.4);
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 6px;
       position: relative;
     }
 
@@ -534,11 +534,72 @@
     }
 
     .msg-content {
-      white-space: pre-wrap;
+      white-space: normal;
       word-wrap: break-word;
-      font-size: 12px;
-      line-height: 1.4;
+      font-size: 13px;
+      line-height: 1.7;
+      padding: 2px 0;
+      margin: 0;
+      letter-spacing: 0.3px;
+      word-spacing: 1px;
     }
+
+    .msg-content p {
+      margin: 0.6em 0;
+      line-height: 1.7;
+    }
+
+    .msg-content p:first-child {
+      margin-top: 0;
+    }
+
+    .msg-content p:last-child {
+      margin-bottom: 0;
+    }
+
+    .msg-content strong {
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .msg-content em {
+      color: #b8d4ff;
+      font-style: italic;
+    }
+
+    .msg-content code {
+      background: rgba(0, 0, 0, 0.4);
+      padding: 2px 5px;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-size: 0.9em;
+      color: #7fd7ff;
+    }
+
+    .msg-content ul, .msg-content ol {
+      margin: 0.6em 0;
+      padding-left: 1.5em;
+      line-height: 1.7;
+    }
+
+    .msg-content li {
+      margin: 0.3em 0;
+      line-height: 1.6;
+    }
+
+    .msg-content h1, .msg-content h2, .msg-content h3,
+    .msg-content h4, .msg-content h5, .msg-content h6 {
+      margin: 0.8em 0 0.5em 0;
+      color: var(--accent);
+      font-weight: 700;
+      line-height: 1.4;
+      letter-spacing: 0.05em;
+    }
+
+    .msg-content h1 { font-size: 1.3em; }
+    .msg-content h2 { font-size: 1.2em; }
+    .msg-content h3 { font-size: 1.1em; }
+    .msg-content h4, .msg-content h5, .msg-content h6 { font-size: 1em; }
 
     .msg-files {
       margin-top: 4px;
@@ -1460,6 +1521,68 @@
       });
     }
 
+    function formatMessageContent(text) {
+      if (!text) return "";
+
+      // Split by double newlines to preserve paragraph structure
+      const paragraphs = text.split(/\n\n+/);
+
+      return paragraphs.map(para => {
+        // Escape HTML entities
+        let formatted = para
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+
+        // Bold: **text** or __text__
+        formatted = formatted.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+        formatted = formatted.replace(/__(.+?)__/g, "<strong>$1</strong>");
+
+        // Italic: *text* or _text_
+        formatted = formatted.replace(/\*(.*?)\*/g, "<em>$1</em>");
+        formatted = formatted.replace(/_(.+?)_/g, "<em>$1</em>");
+
+        // Code: `text`
+        formatted = formatted.replace(/`([^`]+)`/g, "<code>$1</code>");
+
+        // Headings: ## text
+        if (formatted.match(/^#{1,6}\s/)) {
+          const match = formatted.match(/^(#{1,6})\s(.+)$/);
+          if (match) {
+            const level = match[1].length;
+            formatted = `<h${level} class="msg-heading">${match[2]}</h${level}>`;
+          }
+        }
+
+        // Bullet lists: - item or * item
+        if (formatted.includes("\n-") || formatted.includes("\n*") || formatted.startsWith("-") || formatted.startsWith("*")) {
+          const lines = formatted.split("\n");
+          let inList = false;
+          formatted = lines.map(line => {
+            if (line.match(/^[-*]\s/)) {
+              if (!inList) {
+                inList = true;
+                return "<ul><li>" + line.replace(/^[-*]\s/, "");
+              }
+              return "<li>" + line.replace(/^[-*]\s/, "");
+            } else if (inList) {
+              inList = false;
+              return "</ul>" + line;
+            }
+            return line;
+          }).join("</li>\n");
+          if (inList) formatted += "</li></ul>";
+        }
+
+        // Preserve line breaks within paragraphs
+        formatted = formatted.replace(/\n/g, "<br/>");
+
+        return `<p>${formatted}</p>`;
+      }).join("");
+    }
+
     function createThumbButtons(messageText) {
       const wrapper = document.createElement("div");
       wrapper.className = "msg-actions";
@@ -1544,7 +1667,7 @@
 
       const content = document.createElement("div");
       content.className = "msg-content";
-      content.textContent = text;
+      content.innerHTML = formatMessageContent(text);
 
       bubble.appendChild(header);
       bubble.appendChild(content);

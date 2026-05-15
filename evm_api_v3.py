@@ -297,6 +297,10 @@ def register_evm_routes(app, data_dir: str, ledger_file: str, chain_file: str, p
             limit = 10
         return jsonify(contracts=contracts[-limit:]), 200
 
+    @app.route("/api/evm/latest_contracts", methods=["GET"])
+    def api_evm_latest_contracts():
+        """Returns the most recent deployed contracts (alias for /api/evm/contracts/recent)."""
+        return api_evm_list_contracts_recent()
 
     @app.route("/api/evm/templates", methods=["GET"])
     def api_evm_templates():

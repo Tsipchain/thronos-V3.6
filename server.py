@@ -33,6 +33,7 @@ from __future__ import annotations
 import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil, sqlite3, base64, hmac
 import sys
 import threading
+import queue
 import atexit
 from collections import Counter
 from decimal import Decimal, ROUND_DOWN
@@ -176,6 +177,52 @@ try:
 except Exception:
     # SECURITY: Never fall back to allow-all origins — Phase 0 hardening
     CORS(app, origins=_CORS_ORIGINS)
+
+# Background worker infrastructure for async block processing and broadcasting
+_BLOCK_PROCESS_QUEUE = queue.Queue(maxsize=100)
+_BROADCAST_QUEUE = queue.Queue(maxsize=100)
+_BACKGROUND_WORKERS_ACTIVE = True
+
+def _background_block_processor():
+    """Process mined blocks asynchronously to avoid 499 timeouts."""
+    while _BACKGROUND_WORKERS_ACTIVE:
+        try:
+            data, submit_time = _BLOCK_PROCESS_QUEUE.get(timeout=1)
+            _process_mining_submission(data, require_job_id=False)
+            logger.info(f"Background block processor: completed block in {time.time() - submit_time:.2f}s")
+        except queue.Empty:
+            continue
+        except Exception as e:
+            logger.error(f"Background block processor error: {e}")
+
+def _background_block_broadcaster():
+    """Broadcast mined blocks to peers asynchronously to avoid 499 timeouts."""
+    while _BACKGROUND_WORKERS_ACTIVE:
+        try:
+            block = _BROADCAST_QUEUE.get(timeout=1)
+            try:
+                broadcast_block(block)
+            except Exception as e:
+                logger.warning(f"Failed to broadcast block: {e}")
+        except queue.Empty:
+            continue
+        except Exception as e:
+            logger.error(f"Background block broadcaster error: {e}")
+
+# Start background workers
+_block_processor_thread = threading.Thread(target=_background_block_processor, daemon=True)
+_block_broadcaster_thread = threading.Thread(target=_background_block_broadcaster, daemon=True)
+_block_processor_thread.start()
+_block_broadcaster_thread.start()
+
+def _shutdown_background_workers():
+    """Gracefully shutdown background workers."""
+    global _BACKGROUND_WORKERS_ACTIVE
+    _BACKGROUND_WORKERS_ACTIVE = False
+    _block_processor_thread.join(timeout=5)
+    _block_broadcaster_thread.join(timeout=5)
+
+atexit.register(_shutdown_background_workers)
 
 # absolute path to /public folder next to server.py
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -20263,7 +20310,11 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
             included.append(tx)
         save_mempool([])
 
-        ledger=load_json(LEDGER_FILE,{})
+    # Batch ledger updates: read once, update all, write once (instead of read-write-read-write)
+    ledger=load_json(LEDGER_FILE,{})
+
+    # Process included mempool transactions
+    if pool and included:
         for tx in included:
             if tx.get("type")=="transfer":
                 to_thr=tx["to"]
@@ -20287,13 +20338,12 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
                 # Account THR fee burn to burn address for transparency.
                 ledger[BURN_ADDRESS] = round(ledger.get(BURN_ADDRESS, 0.0) + fee, 6)
 
-        save_json(LEDGER_FILE,ledger)
-
-    # reward to ledger
-    ledger=load_json(LEDGER_FILE,{})
+    # Add mining rewards to same ledger update (batch optimization)
     ledger[thr_address]=round(ledger.get(thr_address,0.0)+miner_share,6)
     ledger[AI_WALLET_ADDRESS]=round(ledger.get(AI_WALLET_ADDRESS,0.0)+ai_share,6)
     ledger[BURN_ADDRESS]=round(ledger.get(BURN_ADDRESS,0.0)+burn_share,6)
+
+    # Single write operation
     save_json(LEDGER_FILE,ledger)
 
     save_json(CHAIN_FILE, chain)
@@ -20305,10 +20355,16 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
     # Broadcast the newly mined block to peers.  This is best‑effort
     # and failures are ignored.  It allows other nodes to update
     # their chains without polling.
+    # Queue block for async broadcast to peers (avoid network timeouts)
     try:
-        broadcast_block(new_block)
-    except Exception:
-        pass
+        _BROADCAST_QUEUE.put(new_block, block=False)
+    except queue.Full:
+        # If queue is full, do broadcast synchronously
+        try:
+            broadcast_block(new_block)
+        except Exception:
+            logger.warning(f"Failed to broadcast block {height}")
+
     print(f"⛏️ Miner {thr_address} found block #{height}! R={total_reward} (m/a/b: {miner_share}/{ai_share}/{burn_share}) | TXs: {len(included)} | IoT rewards: {iot_rewards_paid} | Stratum={is_stratum}")
     logger.debug("submit_block handler took %.3fs", time.time() - start)
     return jsonify(status="accepted", height=height, reward=miner_share, tx_included=len(included), iot_rewards=iot_rewards_paid), 200
@@ -20349,9 +20405,28 @@ def api_miner_work():
 
 @app.route("/api/miner/submit", methods=["POST"])
 def api_miner_submit():
-    """Simple HTTP miner submit (CPU/GPU)."""
+    """Simple HTTP miner submit (CPU/GPU) - processes asynchronously to avoid timeouts."""
     data = request.get_json() or {}
-    return _process_mining_submission(data, require_job_id=False)
+
+    # Quick validation
+    thr_address = data.get("thr_address") or data.get("address")
+    nonce = data.get("nonce")
+    if not thr_address or nonce is None:
+        return jsonify(error="Missing mining data"), 400
+
+    # Queue for background processing
+    try:
+        _BLOCK_PROCESS_QUEUE.put((data, time.time()), block=False)
+        return jsonify(
+            status="accepted",
+            message="Block queued for processing",
+            height=data.get("height"),
+            thr_address=thr_address
+        ), 202
+    except queue.Full:
+        # Queue is full, fall back to synchronous processing with timeout
+        logger.warning("Block processing queue is full, processing synchronously")
+        return _process_mining_submission(data, require_job_id=False)
 
 
 # ─── BACKGROUND MINTER / WATCHDOG ──────────────────

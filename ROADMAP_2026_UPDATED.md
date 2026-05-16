@@ -134,6 +134,16 @@
 - ✅ **Provider Registry** - Doctor/clinic verification
 - ✅ **Patient Privacy** - Encrypted medical records on-chain
 
+#### Digital Legacy & Inheritance (NEW v3.6.2)
+- ✅ **NFT-based Digital Wills** - Immutable estate documents
+- ✅ **Heir Registration** - Biometric + genetic verification
+- ✅ **Recovery QR Codes** - Time-limited heir access (30-day TTL)
+- ✅ **Audit Trail** - Complete blockchain proof of custody
+- ✅ **Smart Contract Distribution** - Automated multi-heir asset splits
+- ✅ **Solidity Contract Template** - DigitalLegacyNFT on EVM
+
+**Key Innovation:** Solves critical blockchain gap - lost assets from death. Provides legal-grade inheritance with biometric verification and immutable audit trail proving no tampering.
+
 ---
 
 ## 🔧 RECENT OPTIMIZATIONS (May 2026)
@@ -154,6 +164,16 @@
 - ✅ **Double JSON Parsing** - Fixed response parsing in pledge watcher
 - ✅ **N+1 Query Problem** - Eliminated redundant transaction detail requests
 - ✅ **Timeout Issues** - Resolved 499 client disconnection errors
+
+### Major Features (May 15-16, 2026)
+- ✅ **Digital Legacy System** - NFT-based digital wills with biometric heir verification
+  - `/api/legacy/create` - Create digital will
+  - `/api/legacy/{id}/register-heir` - Register heir with biometric hash
+  - `/api/legacy/verify-heir` - Verify heir identity (biometric + genetic)
+  - `/api/legacy/recovery-qr` - Generate QR for heir recovery
+  - `/api/legacy/{id}/distribute` - Execute asset distribution to verified heir
+  - Immutable audit trail proves custody and prevents post-distribution tampering claims
+  - Smart contract handles multi-heir percentage splits automatically
 
 ---
 

@@ -16781,7 +16781,7 @@ def api_get_settlement_stats():
 @app.route("/api/cex/task/status/<task_id>", methods=["GET"])
 def api_get_cex_task_status(task_id: str):
     """
-    Phase 4: Get CEX conversion task status
+    CEX LP Agent: Get conversion task status
 
     GET /api/cex/task/status/<task_id>
 
@@ -16790,20 +16790,20 @@ def api_get_cex_task_status(task_id: str):
             "task_id": "cex_...",
             "exchange": "binance",
             "user_email": "user@example.com",
-            "status": "completed|pending|kyc_check|converting|failed",
+            "status": "pending|processing|completed|failed",
             "btc_amount": "0.00001",
             "thr_address": "THR...",
             ...
         }
     """
     try:
-        if not _cex_agent:
+        if not _cex_lp_agent:
             return jsonify(
                 status="error",
-                message="Phase 4 not available"
+                message="CEX LP Agent not available"
             ), 503
 
-        task = _cex_agent.get_task_status(task_id)
+        task = _cex_lp_agent.get_task_status(task_id)
         if not task:
             return jsonify(
                 status="not_found",
@@ -16824,7 +16824,7 @@ def api_get_cex_task_status(task_id: str):
 @app.route("/api/cex/pending", methods=["GET"])
 def api_get_pending_cex_conversions():
     """
-    Phase 4: Get all pending CEX conversions
+    CEX LP Agent: Get all pending conversions
 
     GET /api/cex/pending
 
@@ -16838,13 +16838,13 @@ def api_get_pending_cex_conversions():
         }
     """
     try:
-        if not _cex_agent:
+        if not _cex_lp_agent:
             return jsonify(
                 status="error",
-                message="Phase 4 not available"
+                message="CEX LP Agent not available"
             ), 503
 
-        pending = _cex_agent.get_pending_conversions()
+        pending = _cex_lp_agent.get_pending_conversions()
         return jsonify(
             pending_count=len(pending),
             tasks=pending
@@ -16862,7 +16862,7 @@ def api_get_pending_cex_conversions():
 @app.route("/api/cex/stats", methods=["GET"])
 def api_get_cex_agent_stats():
     """
-    Phase 4: Get CEX Integration Agent statistics
+    CEX LP Agent: Get statistics
 
     GET /api/cex/stats
 
@@ -16873,18 +16873,17 @@ def api_get_cex_agent_stats():
             "completed": 250,
             "failed": 0,
             "total_btc_converted": 0.00250,
-            "total_deposits_found": 500,
             "agent_running": true
         }
     """
     try:
-        if not _cex_agent:
+        if not _cex_lp_agent:
             return jsonify(
                 status="error",
-                message="Phase 4 not available"
+                message="CEX LP Agent not available"
             ), 503
 
-        stats = _cex_agent.get_stats()
+        stats = _cex_lp_agent.get_stats()
         return jsonify(stats), 200
 
     except Exception as e:

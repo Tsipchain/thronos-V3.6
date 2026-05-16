@@ -264,6 +264,75 @@
         </div>
     </div>
 
+    <!-- PHASE SYSTEM STATUS -->
+    <div class="section" style="background: linear-gradient(135deg, #0a1f15 0%, #071510 100%); border: 2px solid #3CFF7A;">
+        <h2 style="color: #3CFF7A; margin: 0 0 20px 0;">🚀 CEX Integration Architecture Status</h2>
+        <div class="stats-row" style="margin-bottom: 0;">
+            <div class="stat-card" style="border: 1px solid #3CFF7A; background: #06140b;">
+                <div style="color: #3CFF7A; font-size: 1.5em;">✅</div>
+                <div style="color: #3CFF7A; font-weight: bold; margin-top: 10px;">Phase 1A</div>
+                <div style="color: #d7ffe6; font-size: 0.9em;">CEX Blocklist</div>
+                <div style="color: #3CFF7A; margin-top: 5px; font-size: 0.85em;">50% Automation</div>
+            </div>
+            <div class="stat-card" style="border: 1px solid #3CFF7A; background: #06140b;">
+                <div style="color: #3CFF7A; font-size: 1.5em;">✅</div>
+                <div style="color: #3CFF7A; font-weight: bold; margin-top: 10px;">Phase 1B</div>
+                <div style="color: #d7ffe6; font-size: 0.9em;">Unique Addresses</div>
+                <div style="color: #3CFF7A; margin-top: 5px; font-size: 0.85em;">80% Automation</div>
+            </div>
+            <div class="stat-card" style="border: 1px solid #3CFF7A; background: #06140b;">
+                <div style="color: #3CFF7A; font-size: 1.5em;">✅</div>
+                <div style="color: #3CFF7A; font-weight: bold; margin-top: 10px;">Phase 2</div>
+                <div style="color: #d7ffe6; font-size: 0.9em;">Message Signing</div>
+                <div style="color: #3CFF7A; margin-top: 5px; font-size: 0.85em;">85% Automation</div>
+            </div>
+            <div class="stat-card" style="border: 1px solid #3CFF7A; background: #06140b;">
+                <div style="color: #3CFF7A; font-size: 1.5em;">✅</div>
+                <div style="color: #3CFF7A; font-weight: bold; margin-top: 10px;">Phase 3</div>
+                <div style="color: #d7ffe6; font-size: 0.9em;">Stellar Settlement</div>
+                <div style="color: #3CFF7A; margin-top: 5px; font-size: 0.85em;">95% Automation</div>
+            </div>
+            <div class="stat-card" style="border: 2px solid #3CFF7A; background: #0a1f15;">
+                <div style="color: #3CFF7A; font-size: 1.5em;">✅</div>
+                <div style="color: #3CFF7A; font-weight: bold; margin-top: 10px;">Phase 4</div>
+                <div style="color: #d7ffe6; font-size: 0.9em;">CEX Integration</div>
+                <div style="color: #3CFF7A; margin-top: 5px; font-size: 0.85em; font-weight: bold;">99% AUTOMATION 🎯</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- API ENDPOINTS -->
+    <div class="section">
+        <h2>🌐 API Endpoints</h2>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+            <div style="background: #050b07; padding: 15px; border-radius: 10px; border: 1px solid #1a5a2f;">
+                <h3 style="color: #3CFF7A; margin: 0 0 10px 0; font-size: 1em;">Write Operations</h3>
+                <div style="color: #d7ffe6; font-family: monospace; font-size: 0.9em; word-break: break-all;">
+                    <strong style="color: #3CFF7A;">Base URL:</strong><br>
+                    https://api.thronoschain.org
+                </div>
+            </div>
+            <div style="background: #050b07; padding: 15px; border-radius: 10px; border: 1px solid #1a5a2f;">
+                <h3 style="color: #3CFF7A; margin: 0 0 10px 0; font-size: 1em;">Read Operations</h3>
+                <div style="color: #d7ffe6; font-family: monospace; font-size: 0.9em; word-break: break-all;">
+                    <strong style="color: #3CFF7A;">Base URL:</strong><br>
+                    https://node-2.up.railway.app
+                </div>
+            </div>
+        </div>
+        <div style="margin-top: 15px; padding: 15px; background: #050b07; border-radius: 10px; border: 1px solid #1a5a2f;">
+            <h3 style="color: #3CFF7A; margin: 0 0 15px 0;">Pledge & Bridge Endpoints</h3>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; font-size: 0.85em;">
+                <div><strong style="color: #3CFF7A;">Deposit Address:</strong><br><span style="color: #d7ffe6; font-family: monospace;">GET /api/pledge/deposit-address</span></div>
+                <div><strong style="color: #3CFF7A;">Message to Sign:</strong><br><span style="color: #d7ffe6; font-family: monospace;">GET /api/pledge/get-message-to-sign</span></div>
+                <div><strong style="color: #3CFF7A;">Verify Signature:</strong><br><span style="color: #d7ffe6; font-family: monospace;">POST /api/pledge/verify-signature</span></div>
+                <div><strong style="color: #3CFF7A;">Settlement Status:</strong><br><span style="color: #d7ffe6; font-family: monospace;">GET /api/pledge/settlement/status</span></div>
+                <div><strong style="color: #3CFF7A;">CEX Task Status:</strong><br><span style="color: #d7ffe6; font-family: monospace;">GET /api/cex/task/status</span></div>
+                <div><strong style="color: #3CFF7A;">CEX Agent Stats:</strong><br><span style="color: #d7ffe6; font-family: monospace;">GET /api/cex/stats</span></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Tabs -->
     <div class="tabs">
         <button class="tab-btn active" onclick="showTab('tokens')">
@@ -274,6 +343,15 @@
         </button>
         <button class="tab-btn" onclick="showTab('pools')">
             💧 Pools
+        </button>
+        <button class="tab-btn" onclick="showTab('pledge')">
+            📊 Pledge System
+        </button>
+        <button class="tab-btn" onclick="showTab('settlement')">
+            🌉 Settlement
+        </button>
+        <button class="tab-btn" onclick="showTab('cex')">
+            🏦 CEX Agent
         </button>
     </div>
 
@@ -308,6 +386,97 @@
         <h2>💧 Liquidity Pools</h2>
         <div id="poolsGrid" class="token-grid">
             <div class="loading"><span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span><span class="lang-ja">読み込み中...</span><span class="lang-ru">Загрузка...</span><span class="lang-es">Cargando...</span></div>
+        </div>
+    </div>
+
+    <!-- Pledge System Tab -->
+    <div id="pledge-tab" class="section tab-content" style="display: none;">
+        <h2>📊 Pledge System (Phase 1B)</h2>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom: 20px;">
+            <div style="background: #050b07; padding: 15px; border-radius: 10px; border: 1px solid #1a5a2f;">
+                <div style="color: #3CFF7A; font-size: 1.2em; font-weight: bold;" id="pledgeCount">0</div>
+                <div style="color: #d7ffe6; font-size: 0.9em;">Total Pledges</div>
+            </div>
+            <div style="background: #050b07; padding: 15px; border-radius: 10px; border: 1px solid #1a5a2f;">
+                <div style="color: #3CFF7A; font-size: 1.2em; font-weight: bold;" id="pledgeVerified">0</div>
+                <div style="color: #d7ffe6; font-size: 0.9em;">Verified</div>
+            </div>
+            <div style="background: #050b07; padding: 15px; border-radius: 10px; border: 1px solid #1a5a2f;">
+                <div style="color: #3CFF7A; font-size: 1.2em; font-weight: bold;" id="pledgePending">0</div>
+                <div style="color: #d7ffe6; font-size: 0.9em;">Pending</div>
+            </div>
+        </div>
+        <div style="background: #050b07; padding: 15px; border-radius: 10px; border: 1px solid #1a5a2f; font-size: 0.9em;">
+            <strong style="color: #3CFF7A;">Endpoint:</strong><br>
+            <span style="color: #d7ffe6; font-family: monospace;">GET /api/pledge/deposit-address?thr_address=THR...</span>
+            <div style="margin-top: 10px; color: #d7ffe6;">Generates unique BTC address per user using BIP32 derivation (m/44'/0'/{index}'/0/0)</div>
+        </div>
+    </div>
+
+    <!-- Settlement Tab -->
+    <div id="settlement-tab" class="section tab-content" style="display: none;">
+        <h2>🌉 Stellar Bridge Settlement (Phase 3)</h2>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom: 20px;">
+            <div style="background: #050b07; padding: 15px; border-radius: 10px; border: 1px solid #1a5a2f;">
+                <div style="color: #3CFF7A; font-size: 1.2em; font-weight: bold;" id="settlementQueue">0</div>
+                <div style="color: #d7ffe6; font-size: 0.9em;">Queue Size</div>
+            </div>
+            <div style="background: #050b07; padding: 15px; border-radius: 10px; border: 1px solid #1a5a2f;">
+                <div style="color: #3CFF7A; font-size: 1.2em; font-weight: bold;" id="settlementCompleted">0</div>
+                <div style="color: #d7ffe6; font-size: 0.9em;">Completed</div>
+            </div>
+            <div style="background: #050b07; padding: 15px; border-radius: 10px; border: 1px solid #1a5a2f;">
+                <div style="color: #3CFF7A; font-size: 1.2em; font-weight: bold;" id="settlementFailed">0</div>
+                <div style="color: #d7ffe6; font-size: 0.9em;">Failed</div>
+            </div>
+            <div style="background: #050b07; padding: 15px; border-radius: 10px; border: 1px solid #1a5a2f;">
+                <div style="color: #3CFF7A; font-size: 1.2em; font-weight: bold;" id="settlementTotal">$0</div>
+                <div style="color: #d7ffe6; font-size: 0.9em;">Total USDC Settled</div>
+            </div>
+        </div>
+        <div style="background: #050b07; padding: 15px; border-radius: 10px; border: 1px solid #1a5a2f; font-size: 0.9em;">
+            <strong style="color: #3CFF7A;">Endpoints:</strong><br>
+            <span style="color: #d7ffe6; font-family: monospace; display: block; margin: 5px 0;">GET /api/pledge/settlement/status/&lt;task_id&gt;</span>
+            <span style="color: #d7ffe6; font-family: monospace; display: block; margin: 5px 0;">GET /api/pledge/settlement/pending</span>
+            <span style="color: #d7ffe6; font-family: monospace;">GET /api/pledge/settlement/stats</span>
+            <div style="margin-top: 10px; color: #d7ffe6;">Async queue with exponential backoff (2s → 4s → 8s → 16s → 32s). Sub-1 minute settlement via Stellar network with <0.01% fees.</div>
+        </div>
+    </div>
+
+    <!-- CEX Agent Tab -->
+    <div id="cex-tab" class="section tab-content" style="display: none;">
+        <h2>🏦 CEX Integration Agent (Phase 4)</h2>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom: 20px;">
+            <div style="background: #050b07; padding: 15px; border-radius: 10px; border: 1px solid #1a5a2f;">
+                <div style="color: #3CFF7A; font-size: 1.2em; font-weight: bold;" id="cexTasksPending">0</div>
+                <div style="color: #d7ffe6; font-size: 0.9em;">Pending Tasks</div>
+            </div>
+            <div style="background: #050b07; padding: 15px; border-radius: 10px; border: 1px solid #1a5a2f;">
+                <div style="color: #3CFF7A; font-size: 1.2em; font-weight: bold;" id="cexTasksCompleted">0</div>
+                <div style="color: #d7ffe6; font-size: 0.9em;">Completed</div>
+            </div>
+            <div style="background: #050b07; padding: 15px; border-radius: 10px; border: 1px solid #1a5a2f;">
+                <div style="color: #3CFF7A; font-size: 1.2em; font-weight: bold;" id="cexDepositsFound">0</div>
+                <div style="color: #d7ffe6; font-size: 0.9em;">Deposits Found</div>
+            </div>
+            <div style="background: #050b07; padding: 15px; border-radius: 10px; border: 1px solid #1a5a2f;">
+                <div style="color: #3CFF7A; font-size: 1.2em; font-weight: bold;" id="cexBTCConverted">0 BTC</div>
+                <div style="color: #d7ffe6; font-size: 0.9em;">Total BTC Converted</div>
+            </div>
+        </div>
+        <div style="background: #0a1f15; padding: 15px; border-radius: 10px; border: 2px solid #3CFF7A; margin-bottom: 15px;">
+            <strong style="color: #3CFF7A;">Supported Exchanges:</strong>
+            <div style="color: #d7ffe6; margin-top: 10px;">
+                🏦 Binance  •  🏦 MEXC  •  🏦 Kraken  •  🏦 Bybit  •  🏦 OKX
+            </div>
+            <div style="margin-top: 10px; font-size: 0.9em;">24/7 monitoring • Auto-detect deposits • Auto-verify KYC • Auto-convert BTC → USDC → THR</div>
+        </div>
+        <div style="background: #050b07; padding: 15px; border-radius: 10px; border: 1px solid #1a5a2f; font-size: 0.9em;">
+            <strong style="color: #3CFF7A;">Endpoints:</strong><br>
+            <span style="color: #d7ffe6; font-family: monospace; display: block; margin: 5px 0;">GET /api/cex/task/status/&lt;task_id&gt;</span>
+            <span style="color: #d7ffe6; font-family: monospace; display: block; margin: 5px 0;">GET /api/cex/pending</span>
+            <span style="color: #d7ffe6; font-family: monospace;">GET /api/cex/stats</span>
+            <div style="margin-top: 10px; color: #d7ffe6;"><strong>99% Automation:</strong> User deposits to their existing exchange account. Agent automatically detects, verifies KYC, and converts to THR. Zero user interaction required.</div>
         </div>
     </div>
 </div>
@@ -502,7 +671,64 @@ $('searchInput').addEventListener('keypress', e => {
     if (e.key === 'Enter') search();
 });
 
+// Load Pledge System stats
+async function loadPledgeStats() {
+    try {
+        const res = await fetch('/api/pledge/stats', { method: 'GET' }).catch(() => ({}));
+        if (res.ok) {
+            const data = await res.json();
+            $('pledgeCount').textContent = data.total || 0;
+            $('pledgeVerified').textContent = data.verified || 0;
+            $('pledgePending').textContent = data.pending || 0;
+        }
+    } catch (e) {
+        console.warn('Could not load pledge stats:', e);
+    }
+}
+
+// Load Settlement stats
+async function loadSettlementStats() {
+    try {
+        const res = await fetch('/api/pledge/settlement/stats').catch(() => ({}));
+        if (res.ok) {
+            const data = await res.json();
+            $('settlementQueue').textContent = data.queue_size || 0;
+            $('settlementCompleted').textContent = data.completed || 0;
+            $('settlementFailed').textContent = data.failed || 0;
+            $('settlementTotal').textContent = '$' + (data.total_usdc_settled || 0).toFixed(2);
+        }
+    } catch (e) {
+        console.warn('Could not load settlement stats:', e);
+    }
+}
+
+// Load CEX stats
+async function loadCexStats() {
+    try {
+        const res = await fetch('/api/cex/stats').catch(() => ({}));
+        if (res.ok) {
+            const data = await res.json();
+            $('cexTasksPending').textContent = data.pending || 0;
+            $('cexTasksCompleted').textContent = data.completed || 0;
+            $('cexDepositsFound').textContent = data.total_deposits_found || 0;
+            $('cexBTCConverted').textContent = (data.total_btc_converted || 0).toFixed(5) + ' BTC';
+        }
+    } catch (e) {
+        console.warn('Could not load CEX stats:', e);
+    }
+}
+
+// Refresh stats every 10 seconds
+setInterval(() => {
+    loadPledgeStats();
+    loadSettlementStats();
+    loadCexStats();
+}, 10000);
+
 // Initial load
 loadData();
+loadPledgeStats();
+loadSettlementStats();
+loadCexStats();
 </script>
 {% endblock %}

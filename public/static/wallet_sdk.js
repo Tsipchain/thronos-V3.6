@@ -1,10 +1,13 @@
 (function () {
-  // Always safe defaults
-  const DEFAULT_API_BASE = "/api";
+  // Production API endpoints
+  const DEFAULT_READ_BASE = "https://node-2.up.railway.app";
+  const DEFAULT_WRITE_BASE = "https://api.thronoschain.org";
+  // Fallback to relative paths for local development
+  const IS_PRODUCTION = window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
 
   window.THRONOS_CONFIG = window.THRONOS_CONFIG || {};
-  window.THRONOS_CONFIG.apiReadBase = window.THRONOS_CONFIG.apiReadBase || DEFAULT_API_BASE;
-  window.THRONOS_CONFIG.apiWriteBase = window.THRONOS_CONFIG.apiWriteBase || window.THRONOS_CONFIG.apiReadBase;
+  window.THRONOS_CONFIG.apiReadBase = window.THRONOS_CONFIG.apiReadBase || (IS_PRODUCTION ? DEFAULT_READ_BASE : "/api");
+  window.THRONOS_CONFIG.apiWriteBase = window.THRONOS_CONFIG.apiWriteBase || (IS_PRODUCTION ? DEFAULT_WRITE_BASE : "/api");
 })();
 
 (function(window){

@@ -1010,8 +1010,70 @@
                     </li>
                 </ul>
                 <div class="progress-container">
-                    <div class="progress-bar"><div class="progress-fill in-progress" style="width: 25%"></div></div>
-                    <div class="progress-label"><span>25%</span><span class="lang-el">Φάση 1A complete, 1B έτοιμη</span><span class="lang-en">Phase 1A complete, 1B ready</span></div>
+                    <div class="progress-bar"><div class="progress-fill in-progress" style="width: 50%"></div></div>
+                    <div class="progress-label"><span>50%</span><span class="lang-el">Φάσεις 1A & 1B complete, Phase 2 in progress</span><span class="lang-en">Phases 1A & 1B complete, Phase 2 in progress</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Phase 2: Stellar Bridge & Low-Cost Transfers (June 2026) -->
+        <div class="phase">
+            <div class="phase-icon in-progress">🌟</div>
+            <div class="phase-content">
+                <div class="phase-header">
+                    <div class="phase-title">
+                        🌟 <span class="lang-el">Stellar Bridge & Χαμηλού Κόστους Μεταφορές</span><span class="lang-en">Stellar Bridge & Low-Cost Transfers</span>
+                    </div>
+                    <div class="phase-version">v3.6-STELLAR</div>
+                </div>
+                <div class="phase-date">May 25-31 - June 15, 2026</div>
+                <ul class="feature-list">
+                    <li class="feature-item">
+                        <span class="feature-status">⏳</span>
+                        <div class="feature-text">
+                            <div class="feature-name"><span class="lang-el">Stellar Network Integration</span><span class="lang-en">Stellar Network Integration</span></div>
+                            <div class="feature-desc"><span class="lang-el">Ενσωμάτωση Stellar protocol για χαμηλού κόστους bridge. Thronos → Stellar → USDC/USDT → Binance/Kraken. Target: &lt;1 minute settlement, &lt;0.01% fees</span><span class="lang-en">Stellar protocol integration for low-cost bridge. Thronos → Stellar → USDC/USDT → Binance/Kraken. Target: <1 min settlement, <0.01% fees</span></div>
+                        </div>
+                    </li>
+                    <li class="feature-item">
+                        <span class="feature-status">⏳</span>
+                        <div class="feature-text">
+                            <div class="feature-name"><span class="lang-el">Async Queue-Based Processing</span><span class="lang-en">Async Queue-Based Processing</span></div>
+                            <div class="feature-desc"><span class="lang-el">Asynchronous transaction queue με exponential backoff retry logic. Handles burst loads, prevents 503 errors, graceful backpressure. Max queue size: 10K transactions</span><span class="lang-en">Async tx queue with exponential backoff retry. Handles bursts, prevents 503, graceful backpressure. Max 10K tx queue</span></div>
+                        </div>
+                    </li>
+                    <li class="feature-item">
+                        <span class="feature-status">⏳</span>
+                        <div class="feature-text">
+                            <div class="feature-name"><span class="lang-el">USDC ↔ Binance Direct Bridge</span><span class="lang-en">USDC ↔ Binance Direct Bridge</span></div>
+                            <div class="feature-desc"><span class="lang-el">Αμφίδρομη γέφυρα: THR → USDC στο Stellar → Binance USDC. Ενσωμάτωση Binance API για auto-conversion σε THR BTC/ETH. No manual intervention</span><span class="lang-en">Bidirectional: THR → USDC on Stellar → Binance USDC. Binance API for auto-conversion. No manual work</span></div>
+                        </div>
+                    </li>
+                    <li class="feature-item">
+                        <span class="feature-status">⏳</span>
+                        <div class="feature-text">
+                            <div class="feature-name"><span class="lang-el">Exponential Backoff Retry Logic</span><span class="lang-en">Exponential Backoff Retry Logic</span></div>
+                            <div class="feature-desc"><span class="lang-el">Retry policy: 2s → 4s → 8s → 16s → 32s. Max 5 retries (≈2 min total). Prevents Stellar congestion, handles temporary network issues. Automatic transition to Phase 3 on repeated failures</span><span class="lang-en">Retry: 2s → 4s → 8s → 16s → 32s. Max 5 retries (2 min). Prevents congestion, handles failures</span></div>
+                        </div>
+                    </li>
+                    <li class="feature-item">
+                        <span class="feature-status">⏳</span>
+                        <div class="feature-text">
+                            <div class="feature-name"><span class="lang-el">Stellar Account Management</span><span class="lang-en">Stellar Account Management</span></div>
+                            <div class="feature-desc"><span class="lang-el">Λογαριασμός Stellar για Thronos (public key + signing key). Πολλαπλοί λογαριασμοί για load balancing. Ελάχιστο XRP balance (2.5 XRP = ~$0.50)</span><span class="lang-en">Stellar account for Thronos (pub + sign key). Multi-account load balancing. Min XRP balance: 2.5 (~$0.50)</span></div>
+                        </div>
+                    </li>
+                    <li class="feature-item">
+                        <span class="feature-status">⏳</span>
+                        <div class="feature-text">
+                            <div class="feature-name"><span class="lang-el">Transaction Monitoring &amp; Alerts</span><span class="lang-en">Transaction Monitoring &amp; Alerts</span></div>
+                            <div class="feature-desc"><span class="lang-el">Real-time monitoring dashboard για Stellar txs. Alerts για failed transactions, long settlement times, suspicious activity. Σύνδεση με Pytheia AI για autonomous recovery</span><span class="lang-en">Real-time monitoring for Stellar txs. Alerts on failures, delays, anomalies. Pytheia AI integration for recovery</span></div>
+                        </div>
+                    </li>
+                </ul>
+                <div class="progress-container">
+                    <div class="progress-bar"><div class="progress-fill in-progress" style="width: 15%"></div></div>
+                    <div class="progress-label"><span>15%</span><span class="lang-el">Σε Εξέλιξη - Ανάπτυξη Stellar integration</span><span class="lang-en">In Progress - Stellar integration development</span></div>
                 </div>
             </div>
         </div>

@@ -1201,6 +1201,16 @@ BTC_RPC_PASSWORD = os.getenv("BTC_RPC_PASSWORD", "")
 BTC_RECEIVER  = BTC_PLEDGE_VAULT
 MIN_AMOUNT    = 0.00001
 
+# BIP32 Master Seed for Phase 1B unique deposit address generation
+# This seed is used to derive unique BTC addresses per user using BIP32 hierarchy
+# Path: m/44'/0'/{user_index}'/0/0
+# Each user gets deterministic address based on their THR address
+# Must be 64-char hex string (32 bytes)
+PLEDGE_BRIDGE_MASTER_SEED = os.getenv(
+    "PLEDGE_BRIDGE_MASTER_SEED",
+    "e9873d79c6d87dc0fb6a5778633389f4453213303da61f20bd67fc233aa33262"  # Default test seed
+)
+
 # ─── PR-184: Multi-Chain RPC Configuration ─────────────────────────────────
 # EVM-compatible chains
 ETH_RPC_URL = os.getenv("ETH_RPC_URL", "https://eth.llamarpc.com")
@@ -16292,6 +16302,57 @@ def api_pledge_quote():
         vault_address=BTC_RECEIVER,
         confirmations_required=1,
     ), 200
+
+
+@app.route("/api/pledge/deposit-address")
+def api_pledge_deposit_address():
+    """
+    Phase 1B: Get unique BTC deposit address for user (BIP32 derivation)
+
+    Query params:
+        thr_address: User's Thronos address
+
+    Returns:
+        {
+            "thr_address": "THR...",
+            "deposit_address": "1A1z...",
+            "derivation_path": "m/44'/0'/{index}'/0/0",
+            "instructions": "...",
+            "security_note": "..."
+        }
+    """
+    try:
+        from bip32_deposit_manager import get_deposit_manager
+
+        thr_address = request.args.get('thr_address', '').strip()
+        if not thr_address:
+            return jsonify(error="Missing thr_address parameter"), 400
+
+        # Initialize deposit manager if needed
+        manager = get_deposit_manager()
+        if not manager:
+            from bip32_deposit_manager import initialize_deposit_manager
+            manager = initialize_deposit_manager(PLEDGE_BRIDGE_MASTER_SEED)
+
+        deposit_info = manager.get_user_deposit_info(thr_address)
+
+        if "error" in deposit_info:
+            return jsonify(error=deposit_info["error"]), 400
+
+        return jsonify(ok=True, **deposit_info), 200
+
+    except ImportError:
+        # Phase 1B not available yet (graceful degradation)
+        return jsonify(
+            ok=False,
+            message="Phase 1B not yet deployed",
+            note="Using Phase 1A blocklist validator",
+            fallback_address=BTC_RECEIVER
+        ), 200
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Failed to get deposit address: {e}")
+        return jsonify(error=str(e)), 500
 
 
 def build_wallet_history(thr_addr: str) -> list[dict]:

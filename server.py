@@ -215,12 +215,33 @@ _block_broadcaster_thread = threading.Thread(target=_background_block_broadcaste
 _block_processor_thread.start()
 _block_broadcaster_thread.start()
 
+# Phase 3: Initialize Stellar Bridge Coordinator
+try:
+    from stellar_bridge_coordinator import initialize_coordinator, start_worker as start_stellar_worker
+    _stellar_coordinator = initialize_coordinator()
+    _stellar_coordinator.start_worker()
+    logger.info("✅ Phase 3: Stellar Bridge Coordinator initialized and worker started")
+except ImportError:
+    _stellar_coordinator = None
+    logger.warning("Phase 3 (Stellar Bridge) not yet available")
+except Exception as e:
+    _stellar_coordinator = None
+    logger.error(f"Failed to initialize Stellar Bridge: {e}")
+
 def _shutdown_background_workers():
     """Gracefully shutdown background workers."""
     global _BACKGROUND_WORKERS_ACTIVE
     _BACKGROUND_WORKERS_ACTIVE = False
     _block_processor_thread.join(timeout=5)
     _block_broadcaster_thread.join(timeout=5)
+
+    # Shutdown Stellar Bridge
+    try:
+        if _stellar_coordinator:
+            _stellar_coordinator.stop_worker()
+            logger.info("Stellar Bridge worker stopped")
+    except Exception as e:
+        logger.error(f"Error stopping Stellar Bridge: {e}")
 
 atexit.register(_shutdown_background_workers)
 
@@ -16561,12 +16582,32 @@ def api_verify_pledge_signature():
             f"{amount_btc} BTC → {thr_amount} THR"
         )
 
+        # 🌟 Phase 3: Queue Stellar settlement
+        settlement_queued = False
+        settlement_task_id = ""
+        try:
+            if _stellar_coordinator:
+                from decimal import Decimal
+                success, task_id, msg = _stellar_coordinator.queue_settlement(
+                    thr_address=thr_address,
+                    btc_amount=Decimal(str(amount_btc)),
+                    btc_tx_id=tx_id,
+                    target_exchange="binance"  # Default, can be parameterized
+                )
+                settlement_queued = success
+                settlement_task_id = task_id
+                logger.info(f"Settlement queued: {task_id} ({msg})")
+        except Exception as e:
+            logger.warning(f"Failed to queue settlement: {e}")
+
         return jsonify(
             status="verified",
             thr_address=thr_address,
             thr_minted=thr_amount,
             message=f"🎉 Welcome to Thronos! You have {thr_amount} THR",
-            next_steps="Visit /wallet to view your balance and start using Thronos services"
+            next_steps="Visit /wallet to view your balance and start using Thronos services",
+            phase3_settlement_queued=settlement_queued,
+            phase3_settlement_task=settlement_task_id
         ), 200
 
     except ImportError:
@@ -16577,6 +16618,125 @@ def api_verify_pledge_signature():
     except Exception as e:
         logger = logging.getLogger("thronos")
         logger.error(f"Error verifying signature: {e}")
+        return jsonify(
+            status="error",
+            error=str(e)
+        ), 500
+
+
+@app.route("/api/pledge/settlement/status/<task_id>", methods=["GET"])
+def api_get_settlement_status(task_id: str):
+    """
+    Phase 3: Get Stellar settlement status
+
+    GET /api/pledge/settlement/status/<task_id>
+
+    Returns:
+        {
+            "task_id": "stellar_...",
+            "thr_address": "THR...",
+            "status": "pending|processing|completed|failed",
+            "btc_amount": 0.00001,
+            "usdc_amount": 0.425,
+            "attempt_count": 0,
+            "created_at": "2026-05-25T...",
+            "last_error": null
+        }
+    """
+    try:
+        if not _stellar_coordinator:
+            return jsonify(
+                status="error",
+                message="Phase 3 not available"
+            ), 503
+
+        settlement = _stellar_coordinator.get_settlement_status(task_id)
+        if not settlement:
+            return jsonify(
+                status="not_found",
+                message=f"Settlement {task_id} not found"
+            ), 404
+
+        return jsonify(settlement), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting settlement status: {e}")
+        return jsonify(
+            status="error",
+            error=str(e)
+        ), 500
+
+
+@app.route("/api/pledge/settlement/pending", methods=["GET"])
+def api_get_pending_settlements():
+    """
+    Phase 3: Get all pending settlements
+
+    GET /api/pledge/settlement/pending
+
+    Returns:
+        {
+            "pending_count": 5,
+            "settlements": [
+                { task_id, thr_address, status, btc_amount, ... },
+                ...
+            ]
+        }
+    """
+    try:
+        if not _stellar_coordinator:
+            return jsonify(
+                status="error",
+                message="Phase 3 not available"
+            ), 503
+
+        pending = _stellar_coordinator.get_pending_settlements()
+        return jsonify(
+            pending_count=len(pending),
+            settlements=pending
+        ), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting pending settlements: {e}")
+        return jsonify(
+            status="error",
+            error=str(e)
+        ), 500
+
+
+@app.route("/api/pledge/settlement/stats", methods=["GET"])
+def api_get_settlement_stats():
+    """
+    Phase 3: Get settlement coordinator statistics
+
+    GET /api/pledge/settlement/stats
+
+    Returns:
+        {
+            "queue_size": 10,
+            "pending": 5,
+            "processing": 2,
+            "completed": 100,
+            "failed": 0,
+            "total_usdc_settled": 42500.50,
+            "worker_running": true
+        }
+    """
+    try:
+        if not _stellar_coordinator:
+            return jsonify(
+                status="error",
+                message="Phase 3 not available"
+            ), 503
+
+        stats = _stellar_coordinator.get_stats()
+        return jsonify(stats), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting settlement stats: {e}")
         return jsonify(
             status="error",
             error=str(e)

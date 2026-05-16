@@ -410,6 +410,11 @@ except ImportError:
     register_evm_routes = None
 
 try:
+    from legacy_api import register_legacy_routes
+except ImportError:
+    register_legacy_routes = None
+
+try:
     from own_api_v1 import register_own_routes
 except ImportError:
     register_own_routes = None
@@ -906,6 +911,14 @@ if register_evm_routes is not None:
         print('[EVM] routes registered')
     except Exception as _e:
         print(f'[EVM] routes not registered: {_e}')
+
+# Register Digital Legacy routes
+if register_legacy_routes is not None:
+    try:
+        register_legacy_routes(app, DATA_DIR)  # type: ignore
+        print('[Digital Legacy] routes registered')
+    except Exception as _e:
+        print(f'[Digital Legacy] routes not registered: {_e}')
 
 # --------------------------------------------------------------------------
 # AI demo usage tracking

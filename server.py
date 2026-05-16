@@ -228,6 +228,19 @@ except Exception as e:
     _stellar_coordinator = None
     logger.error(f"Failed to initialize Stellar Bridge: {e}")
 
+# Phase 4: Initialize CEX Integration Agent
+try:
+    from cex_integration_agent import initialize_agent, start_agent as start_cex_agent
+    _cex_agent = initialize_agent()
+    _cex_agent.start()
+    logger.info("✅ Phase 4: CEX Integration Agent initialized and monitoring started")
+except ImportError:
+    _cex_agent = None
+    logger.warning("Phase 4 (CEX Integration) not yet available")
+except Exception as e:
+    _cex_agent = None
+    logger.error(f"Failed to initialize CEX Agent: {e}")
+
 def _shutdown_background_workers():
     """Gracefully shutdown background workers."""
     global _BACKGROUND_WORKERS_ACTIVE
@@ -242,6 +255,14 @@ def _shutdown_background_workers():
             logger.info("Stellar Bridge worker stopped")
     except Exception as e:
         logger.error(f"Error stopping Stellar Bridge: {e}")
+
+    # Shutdown CEX Agent
+    try:
+        if _cex_agent:
+            _cex_agent.stop()
+            logger.info("CEX Integration Agent stopped")
+    except Exception as e:
+        logger.error(f"Error stopping CEX Agent: {e}")
 
 atexit.register(_shutdown_background_workers)
 
@@ -16737,6 +16758,124 @@ def api_get_settlement_stats():
     except Exception as e:
         logger = logging.getLogger("thronos")
         logger.error(f"Error getting settlement stats: {e}")
+        return jsonify(
+            status="error",
+            error=str(e)
+        ), 500
+
+
+@app.route("/api/cex/task/status/<task_id>", methods=["GET"])
+def api_get_cex_task_status(task_id: str):
+    """
+    Phase 4: Get CEX conversion task status
+
+    GET /api/cex/task/status/<task_id>
+
+    Returns:
+        {
+            "task_id": "cex_...",
+            "exchange": "binance",
+            "user_email": "user@example.com",
+            "status": "completed|pending|kyc_check|converting|failed",
+            "btc_amount": "0.00001",
+            "thr_address": "THR...",
+            ...
+        }
+    """
+    try:
+        if not _cex_agent:
+            return jsonify(
+                status="error",
+                message="Phase 4 not available"
+            ), 503
+
+        task = _cex_agent.get_task_status(task_id)
+        if not task:
+            return jsonify(
+                status="not_found",
+                message=f"Task {task_id} not found"
+            ), 404
+
+        return jsonify(task), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting CEX task status: {e}")
+        return jsonify(
+            status="error",
+            error=str(e)
+        ), 500
+
+
+@app.route("/api/cex/pending", methods=["GET"])
+def api_get_pending_cex_conversions():
+    """
+    Phase 4: Get all pending CEX conversions
+
+    GET /api/cex/pending
+
+    Returns:
+        {
+            "pending_count": 5,
+            "tasks": [
+                { task_id, exchange, user_email, btc_amount, status },
+                ...
+            ]
+        }
+    """
+    try:
+        if not _cex_agent:
+            return jsonify(
+                status="error",
+                message="Phase 4 not available"
+            ), 503
+
+        pending = _cex_agent.get_pending_conversions()
+        return jsonify(
+            pending_count=len(pending),
+            tasks=pending
+        ), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting pending conversions: {e}")
+        return jsonify(
+            status="error",
+            error=str(e)
+        ), 500
+
+
+@app.route("/api/cex/stats", methods=["GET"])
+def api_get_cex_agent_stats():
+    """
+    Phase 4: Get CEX Integration Agent statistics
+
+    GET /api/cex/stats
+
+    Returns:
+        {
+            "queue_size": 5,
+            "pending": 3,
+            "completed": 250,
+            "failed": 0,
+            "total_btc_converted": 0.00250,
+            "total_deposits_found": 500,
+            "agent_running": true
+        }
+    """
+    try:
+        if not _cex_agent:
+            return jsonify(
+                status="error",
+                message="Phase 4 not available"
+            ), 503
+
+        stats = _cex_agent.get_stats()
+        return jsonify(stats), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting CEX stats: {e}")
         return jsonify(
             status="error",
             error=str(e)

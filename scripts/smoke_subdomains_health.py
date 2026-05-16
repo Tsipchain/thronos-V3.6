@@ -64,7 +64,9 @@ def _try_target(target: Target) -> dict:
         resp = None
         for attempt in range(RETRIES):
             try:
-                resp = requests.get(url, timeout=TIMEOUT)
+                # For internal ro.api calls with potential SSL issues, allow legacy certs
+                verify_ssl = False if "ro.api" in url else True
+                resp = requests.get(url, timeout=TIMEOUT, verify=verify_ssl)
                 break
             except Exception as exc:
                 if attempt == RETRIES - 1:

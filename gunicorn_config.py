@@ -10,8 +10,9 @@ bind = f"0.0.0.0:{os.getenv('PORT', 8000)}"
 workers = 1  # Single worker to avoid scheduler conflicts
 worker_class = "gthread"
 threads = 32  # Match CPU cores for maximum concurrency
-timeout = 120
-graceful_timeout = 30
+timeout = 300  # Increased from 120s to handle heavy block processing (chain.json, ledger updates, peer broadcast)
+graceful_timeout = 60  # Increased from 30s for clean shutdown
+keepalive = 5  # Keep-alive timeout for long-running requests
 
 # Trust Railway's proxy so ProxyFix sees real client IPs and correct scheme.
 # Railway terminates TLS and forwards requests via its internal load balancer.

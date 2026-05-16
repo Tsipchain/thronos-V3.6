@@ -1349,15 +1349,16 @@ REDIS_CLIENT = None
 if REDIS_CACHE_ENABLED and (REDIS_URL or REDIS_HOST):
     try:
         if REDIS_URL:
-            REDIS_CLIENT = redis.Redis.from_url(REDIS_URL, socket_timeout=5, socket_connect_timeout=5)
+            # Increased timeouts from 5s to 10s for slower Redis under load
+            REDIS_CLIENT = redis.Redis.from_url(REDIS_URL, socket_timeout=10, socket_connect_timeout=10)
         else:
             REDIS_CLIENT = redis.Redis(
                 host=REDIS_HOST,
                 port=REDIS_PORT,
                 db=REDIS_DB,
                 password=REDIS_PASSWORD or None,
-                socket_timeout=5,
-                socket_connect_timeout=5,
+                socket_timeout=10,  # Increased from 5s to 10s
+                socket_connect_timeout=10,  # Increased from 5s to 10s
             )
         REDIS_CLIENT.ping()
         logger.info("[REDIS] Balance cache enabled")
@@ -20432,6 +20433,14 @@ def api_miner_work():
 @app.route("/api/miner/submit", methods=["POST"])
 def api_miner_submit():
     """Simple HTTP miner submit (CPU/GPU) - processes asynchronously to avoid timeouts."""
+    # Reject mining on read-only replica nodes
+    if READ_ONLY or NODE_ROLE == "replica":
+        return jsonify(
+            error="Mining disabled on read-only nodes",
+            node_role=NODE_ROLE,
+            message="Submit blocks to the master node"
+        ), 403
+
     data = request.get_json() or {}
 
     # Quick validation
@@ -20450,9 +20459,13 @@ def api_miner_submit():
             thr_address=thr_address
         ), 202
     except queue.Full:
-        # Queue is full, fall back to synchronous processing with timeout
-        logger.warning("Block processing queue is full, processing synchronously")
-        return _process_mining_submission(data, require_job_id=False)
+        # Queue is full - return 503 instead of blocking (prevents timeouts)
+        logger.warning(f"Block processing queue is full - rejecting block from {thr_address}")
+        return jsonify(
+            error="Node processing limit reached",
+            reason="queue_full",
+            message="Please retry after a moment"
+        ), 503
 
 
 # ─── BACKGROUND MINTER / WATCHDOG ──────────────────

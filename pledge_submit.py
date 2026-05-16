@@ -8,6 +8,24 @@ def pledge_submit():
     if not btc_address:
         return jsonify(error="Missing BTC address"), 400
 
+    # === CEX Validation (Phase 1A) ===
+    # Prevent direct deposits from CEX hot wallets (MEXC, Binance, Kraken)
+    # Personal wallet required for KYC/AML compliance
+    try:
+        from cex_validator import validate_pledge_source
+        is_valid_source, source_message = validate_pledge_source(btc_address)
+
+        if not is_valid_source:
+            return jsonify(
+                status="rejected",
+                reason="cex_direct_not_allowed",
+                message=source_message,
+                suggestion="Withdraw BTC to personal wallet (MetaMask, Ledger, etc.) first"
+            ), 403
+    except ImportError:
+        # If cex_validator not available, continue (graceful degradation)
+        pass
+
     pledges = load_json(PLEDGE_CHAIN, [])
     exists = next((p for p in pledges if p["btc_address"] == btc_address), None)
     if exists:

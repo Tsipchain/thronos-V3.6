@@ -415,6 +415,11 @@ except ImportError:
     register_legacy_routes = None
 
 try:
+    from dormant_asset_api import register_dormant_asset_routes
+except ImportError:
+    register_dormant_asset_routes = None
+
+try:
     from own_api_v1 import register_own_routes
 except ImportError:
     register_own_routes = None
@@ -919,6 +924,14 @@ if register_legacy_routes is not None:
         print('[Digital Legacy] routes registered')
     except Exception as _e:
         print(f'[Digital Legacy] routes not registered: {_e}')
+
+# Register Dormant Asset System routes
+if register_dormant_asset_routes is not None:
+    try:
+        register_dormant_asset_routes(app, DATA_DIR)  # type: ignore
+        print('[Dormant Asset System] routes registered')
+    except Exception as _e:
+        print(f'[Dormant Asset System] routes not registered: {_e}')
 
 # --------------------------------------------------------------------------
 # AI demo usage tracking

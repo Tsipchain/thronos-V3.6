@@ -1,393 +1,467 @@
 """
-Digital Legacy API Endpoints
-REST API for Thronos Digital Legacy System
+Digital Legacy System API
+Flask REST API for creating, managing, and claiming digital legacies.
+
+10 endpoints for complete inheritance workflow:
+1. Create legacy
+2. Register heir
+3. Register biometric
+4. Add asset
+5. Store document
+6. Activate legacy
+7. Verify heir
+8. Claim and distribute
+9. Get legacy details
+10. Get audit trail
 """
 
+from flask import Flask, request, jsonify
+from functools import wraps
+from digital_legacy_system import DigitalLegacySystem, LegacyStatus
 import json
-import hashlib
-from flask import request, jsonify
-from typing import Dict, Any
-from digital_legacy_system import DigitalLegacySystem, LEGACY_NFT_CONTRACT_TEMPLATE
 
-
-def register_legacy_routes(app, data_dir: str):
-    """Register digital legacy routes to Flask app."""
-
-    legacy_system = DigitalLegacySystem(data_dir)
-
-    # ─── CREATE LEGACY DOCUMENT ─────────────────────────────────────────
-
-    @app.route("/api/legacy/create", methods=["POST"])
-    def api_legacy_create():
-        """
-        Create a digital legacy document (NFT-based will).
-
-        Request body:
-        {
-            "owner_address": "THR address",
-            "owner_signature": "digital signature from owner",
-            "assets": [
-                {
-                    "asset_type": "wallet|token|property",
-                    "identifier": "wallet address or token id",
-                    "value_thr": 1000.5,
-                    "description": "Primary wallet"
-                }
-            ],
-            "heirs": [
-                {
-                    "heir_name": "John Doe",
-                    "share_percentage": 50
-                }
-            ],
-            "metadata": {
-                "created_by": "optional",
-                "notes": "My digital will"
-            }
-        }
-
-        Response:
-        {
-            "status": "success",
-            "legacy_id": "abc123...",
-            "nft_contract": "LEGACY_NFT_abc123",
-            "nft_token_id": "abc123...",
-            "total_asset_value_thr": 1000.5
-        }
-        """
-        try:
-            data = request.get_json() or {}
-
-            owner_address = data.get("owner_address", "").strip()
-            owner_signature = data.get("owner_signature", "").strip()
-            assets = data.get("assets", [])
-            heirs = data.get("heirs", [])
-            metadata = data.get("metadata", {})
-
-            if not owner_address or not owner_signature or not assets or not heirs:
-                return jsonify(error="Missing required fields"), 400
-
-            legacy_doc = legacy_system.create_legacy_document(
-                owner_address=owner_address,
-                owner_signature=owner_signature,
-                assets=assets,
-                heirs=heirs,
-                metadata=metadata
-            )
-
-            return jsonify(
-                status="success",
-                legacy_id=legacy_doc["legacy_id"],
-                nft_contract=legacy_doc["nft_contract"],
-                nft_token_id=legacy_doc["nft_token_id"],
-                total_asset_value_thr=legacy_doc["total_asset_value_thr"],
-                heirs_count=len(heirs)
-            ), 201
-
-        except ValueError as e:
-            return jsonify(error=str(e)), 400
-        except Exception as e:
-            return jsonify(error=f"Internal error: {str(e)}"), 500
-
-    # ─── REGISTER HEIR ─────────────────────────────────────────────────
-
-    @app.route("/api/legacy/<legacy_id>/register-heir", methods=["POST"])
-    def api_register_heir(legacy_id):
-        """
-        Register an heir with biometric/genetic verification.
-
-        Request body:
-        {
-            "heir_address": "THR address",
-            "heir_name": "John Doe",
-            "biometric_hash": "hash of fingerprint/face/iris scan",
-            "genetic_marker": "optional hash of genetic data"
-        }
-
-        Response:
-        {
-            "status": "success",
-            "heir_id": "heir123...",
-            "verified": false
-        }
-        """
-        try:
-            data = request.get_json() or {}
-
-            heir_address = data.get("heir_address", "").strip()
-            heir_name = data.get("heir_name", "").strip()
-            biometric_hash = data.get("biometric_hash", "").strip()
-            genetic_marker = data.get("genetic_marker", "").strip() or None
-
-            if not heir_address or not heir_name or not biometric_hash:
-                return jsonify(error="Missing required fields"), 400
-
-            # Verify legacy exists
-            legacy = legacy_system.get_legacy_document(legacy_id)
-            if not legacy:
-                return jsonify(error="Legacy not found"), 404
-
-            heir_record = legacy_system.register_heir(
-                legacy_id=legacy_id,
-                heir_address=heir_address,
-                heir_name=heir_name,
-                biometric_hash=biometric_hash,
-                genetic_marker=genetic_marker
-            )
-
-            return jsonify(
-                status="success",
-                heir_id=heir_record["heir_id"],
-                heir_name=heir_record["heir_name"],
-                verified=heir_record["verified"]
-            ), 201
-
-        except Exception as e:
-            return jsonify(error=f"Error: {str(e)}"), 500
-
-    # ─── VERIFY HEIR ───────────────────────────────────────────────────
-
-    @app.route("/api/legacy/verify-heir", methods=["POST"])
-    def api_verify_heir():
-        """
-        Verify heir identity using biometric/genetic data.
-
-        Request body:
-        {
-            "heir_id": "heir123...",
-            "biometric_data": "raw biometric data for matching",
-            "genetic_data": "optional genetic data"
-        }
-
-        Response:
-        {
-            "verified": true,
-            "access_token": "token123...",
-            "access_valid_until": 1234567890
-        }
-        """
-        try:
-            data = request.get_json() or {}
-
-            heir_id = data.get("heir_id", "").strip()
-            biometric_data = data.get("biometric_data", "").strip()
-            genetic_data = data.get("genetic_data", "").strip() or None
-
-            if not heir_id or not biometric_data:
-                return jsonify(error="Missing required fields"), 400
-
-            result = legacy_system.verify_heir(
-                heir_id=heir_id,
-                biometric_data=biometric_data,
-                genetic_data=genetic_data
-            )
-
-            if not result.get("verified"):
-                return jsonify(
-                    verified=False,
-                    error=result.get("error", "Verification failed")
-                ), 403
-
-            return jsonify(
-                verified=True,
-                heir_id=result["heir_id"],
-                heir_name=result["heir_name"],
-                access_token=result["access_token"],
-                access_valid_until=result["access_valid_until"]
-            ), 200
-
-        except Exception as e:
-            return jsonify(error=f"Error: {str(e)}"), 500
-
-    # ─── GENERATE RECOVERY QR ──────────────────────────────────────────
-
-    @app.route("/api/legacy/recovery-qr", methods=["POST"])
-    def api_generate_recovery_qr():
-        """
-        Generate QR code for heir recovery access.
-
-        Request body:
-        {
-            "legacy_id": "abc123...",
-            "heir_id": "heir123...",
-            "access_token": "token123..."
-        }
-
-        Response:
-        {
-            "recovery_id": "rec123...",
-            "qr_code_base64": "data:image/png;base64,...",
-            "valid_until": 1234567890
-        }
-        """
-        try:
-            data = request.get_json() or {}
-
-            legacy_id = data.get("legacy_id", "").strip()
-            heir_id = data.get("heir_id", "").strip()
-            access_token = data.get("access_token", "").strip()
-
-            if not legacy_id or not heir_id or not access_token:
-                return jsonify(error="Missing required fields"), 400
-
-            recovery_record = legacy_system.generate_recovery_qr(
-                legacy_id=legacy_id,
-                heir_id=heir_id,
-                access_token=access_token
-            )
-
-            return jsonify(
-                status="success",
-                recovery_id=recovery_record["recovery_id"],
-                qr_code_base64=f"data:image/png;base64,{recovery_record['qr_code_base64']}",
-                valid_until=recovery_record["valid_until"]
-            ), 200
-
-        except Exception as e:
-            return jsonify(error=f"Error: {str(e)}"), 500
-
-    # ─── GET LEGACY DOCUMENT ───────────────────────────────────────────
-
-    @app.route("/api/legacy/<legacy_id>", methods=["GET"])
-    def api_get_legacy(legacy_id):
-        """Retrieve legacy document by ID."""
-        try:
-            legacy = legacy_system.get_legacy_document(legacy_id)
-            if not legacy:
-                return jsonify(error="Legacy not found"), 404
-
-            return jsonify(
-                status="success",
-                legacy=legacy
-            ), 200
-
-        except Exception as e:
-            return jsonify(error=f"Error: {str(e)}"), 500
-
-    # ─── GET USER'S LEGACIES (AS OWNER) ────────────────────────────────
-
-    @app.route("/api/legacy/owner/<owner_address>", methods=["GET"])
-    def api_get_owner_legacies(owner_address):
-        """Get all legacy documents for an owner."""
-        try:
-            legacies = legacy_system.get_legacy_by_owner(owner_address)
-
-            return jsonify(
-                status="success",
-                owner_address=owner_address,
-                legacies_count=len(legacies),
-                legacies=legacies
-            ), 200
-
-        except Exception as e:
-            return jsonify(error=f"Error: {str(e)}"), 500
-
-    # ─── GET USER'S LEGACIES (AS HEIR) ────────────────────────────────
-
-    @app.route("/api/legacy/heir/<heir_address>", methods=["GET"])
-    def api_get_heir_legacies(heir_address):
-        """Get all legacy documents where someone is an heir."""
-        try:
-            legacies = legacy_system.get_heir_legacies(heir_address)
-
-            return jsonify(
-                status="success",
-                heir_address=heir_address,
-                legacies_count=len(legacies),
-                legacies=legacies
-            ), 200
-
-        except Exception as e:
-            return jsonify(error=f"Error: {str(e)}"), 500
-
-    # ─── GET AUDIT TRAIL ───────────────────────────────────────────────
-
-    @app.route("/api/legacy/<legacy_id>/audit-trail", methods=["GET"])
-    def api_get_audit_trail(legacy_id):
-        """Get complete immutable audit trail for a legacy."""
-        try:
-            trail = legacy_system.get_audit_trail(legacy_id)
-
-            return jsonify(
-                status="success",
-                legacy_id=legacy_id,
-                audit_entries=len(trail),
-                trail=trail
-            ), 200
-
-        except Exception as e:
-            return jsonify(error=f"Error: {str(e)}"), 500
-
-    # ─── DISTRIBUTE LEGACY ─────────────────────────────────────────────
-
-    @app.route("/api/legacy/<legacy_id>/distribute", methods=["POST"])
-    def api_distribute_legacy(legacy_id):
-        """
-        Execute legacy distribution to verified heir.
-
-        Request body:
-        {
-            "heir_id": "heir123...",
-            "access_token": "token123..."
-        }
-
-        Response:
-        {
-            "distribution_id": "dist123...",
-            "heir_name": "John Doe",
-            "total_value_thr": 1000.5,
-            "nft_transfer_receipt": "LEGACY_TRANSFER_..."
-        }
-        """
-        try:
-            data = request.get_json() or {}
-
-            heir_id = data.get("heir_id", "").strip()
-            access_token = data.get("access_token", "").strip()
-
-            if not heir_id or not access_token:
-                return jsonify(error="Missing required fields"), 400
-
-            distribution = legacy_system.distribute_to_heir(
-                legacy_id=legacy_id,
-                heir_id=heir_id,
-                access_token=access_token
-            )
-
-            return jsonify(
-                status="success",
-                distribution_id=distribution["distribution_id"],
-                heir_name=distribution["heir_name"],
-                total_value_thr=distribution["total_value_thr"],
-                nft_transfer_receipt=distribution["nft_transfer_receipt"]
-            ), 200
-
-        except ValueError as e:
-            return jsonify(error=str(e)), 400
-        except Exception as e:
-            return jsonify(error=f"Error: {str(e)}"), 500
-
-    # ─── DEPLOY LEGACY NFT CONTRACT ────────────────────────────────────
-
-    @app.route("/api/legacy/contract-template", methods=["GET"])
-    def api_get_legacy_contract():
-        """Get Solidity contract template for Digital Legacy NFT."""
-        return jsonify(
-            status="success",
-            contract_name="DigitalLegacyNFT",
-            contract_code=LEGACY_NFT_CONTRACT_TEMPLATE,
-            description="Smart contract for managing digital legacies and heir verification"
-        ), 200
-
-    return {
-        "/api/legacy/create": "POST",
-        "/api/legacy/<legacy_id>/register-heir": "POST",
-        "/api/legacy/verify-heir": "POST",
-        "/api/legacy/recovery-qr": "POST",
-        "/api/legacy/<legacy_id>": "GET",
-        "/api/legacy/owner/<owner_address>": "GET",
-        "/api/legacy/heir/<heir_address>": "GET",
-        "/api/legacy/<legacy_id>/audit-trail": "GET",
-        "/api/legacy/<legacy_id>/distribute": "POST",
-        "/api/legacy/contract-template": "GET"
+app = Flask(__name__)
+legacy_system = DigitalLegacySystem()
+
+# Rate limiting and auth simulation
+VALID_TOKENS = {"demo": "demo_user", "test": "test_user"}
+
+
+def require_auth(f):
+    """Require authentication token"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.headers.get("Authorization", "").replace("Bearer ", "")
+        if token not in VALID_TOKENS:
+            return jsonify({"error": "Unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+
+@app.route("/api/legacy/create", methods=["POST"])
+@require_auth
+def create_legacy():
+    """
+    Create a new digital legacy
+    
+    POST /api/legacy/create
+    {
+        "owner_address": "0x...",
+        "owner_name": "John Doe",
+        "title": "My Digital Estate",
+        "description": "Protection for my family"
     }
+    """
+    try:
+        data = request.json
+        
+        legacy_id = legacy_system.create_legacy(
+            owner_address=data["owner_address"],
+            owner_name=data["owner_name"],
+            title=data.get("title", ""),
+            description=data.get("description", "")
+        )
+        
+        return jsonify({
+            "success": True,
+            "legacy_id": legacy_id,
+            "status": "created",
+            "message": "Digital legacy created successfully"
+        }), 201
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/legacy/<legacy_id>/register-heir", methods=["POST"])
+@require_auth
+def register_heir(legacy_id):
+    """
+    Register a heir to the legacy
+    
+    POST /api/legacy/{legacy_id}/register-heir
+    {
+        "heir_id": "heir_001",
+        "full_name": "Jane Doe",
+        "birth_date": "1990-01-01",
+        "relationship": "daughter",
+        "inheritance_percentage": 50.0
+    }
+    """
+    try:
+        data = request.json
+        
+        heir_id = legacy_system.add_heir_to_legacy(
+            legacy_id=legacy_id,
+            heir_id=data["heir_id"],
+            full_name=data["full_name"],
+            birth_date=data["birth_date"],
+            relationship=data["relationship"],
+            inheritance_percentage=data["inheritance_percentage"]
+        )
+        
+        return jsonify({
+            "success": True,
+            "heir_id": heir_id,
+            "message": "Heir registered successfully"
+        }), 201
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/legacy/<legacy_id>/register-biometric", methods=["POST"])
+@require_auth
+def register_biometric(legacy_id):
+    """
+    Register heir biometric data
+    
+    POST /api/legacy/{legacy_id}/register-biometric
+    {
+        "heir_id": "heir_001",
+        "biometric_type": "fingerprint",
+        "biometric_data": "<base64_encoded>"
+    }
+    """
+    try:
+        data = request.json
+        biometric_data = data["biometric_data"].encode() if isinstance(data["biometric_data"], str) else data["biometric_data"]
+        
+        success = legacy_system.register_heir_biometric(
+            legacy_id=legacy_id,
+            heir_id=data["heir_id"],
+            biometric_type=data["biometric_type"],
+            raw_data=biometric_data
+        )
+        
+        return jsonify({
+            "success": success,
+            "message": "Biometric data registered"
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/legacy/<legacy_id>/add-asset", methods=["POST"])
+@require_auth
+def add_asset(legacy_id):
+    """
+    Add an asset to the legacy
+    
+    POST /api/legacy/{legacy_id}/add-asset
+    {
+        "asset_type": "thr",
+        "description": "1000 THR tokens",
+        "value": 1000.0,
+        "blockchain_address": "0xaccount"
+    }
+    """
+    try:
+        data = request.json
+        
+        asset_id = legacy_system.add_asset_to_legacy(
+            legacy_id=legacy_id,
+            asset_type=data["asset_type"],
+            description=data["description"],
+            value=float(data["value"]),
+            blockchain_address=data.get("blockchain_address", "")
+        )
+        
+        return jsonify({
+            "success": True,
+            "asset_id": asset_id,
+            "message": "Asset added to legacy"
+        }), 201
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/legacy/<legacy_id>/store-document", methods=["POST"])
+@require_auth
+def store_document(legacy_id):
+    """
+    Store a document in the legacy
+    
+    POST /api/legacy/{legacy_id}/store-document
+    {
+        "document_type": "will",
+        "content_hash": "0x...",
+        "ipfs_hash": "Qm...",
+        "url": "https://..."
+    }
+    """
+    try:
+        data = request.json
+        
+        doc_id = legacy_system.store_legacy_document(
+            legacy_id=legacy_id,
+            document_type=data["document_type"],
+            content_hash=data["content_hash"],
+            ipfs_hash=data.get("ipfs_hash", ""),
+            url=data.get("url", "")
+        )
+        
+        return jsonify({
+            "success": True,
+            "document_id": doc_id,
+            "message": "Document stored in legacy"
+        }), 201
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/legacy/<legacy_id>/activate", methods=["POST"])
+@require_auth
+def activate_legacy(legacy_id):
+    """
+    Activate the legacy (when owner is deceased)
+    
+    POST /api/legacy/{legacy_id}/activate
+    {
+        "activation_date": 1715851200
+    }
+    """
+    try:
+        data = request.json or {}
+        
+        success = legacy_system.activate_legacy(
+            legacy_id=legacy_id,
+            activation_date=data.get("activation_date", 0)
+        )
+        
+        return jsonify({
+            "success": success,
+            "message": "Legacy activated - heirs can now claim"
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/legacy/<legacy_id>/verify-heir", methods=["POST"])
+@require_auth
+def verify_heir(legacy_id):
+    """
+    Verify heir identity using biometric
+    
+    POST /api/legacy/{legacy_id}/verify-heir
+    {
+        "heir_id": "heir_001",
+        "biometric_data": "<base64_test_data>",
+        "genetic_marker": "optional_genetic_code"
+    }
+    """
+    try:
+        data = request.json
+        biometric_data = data["biometric_data"].encode() if isinstance(data["biometric_data"], str) else data["biometric_data"]
+        
+        verified = legacy_system.verify_heir_identity(
+            legacy_id=legacy_id,
+            heir_id=data["heir_id"],
+            test_biometric=biometric_data,
+            test_genetic=data.get("genetic_marker")
+        )
+        
+        return jsonify({
+            "success": True,
+            "verified": verified,
+            "message": "Heir verified" if verified else "Verification failed"
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/legacy/<legacy_id>/claim", methods=["POST"])
+@require_auth
+def claim_legacy(legacy_id):
+    """
+    Claim and distribute legacy to verified heir
+    
+    POST /api/legacy/{legacy_id}/claim
+    {
+        "heir_id": "heir_001"
+    }
+    """
+    try:
+        data = request.json
+        
+        distribution = legacy_system.claim_and_distribute(
+            legacy_id=legacy_id,
+            heir_id=data["heir_id"]
+        )
+        
+        return jsonify({
+            "success": True,
+            "distribution": distribution,
+            "message": "Legacy claimed and assets distributed"
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/legacy/<legacy_id>", methods=["GET"])
+@require_auth
+def get_legacy(legacy_id):
+    """
+    Get legacy details
+    
+    GET /api/legacy/{legacy_id}
+    """
+    try:
+        legacy = legacy_system.get_legacy(legacy_id)
+        
+        if not legacy:
+            return jsonify({"error": "Legacy not found"}), 404
+        
+        return jsonify({
+            "success": True,
+            "legacy": legacy
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/legacy/<legacy_id>/audit-trail", methods=["GET"])
+@require_auth
+def get_audit_trail(legacy_id):
+    """
+    Get immutable audit trail for legacy
+    
+    GET /api/legacy/{legacy_id}/audit-trail
+    """
+    try:
+        audit_trail = legacy_system.get_legacy_audit_trail(legacy_id)
+        
+        if audit_trail is None:
+            return jsonify({"error": "Legacy not found"}), 404
+        
+        return jsonify({
+            "success": True,
+            "audit_trail": audit_trail,
+            "entry_count": len(audit_trail)
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/legacy/owner/<owner_address>", methods=["GET"])
+@require_auth
+def get_owner_legacies(owner_address):
+    """
+    Get all legacies for an owner
+    
+    GET /api/legacy/owner/{owner_address}
+    """
+    try:
+        legacies = legacy_system.get_owner_legacies(owner_address)
+        
+        return jsonify({
+            "success": True,
+            "legacies": legacies,
+            "count": len(legacies)
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/legacy/heir/<heir_id>", methods=["GET"])
+@require_auth
+def get_heir_legacies(heir_id):
+    """
+    Get all legacies where user is an heir
+    
+    GET /api/legacy/heir/{heir_id}
+    """
+    try:
+        legacies = legacy_system.get_heir_legacies(heir_id)
+        
+        return jsonify({
+            "success": True,
+            "legacies": legacies,
+            "count": len(legacies)
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/legacy/statistics", methods=["GET"])
+@require_auth
+def get_statistics():
+    """
+    Get system-wide statistics
+    
+    GET /api/legacy/statistics
+    """
+    try:
+        stats = legacy_system.get_system_statistics()
+        
+        return jsonify({
+            "success": True,
+            "statistics": stats
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/legacy/contract-template", methods=["GET"])
+@require_auth
+def get_contract_template():
+    """
+    Get Solidity contract template for legacy NFT
+    
+    GET /api/legacy/contract-template
+    """
+    contract = '''
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract DigitalLegacyNFT {
+    struct Legacy {
+        string legacyId;
+        address owner;
+        uint256 createdTimestamp;
+        uint256 activationTimestamp;
+        string status;
+        uint256 totalAssets;
+    }
+    
+    mapping(string => Legacy) public legacies;
+    mapping(address => string[]) public ownerLegacies;
+    
+    event LegacyCreated(string indexed legacyId, address indexed owner);
+    event LegacyActivated(string indexed legacyId, uint256 timestamp);
+    event AssetClaimed(string indexed legacyId, address indexed heir);
+}
+'''
+    
+    return jsonify({
+        "success": True,
+        "contract": contract,
+        "language": "solidity",
+        "version": "0.8.0"
+    }), 200
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    """Health check endpoint"""
+    return jsonify({
+        "status": "healthy",
+        "service": "digital_legacy_api",
+        "version": "1.0",
+        "legacies_active": legacy_system.total_legacies
+    }), 200
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5002, debug=True)

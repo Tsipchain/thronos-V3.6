@@ -216,30 +216,44 @@ _block_processor_thread.start()
 _block_broadcaster_thread.start()
 
 # Phase 3: Initialize Stellar Bridge Coordinator
-try:
-    from stellar_bridge_coordinator import initialize_coordinator, start_worker as start_stellar_worker
-    _stellar_coordinator = initialize_coordinator()
-    _stellar_coordinator.start_worker()
-    logger.info("✅ Phase 3: Stellar Bridge Coordinator initialized and worker started")
-except ImportError:
-    _stellar_coordinator = None
-    logger.warning("Phase 3 (Stellar Bridge) not yet available")
-except Exception as e:
-    _stellar_coordinator = None
-    logger.error(f"Failed to initialize Stellar Bridge: {e}")
+_stellar_coordinator = None
+_cex_agent = None
 
-# Phase 4: Initialize CEX Integration Agent
-try:
-    from cex_integration_agent import initialize_agent, start_agent as start_cex_agent
-    _cex_agent = initialize_agent()
-    _cex_agent.start()
-    logger.info("✅ Phase 4: CEX Integration Agent initialized and monitoring started")
-except ImportError:
-    _cex_agent = None
-    logger.warning("Phase 4 (CEX Integration) not yet available")
-except Exception as e:
-    _cex_agent = None
-    logger.error(f"Failed to initialize CEX Agent: {e}")
+def _initialize_phase3_and_4():
+    """Initialize Phase 3 and Phase 4 after logger is ready"""
+    global _stellar_coordinator, _cex_agent
+
+    # Phase 3: Stellar Bridge
+    try:
+        from stellar_bridge_coordinator import initialize_coordinator
+        _stellar_coordinator = initialize_coordinator()
+        _stellar_coordinator.start_worker()
+        logger = logging.getLogger("thronos")
+        logger.info("✅ Phase 3: Stellar Bridge Coordinator initialized and worker started")
+    except ImportError:
+        _stellar_coordinator = None
+        print("[Phase 3] Stellar Bridge not available (module not found)")
+    except Exception as e:
+        _stellar_coordinator = None
+        logger = logging.getLogger("thronos")
+        logger.error(f"Failed to initialize Stellar Bridge: {e}")
+        print(f"[Phase 3] Error: {e}")
+
+    # Phase 4: CEX Integration Agent
+    try:
+        from cex_integration_agent import initialize_agent
+        _cex_agent = initialize_agent()
+        _cex_agent.start()
+        logger = logging.getLogger("thronos")
+        logger.info("✅ Phase 4: CEX Integration Agent initialized and monitoring started")
+    except ImportError:
+        _cex_agent = None
+        print("[Phase 4] CEX Integration Agent not available (module not found)")
+    except Exception as e:
+        _cex_agent = None
+        logger = logging.getLogger("thronos")
+        logger.error(f"Failed to initialize CEX Agent: {e}")
+        print(f"[Phase 4] Error: {e}")
 
 def _shutdown_background_workers():
     """Gracefully shutdown background workers."""
@@ -252,17 +266,21 @@ def _shutdown_background_workers():
     try:
         if _stellar_coordinator:
             _stellar_coordinator.stop_worker()
-            logger.info("Stellar Bridge worker stopped")
+            _log = logging.getLogger("thronos")
+            _log.info("Stellar Bridge worker stopped")
     except Exception as e:
-        logger.error(f"Error stopping Stellar Bridge: {e}")
+        _log = logging.getLogger("thronos")
+        _log.error(f"Error stopping Stellar Bridge: {e}")
 
     # Shutdown CEX Agent
     try:
         if _cex_agent:
             _cex_agent.stop()
-            logger.info("CEX Integration Agent stopped")
+            _log = logging.getLogger("thronos")
+            _log.info("CEX Integration Agent stopped")
     except Exception as e:
-        logger.error(f"Error stopping CEX Agent: {e}")
+        _log = logging.getLogger("thronos")
+        _log.error(f"Error stopping CEX Agent: {e}")
 
 atexit.register(_shutdown_background_workers)
 
@@ -1382,6 +1400,9 @@ for handler in root_logger.handlers:
     handler.addFilter(AttributesLevelFilter())
 
 logger = logging.getLogger("thronos")
+
+# Initialize Phase 3 & 4 now that logger is ready
+_initialize_phase3_and_4()
 
 scheduler_logger = logging.getLogger("apscheduler")
 scheduler_logger.setLevel(logging.INFO)

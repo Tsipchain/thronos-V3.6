@@ -578,6 +578,65 @@
             <li><span class="lang-el"><strong>Chrome Extension</strong>: Secure wallet με dApp integration</span><span class="lang-en"><strong>Chrome Extension</strong>: Secure wallet with dApp integration</span></li>
             <li><span class="lang-el"><strong>Mobile SDKs</strong>: React Native, iOS, Android support</span><span class="lang-en"><strong>Mobile SDKs</strong>: React Native, iOS, Android support</span></li>
         </ul>
+
+        <h3>🛡️ <span class="lang-el">KYC/AML Compliance & CEX Integration Architecture</span><span class="lang-en">KYC/AML Compliance & CEX Integration Architecture</span></h3>
+
+        <p>
+            <span class="lang-el"><strong>Πρόβλημα CEX:</strong> Οι ανταλλαγές κρυπτονομισμάτων (MEXC, Binance, Kraken κλπ.) χρησιμοποιούν ξεχωριστές διευθύνσεις κατάθεσης ανά χρήστη (μοναδικές), αλλά κοινές "hot wallets" για όλες τις αναλήψεις χρηστών (κοινόχρηστες). Αυτό σημαίνει ότι δεν μπορούμε να επαληθεύσουμε τον αποστολέα μόνο από τη διεύθυνση της συναλλαγής.</span>
+            <span class="lang-en"><strong>CEX Problem:</strong> Cryptocurrency exchanges (MEXC, Binance, Kraken, etc.) use separate deposit addresses per user (unique), but shared "hot wallets" for all user withdrawals (shared). This means we cannot verify the sender by transaction address alone.</span>
+        </p>
+
+        <p>
+            <span class="lang-el"><strong>Λύση:</strong> 4-φάσιο αρχιτεκτονικό πλάνο που εξελίσσεται από απλή blocklist σε πλήρη CEX API integration:</span>
+            <span class="lang-en"><strong>Solution:</strong> 4-phase architectural plan that evolves from simple blocklist to full CEX API integration:</span>
+        </p>
+
+        <div class="highlight-box">
+            <strong><span class="lang-el">Φάση 1A: Blocklist Validator (LIVE ✅)</span><span class="lang-en">Phase 1A: Blocklist Validator (LIVE ✅)</span></strong>
+            <ul style="margin: 10px 0 0 0;">
+                <li><span class="lang-el">Τρέχουσα κατάσταση: Αποκλεισμός γνωστών CEX hot wallet addresses</span><span class="lang-en">Current: Block known CEX hot wallet addresses</span></li>
+                <li><span class="lang-el">cex_validator.py module με KNOWN_CEX_WALLETS dict για MEXC, Binance, Kraken, Coinbase, OKX, Huobi</span><span class="lang-en">cex_validator.py module with KNOWN_CEX_WALLETS dict for MEXC, Binance, Kraken, Coinbase, OKX, Huobi</span></li>
+                <li><span class="lang-el">Enforcement σε pledge_submit.py endpoint με 403 Forbidden απορριψη</span><span class="lang-en">Enforcement in pledge_submit.py endpoint with 403 Forbidden rejection</span></li>
+                <li><span class="lang-el">UI warning banner στο pledge.html με 5-step οδηγίες για withdrawal σε personal wallet</span><span class="lang-en">UI warning banner in pledge.html with 5-step instructions to withdraw to personal wallet</span></li>
+                <li><span class="lang-el">Graceful degradation αν module unavailable</span><span class="lang-en">Graceful degradation if module unavailable</span></li>
+            </ul>
+        </div>
+
+        <div class="highlight-box">
+            <strong><span class="lang-el">Φάση 1B: BIP32 Unique Deposit Addresses (TARGET: May 17-18)</span><span class="lang-en">Phase 1B: BIP32 Unique Deposit Addresses (TARGET: May 17-18)</span></strong>
+            <ul style="margin: 10px 0 0 0;">
+                <li><span class="lang-el">Δημιουργία διαφορετικής deposit address ανά χρήστη χρησιμοποιώντας BIP32 derivation</span><span class="lang-en">Create unique per-user deposit address using BIP32 derivation</span></li>
+                <li><span class="lang-el">Ίδιο ιδιωτικό κλειδί παράγει ξεχωριστές addresses για MEXC, Binance, κλπ.</span><span class="lang-en">Same private key generates separate addresses for MEXC, Binance, etc.</span></li>
+                <li><span class="lang-el">Verification: αποστολέας χρησιμοποιεί ίδια κλειδί = verified identity</span><span class="lang-en">Verification: sender uses same key = verified identity</span></li>
+            </ul>
+        </div>
+
+        <div class="highlight-box">
+            <strong><span class="lang-el">Φάση 2: Signature & Payload Verification (TARGET: May 19-24, June 1-15)</span><span class="lang-en">Phase 2: Signature & Payload Verification (TARGET: May 19-24, June 1-15)</span></strong>
+            <ul style="margin: 10px 0 0 0;">
+                <li><span class="lang-el">Payload verification system: BTC client υπογράφει (bitcoin_message_sign) deposit payload</span><span class="lang-en">Payload verification system: BTC client signs (bitcoin_message_sign) deposit payload</span></li>
+                <li><span class="lang-el">Bridge ενδιάμεσο επαληθεύει υπογραφή με ECDSA verification</span><span class="lang-en">Bridge intermediate verifies signature with ECDSA verification</span></li>
+                <li><span class="lang-el">Προαπαιτούμενα: Phase 1B BIP32 derivation επιτυχία</span><span class="lang-en">Prerequisite: Phase 1B BIP32 derivation success</span></li>
+            </ul>
+        </div>
+
+        <div class="highlight-box">
+            <strong><span class="lang-el">Φάση 3: Stellar Bridge & Low-Cost Transfers (TARGET: May 25-31, June 1-15)</span><span class="lang-en">Phase 3: Stellar Bridge & Low-Cost Transfers (TARGET: May 25-31, June 1-15)</span></strong>
+            <ul style="margin: 10px 0 0 0;">
+                <li><span class="lang-el">Stellar network integration για χαμηλού κόστους bridge: Thronos ↔ Stellar ↔ USDC/USDT</span><span class="lang-en">Stellar network integration for low-cost bridge: Thronos ↔ Stellar ↔ USDC/USDT</span></li>
+                <li><span class="lang-el">Async queue-based processing με exponential backoff retry logic</span><span class="lang-en">Async queue-based processing with exponential backoff retry logic</span></li>
+                <li><span class="lang-el">Direct CEX bridge: USDC ↔ Binance/Kraken</span><span class="lang-en">Direct CEX bridge: USDC ↔ Binance/Kraken</span></li>
+            </ul>
+        </div>
+
+        <div class="highlight-box">
+            <strong><span class="lang-el">Φάση 4: Full CEX API Integration (TARGET: June 1-30)</span><span class="lang-en">Phase 4: Full CEX API Integration (TARGET: June 1-30)</span></strong>
+            <ul style="margin: 10px 0 0 0;">
+                <li><span class="lang-el">Πλήρης CEX API integration: MEXC, Binance, Kraken, Bybit, OKX</span><span class="lang-en">Full CEX API integration: MEXC, Binance, Kraken, Bybit, OKX</span></li>
+                <li><span class="lang-el">Autonomous agent handles withdrawals, KYC verification, AML compliance checks</span><span class="lang-en">Autonomous agent handles withdrawals, KYC verification, AML compliance checks</span></li>
+                <li><span class="lang-el">Αντικατάσταση manual bridge με πλήρως αυτοματοποιημένο σύστημα</span><span class="lang-en">Replace manual bridge with fully automated system</span></li>
+            </ul>
+        </div>
     </div>
 
     <!-- Roadmap -->

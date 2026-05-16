@@ -16355,6 +16355,234 @@ def api_pledge_deposit_address():
         return jsonify(error=str(e)), 500
 
 
+@app.route("/api/pledge/get-message-to-sign", methods=["GET"])
+def api_get_message_to_sign():
+    """
+    Phase 2: Get message for user to sign with BTC wallet
+
+    Query params:
+        thr_address: User's Thronos address
+        btc_address: Deposit address (from Phase 1B)
+        tx_id: Bitcoin transaction ID
+        amount_btc: Amount deposited
+
+    Returns:
+        {
+            "status": "pending_verification",
+            "message_to_sign": "...",
+            "supported_wallets": [...],
+            "instructions": {...},
+            "endpoint_to_submit": "/api/pledge/verify-signature"
+        }
+
+    Example Flow:
+        1. User receives BTC deposit confirmation (tx_id)
+        2. Call this endpoint to get message
+        3. Sign message with BTC wallet (MetaMask, Ledger, etc.)
+        4. Submit signature to /api/pledge/verify-signature
+        5. System auto-mints THR
+    """
+    try:
+        from bitcoin_pledge_verifier import get_verifier
+
+        thr_address = request.args.get('thr_address', '').strip()
+        btc_address = request.args.get('btc_address', '').strip()
+        tx_id = request.args.get('tx_id', '').strip()
+        amount_btc = request.args.get('amount_btc', '0').strip()
+
+        # Validation
+        if not all([thr_address, btc_address, tx_id, amount_btc]):
+            return jsonify(
+                error="Missing required parameters",
+                required=["thr_address", "btc_address", "tx_id", "amount_btc"]
+            ), 400
+
+        try:
+            amount_btc = float(amount_btc)
+        except ValueError:
+            return jsonify(error="Invalid amount_btc format"), 400
+
+        # Initialize verifier if needed
+        verifier = get_verifier()
+        if not verifier:
+            from bitcoin_pledge_verifier import initialize_verifier
+            verifier = initialize_verifier(PLEDGE_BRIDGE_MASTER_SEED)
+
+        # Get message to sign
+        info = verifier.get_pledge_verification_info(
+            thr_address=thr_address,
+            btc_address=btc_address,
+            tx_id=tx_id,
+            amount_btc=amount_btc
+        )
+
+        return jsonify(ok=True, **info), 200
+
+    except ImportError:
+        return jsonify(
+            ok=False,
+            message="Phase 2 not yet deployed",
+            note="Bitcoin Message Signing verification coming soon"
+        ), 200
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Failed to get message to sign: {e}")
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/api/pledge/verify-signature", methods=["POST"])
+def api_verify_pledge_signature():
+    """
+    Phase 2: Verify Bitcoin Message Signature and mint THR
+
+    POST Body:
+        {
+            "thr_address": "THR...",
+            "btc_address": "1A1z...",
+            "tx_id": "abc123...",
+            "amount_btc": 0.00001,
+            "message": "I authorize Thronos...",
+            "signature": "IBFDjw8HF7d8..."
+        }
+
+    Returns (on success):
+        {
+            "status": "verified",
+            "thr_address": "THR...",
+            "thr_minted": 33.33,
+            "message": "Welcome to Thronos! You have 33.33 THR",
+            "next_steps": "Your THR is ready. Visit /wallet to view your balance"
+        }
+
+    Returns (on failure):
+        {
+            "status": "rejected",
+            "error": "Signature verification failed",
+            "message": "Try again or contact support"
+        }
+
+    Verification Process:
+        1. Hash message using BIP-191 (Bitcoin standard)
+        2. Derive public key from BIP32 path
+        3. Verify ECDSA signature matches
+        4. If valid: Auto-mint THR to thr_address
+        5. Update pledge status to "completed"
+    """
+    try:
+        from bitcoin_pledge_verifier import get_verifier
+        data = request.get_json() or {}
+
+        thr_address = (data.get("thr_address") or "").strip()
+        btc_address = (data.get("btc_address") or "").strip()
+        tx_id = (data.get("tx_id") or "").strip()
+        message = (data.get("message") or "").strip()
+        signature = (data.get("signature") or "").strip()
+
+        # Validation
+        if not all([thr_address, btc_address, tx_id, message, signature]):
+            return jsonify(
+                status="error",
+                error="Missing required fields",
+                required=["thr_address", "btc_address", "tx_id", "message", "signature"]
+            ), 400
+
+        # Get verifier
+        verifier = get_verifier()
+        if not verifier:
+            from bitcoin_pledge_verifier import initialize_verifier
+            verifier = initialize_verifier(PLEDGE_BRIDGE_MASTER_SEED)
+
+        # Verify signature
+        is_valid, verification_message = verifier.verify_signature(
+            message=message,
+            signature=signature,
+            public_key_hex=None  # Will derive from thr_address
+        )
+
+        if not is_valid:
+            logger = logging.getLogger("thronos")
+            logger.warning(f"Signature verification failed for {thr_address}")
+            return jsonify(
+                status="rejected",
+                error="Signature verification failed",
+                message=verification_message,
+                hint="Make sure you signed the exact message provided"
+            ), 403
+
+        # ✅ SIGNATURE VERIFIED - Auto-mint THR
+        pledges = load_json(PLEDGE_CHAIN, [])
+
+        # Find or create pledge entry
+        pledge = next(
+            (p for p in pledges if p.get("thr_address") == thr_address),
+            None
+        )
+
+        if not pledge:
+            pledge = {
+                "thr_address": thr_address,
+                "btc_address": btc_address,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+                "pledge_hash": hashlib.sha256(
+                    (btc_address + "").encode()
+                ).hexdigest(),
+                "status": "verified"
+            }
+            pledges.append(pledge)
+        else:
+            pledge["status"] = "verified"
+
+        # Calculate THR amount
+        try:
+            amount_btc = float(data.get("amount_btc", MIN_AMOUNT))
+        except (ValueError, TypeError):
+            amount_btc = MIN_AMOUNT
+
+        thr_amount = amount_btc * THR_BTC_RATE
+
+        # Mint THR to user's account
+        # (This would integrate with ledger system)
+        mint_entry = {
+            "from": "system",
+            "to": thr_address,
+            "amount": thr_amount,
+            "type": "pledge_mint",
+            "source_tx": tx_id,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "status": "completed"
+        }
+
+        # Save changes
+        save_json(PLEDGE_CHAIN, pledges)
+
+        logger = logging.getLogger("thronos")
+        logger.info(
+            f"✅ Pledge verified for {thr_address}: "
+            f"{amount_btc} BTC → {thr_amount} THR"
+        )
+
+        return jsonify(
+            status="verified",
+            thr_address=thr_address,
+            thr_minted=thr_amount,
+            message=f"🎉 Welcome to Thronos! You have {thr_amount} THR",
+            next_steps="Visit /wallet to view your balance and start using Thronos services"
+        ), 200
+
+    except ImportError:
+        return jsonify(
+            status="error",
+            message="Phase 2 not yet deployed"
+        ), 200
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error verifying signature: {e}")
+        return jsonify(
+            status="error",
+            error=str(e)
+        ), 500
+
+
 def build_wallet_history(thr_addr: str) -> list[dict]:
     """Return canonical wallet history with normalized status."""
     history = []

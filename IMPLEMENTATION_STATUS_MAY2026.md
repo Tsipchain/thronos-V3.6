@@ -5,12 +5,13 @@
 
 ## 🎯 SUMMARY
 
-**Total Features:** 147  
-**Completed:** 124 (84%)  
+**Total Features:** 157 (updated May 16)  
+**Completed:** 134 (85%)  
 **In Progress:** 15 (10%)  
-**Planned:** 8 (6%)  
+**Planned:** 8 (5%)  
 
 **Production Status:** ✅ **LIVE & OPERATIONAL**
+**Latest Addition:** Digital Legacy System (v3.6.2, May 16)
 
 ---
 
@@ -94,7 +95,7 @@
 - [x] **NEW:** Async peer broadcasting
 - [x] **NEW:** Batched ledger operations
 
-### **APIs & Endpoints (95%)**
+### **APIs & Endpoints (98%)**
 - [x] `/api/health` - Health check
 - [x] `/api/blocks/tip/height` - Latest block
 - [x] `/api/block/{hash}` - Block details
@@ -103,18 +104,36 @@
 - [x] `/api/address/{address}/utxo` - UTXOs
 - [x] `/api/address/{address}/txs` - Transactions
 - [x] `/api/address/{address}/txs/mempool` - Mempool txs
-- [x] `/api/address/{address}` - Address info **NEW**
+- [x] `/api/address/{address}` - Address info
 - [x] `/api/evm/contract/{addr}` - Contract details
 - [x] `/api/evm/contracts` - List contracts
 - [x] `/api/evm/contracts/recent` - Recent contracts
-- [x] `/api/evm/latest_contracts` - Latest contracts **NEW**
+- [x] `/api/evm/latest_contracts` - Latest contracts
+- [x] `/api/legacy/create` - Create digital legacy **NEW**
+- [x] `/api/legacy/{id}/register-heir` - Register heir **NEW**
+- [x] `/api/legacy/verify-heir` - Verify heir identity **NEW**
+- [x] `/api/legacy/recovery-qr` - Generate recovery QR **NEW**
+- [x] `/api/legacy/{id}/distribute` - Distribute assets **NEW**
+- [x] `/api/legacy/{id}/audit-trail` - View audit trail **NEW**
 - [x] `/api/miner/work` - Mining job
-- [x] `/api/miner/submit` - Submit block **OPTIMIZED**
+- [x] `/api/miner/submit` - Submit block
 - [x] `/api/mining/work` - Alternative mining
 - [x] `/api/mining/submit` - Alternative submit
 - [x] `/pledge_submit` - Pledge verification
 - [x] `/api/tokens/stats` - Token statistics
 - [x] `/api/network_live` - Network status
+
+### **Digital Legacy & Inheritance (100% - NEW)**
+- [x] **NFT-based Digital Wills** - Immutable on-chain estate documents
+- [x] **Heir Registration System** - Biometric + genetic marker verification
+- [x] **Biometric Verification** - Hash-based identity matching (never stores plaintext)
+- [x] **Genetic Markers** - Optional second-factor verification for heirs
+- [x] **Recovery QR Codes** - Time-limited heir access (30-day TTL)
+- [x] **Immutable Audit Trail** - Complete blockchain record of all legacy actions
+- [x] **Smart Contract Distribution** - EVM-based automated multi-heir asset splits
+- [x] **Solidity Contract Template** - DigitalLegacyNFT for on-chain execution
+- [x] **API Documentation** - 10 endpoints with complete request/response specs
+- [x] **Deployment Guide** - Production-ready checklist and monitoring setup
 
 ---
 

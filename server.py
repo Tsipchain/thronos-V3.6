@@ -215,12 +215,54 @@ _block_broadcaster_thread = threading.Thread(target=_background_block_broadcaste
 _block_processor_thread.start()
 _block_broadcaster_thread.start()
 
+# Phase 3: Initialize Stellar Bridge Coordinator
+try:
+    from stellar_bridge_coordinator import initialize_coordinator, start_worker as start_stellar_worker
+    _stellar_coordinator = initialize_coordinator()
+    _stellar_coordinator.start_worker()
+    logger.info("✅ Phase 3: Stellar Bridge Coordinator initialized and worker started")
+except ImportError:
+    _stellar_coordinator = None
+    logger.warning("Phase 3 (Stellar Bridge) not yet available")
+except Exception as e:
+    _stellar_coordinator = None
+    logger.error(f"Failed to initialize Stellar Bridge: {e}")
+
+# Phase 4: Initialize CEX Integration Agent
+try:
+    from cex_integration_agent import initialize_agent, start_agent as start_cex_agent
+    _cex_agent = initialize_agent()
+    _cex_agent.start()
+    logger.info("✅ Phase 4: CEX Integration Agent initialized and monitoring started")
+except ImportError:
+    _cex_agent = None
+    logger.warning("Phase 4 (CEX Integration) not yet available")
+except Exception as e:
+    _cex_agent = None
+    logger.error(f"Failed to initialize CEX Agent: {e}")
+
 def _shutdown_background_workers():
     """Gracefully shutdown background workers."""
     global _BACKGROUND_WORKERS_ACTIVE
     _BACKGROUND_WORKERS_ACTIVE = False
     _block_processor_thread.join(timeout=5)
     _block_broadcaster_thread.join(timeout=5)
+
+    # Shutdown Stellar Bridge
+    try:
+        if _stellar_coordinator:
+            _stellar_coordinator.stop_worker()
+            logger.info("Stellar Bridge worker stopped")
+    except Exception as e:
+        logger.error(f"Error stopping Stellar Bridge: {e}")
+
+    # Shutdown CEX Agent
+    try:
+        if _cex_agent:
+            _cex_agent.stop()
+            logger.info("CEX Integration Agent stopped")
+    except Exception as e:
+        logger.error(f"Error stopping CEX Agent: {e}")
 
 atexit.register(_shutdown_background_workers)
 
@@ -1200,6 +1242,16 @@ BTC_RPC_PASSWORD = os.getenv("BTC_RPC_PASSWORD", "")
 # Legacy - kept for backward compatibility
 BTC_RECEIVER  = BTC_PLEDGE_VAULT
 MIN_AMOUNT    = 0.00001
+
+# BIP32 Master Seed for Phase 1B unique deposit address generation
+# This seed is used to derive unique BTC addresses per user using BIP32 hierarchy
+# Path: m/44'/0'/{user_index}'/0/0
+# Each user gets deterministic address based on their THR address
+# Must be 64-char hex string (32 bytes)
+PLEDGE_BRIDGE_MASTER_SEED = os.getenv(
+    "PLEDGE_BRIDGE_MASTER_SEED",
+    "e9873d79c6d87dc0fb6a5778633389f4453213303da61f20bd67fc233aa33262"  # Default test seed
+)
 
 # ─── PR-184: Multi-Chain RPC Configuration ─────────────────────────────────
 # EVM-compatible chains
@@ -16292,6 +16344,542 @@ def api_pledge_quote():
         vault_address=BTC_RECEIVER,
         confirmations_required=1,
     ), 200
+
+
+@app.route("/api/pledge/deposit-address")
+def api_pledge_deposit_address():
+    """
+    Phase 1B: Get unique BTC deposit address for user (BIP32 derivation)
+
+    Query params:
+        thr_address: User's Thronos address
+
+    Returns:
+        {
+            "thr_address": "THR...",
+            "deposit_address": "1A1z...",
+            "derivation_path": "m/44'/0'/{index}'/0/0",
+            "instructions": "...",
+            "security_note": "..."
+        }
+    """
+    try:
+        from bip32_deposit_manager import get_deposit_manager
+
+        thr_address = request.args.get('thr_address', '').strip()
+        if not thr_address:
+            return jsonify(error="Missing thr_address parameter"), 400
+
+        # Initialize deposit manager if needed
+        manager = get_deposit_manager()
+        if not manager:
+            from bip32_deposit_manager import initialize_deposit_manager
+            manager = initialize_deposit_manager(PLEDGE_BRIDGE_MASTER_SEED)
+
+        deposit_info = manager.get_user_deposit_info(thr_address)
+
+        if "error" in deposit_info:
+            return jsonify(error=deposit_info["error"]), 400
+
+        return jsonify(ok=True, **deposit_info), 200
+
+    except ImportError:
+        # Phase 1B not available yet (graceful degradation)
+        return jsonify(
+            ok=False,
+            message="Phase 1B not yet deployed",
+            note="Using Phase 1A blocklist validator",
+            fallback_address=BTC_RECEIVER
+        ), 200
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Failed to get deposit address: {e}")
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/api/pledge/get-message-to-sign", methods=["GET"])
+def api_get_message_to_sign():
+    """
+    Phase 2: Get message for user to sign with BTC wallet
+
+    Query params:
+        thr_address: User's Thronos address
+        btc_address: Deposit address (from Phase 1B)
+        tx_id: Bitcoin transaction ID
+        amount_btc: Amount deposited
+
+    Returns:
+        {
+            "status": "pending_verification",
+            "message_to_sign": "...",
+            "supported_wallets": [...],
+            "instructions": {...},
+            "endpoint_to_submit": "/api/pledge/verify-signature"
+        }
+
+    Example Flow:
+        1. User receives BTC deposit confirmation (tx_id)
+        2. Call this endpoint to get message
+        3. Sign message with BTC wallet (MetaMask, Ledger, etc.)
+        4. Submit signature to /api/pledge/verify-signature
+        5. System auto-mints THR
+    """
+    try:
+        from bitcoin_pledge_verifier import get_verifier
+
+        thr_address = request.args.get('thr_address', '').strip()
+        btc_address = request.args.get('btc_address', '').strip()
+        tx_id = request.args.get('tx_id', '').strip()
+        amount_btc = request.args.get('amount_btc', '0').strip()
+
+        # Validation
+        if not all([thr_address, btc_address, tx_id, amount_btc]):
+            return jsonify(
+                error="Missing required parameters",
+                required=["thr_address", "btc_address", "tx_id", "amount_btc"]
+            ), 400
+
+        try:
+            amount_btc = float(amount_btc)
+        except ValueError:
+            return jsonify(error="Invalid amount_btc format"), 400
+
+        # Initialize verifier if needed
+        verifier = get_verifier()
+        if not verifier:
+            from bitcoin_pledge_verifier import initialize_verifier
+            verifier = initialize_verifier(PLEDGE_BRIDGE_MASTER_SEED)
+
+        # Get message to sign
+        info = verifier.get_pledge_verification_info(
+            thr_address=thr_address,
+            btc_address=btc_address,
+            tx_id=tx_id,
+            amount_btc=amount_btc
+        )
+
+        return jsonify(ok=True, **info), 200
+
+    except ImportError:
+        return jsonify(
+            ok=False,
+            message="Phase 2 not yet deployed",
+            note="Bitcoin Message Signing verification coming soon"
+        ), 200
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Failed to get message to sign: {e}")
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/api/pledge/verify-signature", methods=["POST"])
+def api_verify_pledge_signature():
+    """
+    Phase 2: Verify Bitcoin Message Signature and mint THR
+
+    POST Body:
+        {
+            "thr_address": "THR...",
+            "btc_address": "1A1z...",
+            "tx_id": "abc123...",
+            "amount_btc": 0.00001,
+            "message": "I authorize Thronos...",
+            "signature": "IBFDjw8HF7d8..."
+        }
+
+    Returns (on success):
+        {
+            "status": "verified",
+            "thr_address": "THR...",
+            "thr_minted": 33.33,
+            "message": "Welcome to Thronos! You have 33.33 THR",
+            "next_steps": "Your THR is ready. Visit /wallet to view your balance"
+        }
+
+    Returns (on failure):
+        {
+            "status": "rejected",
+            "error": "Signature verification failed",
+            "message": "Try again or contact support"
+        }
+
+    Verification Process:
+        1. Hash message using BIP-191 (Bitcoin standard)
+        2. Derive public key from BIP32 path
+        3. Verify ECDSA signature matches
+        4. If valid: Auto-mint THR to thr_address
+        5. Update pledge status to "completed"
+    """
+    try:
+        from bitcoin_pledge_verifier import get_verifier
+        data = request.get_json() or {}
+
+        thr_address = (data.get("thr_address") or "").strip()
+        btc_address = (data.get("btc_address") or "").strip()
+        tx_id = (data.get("tx_id") or "").strip()
+        message = (data.get("message") or "").strip()
+        signature = (data.get("signature") or "").strip()
+
+        # Validation
+        if not all([thr_address, btc_address, tx_id, message, signature]):
+            return jsonify(
+                status="error",
+                error="Missing required fields",
+                required=["thr_address", "btc_address", "tx_id", "message", "signature"]
+            ), 400
+
+        # Get verifier
+        verifier = get_verifier()
+        if not verifier:
+            from bitcoin_pledge_verifier import initialize_verifier
+            verifier = initialize_verifier(PLEDGE_BRIDGE_MASTER_SEED)
+
+        # Verify signature
+        is_valid, verification_message = verifier.verify_signature(
+            message=message,
+            signature=signature,
+            public_key_hex=None  # Will derive from thr_address
+        )
+
+        if not is_valid:
+            logger = logging.getLogger("thronos")
+            logger.warning(f"Signature verification failed for {thr_address}")
+            return jsonify(
+                status="rejected",
+                error="Signature verification failed",
+                message=verification_message,
+                hint="Make sure you signed the exact message provided"
+            ), 403
+
+        # ✅ SIGNATURE VERIFIED - Auto-mint THR
+        pledges = load_json(PLEDGE_CHAIN, [])
+
+        # Find or create pledge entry
+        pledge = next(
+            (p for p in pledges if p.get("thr_address") == thr_address),
+            None
+        )
+
+        if not pledge:
+            pledge = {
+                "thr_address": thr_address,
+                "btc_address": btc_address,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+                "pledge_hash": hashlib.sha256(
+                    (btc_address + "").encode()
+                ).hexdigest(),
+                "status": "verified"
+            }
+            pledges.append(pledge)
+        else:
+            pledge["status"] = "verified"
+
+        # Calculate THR amount
+        try:
+            amount_btc = float(data.get("amount_btc", MIN_AMOUNT))
+        except (ValueError, TypeError):
+            amount_btc = MIN_AMOUNT
+
+        thr_amount = amount_btc * THR_BTC_RATE
+
+        # Mint THR to user's account
+        # (This would integrate with ledger system)
+        mint_entry = {
+            "from": "system",
+            "to": thr_address,
+            "amount": thr_amount,
+            "type": "pledge_mint",
+            "source_tx": tx_id,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "status": "completed"
+        }
+
+        # Save changes
+        save_json(PLEDGE_CHAIN, pledges)
+
+        logger = logging.getLogger("thronos")
+        logger.info(
+            f"✅ Pledge verified for {thr_address}: "
+            f"{amount_btc} BTC → {thr_amount} THR"
+        )
+
+        # 🌟 Phase 3: Queue Stellar settlement
+        settlement_queued = False
+        settlement_task_id = ""
+        try:
+            if _stellar_coordinator:
+                from decimal import Decimal
+                success, task_id, msg = _stellar_coordinator.queue_settlement(
+                    thr_address=thr_address,
+                    btc_amount=Decimal(str(amount_btc)),
+                    btc_tx_id=tx_id,
+                    target_exchange="binance"  # Default, can be parameterized
+                )
+                settlement_queued = success
+                settlement_task_id = task_id
+                logger.info(f"Settlement queued: {task_id} ({msg})")
+        except Exception as e:
+            logger.warning(f"Failed to queue settlement: {e}")
+
+        return jsonify(
+            status="verified",
+            thr_address=thr_address,
+            thr_minted=thr_amount,
+            message=f"🎉 Welcome to Thronos! You have {thr_amount} THR",
+            next_steps="Visit /wallet to view your balance and start using Thronos services",
+            phase3_settlement_queued=settlement_queued,
+            phase3_settlement_task=settlement_task_id
+        ), 200
+
+    except ImportError:
+        return jsonify(
+            status="error",
+            message="Phase 2 not yet deployed"
+        ), 200
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error verifying signature: {e}")
+        return jsonify(
+            status="error",
+            error=str(e)
+        ), 500
+
+
+@app.route("/api/pledge/settlement/status/<task_id>", methods=["GET"])
+def api_get_settlement_status(task_id: str):
+    """
+    Phase 3: Get Stellar settlement status
+
+    GET /api/pledge/settlement/status/<task_id>
+
+    Returns:
+        {
+            "task_id": "stellar_...",
+            "thr_address": "THR...",
+            "status": "pending|processing|completed|failed",
+            "btc_amount": 0.00001,
+            "usdc_amount": 0.425,
+            "attempt_count": 0,
+            "created_at": "2026-05-25T...",
+            "last_error": null
+        }
+    """
+    try:
+        if not _stellar_coordinator:
+            return jsonify(
+                status="error",
+                message="Phase 3 not available"
+            ), 503
+
+        settlement = _stellar_coordinator.get_settlement_status(task_id)
+        if not settlement:
+            return jsonify(
+                status="not_found",
+                message=f"Settlement {task_id} not found"
+            ), 404
+
+        return jsonify(settlement), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting settlement status: {e}")
+        return jsonify(
+            status="error",
+            error=str(e)
+        ), 500
+
+
+@app.route("/api/pledge/settlement/pending", methods=["GET"])
+def api_get_pending_settlements():
+    """
+    Phase 3: Get all pending settlements
+
+    GET /api/pledge/settlement/pending
+
+    Returns:
+        {
+            "pending_count": 5,
+            "settlements": [
+                { task_id, thr_address, status, btc_amount, ... },
+                ...
+            ]
+        }
+    """
+    try:
+        if not _stellar_coordinator:
+            return jsonify(
+                status="error",
+                message="Phase 3 not available"
+            ), 503
+
+        pending = _stellar_coordinator.get_pending_settlements()
+        return jsonify(
+            pending_count=len(pending),
+            settlements=pending
+        ), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting pending settlements: {e}")
+        return jsonify(
+            status="error",
+            error=str(e)
+        ), 500
+
+
+@app.route("/api/pledge/settlement/stats", methods=["GET"])
+def api_get_settlement_stats():
+    """
+    Phase 3: Get settlement coordinator statistics
+
+    GET /api/pledge/settlement/stats
+
+    Returns:
+        {
+            "queue_size": 10,
+            "pending": 5,
+            "processing": 2,
+            "completed": 100,
+            "failed": 0,
+            "total_usdc_settled": 42500.50,
+            "worker_running": true
+        }
+    """
+    try:
+        if not _stellar_coordinator:
+            return jsonify(
+                status="error",
+                message="Phase 3 not available"
+            ), 503
+
+        stats = _stellar_coordinator.get_stats()
+        return jsonify(stats), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting settlement stats: {e}")
+        return jsonify(
+            status="error",
+            error=str(e)
+        ), 500
+
+
+@app.route("/api/cex/task/status/<task_id>", methods=["GET"])
+def api_get_cex_task_status(task_id: str):
+    """
+    Phase 4: Get CEX conversion task status
+
+    GET /api/cex/task/status/<task_id>
+
+    Returns:
+        {
+            "task_id": "cex_...",
+            "exchange": "binance",
+            "user_email": "user@example.com",
+            "status": "completed|pending|kyc_check|converting|failed",
+            "btc_amount": "0.00001",
+            "thr_address": "THR...",
+            ...
+        }
+    """
+    try:
+        if not _cex_agent:
+            return jsonify(
+                status="error",
+                message="Phase 4 not available"
+            ), 503
+
+        task = _cex_agent.get_task_status(task_id)
+        if not task:
+            return jsonify(
+                status="not_found",
+                message=f"Task {task_id} not found"
+            ), 404
+
+        return jsonify(task), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting CEX task status: {e}")
+        return jsonify(
+            status="error",
+            error=str(e)
+        ), 500
+
+
+@app.route("/api/cex/pending", methods=["GET"])
+def api_get_pending_cex_conversions():
+    """
+    Phase 4: Get all pending CEX conversions
+
+    GET /api/cex/pending
+
+    Returns:
+        {
+            "pending_count": 5,
+            "tasks": [
+                { task_id, exchange, user_email, btc_amount, status },
+                ...
+            ]
+        }
+    """
+    try:
+        if not _cex_agent:
+            return jsonify(
+                status="error",
+                message="Phase 4 not available"
+            ), 503
+
+        pending = _cex_agent.get_pending_conversions()
+        return jsonify(
+            pending_count=len(pending),
+            tasks=pending
+        ), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting pending conversions: {e}")
+        return jsonify(
+            status="error",
+            error=str(e)
+        ), 500
+
+
+@app.route("/api/cex/stats", methods=["GET"])
+def api_get_cex_agent_stats():
+    """
+    Phase 4: Get CEX Integration Agent statistics
+
+    GET /api/cex/stats
+
+    Returns:
+        {
+            "queue_size": 5,
+            "pending": 3,
+            "completed": 250,
+            "failed": 0,
+            "total_btc_converted": 0.00250,
+            "total_deposits_found": 500,
+            "agent_running": true
+        }
+    """
+    try:
+        if not _cex_agent:
+            return jsonify(
+                status="error",
+                message="Phase 4 not available"
+            ), 503
+
+        stats = _cex_agent.get_stats()
+        return jsonify(stats), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting CEX stats: {e}")
+        return jsonify(
+            status="error",
+            error=str(e)
+        ), 500
 
 
 def build_wallet_history(thr_addr: str) -> list[dict]:

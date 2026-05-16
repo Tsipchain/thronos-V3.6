@@ -53,6 +53,29 @@ PROCESSED_TXS_FILE = os.path.join(DATA_DIR, "btc_pledge_processed.json")
 # Format: {"btc_address": {"thr_address": "THR...", "kyc_verified": bool, "whitelisted_admin": bool}}
 USER_REGISTRY_FILE = os.path.join(DATA_DIR, "btc_user_registry.json")
 
+# Pledge chain file - maps BTC addresses to THR addresses (submitted via /pledge_submit)
+# Primary location: /data/pledge_chain.json (working directory)
+# Fallback: ./static/pledge_chain.json (for historical data)
+PLEDGE_CHAIN_FILE = os.path.join(DATA_DIR, "pledge_chain.json")
+PLEDGE_CHAIN_FALLBACK = "./static/pledge_chain.json"
+
+
+def sync_pledge_chain_from_fallback():
+    """
+    Auto-sync pledge_chain.json from fallback location if primary doesn't exist.
+    This ensures we don't lose historical pledge data.
+    """
+    try:
+        if not os.path.exists(PLEDGE_CHAIN_FILE) and os.path.exists(PLEDGE_CHAIN_FALLBACK):
+            os.makedirs(os.path.dirname(PLEDGE_CHAIN_FILE), exist_ok=True)
+            with open(PLEDGE_CHAIN_FALLBACK, 'r') as f:
+                fallback_data = json.load(f)
+            with open(PLEDGE_CHAIN_FILE, 'w') as f:
+                json.dump(fallback_data, f, indent=2)
+            logger.info(f"Synced pledge chain from fallback: {len(fallback_data) if isinstance(fallback_data, list) else 1} entries")
+    except Exception as e:
+        logger.warning(f"Could not sync pledge chain from fallback: {e}")
+
 
 def load_processed_txs() -> List[str]:
     """Load list of already processed transaction IDs"""
@@ -382,10 +405,9 @@ def resolve_user_from_tx(tx: Dict) -> Optional[Dict]:
         }
 
     # Strategy 2: Look up in pledge_chain.json (from /pledge_submit)
-    pledge_chain_file = os.path.join(DATA_DIR, "pledge_chain.json")
     try:
-        if os.path.exists(pledge_chain_file):
-            with open(pledge_chain_file, 'r') as f:
+        if os.path.exists(PLEDGE_CHAIN_FILE):
+            with open(PLEDGE_CHAIN_FILE, 'r') as f:
                 pledges = json.load(f)
             for pledge in pledges:
                 if pledge.get("btc_address") == btc_address and pledge.get("thr_address"):
@@ -438,10 +460,9 @@ def call_master_node_api(endpoint: str, data: Dict) -> Optional[Dict]:
 
 def clear_pending_confirmation(btc_address: str):
     """Clear the pending_confirmation flag from pledge_chain when BTC is confirmed"""
-    pledge_chain_file = os.path.join(DATA_DIR, "pledge_chain.json")
     try:
-        if os.path.exists(pledge_chain_file):
-            with open(pledge_chain_file, 'r') as f:
+        if os.path.exists(PLEDGE_CHAIN_FILE):
+            with open(PLEDGE_CHAIN_FILE, 'r') as f:
                 pledges = json.load(f)
             for pledge in pledges:
                 if pledge.get("btc_address") == btc_address and pledge.get("pending_confirmation"):
@@ -518,6 +539,9 @@ def watch_btc_pledges():
     logger.info(f"Watching vault: {BTC_PLEDGE_VAULT}")
     logger.info(f"THR/BTC rate: {THR_BTC_RATE}")
     logger.info(f"Master node: {MASTER_NODE_URL}")
+
+    # Ensure pledge_chain.json is synced from fallback on startup
+    sync_pledge_chain_from_fallback()
 
     processed_txs = load_processed_txs()
 

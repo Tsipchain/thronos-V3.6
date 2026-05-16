@@ -215,45 +215,58 @@ _block_broadcaster_thread = threading.Thread(target=_background_block_broadcaste
 _block_processor_thread.start()
 _block_broadcaster_thread.start()
 
-# Phase 3: Initialize Stellar Bridge Coordinator
-_stellar_coordinator = None
-_cex_agent = None
+# Architecture Separation:
+# - Pledge System (Phase 1-2): User deposits via Thronos UI + message signing
+# - CEX LP Agent: Detects major exchange deposits → Uses native Liquidity Pool
+# - Stellar Bridge: Optional background liquidity management for LP reserves
+
+_bridge_coordinator = None
+_cex_lp_agent = None
+_stellar_coordinator = None  # Optional background liquidity management
+
 
 def _initialize_phase3_and_4():
-    """Initialize Phase 3 and Phase 4 after logger is ready"""
-    global _stellar_coordinator, _cex_agent
+    """Initialize CEX LP Agent and optional Stellar background process after logger is ready"""
+    global _bridge_coordinator, _cex_lp_agent, _stellar_coordinator
+    logger = logging.getLogger("thronos")
 
-    # Phase 3: Stellar Bridge
+    # Initialize Native Bridge with Liquidity Pools
+    try:
+        from bridge_coordinator import BridgeCoordinator
+        _bridge_coordinator = BridgeCoordinator()
+        logger.info("✅ Native Bridge Coordinator (Liquidity Pools) initialized")
+    except ImportError:
+        _bridge_coordinator = None
+        print("[Bridge] BridgeCoordinator not available")
+    except Exception as e:
+        _bridge_coordinator = None
+        logger.error(f"Failed to initialize BridgeCoordinator: {e}")
+
+    # Initialize CEX LP Agent (uses Liquidity Pool for conversions)
+    try:
+        from cex_lp_agent import initialize_cex_lp_agent, start_cex_lp_agent
+        _cex_lp_agent = initialize_cex_lp_agent(_bridge_coordinator)
+        start_cex_lp_agent()
+        logger.info("✅ CEX LP Agent initialized (detects deposits → Liquidity Pool)")
+    except ImportError:
+        _cex_lp_agent = None
+        print("[CEX] CEX LP Agent not available")
+    except Exception as e:
+        _cex_lp_agent = None
+        logger.error(f"Failed to initialize CEX LP Agent: {e}")
+
+    # Optional: Stellar Bridge for background LP liquidity management
     try:
         from stellar_bridge_coordinator import initialize_coordinator
         _stellar_coordinator = initialize_coordinator()
         _stellar_coordinator.start_worker()
-        logger = logging.getLogger("thronos")
-        logger.info("✅ Phase 3: Stellar Bridge Coordinator initialized and worker started")
+        logger.info("✅ Stellar Bridge (background LP liquidity management) started")
     except ImportError:
         _stellar_coordinator = None
-        print("[Phase 3] Stellar Bridge not available (module not found)")
+        print("[Stellar] Stellar Bridge not available (optional)")
     except Exception as e:
         _stellar_coordinator = None
-        logger = logging.getLogger("thronos")
-        logger.error(f"Failed to initialize Stellar Bridge: {e}")
-        print(f"[Phase 3] Error: {e}")
-
-    # Phase 4: CEX Integration Agent
-    try:
-        from cex_integration_agent import initialize_agent
-        _cex_agent = initialize_agent()
-        _cex_agent.start()
-        logger = logging.getLogger("thronos")
-        logger.info("✅ Phase 4: CEX Integration Agent initialized and monitoring started")
-    except ImportError:
-        _cex_agent = None
-        print("[Phase 4] CEX Integration Agent not available (module not found)")
-    except Exception as e:
-        _cex_agent = None
-        logger = logging.getLogger("thronos")
-        logger.error(f"Failed to initialize CEX Agent: {e}")
-        print(f"[Phase 4] Error: {e}")
+        logger.warning(f"Stellar Bridge not initialized (optional): {e}")
 
 def _shutdown_background_workers():
     """Gracefully shutdown background workers."""
@@ -272,12 +285,12 @@ def _shutdown_background_workers():
         _log = logging.getLogger("thronos")
         _log.error(f"Error stopping Stellar Bridge: {e}")
 
-    # Shutdown CEX Agent
+    # Shutdown CEX LP Agent
     try:
-        if _cex_agent:
-            _cex_agent.stop()
+        if _cex_lp_agent:
+            _cex_lp_agent.stop()
             _log = logging.getLogger("thronos")
-            _log.info("CEX Integration Agent stopped")
+            _log.info("CEX LP Agent stopped")
     except Exception as e:
         _log = logging.getLogger("thronos")
         _log.error(f"Error stopping CEX Agent: {e}")
@@ -16624,32 +16637,12 @@ def api_verify_pledge_signature():
             f"{amount_btc} BTC → {thr_amount} THR"
         )
 
-        # 🌟 Phase 3: Queue Stellar settlement
-        settlement_queued = False
-        settlement_task_id = ""
-        try:
-            if _stellar_coordinator:
-                from decimal import Decimal
-                success, task_id, msg = _stellar_coordinator.queue_settlement(
-                    thr_address=thr_address,
-                    btc_amount=Decimal(str(amount_btc)),
-                    btc_tx_id=tx_id,
-                    target_exchange="binance"  # Default, can be parameterized
-                )
-                settlement_queued = success
-                settlement_task_id = task_id
-                logger.info(f"Settlement queued: {task_id} ({msg})")
-        except Exception as e:
-            logger.warning(f"Failed to queue settlement: {e}")
-
         return jsonify(
             status="verified",
             thr_address=thr_address,
             thr_minted=thr_amount,
             message=f"🎉 Welcome to Thronos! You have {thr_amount} THR",
-            next_steps="Visit /wallet to view your balance and start using Thronos services",
-            phase3_settlement_queued=settlement_queued,
-            phase3_settlement_task=settlement_task_id
+            next_steps="Visit /wallet to view your balance and start using Thronos services"
         ), 200
 
     except ImportError:

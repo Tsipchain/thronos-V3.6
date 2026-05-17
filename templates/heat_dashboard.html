@@ -1,0 +1,479 @@
+{% extends "base.html" %}
+
+{% block title %}🔥 Heat Recovery Dashboard{% endblock %}
+
+{% block styles %}
+<style>
+    .heat-container {
+        max-width: 1400px;
+        margin: 30px auto;
+        padding: 20px;
+        background-color: #0a0a0a;
+        border: 2px solid #ff6600;
+        border-radius: 8px;
+    }
+
+    h1 {
+        color: #ff6600;
+        text-align: center;
+        margin-bottom: 30px;
+        font-size: 2.5em;
+    }
+
+    .heat-stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 20px;
+        margin: 30px 0;
+    }
+
+    .stat-box {
+        background: linear-gradient(135deg, #1a1a1a 0%, #2a1a0a 100%);
+        border: 2px solid #ff6600;
+        padding: 20px;
+        border-radius: 8px;
+        text-align: center;
+    }
+
+    .stat-value {
+        font-size: 2.5em;
+        color: #ff9900;
+        font-weight: bold;
+        margin: 15px 0;
+        font-family: monospace;
+    }
+
+    .stat-label {
+        color: #aaa;
+        font-size: 0.9em;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    .tier-box {
+        background-color: #1a1a1a;
+        border-left: 4px solid #ff6600;
+        padding: 15px;
+        margin: 10px 0;
+        border-radius: 4px;
+    }
+
+    .tier-title {
+        color: #ff9900;
+        font-weight: bold;
+        margin-bottom: 5px;
+    }
+
+    .tier-bonus {
+        color: #00ff00;
+        font-family: monospace;
+    }
+
+    .tier-description {
+        color: #aaa;
+        font-size: 0.9em;
+        margin-top: 5px;
+    }
+
+    .chart-container {
+        background-color: #1a1a1a;
+        border: 1px solid #ff6600;
+        padding: 20px;
+        border-radius: 8px;
+        margin: 20px 0;
+    }
+
+    .chart-title {
+        color: #ff9900;
+        font-weight: bold;
+        margin-bottom: 15px;
+        font-size: 1.2em;
+    }
+
+    canvas {
+        max-height: 400px;
+    }
+
+    .energy-calculator {
+        background-color: #1a1a1a;
+        border: 1px solid #ff6600;
+        padding: 20px;
+        border-radius: 8px;
+        margin: 20px 0;
+    }
+
+    .input-group {
+        margin: 15px 0;
+        display: flex;
+        gap: 15px;
+        align-items: center;
+    }
+
+    .input-group label {
+        color: #ff9900;
+        flex: 0 0 200px;
+    }
+
+    .input-group input {
+        flex: 1;
+        padding: 8px;
+        background-color: #0a0a0a;
+        border: 1px solid #ff6600;
+        color: #00ff00;
+        font-family: monospace;
+    }
+
+    .input-group input::placeholder {
+        color: #666;
+    }
+
+    .button {
+        background-color: #ff6600;
+        border: none;
+        color: #000;
+        padding: 10px 20px;
+        text-align: center;
+        text-decoration: none;
+        display: inline-block;
+        font-size: 1em;
+        font-weight: bold;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: background-color 0.3s;
+    }
+
+    .button:hover {
+        background-color: #ff9900;
+    }
+
+    .results {
+        background-color: #0a0a0a;
+        border: 1px solid #00ff00;
+        padding: 15px;
+        margin-top: 15px;
+        border-radius: 4px;
+        color: #00ff00;
+        font-family: monospace;
+    }
+
+    .results-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 8px 0;
+        border-bottom: 1px solid #333;
+    }
+
+    .results-row:last-child {
+        border-bottom: none;
+    }
+
+    .notes {
+        background-color: #1a1a1a;
+        border-left: 4px solid #00aaff;
+        padding: 20px;
+        margin: 20px 0;
+        border-radius: 4px;
+        line-height: 1.6;
+    }
+
+    .notes strong {
+        color: #00aaff;
+    }
+
+    table {
+        border-collapse: collapse;
+        width: 100%;
+        margin-top: 15px;
+        background-color: #111;
+    }
+
+    th, td {
+        border: 1px solid #ff6600;
+        padding: 12px;
+        text-align: left;
+    }
+
+    th {
+        background-color: #ff6600;
+        color: #000;
+        font-weight: bold;
+    }
+
+    tr:nth-child(even) {
+        background-color: #0a0a0a;
+    }
+
+    tr:hover {
+        background-color: #1a1a1a;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="heat-container">
+    <h1>🔥 <span class="lang-el">Ανάκτηση Θερμότητας & Ανταμοιβές</span><span class="lang-en">Heat Recovery & Rewards</span><span class="lang-ja">熱回収と報酬</span><span class="lang-es">Recuperación de Calor y Recompensas</span><span class="lang-ru">Восстановление тепла и награды</span></h1>
+
+    <div class="heat-stats">
+        <div class="stat-box">
+            <div class="stat-label"><span class="lang-el">Δικτυακή Ανάκτηση</span><span class="lang-en">Network Recovery</span></div>
+            <div class="stat-value" id="networkHeat">0</div>
+            <div class="stat-label">kWh/day</div>
+        </div>
+
+        <div class="stat-box">
+            <div class="stat-label"><span class="lang-el">Ενεργές Φάρμες</span><span class="lang-en">Active Farms</span></div>
+            <div class="stat-value" id="activeFarms">0</div>
+            <div class="stat-label"><span class="lang-el">Σημεία</span><span class="lang-en">Sites</span></div>
+        </div>
+
+        <div class="stat-box">
+            <div class="stat-label"><span class="lang-el">Μέσο % Ανάκτησης</span><span class="lang-en">Average Recovery %</span></div>
+            <div class="stat-value" id="avgRecovery">0%</div>
+            <div class="stat-label"><span class="lang-el">Απόδοση</span><span class="lang-en">Efficiency</span></div>
+        </div>
+
+        <div class="stat-box">
+            <div class="stat-label"><span class="lang-el">Τρέχουσα Τιμή THR</span><span class="lang-en">Current THR Price</span></div>
+            <div class="stat-value" id="thrPrice">$0.0001</div>
+            <div class="stat-label">BTC Peg</div>
+        </div>
+    </div>
+
+    <h2><span class="lang-el">📊 Σύστημα Ανταμοιβής Θερμότητας</span><span class="lang-en">📊 Heat Reward Tier System</span></h2>
+
+    <div id="tierContainer"></div>
+
+    <h2><span class="lang-el">🌾 Περιπτώσεις Χρήσης & Bonus</span><span class="lang-en">🌾 Use Cases & Bonuses</span></h2>
+
+    <table id="useCaseTable">
+        <thead>
+            <tr>
+                <th><span class="lang-el">Περίπτωση Χρήσης</span><span class="lang-en">Use Case</span></th>
+                <th><span class="lang-el">Περιγραφή</span><span class="lang-en">Description</span></th>
+                <th><span class="lang-el">Bonus</span><span class="lang-en">Bonus</span></th>
+                <th><span class="lang-el">Αξιοπιστία</span><span class="lang-en">Reliability</span></th>
+            </tr>
+        </thead>
+        <tbody id="useCaseBody"></tbody>
+    </table>
+
+    <div class="energy-calculator">
+        <h3><span class="lang-el">⚡ Υπολογιστής Ενέργειας & Ανταμοιβών</span><span class="lang-en">⚡ Energy & Reward Calculator</span></h3>
+
+        <div class="input-group">
+            <label><span class="lang-el">kWh Ανακτημένα/Ημέρα:</span><span class="lang-en">kWh Recovered/Day:</span></label>
+            <input type="number" id="kwhDaily" placeholder="50" value="50">
+        </div>
+
+        <div class="input-group">
+            <label><span class="lang-el">Ποσοστό Ανάκτησης (%):</span><span class="lang-en">Recovery % :</span></label>
+            <input type="number" id="recoveryPct" placeholder="15" value="15" min="0" max="100">
+        </div>
+
+        <div class="input-group">
+            <label><span class="lang-el">Περίπτωση Χρήσης:</span><span class="lang-en">Use Case:</span></label>
+            <select id="useCase" style="flex: 1; padding: 8px; background-color: #0a0a0a; border: 1px solid #ff6600; color: #00ff00; font-family: monospace;">
+                <option value="space_heating">Space Heating (+5%)</option>
+                <option value="greenhouse" selected>Greenhouse (+15%)</option>
+                <option value="livestock">Livestock (+12%)</option>
+                <option value="aquaculture">Aquaculture (+18%)</option>
+                <option value="desalination">Desalination (+20%)</option>
+            </select>
+        </div>
+
+        <button class="button" onclick="calculateRewards()"><span class="lang-el">Υπολογισμός</span><span class="lang-en">Calculate</span></button>
+
+        <div class="results" id="results" style="display: none;">
+            <div class="results-row">
+                <span><span class="lang-el">Θερμίδα κατηγορίας:</span><span class="lang-en">Reward Tier:</span></span>
+                <span id="resultTier">—</span>
+            </div>
+            <div class="results-row">
+                <span><span class="lang-el">Βάση ανταμοιβής (Phase C5):</span><span class="lang-en">Base Reward (Phase C5):</span></span>
+                <span id="resultBase">8.0 THR/block</span>
+            </div>
+            <div class="results-row">
+                <span><span class="lang-el">Bonus Ποσοστό:</span><span class="lang-en">Bonus %:</span></span>
+                <span id="resultBonusPct">—</span>
+            </div>
+            <div class="results-row">
+                <span><span class="lang-el">Θερμή Ανταμοιβή:</span><span class="lang-en">Heat Bonus:</span></span>
+                <span id="resultBonus">—</span>
+            </div>
+            <div class="results-row">
+                <span style="font-weight: bold;"><span class="lang-el">ΣΥΝΟΛΟ ΗΜΕΡΗΣΙΑΣ ΑΝΤΑΜΟΙΒΗΣ:</span><span class="lang-en">TOTAL DAILY REWARD:</span></span>
+                <span id="resultDaily" style="color: #ff6600; font-weight: bold;">—</span>
+            </div>
+            <div class="results-row">
+                <span><span class="lang-el">Αξία Ενέργειας (USD):</span><span class="lang-en">Energy Value (USD):</span></span>
+                <span id="resultUSD">—</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="chart-container">
+        <div class="chart-title"><span class="lang-el">📈 Ανταμοιβές ανά Θερμίδα</span><span class="lang-en">📈 Rewards per Tier</span></div>
+        <canvas id="rewardChart" width="400" height="200"></canvas>
+    </div>
+
+    <div class="notes">
+        <strong><span class="lang-el">💡 Πώς λειτουργεί η Ανάκτηση Θερμότητας:</span><span class="lang-en">💡 How Heat Recovery Works:</span></strong>
+        <span class="lang-el">Οι ανθρακορύχοι αναφέρουν μετρικές θερμότητας → συμπληρώνουν δυναμικές ανταμοιβές → κερδίζουν εμπειρία. Τα 4 επίπεδα ανταμοιβών κινούνται από 5% έως 40% επιπλέον THR. Επιπλέον bonus ανά περίπτωση χρήσης (θερμοκήπιο, ζωικό κεφάλαιο, κλπ.).</span>
+        <span class="lang-en">Miners report heat metrics → earn dynamic rewards → improve efficiency. 4 reward tiers range from 5% to 40% bonus THR. Additional bonus per use case (greenhouse, livestock, etc.).</span>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+<script>
+    async function loadHeatStats() {
+        try {
+            const response = await fetch('/api/heat/stats');
+            const data = await response.json();
+
+            // Update stat boxes
+            document.getElementById('networkHeat').textContent = data.network_heat_kwh_day.toFixed(0);
+            document.getElementById('activeFarms').textContent = data.active_farms;
+            document.getElementById('avgRecovery').textContent = (data.average_recovery_pct || 0).toFixed(1) + '%';
+            document.getElementById('thrPrice').textContent = '$0.0001';
+
+            // Build tier boxes
+            const tierContainer = document.getElementById('tierContainer');
+            tierContainer.innerHTML = '';
+            Object.entries(data.reward_tiers).forEach(([tierKey, tierData]) => {
+                const box = document.createElement('div');
+                box.className = 'tier-box';
+                box.innerHTML = `
+                    <div class="tier-title">${tierData.name}</div>
+                    <div class="tier-bonus">${tierData.recovery_range} Recovery → ${tierData.bonus} Bonus</div>
+                    <div class="tier-description">Equivalent to 0.4 - 3.2 THR/day bonus on 8 THR base reward</div>
+                `;
+                tierContainer.appendChild(box);
+            });
+
+            // Build use case table
+            const tbody = document.getElementById('useCaseBody');
+            tbody.innerHTML = '';
+            Object.entries(data.use_cases).forEach(([key, desc]) => {
+                const bonusMap = {
+                    'space_heating': '5%',
+                    'greenhouse': '15%',
+                    'livestock': '12%',
+                    'aquaculture': '18%',
+                    'desalination': '20%'
+                };
+                const reliabilityMap = {
+                    'space_heating': '95%',
+                    'greenhouse': '98%',
+                    'livestock': '90%',
+                    'aquaculture': '99%',
+                    'desalination': '99%'
+                };
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td style="text-transform: capitalize;">${key.replace(/_/g, ' ')}</td>
+                    <td>${desc}</td>
+                    <td style="color: #ff6600; font-weight: bold;">${bonusMap[key]}</td>
+                    <td>${reliabilityMap[key]}</td>
+                `;
+                tbody.appendChild(row);
+            });
+
+            // Draw reward tiers chart
+            drawTierChart();
+
+        } catch (error) {
+            console.error('Error loading heat stats:', error);
+        }
+    }
+
+    function calculateRewards() {
+        const kwhDaily = parseFloat(document.getElementById('kwhDaily').value) || 50;
+        const recoveryPct = parseFloat(document.getElementById('recoveryPct').value) || 15;
+        const useCase = document.getElementById('useCase').value;
+
+        // Determine tier
+        let tier = 'TIER_1';
+        let bonusPct = 0.05;
+        if (recoveryPct >= 10 && recoveryPct < 15) {
+            tier = 'TIER_2';
+            bonusPct = 0.15;
+        } else if (recoveryPct >= 15 && recoveryPct < 25) {
+            tier = 'TIER_3';
+            bonusPct = 0.25;
+        } else if (recoveryPct >= 25) {
+            tier = 'TIER_4';
+            bonusPct = 0.40;
+        }
+
+        // Use case bonus
+        const useCaseBonusMap = {
+            'space_heating': 0.05,
+            'greenhouse': 0.15,
+            'livestock': 0.12,
+            'aquaculture': 0.18,
+            'desalination': 0.20
+        };
+        const useCaseBonus = useCaseBonusMap[useCase] || 0.10;
+
+        // Calculate rewards
+        const baseReward = 8.0;
+        const blocksPerDay = 720; // 2-minute blocks
+        const heatBonus = baseReward * bonusPct * (1 + useCaseBonus);
+        const totalDailyReward = (baseReward + heatBonus) * blocksPerDay;
+        const energyValue = kwhDaily * 0.08; // $0.08/kWh industrial rate
+
+        // Display results
+        document.getElementById('resultTier').textContent = tier;
+        document.getElementById('resultBonusPct').textContent = (bonusPct * 100).toFixed(0) + '%';
+        document.getElementById('resultBonus').textContent = heatBonus.toFixed(6) + ' THR/block';
+        document.getElementById('resultDaily').textContent = totalDailyReward.toLocaleString('en-US', {maximumFractionDigits: 0}) + ' THR';
+        document.getElementById('resultUSD').textContent = '$' + energyValue.toFixed(2);
+        document.getElementById('results').style.display = 'block';
+    }
+
+    function drawTierChart() {
+        const ctx = document.getElementById('rewardChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: ['TIER_1\n(5-10%)', 'TIER_2\n(10-15%)', 'TIER_3\n(15-25%)', 'TIER_4\n(25%+)'],
+                datasets: [{
+                    label: 'Base Block Reward',
+                    data: [8, 8, 8, 8],
+                    backgroundColor: 'rgba(255, 102, 0, 0.3)',
+                    borderColor: '#ff6600',
+                    borderWidth: 2
+                }, {
+                    label: 'Heat Bonus (avg)',
+                    data: [0.4, 1.2, 2.0, 3.2],
+                    backgroundColor: 'rgba(255, 153, 0, 0.5)',
+                    borderColor: '#ff9900',
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: 'THR per Block' },
+                        ticks: { color: '#ff6600' },
+                        grid: { color: 'rgba(255, 102, 0, 0.1)' }
+                    },
+                    x: {
+                        ticks: { color: '#ff6600' },
+                        grid: { color: 'rgba(255, 102, 0, 0.1)' }
+                    }
+                },
+                plugins: {
+                    legend: { labels: { color: '#ff6600' } }
+                }
+            }
+        });
+    }
+
+    // Load on page load
+    loadHeatStats();
+</script>
+{% endblock %}

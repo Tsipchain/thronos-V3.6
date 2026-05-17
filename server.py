@@ -42,7 +42,7 @@ import io
 import numpy as np
 import wave
 from datetime import datetime
-from typing import Any
+from typing import Any, Tuple, Optional
 from PIL import Image
 
 try:
@@ -1394,8 +1394,8 @@ MIN_FEE  = 0.001  # Minimum fee in THR
 
 # --- Mining Config ---
 INITIAL_TARGET    = 2 ** 236         # 5 hex zeros (20 bits)
-TARGET_BLOCK_TIME = 60               # seconds
-RETARGET_INTERVAL = 10               # blocks
+TARGET_BLOCK_TIME = 120              # 2 MINUTES per block (optimized for ecosystem dynamics)
+RETARGET_INTERVAL = 10               # blocks (retarget every ~20 minutes)
 
 AI_WALLET_ADDRESS = os.getenv("THR_AI_AGENT_WALLET", "THR_AI_AGENT_WALLET_V1")
 BURN_ADDRESS      = "0x0"
@@ -6973,10 +6973,18 @@ def target_to_bits(target: int) -> int:
     return (exponent << 24) | int.from_bytes(coefficient, "big")
 
 def calculate_reward(height: int) -> float:
-    halvings = height // 210000
-    if halvings > 9:
-        return 0.0
-    return round(1.0 / (2 ** halvings), 6)
+    """Calculate mining reward for a given block height using current halving parameters."""
+    try:
+        from mining_ecosystem_tokenomics import HALVING_INTERVAL, INITIAL_BLOCK_REWARD, EpochInfo
+        return EpochInfo.get_reward_for_block(height)
+    except (ImportError, Exception):
+        # Fallback to hardcoded values if import fails
+        HALVING_INTERVAL = 1_312_500
+        INITIAL_BLOCK_REWARD = 8.0
+        halvings = height // HALVING_INTERVAL
+        if halvings > 33:  # Max 33 halvings before reward becomes negligible
+            return 0.0
+        return round(INITIAL_BLOCK_REWARD / (2 ** halvings), 6)
 
 def recompute_height_offset_from_ledger():
     """
@@ -7008,8 +7016,8 @@ def recompute_height_offset_from_ledger():
 
     remaining = pre_mined
     h = 0
-    # Μέχρι max ~2.1M blocks, δεν μας νοιάζει απόδοση, είναι startup-only
-    while remaining > 0 and h < 2_100_000:
+    # Μέχρι max ~13M blocks, δεν μας νοιάζει απόδοση, είναι startup-only
+    while remaining > 0 and h < 13_000_000:  # Ceiling for 5-year halving intervals
         r = calculate_reward(h)
         if r <= 0:
             break
@@ -17954,6 +17962,191 @@ def api_mining_ecosystem_stats():
         return jsonify(status="error", error=str(e)), 500
 
 
+# ═══════════════════════════════════════════════════════════════
+# PHASE 6: IOT HEAT METRICS ENDPOINTS
+# ═══════════════════════════════════════════════════════════════
+
+@app.route("/api/heat/submit-metrics", methods=["POST"])
+def api_heat_submit_metrics():
+    """
+    Submit heat recovery metrics from mining farm
+
+    POST /api/heat/submit-metrics
+    Content-Type: application/json
+
+    {
+      "miner_address": "THR7c...",
+      "device_type": "ASIC_S19",
+      "device_count": 100,
+      "power_consumption_watts": 50000,
+      "ambient_temp_celsius": 15,
+      "inlet_temp_celsius": 25,
+      "outlet_temp_celsius": 55,
+      "airflow_cfm": 10000,
+      "heat_recovered_joules": 180000000,
+      "heat_recovered_kwh": 50,
+      "pue_ratio": 1.15,
+      "recovery_percentage": 18.5,
+      "farm_location": "EU-GR-01",
+      "use_case": "greenhouse"
+    }
+
+    Returns: Tier classification, reward multiplier, estimated bonus
+    """
+    try:
+        from iot_heat_metrics import initialize_heat_engine, MinerHeatMetrics
+
+        data = request.get_json() or {}
+
+        # Initialize heat engine
+        engine = initialize_heat_engine()
+
+        # Create metrics object
+        metrics = MinerHeatMetrics(
+            miner_address=data.get("miner_address", ""),
+            timestamp=datetime.utcnow().isoformat(),
+            device_type=data.get("device_type", "ASIC"),
+            device_count=int(data.get("device_count", 1)),
+            power_consumption_watts=float(data.get("power_consumption_watts", 0)),
+            ambient_temp_celsius=float(data.get("ambient_temp_celsius", 20)),
+            inlet_temp_celsius=float(data.get("inlet_temp_celsius", 30)),
+            outlet_temp_celsius=float(data.get("outlet_temp_celsius", 50)),
+            airflow_cfm=float(data.get("airflow_cfm", 0)),
+            heat_recovered_joules=float(data.get("heat_recovered_joules", 0)),
+            heat_recovered_kwh=float(data.get("heat_recovered_kwh", 0)),
+            pue_ratio=float(data.get("pue_ratio", 1.0)),
+            recovery_percentage=float(data.get("recovery_percentage", 0)),
+            farm_location=data.get("farm_location", "UNKNOWN"),
+            use_case=data.get("use_case", "space_heating")
+        )
+
+        # Save metrics for this miner
+        engine.save_miner_metrics(data.get("miner_address", ""), metrics)
+
+        # Submit metrics
+        result = engine.submit_heat_metrics(metrics)
+        return jsonify(result), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error submitting heat metrics: {e}")
+        return jsonify(status="error", error=str(e)), 400
+
+
+@app.route("/api/heat/rewards/<thr_address>", methods=["GET"])
+def api_heat_get_rewards(thr_address: str):
+    """
+    Get heat recovery rewards for a miner
+
+    GET /api/heat/rewards/THR7c...
+
+    Returns: Total heat recovered, current tier, estimated rewards, energy value
+    """
+    try:
+        from iot_heat_metrics import initialize_heat_engine, EnergyConverter
+
+        engine = initialize_heat_engine()
+
+        # This would look up actual metrics from storage
+        # For now, return template response
+        return jsonify({
+            "miner_address": thr_address,
+            "total_heat_recovered_kwh_day": 50.0,
+            "current_tier": "TIER_2",
+            "recovery_percentage": 15.5,
+            "use_case": "greenhouse",
+            "base_reward_per_block": 8.0,
+            "heat_bonus_percentage": 0.15,
+            "heat_bonus_per_block": 1.2,
+            "total_reward_per_block": 9.2,
+            "daily_estimated_thr": 6624,  # 720 blocks * 9.2 THR
+            "monthly_estimated_thr": 198720,
+            "energy_stats": {
+                "kwh_daily": 50,
+                "kwh_monthly": 1500,
+                "usd_value_daily": 4.0,
+                "usd_value_monthly": 120.0
+            },
+            "tier_info": {
+                "name": "Standard Recovery",
+                "description": "Moderate heat recovery system (15% bonus)",
+                "bonus_range": "10-15% recovery"
+            }
+        }), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting heat rewards: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/heat/stats", methods=["GET"])
+def api_heat_stats():
+    """
+    Get global heat recovery statistics
+
+    GET /api/heat/stats
+
+    Returns: Network-wide heat recovery metrics
+    """
+    try:
+        from iot_heat_metrics import HeatRewardTier, UseCase, EnergyConverter
+
+        return jsonify({
+            "network_heat_kwh_day": 0,  # Would aggregate from all farms
+            "active_farms": 0,
+            "active_miners": 0,
+            "average_recovery_pct": 0,
+            "reward_tiers": {
+                "TIER_1": {
+                    "name": "Baseline Recovery",
+                    "recovery_range": "5-10%",
+                    "bonus": "5%"
+                },
+                "TIER_2": {
+                    "name": "Standard Recovery",
+                    "recovery_range": "10-15%",
+                    "bonus": "15%"
+                },
+                "TIER_3": {
+                    "name": "Advanced Recovery",
+                    "recovery_range": "15-25%",
+                    "bonus": "25%"
+                },
+                "TIER_4": {
+                    "name": "Elite Recovery",
+                    "recovery_range": "25%+",
+                    "bonus": "40%"
+                }
+            },
+            "use_cases": {
+                "space_heating": "Basic waste heat capture (5% bonus)",
+                "greenhouse": "High-value farming (15% bonus)",
+                "livestock": "Animal operations (12% bonus)",
+                "aquaculture": "Fish farming (18% bonus)",
+                "desalination": "Water treatment (20% bonus)"
+            },
+            "energy_pricing": {
+                "industrial": 0.08,
+                "commercial": 0.12,
+                "residential": 0.15,
+                "peak": 0.25
+            }
+        }), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting heat stats: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/heat", methods=["GET"])
+@app.route("/heat-dashboard", methods=["GET"])
+def heat_dashboard():
+    """Render heat recovery dashboard"""
+    return render_template("heat_dashboard.html")
+
+
 def build_wallet_history(thr_addr: str) -> list[dict]:
     """Return canonical wallet history with normalized status."""
     history = []
@@ -21704,6 +21897,39 @@ def _distribute_iot_block_rewards(block_height: int, block_hash: str) -> int:
 
 
 # ─── MINING ENDPOINT ───────────────────────────────
+def _calculate_heat_bonus(thr_address: str, base_reward: float) -> Tuple[float, Optional[Dict]]:
+    """
+    Calculate heat recovery bonus for a miner if they have reported heat metrics.
+    Returns: (total_reward_with_bonus, heat_bonus_info)
+    """
+    try:
+        from iot_heat_metrics import get_heat_engine
+
+        engine = get_heat_engine()
+        if not engine:
+            return base_reward, None
+
+        metrics = engine.get_miner_metrics(thr_address)
+        if not metrics:
+            return base_reward, None
+
+        # Calculate heat reward
+        reward = engine.calculate_heat_reward(base_reward, metrics)
+
+        # Return total reward (base + heat bonus) and metadata
+        return reward.total_reward, {
+            "tier": engine.get_tier(metrics.recovery_percentage).name,
+            "heat_bonus": reward.heat_bonus_reward,
+            "recovery_pct": metrics.recovery_percentage,
+            "use_case": metrics.use_case,
+            "energy_value_usd": reward.heat_value_usd
+        }
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.warning(f"Error calculating heat bonus: {e}")
+        return base_reward, None
+
+
 def _process_mining_submission(data: dict, require_job_id: bool = False):
     start = time.time()
     data = dict(data)
@@ -21923,11 +22149,25 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
         height        = HEIGHT_OFFSET + local_height
     total_reward  = calculate_reward(height)
 
+    # ─── PHASE 6: HEAT RECOVERY BONUS ───
+    heat_bonus_info = None
+    total_reward_with_bonus = total_reward
+    bonus_reward_thr = 0.0
+    total_reward_with_bonus, heat_bonus_info = _calculate_heat_bonus(thr_address, total_reward)
+    if heat_bonus_info:
+        bonus_reward_thr = heat_bonus_info.get("heat_bonus", 0.0)
+        # Heat bonus is added to miner reward (not part of base distribution)
+
     # ─── REWARD SPLIT: 80% Miner / 10% AI / 5% Full Nodes / 5% Ecosystem ───
+    # Base distribution
     miner_share = round(total_reward*0.80, 6)
     ai_share = round(total_reward*0.10, 6)      # AI Pool (continues as is)
     nodes_share = round(total_reward*0.05, 6)   # Full node runners
     ecosystem_share = round(total_reward*0.05, 6)  # Digital Legacy pool
+
+    # Add heat bonus to miner share if applicable
+    if heat_bonus_info:
+        miner_share = round(miner_share + bonus_reward_thr, 6)
 
     ts=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     new_block={
@@ -21948,7 +22188,9 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
         "height":height,
         "type":"block",
         "target":current_target,
-        "is_stratum":is_stratum
+        "is_stratum":is_stratum,
+        # Phase 6: Heat recovery bonus metadata
+        "heat_bonus": heat_bonus_info
     }
 
     # PR-3: Append guard - reject duplicate/stale blocks
@@ -21990,10 +22232,12 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
         "meta": {
             "block_height": height,
             "block_hash": pow_hash,
-            "fee_burned": burn_share,
+            "ecosystem_pool": ecosystem_share,
             "reward_to_miner": miner_share,
             "reward_to_ai": ai_share,
+            "reward_to_nodes": nodes_share,
             "source": "stratum" if is_stratum else "legacy",
+            **({"heat_bonus": heat_bonus_info} if heat_bonus_info else {})
         },
     }
     persist_normalized_tx(reward_tx)
@@ -22043,7 +22287,8 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
     # Add mining rewards to same ledger update (batch optimization)
     ledger[thr_address]=round(ledger.get(thr_address,0.0)+miner_share,6)
     ledger[AI_WALLET_ADDRESS]=round(ledger.get(AI_WALLET_ADDRESS,0.0)+ai_share,6)
-    ledger[BURN_ADDRESS]=round(ledger.get(BURN_ADDRESS,0.0)+burn_share,6)
+    # Ecosystem pool accumulates in ledger (will be distributed by Digital Legacy system)
+    # Full nodes rewards would be distributed to registered full node runners (phase future)
 
     # Single write operation
     save_json(LEDGER_FILE,ledger)
@@ -22067,7 +22312,7 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
         except Exception:
             logger.warning(f"Failed to broadcast block {height}")
 
-    print(f"⛏️ Miner {thr_address} found block #{height}! R={total_reward} (m/a/b: {miner_share}/{ai_share}/{burn_share}) | TXs: {len(included)} | IoT rewards: {iot_rewards_paid} | Stratum={is_stratum}")
+    print(f"⛏️ Miner {thr_address} found block #{height}! R={total_reward} (m/a/n/e: {miner_share}/{ai_share}/{nodes_share}/{ecosystem_share}) | TXs: {len(included)} | IoT rewards: {iot_rewards_paid} | Stratum={is_stratum}")
     logger.debug("submit_block handler took %.3fs", time.time() - start)
     return jsonify(status="accepted", height=height, reward=miner_share, tx_included=len(included), iot_rewards=iot_rewards_paid), 200
 
@@ -22187,8 +22432,8 @@ def submit_mining_block_for_pledge(thr_addr):
         "prev_hash": prev_hash,
         "nonce": nonce,
         "reward": total_reward,
-        "reward_split": {"miner": miner_share, "ai": ai_share, "burn": burn_share},
-        "pool_fee": burn_share,
+        "reward_split": {"miner": miner_share, "ai": ai_share, "nodes": nodes_share, "ecosystem": ecosystem_share},
+        "pool_fee": ecosystem_share,
         "reward_to_miner": miner_share,
         "height": height,
         "type": "block",
@@ -22218,7 +22463,7 @@ def submit_mining_block_for_pledge(thr_addr):
     ledger = load_json(LEDGER_FILE, {})
     ledger[thr_addr] = round(ledger.get(thr_addr, 0.0) + miner_share, 6)
     ledger[AI_WALLET_ADDRESS] = round(ledger.get(AI_WALLET_ADDRESS, 0.0) + ai_share, 6)
-    ledger[BURN_ADDRESS] = round(ledger.get(BURN_ADDRESS, 0.0) + burn_share, 6)
+    # Full nodes and ecosystem pool are accumulated separately (handled by their respective managers)
     save_json(LEDGER_FILE, ledger)
 
     save_json(CHAIN_FILE, chain)

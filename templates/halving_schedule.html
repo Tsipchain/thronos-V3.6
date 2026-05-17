@@ -155,19 +155,19 @@
 
         <div class="stat-box">
             <div class="stat-label"><span class="lang-el">Διάστημα Halving</span><span class="lang-en">Halving Interval</span></div>
-            <div class="stat-value">210,000</div>
-            <div class="stat-label"><span class="lang-el">Blocks (~9.6 μήνες)</span><span class="lang-en">Blocks (~9.6 months)</span></div>
+            <div class="stat-value">1,312,500</div>
+            <div class="stat-label"><span class="lang-el">Blocks (~5 χρόνια)</span><span class="lang-en">Blocks (~5 years)</span></div>
         </div>
 
         <div class="stat-box">
             <div class="stat-label"><span class="lang-el">Αρχική Ανταμοιβή</span><span class="lang-en">Initial Reward</span></div>
-            <div class="stat-value">1.0</div>
+            <div class="stat-value">8.0</div>
             <div class="stat-label">THR / Block</div>
         </div>
 
         <div class="stat-box">
             <div class="stat-label"><span class="lang-el">Πλήρης Κυκλοφορία</span><span class="lang-en">Full Circulation</span></div>
-            <div class="stat-value">~4</div>
+            <div class="stat-value">~30</div>
             <div class="stat-label"><span class="lang-el">Χρόνια</span><span class="lang-en">Years</span></div>
         </div>
 
@@ -246,9 +246,9 @@
 
                 row.innerHTML = `
                     <td>${halving.epoch}</td>
-                    <td>${halving.block_height.toLocaleString()} – ${(halving.block_height + 210000 - 1).toLocaleString()}</td>
+                    <td>${halving.block_height.toLocaleString()} – ${(halving.block_height + 1312500 - 1).toLocaleString()}</td>
                     <td class="reward-value">${halving.reward_after.toFixed(6)} THR</td>
-                    <td class="supply-value">${halving.block_height === 0 ? '210,000.00' : (210000 * (1 / Math.pow(2, halving.epoch))).toFixed(2)}</td>
+                    <td class="supply-value">${halving.block_height === 0 ? '10,500,000.00' : (1312500 * (8 / Math.pow(2, halving.epoch))).toFixed(2)}</td>
                     <td class="timeline-date">${new Date(halving.halving_date).toLocaleDateString()}</td>
                     <td>${halving.epoch_duration_hours.toFixed(0)} hours (~${(halving.epoch_duration_hours / 24 / 30.44).toFixed(1)} months)</td>
                 `;
@@ -268,7 +268,7 @@
 
                 // Chart data
                 epochs.push(`E${halving.epoch}`);
-                rewards.push(210000 * halving.reward_after);
+                rewards.push(1312500 * halving.reward_after);
                 supplies.push(supply);
             });
 

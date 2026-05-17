@@ -42,9 +42,9 @@ DATA_DIR.mkdir(exist_ok=True)
 
 TOTAL_SUPPLY_THR = 21_000_001  # Bitcoin + 1
 INITIAL_BLOCK_REWARD = 1.0     # 1 THR per block
-BLOCK_TIME_MINUTES = 2         # 2 minutes per block
+BLOCK_TIME_MINUTES = 1         # 1 MINUTE per block (4x faster than Bitcoin!)
 HALVING_INTERVAL = 210_000     # Blocks between halvings (like Bitcoin)
-GENESIS_BLOCK_TIME = datetime(2024, 1, 1, 0, 0, 0)  # Assumed genesis
+GENESIS_BLOCK_TIME = datetime(2023, 1, 1, 0, 0, 0)  # Started 2023 with first miner
 
 # Current reward distribution (to be updated to 80/5/5)
 REWARD_DISTRIBUTION_V1 = {

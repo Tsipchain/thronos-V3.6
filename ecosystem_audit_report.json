@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-05-17T11:06:00.838962",
+  "timestamp": "2026-05-17T11:51:47.561235",
   "audit_version": "1.0",
   "base_directory": "/home/user/thronos-V3.6",
   "sections": {
@@ -10,11 +10,13 @@
         "server.py": {
           "exists": true,
           "path": "/home/user/thronos-V3.6/server.py",
-          "size_bytes": 1299781,
+          "size_bytes": 1301233,
           "key_variables_found": [
             "TARGET_BLOCK_TIME",
             "INITIAL_TARGET",
-            "RETARGET_INTERVAL"
+            "RETARGET_INTERVAL",
+            "HALVING_INTERVAL",
+            "INITIAL_BLOCK_REWARD"
           ],
           "status": "\u2705 EXISTS"
         }
@@ -29,7 +31,7 @@
         "server.py": {
           "exists": true,
           "path": "/home/user/thronos-V3.6/server.py",
-          "size_bytes": 1299781,
+          "size_bytes": 1301233,
           "key_variables_found": [],
           "status": "\u2705 EXISTS"
         }
@@ -63,7 +65,7 @@
         "server.py": {
           "exists": true,
           "path": "/home/user/thronos-V3.6/server.py",
-          "size_bytes": 1299781,
+          "size_bytes": 1301233,
           "key_variables_found": [],
           "status": "\u2705 EXISTS"
         }
@@ -97,7 +99,7 @@
         "server.py": {
           "exists": true,
           "path": "/home/user/thronos-V3.6/server.py",
-          "size_bytes": 1299781,
+          "size_bytes": 1301233,
           "key_variables_found": [],
           "status": "\u2705 EXISTS"
         }
@@ -195,7 +197,7 @@
         "mining_ecosystem_tokenomics.py": {
           "exists": true,
           "path": "/home/user/thronos-V3.6/mining_ecosystem_tokenomics.py",
-          "size_bytes": 11278,
+          "size_bytes": 11345,
           "key_variables_found": [],
           "status": "\u2705 EXISTS"
         }
@@ -210,7 +212,7 @@
         "server.py": {
           "exists": true,
           "path": "/home/user/thronos-V3.6/server.py",
-          "size_bytes": 1299781,
+          "size_bytes": 1301233,
           "key_variables_found": [],
           "status": "\u2705 EXISTS"
         }
@@ -235,7 +237,7 @@
         "server.py": {
           "exists": true,
           "path": "/home/user/thronos-V3.6/server.py",
-          "size_bytes": 1299781,
+          "size_bytes": 1301233,
           "key_variables_found": [],
           "status": "\u2705 EXISTS"
         }
@@ -255,16 +257,6 @@
     }
   },
   "issues": [
-    {
-      "section": "server.py",
-      "severity": "WARNING",
-      "message": "Key variable 'HALVING_INTERVAL' not found"
-    },
-    {
-      "section": "server.py",
-      "severity": "WARNING",
-      "message": "Key variable 'INITIAL_BLOCK_REWARD' not found"
-    },
     {
       "section": "pledge_chain.json",
       "severity": "INFO",
@@ -318,9 +310,9 @@
   ],
   "summary": {
     "total_sections_audited": 8,
-    "issues_found": 12,
+    "issues_found": 10,
     "critical_issues": 0,
-    "warnings": 2,
+    "warnings": 0,
     "info_items": 10
   }
 }

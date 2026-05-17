@@ -1,0 +1,361 @@
+{% extends "base.html" %}
+
+{% block title %}⛏️ THR Halving Schedule{% endblock %}
+
+{% block styles %}
+<style>
+    .halving-container {
+        max-width: 1200px;
+        margin: 30px auto;
+        padding: 20px;
+        background-color: #0a0a0a;
+        border: 2px solid #0f0;
+        border-radius: 8px;
+    }
+
+    .halving-stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 20px;
+        margin: 30px 0;
+    }
+
+    .stat-box {
+        background-color: #1a1a1a;
+        border: 1px solid #0f0;
+        padding: 20px;
+        border-radius: 4px;
+        text-align: center;
+    }
+
+    .stat-value {
+        font-size: 2em;
+        color: #0f0;
+        font-weight: bold;
+        margin: 10px 0;
+    }
+
+    .stat-label {
+        color: #aaa;
+        font-size: 0.9em;
+    }
+
+    table {
+        border-collapse: collapse;
+        width: 100%;
+        margin-top: 20px;
+        background-color: #111;
+    }
+
+    th, td {
+        border: 1px solid #0f0;
+        padding: 12px;
+        text-align: left;
+    }
+
+    th {
+        background-color: #0f0;
+        color: #000;
+        font-weight: bold;
+    }
+
+    tr:nth-child(even) {
+        background-color: #0a0a0a;
+    }
+
+    tr:hover {
+        background-color: #1a1a1a;
+    }
+
+    .epoch-0 { background-color: rgba(0, 255, 0, 0.1); }
+    .epoch-1 { background-color: rgba(0, 200, 0, 0.1); }
+    .epoch-2 { background-color: rgba(0, 150, 0, 0.1); }
+
+    .reward-value {
+        font-family: monospace;
+        color: #0f0;
+        font-weight: bold;
+    }
+
+    .supply-value {
+        font-family: monospace;
+        color: #00ff00;
+    }
+
+    .timeline {
+        margin: 30px 0;
+        padding: 20px;
+        background-color: #1a1a1a;
+        border-left: 4px solid #0f0;
+        border-radius: 4px;
+    }
+
+    .timeline-item {
+        margin: 15px 0;
+        padding: 10px;
+        background-color: #0a0a0a;
+        border-radius: 3px;
+    }
+
+    .timeline-epoch {
+        font-weight: bold;
+        color: #0f0;
+    }
+
+    .timeline-date {
+        color: #aaa;
+        font-size: 0.9em;
+    }
+
+    .chart-container {
+        margin: 30px 0;
+        padding: 20px;
+        background-color: #1a1a1a;
+        border: 1px solid #0f0;
+        border-radius: 4px;
+        overflow-x: auto;
+    }
+
+    .chart-title {
+        color: #0f0;
+        font-weight: bold;
+        margin-bottom: 10px;
+    }
+
+    .notes {
+        background-color: #1a1a1a;
+        border-left: 4px solid #00aaff;
+        padding: 20px;
+        margin: 20px 0;
+        border-radius: 4px;
+    }
+
+    .notes strong {
+        color: #00aaff;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="halving-container">
+    <h1>⛏️ <span class="lang-el">Χronοδιάγραμμα Halving της Thronos</span><span class="lang-en">Thronos Halving Schedule</span></h1>
+
+    <div class="halving-stats">
+        <div class="stat-box">
+            <div class="stat-label"><span class="lang-el">Συνολική Προμήθεια</span><span class="lang-en">Total Supply</span></div>
+            <div class="stat-value">21,000,001</div>
+            <div class="stat-label">THR</div>
+        </div>
+
+        <div class="stat-box">
+            <div class="stat-label"><span class="lang-el">Χρόνος Block</span><span class="lang-en">Block Time</span></div>
+            <div class="stat-value">2</div>
+            <div class="stat-label"><span class="lang-el">Λεπτά</span><span class="lang-en">Minutes</span></div>
+        </div>
+
+        <div class="stat-box">
+            <div class="stat-label"><span class="lang-el">Διάστημα Halving</span><span class="lang-en">Halving Interval</span></div>
+            <div class="stat-value">210,000</div>
+            <div class="stat-label"><span class="lang-el">Blocks (~9.6 μήνες)</span><span class="lang-en">Blocks (~9.6 months)</span></div>
+        </div>
+
+        <div class="stat-box">
+            <div class="stat-label"><span class="lang-el">Αρχική Ανταμοιβή</span><span class="lang-en">Initial Reward</span></div>
+            <div class="stat-value">1.0</div>
+            <div class="stat-label">THR / Block</div>
+        </div>
+
+        <div class="stat-box">
+            <div class="stat-label"><span class="lang-el">Πλήρης Κυκλοφορία</span><span class="lang-en">Full Circulation</span></div>
+            <div class="stat-value">~4</div>
+            <div class="stat-label"><span class="lang-el">Χρόνια</span><span class="lang-en">Years</span></div>
+        </div>
+
+        <div class="stat-box">
+            <div class="stat-label"><span class="lang-el">Διανομή Reward (v2)</span><span class="lang-en">Reward Distribution (v2)</span></div>
+            <div class="stat-value">80/5/5</div>
+            <div class="stat-label"><span class="lang-el">Miner/Nodes/Ecosystem</span><span class="lang-en">Miner/Nodes/Ecosystem</span></div>
+        </div>
+    </div>
+
+    <div class="notes">
+        <strong><span class="lang-el">📌 Digital Legacy Integration:</span><span class="lang-en">📌 Digital Legacy Integration:</span></strong>
+        <span class="lang-el">Το 5% του ecosystem pool χρησιμοποιείται για τη Digital Legacy System - unclaimed assets επιστρέφουν στο δίκτυο και διανέμονται σε σχολεία, στέγη, υγεία και κοινοτικές αναπτύξεις.</span>
+        <span class="lang-en">The 5% ecosystem pool is used for the Digital Legacy System - unclaimed assets return to the network and are distributed to schools, housing, healthcare, and community development.</span>
+    </div>
+
+    <h2><span class="lang-el">📊 Πλήρες Χρονοδιάγραμμα Halving</span><span class="lang-en">📊 Complete Halving Schedule</span></h2>
+
+    <table id="halvingTable">
+        <thead>
+            <tr>
+                <th><span class="lang-el">Εποχή</span><span class="lang-en">Epoch</span></th>
+                <th><span class="lang-el">Εύρος Block</span><span class="lang-en">Block Range</span></th>
+                <th><span class="lang-el">Ανταμοιβή/Block</span><span class="lang-en">Reward/Block</span></th>
+                <th><span class="lang-el">Σύνολο Έκδοσης</span><span class="lang-en">Total Issued</span></th>
+                <th><span class="lang-el">Αναμενόμενη Ημερομηνία</span><span class="lang-en">Expected Date</span></th>
+                <th><span class="lang-el">Διάρκεια Εποχής</span><span class="lang-en">Epoch Duration</span></th>
+            </tr>
+        </thead>
+        <tbody id="halvingBody">
+            <!-- Filled by JavaScript -->
+        </tbody>
+    </table>
+
+    <div class="timeline">
+        <div class="chart-title"><span class="lang-el">⏱️ Χρονολογία Halving</span><span class="lang-en">⏱️ Halving Timeline</span></div>
+        <div id="timelineContent">
+            <!-- Filled by JavaScript -->
+        </div>
+    </div>
+
+    <div class="chart-container">
+        <div class="chart-title"><span class="lang-el">📈 Προσδοκώμενη Προσθήκη THR ανά Εποχή</span><span class="lang-en">📈 Expected THR Added per Epoch</span></div>
+        <canvas id="rewardChart" width="400" height="200"></canvas>
+    </div>
+
+    <div class="chart-container">
+        <div class="chart-title"><span class="lang-el">📊 Σωρευτική Προμήθεια ανά Εποχή</span><span class="lang-en">📊 Cumulative Supply per Epoch</span></div>
+        <canvas id="supplyChart" width="400" height="200"></canvas>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+<script>
+    // Fetch halving schedule from API
+    async function loadHalvingSchedule() {
+        try {
+            const response = await fetch('/api/mining/halving-schedule');
+            const data = await response.json();
+            const halvings = data.halvings;
+
+            // Populate table
+            const tbody = document.getElementById('halvingBody');
+            const timeline = document.getElementById('timelineContent');
+            const epochs = [];
+            const rewards = [];
+            const supplies = [];
+            let cumulativeSupply = 0;
+
+            halvings.slice(0, 10).forEach(halving => {
+                const row = document.createElement('tr');
+                row.className = `epoch-${halving.epoch % 3}`;
+
+                const supply = halving.supply_at_halving;
+                cumulativeSupply = supply;
+
+                row.innerHTML = `
+                    <td>${halving.epoch}</td>
+                    <td>${halving.block_height.toLocaleString()} – ${(halving.block_height + 210000 - 1).toLocaleString()}</td>
+                    <td class="reward-value">${halving.reward_after.toFixed(6)} THR</td>
+                    <td class="supply-value">${halving.block_height === 0 ? '210,000.00' : (210000 * (1 / Math.pow(2, halving.epoch))).toFixed(2)}</td>
+                    <td class="timeline-date">${new Date(halving.halving_date).toLocaleDateString()}</td>
+                    <td>${halving.epoch_duration_hours.toFixed(0)} hours (~${(halving.epoch_duration_hours / 24 / 30.44).toFixed(1)} months)</td>
+                `;
+                tbody.appendChild(row);
+
+                // Timeline
+                if (halving.epoch < 10) {
+                    const timelineItem = document.createElement('div');
+                    timelineItem.className = 'timeline-item';
+                    timelineItem.innerHTML = `
+                        <div class="timeline-epoch">Epoch ${halving.epoch}: ${new Date(halving.halving_date).toLocaleDateString()}</div>
+                        <div class="timeline-date">Block ${halving.block_height.toLocaleString()} → Reward: ${halving.reward_after.toFixed(6)} THR</div>
+                        <div class="timeline-date">Supply at halving: ${supply.toLocaleString()} THR</div>
+                    `;
+                    timeline.appendChild(timelineItem);
+                }
+
+                // Chart data
+                epochs.push(`E${halving.epoch}`);
+                rewards.push(210000 * halving.reward_after);
+                supplies.push(supply);
+            });
+
+            // Draw charts
+            drawRewardChart(epochs, rewards);
+            drawSupplyChart(epochs, supplies);
+
+        } catch (error) {
+            console.error('Error loading halving schedule:', error);
+            document.getElementById('halvingBody').innerHTML = '<tr><td colspan="6">Error loading data</td></tr>';
+        }
+    }
+
+    function drawRewardChart(epochs, rewards) {
+        const ctx = document.getElementById('rewardChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: epochs,
+                datasets: [{
+                    label: 'THR Issued per Epoch',
+                    data: rewards,
+                    backgroundColor: 'rgba(0, 255, 0, 0.5)',
+                    borderColor: '#0f0',
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: { color: '#0f0' },
+                        grid: { color: 'rgba(0, 255, 0, 0.1)' }
+                    },
+                    x: {
+                        ticks: { color: '#0f0' },
+                        grid: { color: 'rgba(0, 255, 0, 0.1)' }
+                    }
+                },
+                plugins: {
+                    legend: { labels: { color: '#0f0' } }
+                }
+            }
+        });
+    }
+
+    function drawSupplyChart(epochs, supplies) {
+        const ctx = document.getElementById('supplyChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: epochs,
+                datasets: [{
+                    label: 'Total THR Supply',
+                    data: supplies,
+                    borderColor: '#0f0',
+                    backgroundColor: 'rgba(0, 255, 0, 0.1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.1,
+                    pointBackgroundColor: '#0f0'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: { color: '#0f0' },
+                        grid: { color: 'rgba(0, 255, 0, 0.1)' }
+                    },
+                    x: {
+                        ticks: { color: '#0f0' },
+                        grid: { color: 'rgba(0, 255, 0, 0.1)' }
+                    }
+                },
+                plugins: {
+                    legend: { labels: { color: '#0f0' } }
+                }
+            }
+        });
+    }
+
+    // Load on page load
+    loadHalvingSchedule();
+</script>
+{% endblock %}

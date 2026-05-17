@@ -17828,6 +17828,124 @@ def api_pool_stats(pool_id: str = None):
         return jsonify(status="error", error=str(e)), 500
 
 
+# MINING ECOSYSTEM & HALVING SCHEDULE - Phase C5
+# ────────────────────────────────────────────────
+
+@app.route("/api/mining/halving-schedule", methods=["GET"])
+def api_mining_halving_schedule():
+    """
+    Get complete halving schedule for Thronos
+
+    GET /api/mining/halving-schedule
+
+    Returns all 33 halvings with dates, block heights, rewards, and supply info.
+    Total supply: 21,000,001 THR (Bitcoin + 1)
+    Block time: 2 minutes
+    Halving interval: 210,000 blocks (~9.6 months)
+    """
+    try:
+        from mining_ecosystem_tokenomics import TimingCalculator
+
+        halving_schedule = TimingCalculator.get_halving_times()
+        return jsonify(
+            total_supply=21_000_001,
+            block_time_minutes=2,
+            halving_interval_blocks=210_000,
+            halvings=halving_schedule
+        ), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting halving schedule: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/mining/supply-projection", methods=["GET"])
+def api_mining_supply_projection():
+    """
+    Get THR supply projection over time
+
+    GET /api/mining/supply-projection?years=10
+
+    Projects total THR circulation year by year.
+    Shows progression toward 21,000,001 THR max supply.
+    """
+    try:
+        from mining_ecosystem_tokenomics import TimingCalculator
+
+        years = request.args.get("years", 10, type=int)
+        years = min(max(1, years), 20)  # Clamp 1-20 years
+
+        projection = TimingCalculator.get_supply_projection(years)
+        return jsonify(projection), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting supply projection: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/mining/current-epoch", methods=["GET"])
+def api_mining_current_epoch():
+    """
+    Get current mining epoch information
+
+    GET /api/mining/current-epoch?block_height=<height>
+
+    Returns current epoch, blocks until halving, current reward, supply info.
+    If block_height not provided, uses chain tip.
+    """
+    try:
+        from mining_ecosystem_tokenomics import get_mining_ecosystem
+
+        block_height = request.args.get("block_height", type=int)
+
+        if not block_height:
+            # Get current chain tip
+            last_block = get_last_block_snapshot()
+            block_height = last_block.get("height", 0)
+
+        manager = get_mining_ecosystem()
+        if not manager:
+            # Initialize if needed
+            from mining_ecosystem_tokenomics import initialize_mining_ecosystem
+            manager = initialize_mining_ecosystem(version=2)
+
+        epoch_info = manager.get_current_epoch_info(block_height)
+        return jsonify(epoch_info), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting current epoch: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/mining/ecosystem-stats", methods=["GET"])
+def api_mining_ecosystem_stats():
+    """
+    Get mining ecosystem statistics
+
+    GET /api/mining/ecosystem-stats
+
+    Returns global mining parameters, reward distribution, supply info.
+    """
+    try:
+        from mining_ecosystem_tokenomics import get_mining_ecosystem
+
+        manager = get_mining_ecosystem()
+        if not manager:
+            from mining_ecosystem_tokenomics import initialize_mining_ecosystem
+            manager = initialize_mining_ecosystem(version=2)
+
+        stats = manager.get_stats()
+        return jsonify(stats), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting mining stats: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
 def build_wallet_history(thr_addr: str) -> list[dict]:
     """Return canonical wallet history with normalized status."""
     history = []

@@ -227,11 +227,12 @@ _pythia_manager = None  # Pytheia AI Node Manager
 _legacy_manager = None  # Digital Legacy System
 _will_manager = None  # Smart Contract Will System
 _distribution_manager = None  # Multi-Sig Distribution System
+_pool_manager = None  # Charity Pool & Redistribution System
 
 
 def _initialize_phase3_and_4():
     """Initialize CEX LP Agent, Stellar, Pythia, and Digital Legacy after logger is ready"""
-    global _bridge_coordinator, _cex_lp_agent, _stellar_coordinator, _pythia_manager, _legacy_manager, _will_manager, _distribution_manager
+    global _bridge_coordinator, _cex_lp_agent, _stellar_coordinator, _pythia_manager, _legacy_manager, _will_manager, _distribution_manager, _pool_manager
     logger = logging.getLogger("thronos")
 
     # Initialize Native Bridge with Liquidity Pools
@@ -319,6 +320,18 @@ def _initialize_phase3_and_4():
     except Exception as e:
         _distribution_manager = None
         logger.error(f"Failed to initialize Distribution Manager: {e}")
+
+    # Initialize Charity Pool & Redistribution System
+    try:
+        from digital_pool_redistribution import initialize_pool_manager
+        _pool_manager = initialize_pool_manager()
+        logger.info("🌍 Charity Pool Manager initialized (unclaimed assets → schools, housing, charity)")
+    except ImportError:
+        _pool_manager = None
+        print("[Pool] Charity Pool System not available")
+    except Exception as e:
+        _pool_manager = None
+        logger.error(f"Failed to initialize Charity Pool: {e}")
 
 
 def _reset_daily_pool_volumes():
@@ -17595,6 +17608,223 @@ def api_distribution_stats():
     except Exception as e:
         logger = logging.getLogger("thronos")
         logger.error(f"Error getting distribution stats: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+# CHARITY POOL & REDISTRIBUTION SYSTEM - Phase C4
+# ────────────────────────────────────────────────────
+
+@app.route("/api/legacy/pool/create", methods=["POST"])
+def api_create_charity_pool():
+    """
+    Create a new charity pool for redistributing unclaimed assets
+
+    POST /api/legacy/pool/create
+
+    Creates pool with default allocations:
+    - 25% → Schools & Education
+    - 25% → Housing & Shelter
+    - 25% → Healthcare & Medical
+    - 15% → Food Security & Nutrition
+    - 10% → Community Development
+
+    Returns: {
+        "pool_id": "pool_...",
+        "status": "collecting",
+        "allocations": {...}
+    }
+    """
+    try:
+        if not _pool_manager:
+            return jsonify(status="error", message="Pool System not available"), 503
+
+        pool = _pool_manager.create_pool()
+        return jsonify(
+            status="created",
+            pool=pool.to_dict()
+        ), 201
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error creating pool: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/pool/<pool_id>/add-asset", methods=["POST"])
+def api_add_unclaimed_asset(pool_id: str):
+    """
+    Add unclaimed asset to charity pool
+
+    POST /api/legacy/pool/<pool_id>/add-asset
+    Body: {
+        "asset_id": "asset_...",
+        "original_owner": "THR...",
+        "asset_type": "crypto|real_estate|bank|...",
+        "value_usd": 125000.50,
+        "claim_deadline": "2056-05-16T10:30:00Z"
+    }
+
+    Called when claim period expires and asset reverts to pool.
+    Asset will be redistributed to charitable causes.
+    """
+    try:
+        if not _pool_manager:
+            return jsonify(status="error", message="Pool System not available"), 503
+
+        data = request.get_json() or {}
+
+        required = ["asset_id", "original_owner", "asset_type", "value_usd", "claim_deadline"]
+        missing = [f for f in required if not data.get(f)]
+        if missing:
+            return jsonify(status="error", message=f"Missing fields: {missing}"), 400
+
+        success, msg = _pool_manager.add_unclaimed_asset(
+            pool_id=pool_id,
+            asset_id=data["asset_id"],
+            original_owner=data["original_owner"],
+            asset_type=data["asset_type"],
+            value_usd=float(data["value_usd"]),
+            claim_deadline=data["claim_deadline"]
+        )
+
+        if success:
+            return jsonify(status="added", message=msg), 201
+        else:
+            return jsonify(status="error", message=msg), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error adding asset to pool: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/pool/<pool_id>/collect", methods=["POST"])
+def api_collect_pool(pool_id: str):
+    """
+    Mark pool as fully collected (ready for allocation)
+
+    POST /api/legacy/pool/<pool_id>/collect
+
+    Called after all unclaimed assets have been added.
+    Transitions pool from "collecting" to "collected" status.
+    """
+    try:
+        if not _pool_manager:
+            return jsonify(status="error", message="Pool System not available"), 503
+
+        success, msg = _pool_manager.collect_pool(pool_id)
+
+        if success:
+            return jsonify(status="collected", message=msg), 200
+        else:
+            return jsonify(status="error", message=msg), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error collecting pool: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/pool/<pool_id>/allocate", methods=["POST"])
+def api_allocate_pool(pool_id: str):
+    """
+    Allocate collected assets to charitable causes
+
+    POST /api/legacy/pool/<pool_id>/allocate
+
+    Distributes pool assets according to default percentages:
+    - 25% → Schools & Education (fight illiteracy)
+    - 25% → Housing & Shelter (end homelessness)
+    - 25% → Healthcare & Medical (save lives)
+    - 15% → Food Security (prevent starvation)
+    - 10% → Community Development (empower economies)
+
+    Returns allocation breakdown by cause.
+    """
+    try:
+        if not _pool_manager:
+            return jsonify(status="error", message="Pool System not available"), 503
+
+        success, msg = _pool_manager.allocate_pool_to_causes(pool_id)
+
+        if success:
+            pool = _pool_manager.pools.get(pool_id)
+            return jsonify(
+                status="allocated",
+                message=msg,
+                allocations={
+                    cause: {
+                        "percentage": alloc.allocation_percentage,
+                        "amount_usd": alloc.allocated_amount_usd
+                    }
+                    for cause, alloc in pool.allocations.items()
+                }
+            ), 200
+        else:
+            return jsonify(status="error", message=msg), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error allocating pool: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/pool/<pool_id>", methods=["GET"])
+def api_get_pool(pool_id: str):
+    """
+    Get detailed information about a charity pool
+
+    GET /api/legacy/pool/<pool_id>
+
+    Returns full pool object with assets, allocations, and status.
+    """
+    try:
+        if not _pool_manager:
+            return jsonify(status="error", message="Pool System not available"), 503
+
+        pool = _pool_manager.pools.get(pool_id)
+        if not pool:
+            return jsonify(status="error", message="Pool not found"), 404
+
+        return jsonify(pool.to_dict()), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting pool: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/pool/stats", methods=["GET"])
+@app.route("/api/legacy/pool/stats/<pool_id>", methods=["GET"])
+def api_pool_stats(pool_id: str = None):
+    """
+    Get charity pool statistics
+
+    GET /api/legacy/pool/stats (all pools)
+    GET /api/legacy/pool/stats/<pool_id> (specific pool)
+
+    Returns: {
+        "total_pools": 5,
+        "total_value_usd": 500000.00,
+        "pools": {
+            "pool_...": {
+                "assets": 10,
+                "value_usd": 100000.00,
+                "status": "allocated"
+            }
+        }
+    }
+    """
+    try:
+        if not _pool_manager:
+            return jsonify(status="error", message="Pool System not available"), 503
+
+        stats = _pool_manager.get_pool_stats(pool_id)
+        return jsonify(stats), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting pool stats: {e}")
         return jsonify(status="error", error=str(e)), 500
 
 

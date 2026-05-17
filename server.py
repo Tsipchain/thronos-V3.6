@@ -226,11 +226,12 @@ _stellar_coordinator = None  # Optional background liquidity management
 _pythia_manager = None  # Pytheia AI Node Manager
 _legacy_manager = None  # Digital Legacy System
 _will_manager = None  # Smart Contract Will System
+_distribution_manager = None  # Multi-Sig Distribution System
 
 
 def _initialize_phase3_and_4():
     """Initialize CEX LP Agent, Stellar, Pythia, and Digital Legacy after logger is ready"""
-    global _bridge_coordinator, _cex_lp_agent, _stellar_coordinator, _pythia_manager, _legacy_manager, _will_manager
+    global _bridge_coordinator, _cex_lp_agent, _stellar_coordinator, _pythia_manager, _legacy_manager, _will_manager, _distribution_manager
     logger = logging.getLogger("thronos")
 
     # Initialize Native Bridge with Liquidity Pools
@@ -306,6 +307,18 @@ def _initialize_phase3_and_4():
     except Exception as e:
         _will_manager = None
         logger.error(f"Failed to initialize Smart Contract Will: {e}")
+
+    # Initialize Multi-Sig Distribution System
+    try:
+        from digital_distribution_manager import initialize_distribution_manager
+        _distribution_manager = initialize_distribution_manager()
+        logger.info("🔑 Multi-Sig Distribution Manager initialized (asset release & audit trail)")
+    except ImportError:
+        _distribution_manager = None
+        print("[Distribution] Distribution System not available")
+    except Exception as e:
+        _distribution_manager = None
+        logger.error(f"Failed to initialize Distribution Manager: {e}")
 
 
 def _reset_daily_pool_volumes():
@@ -17420,6 +17433,168 @@ def api_smart_contract_will_stats():
     except Exception as e:
         logger = logging.getLogger("thronos")
         logger.error(f"Error getting will stats: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+# MULTI-SIG DISTRIBUTION SYSTEM - Asset Release & Audit Trail
+# ─────────────────────────────────────────────────────────────
+
+@app.route("/api/legacy/distribution/release-keys", methods=["POST"])
+def api_release_asset_keys():
+    """
+    Release encrypted asset keys to authorized heir
+
+    POST /api/legacy/distribution/release-keys
+    Body: {
+        "asset_id": "asset_...",
+        "heir_address": "THR...",
+        "encrypted_keys": "AES-256 encrypted keys",
+        "will_signature": "heir's signature on will",
+        "will_hash": "SHA-256 of will",
+        "asset_salt": "salt used for encryption"
+    }
+
+    Process:
+    1. Validates heir signature on will
+    2. Checks asset not tampered
+    3. Creates audit record
+    4. Releases encrypted keys to heir
+    5. Returns audit ID for tracking
+
+    Returns: {
+        "status": "released",
+        "message": "Keys released...",
+        "audit_id": "audit_...",
+        "keys_hash": "SHA-256 hash of keys for verification"
+    }
+    """
+    try:
+        if not _distribution_manager:
+            return jsonify(status="error", message="Distribution System not available"), 503
+
+        data = request.get_json() or {}
+
+        required = ["asset_id", "heir_address", "encrypted_keys", "will_signature", "will_hash", "asset_salt"]
+        missing = [f for f in required if not data.get(f)]
+        if missing:
+            return jsonify(status="error", message=f"Missing fields: {missing}"), 400
+
+        success, msg, audit = _distribution_manager.release_asset_keys(
+            asset_id=data["asset_id"],
+            heir_address=data["heir_address"],
+            encrypted_keys=data["encrypted_keys"],
+            will_signature=data["will_signature"],
+            will_hash=data["will_hash"],
+            asset_salt=data["asset_salt"]
+        )
+
+        if success:
+            return jsonify(
+                status="released",
+                message=msg,
+                audit_id=audit.audit_id if audit else None,
+                keys_hash=audit.keys_hash if audit else None
+            ), 200
+        else:
+            return jsonify(status="error", message=msg), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error releasing keys: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/distribution/mark-claimed", methods=["POST"])
+def api_mark_asset_claimed():
+    """
+    Mark asset as claimed by heir (transferred to wallet)
+
+    POST /api/legacy/distribution/mark-claimed
+    Body: {
+        "audit_id": "audit_...",
+        "transaction_hash": "blockchain_tx_hash" (optional)
+    }
+
+    Records blockchain transaction if available.
+    Updates distribution status from RELEASED → CLAIMED.
+    """
+    try:
+        if not _distribution_manager:
+            return jsonify(status="error", message="Distribution System not available"), 503
+
+        data = request.get_json() or {}
+        audit_id = data.get("audit_id", "").strip()
+
+        if not audit_id:
+            return jsonify(status="error", message="Missing audit_id"), 400
+
+        success, msg = _distribution_manager.mark_asset_claimed(
+            audit_id=audit_id,
+            transaction_hash=data.get("transaction_hash")
+        )
+
+        if success:
+            return jsonify(status="claimed", message=msg), 200
+        else:
+            return jsonify(status="error", message=msg), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error marking asset claimed: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/distribution/heir-claims/<heir_address>", methods=["GET"])
+def api_get_heir_claims(heir_address: str):
+    """
+    Get all claimed assets for a specific heir
+
+    GET /api/legacy/distribution/heir-claims/<heir_address>
+
+    Returns array of all distributions (released, claimed, unclaimed) for heir.
+    """
+    try:
+        if not _distribution_manager:
+            return jsonify(status="error", message="Distribution System not available"), 503
+
+        claims = _distribution_manager.get_heir_claims(heir_address)
+        return jsonify(
+            heir_address=heir_address,
+            total_claims=len(claims),
+            claims=[c.to_dict() for c in claims]
+        ), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting heir claims: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/distribution/stats", methods=["GET"])
+def api_distribution_stats():
+    """
+    Get distribution system statistics
+
+    GET /api/legacy/distribution/stats
+
+    Returns: {
+        "total_distributions": 100,
+        "released": 80,
+        "claimed": 70,
+        "unclaimed": 30,
+        "audit_records": 100
+    }
+    """
+    try:
+        if not _distribution_manager:
+            return jsonify(status="error", message="Distribution System not available"), 503
+
+        stats = _distribution_manager.get_distribution_stats()
+        return jsonify(stats), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting distribution stats: {e}")
         return jsonify(status="error", error=str(e)), 500
 
 

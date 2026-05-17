@@ -224,11 +224,12 @@ _bridge_coordinator = None
 _cex_lp_agent = None
 _stellar_coordinator = None  # Optional background liquidity management
 _pythia_manager = None  # Pytheia AI Node Manager
+_legacy_manager = None  # Digital Legacy System
 
 
 def _initialize_phase3_and_4():
-    """Initialize CEX LP Agent, Stellar, and Pythia after logger is ready"""
-    global _bridge_coordinator, _cex_lp_agent, _stellar_coordinator, _pythia_manager
+    """Initialize CEX LP Agent, Stellar, Pythia, and Digital Legacy after logger is ready"""
+    global _bridge_coordinator, _cex_lp_agent, _stellar_coordinator, _pythia_manager, _legacy_manager
     logger = logging.getLogger("thronos")
 
     # Initialize Native Bridge with Liquidity Pools
@@ -280,6 +281,18 @@ def _initialize_phase3_and_4():
     except Exception as e:
         _pythia_manager = None
         logger.error(f"Failed to initialize Pythia Node Manager: {e}")
+
+    # Initialize Digital Legacy System (inheritance & asset management)
+    try:
+        from digital_legacy_manager import initialize_digital_legacy
+        _legacy_manager = initialize_digital_legacy()
+        logger.info("🏛️ Digital Legacy System initialized (inheritance management)")
+    except ImportError:
+        _legacy_manager = None
+        print("[Legacy] Digital Legacy System not available")
+    except Exception as e:
+        _legacy_manager = None
+        logger.error(f"Failed to initialize Digital Legacy: {e}")
 
 
 def _reset_daily_pool_volumes():
@@ -16921,6 +16934,225 @@ def api_get_cex_agent_stats():
             status="error",
             error=str(e)
         ), 500
+
+
+# ─────────────────────────────────────────────────────────────
+# DIGITAL LEGACY SYSTEM - Inheritance & Asset Management
+# ─────────────────────────────────────────────────────────────
+
+@app.route("/api/legacy/estate/<address>", methods=["GET"])
+def api_get_legacy_estate(address: str):
+    """
+    Get digital estate for a user
+
+    GET /api/legacy/estate/<address>
+
+    Returns:
+        {
+            "owner_address": "THR...",
+            "assets": [...],
+            "heirs": [...],
+            "total_estimated_value": 125000.50,
+            "will_status": "active"
+        }
+    """
+    try:
+        if not _legacy_manager:
+            return jsonify(
+                status="error",
+                message="Digital Legacy System not available"
+            ), 503
+
+        estate = _legacy_manager.get_estate(address)
+        if not estate:
+            return jsonify(
+                status="not_found",
+                message=f"No estate found for {address}"
+            ), 404
+
+        return jsonify(estate.to_dict()), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting estate: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/estate/create", methods=["POST"])
+def api_create_legacy_estate():
+    """
+    Create digital estate for user
+
+    POST /api/legacy/estate/create
+    Body: {
+        "address": "THR...",
+        "name": "User Full Name" (optional)
+    }
+    """
+    try:
+        if not _legacy_manager:
+            return jsonify(status="error", message="Legacy System not available"), 503
+
+        data = request.get_json() or {}
+        address = data.get("address", "").strip()
+        name = data.get("name", "").strip() or None
+
+        if not address:
+            return jsonify(status="error", message="Missing address"), 400
+
+        estate = _legacy_manager.create_estate(address, name)
+        return jsonify(
+            status="created",
+            message="Digital estate created",
+            estate=estate.to_dict()
+        ), 201
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error creating estate: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/asset/add", methods=["POST"])
+def api_add_legacy_asset():
+    """
+    Add encrypted asset to estate
+
+    POST /api/legacy/asset/add
+    Body: {
+        "address": "THR...",
+        "asset_type": "crypto|exchange|cold_storage|real_estate|bank|nft|domain|business|metals|other",
+        "name": "My Bitcoin Cold Wallet",
+        "description": "Location and access instructions",
+        "encrypted_keys": "AES-256 encrypted private keys (base64)",
+        "encrypted_recovery": "AES-256 encrypted recovery codes (base64)",
+        "value_estimate": 125000.50,
+        "assigned_heirs": ["THR_heir1", "THR_heir2"],
+        "contact_info": {
+            "email": "recovery@example.com",
+            "phone": "+1234567890",
+            "address": "123 Main St, City"
+        }
+    }
+    """
+    try:
+        if not _legacy_manager:
+            return jsonify(status="error", message="Legacy System not available"), 503
+
+        data = request.get_json() or {}
+
+        # Validate required fields
+        required = ["address", "asset_type", "name", "description", "encrypted_keys", "value_estimate"]
+        missing = [f for f in required if not data.get(f)]
+        if missing:
+            return jsonify(status="error", message=f"Missing fields: {missing}"), 400
+
+        from digital_legacy_manager import AssetCategory
+        try:
+            asset_type = AssetCategory(data["asset_type"])
+        except ValueError:
+            return jsonify(status="error", message=f"Invalid asset type"), 400
+
+        success, msg, asset = _legacy_manager.add_asset(
+            owner_address=data["address"],
+            asset_type=asset_type,
+            name=data["name"],
+            description=data["description"],
+            encrypted_keys=data["encrypted_keys"],
+            encrypted_recovery=data.get("encrypted_recovery", ""),
+            value_estimate=float(data.get("value_estimate", 0)),
+            assigned_heirs=data.get("assigned_heirs", []),
+            contact_info=data.get("contact_info")
+        )
+
+        if success:
+            return jsonify(
+                status="created",
+                message=msg,
+                asset=asset.to_dict()
+            ), 201
+        else:
+            return jsonify(status="error", message=msg), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error adding asset: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/heir/add", methods=["POST"])
+def api_add_legacy_heir():
+    """
+    Add beneficiary (heir) to estate
+
+    POST /api/legacy/heir/add
+    Body: {
+        "owner_address": "THR...",
+        "heir_address": "THR...",
+        "share_percentage": 50.0,
+        "email": "heir@example.com" (optional),
+        "phone": "+1234567890" (optional)
+    }
+    """
+    try:
+        if not _legacy_manager:
+            return jsonify(status="error", message="Legacy System not available"), 503
+
+        data = request.get_json() or {}
+
+        required = ["owner_address", "heir_address", "share_percentage"]
+        missing = [f for f in required if not data.get(f)]
+        if missing:
+            return jsonify(status="error", message=f"Missing fields: {missing}"), 400
+
+        success, msg = _legacy_manager.add_heir(
+            owner_address=data["owner_address"],
+            heir_address=data["heir_address"],
+            share_percentage=float(data["share_percentage"]),
+            email=data.get("email"),
+            phone=data.get("phone")
+        )
+
+        if success:
+            return jsonify(status="created", message=msg), 201
+        else:
+            return jsonify(status="error", message=msg), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error adding heir: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/stats", methods=["GET"])
+def api_legacy_stats():
+    """
+    Get Digital Legacy System statistics
+
+    GET /api/legacy/stats
+
+    Returns:
+        {
+            "total_estates": 100,
+            "total_assets": 500,
+            "total_heirs": 250,
+            "total_value_usd": 50000000.00
+        }
+    """
+    try:
+        if not _legacy_manager:
+            return jsonify(
+                status="error",
+                message="Digital Legacy System not available"
+            ), 503
+
+        stats = _legacy_manager.get_stats()
+        return jsonify(stats), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting legacy stats: {e}")
+        return jsonify(status="error", error=str(e)), 500
 
 
 def build_wallet_history(thr_addr: str) -> list[dict]:

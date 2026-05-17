@@ -9138,6 +9138,14 @@ def send_page():
 def tokenomics_page():
     return render_template("tokenomics.html")
 
+@app.route("/halving")
+def halving_schedule_page():
+    return render_template("halving_schedule.html")
+
+@app.route("/supply-projection")
+def supply_projection_page():
+    return render_template("supply_projection.html")
+
 @app.route("/whitepaper")
 def whitepaper_page():
     return render_template("whitepaper.html")

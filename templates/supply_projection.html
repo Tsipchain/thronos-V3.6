@@ -1,0 +1,397 @@
+{% extends "base.html" %}
+
+{% block title %}📈 THR Supply Projection{% endblock %}
+
+{% block styles %}
+<style>
+    .projection-container {
+        max-width: 1200px;
+        margin: 30px auto;
+        padding: 20px;
+        background-color: #0a0a0a;
+        border: 2px solid #0f0;
+        border-radius: 8px;
+    }
+
+    .chart-box {
+        background-color: #1a1a1a;
+        border: 1px solid #0f0;
+        padding: 20px;
+        border-radius: 4px;
+        margin: 20px 0;
+    }
+
+    .chart-title {
+        color: #0f0;
+        font-weight: bold;
+        margin-bottom: 15px;
+        font-size: 1.2em;
+    }
+
+    .comparison-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 20px;
+        margin: 20px 0;
+    }
+
+    .comparison-box {
+        background-color: #1a1a1a;
+        border: 1px solid #0f0;
+        padding: 20px;
+        border-radius: 4px;
+        text-align: center;
+    }
+
+    .comparison-title {
+        color: #0f0;
+        font-weight: bold;
+        margin-bottom: 10px;
+    }
+
+    .comparison-value {
+        font-size: 2em;
+        color: #0f0;
+        font-weight: bold;
+        margin: 10px 0;
+        font-family: monospace;
+    }
+
+    table {
+        border-collapse: collapse;
+        width: 100%;
+        margin-top: 15px;
+        background-color: #111;
+        font-size: 0.9em;
+    }
+
+    th, td {
+        border: 1px solid #0f0;
+        padding: 10px;
+        text-align: left;
+    }
+
+    th {
+        background-color: #0f0;
+        color: #000;
+        font-weight: bold;
+    }
+
+    tr:nth-child(even) {
+        background-color: #0a0a0a;
+    }
+
+    tr:hover {
+        background-color: #1a1a1a;
+    }
+
+    .year-row-early { background-color: rgba(0, 255, 0, 0.1); }
+    .year-row-mid { background-color: rgba(0, 200, 0, 0.1); }
+    .year-row-late { background-color: rgba(0, 150, 0, 0.1); }
+
+    .supply-value {
+        font-family: monospace;
+        color: #00ff00;
+    }
+
+    .percent-value {
+        font-family: monospace;
+        color: #ffff00;
+    }
+
+    .legend {
+        display: flex;
+        gap: 30px;
+        margin: 20px 0;
+        flex-wrap: wrap;
+    }
+
+    .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .legend-box {
+        width: 20px;
+        height: 20px;
+        border-radius: 3px;
+    }
+
+    .notes {
+        background-color: #1a1a1a;
+        border-left: 4px solid #00aaff;
+        padding: 20px;
+        margin: 20px 0;
+        border-radius: 4px;
+        line-height: 1.6;
+    }
+
+    .notes strong {
+        color: #00aaff;
+    }
+
+    .formula {
+        background-color: #0a0a0a;
+        border-left: 4px solid #0f0;
+        padding: 15px;
+        margin: 15px 0;
+        font-family: monospace;
+        font-size: 0.9em;
+        color: #0f0;
+        border-radius: 3px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="projection-container">
+    <h1>📈 <span class="lang-el">Προβολή Προμήθειας THR</span><span class="lang-en">THR Supply Projection</span></h1>
+
+    <div class="notes">
+        <strong><span class="lang-el">📊 Πώς λειτουργεί η προβολή:</span><span class="lang-en">📊 How the projection works:</span></strong>
+        <span class="lang-el">Βάσει 2 λεπτών ανά block, 210,000 blocks ανά halving, και 1 THR αρχικής ανταμοιβής, η συνολική προμήθεια των 21,000,001 THR θα κυκλοφορήσει σε αυτές τις χρονοσειρές.</span>
+        <span class="lang-en">Based on 2 minutes per block, 210,000 blocks per halving, and 1 THR initial reward, the total supply of 21,000,001 THR will circulate in these timelines.</span>
+    </div>
+
+    <div class="formula">
+        <span class="lang-el">Σύνολο Προμήθειας = 210,000 × (1 + 0.5 + 0.25 + 0.125 + ... ) = 21,000,001 THR</span>
+        <span class="lang-en">Total Supply = 210,000 × (1 + 0.5 + 0.25 + 0.125 + ... ) = 21,000,001 THR</span>
+    </div>
+
+    <h2><span class="lang-el">🔄 Σύγκριση: Thronos vs Bitcoin</span><span class="lang-en">🔄 Comparison: Thronos vs Bitcoin</span></h2>
+
+    <div class="comparison-grid">
+        <div class="comparison-box">
+            <div class="comparison-title">
+                <span class="lang-el">Thronos (2-min blocks)</span>
+                <span class="lang-en">Thronos (2-min blocks)</span>
+            </div>
+            <div class="comparison-value">~4 χρόνια</div>
+            <div class="comparison-value">21,000,001</div>
+            <div style="font-size: 0.9em; color: #aaa;">
+                <span class="lang-el">Πλήρης Κυκλοφορία</span>
+                <span class="lang-en">Full Circulation</span>
+            </div>
+        </div>
+
+        <div class="comparison-box">
+            <div class="comparison-title">
+                <span class="lang-el">Bitcoin (10-min blocks)</span>
+                <span class="lang-en">Bitcoin (10-min blocks)</span>
+            </div>
+            <div class="comparison-value">~140 χρόνια</div>
+            <div class="comparison-value">21,000,000</div>
+            <div style="font-size: 0.9em; color: #aaa;">
+                <span class="lang-el">Πλήρης Κυκλοφορία</span>
+                <span class="lang-en">Full Circulation</span>
+            </div>
+        </div>
+
+        <div class="comparison-box">
+            <div class="comparison-title">
+                <span class="lang-el">Επιπλέον THR</span>
+                <span class="lang-en">Extra THR</span>
+            </div>
+            <div class="comparison-value">+1</div>
+            <div style="font-size: 0.9em; color: #aaa;">
+                <span class="lang-el">για Δίκτυο + Charity</span>
+                <span class="lang-en">for Network + Charity</span>
+            </div>
+        </div>
+    </div>
+
+    <h2><span class="lang-el">📊 Προβολή Προμήθειας ανά Έτος</span><span class="lang-en">📊 Supply Projection per Year</span></h2>
+
+    <div class="chart-box">
+        <div class="chart-title"><span class="lang-el">📈 Σωρευτική Προμήθεια σε Χρόνια</span><span class="lang-en">📈 Cumulative Supply in Years</span></div>
+        <canvas id="supplyYearChart" width="400" height="200"></canvas>
+    </div>
+
+    <div class="chart-box">
+        <div class="chart-title"><span class="lang-el">📊 Ποσοστό Μέχρι Μέγιστη Προμήθεια</span><span class="lang-en">📊 Percentage Until Max Supply</span></div>
+        <canvas id="percentChart" width="400" height="200"></canvas>
+    </div>
+
+    <h2><span class="lang-el">📋 Λεπτομερής Προβολή</span><span class="lang-en">📋 Detailed Projection</span></h2>
+
+    <table id="projectionTable">
+        <thead>
+            <tr>
+                <th><span class="lang-el">Έτος</span><span class="lang-en">Year</span></th>
+                <th><span class="lang-el">Ημερομηνία</span><span class="lang-en">Date</span></th>
+                <th><span class="lang-el">Ύψος Block</span><span class="lang-en">Block Height</span></th>
+                <th><span class="lang-el">Συνολική Προμήθεια</span><span class="lang-en">Total Supply</span></th>
+                <th><span class="lang-el">% Μέχρι Max</span><span class="lang-en">% of Max</span></th>
+                <th><span class="lang-el">Τρέχουσα Εποχή</span><span class="lang-en">Current Epoch</span></th>
+                <th><span class="lang-el">Τρέχουσα Ανταμοιβή</span><span class="lang-en">Current Reward</span></th>
+            </tr>
+        </thead>
+        <tbody id="projectionBody">
+            <!-- Filled by JavaScript -->
+        </tbody>
+    </table>
+
+    <h2><span class="lang-el">💡 Σημεία Ενδιαφέροντος</span><span class="lang-en">💡 Key Milestones</span></h2>
+
+    <div class="chart-box">
+        <ul id="milestoneList" style="list-style: none; padding: 0; line-height: 2;">
+            <!-- Filled by JavaScript -->
+        </ul>
+    </div>
+
+    <div class="notes">
+        <strong><span class="lang-el">🔗 Digital Legacy Pool:</span><span class="lang-en">🔗 Digital Legacy Pool:</span></strong>
+        <span class="lang-el">Καθώς η προμήθεια κυκλοφορεί, το 5% του ecosystem pool συσσωρεύεται στη Digital Legacy για unclaimed assets. Ετησίως, τα σωρευμένα περιουσιακά στοιχεία διανέμονται σε σχολεία (25%), στέγη (25%), υγεία (25%), τροφή (15%) και κοινοτικές αναπτύξεις (10%).</span>
+        <span class="lang-en">As the supply circulates, the 5% ecosystem pool accumulates in the Digital Legacy for unclaimed assets. Annually, accumulated assets are distributed to schools (25%), housing (25%), healthcare (25%), food (15%), and community development (10%).</span>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+<script>
+    async function loadSupplyProjection() {
+        try {
+            const response = await fetch('/api/mining/supply-projection?years=10');
+            const data = await response.json();
+
+            // Populate table
+            const tbody = document.getElementById('projectionBody');
+            const milestones = document.getElementById('milestoneList');
+
+            const years = [];
+            const supplies = [];
+            const percents = [];
+            const blockHeights = [];
+
+            data.forEach((point, idx) => {
+                const row = document.createElement('tr');
+                const rowClass = idx < 3 ? 'year-row-early' : idx < 6 ? 'year-row-mid' : 'year-row-late';
+                row.className = rowClass;
+
+                row.innerHTML = `
+                    <td>${point.year}</td>
+                    <td>${new Date(point.date).toLocaleDateString()}</td>
+                    <td>${point.block_height.toLocaleString()}</td>
+                    <td class="supply-value">${point.supply_thr.toLocaleString()}</td>
+                    <td class="percent-value">${point.percent_of_max.toFixed(2)}%</td>
+                    <td>Epoch ${point.current_epoch}</td>
+                    <td>${point.current_reward.toFixed(6)} THR</td>
+                `;
+                tbody.appendChild(row);
+
+                years.push(`Year ${point.year}`);
+                supplies.push(point.supply_thr);
+                percents.push(point.percent_of_max);
+                blockHeights.push(point.block_height);
+
+                // Milestones
+                if (point.percent_of_max >= 25 && (!data[idx-1] || data[idx-1].percent_of_max < 25)) {
+                    const li = document.createElement('li');
+                    li.innerHTML = `<strong>Year ${point.year}:</strong> 25% (${point.supply_thr.toLocaleString()} THR) - Quarter Complete`;
+                    milestones.appendChild(li);
+                }
+                if (point.percent_of_max >= 50 && (!data[idx-1] || data[idx-1].percent_of_max < 50)) {
+                    const li = document.createElement('li');
+                    li.innerHTML = `<strong>Year ${point.year}:</strong> 50% (${point.supply_thr.toLocaleString()} THR) - Halfway Complete 🎯`;
+                    milestones.appendChild(li);
+                }
+                if (point.percent_of_max >= 75 && (!data[idx-1] || data[idx-1].percent_of_max < 75)) {
+                    const li = document.createElement('li');
+                    li.innerHTML = `<strong>Year ${point.year}:</strong> 75% (${point.supply_thr.toLocaleString()} THR) - Three Quarters Complete`;
+                    milestones.appendChild(li);
+                }
+            });
+
+            // Draw charts
+            drawSupplyChart(years, supplies);
+            drawPercentChart(years, percents);
+
+        } catch (error) {
+            console.error('Error loading projection:', error);
+            document.getElementById('projectionBody').innerHTML = '<tr><td colspan="7">Error loading data</td></tr>';
+        }
+    }
+
+    function drawSupplyChart(years, supplies) {
+        const ctx = document.getElementById('supplyYearChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: years,
+                datasets: [{
+                    label: 'Circulating THR Supply',
+                    data: supplies,
+                    borderColor: '#0f0',
+                    backgroundColor: 'rgba(0, 255, 0, 0.1)',
+                    borderWidth: 3,
+                    fill: true,
+                    tension: 0.3,
+                    pointBackgroundColor: '#0f0',
+                    pointBorderColor: '#fff',
+                    pointRadius: 5,
+                    pointHoverRadius: 7
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { labels: { color: '#0f0', font: { size: 12 } } },
+                    tooltip: { backgroundColor: '#1a1a1a', titleColor: '#0f0', bodyColor: '#0f0' }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 21000001,
+                        ticks: { color: '#0f0' },
+                        grid: { color: 'rgba(0, 255, 0, 0.1)' }
+                    },
+                    x: {
+                        ticks: { color: '#0f0' },
+                        grid: { color: 'rgba(0, 255, 0, 0.1)' }
+                    }
+                }
+            }
+        });
+    }
+
+    function drawPercentChart(years, percents) {
+        const ctx = document.getElementById('percentChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: years,
+                datasets: [{
+                    label: 'Percent of Max Supply (%)',
+                    data: percents,
+                    backgroundColor: 'rgba(0, 255, 0, 0.5)',
+                    borderColor: '#0f0',
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: { labels: { color: '#0f0' } }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: { color: '#0f0' },
+                        grid: { color: 'rgba(0, 255, 0, 0.1)' }
+                    },
+                    x: {
+                        ticks: { color: '#0f0' },
+                        grid: { color: 'rgba(0, 255, 0, 0.1)' }
+                    }
+                }
+            }
+        });
+    }
+
+    loadSupplyProjection();
+</script>
+{% endblock %}

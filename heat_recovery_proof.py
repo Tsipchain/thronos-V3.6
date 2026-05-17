@@ -184,7 +184,9 @@ class HeatRecoveryVerifier:
         verification = HeatProofVerification(
             proof_id=proof_id,
             miner_address=proof.miner_address,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.utcnow().isoformat(),
+            is_valid=False,
+            proof_level=ProofLevel.LEVEL_1
         )
 
         # Check Level 1: Temperature Differential

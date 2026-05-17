@@ -223,11 +223,12 @@ _block_broadcaster_thread.start()
 _bridge_coordinator = None
 _cex_lp_agent = None
 _stellar_coordinator = None  # Optional background liquidity management
+_pythia_manager = None  # Pytheia AI Node Manager
 
 
 def _initialize_phase3_and_4():
-    """Initialize CEX LP Agent and optional Stellar background process after logger is ready"""
-    global _bridge_coordinator, _cex_lp_agent, _stellar_coordinator
+    """Initialize CEX LP Agent, Stellar, and Pythia after logger is ready"""
+    global _bridge_coordinator, _cex_lp_agent, _stellar_coordinator, _pythia_manager
     logger = logging.getLogger("thronos")
 
     # Initialize Native Bridge with Liquidity Pools
@@ -267,6 +268,33 @@ def _initialize_phase3_and_4():
     except Exception as e:
         _stellar_coordinator = None
         logger.warning(f"Stellar Bridge not initialized (optional): {e}")
+
+    # Initialize Pythia AI Node Manager (system monitoring + AMM management)
+    try:
+        from pythia_node_manager import PythiaNodeManager
+        _pythia_manager = PythiaNodeManager()
+        logger.info("✅ Pythia AI Node Manager initialized (monitoring + AMM management)")
+    except ImportError:
+        _pythia_manager = None
+        print("[Pythia] Pythia Node Manager not available")
+    except Exception as e:
+        _pythia_manager = None
+        logger.error(f"Failed to initialize Pythia Node Manager: {e}")
+
+
+def _reset_daily_pool_volumes():
+    """Reset 24h pool volumes at midnight UTC"""
+    logger = logging.getLogger("thronos")
+    try:
+        pools = load_pools()
+        for pool in pools:
+            pool["volume_24h"] = 0.0
+            pool["fees_collected"] = 0.0
+        save_pools(pools)
+        logger.info("✅ Daily pool volumes reset")
+    except Exception as e:
+        logger.error(f"Error resetting daily volumes: {e}")
+
 
 def _shutdown_background_workers():
     """Gracefully shutdown background workers."""
@@ -19275,6 +19303,13 @@ def api_swap_execute():
         else:
             pool["reserves_b"] = round(reserves_b + amt_in, 6)
             pool["reserves_a"] = round(reserves_a - amt_out, 6)
+
+        # Update Pytheia metrics
+        pool["volume_24h"] = float(pool.get("volume_24h", 0.0)) + amt_in
+        pool["volume_total"] = float(pool.get("volume_total", 0.0)) + amt_in
+        pool["fees_collected"] = float(pool.get("fees_collected", 0.0)) + fee_amount
+        pool["last_swap_time"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
         return amt_out, fee_amount, price_impact
 
     swap_trace = []
@@ -21919,6 +21954,12 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
     scheduler.add_job(update_telemetry_cache_job, "interval", seconds=30,
                      coalesce=True, max_instances=1, id="telemetry_cache")
 
+    # Daily Pool Volume Reset – reset 24h volumes at midnight UTC
+    scheduler.add_job(_reset_daily_pool_volumes, "cron",
+                     hour=0, minute=0, id="reset_daily_volumes",
+                     coalesce=True, max_instances=1)
+    print("[SCHEDULER] Daily pool volume reset scheduled (midnight UTC)")
+
     # BTC Pledge Watcher – polls blockstream.info for vault deposits
     try:
         from btc_pledge_watcher import watch_btc_pledges
@@ -21946,6 +21987,13 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
         print(f"[SCHEDULER] PYTHEIA worker unavailable: {e}")
     except Exception as e:
         print(f"[SCHEDULER] PYTHEIA worker init error: {e}")
+
+    # Pythia AI Node Manager – AMM pool monitoring & bug detection
+    if _pythia_manager:
+        scheduler.add_job(_pythia_manager.fetch_amm_data, "interval",
+                         minutes=5, coalesce=True, max_instances=1,
+                         id="pythia_amm_monitor")
+        print("[SCHEDULER] Pythia AMM monitoring scheduled (every 5 min)")
 
     scheduler.start()
     _active_schedulers.append(scheduler)
@@ -26022,6 +26070,10 @@ def api_v1_get_pools():
             pool["tvl_btc"] = round(tvl_thr * 0.0001, 8)
             if thr_usd:
                 pool["tvl_usd"] = round(tvl_thr * thr_usd, 2)
+
+            # Pytheia compatibility: Add singular field name aliases
+            pool["reserve_a"] = pool.get("reserves_a", 0)
+            pool["reserve_b"] = pool.get("reserves_b", 0)
         except Exception:
             continue
     return jsonify(pools=pools), 200
@@ -26336,6 +26388,7 @@ def api_v1_create_pool():
     lp_symbol = f"LP-{token_a}-{token_b}"
     new_pool = {
         "id": pool_id,
+        "name": f"{token_a}/{token_b}",
         "token_a": token_a,
         "token_b": token_b,
         "reserves_a": round(amt_a_float, state_a["decimals"]),
@@ -26345,7 +26398,13 @@ def api_v1_create_pool():
         "lp_symbol": lp_symbol,
         "providers": {
             provider: round(shares, 6)
-        }
+        },
+        # Pytheia AMM monitoring metrics
+        "volume_24h": 0.0,
+        "volume_total": 0.0,
+        "fees_collected": 0.0,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "last_swap_time": None,
     }
     pools.append(new_pool)
     save_pools(pools)

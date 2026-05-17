@@ -42,7 +42,7 @@ import io
 import numpy as np
 import wave
 from datetime import datetime
-from typing import Any
+from typing import Any, Tuple, Optional
 from PIL import Image
 
 try:
@@ -18020,6 +18020,9 @@ def api_heat_submit_metrics():
             use_case=data.get("use_case", "space_heating")
         )
 
+        # Save metrics for this miner
+        engine.save_miner_metrics(data.get("miner_address", ""), metrics)
+
         # Submit metrics
         result = engine.submit_heat_metrics(metrics)
         return jsonify(result), 200
@@ -21894,6 +21897,39 @@ def _distribute_iot_block_rewards(block_height: int, block_hash: str) -> int:
 
 
 # ─── MINING ENDPOINT ───────────────────────────────
+def _calculate_heat_bonus(thr_address: str, base_reward: float) -> Tuple[float, Optional[Dict]]:
+    """
+    Calculate heat recovery bonus for a miner if they have reported heat metrics.
+    Returns: (total_reward_with_bonus, heat_bonus_info)
+    """
+    try:
+        from iot_heat_metrics import get_heat_engine
+
+        engine = get_heat_engine()
+        if not engine:
+            return base_reward, None
+
+        metrics = engine.get_miner_metrics(thr_address)
+        if not metrics:
+            return base_reward, None
+
+        # Calculate heat reward
+        reward = engine.calculate_heat_reward(base_reward, metrics)
+
+        # Return total reward (base + heat bonus) and metadata
+        return reward.total_reward, {
+            "tier": engine.get_tier(metrics.recovery_percentage).name,
+            "heat_bonus": reward.heat_bonus_reward,
+            "recovery_pct": metrics.recovery_percentage,
+            "use_case": metrics.use_case,
+            "energy_value_usd": reward.heat_value_usd
+        }
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.warning(f"Error calculating heat bonus: {e}")
+        return base_reward, None
+
+
 def _process_mining_submission(data: dict, require_job_id: bool = False):
     start = time.time()
     data = dict(data)
@@ -22113,11 +22149,25 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
         height        = HEIGHT_OFFSET + local_height
     total_reward  = calculate_reward(height)
 
+    # ─── PHASE 6: HEAT RECOVERY BONUS ───
+    heat_bonus_info = None
+    total_reward_with_bonus = total_reward
+    bonus_reward_thr = 0.0
+    total_reward_with_bonus, heat_bonus_info = _calculate_heat_bonus(thr_address, total_reward)
+    if heat_bonus_info:
+        bonus_reward_thr = heat_bonus_info.get("heat_bonus", 0.0)
+        # Heat bonus is added to miner reward (not part of base distribution)
+
     # ─── REWARD SPLIT: 80% Miner / 10% AI / 5% Full Nodes / 5% Ecosystem ───
+    # Base distribution
     miner_share = round(total_reward*0.80, 6)
     ai_share = round(total_reward*0.10, 6)      # AI Pool (continues as is)
     nodes_share = round(total_reward*0.05, 6)   # Full node runners
     ecosystem_share = round(total_reward*0.05, 6)  # Digital Legacy pool
+
+    # Add heat bonus to miner share if applicable
+    if heat_bonus_info:
+        miner_share = round(miner_share + bonus_reward_thr, 6)
 
     ts=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     new_block={
@@ -22138,7 +22188,9 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
         "height":height,
         "type":"block",
         "target":current_target,
-        "is_stratum":is_stratum
+        "is_stratum":is_stratum,
+        # Phase 6: Heat recovery bonus metadata
+        "heat_bonus": heat_bonus_info
     }
 
     # PR-3: Append guard - reject duplicate/stale blocks
@@ -22185,6 +22237,7 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
             "reward_to_ai": ai_share,
             "reward_to_nodes": nodes_share,
             "source": "stratum" if is_stratum else "legacy",
+            **({"heat_bonus": heat_bonus_info} if heat_bonus_info else {})
         },
     }
     persist_normalized_tx(reward_tx)

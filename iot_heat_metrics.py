@@ -382,6 +382,56 @@ class HeatRewardEngine:
         """Save farm stats"""
         self.farms_file.write_text(json.dumps(farms, indent=2))
 
+    def save_miner_metrics(self, miner_address: str, metrics: MinerHeatMetrics):
+        """Save latest heat metrics for a miner"""
+        metrics_dict = asdict(metrics)
+        metrics_dict["timestamp"] = datetime.utcnow().isoformat()
+
+        metrics_data = {}
+        if self.metrics_file.exists():
+            try:
+                metrics_data = json.loads(self.metrics_file.read_text())
+            except:
+                metrics_data = {}
+
+        metrics_data[miner_address] = metrics_dict
+        self.metrics_file.write_text(json.dumps(metrics_data, indent=2))
+
+    def get_miner_metrics(self, miner_address: str) -> Optional[MinerHeatMetrics]:
+        """Get latest heat metrics for a miner"""
+        if not self.metrics_file.exists():
+            return None
+
+        try:
+            metrics_data = json.loads(self.metrics_file.read_text())
+            if miner_address not in metrics_data:
+                return None
+
+            data = metrics_data[miner_address]
+            return MinerHeatMetrics(
+                miner_address=data.get("miner_address", miner_address),
+                timestamp=data.get("timestamp", ""),
+                device_type=data.get("device_type", "ASIC"),
+                device_count=int(data.get("device_count", 1)),
+                power_consumption_watts=float(data.get("power_consumption_watts", 0)),
+                ambient_temp_celsius=float(data.get("ambient_temp_celsius", 20)),
+                inlet_temp_celsius=float(data.get("inlet_temp_celsius", 30)),
+                outlet_temp_celsius=float(data.get("outlet_temp_celsius", 50)),
+                airflow_cfm=float(data.get("airflow_cfm", 0)),
+                heat_recovered_joules=float(data.get("heat_recovered_joules", 0)),
+                heat_recovered_kwh=float(data.get("heat_recovered_kwh", 0)),
+                pue_ratio=float(data.get("pue_ratio", 1.0)),
+                recovery_percentage=float(data.get("recovery_percentage", 0)),
+                farm_location=data.get("farm_location", "UNKNOWN"),
+                use_case=data.get("use_case", "space_heating"),
+                verified=data.get("verified", False),
+                verification_signature=data.get("verification_signature", ""),
+                block_height=int(data.get("block_height", 0))
+            )
+        except Exception as e:
+            logger.error(f"Error loading miner metrics: {e}")
+            return None
+
 
 # ═══════════════════════════════════════════════════════════════
 # GLOBAL INSTANCE

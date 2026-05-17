@@ -6979,8 +6979,8 @@ def calculate_reward(height: int) -> float:
         return EpochInfo.get_reward_for_block(height)
     except (ImportError, Exception):
         # Fallback to hardcoded values if import fails
-        HALVING_INTERVAL = 877_800
-        INITIAL_BLOCK_REWARD = 12.0
+        HALVING_INTERVAL = 1_312_500
+        INITIAL_BLOCK_REWARD = 8.0
         halvings = height // HALVING_INTERVAL
         if halvings > 33:  # Max 33 halvings before reward becomes negligible
             return 0.0
@@ -7016,8 +7016,8 @@ def recompute_height_offset_from_ledger():
 
     remaining = pre_mined
     h = 0
-    # Μέχρι max ~2.1M blocks, δεν μας νοιάζει απόδοση, είναι startup-only
-    while remaining > 0 and h < 5_000_000:  # Increased ceiling for new halving schedule
+    # Μέχρι max ~13M blocks, δεν μας νοιάζει απόδοση, είναι startup-only
+    while remaining > 0 and h < 13_000_000:  # Ceiling for 5-year halving intervals
         r = calculate_reward(h)
         if r <= 0:
             break

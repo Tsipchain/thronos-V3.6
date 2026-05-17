@@ -21922,10 +21922,13 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
         local_height  = len(blocks)
         height        = HEIGHT_OFFSET + local_height
     total_reward  = calculate_reward(height)
-    
-    miner_share=round(total_reward*0.80,6)
-    ai_share=round(total_reward*0.10,6)
-    burn_share=round(total_reward*0.10,6)
+
+    # ─── REWARD SPLIT: 80% Miner / 10% AI / 5% Full Nodes / 5% Ecosystem ───
+    miner_share = round(total_reward*0.80, 6)
+    ai_share = round(total_reward*0.10, 6)      # AI Pool (continues as is)
+    nodes_share = round(total_reward*0.05, 6)   # Full node runners
+    ecosystem_share = round(total_reward*0.05, 6)  # Digital Legacy pool
+
     ts=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     new_block={
         "thr_address":thr_address,
@@ -21934,8 +21937,13 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
         "prev_hash":prev_hash,
         "nonce":nonce,
         "reward":total_reward,
-        "reward_split":{"miner":miner_share,"ai":ai_share,"burn":burn_share},
-        "pool_fee":burn_share,
+        "reward_split":{
+            "miner": miner_share,
+            "ai": ai_share,
+            "full_nodes": nodes_share,
+            "ecosystem": ecosystem_share
+        },
+        "pool_fee": ecosystem_share,  # Changed from burn_share
         "reward_to_miner":miner_share,
         "height":height,
         "type":"block",
@@ -22154,9 +22162,11 @@ def submit_mining_block_for_pledge(thr_addr):
     height       = HEIGHT_OFFSET + local_height
     total_reward = calculate_reward(height)
 
+    # ─── REWARD SPLIT: 80% Miner / 10% AI / 5% Full Nodes / 5% Ecosystem ───
     miner_share = round(total_reward * 0.80, 6)
-    ai_share    = round(total_reward * 0.10, 6)
-    burn_share  = round(total_reward * 0.10, 6)
+    ai_share    = round(total_reward * 0.10, 6)      # AI Pool (continues)
+    nodes_share = round(total_reward * 0.05, 6)      # Full node runners
+    ecosystem_share = round(total_reward * 0.05, 6)  # Digital Legacy pool
 
     target = get_mining_target()
 

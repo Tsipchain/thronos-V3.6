@@ -131,9 +131,7 @@ class MinerHeatMetrics:
     # Heat recovery
     airflow_cfm: float  # Cubic feet per minute
     heat_recovered_joules: float
-    heat_recovered_kwh: float = 0.0
-
-    # Efficiency
+    heat_recovered_kwh: float
     pue_ratio: float  # Power Usage Effectiveness
     recovery_percentage: float  # 0-100
 

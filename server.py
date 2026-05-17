@@ -225,11 +225,12 @@ _cex_lp_agent = None
 _stellar_coordinator = None  # Optional background liquidity management
 _pythia_manager = None  # Pytheia AI Node Manager
 _legacy_manager = None  # Digital Legacy System
+_will_manager = None  # Smart Contract Will System
 
 
 def _initialize_phase3_and_4():
     """Initialize CEX LP Agent, Stellar, Pythia, and Digital Legacy after logger is ready"""
-    global _bridge_coordinator, _cex_lp_agent, _stellar_coordinator, _pythia_manager, _legacy_manager
+    global _bridge_coordinator, _cex_lp_agent, _stellar_coordinator, _pythia_manager, _legacy_manager, _will_manager
     logger = logging.getLogger("thronos")
 
     # Initialize Native Bridge with Liquidity Pools
@@ -293,6 +294,18 @@ def _initialize_phase3_and_4():
     except Exception as e:
         _legacy_manager = None
         logger.error(f"Failed to initialize Digital Legacy: {e}")
+
+    # Initialize Smart Contract Will System (NFT-based wills)
+    try:
+        from digital_will_smart_contract import initialize_will_manager
+        _will_manager = initialize_will_manager()
+        logger.info("🔐 Smart Contract Will System initialized (NFT wills with steganography)")
+    except ImportError:
+        _will_manager = None
+        print("[Will] Smart Contract Will System not available")
+    except Exception as e:
+        _will_manager = None
+        logger.error(f"Failed to initialize Smart Contract Will: {e}")
 
 
 def _reset_daily_pool_volumes():
@@ -17152,6 +17165,261 @@ def api_legacy_stats():
     except Exception as e:
         logger = logging.getLogger("thronos")
         logger.error(f"Error getting legacy stats: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+# SMART CONTRACT WILL SYSTEM - NFT-Based Encrypted Wills
+# ─────────────────────────────────────────────────────────────
+
+@app.route("/api/legacy/will/create", methods=["POST"])
+def api_create_smart_contract_will():
+    """
+    Create a smart contract will from an estate
+
+    POST /api/legacy/will/create
+    Body: {
+        "owner_address": "THR...",
+        "time_lock_years": 30
+    }
+
+    Creates will with SHA-256 hashes for tamper detection.
+    Multi-sig requirement = majority of heirs.
+    """
+    try:
+        if not _will_manager or not _legacy_manager:
+            return jsonify(status="error", message="Will System not available"), 503
+
+        data = request.get_json() or {}
+        owner_address = data.get("owner_address", "").strip()
+        time_lock_years = int(data.get("time_lock_years", 30))
+
+        if not owner_address:
+            return jsonify(status="error", message="Missing owner_address"), 400
+
+        # Get estate
+        estate = _legacy_manager.get_estate(owner_address)
+        if not estate:
+            return jsonify(status="error", message="Estate not found"), 404
+
+        if not estate.heirs:
+            return jsonify(status="error", message="Estate must have at least one heir"), 400
+
+        # Create hash of estate for will
+        import hashlib
+        estate_json = json.dumps(estate.to_dict(), sort_keys=True)
+        estate_hash = hashlib.sha256(estate_json.encode()).hexdigest()
+
+        # Create will
+        success, msg, will = _will_manager.create_will(
+            owner_address=owner_address,
+            estate_hash=estate_hash,
+            estate_salt="",  # Salt will be generated during asset encryption
+            heir_addresses=[h.heir_address for h in estate.heirs],
+            time_lock_years=time_lock_years
+        )
+
+        if success:
+            return jsonify(
+                status="created",
+                message=msg,
+                will=will.to_dict()
+            ), 201
+        else:
+            return jsonify(status="error", message=msg), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error creating will: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/will/<will_id>", methods=["GET"])
+def api_get_smart_contract_will(will_id: str):
+    """
+    Get details of a smart contract will
+
+    GET /api/legacy/will/<will_id>
+
+    Returns: Full will object with all conditions and signatures
+    """
+    try:
+        if not _will_manager:
+            return jsonify(status="error", message="Will System not available"), 503
+
+        will = _will_manager.wills.get(will_id)
+        if not will:
+            return jsonify(status="error", message="Will not found"), 404
+
+        return jsonify(will.to_dict()), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting will: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/will/<will_id>/seal", methods=["POST"])
+def api_seal_smart_contract_will(will_id: str):
+    """
+    Seal a will with tamper detection
+
+    POST /api/legacy/will/<will_id>/seal
+
+    Once sealed, any modification will break the seal.
+    Multi-sig signatures can only be added to sealed wills.
+    """
+    try:
+        if not _will_manager:
+            return jsonify(status="error", message="Will System not available"), 503
+
+        success, msg = _will_manager.seal_will(will_id)
+
+        if success:
+            return jsonify(status="sealed", message=msg), 200
+        else:
+            return jsonify(status="error", message=msg), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error sealing will: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/will/<will_id>/verify-seal", methods=["GET"])
+def api_verify_smart_contract_will_seal(will_id: str):
+    """
+    Verify that a will hasn't been tampered with
+
+    GET /api/legacy/will/<will_id>/verify-seal
+
+    Returns: {
+        "status": "verified|broken",
+        "message": "Seal verified - Will intact" or "SEAL BROKEN - Will has been tampered with"
+    }
+    """
+    try:
+        if not _will_manager:
+            return jsonify(status="error", message="Will System not available"), 503
+
+        success, msg = _will_manager.verify_seal(will_id)
+
+        return jsonify(
+            status="verified" if success else "broken",
+            message=msg
+        ), (200 if success else 400)
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error verifying will seal: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/will/<will_id>/sign", methods=["POST"])
+def api_add_heir_signature_to_will(will_id: str):
+    """
+    Add heir signature to unlock will
+
+    POST /api/legacy/will/<will_id>/sign
+    Body: {
+        "heir_address": "THR...",
+        "signature": "bitcoin_message_signature_or_eth_sig"
+    }
+
+    Signatures must be from authorized heirs.
+    Majority of heirs must sign before will can be opened.
+    """
+    try:
+        if not _will_manager:
+            return jsonify(status="error", message="Will System not available"), 503
+
+        data = request.get_json() or {}
+        heir_address = data.get("heir_address", "").strip()
+        signature = data.get("signature", "").strip()
+
+        if not heir_address or not signature:
+            return jsonify(status="error", message="Missing heir_address or signature"), 400
+
+        success, msg = _will_manager.add_heir_signature(will_id, heir_address, signature)
+
+        if success:
+            will = _will_manager.wills.get(will_id)
+            return jsonify(
+                status="signed",
+                message=msg,
+                signature_count=will.signature_count if will else 0,
+                required_count=will.required_heirs if will else 0
+            ), 200
+        else:
+            return jsonify(status="error", message=msg), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error adding signature: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/will/<will_id>/can-open", methods=["GET"])
+def api_can_open_smart_contract_will(will_id: str):
+    """
+    Check if a will can be opened
+
+    GET /api/legacy/will/<will_id>/can-open
+
+    Checks three conditions:
+    1. Seal is intact (no tampering)
+    2. Time-lock has expired (after death + grace period)
+    3. Required heirs have signed (majority rule)
+
+    Returns: {
+        "can_open": true|false,
+        "reason": "Will can be opened" or error message
+    }
+    """
+    try:
+        if not _will_manager:
+            return jsonify(status="error", message="Will System not available"), 503
+
+        can_open, reason = _will_manager.can_open_will(will_id)
+
+        return jsonify(
+            can_open=can_open,
+            reason=reason
+        ), (200 if can_open else 403)
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error checking will open: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/wills/stats", methods=["GET"])
+def api_smart_contract_will_stats():
+    """
+    Get Smart Contract Will System statistics
+
+    GET /api/legacy/wills/stats
+
+    Returns: {
+        "total_wills": 100,
+        "created": 50,
+        "minted": 30,
+        "opened": 15,
+        "distributed": 5
+    }
+    """
+    try:
+        if not _will_manager:
+            return jsonify(
+                status="error",
+                message="Will System not available"
+            ), 503
+
+        stats = _will_manager.get_stats()
+        return jsonify(stats), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting will stats: {e}")
         return jsonify(status="error", error=str(e)), 500
 
 

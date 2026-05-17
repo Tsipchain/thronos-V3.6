@@ -215,45 +215,138 @@ _block_broadcaster_thread = threading.Thread(target=_background_block_broadcaste
 _block_processor_thread.start()
 _block_broadcaster_thread.start()
 
-# Phase 3: Initialize Stellar Bridge Coordinator
-_stellar_coordinator = None
-_cex_agent = None
+# Architecture Separation:
+# - Pledge System (Phase 1-2): User deposits via Thronos UI + message signing
+# - CEX LP Agent: Detects major exchange deposits → Uses native Liquidity Pool
+# - Stellar Bridge: Optional background liquidity management for LP reserves
+
+_bridge_coordinator = None
+_cex_lp_agent = None
+_stellar_coordinator = None  # Optional background liquidity management
+_pythia_manager = None  # Pytheia AI Node Manager
+_legacy_manager = None  # Digital Legacy System
+_will_manager = None  # Smart Contract Will System
+_distribution_manager = None  # Multi-Sig Distribution System
+_pool_manager = None  # Charity Pool & Redistribution System
+
 
 def _initialize_phase3_and_4():
-    """Initialize Phase 3 and Phase 4 after logger is ready"""
-    global _stellar_coordinator, _cex_agent
+    """Initialize CEX LP Agent, Stellar, Pythia, and Digital Legacy after logger is ready"""
+    global _bridge_coordinator, _cex_lp_agent, _stellar_coordinator, _pythia_manager, _legacy_manager, _will_manager, _distribution_manager, _pool_manager
+    logger = logging.getLogger("thronos")
 
-    # Phase 3: Stellar Bridge
+    # Initialize Native Bridge with Liquidity Pools
+    try:
+        from bridge_coordinator import BridgeCoordinator
+        _bridge_coordinator = BridgeCoordinator()
+        logger.info("✅ Native Bridge Coordinator (Liquidity Pools) initialized")
+    except ImportError:
+        _bridge_coordinator = None
+        print("[Bridge] BridgeCoordinator not available")
+    except Exception as e:
+        _bridge_coordinator = None
+        logger.error(f"Failed to initialize BridgeCoordinator: {e}")
+
+    # Initialize CEX LP Agent (uses Liquidity Pool for conversions)
+    try:
+        from cex_lp_agent import initialize_cex_lp_agent, start_cex_lp_agent
+        _cex_lp_agent = initialize_cex_lp_agent(_bridge_coordinator)
+        start_cex_lp_agent()
+        logger.info("✅ CEX LP Agent initialized (detects deposits → Liquidity Pool)")
+    except ImportError:
+        _cex_lp_agent = None
+        print("[CEX] CEX LP Agent not available")
+    except Exception as e:
+        _cex_lp_agent = None
+        logger.error(f"Failed to initialize CEX LP Agent: {e}")
+
+    # Optional: Stellar Bridge for background LP liquidity management
     try:
         from stellar_bridge_coordinator import initialize_coordinator
         _stellar_coordinator = initialize_coordinator()
         _stellar_coordinator.start_worker()
-        logger = logging.getLogger("thronos")
-        logger.info("✅ Phase 3: Stellar Bridge Coordinator initialized and worker started")
+        logger.info("✅ Stellar Bridge (background LP liquidity management) started")
     except ImportError:
         _stellar_coordinator = None
-        print("[Phase 3] Stellar Bridge not available (module not found)")
+        print("[Stellar] Stellar Bridge not available (optional)")
     except Exception as e:
         _stellar_coordinator = None
-        logger = logging.getLogger("thronos")
-        logger.error(f"Failed to initialize Stellar Bridge: {e}")
-        print(f"[Phase 3] Error: {e}")
+        logger.warning(f"Stellar Bridge not initialized (optional): {e}")
 
-    # Phase 4: CEX Integration Agent
+    # Initialize Pythia AI Node Manager (system monitoring + AMM management)
     try:
-        from cex_integration_agent import initialize_agent
-        _cex_agent = initialize_agent()
-        _cex_agent.start()
-        logger = logging.getLogger("thronos")
-        logger.info("✅ Phase 4: CEX Integration Agent initialized and monitoring started")
+        from pythia_node_manager import PythiaNodeManager
+        _pythia_manager = PythiaNodeManager()
+        logger.info("✅ Pythia AI Node Manager initialized (monitoring + AMM management)")
     except ImportError:
-        _cex_agent = None
-        print("[Phase 4] CEX Integration Agent not available (module not found)")
+        _pythia_manager = None
+        print("[Pythia] Pythia Node Manager not available")
     except Exception as e:
-        _cex_agent = None
-        logger = logging.getLogger("thronos")
-        logger.error(f"Failed to initialize CEX Agent: {e}")
-        print(f"[Phase 4] Error: {e}")
+        _pythia_manager = None
+        logger.error(f"Failed to initialize Pythia Node Manager: {e}")
+
+    # Initialize Digital Legacy System (inheritance & asset management)
+    try:
+        from digital_legacy_manager import initialize_digital_legacy
+        _legacy_manager = initialize_digital_legacy()
+        logger.info("🏛️ Digital Legacy System initialized (inheritance management)")
+    except ImportError:
+        _legacy_manager = None
+        print("[Legacy] Digital Legacy System not available")
+    except Exception as e:
+        _legacy_manager = None
+        logger.error(f"Failed to initialize Digital Legacy: {e}")
+
+    # Initialize Smart Contract Will System (NFT-based wills)
+    try:
+        from digital_will_smart_contract import initialize_will_manager
+        _will_manager = initialize_will_manager()
+        logger.info("🔐 Smart Contract Will System initialized (NFT wills with steganography)")
+    except ImportError:
+        _will_manager = None
+        print("[Will] Smart Contract Will System not available")
+    except Exception as e:
+        _will_manager = None
+        logger.error(f"Failed to initialize Smart Contract Will: {e}")
+
+    # Initialize Multi-Sig Distribution System
+    try:
+        from digital_distribution_manager import initialize_distribution_manager
+        _distribution_manager = initialize_distribution_manager()
+        logger.info("🔑 Multi-Sig Distribution Manager initialized (asset release & audit trail)")
+    except ImportError:
+        _distribution_manager = None
+        print("[Distribution] Distribution System not available")
+    except Exception as e:
+        _distribution_manager = None
+        logger.error(f"Failed to initialize Distribution Manager: {e}")
+
+    # Initialize Charity Pool & Redistribution System
+    try:
+        from digital_pool_redistribution import initialize_pool_manager
+        _pool_manager = initialize_pool_manager()
+        logger.info("🌍 Charity Pool Manager initialized (unclaimed assets → schools, housing, charity)")
+    except ImportError:
+        _pool_manager = None
+        print("[Pool] Charity Pool System not available")
+    except Exception as e:
+        _pool_manager = None
+        logger.error(f"Failed to initialize Charity Pool: {e}")
+
+
+def _reset_daily_pool_volumes():
+    """Reset 24h pool volumes at midnight UTC"""
+    logger = logging.getLogger("thronos")
+    try:
+        pools = load_pools()
+        for pool in pools:
+            pool["volume_24h"] = 0.0
+            pool["fees_collected"] = 0.0
+        save_pools(pools)
+        logger.info("✅ Daily pool volumes reset")
+    except Exception as e:
+        logger.error(f"Error resetting daily volumes: {e}")
+
 
 def _shutdown_background_workers():
     """Gracefully shutdown background workers."""
@@ -272,12 +365,12 @@ def _shutdown_background_workers():
         _log = logging.getLogger("thronos")
         _log.error(f"Error stopping Stellar Bridge: {e}")
 
-    # Shutdown CEX Agent
+    # Shutdown CEX LP Agent
     try:
-        if _cex_agent:
-            _cex_agent.stop()
+        if _cex_lp_agent:
+            _cex_lp_agent.stop()
             _log = logging.getLogger("thronos")
-            _log.info("CEX Integration Agent stopped")
+            _log.info("CEX LP Agent stopped")
     except Exception as e:
         _log = logging.getLogger("thronos")
         _log.error(f"Error stopping CEX Agent: {e}")
@@ -16624,32 +16717,12 @@ def api_verify_pledge_signature():
             f"{amount_btc} BTC → {thr_amount} THR"
         )
 
-        # 🌟 Phase 3: Queue Stellar settlement
-        settlement_queued = False
-        settlement_task_id = ""
-        try:
-            if _stellar_coordinator:
-                from decimal import Decimal
-                success, task_id, msg = _stellar_coordinator.queue_settlement(
-                    thr_address=thr_address,
-                    btc_amount=Decimal(str(amount_btc)),
-                    btc_tx_id=tx_id,
-                    target_exchange="binance"  # Default, can be parameterized
-                )
-                settlement_queued = success
-                settlement_task_id = task_id
-                logger.info(f"Settlement queued: {task_id} ({msg})")
-        except Exception as e:
-            logger.warning(f"Failed to queue settlement: {e}")
-
         return jsonify(
             status="verified",
             thr_address=thr_address,
             thr_minted=thr_amount,
             message=f"🎉 Welcome to Thronos! You have {thr_amount} THR",
-            next_steps="Visit /wallet to view your balance and start using Thronos services",
-            phase3_settlement_queued=settlement_queued,
-            phase3_settlement_task=settlement_task_id
+            next_steps="Visit /wallet to view your balance and start using Thronos services"
         ), 200
 
     except ImportError:
@@ -16788,7 +16861,7 @@ def api_get_settlement_stats():
 @app.route("/api/cex/task/status/<task_id>", methods=["GET"])
 def api_get_cex_task_status(task_id: str):
     """
-    Phase 4: Get CEX conversion task status
+    CEX LP Agent: Get conversion task status
 
     GET /api/cex/task/status/<task_id>
 
@@ -16797,20 +16870,20 @@ def api_get_cex_task_status(task_id: str):
             "task_id": "cex_...",
             "exchange": "binance",
             "user_email": "user@example.com",
-            "status": "completed|pending|kyc_check|converting|failed",
+            "status": "pending|processing|completed|failed",
             "btc_amount": "0.00001",
             "thr_address": "THR...",
             ...
         }
     """
     try:
-        if not _cex_agent:
+        if not _cex_lp_agent:
             return jsonify(
                 status="error",
-                message="Phase 4 not available"
+                message="CEX LP Agent not available"
             ), 503
 
-        task = _cex_agent.get_task_status(task_id)
+        task = _cex_lp_agent.get_task_status(task_id)
         if not task:
             return jsonify(
                 status="not_found",
@@ -16831,7 +16904,7 @@ def api_get_cex_task_status(task_id: str):
 @app.route("/api/cex/pending", methods=["GET"])
 def api_get_pending_cex_conversions():
     """
-    Phase 4: Get all pending CEX conversions
+    CEX LP Agent: Get all pending conversions
 
     GET /api/cex/pending
 
@@ -16845,13 +16918,13 @@ def api_get_pending_cex_conversions():
         }
     """
     try:
-        if not _cex_agent:
+        if not _cex_lp_agent:
             return jsonify(
                 status="error",
-                message="Phase 4 not available"
+                message="CEX LP Agent not available"
             ), 503
 
-        pending = _cex_agent.get_pending_conversions()
+        pending = _cex_lp_agent.get_pending_conversions()
         return jsonify(
             pending_count=len(pending),
             tasks=pending
@@ -16869,7 +16942,7 @@ def api_get_pending_cex_conversions():
 @app.route("/api/cex/stats", methods=["GET"])
 def api_get_cex_agent_stats():
     """
-    Phase 4: Get CEX Integration Agent statistics
+    CEX LP Agent: Get statistics
 
     GET /api/cex/stats
 
@@ -16880,18 +16953,17 @@ def api_get_cex_agent_stats():
             "completed": 250,
             "failed": 0,
             "total_btc_converted": 0.00250,
-            "total_deposits_found": 500,
             "agent_running": true
         }
     """
     try:
-        if not _cex_agent:
+        if not _cex_lp_agent:
             return jsonify(
                 status="error",
-                message="Phase 4 not available"
+                message="CEX LP Agent not available"
             ), 503
 
-        stats = _cex_agent.get_stats()
+        stats = _cex_lp_agent.get_stats()
         return jsonify(stats), 200
 
     except Exception as e:
@@ -16901,6 +16973,859 @@ def api_get_cex_agent_stats():
             status="error",
             error=str(e)
         ), 500
+
+
+# ─────────────────────────────────────────────────────────────
+# DIGITAL LEGACY SYSTEM - Inheritance & Asset Management
+# ─────────────────────────────────────────────────────────────
+
+@app.route("/api/legacy/estate/<address>", methods=["GET"])
+def api_get_legacy_estate(address: str):
+    """
+    Get digital estate for a user
+
+    GET /api/legacy/estate/<address>
+
+    Returns:
+        {
+            "owner_address": "THR...",
+            "assets": [...],
+            "heirs": [...],
+            "total_estimated_value": 125000.50,
+            "will_status": "active"
+        }
+    """
+    try:
+        if not _legacy_manager:
+            return jsonify(
+                status="error",
+                message="Digital Legacy System not available"
+            ), 503
+
+        estate = _legacy_manager.get_estate(address)
+        if not estate:
+            return jsonify(
+                status="not_found",
+                message=f"No estate found for {address}"
+            ), 404
+
+        return jsonify(estate.to_dict()), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting estate: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/estate/create", methods=["POST"])
+def api_create_legacy_estate():
+    """
+    Create digital estate for user
+
+    POST /api/legacy/estate/create
+    Body: {
+        "address": "THR...",
+        "name": "User Full Name" (optional)
+    }
+    """
+    try:
+        if not _legacy_manager:
+            return jsonify(status="error", message="Legacy System not available"), 503
+
+        data = request.get_json() or {}
+        address = data.get("address", "").strip()
+        name = data.get("name", "").strip() or None
+
+        if not address:
+            return jsonify(status="error", message="Missing address"), 400
+
+        estate = _legacy_manager.create_estate(address, name)
+        return jsonify(
+            status="created",
+            message="Digital estate created",
+            estate=estate.to_dict()
+        ), 201
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error creating estate: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/asset/add", methods=["POST"])
+def api_add_legacy_asset():
+    """
+    Add encrypted asset to estate
+
+    POST /api/legacy/asset/add
+    Body: {
+        "address": "THR...",
+        "asset_type": "crypto|exchange|cold_storage|real_estate|bank|nft|domain|business|metals|other",
+        "name": "My Bitcoin Cold Wallet",
+        "description": "Location and access instructions",
+        "encrypted_keys": "AES-256 encrypted private keys (base64)",
+        "encrypted_recovery": "AES-256 encrypted recovery codes (base64)",
+        "value_estimate": 125000.50,
+        "assigned_heirs": ["THR_heir1", "THR_heir2"],
+        "contact_info": {
+            "email": "recovery@example.com",
+            "phone": "+1234567890",
+            "address": "123 Main St, City"
+        }
+    }
+    """
+    try:
+        if not _legacy_manager:
+            return jsonify(status="error", message="Legacy System not available"), 503
+
+        data = request.get_json() or {}
+
+        # Validate required fields
+        required = ["address", "asset_type", "name", "description", "encrypted_keys", "value_estimate"]
+        missing = [f for f in required if not data.get(f)]
+        if missing:
+            return jsonify(status="error", message=f"Missing fields: {missing}"), 400
+
+        from digital_legacy_manager import AssetCategory
+        try:
+            asset_type = AssetCategory(data["asset_type"])
+        except ValueError:
+            return jsonify(status="error", message=f"Invalid asset type"), 400
+
+        success, msg, asset = _legacy_manager.add_asset(
+            owner_address=data["address"],
+            asset_type=asset_type,
+            name=data["name"],
+            description=data["description"],
+            encrypted_keys=data["encrypted_keys"],
+            encrypted_recovery=data.get("encrypted_recovery", ""),
+            value_estimate=float(data.get("value_estimate", 0)),
+            assigned_heirs=data.get("assigned_heirs", []),
+            contact_info=data.get("contact_info")
+        )
+
+        if success:
+            return jsonify(
+                status="created",
+                message=msg,
+                asset=asset.to_dict()
+            ), 201
+        else:
+            return jsonify(status="error", message=msg), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error adding asset: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/heir/add", methods=["POST"])
+def api_add_legacy_heir():
+    """
+    Add beneficiary (heir) to estate
+
+    POST /api/legacy/heir/add
+    Body: {
+        "owner_address": "THR...",
+        "heir_address": "THR...",
+        "share_percentage": 50.0,
+        "email": "heir@example.com" (optional),
+        "phone": "+1234567890" (optional)
+    }
+    """
+    try:
+        if not _legacy_manager:
+            return jsonify(status="error", message="Legacy System not available"), 503
+
+        data = request.get_json() or {}
+
+        required = ["owner_address", "heir_address", "share_percentage"]
+        missing = [f for f in required if not data.get(f)]
+        if missing:
+            return jsonify(status="error", message=f"Missing fields: {missing}"), 400
+
+        success, msg = _legacy_manager.add_heir(
+            owner_address=data["owner_address"],
+            heir_address=data["heir_address"],
+            share_percentage=float(data["share_percentage"]),
+            email=data.get("email"),
+            phone=data.get("phone")
+        )
+
+        if success:
+            return jsonify(status="created", message=msg), 201
+        else:
+            return jsonify(status="error", message=msg), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error adding heir: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/stats", methods=["GET"])
+def api_legacy_stats():
+    """
+    Get Digital Legacy System statistics
+
+    GET /api/legacy/stats
+
+    Returns:
+        {
+            "total_estates": 100,
+            "total_assets": 500,
+            "total_heirs": 250,
+            "total_value_usd": 50000000.00
+        }
+    """
+    try:
+        if not _legacy_manager:
+            return jsonify(
+                status="error",
+                message="Digital Legacy System not available"
+            ), 503
+
+        stats = _legacy_manager.get_stats()
+        return jsonify(stats), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting legacy stats: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+# SMART CONTRACT WILL SYSTEM - NFT-Based Encrypted Wills
+# ─────────────────────────────────────────────────────────────
+
+@app.route("/api/legacy/will/create", methods=["POST"])
+def api_create_smart_contract_will():
+    """
+    Create a smart contract will from an estate
+
+    POST /api/legacy/will/create
+    Body: {
+        "owner_address": "THR...",
+        "time_lock_years": 30
+    }
+
+    Creates will with SHA-256 hashes for tamper detection.
+    Multi-sig requirement = majority of heirs.
+    """
+    try:
+        if not _will_manager or not _legacy_manager:
+            return jsonify(status="error", message="Will System not available"), 503
+
+        data = request.get_json() or {}
+        owner_address = data.get("owner_address", "").strip()
+        time_lock_years = int(data.get("time_lock_years", 30))
+
+        if not owner_address:
+            return jsonify(status="error", message="Missing owner_address"), 400
+
+        # Get estate
+        estate = _legacy_manager.get_estate(owner_address)
+        if not estate:
+            return jsonify(status="error", message="Estate not found"), 404
+
+        if not estate.heirs:
+            return jsonify(status="error", message="Estate must have at least one heir"), 400
+
+        # Create hash of estate for will
+        import hashlib
+        estate_json = json.dumps(estate.to_dict(), sort_keys=True)
+        estate_hash = hashlib.sha256(estate_json.encode()).hexdigest()
+
+        # Create will
+        success, msg, will = _will_manager.create_will(
+            owner_address=owner_address,
+            estate_hash=estate_hash,
+            estate_salt="",  # Salt will be generated during asset encryption
+            heir_addresses=[h.heir_address for h in estate.heirs],
+            time_lock_years=time_lock_years
+        )
+
+        if success:
+            return jsonify(
+                status="created",
+                message=msg,
+                will=will.to_dict()
+            ), 201
+        else:
+            return jsonify(status="error", message=msg), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error creating will: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/will/<will_id>", methods=["GET"])
+def api_get_smart_contract_will(will_id: str):
+    """
+    Get details of a smart contract will
+
+    GET /api/legacy/will/<will_id>
+
+    Returns: Full will object with all conditions and signatures
+    """
+    try:
+        if not _will_manager:
+            return jsonify(status="error", message="Will System not available"), 503
+
+        will = _will_manager.wills.get(will_id)
+        if not will:
+            return jsonify(status="error", message="Will not found"), 404
+
+        return jsonify(will.to_dict()), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting will: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/will/<will_id>/seal", methods=["POST"])
+def api_seal_smart_contract_will(will_id: str):
+    """
+    Seal a will with tamper detection
+
+    POST /api/legacy/will/<will_id>/seal
+
+    Once sealed, any modification will break the seal.
+    Multi-sig signatures can only be added to sealed wills.
+    """
+    try:
+        if not _will_manager:
+            return jsonify(status="error", message="Will System not available"), 503
+
+        success, msg = _will_manager.seal_will(will_id)
+
+        if success:
+            return jsonify(status="sealed", message=msg), 200
+        else:
+            return jsonify(status="error", message=msg), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error sealing will: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/will/<will_id>/verify-seal", methods=["GET"])
+def api_verify_smart_contract_will_seal(will_id: str):
+    """
+    Verify that a will hasn't been tampered with
+
+    GET /api/legacy/will/<will_id>/verify-seal
+
+    Returns: {
+        "status": "verified|broken",
+        "message": "Seal verified - Will intact" or "SEAL BROKEN - Will has been tampered with"
+    }
+    """
+    try:
+        if not _will_manager:
+            return jsonify(status="error", message="Will System not available"), 503
+
+        success, msg = _will_manager.verify_seal(will_id)
+
+        return jsonify(
+            status="verified" if success else "broken",
+            message=msg
+        ), (200 if success else 400)
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error verifying will seal: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/will/<will_id>/sign", methods=["POST"])
+def api_add_heir_signature_to_will(will_id: str):
+    """
+    Add heir signature to unlock will
+
+    POST /api/legacy/will/<will_id>/sign
+    Body: {
+        "heir_address": "THR...",
+        "signature": "bitcoin_message_signature_or_eth_sig"
+    }
+
+    Signatures must be from authorized heirs.
+    Majority of heirs must sign before will can be opened.
+    """
+    try:
+        if not _will_manager:
+            return jsonify(status="error", message="Will System not available"), 503
+
+        data = request.get_json() or {}
+        heir_address = data.get("heir_address", "").strip()
+        signature = data.get("signature", "").strip()
+
+        if not heir_address or not signature:
+            return jsonify(status="error", message="Missing heir_address or signature"), 400
+
+        success, msg = _will_manager.add_heir_signature(will_id, heir_address, signature)
+
+        if success:
+            will = _will_manager.wills.get(will_id)
+            return jsonify(
+                status="signed",
+                message=msg,
+                signature_count=will.signature_count if will else 0,
+                required_count=will.required_heirs if will else 0
+            ), 200
+        else:
+            return jsonify(status="error", message=msg), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error adding signature: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/will/<will_id>/can-open", methods=["GET"])
+def api_can_open_smart_contract_will(will_id: str):
+    """
+    Check if a will can be opened
+
+    GET /api/legacy/will/<will_id>/can-open
+
+    Checks three conditions:
+    1. Seal is intact (no tampering)
+    2. Time-lock has expired (after death + grace period)
+    3. Required heirs have signed (majority rule)
+
+    Returns: {
+        "can_open": true|false,
+        "reason": "Will can be opened" or error message
+    }
+    """
+    try:
+        if not _will_manager:
+            return jsonify(status="error", message="Will System not available"), 503
+
+        can_open, reason = _will_manager.can_open_will(will_id)
+
+        return jsonify(
+            can_open=can_open,
+            reason=reason
+        ), (200 if can_open else 403)
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error checking will open: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/wills/stats", methods=["GET"])
+def api_smart_contract_will_stats():
+    """
+    Get Smart Contract Will System statistics
+
+    GET /api/legacy/wills/stats
+
+    Returns: {
+        "total_wills": 100,
+        "created": 50,
+        "minted": 30,
+        "opened": 15,
+        "distributed": 5
+    }
+    """
+    try:
+        if not _will_manager:
+            return jsonify(
+                status="error",
+                message="Will System not available"
+            ), 503
+
+        stats = _will_manager.get_stats()
+        return jsonify(stats), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting will stats: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+# MULTI-SIG DISTRIBUTION SYSTEM - Asset Release & Audit Trail
+# ─────────────────────────────────────────────────────────────
+
+@app.route("/api/legacy/distribution/release-keys", methods=["POST"])
+def api_release_asset_keys():
+    """
+    Release encrypted asset keys to authorized heir
+
+    POST /api/legacy/distribution/release-keys
+    Body: {
+        "asset_id": "asset_...",
+        "heir_address": "THR...",
+        "encrypted_keys": "AES-256 encrypted keys",
+        "will_signature": "heir's signature on will",
+        "will_hash": "SHA-256 of will",
+        "asset_salt": "salt used for encryption"
+    }
+
+    Process:
+    1. Validates heir signature on will
+    2. Checks asset not tampered
+    3. Creates audit record
+    4. Releases encrypted keys to heir
+    5. Returns audit ID for tracking
+
+    Returns: {
+        "status": "released",
+        "message": "Keys released...",
+        "audit_id": "audit_...",
+        "keys_hash": "SHA-256 hash of keys for verification"
+    }
+    """
+    try:
+        if not _distribution_manager:
+            return jsonify(status="error", message="Distribution System not available"), 503
+
+        data = request.get_json() or {}
+
+        required = ["asset_id", "heir_address", "encrypted_keys", "will_signature", "will_hash", "asset_salt"]
+        missing = [f for f in required if not data.get(f)]
+        if missing:
+            return jsonify(status="error", message=f"Missing fields: {missing}"), 400
+
+        success, msg, audit = _distribution_manager.release_asset_keys(
+            asset_id=data["asset_id"],
+            heir_address=data["heir_address"],
+            encrypted_keys=data["encrypted_keys"],
+            will_signature=data["will_signature"],
+            will_hash=data["will_hash"],
+            asset_salt=data["asset_salt"]
+        )
+
+        if success:
+            return jsonify(
+                status="released",
+                message=msg,
+                audit_id=audit.audit_id if audit else None,
+                keys_hash=audit.keys_hash if audit else None
+            ), 200
+        else:
+            return jsonify(status="error", message=msg), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error releasing keys: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/distribution/mark-claimed", methods=["POST"])
+def api_mark_asset_claimed():
+    """
+    Mark asset as claimed by heir (transferred to wallet)
+
+    POST /api/legacy/distribution/mark-claimed
+    Body: {
+        "audit_id": "audit_...",
+        "transaction_hash": "blockchain_tx_hash" (optional)
+    }
+
+    Records blockchain transaction if available.
+    Updates distribution status from RELEASED → CLAIMED.
+    """
+    try:
+        if not _distribution_manager:
+            return jsonify(status="error", message="Distribution System not available"), 503
+
+        data = request.get_json() or {}
+        audit_id = data.get("audit_id", "").strip()
+
+        if not audit_id:
+            return jsonify(status="error", message="Missing audit_id"), 400
+
+        success, msg = _distribution_manager.mark_asset_claimed(
+            audit_id=audit_id,
+            transaction_hash=data.get("transaction_hash")
+        )
+
+        if success:
+            return jsonify(status="claimed", message=msg), 200
+        else:
+            return jsonify(status="error", message=msg), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error marking asset claimed: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/distribution/heir-claims/<heir_address>", methods=["GET"])
+def api_get_heir_claims(heir_address: str):
+    """
+    Get all claimed assets for a specific heir
+
+    GET /api/legacy/distribution/heir-claims/<heir_address>
+
+    Returns array of all distributions (released, claimed, unclaimed) for heir.
+    """
+    try:
+        if not _distribution_manager:
+            return jsonify(status="error", message="Distribution System not available"), 503
+
+        claims = _distribution_manager.get_heir_claims(heir_address)
+        return jsonify(
+            heir_address=heir_address,
+            total_claims=len(claims),
+            claims=[c.to_dict() for c in claims]
+        ), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting heir claims: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/distribution/stats", methods=["GET"])
+def api_distribution_stats():
+    """
+    Get distribution system statistics
+
+    GET /api/legacy/distribution/stats
+
+    Returns: {
+        "total_distributions": 100,
+        "released": 80,
+        "claimed": 70,
+        "unclaimed": 30,
+        "audit_records": 100
+    }
+    """
+    try:
+        if not _distribution_manager:
+            return jsonify(status="error", message="Distribution System not available"), 503
+
+        stats = _distribution_manager.get_distribution_stats()
+        return jsonify(stats), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting distribution stats: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+# CHARITY POOL & REDISTRIBUTION SYSTEM - Phase C4
+# ────────────────────────────────────────────────────
+
+@app.route("/api/legacy/pool/create", methods=["POST"])
+def api_create_charity_pool():
+    """
+    Create a new charity pool for redistributing unclaimed assets
+
+    POST /api/legacy/pool/create
+
+    Creates pool with default allocations:
+    - 25% → Schools & Education
+    - 25% → Housing & Shelter
+    - 25% → Healthcare & Medical
+    - 15% → Food Security & Nutrition
+    - 10% → Community Development
+
+    Returns: {
+        "pool_id": "pool_...",
+        "status": "collecting",
+        "allocations": {...}
+    }
+    """
+    try:
+        if not _pool_manager:
+            return jsonify(status="error", message="Pool System not available"), 503
+
+        pool = _pool_manager.create_pool()
+        return jsonify(
+            status="created",
+            pool=pool.to_dict()
+        ), 201
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error creating pool: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/pool/<pool_id>/add-asset", methods=["POST"])
+def api_add_unclaimed_asset(pool_id: str):
+    """
+    Add unclaimed asset to charity pool
+
+    POST /api/legacy/pool/<pool_id>/add-asset
+    Body: {
+        "asset_id": "asset_...",
+        "original_owner": "THR...",
+        "asset_type": "crypto|real_estate|bank|...",
+        "value_usd": 125000.50,
+        "claim_deadline": "2056-05-16T10:30:00Z"
+    }
+
+    Called when claim period expires and asset reverts to pool.
+    Asset will be redistributed to charitable causes.
+    """
+    try:
+        if not _pool_manager:
+            return jsonify(status="error", message="Pool System not available"), 503
+
+        data = request.get_json() or {}
+
+        required = ["asset_id", "original_owner", "asset_type", "value_usd", "claim_deadline"]
+        missing = [f for f in required if not data.get(f)]
+        if missing:
+            return jsonify(status="error", message=f"Missing fields: {missing}"), 400
+
+        success, msg = _pool_manager.add_unclaimed_asset(
+            pool_id=pool_id,
+            asset_id=data["asset_id"],
+            original_owner=data["original_owner"],
+            asset_type=data["asset_type"],
+            value_usd=float(data["value_usd"]),
+            claim_deadline=data["claim_deadline"]
+        )
+
+        if success:
+            return jsonify(status="added", message=msg), 201
+        else:
+            return jsonify(status="error", message=msg), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error adding asset to pool: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/pool/<pool_id>/collect", methods=["POST"])
+def api_collect_pool(pool_id: str):
+    """
+    Mark pool as fully collected (ready for allocation)
+
+    POST /api/legacy/pool/<pool_id>/collect
+
+    Called after all unclaimed assets have been added.
+    Transitions pool from "collecting" to "collected" status.
+    """
+    try:
+        if not _pool_manager:
+            return jsonify(status="error", message="Pool System not available"), 503
+
+        success, msg = _pool_manager.collect_pool(pool_id)
+
+        if success:
+            return jsonify(status="collected", message=msg), 200
+        else:
+            return jsonify(status="error", message=msg), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error collecting pool: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/pool/<pool_id>/allocate", methods=["POST"])
+def api_allocate_pool(pool_id: str):
+    """
+    Allocate collected assets to charitable causes
+
+    POST /api/legacy/pool/<pool_id>/allocate
+
+    Distributes pool assets according to default percentages:
+    - 25% → Schools & Education (fight illiteracy)
+    - 25% → Housing & Shelter (end homelessness)
+    - 25% → Healthcare & Medical (save lives)
+    - 15% → Food Security (prevent starvation)
+    - 10% → Community Development (empower economies)
+
+    Returns allocation breakdown by cause.
+    """
+    try:
+        if not _pool_manager:
+            return jsonify(status="error", message="Pool System not available"), 503
+
+        success, msg = _pool_manager.allocate_pool_to_causes(pool_id)
+
+        if success:
+            pool = _pool_manager.pools.get(pool_id)
+            return jsonify(
+                status="allocated",
+                message=msg,
+                allocations={
+                    cause: {
+                        "percentage": alloc.allocation_percentage,
+                        "amount_usd": alloc.allocated_amount_usd
+                    }
+                    for cause, alloc in pool.allocations.items()
+                }
+            ), 200
+        else:
+            return jsonify(status="error", message=msg), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error allocating pool: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/pool/<pool_id>", methods=["GET"])
+def api_get_pool(pool_id: str):
+    """
+    Get detailed information about a charity pool
+
+    GET /api/legacy/pool/<pool_id>
+
+    Returns full pool object with assets, allocations, and status.
+    """
+    try:
+        if not _pool_manager:
+            return jsonify(status="error", message="Pool System not available"), 503
+
+        pool = _pool_manager.pools.get(pool_id)
+        if not pool:
+            return jsonify(status="error", message="Pool not found"), 404
+
+        return jsonify(pool.to_dict()), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting pool: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/pool/stats", methods=["GET"])
+@app.route("/api/legacy/pool/stats/<pool_id>", methods=["GET"])
+def api_pool_stats(pool_id: str = None):
+    """
+    Get charity pool statistics
+
+    GET /api/legacy/pool/stats (all pools)
+    GET /api/legacy/pool/stats/<pool_id> (specific pool)
+
+    Returns: {
+        "total_pools": 5,
+        "total_value_usd": 500000.00,
+        "pools": {
+            "pool_...": {
+                "assets": 10,
+                "value_usd": 100000.00,
+                "status": "allocated"
+            }
+        }
+    }
+    """
+    try:
+        if not _pool_manager:
+            return jsonify(status="error", message="Pool System not available"), 503
+
+        stats = _pool_manager.get_pool_stats(pool_id)
+        return jsonify(stats), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting pool stats: {e}")
+        return jsonify(status="error", error=str(e)), 500
 
 
 def build_wallet_history(thr_addr: str) -> list[dict]:
@@ -19283,6 +20208,13 @@ def api_swap_execute():
         else:
             pool["reserves_b"] = round(reserves_b + amt_in, 6)
             pool["reserves_a"] = round(reserves_a - amt_out, 6)
+
+        # Update Pytheia metrics
+        pool["volume_24h"] = float(pool.get("volume_24h", 0.0)) + amt_in
+        pool["volume_total"] = float(pool.get("volume_total", 0.0)) + amt_in
+        pool["fees_collected"] = float(pool.get("fees_collected", 0.0)) + fee_amount
+        pool["last_swap_time"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
         return amt_out, fee_amount, price_impact
 
     swap_trace = []
@@ -21927,6 +22859,12 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
     scheduler.add_job(update_telemetry_cache_job, "interval", seconds=30,
                      coalesce=True, max_instances=1, id="telemetry_cache")
 
+    # Daily Pool Volume Reset – reset 24h volumes at midnight UTC
+    scheduler.add_job(_reset_daily_pool_volumes, "cron",
+                     hour=0, minute=0, id="reset_daily_volumes",
+                     coalesce=True, max_instances=1)
+    print("[SCHEDULER] Daily pool volume reset scheduled (midnight UTC)")
+
     # BTC Pledge Watcher – polls blockstream.info for vault deposits
     try:
         from btc_pledge_watcher import watch_btc_pledges
@@ -21954,6 +22892,13 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
         print(f"[SCHEDULER] PYTHEIA worker unavailable: {e}")
     except Exception as e:
         print(f"[SCHEDULER] PYTHEIA worker init error: {e}")
+
+    # Pythia AI Node Manager – AMM pool monitoring & bug detection
+    if _pythia_manager:
+        scheduler.add_job(_pythia_manager.fetch_amm_data, "interval",
+                         minutes=5, coalesce=True, max_instances=1,
+                         id="pythia_amm_monitor")
+        print("[SCHEDULER] Pythia AMM monitoring scheduled (every 5 min)")
 
     scheduler.start()
     _active_schedulers.append(scheduler)
@@ -26030,6 +26975,10 @@ def api_v1_get_pools():
             pool["tvl_btc"] = round(tvl_thr * 0.0001, 8)
             if thr_usd:
                 pool["tvl_usd"] = round(tvl_thr * thr_usd, 2)
+
+            # Pytheia compatibility: Add singular field name aliases
+            pool["reserve_a"] = pool.get("reserves_a", 0)
+            pool["reserve_b"] = pool.get("reserves_b", 0)
         except Exception:
             continue
     return jsonify(pools=pools), 200
@@ -26344,6 +27293,7 @@ def api_v1_create_pool():
     lp_symbol = f"LP-{token_a}-{token_b}"
     new_pool = {
         "id": pool_id,
+        "name": f"{token_a}/{token_b}",
         "token_a": token_a,
         "token_b": token_b,
         "reserves_a": round(amt_a_float, state_a["decimals"]),
@@ -26353,7 +27303,13 @@ def api_v1_create_pool():
         "lp_symbol": lp_symbol,
         "providers": {
             provider: round(shares, 6)
-        }
+        },
+        # Pytheia AMM monitoring metrics
+        "volume_24h": 0.0,
+        "volume_total": 0.0,
+        "fees_collected": 0.0,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "last_swap_time": None,
     }
     pools.append(new_pool)
     save_pools(pools)

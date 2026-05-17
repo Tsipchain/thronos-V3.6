@@ -18147,6 +18147,77 @@ def heat_dashboard():
     return render_template("heat_dashboard.html")
 
 
+@app.route("/api/miner-kit", methods=["GET"])
+def api_miner_kit():
+    """
+    Download complete miner kit (Phase 6B)
+    Available to users who have completed a pledge
+
+    GET /api/miner-kit
+
+    Returns: Complete miner kit JSON with all hardware specifications
+    """
+    try:
+        # Load miner kit configuration
+        kit_file = Path(DATA_DIR) / "miner-kit-config.json"
+        if not kit_file.exists():
+            # Try alternate path
+            kit_file = Path("/home/user/thronos-V3.6/miner-kit-config.json")
+
+        if kit_file.exists():
+            kit_data = json.loads(kit_file.read_text())
+            return jsonify(kit_data), 200
+        else:
+            logger = logging.getLogger("thronos")
+            logger.warning("Miner kit configuration not found")
+            return jsonify(status="error", error="Miner kit not available"), 404
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error retrieving miner kit: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/download/miner-kit", methods=["GET"])
+def download_miner_kit():
+    """
+    Download miner kit as JSON file (requires pledge verification)
+
+    GET /download/miner-kit?address=THR7c...
+    """
+    try:
+        thr_address = request.args.get("address", "")
+
+        # Check if user has made a pledge
+        pledge_entry = get_mining_whitelist_entry(thr_address)
+        if not pledge_entry or not pledge_entry.get("pledge_ok", False):
+            return jsonify(
+                status="error",
+                error="Complete a THR pledge to download miner kit"
+            ), 403
+
+        # Load miner kit configuration
+        kit_file = Path("/home/user/thronos-V3.6/miner-kit-config.json")
+        if not kit_file.exists():
+            kit_file = Path(DATA_DIR) / "miner-kit-config.json"
+
+        if kit_file.exists():
+            kit_data = json.loads(kit_file.read_text())
+            return jsonify({
+                **kit_data,
+                "pledge_verified": True,
+                "miner_address": thr_address,
+                "download_timestamp": datetime.utcnow().isoformat()
+            }), 200
+        else:
+            return jsonify(status="error", error="Miner kit not available"), 404
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error downloading miner kit: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
 def build_wallet_history(thr_addr: str) -> list[dict]:
     """Return canonical wallet history with normalized status."""
     history = []

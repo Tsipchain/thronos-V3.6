@@ -163,6 +163,8 @@
   "device_type": "USB_ASIC",
   "variants": [
     "ANTMINER_U1",
+    "BTC_BLOCK_ERUPTER",
+    "BITFURY_RED_FURY",
     "COMPAC_F4",
     "DUALMINER_USB",
     "TERMINATOR_ASIC",
@@ -170,6 +172,8 @@
   ],
   "power_consumption_watts": {
     "ANTMINER_U1": 4,
+    "BTC_BLOCK_ERUPTER": 5,
+    "BITFURY_RED_FURY": 1.5,
     "COMPAC_F4": 15,
     "DUALMINER_USB": 8,
     "TERMINATOR_ASIC": 25,
@@ -177,6 +181,8 @@
   },
   "hashrate_ghash": {
     "ANTMINER_U1": 1.6,
+    "BTC_BLOCK_ERUPTER": 333,
+    "BITFURY_RED_FURY": 0.85,
     "COMPAC_F4": 55,
     "DUALMINER_USB": 20,
     "TERMINATOR_ASIC": 180,
@@ -184,6 +190,8 @@
   },
   "heat_output_watts": {
     "ANTMINER_U1": 3,
+    "BTC_BLOCK_ERUPTER": 4.5,
+    "BITFURY_RED_FURY": 1.2,
     "COMPAC_F4": 12,
     "DUALMINER_USB": 6,
     "TERMINATOR_ASIC": 20,
@@ -192,12 +200,37 @@
 }
 ```
 
+**New Miners Added:**
+
+**BTC Block Erupter** ⚡ (Classic 2013-2014)
+- Power: 5W per unit
+- Hashrate: 333 GH/s (fast for USB!)
+- Heat output: 4.5W
+- Form factor: USB Block
+- Era: Early ASIC mining (historical)
+- Recovery potential: 8-12%
+- Tier: TIER_1 (Baseline - 5% bonus)
+- Use case: **Educational/historical mining experiments**
+- Example: 100 units = 33.3 TH/s, **+0.2 THR/block bonus**
+
+**BitFury Red Fury** 🔴 (Ultra-Efficient 2014-2015)
+- Power: 1.5W per unit (**ultra low-power!**)
+- Hashrate: 850 MH/s
+- Heat output: 1.2W
+- Form factor: USB Nano
+- Era: Low-power champion
+- Recovery potential: 5-10%
+- Tier: TIER_1 (Baseline - 5% bonus)
+- Use case: **Distributed IoT-style mining, energy research, portable**
+- Example: 10,000 units = 8.5 TH/s, **+0.15 THR/block + ultra-efficient data**
+
 **Phase 6 Heat Recovery (USB ASIC):**
-- Recovery potential: 8-15% of power consumption
-- Typical recovery: 2-5 kWh/day per 100 units
+- Recovery potential: 5-12% of power consumption
+- Typical recovery: 0.5-2 kWh/day per 1000 units
 - Tier: TIER_1 (Baseline Recovery - 5% bonus)
-- Best use case: Educational (no heat bonus needed)
+- Best use case: Educational programs, distributed networks, energy research
 - Example: 1000 × Compac F4 = **+0.3 THR/block heat bonus**
+- Example: 10,000 × BitFury Red Fury = **+0.15 THR/block (ultra-efficient)**
 
 ---
 
@@ -517,6 +550,8 @@ curl http://localhost:8000/api/heat/stats
 | **ASIC S19** | 135kW (100×) | 11 TH/s | 600° | TIER_3 | Greenhouse | +29.8k THR |
 | **GPU RTX4090** | 45kW (100×) | 4.5 TH/s | 180° | TIER_2 | Space Heat | +67.9k THR |
 | **CPU Ryzen7950X** | 17kW (100×) | 850 MH/s | 60° | TIER_1 | Space Heat | +13.7k THR |
+| **USB Block Erupter** | 500W (100×) | 33.3 GH/s | 5° | TIER_1 | Classic/Education | +1.8k THR |
+| **USB Red Fury** | 150W (1000×) | 850 MH/s | 1.2° | TIER_1 | IoT/Ultra-Efficient | +0.9k THR |
 | **USB Compac F4** | 1.5kW (100×) | 5.5 GH/s | 6° | TIER_1 | Education | +2.7k THR |
 | **IoT RPi4** | 500W (100×) | 1 GH/s | 0.2° | TIER_1 | Science | +4.6k THR |
 | **Hybrid Rig** | 2.5kW (1×) | 25 TH/s | 2.2° | TIER_3 | Aquaculture | +1.8k THR |

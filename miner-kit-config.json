@@ -1,0 +1,390 @@
+{
+  "thronos_miner_kit": {
+    "version": "1.0.0",
+    "release_date": "2026-05-17",
+    "description": "Complete Thronos Mining Kit - Hardware support for ASIC, GPU, CPU, USB, IoT, and Hybrid miners",
+    "phase": "Phase 6B Complete",
+    "api_endpoints": {
+      "submit_metrics": "POST /api/heat/submit-metrics",
+      "get_rewards": "GET /api/heat/rewards/<thr_address>",
+      "get_stats": "GET /api/heat/stats",
+      "dashboard": "GET /heat-dashboard"
+    },
+    "hardware_types": {
+      "asic": {
+        "category": "ASIC Miners",
+        "power_range_watts": "1321-3060",
+        "hashrate_range": "84-504 TH/s",
+        "heat_recovery": "15-25%",
+        "reward_tier": "TIER_3",
+        "variants": {
+          "S19": {
+            "power_watts": 1350,
+            "hashrate_ths": 110,
+            "heat_watts": 1200,
+            "efficiency_j_per_gh": 12.27
+          },
+          "S19_PRO": {
+            "power_watts": 1350,
+            "hashrate_ths": 110,
+            "heat_watts": 1200,
+            "efficiency_j_per_gh": 12.27
+          },
+          "S19_XP": {
+            "power_watts": 1321,
+            "hashrate_ths": 140,
+            "heat_watts": 1180,
+            "efficiency_j_per_gh": 9.44
+          },
+          "S21": {
+            "power_watts": 1500,
+            "hashrate_ths": 130,
+            "heat_watts": 1350,
+            "efficiency_j_per_gh": 11.54
+          },
+          "T19": {
+            "power_watts": 1280,
+            "hashrate_ths": 84,
+            "heat_watts": 1150,
+            "efficiency_j_per_gh": 15.24
+          },
+          "L7": {
+            "power_watts": 3060,
+            "hashrate_ths": 504,
+            "heat_watts": 2750,
+            "efficiency_j_per_gh": 6.07
+          }
+        },
+        "example": {
+          "units": 100,
+          "total_power_kw": 135,
+          "total_hashrate_ths": 11000,
+          "monthly_heat_bonus_thr": 29800,
+          "use_case": "greenhouse"
+        }
+      },
+      "gpu": {
+        "category": "GPU Miners",
+        "power_range_watts": "250-450",
+        "hashrate_range": "22-45 TH/s",
+        "heat_recovery": "12-20%",
+        "reward_tier": "TIER_2",
+        "variants": {
+          "RTX_4090": {
+            "power_watts": 450,
+            "hashrate_ths": 45,
+            "heat_watts": 400,
+            "efficiency_j_per_gh": 10
+          },
+          "RTX_4080": {
+            "power_watts": 320,
+            "hashrate_ths": 30,
+            "heat_watts": 280,
+            "efficiency_j_per_gh": 10.67
+          },
+          "RTX_A100": {
+            "power_watts": 400,
+            "hashrate_ths": 35,
+            "heat_watts": 350,
+            "efficiency_j_per_gh": 11.43
+          },
+          "A40": {
+            "power_watts": 300,
+            "hashrate_ths": 28,
+            "heat_watts": 260,
+            "efficiency_j_per_gh": 10.71
+          },
+          "RX_7900_XTX": {
+            "power_watts": 440,
+            "hashrate_ths": 42,
+            "heat_watts": 380,
+            "efficiency_j_per_gh": 10.48
+          }
+        },
+        "example": {
+          "units": 100,
+          "total_power_kw": 45,
+          "total_hashrate_ths": 4500,
+          "monthly_heat_bonus_thr": 67900,
+          "use_case": "space_heating"
+        }
+      },
+      "cpu": {
+        "category": "CPU Miners",
+        "power_range_watts": "50-250",
+        "hashrate_range": "150 MH/s - 1.2 GH/s",
+        "heat_recovery": "10-18%",
+        "reward_tier": "TIER_1",
+        "variants": {
+          "RYZEN_7950X": {
+            "power_watts": 170,
+            "hashrate_mhs": 850,
+            "heat_watts": 150,
+            "efficiency_j_per_mh": 0.2
+          },
+          "RYZEN_5950X": {
+            "power_watts": 105,
+            "hashrate_mhs": 650,
+            "heat_watts": 90,
+            "efficiency_j_per_mh": 0.162
+          },
+          "INTEL_I9_13900K": {
+            "power_watts": 125,
+            "hashrate_mhs": 700,
+            "heat_watts": 110,
+            "efficiency_j_per_mh": 0.179
+          },
+          "INTEL_XEON_W9_3595X": {
+            "power_watts": 250,
+            "hashrate_mhs": 1200,
+            "heat_watts": 220,
+            "efficiency_j_per_mh": 0.208
+          }
+        },
+        "example": {
+          "units": 100,
+          "total_power_kw": 17,
+          "total_hashrate_ghs": 85,
+          "monthly_heat_bonus_thr": 13700,
+          "use_case": "space_heating"
+        }
+      },
+      "usb_asic": {
+        "category": "USB ASIC Miners",
+        "power_range_watts": "1.5-25",
+        "hashrate_range": "0.85 GH/s - 333 GH/s",
+        "heat_recovery": "5-12%",
+        "reward_tier": "TIER_1",
+        "variants": {
+          "ANTMINER_U1": {
+            "power_watts": 4,
+            "hashrate_ghs": 1.6,
+            "heat_watts": 3,
+            "efficiency_j_per_gh": 2.5,
+            "form_factor": "USB Stick",
+            "era": "2013"
+          },
+          "BTC_BLOCK_ERUPTER": {
+            "power_watts": 5,
+            "hashrate_ghs": 333,
+            "heat_watts": 4.5,
+            "efficiency_j_per_gh": 0.015,
+            "form_factor": "USB Block",
+            "era": "2013-2014"
+          },
+          "BITFURY_RED_FURY": {
+            "power_watts": 1.5,
+            "hashrate_ghs": 0.85,
+            "heat_watts": 1.2,
+            "efficiency_j_per_gh": 1.76,
+            "form_factor": "USB Nano",
+            "era": "2014-2015"
+          },
+          "COMPAC_F4": {
+            "power_watts": 15,
+            "hashrate_ghs": 55,
+            "heat_watts": 12,
+            "efficiency_j_per_gh": 0.27,
+            "form_factor": "USB Dongle",
+            "era": "2018"
+          },
+          "DUALMINER_USB": {
+            "power_watts": 8,
+            "hashrate_ghs": 20,
+            "heat_watts": 6,
+            "efficiency_j_per_gh": 0.4,
+            "form_factor": "USB Module",
+            "era": "2014"
+          },
+          "TERMINATOR_ASIC": {
+            "power_watts": 25,
+            "hashrate_ghs": 180,
+            "heat_watts": 20,
+            "efficiency_j_per_gh": 0.139,
+            "form_factor": "USB Controller",
+            "era": "2015"
+          }
+        },
+        "examples": {
+          "block_erupter": {
+            "units": 100,
+            "total_power_kw": 0.5,
+            "total_hashrate_ths": 33.3,
+            "monthly_heat_bonus_thr": 1800,
+            "use_case": "education"
+          },
+          "red_fury": {
+            "units": 10000,
+            "total_power_kw": 15,
+            "total_hashrate_ghs": 8500,
+            "monthly_heat_bonus_thr": 900,
+            "use_case": "iot_distributed"
+          }
+        }
+      },
+      "iot": {
+        "category": "IoT Mining Nodes",
+        "power_range_watts": "4-40",
+        "hashrate_range": "8 MH/s - 80 MH/s",
+        "heat_recovery": "5-12%",
+        "reward_tier": "TIER_1",
+        "special_feature": "Dual mining + environmental data collection",
+        "variants": {
+          "RASPBERRY_PI_4": {
+            "power_watts": 5,
+            "hashrate_mhs": 10,
+            "heat_watts": 4,
+            "sensors": ["temp", "humidity"]
+          },
+          "RASPBERRY_PI_5": {
+            "power_watts": 8,
+            "hashrate_mhs": 15,
+            "heat_watts": 6,
+            "sensors": ["temp", "humidity", "pressure"]
+          },
+          "JETSON_NANO": {
+            "power_watts": 15,
+            "hashrate_mhs": 25,
+            "heat_watts": 12,
+            "sensors": ["temp", "humidity", "ai_capable"]
+          },
+          "JETSON_ORIN": {
+            "power_watts": 40,
+            "hashrate_mhs": 80,
+            "heat_watts": 30,
+            "sensors": ["temp", "humidity", "pressure", "ai_capable"]
+          }
+        },
+        "example": {
+          "units": 10000,
+          "total_power_kw": 50,
+          "total_hashrate_ghs": 100,
+          "monthly_heat_bonus_thr": 4600,
+          "use_case": "distributed_sensing"
+        }
+      },
+      "hybrid": {
+        "category": "Hybrid Mining Rigs",
+        "power_range_watts": "2500-3500",
+        "hashrate_range": "Variable",
+        "heat_recovery": "18-22%",
+        "reward_tier": "TIER_3",
+        "composition": {
+          "gpu_count": 6,
+          "cpu_type": "Ryzen 7950X",
+          "system_memory_gb": 128
+        },
+        "example": {
+          "units": 50,
+          "total_power_kw": 125,
+          "total_hashrate": "Mixed algorithms",
+          "monthly_heat_bonus_thr": 1800,
+          "use_case": "aquaculture"
+        }
+      }
+    },
+    "reward_tiers": {
+      "TIER_1": {
+        "name": "Baseline Recovery",
+        "recovery_min": 5,
+        "recovery_max": 10,
+        "bonus_percentage": 0.05,
+        "description": "Basic waste heat capture (5% bonus)"
+      },
+      "TIER_2": {
+        "name": "Standard Recovery",
+        "recovery_min": 10,
+        "recovery_max": 15,
+        "bonus_percentage": 0.15,
+        "description": "Moderate heat recovery system (15% bonus)"
+      },
+      "TIER_3": {
+        "name": "Advanced Recovery",
+        "recovery_min": 15,
+        "recovery_max": 25,
+        "bonus_percentage": 0.25,
+        "description": "High-efficiency heat capture (25% bonus)"
+      },
+      "TIER_4": {
+        "name": "Elite Recovery",
+        "recovery_min": 25,
+        "recovery_max": 100,
+        "bonus_percentage": 0.40,
+        "description": "Industrial-grade heat recovery (40% bonus)"
+      }
+    },
+    "use_cases": {
+      "space_heating": {
+        "name": "Space Heating",
+        "bonus": 0.05,
+        "reliability": 0.95,
+        "seasonal_factor": 0.5,
+        "regions": ["cold_climate"]
+      },
+      "greenhouse": {
+        "name": "Greenhouse Farming",
+        "bonus": 0.15,
+        "reliability": 0.98,
+        "seasonal_factor": 1.0,
+        "regions": ["temperate"]
+      },
+      "livestock": {
+        "name": "Livestock Operations",
+        "bonus": 0.12,
+        "reliability": 0.90,
+        "seasonal_factor": 0.7,
+        "regions": ["cold_climate", "temperate"]
+      },
+      "aquaculture": {
+        "name": "Fish Farming",
+        "bonus": 0.18,
+        "reliability": 0.99,
+        "seasonal_factor": 1.0,
+        "regions": ["tropical", "temperate"]
+      },
+      "desalination": {
+        "name": "Water Treatment",
+        "bonus": 0.20,
+        "reliability": 0.99,
+        "seasonal_factor": 1.0,
+        "regions": ["tropical"]
+      }
+    },
+    "energy_pricing": {
+      "industrial": 0.08,
+      "commercial": 0.12,
+      "residential": 0.15,
+      "peak": 0.25,
+      "currency": "USD per kWh"
+    },
+    "phase_6_features": {
+      "metrics_submission": "Real-time heat recovery metrics from mining farms",
+      "reward_calculation": "Automatic heat bonus applied to mining rewards",
+      "dashboard": "Interactive multi-language monitoring dashboard",
+      "regional_optimization": "Climate-based use case recommendations",
+      "farm_reputation": "Reputation scoring for long-term validators"
+    },
+    "mining_parameters": {
+      "base_reward": 8.0,
+      "reward_unit": "THR",
+      "block_time_minutes": 2,
+      "halving_interval_blocks": 1312500,
+      "halving_interval_years": 5,
+      "max_supply": 21000001
+    },
+    "download_instructions": {
+      "step_1": "Complete a THR pledge to access this miner kit",
+      "step_2": "Download and extract the configuration files",
+      "step_3": "Select your hardware type from this kit",
+      "step_4": "Configure power consumption, heat output, and location",
+      "step_5": "Submit heat metrics via /api/heat/submit-metrics",
+      "step_6": "Monitor heat bonuses via /heat-dashboard"
+    },
+    "support": {
+      "documentation": "MINER_KIT_COMPLETE.md",
+      "technical_spec": "PHASE_6_IOT_HEAT_METRICS.md",
+      "api_endpoints": "See server.py heat reward endpoints",
+      "discord": "https://discord.gg/thronos"
+    }
+  }
+}

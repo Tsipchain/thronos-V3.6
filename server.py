@@ -18178,8 +18178,11 @@ def api_miner_kit():
         return jsonify(status="error", error=str(e)), 500
 
 
-@app.route("/download/miner-kit", methods=["GET"])
-def download_miner_kit():
+@app.route("/miner-kit", methods=["GET"])
+@app.route("/miner-kit-download", methods=["GET"])
+def miner_kit_page():
+    """Render miner kit download page (Phase 6B)"""
+    return render_template("miner_kit_download.html")
     """
     Download miner kit as JSON file (requires pledge verification)
 

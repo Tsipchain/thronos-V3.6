@@ -17969,7 +17969,7 @@ def api_mining_ecosystem_stats():
 @app.route("/api/heat/submit-metrics", methods=["POST"])
 def api_heat_submit_metrics():
     """
-    Submit heat recovery metrics from mining farm
+    Submit and verify heat recovery metrics from mining farm with 4-level proof validation
 
     POST /api/heat/submit-metrics
     Content-Type: application/json
@@ -17982,28 +17982,71 @@ def api_heat_submit_metrics():
       "ambient_temp_celsius": 15,
       "inlet_temp_celsius": 25,
       "outlet_temp_celsius": 55,
+      "inlet_humidity_pct": 40,
+      "outlet_humidity_pct": 35,
       "airflow_cfm": 10000,
-      "heat_recovered_joules": 180000000,
-      "heat_recovered_kwh": 50,
-      "pue_ratio": 1.15,
-      "recovery_percentage": 18.5,
+      "pre_recovery_temp_celsius": 55,
+      "post_recovery_temp_celsius": 35,
+      "recirculation_flow_gpm": 100,
+      "facility_temp_celsius": 28,
+      "facility_humidity_pct": 45,
+      "energy_generated_kwh": 12.5,
       "farm_location": "EU-GR-01",
-      "use_case": "greenhouse"
+      "use_case": "greenhouse",
+      "gps_latitude": 38.2466,
+      "gps_longitude": 23.7372,
+      "gps_accuracy_meters": 10,
+      "sensors_online": 12,
+      "sensors_total": 12
     }
 
-    Returns: Tier classification, reward multiplier, estimated bonus
+    Returns: Proof validation result, tier, fraud detection, reward multiplier
     """
     try:
         from iot_heat_metrics import initialize_heat_engine, MinerHeatMetrics
+        from heat_recovery_proof import initialize_heat_verifier, HeatRecoveryProof
 
         data = request.get_json() or {}
+        miner_address = data.get("miner_address", "")
 
-        # Initialize heat engine
+        # Initialize engines
         engine = initialize_heat_engine()
+        verifier = initialize_heat_verifier()
 
-        # Create metrics object
+        # Create proof object for validation
+        proof = HeatRecoveryProof(
+            miner_address=miner_address,
+            timestamp=datetime.utcnow().isoformat(),
+            ambient_temp_c=float(data.get("ambient_temp_celsius", 20)),
+            inlet_temp_c=float(data.get("inlet_temp_celsius", 30)),
+            outlet_temp_c=float(data.get("outlet_temp_celsius", 50)),
+            inlet_humidity_pct=float(data.get("inlet_humidity_pct", 40)),
+            outlet_humidity_pct=float(data.get("outlet_humidity_pct", 35)),
+            airflow_cfm=float(data.get("airflow_cfm", 0)),
+            pre_recovery_temp_c=float(data.get("pre_recovery_temp_celsius", 55)),
+            post_recovery_temp_c=float(data.get("post_recovery_temp_celsius", 35)),
+            recirculation_flow_gpm=float(data.get("recirculation_flow_gpm", 0)),
+            facility_temp_c=float(data.get("facility_temp_celsius", 25)),
+            facility_humidity_pct=float(data.get("facility_humidity_pct", 45)),
+            energy_generated_kwh=float(data.get("energy_generated_kwh", 0)),
+            device_type=data.get("device_type", "ASIC"),
+            device_count=int(data.get("device_count", 1)),
+            power_consumption_watts=float(data.get("power_consumption_watts", 0)),
+            farm_location=data.get("farm_location", "UNKNOWN"),
+            use_case=data.get("use_case", "space_heating"),
+            gps_latitude=float(data.get("gps_latitude", 0.0)),
+            gps_longitude=float(data.get("gps_longitude", 0.0)),
+            gps_accuracy_meters=float(data.get("gps_accuracy_meters", 0.0)),
+            sensors_online=int(data.get("sensors_online", 12)),
+            sensors_total=int(data.get("sensors_total", 12))
+        )
+
+        # Verify proof (4-level validation + fraud detection)
+        verification = verifier.verify_proof(proof)
+
+        # Create metrics object for reward calculation
         metrics = MinerHeatMetrics(
-            miner_address=data.get("miner_address", ""),
+            miner_address=miner_address,
             timestamp=datetime.utcnow().isoformat(),
             device_type=data.get("device_type", "ASIC"),
             device_count=int(data.get("device_count", 1)),
@@ -18013,23 +18056,52 @@ def api_heat_submit_metrics():
             outlet_temp_celsius=float(data.get("outlet_temp_celsius", 50)),
             airflow_cfm=float(data.get("airflow_cfm", 0)),
             heat_recovered_joules=float(data.get("heat_recovered_joules", 0)),
-            heat_recovered_kwh=float(data.get("heat_recovered_kwh", 0)),
+            heat_recovered_kwh=float(data.get("energy_generated_kwh", 0)),
             pue_ratio=float(data.get("pue_ratio", 1.0)),
-            recovery_percentage=float(data.get("recovery_percentage", 0)),
+            recovery_percentage=proof.calculated_recovery_pct,
             farm_location=data.get("farm_location", "UNKNOWN"),
             use_case=data.get("use_case", "space_heating")
         )
 
         # Save metrics for this miner
-        engine.save_miner_metrics(data.get("miner_address", ""), metrics)
+        engine.save_miner_metrics(miner_address, metrics)
 
-        # Submit metrics
-        result = engine.submit_heat_metrics(metrics)
-        return jsonify(result), 200
+        # Only apply rewards if proof is valid and not fraudulent
+        if verification.is_valid:
+            result = engine.submit_heat_metrics(metrics)
+            result.update({
+                "proof_id": verification.proof_id,
+                "proof_level": verification.proof_level.name,
+                "proof_valid": verification.is_valid,
+                "fraud_detected": verification.fraud_detected,
+                "level_1_passed": verification.level_1_passed,
+                "level_2_passed": verification.level_2_passed,
+                "level_3_passed": verification.level_3_passed,
+                "level_4_passed": verification.level_4_passed,
+                "bonus_multiplier": verification.bonus_multiplier,
+                "recovery_percentage": proof.calculated_recovery_pct,
+                "calculated_heat_kwh": proof.calculated_heat_kwh
+            })
+            status_code = 200
+        else:
+            # Proof failed - return error with details
+            result = {
+                "proof_id": verification.proof_id,
+                "proof_valid": False,
+                "fraud_detected": verification.fraud_detected,
+                "anomalies": verification.anomalies,
+                "error": "Heat recovery proof validation failed",
+                "reason": ", ".join(verification.anomalies) if verification.anomalies else "Unknown"
+            }
+            status_code = 400
+
+        return jsonify(result), status_code
 
     except Exception as e:
         logger = logging.getLogger("thronos")
         logger.error(f"Error submitting heat metrics: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return jsonify(status="error", error=str(e)), 400
 
 
@@ -18137,6 +18209,188 @@ def api_heat_stats():
     except Exception as e:
         logger = logging.getLogger("thronos")
         logger.error(f"Error getting heat stats: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/heat/monitor/farms", methods=["GET"])
+def api_heat_monitor_farms():
+    """
+    Real-time monitoring dashboard for all active farms
+
+    GET /api/heat/monitor/farms?limit=50&offset=0&sort_by=recovery_pct
+
+    Returns: List of active farms with real-time metrics, proof levels, and anomalies
+    """
+    try:
+        from pathlib import Path
+        import json
+
+        limit = int(request.args.get("limit", 50))
+        offset = int(request.args.get("offset", 0))
+        sort_by = request.args.get("sort_by", "recovery_pct")  # or "timestamp", "heat_kwh", "tier"
+
+        # Load all stored heat proofs
+        data_dir = Path(os.getenv("DATA_DIR", "data"))
+        proofs_file = data_dir / "heat_recovery_proofs.json"
+        fraud_file = data_dir / "fraud_detections.json"
+
+        farms = {}
+
+        if proofs_file.exists():
+            try:
+                proofs = json.loads(proofs_file.read_text())
+                for miner_addr, proof_list in proofs.items():
+                    if proof_list:
+                        latest = proof_list[-1]  # Most recent proof
+                        farms[miner_addr] = {
+                            "miner_address": miner_addr,
+                            "last_proof_id": latest.get("proof_id", ""),
+                            "last_submission": latest.get("timestamp", ""),
+                            "proof_level": latest.get("proof_level", "LEVEL_1"),
+                            "is_valid": latest.get("is_valid", False),
+                            "recovery_percentage": latest.get("recovery_pct", 0),
+                            "bonus_multiplier": latest.get("bonus_multiplier", 1.0),
+                            "proof_count": len(proof_list),
+                            "is_fraudulent": False
+                        }
+            except:
+                pass
+
+        # Mark fraudulent miners
+        if fraud_file.exists():
+            try:
+                frauds = json.loads(fraud_file.read_text())
+                if isinstance(frauds, list):
+                    for fraud in frauds:
+                        miner = fraud.get("miner_address", "")
+                        if miner in farms:
+                            farms[miner]["is_fraudulent"] = True
+                            farms[miner]["fraud_violations"] = fraud.get("violations", [])
+            except:
+                pass
+
+        # Sort farms
+        farm_list = list(farms.values())
+        if sort_by == "recovery_pct":
+            farm_list.sort(key=lambda x: x.get("recovery_percentage", 0), reverse=True)
+        elif sort_by == "timestamp":
+            farm_list.sort(key=lambda x: x.get("last_submission", ""), reverse=True)
+        elif sort_by == "tier":
+            tier_order = {"LEVEL_4": 4, "LEVEL_3": 3, "LEVEL_2": 2, "LEVEL_1": 1}
+            farm_list.sort(key=lambda x: tier_order.get(x.get("proof_level", "LEVEL_1"), 0), reverse=True)
+
+        # Paginate
+        total = len(farm_list)
+        farm_list = farm_list[offset:offset+limit]
+
+        # Calculate network stats
+        valid_proofs = [f for f in farms.values() if f.get("is_valid")]
+        fraudulent = [f for f in farms.values() if f.get("is_fraudulent")]
+
+        return jsonify({
+            "timestamp": datetime.utcnow().isoformat(),
+            "network_stats": {
+                "total_farms": len(farms),
+                "valid_farms": len(valid_proofs),
+                "fraudulent_farms": len(fraudulent),
+                "average_recovery_pct": sum(f.get("recovery_percentage", 0) for f in farms.values()) / max(1, len(farms)),
+                "average_bonus_multiplier": sum(f.get("bonus_multiplier", 1.0) for f in valid_proofs) / max(1, len(valid_proofs))
+            },
+            "pagination": {
+                "offset": offset,
+                "limit": limit,
+                "total": total,
+                "returned": len(farm_list)
+            },
+            "farms": farm_list
+        }), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error monitoring farms: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/heat/monitor/farm/<miner_address>", methods=["GET"])
+def api_heat_monitor_farm(miner_address: str):
+    """
+    Real-time monitoring for specific farm
+
+    GET /api/heat/monitor/farm/THR7c...?history=true&limit=100
+
+    Returns: Detailed farm metrics, proof history, and trend analysis
+    """
+    try:
+        from pathlib import Path
+        import json
+
+        limit = int(request.args.get("limit", 100))
+        include_history = request.args.get("history", "false").lower() == "true"
+
+        data_dir = Path(os.getenv("DATA_DIR", "data"))
+        proofs_file = data_dir / "heat_recovery_proofs.json"
+        fraud_file = data_dir / "fraud_detections.json"
+
+        proofs = {}
+        if proofs_file.exists():
+            try:
+                all_proofs = json.loads(proofs_file.read_text())
+                proofs = all_proofs.get(miner_address, [])
+            except:
+                proofs = []
+
+        if not proofs:
+            return jsonify(status="error", error="No proofs found for this miner"), 404
+
+        # Get latest proof
+        latest = proofs[-1]
+
+        # Check for fraud
+        is_fraudulent = False
+        fraud_violations = []
+        if fraud_file.exists():
+            try:
+                frauds = json.loads(fraud_file.read_text())
+                if isinstance(frauds, list):
+                    for fraud in frauds:
+                        if fraud.get("miner_address") == miner_address:
+                            is_fraudulent = True
+                            fraud_violations = fraud.get("violations", [])
+                            break
+            except:
+                pass
+
+        # Build response
+        response = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "miner_address": miner_address,
+            "current_status": {
+                "proof_id": latest.get("proof_id", ""),
+                "proof_level": latest.get("proof_level", "LEVEL_1"),
+                "is_valid": latest.get("is_valid", False),
+                "is_fraudulent": is_fraudulent,
+                "fraud_violations": fraud_violations,
+                "recovery_percentage": latest.get("recovery_pct", 0),
+                "bonus_multiplier": latest.get("bonus_multiplier", 1.0),
+                "last_submission": latest.get("timestamp", "")
+            },
+            "summary": {
+                "total_proofs": len(proofs),
+                "valid_proofs": sum(1 for p in proofs if p.get("is_valid")),
+                "average_recovery": sum(p.get("recovery_pct", 0) for p in proofs) / max(1, len(proofs))
+            }
+        }
+
+        # Add history if requested
+        if include_history:
+            history = proofs[-limit:] if len(proofs) > limit else proofs
+            response["proof_history"] = history
+
+        return jsonify(response), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error monitoring farm: {e}")
         return jsonify(status="error", error=str(e)), 500
 
 

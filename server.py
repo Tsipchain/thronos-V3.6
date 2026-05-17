@@ -17962,6 +17962,188 @@ def api_mining_ecosystem_stats():
         return jsonify(status="error", error=str(e)), 500
 
 
+# ═══════════════════════════════════════════════════════════════
+# PHASE 6: IOT HEAT METRICS ENDPOINTS
+# ═══════════════════════════════════════════════════════════════
+
+@app.route("/api/heat/submit-metrics", methods=["POST"])
+def api_heat_submit_metrics():
+    """
+    Submit heat recovery metrics from mining farm
+
+    POST /api/heat/submit-metrics
+    Content-Type: application/json
+
+    {
+      "miner_address": "THR7c...",
+      "device_type": "ASIC_S19",
+      "device_count": 100,
+      "power_consumption_watts": 50000,
+      "ambient_temp_celsius": 15,
+      "inlet_temp_celsius": 25,
+      "outlet_temp_celsius": 55,
+      "airflow_cfm": 10000,
+      "heat_recovered_joules": 180000000,
+      "heat_recovered_kwh": 50,
+      "pue_ratio": 1.15,
+      "recovery_percentage": 18.5,
+      "farm_location": "EU-GR-01",
+      "use_case": "greenhouse"
+    }
+
+    Returns: Tier classification, reward multiplier, estimated bonus
+    """
+    try:
+        from iot_heat_metrics import initialize_heat_engine, MinerHeatMetrics
+
+        data = request.get_json() or {}
+
+        # Initialize heat engine
+        engine = initialize_heat_engine()
+
+        # Create metrics object
+        metrics = MinerHeatMetrics(
+            miner_address=data.get("miner_address", ""),
+            timestamp=datetime.utcnow().isoformat(),
+            device_type=data.get("device_type", "ASIC"),
+            device_count=int(data.get("device_count", 1)),
+            power_consumption_watts=float(data.get("power_consumption_watts", 0)),
+            ambient_temp_celsius=float(data.get("ambient_temp_celsius", 20)),
+            inlet_temp_celsius=float(data.get("inlet_temp_celsius", 30)),
+            outlet_temp_celsius=float(data.get("outlet_temp_celsius", 50)),
+            airflow_cfm=float(data.get("airflow_cfm", 0)),
+            heat_recovered_joules=float(data.get("heat_recovered_joules", 0)),
+            heat_recovered_kwh=float(data.get("heat_recovered_kwh", 0)),
+            pue_ratio=float(data.get("pue_ratio", 1.0)),
+            recovery_percentage=float(data.get("recovery_percentage", 0)),
+            farm_location=data.get("farm_location", "UNKNOWN"),
+            use_case=data.get("use_case", "space_heating")
+        )
+
+        # Submit metrics
+        result = engine.submit_heat_metrics(metrics)
+        return jsonify(result), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error submitting heat metrics: {e}")
+        return jsonify(status="error", error=str(e)), 400
+
+
+@app.route("/api/heat/rewards/<thr_address>", methods=["GET"])
+def api_heat_get_rewards(thr_address: str):
+    """
+    Get heat recovery rewards for a miner
+
+    GET /api/heat/rewards/THR7c...
+
+    Returns: Total heat recovered, current tier, estimated rewards, energy value
+    """
+    try:
+        from iot_heat_metrics import initialize_heat_engine, EnergyConverter
+
+        engine = initialize_heat_engine()
+
+        # This would look up actual metrics from storage
+        # For now, return template response
+        return jsonify({
+            "miner_address": thr_address,
+            "total_heat_recovered_kwh_day": 50.0,
+            "current_tier": "TIER_2",
+            "recovery_percentage": 15.5,
+            "use_case": "greenhouse",
+            "base_reward_per_block": 8.0,
+            "heat_bonus_percentage": 0.15,
+            "heat_bonus_per_block": 1.2,
+            "total_reward_per_block": 9.2,
+            "daily_estimated_thr": 6624,  # 720 blocks * 9.2 THR
+            "monthly_estimated_thr": 198720,
+            "energy_stats": {
+                "kwh_daily": 50,
+                "kwh_monthly": 1500,
+                "usd_value_daily": 4.0,
+                "usd_value_monthly": 120.0
+            },
+            "tier_info": {
+                "name": "Standard Recovery",
+                "description": "Moderate heat recovery system (15% bonus)",
+                "bonus_range": "10-15% recovery"
+            }
+        }), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting heat rewards: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/heat/stats", methods=["GET"])
+def api_heat_stats():
+    """
+    Get global heat recovery statistics
+
+    GET /api/heat/stats
+
+    Returns: Network-wide heat recovery metrics
+    """
+    try:
+        from iot_heat_metrics import HeatRewardTier, UseCase, EnergyConverter
+
+        return jsonify({
+            "network_heat_kwh_day": 0,  # Would aggregate from all farms
+            "active_farms": 0,
+            "active_miners": 0,
+            "average_recovery_pct": 0,
+            "reward_tiers": {
+                "TIER_1": {
+                    "name": "Baseline Recovery",
+                    "recovery_range": "5-10%",
+                    "bonus": "5%"
+                },
+                "TIER_2": {
+                    "name": "Standard Recovery",
+                    "recovery_range": "10-15%",
+                    "bonus": "15%"
+                },
+                "TIER_3": {
+                    "name": "Advanced Recovery",
+                    "recovery_range": "15-25%",
+                    "bonus": "25%"
+                },
+                "TIER_4": {
+                    "name": "Elite Recovery",
+                    "recovery_range": "25%+",
+                    "bonus": "40%"
+                }
+            },
+            "use_cases": {
+                "space_heating": "Basic waste heat capture (5% bonus)",
+                "greenhouse": "High-value farming (15% bonus)",
+                "livestock": "Animal operations (12% bonus)",
+                "aquaculture": "Fish farming (18% bonus)",
+                "desalination": "Water treatment (20% bonus)"
+            },
+            "energy_pricing": {
+                "industrial": 0.08,
+                "commercial": 0.12,
+                "residential": 0.15,
+                "peak": 0.25
+            }
+        }), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting heat stats: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/heat", methods=["GET"])
+@app.route("/heat-dashboard", methods=["GET"])
+def heat_dashboard():
+    """Render heat recovery dashboard"""
+    return render_template("heat_dashboard.html")
+
+
 def build_wallet_history(thr_addr: str) -> list[dict]:
     """Return canonical wallet history with normalized status."""
     history = []

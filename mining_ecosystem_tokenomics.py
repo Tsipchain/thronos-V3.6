@@ -6,18 +6,18 @@ Complete Thronos mining schedule with halving, supply projections, and epoch man
 
 Parameters:
 - Total Supply: 21,000,001 THR (Bitcoin + 1)
-- Initial Block Reward: 1 THR
+- Initial Block Reward: 12 THR
 - Block Time: 2 minutes (120 seconds)
-- Halving Interval: 210,000 blocks (~9.6 months per halving)
-- Reward Distribution: 80% Miner, 5% Full Nodes, 5% Ecosystem
+- Halving Interval: 877,800 blocks (~3.3 years per halving)
+- Reward Distribution: 80% Miner, 5% Full Nodes, 5% Ecosystem (10% to AI Pool preserved)
 
-Halving Schedule (matching Bitcoin structure):
-Epoch 0: 210,000 blocks × 1.0 THR = 210,000 THR
-Epoch 1: 210,000 blocks × 0.5 THR = 105,000 THR
-Epoch 2: 210,000 blocks × 0.25 THR = 52,500 THR
-... (continues until supply exhausted at block 2,100,000)
+Halving Schedule (Thronos optimized):
+Epoch 0: 877,800 blocks × 12.0 THR = 10,533,600 THR
+Epoch 1: 877,800 blocks × 6.0 THR = 5,266,800 THR
+Epoch 2: 877,800 blocks × 3.0 THR = 2,633,400 THR
+... (continues until supply exhausted)
 
-Max supply reached: Block 2,100,000 (after ~4 years at 2-min blocks)
+Max supply reached: Block ~2,100,000 (after ~3.3 years at 2-min blocks)
 
 Author: Thronos Mining Economics
 """
@@ -41,9 +41,9 @@ DATA_DIR.mkdir(exist_ok=True)
 # ─────────────────────────────────────────────────────────────
 
 TOTAL_SUPPLY_THR = 21_000_001  # Bitcoin + 1
-INITIAL_BLOCK_REWARD = 1.0     # 1 THR per block
-BLOCK_TIME_MINUTES = 1         # 1 MINUTE per block (4x faster than Bitcoin!)
-HALVING_INTERVAL = 210_000     # Blocks between halvings (like Bitcoin)
+INITIAL_BLOCK_REWARD = 12.0    # 12 THR per block (scaled for 877,800 block halving interval)
+BLOCK_TIME_MINUTES = 2         # 2 MINUTES per block (optimized for ecosystem)
+HALVING_INTERVAL = 877_800     # 3.3333 years (faster than Bitcoin's 4-year cycle)
 GENESIS_BLOCK_TIME = datetime(2023, 1, 1, 0, 0, 0)  # Started 2023 with first miner
 
 # Current reward distribution (to be updated to 80/5/5)

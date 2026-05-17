@@ -1394,8 +1394,8 @@ MIN_FEE  = 0.001  # Minimum fee in THR
 
 # --- Mining Config ---
 INITIAL_TARGET    = 2 ** 236         # 5 hex zeros (20 bits)
-TARGET_BLOCK_TIME = 60               # seconds
-RETARGET_INTERVAL = 10               # blocks
+TARGET_BLOCK_TIME = 120              # 2 MINUTES per block (optimized for ecosystem dynamics)
+RETARGET_INTERVAL = 10               # blocks (retarget every ~20 minutes)
 
 AI_WALLET_ADDRESS = os.getenv("THR_AI_AGENT_WALLET", "THR_AI_AGENT_WALLET_V1")
 BURN_ADDRESS      = "0x0"
@@ -6973,10 +6973,18 @@ def target_to_bits(target: int) -> int:
     return (exponent << 24) | int.from_bytes(coefficient, "big")
 
 def calculate_reward(height: int) -> float:
-    halvings = height // 210000
-    if halvings > 9:
-        return 0.0
-    return round(1.0 / (2 ** halvings), 6)
+    """Calculate mining reward for a given block height using current halving parameters."""
+    try:
+        from mining_ecosystem_tokenomics import HALVING_INTERVAL, INITIAL_BLOCK_REWARD, EpochInfo
+        return EpochInfo.get_reward_for_block(height)
+    except (ImportError, Exception):
+        # Fallback to hardcoded values if import fails
+        HALVING_INTERVAL = 877_800
+        INITIAL_BLOCK_REWARD = 12.0
+        halvings = height // HALVING_INTERVAL
+        if halvings > 33:  # Max 33 halvings before reward becomes negligible
+            return 0.0
+        return round(INITIAL_BLOCK_REWARD / (2 ** halvings), 6)
 
 def recompute_height_offset_from_ledger():
     """
@@ -7009,7 +7017,7 @@ def recompute_height_offset_from_ledger():
     remaining = pre_mined
     h = 0
     # Μέχρι max ~2.1M blocks, δεν μας νοιάζει απόδοση, είναι startup-only
-    while remaining > 0 and h < 2_100_000:
+    while remaining > 0 and h < 5_000_000:  # Increased ceiling for new halving schedule
         r = calculate_reward(h)
         if r <= 0:
             break
@@ -21990,9 +21998,10 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
         "meta": {
             "block_height": height,
             "block_hash": pow_hash,
-            "fee_burned": burn_share,
+            "ecosystem_pool": ecosystem_share,
             "reward_to_miner": miner_share,
             "reward_to_ai": ai_share,
+            "reward_to_nodes": nodes_share,
             "source": "stratum" if is_stratum else "legacy",
         },
     }
@@ -22043,7 +22052,8 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
     # Add mining rewards to same ledger update (batch optimization)
     ledger[thr_address]=round(ledger.get(thr_address,0.0)+miner_share,6)
     ledger[AI_WALLET_ADDRESS]=round(ledger.get(AI_WALLET_ADDRESS,0.0)+ai_share,6)
-    ledger[BURN_ADDRESS]=round(ledger.get(BURN_ADDRESS,0.0)+burn_share,6)
+    # Ecosystem pool accumulates in ledger (will be distributed by Digital Legacy system)
+    # Full nodes rewards would be distributed to registered full node runners (phase future)
 
     # Single write operation
     save_json(LEDGER_FILE,ledger)
@@ -22067,7 +22077,7 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
         except Exception:
             logger.warning(f"Failed to broadcast block {height}")
 
-    print(f"⛏️ Miner {thr_address} found block #{height}! R={total_reward} (m/a/b: {miner_share}/{ai_share}/{burn_share}) | TXs: {len(included)} | IoT rewards: {iot_rewards_paid} | Stratum={is_stratum}")
+    print(f"⛏️ Miner {thr_address} found block #{height}! R={total_reward} (m/a/n/e: {miner_share}/{ai_share}/{nodes_share}/{ecosystem_share}) | TXs: {len(included)} | IoT rewards: {iot_rewards_paid} | Stratum={is_stratum}")
     logger.debug("submit_block handler took %.3fs", time.time() - start)
     return jsonify(status="accepted", height=height, reward=miner_share, tx_included=len(included), iot_rewards=iot_rewards_paid), 200
 
@@ -22187,8 +22197,8 @@ def submit_mining_block_for_pledge(thr_addr):
         "prev_hash": prev_hash,
         "nonce": nonce,
         "reward": total_reward,
-        "reward_split": {"miner": miner_share, "ai": ai_share, "burn": burn_share},
-        "pool_fee": burn_share,
+        "reward_split": {"miner": miner_share, "ai": ai_share, "nodes": nodes_share, "ecosystem": ecosystem_share},
+        "pool_fee": ecosystem_share,
         "reward_to_miner": miner_share,
         "height": height,
         "type": "block",
@@ -22218,7 +22228,7 @@ def submit_mining_block_for_pledge(thr_addr):
     ledger = load_json(LEDGER_FILE, {})
     ledger[thr_addr] = round(ledger.get(thr_addr, 0.0) + miner_share, 6)
     ledger[AI_WALLET_ADDRESS] = round(ledger.get(AI_WALLET_ADDRESS, 0.0) + ai_share, 6)
-    ledger[BURN_ADDRESS] = round(ledger.get(BURN_ADDRESS, 0.0) + burn_share, 6)
+    # Full nodes and ecosystem pool are accumulated separately (handled by their respective managers)
     save_json(LEDGER_FILE, ledger)
 
     save_json(CHAIN_FILE, chain)

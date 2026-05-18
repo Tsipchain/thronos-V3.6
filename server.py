@@ -188,7 +188,9 @@ def _background_block_processor():
     while _BACKGROUND_WORKERS_ACTIVE:
         try:
             data, submit_time = _BLOCK_PROCESS_QUEUE.get(timeout=1)
-            _process_mining_submission(data, require_job_id=False)
+            # Push app context so jsonify() and other Flask operations work
+            with app.app_context():
+                _process_mining_submission(data, require_job_id=False)
             logger.info(f"Background block processor: completed block in {time.time() - submit_time:.2f}s")
         except queue.Empty:
             continue

@@ -18005,13 +18005,15 @@ def api_heat_submit_metrics():
     try:
         from iot_heat_metrics import initialize_heat_engine, MinerHeatMetrics
         from heat_recovery_proof import initialize_heat_verifier, HeatRecoveryProof
+        from miner_equipment_tracker import initialize_equipment_tracker, EquipmentInfo
 
         data = request.get_json() or {}
         miner_address = data.get("miner_address", "")
 
-        # Initialize engines
+        # Initialize all systems
         engine = initialize_heat_engine()
         verifier = initialize_heat_verifier()
+        tracker = initialize_equipment_tracker()
 
         # Create proof object for validation
         proof = HeatRecoveryProof(
@@ -18069,6 +18071,18 @@ def api_heat_submit_metrics():
         # Only apply rewards if proof is valid and not fraudulent
         if verification.is_valid:
             result = engine.submit_heat_metrics(metrics)
+
+            # Record proof submission for compliance tracking
+            proof_record = tracker.record_proof_submission(
+                miner_address,
+                is_valid=True,
+                proof_level=verification.proof_level.name,
+                recovery_pct=proof.calculated_recovery_pct
+            )
+
+            # Get current miner status
+            miner_status = tracker.get_miner_status(miner_address)
+
             result.update({
                 "proof_id": verification.proof_id,
                 "proof_level": verification.proof_level.name,
@@ -18080,10 +18094,34 @@ def api_heat_submit_metrics():
                 "level_4_passed": verification.level_4_passed,
                 "bonus_multiplier": verification.bonus_multiplier,
                 "recovery_percentage": proof.calculated_recovery_pct,
-                "calculated_heat_kwh": proof.calculated_heat_kwh
+                "calculated_heat_kwh": proof.calculated_heat_kwh,
+                "compliance": miner_status["compliance"],
+                "equipment_status": miner_status["equipment"],
+                "proof_statistics": proof_record
             })
             status_code = 200
         else:
+            # Proof failed - record and check for fraud
+            if verification.fraud_detected:
+                fraud_record = tracker.record_fraud_violation(
+                    miner_address,
+                    violation=", ".join(verification.anomalies) if verification.anomalies else "Unknown fraud"
+                )
+                fraud_action = fraud_record.get("action_taken", "Unknown action")
+            else:
+                fraud_action = None
+
+            # Record failed proof
+            proof_record = tracker.record_proof_submission(
+                miner_address,
+                is_valid=False,
+                proof_level=verification.proof_level.name,
+                recovery_pct=0
+            )
+
+            # Get miner status for response
+            miner_status = tracker.get_miner_status(miner_address)
+
             # Proof failed - return error with details
             result = {
                 "proof_id": verification.proof_id,
@@ -18091,8 +18129,16 @@ def api_heat_submit_metrics():
                 "fraud_detected": verification.fraud_detected,
                 "anomalies": verification.anomalies,
                 "error": "Heat recovery proof validation failed",
-                "reason": ", ".join(verification.anomalies) if verification.anomalies else "Unknown"
+                "reason": ", ".join(verification.anomalies) if verification.anomalies else "Unknown",
+                "compliance": miner_status["compliance"],
+                "equipment_status": miner_status["equipment"],
+                "proof_statistics": proof_record
             }
+
+            if fraud_action:
+                result["fraud_action_taken"] = fraud_action
+                result["compliance_status_updated"] = miner_status["compliance"]["status"]
+
             status_code = 400
 
         return jsonify(result), status_code
@@ -18399,6 +18445,152 @@ def api_heat_monitor_farm(miner_address: str):
 def heat_dashboard():
     """Render heat recovery dashboard"""
     return render_template("heat_dashboard.html")
+
+
+@app.route("/api/miner/equipment/register", methods=["POST"])
+def api_miner_register_equipment():
+    """
+    Register heat recovery equipment for miner
+
+    POST /api/miner/equipment/register
+    Content-Type: application/json
+
+    {
+      "miner_address": "THR7c...",
+      "equipment_type": "heat_exchanger",  # or orc_turbine, stirling_engine, heat_pump, hybrid_system
+      "location": "EU-GR-01",
+      "capacity_kw": 50,
+      "efficiency_percent": 90,
+      "gps_latitude": 38.2466,
+      "gps_longitude": 23.7372,
+      "facility_photo_hash": "QmHash..."
+    }
+
+    Returns: Registration confirmation with expected tier upgrade
+    """
+    try:
+        from miner_equipment_tracker import initialize_equipment_tracker, EquipmentInfo
+
+        data = request.get_json() or {}
+        tracker = initialize_equipment_tracker()
+
+        equipment = EquipmentInfo(
+            miner_address=data.get("miner_address", ""),
+            equipment_type=data.get("equipment_type", "none"),
+            installation_date=datetime.utcnow().isoformat(),
+            location=data.get("location", "UNKNOWN"),
+            capacity_kw=float(data.get("capacity_kw", 0)),
+            efficiency_percent=float(data.get("efficiency_percent", 0)),
+            gps_latitude=float(data.get("gps_latitude", 0.0)),
+            gps_longitude=float(data.get("gps_longitude", 0.0)),
+            facility_photo_hash=data.get("facility_photo_hash", "")
+        )
+
+        result = tracker.register_equipment(data.get("miner_address", ""), equipment)
+        return jsonify(result), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error registering equipment: {e}")
+        return jsonify(status="error", error=str(e)), 400
+
+
+@app.route("/api/miner/status/<miner_address>", methods=["GET"])
+def api_miner_equipment_status(miner_address: str):
+    """
+    Get miner compliance status, equipment verification, and proof history
+
+    GET /api/miner/status/THR7c...
+
+    Returns: Complete miner compliance record, equipment status, proof statistics
+    """
+    try:
+        from miner_equipment_tracker import initialize_equipment_tracker
+
+        tracker = initialize_equipment_tracker()
+        status = tracker.get_miner_status(miner_address)
+
+        return jsonify(status), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting miner status: {e}")
+        return jsonify(status="error", error=str(e)), 400
+
+
+@app.route("/api/heat/compliance/report", methods=["GET"])
+def api_heat_compliance_report():
+    """
+    Get network-wide heat recovery compliance report
+
+    GET /api/heat/compliance/report?limit=100&offset=0&filter=all
+
+    Filters: all, compliant, monitoring, suspended, banned
+
+    Returns: Compliance statistics for all miners
+    """
+    try:
+        from pathlib import Path
+        from miner_equipment_tracker import initialize_equipment_tracker, ComplianceStatus
+        import json
+
+        tracker = initialize_equipment_tracker()
+        limit = int(request.args.get("limit", 100))
+        offset = int(request.args.get("offset", 0))
+        filter_status = request.args.get("filter", "all")
+
+        compliance_file = Path(os.getenv("DATA_DIR", "data")) / "miner_compliance.json"
+        compliance_data = {}
+
+        if compliance_file.exists():
+            try:
+                compliance_data = json.loads(compliance_file.read_text())
+            except:
+                compliance_data = {}
+
+        # Filter by status if requested
+        all_miners = list(compliance_data.values())
+
+        if filter_status != "all":
+            all_miners = [m for m in all_miners if m.get("compliance_status") == filter_status]
+
+        # Calculate statistics
+        total_miners = len(compliance_data)
+        compliant = len([m for m in all_miners if m.get("compliance_status") in ["verified", "compliant"]])
+        monitoring = len([m for m in all_miners if m.get("compliance_status") == "monitoring"])
+        suspended = len([m for m in all_miners if m.get("compliance_status") == "suspended"])
+        banned = len([m for m in all_miners if m.get("is_banned", False)])
+
+        avg_recovery = sum(m.get("average_recovery_pct", 0) for m in all_miners) / max(1, len(all_miners))
+        avg_reputation = sum(m.get("reputation_score", 100) for m in all_miners) / max(1, len(all_miners))
+
+        # Paginate
+        paginated = all_miners[offset:offset+limit]
+
+        return jsonify({
+            "timestamp": datetime.utcnow().isoformat(),
+            "summary": {
+                "total_miners": total_miners,
+                "compliant": compliant,
+                "under_monitoring": monitoring,
+                "suspended": suspended,
+                "permanently_banned": banned,
+                "average_recovery_pct": round(avg_recovery, 1),
+                "average_reputation_score": round(avg_reputation, 1)
+            },
+            "pagination": {
+                "offset": offset,
+                "limit": limit,
+                "total": len(all_miners),
+                "returned": len(paginated)
+            },
+            "miners": paginated
+        }), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting compliance report: {e}")
+        return jsonify(status="error", error=str(e)), 400
 
 
 @app.route("/api/miner-kit", methods=["GET"])

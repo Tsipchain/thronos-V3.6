@@ -23131,18 +23131,17 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
                 logger.debug("submit_block handler took %.3fs", time.time() - start)
                 return jsonify(error="Mining temporarily banned", reason="banned_by_watchdog"), 429
             return jsonify(error="Missing Stratum fields"),400
-        if prev_hash != server_last_hash or (
-            submitted_height is not None
-            and tip_height is not None
-            and submitted_height != int(tip_height) + 1
-        ):
-            reason = "prev_mismatch" if prev_hash != server_last_hash else "stale_height"
+        # Hash is the authoritative chain identifier. If prev_hash matches the tip's
+        # hash, the miner is building on the correct chain — even if the cached
+        # tip_height is stale (e.g. from corrupted snapshot showing phantom orphan
+        # blocks). Self-heal the cache when this mismatch is detected.
+        if prev_hash != server_last_hash:
             logger.info("mining.stale_block %s", json.dumps({
                 "submitted_height": submitted_height,
                 "tip_height": tip_height,
                 "tip_hash": server_last_hash,
                 "prev_hash": prev_hash,
-                "reason": reason,
+                "reason": "prev_mismatch",
             }))
             logger.debug("submit_block handler took %.3fs", time.time() - start)
             return jsonify(
@@ -23150,8 +23149,26 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
                 submitted_height=submitted_height,
                 tip_height=tip_height,
                 tip_hash=server_last_hash,
-                reason=reason,
+                reason="prev_mismatch",
             ), 409
+        # Hash matched. If submitted_height disagrees with cached tip_height, the
+        # cache is corrupted — refresh from chain so subsequent operations see the
+        # correct height.
+        if (
+            submitted_height is not None
+            and tip_height is not None
+            and submitted_height != int(tip_height) + 1
+        ):
+            logger.warning(
+                "mining.cache_drift submitted=%s cached_tip=%s — accepting (hash matches), refreshing cache",
+                submitted_height, tip_height,
+            )
+            try:
+                LAST_BLOCK_SNAPSHOT.clear()
+                _ = get_last_block_snapshot()
+                tip_height = LAST_BLOCK_SNAPSHOT.get("height")
+            except Exception:
+                pass
         try:
             header  = struct.pack("<I",version)
             header += bytes.fromhex(prev_hash)[::-1]
@@ -23169,18 +23186,15 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
     else:
         pow_hash=data.get("pow_hash")
         prev_hash=data.get("prev_hash")
-        if prev_hash != server_last_hash or (
-            submitted_height is not None
-            and tip_height is not None
-            and submitted_height != int(tip_height) + 1
-        ):
-            reason = "prev_mismatch" if prev_hash != server_last_hash else "stale_height"
+        # Hash is the authoritative chain identifier. Only reject on prev_hash
+        # mismatch; height drift in the cache is self-healed below.
+        if prev_hash != server_last_hash:
             logger.info("mining.stale_block %s", json.dumps({
                 "submitted_height": submitted_height,
                 "tip_height": tip_height,
                 "tip_hash": server_last_hash,
                 "prev_hash": prev_hash,
-                "reason": reason,
+                "reason": "prev_mismatch",
             }))
             logger.debug("submit_block handler took %.3fs", time.time() - start)
             return jsonify(
@@ -23188,8 +23202,23 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
                 submitted_height=submitted_height,
                 tip_height=tip_height,
                 tip_hash=server_last_hash,
-                reason=reason,
+                reason="prev_mismatch",
             ), 409
+        if (
+            submitted_height is not None
+            and tip_height is not None
+            and submitted_height != int(tip_height) + 1
+        ):
+            logger.warning(
+                "mining.cache_drift submitted=%s cached_tip=%s — accepting (hash matches), refreshing cache",
+                submitted_height, tip_height,
+            )
+            try:
+                LAST_BLOCK_SNAPSHOT.clear()
+                _ = get_last_block_snapshot()
+                tip_height = LAST_BLOCK_SNAPSHOT.get("height")
+            except Exception:
+                pass
         check=hashlib.sha256((prev_hash+thr_address).encode()+str(nonce).encode()).hexdigest()
         if check!=pow_hash:
             if _mining_watchdog_register_invalid(miner_key, now):
@@ -24368,27 +24397,37 @@ def tx_registry_view():
 
 
 # ─── SCHEDULER ─────────────────────────────────────
+def _with_app_context(fn):
+    """Wrap a scheduler job so it runs inside Flask's app context.
+    Required by jobs that call jsonify, url_for, or access g/current_app."""
+    def _wrapped(*args, **kwargs):
+        with app.app_context():
+            return fn(*args, **kwargs)
+    _wrapped.__name__ = getattr(fn, "__name__", "scheduler_job")
+    return _wrapped
+
 # Start scheduler only on master nodes.
 if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
     print(f"[SCHEDULER] Starting as MASTER node (SCHEDULER_ENABLED={SCHEDULER_ENABLED}, ENABLE_CHAIN={ENABLE_CHAIN})")
     scheduler=BackgroundScheduler(daemon=True)
 
     # APScheduler safety: coalesce=True prevents job pileup, max_instances=1 prevents concurrent runs
-    scheduler.add_job(mint_first_blocks, "interval", minutes=1,
+    # All jobs wrapped with app_context so jsonify/url_for/etc work in background threads
+    scheduler.add_job(_with_app_context(mint_first_blocks), "interval", minutes=1,
                      coalesce=True, max_instances=1, id="mint_first_blocks")
-    scheduler.add_job(confirm_mempool_if_stuck, "interval", seconds=45,
+    scheduler.add_job(_with_app_context(confirm_mempool_if_stuck), "interval", seconds=45,
                      coalesce=True, max_instances=1, id="confirm_mempool")
-    scheduler.add_job(aggregator_step, "interval", seconds=10,
+    scheduler.add_job(_with_app_context(aggregator_step), "interval", seconds=10,
                      coalesce=True, max_instances=1, id="aggregator_step")
-    scheduler.add_job(ai_knowledge_watcher, "interval", seconds=30,
+    scheduler.add_job(_with_app_context(ai_knowledge_watcher), "interval", seconds=30,
                      coalesce=True, max_instances=1, id="ai_knowledge_watcher")
-    scheduler.add_job(summarize_recent_iot_to_corpus, "interval",
+    scheduler.add_job(_with_app_context(summarize_recent_iot_to_corpus), "interval",
                      minutes=max(1, min(5, IOT_SUMMARY_WINDOW_MINUTES)),
                      coalesce=True, max_instances=1, id="iot_to_corpus_summary")
-    scheduler.add_job(distribute_ai_rewards_step, "interval",
+    scheduler.add_job(_with_app_context(distribute_ai_rewards_step), "interval",
                      minutes=int(_strip_env_quotes(os.getenv("AI_POOL_DISTRIBUTION_INTERVAL", "30"))),
                      coalesce=True, max_instances=1, id="ai_rewards")
-    scheduler.add_job(update_telemetry_cache_job, "interval", seconds=30,
+    scheduler.add_job(_with_app_context(update_telemetry_cache_job), "interval", seconds=30,
                      coalesce=True, max_instances=1, id="telemetry_cache")
 
     # Daily Pool Volume Reset – reset 24h volumes at midnight UTC
@@ -24400,7 +24439,7 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
     # BTC Pledge Watcher – polls blockstream.info for vault deposits
     try:
         from btc_pledge_watcher import watch_btc_pledges
-        scheduler.add_job(watch_btc_pledges, "interval", minutes=5,
+        scheduler.add_job(_with_app_context(watch_btc_pledges), "interval", minutes=5,
                          coalesce=True, max_instances=1, id="btc_pledge_watcher")
         print("[SCHEDULER] BTC pledge watcher scheduled (every 5 min)")
     except ImportError as e:
@@ -24416,7 +24455,7 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
             pass
         from pytheia_worker import PYTHEIAWorker
         _pytheia_instance = PYTHEIAWorker()
-        scheduler.add_job(_pytheia_instance.run_cycle, "interval",
+        scheduler.add_job(_with_app_context(_pytheia_instance.run_cycle), "interval",
                          seconds=int(_strip_env_quotes(os.getenv("PYTHEIA_CHECK_INTERVAL", "300"))),
                          coalesce=True, max_instances=1, id="pytheia_worker")
         print("[SCHEDULER] PYTHEIA worker scheduled (every 5 min)")

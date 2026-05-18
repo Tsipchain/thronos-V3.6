@@ -7439,15 +7439,26 @@ def get_blocks_for_viewer():
         block_txs = txs_by_height.get(height, [])
 
         rsplit = b.get("reward_split") or {}
-        total_reward = float(b.get("reward", 1.0))
+        # Use calculate_reward(height) as default to reflect current halving schedule
+        try:
+            default_reward = calculate_reward(int(height))
+        except Exception:
+            default_reward = 8.0  # Phase C5 initial reward
+        total_reward = float(b.get("reward", default_reward) or default_reward)
 
         if rsplit:
             reward_to_miner = float(rsplit.get("miner", 0.0))
             reward_to_ai = float(rsplit.get("ai", 0.0))
-            burn_from_split = float(rsplit.get("burn", 0.0))
+            # Support new 80/10/5/5 split: include full_nodes + ecosystem alongside burn
+            burn_from_split = float(
+                rsplit.get("burn", 0.0)
+                or rsplit.get("ecosystem", 0.0)
+                or rsplit.get("full_nodes", 0.0)
+            )
         else:
-            reward_to_miner = float(b.get("reward_to_miner", total_reward * 0.9))
-            reward_to_ai = float(b.get("reward_to_ai", total_reward * 0.1))
+            # Phase C5: 80/10/5/5 split (miner / ai / full_nodes / ecosystem)
+            reward_to_miner = float(b.get("reward_to_miner", total_reward * 0.80))
+            reward_to_ai = float(b.get("reward_to_ai", total_reward * 0.10))
             burn_from_split = 0.0
 
         fees_from_txs = sum(float(tx.get("fee_burned", 0.0) or tx.get("fee", 0.0)) for tx in block_txs)
@@ -8643,9 +8654,16 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
                 continue
             mining_ids.add(reward_id)
             rsplit = tx.get("reward_split") or {}
-            total_reward = float(tx.get("reward", 1.0) or 1.0)
-            reward_to_miner = float(rsplit.get("miner", tx.get("reward_to_miner", total_reward * 0.9)) or 0.0)
-            reward_to_ai = float(rsplit.get("ai", tx.get("reward_to_ai", total_reward * 0.1)) or 0.0)
+            # Use current halving schedule as default reward (Phase C5: 8 THR initial)
+            try:
+                _height_for_reward = int(tx.get("height") or tx.get("index") or 0)
+                default_reward = calculate_reward(_height_for_reward)
+            except Exception:
+                default_reward = 8.0
+            total_reward = float(tx.get("reward", default_reward) or default_reward)
+            # Phase C5 split: 80% miner / 10% ai / 5% full_nodes / 5% ecosystem
+            reward_to_miner = float(rsplit.get("miner", tx.get("reward_to_miner", total_reward * 0.80)) or 0.0)
+            reward_to_ai = float(rsplit.get("ai", tx.get("reward_to_ai", total_reward * 0.10)) or 0.0)
             wallet_txs.append(normalize_history_item({
                 "kind": "mining_reward",
                 "type": "mining_reward",
@@ -8689,12 +8707,17 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
             tx.get("user_wallet"),
             tx.get("sender_wallet"),
             tx.get("recipient_wallet"),
+            # Fix: Include pool/swap participants so they appear in wallet history
+            tx.get("trader"),
+            tx.get("provider"),
             tx_meta.get("wallet"),
             tx_meta.get("wallet_address"),
             tx_meta.get("thr_address"),
             tx_meta.get("owner"),
             tx_meta.get("artist_wallet"),
             tx_meta.get("tipper_wallet"),
+            tx_meta.get("trader"),
+            tx_meta.get("provider"),
         }
         parties = {str(p).lower() for p in parties if p}
         if addr_lower not in parties:
@@ -18005,13 +18028,15 @@ def api_heat_submit_metrics():
     try:
         from iot_heat_metrics import initialize_heat_engine, MinerHeatMetrics
         from heat_recovery_proof import initialize_heat_verifier, HeatRecoveryProof
+        from miner_equipment_tracker import initialize_equipment_tracker, EquipmentInfo
 
         data = request.get_json() or {}
         miner_address = data.get("miner_address", "")
 
-        # Initialize engines
+        # Initialize all systems
         engine = initialize_heat_engine()
         verifier = initialize_heat_verifier()
+        tracker = initialize_equipment_tracker()
 
         # Create proof object for validation
         proof = HeatRecoveryProof(
@@ -18069,6 +18094,18 @@ def api_heat_submit_metrics():
         # Only apply rewards if proof is valid and not fraudulent
         if verification.is_valid:
             result = engine.submit_heat_metrics(metrics)
+
+            # Record proof submission for compliance tracking
+            proof_record = tracker.record_proof_submission(
+                miner_address,
+                is_valid=True,
+                proof_level=verification.proof_level.name,
+                recovery_pct=proof.calculated_recovery_pct
+            )
+
+            # Get current miner status
+            miner_status = tracker.get_miner_status(miner_address)
+
             result.update({
                 "proof_id": verification.proof_id,
                 "proof_level": verification.proof_level.name,
@@ -18080,10 +18117,34 @@ def api_heat_submit_metrics():
                 "level_4_passed": verification.level_4_passed,
                 "bonus_multiplier": verification.bonus_multiplier,
                 "recovery_percentage": proof.calculated_recovery_pct,
-                "calculated_heat_kwh": proof.calculated_heat_kwh
+                "calculated_heat_kwh": proof.calculated_heat_kwh,
+                "compliance": miner_status["compliance"],
+                "equipment_status": miner_status["equipment"],
+                "proof_statistics": proof_record
             })
             status_code = 200
         else:
+            # Proof failed - record and check for fraud
+            if verification.fraud_detected:
+                fraud_record = tracker.record_fraud_violation(
+                    miner_address,
+                    violation=", ".join(verification.anomalies) if verification.anomalies else "Unknown fraud"
+                )
+                fraud_action = fraud_record.get("action_taken", "Unknown action")
+            else:
+                fraud_action = None
+
+            # Record failed proof
+            proof_record = tracker.record_proof_submission(
+                miner_address,
+                is_valid=False,
+                proof_level=verification.proof_level.name,
+                recovery_pct=0
+            )
+
+            # Get miner status for response
+            miner_status = tracker.get_miner_status(miner_address)
+
             # Proof failed - return error with details
             result = {
                 "proof_id": verification.proof_id,
@@ -18091,8 +18152,16 @@ def api_heat_submit_metrics():
                 "fraud_detected": verification.fraud_detected,
                 "anomalies": verification.anomalies,
                 "error": "Heat recovery proof validation failed",
-                "reason": ", ".join(verification.anomalies) if verification.anomalies else "Unknown"
+                "reason": ", ".join(verification.anomalies) if verification.anomalies else "Unknown",
+                "compliance": miner_status["compliance"],
+                "equipment_status": miner_status["equipment"],
+                "proof_statistics": proof_record
             }
+
+            if fraud_action:
+                result["fraud_action_taken"] = fraud_action
+                result["compliance_status_updated"] = miner_status["compliance"]["status"]
+
             status_code = 400
 
         return jsonify(result), status_code
@@ -18399,6 +18468,152 @@ def api_heat_monitor_farm(miner_address: str):
 def heat_dashboard():
     """Render heat recovery dashboard"""
     return render_template("heat_dashboard.html")
+
+
+@app.route("/api/miner/equipment/register", methods=["POST"])
+def api_miner_register_equipment():
+    """
+    Register heat recovery equipment for miner
+
+    POST /api/miner/equipment/register
+    Content-Type: application/json
+
+    {
+      "miner_address": "THR7c...",
+      "equipment_type": "heat_exchanger",  # or orc_turbine, stirling_engine, heat_pump, hybrid_system
+      "location": "EU-GR-01",
+      "capacity_kw": 50,
+      "efficiency_percent": 90,
+      "gps_latitude": 38.2466,
+      "gps_longitude": 23.7372,
+      "facility_photo_hash": "QmHash..."
+    }
+
+    Returns: Registration confirmation with expected tier upgrade
+    """
+    try:
+        from miner_equipment_tracker import initialize_equipment_tracker, EquipmentInfo
+
+        data = request.get_json() or {}
+        tracker = initialize_equipment_tracker()
+
+        equipment = EquipmentInfo(
+            miner_address=data.get("miner_address", ""),
+            equipment_type=data.get("equipment_type", "none"),
+            installation_date=datetime.utcnow().isoformat(),
+            location=data.get("location", "UNKNOWN"),
+            capacity_kw=float(data.get("capacity_kw", 0)),
+            efficiency_percent=float(data.get("efficiency_percent", 0)),
+            gps_latitude=float(data.get("gps_latitude", 0.0)),
+            gps_longitude=float(data.get("gps_longitude", 0.0)),
+            facility_photo_hash=data.get("facility_photo_hash", "")
+        )
+
+        result = tracker.register_equipment(data.get("miner_address", ""), equipment)
+        return jsonify(result), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error registering equipment: {e}")
+        return jsonify(status="error", error=str(e)), 400
+
+
+@app.route("/api/miner/status/<miner_address>", methods=["GET"])
+def api_miner_equipment_status(miner_address: str):
+    """
+    Get miner compliance status, equipment verification, and proof history
+
+    GET /api/miner/status/THR7c...
+
+    Returns: Complete miner compliance record, equipment status, proof statistics
+    """
+    try:
+        from miner_equipment_tracker import initialize_equipment_tracker
+
+        tracker = initialize_equipment_tracker()
+        status = tracker.get_miner_status(miner_address)
+
+        return jsonify(status), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting miner status: {e}")
+        return jsonify(status="error", error=str(e)), 400
+
+
+@app.route("/api/heat/compliance/report", methods=["GET"])
+def api_heat_compliance_report():
+    """
+    Get network-wide heat recovery compliance report
+
+    GET /api/heat/compliance/report?limit=100&offset=0&filter=all
+
+    Filters: all, compliant, monitoring, suspended, banned
+
+    Returns: Compliance statistics for all miners
+    """
+    try:
+        from pathlib import Path
+        from miner_equipment_tracker import initialize_equipment_tracker, ComplianceStatus
+        import json
+
+        tracker = initialize_equipment_tracker()
+        limit = int(request.args.get("limit", 100))
+        offset = int(request.args.get("offset", 0))
+        filter_status = request.args.get("filter", "all")
+
+        compliance_file = Path(os.getenv("DATA_DIR", "data")) / "miner_compliance.json"
+        compliance_data = {}
+
+        if compliance_file.exists():
+            try:
+                compliance_data = json.loads(compliance_file.read_text())
+            except:
+                compliance_data = {}
+
+        # Filter by status if requested
+        all_miners = list(compliance_data.values())
+
+        if filter_status != "all":
+            all_miners = [m for m in all_miners if m.get("compliance_status") == filter_status]
+
+        # Calculate statistics
+        total_miners = len(compliance_data)
+        compliant = len([m for m in all_miners if m.get("compliance_status") in ["verified", "compliant"]])
+        monitoring = len([m for m in all_miners if m.get("compliance_status") == "monitoring"])
+        suspended = len([m for m in all_miners if m.get("compliance_status") == "suspended"])
+        banned = len([m for m in all_miners if m.get("is_banned", False)])
+
+        avg_recovery = sum(m.get("average_recovery_pct", 0) for m in all_miners) / max(1, len(all_miners))
+        avg_reputation = sum(m.get("reputation_score", 100) for m in all_miners) / max(1, len(all_miners))
+
+        # Paginate
+        paginated = all_miners[offset:offset+limit]
+
+        return jsonify({
+            "timestamp": datetime.utcnow().isoformat(),
+            "summary": {
+                "total_miners": total_miners,
+                "compliant": compliant,
+                "under_monitoring": monitoring,
+                "suspended": suspended,
+                "permanently_banned": banned,
+                "average_recovery_pct": round(avg_recovery, 1),
+                "average_reputation_score": round(avg_reputation, 1)
+            },
+            "pagination": {
+                "offset": offset,
+                "limit": limit,
+                "total": len(all_miners),
+                "returned": len(paginated)
+            },
+            "miners": paginated
+        }), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting compliance report: {e}")
+        return jsonify(status="error", error=str(e)), 400
 
 
 @app.route("/api/miner-kit", methods=["GET"])
@@ -27675,20 +27890,31 @@ def api_v1_get_pools():
             if reserves_a > 0 and reserves_b > 0:
                 pool["price_a_to_b"] = round(reserves_b / reserves_a, 6)
                 pool["price_b_to_a"] = round(reserves_a / reserves_b, 6)
+
+            # Fix: Always set singular field aliases for Pytheia/viewer compat,
+            # even when price feeds are unavailable
+            pool["reserve_a"] = pool.get("reserves_a", 0)
+            pool["reserve_b"] = pool.get("reserves_b", 0)
+
             price_a_thr = get_token_price_in_thr(pool.get("token_a", "THR"))
             price_b_thr = get_token_price_in_thr(pool.get("token_b", "THR"))
-            if price_a_thr is None or price_b_thr is None:
-                continue
+
+            # Fix: Use 0.0 fallback instead of skipping the pool entirely
+            if price_a_thr is None:
+                price_a_thr = 0.0
+            if price_b_thr is None:
+                price_b_thr = 0.0
+
             tvl_thr = (reserves_a * price_a_thr) + (reserves_b * price_b_thr)
             pool["tvl_thr"] = round(tvl_thr, 6)
             pool["tvl_btc"] = round(tvl_thr * 0.0001, 8)
-            if thr_usd:
-                pool["tvl_usd"] = round(tvl_thr * thr_usd, 2)
-
-            # Pytheia compatibility: Add singular field name aliases
-            pool["reserve_a"] = pool.get("reserves_a", 0)
-            pool["reserve_b"] = pool.get("reserves_b", 0)
+            pool["tvl_usd"] = round(tvl_thr * thr_usd, 2) if thr_usd else 0.0
         except Exception:
+            # Ensure pool still has required fields even on error
+            pool.setdefault("reserve_a", pool.get("reserves_a", 0))
+            pool.setdefault("reserve_b", pool.get("reserves_b", 0))
+            pool.setdefault("tvl_thr", 0.0)
+            pool.setdefault("tvl_usd", 0.0)
             continue
     return jsonify(pools=pools), 200
 
@@ -28300,6 +28526,12 @@ def api_v1_add_liquidity():
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
     update_last_block(tx, is_block=False)
+    # Fix: Persist & index so add_liquidity shows in wallet history & tx_feed
+    persist_normalized_tx(tx)
+    try:
+        _index_transaction_event(tx)
+    except Exception:
+        pass
 
     try:
         broadcast_tx(tx)
@@ -28510,6 +28742,11 @@ def api_v1_remove_liquidity():
     save_json(CHAIN_FILE, chain)
     persist_normalized_tx(tx)
     update_last_block(tx, is_block=False)
+    # Fix: Index remove_liquidity so it appears in wallet history & tx_feed
+    try:
+        _index_transaction_event(tx)
+    except Exception:
+        pass
 
     try:
         broadcast_tx(tx)
@@ -28713,15 +28950,24 @@ def api_v1_pool_swap():
     tx_id = f"POOL-SWAP-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
         "type": "pool_swap",
+        "kind": "pool_swap",
         "pool_id": pool_id,
         "token_in": token_in,
         "token_out": token_out,
         "amount_in": amount_in,
         "amount_out": amount_out,
+        "amount": amount_in,  # Generic amount for indexing
+        "symbol": token_in,
+        "symbol_in": token_in,
+        "symbol_out": token_out,
         "fee": fee_amount,
         "fee_bps": fee_bps,
         "price_impact": round(price_impact, 4),
         "trader": trader,
+        # Fix: Set from/to for proper indexing & wallet history matching
+        "from": trader,
+        "to": trader,
+        "thr_address": trader,
         "timestamp": ts,
         "tx_id": tx_id,
         "status": "confirmed",
@@ -28749,6 +28995,11 @@ def api_v1_pool_swap():
     save_json(CHAIN_FILE, chain)
     update_last_block(tx, is_block=False)
     persist_normalized_tx(tx)
+    # Fix: Index swap so it appears instantly in wallet history & tx_feed
+    try:
+        _index_transaction_event(tx)
+    except Exception:
+        pass
 
     try:
         broadcast_tx(tx)

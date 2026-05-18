@@ -7440,28 +7440,47 @@ def get_blocks_for_viewer():
             height = len(blocks)
         block_txs = txs_by_height.get(height, [])
 
-        rsplit = b.get("reward_split") or {}
-        # Use calculate_reward(height) as default to reflect current halving schedule
+        # Always use current schedule (calculate_reward + 80/10/5/5 split) for display.
+        # Old blocks stored with pre-upgrade rewards (e.g. 1.0 THR / 90-10 split) are
+        # rendered with the post-upgrade schedule so the explorer reflects current economics.
         try:
-            default_reward = calculate_reward(int(height))
+            scheduled_reward = calculate_reward(int(height))
         except Exception:
-            default_reward = 8.0  # Phase C5 initial reward
-        total_reward = float(b.get("reward", default_reward) or default_reward)
+            scheduled_reward = 8.0  # Phase C5 initial reward
 
-        if rsplit:
+        stored_reward = float(b.get("reward", 0.0) or 0.0)
+        rsplit = b.get("reward_split") or {}
+        stored_split_total = (
+            float(rsplit.get("miner", 0.0))
+            + float(rsplit.get("ai", 0.0))
+            + float(rsplit.get("burn", 0.0))
+            + float(rsplit.get("full_nodes", 0.0))
+            + float(rsplit.get("ecosystem", 0.0))
+        ) if rsplit else 0.0
+
+        # Trust stored values only if they match the current schedule (post-upgrade blocks).
+        # Otherwise (pre-upgrade / corrupt data) regenerate from calculate_reward(height).
+        if rsplit and abs(stored_split_total - scheduled_reward) < 0.001:
+            total_reward = stored_split_total
             reward_to_miner = float(rsplit.get("miner", 0.0))
             reward_to_ai = float(rsplit.get("ai", 0.0))
-            # Support new 80/10/5/5 split: include full_nodes + ecosystem alongside burn
-            burn_from_split = float(
-                rsplit.get("burn", 0.0)
-                or rsplit.get("ecosystem", 0.0)
-                or rsplit.get("full_nodes", 0.0)
+            burn_from_split = (
+                float(rsplit.get("burn", 0.0))
+                + float(rsplit.get("full_nodes", 0.0))
+                + float(rsplit.get("ecosystem", 0.0))
             )
+        elif stored_reward > 0 and abs(stored_reward - scheduled_reward) < 0.001:
+            # Stored total matches schedule but no split info — derive 80/10/5/5
+            total_reward = stored_reward
+            reward_to_miner = total_reward * 0.80
+            reward_to_ai = total_reward * 0.10
+            burn_from_split = total_reward * 0.10  # 5% full_nodes + 5% ecosystem
         else:
-            # Phase C5: 80/10/5/5 split (miner / ai / full_nodes / ecosystem)
-            reward_to_miner = float(b.get("reward_to_miner", total_reward * 0.80))
-            reward_to_ai = float(b.get("reward_to_ai", total_reward * 0.10))
-            burn_from_split = 0.0
+            # Pre-upgrade or corrupt block — render with current schedule
+            total_reward = scheduled_reward
+            reward_to_miner = total_reward * 0.80
+            reward_to_ai = total_reward * 0.10
+            burn_from_split = total_reward * 0.10
 
         fees_from_txs = sum(float(tx.get("fee_burned", 0.0) or tx.get("fee", 0.0)) for tx in block_txs)
 
@@ -7512,6 +7531,25 @@ def get_blocks_for_viewer():
             final_blocks.append(b)
 
     final_blocks.sort(key=lambda x: x["index"], reverse=True)
+
+    # Filter orphan / phantom blocks: anything whose height is more than 1 above
+    # the canonical tip (from last_block.json) is treated as an orphan and excluded
+    # from the viewer. This prevents corrupted past mining state (e.g. ghost blocks
+    # at heights 204773/204772 while real tip is 200285) from polluting the display.
+    try:
+        tip_snapshot = get_last_block_snapshot() or {}
+        tip_height = int(tip_snapshot.get("height") or 0)
+        if tip_height > 0:
+            # Allow tip_height + 1 (block currently being mined) and tip_height itself.
+            # Anything substantially above tip is an orphan.
+            max_visible_height = tip_height + 1
+            filtered = [b for b in final_blocks if int(b.get("index") or 0) <= max_visible_height]
+            # If filtering would empty the list (e.g. fresh node), fall back to unfiltered.
+            if filtered:
+                final_blocks = filtered
+    except Exception:
+        pass  # On any error, return unfiltered list rather than empty.
+
     return final_blocks
 
 def _tx_feed(include_pending: bool = True, include_bridge: bool = True) -> list[dict]:
@@ -8655,17 +8693,36 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
             if reward_id in mining_ids:
                 continue
             mining_ids.add(reward_id)
-            rsplit = tx.get("reward_split") or {}
-            # Use current halving schedule as default reward (Phase C5: 8 THR initial)
+            # Always render mining rewards with the CURRENT halving schedule (Phase C5: 8 THR + 80/10/5/5).
+            # Pre-upgrade blocks have stale stored values (e.g. 1.0 THR / 90-10 split) — recompute for display.
             try:
                 _height_for_reward = int(tx.get("height") or tx.get("index") or 0)
-                default_reward = calculate_reward(_height_for_reward)
+                scheduled_reward = calculate_reward(_height_for_reward)
             except Exception:
-                default_reward = 8.0
-            total_reward = float(tx.get("reward", default_reward) or default_reward)
-            # Phase C5 split: 80% miner / 10% ai / 5% full_nodes / 5% ecosystem
-            reward_to_miner = float(rsplit.get("miner", tx.get("reward_to_miner", total_reward * 0.80)) or 0.0)
-            reward_to_ai = float(rsplit.get("ai", tx.get("reward_to_ai", total_reward * 0.10)) or 0.0)
+                scheduled_reward = 8.0
+
+            stored_reward = float(tx.get("reward", 0.0) or 0.0)
+            rsplit = tx.get("reward_split") or {}
+            stored_split_total = (
+                float(rsplit.get("miner", 0.0))
+                + float(rsplit.get("ai", 0.0))
+                + float(rsplit.get("burn", 0.0))
+                + float(rsplit.get("full_nodes", 0.0))
+                + float(rsplit.get("ecosystem", 0.0))
+            ) if rsplit else 0.0
+
+            if rsplit and abs(stored_split_total - scheduled_reward) < 0.001:
+                total_reward = stored_split_total
+                reward_to_miner = float(rsplit.get("miner", 0.0))
+                reward_to_ai = float(rsplit.get("ai", 0.0))
+            elif stored_reward > 0 and abs(stored_reward - scheduled_reward) < 0.001:
+                total_reward = stored_reward
+                reward_to_miner = total_reward * 0.80
+                reward_to_ai = total_reward * 0.10
+            else:
+                total_reward = scheduled_reward
+                reward_to_miner = total_reward * 0.80
+                reward_to_ai = total_reward * 0.10
             wallet_txs.append(normalize_history_item({
                 "kind": "mining_reward",
                 "type": "mining_reward",

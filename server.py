@@ -18999,6 +18999,168 @@ def api_btc_mining_compliance_report():
         return jsonify(status="error", error=str(e)), 500
 
 
+# ===== BTC PLEDGE & NETWORK POOL ENDPOINTS =====
+
+@app.route("/api/btc-mining/pledge/required/<btc_address>", methods=["GET"])
+def api_btc_mining_pledge_required(btc_address):
+    """
+    Get required BTC pledge amount for a registered farm
+
+    GET /api/btc-mining/pledge/required/1A1z7agoat...
+
+    Returns: {btc_address, required_pledge_btc, required_pledge_satoshis, pool_address}
+    """
+    try:
+        from btc_heat_mining import BtcHeatMiningTracker
+
+        tracker = BtcHeatMiningTracker()
+
+        if btc_address not in tracker.miners:
+            return jsonify(status="error", error="Farm not registered"), 404
+
+        miner = tracker.miners[btc_address]
+        required = tracker.calculate_required_pledge(
+            hardware_type=miner.hardware_type.name if hasattr(miner.hardware_type, "name") else miner.hardware_type,
+            unit_count=miner.unit_count
+        )
+
+        return jsonify({
+            "status": "success",
+            "btc_address": btc_address,
+            "required_pledge_satoshis": required,
+            "required_pledge_btc": required / 100_000_000,
+            "pool_address": tracker.network_pool.pool_address,
+            "pledge_ratio_percent": tracker.PLEDGE_RATIO * 100,
+            "message": "Send BTC pledge to pool_address to activate heat mining bonuses"
+        }), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting pledge requirement: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/btc-mining/pledge/confirm", methods=["POST"])
+def api_btc_mining_pledge_confirm():
+    """
+    Confirm a BTC pledge has been sent to the network pool
+
+    POST /api/btc-mining/pledge/confirm
+    {
+        "btc_address": "1A1z7agoat...",
+        "pledge_satoshis": 4000,
+        "btc_tx_hash": "abc123..."
+    }
+
+    Returns: {status, btc_address, pledge_active, message}
+    """
+    try:
+        from btc_heat_mining import BtcHeatMiningTracker
+
+        data = request.get_json() or {}
+        required = ["btc_address", "pledge_satoshis", "btc_tx_hash"]
+        for field in required:
+            if field not in data:
+                return jsonify(status="error", error=f"Missing field: {field}"), 400
+
+        tracker = BtcHeatMiningTracker()
+
+        success = tracker.record_pledge(
+            btc_address=data["btc_address"],
+            pledge_satoshis=int(data["pledge_satoshis"]),
+            pledge_tx_hash=data["btc_tx_hash"]
+        )
+
+        if success:
+            return jsonify(
+                status="success",
+                btc_address=data["btc_address"],
+                pledge_active=True,
+                pledge_satoshis=int(data["pledge_satoshis"]),
+                message="Pledge recorded - farm is now eligible for heat bonuses"
+            ), 201
+        else:
+            return jsonify(status="error", error="Farm not registered or pledge failed"), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error confirming pledge: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/btc-mining/fee/collect", methods=["POST"])
+def api_btc_mining_fee_collect():
+    """
+    Collect a fee from a farm when they submit a heat proof
+    Called automatically per heat proof submission
+
+    POST /api/btc-mining/fee/collect
+    {
+        "btc_address": "1A1z7agoat...",
+        "btc_mined_satoshis": 4500
+    }
+
+    Returns: {fee_collected_satoshis, fee_collected_btc, pool_balance_btc}
+    """
+    try:
+        from btc_heat_mining import BtcHeatMiningTracker
+
+        data = request.get_json() or {}
+        if "btc_address" not in data or "btc_mined_satoshis" not in data:
+            return jsonify(status="error", error="Missing required fields"), 400
+
+        tracker = BtcHeatMiningTracker()
+        fee = tracker.collect_heat_proof_fee(
+            btc_address=data["btc_address"],
+            btc_mined_satoshis=int(data["btc_mined_satoshis"])
+        )
+
+        return jsonify({
+            "status": "success",
+            "btc_address": data["btc_address"],
+            "fee_collected_satoshis": fee,
+            "fee_collected_btc": fee / 100_000_000,
+            "fee_ratio_percent": tracker.HEAT_PROOF_FEE_RATIO * 100,
+            "pool_balance_btc": tracker.network_pool.total_balance_btc
+        }), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error collecting fee: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/btc-mining/network-pool", methods=["GET"])
+def api_btc_mining_network_pool():
+    """
+    Get current state of the network BTC pool
+    Shows total pledges, fees collected, payouts, and available balances
+
+    GET /api/btc-mining/network-pool
+
+    Returns: {pool_address, total_balance_btc, pledged, fees, payouts, reserves}
+    """
+    try:
+        from btc_heat_mining import BtcHeatMiningTracker
+
+        tracker = BtcHeatMiningTracker()
+        pool_status = tracker.get_network_pool_status()
+
+        # Add roadmap info
+        pool_status["roadmap"] = {
+            "current_phase": "Phase 7: BTC pool accumulating fees & pledges",
+            "next_phase": "Phase 7.1: Ether.fi integration for fiat conversion",
+            "future_phase": "Phase 8: Thronos Visa card (gated on user volume)"
+        }
+
+        return jsonify(status="success", **pool_status), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting pool status: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
 def build_wallet_history(thr_addr: str) -> list[dict]:
     """Return canonical wallet history with normalized status."""
     history = []

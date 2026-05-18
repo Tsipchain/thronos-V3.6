@@ -129,6 +129,38 @@ class BtcFarmComplianceRecord:
     equipment_verification_date: Optional[str] = None
     monitoring_flags: List[str] = field(default_factory=list)
 
+    # BTC pledge & fee tracking
+    btc_pledge_satoshis: int = 0          # BTC pledged to network pool
+    btc_pledge_active: bool = False
+    btc_pledge_tx_hash: Optional[str] = None
+    btc_pledge_date: Optional[str] = None
+    btc_fee_paid_total: int = 0           # Total fees paid to network pool (satoshis)
+    btc_fee_pending: int = 0              # Pending fees (not yet collected)
+
+
+@dataclass
+class BtcNetworkPool:
+    """Network BTC pool - collects pledges & fees from farms"""
+    pool_address: str = ""                # Network multisig address
+    total_pledged_satoshis: int = 0       # Sum of all active pledges
+    total_fees_collected_satoshis: int = 0  # Total fees from farms
+    total_payouts_satoshis: int = 0       # Total paid out (cross-chain settlement)
+
+    # Reserve management
+    minimum_reserve_satoshis: int = 0     # Min held for cross-chain settlement
+    available_for_conversion: int = 0     # Available for fiat conversion via Ether.fi
+    available_for_payouts: int = 0        # Available for heat bonus payouts
+
+    last_updated: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+
+    @property
+    def total_balance_satoshis(self) -> int:
+        return self.total_pledged_satoshis + self.total_fees_collected_satoshis - self.total_payouts_satoshis
+
+    @property
+    def total_balance_btc(self) -> float:
+        return self.total_balance_satoshis / 100_000_000
+
 class BtcHeatMiningValidator:
     """Validates Bitcoin mining heat proofs"""
 
@@ -332,6 +364,11 @@ class BtcHeatMiningValidator:
 class BtcHeatMiningTracker:
     """Tracks BTC heat mining farms and compliance"""
 
+    # Fee structure (in satoshis per BTC mined)
+    PLEDGE_RATIO = 0.01           # 1% of expected monthly BTC earnings as pledge
+    HEAT_PROOF_FEE_RATIO = 0.005  # 0.5% of BTC mined per heat proof submission
+    NETWORK_POOL_RESERVE = 0.20   # Keep 20% as cross-chain settlement reserve
+
     def __init__(self, data_dir: str = "/data"):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True)
@@ -340,14 +377,116 @@ class BtcHeatMiningTracker:
         self.compliance_file = self.data_dir / "btc_compliance.json"
         self.proofs_file = self.data_dir / "btc_heat_proofs.json"
         self.fraud_log_file = self.data_dir / "btc_fraud_log.json"
+        self.pool_file = self.data_dir / "btc_network_pool.json"
 
         self.miners: Dict[str, BtcMiner] = self._load_json(self.miners_file, {})
         self.compliance: Dict[str, BtcFarmComplianceRecord] = {}
         self.proofs: Dict[str, BtcHeatProof] = self._load_json(self.proofs_file, {})
         self.fraud_log: List[Dict] = self._load_json(self.fraud_log_file, [])
+        self.network_pool: BtcNetworkPool = self._load_network_pool()
         self.validator = BtcHeatMiningValidator()
 
         self._load_compliance()
+
+    def _load_network_pool(self) -> BtcNetworkPool:
+        """Load network BTC pool state"""
+        try:
+            if self.pool_file.exists():
+                with open(self.pool_file) as f:
+                    data = json.load(f)
+                    return BtcNetworkPool(**data)
+        except (json.JSONDecodeError, IOError, TypeError):
+            pass
+        return BtcNetworkPool(pool_address="bc1qthronoschain_network_pool_multisig_placeholder")
+
+    def _save_network_pool(self):
+        """Persist network pool state"""
+        self.network_pool.last_updated = datetime.utcnow().isoformat()
+        # Recompute available balances
+        total = self.network_pool.total_balance_satoshis
+        self.network_pool.minimum_reserve_satoshis = int(total * self.NETWORK_POOL_RESERVE)
+        self.network_pool.available_for_payouts = int(total * 0.50)  # 50% for THR bonuses
+        self.network_pool.available_for_conversion = total - self.network_pool.minimum_reserve_satoshis - self.network_pool.available_for_payouts
+        if self.network_pool.available_for_conversion < 0:
+            self.network_pool.available_for_conversion = 0
+
+        with open(self.pool_file, 'w') as f:
+            json.dump({
+                "pool_address": self.network_pool.pool_address,
+                "total_pledged_satoshis": self.network_pool.total_pledged_satoshis,
+                "total_fees_collected_satoshis": self.network_pool.total_fees_collected_satoshis,
+                "total_payouts_satoshis": self.network_pool.total_payouts_satoshis,
+                "minimum_reserve_satoshis": self.network_pool.minimum_reserve_satoshis,
+                "available_for_conversion": self.network_pool.available_for_conversion,
+                "available_for_payouts": self.network_pool.available_for_payouts,
+                "last_updated": self.network_pool.last_updated
+            }, f, indent=2)
+
+    def calculate_required_pledge(self, hardware_type: str, unit_count: int) -> int:
+        """Calculate required BTC pledge for a farm (in satoshis)"""
+        try:
+            hw = MiningHardware[hardware_type.upper()]
+        except KeyError:
+            return 0
+
+        # Estimate monthly BTC earnings: hashrate × network_share × block_reward × blocks/month
+        total_hashrate_th = hw.specs["hashrate_th"] * unit_count
+        # Conservative estimate: 25 TH/s ≈ 0.00004 BTC/month at current difficulty
+        monthly_btc_estimate = (total_hashrate_th / 25.0) * 0.00004
+        pledge_btc = monthly_btc_estimate * self.PLEDGE_RATIO
+        return int(pledge_btc * 100_000_000)  # Convert to satoshis
+
+    def record_pledge(self, btc_address: str, pledge_satoshis: int, pledge_tx_hash: str) -> bool:
+        """Record a farm's BTC pledge to the network pool"""
+        if btc_address not in self.compliance:
+            return False
+
+        compliance = self.compliance[btc_address]
+        compliance.btc_pledge_satoshis = pledge_satoshis
+        compliance.btc_pledge_active = True
+        compliance.btc_pledge_tx_hash = pledge_tx_hash
+        compliance.btc_pledge_date = datetime.utcnow().isoformat()
+
+        self.network_pool.total_pledged_satoshis += pledge_satoshis
+        self._save_compliance()
+        self._save_network_pool()
+        return True
+
+    def collect_heat_proof_fee(self, btc_address: str, btc_mined_satoshis: int) -> int:
+        """Collect fee from farm when heat proof submitted. Returns fee amount."""
+        if btc_address not in self.compliance:
+            return 0
+
+        fee_satoshis = int(btc_mined_satoshis * self.HEAT_PROOF_FEE_RATIO)
+        compliance = self.compliance[btc_address]
+        compliance.btc_fee_paid_total += fee_satoshis
+        compliance.btc_mined_total += btc_mined_satoshis
+
+        self.network_pool.total_fees_collected_satoshis += fee_satoshis
+        self._save_compliance()
+        self._save_network_pool()
+        return fee_satoshis
+
+    def record_payout(self, btc_address: str, payout_satoshis: int, payout_purpose: str = "thr_bonus_settlement"):
+        """Record a payout from the network pool (for cross-chain settlement)"""
+        self.network_pool.total_payouts_satoshis += payout_satoshis
+        self._save_network_pool()
+        return True
+
+    def get_network_pool_status(self) -> Dict:
+        """Return current network pool status"""
+        return {
+            "pool_address": self.network_pool.pool_address,
+            "total_balance_btc": self.network_pool.total_balance_btc,
+            "total_balance_satoshis": self.network_pool.total_balance_satoshis,
+            "total_pledged_satoshis": self.network_pool.total_pledged_satoshis,
+            "total_fees_collected_satoshis": self.network_pool.total_fees_collected_satoshis,
+            "total_payouts_satoshis": self.network_pool.total_payouts_satoshis,
+            "minimum_reserve_satoshis": self.network_pool.minimum_reserve_satoshis,
+            "available_for_payouts": self.network_pool.available_for_payouts,
+            "available_for_conversion": self.network_pool.available_for_conversion,
+            "last_updated": self.network_pool.last_updated
+        }
 
     def _load_json(self, filepath: Path, default=None) -> dict:
         """Load JSON file or return default"""
@@ -385,7 +524,13 @@ class BtcHeatMiningTracker:
                         thronos_earned_total=record.get("thronos_earned_total", 0.0),
                         equipment_verified=record.get("equipment_verified", False),
                         equipment_verification_date=record.get("equipment_verification_date"),
-                        monitoring_flags=record.get("monitoring_flags", [])
+                        monitoring_flags=record.get("monitoring_flags", []),
+                        btc_pledge_satoshis=record.get("btc_pledge_satoshis", 0),
+                        btc_pledge_active=record.get("btc_pledge_active", False),
+                        btc_pledge_tx_hash=record.get("btc_pledge_tx_hash"),
+                        btc_pledge_date=record.get("btc_pledge_date"),
+                        btc_fee_paid_total=record.get("btc_fee_paid_total", 0),
+                        btc_fee_pending=record.get("btc_fee_pending", 0)
                     )
         except (json.JSONDecodeError, IOError, FileNotFoundError):
             pass
@@ -571,6 +716,12 @@ class BtcHeatMiningTracker:
                 "thronos_earned_total": record.thronos_earned_total,
                 "equipment_verified": record.equipment_verified,
                 "equipment_verification_date": record.equipment_verification_date,
-                "monitoring_flags": record.monitoring_flags
+                "monitoring_flags": record.monitoring_flags,
+                "btc_pledge_satoshis": record.btc_pledge_satoshis,
+                "btc_pledge_active": record.btc_pledge_active,
+                "btc_pledge_tx_hash": record.btc_pledge_tx_hash,
+                "btc_pledge_date": record.btc_pledge_date,
+                "btc_fee_paid_total": record.btc_fee_paid_total,
+                "btc_fee_pending": record.btc_fee_pending
             }
         self._save_json(self.compliance_file, data)

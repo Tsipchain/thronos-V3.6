@@ -23993,7 +23993,45 @@ def api_v1_block_by_height(height: int):
     idx = height - HEIGHT_OFFSET
     if idx < 0 or idx >= len(blocks):
         return jsonify(error="block_not_found", height=height), 404
-    block = blocks[idx]
+    block = blocks[idx].copy()
+
+    # Recalculate reward with current 80/10/5/5 split (same logic as viewer)
+    try:
+        scheduled_reward = calculate_reward(int(height))
+    except Exception:
+        scheduled_reward = 8.0
+
+    stored_reward = float(block.get("reward", 0.0) or 0.0)
+    rsplit = block.get("reward_split") or {}
+    stored_split_total = (
+        float(rsplit.get("miner", 0.0))
+        + float(rsplit.get("ai", 0.0))
+        + float(rsplit.get("burn", 0.0))
+        + float(rsplit.get("full_nodes", 0.0))
+        + float(rsplit.get("ecosystem", 0.0))
+    ) if rsplit else 0.0
+
+    # Trust stored values only if they match current schedule; otherwise regenerate
+    if rsplit and abs(stored_split_total - scheduled_reward) < 0.001:
+        total_reward = stored_split_total
+        block["reward"] = total_reward
+    elif stored_reward > 0 and abs(stored_reward - scheduled_reward) < 0.001:
+        total_reward = stored_reward
+        block["reward"] = total_reward
+    else:
+        # Pre-upgrade or corrupt block — render with current schedule
+        block["reward"] = scheduled_reward
+        rsplit = {}
+
+    # Ensure correct 80/10/5/5 split for display
+    if not rsplit or abs(stored_split_total - scheduled_reward) >= 0.001:
+        block["reward_split"] = {
+            "miner": scheduled_reward * 0.80,
+            "ai": scheduled_reward * 0.10,
+            "full_nodes": scheduled_reward * 0.05,
+            "ecosystem": scheduled_reward * 0.05,
+        }
+
     return jsonify(block=block, height=height), 200
 
 
@@ -24008,9 +24046,49 @@ def api_v1_block_by_hash(block_hash: str):
     )
     if not block:
         return jsonify(error="block_not_found", block_hash=block_hash), 404
+
+    block = block.copy()
     # Derive height for reference
     blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
     height_calc = HEIGHT_OFFSET + blocks.index(block)
+
+    # Recalculate reward with current 80/10/5/5 split (same logic as viewer)
+    try:
+        scheduled_reward = calculate_reward(int(height_calc))
+    except Exception:
+        scheduled_reward = 8.0
+
+    stored_reward = float(block.get("reward", 0.0) or 0.0)
+    rsplit = block.get("reward_split") or {}
+    stored_split_total = (
+        float(rsplit.get("miner", 0.0))
+        + float(rsplit.get("ai", 0.0))
+        + float(rsplit.get("burn", 0.0))
+        + float(rsplit.get("full_nodes", 0.0))
+        + float(rsplit.get("ecosystem", 0.0))
+    ) if rsplit else 0.0
+
+    # Trust stored values only if they match current schedule; otherwise regenerate
+    if rsplit and abs(stored_split_total - scheduled_reward) < 0.001:
+        total_reward = stored_split_total
+        block["reward"] = total_reward
+    elif stored_reward > 0 and abs(stored_reward - scheduled_reward) < 0.001:
+        total_reward = stored_reward
+        block["reward"] = total_reward
+    else:
+        # Pre-upgrade or corrupt block — render with current schedule
+        block["reward"] = scheduled_reward
+        rsplit = {}
+
+    # Ensure correct 80/10/5/5 split for display
+    if not rsplit or abs(stored_split_total - scheduled_reward) >= 0.001:
+        block["reward_split"] = {
+            "miner": scheduled_reward * 0.80,
+            "ai": scheduled_reward * 0.10,
+            "full_nodes": scheduled_reward * 0.05,
+            "ecosystem": scheduled_reward * 0.05,
+        }
+
     return jsonify(block=block, height=height_calc), 200
 
 

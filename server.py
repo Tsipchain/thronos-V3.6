@@ -188,9 +188,10 @@ def _background_block_processor():
     while _BACKGROUND_WORKERS_ACTIVE:
         try:
             data, submit_time = _BLOCK_PROCESS_QUEUE.get(timeout=1)
-            # Push app context so jsonify() and other Flask operations work
+            # Push both app context AND test request context so Flask operations work
             with app.app_context():
-                _process_mining_submission(data, require_job_id=False)
+                with app.test_request_context():
+                    _process_mining_submission(data, require_job_id=False)
             logger.info(f"Background block processor: completed block in {time.time() - submit_time:.2f}s")
         except queue.Empty:
             continue
@@ -23297,13 +23298,18 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
 
     # PR-3: Append guard - reject duplicate/stale blocks
     # Check if there's already a block at this height or later
+    # BUT: if prev_hash matches the actual chain tip's hash, we're building on the
+    # correct chain even if the stored height is corrupted (phantom orphan blocks).
     blocks = [b for b in chain if isinstance(b, dict) and b.get("reward") is not None]
     chain_tip_height = blocks[-1].get("height", -1) if blocks else -1
-    if height <= chain_tip_height:
+    chain_tip_hash = blocks[-1].get("block_hash", "") if blocks else ""
+
+    # Only reject as stale if height is wrong AND prev_hash doesn't match the tip
+    if height <= chain_tip_height and prev_hash != chain_tip_hash:
         logger.info("mining.stale_block %s", json.dumps({
             "submitted_height": height,
             "tip_height": chain_tip_height,
-            "tip_hash": server_last_hash,
+            "tip_hash": chain_tip_hash,
             "prev_hash": prev_hash,
             "reason": "stale_height",
         }))
@@ -23312,9 +23318,17 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
             error="stale_block",
             submitted_height=height,
             tip_height=chain_tip_height,
-            tip_hash=server_last_hash,
+            tip_hash=chain_tip_hash,
             reason="stale_height",
         ), 409
+
+    # If prev_hash matches but height is wrong, the chain file has phantom blocks
+    # Accept the block since hash is authoritative for chain continuity
+    if height <= chain_tip_height and prev_hash == chain_tip_hash:
+        logger.warning(
+            "mining.phantom_blocks submitted=%s chain_tip=%s (hash matches, accepting)",
+            height, chain_tip_height
+        )
 
     chain.append(new_block)
     _index_block_event(new_block)  # Index for fast queries
@@ -35172,7 +35186,8 @@ else:
 if is_master():
     try:
         print("[STARTUP] Seeding transaction log from chain...")
-        _seed_tx_log_from_chain()
+        with app.app_context():
+            _seed_tx_log_from_chain()
         print("[STARTUP] Transaction log seeded successfully.")
     except Exception as exc:
         logger.warning(f"[STARTUP] TX log seeding skipped: {exc}")

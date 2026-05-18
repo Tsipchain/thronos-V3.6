@@ -1,0 +1,573 @@
+{% extends "base.html" %}
+
+{% block title %}🔨 Download Thronos Miner Kit - Phase 6B{% endblock %}
+
+{% block styles %}
+<style>
+    .kit-container {
+        max-width: 1200px;
+        margin: 30px auto;
+        padding: 20px;
+        background-color: #0a0a0a;
+    }
+
+    .kit-header {
+        text-align: center;
+        margin-bottom: 40px;
+    }
+
+    .kit-header h1 {
+        color: #ff6600;
+        font-size: 2.5em;
+        margin-bottom: 10px;
+    }
+
+    .kit-header p {
+        color: #aaa;
+        font-size: 1.1em;
+    }
+
+    .pledge-status {
+        background: linear-gradient(135deg, #1a3a1a 0%, #0a2a0a 100%);
+        border: 2px solid #00ff00;
+        padding: 20px;
+        border-radius: 8px;
+        margin-bottom: 30px;
+        text-align: center;
+    }
+
+    .pledge-status.verified {
+        color: #00ff00;
+    }
+
+    .pledge-status.pending {
+        background: linear-gradient(135deg, #3a2a1a 0%, #2a1a0a 100%);
+        border-color: #ff9900;
+        color: #ff9900;
+    }
+
+    .hardware-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 20px;
+        margin: 30px 0;
+    }
+
+    .hardware-card {
+        background-color: #1a1a1a;
+        border: 2px solid #ff6600;
+        padding: 20px;
+        border-radius: 8px;
+        transition: all 0.3s ease;
+    }
+
+    .hardware-card:hover {
+        border-color: #ff9900;
+        box-shadow: 0 0 20px rgba(255, 102, 0, 0.3);
+    }
+
+    .hardware-icon {
+        font-size: 2em;
+        margin-bottom: 10px;
+    }
+
+    .hardware-name {
+        color: #ff9900;
+        font-weight: bold;
+        font-size: 1.2em;
+        margin-bottom: 10px;
+    }
+
+    .hardware-specs {
+        color: #aaa;
+        font-size: 0.9em;
+        margin: 10px 0;
+    }
+
+    .spec-item {
+        display: flex;
+        justify-content: space-between;
+        margin: 5px 0;
+    }
+
+    .spec-label {
+        color: #999;
+    }
+
+    .spec-value {
+        color: #00ff00;
+        font-family: monospace;
+        font-weight: bold;
+    }
+
+    .download-section {
+        background-color: #1a1a1a;
+        border: 1px solid #ff6600;
+        padding: 30px;
+        border-radius: 8px;
+        margin: 30px 0;
+        text-align: center;
+    }
+
+    .download-button {
+        background: linear-gradient(135deg, #ff6600 0%, #ff9900 100%);
+        color: #000;
+        border: none;
+        padding: 15px 40px;
+        font-size: 1.1em;
+        font-weight: bold;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        margin: 10px;
+    }
+
+    .download-button:hover {
+        transform: scale(1.05);
+        box-shadow: 0 0 30px rgba(255, 102, 0, 0.5);
+    }
+
+    .download-button:disabled {
+        background: #666;
+        cursor: not-allowed;
+        opacity: 0.5;
+    }
+
+    .instructions {
+        background-color: #1a1a1a;
+        border-left: 4px solid #ff6600;
+        padding: 20px;
+        margin: 20px 0;
+        border-radius: 4px;
+    }
+
+    .instructions h3 {
+        color: #ff9900;
+        margin-top: 0;
+    }
+
+    .instructions ol {
+        color: #aaa;
+        line-height: 1.8;
+    }
+
+    .instructions li {
+        margin: 10px 0;
+    }
+
+    .features-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+        margin: 20px 0;
+    }
+
+    .feature-badge {
+        background-color: #1a1a1a;
+        border: 1px solid #ff6600;
+        padding: 15px;
+        border-radius: 8px;
+        text-align: center;
+    }
+
+    .feature-icon {
+        font-size: 1.8em;
+        margin-bottom: 10px;
+    }
+
+    .feature-name {
+        color: #ff9900;
+        font-weight: bold;
+        margin-bottom: 5px;
+    }
+
+    .feature-desc {
+        color: #aaa;
+        font-size: 0.9em;
+    }
+
+    .thr-logo {
+        color: #ff6600;
+        font-weight: bold;
+    }
+
+    table {
+        width: 100%;
+        background-color: #0a0a0a;
+        border-collapse: collapse;
+        margin: 20px 0;
+    }
+
+    th, td {
+        border: 1px solid #ff6600;
+        padding: 10px;
+        text-align: left;
+    }
+
+    th {
+        background-color: #1a1a1a;
+        color: #ff9900;
+        font-weight: bold;
+    }
+
+    td {
+        color: #aaa;
+    }
+
+    tr:hover {
+        background-color: #1a1a1a;
+    }
+
+    .data-download {
+        background-color: #0a3a0a;
+        border: 2px dashed #00ff00;
+        padding: 20px;
+        border-radius: 8px;
+        margin: 20px 0;
+    }
+
+    .data-download h4 {
+        color: #00ff00;
+        margin-top: 0;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="kit-container">
+    <div class="kit-header">
+        <h1>🔨 Thronos Miner Kit - Phase 6B Complete</h1>
+        <p>Hardware Support for All Mining Types: ASIC, GPU, CPU, USB, IoT, Hybrid</p>
+    </div>
+
+    <!-- Pledge Status -->
+    <div class="pledge-status verified" id="pledgeStatus">
+        <strong>✅ Pledge Verified</strong>
+        <p>You have successfully completed a pledge and can now download the complete miner kit.</p>
+    </div>
+
+    <!-- Features -->
+    <h2 style="color: #ff6600; text-align: center;">📦 What's Included</h2>
+    <div class="features-grid">
+        <div class="feature-badge">
+            <div class="feature-icon">📊</div>
+            <div class="feature-name">6 Device Types</div>
+            <div class="feature-desc">ASIC, GPU, CPU, USB, IoT, Hybrid</div>
+        </div>
+        <div class="feature-badge">
+            <div class="feature-icon">⚙️</div>
+            <div class="feature-name">20+ Variants</div>
+            <div class="feature-desc">Detailed specs for each hardware type</div>
+        </div>
+        <div class="feature-badge">
+            <div class="feature-icon">🔥</div>
+            <div class="feature-name">Heat Recovery Integration</div>
+            <div class="feature-desc">4-tier bonus system (5%-40%)</div>
+        </div>
+        <div class="feature-badge">
+            <div class="feature-icon">🌍</div>
+            <div class="feature-name">Regional Optimization</div>
+            <div class="feature-desc">Climate-based recommendations</div>
+        </div>
+        <div class="feature-badge">
+            <div class="feature-icon">📈</div>
+            <div class="feature-name">Real-Time Dashboard</div>
+            <div class="feature-desc">Multi-language monitoring</div>
+        </div>
+        <div class="feature-badge">
+            <div class="feature-icon">💰</div>
+            <div class="feature-name">Automatic Rewards</div>
+            <div class="feature-desc">Heat bonus integrated in blocks</div>
+        </div>
+    </div>
+
+    <!-- Hardware Overview -->
+    <h2 style="color: #ff6600;">⛏️ Complete Hardware Support</h2>
+    <div class="hardware-grid">
+        <!-- ASIC -->
+        <div class="hardware-card">
+            <div class="hardware-icon">⚡</div>
+            <div class="hardware-name">ASIC Miners</div>
+            <div class="hardware-specs">
+                <div class="spec-item">
+                    <span class="spec-label">Power:</span>
+                    <span class="spec-value">1.3-3.1 kW</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Hashrate:</span>
+                    <span class="spec-value">84-504 TH/s</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Heat Recovery:</span>
+                    <span class="spec-value">15-25%</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Tier:</span>
+                    <span class="spec-value">TIER_3</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Examples:</span>
+                    <span class="spec-value">S19, S21, L7</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- GPU -->
+        <div class="hardware-card">
+            <div class="hardware-icon">🎮</div>
+            <div class="hardware-name">GPU Miners</div>
+            <div class="hardware-specs">
+                <div class="spec-item">
+                    <span class="spec-label">Power:</span>
+                    <span class="spec-value">250-450 W</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Hashrate:</span>
+                    <span class="spec-value">22-45 TH/s</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Heat Recovery:</span>
+                    <span class="spec-value">12-20%</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Tier:</span>
+                    <span class="spec-value">TIER_2</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Examples:</span>
+                    <span class="spec-value">RTX, A100</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- CPU -->
+        <div class="hardware-card">
+            <div class="hardware-icon">💻</div>
+            <div class="hardware-name">CPU Miners</div>
+            <div class="hardware-specs">
+                <div class="spec-item">
+                    <span class="spec-label">Power:</span>
+                    <span class="spec-value">50-250 W</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Hashrate:</span>
+                    <span class="spec-value">150 MH/s - 1.2 GH/s</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Heat Recovery:</span>
+                    <span class="spec-value">10-18%</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Tier:</span>
+                    <span class="spec-value">TIER_1</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Examples:</span>
+                    <span class="spec-value">Ryzen, Xeon</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- USB ASIC -->
+        <div class="hardware-card">
+            <div class="hardware-icon">🔌</div>
+            <div class="hardware-name">USB ASIC Miners</div>
+            <div class="hardware-specs">
+                <div class="spec-item">
+                    <span class="spec-label">Power:</span>
+                    <span class="spec-value">1.5-25 W</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Hashrate:</span>
+                    <span class="spec-value">0.85-333 GH/s</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Heat Recovery:</span>
+                    <span class="spec-value">5-12%</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Tier:</span>
+                    <span class="spec-value">TIER_1</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Examples:</span>
+                    <span class="spec-value">Block Erupter, Red Fury</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- IoT -->
+        <div class="hardware-card">
+            <div class="hardware-icon">📡</div>
+            <div class="hardware-name">IoT Nodes</div>
+            <div class="hardware-specs">
+                <div class="spec-item">
+                    <span class="spec-label">Power:</span>
+                    <span class="spec-value">4-40 W</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Hashrate:</span>
+                    <span class="spec-value">8-80 MH/s</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Heat Recovery:</span>
+                    <span class="spec-value">5-12%</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Tier:</span>
+                    <span class="spec-value">TIER_1</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Bonus:</span>
+                    <span class="spec-value">+ Data Collection</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Hybrid -->
+        <div class="hardware-card">
+            <div class="hardware-icon">🔧</div>
+            <div class="hardware-name">Hybrid Rigs</div>
+            <div class="hardware-specs">
+                <div class="spec-item">
+                    <span class="spec-label">Power:</span>
+                    <span class="spec-value">2.5-3.5 kW</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Hashrate:</span>
+                    <span class="spec-value">Variable (6×GPU)</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Heat Recovery:</span>
+                    <span class="spec-value">18-22%</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Tier:</span>
+                    <span class="spec-value">TIER_3</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-label">Professional:</span>
+                    <span class="spec-value">Multi-Algorithm</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Download Section -->
+    <div class="download-section">
+        <h2 style="color: #ff9900; margin-top: 0;">📥 Download Miner Kit</h2>
+        <p>Complete configuration and setup files for all hardware types</p>
+        <button class="download-button" onclick="downloadMinerKit()">
+            ⬇️ Download JSON Configuration
+        </button>
+        <button class="download-button" onclick="viewOnline()">
+            👁️ View Online
+        </button>
+        <button class="download-button" onclick="copyAPI()">
+            📋 Copy API Endpoint
+        </button>
+
+        <div class="data-download">
+            <h4>📊 API Endpoint (Read-Only)</h4>
+            <code style="color: #00ff00;">GET /api/miner-kit</code>
+            <p style="color: #aaa; font-size: 0.9em;">Access miner specifications programmatically. No pledge required for this endpoint.</p>
+        </div>
+    </div>
+
+    <!-- Instructions -->
+    <div class="instructions">
+        <h3>🚀 Getting Started</h3>
+        <ol>
+            <li><strong>Download the miner kit</strong> - Get the complete hardware specifications</li>
+            <li><strong>Select your hardware</strong> - Choose from 6 device types and 20+ variants</li>
+            <li><strong>Configure metrics</strong> - Set up power, heat output, and location</li>
+            <li><strong>Submit heat data</strong> - Send metrics via <code>/api/heat/submit-metrics</code></li>
+            <li><strong>Start mining</strong> - Begin earning with automatic heat bonuses</li>
+            <li><strong>Monitor dashboard</strong> - Track your rewards at <code>/heat-dashboard</code></li>
+        </ol>
+    </div>
+
+    <!-- FAQ -->
+    <h2 style="color: #ff6600;">❓ Frequently Asked Questions</h2>
+
+    <div class="instructions" style="margin-bottom: 10px;">
+        <strong>Q: Which hardware type should I choose?</strong>
+        <p style="color: #aaa; margin: 10px 0;">Choose based on your available equipment: ASIC for maximum rewards, GPU for flexibility, CPU for accessibility, USB for education, IoT for distributed networks.</p>
+    </div>
+
+    <div class="instructions" style="margin-bottom: 10px;">
+        <strong>Q: How do heat bonuses work?</strong>
+        <p style="color: #aaa; margin: 10px 0;">Submit heat metrics (temperature, recovery %) and we automatically classify your operation into a tier (5% → 40% bonus). Use case bonuses add 5-20% more.</p>
+    </div>
+
+    <div class="instructions" style="margin-bottom: 10px;">
+        <strong>Q: Can I update my heat metrics?</strong>
+        <p style="color: #aaa; margin: 10px 0;">Yes! Submit new metrics anytime. We track your latest data and apply the current tier/bonus to your mining rewards.</p>
+    </div>
+
+    <div class="instructions" style="margin-bottom: 10px;">
+        <strong>Q: What's the difference between TIER_1 and TIER_4?</strong>
+        <p style="color: #aaa; margin: 10px 0;">TIER_1 (5-10% recovery) = 5% bonus, TIER_2 (10-15%) = 15% bonus, TIER_3 (15-25%) = 25% bonus, TIER_4 (25%+) = 40% bonus.</p>
+    </div>
+
+    <h2 style="color: #ff6600; margin-top: 40px;">📚 Additional Resources</h2>
+    <div class="instructions">
+        <ul style="color: #aaa;">
+            <li><strong>MINER_KIT_COMPLETE.md</strong> - Full hardware guide with setup instructions</li>
+            <li><strong>PHASE_6_IOT_HEAT_METRICS.md</strong> - Technical specification and API reference</li>
+            <li><strong>/heat-dashboard</strong> - Real-time monitoring (5 languages)</li>
+            <li><strong>/api/heat/stats</strong> - Network-wide heat statistics</li>
+        </ul>
+    </div>
+</div>
+
+<script>
+    function downloadMinerKit() {
+        // Get pledge address (would come from session/auth)
+        const address = getCookie('thr_address') || prompt('Enter your THR address:');
+        if (!address) return;
+
+        // Download from API
+        window.location.href = `/download/miner-kit?address=${address}`;
+    }
+
+    function viewOnline() {
+        fetch('/api/miner-kit')
+            .then(r => r.json())
+            .then(data => {
+                const modal = document.createElement('div');
+                modal.innerHTML = `
+                    <div style="position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+                                background: rgba(0,0,0,0.9); z-index: 1000; overflow: auto;">
+                        <div style="max-width: 1000px; margin: 20px auto; background: #1a1a1a;
+                                   border: 2px solid #ff6600; padding: 20px; border-radius: 8px;">
+                            <button onclick="this.parentElement.parentElement.remove()"
+                                    style="float: right; background: #ff6600; color: #000; border: none;
+                                           padding: 10px 20px; cursor: pointer; border-radius: 4px;">✕ Close</button>
+                            <h2 style="color: #ff6600;">Miner Kit Specifications</h2>
+                            <pre style="color: #00ff00; background: #0a0a0a; padding: 15px;
+                                      border-radius: 4px; overflow-x: auto;">
+${JSON.stringify(data, null, 2)}
+                            </pre>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+            });
+    }
+
+    function copyAPI() {
+        const endpoint = 'GET /api/miner-kit';
+        navigator.clipboard.writeText(endpoint).then(() => {
+            alert('API endpoint copied to clipboard!');
+        });
+    }
+
+    function getCookie(name) {
+        const value = `; ${document.cookie}`;
+        const parts = value.split(`; ${name}=`);
+        if (parts.length === 2) return parts.pop().split(';').shift();
+        return null;
+    }
+</script>
+{% endblock %}

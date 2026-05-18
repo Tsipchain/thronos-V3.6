@@ -7439,15 +7439,26 @@ def get_blocks_for_viewer():
         block_txs = txs_by_height.get(height, [])
 
         rsplit = b.get("reward_split") or {}
-        total_reward = float(b.get("reward", 1.0))
+        # Use calculate_reward(height) as default to reflect current halving schedule
+        try:
+            default_reward = calculate_reward(int(height))
+        except Exception:
+            default_reward = 8.0  # Phase C5 initial reward
+        total_reward = float(b.get("reward", default_reward) or default_reward)
 
         if rsplit:
             reward_to_miner = float(rsplit.get("miner", 0.0))
             reward_to_ai = float(rsplit.get("ai", 0.0))
-            burn_from_split = float(rsplit.get("burn", 0.0))
+            # Support new 80/10/5/5 split: include full_nodes + ecosystem alongside burn
+            burn_from_split = float(
+                rsplit.get("burn", 0.0)
+                or rsplit.get("ecosystem", 0.0)
+                or rsplit.get("full_nodes", 0.0)
+            )
         else:
-            reward_to_miner = float(b.get("reward_to_miner", total_reward * 0.9))
-            reward_to_ai = float(b.get("reward_to_ai", total_reward * 0.1))
+            # Phase C5: 80/10/5/5 split (miner / ai / full_nodes / ecosystem)
+            reward_to_miner = float(b.get("reward_to_miner", total_reward * 0.80))
+            reward_to_ai = float(b.get("reward_to_ai", total_reward * 0.10))
             burn_from_split = 0.0
 
         fees_from_txs = sum(float(tx.get("fee_burned", 0.0) or tx.get("fee", 0.0)) for tx in block_txs)
@@ -8643,9 +8654,16 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
                 continue
             mining_ids.add(reward_id)
             rsplit = tx.get("reward_split") or {}
-            total_reward = float(tx.get("reward", 1.0) or 1.0)
-            reward_to_miner = float(rsplit.get("miner", tx.get("reward_to_miner", total_reward * 0.9)) or 0.0)
-            reward_to_ai = float(rsplit.get("ai", tx.get("reward_to_ai", total_reward * 0.1)) or 0.0)
+            # Use current halving schedule as default reward (Phase C5: 8 THR initial)
+            try:
+                _height_for_reward = int(tx.get("height") or tx.get("index") or 0)
+                default_reward = calculate_reward(_height_for_reward)
+            except Exception:
+                default_reward = 8.0
+            total_reward = float(tx.get("reward", default_reward) or default_reward)
+            # Phase C5 split: 80% miner / 10% ai / 5% full_nodes / 5% ecosystem
+            reward_to_miner = float(rsplit.get("miner", tx.get("reward_to_miner", total_reward * 0.80)) or 0.0)
+            reward_to_ai = float(rsplit.get("ai", tx.get("reward_to_ai", total_reward * 0.10)) or 0.0)
             wallet_txs.append(normalize_history_item({
                 "kind": "mining_reward",
                 "type": "mining_reward",
@@ -8689,12 +8707,17 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
             tx.get("user_wallet"),
             tx.get("sender_wallet"),
             tx.get("recipient_wallet"),
+            # Fix: Include pool/swap participants so they appear in wallet history
+            tx.get("trader"),
+            tx.get("provider"),
             tx_meta.get("wallet"),
             tx_meta.get("wallet_address"),
             tx_meta.get("thr_address"),
             tx_meta.get("owner"),
             tx_meta.get("artist_wallet"),
             tx_meta.get("tipper_wallet"),
+            tx_meta.get("trader"),
+            tx_meta.get("provider"),
         }
         parties = {str(p).lower() for p in parties if p}
         if addr_lower not in parties:
@@ -27867,20 +27890,31 @@ def api_v1_get_pools():
             if reserves_a > 0 and reserves_b > 0:
                 pool["price_a_to_b"] = round(reserves_b / reserves_a, 6)
                 pool["price_b_to_a"] = round(reserves_a / reserves_b, 6)
+
+            # Fix: Always set singular field aliases for Pytheia/viewer compat,
+            # even when price feeds are unavailable
+            pool["reserve_a"] = pool.get("reserves_a", 0)
+            pool["reserve_b"] = pool.get("reserves_b", 0)
+
             price_a_thr = get_token_price_in_thr(pool.get("token_a", "THR"))
             price_b_thr = get_token_price_in_thr(pool.get("token_b", "THR"))
-            if price_a_thr is None or price_b_thr is None:
-                continue
+
+            # Fix: Use 0.0 fallback instead of skipping the pool entirely
+            if price_a_thr is None:
+                price_a_thr = 0.0
+            if price_b_thr is None:
+                price_b_thr = 0.0
+
             tvl_thr = (reserves_a * price_a_thr) + (reserves_b * price_b_thr)
             pool["tvl_thr"] = round(tvl_thr, 6)
             pool["tvl_btc"] = round(tvl_thr * 0.0001, 8)
-            if thr_usd:
-                pool["tvl_usd"] = round(tvl_thr * thr_usd, 2)
-
-            # Pytheia compatibility: Add singular field name aliases
-            pool["reserve_a"] = pool.get("reserves_a", 0)
-            pool["reserve_b"] = pool.get("reserves_b", 0)
+            pool["tvl_usd"] = round(tvl_thr * thr_usd, 2) if thr_usd else 0.0
         except Exception:
+            # Ensure pool still has required fields even on error
+            pool.setdefault("reserve_a", pool.get("reserves_a", 0))
+            pool.setdefault("reserve_b", pool.get("reserves_b", 0))
+            pool.setdefault("tvl_thr", 0.0)
+            pool.setdefault("tvl_usd", 0.0)
             continue
     return jsonify(pools=pools), 200
 
@@ -28492,6 +28526,12 @@ def api_v1_add_liquidity():
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
     update_last_block(tx, is_block=False)
+    # Fix: Persist & index so add_liquidity shows in wallet history & tx_feed
+    persist_normalized_tx(tx)
+    try:
+        _index_transaction_event(tx)
+    except Exception:
+        pass
 
     try:
         broadcast_tx(tx)
@@ -28702,6 +28742,11 @@ def api_v1_remove_liquidity():
     save_json(CHAIN_FILE, chain)
     persist_normalized_tx(tx)
     update_last_block(tx, is_block=False)
+    # Fix: Index remove_liquidity so it appears in wallet history & tx_feed
+    try:
+        _index_transaction_event(tx)
+    except Exception:
+        pass
 
     try:
         broadcast_tx(tx)
@@ -28905,15 +28950,24 @@ def api_v1_pool_swap():
     tx_id = f"POOL-SWAP-{int(time.time())}-{secrets.token_hex(4)}"
     tx = {
         "type": "pool_swap",
+        "kind": "pool_swap",
         "pool_id": pool_id,
         "token_in": token_in,
         "token_out": token_out,
         "amount_in": amount_in,
         "amount_out": amount_out,
+        "amount": amount_in,  # Generic amount for indexing
+        "symbol": token_in,
+        "symbol_in": token_in,
+        "symbol_out": token_out,
         "fee": fee_amount,
         "fee_bps": fee_bps,
         "price_impact": round(price_impact, 4),
         "trader": trader,
+        # Fix: Set from/to for proper indexing & wallet history matching
+        "from": trader,
+        "to": trader,
+        "thr_address": trader,
         "timestamp": ts,
         "tx_id": tx_id,
         "status": "confirmed",
@@ -28941,6 +28995,11 @@ def api_v1_pool_swap():
     save_json(CHAIN_FILE, chain)
     update_last_block(tx, is_block=False)
     persist_normalized_tx(tx)
+    # Fix: Index swap so it appears instantly in wallet history & tx_feed
+    try:
+        _index_transaction_event(tx)
+    except Exception:
+        pass
 
     try:
         broadcast_tx(tx)

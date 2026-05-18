@@ -18690,6 +18690,477 @@ def miner_kit_page():
         return jsonify(status="error", error=str(e)), 500
 
 
+# ===== BITCOIN HEAT MINING ENDPOINTS (Dual-Chain Farming) =====
+
+@app.route("/api/btc-mining/register", methods=["POST"])
+def api_btc_mining_register():
+    """
+    Register a BTC mining farm for heat recovery
+
+    POST /api/btc-mining/register
+    {
+        "btc_address": "1A1z7agoat...",
+        "thronos_address": "THR7c...",
+        "farm_name": "OceanPool Farm #1",
+        "hardware_type": "ANTMINER_S21",
+        "unit_count": 100,
+        "location_latitude": 40.7128,
+        "location_longitude": -74.0060,
+        "ambient_temp_c": 22.5
+    }
+
+    Returns: {status, btc_address, farm_name, status}
+    """
+    try:
+        from btc_heat_mining import BtcHeatMiningTracker
+
+        data = request.get_json() or {}
+
+        # Validate required fields
+        required = ["btc_address", "thronos_address", "farm_name", "hardware_type", "unit_count",
+                   "location_latitude", "location_longitude", "ambient_temp_c"]
+        for field in required:
+            if field not in data:
+                return jsonify(status="error", error=f"Missing field: {field}"), 400
+
+        tracker = BtcHeatMiningTracker()
+
+        success = tracker.register_btc_miner(
+            btc_address=data["btc_address"],
+            farm_name=data["farm_name"],
+            hardware_type=data["hardware_type"],
+            unit_count=int(data["unit_count"]),
+            location_lat=float(data["location_latitude"]),
+            location_lon=float(data["location_longitude"]),
+            ambient_temp=float(data["ambient_temp_c"])
+        )
+
+        if success:
+            return jsonify(
+                status="success",
+                btc_address=data["btc_address"],
+                farm_name=data["farm_name"],
+                message="Farm registered for heat recovery mining"
+            ), 201
+        else:
+            return jsonify(
+                status="error",
+                error="Farm already registered or invalid hardware type"
+            ), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error registering BTC mining farm: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/btc-mining/submit-heat", methods=["POST"])
+def api_btc_mining_submit_heat():
+    """
+    Submit heat recovery proof for BTC mining operation
+
+    POST /api/btc-mining/submit-heat
+    {
+        "btc_address": "1A1z7agoat...",
+        "thronos_address": "THR7c...",
+        "mining_duration_minutes": 60,
+        "btc_block_height": 854123,
+        "btc_tx_hash": "abc123...",
+        "sensor_data": {
+            "inlet_temp_c": 45.0,
+            "outlet_temp_c": 35.0,
+            "humidity_inlet_percent": 60.0,
+            "humidity_outlet_percent": 45.0,
+            "airflow_m3_per_min": 150.0,
+            "facility_inlet_temp_c": 32.0,
+            "facility_outlet_temp_c": 28.0,
+            "energy_generated_kwh": 45.0,
+            "gps_latitude": 40.7128,
+            "gps_longitude": -74.0060,
+            "sensor_uptime_percent": 99.5
+        }
+    }
+
+    Returns: {is_valid, proof_id, validation_level, bonus_multiplier, anomalies}
+    """
+    try:
+        from btc_heat_mining import BtcHeatMiningTracker
+
+        data = request.get_json() or {}
+
+        required = ["btc_address", "thronos_address", "mining_duration_minutes", "btc_block_height",
+                   "btc_tx_hash", "sensor_data"]
+        for field in required:
+            if field not in data:
+                return jsonify(status="error", error=f"Missing field: {field}"), 400
+
+        tracker = BtcHeatMiningTracker()
+
+        is_valid, proof_id, level, bonus = tracker.submit_heat_proof(
+            btc_address=data["btc_address"],
+            thronos_address=data["thronos_address"],
+            mining_duration_minutes=int(data["mining_duration_minutes"]),
+            btc_block_height=int(data["btc_block_height"]),
+            btc_tx_hash=data["btc_tx_hash"],
+            sensor_data=data["sensor_data"]
+        )
+
+        if is_valid:
+            return jsonify(
+                status="success",
+                proof_id=proof_id,
+                is_valid=True,
+                validation_level=level,
+                bonus_multiplier=bonus,
+                message="Heat recovery proof accepted"
+            ), 201
+        else:
+            # Get anomalies for feedback
+            from btc_heat_mining import BtcHeatMiningTracker as Tracker
+            tr = Tracker()
+            if proof_id in tr.proofs:
+                proof = tr.proofs[proof_id]
+                anomalies = [
+                    f"Recovery: {proof.recovery_percentage:.1%}" if proof.recovery_percentage else "Unknown anomaly"
+                ]
+            else:
+                anomalies = ["Proof validation failed"]
+
+            return jsonify(
+                status="rejected",
+                proof_id=proof_id,
+                is_valid=False,
+                validation_level=level,
+                bonus_multiplier=0.0,
+                anomalies=anomalies,
+                message="Heat recovery proof rejected - fraud detected"
+            ), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error submitting BTC heat proof: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/btc-mining/farm-status/<btc_address>", methods=["GET"])
+def api_btc_mining_farm_status(btc_address):
+    """
+    Get BTC mining farm status and compliance
+
+    GET /api/btc-mining/farm-status/1A1z7agoat...
+
+    Returns: {btc_address, farm_name, hardware, unit_count, status, tier, equipment_verified, etc}
+    """
+    try:
+        from btc_heat_mining import BtcHeatMiningTracker
+
+        tracker = BtcHeatMiningTracker()
+        status = tracker.get_farm_status(btc_address)
+
+        if status:
+            return jsonify(status="success", **status), 200
+        else:
+            return jsonify(status="error", error="Farm not found"), 404
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting farm status: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/btc-mining/monitor/farms", methods=["GET"])
+def api_btc_mining_monitor_farms():
+    """
+    Monitor all BTC mining farms and their heat recovery performance
+
+    GET /api/btc-mining/monitor/farms?limit=50&offset=0&sort_by=recovery_pct
+
+    Returns: {farms: [...], stats: {total_btc, total_thr, avg_recovery, avg_reputation}}
+    """
+    try:
+        from btc_heat_mining import BtcHeatMiningTracker
+
+        limit = min(int(request.args.get("limit", 50)), 500)
+        offset = int(request.args.get("offset", 0))
+        sort_by = request.args.get("sort_by", "thronos_earned")
+
+        tracker = BtcHeatMiningTracker()
+
+        farms = []
+        for addr, status_dict in [(addr, tracker.get_farm_status(addr)) for addr in tracker.compliance.keys()]:
+            if status_dict:
+                farms.append(status_dict)
+
+        # Sort by requested field
+        if sort_by == "recovery_pct":
+            farms.sort(key=lambda f: f.get("average_recovery_percent", 0), reverse=True)
+        elif sort_by == "thronos_earned":
+            farms.sort(key=lambda f: f.get("thronos_earned", 0), reverse=True)
+        elif sort_by == "reputation":
+            farms.sort(key=lambda f: f.get("reputation_score", 0), reverse=True)
+
+        paginated = farms[offset:offset+limit]
+
+        # Calculate network statistics
+        total_power_kw = sum(f.get("total_power_kw", 0) for f in farms)
+        total_hashrate = sum(f.get("total_hashrate_th", 0) for f in farms)
+        total_btc = sum(f.get("btc_mined", 0) for f in farms)
+        total_thr = sum(f.get("thronos_earned", 0) for f in farms)
+        avg_recovery = sum(f.get("average_recovery_percent", 0) for f in farms) / len(farms) if farms else 0
+        avg_reputation = sum(f.get("reputation_score", 75) for f in farms) / len(farms) if farms else 75
+
+        return jsonify({
+            "status": "success",
+            "stats": {
+                "total_farms": len(farms),
+                "total_power_kw": round(total_power_kw, 2),
+                "total_hashrate_th": round(total_hashrate, 2),
+                "total_btc_mined": total_btc,
+                "total_thronos_earned": round(total_thr, 2),
+                "average_recovery_percent": round(avg_recovery, 1),
+                "average_reputation_score": round(avg_reputation, 1)
+            },
+            "farms": paginated,
+            "pagination": {
+                "offset": offset,
+                "limit": limit,
+                "total": len(farms),
+                "returned": len(paginated)
+            }
+        }), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error monitoring BTC farms: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/btc-mining/compliance-report", methods=["GET"])
+def api_btc_mining_compliance_report():
+    """
+    Network compliance report for BTC heat mining farms
+
+    GET /api/btc-mining/compliance-report?filter=all&limit=100&offset=0
+
+    Returns: {report: {total_farms, verified, active, suspended, banned}, farms: [...]}
+    """
+    try:
+        from btc_heat_mining import BtcHeatMiningTracker, BtcMiningStatus
+
+        filter_status = request.args.get("filter", "all")
+        limit = min(int(request.args.get("limit", 100)), 500)
+        offset = int(request.args.get("offset", 0))
+
+        tracker = BtcHeatMiningTracker()
+
+        # Build filtered list
+        farms = []
+        for addr in tracker.compliance.keys():
+            compliance = tracker.compliance[addr]
+            status_dict = tracker.get_farm_status(addr)
+
+            if filter_status == "all" or compliance.status.value == filter_status:
+                if status_dict:
+                    farms.append(status_dict)
+
+        paginated = farms[offset:offset+limit]
+
+        # Calculate compliance statistics
+        verified = sum(1 for f in farms if f.get("equipment_verified"))
+        active = sum(1 for f in farms if f.get("status") == "active")
+        suspended = sum(1 for f in farms if f.get("status") == "suspended")
+        banned = sum(1 for f in farms if f.get("status") == "banned")
+        avg_recovery = sum(f.get("average_recovery_percent", 0) for f in farms) / len(farms) if farms else 0
+        avg_reputation = sum(f.get("reputation_score", 75) for f in farms) / len(farms) if farms else 75
+
+        return jsonify({
+            "status": "success",
+            "report": {
+                "total_farms": len(farms),
+                "equipment_verified": verified,
+                "active": active,
+                "suspended": suspended,
+                "banned": banned,
+                "average_recovery_pct": round(avg_recovery, 1),
+                "average_reputation_score": round(avg_reputation, 1)
+            },
+            "farms": paginated,
+            "pagination": {
+                "offset": offset,
+                "limit": limit,
+                "total": len(farms),
+                "returned": len(paginated)
+            }
+        }), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error generating compliance report: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+# ===== BTC PLEDGE & NETWORK POOL ENDPOINTS =====
+
+@app.route("/api/btc-mining/pledge/required/<btc_address>", methods=["GET"])
+def api_btc_mining_pledge_required(btc_address):
+    """
+    Get required BTC pledge amount for a registered farm
+
+    GET /api/btc-mining/pledge/required/1A1z7agoat...
+
+    Returns: {btc_address, required_pledge_btc, required_pledge_satoshis, pool_address}
+    """
+    try:
+        from btc_heat_mining import BtcHeatMiningTracker
+
+        tracker = BtcHeatMiningTracker()
+
+        if btc_address not in tracker.miners:
+            return jsonify(status="error", error="Farm not registered"), 404
+
+        miner = tracker.miners[btc_address]
+        required = tracker.calculate_required_pledge(
+            hardware_type=miner.hardware_type.name if hasattr(miner.hardware_type, "name") else miner.hardware_type,
+            unit_count=miner.unit_count
+        )
+
+        return jsonify({
+            "status": "success",
+            "btc_address": btc_address,
+            "required_pledge_satoshis": required,
+            "required_pledge_btc": required / 100_000_000,
+            "pool_address": tracker.network_pool.pool_address,
+            "pledge_ratio_percent": tracker.PLEDGE_RATIO * 100,
+            "message": "Send BTC pledge to pool_address to activate heat mining bonuses"
+        }), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting pledge requirement: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/btc-mining/pledge/confirm", methods=["POST"])
+def api_btc_mining_pledge_confirm():
+    """
+    Confirm a BTC pledge has been sent to the network pool
+
+    POST /api/btc-mining/pledge/confirm
+    {
+        "btc_address": "1A1z7agoat...",
+        "pledge_satoshis": 4000,
+        "btc_tx_hash": "abc123..."
+    }
+
+    Returns: {status, btc_address, pledge_active, message}
+    """
+    try:
+        from btc_heat_mining import BtcHeatMiningTracker
+
+        data = request.get_json() or {}
+        required = ["btc_address", "pledge_satoshis", "btc_tx_hash"]
+        for field in required:
+            if field not in data:
+                return jsonify(status="error", error=f"Missing field: {field}"), 400
+
+        tracker = BtcHeatMiningTracker()
+
+        success = tracker.record_pledge(
+            btc_address=data["btc_address"],
+            pledge_satoshis=int(data["pledge_satoshis"]),
+            pledge_tx_hash=data["btc_tx_hash"]
+        )
+
+        if success:
+            return jsonify(
+                status="success",
+                btc_address=data["btc_address"],
+                pledge_active=True,
+                pledge_satoshis=int(data["pledge_satoshis"]),
+                message="Pledge recorded - farm is now eligible for heat bonuses"
+            ), 201
+        else:
+            return jsonify(status="error", error="Farm not registered or pledge failed"), 400
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error confirming pledge: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/btc-mining/fee/collect", methods=["POST"])
+def api_btc_mining_fee_collect():
+    """
+    Collect a fee from a farm when they submit a heat proof
+    Called automatically per heat proof submission
+
+    POST /api/btc-mining/fee/collect
+    {
+        "btc_address": "1A1z7agoat...",
+        "btc_mined_satoshis": 4500
+    }
+
+    Returns: {fee_collected_satoshis, fee_collected_btc, pool_balance_btc}
+    """
+    try:
+        from btc_heat_mining import BtcHeatMiningTracker
+
+        data = request.get_json() or {}
+        if "btc_address" not in data or "btc_mined_satoshis" not in data:
+            return jsonify(status="error", error="Missing required fields"), 400
+
+        tracker = BtcHeatMiningTracker()
+        fee = tracker.collect_heat_proof_fee(
+            btc_address=data["btc_address"],
+            btc_mined_satoshis=int(data["btc_mined_satoshis"])
+        )
+
+        return jsonify({
+            "status": "success",
+            "btc_address": data["btc_address"],
+            "fee_collected_satoshis": fee,
+            "fee_collected_btc": fee / 100_000_000,
+            "fee_ratio_percent": tracker.HEAT_PROOF_FEE_RATIO * 100,
+            "pool_balance_btc": tracker.network_pool.total_balance_btc
+        }), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error collecting fee: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/btc-mining/network-pool", methods=["GET"])
+def api_btc_mining_network_pool():
+    """
+    Get current state of the network BTC pool
+    Shows total pledges, fees collected, payouts, and available balances
+
+    GET /api/btc-mining/network-pool
+
+    Returns: {pool_address, total_balance_btc, pledged, fees, payouts, reserves}
+    """
+    try:
+        from btc_heat_mining import BtcHeatMiningTracker
+
+        tracker = BtcHeatMiningTracker()
+        pool_status = tracker.get_network_pool_status()
+
+        # Add roadmap info
+        pool_status["roadmap"] = {
+            "current_phase": "Phase 7: BTC pool accumulating fees & pledges",
+            "next_phase": "Phase 7.1: Ether.fi integration for fiat conversion",
+            "future_phase": "Phase 8: Thronos Visa card (gated on user volume)"
+        }
+
+        return jsonify(status="success", **pool_status), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting pool status: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
 def build_wallet_history(thr_addr: str) -> list[dict]:
     """Return canonical wallet history with normalized status."""
     history = []

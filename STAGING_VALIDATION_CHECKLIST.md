@@ -117,26 +117,7 @@ curl -X POST ${STAGING_MASTER_URL}/api/v1/tx/send \
 # Expected: HTTP 400 (invalid_signature)
 ```
 
-#### Test 2e: Public Key/Address Mismatch Rejected
-```bash
-curl -X POST ${STAGING_MASTER_URL}/api/v1/tx/send \
-  -H "Content-Type: application/json" \
-  -d '{
-    "tx": {
-      "from": "THRC0FFEE0C0FFEE0C0FFEE0C0FFEE0C0FF",
-      "to": "THR0000000000000000000000000000000000000",
-      "amount": 100,
-      "token": "THR",
-      "nonce": "tx_test_mismatch_001",
-      "timestamp": 1710000000,
-      "signature": "304402203505194ba8f98847f7c4506004f107ee99b73c734af0175c9afb56841cc62a890220319211f1617059e5d6172ddbc374896239fb9a25debaa1324e064209c2d50a05",
-      "publicKey": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
-    }
-  }'
-# Expected: HTTP 400 (address_mismatch or invalid_address)
-```
-
-#### Test 2f: Valid Golden Vector Transaction Accepted
+#### Test 2e: Public Key/Address Mismatch Rejected (Old Golden Vector)
 ```bash
 curl -X POST ${STAGING_MASTER_URL}/api/v1/tx/send \
   -H "Content-Type: application/json" \
@@ -152,31 +133,58 @@ curl -X POST ${STAGING_MASTER_URL}/api/v1/tx/send \
       "publicKey": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
     }
   }'
+# Expected: HTTP 400 (address_mismatch OR timestamp_expired)
+# Reason 1: Address does NOT match publicKey (publicKey derives to THR751E76E8199196D454941C45D1B3A323F1433BD6)
+# Reason 2: Timestamp 1710000000 is old (2024-03-10), fails ±5 min drift validation
+```
+
+#### Test 2f: Valid Fresh Signed Transaction Accepted
+```bash
+curl -X POST ${STAGING_MASTER_URL}/api/v1/tx/send \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tx": {
+      "from": "THR751E76E8199196D454941C45D1B3A323F1433BD6",
+      "to": "THRC0FFEE0C0FFEE0C0FFEE0C0FFEE0C0FF",
+      "amount": 100,
+      "token": "THR",
+      "nonce": "tx_staging_1779212171",
+      "timestamp": 1779212171,
+      "signature": "30440220018ad87c4581249ae5906ee26e0d996910461d8b7b56a9c798d09a752b99651202206769947d7a756b3a6d61bfa12dafd3fb9ad7fbd044c6c89e028f0cdccc5681fb",
+      "publicKey": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+    }
+  }'
 # Expected: HTTP 200 OK (transaction accepted)
 # Response should include: transaction ID, confirmation status, or similar
+# Verification:
+# - Address THR751E76E8199196D454941C45D1B3A323F1433BD6 = RIPEMD160(SHA256(publicKey))
+# - Timestamp 1779212171 is current UNIX seconds (within ±5 min drift)
+# - Signature is DER-encoded ECDSA/secp256k1
+# - Public Key is compressed (66 hex chars, 02 prefix)
 ```
 
 ---
 
 ## Staging Replica Tests
 
-### 1. Replica Rejects Write Operations
+### 1. Replica Rejects Write Operations (Using Valid Fresh Signed TX)
 ```bash
 curl -X POST ${STAGING_REPLICA_URL}/api/v1/tx/send \
   -H "Content-Type: application/json" \
   -d '{
     "tx": {
-      "from": "THR7D865DCC21E8B5D5D8B5B5D5D5D5D5D5",
+      "from": "THR751E76E8199196D454941C45D1B3A323F1433BD6",
       "to": "THRC0FFEE0C0FFEE0C0FFEE0C0FFEE0C0FF",
       "amount": 100,
       "token": "THR",
-      "nonce": "tx_test_replica_001",
-      "timestamp": 1710000000,
-      "signature": "304402203505194ba8f98847f7c4506004f107ee99b73c734af0175c9afb56841cc62a890220319211f1617059e5d6172ddbc374896239fb9a25debaa1324e064209c2d50a05",
+      "nonce": "tx_staging_1779212171",
+      "timestamp": 1779212171,
+      "signature": "30440220018ad87c4581249ae5906ee26e0d996910461d8b7b56a9c798d09a752b99651202206769947d7a756b3a6d61bfa12dafd3fb9ad7fbd044c6c89e028f0cdccc5681fb",
       "publicKey": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
     }
   }'
 # Expected: HTTP 503 with error message containing "read_only_replica"
+# Note: Even though the transaction is valid, replica must reject ALL writes
 ```
 
 ### 2. Replica Accepts Read Operations
@@ -193,28 +201,37 @@ curl -X GET ${STAGING_REPLICA_URL}/api/transfers
 
 ---
 
-## Golden Vector Test Transaction
+## Fresh Signed Test Transaction (For Staging Validation)
 
 **Signed with real ECDSA/secp256k1**
 
 ```json
 {
-  "from": "THR7D865DCC21E8B5D5D8B5B5D5D5D5D5D5",
+  "from": "THR751E76E8199196D454941C45D1B3A323F1433BD6",
   "to": "THRC0FFEE0C0FFEE0C0FFEE0C0FFEE0C0FF",
   "amount": 100,
   "token": "THR",
-  "nonce": "tx_golden_vector_001",
-  "timestamp": 1710000000,
-  "signature": "304402203505194ba8f98847f7c4506004f107ee99b73c734af0175c9afb56841cc62a890220319211f1617059e5d6172ddbc374896239fb9a25debaa1324e064209c2d50a05",
+  "nonce": "tx_staging_1779212171",
+  "timestamp": 1779212171,
+  "signature": "30440220018ad87c4581249ae5906ee26e0d996910461d8b7b56a9c798d09a752b99651202206769947d7a756b3a6d61bfa12dafd3fb9ad7fbd044c6c89e028f0cdccc5681fb",
   "publicKey": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
 }
 ```
 
 **Properties:**
+- From Address: THR751E76E8199196D454941C45D1B3A323F1433BD6 (derived from publicKey via RIPEMD160(SHA256())) ✅
 - Public Key: Compressed secp256k1 (66 hex chars, 02 prefix) ✅
 - Signature: DER-encoded ECDSA ✅
-- Timestamp: UNIX seconds (1710000000 = 2024-03-10 00:00:00 UTC) ✅
+- Timestamp: UNIX seconds (1779212171, current time within ±5 min drift) ✅
 - Canonical: Sorted keys, compact JSON ✅
+
+## Old Golden Vector (For Rejection Testing)
+
+The old golden vector with timestamp 1710000000 (2024-03-10) will be rejected for TWO reasons:
+1. **Address Mismatch**: from="THR7D865DCC21E8B5D5D8B5B5D5D5D5D5D5" does NOT match the public key (derives to THR751E76E8199196D454941C45D1B3A323F1433BD6)
+2. **Expired Timestamp**: 1710000000 is old and fails the ±5 minute drift validation
+
+Expected rejection: HTTP 400 (address_mismatch OR timestamp_expired or similar)
 
 ---
 
@@ -229,10 +246,10 @@ curl -X GET ${STAGING_REPLICA_URL}/api/transfers
 | Invalid Signature | 400 | N/A | ✅ |
 | Milliseconds Timestamp | 400 | N/A | ✅ |
 | HMAC Signature | 400 | N/A | ✅ |
-| PublicKey/Address Mismatch | 400 | N/A | ✅ |
-| Valid Golden Vector TX | 200 | N/A | ✅ |
-| Write Operation | N/A | 503 | ✅ |
-| Read Operations | N/A | 200 | ✅ |
+| Old Golden Vector (mismatch + expired) | 400 | N/A | ✅ |
+| Valid Fresh Signed TX | 200 | N/A | ✅ |
+| Write Operation on Replica | N/A | 503 | ✅ |
+| Read Operations on Replica | N/A | 200 | ✅ |
 
 ---
 

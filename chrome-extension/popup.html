@@ -120,8 +120,8 @@
                     <input type="text" id="importAddress" class="form-input" placeholder="THR...">
                 </div>
                 <div class="form-group">
-                    <label>Secret Key</label>
-                    <input type="password" id="importSecret" class="form-input" placeholder="Enter secret key">
+                    <label>Mnemonic (12 or 24 words)</label>
+                    <textarea id="importSecret" class="form-input" placeholder="Enter mnemonic words separated by spaces" style="min-height: 80px;"></textarea>
                 </div>
                 <div class="modal-actions">
                     <button id="cancelImportBtn" class="btn btn-secondary">Cancel</button>
@@ -147,6 +147,8 @@
         </div>
     </div>
 
+    <!-- Load cryptographic libraries for client-side signing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
     <script src="popup.js"></script>
 </body>
 </html>

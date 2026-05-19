@@ -51,7 +51,7 @@
 
 ### Core Signing Files (ECDSA/secp256k1)
 - ✅ thronos-wallet-app/src/services/signing.ts (complete rewrite)
-- ✅ mobile-sdk/src/signing.js (via signing-fixed.js)
+- ✅ mobile-sdk/src/signing.js (complete rewrite with ECDSA)
 - ✅ chrome-extension/popup.js (complete rewrite)
 
 ### Address Derivation Files
@@ -66,6 +66,7 @@
 - ✅ WALLET_V1_CRYPTO_FIX_GUIDE.md (comprehensive guide)
 - ✅ CRYPTO_FIXES_SUMMARY.md (before/after comparison)
 - ✅ PUBLICKEY_FORMAT_FIX.md (format specification)
+- ✅ test_mobile_sdk_compressed_pubkey.js (mobile SDK validation tests)
 
 ---
 
@@ -130,13 +131,15 @@ curl -X POST /api/v1/tx/send \
 ## Commits in This Branch (Most Recent)
 
 ```
+1508eb9 Add mobile SDK compressed key validation and status documentation
+f8aed34 Fix mobile SDK: Use compressed public keys in signed transactions
 6e58d56 Add comprehensive documentation of publicKey format fix
 4a58651 Fix publicKey format: use compressed keys in signed transactions
 457ac7f Add comprehensive summary of crypto compatibility fixes
 87801ee Fix Chrome extension BIP44 derivation path to match wallet.ts and mobile SDK
 368160d Fix critical address derivation and signing bugs across all clients
 904b172 P0: Add crypto fix guide + client signing implementations (ECDSA/secp256k1)
-... (20 more commits with wallet hardening, backend production verification, etc.)
+... (20+ more commits with wallet hardening, backend production verification, etc.)
 ```
 
 ---
@@ -207,6 +210,7 @@ curl -X POST /api/v1/tx/send \
 - WALLET_V1_CRYPTO_FIX_GUIDE.md - Implementation guide
 - wallet_v1_golden_vectors.json - Real test vectors
 - test_wallet_v1_crypto_compatibility.py - Backend compatibility tests
+- test_mobile_sdk_compressed_pubkey.js - Mobile SDK validation tests
 
 ---
 

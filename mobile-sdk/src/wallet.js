@@ -14,9 +14,6 @@ let CryptoJS;
 let bip39;
 let bip32;
 
-// Import signing module for ECDSA
-const signingModule = require('./signing');
-
 // Dynamic imports for platform compatibility
 try {
     AsyncStorage = require('@react-native-async-storage/async-storage').default;
@@ -58,6 +55,14 @@ try {
     bip32 = require('bip32');
 } catch (e) {
     console.warn('BIP39/BIP32 libraries not available');
+}
+
+// Import signing module for ECDSA secp256k1
+let signingModule;
+try {
+    signingModule = require('./signing');
+} catch (e) {
+    console.warn('Signing module not available');
 }
 
 const STORAGE_KEY_ADDRESS = '@thronos_wallet_address';
@@ -150,6 +155,7 @@ export default class ThronosWallet {
 
     /**
      * Derive THR address from mnemonic using BIP44 path m/44'/1'/0'/0/0
+     * Uses canonical Bitcoin-style address derivation: SHA256 → RIPEMD160 → first 40 chars uppercase
      * @param {string} mnemonic - BIP39 mnemonic
      * @returns {Promise<string>}
      * @private
@@ -170,9 +176,16 @@ export default class ThronosWallet {
             const path = "m/44'/1'/0'/0/0";
             const child = root.derivePath(path);
 
-            // Derive address from public key
-            const publicKeyHash = CryptoJS.SHA256(child.publicKey.toString()).toString();
-            const address = `THR${publicKeyHash.slice(0, 34)}`;
+            // Derive address from compressed public key using canonical Bitcoin-style algorithm
+            // 1. SHA256 of compressed public key
+            const publicKeyHex = child.publicKey.toString('hex');
+            const sha256Hash = CryptoJS.SHA256(publicKeyHex).toString();
+
+            // 2. RIPEMD160 of SHA256 result
+            const ripemd160Hash = CryptoJS.RIPEMD160(sha256Hash).toString();
+
+            // 3. Take first 40 chars (uppercase) and prepend THR
+            const address = `THR${ripemd160Hash.substring(0, 40).toUpperCase()}`;
 
             return address;
         } catch (error) {
@@ -274,8 +287,8 @@ export default class ThronosWallet {
     }
 
     /**
-     * Sign a transaction with secp256k1 ECDSA (uses signing module)
-     * Routes through signing.js for real ECDSA (NOT HMAC-SHA256)
+     * Sign a transaction on the device using ECDSA/secp256k1
+     * Mnemonic retrieved on-demand, key never stored
      * @param {object} txParams - Transaction parameters
      * @returns {Promise<object>} - Signed transaction envelope
      */
@@ -286,27 +299,41 @@ export default class ThronosWallet {
                 throw new Error('Wallet not found or mnemonic not available');
             }
 
-            if (!bip32) {
-                throw new Error('BIP32 library not available');
+            if (!bip32 || !signingModule) {
+                throw new Error('BIP32 or signing module not available');
             }
 
-            // Derive wallet from mnemonic
+            // Derive private key and public key from mnemonic
             const seed = await bip39.mnemonicToSeed(mnemonic);
             const root = bip32.fromSeed(Buffer.from(seed, 'hex'));
             const child = root.derivePath("m/44'/1'/0'/0/0");
 
             if (!child.privateKey) {
-                throw new Error('Failed to derive private key from mnemonic');
+                throw new Error('Failed to derive private key');
             }
 
-            // Create wallet object for signing module
             const wallet = {
                 privateKey: child.privateKey.toString('hex'),
                 publicKey: child.publicKey.toString('hex')
             };
 
-            // Use signing module to sign with ECDSA (NOT HMAC)
-            const signedTx = await signingModule.signThronosTransaction(txParams, wallet);
+            // Create transaction payload with UNIX seconds timestamp
+            const txPayload = {
+                from: txParams.from,
+                to: txParams.to,
+                amount: txParams.amount,
+                token: txParams.token || 'THR',
+                nonce: txParams.nonce || `tx_${Date.now()}`,
+                timestamp: Math.floor(Date.now() / 1000)  // UNIX seconds, not milliseconds
+            };
+
+            // Sign using ECDSA/secp256k1 from signing module
+            const signedTx = await signingModule.signThronosTransaction(txPayload, wallet);
+
+            // Verify envelope structure (no forbidden fields)
+            if (!signingModule.verifyEnvelopeStructure(signedTx)) {
+                throw new Error('Invalid transaction envelope');
+            }
 
             return signedTx;
         } catch (error) {

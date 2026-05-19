@@ -14,6 +14,9 @@ let CryptoJS;
 let bip39;
 let bip32;
 
+// Import signing module for ECDSA
+const signingModule = require('./signing');
+
 // Dynamic imports for platform compatibility
 try {
     AsyncStorage = require('@react-native-async-storage/async-storage').default;
@@ -271,8 +274,8 @@ export default class ThronosWallet {
     }
 
     /**
-     * Sign a transaction on the device
-     * Mnemonic retrieved on-demand, key never stored
+     * Sign a transaction with secp256k1 ECDSA (uses signing module)
+     * Routes through signing.js for real ECDSA (NOT HMAC-SHA256)
      * @param {object} txParams - Transaction parameters
      * @returns {Promise<object>} - Signed transaction envelope
      */
@@ -287,35 +290,25 @@ export default class ThronosWallet {
                 throw new Error('BIP32 library not available');
             }
 
-            // Derive private key from mnemonic
+            // Derive wallet from mnemonic
             const seed = await bip39.mnemonicToSeed(mnemonic);
             const root = bip32.fromSeed(Buffer.from(seed, 'hex'));
             const child = root.derivePath("m/44'/1'/0'/0/0");
-            const privateKey = child.privateKey.toString('hex');
 
-            // Create transaction payload
-            const txPayload = {
-                from: txParams.from,
-                to: txParams.to,
-                amount: txParams.amount,
-                token: txParams.token || 'THR',
-                nonce: txParams.nonce || Math.floor(Date.now() / 1000),
-                timestamp: Date.now()
-            };
+            if (!child.privateKey) {
+                throw new Error('Failed to derive private key from mnemonic');
+            }
 
-            // Sign payload with private key
-            const message = JSON.stringify(txPayload, Object.keys(txPayload).sort());
-            const signature = CryptoJS.HmacSHA256(message, privateKey).toString();
-
-            // Clear private key from memory
-            // (Note: In production, use more secure key clearing methods)
-            privateKey = null;
-
-            return {
-                ...txPayload,
-                signature,
+            // Create wallet object for signing module
+            const wallet = {
+                privateKey: child.privateKey.toString('hex'),
                 publicKey: child.publicKey.toString('hex')
             };
+
+            // Use signing module to sign with ECDSA (NOT HMAC)
+            const signedTx = await signingModule.signThronosTransaction(txParams, wallet);
+
+            return signedTx;
         } catch (error) {
             throw new Error(`Failed to sign transaction: ${error.message}`);
         }

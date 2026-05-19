@@ -11,7 +11,8 @@ import { Audio } from 'expo-av';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { useStore } from '../store/useStore';
 import { getWallet, isValidAddress } from '../services/wallet';
-import { sendTHR, sendToken } from '../services/api';
+import { sendTHRSigned, sendTokenSigned } from '../services/api';
+import { signThronosTransaction } from '../services/signing';
 import { CONFIG } from '../constants/config';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -140,12 +141,20 @@ export default function SendScreen() {
             setSending(true);
             setTxResult(null);
             try {
+              const signedTx = await signThronosTransaction({
+                from: creds.address,
+                to: recipient.trim(),
+                amount: amt,
+                token: selectedToken,
+                nonce: Math.floor(Date.now() / 1000),
+              });
+
               const result = selectedToken === 'THR'
-                ? await sendTHR({ from: creds.address, to: recipient.trim(), amount: amt, secret: creds.secret, speed })
-                : await sendToken({ symbol: selectedToken, from: creds.address, to: recipient.trim(), amount: amt, secret: creds.secret });
+                ? await sendTHRSigned({ signedTx, speed })
+                : await sendTokenSigned({ signedTx });
 
               if (result.success) {
-                setTxResult({ success: true, tx_id: result.transaction?.tx_id });
+                setTxResult({ success: true, tx_id: result.txHash });
               } else {
                 setTxResult({ success: false, error: result.error || 'Transaction failed.' });
               }

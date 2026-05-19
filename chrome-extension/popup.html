@@ -134,7 +134,7 @@
         <div id="createModal" class="modal" style="display: none;">
             <div class="modal-content">
                 <h3>Create New Wallet</h3>
-                <p class="warning-message">⚠️ Please save your secret key securely!</p>
+                <p class="warning-message">⚠️ Please save your mnemonic securely!</p>
                 <div class="wallet-details" id="newWalletDetails">
                     <div class="spinner"></div>
                     <p>Generating wallet...</p>
@@ -147,8 +147,10 @@
         </div>
     </div>
 
-    <!-- Load cryptographic libraries for client-side signing -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <!-- Cryptographic libraries for ECDSA/secp256k1 signing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/elliptic/6.5.4/elliptic.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bip39@4.0.0/dist/bip39.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bip32@4.0.1/dist/bip32.min.js"></script>
     <script src="popup.js"></script>
 </body>
 </html>

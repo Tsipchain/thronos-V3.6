@@ -1,6 +1,8 @@
-// Thronos Wallet App - Transaction Signing Service (FIXED - ECDSA/secp256k1)
-// Uses real secp256k1 ECDSA signatures (NOT HMAC-SHA256 placeholder)
-// All signing operations occur on-device. Private keys never leave the device.
+/**
+ * Thronos Transaction Signing Service (Client-Side Only)
+ * ECDSA/secp256k1 signing with SHA256 hashing
+ * Private keys never leave the device.
+ */
 
 import { ec as EC } from 'elliptic';
 import * as crypto from 'crypto';
@@ -10,24 +12,26 @@ const ec = new EC('secp256k1');
 
 export interface SignedTransaction {
   nonce: string;
-  timestamp: number; // UNIX seconds, NOT milliseconds
+  timestamp: number;
   from: string;
   to: string;
   amount: number;
   fee?: number;
   token?: string;
-  signature: string; // DER-encoded ECDSA signature (hex)
-  publicKey: string; // secp256k1 uncompressed public key (hex, 65 bytes)
+  signature: string;
+  publicKey: string;
+}
+
+export interface SignedMessage {
+  message: string;
+  signature: string;
+  publicKey: string;
+  timestamp: number;
 }
 
 /**
  * Create canonical payload string for signing.
  * Must match backend's canonicalization exactly.
- *
- * Rules:
- * - JSON object with sorted keys
- * - Compact format (no whitespace)
- * - Timestamp must be UNIX seconds (< 1e10), NOT milliseconds
  */
 function canonicalPayloadString(payload: {
   from: string;
@@ -40,7 +44,7 @@ function canonicalPayloadString(payload: {
   // Verify timestamp is in seconds, not milliseconds
   if (payload.timestamp > 1e10) {
     throw new Error(
-      `Invalid timestamp ${payload.timestamp}: must be UNIX seconds (< 1e10), not milliseconds`
+      `Invalid timestamp ${payload.timestamp}: must be UNIX seconds (e.g. 1710000000), not milliseconds`
     );
   }
 
@@ -69,7 +73,7 @@ function signCanonicalPayload(
   // Hash with SHA256
   const hash = crypto.createHash('sha256').update(canonicalBytes).digest();
 
-  // ECDSA sign using secp256k1
+  // ECDSA sign
   const keyPair = ec.keyFromPrivate(privateKeyHex);
   const signature = keyPair.sign(hash);
 
@@ -78,18 +82,9 @@ function signCanonicalPayload(
 }
 
 /**
- * Convert compressed public key to uncompressed format for backend.
- * Backend expects 65-byte uncompressed format (0x04 + 32 bytes X + 32 bytes Y).
- */
-function publicKeyCompressedToUncompressed(compressedHex: string): string {
-  const keyPair = ec.keyFromPublic(compressedHex, 'hex');
-  return keyPair.getPublic('hex'); // Returns uncompressed (65 bytes)
-}
-
-/**
  * Sign a Thronos transaction with proper ECDSA/secp256k1.
  *
- * IMPORTANT: timestamp MUST be UNIX seconds (e.g. 1710000000), not milliseconds!
+ * IMPORTANT: timestamp MUST be UNIX seconds, not milliseconds!
  */
 export async function signThronosTransaction(params: {
   from: string;
@@ -98,7 +93,7 @@ export async function signThronosTransaction(params: {
   token?: string;
   fee?: number;
   nonce: string;
-  timestamp?: number; // UNIX seconds; if not provided, uses current time
+  timestamp?: number;
 }): Promise<SignedTransaction> {
   const mnemonic = await getMnemonic();
   if (!mnemonic) {
@@ -132,16 +127,15 @@ export async function signThronosTransaction(params: {
   // Canonicalize for signing
   const canonical = canonicalPayloadString(payload);
 
-  // Sign with ECDSA/secp256k1 (NOT HMAC-SHA256)
+  // Sign with ECDSA/secp256k1
   const signature = signCanonicalPayload(canonical, derived.privateKey);
 
-  // Get uncompressed public key for backend
-  const publicKeyUncompressed = publicKeyCompressedToUncompressed(derived.publicKey);
-
+  // Use compressed public key for backend
+  // Backend derives address from: RIPEMD160(SHA256(compressedPublicKey))
   return {
     ...payload,
     signature,
-    publicKey: publicKeyUncompressed,
+    publicKey: derived.publicKey,  // Compressed key
     fee: params.fee || 0,
   };
 }
@@ -149,12 +143,7 @@ export async function signThronosTransaction(params: {
 /**
  * Sign a message with proper ECDSA/secp256k1.
  */
-export async function signMessage(message: string): Promise<{
-  message: string;
-  signature: string;
-  publicKey: string;
-  timestamp: number;
-}> {
+export async function signMessage(message: string): Promise<SignedMessage> {
   const mnemonic = await getMnemonic();
   if (!mnemonic) {
     throw new Error('Wallet not initialized.');
@@ -170,12 +159,11 @@ export async function signMessage(message: string): Promise<{
   const signature = keyPair.sign(messageHash);
   const signatureHex = signature.toDER('hex');
 
-  const publicKeyUncompressed = publicKeyCompressedToUncompressed(derived.publicKey);
-
+  // Use compressed public key for backend
   return {
     message,
     signature: signatureHex,
-    publicKey: publicKeyUncompressed,
+    publicKey: derived.publicKey,  // Compressed key
     timestamp: Math.floor(Date.now() / 1000),
   };
 }

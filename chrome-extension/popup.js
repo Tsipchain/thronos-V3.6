@@ -470,14 +470,12 @@ async function signTransactionLocally(params) {
             // Sign with ECDSA/secp256k1
             const signature = await signCanonicalPayload(canonical, privateKeyHex);
 
-            // Get uncompressed public key for backend
-            const publicKeyUncompressed = publicKeyCompressedToUncompressed(publicKeyCompressed);
-
-            // Verify envelope structure
+            // Use compressed public key for backend
+            // Backend derives address from: RIPEMD160(SHA256(compressedPublicKey))
             const signedTx = {
                 ...txPayload,
                 signature,
-                publicKey: publicKeyUncompressed
+                publicKey: publicKeyCompressed  // Compressed key
             };
 
             if (!verifyEnvelopeStructure(signedTx)) {
@@ -538,15 +536,6 @@ async function signCanonicalPayload(canonical, privateKeyHex) {
 
     // DER encoding
     return signature.toDER('hex');
-}
-
-/**
- * Convert compressed public key to uncompressed format for backend.
- */
-function publicKeyCompressedToUncompressed(compressedHex) {
-    const ec = new elliptic.ec('secp256k1');
-    const keyPair = ec.keyFromPublic(compressedHex, 'hex');
-    return keyPair.getPublic('hex'); // Returns uncompressed (65 bytes)
 }
 
 /**

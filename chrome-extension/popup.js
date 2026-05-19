@@ -429,37 +429,123 @@ async function sendTransaction() {
     }
 }
 
-// Sign transaction locally using mnemonic
-function signTransactionLocally(params) {
-    return new Promise((resolve, reject) => {
-        try {
-            // Create transaction payload
-            const txPayload = {
-                from: params.from,
-                to: params.to,
-                amount: params.amount,
-                token: params.token || 'THR',
-                nonce: Math.floor(Date.now() / 1000),
-                timestamp: Date.now()
-            };
+// Create canonical payload string for signing (matches backend format exactly)
+function canonicalPayloadString(payload) {
+    // Verify timestamp is in seconds, not milliseconds
+    if (payload.timestamp > 1e10) {
+        throw new Error(
+            `Invalid timestamp ${payload.timestamp}: must be UNIX seconds (e.g. 1710000000), not milliseconds`
+        );
+    }
 
-            // Simple signing: HMAC-SHA256 of payload using mnemonic as key
-            // In production: derive private key from mnemonic using BIP39/BIP32
-            const message = JSON.stringify(txPayload, Object.keys(txPayload).sort());
-            const signature = CryptoJS.HmacSHA256(message, params.mnemonic).toString();
-            const publicKey = CryptoJS.SHA256(params.mnemonic).toString().slice(0, 66);
+    const obj = {
+        amount: payload.amount,
+        from: payload.from,
+        nonce: payload.nonce,
+        timestamp: payload.timestamp,
+        to: payload.to,
+        token: payload.token,
+    };
 
-            const signedTx = {
-                ...txPayload,
-                signature: signature,
-                publicKey: publicKey
-            };
+    // Compact JSON with sorted keys - must match backend exactly
+    return JSON.stringify(obj, Object.keys(obj).sort());
+}
 
-            resolve(signedTx);
-        } catch (error) {
-            reject(error);
+// Hash canonical payload with SHA-256 (browser SubtleCrypto)
+async function hashCanonicalPayload(canonical) {
+    const canonicalBytes = new TextEncoder().encode(canonical);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', canonicalBytes);
+    return new Uint8Array(hashBuffer);
+}
+
+// Convert Uint8Array to hex string
+function uint8ArrayToHex(arr) {
+    return Array.from(arr)
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+}
+
+// Convert compressed public key to uncompressed format for backend
+function publicKeyCompressedToUncompressed(compressedHex) {
+    const ec = new elliptic.ec('secp256k1');
+    const keyPair = ec.keyFromPublic(compressedHex, 'hex');
+    return keyPair.getPublic('hex'); // Returns uncompressed (65 bytes)
+}
+
+// Sign transaction locally using mnemonic and ECDSA/secp256k1
+async function signTransactionLocally(params) {
+    try {
+        // Validate mnemonic
+        if (!params.mnemonic) {
+            throw new Error('Mnemonic required for signing');
         }
-    });
+
+        // Derive keypair from mnemonic using BIP39/BIP32
+        const seed = bip39.mnemonicToSeedSync(params.mnemonic);
+        const root = bip32.fromSeed(seed);
+        const child = root.derivePath("m/44'/60'/0'/0/0"); // Ethereum-compatible path
+
+        if (!child.privateKey) {
+            throw new Error('Failed to derive private key from mnemonic');
+        }
+
+        const privateKeyHex = child.privateKey.toString('hex');
+        const publicKeyCompressed = child.publicKey.toString('hex');
+
+        // Ensure timestamp is UNIX seconds, not milliseconds
+        const timestampSeconds = Math.floor(Date.now() / 1000);
+        if (timestampSeconds > 1e10) {
+            throw new Error(
+                `Timestamp too large: ${timestampSeconds}. Use UNIX seconds (e.g. 1710000000), not milliseconds.`
+            );
+        }
+
+        // Create canonical payload
+        const txPayload = {
+            from: params.from,
+            to: params.to,
+            amount: params.amount,
+            token: params.token || 'THR',
+            nonce: `tx_${Date.now()}`,
+            timestamp: timestampSeconds,
+        };
+
+        // Canonicalize for signing
+        const canonical = canonicalPayloadString(txPayload);
+
+        // Hash with SHA-256
+        const hashBytes = await hashCanonicalPayload(canonical);
+        const hashHex = uint8ArrayToHex(hashBytes);
+
+        // ECDSA sign with secp256k1
+        const ec = new elliptic.ec('secp256k1');
+        const keyPair = ec.keyFromPrivate(privateKeyHex);
+        const signature = keyPair.sign(hashHex);
+
+        // DER encoding
+        const signatureHex = signature.toDER('hex');
+
+        // Get uncompressed public key for backend
+        const publicKeyUncompressed = publicKeyCompressedToUncompressed(publicKeyCompressed);
+
+        // Verify no forbidden fields present
+        const forbiddenFields = ['secret', 'mnemonic', 'seed', 'privateKey', 'auth_secret', 'passphrase'];
+        for (const field of forbiddenFields) {
+            if (txPayload[field] !== undefined) {
+                throw new Error(`Forbidden field present: ${field}`);
+            }
+        }
+
+        const signedTx = {
+            ...txPayload,
+            signature: signatureHex,
+            publicKey: publicKeyUncompressed,
+        };
+
+        return signedTx;
+    } catch (error) {
+        throw new Error(`Failed to sign transaction: ${error.message}`);
+    }
 }
 
 // Show toast notification

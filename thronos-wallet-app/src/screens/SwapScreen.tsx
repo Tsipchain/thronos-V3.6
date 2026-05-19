@@ -8,8 +8,9 @@ import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { useStore } from '../store/useStore';
-import { getSwapQuote, executeSwap } from '../services/api';
+import { getSwapQuote, executeSwapSigned } from '../services/api';
 import { getWallet } from '../services/wallet';
+import { signThronosTransaction } from '../services/signing';
 
 export default function SwapScreen() {
   const navigation = useNavigation();
@@ -44,16 +45,20 @@ export default function SwapScreen() {
 
     setLoading(true);
     try {
-      const result = await executeSwap({
-        from_token: fromToken, to_token: toToken,
-        amount: parseFloat(amount), address: creds.address, secret: creds.secret,
+      const signedTx = await signThronosTransaction({
+        from: creds.address,
+        to: creds.address,
+        amount: parseFloat(amount),
+        token: fromToken,
+        nonce: Math.floor(Date.now() / 1000),
       });
+      const result = await executeSwapSigned({ signedTx });
       if (result.success) {
         Alert.alert('Success', `Swapped ${amount} ${fromToken} to ${toToken}!`, [
           { text: 'OK', onPress: () => navigation.goBack() },
         ]);
       } else {
-        Alert.alert('Failed', 'Swap failed.');
+        Alert.alert('Failed', result.error || 'Swap failed.');
       }
     } catch (error: any) {
       Alert.alert('Error', error.message);

@@ -63,67 +63,73 @@ export default class ThronosAPI {
     }
 
     /**
-     * Send a transaction
-     * @param {object} transaction - Transaction details
+     * Send a signed transaction (no secret transmitted)
+     * @param {object} signedTx - Signed transaction envelope
      * @returns {Promise<{success: boolean, transaction: object}>}
      */
-    async sendTransaction(transaction) {
+    async sendTransaction(signedTx) {
+        // Verify envelope contains required fields
+        if (!signedTx.signature || !signedTx.publicKey) {
+            throw new Error('Transaction must be signed (missing signature or publicKey)');
+        }
+
+        if (signedTx.signature === undefined || signedTx.secret !== undefined) {
+            throw new Error('Transaction must be signed client-side; no raw secrets allowed');
+        }
+
         // Route based on token type
-        const token = (transaction.token || 'THR').toUpperCase();
+        const token = (signedTx.token || 'THR').toUpperCase();
 
         if (token === 'THR') {
-            // Native THR send
-            return await this.request('/send_thr', {
+            // Native THR send with signature
+            return await this.request('/api/v1/tx/send', {
                 method: 'POST',
                 body: JSON.stringify({
-                    from_thr: transaction.from,
-                    to_thr: transaction.to,
-                    amount: transaction.amount,
-                    auth_secret: transaction.secret,
-                    speed: transaction.speed || 'fast',
-                    passphrase: transaction.passphrase
+                    tx: signedTx  // Signed envelope only
                 })
             });
         } else {
-            // Custom token transfer (fee paid in THR)
-            return await this.request('/api/tokens/transfer', {
+            // Custom token transfer with signature
+            return await this.request('/api/v1/token/transfer', {
                 method: 'POST',
                 body: JSON.stringify({
-                    symbol: token,
-                    from_thr: transaction.from,
-                    to_thr: transaction.to,
-                    amount: transaction.amount,
-                    auth_secret: transaction.secret,
-                    speed: transaction.speed || 'fast',
-                    passphrase: transaction.passphrase
+                    tx: signedTx  // Signed envelope only
                 })
             });
         }
     }
 
     /**
-     * Send multiple tokens in batch
-     * @param {object} batchDetails - Batch transfer details
+     * Send multiple tokens in batch (with signatures)
+     * @param {object} batchDetails - Batch transfer details {transfers: [{to, amount, token, signedTx}]}
      * @returns {Promise<{success: boolean, results: Array}>}
      */
     async sendMultipleTokens(batchDetails) {
         const results = [];
-        const { from, transfers, secret, speed, passphrase } = batchDetails;
+        const { transfers } = batchDetails;
 
         for (const transfer of transfers) {
             try {
-                const result = await this.sendTransaction({
-                    from,
+                if (!transfer.signedTx) {
+                    throw new Error('Each transfer must have a signed transaction');
+                }
+
+                const result = await this.sendTransaction(transfer.signedTx);
+                results.push({
                     to: transfer.to,
                     amount: transfer.amount,
                     token: transfer.token || 'THR',
-                    secret,
-                    speed,
-                    passphrase
+                    success: true,
+                    result
                 });
-                results.push({ ...transfer, success: true, result });
             } catch (error) {
-                results.push({ ...transfer, success: false, error: error.message });
+                results.push({
+                    to: transfer.to,
+                    amount: transfer.amount,
+                    token: transfer.token || 'THR',
+                    success: false,
+                    error: error.message
+                });
             }
         }
 

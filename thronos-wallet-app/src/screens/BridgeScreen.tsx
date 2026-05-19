@@ -20,10 +20,11 @@ import { useStore } from '../store/useStore';
 import {
   getTokenBalances,
   getBridgeQuote,
-  executeBridge as executeBridgeAPI,
+  executeBridgeSigned,
   getBridgeHistory,
 } from '../services/api';
 import { getWallet } from '../services/wallet';
+import { signThronosTransaction } from '../services/signing';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -316,14 +317,18 @@ export default function BridgeScreen({ navigation }: { navigation: any }) {
         return;
       }
 
-      const result = await executeBridgeAPI({
+      const signedTx = await signThronosTransaction({
+        from: creds.address,
+        to: wallet.chainAddresses?.[destChain] || creds.address,
+        amount: parsedAmount,
+        token: selectedToken,
+        nonce: Math.floor(Date.now() / 1000),
+      });
+
+      const result = await executeBridgeSigned({
         from_chain: sourceChain,
         to_chain: destChain,
-        token: selectedToken,
-        amount: parsedAmount,
-        from_address: creds.address,
-        to_address: wallet.chainAddresses?.[destChain] || creds.address,
-        secret: creds.secret,
+        signedTx,
       });
 
       if (result.success && result.transfer) {

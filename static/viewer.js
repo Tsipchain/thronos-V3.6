@@ -239,6 +239,13 @@
       if (el('stat-unique-addresses')) {
         el('stat-unique-addresses').textContent = formatNumber(safeNumber(stats.unique_addresses));
       }
+      // Display additional transfer stats
+      if (el('stat-total-volume')) {
+        el('stat-total-volume').textContent = formatNumber(safeNumber(stats.total_volume));
+      }
+      if (el('stat-avg-transfer-size')) {
+        el('stat-avg-transfer-size').textContent = formatNumber(safeNumber(stats.avg_transfer_size));
+      }
 
       return stats;
     } catch (error) {

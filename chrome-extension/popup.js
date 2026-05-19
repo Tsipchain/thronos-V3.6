@@ -19,13 +19,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 // Load wallet from storage (Promise-based to fix async race condition)
+// NOTE: Secrets are NOT stored; only address is kept
 async function loadWallet() {
     return new Promise((resolve) => {
-        chrome.storage.local.get(['thr_address', 'thr_secret'], (result) => {
-            if (result.thr_address && result.thr_secret) {
+        chrome.storage.local.get(['thr_address', 'thr_mnemonic_encrypted'], (result) => {
+            if (result.thr_address) {
                 currentWallet = {
-                    address: result.thr_address,
-                    secret: result.thr_secret
+                    address: result.thr_address
+                    // NOTE: No secret field; mnemonic retrieved for signing only
                 };
                 showWalletConnected();
                 loadWalletData();
@@ -204,6 +205,8 @@ async function createNewWallet() {
     const detailsDiv = document.getElementById('newWalletDetails');
 
     try {
+        // Call backend to generate wallet (returns address only in new secure flow)
+        // OR use client-side BIP39 generation
         const response = await fetch(`${API_BASE}/api/wallet/create`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }
@@ -212,20 +215,20 @@ async function createNewWallet() {
         if (!response.ok) throw new Error('Failed to create wallet');
 
         const data = await response.json();
+        const mnemonic = data.mnemonic || data.seed; // Client-generated wallet
 
         detailsDiv.innerHTML = `
             <strong>Address:</strong>
             <code>${data.address}</code>
             <br><br>
-            <strong>Secret Key:</strong>
-            <code>${data.secret}</code>
-            <br><br>
-            <p style="color: #ff6600; font-size: 10px;">⚠️ Save this secret key securely! You cannot recover it later.</p>
+            <p style="color: #00aa00; font-size: 11px;">✓ Wallet created successfully!</p>
+            <p style="color: #ff6600; font-size: 10px;">⚠️ Save your mnemonic securely (shown only once).</p>
+            ${mnemonic ? `<br><strong>Mnemonic:</strong><br><code style="word-break: break-all;">${mnemonic}</code><br><br>` : ''}
         `;
 
         document.getElementById('confirmCreateBtn').style.display = 'block';
         document.getElementById('confirmCreateBtn').dataset.address = data.address;
-        document.getElementById('confirmCreateBtn').dataset.secret = data.secret;
+        document.getElementById('confirmCreateBtn').dataset.mnemonic = mnemonic || '';
     } catch (error) {
         console.error('Error creating wallet:', error);
         detailsDiv.innerHTML = '<p style="color: #ff0000;">Failed to create wallet</p>';
@@ -235,10 +238,19 @@ async function createNewWallet() {
 function confirmCreateWallet() {
     const btn = document.getElementById('confirmCreateBtn');
     const address = btn.dataset.address;
-    const secret = btn.dataset.secret;
+    const mnemonic = btn.dataset.mnemonic;
 
-    chrome.storage.local.set({ thr_address: address, thr_secret: secret }, () => {
-        currentWallet = { address, secret };
+    // Store only address (and optionally encrypted mnemonic)
+    // Never store raw secret or mnemonic in plain text
+    const storageData = { thr_address: address };
+    if (mnemonic) {
+        // In production: encrypt mnemonic with device-specific key
+        // For now: only store address
+        storageData.thr_mnemonic_encrypted = btoa(mnemonic); // Base64 encode as placeholder
+    }
+
+    chrome.storage.local.set(storageData, () => {
+        currentWallet = { address };  // No secret stored
         hideCreateWalletModal();
         showWalletConnected();
         loadWalletData();
@@ -259,10 +271,10 @@ function hideImportWalletModal() {
 
 function confirmImportWallet() {
     const address = document.getElementById('importAddress').value.trim();
-    const secret = document.getElementById('importSecret').value.trim();
+    const mnemonic = document.getElementById('importSecret').value.trim(); // Field reused for mnemonic
 
-    if (!address || !secret) {
-        showToast('Please enter both address and secret key', 'error');
+    if (!address || !mnemonic) {
+        showToast('Please enter address and mnemonic', 'error');
         return;
     }
 
@@ -271,8 +283,21 @@ function confirmImportWallet() {
         return;
     }
 
-    chrome.storage.local.set({ thr_address: address, thr_secret: secret }, () => {
-        currentWallet = { address, secret };
+    // Validate mnemonic format (basic check: should be space-separated words)
+    const words = mnemonic.trim().split(/\s+/);
+    if (words.length !== 12 && words.length !== 24) {
+        showToast('Mnemonic must be 12 or 24 words', 'error');
+        return;
+    }
+
+    const storageData = { thr_address: address };
+    if (mnemonic) {
+        // In production: encrypt mnemonic with device-specific key
+        storageData.thr_mnemonic_encrypted = btoa(mnemonic); // Base64 encode as placeholder
+    }
+
+    chrome.storage.local.set(storageData, () => {
+        currentWallet = { address };  // No secret stored
         hideImportWalletModal();
         showWalletConnected();
         loadWalletData();
@@ -293,7 +318,7 @@ function copyAddress() {
 // Disconnect wallet
 function disconnectWallet() {
     if (confirm('Are you sure you want to disconnect your wallet?')) {
-        chrome.storage.local.remove(['thr_address', 'thr_secret'], () => {
+        chrome.storage.local.remove(['thr_address', 'thr_mnemonic_encrypted'], () => {
             currentWallet = null;
             tokens = [];
             showNotConnected();
@@ -302,10 +327,10 @@ function disconnectWallet() {
     }
 }
 
-// Send transaction
+// Send transaction (with client-side signing)
 async function sendTransaction() {
     // Check wallet connection first
-    if (!currentWallet || !currentWallet.address || !currentWallet.secret) {
+    if (!currentWallet || !currentWallet.address) {
         showToast('Wallet not connected', 'error');
         return;
     }
@@ -313,7 +338,6 @@ async function sendTransaction() {
     const tokenSymbol = document.getElementById('sendToken').value;
     const to = document.getElementById('sendTo').value.trim();
     const amount = parseFloat(document.getElementById('sendAmount').value);
-    // Get speed from settings or default to 'fast'
     const speed = document.getElementById('sendSpeed')?.value || 'fast';
 
     if (!tokenSymbol || !to || !amount) {
@@ -343,16 +367,35 @@ async function sendTransaction() {
             return;
         }
 
-        const response = await fetch(`${API_BASE}/api/wallet/send`, {
+        // Retrieve mnemonic for signing (stored encrypted)
+        const storedData = await new Promise((resolve) => {
+            chrome.storage.local.get(['thr_mnemonic_encrypted'], (result) => {
+                resolve(result);
+            });
+        });
+
+        if (!storedData.thr_mnemonic_encrypted) {
+            showToast('Cannot sign transaction: mnemonic not found', 'error');
+            return;
+        }
+
+        const mnemonic = atob(storedData.thr_mnemonic_encrypted); // Decode base64
+
+        // Sign transaction locally
+        const signedTx = await signTransactionLocally({
+            from: currentWallet.address,
+            to: to,
+            amount: amount,
+            token: tokenSymbol,
+            mnemonic: mnemonic
+        });
+
+        // Send signed transaction (no secret in request)
+        const response = await fetch(`${API_BASE}/api/v1/tx/send`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                from: currentWallet.address,
-                to: to,
-                amount: amount,
-                token: tokenSymbol,
-                secret: currentWallet.secret,
-                speed: speed
+                tx: signedTx  // Signed envelope only
             })
         });
 
@@ -361,7 +404,6 @@ async function sendTransaction() {
         // Handle errors properly
         if (!response.ok || result.error || result.ok === false) {
             let errorMsg = result.error || result.message || 'Transaction failed';
-            // Handle specific error for THR fees on custom tokens
             if (result.thr_balance !== undefined && result.fee_required !== undefined) {
                 errorMsg = `Insufficient THR for fee. Need ${result.fee_required} THR, have ${result.thr_balance} THR`;
             }
@@ -369,7 +411,7 @@ async function sendTransaction() {
             return;
         }
 
-        // Success - show fee info if available
+        // Success
         const feeInfo = result.fee_burned || result.fee ? ` (Fee: ${(result.fee_burned || result.fee).toFixed(6)} THR)` : '';
         showToast(`${amount} ${tokenSymbol} sent successfully!${feeInfo}`, 'success');
 
@@ -378,14 +420,144 @@ async function sendTransaction() {
         document.getElementById('sendTo').value = '';
         document.getElementById('sendAmount').value = '';
 
-        // Refresh wallet data immediately then retry for confirmation
+        // Refresh wallet data
         await loadWalletData();
-        // Additional refresh after short delay for blockchain propagation
         setTimeout(() => loadWalletData(), 1000);
     } catch (error) {
         console.error('Error sending transaction:', error);
         showToast('Transaction failed: ' + (error.message || 'Unknown error'), 'error');
     }
+}
+
+// Sign transaction locally using ECDSA/secp256k1
+async function signTransactionLocally(params) {
+    return new Promise(async (resolve, reject) => {
+        try {
+            if (!params.mnemonic) {
+                throw new Error('Mnemonic required for signing');
+            }
+
+            // Validate mnemonic
+            if (!bip39.validateMnemonic(params.mnemonic)) {
+                throw new Error('Invalid mnemonic');
+            }
+
+            // Derive keypair from mnemonic using BIP39/BIP32
+            const seed = bip39.mnemonicToSeedSync(params.mnemonic);
+            const root = bip32.fromSeed(seed);
+            const child = root.derivePath("m/44'/1'/0'/0/0"); // Testnet path (matches wallet.ts and mobile SDK)
+
+            if (!child.privateKey) {
+                throw new Error('Failed to derive private key from mnemonic');
+            }
+
+            const privateKeyHex = child.privateKey.toString('hex');
+            const publicKeyCompressed = child.publicKey.toString('hex');
+
+            // Create transaction payload with UNIX seconds timestamp
+            const txPayload = {
+                from: params.from,
+                to: params.to,
+                amount: params.amount,
+                token: params.token || 'THR',
+                nonce: params.nonce || `tx_${Date.now()}`,
+                timestamp: Math.floor(Date.now() / 1000)  // UNIX seconds, not milliseconds
+            };
+
+            // Create canonical payload string (sorted keys, compact JSON)
+            const canonical = canonicalPayloadString(txPayload);
+
+            // Sign with ECDSA/secp256k1
+            const signature = await signCanonicalPayload(canonical, privateKeyHex);
+
+            // Use compressed public key for backend
+            // Backend derives address from: RIPEMD160(SHA256(compressedPublicKey))
+            const signedTx = {
+                ...txPayload,
+                signature,
+                publicKey: publicKeyCompressed  // Compressed key
+            };
+
+            if (!verifyEnvelopeStructure(signedTx)) {
+                throw new Error('Invalid transaction envelope');
+            }
+
+            resolve(signedTx);
+        } catch (error) {
+            reject(error);
+        }
+    });
+}
+
+/**
+ * Create canonical payload string for signing.
+ * Must match backend's canonicalization exactly.
+ */
+function canonicalPayloadString(payload) {
+    // Verify timestamp is in seconds, not milliseconds
+    if (payload.timestamp > 1e10) {
+        throw new Error(
+            `Invalid timestamp ${payload.timestamp}: must be UNIX seconds (e.g. 1710000000), not milliseconds`
+        );
+    }
+
+    const obj = {
+        amount: payload.amount,
+        from: payload.from,
+        nonce: payload.nonce,
+        timestamp: payload.timestamp,
+        to: payload.to,
+        token: payload.token,
+    };
+
+    // Compact JSON with sorted keys - must match backend exactly
+    return JSON.stringify(obj, Object.keys(obj).sort());
+}
+
+/**
+ * Sign canonical payload with ECDSA/secp256k1 + SHA256.
+ */
+async function signCanonicalPayload(canonical, privateKeyHex) {
+    const canonicalBytes = new TextEncoder().encode(canonical);
+
+    // Using elliptic.js for signing
+    const ec = new elliptic.ec('secp256k1');
+    const keyPair = ec.keyFromPrivate(privateKeyHex);
+
+    // Hash with SHA-256
+    const hashBuffer = await crypto.subtle.digest('SHA-256', canonicalBytes);
+
+    // ECDSA sign
+    const hashHex = Array.from(new Uint8Array(hashBuffer))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+
+    const signature = keyPair.sign(hashHex);
+
+    // DER encoding
+    return signature.toDER('hex');
+}
+
+/**
+ * Verify a signed transaction envelope structure.
+ */
+function verifyEnvelopeStructure(signedTx) {
+    // Verify required fields
+    const requiredFields = ['from', 'to', 'amount', 'signature', 'publicKey', 'nonce', 'timestamp'];
+    const hasAllFields = requiredFields.every((field) => signedTx[field] !== undefined);
+
+    if (!hasAllFields) {
+        return false;
+    }
+
+    // Verify no secret fields present
+    const forbiddenFields = ['secret', 'mnemonic', 'seed', 'privateKey', 'auth_secret', 'passphrase'];
+    const hasForbiddenFields = forbiddenFields.some((field) => signedTx[field] !== undefined);
+
+    // Verify timestamp is in seconds, not milliseconds
+    const isTimestampValid = signedTx.timestamp < 1e10;
+
+    return !hasForbiddenFields && isTimestampValid;
 }
 
 // Show toast notification

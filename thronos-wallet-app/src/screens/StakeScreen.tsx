@@ -8,8 +8,9 @@ import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { useStore } from '../store/useStore';
-import { getPledgeInfo, pledgeTokens } from '../services/api';
+import { getPledgeInfo, pledgeTokensSigned } from '../services/api';
 import { getWallet } from '../services/wallet';
+import { signThronosTransaction } from '../services/signing';
 
 export default function StakeScreen() {
   const navigation = useNavigation();
@@ -39,7 +40,14 @@ export default function StakeScreen() {
 
     setStaking(true);
     try {
-      const result = await pledgeTokens({ address: creds.address, amount: amt, secret: creds.secret });
+      const signedTx = await signThronosTransaction({
+        from: creds.address,
+        to: creds.address,
+        amount: amt,
+        token: 'THR',
+        nonce: Math.floor(Date.now() / 1000),
+      });
+      const result = await pledgeTokensSigned({ signedTx });
       if (result.success) {
         Alert.alert('Success', `Staked ${amt} THR!`, [{ text: 'OK', onPress: () => navigation.goBack() }]);
       }

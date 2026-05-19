@@ -8,6 +8,15 @@ Architecture:
 
 SQLite: Master-local persistent storage for chain/wallet state
 Redis: Distributed nonce/replay coordination (key prefix: thronos:wallet:*)
+
+ADDRESS DERIVATION (CANONICAL):
+  Input: Compressed secp256k1 public key (66 chars, starts with 02 or 03)
+  1. SHA256(publicKey)
+  2. RIPEMD160(SHA256 result)
+  3. Take first 40 hex chars
+  4. Uppercase
+  5. Prepend "THR"
+  Result: "THR" + 40 uppercase hex = 43-char address
 """
 
 import json
@@ -90,25 +99,51 @@ def _init_master_sqlite(db_path: str):
         raise RuntimeError(f"SQLite initialization failed: {e}")
 
 
-def derive_address_from_publickey(public_key_hex: str) -> str:
+def derive_thronos_address(public_key_hex: str) -> str:
     """
-    Derive THR address from secp256k1 public key.
+    CANONICAL address derivation (Bitcoin-style: SHA256 → RIPEMD160).
     
-    Uses: SHA256(publicKey) -> take first 34 chars -> prepend 'THR'
+    MUST match exactly what all clients use.
     
-    This matches the client-side address derivation in wallet.ts and wallet.js
+    Input: Compressed secp256k1 public key (66 chars, starts with 02 or 03)
+    1. SHA256(publicKey)
+    2. RIPEMD160(SHA256)
+    3. Take first 40 hex chars (20 bytes)
+    4. Uppercase
+    5. Prepend "THR"
+    Result: "THR" + 40 uppercase hex chars = 43-char address
     """
     try:
-        # Hash public key with SHA256
-        pub_key_bytes = bytes.fromhex(public_key_hex)
-        hash_obj = hashlib.sha256(pub_key_bytes)
-        hash_hex = hash_obj.hexdigest()
+        # Validate input format
+        if not isinstance(public_key_hex, str) or len(public_key_hex) != 66:
+            raise ValueError(f"Expected 66-char compressed pubkey, got {len(public_key_hex) if isinstance(public_key_hex, str) else 'non-string'}")
         
-        # Take first 34 chars and prepend 'THR'
-        address = f"THR{hash_hex[:34]}"
+        if not public_key_hex.startswith(('02', '03')):
+            raise ValueError(f"Compressed pubkey must start with 02 or 03, got {public_key_hex[:2]}")
+        
+        # Step 1: SHA256
+        pub_key_bytes = bytes.fromhex(public_key_hex)
+        sha256_hash = hashlib.sha256(pub_key_bytes).digest()
+        
+        # Step 2: RIPEMD160
+        try:
+            ripemd160 = hashlib.new('ripemd160')
+            ripemd160.update(sha256_hash)
+            ripemd160_hash = ripemd160.digest()
+        except ValueError:
+            raise ValueError("RIPEMD160 not available (requires OpenSSL support)")
+        
+        # Step 3: Take first 40 chars (20 bytes in hex)
+        ripemd160_hex = ripemd160_hash.hex().upper()
+        address_hash = ripemd160_hex[:40]
+        
+        # Step 4 & 5: Prepend THR
+        address = f"THR{address_hash}"
+        
         return address
+    
     except Exception as e:
-        raise ValueError(f"Failed to derive address from public key: {e}")
+        raise ValueError(f"Address derivation failed: {e}")
 
 
 def check_nonce_redis(address: str, nonce: str) -> Tuple[bool, str]:
@@ -242,10 +277,9 @@ def verify_publickey_matches_address(signed_tx: Dict[str, Any]) -> Tuple[bool, s
     """
     CRITICAL: Verify that publicKey derives to the address in tx.from
     
-    Prevents attacker from using valid signature + mismatched address.
-    Example: Valid signature from alice.pub but tx.from = bob_address
+    Using CANONICAL address derivation (Bitcoin-style: SHA256→RIPEMD160).
     
-    Returns: (matches, error_message)
+    Prevents attacker from using valid signature + mismatched address.
     """
     try:
         public_key_hex = signed_tx.get('publicKey')
@@ -254,12 +288,15 @@ def verify_publickey_matches_address(signed_tx: Dict[str, Any]) -> Tuple[bool, s
         if not public_key_hex or not from_address:
             return False, "missing_publickey_or_from_address"
 
-        # Derive address from public key
-        derived_address = derive_address_from_publickey(public_key_hex)
+        # Derive address from public key using CANONICAL algorithm
+        derived_address = derive_thronos_address(public_key_hex)
 
         # Compare
         if derived_address != from_address:
-            return False, f"address_mismatch:derived_{derived_address}_vs_claimed_{from_address}"
+            return (
+                False,
+                f"address_mismatch:derived_{derived_address}_vs_claimed_{from_address}",
+            )
 
         return True, ""
 
@@ -295,7 +332,7 @@ def verify_signed_transaction_core(signed_tx: Dict[str, Any]) -> Tuple[bool, str
     1. Required fields present
     2. No forbidden fields
     3. ECDSA signature valid
-    4. PublicKey matches tx.from address (CRITICAL)
+    4. PublicKey matches tx.from address (CANONICAL derivation)
     5. Timestamp valid (±5 minutes)
     6. Nonce not replayed (Redis check)
 

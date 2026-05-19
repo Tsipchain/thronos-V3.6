@@ -2,7 +2,7 @@
 // Uses expo-secure-store for encrypted key storage on device.
 // ALL private keys and mnemonics remain ONLY on client device.
 // NO secrets are transmitted to any backend server.
-// Signing is performed exclusively on the client.
+// Signing is performed exclusively on the client (see signing.ts for ECDSA operations).
 
 import * as SecureStore from 'expo-secure-store';
 import { getUniqueIdAsync } from 'expo-application';
@@ -134,20 +134,6 @@ export async function markBackedUp(): Promise<void> {
 export async function isBackedUp(): Promise<boolean> {
   const val = await SecureStore.getItemAsync(KEY_BACKUP_VERIFIED);
   return val === 'true';
-}
-
-export async function signTransaction(transactionData: string, hashAlgorithm: 'sha256' | 'sha512' = 'sha256'): Promise<string> {
-  const mnemonic = await getMnemonic();
-  if (!mnemonic) throw new Error('Wallet not initialized. No recovery phrase found.');
-  const derived = await deriveHDWalletFromMnemonic(mnemonic);
-  const messageHash = hashAlgorithm === 'sha256'
-    ? CryptoJS.SHA256(transactionData).toString()
-    : CryptoJS.SHA512(transactionData).toString();
-  return CryptoJS.HmacSHA256(messageHash, derived.privateKey).toString();
-}
-
-export async function signMessage(message: string): Promise<string> {
-  return signTransaction(message, 'sha256');
 }
 
 export function isValidAddress(address: string): boolean {

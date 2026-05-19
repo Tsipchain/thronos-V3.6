@@ -1,7 +1,8 @@
 /**
- * Thronos Mobile SDK - Transaction Signing Service (FIXED - ECDSA/secp256k1)
- * Handles client-side signing of transactions with real secp256k1 ECDSA
- * Private keys never transmitted or stored persistently
+ * Thronos Mobile SDK - Transaction Signing Service
+ *
+ * ECDSA/secp256k1 + SHA256 signing to match backend verification.
+ * Private keys never transmitted or stored persistently.
  */
 
 const elliptic = require('elliptic');
@@ -17,7 +18,7 @@ function canonicalPayloadString(payload) {
   // Verify timestamp is in seconds, not milliseconds
   if (payload.timestamp > 1e10) {
     throw new Error(
-      `Invalid timestamp ${payload.timestamp}: must be UNIX seconds (< 1e10), not milliseconds`
+      `Invalid timestamp ${payload.timestamp}: must be UNIX seconds (e.g. 1710000000), not milliseconds`
     );
   }
 
@@ -43,7 +44,7 @@ function signCanonicalPayload(canonical, privateKeyHex) {
   // Hash with SHA256
   const hash = crypto.createHash('sha256').update(canonicalBytes).digest();
 
-  // ECDSA sign using secp256k1
+  // ECDSA sign
   const keyPair = ec.keyFromPrivate(privateKeyHex);
   const signature = keyPair.sign(hash);
 
@@ -52,20 +53,13 @@ function signCanonicalPayload(canonical, privateKeyHex) {
 }
 
 /**
- * Convert compressed public key to uncompressed format for backend.
- */
-function publicKeyCompressedToUncompressed(compressedHex) {
-  const keyPair = ec.keyFromPublic(compressedHex, 'hex');
-  return keyPair.getPublic('hex'); // Returns uncompressed (65 bytes)
-}
-
-/**
- * Sign a transaction with wallet's private key
+ * Sign a Thronos transaction with proper ECDSA/secp256k1.
+ *
  * @param {object} params - Transaction parameters
  * @param {object} wallet - Wallet instance with privateKey and publicKey
  * @returns {Promise<object>} - Signed transaction envelope
  */
-export async function signThronosTransaction(params, wallet) {
+async function signThronosTransaction(params, wallet) {
   try {
     if (!wallet) {
       throw new Error('Wallet required for signing');
@@ -78,7 +72,8 @@ export async function signThronosTransaction(params, wallet) {
     }
 
     // Ensure timestamp is UNIX seconds, not milliseconds
-    const timestampSeconds = params.timestamp || Math.floor(Date.now() / 1000);
+    const timestampSeconds =
+      params.timestamp || Math.floor(Date.now() / 1000);
     if (timestampSeconds > 1e10) {
       throw new Error(
         `Timestamp too large: ${timestampSeconds}. Use UNIX seconds (e.g. 1710000000), not milliseconds.`
@@ -98,16 +93,15 @@ export async function signThronosTransaction(params, wallet) {
     // Canonicalize for signing
     const canonical = canonicalPayloadString(payload);
 
-    // Sign with ECDSA/secp256k1 (NOT HMAC-SHA256)
+    // Sign with ECDSA/secp256k1
     const signature = signCanonicalPayload(canonical, wallet.privateKey);
 
-    // Get uncompressed public key for backend
-    const publicKeyUncompressed = publicKeyCompressedToUncompressed(wallet.publicKey);
-
+    // Use compressed public key for backend
+    // Backend derives address from: RIPEMD160(SHA256(compressedPublicKey))
     return {
       ...payload,
       signature,
-      publicKey: publicKeyUncompressed,
+      publicKey: wallet.publicKey,  // Compressed key (66 hex chars, 02/03 prefix)
     };
   } catch (error) {
     throw new Error(`Failed to sign transaction: ${error.message}`);
@@ -115,31 +109,30 @@ export async function signThronosTransaction(params, wallet) {
 }
 
 /**
- * Sign a message with wallet's private key
- * @param {string} message - Message to sign
- * @param {object} wallet - Wallet instance
- * @returns {Promise<string>} - Message signature
+ * Sign a message with proper ECDSA/secp256k1.
  */
-export async function signMessage(message, wallet) {
+async function signMessage(message, wallet) {
   try {
     if (!wallet) {
       throw new Error('Wallet required for signing');
     }
 
     // Hash message
-    const messageHash = crypto.createHash('sha256').update(message).digest();
+    const messageHash = crypto
+      .createHash('sha256')
+      .update(message)
+      .digest();
 
     // ECDSA sign
     const keyPair = ec.keyFromPrivate(wallet.privateKey);
     const signature = keyPair.sign(messageHash);
     const signatureHex = signature.toDER('hex');
 
-    const publicKeyUncompressed = publicKeyCompressedToUncompressed(wallet.publicKey);
-
+    // Use compressed public key for backend
     return {
       message,
       signature: signatureHex,
-      publicKey: publicKeyUncompressed,
+      publicKey: wallet.publicKey,  // Compressed key (66 hex chars, 02/03 prefix)
       timestamp: Math.floor(Date.now() / 1000),
     };
   } catch (error) {
@@ -149,13 +142,11 @@ export async function signMessage(message, wallet) {
 
 /**
  * Verify a signed transaction envelope structure.
- * @param {object} signedTx - Signed transaction to verify
- * @returns {boolean}
  */
-export function verifyEnvelopeStructure(signedTx) {
+function verifyEnvelopeStructure(signedTx) {
   // Verify required fields
   const requiredFields = ['from', 'to', 'amount', 'signature', 'publicKey', 'nonce', 'timestamp'];
-  const hasAllFields = requiredFields.every(field => signedTx[field] !== undefined);
+  const hasAllFields = requiredFields.every((field) => signedTx[field] !== undefined);
 
   if (!hasAllFields) {
     return false;
@@ -163,7 +154,7 @@ export function verifyEnvelopeStructure(signedTx) {
 
   // Verify no secret fields present
   const forbiddenFields = ['secret', 'mnemonic', 'seed', 'privateKey', 'auth_secret'];
-  const hasForbiddenFields = forbiddenFields.some(field => signedTx[field] !== undefined);
+  const hasForbiddenFields = forbiddenFields.some((field) => signedTx[field] !== undefined);
 
   // Verify timestamp is in seconds, not milliseconds
   const isTimestampValid = signedTx.timestamp < 1e10;
@@ -174,9 +165,12 @@ export function verifyEnvelopeStructure(signedTx) {
 /**
  * Verify a signature (for testing).
  */
-export function verifySignature(message, signature, publicKey) {
+function verifySignature(message, signature, publicKey) {
   try {
-    const messageHash = crypto.createHash('sha256').update(message).digest();
+    const messageHash = crypto
+      .createHash('sha256')
+      .update(message)
+      .digest();
     const keyPair = ec.keyFromPublic(publicKey, 'hex');
     return keyPair.verify(messageHash, signature);
   } catch {
@@ -184,7 +178,7 @@ export function verifySignature(message, signature, publicKey) {
   }
 }
 
-export default {
+module.exports = {
   signThronosTransaction,
   signMessage,
   verifyEnvelopeStructure,

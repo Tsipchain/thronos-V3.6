@@ -107,6 +107,50 @@ def test_insufficient_funds_rejected(monkeypatch):
     assert payload["error"] == "insufficient_balance"
 
 
+def test_fee_parity_with_legacy_fee_function(monkeypatch):
+    state = FakeServerState()
+    from_addr = "THR" + "1" * 40
+    to_addr = "THR" + "2" * 40
+    state.ledger[from_addr] = 100.0
+    install_fake_server(monkeypatch, state)
+
+    captured = {}
+
+    def fake_fee(amount, speed="fast"):
+        captured["amount"] = amount
+        captured["speed"] = speed
+        return 0.123456
+
+    monkeypatch.setattr(adapter.server_module, "calculate_fixed_burn_fee", fake_fee)
+    ok, payload, status = adapter.execute_verified_signed_transfer({
+        "from": from_addr, "to": to_addr, "amount": 2, "nonce": "n-fee", "token": "THR", "speed": "slow"
+    })
+    assert ok is True
+    assert status == 200
+    assert captured["amount"] == 2.0
+    assert captured["speed"] == "slow"
+    assert payload["fee"] == 0.123456
+
+
+def test_sender_and_receiver_balance_deltas_include_fee(monkeypatch):
+    state = FakeServerState()
+    from_addr = "THR" + "3" * 40
+    to_addr = "THR" + "4" * 40
+    state.ledger[from_addr] = 50.0
+    state.ledger[to_addr] = 5.0
+    install_fake_server(monkeypatch, state)
+    monkeypatch.setattr(adapter.server_module, "calculate_fixed_burn_fee", lambda _a, speed="fast": 0.5)
+
+    ok, payload, status = adapter.execute_verified_signed_transfer({
+        "from": from_addr, "to": to_addr, "amount": 10, "nonce": "n-bal", "token": "THR", "speed": "fast"
+    })
+    assert ok is True
+    assert status == 200
+    assert state.ledger[from_addr] == 39.5  # 50 - (10 + 0.5)
+    assert state.ledger[to_addr] == 15.0    # 5 + 10
+    assert payload["new_balance"] == 39.5
+
+
 def test_nonce_replay_rejected(monkeypatch, tmp_path):
     redis = DummyRedis()
     state = FakeServerState()
@@ -119,6 +163,42 @@ def test_nonce_replay_rejected(monkeypatch, tmp_path):
     assert ok1 is True
     assert ok2 is False
     assert err2 == "nonce_replay_detected"
+
+
+def test_no_zero_fee_unless_legacy_fee_function_returns_zero(monkeypatch):
+    state = FakeServerState()
+    from_addr = "THR" + "5" * 40
+    to_addr = "THR" + "6" * 40
+    state.ledger[from_addr] = 10.0
+    install_fake_server(monkeypatch, state)
+
+    monkeypatch.setattr(adapter.server_module, "calculate_fixed_burn_fee", lambda _a, speed="fast": 0.0)
+    ok, payload, status = adapter.execute_verified_signed_transfer({
+        "from": from_addr, "to": to_addr, "amount": 1, "nonce": "n-zero", "token": "THR"
+    })
+    assert ok is True
+    assert status == 200
+    assert payload["fee"] == 0.0
+
+
+def test_non_thr_rejected(monkeypatch, tmp_path):
+    app = Flask(__name__)
+    redis = DummyRedis()
+    monkeypatch.setattr(wallet_v1_prod, "verify_signed_transaction_core", lambda _tx: (True, ""))
+    register_wallet_v1_routes(app, redis_client=redis, node_role="master", read_only=False, sqlite_path=str(tmp_path / "ledger.sqlite3"))
+    client = app.test_client()
+    res = client.post("/api/v1/tx/send", json={"tx": {
+        "from": "THR" + "7" * 40,
+        "to": "THR" + "8" * 40,
+        "amount": 1,
+        "token": "USDT",
+        "nonce": "n-token",
+        "timestamp": 9999999999,
+        "signature": "00",
+        "publicKey": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+    }})
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "unsupported_token_for_wallet_v1_execution"
 
 
 def test_replica_write_still_503(tmp_path):

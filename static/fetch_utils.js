@@ -65,6 +65,16 @@
         return path + (u.search || "") + (u.hash || "");
       }
 
+      // Wallet V1 endpoints must remain exact (no v1 -> legacy rewrite)
+      const walletV1ExactPaths = new Set([
+        "/api/v1/tx/send",
+        "/api/v1/wallet/health",
+        "/api/v1/address/derive",
+      ]);
+      if (walletV1ExactPaths.has(path)) {
+        return path + (u.search || "") + (u.hash || "");
+      }
+
       path = path.replace(/^\/api\/v1\/read\/api\//, "/api/");
       path = path.replace(/^\/api\/v1\/write\/api\//, "/api/");
       path = path.replace(/^\/api\/v1\/read\//, "/api/");
@@ -87,6 +97,16 @@
       if (base.startsWith("api/")) base = "/" + base;
 
       if (!isProbablyApiPath(base)) {
+        return base + search + hash;
+      }
+
+      // Wallet V1 endpoints must remain exact (no v1 -> legacy rewrite)
+      const walletV1ExactPaths = new Set([
+        "/api/v1/tx/send",
+        "/api/v1/wallet/health",
+        "/api/v1/address/derive",
+      ]);
+      if (walletV1ExactPaths.has(base)) {
         return base + search + hash;
       }
 

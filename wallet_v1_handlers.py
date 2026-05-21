@@ -10,6 +10,7 @@ Initialization:
 
 from flask import jsonify
 import wallet_v1_production_final as wallet_v1_prod
+from wallet_v1_execution_adapter import execute_verified_signed_transfer
 from wallet_v1_address_derivation import (
     derive_thronos_address,
     validate_thronos_address,
@@ -91,18 +92,16 @@ def handle_tx_send(request):
                 "detail": error_msg
             }), 400
 
-        # If verification passes, transaction is accepted
-        # TODO: Integrate with actual send_thr_internal / transfer_custom_token
-        return jsonify({
-            "ok": True,
-            "message": "Signed transaction verified and accepted",
-            "tx_id": signed_tx.get('nonce'),
-            "from": signed_tx.get('from'),
-            "to": signed_tx.get('to'),
-            "amount": signed_tx.get('amount'),
-            "token": signed_tx.get('token', 'THR'),
-            "timestamp": signed_tx.get('timestamp')
-        }), 200
+        token = (signed_tx.get("token") or "THR").upper()
+        if token != "THR":
+            return jsonify({
+                "ok": False,
+                "error": "unsupported_token_for_wallet_v1_execution",
+                "detail": "Wallet V1 execution currently supports THR only."
+            }), 400
+
+        ok, payload, status = execute_verified_signed_transfer(signed_tx)
+        return jsonify(payload), status
 
     except Exception as e:
         return jsonify({

@@ -114,13 +114,10 @@
         </div>
     </div>
 
-    <label for="speed">
-      <span class="lang-el">Ταχύτητα</span><span class="lang-en">Speed</span>
+    <label for="auth_secret">
+      <span class="lang-el">Μυστικό Αποστολής (auth_secret)</span><span class="lang-en">Send Secret (auth_secret)</span>
     </label>
-    <select id="speed" onchange="updateFee()" style="width:100%;padding:8px;background:#000;border:1px solid var(--line);color:var(--line);font-family:inherit;box-sizing:border-box">
-      <option value="fast">FAST</option>
-      <option value="slow">SLOW</option>
-    </select>
+    <input id="auth_secret" type="password" placeholder="Μυστικό που πήρες με το Pledge (send_secret)" />
 
     <div class="kpi">
       <div>🧺 Mempool: <span id="mpCount">0</span></div>
@@ -173,33 +170,24 @@ const $ = (id)=>document.getElementById(id);
 const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
 
 // --- Fee Logic ---
-let lastFeeEstimate = { fee: 0.0, total_cost: 0.0 };
+const FEE_RATE = 0.005; // 0.5%
+const MIN_FEE = 0.001;
 
-async function updateFee() {
+function updateFee() {
     let amount = parseFloat($('amount').value) || 0;
     if (amount < 0) amount = 0;
-    const speed = $('speed').value || 'fast';
-    try{
-      const res = await fetch('/api/v1/wallet/fee-estimate', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ amount, speed, token: 'THR' })
-      });
-      const data = await res.json();
-      if(data?.ok){
-        lastFeeEstimate = data;
-        $('feeDisplay').textContent = Number(data.fee || 0).toFixed(6) + " THR";
-        $('totalCostDisplay').textContent = Number(data.total_cost || amount).toFixed(6) + " THR";
-        return;
-      }
-    }catch(_){}
-    $('feeDisplay').textContent = "—";
-    $('totalCostDisplay').textContent = "—";
+    
+    const fee = Math.max(MIN_FEE, amount * FEE_RATE);
+    const total = amount + fee;
+    
+    $('feeDisplay').textContent = fee.toFixed(6) + " THR";
+    $('totalCostDisplay').textContent = total.toFixed(6) + " THR";
 }
 
 // --- Auto-fill from localStorage ---
 document.addEventListener('DOMContentLoaded', () => {
     const savedAddr = walletSession.getAddress();
+    const savedSecret = walletSession.getSendSeed();
     const bound = walletSession.isBound();
 
     if (savedAddr && bound) {
@@ -207,6 +195,10 @@ document.addEventListener('DOMContentLoaded', () => {
         loadBalance(); // Auto load balance
     } else {
         $('walletWarning').style.display = 'block';
+    }
+    
+    if (savedSecret) {
+        $('auth_secret').value = savedSecret;
     }
     
     updateFee(); // Init fee display
@@ -373,21 +365,13 @@ async function followUntilConfirmed(fromThr){
 async function doSend() {
   const from_thr    = $('from_thr').value.trim();
   const to_thr      = $('to_thr').value.trim();
-  const amountNum   = parseFloat($('amount').value || '0');
-  const speed       = ($('speed').value || 'fast').toLowerCase();
+  const amount      = $('amount').value;
+  const auth_secret = $('auth_secret').value.trim() || walletSession.getSendSeed();
   const lang = localStorage.getItem('lang') || 'el';
 
   const msg = {
-    el:{
-      missingAddr:'Συμπλήρωσε FROM και TO THR address',
-      missingSigner:'Το wallet πρέπει να υποστηρίζει local υπογραφή secp256k1 (χωρίς αποστολή secret).',
-      error:'Σφάλμα αποστολής: '
-    },
-    en:{
-      missingAddr:'Fill in FROM and TO THR address',
-      missingSigner:'Wallet must support local secp256k1 signing (no secret transmission).',
-      error:'Error sending: '
-    }
+    el:{missingAddr:'Συμπλήρωσε FROM και TO THR address', missingSecret:'Χρειάζεται το send_secret που πήρες με το Pledge', error:'Σφάλμα αποστολής: '},
+    en:{missingAddr:'Fill in FROM and TO THR address',     missingSecret:'Send_secret from Pledge is required',          error:'Error sending: '}
   }[lang];
 
   if(!walletSession.isBound()){
@@ -396,54 +380,30 @@ async function doSend() {
   }
 
   if(!from_thr || !to_thr){ alert(msg.missingAddr); return; }
-  if(!(amountNum > 0)){ alert('Amount must be > 0'); return; }
+  if(!auth_secret){ alert(msg.missingSecret); return; }
 
-  if(!walletSession.requirePin('sign and send funds')) return;
-
-  if(typeof walletSession.signTransaction !== 'function' || typeof walletSession.getPublicKey !== 'function'){
-    $('sendResult').textContent = JSON.stringify({ ok:false, error:'wallet_signer_unavailable', detail:msg.missingSigner }, null, 2);
-    return;
-  }
+  if(!walletSession.requirePin('send funds')) return;
 
   try{
-    const nonce = `wv1-${Date.now()}-${Math.random().toString(16).slice(2,10)}`;
-    const timestamp = Math.floor(Date.now()/1000);
-    const token = 'THR';
-    const txCore = {
-      from: from_thr,
-      to: to_thr,
-      amount: amountNum,
-      token,
-      nonce,
-      timestamp
-    };
-
-    $('pendingBadge').style.display='none';
-    $('okBadge').style.display='none';
-    $('warnBadge').style.display='none';
-    $('sendResult').textContent = JSON.stringify({ status:'signing', tx: txCore }, null, 2);
-
-    const publicKey = await walletSession.getPublicKey();
-    const signature = await walletSession.signTransaction(txCore);
-    const envelope = { ...txCore, publicKey, signature, speed };
-
-    $('sendResult').textContent = JSON.stringify({ status:'submitting', tx: { ...txCore, speed } }, null, 2);
-    const res = await fetch('/api/v1/tx/send', {
+    const res = await fetch('/send_thr', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ tx: envelope })
+      body: JSON.stringify({ from_thr, to_thr, amount, auth_secret })
     });
     const data = await res.json();
-    if(res.ok && data?.ok){
-      $('okBadge').style.display='inline-block';
-      $('sendResult').textContent = JSON.stringify({ status:'confirmed', ...data }, null, 2);
-    }else{
-      $('sendResult').textContent = JSON.stringify({ status:'rejected', ...data }, null, 2);
-    }
+    $('sendResult').textContent = JSON.stringify(data, null, 2);
 
+    // Αν είναι pending, ξεκίνα παρακολούθηση
+    if(data?.status === 'pending' && data?.tx){
+      lastSentTxId = data.tx.tx_id;
+      lastSentTo   = data.tx.to;
+      lastSentAmt  = data.tx.amount;
+      followUntilConfirmed(from_thr);
+    }
+    // ανανέωση υπολοίπου αμέσως (το fee κρατήθηκε)
     loadBalance();
     pulseNetworkKpis();
   }catch(e){
-    $('sendResult').textContent = JSON.stringify({ status:'timeout', error: String(e || msg.error) }, null, 2);
+    $('sendResult').textContent = msg.error + e;
   }
 }
 </script>

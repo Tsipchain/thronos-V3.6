@@ -16,7 +16,19 @@ def test_send_flow_uses_v1_paths_and_signer():
     assert 'walletSession.getPublicKey' in text
 
 
-def test_wallet_session_exposes_v1_signer_methods():
+def test_signed_payload_avoids_secret_fields():
+    text = Path('templates/send.html').read_text(encoding='utf-8')
+    assert 'body: JSON.stringify({ tx: signed })' in text
+    for forbidden in ('auth_secret', 'send_secret', 'privateKey', 'mnemonic', 'passphrase'):
+        assert forbidden not in text
+
+
+def test_wallet_session_exposes_v1_signer_and_migration_methods():
     text = Path('public/static/wallet_session.js').read_text(encoding='utf-8')
-    assert 'function getPublicKey' in text
     assert 'async function signTransaction' in text
+    assert 'function getPublicKey' in text
+    assert 'function isWalletV1' in text
+    assert 'function isMigrated' in text
+    assert 'function getMigrationInfo' in text
+    assert 'async function migrateLegacyWallet' in text
+    assert 'setSendSeed(\'\')' in text

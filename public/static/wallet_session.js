@@ -116,5 +116,33 @@
   function saveSession({address, sendSeed, pin, bound}){ setAddress(address || ''); setSendSeed(sendSeed || ''); setPin(pin || ''); setBound(bound !== undefined ? !!bound : !!(address && sendSeed)); if (address || sendSeed) localStorage.setItem(LOCK_KEY, '0'); }
   function requirePin(actionLabel = 'continue'){ const stored = getPin(); if(!stored) return true; const entered = prompt(`Enter wallet PIN to ${actionLabel}`); if(entered === null) return false; if(entered !== stored){ alert('Wrong PIN.'); return false; } return true; }
 
-  window.walletSession = { ADDRESS_KEY,SEND_SECRET_KEY,SEND_SEED_KEY,PIN_KEY,BOUND_KEY,LOCK_KEY,getAddress,setAddress,getSendSeed,setSendSeed,getSendSecret,setSendSecret,getPin,setPin,isLocked,lockWallet,unlockWallet,setCustomUnlockHandler,isBound,setBound,disconnect,forgetDevice,clearSession,saveSession,requirePin,createWalletV1,getPublicKey,signTransaction,setMigrationMeta,getMigrationMeta };
+
+  function isWalletV1(){ return !!(localStorage.getItem(V1_PUBLIC_KEY) && localStorage.getItem(V1_ENCRYPTED_KEY)); }
+  function isMigrated(){ const m=getMigrationMeta(); return !!(m && m.old_address && m.new_v1_address); }
+  function getMigrationInfo(){ return getMigrationMeta(); }
+  function lock(){ return lockWallet(); }
+  async function unlock(pinOrOptions){
+    const options = typeof pinOrOptions === 'string' ? {pin: pinOrOptions, prompt:false} : (pinOrOptions || {});
+    return unlockWallet(options);
+  }
+
+  async function migrateLegacyWallet({oldAddress, sendSecret, pin, signedMigrationRequest} = {}){
+    if (!oldAddress || !sendSecret) throw new Error('legacy_credentials_required');
+    const created = await createWalletV1({ pin });
+    try {
+      const body = { old_thr_address: oldAddress, legacy_secret: sendSecret, new_compressed_public_key: created.publicKey };
+      if (signedMigrationRequest) body.signed_migration_request = signedMigrationRequest;
+      const res = await fetch('/api/v1/wallet/migrate', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'migration_failed');
+      const meta = { old_address: oldAddress, new_v1_address: data.new_v1_address || created.address, migration_tx_id: data.migration_tx_id || data.tx_id || '', migrated_at: data.migrated_at || new Date().toISOString() };
+      setMigrationMeta(meta);
+      setSendSeed('');
+      return { ...data, ...meta };
+    } finally {
+      sendSecret = '';
+    }
+  }
+
+  window.walletSession = { ADDRESS_KEY,SEND_SECRET_KEY,SEND_SEED_KEY,PIN_KEY,BOUND_KEY,LOCK_KEY,getAddress,setAddress,getSendSeed,setSendSeed,getSendSecret,setSendSecret,getPin,setPin,isLocked,lockWallet,unlockWallet,setCustomUnlockHandler,isBound,setBound,disconnect,forgetDevice,clearSession,saveSession,requirePin,createWalletV1,getPublicKey,signTransaction,setMigrationMeta,getMigrationMeta,isWalletV1,isMigrated,getMigrationInfo,lock,unlock,migrateLegacyWallet };
 })(window);

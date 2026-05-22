@@ -106,12 +106,32 @@
   function getMigrationInfo(){ try { return JSON.parse(localStorage.getItem(V1_MIGRATION_META) || '{}'); } catch(_) { return {}; } }
   function isMigrated(){ const m = getMigrationInfo(); return !!(m.old_address && m.new_v1_address); }
 
+
+  function canonicalTxMessage(txCore){
+    const txForSigning = {
+      from: txCore.from,
+      to: txCore.to,
+      amount: txCore.amount,
+      token: txCore.token,
+      nonce: txCore.nonce,
+      timestamp: txCore.timestamp,
+    };
+    const token = txForSigning.token || 'THR';
+    return '{"amount":' + JSON.stringify(txForSigning.amount)
+      + ',"from":' + JSON.stringify(txForSigning.from)
+      + ',"nonce":' + JSON.stringify(txForSigning.nonce)
+      + ',"timestamp":' + JSON.stringify(txForSigning.timestamp)
+      + ',"to":' + JSON.stringify(txForSigning.to)
+      + ',"token":' + JSON.stringify(token)
+      + '}';
+  }
+
   async function signTransaction(txCore){
     if (isLocked() || !isBound()) throw new Error('wallet_locked');
     const secp = _getSecp();
     if (!secp || !secp.sign) throw new Error('secp256k1_library_missing');
     if (!unlockedPrivateKeyHex) throw new Error('wallet_locked');
-    const digestHex = await sha256Hex(JSON.stringify(txCore));
+    const digestHex = await sha256Hex(canonicalTxMessage(txCore));
     const sig = await secp.sign(digestHex, unlockedPrivateKeyHex, { der: true });
     return typeof sig === 'string' ? sig : bytesToHex(sig);
   }
@@ -154,6 +174,6 @@
     getPin, setPin, isLocked, lockWallet, unlockWallet, setCustomUnlockHandler,
     isBound, setBound, disconnect, forgetDevice, clearSession, saveSession, requirePin,
     createWalletV1, getPublicKey, signTransaction, isWalletV1, isMigrated, getMigrationInfo,
-    lock, unlock, migrateLegacyWallet
+    lock, unlock, migrateLegacyWallet, canonicalTxMessage
   };
 })(window);

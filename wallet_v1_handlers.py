@@ -10,6 +10,8 @@ Initialization:
 
 from flask import jsonify
 import wallet_v1_production_final as wallet_v1_prod
+from wallet_v1_activation import require_active_thr_address, AdmissionError
+from wallet_v1_migration import migrate_legacy_address
 from wallet_v1_address_derivation import (
     derive_thronos_address,
     validate_thronos_address,
@@ -116,6 +118,19 @@ def handle_wallet_health():
         "read_only": bool(getattr(wallet_v1_prod, "READ_ONLY", False)),
         "redis_present": bool(getattr(wallet_v1_prod, "REDIS_CLIENT", None)),
         "sqlite_path_present": bool(getattr(wallet_v1_prod, "MASTER_SQLITE_PATH", None)),
+        "init_error": _WALLET_V1_INIT_ERROR,
+    }), 200
+
+
+def handle_wallet_health():
+    """Return Wallet V1 runtime diagnostics."""
+    return jsonify({
+        "ok": True,
+        "wallet_v1_loaded": _WALLET_V1_LOADED,
+        "node_role": wallet_v1_prod.NODE_ROLE,
+        "read_only": bool(wallet_v1_prod.READ_ONLY),
+        "redis_present": wallet_v1_prod.REDIS_CLIENT is not None,
+        "sqlite_path_present": bool(wallet_v1_prod.MASTER_SQLITE_PATH),
         "init_error": _WALLET_V1_INIT_ERROR,
     }), 200
 

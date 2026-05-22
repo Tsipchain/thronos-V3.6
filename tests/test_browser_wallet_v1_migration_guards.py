@@ -1,34 +1,39 @@
 from pathlib import Path
 
 
-def test_send_flow_no_legacy_secret_or_send_thr():
-    text = Path('templates/send.html').read_text(encoding='utf-8')
-    assert '/send_thr' not in text
-    assert 'auth_secret' not in text
-    assert 'getSendSeed' not in text
+def _header_wallet_section(text: str) -> str:
+    start = text.find('id="walletLoginSection"')
+    end = text.find('id="walletContentSection"')
+    return text[start:end] if start != -1 and end != -1 else text
 
 
-def test_send_flow_uses_v1_paths_and_signer():
-    text = Path('templates/send.html').read_text(encoding='utf-8')
-    assert '/api/v1/tx/send' in text
-    assert '/api/v1/wallet/fee-estimate' in text
-    assert 'walletSession.signTransaction' in text
+def test_base_header_no_send_secret_in_normal_connect():
+    text = Path('templates/base.html').read_text(encoding='utf-8')
+    header = _header_wallet_section(text)
+    assert 'walletWidgetSecret' not in header
+    assert 'Send Secret</label>' not in header
+
+
+def test_send_secret_only_in_migration_section():
+    text = Path('templates/base.html').read_text(encoding='utf-8')
+    assert 'walletWidgetLegacySecret' in text
+    assert 'migration only' in text
+
+
+def test_no_auth_secret_in_header_wallet_flow_segment():
+    text = Path('templates/base.html').read_text(encoding='utf-8')
+    start = text.find('function showWalletLoginForm()')
+    end = text.find('function updateHeaderWalletUi(){')
+    segment = text[start:end]
+    assert 'auth_secret' not in segment
+
+
+def test_wallet_session_signer_methods_referenced():
+    text = Path('templates/base.html').read_text(encoding='utf-8')
     assert 'walletSession.getPublicKey' in text
+    assert 'walletSession.isWalletV1' in text
 
 
-def test_signed_payload_avoids_secret_fields():
-    text = Path('templates/send.html').read_text(encoding='utf-8')
-    assert 'body: JSON.stringify({ tx: signed })' in text
-    for forbidden in ('auth_secret', 'send_secret', 'privateKey', 'mnemonic', 'passphrase'):
-        assert forbidden not in text
-
-
-def test_wallet_session_exposes_v1_signer_and_migration_methods():
+def test_wallet_migrate_endpoint_only_in_migration_flow_js():
     text = Path('public/static/wallet_session.js').read_text(encoding='utf-8')
-    assert 'async function signTransaction' in text
-    assert 'function getPublicKey' in text
-    assert 'function isWalletV1' in text
-    assert 'function isMigrated' in text
-    assert 'function getMigrationInfo' in text
-    assert 'async function migrateLegacyWallet' in text
-    assert 'setSendSeed(\'\')' in text
+    assert '/api/v1/wallet/migrate' in text

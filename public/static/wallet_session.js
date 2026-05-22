@@ -144,5 +144,83 @@
     }
   }
 
-  window.walletSession = { ADDRESS_KEY,SEND_SECRET_KEY,SEND_SEED_KEY,PIN_KEY,BOUND_KEY,LOCK_KEY,getAddress,setAddress,getSendSeed,setSendSeed,getSendSecret,setSendSecret,getPin,setPin,isLocked,lockWallet,unlockWallet,setCustomUnlockHandler,isBound,setBound,disconnect,forgetDevice,clearSession,saveSession,requirePin,createWalletV1,getPublicKey,signTransaction,setMigrationMeta,getMigrationMeta,isWalletV1,isMigrated,getMigrationInfo,lock,unlock,migrateLegacyWallet };
+
+  function isWalletV1(){
+    return !!(localStorage.getItem('wallet_v1_public_key') && localStorage.getItem('wallet_v1_encrypted_priv'));
+  }
+
+  function isMigrated(){
+    try {
+      const m = JSON.parse(localStorage.getItem('wallet_v1_migration_meta') || '{}');
+      return !!(m.old_address && m.new_v1_address);
+    } catch(_) { return false; }
+  }
+
+  function getMigrationInfo(){
+    try { return JSON.parse(localStorage.getItem('wallet_v1_migration_meta') || '{}'); }
+    catch(_) { return {}; }
+  }
+
+  function getPublicKey(){
+    return localStorage.getItem('wallet_v1_public_key') || '';
+  }
+
+  async function signTransaction(_txCore){
+    throw new Error('wallet_v1_signing_not_available_in_legacy_session');
+  }
+
+  function lock(){ return lockWallet(); }
+  async function unlock(pinOrOptions){
+    const options = typeof pinOrOptions === 'string' ? { pin: pinOrOptions, prompt: false } : (pinOrOptions || {});
+    return unlockWallet(options);
+  }
+
+  async function migrateLegacyWallet({oldAddress, sendSecret, pin} = {}){
+    const publicKey = getPublicKey();
+    const body = { old_thr_address: oldAddress, legacy_secret: sendSecret, new_compressed_public_key: publicKey };
+    const res = await fetch('/api/v1/wallet/migrate', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'migration_failed');
+    const meta = { old_address: oldAddress, new_v1_address: data?.migration?.new_v1_address || '', migration_tx_id: data?.migration?.migration_tx_id || '', migrated_at: data?.migration?.migrated_at || new Date().toISOString() };
+    localStorage.setItem('wallet_v1_migration_meta', JSON.stringify(meta));
+    if (pin) setPin(pin);
+    setSendSeed('');
+    return meta;
+  }
+
+  window.walletSession = {
+    ADDRESS_KEY,
+    SEND_SECRET_KEY,
+    SEND_SEED_KEY,
+    PIN_KEY,
+    BOUND_KEY,
+    LOCK_KEY,
+    getAddress,
+    setAddress,
+    getSendSeed,
+    setSendSeed,
+    getSendSecret,
+    setSendSecret,
+    getPin,
+    setPin,
+    isLocked,
+    lockWallet,
+    unlockWallet,
+    setCustomUnlockHandler,
+    isBound,
+    setBound,
+    disconnect,
+    forgetDevice,
+    clearSession,
+    saveSession,
+    requirePin,
+    getPublicKey,
+    signTransaction,
+    isWalletV1,
+    isMigrated,
+    getMigrationInfo,
+    lock,
+    unlock,
+    migrateLegacyWallet
+  };
 })(window);

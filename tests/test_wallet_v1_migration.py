@@ -98,6 +98,14 @@ def test_correct_proof_accepts_and_derives(monkeypatch, tmp_path):
     assert fake_store["chain"][-1]["type"] == "wallet_v1_migration"
     assert fake_store["chain"][-1]["fee_burned"] == 0.0
     assert fake_store["txlog"][-1]["type"] == "wallet_v1_migration"
+    updated_pledge = fake_store["pledge"][0]
+    assert updated_pledge["status"] == "legacy_migrated"
+    assert updated_pledge["migrated_to"] == new_addr
+    assert updated_pledge["migration_tx_id"] == fake_store["chain"][-1]["tx_id"]
+    migration_entry = fake_store["migrations"]["migrations"]["THROLD"]
+    assert "legacy_secret" not in str(migration_entry)
+    assert "send_secret" not in str(migration_entry)
+    assert "auth_secret" not in str(migration_entry)
 
 
 def test_already_migrated_rejected(monkeypatch):
@@ -130,3 +138,11 @@ def test_no_secrets_in_migration_response(monkeypatch, tmp_path):
     res = _app(tmp_path).test_client().post("/api/v1/wallet/migrate", json={})
     body = res.get_json()
     assert "legacy_secret" not in str(body)
+
+
+def test_legacy_hmac_write_block_not_yet_enforced_documented():
+    """
+    Current PR enforces read-only migrated old address for Wallet V1 path.
+    Legacy /send_thr HMAC path is in server.py and is not modified in this PR scope.
+    """
+    assert True

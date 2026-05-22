@@ -37,6 +37,22 @@ def _pledge_entry(old_thr_address: str) -> Dict[str, Any] | None:
     return None
 
 
+def _mark_legacy_pledge_migrated(old_thr_address: str, new_v1_address: str, migrated_at: int, migration_tx_id: str) -> None:
+    pledges = server_module.load_json(server_module.PLEDGE_CHAIN, [])
+    if not isinstance(pledges, list):
+        return
+    changed = False
+    for p in pledges:
+        if isinstance(p, dict) and p.get("thr_address") == old_thr_address:
+            p["status"] = "legacy_migrated"
+            p["migrated_to"] = new_v1_address
+            p["migrated_at"] = migrated_at
+            p["migration_tx_id"] = migration_tx_id
+            changed = True
+    if changed:
+        server_module.save_json(server_module.PLEDGE_CHAIN, pledges)
+
+
 def migrate_legacy_address(old_thr_address: str, legacy_secret: str, new_compressed_public_key: str) -> Dict[str, Any]:
     old_thr_address = (old_thr_address or "").strip()
     legacy_secret = (legacy_secret or "").strip()
@@ -99,14 +115,19 @@ def migrate_legacy_address(old_thr_address: str, legacy_secret: str, new_compres
     if hasattr(server_module, "persist_normalized_tx"):
         server_module.persist_normalized_tx(migration_tx)
 
+    migrated_at = int(time.time())
+    _mark_legacy_pledge_migrated(old_thr_address, new_v1_address, migrated_at, migration_tx_id)
+
     rec = {
         "old_address": old_thr_address,
         "new_v1_address": new_v1_address,
         "new_compressed_public_key": new_compressed_public_key,
-        "migrated_at": int(time.time()),
+        "migrated_at": migrated_at,
         "migration_tx_id": migration_tx_id,
         "admission_source": "whitelist" if is_whitelisted else ("btc_pledge" if has_pledge else "unknown"),
-        "legacy_proof_hash": hashlib.sha256(legacy_secret.encode()).hexdigest(),
+        "legacy_proof_hash": hashlib.sha256(
+            f"wallet_v1_migration:{old_thr_address}:{new_v1_address}:{stored_seed_hash}".encode()
+        ).hexdigest(),
         "historical_visible": True,
         "old_read_only": True,
     }

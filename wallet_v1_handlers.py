@@ -12,6 +12,7 @@ from flask import jsonify
 import wallet_v1_production_final as wallet_v1_prod
 from wallet_v1_activation import require_active_thr_address, AdmissionError
 from wallet_v1_execution_adapter import execute_verified_signed_transfer
+from wallet_v1_migration import migrate_legacy_address
 from wallet_v1_address_derivation import (
     derive_thronos_address,
     validate_thronos_address,
@@ -171,3 +172,26 @@ def handle_address_derivation(request):
             "error": "address_derivation_failed",
             "detail": str(e)
         }), 500
+
+
+def handle_wallet_migrate(request):
+    """Handle POST /api/v1/wallet/migrate."""
+    try:
+        data = request.get_json() or {}
+        old_thr_address = data.get("old_thr_address")
+        legacy_secret = data.get("legacy_secret")
+        new_compressed_public_key = data.get("new_compressed_public_key")
+        rec = migrate_legacy_address(old_thr_address, legacy_secret, new_compressed_public_key)
+        return jsonify({
+            "ok": True,
+            "migration": {
+                "old_address": rec["old_address"],
+                "new_v1_address": rec["new_v1_address"],
+                "migrated_at": rec["migrated_at"],
+                "old_read_only": rec["old_read_only"],
+            }
+        }), 200
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"ok": False, "error": "migration_failed", "detail": str(e)}), 500

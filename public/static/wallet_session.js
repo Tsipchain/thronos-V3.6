@@ -54,7 +54,9 @@
     return bytesToHex(new Uint8Array(clear));
   }
 
-  function _getSecp(){ return window.nobleSecp256k1 || window.secp256k1 || null; }
+  function _getSecp(){
+    return window.nobleSecp256k1 || window.secp256k1 || window.nobleSecp256k1Lib || window.NobleSecp256k1 || null;
+  }
 
   async function deriveAddressFromPublicKey(publicKey){
     const res = await fetch('/api/v1/address/derive', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({public_key: publicKey})});

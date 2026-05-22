@@ -46,7 +46,9 @@
     };
   })();
   </script>
-  <script src="https://thrchain.vercel.app/static/wallet_session.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@noble/secp256k1@2.2.3/dist/index.umd.min.js"></script>
+  <script>window.nobleSecp256k1 = window.nobleSecp256k1 || window.secp256k1 || window.nobleSecp256k1Lib || null;</script>
+  <script src="{{ url_for('static', filename='wallet_session.js') }}?v={{ build_id }}"></script>
   <style>
     /* Global Styles */
     body {
@@ -5631,8 +5633,8 @@ function downloadCGMinerKit() {
 </script>
 
 <script src="{{ url_for('static', filename='fetch_utils.js') }}?v={{ build_id }}"></script>
-<script src="https://thrchain.vercel.app/static/wallet_sdk.js?v={{ build_id }}"></script>
-<script src="https://thrchain.vercel.app/static/wallet_auth.js"></script>
+<script src="{{ url_for('static', filename='wallet_sdk.js') }}?v={{ build_id }}"></script>
+<script src="{{ url_for('static', filename='wallet_auth.js') }}?v={{ build_id }}"></script>
 <script src="{{ asset_cdn_base|default('https://thrchain.vercel.app') }}/static/music_module.js?v={{ build_id }}"></script>
 
 <script>

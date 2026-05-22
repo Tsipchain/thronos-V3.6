@@ -17,16 +17,25 @@ from wallet_v1_address_derivation import (
 )
 
 
+_WALLET_V1_LOADED = False
+_WALLET_V1_INIT_ERROR = None
+
+
 def init_wallet_v1_handler(app, redis_client, node_role="master", read_only=False, sqlite_path=None):
     """
     Initialize Wallet V1 with Flask app dependencies.
 
     Called from wallet_v1_blueprint.register_wallet_v1_routes().
     """
+    global _WALLET_V1_LOADED, _WALLET_V1_INIT_ERROR
     try:
         wallet_v1_prod.init_wallet_v1(redis_client, node_role, read_only, sqlite_path)
+        _WALLET_V1_LOADED = True
+        _WALLET_V1_INIT_ERROR = None
         app.logger.info("[WalletV1] Handlers initialized: node_role=%s, read_only=%s", node_role, read_only)
     except Exception as e:
+        _WALLET_V1_LOADED = False
+        _WALLET_V1_INIT_ERROR = str(e)
         app.logger.error("[WalletV1] Initialization failed: %s", e)
         raise
 
@@ -50,6 +59,13 @@ def handle_tx_send(request):
     }
     """
     try:
+        if not _WALLET_V1_LOADED:
+            return jsonify({
+                "ok": False,
+                "error": "wallet_v1_not_initialized",
+                "detail": _WALLET_V1_INIT_ERROR or "wallet_v1 init not completed"
+            }), 503
+
         data = request.get_json() or {}
         signed_tx = data.get('tx')
 
@@ -106,6 +122,19 @@ def handle_tx_send(request):
             "error": "transaction_processing_failed",
             "detail": str(e)
         }), 500
+
+
+def handle_wallet_health():
+    """Return Wallet V1 runtime diagnostics."""
+    return jsonify({
+        "ok": True,
+        "wallet_v1_loaded": _WALLET_V1_LOADED,
+        "node_role": wallet_v1_prod.NODE_ROLE,
+        "read_only": bool(wallet_v1_prod.READ_ONLY),
+        "redis_present": wallet_v1_prod.REDIS_CLIENT is not None,
+        "sqlite_path_present": bool(wallet_v1_prod.MASTER_SQLITE_PATH),
+        "init_error": _WALLET_V1_INIT_ERROR,
+    }), 200
 
 
 def handle_address_derivation(request):

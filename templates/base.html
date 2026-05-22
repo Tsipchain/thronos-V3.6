@@ -46,7 +46,9 @@
     };
   })();
   </script>
-  <script src="https://thrchain.vercel.app/static/wallet_session.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@noble/secp256k1@2.2.3/dist/index.umd.min.js"></script>
+  <script>window.nobleSecp256k1 = window.nobleSecp256k1 || window.secp256k1 || window.nobleSecp256k1Lib || null;</script>
+  <script src="{{ url_for('static', filename='wallet_session.js') }}?v={{ build_id }}"></script>
   <style>
     /* Global Styles */
     body {
@@ -1551,15 +1553,37 @@
             <div id="walletLoginSection" class="wallet-popup-login" style="display:none;">
                 <label for="walletWidgetAddress">THR Address</label>
                 <input type="text" id="walletWidgetAddress" placeholder="THR..." />
-                <label for="walletWidgetSecret">Send Secret</label>
-                <input type="password" id="walletWidgetSecret" placeholder="send_secret" />
-                <label for="walletWidgetPin">PIN (optional)</label>
+<label for="walletWidgetMode">Mode</label>
+                <select id="walletWidgetMode" onchange="switchWalletV1Mode()" style="width:100%;padding:8px;background:#000;border:1px solid #00ff66;color:#00ff66;">
+                    <option value="create">Create Wallet V1</option>
+                    <option value="unlock">Unlock Wallet V1</option>
+                    <option value="migrate">Migrate Legacy Wallet</option>
+                </select>
+                <div id="walletV1UnlockMode" style="display:none; margin-top:10px;">
+                    <label for="walletWidgetUnlockPin">PIN</label>
+                    <input type="password" id="walletWidgetUnlockPin" placeholder="Enter wallet PIN" />
+                    <div class="wallet-modal-actions" style="margin-top:10px;">
+                        <button class="primary" onclick="unlockWalletV1FromHeader()">Unlock Wallet V1</button>
+                    </div>
+                </div>
+                <div id="walletV1MigrateMode" style="display:none; margin-top:10px; border-top:1px solid #114422; padding-top:10px;">
+                    <label for="walletWidgetLegacyAddress">Legacy THR Address</label>
+                    <input type="text" id="walletWidgetLegacyAddress" placeholder="THR..." />
+                    <label for="walletWidgetLegacySecret">Legacy Send Secret (migration only)</label>
+                    <input type="password" id="walletWidgetLegacySecret" placeholder="send_secret (migration only)" />
+                    <label for="walletWidgetMigratePin">New Wallet V1 PIN</label>
+                    <input type="password" id="walletWidgetMigratePin" placeholder="4-8 digits" />
+                    <div class="wallet-modal-actions" style="margin-top:10px;">
+                        <button class="primary" onclick="migrateLegacyWalletFromHeader()">Migrate Legacy Wallet</button>
+                    </div>
+                </div>
+                                <label for="walletWidgetPin">PIN (optional)</label>
                 <input type="password" id="walletWidgetPin" placeholder="4-8 digits" />
                 <div class="wallet-modal-actions" style="margin-top:10px;">
-                    <button class="primary" onclick="submitHeaderWalletLogin()">Save</button>
+                    <button class="primary" onclick="createWalletV1FromHeader()">Create Wallet V1</button>
                 </div>
                 <div style="font-size:11px; color:#9f9; opacity:0.7; margin-top:6px;">
-                    Stored locally (thr_address, send_secret, wallet_pin).
+                    Stored locally (wallet_v1_address, encrypted key material, wallet_pin).
                 </div>
             </div>
 
@@ -4941,12 +4965,11 @@ function showWalletLoginForm(){
     if(loginSection){
         loginSection.style.display = 'block';
         const addrInput = document.getElementById('walletWidgetAddress');
-        const secretInput = document.getElementById('walletWidgetSecret');
-        const pinInput = document.getElementById('walletWidgetPin');
+                const pinInput = document.getElementById('walletWidgetPin');
         if(addrInput) addrInput.value = walletSession.getAddress();
-        if(secretInput) secretInput.value = walletSession.getSendSeed();
-        if(pinInput) pinInput.value = walletSession.getPin();
-        setTimeout(()=>{ if(addrInput) addrInput.focus(); }, 50);
+                if(pinInput) pinInput.value = walletSession.getPin();
+        switchWalletV1Mode();
+        setTimeout(()=>{ if(pinInput) pinInput.focus(); }, 50);
     }
     if(contentSection) contentSection.style.display = 'none';
 }
@@ -4993,37 +5016,59 @@ function closeHeaderWalletModal(){
 }
 
 async function submitHeaderWalletLogin(){
-    const existingAddress = walletSession.getAddress();
-    const existingSeed = walletSession.getSendSeed();
+    return createWalletV1FromHeader();
+}
 
-    const address = (document.getElementById('walletWidgetAddress')?.value || '').trim() || existingAddress;
-    const seed = (document.getElementById('walletWidgetSecret')?.value || '').trim() || existingSeed;
+function switchWalletV1Mode(){
+    const mode = document.getElementById('walletWidgetMode')?.value || 'create';
+    const unlockEl = document.getElementById('walletV1UnlockMode');
+    const migrateEl = document.getElementById('walletV1MigrateMode');
+    if (unlockEl) unlockEl.style.display = mode === 'unlock' ? 'block' : 'none';
+    if (migrateEl) migrateEl.style.display = mode === 'migrate' ? 'block' : 'none';
+}
+
+async function createWalletV1FromHeader(){
     const pin = (document.getElementById('walletWidgetPin')?.value || '').trim();
-    if (!address) {
-        alert('Please enter a THR address.');
-        return;
-    }
-
-    // Store session (reuse saved address/seed when logging in with PIN-only)
-    walletSession.saveSession({ address, sendSeed: seed, pin, bound: true });
-
-    // Sync the PIN with the wallet lock so PIN-only unlock works with the header widget
-    if (pin) {
-        const h = await sha256Hex(pin);
-        localStorage.setItem(WALLET_PIN_HASH_KEY, h);
-        markWalletActive();
-    } else {
-        localStorage.removeItem(WALLET_PIN_HASH_KEY);
-    }
-
+    if (!pin) return alert('PIN is required.');
+    if (!walletSession.createWalletV1) return alert('Wallet V1 unsupported in this build');
+    const created = await walletSession.createWalletV1({ pin });
+    walletSession.setBound(true);
     showWalletContentSection();
     updateHeaderWalletUi();
     updateWalletUI();
-    loadTokenBalances();
     loadWalletBalances(true);
-    updateReceiveModal();
-    if (typeof updateHeroButton === 'function') {
-        updateHeroButton(address);
+    if (typeof updateHeroButton === 'function') updateHeroButton(created.address);
+}
+
+async function unlockWalletV1FromHeader(){
+    const pin = (document.getElementById('walletWidgetUnlockPin')?.value || '').trim();
+    const ok = await walletSession.unlock(pin);
+    if (!ok) return alert('Unlock failed');
+    walletSession.setBound(true);
+    showWalletContentSection();
+    updateHeaderWalletUi();
+    loadWalletBalances(true);
+}
+
+async function migrateLegacyWalletFromHeader(){
+    const oldAddress = (document.getElementById('walletWidgetLegacyAddress')?.value || '').trim();
+    let sendSecret = (document.getElementById('walletWidgetLegacySecret')?.value || '').trim();
+    const pin = (document.getElementById('walletWidgetMigratePin')?.value || '').trim();
+    if (!oldAddress || !sendSecret || !pin) return alert('Legacy address, send secret and PIN are required.');
+    if (!walletSession.migrateLegacyWallet) return alert('Migration API unavailable');
+    try {
+        const result = await walletSession.migrateLegacyWallet({ oldAddress, sendSecret, pin });
+        if (document.getElementById('walletWidgetLegacySecret')) document.getElementById('walletWidgetLegacySecret').value = '';
+        localStorage.removeItem('send_secret');
+        localStorage.removeItem('send_seed');
+        localStorage.removeItem('thr_secret');
+        walletSession.setBound(true);
+        showWalletContentSection();
+        updateHeaderWalletUi();
+        loadWalletBalances(true);
+        alert('Migration complete: ' + (result.new_v1_address || 'ok'));
+    } finally {
+        sendSecret = '';
     }
 }
 
@@ -5035,10 +5080,13 @@ function updateHeaderWalletUi(){
     const loginBtn = document.getElementById('walletLoginBtn');
 
     const hasWallet = bound && wallet;
-    const short = hasWallet ? wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4) : 'Connect';
+    const walletPubKey = (walletSession.getPublicKey && walletSession.getPublicKey()) || '';
+    const walletV1Capable = !!(walletSession.isWalletV1 && walletSession.isWalletV1() && walletPubKey);
+    const migrated = (walletSession.isMigrated && walletSession.isMigrated()) ? ' (migrated)' : '';
+    const short = hasWallet ? ('V1 ' + wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4) + migrated) : 'Wallet V1';
 
     if(statusEl){
-        document.getElementById('walletAddrShort').textContent = short;
+        document.getElementById('walletAddrShort').textContent = walletV1Capable ? short : 'Migrate to Wallet V1';
         statusEl.style.display = 'flex';
         if(!statusEl.dataset.init){
             initWalletUiControls();
@@ -5585,8 +5633,8 @@ function downloadCGMinerKit() {
 </script>
 
 <script src="{{ url_for('static', filename='fetch_utils.js') }}?v={{ build_id }}"></script>
-<script src="https://thrchain.vercel.app/static/wallet_sdk.js?v={{ build_id }}"></script>
-<script src="https://thrchain.vercel.app/static/wallet_auth.js"></script>
+<script src="{{ url_for('static', filename='wallet_sdk.js') }}?v={{ build_id }}"></script>
+<script src="{{ url_for('static', filename='wallet_auth.js') }}?v={{ build_id }}"></script>
 <script src="{{ asset_cdn_base|default('https://thrchain.vercel.app') }}/static/music_module.js?v={{ build_id }}"></script>
 
 <script>

@@ -9,7 +9,7 @@ from flask import Blueprint, request, jsonify
 from wallet_v1_handlers import (
     handle_tx_send,
     handle_address_derivation,
-    handle_wallet_health,
+    handle_wallet_migrate,
     init_wallet_v1_handler,
 )
 
@@ -32,10 +32,10 @@ def address_derive():
     return handle_address_derivation(request)
 
 
-@wallet_v1_bp.route('/wallet/health', methods=['GET'])
-def wallet_health():
-    """Wallet V1 runtime health diagnostics."""
-    return handle_wallet_health()
+@wallet_v1_bp.route('/wallet/migrate', methods=['POST'])
+def wallet_migrate():
+    """Migrate legacy THR address to Wallet V1 address authority."""
+    return handle_wallet_migrate(request)
 
 
 def register_wallet_v1_routes(app, redis_client=None, node_role="master", read_only=False, sqlite_path=None):

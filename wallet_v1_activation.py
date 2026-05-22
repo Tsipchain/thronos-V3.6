@@ -1,6 +1,7 @@
 """Wallet V1 activation/admission checks for write authorization."""
 
 import server as server_module
+from wallet_v1_migration import resolve_migration
 
 
 class AdmissionError(Exception):
@@ -13,6 +14,13 @@ def require_active_thr_address(address: str):
     thr_address = (address or "").strip()
     if not thr_address:
         raise AdmissionError("missing_from_address")
+
+    mig = resolve_migration(thr_address)
+    if isinstance(mig, dict):
+        if mig.get("kind") == "old":
+            raise AdmissionError("legacy_address_migrated_read_only")
+        if mig.get("kind") == "new":
+            return {"effective_pledge_ok": True, "pledge_mode": "migrated_from_legacy", "migration": mig}
 
     resolve_state = getattr(server_module, "resolve_wallet_pledge_state", None)
     if callable(resolve_state):

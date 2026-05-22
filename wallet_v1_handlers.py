@@ -123,6 +123,19 @@ def handle_tx_send(request):
         }), 500
 
 
+def handle_wallet_health():
+    """Return Wallet V1 runtime diagnostics."""
+    return jsonify({
+        "ok": True,
+        "wallet_v1_loaded": _WALLET_V1_LOADED,
+        "node_role": wallet_v1_prod.NODE_ROLE,
+        "read_only": bool(wallet_v1_prod.READ_ONLY),
+        "redis_present": wallet_v1_prod.REDIS_CLIENT is not None,
+        "sqlite_path_present": bool(wallet_v1_prod.MASTER_SQLITE_PATH),
+        "init_error": _WALLET_V1_INIT_ERROR,
+    }), 200
+
+
 def handle_address_derivation(request):
     """
     Handle POST /api/v1/address/derive - Derive Thronos address from public key.

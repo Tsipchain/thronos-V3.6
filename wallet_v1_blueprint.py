@@ -9,6 +9,7 @@ from flask import Blueprint, request, jsonify
 from wallet_v1_handlers import (
     handle_tx_send,
     handle_address_derivation,
+    handle_wallet_health,
     init_wallet_v1_handler,
 )
 
@@ -31,6 +32,12 @@ def address_derive():
     return handle_address_derivation(request)
 
 
+@wallet_v1_bp.route('/wallet/health', methods=['GET'])
+def wallet_health():
+    """Wallet V1 runtime health diagnostics."""
+    return handle_wallet_health()
+
+
 def register_wallet_v1_routes(app, redis_client=None, node_role="master", read_only=False, sqlite_path=None):
     """
     Register Wallet V1 blueprint with Flask app.
@@ -44,9 +51,9 @@ def register_wallet_v1_routes(app, redis_client=None, node_role="master", read_o
         read_only: True if this node is read-only (default: False)
         sqlite_path: Path to SQLite database on master node (required on master)
     """
-    # Initialize wallet V1 with Flask app dependencies
-    init_wallet_v1_handler(app, redis_client, node_role, read_only, sqlite_path)
-
     # Register blueprint
     app.register_blueprint(wallet_v1_bp)
-    app.logger.info("[WalletV1] Blueprint registered at /api/v1/tx/send, /api/v1/address/derive")
+    app.logger.info("[WalletV1] Blueprint registered at /api/v1/tx/send, /api/v1/address/derive, /api/v1/wallet/health")
+
+    # Initialize wallet V1 with Flask app dependencies
+    init_wallet_v1_handler(app, redis_client, node_role, read_only, sqlite_path)

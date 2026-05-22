@@ -58,7 +58,9 @@ def migrate_legacy_address(old_thr_address: str, legacy_secret: str, new_compres
     if new_v1_address in data["index_new"]:
         raise ValueError("new_v1_address_already_bound")
 
-    admitted = bool(server_module.has_pledge_access(old_thr_address) or server_module.is_wallet_whitelisted(old_thr_address))
+    is_whitelisted = bool(server_module.is_wallet_whitelisted(old_thr_address))
+    has_pledge = bool(server_module.has_pledge_access(old_thr_address))
+    admitted = bool(has_pledge or is_whitelisted)
     if not admitted:
         raise ValueError("old_address_not_admitted")
 
@@ -72,12 +74,39 @@ def migrate_legacy_address(old_thr_address: str, legacy_secret: str, new_compres
     if hashlib.sha256(legacy_secret.encode()).hexdigest() != stored_seed_hash:
         raise ValueError("invalid_legacy_proof")
 
+    ledger = server_module.load_json(server_module.LEDGER_FILE, {})
+    old_balance = float(ledger.get(old_thr_address, 0.0))
+    ledger[old_thr_address] = 0.0
+    ledger[new_v1_address] = round(float(ledger.get(new_v1_address, 0.0)) + old_balance, 6)
+    server_module.save_json(server_module.LEDGER_FILE, ledger)
+
+    migration_tx_id = f"MIGRATE-{int(time.time())}-{old_thr_address[-6:]}-{new_v1_address[-6:]}"
+    migration_tx = {
+        "type": "wallet_v1_migration",
+        "kind": "wallet_v1_migration",
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "from": old_thr_address,
+        "to": new_v1_address,
+        "amount": round(old_balance, 6),
+        "fee_burned": 0.0,
+        "tx_id": migration_tx_id,
+        "status": "confirmed",
+        "historical_visible": True,
+    }
+    chain = server_module.load_json(server_module.CHAIN_FILE, [])
+    chain.append(migration_tx)
+    server_module.save_json(server_module.CHAIN_FILE, chain)
+    if hasattr(server_module, "persist_normalized_tx"):
+        server_module.persist_normalized_tx(migration_tx)
+
     rec = {
         "old_address": old_thr_address,
         "new_v1_address": new_v1_address,
         "new_compressed_public_key": new_compressed_public_key,
         "migrated_at": int(time.time()),
-        "admission_source": "pledge_or_whitelist",
+        "migration_tx_id": migration_tx_id,
+        "admission_source": "whitelist" if is_whitelisted else ("btc_pledge" if has_pledge else "unknown"),
+        "legacy_proof_hash": hashlib.sha256(legacy_secret.encode()).hexdigest(),
         "historical_visible": True,
         "old_read_only": True,
     }

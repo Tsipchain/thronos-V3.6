@@ -11,7 +11,6 @@ Initialization:
 from flask import jsonify
 import wallet_v1_production_final as wallet_v1_prod
 from wallet_v1_activation import require_active_thr_address, AdmissionError
-from wallet_v1_execution_adapter import execute_verified_signed_transfer
 from wallet_v1_migration import migrate_legacy_address
 from wallet_v1_address_derivation import (
     derive_thronos_address,
@@ -105,16 +104,16 @@ def handle_tx_send(request):
                 "detail": "Address has no active network admission (pledge/whitelist).",
             }), 403
 
-        token = (signed_tx.get("token") or "THR").upper()
-        if token != "THR":
-            return jsonify({
-                "ok": False,
-                "error": "unsupported_token_for_wallet_v1_execution",
-                "detail": "Wallet V1 execution currently supports THR only."
-            }), 400
-
-        ok, payload, status = execute_verified_signed_transfer(signed_tx)
-        return jsonify(payload), status
+        return jsonify({
+            "ok": True,
+            "message": "Signed transaction verified and accepted",
+            "tx_id": signed_tx.get('nonce'),
+            "from": signed_tx.get('from'),
+            "to": signed_tx.get('to'),
+            "amount": signed_tx.get('amount'),
+            "token": signed_tx.get('token', 'THR'),
+            "timestamp": signed_tx.get('timestamp')
+        }), 200
 
     except Exception as e:
         return jsonify({

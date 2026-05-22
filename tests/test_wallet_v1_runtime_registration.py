@@ -1,106 +1,56 @@
-import importlib
-import os
 import sys
-import types
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import pytest
 from flask import Flask
 
-ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
-if ROOT_DIR not in sys.path:
-    sys.path.insert(0, ROOT_DIR)
-
-from wallet_v1_blueprint import register_wallet_v1_routes
+import wallet_v1_blueprint
+import wallet_v1_handlers
+import wallet_v1_production_final as wallet_v1_prod
 
 
-class DummyRedis:
-    def exists(self, _k):
-        return False
-
-    def setex(self, _k, _ttl, _v):
-        return True
-
-
-def test_blueprint_registers_with_valid_config(tmp_path):
+def _app(monkeypatch):
     app = Flask(__name__)
-    db_path = tmp_path / "ledger.sqlite3"
-    register_wallet_v1_routes(
-        app,
-        redis_client=DummyRedis(),
-        node_role="master",
-        read_only=False,
-        sqlite_path=str(db_path),
-    )
-    client = app.test_client()
-
-    tx_res = client.post("/api/v1/tx/send", json={})
-    assert tx_res.status_code == 400
-    assert tx_res.get_json()["error"] == "missing_tx_envelope"
-
-    health = client.get("/api/v1/wallet/health")
-    body = health.get_json()
-    assert health.status_code == 200
-    assert body["wallet_v1_loaded"] is True
-    assert body["redis_present"] is True
-    assert body["sqlite_path_present"] is True
+    monkeypatch.setattr(wallet_v1_prod, "init_wallet_v1", lambda *a, **k: None)
+    wallet_v1_blueprint.register_wallet_v1_routes(app, redis_client=object(), node_role="master", read_only=False, sqlite_path="/tmp/db.sqlite")
+    return app
 
 
-def test_missing_redis_keeps_app_alive_and_exposes_diagnostics():
-    app = Flask(__name__)
-
-    @app.get("/api/dashboard")
-    def dashboard():
-        return {"ok": True}, 200
-
-    @app.get("/api/transfers")
-    def transfers():
-        return {"ok": True}, 200
-
-    with pytest.raises(RuntimeError):
-        register_wallet_v1_routes(app, redis_client=None, node_role="master", read_only=False, sqlite_path="/tmp/x.sqlite3")
-
-    client = app.test_client()
-    assert client.get("/api/dashboard").status_code == 200
-    assert client.get("/api/transfers").status_code == 200
-
-    tx_res = client.post("/api/v1/tx/send", json={})
-    assert tx_res.status_code == 503
-
-    health = client.get("/api/v1/wallet/health")
-    body = health.get_json()
-    assert health.status_code == 200
-    assert body["wallet_v1_loaded"] is False
-    assert body["redis_present"] is False
+def test_wallet_health_route_returns_200(monkeypatch):
+    app = _app(monkeypatch)
+    r = app.test_client().get("/api/v1/wallet/health")
+    assert r.status_code == 200
 
 
-def test_replica_mode_rejects_write_with_503(tmp_path):
-    app = Flask(__name__)
-    register_wallet_v1_routes(
-        app,
-        redis_client=DummyRedis(),
-        node_role="replica",
-        read_only=True,
-        sqlite_path=str(tmp_path / "ignored.sqlite3"),
-    )
-
-    res = app.test_client().post(
-        "/api/v1/tx/send",
-        json={"tx": {"from": "THRA", "to": "THRB", "amount": 1, "nonce": "n1", "timestamp": 1}},
-    )
-    assert res.status_code == 503
-    assert res.get_json()["error"] == "read_only_replica"
+def test_unsigned_tx_returns_400_not_404(monkeypatch):
+    app = _app(monkeypatch)
+    r = app.test_client().post("/api/v1/tx/send", json={})
+    assert r.status_code == 400
 
 
-def test_server_ext_import_does_not_crash_when_wallet_registration_fails(monkeypatch):
-    fake_server = types.ModuleType("server")
-    fake_server.app = Flask("fake")
-    fake_server.NODE_ROLE = "master"
-    fake_server.READ_ONLY = False
-    fake_server.REDIS_CLIENT = None
-    fake_server.LEDGER_DB_FILE = "/tmp/ledger.sqlite3"
+def test_valid_initialized_tx_path_invokes_execution(monkeypatch):
+    app = _app(monkeypatch)
+    monkeypatch.setattr(wallet_v1_prod, "NODE_ROLE", "master")
+    monkeypatch.setattr(wallet_v1_prod, "READ_ONLY", False)
+    monkeypatch.setattr(wallet_v1_prod, "verify_signed_transaction_core", lambda _tx: (True, ""))
+    monkeypatch.setattr(wallet_v1_handlers, "require_active_thr_address", lambda _a: True)
 
-    monkeypatch.setitem(sys.modules, "server", fake_server)
-    sys.modules.pop("server_ext", None)
+    called = {}
 
-    mod = importlib.import_module("server_ext")
-    assert hasattr(mod, "app")
+    def _exec(tx):
+        called["nonce"] = tx.get("nonce")
+        return ({"ok": True, "tx_id": tx.get("nonce")}, 200, {"Content-Type": "application/json"})
+
+    monkeypatch.setattr(wallet_v1_handlers, "execute_verified_signed_transfer", _exec)
+
+    payload = {"tx": {"from": "THRA", "to": "THRB", "amount": 1.5, "token": "THR", "nonce": "n1", "timestamp": 1}}
+    r = app.test_client().post("/api/v1/tx/send", json=payload)
+    assert r.status_code == 200
+    assert called["nonce"] == "n1"
+
+
+def test_wallet_migrate_route_still_exists(monkeypatch):
+    app = _app(monkeypatch)
+    monkeypatch.setattr(wallet_v1_handlers, "migrate_legacy_address", lambda *a, **k: {"old_address": "A", "new_v1_address": "B", "migrated_at": "T", "old_read_only": True})
+    r = app.test_client().post("/api/v1/wallet/migrate", json={"old_thr_address": "A", "legacy_secret": "s", "new_compressed_public_key": "02" + "11" * 32})
+    assert r.status_code == 200

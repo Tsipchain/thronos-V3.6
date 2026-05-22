@@ -1,4 +1,8 @@
-"""Wallet V1 execution adapter."""
+"""Wallet V1 execution adapter.
+
+Executes already-verified signed transactions using the same persistence
+primitives used by production transfer routes in server.py.
+"""
 
 from __future__ import annotations
 

@@ -10,6 +10,7 @@ Initialization:
 
 from flask import jsonify
 import wallet_v1_production_final as wallet_v1_prod
+from wallet_v1_activation import require_active_thr_address, AdmissionError
 from wallet_v1_execution_adapter import execute_verified_signed_transfer
 from wallet_v1_address_derivation import (
     derive_thronos_address,
@@ -91,6 +92,17 @@ def handle_tx_send(request):
                 "error": error_msg.split(':')[0],
                 "detail": error_msg
             }), 400
+
+        # Admission check: cryptographic ownership is not enough.
+        # Address must also be network-admitted (BTC pledge / whitelist / legacy policy).
+        try:
+            require_active_thr_address(signed_tx.get("from"))
+        except AdmissionError as admission_err:
+            return jsonify({
+                "ok": False,
+                "error": str(admission_err),
+                "detail": "Address has no active network admission (pledge/whitelist).",
+            }), 403
 
         token = (signed_tx.get("token") or "THR").upper()
         if token != "THR":

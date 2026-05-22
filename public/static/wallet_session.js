@@ -58,6 +58,14 @@
     return window.nobleSecp256k1 || window.secp256k1 || window.nobleSecp256k1Lib || window.NobleSecp256k1 || null;
   }
 
+  async function _ensureSecpLoaded(){
+    if (_getSecp()) return _getSecp();
+    if (window.__nobleSecp256k1Ready && typeof window.__nobleSecp256k1Ready.then === 'function') {
+      try { await window.__nobleSecp256k1Ready; } catch(_) {}
+    }
+    return _getSecp();
+  }
+
   async function deriveAddressFromPublicKey(publicKey){
     const res = await fetch('/api/v1/address/derive', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({public_key: publicKey})});
     const data = await res.json();
@@ -66,7 +74,7 @@
   }
 
   async function createWalletV1({pin} = {}){
-    const secp = _getSecp();
+    const secp = await _ensureSecpLoaded();
     if (!secp || !secp.getPublicKey || !secp.utils || !secp.sign) throw new Error('secp256k1_library_missing');
     if (!pin) throw new Error('pin_required');
     const privBytes = secp.utils.randomPrivateKey ? secp.utils.randomPrivateKey() : crypto.getRandomValues(new Uint8Array(32));
@@ -130,7 +138,7 @@
 
   async function signTransaction(txCore){
     if (isLocked() || !isBound()) throw new Error('wallet_locked');
-    const secp = _getSecp();
+    const secp = await _ensureSecpLoaded();
     if (!secp || !secp.sign) throw new Error('secp256k1_library_missing');
     if (!unlockedPrivateKeyHex) throw new Error('wallet_locked');
     const digestHex = await sha256Hex(canonicalTxMessage(txCore));

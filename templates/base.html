@@ -46,8 +46,7 @@
     };
   })();
   </script>
-  <script src="https://cdn.jsdelivr.net/npm/@noble/secp256k1@2.2.3/dist/index.umd.min.js"></script>
-  <script>window.nobleSecp256k1 = window.nobleSecp256k1 || window.secp256k1 || window.nobleSecp256k1Lib || null;</script>
+  <script src="{{ url_for('static', filename='vendor/noble-secp256k1.min.js') }}?v={{ build_id }}"></script>
   <script src="{{ url_for('static', filename='wallet_session.js') }}?v={{ build_id }}"></script>
   <style>
     /* Global Styles */

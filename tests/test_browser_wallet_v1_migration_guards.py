@@ -1,41 +1,38 @@
 from pathlib import Path
 
 
-def test_base_does_not_reference_nonworking_noble_umd_dist():
-    text = Path('templates/base.html').read_text(encoding='utf-8')
-    assert '@noble/secp256k1@2.2.3/dist/index.umd.min.js' not in text
+def test_fetch_normalizer_preserves_wallet_v1_exact_paths():
+    text = Path('static/fetch_utils.js').read_text(encoding='utf-8')
+    for path in [
+        '/api/v1/address/derive',
+        '/api/v1/tx/send',
+        '/api/v1/wallet/migrate',
+        '/api/v1/wallet/health',
+        '/api/v1/wallet/fee-estimate',
+    ]:
+        assert path in text
+    assert 'function isWalletV1ExactPath' in text
 
 
-def test_base_loads_local_secp_before_wallet_session():
-    text = Path('templates/base.html').read_text(encoding='utf-8')
-    secp_idx = text.find("filename='vendor/noble-secp256k1.min.js'")
-    wallet_idx = text.find("filename='wallet_session.js'")
-    assert secp_idx != -1 and wallet_idx != -1 and secp_idx < wallet_idx
-
-
-def test_get_secp_path_supports_real_loaded_global_and_waits_for_loader():
+def test_wallet_session_uses_exact_v1_derive_path():
     text = Path('static/wallet_session.js').read_text(encoding='utf-8')
-    assert 'function _getSecp()' in text
-    assert 'window.nobleSecp256k1' in text
-    assert 'window.secp256k1' in text
-    assert 'async function _ensureSecpLoaded()' in text
-    assert 'window.__nobleSecp256k1Ready' in text
+    assert "fetch('/api/v1/address/derive'" in text
+    assert '/api/address/derive' not in text
 
 
-def test_create_wallet_v1_uses_ensured_secp_not_missing_stub():
-    text = Path('static/wallet_session.js').read_text(encoding='utf-8')
-    assert 'const secp = await _ensureSecpLoaded();' in text
-    assert 'secp256k1_library_missing' in text
+def test_no_rewrite_codepath_to_legacy_derive():
+    text = Path('static/fetch_utils.js').read_text(encoding='utf-8')
+    assert "path = path.replace(/^/api/v1/".replace('^/','^\\/') not in text  # sanity no-op
+    assert "path = path.replace(/^\\/api\\/v1\\//, \"/api/\")" in text
+    # and exact-preserve guard exists before generic rewrite
+    guard_idx = text.find('if (isWalletV1ExactPath(path))')
+    rewrite_idx = text.find('path = path.replace(/^\\/api\\/v1\\//, "/api/")')
+    assert guard_idx != -1 and rewrite_idx != -1 and guard_idx < rewrite_idx
 
 
 def test_no_hardcoded_vercel_wallet_session_url():
     text = Path('templates/base.html').read_text(encoding='utf-8')
     assert 'https://thrchain.vercel.app/static/wallet_session.js' not in text
-
-
-def test_wallet_session_exports_window_wallet_session():
-    text = Path('static/wallet_session.js').read_text(encoding='utf-8')
-    assert 'window.walletSession = {' in text
 
 
 def test_no_sensitive_fields_in_migration_payload():

@@ -6,6 +6,15 @@ from wallet_v1_activation import require_active_thr_address, AdmissionError
 from wallet_v1_migration import migrate_legacy_address, repair_migration
 from wallet_v1_address_derivation import derive_thronos_address, validate_thronos_address
 
+try:
+    from wallet_v1_migration import migrate_legacy_address
+except Exception:
+    def migrate_legacy_address(*_args, **_kwargs):
+        raise ValueError('migration_unavailable')
+
+
+_WALLET_V1_LOADED = False
+_WALLET_V1_INIT_ERROR = None
 
 _WALLET_V1_LOADED = False
 _WALLET_V1_INIT_ERROR = None

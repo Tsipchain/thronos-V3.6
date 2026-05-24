@@ -10,6 +10,8 @@ Initialization:
 
 from flask import jsonify
 import wallet_v1_production_final as wallet_v1_prod
+from wallet_v1_activation import require_active_thr_address, AdmissionError
+from wallet_v1_migration import migrate_legacy_address, repair_migration
 from wallet_v1_address_derivation import (
     derive_thronos_address,
     validate_thronos_address,
@@ -75,18 +77,12 @@ def handle_tx_send(request):
                 "detail": error_msg
             }), 400
 
-        # If verification passes, transaction is accepted
-        # TODO: Integrate with actual send_thr_internal / transfer_custom_token
-        return jsonify({
-            "ok": True,
-            "message": "Signed transaction verified and accepted",
-            "tx_id": signed_tx.get('nonce'),
-            "from": signed_tx.get('from'),
-            "to": signed_tx.get('to'),
-            "amount": signed_tx.get('amount'),
-            "token": signed_tx.get('token', 'THR'),
-            "timestamp": signed_tx.get('timestamp')
-        }), 200
+        try:
+            require_active_thr_address(signed_tx.get('from'))
+        except AdmissionError as ae:
+            return jsonify({'ok': False, 'error': str(ae)}), 403
+
+        return jsonify({'ok': True, 'message': 'verified'}), 200
 
     except Exception as e:
         return jsonify({
@@ -144,3 +140,30 @@ def handle_address_derivation(request):
             "error": "address_derivation_failed",
             "detail": str(e)
         }), 500
+
+
+def handle_wallet_migrate(request):
+    data = request.get_json() or {}
+    try:
+        rec = migrate_legacy_address(
+            data.get('old_thr_address'),
+            data.get('legacy_secret'),
+            data.get('new_compressed_public_key'),
+            data.get('new_v1_address') or data.get('new_thr_address') or ''
+        )
+        return jsonify({'ok': True, 'migration': rec}), 200
+    except ValueError as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+def handle_wallet_migration_repair(request):
+    data = request.get_json() or {}
+    try:
+        out = repair_migration(data.get('old_address'), data.get('new_v1_address'))
+        return jsonify(out), 200
+    except ValueError as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500

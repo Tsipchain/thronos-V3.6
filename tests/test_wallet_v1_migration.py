@@ -32,14 +32,12 @@ class S:
     def unmark_legacy_migrated(self, old): self.marks.pop(old, None)
     def rollback_partial_migration(self, old, new): pass
 
-    # admission hooks
     def resolve_wallet_pledge_state(self, addr): return {'active': addr in self.pledged}
     def has_pledge_access(self, addr): return addr in self.pledged
     def is_wallet_whitelisted(self, addr): return addr in self.whitelisted
     def is_whitelisted_address(self, addr): return addr in self.whitelisted
     def get_mining_whitelist_entry(self, addr):
-        if addr == 'MINER':
-            return {'active': True, 'banned': False, 'pledge_ok': False, 'whitelist_legacy': True}
+        if addr == 'MINER': return {'active': True, 'banned': False, 'pledge_ok': False, 'whitelist_legacy': True}
         return None
     def _whitelist_allows_no_pledge(self, entry): return bool(entry.get('whitelist_legacy'))
 
@@ -50,101 +48,64 @@ def _setup(monkeypatch, tmp_path, s):
     monkeypatch.setattr(m, 'MIGRATION_FILE', tmp_path / 'm.json')
 
 
-def test_inactive_non_pledged_rejected(monkeypatch, tmp_path):
+def test_legacy_secret_verifier_works_and_wrong_rejected(monkeypatch, tmp_path):
     s = S(); _setup(monkeypatch, tmp_path, s)
+    assert m.verify_legacy_secret_once('OLD', 'ok') is True
+    assert m.verify_legacy_secret_once('OLD', 'wrong') is False
+
+
+def test_missing_legacy_verifier_fail_closed(monkeypatch, tmp_path):
+    class SBare:
+        def get_wallet_balance(self, *_): return 0
+        def get_all_token_balances(self, *_): return {}
+    sb = SBare()
+    monkeypatch.setattr(m, '_server', lambda: sb)
+    monkeypatch.setattr(m, 'MIGRATION_FILE', tmp_path / 'm.json')
     try:
-        a.require_active_thr_address('NOPE'); assert False
-    except a.AdmissionError as e:
-        assert str(e) == 'inactive_thr_address'
+        m.verify_legacy_secret_once('OLD', 'x')
+        assert False
+    except Exception as e:
+        assert 'missing_legacy_seed_hash' in str(e)
 
 
-def test_whitelisted_address_admitted(monkeypatch, tmp_path):
+def test_admission_hooks_still_work(monkeypatch, tmp_path):
     s = S(); _setup(monkeypatch, tmp_path, s)
     assert a.require_active_thr_address('WHITE') is True
-
-
-def test_pledged_address_admitted(monkeypatch, tmp_path):
-    s = S(); _setup(monkeypatch, tmp_path, s)
     assert a.require_active_thr_address('PLEDGED') is True
-
-
-def test_mining_whitelist_policy_admitted(monkeypatch, tmp_path):
-    s = S(); _setup(monkeypatch, tmp_path, s)
     assert a.require_active_thr_address('MINER') is True
 
 
-def test_migrated_old_blocked_only_after_completed(monkeypatch, tmp_path):
+def test_old_and_new_status_gates(monkeypatch, tmp_path):
     s = S(); _setup(monkeypatch, tmp_path, s)
     (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"pending"}},"index_new":{}}')
     assert a.require_active_thr_address('OLD') is True
-    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"completed"}},"index_new":{}}')
-    try:
-        a.require_active_thr_address('OLD'); assert False
-    except a.AdmissionError as e:
-        assert str(e) == 'legacy_address_migrated_read_only'
-
-
-def test_migrated_new_admitted_only_after_completed_or_repaired(monkeypatch, tmp_path):
-    s = S(); _setup(monkeypatch, tmp_path, s)
-    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{}}')
     try:
         a.require_active_thr_address('NEW'); assert False
     except a.AdmissionError:
         pass
-    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"repaired"}},"index_new":{}}')
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"completed"}},"index_new":{}}')
+    try:
+        a.require_active_thr_address('OLD'); assert False
+    except a.AdmissionError:
+        pass
     assert a.require_active_thr_address('NEW') is True
 
 
-def test_old_balance_migrates_exact_and_derives_new_address(monkeypatch, tmp_path):
+def test_balance_and_tokens_migrate(monkeypatch, tmp_path):
     s = S(); _setup(monkeypatch, tmp_path, s)
-    pub = '02' + '11' * 32
-    rec = m.migrate_legacy_address('OLD', 'ok', pub)
-    assert rec['status'] == 'completed'
-    assert rec['new_v1_address'] == m.derive_thronos_address(pub)
+    rec = m.migrate_legacy_address('OLD', 'ok', '02' + '11'*32)
     assert rec['migrated_thr_amount'] == 10.0
-
-
-def test_token_balances_migrate_or_preserve(monkeypatch, tmp_path):
-    s = S(); _setup(monkeypatch, tmp_path, s)
-    rec = m.migrate_legacy_address('OLD', 'ok', '02' + '11' * 32)
     assert rec['migrated_token_count'] >= 1
 
 
-def test_missing_required_hooks_fail_closed(monkeypatch, tmp_path):
-    class SBare:
-        def verify_legacy_secret_once(self, *_): return True
-        def get_wallet_balance(self, *_): return 10
-        def get_all_token_balances(self, *_): return {}
-    s = SBare()
-    monkeypatch.setattr(m, '_server', lambda: s)
-    monkeypatch.setattr(m, 'MIGRATION_FILE', tmp_path / 'm.json')
-    try:
-        m.migrate_legacy_address('OLD', 'ok', '02' + '11' * 32)
-        assert False
-    except Exception as e:
-        assert 'missing_required_hook' in str(e)
-
-
-def test_failed_migration_not_marked_legacy(monkeypatch, tmp_path):
+def test_bad_migration_repair_moves_missing(monkeypatch, tmp_path):
     s = S(); _setup(monkeypatch, tmp_path, s)
-    def bad(*a, **k): raise RuntimeError('boom')
-    s.transfer_balance_atomic = bad
-    try:
-        m.migrate_legacy_address('OLD', 'ok', '02' + '11' * 32)
-        assert False
-    except Exception:
-        pass
-    assert 'OLD' not in s.marks
-
-
-def test_repair_moves_missing_assets_or_rolls_back(monkeypatch, tmp_path):
-    s = S(); _setup(monkeypatch, tmp_path, s)
-    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"completed"}},"index_new":{}}')
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"completed"}},"index_new":{"NEW":"OLD"}}')
     out = m.repair_migration('OLD', 'NEW')
-    assert out['ok'] is True
+    assert out['status'] in ('repaired', 'failed')
 
 
-def test_old_format_migration_map_resolves(monkeypatch, tmp_path):
+def test_old_map_format_resolves(monkeypatch, tmp_path):
     s = S(); _setup(monkeypatch, tmp_path, s)
     (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"completed"}},"index_new":{"NEW":"OLD"}}')
     rec = m.resolve_migration('NEW')

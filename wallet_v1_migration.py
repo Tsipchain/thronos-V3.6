@@ -33,152 +33,184 @@ def _load_map_raw():
 
 
 def _load_map():
-    data = _load_map_raw()
-    if 'migrations' in data and isinstance(data.get('migrations'), dict):
-        return data['migrations']
-    return data
+    raw = _load_map_raw()
+    if isinstance(raw.get('migrations'), dict):
+        return raw['migrations']
+    return raw
 
 
-def _save_map_compat(m):
-    idx = {rec.get('new_v1_address'): old for old, rec in m.items() if rec.get('new_v1_address')}
+def _save_map_compat(migrations):
+    index_new = {}
+    for old, rec in migrations.items():
+        new = rec.get('new_v1_address')
+        if new:
+            index_new[new] = old
     MIGRATION_FILE.parent.mkdir(parents=True, exist_ok=True)
-    MIGRATION_FILE.write_text(json.dumps({'migrations': m, 'index_new': idx}, indent=2, sort_keys=True))
+    MIGRATION_FILE.write_text(json.dumps({'migrations': migrations, 'index_new': index_new}, indent=2, sort_keys=True))
 
 
-def _require_server_attrs(*names):
-    s = _server()
-    missing = [n for n in names if not hasattr(s, n)]
-    if missing:
-        raise MigrationError(f"missing_required_hook:{','.join(missing)}")
-    return s
+def _require_callable(name):
+    fn = getattr(_server(), name, None)
+    if not callable(fn):
+        raise MigrationError(f'missing_required_hook:{name}')
+    return fn
 
 
 def get_send_seed_hash(old_address):
-    s = _require_server_attrs('load_json', 'PLEDGE_CHAIN')
-    pledges = s.load_json(s.PLEDGE_CHAIN, [])
-    p = next((x for x in pledges if x.get('thr_address') == old_address), None)
-    if not p:
-        return None
-    return p.get('send_seed_hash')
+    s = _server()
+    load_json = getattr(s, 'load_json', None)
+    pledge_chain = getattr(s, 'PLEDGE_CHAIN', None)
+    if not callable(load_json) or not pledge_chain:
+        raise MigrationError('missing_legacy_seed_hash')
+    pledges = load_json(pledge_chain, []) or []
+    row = next((p for p in pledges if p.get('thr_address') == old_address), None)
+    return row.get('send_seed_hash') if row else None
 
 
 def verify_legacy_secret_once(old_address, legacy_secret):
     s = _server()
-    if hasattr(s, 'verify_legacy_secret_once') and callable(s.verify_legacy_secret_once):
-        return bool(s.verify_legacy_secret_once(old_address, legacy_secret))
+    verifier = getattr(s, 'verify_legacy_secret_once', None)
+    if callable(verifier):
+        return bool(verifier(old_address, legacy_secret))
     stored = get_send_seed_hash(old_address)
     if not stored:
         raise MigrationError('missing_legacy_seed_hash')
-    submitted = hashlib.sha256((legacy_secret or '').encode()).hexdigest()
-    return submitted == stored
+    return hashlib.sha256((legacy_secret or '').encode()).hexdigest() == stored
 
 
-def get_wallet_balance(old_address):
-    s = _require_server_attrs('get_wallet_balance')
-    return float(s.get_wallet_balance(old_address) or 0.0), 'get_wallet_balance'
-
-
-def get_all_token_balances(old_address):
+def get_wallet_balance(address):
+    """Authoritative THR source: same primitives /api/balances uses in server.py (get_wallet_balance or LEDGER_FILE)."""
     s = _server()
-    if hasattr(s, 'get_all_token_balances'):
-        return dict(s.get_all_token_balances(old_address) or {})
-    if hasattr(s, 'load_token_balances'):
-        tb = s.load_token_balances() or {}
-        return dict(tb.get(old_address, {}) or {})
+    if callable(getattr(s, 'get_wallet_balance', None)):
+        return float(s.get_wallet_balance(address) or 0.0), 'get_wallet_balance'
+    if callable(getattr(s, 'load_json', None)) and getattr(s, 'LEDGER_FILE', None):
+        ledger = s.load_json(s.LEDGER_FILE, {}) or {}
+        return float(ledger.get(address, 0.0) or 0.0), 'LEDGER_FILE'
+    raise MigrationError('missing_authoritative_balance_source')
+
+
+def get_all_token_balances(address):
+    s = _server()
+    if callable(getattr(s, 'get_all_token_balances', None)):
+        return dict(s.get_all_token_balances(address) or {})
+    if callable(getattr(s, 'load_token_balances', None)):
+        balances = s.load_token_balances() or {}
+        return dict(balances.get(address, {}) or {})
+    if callable(getattr(s, 'load_json', None)) and getattr(s, 'TOKEN_BALANCES_FILE', None):
+        balances = s.load_json(s.TOKEN_BALANCES_FILE, {}) or {}
+        return dict(balances.get(address, {}) or {})
     raise MigrationError('missing_authoritative_token_source')
 
 
-def transfer_balance_atomic(old_address, new_v1_address, amount):
+def transfer_balance_atomic(old, new, amount):
     s = _server()
-    if hasattr(s, 'transfer_balance_atomic') and callable(s.transfer_balance_atomic):
-        return s.transfer_balance_atomic(old_address, new_v1_address, amount)
-    s = _require_server_attrs('load_json', 'save_json', 'LEDGER_FILE')
-    ledger = s.load_json(s.LEDGER_FILE, {}) or {}
-    oldb = float(ledger.get(old_address, 0.0) or 0.0)
-    if oldb < amount:
+    if callable(getattr(s, 'transfer_balance_atomic', None)):
+        return s.transfer_balance_atomic(old, new, amount)
+    load_json = getattr(s, 'load_json', None)
+    save_json = getattr(s, 'save_json', None)
+    ledger_file = getattr(s, 'LEDGER_FILE', None)
+    if not callable(load_json) or not callable(save_json) or not ledger_file:
+        raise MigrationError('missing_required_hook:transfer_balance_atomic')
+    ledger = load_json(ledger_file, {}) or {}
+    old_bal = float(ledger.get(old, 0.0) or 0.0)
+    if old_bal < float(amount):
         raise MigrationError('insufficient_old_balance_for_migration')
-    ledger[old_address] = oldb - amount
-    ledger[new_v1_address] = float(ledger.get(new_v1_address, 0.0) or 0.0) + amount
-    s.save_json(s.LEDGER_FILE, ledger)
+    ledger[old] = old_bal - float(amount)
+    ledger[new] = float(ledger.get(new, 0.0) or 0.0) + float(amount)
+    save_json(ledger_file, ledger)
 
 
-def transfer_all_tokens_atomic(old_address, new_v1_address):
+def transfer_all_tokens_atomic(old, new):
     s = _server()
-    if hasattr(s, 'transfer_all_tokens_atomic') and callable(s.transfer_all_tokens_atomic):
-        return int(s.transfer_all_tokens_atomic(old_address, new_v1_address) or 0)
-    if hasattr(s, 'load_token_balances') and hasattr(s, 'save_token_balances'):
-        tb = s.load_token_balances() or {}
-        old = tb.get(old_address, {}) or {}
-        new = tb.get(new_v1_address, {}) or {}
+    if callable(getattr(s, 'transfer_all_tokens_atomic', None)):
+        return int(s.transfer_all_tokens_atomic(old, new) or 0)
+    if callable(getattr(s, 'load_token_balances', None)) and callable(getattr(s, 'save_token_balances', None)):
+        balances = s.load_token_balances() or {}
+        old_b = balances.get(old, {}) or {}
+        new_b = balances.get(new, {}) or {}
         moved = 0
-        for sym, amt in list(old.items()):
+        for sym, amt in list(old_b.items()):
             v = float(amt or 0)
             if v > 0:
-                new[sym] = float(new.get(sym, 0) or 0) + v
-                old[sym] = 0
+                new_b[sym] = float(new_b.get(sym, 0) or 0) + v
+                old_b[sym] = 0
                 moved += 1
-        tb[old_address] = old
-        tb[new_v1_address] = new
-        s.save_token_balances(tb)
+        balances[old] = old_b
+        balances[new] = new_b
+        s.save_token_balances(balances)
         return moved
-    raise MigrationError('missing_authoritative_token_source')
+    raise MigrationError('missing_required_hook:transfer_all_tokens_atomic')
 
 
-def preserve_admission_to_new_address(old_address, new_v1_address):
+def preserve_admission_to_new_address(old, new):
     s = _server()
-    if hasattr(s, 'preserve_admission_to_new_address') and callable(s.preserve_admission_to_new_address):
-        return s.preserve_admission_to_new_address(old_address, new_v1_address)
-    s = _require_server_attrs('load_json', 'save_json', 'PLEDGE_CHAIN')
-    # copy pledge entry (without secrets) to new address if old has pledge
-    pledges = s.load_json(s.PLEDGE_CHAIN, [])
-    oldp = next((p for p in pledges if p.get('thr_address') == old_address), None)
-    if oldp:
-        if not any(p.get('thr_address') == new_v1_address for p in pledges):
-            np = dict(oldp)
-            np['thr_address'] = new_v1_address
-            np.pop('send_seed_hash', None)
-            np.pop('send_auth_hash', None)
-            pledges.append(np)
-        s.save_json(s.PLEDGE_CHAIN, pledges)
+    if callable(getattr(s, 'preserve_admission_to_new_address', None)):
+        return s.preserve_admission_to_new_address(old, new)
+    load_json = getattr(s, 'load_json', None)
+    save_json = getattr(s, 'save_json', None)
+    pledge_chain = getattr(s, 'PLEDGE_CHAIN', None)
+    if not callable(load_json) or not callable(save_json) or not pledge_chain:
+        raise MigrationError('missing_required_hook:preserve_admission_to_new_address')
+    pledges = load_json(pledge_chain, []) or []
+    old_row = next((p for p in pledges if p.get('thr_address') == old), None)
+    if old_row and not any(p.get('thr_address') == new for p in pledges):
+        cp = dict(old_row)
+        cp['thr_address'] = new
+        cp.pop('send_seed_hash', None)
+        cp.pop('send_auth_hash', None)
+        pledges.append(cp)
+        save_json(pledge_chain, pledges)
 
 
-def mark_legacy_migrated(old_address, new_v1_address, tx):
+def mark_legacy_migrated(old, new, tx):
     s = _server()
-    if hasattr(s, 'mark_legacy_migrated') and callable(s.mark_legacy_migrated):
-        return s.mark_legacy_migrated(old_address, new_v1_address, tx)
-    s = _require_server_attrs('load_json', 'save_json', 'PLEDGE_CHAIN')
-    pledges = s.load_json(s.PLEDGE_CHAIN, [])
+    if callable(getattr(s, 'mark_legacy_migrated', None)):
+        return s.mark_legacy_migrated(old, new, tx)
+    load_json = getattr(s, 'load_json', None)
+    save_json = getattr(s, 'save_json', None)
+    pledge_chain = getattr(s, 'PLEDGE_CHAIN', None)
+    if not callable(load_json) or not callable(save_json) or not pledge_chain:
+        raise MigrationError('missing_required_hook:mark_legacy_migrated')
+    pledges = load_json(pledge_chain, []) or []
     changed = False
     for p in pledges:
-        if p.get('thr_address') == old_address:
+        if p.get('thr_address') == old:
             p['status'] = 'legacy_migrated'
-            p['migrated_to'] = new_v1_address
+            p['migrated_to'] = new
             p['migrated_at'] = _now()
-            p['migration_tx_id'] = tx.get('tx_id') or tx.get('id') or tx.get('nonce') or ''
             changed = True
     if changed:
-        s.save_json(s.PLEDGE_CHAIN, pledges)
+        save_json(pledge_chain, pledges)
 
 
-def unmark_legacy_migrated(old_address):
+def unmark_legacy_migrated(old):
     s = _server()
-    if hasattr(s, 'unmark_legacy_migrated') and callable(s.unmark_legacy_migrated):
-        return s.unmark_legacy_migrated(old_address)
-    s = _require_server_attrs('load_json', 'save_json', 'PLEDGE_CHAIN')
-    pledges = s.load_json(s.PLEDGE_CHAIN, [])
+    if callable(getattr(s, 'unmark_legacy_migrated', None)):
+        return s.unmark_legacy_migrated(old)
+    load_json = getattr(s, 'load_json', None)
+    save_json = getattr(s, 'save_json', None)
+    pledge_chain = getattr(s, 'PLEDGE_CHAIN', None)
+    if not callable(load_json) or not callable(save_json) or not pledge_chain:
+        raise MigrationError('missing_required_hook:unmark_legacy_migrated')
+    pledges = load_json(pledge_chain, []) or []
     for p in pledges:
-        if p.get('thr_address') == old_address:
+        if p.get('thr_address') == old:
             p.pop('status', None)
             p.pop('migrated_to', None)
             p.pop('migrated_at', None)
-            p.pop('migration_tx_id', None)
-    s.save_json(s.PLEDGE_CHAIN, pledges)
+    save_json(pledge_chain, pledges)
 
 
-def rollback_partial_migration(old_address, new_v1_address):
-    # Best effort: remove migrated marker only; balance/token rollback requires source snapshots
+def rollback_partial_migration(old, new):
+    s = _server()
+    rb = getattr(s, 'rollback_partial_migration', None)
+    if callable(rb):
+        try:
+            return rb(old, new)
+        except Exception:
+            pass
     try:
-        unmark_legacy_migrated(old_address)
+        unmark_legacy_migrated(old)
     except Exception:
         pass
 
@@ -192,10 +224,19 @@ def _collect_assets(addr):
     pools = getattr(s, 'get_pool_rewards_state', lambda _a: None)(addr)
     nfts = getattr(s, 'get_nft_ownership', lambda _a: [])(addr) or []
     mining = getattr(s, 'get_mining_payout_state', lambda _a: None)(addr)
-    return {'thr_balance': thr, 'thr_source': src, 'token_balances': tokens, 'pledge_record': pledge, 'whitelist': whitelist, 'pool_rewards': pools, 'nft_ownership': nfts, 'mining_state': mining}
+    return {
+        'thr_balance': thr,
+        'thr_source': src,
+        'token_balances': tokens,
+        'pledge_record': pledge,
+        'whitelist': whitelist,
+        'pool_rewards': pools,
+        'nft_ownership': nfts,
+        'mining_state': mining,
+    }
 
 
-def _has_transferable_state(a):
+def _has_assets(a):
     return a['thr_balance'] > 0 or any(float(v or 0) > 0 for v in a['token_balances'].values()) or bool(a['nft_ownership'] or a['pool_rewards'] or a['mining_state'])
 
 
@@ -203,14 +244,16 @@ def migrate_legacy_address(old_address, legacy_secret, new_compressed_public_key
     if not old_address or not legacy_secret or not new_compressed_public_key:
         raise ValueError('missing_migration_fields')
     new_v1_address = derive_thronos_address(new_compressed_public_key)
+
     mmap = _load_map()
     if mmap.get(old_address, {}).get('status') in ('completed', 'repaired'):
         raise ValueError('already_migrated')
+
     if not verify_legacy_secret_once(old_address, legacy_secret):
         raise ValueError('invalid_legacy_proof')
 
     assets = _collect_assets(old_address)
-    admission_only = not _has_transferable_state(assets)
+    admission_only = not _has_assets(assets)
 
     moved_thr = 0.0
     moved_tokens = 0
@@ -220,19 +263,34 @@ def migrate_legacy_address(old_address, legacy_secret, new_compressed_public_key
             moved_thr = assets['thr_balance']
         moved_tokens = transfer_all_tokens_atomic(old_address, new_v1_address)
         preserve_admission_to_new_address(old_address, new_v1_address)
+
         tx = {
-            'type': 'wallet_v1_migration', 'old_address': old_address, 'new_v1_address': new_v1_address,
-            'old_balance_source': assets['thr_source'], 'migrated_thr_amount': moved_thr,
-            'migrated_token_count': moved_tokens, 'pledge_status_preserved': bool(assets['pledge_record'] or assets['whitelist']),
+            'type': 'wallet_v1_migration',
+            'old_address': old_address,
+            'new_v1_address': new_v1_address,
+            'old_balance_source': assets['thr_source'],
+            'migrated_thr_amount': moved_thr,
+            'migrated_token_count': moved_tokens,
+            'pledge_status_preserved': bool(assets['pledge_record'] or assets['whitelist']),
             'repair_of': None,
         }
+
         mark_legacy_migrated(old_address, new_v1_address, tx)
+
         rec = {
-            'version': MIGRATION_RECORD_VERSION, 'old_address': old_address, 'new_v1_address': new_v1_address,
-            'status': 'completed', 'created_at': _now(), 'completed_at': _now(), 'old_balance_source': assets['thr_source'],
-            'migrated_thr_amount': moved_thr, 'migrated_token_count': moved_tokens,
+            'version': MIGRATION_RECORD_VERSION,
+            'old_address': old_address,
+            'new_v1_address': new_v1_address,
+            'status': 'completed',
+            'created_at': _now(),
+            'completed_at': _now(),
+            'old_balance_source': assets['thr_source'],
+            'migrated_thr_amount': moved_thr,
+            'migrated_token_count': moved_tokens,
             'pledge_status_preserved': bool(assets['pledge_record'] or assets['whitelist']),
-            'admission_only': admission_only, 'assets_migrated': (moved_thr > 0 or moved_tokens > 0), 'migration_tx': tx,
+            'admission_only': admission_only,
+            'assets_migrated': (moved_thr > 0 or moved_tokens > 0),
+            'migration_tx': tx,
         }
         mmap[old_address] = rec
         _save_map_compat(mmap)
@@ -253,20 +311,27 @@ def repair_migration(old_address, new_v1_address):
     assets_old = _collect_assets(old_address)
     moved_thr = 0.0
     moved_tokens = 0
-    if _has_transferable_state(assets_old):
+
+    if _has_assets(assets_old):
         if assets_old['thr_balance'] > 0:
             transfer_balance_atomic(old_address, new_v1_address, assets_old['thr_balance'])
             moved_thr = assets_old['thr_balance']
         moved_tokens = transfer_all_tokens_atomic(old_address, new_v1_address)
         preserve_admission_to_new_address(old_address, new_v1_address)
+
         rec['status'] = 'repaired'
         rec['repaired_at'] = _now()
         mmap[old_address] = rec
         _save_map_compat(mmap)
         return {
-            'ok': True, 'old_address': old_address, 'new_v1_address': new_v1_address,
-            'action': 'moved_missing_assets', 'moved_thr_amount': moved_thr,
-            'moved_token_count': moved_tokens, 'status': 'repaired', 'repair_tx_id': f'repair:{old_address}:{_now()}'
+            'ok': True,
+            'old_address': old_address,
+            'new_v1_address': new_v1_address,
+            'action': 'moved_missing_assets',
+            'moved_thr_amount': moved_thr,
+            'moved_token_count': moved_tokens,
+            'status': 'repaired',
+            'repair_tx_id': f'repair:{old_address}:{_now()}',
         }
 
     unmark_legacy_migrated(old_address)
@@ -275,9 +340,14 @@ def repair_migration(old_address, new_v1_address):
     mmap[old_address] = rec
     _save_map_compat(mmap)
     return {
-        'ok': True, 'old_address': old_address, 'new_v1_address': new_v1_address,
-        'action': 'rolled_back_marker', 'moved_thr_amount': 0.0,
-        'moved_token_count': 0, 'status': 'failed', 'repair_tx_id': ''
+        'ok': True,
+        'old_address': old_address,
+        'new_v1_address': new_v1_address,
+        'action': 'rolled_back_marker',
+        'moved_thr_amount': 0.0,
+        'moved_token_count': 0,
+        'status': 'failed',
+        'repair_tx_id': '',
     }
 
 

@@ -42,6 +42,19 @@
     return s;
   }
 
+  const WALLET_V1_EXACT_PATHS = [
+    '/api/v1/address/derive',
+    '/api/v1/tx/send',
+    '/api/v1/wallet/migrate',
+    '/api/v1/wallet/health',
+    '/api/v1/wallet/fee-estimate',
+  ];
+
+  function isWalletV1ExactPath(path) {
+    if (!path) return false;
+    return WALLET_V1_EXACT_PATHS.some((p) => path === p || path.startsWith(p + '?') || path.startsWith(p + '#'));
+  }
+
   // Normalize all legacy prefixes -> canonical /api/...
   function normalizeApiPath(input) {
     if (!input) return input;
@@ -56,6 +69,10 @@
       // Auto-correct "api/" to "/api/" for consistency (hard rule: all API paths must be absolute)
       if (path.startsWith("/api/") === false && path.includes("api/")) {
         path = path.replace(/^\/(.*)api\//, "/api/");
+      }
+
+      if (isWalletV1ExactPath(path)) {
+        return path + (u.search || '') + (u.hash || '');
       }
 
       if (!isProbablyApiPath(path)) {
@@ -85,6 +102,10 @@
 
       if (!base.startsWith("/")) base = "/" + base;
       if (base.startsWith("api/")) base = "/" + base;
+
+      if (isWalletV1ExactPath(base)) {
+        return base + search + hash;
+      }
 
       if (!isProbablyApiPath(base)) {
         return base + search + hash;

@@ -101,14 +101,14 @@ def test_balance_and_tokens_migrate(monkeypatch, tmp_path):
 
 def test_bad_migration_repair_moves_missing(monkeypatch, tmp_path):
     s = S(); _setup(monkeypatch, tmp_path, s)
-    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"completed"}},"index_new":{"NEW":"OLD"}}')
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
     out = m.repair_migration('OLD', 'NEW')
     assert out['status'] in ('repaired', 'failed')
 
 
 def test_old_map_format_resolves(monkeypatch, tmp_path):
     s = S(); _setup(monkeypatch, tmp_path, s)
-    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"completed"}},"index_new":{"NEW":"OLD"}}')
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
     rec = m.resolve_migration('NEW')
     assert rec['old_address'] == 'OLD'
 
@@ -153,3 +153,54 @@ def test_preserve_admission_failure_restores_assets_and_no_admission(monkeypatch
     except a.AdmissionError:
         pass
     assert a.require_active_thr_address('OLD') is True
+
+
+def test_repair_token_failure_after_thr_move_restores_thr(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
+    def boom_tokens(old, new):
+        raise RuntimeError('repair_token_fail')
+    s.transfer_all_tokens_atomic = boom_tokens
+    try:
+        m.repair_migration('OLD', 'NEW')
+        assert False
+    except Exception as e:
+        assert 'repair_failed' in str(e)
+    assert s.bal['OLD'] == 10.0
+    assert s.bal['NEW'] == 0.0
+
+
+def test_repair_admission_failure_restores_thr_and_tokens(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
+    def boom_preserve(old, new):
+        raise RuntimeError('repair_preserve_fail')
+    s.preserve_admission_to_new_address = boom_preserve
+    try:
+        m.repair_migration('OLD', 'NEW')
+        assert False
+    except Exception as e:
+        assert 'repair_failed' in str(e)
+    assert s.bal['OLD'] == 10.0
+    assert s.bal['NEW'] == 0.0
+    assert s.tokens['OLD'].get('ABC') == 5
+    assert s.tokens['NEW'].get('ABC', 0) == 0
+
+
+def test_failed_repair_does_not_mark_repaired_or_grant_new_admission(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
+    s.transfer_all_tokens_atomic = lambda *_: (_ for _ in ()).throw(RuntimeError('repair_fail'))
+    try:
+        m.repair_migration('OLD', 'NEW')
+        assert False
+    except Exception:
+        pass
+    rec = m.resolve_migration('OLD')
+    assert rec['status'] == 'failed'
+    try:
+        a.require_active_thr_address('NEW')
+        assert False
+    except a.AdmissionError:
+        pass
+    assert rec['status'] != 'repaired'

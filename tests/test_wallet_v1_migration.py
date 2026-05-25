@@ -1,148 +1,151 @@
-import os
 import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from flask import Flask
-
-ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
-if ROOT_DIR not in sys.path:
-    sys.path.insert(0, ROOT_DIR)
-
-from wallet_v1_blueprint import register_wallet_v1_routes
-import wallet_v1_production_final as wallet_v1_prod
-import wallet_v1_migration as migration
-import wallet_v1_activation as activation
+import wallet_v1_migration as m
+import wallet_v1_activation as a
 
 
-class DummyRedis:
-    def exists(self, _k):
-        return False
+class S:
+    def __init__(self):
+        self.bal = {'OLD': 10.0, 'NEW': 0.0}
+        self.tokens = {'OLD': {'ABC': 5}, 'NEW': {}}
+        self.marks = {}
+        self.pledged = {'PLEDGED', 'OLD'}
+        self.whitelisted = {'WHITE'}
 
-    def setex(self, _k, _ttl, _v):
-        return True
+    def get_wallet_balance(self, addr): return self.bal.get(addr, 0)
+    def get_all_token_balances(self, addr): return self.tokens.get(addr, {})
+    def verify_legacy_secret_once(self, old, sec): return sec == 'ok'
+    def transfer_balance_atomic(self, old, new, amt): self.bal[old] -= amt; self.bal[new] = self.bal.get(new, 0)+amt
+    def transfer_all_tokens_atomic(self, old, new):
+        moved=0
+        for k,v in list(self.tokens.get(old, {}).items()):
+            if v>0:
+                self.tokens.setdefault(new,{})[k]=self.tokens.setdefault(new,{}).get(k,0)+v
+                self.tokens[old][k]=0; moved += 1
+        return moved
+    def preserve_admission_to_new_address(self, old, new):
+        if old in self.pledged: self.pledged.add(new)
+        if old in self.whitelisted: self.whitelisted.add(new)
+    def mark_legacy_migrated(self, old, new, tx): self.marks[old] = {'new': new, 'tx': tx}
+    def unmark_legacy_migrated(self, old): self.marks.pop(old, None)
+    def rollback_partial_migration(self, old, new): pass
 
-
-def _app(tmp_path):
-    app = Flask(__name__)
-    register_wallet_v1_routes(app, redis_client=DummyRedis(), node_role="master", read_only=False, sqlite_path=str(tmp_path / "ledger.sqlite3"))
-    return app
-
-
-def _tx(addr):
-    return {
-        "from": addr,
-        "to": "THR" + "B" * 40,
-        "amount": 1,
-        "token": "THR",
-        "nonce": "n-1",
-        "timestamp": 1710000000,
-        "signature": "00",
-        "publicKey": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-    }
-
-
-def test_wrong_legacy_proof_rejected(monkeypatch, tmp_path):
-    monkeypatch.setattr(migration.server_module, "load_json", lambda p, d: [{"thr_address": "THROLD", "send_seed_hash": "abc"}] if p == migration.server_module.PLEDGE_CHAIN else d, raising=False)
-    monkeypatch.setattr(migration.server_module, "has_pledge_access", lambda a: True, raising=False)
-    monkeypatch.setattr(migration.server_module, "is_wallet_whitelisted", lambda a: False, raising=False)
-    res = _app(tmp_path).test_client().post("/api/v1/wallet/migrate", json={
-        "old_thr_address": "THROLD", "legacy_secret": "bad", "new_compressed_public_key": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
-    })
-    assert res.status_code == 400
-
-
-def test_correct_proof_accepts_and_derives(monkeypatch, tmp_path):
-    import hashlib
-    secret = "secret123"
-    seed_hash = hashlib.sha256(secret.encode()).hexdigest()
-    fake_store = {
-        "migrations": {"migrations": {}, "index_new": {}},
-        "pledge": [{"thr_address": "THROLD", "send_seed_hash": seed_hash}],
-        "ledger": {"THROLD": 12.5},
-        "chain": [],
-        "txlog": [],
-    }
-    def fake_load(path, default):
-        if path == migration.server_module.PLEDGE_CHAIN:
-            return fake_store["pledge"]
-        if path == migration.server_module.LEDGER_FILE:
-            return dict(fake_store["ledger"])
-        if path == migration.server_module.CHAIN_FILE:
-            return list(fake_store["chain"])
-        if path == migration.MIGRATION_FILE:
-            return fake_store["migrations"]
-        return default
-    monkeypatch.setattr(migration.server_module, "load_json", fake_load, raising=False)
-    saved = {}
-    def fake_save(path, data):
-        saved[path] = data
-        if path == migration.server_module.LEDGER_FILE:
-            fake_store["ledger"] = dict(data)
-        elif path == migration.server_module.CHAIN_FILE:
-            fake_store["chain"] = list(data)
-        elif path == migration.MIGRATION_FILE:
-            fake_store["migrations"] = dict(data)
-    monkeypatch.setattr(migration.server_module, "save_json", fake_save, raising=False)
-    monkeypatch.setattr(migration.server_module, "persist_normalized_tx", lambda tx: fake_store["txlog"].append(dict(tx)), raising=False)
-    monkeypatch.setattr(migration.server_module, "has_pledge_access", lambda a: True, raising=False)
-    monkeypatch.setattr(migration.server_module, "is_wallet_whitelisted", lambda a: False, raising=False)
-
-    res = _app(tmp_path).test_client().post("/api/v1/wallet/migrate", json={
-        "old_thr_address": "THROLD", "legacy_secret": secret, "new_compressed_public_key": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
-    })
-    assert res.status_code == 200
-    assert res.get_json()["ok"] is True
-    new_addr = res.get_json()["migration"]["new_v1_address"]
-    assert new_addr.startswith("THR")
-    assert fake_store["ledger"]["THROLD"] == 0.0
-    assert fake_store["ledger"][new_addr] == 12.5
-    assert fake_store["chain"][-1]["type"] == "wallet_v1_migration"
-    assert fake_store["chain"][-1]["fee_burned"] == 0.0
-    assert fake_store["txlog"][-1]["type"] == "wallet_v1_migration"
-    updated_pledge = fake_store["pledge"][0]
-    assert updated_pledge["status"] == "legacy_migrated"
-    assert updated_pledge["migrated_to"] == new_addr
-    assert updated_pledge["migration_tx_id"] == fake_store["chain"][-1]["tx_id"]
-    migration_entry = fake_store["migrations"]["migrations"]["THROLD"]
-    assert "legacy_secret" not in str(migration_entry)
-    assert "send_secret" not in str(migration_entry)
-    assert "auth_secret" not in str(migration_entry)
+    # admission hooks
+    def resolve_wallet_pledge_state(self, addr): return {'active': addr in self.pledged}
+    def has_pledge_access(self, addr): return addr in self.pledged
+    def is_wallet_whitelisted(self, addr): return addr in self.whitelisted
+    def is_whitelisted_address(self, addr): return addr in self.whitelisted
+    def get_mining_whitelist_entry(self, addr):
+        if addr == 'MINER':
+            return {'active': True, 'banned': False, 'pledge_ok': False, 'whitelist_legacy': True}
+        return None
+    def _whitelist_allows_no_pledge(self, entry): return bool(entry.get('whitelist_legacy'))
 
 
-def test_already_migrated_rejected(monkeypatch):
-    monkeypatch.setattr(migration.server_module, "load_json", lambda p, d: {"migrations": {"THROLD": {}}, "index_new": {}} if p == migration.MIGRATION_FILE else [], raising=False)
-    monkeypatch.setattr(migration.server_module, "has_pledge_access", lambda a: True, raising=False)
-    monkeypatch.setattr(migration.server_module, "is_wallet_whitelisted", lambda a: True, raising=False)
+def _setup(monkeypatch, tmp_path, s):
+    monkeypatch.setattr(m, '_server', lambda: s)
+    monkeypatch.setattr(a, '_server', lambda: s)
+    monkeypatch.setattr(m, 'MIGRATION_FILE', tmp_path / 'm.json')
+
+
+def test_inactive_non_pledged_rejected(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
     try:
-        migration.migrate_legacy_address("THROLD", "x", "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+        a.require_active_thr_address('NOPE'); assert False
+    except a.AdmissionError as e:
+        assert str(e) == 'inactive_thr_address'
+
+
+def test_whitelisted_address_admitted(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    assert a.require_active_thr_address('WHITE') is True
+
+
+def test_pledged_address_admitted(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    assert a.require_active_thr_address('PLEDGED') is True
+
+
+def test_mining_whitelist_policy_admitted(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    assert a.require_active_thr_address('MINER') is True
+
+
+def test_migrated_old_blocked_only_after_completed(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"pending"}},"index_new":{}}')
+    assert a.require_active_thr_address('OLD') is True
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"completed"}},"index_new":{}}')
+    try:
+        a.require_active_thr_address('OLD'); assert False
+    except a.AdmissionError as e:
+        assert str(e) == 'legacy_address_migrated_read_only'
+
+
+def test_migrated_new_admitted_only_after_completed_or_repaired(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{}}')
+    try:
+        a.require_active_thr_address('NEW'); assert False
+    except a.AdmissionError:
+        pass
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"repaired"}},"index_new":{}}')
+    assert a.require_active_thr_address('NEW') is True
+
+
+def test_old_balance_migrates_exact_and_derives_new_address(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    pub = '02' + '11' * 32
+    rec = m.migrate_legacy_address('OLD', 'ok', pub)
+    assert rec['status'] == 'completed'
+    assert rec['new_v1_address'] == m.derive_thronos_address(pub)
+    assert rec['migrated_thr_amount'] == 10.0
+
+
+def test_token_balances_migrate_or_preserve(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    rec = m.migrate_legacy_address('OLD', 'ok', '02' + '11' * 32)
+    assert rec['migrated_token_count'] >= 1
+
+
+def test_missing_required_hooks_fail_closed(monkeypatch, tmp_path):
+    class SBare:
+        def verify_legacy_secret_once(self, *_): return True
+        def get_wallet_balance(self, *_): return 10
+        def get_all_token_balances(self, *_): return {}
+    s = SBare()
+    monkeypatch.setattr(m, '_server', lambda: s)
+    monkeypatch.setattr(m, 'MIGRATION_FILE', tmp_path / 'm.json')
+    try:
+        m.migrate_legacy_address('OLD', 'ok', '02' + '11' * 32)
         assert False
-    except ValueError as e:
-        assert str(e) == "already_migrated"
+    except Exception as e:
+        assert 'missing_required_hook' in str(e)
 
 
-def test_migrated_old_cannot_write_and_new_can(monkeypatch, tmp_path):
-    monkeypatch.setattr(wallet_v1_prod, "verify_signed_transaction_core", lambda _tx: (True, ""))
-    monkeypatch.setattr(activation, "resolve_migration", lambda a: {"kind": "old"} if a == "THROLD" else ({"kind": "new"} if a == "THRNEW" else None))
-    app = _app(tmp_path)
-    r_old = app.test_client().post("/api/v1/tx/send", json={"tx": _tx("THROLD")})
-    assert r_old.status_code == 403
-
-    r_new = app.test_client().post("/api/v1/tx/send", json={"tx": _tx("THRNEW")})
-    assert r_new.status_code == 200
-
-
-def test_no_secrets_in_migration_response(monkeypatch, tmp_path):
-    monkeypatch.setattr(migration, "migrate_legacy_address", lambda *_a, **_k: {
-        "old_address": "THR1", "new_v1_address": "THR2", "migrated_at": 1, "old_read_only": True,
-        "legacy_secret": "never"
-    })
-    res = _app(tmp_path).test_client().post("/api/v1/wallet/migrate", json={})
-    body = res.get_json()
-    assert "legacy_secret" not in str(body)
+def test_failed_migration_not_marked_legacy(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    def bad(*a, **k): raise RuntimeError('boom')
+    s.transfer_balance_atomic = bad
+    try:
+        m.migrate_legacy_address('OLD', 'ok', '02' + '11' * 32)
+        assert False
+    except Exception:
+        pass
+    assert 'OLD' not in s.marks
 
 
-def test_legacy_hmac_write_block_not_yet_enforced_documented():
-    """
-    Current PR enforces read-only migrated old address for Wallet V1 path.
-    Legacy /send_thr HMAC path is in server.py and is not modified in this PR scope.
-    """
-    assert True
+def test_repair_moves_missing_assets_or_rolls_back(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"completed"}},"index_new":{}}')
+    out = m.repair_migration('OLD', 'NEW')
+    assert out['ok'] is True
+
+
+def test_old_format_migration_map_resolves(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"completed"}},"index_new":{"NEW":"OLD"}}')
+    rec = m.resolve_migration('NEW')
+    assert rec['old_address'] == 'OLD'

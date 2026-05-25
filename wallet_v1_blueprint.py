@@ -11,6 +11,7 @@ from wallet_v1_handlers import (
     handle_address_derivation,
     handle_wallet_health,
     handle_wallet_migrate,
+    handle_wallet_migration_repair,
     init_wallet_v1_handler,
 )
 
@@ -39,6 +40,11 @@ def wallet_health():
 @wallet_v1_bp.route('/wallet/migrate', methods=['POST'])
 def wallet_migrate():
     return handle_wallet_migrate(request)
+
+
+@wallet_v1_bp.route('/wallet/migration/repair', methods=['POST'])
+def wallet_migration_repair():
+    return handle_wallet_migration_repair(request)
 
 
 def register_wallet_v1_routes(app, redis_client=None, node_role="master", read_only=False, sqlite_path=None):

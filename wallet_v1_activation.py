@@ -1,47 +1,95 @@
-"""Wallet V1 activation/admission checks for write authorization."""
-
-import server as server_module
 from wallet_v1_migration import resolve_migration
 
 
 class AdmissionError(Exception):
-    """Raised when a THR address is not admitted for Wallet V1 writes."""
+    pass
 
 
+def _server():
+    import server
+    return server
 
-def require_active_thr_address(address: str):
-    """Require address to have network admission (pledge/whitelist/legacy policy)."""
-    thr_address = (address or "").strip()
-    if not thr_address:
-        raise AdmissionError("missing_from_address")
 
-    mig = resolve_migration(thr_address)
-    if isinstance(mig, dict):
-        if mig.get("kind") == "old":
-            raise AdmissionError("legacy_address_migrated_read_only")
-        if mig.get("kind") == "new":
-            return {"effective_pledge_ok": True, "pledge_mode": "migrated_from_legacy", "migration": mig}
+def _migration_gate(address):
+    rec = resolve_migration(address)
+    if not rec:
+        return None
+    status = rec.get('status')
+    old_addr = rec.get('old_address')
+    new_addr = rec.get('new_v1_address')
 
-    resolve_state = getattr(server_module, "resolve_wallet_pledge_state", None)
-    if callable(resolve_state):
-        state = resolve_state(thr_address)
-        if isinstance(state, dict) and state.get("effective_pledge_ok"):
-            return state
+    if address == old_addr:
+        # old becomes read-only only after final statuses
+        if status in ('completed', 'repaired'):
+            raise AdmissionError('legacy_address_migrated_read_only')
+        return None
 
-    has_pledge_access = getattr(server_module, "has_pledge_access", None)
-    if callable(has_pledge_access) and has_pledge_access(thr_address):
-        return {"effective_pledge_ok": True, "pledge_mode": "pledge_or_whitelist"}
+    if address == new_addr:
+        # new admitted only after final statuses
+        if status in ('completed', 'repaired'):
+            return True
+        raise AdmissionError('migration_not_completed')
 
-    is_wallet_whitelisted = getattr(server_module, "is_wallet_whitelisted", None)
-    if callable(is_wallet_whitelisted) and is_wallet_whitelisted(thr_address):
-        return {"effective_pledge_ok": True, "pledge_mode": "whitelist"}
+    return None
 
-    get_mining_whitelist_entry = getattr(server_module, "get_mining_whitelist_entry", None)
-    whitelist_allows = getattr(server_module, "_whitelist_allows_no_pledge", None)
-    if callable(get_mining_whitelist_entry):
-        entry = get_mining_whitelist_entry(thr_address)
-        if isinstance(entry, dict) and entry.get("active", True) and not entry.get("banned", False):
-            if callable(whitelist_allows) and whitelist_allows(entry):
-                return {"effective_pledge_ok": True, "pledge_mode": "legacy_whitelist"}
 
-    raise AdmissionError("inactive_thr_address")
+def _hook_true(name, address):
+    s = _server()
+    fn = getattr(s, name, None)
+    if callable(fn):
+        try:
+            return bool(fn(address))
+        except Exception:
+            return False
+    return False
+
+
+def require_active_thr_address(address):
+    if not address:
+        raise AdmissionError('missing_address')
+
+    mg = _migration_gate(address)
+    if mg is True:
+        return True
+
+    # Preserve existing pledge/whitelist admission policies (best-effort hook set)
+    s = _server()
+    resolver = getattr(s, 'resolve_wallet_pledge_state', None)
+    if callable(resolver):
+        try:
+            state = resolver(address)
+            if isinstance(state, dict) and bool(state.get('active') or state.get('pledged') or state.get('admitted')):
+                return True
+            if isinstance(state, str) and state.lower() in ('active', 'pledged', 'admitted', 'approved', 'whitelisted'):
+                return True
+        except Exception:
+            pass
+
+    if _hook_true('has_pledge_access', address):
+        return True
+    if _hook_true('is_wallet_whitelisted', address):
+        return True
+    if _hook_true('is_whitelisted_address', address):
+        return True
+    # Preserve mining whitelist + legacy whitelist policy from main
+    s = _server()
+    get_mining = getattr(s, 'get_mining_whitelist_entry', None)
+    allows_no_pledge = getattr(s, '_whitelist_allows_no_pledge', None)
+    if callable(get_mining):
+        try:
+            entry = get_mining(address)
+            if entry:
+                active = bool(entry.get('active', True) and not entry.get('banned', False))
+                if active:
+                    if bool(entry.get('pledge_ok')):
+                        return True
+                    if callable(allows_no_pledge) and bool(allows_no_pledge(entry)):
+                        return True
+        except Exception:
+            pass
+    if _hook_true('is_mining_whitelisted', address):
+        return True
+    if _hook_true('is_legacy_whitelisted', address):
+        return True
+
+    raise AdmissionError('inactive_thr_address')

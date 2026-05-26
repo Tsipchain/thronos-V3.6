@@ -33,3 +33,42 @@ def test_repair_requires_token(monkeypatch):
     monkeypatch.setenv('WALLET_V1_REPAIR_TOKEN', 'secret')
     r = app.test_client().post('/api/v1/wallet/migration/repair', json={'old_address':'A','new_v1_address':'B'})
     assert r.status_code == 403
+
+
+def test_status_requires_token(monkeypatch):
+    app = _app(monkeypatch)
+    monkeypatch.setenv('WALLET_V1_REPAIR_TOKEN', 'secret')
+    r = app.test_client().post('/api/v1/wallet/migration/status', json={'old_address':'A'})
+    assert r.status_code == 403
+
+
+def test_status_returns_record_and_no_mutation(monkeypatch):
+    app = _app(monkeypatch)
+    monkeypatch.setenv('WALLET_V1_REPAIR_TOKEN', 'secret')
+    rec = {
+        'old_address': 'OLD',
+        'new_v1_address': 'NEW',
+        'status': 'completed',
+        'admission_only': False,
+        'assets_migrated': True,
+        'migration_tx': {'tx_id': 'm1', 'legacy_secret': 'x', 'privateKey': 'y'}
+    }
+    monkeypatch.setattr(wallet_v1_handlers, 'resolve_migration', lambda old: rec if old == 'OLD' else None)
+    c = app.test_client()
+    r = c.post('/api/v1/wallet/migration/status', json={'old_address':'OLD'}, headers={'X-Repair-Token':'secret'})
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body['new_v1_address'] == 'NEW'
+    assert body['migration_tx'] == 'm1'
+    dumped = str(body)
+    assert 'legacy_secret' not in dumped
+    assert 'privateKey' not in dumped
+
+
+def test_status_not_found(monkeypatch):
+    app = _app(monkeypatch)
+    monkeypatch.setenv('WALLET_V1_REPAIR_TOKEN', 'secret')
+    monkeypatch.setattr(wallet_v1_handlers, 'resolve_migration', lambda _old: None)
+    r = app.test_client().post('/api/v1/wallet/migration/status', json={'old_address':'MISS'}, headers={'X-Repair-Token':'secret'})
+    assert r.status_code == 404
+    assert r.get_json().get('error') == 'migration_record_not_found'

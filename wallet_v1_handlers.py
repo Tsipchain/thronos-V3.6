@@ -2,12 +2,20 @@ from flask import jsonify
 import os
 import wallet_v1_production_final as wallet_v1_prod
 from wallet_v1_activation import require_active_thr_address, AdmissionError
-from wallet_v1_migration import migrate_legacy_address, repair_migration
+from wallet_v1_migration import migrate_legacy_address, repair_migration, resolve_migration
 from wallet_v1_address_derivation import derive_thronos_address, validate_thronos_address
 
 _WALLET_V1_LOADED = False
 _WALLET_V1_INIT_ERROR = None
 
+
+def _require_repair_token(request):
+    token = request.headers.get('X-Repair-Token') or request.headers.get('X-Admin-Token')
+    required = os.getenv('WALLET_V1_REPAIR_TOKEN', '')
+    return bool(required and token == required)
+
+_WALLET_V1_LOADED = False
+_WALLET_V1_INIT_ERROR = None
 
 def init_wallet_v1_handler(app, redis_client, node_role="master", read_only=False, sqlite_path=None):
     global _WALLET_V1_LOADED, _WALLET_V1_INIT_ERROR
@@ -78,12 +86,33 @@ def handle_wallet_migrate(request):
 
 
 def handle_wallet_migration_repair(request):
-    token = request.headers.get('X-Repair-Token') or request.headers.get('X-Admin-Token')
-    required = os.getenv('WALLET_V1_REPAIR_TOKEN', '')
-    if not required or token != required:
+    if not _require_repair_token(request):
         return jsonify({'ok': False, 'error': 'unauthorized_repair'}), 403
     data = request.get_json() or {}
     try:
         return jsonify(repair_migration(data.get('old_address'), data.get('new_v1_address'))), 200
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 400
+
+
+def handle_wallet_migration_status(request):
+    if not _require_repair_token(request):
+        return jsonify({'ok': False, 'error': 'unauthorized_repair'}), 403
+    data = request.get_json() or {}
+    old = data.get('old_address')
+    if not old:
+        return jsonify({'ok': False, 'error': 'missing_old_address'}), 400
+    rec = resolve_migration(old)
+    if not rec:
+        return jsonify({'ok': False, 'error': 'migration_record_not_found'}), 404
+    tx = rec.get('migration_tx')
+    migration_tx = tx.get('tx_id') if isinstance(tx, dict) else tx
+    return jsonify({
+        'ok': True,
+        'old_address': rec.get('old_address') or old,
+        'new_v1_address': rec.get('new_v1_address'),
+        'status': rec.get('status'),
+        'migration_tx': migration_tx,
+        'admission_only': bool(rec.get('admission_only', False)),
+        'assets_migrated': bool(rec.get('assets_migrated', False)),
+    }), 200

@@ -2,7 +2,7 @@ from flask import jsonify
 import os
 import wallet_v1_production_final as wallet_v1_prod
 from wallet_v1_activation import require_active_thr_address, AdmissionError
-from wallet_v1_migration import migrate_legacy_address, repair_migration, resolve_migration
+from wallet_v1_migration import migrate_legacy_address, repair_migration, resolve_migration, _remaining_old_token_count
 from wallet_v1_address_derivation import derive_thronos_address, validate_thronos_address
 
 _WALLET_V1_LOADED = False
@@ -107,6 +107,13 @@ def handle_wallet_migration_status(request):
         return jsonify({'ok': False, 'error': 'migration_record_not_found'}), 404
     tx = rec.get('migration_tx')
     migration_tx = tx.get('tx_id') if isinstance(tx, dict) else tx
+    remaining_old_token_count = rec.get('remaining_old_token_count')
+    if remaining_old_token_count is None:
+        try:
+            remaining_old_token_count = _remaining_old_token_count(old)
+        except Exception:
+            remaining_old_token_count = 0
+    assets_migrated = bool(rec.get('assets_migrated', False)) and int(remaining_old_token_count) == 0
     return jsonify({
         'ok': True,
         'old_address': rec.get('old_address') or old,
@@ -114,5 +121,10 @@ def handle_wallet_migration_status(request):
         'status': rec.get('status'),
         'migration_tx': migration_tx,
         'admission_only': bool(rec.get('admission_only', False)),
-        'assets_migrated': bool(rec.get('assets_migrated', False)),
+        'assets_migrated': assets_migrated,
+        'repair_tx_id': rec.get('repair_tx_id', ''),
+        'moved_token_count': int(rec.get('moved_token_count', 0) or 0),
+        'remaining_old_token_count': int(remaining_old_token_count or 0),
+        'ecosystem_bindings_repaired': bool(rec.get('ecosystem_bindings_repaired', False)),
+        'music_bindings_repaired': bool(rec.get('music_bindings_repaired', False)),
     }), 200

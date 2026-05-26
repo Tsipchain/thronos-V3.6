@@ -239,6 +239,73 @@ def _collect_assets(addr):
 def _has_assets(a):
     return a['thr_balance'] > 0 or any(float(v or 0) > 0 for v in a['token_balances'].values()) or bool(a['nft_ownership'] or a['pool_rewards'] or a['mining_state'])
 
+
+def _remaining_old_token_count(old_address):
+    tokens = get_all_token_balances(old_address)
+    return sum(1 for _k, v in (tokens or {}).items() if float(v or 0) > 0)
+
+
+
+def _repair_music_bindings(old_address, new_v1_address):
+    """Best-effort Decent Music binding repair via existing production hooks.
+    Returns tuple: (music_bindings_repaired: bool, moved_refs: int).
+    """
+    srv = _server()
+    # Primary explicit hook if production has one.
+    hook = getattr(srv, 'repair_music_wallet_bindings', None)
+    if callable(hook):
+        out = hook(old_address, new_v1_address)
+        if isinstance(out, dict):
+            return bool(out.get('ok', False)), int(out.get('moved_refs', 0) or 0)
+        return bool(out), 0
+
+    moved = 0
+    repaired_any = False
+    # File-driven fallback: allow updating known music datasets when available.
+    load_json = getattr(srv, 'load_json', None)
+    save_json = getattr(srv, 'save_json', None)
+    if not callable(load_json) or not callable(save_json):
+        return False, 0
+
+    candidates = [
+        ('MUSIC_ARTISTS_FILE', 'wallet_address'),
+        ('MUSIC_TRACKS_FILE', 'owner_address'),
+        ('MUSIC_TRACKS_FILE', 'creator_address'),
+        ('MUSIC_REWARDS_FILE', 'reward_address'),
+        ('MUSIC_ENTITLEMENTS_FILE', 'owner_address'),
+        ('MUSIC_PLAYLISTS_FILE', 'wallet_address'),
+    ]
+    for file_const, field in candidates:
+        fp = getattr(srv, file_const, None)
+        if not fp:
+            continue
+        rows = load_json(fp, []) or []
+        if not isinstance(rows, list):
+            continue
+        changed = False
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            # historical creator provenance may remain old; keep creator on tracks.
+            if field == 'creator_address' and file_const == 'MUSIC_TRACKS_FILE':
+                continue
+            if row.get(field) == old_address:
+                row[field] = new_v1_address
+                moved += 1
+                changed = True
+        if changed:
+            save_json(fp, rows)
+            repaired_any = True
+
+    return repaired_any, moved
+
+
+def _compute_assets_migrated(old_address, ecosystem_bindings_repaired=False):
+    remaining_old_tokens = _remaining_old_token_count(old_address)
+    remaining_old_thr = float(get_wallet_balance(old_address)[0] or 0.0)
+    return (remaining_old_tokens == 0 and remaining_old_thr <= 0 and bool(ecosystem_bindings_repaired)), remaining_old_tokens
+
+
 def _snapshot_state(old_address, new_address):
     old_thr, _ = get_wallet_balance(old_address)
     new_thr, _ = get_wallet_balance(new_address)
@@ -399,7 +466,9 @@ def migrate_legacy_address(old_address, legacy_secret, new_compressed_public_key
             'migrated_token_count': moved_tokens,
             'pledge_status_preserved': bool(assets['pledge_record'] or assets['whitelist']),
             'admission_only': admission_only,
-            'assets_migrated': (moved_thr > 0 or moved_tokens > 0),
+            'music_bindings_repaired': False,
+            'ecosystem_bindings_repaired': False,
+            'assets_migrated': False,
             'migration_tx': tx,
         }
         mmap[old_address] = rec
@@ -431,44 +500,46 @@ def repair_migration(old_address, new_v1_address):
     mutation_started = False
 
     try:
-        if _has_assets(assets_old):
-            if assets_old['thr_balance'] > 0:
-                transfer_balance_atomic(old_address, new_v1_address, assets_old['thr_balance'])
-                moved_thr = assets_old['thr_balance']
-                mutation_started = True
-            moved_tokens = transfer_all_tokens_atomic(old_address, new_v1_address)
-            mutation_started = mutation_started or (moved_tokens > 0)
-            preserve_admission_to_new_address(old_address, new_v1_address)
+        old_thr = float(assets_old.get('thr_balance') or 0.0)
+        # If THR already moved, do not move again; only move remaining tokens/admission.
+        if old_thr > 0:
+            transfer_balance_atomic(old_address, new_v1_address, old_thr)
+            moved_thr = old_thr
+            mutation_started = True
 
-            rec['status'] = 'repaired'
-            rec['repaired_at'] = _now()
-            mmap[old_address] = rec
-            _save_map_compat(mmap)
-            return {
-                'ok': True,
-                'old_address': old_address,
-                'new_v1_address': new_v1_address,
-                'action': 'moved_missing_assets',
-                'moved_thr_amount': moved_thr,
-                'moved_token_count': moved_tokens,
-                'status': 'repaired',
-                'repair_tx_id': f'repair:{old_address}:{_now()}',
-            }
+        moved_tokens = transfer_all_tokens_atomic(old_address, new_v1_address)
+        mutation_started = mutation_started or (moved_tokens > 0)
+        preserve_admission_to_new_address(old_address, new_v1_address)
 
-        unmark_legacy_migrated(old_address)
-        rec['status'] = 'failed'
-        rec['failed_at'] = _now()
+        music_ok, music_moved = _repair_music_bindings(old_address, new_v1_address)
+        ecosystem_ok = bool(music_ok)
+        fully_migrated, remaining_old_tokens = _compute_assets_migrated(old_address, ecosystem_ok)
+
+        rec['status'] = 'repaired' if fully_migrated else rec.get('status', 'failed')
+        rec['repaired_at'] = _now()
+        rec['music_bindings_repaired'] = bool(music_ok)
+        rec['ecosystem_bindings_repaired'] = bool(ecosystem_ok)
+        rec['assets_migrated'] = bool(fully_migrated)
+        rec['moved_token_count'] = int(rec.get('moved_token_count', 0) or 0) + int(moved_tokens or 0)
+        rec['remaining_old_token_count'] = remaining_old_tokens
+        repair_tx_id = f'repair:{old_address}:{_now()}' if (moved_thr > 0 or moved_tokens > 0) else ''
+        if repair_tx_id:
+            rec['repair_tx_id'] = repair_tx_id
         mmap[old_address] = rec
         _save_map_compat(mmap)
         return {
             'ok': True,
             'old_address': old_address,
             'new_v1_address': new_v1_address,
-            'action': 'rolled_back_marker',
-            'moved_thr_amount': 0.0,
-            'moved_token_count': 0,
-            'status': 'failed',
-            'repair_tx_id': '',
+            'action': 'moved_missing_assets' if (moved_thr > 0 or moved_tokens > 0) else 'no_missing_assets',
+            'moved_thr_amount': moved_thr,
+            'moved_token_count': moved_tokens,
+            'remaining_old_token_count': remaining_old_tokens,
+            'status': rec.get('status'),
+            'repair_tx_id': repair_tx_id,
+            'assets_migrated': bool(rec.get('assets_migrated', False)),
+            'ecosystem_bindings_repaired': bool(rec.get('ecosystem_bindings_repaired', False)),
+            'music_bindings_repaired': bool(rec.get('music_bindings_repaired', False)),
         }
     except Exception as e:
         try:

@@ -60,6 +60,11 @@ def test_status_returns_record_and_no_mutation(monkeypatch):
     body = r.get_json()
     assert body['new_v1_address'] == 'NEW'
     assert body['migration_tx'] == 'm1'
+    assert 'repair_tx_id' in body
+    assert 'moved_token_count' in body
+    assert 'remaining_old_token_count' in body
+    assert 'ecosystem_bindings_repaired' in body
+    assert 'music_bindings_repaired' in body
     dumped = str(body)
     assert 'legacy_secret' not in dumped
     assert 'privateKey' not in dumped

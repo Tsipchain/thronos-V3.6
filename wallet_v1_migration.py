@@ -110,8 +110,9 @@ def get_authoritative_balances_for_address(address):
                 {'symbol': 'L2E', 'balance': l2e},
             ])
             custom = (s.load_token_balances() if callable(getattr(s, 'load_token_balances', None)) else {}) or {}
-            for sym, bal in (custom.get(address, {}) or {}).items():
-                out['tokens'].append({'symbol': sym, 'balance': float(bal or 0)})
+            for sym, holders in (custom or {}).items():
+                if isinstance(holders, dict):
+                    out['tokens'].append({'symbol': sym, 'balance': float(holders.get(address, 0) or 0)})
         except Exception:
             pass
     tokens = out.get('tokens', []) if isinstance(out, dict) else []
@@ -163,7 +164,11 @@ def set_authoritative_token_balances_for_address(address, balances):
         if not (callable(getattr(s, 'load_token_balances', None)) and callable(getattr(s, 'save_token_balances', None))):
             raise MigrationError('missing_authoritative_token_write_source:custom')
         all_b = s.load_token_balances() or {}
-        all_b[address] = dict(custom)
+        for sym, amt in custom.items():
+            all_b.setdefault(sym, {})
+            if not isinstance(all_b[sym], dict):
+                all_b[sym] = {}
+            all_b[sym][address] = float(amt or 0.0)
         s.save_token_balances(all_b)
 def transfer_balance_atomic(old, new, amount):
     s = _server()
@@ -217,17 +222,18 @@ def transfer_all_tokens_atomic(old, new):
     # custom tokens
     if custom_syms:
         all_b = s.load_token_balances() or {}
-        old_b = all_b.get(old, {}) or {}
-        new_b = all_b.get(new, {}) or {}
         for sym in custom_syms:
             amt = float(non_thr.get(sym, 0.0) or 0.0)
             if amt <= 0:
                 continue
-            new_b[sym] = float(new_b.get(sym, 0.0) or 0.0) + amt
-            old_b[sym] = max(0.0, float(old_b.get(sym, amt) or amt) - amt)
+            all_b.setdefault(sym, {})
+            if not isinstance(all_b[sym], dict):
+                all_b[sym] = {}
+            old_cur = float(all_b[sym].get(old, amt) or amt)
+            new_cur = float(all_b[sym].get(new, 0.0) or 0.0)
+            all_b[sym][old] = max(0.0, old_cur - amt)
+            all_b[sym][new] = new_cur + amt
             moved += 1
-        all_b[old] = old_b
-        all_b[new] = new_b
         s.save_token_balances(all_b)
 
     return moved

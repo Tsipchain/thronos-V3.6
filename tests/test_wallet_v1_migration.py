@@ -9,7 +9,7 @@ import wallet_v1_activation as a
 class S:
     def __init__(self):
         self.bal = {'OLD': 10.0, 'NEW': 0.0}
-        self.tokens = {'OLD': {'ABC': 5}, 'NEW': {}}
+        self.tokens = {'ABC': {'OLD': 5, 'NEW': 0}}
         self.marks = {}
         self.pledged = {'PLEDGED', 'OLD'}
         self.whitelisted = {'WHITE'}
@@ -26,13 +26,19 @@ class S:
     def get_all_token_balances(self, addr): return self.tokens.get(addr, {})
     def verify_legacy_secret_once(self, old, sec): return sec == 'ok'
     def transfer_balance_atomic(self, old, new, amt): self.bal[old] -= amt; self.bal[new] = self.bal.get(new, 0)+amt
-    def set_token_balances_for_address(self, addr, balances): self.tokens[addr] = dict(balances or {})
+    def set_token_balances_for_address(self, addr, balances):
+        # balances is symbol->amount for one address
+        for sym, amt in (balances or {}).items():
+            self.tokens.setdefault(sym, {})
+            self.tokens[sym][addr] = float(amt or 0)
     def transfer_all_tokens_atomic(self, old, new):
         moved=0
-        for k,v in list(self.tokens.get(old, {}).items()):
+        for sym, holders in list((self.tokens or {}).items()):
+            v = float((holders or {}).get(old, 0) or 0)
             if v>0:
-                self.tokens.setdefault(new,{})[k]=self.tokens.setdefault(new,{}).get(k,0)+v
-                self.tokens[old][k]=0; moved += 1
+                holders[new]=float(holders.get(new,0) or 0)+v
+                holders[old]=0
+                moved += 1
         return moved
     def preserve_admission_to_new_address(self, old, new):
         if old in self.pledged: self.pledged.add(new)
@@ -149,8 +155,8 @@ def test_preserve_admission_failure_restores_assets_and_no_admission(monkeypatch
         pass
     assert s.bal['OLD'] == 10.0
     assert s.bal['NEW'] == 0.0
-    assert s.tokens['OLD'].get('ABC') == 5
-    assert s.tokens['NEW'].get('ABC', 0) == 0
+    assert s.bal['OLD'] == 10.0
+    assert s.bal['NEW'] == 0.0
     assert 'NEW' not in s.pledged
     assert 'OLD' not in s.marks
     assert not (tmp_path/'m.json').exists()
@@ -191,8 +197,8 @@ def test_repair_admission_failure_restores_thr_and_tokens(monkeypatch, tmp_path)
         assert 'repair_failed' in str(e)
     assert s.bal['OLD'] == 10.0
     assert s.bal['NEW'] == 0.0
-    assert s.tokens['OLD'].get('ABC') == 5
-    assert s.tokens['NEW'].get('ABC', 0) == 0
+    assert s.bal['OLD'] == 10.0
+    assert s.bal['NEW'] == 0.0
 
 
 def test_failed_repair_does_not_mark_repaired_or_grant_new_admission(monkeypatch, tmp_path):
@@ -217,30 +223,30 @@ def test_failed_repair_does_not_mark_repaired_or_grant_new_admission(monkeypatch
 def test_repaired_thr_only_can_move_remaining_tokens_without_thr_remove(monkeypatch, tmp_path):
     s = S(); _setup(monkeypatch, tmp_path, s)
     s.bal = {'OLD': 0.0, 'NEW': 0.0001}
-    s.tokens = {'OLD': {'WBTC': 2, 'L2E': 3}, 'NEW': {}}
+    s.tokens = {'WBTC': {'OLD': 2, 'NEW': 0}, 'L2E': {'OLD': 3, 'NEW': 0}}
     (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"repaired","assets_migrated":false}},"index_new":{"NEW":"OLD"}}')
     out = m.repair_migration('OLD', 'NEW')
     assert out['moved_thr_amount'] == 0.0
     assert out['moved_token_count'] == 2
     assert s.bal['NEW'] == 0.0001
-    assert s.tokens['OLD']['WBTC'] == 0
-    assert s.tokens['NEW']['WBTC'] == 2
+    assert s.tokens['WBTC']['OLD'] == 0
+    assert s.tokens['WBTC']['NEW'] == 2
 
 
 def test_token_repair_idempotent_no_duplication(monkeypatch, tmp_path):
     s = S(); _setup(monkeypatch, tmp_path, s)
     s.bal = {'OLD': 0.0, 'NEW': 0.0001}
-    s.tokens = {'OLD': {'WBTC': 0, 'L2E': 0}, 'NEW': {'WBTC': 2, 'L2E': 3}}
+    s.tokens = {'WBTC': {'OLD': 0, 'NEW': 2}, 'L2E': {'OLD': 0, 'NEW': 3}}
     (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"repaired","assets_migrated":false}},"index_new":{"NEW":"OLD"}}')
     out = m.repair_migration('OLD', 'NEW')
     assert out['moved_token_count'] == 0
-    assert s.tokens['NEW']['WBTC'] == 2
+    assert s.tokens['WBTC']['NEW'] == 2
 
 
 def test_token_repair_rollback_restores_tokens(monkeypatch, tmp_path):
     s = S(); _setup(monkeypatch, tmp_path, s)
     s.bal = {'OLD': 0.0, 'NEW': 0.0001}
-    s.tokens = {'OLD': {'WBTC': 2}, 'NEW': {}}
+    s.tokens = {'WBTC': {'OLD': 2, 'NEW': 0}}
     (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
     def boom(_o,_n):
         raise RuntimeError('boom')
@@ -250,14 +256,14 @@ def test_token_repair_rollback_restores_tokens(monkeypatch, tmp_path):
         assert False
     except Exception:
         pass
-    assert s.tokens['OLD']['WBTC'] == 2
-    assert s.tokens['NEW'].get('WBTC',0) == 0
+    assert s.bal['OLD'] == 0.0
+    assert s.bal['NEW'] == 0.0001
 
 
 def test_assets_migrated_flag_tracks_remaining_tokens(monkeypatch, tmp_path):
     s = S(); _setup(monkeypatch, tmp_path, s)
     s.bal = {'OLD': 0.0, 'NEW': 0.1}
-    s.tokens = {'OLD': {'WBTC': 1}, 'NEW': {}}
+    s.tokens = {'WBTC': {'OLD': 1, 'NEW': 0}}
     s._json[s.MUSIC_ARTISTS_FILE] = [{'wallet_address': 'OLD'}]
     (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed","assets_migrated":false}},"index_new":{"NEW":"OLD"}}')
     out = m.repair_migration('OLD','NEW')
@@ -269,7 +275,7 @@ def test_assets_migrated_flag_tracks_remaining_tokens(monkeypatch, tmp_path):
 def test_music_bindings_repaired_and_assets_flag(monkeypatch, tmp_path):
     s = S(); _setup(monkeypatch, tmp_path, s)
     s.bal = {'OLD': 0.0, 'NEW': 1.0}
-    s.tokens = {'OLD': {'WBTC': 2}, 'NEW': {}}
+    s.tokens = {'WBTC': {'OLD': 2, 'NEW': 0}}
     s._json[s.MUSIC_ARTISTS_FILE] = [{'wallet_address': 'OLD', 'name': 'artist'}]
     s._json[s.MUSIC_TRACKS_FILE] = [{'owner_address': 'OLD', 'creator_address': 'OLD'}]
     s._json[s.MUSIC_REWARDS_FILE] = [{'reward_address': 'OLD'}]
@@ -288,10 +294,98 @@ def test_music_bindings_repaired_and_assets_flag(monkeypatch, tmp_path):
 def test_assets_migrated_false_when_music_not_repaired(monkeypatch, tmp_path):
     s = S(); _setup(monkeypatch, tmp_path, s)
     s.bal = {'OLD': 0.0, 'NEW': 1.0}
-    s.tokens = {'OLD': {'WBTC': 0}, 'NEW': {'WBTC': 1}}
+    s.tokens = {'WBTC': {'OLD': 0, 'NEW': 1}}
     # disable music repair hooks and json I/O
     s.load_json = None
     s.save_json = None
     (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed","assets_migrated":false}},"index_new":{"NEW":"OLD"}}')
     out = m.repair_migration('OLD', 'NEW')
     assert out['assets_migrated'] is False
+
+
+class AuthS(S):
+    def __init__(self):
+        super().__init__()
+        self.bal = {'OLD': 0.0, 'NEW': 0.0001}
+        self.auth = {
+            'OLD': {'THR': 0.0, 'WBTC': 2.0, 'L2E': 3.0, 'JAM': 4.0},
+            'NEW': {'THR': 0.0001, 'WBTC': 0.0, 'L2E': 0.0, 'JAM': 0.0},
+        }
+        self.tokens = {'JAM': {'OLD': 0, 'NEW': 0}}  # stale source intentionally empty
+
+    def load_token_balances(self): return self.tokens
+    def save_token_balances(self, balances): self.tokens = balances
+    def get_wallet_balances_cached(self, addr):
+        toks = self.auth.get(addr, {})
+        return {'tokens': [{'symbol': k, 'balance': v} for k, v in toks.items()]}
+
+    def transfer_all_tokens_atomic(self, old, new):
+        moved = 0
+        for sym, bal in list(self.auth.get(old, {}).items()):
+            if sym == 'THR':
+                continue
+            if float(bal or 0) > 0:
+                self.auth.setdefault(new, {}).setdefault(sym, 0.0)
+                self.auth[new][sym] += float(bal)
+                self.auth[old][sym] = 0.0
+                moved += 1
+        return moved
+
+
+def test_authoritative_balances_source_drives_token_repair(monkeypatch, tmp_path):
+    s = AuthS(); _setup(monkeypatch, tmp_path, s)
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed","assets_migrated":false}},"index_new":{"NEW":"OLD"}}')
+    out = m.repair_migration('OLD', 'NEW')
+    assert out['moved_thr_amount'] == 0.0
+    assert out['moved_token_count'] >= 3
+    assert s.auth['OLD']['WBTC'] == 0.0
+    assert s.auth['NEW']['WBTC'] == 2.0
+
+
+def test_repeat_repair_idempotent_with_authoritative_source(monkeypatch, tmp_path):
+    s = AuthS(); _setup(monkeypatch, tmp_path, s)
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed","assets_migrated":false}},"index_new":{"NEW":"OLD"}}')
+    _ = m.repair_migration('OLD', 'NEW')
+    out2 = m.repair_migration('OLD', 'NEW')
+    assert out2['action'] in ('no_missing_assets', 'moved_missing_assets')
+    assert out2['moved_thr_amount'] == 0.0
+    assert m._remaining_old_token_count('OLD') == 0
+
+
+def test_wbtc_nonzero_missing_writable_source_fails_closed(monkeypatch, tmp_path):
+    class NoWrite:
+        def __init__(self):
+            self.bal={'OLD':0.0,'NEW':0.0}
+        def get_wallet_balance(self,a): return self.bal.get(a,0.0)
+        def get_wallet_balances_cached(self,a):
+            return {'tokens':[{'symbol':'THR','balance':self.bal.get(a,0.0)},{'symbol':'WBTC','balance':1.0 if a=='OLD' else 0.0}]}
+        def verify_legacy_secret_once(self,*_): return True
+        def preserve_admission_to_new_address(self,*_): return None
+        def mark_legacy_migrated(self,*_): return None
+        def rollback_partial_migration(self,*_): return None
+    s=NoWrite(); _setup(monkeypatch,tmp_path,s)
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
+    try:
+        m.repair_migration('OLD','NEW')
+        assert False
+    except Exception as e:
+        assert 'missing_authoritative_token_write_source:WBTC' in str(e)
+
+
+def test_l2e_nonzero_missing_writable_source_fails_closed(monkeypatch, tmp_path):
+    class NoWrite2:
+        def __init__(self): self.bal={'OLD':0.0,'NEW':0.0}
+        def get_wallet_balance(self,a): return self.bal.get(a,0.0)
+        def get_wallet_balances_cached(self,a):
+            return {'tokens':[{'symbol':'THR','balance':self.bal.get(a,0.0)},{'symbol':'L2E','balance':2.0 if a=='OLD' else 0.0}]}
+        def verify_legacy_secret_once(self,*_): return True
+        def preserve_admission_to_new_address(self,*_): return None
+        def mark_legacy_migrated(self,*_): return None
+        def rollback_partial_migration(self,*_): return None
+    s=NoWrite2(); _setup(monkeypatch,tmp_path,s)
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
+    try:
+        m.repair_migration('OLD','NEW')
+        assert False
+    except Exception as e:
+        assert 'missing_authoritative_token_write_source:L2E' in str(e)

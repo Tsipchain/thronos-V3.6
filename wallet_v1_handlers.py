@@ -14,6 +14,8 @@ def _require_repair_token(request):
     required = os.getenv('WALLET_V1_REPAIR_TOKEN', '')
     return bool(required and token == required)
 
+_WALLET_V1_LOADED = False
+_WALLET_V1_INIT_ERROR = None
 
 def init_wallet_v1_handler(app, redis_client, node_role="master", read_only=False, sqlite_path=None):
     global _WALLET_V1_LOADED, _WALLET_V1_INIT_ERROR

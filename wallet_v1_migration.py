@@ -131,6 +131,40 @@ def get_all_token_balances(address):
     return {k: v for k, v in balances.items() if k != 'THR'}
 
 
+
+
+def _can_write_core_token(symbol):
+    s = _server()
+    path = getattr(s, 'WBTC_LEDGER_FILE', None) if symbol == 'WBTC' else getattr(s, 'L2E_LEDGER_FILE', None)
+    return bool(path and callable(getattr(s, 'load_json', None)) and callable(getattr(s, 'save_json', None)))
+
+
+def _set_core_token_balance(symbol, address, value):
+    s = _server()
+    path = getattr(s, 'WBTC_LEDGER_FILE', None) if symbol == 'WBTC' else getattr(s, 'L2E_LEDGER_FILE', None)
+    if not (path and callable(getattr(s, 'load_json', None)) and callable(getattr(s, 'save_json', None))):
+        raise MigrationError(f'missing_authoritative_token_write_source:{symbol}')
+    led = s.load_json(path, {}) or {}
+    led[address] = float(value or 0.0)
+    s.save_json(path, led)
+
+
+def set_authoritative_token_balances_for_address(address, balances):
+    # balances contains non-THR symbols from authoritative source
+    b = {str(k).upper(): float(v or 0.0) for k, v in (balances or {}).items() if str(k).upper() != 'THR'}
+    if 'WBTC' in b:
+        _set_core_token_balance('WBTC', address, b.get('WBTC', 0.0))
+    if 'L2E' in b:
+        _set_core_token_balance('L2E', address, b.get('L2E', 0.0))
+    # custom token family
+    s = _server()
+    custom = {k: v for k, v in b.items() if k not in ('WBTC', 'L2E')}
+    if custom:
+        if not (callable(getattr(s, 'load_token_balances', None)) and callable(getattr(s, 'save_token_balances', None))):
+            raise MigrationError('missing_authoritative_token_write_source:custom')
+        all_b = s.load_token_balances() or {}
+        all_b[address] = dict(custom)
+        s.save_token_balances(all_b)
 def transfer_balance_atomic(old, new, amount):
     s = _server()
     if callable(getattr(s, 'transfer_balance_atomic', None)):
@@ -154,46 +188,49 @@ def transfer_all_tokens_atomic(old, new):
     if callable(getattr(s, 'transfer_all_tokens_atomic', None)):
         return int(s.transfer_all_tokens_atomic(old, new) or 0)
 
+    auth_old = get_authoritative_balances_for_address(old)
+    non_thr = {k: float(v or 0.0) for k, v in auth_old.items() if k != 'THR' and float(v or 0.0) > 0}
+    if not non_thr:
+        return 0
+
+    # fail closed before mutation if source is non-writable
+    if non_thr.get('WBTC', 0.0) > 0 and not _can_write_core_token('WBTC'):
+        raise MigrationError('missing_authoritative_token_write_source:WBTC')
+    if non_thr.get('L2E', 0.0) > 0 and not _can_write_core_token('L2E'):
+        raise MigrationError('missing_authoritative_token_write_source:L2E')
+    custom_syms = [k for k in non_thr.keys() if k not in ('WBTC', 'L2E')]
+    if custom_syms and not (callable(getattr(s, 'load_token_balances', None)) and callable(getattr(s, 'save_token_balances', None))):
+        raise MigrationError('missing_authoritative_token_write_source:custom')
+
     moved = 0
-    # /api/balances authoritative sources for token balances:
-    # - WBTC/L2E via dedicated ledgers or SQLite balances
-    # - other tokens via TOKEN_BALANCES_FILE (load_token_balances)
+    # WBTC/L2E
+    for sym in ('WBTC', 'L2E'):
+        amt = non_thr.get(sym, 0.0)
+        if amt <= 0:
+            continue
+        old_map = get_authoritative_balances_for_address(old)
+        new_map = get_authoritative_balances_for_address(new)
+        _set_core_token_balance(sym, old, max(0.0, float(old_map.get(sym, 0.0) or 0.0) - amt))
+        _set_core_token_balance(sym, new, float(new_map.get(sym, 0.0) or 0.0) + amt)
+        moved += 1
 
-    get_store = getattr(s, 'get_balance_from_store', None)
-    if callable(get_store):
-        for ledger_type in ('wbtc', 'l2e'):
-            sym = ledger_type.upper()
-            old_v = float(get_store(old, ledger_type, 0.0) or 0.0)
-            if old_v <= 0:
+    # custom tokens
+    if custom_syms:
+        all_b = s.load_token_balances() or {}
+        old_b = all_b.get(old, {}) or {}
+        new_b = all_b.get(new, {}) or {}
+        for sym in custom_syms:
+            amt = float(non_thr.get(sym, 0.0) or 0.0)
+            if amt <= 0:
                 continue
-            transfer_balance_atomic(old, new, old_v) if ledger_type == 'thr' else None
-            # write back using JSON ledgers if present; sqlite is covered via save_json helper in server.
-            path = getattr(s, 'WBTC_LEDGER_FILE', None) if ledger_type == 'wbtc' else getattr(s, 'L2E_LEDGER_FILE', None)
-            if callable(getattr(s, 'load_json', None)) and callable(getattr(s, 'save_json', None)) and path:
-                led = s.load_json(path, {}) or {}
-                led[old] = float(led.get(old, 0.0) or 0.0) - old_v
-                if led[old] < 0:
-                    led[old] = 0.0
-                led[new] = float(led.get(new, 0.0) or 0.0) + old_v
-                s.save_json(path, led)
-                moved += 1
+            new_b[sym] = float(new_b.get(sym, 0.0) or 0.0) + amt
+            old_b[sym] = max(0.0, float(old_b.get(sym, amt) or amt) - amt)
+            moved += 1
+        all_b[old] = old_b
+        all_b[new] = new_b
+        s.save_token_balances(all_b)
 
-    if callable(getattr(s, 'load_token_balances', None)) and callable(getattr(s, 'save_token_balances', None)):
-        balances = s.load_token_balances() or {}
-        old_b = balances.get(old, {}) or {}
-        new_b = balances.get(new, {}) or {}
-        for sym, amt in list(old_b.items()):
-            v = float(amt or 0)
-            if v > 0:
-                new_b[sym] = float(new_b.get(sym, 0) or 0) + v
-                old_b[sym] = 0
-                moved += 1
-        balances[old] = old_b
-        balances[new] = new_b
-        s.save_token_balances(balances)
-        return moved
-
-    raise MigrationError('missing_authoritative_token_source')
+    return moved
 
 
 def preserve_admission_to_new_address(old, new):
@@ -404,11 +441,9 @@ def _restore_snapshot(old_address, new_address, snap):
     elif d_new > 0:
         transfer_balance_atomic(old_address, new_address, d_new)
 
-    # Restore tokens exactly when possible.
-    if not _set_token_balances(old_address, snap['old_tokens']):
-        raise MigrationError('missing_token_rollback_primitive')
-    if not _set_token_balances(new_address, snap['new_tokens']):
-        raise MigrationError('missing_token_rollback_primitive')
+    # Restore tokens exactly for authoritative families.
+    set_authoritative_token_balances_for_address(old_address, snap['old_tokens'])
+    set_authoritative_token_balances_for_address(new_address, snap['new_tokens'])
 
 
 

@@ -344,3 +344,42 @@ def test_repeat_repair_idempotent_with_authoritative_source(monkeypatch, tmp_pat
     assert out2['action'] in ('no_missing_assets', 'moved_missing_assets')
     assert out2['moved_thr_amount'] == 0.0
     assert m._remaining_old_token_count('OLD') == 0
+
+
+def test_wbtc_nonzero_missing_writable_source_fails_closed(monkeypatch, tmp_path):
+    class NoWrite:
+        def __init__(self):
+            self.bal={'OLD':0.0,'NEW':0.0}
+        def get_wallet_balance(self,a): return self.bal.get(a,0.0)
+        def get_wallet_balances_cached(self,a):
+            return {'tokens':[{'symbol':'THR','balance':self.bal.get(a,0.0)},{'symbol':'WBTC','balance':1.0 if a=='OLD' else 0.0}]}
+        def verify_legacy_secret_once(self,*_): return True
+        def preserve_admission_to_new_address(self,*_): return None
+        def mark_legacy_migrated(self,*_): return None
+        def rollback_partial_migration(self,*_): return None
+    s=NoWrite(); _setup(monkeypatch,tmp_path,s)
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
+    try:
+        m.repair_migration('OLD','NEW')
+        assert False
+    except Exception as e:
+        assert 'missing_authoritative_token_write_source:WBTC' in str(e)
+
+
+def test_l2e_nonzero_missing_writable_source_fails_closed(monkeypatch, tmp_path):
+    class NoWrite2:
+        def __init__(self): self.bal={'OLD':0.0,'NEW':0.0}
+        def get_wallet_balance(self,a): return self.bal.get(a,0.0)
+        def get_wallet_balances_cached(self,a):
+            return {'tokens':[{'symbol':'THR','balance':self.bal.get(a,0.0)},{'symbol':'L2E','balance':2.0 if a=='OLD' else 0.0}]}
+        def verify_legacy_secret_once(self,*_): return True
+        def preserve_admission_to_new_address(self,*_): return None
+        def mark_legacy_migrated(self,*_): return None
+        def rollback_partial_migration(self,*_): return None
+    s=NoWrite2(); _setup(monkeypatch,tmp_path,s)
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
+    try:
+        m.repair_migration('OLD','NEW')
+        assert False
+    except Exception as e:
+        assert 'missing_authoritative_token_write_source:L2E' in str(e)

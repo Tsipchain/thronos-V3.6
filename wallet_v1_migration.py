@@ -150,6 +150,35 @@ def _set_core_token_balance(symbol, address, value):
     s.save_json(path, led)
 
 
+def get_authoritative_custom_token_balances(address):
+    s = _server()
+    if not callable(getattr(s, 'load_token_balances', None)):
+        raise MigrationError('missing_authoritative_custom_token_write_source')
+    all_b = s.load_token_balances() or {}
+    out = {}
+    for sym, holders in (all_b or {}).items():
+        if str(sym).upper() in ('THR', 'WBTC', 'L2E'):
+            continue
+        if isinstance(holders, dict):
+            out[str(sym).upper()] = float(holders.get(address, 0.0) or 0.0)
+    return out
+
+
+def set_authoritative_custom_token_balance(symbol, address, amount):
+    s = _server()
+    if not (callable(getattr(s, 'load_token_balances', None)) and callable(getattr(s, 'save_token_balances', None))):
+        raise MigrationError('missing_authoritative_custom_token_write_source')
+    sym = str(symbol).upper()
+    if sym in ('THR', 'WBTC', 'L2E'):
+        return
+    all_b = s.load_token_balances() or {}
+    all_b.setdefault(sym, {})
+    if not isinstance(all_b[sym], dict):
+        all_b[sym] = {}
+    all_b[sym][address] = float(amount or 0.0)
+    s.save_token_balances(all_b)
+
+
 def set_authoritative_token_balances_for_address(address, balances):
     # balances contains non-THR symbols from authoritative source
     b = {str(k).upper(): float(v or 0.0) for k, v in (balances or {}).items() if str(k).upper() != 'THR'}
@@ -161,15 +190,8 @@ def set_authoritative_token_balances_for_address(address, balances):
     s = _server()
     custom = {k: v for k, v in b.items() if k not in ('WBTC', 'L2E')}
     if custom:
-        if not (callable(getattr(s, 'load_token_balances', None)) and callable(getattr(s, 'save_token_balances', None))):
-            raise MigrationError('missing_authoritative_token_write_source:custom')
-        all_b = s.load_token_balances() or {}
         for sym, amt in custom.items():
-            all_b.setdefault(sym, {})
-            if not isinstance(all_b[sym], dict):
-                all_b[sym] = {}
-            all_b[sym][address] = float(amt or 0.0)
-        s.save_token_balances(all_b)
+            set_authoritative_custom_token_balance(sym, address, amt)
 def transfer_balance_atomic(old, new, amount):
     s = _server()
     if callable(getattr(s, 'transfer_balance_atomic', None)):
@@ -205,7 +227,7 @@ def transfer_all_tokens_atomic(old, new):
         raise MigrationError('missing_authoritative_token_write_source:L2E')
     custom_syms = [k for k in non_thr.keys() if k not in ('WBTC', 'L2E')]
     if custom_syms and not (callable(getattr(s, 'load_token_balances', None)) and callable(getattr(s, 'save_token_balances', None))):
-        raise MigrationError('missing_authoritative_token_write_source:custom')
+        raise MigrationError('missing_authoritative_custom_token_write_source')
 
     moved = 0
     # WBTC/L2E
@@ -221,20 +243,19 @@ def transfer_all_tokens_atomic(old, new):
 
     # custom tokens
     if custom_syms:
-        all_b = s.load_token_balances() or {}
         for sym in custom_syms:
             amt = float(non_thr.get(sym, 0.0) or 0.0)
             if amt <= 0:
                 continue
-            all_b.setdefault(sym, {})
-            if not isinstance(all_b[sym], dict):
-                all_b[sym] = {}
-            old_cur = float(all_b[sym].get(old, amt) or amt)
-            new_cur = float(all_b[sym].get(new, 0.0) or 0.0)
-            all_b[sym][old] = max(0.0, old_cur - amt)
-            all_b[sym][new] = new_cur + amt
+            old_custom = get_authoritative_custom_token_balances(old)
+            new_custom = get_authoritative_custom_token_balances(new)
+            old_cur = float(old_custom.get(sym, 0.0) or 0.0)
+            new_cur = float(new_custom.get(sym, 0.0) or 0.0)
+            if old_cur <= 0:
+                continue
+            set_authoritative_custom_token_balance(sym, old, max(0.0, old_cur - amt))
+            set_authoritative_custom_token_balance(sym, new, new_cur + amt)
             moved += 1
-        s.save_token_balances(all_b)
 
     return moved
 

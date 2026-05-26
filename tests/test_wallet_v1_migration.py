@@ -22,6 +22,15 @@ class S:
 
     def load_json(self, path, default=None): return self._json.get(path, default)
     def save_json(self, path, data): self._json[path] = data
+
+    def load_token_balances(self): return self.tokens
+    def save_token_balances(self, balances): self.tokens = balances
+    def get_wallet_balances_cached(self, addr):
+        toks = {'THR': float(self.bal.get(addr, 0.0) or 0.0)}
+        for sym, holders in (self.tokens or {}).items():
+            if isinstance(holders, dict):
+                toks[str(sym).upper()] = float(holders.get(addr, 0.0) or 0.0)
+        return {'tokens': [{'symbol': k, 'balance': v} for k, v in toks.items()]}
     def get_wallet_balance(self, addr): return self.bal.get(addr, 0)
     def get_all_token_balances(self, addr): return self.tokens.get(addr, {})
     def verify_legacy_secret_once(self, old, sec): return sec == 'ok'
@@ -389,3 +398,42 @@ def test_l2e_nonzero_missing_writable_source_fails_closed(monkeypatch, tmp_path)
         assert False
     except Exception as e:
         assert 'missing_authoritative_token_write_source:L2E' in str(e)
+
+
+def test_live_shape_custom_tokens_move_and_counts(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    s.bal = {'OLD': 0.0, 'NEW': 1.0}
+    s.tokens = {
+        '7CEB': {'OLD': 1, 'NEW': 0},
+        'CVT': {'OLD': 2, 'NEW': 0},
+        'HPENNIS': {'OLD': 3, 'NEW': 0},
+        'JAM': {'OLD': 4, 'NEW': 0},
+        'LOUMIDIS': {'OLD': 5, 'NEW': 0},
+        'MAR': {'OLD': 6, 'NEW': 0},
+    }
+    assert m._remaining_old_token_count('OLD') == 6
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed","assets_migrated":false}},"index_new":{"NEW":"OLD"}}')
+    out = m.repair_migration('OLD', 'NEW')
+    assert out['moved_thr_amount'] == 0.0
+    assert out['moved_token_count'] == 6
+    assert out['remaining_old_token_count'] == 0
+    for sym in ('7CEB','CVT','HPENNIS','JAM','LOUMIDIS','MAR'):
+        assert s.tokens[sym]['OLD'] == 0
+        assert s.tokens[sym]['NEW'] > 0
+    assert m._remaining_old_token_count('OLD') == 0
+
+
+def test_custom_source_missing_fails_closed(monkeypatch, tmp_path):
+    class MissingCustom(S):
+        load_token_balances = None
+        save_token_balances = None
+        transfer_all_tokens_atomic = None
+    s = MissingCustom(); _setup(monkeypatch, tmp_path, s)
+    s.bal={'OLD':0.0,'NEW':0.1}
+    s.tokens={'JAM':{'OLD':2,'NEW':0}}
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
+    try:
+        m.repair_migration('OLD','NEW')
+        assert False
+    except Exception as e:
+        assert 'missing_authoritative_custom_token_write_source' in str(e)

@@ -418,10 +418,136 @@ def _repair_music_bindings(old_address, new_v1_address):
     return repaired_any, moved
 
 
+def get_mining_whitelist_entry(address):
+    s = _server()
+    fn = getattr(s, 'get_mining_whitelist_entry', None)
+    if callable(fn):
+        return fn(address)
+    return None
+
+
+def get_mining_payout_state(address):
+    s = _server()
+    fn = getattr(s, 'get_mining_payout_state', None)
+    if callable(fn):
+        return fn(address)
+    return None
+
+
+def get_pool_rewards_state(address):
+    s = _server()
+    fn = getattr(s, 'get_pool_rewards_state', None)
+    if callable(fn):
+        return fn(address)
+    return None
+
+
+def repair_mining_wallet_binding(old_address, new_v1_address):
+    s = _server()
+    hook = getattr(s, 'repair_mining_wallet_binding', None)
+    if callable(hook):
+        out = hook(old_address, new_v1_address)
+        if isinstance(out, dict):
+            return bool(out.get('ok', False)), bool(out.get('admission_ok', False)), int(out.get('moved_payout_rows', 0) or 0)
+        return bool(out), bool(out), 0
+
+    entry = get_mining_whitelist_entry(old_address)
+    payout = get_mining_payout_state(old_address)
+    if not entry and not payout:
+        return True, True, 0
+
+    moved = 0
+    admission_ok = False
+    repaired = False
+
+    move_whitelist = getattr(s, 'move_mining_whitelist_entry', None)
+    if callable(move_whitelist):
+        out = move_whitelist(old_address, new_v1_address)
+        repaired = repaired or bool(out)
+    elif entry:
+        raise MigrationError('missing_mining_binding_write_source')
+
+    move_payout = getattr(s, 'move_mining_payout_state', None)
+    if callable(move_payout):
+        moved = int(move_payout(old_address, new_v1_address) or 0)
+        repaired = repaired or moved > 0
+    elif payout:
+        raise MigrationError('missing_mining_binding_write_source')
+
+    new_entry = get_mining_whitelist_entry(new_v1_address)
+    if new_entry:
+        if callable(getattr(s, '_whitelist_allows_no_pledge', None)):
+            admission_ok = bool(new_entry.get('active')) and (bool(new_entry.get('pledge_ok')) or bool(s._whitelist_allows_no_pledge(new_entry))) and not bool(new_entry.get('banned'))
+        else:
+            admission_ok = bool(new_entry.get('active')) and not bool(new_entry.get('banned'))
+    elif not entry:
+        admission_ok = True
+
+    if entry and not admission_ok:
+        raise MigrationError('missing_mining_binding_write_source')
+    return repaired or (not entry and not payout), admission_ok, moved
+
+
+def repair_pool_rewards_wallet_binding(old_address, new_v1_address):
+    s = _server()
+    hook = getattr(s, 'repair_pool_rewards_wallet_binding', None)
+    if callable(hook):
+        out = hook(old_address, new_v1_address)
+        if isinstance(out, dict):
+            return bool(out.get('ok', False)), int(out.get('moved_rows', 0) or 0)
+        return bool(out), 0
+
+    state = get_pool_rewards_state(old_address)
+    if not state:
+        return True, 0
+    mover = getattr(s, 'move_pool_rewards_state', None)
+    if not callable(mover):
+        raise MigrationError('missing_pool_rewards_write_source')
+    moved = int(mover(old_address, new_v1_address) or 0)
+    return True, moved
+
+
+def repair_agent_wallet_bindings(old_address, new_v1_address):
+    s = _server()
+    hook = getattr(s, 'repair_agent_wallet_bindings', None)
+    if callable(hook):
+        out = hook(old_address, new_v1_address)
+        if isinstance(out, dict):
+            return bool(out.get('ok', False)), int(out.get('moved_rows', 0) or 0)
+        return bool(out), 0
+
+    state_fn = getattr(s, 'get_agent_wallet_binding_state', None)
+    move_fn = getattr(s, 'move_agent_wallet_binding_state', None)
+    if not callable(state_fn):
+        return True, 0
+    state = state_fn(old_address)
+    if not state:
+        return True, 0
+    if not callable(move_fn):
+        raise MigrationError('missing_agent_wallet_binding_write_source')
+    moved = int(move_fn(old_address, new_v1_address) or 0)
+    return True, moved
+
+
 def _compute_assets_migrated(old_address, ecosystem_bindings_repaired=False):
     remaining_old_tokens = _remaining_old_token_count(old_address)
     remaining_old_thr = float(get_wallet_balance(old_address)[0] or 0.0)
     return (remaining_old_tokens == 0 and remaining_old_thr <= 0 and bool(ecosystem_bindings_repaired)), remaining_old_tokens
+
+
+def _remaining_old_operational_binding_count(old_address):
+    c = 0
+    if get_mining_whitelist_entry(old_address):
+        c += 1
+    if get_mining_payout_state(old_address):
+        c += 1
+    if get_pool_rewards_state(old_address):
+        c += 1
+    s = _server()
+    ag = getattr(s, 'get_agent_wallet_binding_state', None)
+    if callable(ag) and ag(old_address):
+        c += 1
+    return c
 
 
 def _snapshot_state(old_address, new_address):
@@ -627,17 +753,27 @@ def repair_migration(old_address, new_v1_address):
         mutation_started = mutation_started or (moved_tokens > 0)
         preserve_admission_to_new_address(old_address, new_v1_address)
 
+        mining_ok, mining_admission_ok, _ = repair_mining_wallet_binding(old_address, new_v1_address)
+        pool_ok, _ = repair_pool_rewards_wallet_binding(old_address, new_v1_address)
+        agent_ok, _ = repair_agent_wallet_bindings(old_address, new_v1_address)
         music_ok, music_moved = _repair_music_bindings(old_address, new_v1_address)
-        ecosystem_ok = bool(music_ok)
+        ecosystem_ok = bool(mining_ok and pool_ok and agent_ok and music_ok and mining_admission_ok)
+        remaining_operational = _remaining_old_operational_binding_count(old_address)
+        if remaining_operational > 0:
+            ecosystem_ok = False
         fully_migrated, remaining_old_tokens = _compute_assets_migrated(old_address, ecosystem_ok)
 
         rec['status'] = 'repaired' if fully_migrated else rec.get('status', 'failed')
         rec['repaired_at'] = _now()
         rec['music_bindings_repaired'] = bool(music_ok)
+        rec['mining_bindings_repaired'] = bool(mining_ok)
+        rec['pool_rewards_repaired'] = bool(pool_ok)
+        rec['agent_bindings_repaired'] = bool(agent_ok)
         rec['ecosystem_bindings_repaired'] = bool(ecosystem_ok)
         rec['assets_migrated'] = bool(fully_migrated)
         rec['moved_token_count'] = int(rec.get('moved_token_count', 0) or 0) + int(moved_tokens or 0)
         rec['remaining_old_token_count'] = remaining_old_tokens
+        rec['remaining_old_operational_binding_count'] = int(remaining_operational)
         repair_tx_id = f'repair:{old_address}:{_now()}' if (moved_thr > 0 or moved_tokens > 0) else ''
         if repair_tx_id:
             rec['repair_tx_id'] = repair_tx_id
@@ -656,6 +792,10 @@ def repair_migration(old_address, new_v1_address):
             'assets_migrated': bool(rec.get('assets_migrated', False)),
             'ecosystem_bindings_repaired': bool(rec.get('ecosystem_bindings_repaired', False)),
             'music_bindings_repaired': bool(rec.get('music_bindings_repaired', False)),
+            'mining_bindings_repaired': bool(rec.get('mining_bindings_repaired', False)),
+            'pool_rewards_repaired': bool(rec.get('pool_rewards_repaired', False)),
+            'agent_bindings_repaired': bool(rec.get('agent_bindings_repaired', False)),
+            'remaining_old_operational_binding_count': int(rec.get('remaining_old_operational_binding_count', 0) or 0),
         }
     except Exception as e:
         try:

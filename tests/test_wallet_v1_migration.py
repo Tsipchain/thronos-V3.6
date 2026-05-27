@@ -19,6 +19,10 @@ class S:
         self.MUSIC_REWARDS_FILE = 'rewards.json'
         self.MUSIC_ENTITLEMENTS_FILE = 'entitlements.json'
         self.MUSIC_PLAYLISTS_FILE = 'playlists.json'
+        self.mining_whitelist = {}
+        self.mining_payouts = {}
+        self.pool_rewards = {}
+        self.agent_bindings = {}
 
     def load_json(self, path, default=None): return self._json.get(path, default)
     def save_json(self, path, data): self._json[path] = data
@@ -61,8 +65,44 @@ class S:
     def is_wallet_whitelisted(self, addr): return addr in self.whitelisted
     def is_whitelisted_address(self, addr): return addr in self.whitelisted
     def get_mining_whitelist_entry(self, addr):
-        if addr == 'MINER': return {'active': True, 'banned': False, 'pledge_ok': False, 'whitelist_legacy': True}
+        if addr in self.mining_whitelist:
+            return self.mining_whitelist.get(addr)
+        if addr == 'MINER':
+            return {'active': True, 'banned': False, 'pledge_ok': False, 'whitelist_legacy': True}
         return None
+    def get_mining_payout_state(self, addr):
+        return self.mining_payouts.get(addr)
+    def get_pool_rewards_state(self, addr):
+        return self.pool_rewards.get(addr)
+    def get_agent_wallet_binding_state(self, addr):
+        return self.agent_bindings.get(addr)
+    def move_mining_whitelist_entry(self, old, new):
+        if old not in self.mining_whitelist:
+            return 0
+        self.mining_whitelist[new] = dict(self.mining_whitelist[old])
+        self.mining_whitelist.pop(old, None)
+        return 1
+    def move_mining_payout_state(self, old, new):
+        st = self.mining_payouts.get(old)
+        if not st:
+            return 0
+        self.mining_payouts[new] = self.mining_payouts.get(new, 0) + st
+        self.mining_payouts[old] = 0
+        return 1
+    def move_pool_rewards_state(self, old, new):
+        st = self.pool_rewards.get(old)
+        if not st:
+            return 0
+        self.pool_rewards[new] = self.pool_rewards.get(new, 0) + st
+        self.pool_rewards[old] = 0
+        return 1
+    def move_agent_wallet_binding_state(self, old, new):
+        st = self.agent_bindings.get(old)
+        if not st:
+            return 0
+        self.agent_bindings[new] = st
+        self.agent_bindings.pop(old, None)
+        return 1
     def _whitelist_allows_no_pledge(self, entry): return bool(entry.get('whitelist_legacy'))
 
 
@@ -437,3 +477,78 @@ def test_custom_source_missing_fails_closed(monkeypatch, tmp_path):
         assert False
     except Exception as e:
         assert 'missing_authoritative_custom_token_write_source' in str(e)
+
+
+def test_mining_continuity_repair_moves_whitelist_and_payout(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    s.bal = {'OLD': 0.0, 'NEW': 1.0}
+    s.tokens = {'JAM': {'OLD': 0, 'NEW': 1}}
+    s.mining_whitelist = {'OLD': {'active': True, 'banned': False, 'pledge_ok': False, 'whitelist_legacy': True}}
+    s.mining_payouts = {'OLD': 5}
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
+    out = m.repair_migration('OLD', 'NEW')
+    assert out['mining_bindings_repaired'] is True
+    assert s.mining_whitelist.get('NEW', {}).get('active') is True
+    assert s.mining_payouts.get('NEW') == 5
+    assert s.mining_payouts.get('OLD') == 0
+
+
+def test_repeat_repair_no_duplicate_mining_or_pool(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    s.bal = {'OLD': 0.0, 'NEW': 1.0}
+    s.tokens = {'JAM': {'OLD': 0, 'NEW': 1}}
+    s.mining_whitelist = {'OLD': {'active': True, 'banned': False, 'pledge_ok': True}}
+    s.mining_payouts = {'OLD': 7}
+    s.pool_rewards = {'OLD': 9}
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
+    _ = m.repair_migration('OLD', 'NEW')
+    out2 = m.repair_migration('OLD', 'NEW')
+    assert s.mining_payouts.get('NEW') == 7
+    assert s.pool_rewards.get('NEW') == 9
+    assert out2['moved_thr_amount'] == 0.0
+
+
+def test_missing_mining_write_source_fails_closed(monkeypatch, tmp_path):
+    class NoMiningWrite(S):
+        move_mining_whitelist_entry = None
+        move_mining_payout_state = None
+    s = NoMiningWrite(); _setup(monkeypatch, tmp_path, s)
+    s.bal = {'OLD': 0.0, 'NEW': 1.0}
+    s.tokens = {'JAM': {'OLD': 0, 'NEW': 1}}
+    s.mining_whitelist = {'OLD': {'active': True, 'banned': False, 'pledge_ok': True}}
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
+    try:
+        m.repair_migration('OLD', 'NEW')
+        assert False
+    except Exception as e:
+        assert 'missing_mining_binding_write_source' in str(e)
+
+
+def test_missing_pool_write_source_fails_closed(monkeypatch, tmp_path):
+    class NoPoolWrite(S):
+        move_pool_rewards_state = None
+    s = NoPoolWrite(); _setup(monkeypatch, tmp_path, s)
+    s.bal = {'OLD': 0.0, 'NEW': 1.0}
+    s.tokens = {'JAM': {'OLD': 0, 'NEW': 1}}
+    s.pool_rewards = {'OLD': 10}
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
+    try:
+        m.repair_migration('OLD', 'NEW')
+        assert False
+    except Exception as e:
+        assert 'missing_pool_rewards_write_source' in str(e)
+
+
+def test_missing_agent_write_source_fails_closed(monkeypatch, tmp_path):
+    class NoAgentWrite(S):
+        move_agent_wallet_binding_state = None
+    s = NoAgentWrite(); _setup(monkeypatch, tmp_path, s)
+    s.bal = {'OLD': 0.0, 'NEW': 1.0}
+    s.tokens = {'JAM': {'OLD': 0, 'NEW': 1}}
+    s.agent_bindings = {'OLD': {'service': 'pytheia'}}
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
+    try:
+        m.repair_migration('OLD', 'NEW')
+        assert False
+    except Exception as e:
+        assert 'missing_agent_wallet_binding_write_source' in str(e)

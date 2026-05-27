@@ -381,6 +381,24 @@ class AuthS(S):
         return moved
 
 
+class HookZeroCustomS(S):
+    """Simulates production hook that does nothing for custom tokens."""
+    def __init__(self):
+        super().__init__()
+        self.bal = {'OLD': 0.0, 'NEW': 1.0}
+        self.tokens = {
+            '7CEB': {'OLD': 118.55, 'NEW': 0.0},
+            'CVT': {'OLD': 10000000, 'NEW': 0.0},
+            'HPENNIS': {'OLD': 18929319.95, 'NEW': 0.0},
+            'JAM': {'OLD': 100903, 'NEW': 0.0},
+            'LOUMIDIS': {'OLD': 7756027, 'NEW': 0.0},
+            'MAR': {'OLD': 973635, 'NEW': 0.0},
+        }
+
+    def transfer_all_tokens_atomic(self, old, new):
+        return 0
+
+
 def test_authoritative_balances_source_drives_token_repair(monkeypatch, tmp_path):
     s = AuthS(); _setup(monkeypatch, tmp_path, s)
     (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed","assets_migrated":false}},"index_new":{"NEW":"OLD"}}')
@@ -552,3 +570,44 @@ def test_missing_agent_write_source_fails_closed(monkeypatch, tmp_path):
         assert False
     except Exception as e:
         assert 'missing_agent_wallet_binding_write_source' in str(e)
+
+
+def test_hook_zero_custom_tokens_fallback_still_moves(monkeypatch, tmp_path):
+    s = HookZeroCustomS(); _setup(monkeypatch, tmp_path, s)
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
+    out = m.repair_migration('OLD', 'NEW')
+    assert out['moved_token_count'] == 6
+    assert out['remaining_old_token_count'] == 0
+    for sym in ('7CEB', 'CVT', 'HPENNIS', 'JAM', 'LOUMIDIS', 'MAR'):
+        assert s.tokens[sym]['OLD'] == 0.0
+        assert s.tokens[sym]['NEW'] > 0
+
+
+def test_remaining_tokens_cannot_report_no_missing_assets(monkeypatch, tmp_path):
+    s = HookZeroCustomS(); _setup(monkeypatch, tmp_path, s)
+    # disable custom writable source to force fail-closed/incomplete condition
+    s.save_token_balances = None
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
+    try:
+        m.repair_migration('OLD', 'NEW')
+        assert False
+    except Exception as e:
+        assert 'missing_authoritative_custom_token_write_source' in str(e)
+
+
+def test_remaining_tokens_implies_assets_not_migrated(monkeypatch, tmp_path):
+    s = HookZeroCustomS(); _setup(monkeypatch, tmp_path, s)
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
+    out = m.repair_migration('OLD', 'NEW')
+    assert out['remaining_old_token_count'] == 0
+    assert out['assets_migrated'] is True
+
+
+def test_repeat_repair_no_duplicate_custom_token_credit(monkeypatch, tmp_path):
+    s = HookZeroCustomS(); _setup(monkeypatch, tmp_path, s)
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
+    _ = m.repair_migration('OLD', 'NEW')
+    out2 = m.repair_migration('OLD', 'NEW')
+    assert out2['moved_token_count'] == 0
+    assert out2['action'] != 'incomplete_repair'
+    assert s.tokens['7CEB']['NEW'] == 118.55

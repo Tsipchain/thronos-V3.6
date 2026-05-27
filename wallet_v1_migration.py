@@ -213,7 +213,53 @@ def transfer_balance_atomic(old, new, amount):
 def transfer_all_tokens_atomic(old, new):
     s = _server()
     if callable(getattr(s, 'transfer_all_tokens_atomic', None)):
-        return int(s.transfer_all_tokens_atomic(old, new) or 0)
+        moved_by_hook = int(s.transfer_all_tokens_atomic(old, new) or 0)
+        # Production hook may skip custom-token families; always verify old authoritative balances
+        # and continue with authoritative fallback for any remaining non-THR balances.
+        remaining = get_authoritative_balances_for_address(old)
+        remaining_non_thr = {
+            k: float(v or 0.0)
+            for k, v in (remaining or {}).items()
+            if k != 'THR' and float(v or 0.0) > 0
+        }
+        if not remaining_non_thr:
+            return moved_by_hook
+
+        moved_fallback = 0
+        if remaining_non_thr.get('WBTC', 0.0) > 0:
+            if not _can_write_core_token('WBTC'):
+                raise MigrationError('missing_authoritative_token_write_source:WBTC')
+            amt = float(remaining_non_thr['WBTC'])
+            new_map = get_authoritative_balances_for_address(new)
+            _set_core_token_balance('WBTC', old, 0.0)
+            _set_core_token_balance('WBTC', new, float(new_map.get('WBTC', 0.0) or 0.0) + amt)
+            moved_fallback += 1
+
+        if remaining_non_thr.get('L2E', 0.0) > 0:
+            if not _can_write_core_token('L2E'):
+                raise MigrationError('missing_authoritative_token_write_source:L2E')
+            amt = float(remaining_non_thr['L2E'])
+            new_map = get_authoritative_balances_for_address(new)
+            _set_core_token_balance('L2E', old, 0.0)
+            _set_core_token_balance('L2E', new, float(new_map.get('L2E', 0.0) or 0.0) + amt)
+            moved_fallback += 1
+
+        custom_syms = [k for k in remaining_non_thr.keys() if k not in ('WBTC', 'L2E')]
+        if custom_syms:
+            if not (callable(getattr(s, 'load_token_balances', None)) and callable(getattr(s, 'save_token_balances', None))):
+                raise MigrationError('missing_authoritative_custom_token_write_source')
+            for sym in custom_syms:
+                old_custom = get_authoritative_custom_token_balances(old)
+                new_custom = get_authoritative_custom_token_balances(new)
+                old_amt = float(old_custom.get(sym, 0.0) or 0.0)
+                if old_amt <= 0:
+                    continue
+                new_amt = float(new_custom.get(sym, 0.0) or 0.0)
+                set_authoritative_custom_token_balance(sym, old, 0.0)
+                set_authoritative_custom_token_balance(sym, new, new_amt + old_amt)
+                moved_fallback += 1
+
+        return moved_by_hook + moved_fallback
 
     auth_old = get_authoritative_balances_for_address(old)
     non_thr = {k: float(v or 0.0) for k, v in auth_old.items() if k != 'THR' and float(v or 0.0) > 0}
@@ -763,7 +809,7 @@ def repair_migration(old_address, new_v1_address):
             ecosystem_ok = False
         fully_migrated, remaining_old_tokens = _compute_assets_migrated(old_address, ecosystem_ok)
 
-        rec['status'] = 'repaired' if fully_migrated else rec.get('status', 'failed')
+        rec['status'] = 'repaired' if fully_migrated else 'failed'
         rec['repaired_at'] = _now()
         rec['music_bindings_repaired'] = bool(music_ok)
         rec['mining_bindings_repaired'] = bool(mining_ok)
@@ -783,7 +829,11 @@ def repair_migration(old_address, new_v1_address):
             'ok': True,
             'old_address': old_address,
             'new_v1_address': new_v1_address,
-            'action': 'moved_missing_assets' if (moved_thr > 0 or moved_tokens > 0) else 'no_missing_assets',
+            'action': (
+                'incomplete_repair'
+                if (remaining_old_tokens > 0 and moved_thr == 0 and moved_tokens == 0)
+                else ('moved_missing_assets' if (moved_thr > 0 or moved_tokens > 0) else 'no_missing_assets')
+            ),
             'moved_thr_amount': moved_thr,
             'moved_token_count': moved_tokens,
             'remaining_old_token_count': remaining_old_tokens,

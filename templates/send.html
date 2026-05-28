@@ -114,10 +114,6 @@
         </div>
     </div>
 
-    <label for="auth_secret">
-      <span class="lang-el">Μυστικό Αποστολής (auth_secret)</span><span class="lang-en">Send Secret (auth_secret)</span>
-    </label>
-    <input id="auth_secret" type="password" placeholder="Μυστικό που πήρες με το Pledge (send_secret)" />
 
     <div class="kpi">
       <div>🧺 Mempool: <span id="mpCount">0</span></div>
@@ -170,24 +166,23 @@ const $ = (id)=>document.getElementById(id);
 const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
 
 // --- Fee Logic ---
-const FEE_RATE = 0.005; // 0.5%
-const MIN_FEE = 0.001;
-
-function updateFee() {
+let latestFee = 0;
+async function updateFee() {
     let amount = parseFloat($('amount').value) || 0;
     if (amount < 0) amount = 0;
-    
-    const fee = Math.max(MIN_FEE, amount * FEE_RATE);
-    const total = amount + fee;
-    
-    $('feeDisplay').textContent = fee.toFixed(6) + " THR";
+    try {
+      const r = await fetch('/api/v1/wallet/fee-estimate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ amount, token:'THR' })});
+      const d = await r.json();
+      latestFee = Number(d.fee || 0);
+    } catch(_) { latestFee = 0; }
+    const total = amount + latestFee;
+    $('feeDisplay').textContent = latestFee.toFixed(6) + " THR";
     $('totalCostDisplay').textContent = total.toFixed(6) + " THR";
 }
 
 // --- Auto-fill from localStorage ---
 document.addEventListener('DOMContentLoaded', () => {
     const savedAddr = walletSession.getAddress();
-    const savedSecret = walletSession.getSendSeed();
     const bound = walletSession.isBound();
 
     if (savedAddr && bound) {
@@ -197,9 +192,6 @@ document.addEventListener('DOMContentLoaded', () => {
         $('walletWarning').style.display = 'block';
     }
     
-    if (savedSecret) {
-        $('auth_secret').value = savedSecret;
-    }
     
     updateFee(); // Init fee display
 });
@@ -366,12 +358,11 @@ async function doSend() {
   const from_thr    = $('from_thr').value.trim();
   const to_thr      = $('to_thr').value.trim();
   const amount      = $('amount').value;
-  const auth_secret = $('auth_secret').value.trim() || walletSession.getSendSeed();
   const lang = localStorage.getItem('lang') || 'el';
 
   const msg = {
-    el:{missingAddr:'Συμπλήρωσε FROM και TO THR address', missingSecret:'Χρειάζεται το send_secret που πήρες με το Pledge', error:'Σφάλμα αποστολής: '},
-    en:{missingAddr:'Fill in FROM and TO THR address',     missingSecret:'Send_secret from Pledge is required',          error:'Error sending: '}
+    el:{missingAddr:'Συμπλήρωσε FROM και TO THR address', migrate:'Κάνε migrate σε Wallet V1 πριν την αποστολή', error:'Σφάλμα αποστολής: '},
+    en:{missingAddr:'Fill in FROM and TO THR address', migrate:'Migrate to Wallet V1 before sending', error:'Error sending: '}
   }[lang];
 
   if(!walletSession.isBound()){
@@ -380,14 +371,17 @@ async function doSend() {
   }
 
   if(!from_thr || !to_thr){ alert(msg.missingAddr); return; }
-  if(!auth_secret){ alert(msg.missingSecret); return; }
-
-  if(!walletSession.requirePin('send funds')) return;
+  if(!walletSession.getPublicKey || !walletSession.signTransaction || !walletSession.getPublicKey()){ alert(msg.migrate); return; }
+  if(!walletSession.requirePin('sign transaction')) return;
 
   try{
-    const res = await fetch('/send_thr', {
+    const txCore = { from: from_thr, to: to_thr, amount: Number(amount), token: 'THR', nonce: String(Date.now()), timestamp: Math.floor(Date.now()/1000) };
+    const publicKey = walletSession.getPublicKey();
+    const signature = await walletSession.signTransaction(txCore);
+    const signed = { ...txCore, publicKey, signature };
+    const res = await fetch('/api/v1/tx/send', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ from_thr, to_thr, amount, auth_secret })
+      body: JSON.stringify({ tx: signed })
     });
     const data = await res.json();
     $('sendResult').textContent = JSON.stringify(data, null, 2);

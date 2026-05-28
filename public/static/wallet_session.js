@@ -145,29 +145,76 @@
     setItem(SEND_SEED_COMPAT_KEY, seed ? seed.trim() : '');
   }
 
+  function getAddress(){ return localStorage.getItem(V1_ADDRESS_KEY) || localStorage.getItem(ADDRESS_KEY) || ''; }
+  function setAddress(addr){ setItem(ADDRESS_KEY, addr ? addr.trim() : ''); }
+  function getSendSeed(){ return localStorage.getItem(SEND_SECRET_KEY) || localStorage.getItem(SEND_SEED_KEY) || localStorage.getItem(SEND_SEED_COMPAT_KEY) || ''; }
+  function setSendSeed(seed){ setItem(SEND_SECRET_KEY, seed ? seed.trim() : ''); setItem(SEND_SEED_KEY, seed ? seed.trim() : ''); setItem(SEND_SEED_COMPAT_KEY, seed ? seed.trim() : ''); }
   const getSendSecret = getSendSeed;
   const setSendSecret = setSendSeed;
+  function getPin(){ return localStorage.getItem(PIN_KEY) || ''; }
+  function setPin(pin){ setItem(PIN_KEY, pin ? pin.trim() : ''); }
 
-  function getPin(){
-    return localStorage.getItem(PIN_KEY) || '';
+  function lockWallet(){ unlockedPrivateKeyHex = null; setBound(false); localStorage.setItem(LOCK_KEY, '1'); }
+  function lock(){ return lockWallet(); }
+  function setCustomUnlockHandler(fn){ customUnlockHandler = typeof fn === 'function' ? fn : null; }
+
+  function hexToBytes(hex){ const out=[]; for(let i=0;i<hex.length;i+=2) out.push(parseInt(hex.slice(i,i+2),16)); return new Uint8Array(out); }
+  function bytesToHex(bytes){ return Array.from(bytes).map(b=>b.toString(16).padStart(2,'0')).join(''); }
+  async function sha256Hex(s){ const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)); return bytesToHex(new Uint8Array(d)); }
+  async function aesKeyFromPin(pin, salt){
+    const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:250000,hash:'SHA-256'}, material, {name:'AES-GCM',length:256}, false, ['encrypt','decrypt']);
+  }
+  async function encryptPrivateKeyHex(privateKeyHex, pin){
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const key = await aesKeyFromPin(pin, salt);
+    const cipher = await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, hexToBytes(privateKeyHex));
+    return JSON.stringify({v:1,salt:bytesToHex(salt),iv:bytesToHex(iv),ct:bytesToHex(new Uint8Array(cipher))});
+  }
+  async function decryptPrivateKeyHex(blob, pin){
+    const p = JSON.parse(blob);
+    const key = await aesKeyFromPin(pin, hexToBytes(p.salt));
+    const clear = await crypto.subtle.decrypt({name:'AES-GCM', iv:hexToBytes(p.iv)}, key, hexToBytes(p.ct));
+    return bytesToHex(new Uint8Array(clear));
   }
 
-  function setPin(pin){
-    setItem(PIN_KEY, pin ? pin.trim() : '');
+  function _getSecp(){
+    return window.nobleSecp256k1 || window.secp256k1 || window.nobleSecp256k1Lib || window.NobleSecp256k1 || null;
   }
 
-  function isLocked(){
-    return localStorage.getItem(LOCK_KEY) === '1';
+  async function _ensureSecpLoaded(){
+    if (_getSecp()) return _getSecp();
+    if (window.__nobleSecp256k1Ready && typeof window.__nobleSecp256k1Ready.then === 'function') {
+      try { await window.__nobleSecp256k1Ready; } catch(_) {}
+    }
+    return _getSecp();
   }
 
-  function lockWallet(){
-    // Keep credentials local but require unlock before use
-    setBound(false);
-    localStorage.setItem(LOCK_KEY, '1');
+  async function deriveAddressFromPublicKey(publicKey){
+    const res = await fetch('/api/v1/address/derive', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({public_key: publicKey})});
+    const data = await res.json();
+    if (!res.ok || !data.address) throw new Error(data.error || 'address_derivation_failed');
+    return data.address;
   }
 
-  function setCustomUnlockHandler(fn){
-    customUnlockHandler = typeof fn === 'function' ? fn : null;
+  async function createWalletV1({pin} = {}){
+    const secp = await _ensureSecpLoaded();
+    if (!secp || !secp.getPublicKey || !secp.utils || !secp.sign) throw new Error('secp256k1_library_missing');
+    if (!pin) throw new Error('pin_required');
+    const privBytes = secp.utils.randomPrivateKey ? secp.utils.randomPrivateKey() : crypto.getRandomValues(new Uint8Array(32));
+    const priv = bytesToHex(privBytes);
+    const pub = bytesToHex(secp.getPublicKey(priv, true));
+    const address = await deriveAddressFromPublicKey(pub);
+    const enc = await encryptPrivateKeyHex(priv, pin);
+    localStorage.setItem(V1_ENCRYPTED_KEY, enc);
+    localStorage.setItem(V1_PUBLIC_KEY, pub);
+    localStorage.setItem(V1_ADDRESS_KEY, address);
+    setPin(pin);
+    setBound(true);
+    localStorage.setItem(LOCK_KEY, '0');
+    unlockedPrivateKeyHex = priv;
+    return { address, publicKey: pub };
   }
 
   async function unlockWallet(options = {}){
@@ -230,7 +277,8 @@
       localStorage.setItem(LOCK_KEY, '0');
       return true;
     }
-
+    const hasLegacyCreds = !!(getAddress() && getSendSeed() && pin === getPin());
+    if (hasLegacyCreds) { setBound(true); localStorage.setItem(LOCK_KEY, '0'); return true; }
     return false;
   }
 
@@ -275,17 +323,11 @@
     }
   }
 
-  function requirePin(actionLabel = 'continue'){
-    const stored = getPin();
-    if(!stored) return true;
-    const entered = prompt(`Enter wallet PIN to ${actionLabel}`);
-    if(entered === null) return false;
-    if(entered !== stored){
-      alert('Wrong PIN.');
-      return false;
-    }
-    return true;
-  }
+  function disconnect(){ setBound(false); localStorage.setItem(LOCK_KEY, '1'); unlockedPrivateKeyHex = null; }
+  function forgetDevice(){ [ADDRESS_KEY,SEND_SECRET_KEY,SEND_SEED_KEY,SEND_SEED_COMPAT_KEY,PIN_KEY,BOUND_KEY,LOCK_KEY,V1_ENCRYPTED_KEY,V1_PUBLIC_KEY,V1_ADDRESS_KEY,V1_MIGRATION_META].forEach(k => localStorage.removeItem(k)); unlockedPrivateKeyHex = null; }
+  function clearSession(){ forgetDevice(); }
+  function saveSession({address, sendSeed, pin, bound}){ setAddress(address || ''); setSendSeed(sendSeed || ''); setPin(pin || ''); setBound(bound !== undefined ? !!bound : !!(address && sendSeed)); if (address || sendSeed) localStorage.setItem(LOCK_KEY, '0'); }
+  function requirePin(actionLabel = 'continue'){ const stored = getPin(); if(!stored) return true; const entered = prompt(`Enter wallet PIN to ${actionLabel}`); if(entered === null) return false; if(entered !== stored){ alert('Wrong PIN.'); return false; } return true; }
 
   window.walletSession = {
     ADDRESS_KEY,

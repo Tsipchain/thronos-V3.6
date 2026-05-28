@@ -541,7 +541,8 @@ def _repair_music_bindings(old_address, new_v1_address):
         else:
             repaired_files += 1
 
-    return repaired_any and remaining == 0, moved, {
+    music_clean = (remaining == 0)
+    return music_clean, moved, {
         'music_scanned_files': len(files_with_old_refs),
         'music_repaired_files': repaired_files,
         'remaining_old_music_binding_count': remaining,

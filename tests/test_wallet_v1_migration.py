@@ -763,3 +763,39 @@ def test_music_nested_binding_detected_and_repaired(monkeypatch, tmp_path):
     nested = s._json[s.MUSIC_PLAYLISTS_FILE][0]
     assert nested['meta']['owner']['wallet_address'] == 'NEW'
     assert nested['tracks'][0]['uploader_address'] == 'NEW'
+
+
+def test_already_clean_music_state_is_treated_repaired(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    s.bal = {'OLD': 0.0, 'NEW': 0.1}
+    s.tokens = {'WBTC': {'OLD': 0, 'NEW': 1}}
+    # no music rows contain OLD refs
+    s._json[s.MUSIC_PLAYLISTS_FILE] = [{'wallet_address': 'NEW'}]
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed","assets_migrated":false}},"index_new":{"NEW":"OLD"}}')
+    out = m.repair_migration('OLD', 'NEW')
+    assert out['music_bindings_repaired'] is True
+    assert out['remaining_old_music_binding_count'] == 0
+
+
+def test_clean_music_and_zero_remaining_sets_status_repaired(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    s.bal = {'OLD': 0.0, 'NEW': 0.1}
+    s.tokens = {'WBTC': {'OLD': 0, 'NEW': 1}}
+    s._json[s.MUSIC_PLAYLISTS_FILE] = []
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed","assets_migrated":false}},"index_new":{"NEW":"OLD"}}')
+    out = m.repair_migration('OLD', 'NEW')
+    assert out['status'] == 'repaired'
+    assert out['ecosystem_bindings_repaired'] is True
+    assert out['assets_migrated'] is True
+
+
+def test_repeat_repair_stays_repaired_idempotent(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    s.bal = {'OLD': 0.0, 'NEW': 0.1}
+    s.tokens = {'WBTC': {'OLD': 0, 'NEW': 1}}
+    s._json[s.MUSIC_PLAYLISTS_FILE] = []
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed","assets_migrated":false}},"index_new":{"NEW":"OLD"}}')
+    _ = m.repair_migration('OLD', 'NEW')
+    out2 = m.repair_migration('OLD', 'NEW')
+    assert out2['status'] == 'repaired'
+    assert out2['moved_token_count'] == 0

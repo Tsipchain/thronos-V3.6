@@ -2283,6 +2283,34 @@ function setDisconnectedUI() {
 
 // Wallet Balance Widget Functions
 let walletBalancesLoaded = false;
+let __activeWalletDiagPrinted = false;
+
+function getActiveWalletAddress() {
+    const localAddr = localStorage.getItem('thr_address') || '';
+    let active = localAddr;
+    let migrationNew = '';
+    try {
+        const ws = window.walletSession;
+        if (ws && typeof ws.getAddress === 'function') {
+            active = ws.getAddress() || active;
+        }
+        if (ws && typeof ws.isMigrated === 'function' && ws.isMigrated() &&
+            typeof ws.getMigrationInfo === 'function') {
+            const info = ws.getMigrationInfo() || {};
+            migrationNew = info.new_v1_address || '';
+            if (migrationNew) active = migrationNew;
+        }
+    } catch (_) {}
+    if (!__activeWalletDiagPrinted) {
+        __activeWalletDiagPrinted = true;
+        console.info('[WalletV1]', {
+            active_wallet_address: active || '',
+            local_storage_thr_address: localAddr || '',
+            migration_new_v1_address: migrationNew || '',
+        });
+    }
+    return active || '';
+}
 
 async function loadWalletBalances(force = false) {
     // PR-5a: Guard to prevent multiple simultaneous loads
@@ -2297,7 +2325,7 @@ async function loadWalletBalances(force = false) {
 
     window.__walletLoadInProgress = true;
 
-    const wallet = walletSession.getAddress();
+    const wallet = getActiveWalletAddress();
     if (!wallet) {
         showWalletLoginForm();
         return;
@@ -4438,7 +4466,7 @@ async function submitCrossChainSend(network, to, amount, token, from, secret, re
 }
 
 async function loadTokenBalances() {
-    const wallet = walletSession.getAddress();
+    const wallet = getActiveWalletAddress();
     if (!wallet) return;
 
     try {
@@ -6037,7 +6065,7 @@ window.GlobalMusicPlayer = (function() {
         if (!navigator.geolocation) return;
         const track = queue[currentIndex];
         if (!track) return;
-        const wallet = localStorage.getItem('thr_address') || '';
+        const wallet = getActiveWalletAddress();
 
         navigator.geolocation.getCurrentPosition(
             (pos) => {
@@ -6128,7 +6156,7 @@ window.GlobalMusicPlayer = (function() {
             startTelemetrySession();
 
             // Record play
-            const wallet = localStorage.getItem('thr_address');
+            const wallet = getActiveWalletAddress();
             if (track.id) {
                 fetch(`/api/music/play/${track.id}`, {
                     method: 'POST',

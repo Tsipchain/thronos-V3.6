@@ -152,8 +152,22 @@ def _set_core_token_balance(symbol, address, value):
 
 def get_authoritative_custom_token_balances(address):
     s = _server()
+    # Primary authoritative source used by /api/balances tokens list for experimental tokens:
+    # custom token registry + per-token ledger files.
+    if callable(getattr(s, 'load_custom_tokens', None)) and callable(getattr(s, 'load_custom_token_ledger', None)):
+        out = {}
+        toks = s.load_custom_tokens() or {}
+        for sym, meta in (toks or {}).items():
+            token_id = (meta or {}).get('id')
+            if not token_id:
+                continue
+            led = s.load_custom_token_ledger(token_id) or {}
+            out[str(sym).upper()] = float(led.get(address, 0.0) or 0.0)
+        return out
+
     if not callable(getattr(s, 'load_token_balances', None)):
         raise MigrationError('missing_authoritative_custom_token_write_source')
+    # Legacy fallback: symbol -> {address: amount}
     all_b = s.load_token_balances() or {}
     out = {}
     for sym, holders in (all_b or {}).items():
@@ -166,6 +180,19 @@ def get_authoritative_custom_token_balances(address):
 
 def set_authoritative_custom_token_balance(symbol, address, amount):
     s = _server()
+    # Primary authoritative writer for /api/balances experimental tokens.
+    if callable(getattr(s, 'load_custom_tokens', None)) and callable(getattr(s, 'load_custom_token_ledger', None)) and callable(getattr(s, 'save_custom_token_ledger', None)):
+        sym = str(symbol).upper()
+        toks = s.load_custom_tokens() or {}
+        meta = toks.get(sym)
+        if not meta or not meta.get('id'):
+            raise MigrationError('missing_authoritative_custom_token_write_source')
+        token_id = meta.get('id')
+        led = s.load_custom_token_ledger(token_id) or {}
+        led[address] = float(amount or 0.0)
+        s.save_custom_token_ledger(token_id, led)
+        return
+
     if not (callable(getattr(s, 'load_token_balances', None)) and callable(getattr(s, 'save_token_balances', None))):
         raise MigrationError('missing_authoritative_custom_token_write_source')
     sym = str(symbol).upper()

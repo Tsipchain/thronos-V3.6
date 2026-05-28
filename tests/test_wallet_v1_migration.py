@@ -399,6 +399,53 @@ class HookZeroCustomS(S):
         return 0
 
 
+class LiveCustomLedgerS(S):
+    """Simulates production /api/balances custom-token source (custom registry + ledgers)."""
+    def __init__(self):
+        super().__init__()
+        self.bal = {'OLD': 0.0, 'NEW': 1.0}
+        self.custom_tokens = {
+            '7CEB': {'id': 'tok-7ceb', 'decimals': 2},
+            'CVT': {'id': 'tok-cvt', 'decimals': 6},
+            'HPENNIS': {'id': 'tok-hpennis', 'decimals': 2},
+            'JAM': {'id': 'tok-jam', 'decimals': 3},
+            'LOUMIDIS': {'id': 'tok-loumidis', 'decimals': 3},
+            'MAR': {'id': 'tok-mar', 'decimals': 3},
+        }
+        self.custom_ledgers = {
+            'tok-7ceb': {'OLD': 118.55, 'NEW': 0.0},
+            'tok-cvt': {'OLD': 10000000, 'NEW': 0.0},
+            'tok-hpennis': {'OLD': 18929319.95, 'NEW': 0.0},
+            'tok-jam': {'OLD': 100903, 'NEW': 0.0},
+            'tok-loumidis': {'OLD': 7756027, 'NEW': 0.0},
+            'tok-mar': {'OLD': 973635, 'NEW': 0.0},
+        }
+
+    def load_custom_tokens(self, include_legacy=True):
+        return self.custom_tokens
+
+    def load_custom_token_ledger(self, token_id):
+        return dict(self.custom_ledgers.get(token_id, {}))
+
+    def save_custom_token_ledger(self, token_id, ledger):
+        self.custom_ledgers[token_id] = dict(ledger or {})
+
+    def get_wallet_balances_cached(self, addr):
+        toks = {
+            'THR': float(self.bal.get(addr, 0.0) or 0.0),
+            'WBTC': 0.0,
+            'L2E': 0.0,
+        }
+        for sym, meta in self.custom_tokens.items():
+            led = self.custom_ledgers.get(meta['id'], {})
+            toks[sym] = float(led.get(addr, 0.0) or 0.0)
+        return {'tokens': [{'symbol': k, 'balance': v} for k, v in toks.items()]}
+
+    def transfer_all_tokens_atomic(self, old, new):
+        # Simulate production hook existing but skipping custom ledgers.
+        return 0
+
+
 def test_authoritative_balances_source_drives_token_repair(monkeypatch, tmp_path):
     s = AuthS(); _setup(monkeypatch, tmp_path, s)
     (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed","assets_migrated":false}},"index_new":{"NEW":"OLD"}}')
@@ -611,3 +658,34 @@ def test_repeat_repair_no_duplicate_custom_token_credit(monkeypatch, tmp_path):
     assert out2['moved_token_count'] == 0
     assert out2['action'] != 'incomplete_repair'
     assert s.tokens['7CEB']['NEW'] == 118.55
+
+
+def test_live_custom_ledger_source_migrates_exact_amounts(monkeypatch, tmp_path):
+    s = LiveCustomLedgerS(); _setup(monkeypatch, tmp_path, s)
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
+    out = m.repair_migration('OLD', 'NEW')
+    assert out['moved_token_count'] == 6
+    assert out['remaining_old_token_count'] == 0
+    assert out['assets_migrated'] is True
+    assert s.custom_ledgers['tok-7ceb']['OLD'] == 0.0
+    assert s.custom_ledgers['tok-cvt']['OLD'] == 0.0
+    assert s.custom_ledgers['tok-hpennis']['OLD'] == 0.0
+    assert s.custom_ledgers['tok-jam']['OLD'] == 0.0
+    assert s.custom_ledgers['tok-loumidis']['OLD'] == 0.0
+    assert s.custom_ledgers['tok-mar']['OLD'] == 0.0
+    assert s.custom_ledgers['tok-7ceb']['NEW'] == 118.55
+    assert s.custom_ledgers['tok-cvt']['NEW'] == 10000000
+    assert s.custom_ledgers['tok-hpennis']['NEW'] == 18929319.95
+    assert s.custom_ledgers['tok-jam']['NEW'] == 100903
+    assert s.custom_ledgers['tok-loumidis']['NEW'] == 7756027
+    assert s.custom_ledgers['tok-mar']['NEW'] == 973635
+
+
+def test_live_custom_ledger_repeat_repair_idempotent(monkeypatch, tmp_path):
+    s = LiveCustomLedgerS(); _setup(monkeypatch, tmp_path, s)
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
+    _ = m.repair_migration('OLD', 'NEW')
+    out2 = m.repair_migration('OLD', 'NEW')
+    assert out2['moved_token_count'] == 0
+    assert out2['remaining_old_token_count'] == 0
+    assert s.custom_ledgers['tok-7ceb']['NEW'] == 118.55

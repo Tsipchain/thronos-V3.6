@@ -452,39 +452,71 @@ def _repair_music_bindings(old_address, new_v1_address):
 
     moved = 0
     repaired_any = False
-    # File-driven fallback: allow updating known music datasets when available.
+    # File-driven fallback: update known music datasets when available.
     load_json = getattr(srv, 'load_json', None)
     save_json = getattr(srv, 'save_json', None)
-    if not callable(load_json) or not callable(save_json):
-        return False, 0
 
-    candidates = [
-        ('MUSIC_ARTISTS_FILE', 'wallet_address'),
-        ('MUSIC_TRACKS_FILE', 'owner_address'),
-        ('MUSIC_TRACKS_FILE', 'creator_address'),
-        ('MUSIC_REWARDS_FILE', 'reward_address'),
-        ('MUSIC_ENTITLEMENTS_FILE', 'owner_address'),
-        ('MUSIC_PLAYLISTS_FILE', 'wallet_address'),
+    # Production-facing fields that can bind wallets for Decent Music.
+    binding_fields = {
+        'wallet', 'wallet_address', 'thr_address', 'address',
+        'owner', 'owner_address',
+        'creator', 'creator_address',
+        'artist', 'artist_address', 'artist_wallet',
+        'uploader', 'uploader_address',
+        'payout_address', 'royalty_address',
+        'user_address',
+    }
+
+    # Include broader known stores used by live routes/data.
+    file_consts = [
+        'MUSIC_ARTISTS_FILE',
+        'MUSIC_ARTIST_PROFILES_FILE',
+        'MUSIC_TRACKS_FILE',
+        'MUSIC_UPLOADS_FILE',
+        'MUSIC_PLAYLISTS_FILE',
+        'MUSIC_OFFLINE_FILE',
+        'MUSIC_OFFLINE_ITEMS_FILE',
+        'MUSIC_OFFLINE_PLAYLISTS_FILE',
+        'MUSIC_ENTITLEMENTS_FILE',
+        'MUSIC_REWARDS_FILE',
+        'MUSIC_ROYALTIES_FILE',
     ]
-    for file_const, field in candidates:
-        fp = getattr(srv, file_const, None)
-        if not fp:
+
+    files_with_old_refs = []
+    for c in file_consts:
+        fp = getattr(srv, c, None)
+        if not fp or not callable(load_json):
             continue
         rows = load_json(fp, []) or []
-        if not isinstance(rows, list):
-            continue
-        changed = False
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            # historical creator provenance may remain old; keep creator on tracks.
-            if field == 'creator_address' and file_const == 'MUSIC_TRACKS_FILE':
-                continue
-            if row.get(field) == old_address:
-                row[field] = new_v1_address
-                moved += 1
-                changed = True
-        if changed:
+        if isinstance(rows, list):
+            if any(isinstance(r, dict) and any(r.get(f) == old_address for f in binding_fields) for r in rows):
+                files_with_old_refs.append((c, fp))
+        elif isinstance(rows, dict):
+            if any(v == old_address for k, v in rows.items() if k in binding_fields):
+                files_with_old_refs.append((c, fp))
+
+    if files_with_old_refs and (not callable(load_json) or not callable(save_json)):
+        raise MigrationError('missing_music_binding_write_source')
+
+    def _rewrite(obj):
+        nonlocal moved
+        if isinstance(obj, dict):
+            for k, v in list(obj.items()):
+                if k in binding_fields and v == old_address:
+                    obj[k] = new_v1_address
+                    moved += 1
+                else:
+                    _rewrite(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                _rewrite(item)
+
+    for c, fp in files_with_old_refs:
+        rows = load_json(fp, []) or []
+        before = json.dumps(rows, sort_keys=True)
+        _rewrite(rows)
+        after = json.dumps(rows, sort_keys=True)
+        if before != after:
             save_json(fp, rows)
             repaired_any = True
 

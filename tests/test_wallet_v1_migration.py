@@ -19,6 +19,9 @@ class S:
         self.MUSIC_REWARDS_FILE = 'rewards.json'
         self.MUSIC_ENTITLEMENTS_FILE = 'entitlements.json'
         self.MUSIC_PLAYLISTS_FILE = 'playlists.json'
+        self.MUSIC_ARTIST_PROFILES_FILE = 'artist_profiles.json'
+        self.MUSIC_OFFLINE_ITEMS_FILE = 'offline_items.json'
+        self.MUSIC_ROYALTIES_FILE = 'royalties.json'
         self.mining_whitelist = {}
         self.mining_payouts = {}
         self.pool_rewards = {}
@@ -689,3 +692,56 @@ def test_live_custom_ledger_repeat_repair_idempotent(monkeypatch, tmp_path):
     assert out2['moved_token_count'] == 0
     assert out2['remaining_old_token_count'] == 0
     assert s.custom_ledgers['tok-7ceb']['NEW'] == 118.55
+
+
+def test_music_artist_playlist_offline_and_royalty_bindings_repaired(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    s.bal = {'OLD': 0.0, 'NEW': 0.1}
+    s.tokens = {'WBTC': {'OLD': 0, 'NEW': 1}}
+    s._json[s.MUSIC_ARTISTS_FILE] = [{'wallet_address': 'OLD', 'name': 'artist'}]
+    s._json[s.MUSIC_ARTIST_PROFILES_FILE] = [{'artist_wallet': 'OLD', 'artist': 'OLD'}]
+    s._json[s.MUSIC_PLAYLISTS_FILE] = [{'wallet_address': 'OLD'}, {'owner_address': 'OLD'}]
+    s._json[s.MUSIC_OFFLINE_ITEMS_FILE] = [{'user_address': 'OLD'}]
+    s._json[s.MUSIC_ENTITLEMENTS_FILE] = [{'owner_address': 'OLD'}]
+    s._json[s.MUSIC_REWARDS_FILE] = [{'payout_address': 'OLD'}]
+    s._json[s.MUSIC_ROYALTIES_FILE] = [{'royalty_address': 'OLD'}]
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed","assets_migrated":false}},"index_new":{"NEW":"OLD"}}')
+    out = m.repair_migration('OLD', 'NEW')
+    assert out['music_bindings_repaired'] is True
+    assert out['ecosystem_bindings_repaired'] is True
+    assert out['assets_migrated'] is True
+    assert out['status'] == 'repaired'
+    assert s._json[s.MUSIC_ARTISTS_FILE][0]['wallet_address'] == 'NEW'
+    assert s._json[s.MUSIC_ARTIST_PROFILES_FILE][0]['artist_wallet'] == 'NEW'
+    assert s._json[s.MUSIC_PLAYLISTS_FILE][0]['wallet_address'] == 'NEW'
+    assert s._json[s.MUSIC_PLAYLISTS_FILE][1]['owner_address'] == 'NEW'
+    assert s._json[s.MUSIC_OFFLINE_ITEMS_FILE][0]['user_address'] == 'NEW'
+    assert s._json[s.MUSIC_REWARDS_FILE][0]['payout_address'] == 'NEW'
+    assert s._json[s.MUSIC_ROYALTIES_FILE][0]['royalty_address'] == 'NEW'
+
+
+def test_music_repeat_repair_idempotent_no_duplicates(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    s.bal = {'OLD': 0.0, 'NEW': 0.1}
+    s.tokens = {'WBTC': {'OLD': 0, 'NEW': 1}}
+    s._json[s.MUSIC_PLAYLISTS_FILE] = [{'wallet_address': 'OLD'}, {'wallet_address': 'OLD'}]
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed","assets_migrated":false}},"index_new":{"NEW":"OLD"}}')
+    _ = m.repair_migration('OLD', 'NEW')
+    playlists_after_first = list(s._json[s.MUSIC_PLAYLISTS_FILE])
+    out2 = m.repair_migration('OLD', 'NEW')
+    assert out2['moved_token_count'] == 0
+    assert s._json[s.MUSIC_PLAYLISTS_FILE] == playlists_after_first
+
+
+def test_missing_music_write_source_fails_closed(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    s.bal = {'OLD': 0.0, 'NEW': 0.1}
+    s.tokens = {'WBTC': {'OLD': 0, 'NEW': 1}}
+    s._json[s.MUSIC_PLAYLISTS_FILE] = [{'wallet_address': 'OLD'}]
+    s.save_json = None
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed"}},"index_new":{"NEW":"OLD"}}')
+    try:
+        m.repair_migration('OLD', 'NEW')
+        assert False
+    except Exception as e:
+        assert 'missing_music_binding_write_source' in str(e)

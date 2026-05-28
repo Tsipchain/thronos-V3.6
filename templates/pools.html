@@ -947,8 +947,8 @@ function renderPools(pools, containerId) {
 
 // Render my pools - Enhanced version with positions
 async function renderMyPools() {
-    const wallet = walletSession.getAddress();
-    if (!wallet || !walletSession.isBound()) {
+    const wallet = getPoolActiveWalletAddress();
+    if (!isPoolWalletReady(wallet)) {
         document.getElementById('myPoolsEmpty').style.display = 'block';
         document.getElementById('portfolioSummary').style.display = 'none';
         document.getElementById('referralSection').style.display = 'none';
@@ -1098,6 +1098,42 @@ function checkReferralParam() {
     }
 }
 
+
+function getPoolActiveWalletAddress() {
+    if (typeof window.getActiveWalletAddress === 'function') {
+        return window.getActiveWalletAddress() || '';
+    }
+    if (window.walletSession && typeof window.walletSession.getActiveAddress === 'function') {
+        return window.walletSession.getActiveAddress() || '';
+    }
+    if (window.walletSession && typeof window.walletSession.getAddress === 'function') {
+        return window.walletSession.getAddress() || '';
+    }
+    return localStorage.getItem('thr_address') || '';
+}
+
+function isPoolWalletReady(addr) {
+    if (!addr) return false;
+    if (!window.walletSession || typeof window.walletSession.isBound !== 'function') return true;
+    return !!window.walletSession.isBound();
+}
+
+async function requirePoolWalletAuth(action, txCore) {
+    if (!window.WalletAuth || typeof window.WalletAuth.requireUnlockedWallet !== 'function') {
+        throw new Error('missing_wallet_signing_material');
+    }
+    const auth = await window.WalletAuth.requireUnlockedWallet();
+    const signedTx = auth.signTransaction ? await auth.signTransaction(Object.assign({ type: action }, txCore || {})) : null;
+    return {
+        address: auth.address || getPoolActiveWalletAddress(),
+        authSecret: auth.authSecret,
+        credentialLookupAddress: auth.credentialLookupAddress,
+        publicKey: auth.getPublicKey ? auth.getPublicKey() : '',
+        signedTx,
+        signature: signedTx && signedTx.signature
+    };
+}
+
 // Load token options
 async function loadTokenOptions() {
     try {
@@ -1183,18 +1219,16 @@ async function submitCreatePool(event) {
     const tokenB = document.getElementById('poolTokenB').value;
     const amountA = parseFloat(document.getElementById('poolAmountA').value);
     const amountB = parseFloat(document.getElementById('poolAmountB').value);
-    const provider = walletSession.getAddress();
-    const secret = walletSession.getSendSeed();
+    const provider = getPoolActiveWalletAddress();
     const messageDiv = document.getElementById('createPoolMessage');
 
-    if (!provider || !secret || !walletSession.isBound()) {
+    if (!isPoolWalletReady(provider)) {
         messageDiv.className = 'form-message error';
         messageDiv.textContent = 'Wallet not connected';
         messageDiv.style.display = 'block';
         return;
     }
 
-    if(!walletSession.requirePin('create pool')) return;
 
     if (tokenA === tokenB) {
         messageDiv.className = 'form-message error';
@@ -1225,13 +1259,34 @@ async function submitCreatePool(event) {
         return;
     }
 
+    let poolAuth;
+    try {
+        poolAuth = await requirePoolWalletAuth('create_pool', {
+            provider_thr: provider,
+            token_a: tokenA,
+            token_b: tokenB,
+            amount_a: amountA,
+            amount_b: amountB,
+            lock_days: selectedLockDays
+        });
+    } catch (err) {
+        messageDiv.className = 'form-message error';
+        messageDiv.textContent = err.message || 'missing_wallet_signing_material';
+        messageDiv.style.display = 'block';
+        return;
+    }
+
     const payload = {
         token_a: tokenA,
         token_b: tokenB,
         amount_a: amountA,
         amount_b: amountB,
-        provider_thr: provider,
-        auth_secret: secret,
+        provider_thr: poolAuth.address || provider,
+        auth_secret: poolAuth.authSecret,
+        credential_lookup_address: poolAuth.credentialLookupAddress || provider,
+        public_key: poolAuth.publicKey,
+        signed_tx: poolAuth.signedTx,
+        signature: poolAuth.signature,
         lock_days: selectedLockDays
     };
 
@@ -1283,8 +1338,8 @@ async function addLiquidity(poolId) {
         return;
     }
 
-    const wallet = walletSession.getAddress();
-    if (!wallet || !walletSession.isBound()) {
+    const wallet = getPoolActiveWalletAddress();
+    if (!isPoolWalletReady(wallet)) {
         alert('Wallet not connected');
         return;
     }
@@ -1306,10 +1361,6 @@ async function addLiquidity(poolId) {
     if (!amountBInput || isNaN(amountBInput) || parseFloat(amountBInput) <= 0) return;
     const amountB = amountBInput;
 
-    const authSecret = walletSession.getSendSeed() || prompt('Enter your auth secret:');
-    if (!authSecret) return;
-
-    if(!walletSession.requirePin('add liquidity')) return;
 
     try {
         const balances = await getWalletBalanceMap(wallet);
@@ -1323,6 +1374,13 @@ async function addLiquidity(poolId) {
     }
 
     try {
+        const poolAuth = await requirePoolWalletAuth('add_liquidity', {
+            pool_id: poolId,
+            provider_thr: wallet,
+            amount_a: parseFloat(amountA),
+            amount_b: parseFloat(amountB)
+        });
+
         // Check for referrer in localStorage
         const referrer = localStorage.getItem('pool_referrer') || '';
 
@@ -1333,8 +1391,12 @@ async function addLiquidity(poolId) {
                 pool_id: poolId,
                 amount_a: parseFloat(amountA),
                 amount_b: parseFloat(amountB),
-                provider_thr: wallet,
-                auth_secret: authSecret,
+                provider_thr: poolAuth.address || wallet,
+                auth_secret: poolAuth.authSecret,
+                credential_lookup_address: poolAuth.credentialLookupAddress || wallet,
+                public_key: poolAuth.publicKey,
+                signed_tx: poolAuth.signedTx,
+                signature: poolAuth.signature,
                 passphrase: '',
                 referrer: referrer  // Include referrer if available
             })
@@ -1369,8 +1431,8 @@ async function removeLiquidity(poolId) {
         return;
     }
 
-    const wallet = walletSession.getAddress();
-    if (!wallet || !walletSession.isBound()) {
+    const wallet = getPoolActiveWalletAddress();
+    if (!isPoolWalletReady(wallet)) {
         alert('Wallet not connected');
         return;
     }
@@ -1390,20 +1452,24 @@ async function removeLiquidity(poolId) {
         return;
     }
 
-    const authSecret = walletSession.getSendSeed() || prompt('Enter your auth secret:');
-    if (!authSecret) return;
-
-    if(!walletSession.requirePin('remove liquidity')) return;
-
     try {
+        const poolAuth = await requirePoolWalletAuth('remove_liquidity', {
+            pool_id: poolId,
+            provider_thr: wallet,
+            shares: parseFloat(shares)
+        });
         const response = await fetch('/api/v1/pools/remove_liquidity', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 pool_id: poolId,
                 shares: parseFloat(shares),
-                provider_thr: wallet,
-                auth_secret: authSecret,
+                provider_thr: poolAuth.address || wallet,
+                auth_secret: poolAuth.authSecret,
+                credential_lookup_address: poolAuth.credentialLookupAddress || wallet,
+                public_key: poolAuth.publicKey,
+                signed_tx: poolAuth.signedTx,
+                signature: poolAuth.signature,
                 passphrase: ''
             })
         });

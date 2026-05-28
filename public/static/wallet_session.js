@@ -291,6 +291,10 @@
     setItem(SEND_SEED_COMPAT_KEY, seed ? seed.trim() : '');
   }
 
+  function getAddress(){ return localStorage.getItem(V1_ADDRESS_KEY) || localStorage.getItem(ADDRESS_KEY) || ''; }
+  function setAddress(addr){ setItem(ADDRESS_KEY, addr ? addr.trim() : ''); }
+  function getSendSeed(){ return localStorage.getItem(SEND_SECRET_KEY) || localStorage.getItem(SEND_SEED_KEY) || localStorage.getItem(SEND_SEED_COMPAT_KEY) || ''; }
+  function setSendSeed(seed){ setItem(SEND_SECRET_KEY, seed ? seed.trim() : ''); setItem(SEND_SEED_KEY, seed ? seed.trim() : ''); setItem(SEND_SEED_COMPAT_KEY, seed ? seed.trim() : ''); }
   const getSendSecret = getSendSeed;
   const setSendSecret = setSendSeed;
 
@@ -383,7 +387,8 @@
       localStorage.setItem(LOCK_KEY, '0');
       return true;
     }
-
+    const hasLegacyCreds = !!(getAddress() && getSendSeed() && pin === getPin());
+    if (hasLegacyCreds) { setBound(true); localStorage.setItem(LOCK_KEY, '0'); return true; }
     return false;
   }
 
@@ -433,17 +438,11 @@
     }
   }
 
-  function requirePin(actionLabel = 'continue'){
-    const stored = getPin();
-    if(!stored) return true;
-    const entered = prompt(`Enter wallet PIN to ${actionLabel}`);
-    if(entered === null) return false;
-    if(entered !== stored){
-      alert('Wrong PIN.');
-      return false;
-    }
-    return true;
-  }
+  function disconnect(){ setBound(false); localStorage.setItem(LOCK_KEY, '1'); unlockedPrivateKeyHex = null; }
+  function forgetDevice(){ [ADDRESS_KEY,SEND_SECRET_KEY,SEND_SEED_KEY,SEND_SEED_COMPAT_KEY,PIN_KEY,BOUND_KEY,LOCK_KEY,V1_ENCRYPTED_KEY,V1_PUBLIC_KEY,V1_ADDRESS_KEY,V1_MIGRATION_META].forEach(k => localStorage.removeItem(k)); unlockedPrivateKeyHex = null; }
+  function clearSession(){ forgetDevice(); }
+  function saveSession({address, sendSeed, pin, bound}){ setAddress(address || ''); setSendSeed(sendSeed || ''); setPin(pin || ''); setBound(bound !== undefined ? !!bound : !!(address && sendSeed)); if (address || sendSeed) localStorage.setItem(LOCK_KEY, '0'); }
+  function requirePin(actionLabel = 'continue'){ const stored = getPin(); if(!stored) return true; const entered = prompt(`Enter wallet PIN to ${actionLabel}`); if(entered === null) return false; if(entered !== stored){ alert('Wrong PIN.'); return false; } return true; }
 
   window.walletSession = {
     ADDRESS_KEY,

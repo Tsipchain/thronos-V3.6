@@ -12,10 +12,16 @@ try:
     # Try to get Redis client and SQLite path from server.py's globals
     # If not available, wallet init will fail gracefully
     import server as server_module
-    redis_client = getattr(server_module, 'redis_client', None)
+    redis_client = (
+        getattr(server_module, 'REDIS_CLIENT', None)
+        or getattr(server_module, 'redis_client', None)
+    )
     node_role = getattr(server_module, 'NODE_ROLE', 'master')
     read_only = getattr(server_module, 'READ_ONLY', False)
-    sqlite_path = getattr(server_module, 'MASTER_SQLITE_PATH', None)
+    sqlite_path = (
+        getattr(server_module, 'MASTER_SQLITE_PATH', None)
+        or getattr(server_module, 'LEDGER_DB_FILE', None)
+    )
 
     register_wallet_v1_routes(
         app,

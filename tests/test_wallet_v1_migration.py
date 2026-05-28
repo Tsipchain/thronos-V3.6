@@ -718,6 +718,8 @@ def test_music_artist_playlist_offline_and_royalty_bindings_repaired(monkeypatch
     assert s._json[s.MUSIC_OFFLINE_ITEMS_FILE][0]['user_address'] == 'NEW'
     assert s._json[s.MUSIC_REWARDS_FILE][0]['payout_address'] == 'NEW'
     assert s._json[s.MUSIC_ROYALTIES_FILE][0]['royalty_address'] == 'NEW'
+    assert out['music_moved_count'] > 0
+    assert out['remaining_old_music_binding_count'] == 0
 
 
 def test_music_repeat_repair_idempotent_no_duplicates(monkeypatch, tmp_path):
@@ -745,3 +747,19 @@ def test_missing_music_write_source_fails_closed(monkeypatch, tmp_path):
         assert False
     except Exception as e:
         assert 'missing_music_binding_write_source' in str(e)
+
+
+def test_music_nested_binding_detected_and_repaired(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    s.bal = {'OLD': 0.0, 'NEW': 0.1}
+    s.tokens = {'WBTC': {'OLD': 0, 'NEW': 1}}
+    s._json[s.MUSIC_PLAYLISTS_FILE] = [
+        {'meta': {'owner': {'wallet_address': 'OLD'}}, 'tracks': [{'uploader_address': 'OLD'}]}
+    ]
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed","assets_migrated":false}},"index_new":{"NEW":"OLD"}}')
+    out = m.repair_migration('OLD', 'NEW')
+    assert out['music_bindings_repaired'] is True
+    assert out['remaining_old_music_binding_count'] == 0
+    nested = s._json[s.MUSIC_PLAYLISTS_FILE][0]
+    assert nested['meta']['owner']['wallet_address'] == 'NEW'
+    assert nested['tracks'][0]['uploader_address'] == 'NEW'

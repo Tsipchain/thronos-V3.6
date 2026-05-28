@@ -439,7 +439,7 @@ def _remaining_old_token_count(old_address):
 
 def _repair_music_bindings(old_address, new_v1_address):
     """Best-effort Decent Music binding repair via existing production hooks.
-    Returns tuple: (music_bindings_repaired: bool, moved_refs: int).
+    Returns tuple: (music_bindings_repaired: bool, moved_refs: int, diagnostics: dict).
     """
     srv = _server()
     # Primary explicit hook if production has one.
@@ -447,8 +447,12 @@ def _repair_music_bindings(old_address, new_v1_address):
     if callable(hook):
         out = hook(old_address, new_v1_address)
         if isinstance(out, dict):
-            return bool(out.get('ok', False)), int(out.get('moved_refs', 0) or 0)
-        return bool(out), 0
+            return bool(out.get('ok', False)), int(out.get('moved_refs', 0) or 0), {
+                'music_scanned_files': int(out.get('music_scanned_files', 0) or 0),
+                'music_repaired_files': int(out.get('music_repaired_files', 0) or 0),
+                'remaining_old_music_binding_count': int(out.get('remaining_old_music_binding_count', 0) or 0),
+            }
+        return bool(out), 0, {'music_scanned_files': 0, 'music_repaired_files': 0, 'remaining_old_music_binding_count': 0}
 
     moved = 0
     repaired_any = False
@@ -482,18 +486,26 @@ def _repair_music_bindings(old_address, new_v1_address):
         'MUSIC_ROYALTIES_FILE',
     ]
 
+    def _contains_music_binding(obj, target_addr, fields):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if k in fields and v == target_addr:
+                    return True
+                if _contains_music_binding(v, target_addr, fields):
+                    return True
+            return False
+        if isinstance(obj, list):
+            return any(_contains_music_binding(i, target_addr, fields) for i in obj)
+        return False
+
     files_with_old_refs = []
     for c in file_consts:
         fp = getattr(srv, c, None)
         if not fp or not callable(load_json):
             continue
         rows = load_json(fp, []) or []
-        if isinstance(rows, list):
-            if any(isinstance(r, dict) and any(r.get(f) == old_address for f in binding_fields) for r in rows):
-                files_with_old_refs.append((c, fp))
-        elif isinstance(rows, dict):
-            if any(v == old_address for k, v in rows.items() if k in binding_fields):
-                files_with_old_refs.append((c, fp))
+        if _contains_music_binding(rows, old_address, binding_fields):
+            files_with_old_refs.append((c, fp))
 
     if files_with_old_refs and (not callable(load_json) or not callable(save_json)):
         raise MigrationError('missing_music_binding_write_source')
@@ -520,7 +532,20 @@ def _repair_music_bindings(old_address, new_v1_address):
             save_json(fp, rows)
             repaired_any = True
 
-    return repaired_any, moved
+    remaining = 0
+    repaired_files = 0
+    for _, fp in files_with_old_refs:
+        rows = load_json(fp, []) or []
+        if _contains_music_binding(rows, old_address, binding_fields):
+            remaining += 1
+        else:
+            repaired_files += 1
+
+    return repaired_any and remaining == 0, moved, {
+        'music_scanned_files': len(files_with_old_refs),
+        'music_repaired_files': repaired_files,
+        'remaining_old_music_binding_count': remaining,
+    }
 
 
 def get_mining_whitelist_entry(address):
@@ -861,7 +886,7 @@ def repair_migration(old_address, new_v1_address):
         mining_ok, mining_admission_ok, _ = repair_mining_wallet_binding(old_address, new_v1_address)
         pool_ok, _ = repair_pool_rewards_wallet_binding(old_address, new_v1_address)
         agent_ok, _ = repair_agent_wallet_bindings(old_address, new_v1_address)
-        music_ok, music_moved = _repair_music_bindings(old_address, new_v1_address)
+        music_ok, music_moved, music_diag = _repair_music_bindings(old_address, new_v1_address)
         ecosystem_ok = bool(mining_ok and pool_ok and agent_ok and music_ok and mining_admission_ok)
         remaining_operational = _remaining_old_operational_binding_count(old_address)
         if remaining_operational > 0:
@@ -871,6 +896,10 @@ def repair_migration(old_address, new_v1_address):
         rec['status'] = 'repaired' if fully_migrated else 'failed'
         rec['repaired_at'] = _now()
         rec['music_bindings_repaired'] = bool(music_ok)
+        rec['music_moved_count'] = int(music_moved or 0)
+        rec['music_scanned_files'] = int((music_diag or {}).get('music_scanned_files', 0) or 0)
+        rec['music_repaired_files'] = int((music_diag or {}).get('music_repaired_files', 0) or 0)
+        rec['remaining_old_music_binding_count'] = int((music_diag or {}).get('remaining_old_music_binding_count', 0) or 0)
         rec['mining_bindings_repaired'] = bool(mining_ok)
         rec['pool_rewards_repaired'] = bool(pool_ok)
         rec['agent_bindings_repaired'] = bool(agent_ok)
@@ -901,6 +930,10 @@ def repair_migration(old_address, new_v1_address):
             'assets_migrated': bool(rec.get('assets_migrated', False)),
             'ecosystem_bindings_repaired': bool(rec.get('ecosystem_bindings_repaired', False)),
             'music_bindings_repaired': bool(rec.get('music_bindings_repaired', False)),
+            'music_moved_count': int(rec.get('music_moved_count', 0) or 0),
+            'music_scanned_files': int(rec.get('music_scanned_files', 0) or 0),
+            'music_repaired_files': int(rec.get('music_repaired_files', 0) or 0),
+            'remaining_old_music_binding_count': int(rec.get('remaining_old_music_binding_count', 0) or 0),
             'mining_bindings_repaired': bool(rec.get('mining_bindings_repaired', False)),
             'pool_rewards_repaired': bool(rec.get('pool_rewards_repaired', False)),
             'agent_bindings_repaired': bool(rec.get('agent_bindings_repaired', False)),

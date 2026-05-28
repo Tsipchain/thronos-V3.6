@@ -1,10 +1,4 @@
-/**
- * PR-5a: Wallet Authentication Helper
- *
- * Provides PIN-based unlock for music mutations (tips, playlists).
- * Never prompts for auth_secret - uses session-based unlock.
- */
-
+/** Wallet V1 Authentication Helper */
 (function(window) {
     'use strict';
 

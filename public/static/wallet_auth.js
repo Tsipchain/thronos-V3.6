@@ -52,6 +52,26 @@
       || '';
   }
 
+  function hasSigningMaterial() {
+    if (!window.walletSession) return false;
+    if (typeof window.walletSession.hasV1SigningMaterial === 'function') {
+      return !!window.walletSession.hasV1SigningMaterial();
+    }
+    const publicKey = window.walletSession.getPublicKey && window.walletSession.getPublicKey();
+    const hasEncryptedKey = typeof window.walletSession.hasEncryptedPrivateKey !== 'function' || window.walletSession.hasEncryptedPrivateKey();
+    return !!(publicKey && hasEncryptedKey && typeof window.walletSession.signTransaction === 'function');
+  }
+
+  async function ensureSigningMaterial(address, credentialLookupAddress, authSecret) {
+    if (hasSigningMaterial()) return;
+    if (!authSecret || !window.walletSession || typeof window.walletSession.enrollSigningMaterial !== 'function') {
+      fail('missing_wallet_signing_material');
+    }
+    alert('Wallet V1 signing upgrade required. Unlock with PIN to create encrypted V1 signing key.');
+    await window.walletSession.enrollSigningMaterial({ address, credentialLookupAddress, authSecret });
+    if (!hasSigningMaterial()) fail('missing_wallet_signing_material');
+  }
+
   const WalletAuth = {
     resolveActiveWalletAddress,
     resolveCredentialLookupAddress,
@@ -82,13 +102,13 @@
         address = resolveActiveWalletAddress() || address;
       }
 
+      const credentialLookupAddress = resolveCredentialLookupAddress(address);
+      const authSecret = resolveAuthSecret(credentialLookupAddress, address);
+      await ensureSigningMaterial(address, credentialLookupAddress, authSecret);
       const publicKey = window.walletSession.getPublicKey && window.walletSession.getPublicKey();
       if (!publicKey || typeof window.walletSession.signTransaction !== 'function') {
         fail('missing_wallet_signing_material');
       }
-
-      const credentialLookupAddress = resolveCredentialLookupAddress(address);
-      const authSecret = resolveAuthSecret(credentialLookupAddress, address);
 
       return {
         address,

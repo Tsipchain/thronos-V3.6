@@ -22,6 +22,7 @@
 
   function normalizeAddress(addr){ return (addr || '').toString().trim(); }
   function getAddress(){ return localStorage.getItem(V1_ADDRESS_KEY) || localStorage.getItem(ADDRESS_KEY) || ''; }
+  function getActiveAddress(){ const m = getMigrationInfo(); return normalizeAddress(m.new_v1_address || getAddress()); }
   function setAddress(addr){ setItem(ADDRESS_KEY, normalizeAddress(addr)); }
 
   function getScopedCredential(address){
@@ -163,9 +164,17 @@
   async function unlock(pinOrOptions){ const options = typeof pinOrOptions === 'string' ? {pin: pinOrOptions, prompt:false} : (pinOrOptions || {}); return unlockWallet(options); }
 
   function getPublicKey(){ return localStorage.getItem(V1_PUBLIC_KEY) || ''; }
+  function hasEncryptedPrivateKey(){ return !!localStorage.getItem(V1_ENCRYPTED_KEY); }
   function isWalletV1(){ return !!(localStorage.getItem(V1_PUBLIC_KEY) && localStorage.getItem(V1_ENCRYPTED_KEY)); }
+  function hasV1SigningMaterial(){ return !!(getPublicKey() && hasEncryptedPrivateKey() && typeof signTransaction === 'function'); }
   function getMigrationInfo(){ try { return JSON.parse(localStorage.getItem(V1_MIGRATION_META) || '{}'); } catch(_) { return {}; } }
   function isMigrated(){ const m = getMigrationInfo(); return !!(m.old_address && m.new_v1_address); }
+  function getCredentialLookupAddress(activeAddress){
+    const active = normalizeAddress(activeAddress || getActiveAddress());
+    const m = getMigrationInfo();
+    if (m.old_address && (!active || active === m.new_v1_address || active === getAddress())) return m.old_address;
+    return active || m.new_v1_address || m.old_address || '';
+  }
 
 
   function canonicalTxMessage(txCore){
@@ -195,6 +204,41 @@
     const digestHex = await sha256Hex(canonicalTxMessage(txCore));
     const sig = await secp.sign(digestHex, unlockedPrivateKeyHex, { der: true });
     return typeof sig === 'string' ? sig : bytesToHex(sig);
+  }
+
+  async function enrollSigningMaterial({address, credentialLookupAddress, pin, authSecret} = {}){
+    const activeAddress = normalizeAddress(address || getActiveAddress());
+    const lookupAddress = normalizeAddress(credentialLookupAddress || getCredentialLookupAddress(activeAddress));
+    const legacySecret = authSecret || getSendSeed(lookupAddress) || getSendSeed(activeAddress);
+    if (!activeAddress || !lookupAddress || !legacySecret) throw new Error('missing_wallet_signing_material');
+    const unlockPin = pin || prompt('Wallet V1 signing upgrade required. Unlock with PIN to create encrypted V1 signing key.');
+    if (!unlockPin) throw new Error('wallet_locked');
+    const secp = await _ensureSecpLoaded();
+    if (!secp || !secp.getPublicKey || !secp.utils || !secp.sign) throw new Error('secp256k1_library_missing');
+    const privBytes = secp.utils.randomPrivateKey ? secp.utils.randomPrivateKey() : crypto.getRandomValues(new Uint8Array(32));
+    const priv = bytesToHex(privBytes);
+    const pub = bytesToHex(secp.getPublicKey(priv, true));
+    const enc = await encryptPrivateKeyHex(priv, unlockPin);
+    const res = await fetch('/api/v1/wallet/bind_public_key', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        address: activeAddress,
+        credential_lookup_address: lookupAddress,
+        public_key: pub,
+        auth_secret: legacySecret
+      })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) throw new Error(data.error || 'wallet_signing_enrollment_failed');
+    localStorage.setItem(V1_ENCRYPTED_KEY, enc);
+    localStorage.setItem(V1_PUBLIC_KEY, pub);
+    localStorage.setItem(V1_ADDRESS_KEY, activeAddress);
+    setPin(unlockPin);
+    setBound(true);
+    localStorage.setItem(LOCK_KEY, '0');
+    unlockedPrivateKeyHex = priv;
+    return { address: activeAddress, credentialLookupAddress: lookupAddress, publicKey: pub, binding: data.binding || data };
   }
 
   async function migrateLegacyWallet({oldAddress, sendSecret, pin, signedMigrationRequest} = {}){
@@ -231,10 +275,10 @@
 
   window.walletSession = {
     ADDRESS_KEY, SEND_SECRET_KEY, SEND_SEED_KEY, PIN_KEY, BOUND_KEY, LOCK_KEY,
-    getAddress, setAddress, getSendSeed, setSendSeed, getSendSecret, setSendSecret,
+    getAddress, getActiveAddress, getCredentialLookupAddress, setAddress, getSendSeed, setSendSeed, getSendSecret, setSendSecret,
     getPin, setPin, isLocked, lockWallet, unlockWallet, setCustomUnlockHandler,
     isBound, setBound, disconnect, forgetDevice, clearSession, saveSession, requirePin,
-    createWalletV1, getPublicKey, signTransaction, isWalletV1, isMigrated, getMigrationInfo,
+    createWalletV1, getPublicKey, hasEncryptedPrivateKey, hasV1SigningMaterial, enrollSigningMaterial, signTransaction, isWalletV1, isMigrated, getMigrationInfo,
     lock, unlock, migrateLegacyWallet, canonicalTxMessage
   };
 })(window);

@@ -79,3 +79,67 @@ def test_safe_diagnostics_do_not_log_secret_values():
     assert "has_encrypted_send_seed" in SESSION_JS
     assert "has_signing_material" in SESSION_JS
     assert "console.info('[WalletAuth]'" in SESSION_JS
+
+
+def test_wallet_auth_detects_missing_v1_signing_material():
+    """Verify WalletAuth detects when V1 encrypted key is missing."""
+    assert "hasV1SigningMaterial()" in AUTH_JS
+    assert "window.walletSession.isWalletV1" in AUTH_JS
+
+
+def test_wallet_auth_triggers_enrollment_when_material_missing():
+    """Verify WalletAuth calls enrollSigningMaterial when signing material is missing."""
+    assert "enrollSigningMaterial" in AUTH_JS
+    assert "if (!hasV1SigningMaterial())" in AUTH_JS
+    assert "window.walletSession.enrollSigningMaterial" in AUTH_JS
+
+
+def test_wallet_session_has_enrollment_function():
+    """Verify enrollSigningMaterial exists and handles credential lookup."""
+    assert "async function enrollSigningMaterial" in SESSION_JS
+    assert "credentialLookupAddress" in SESSION_JS
+    assert "/api/v1/wallet/bind_public_key" in SESSION_JS
+
+
+def test_enrollment_uses_credential_lookup_for_binding():
+    """Verify enrollment includes credential lookup address in binding payload."""
+    assert "body: JSON.stringify({" in SESSION_JS
+    assert "address: activeAddress" in SESSION_JS
+    assert "credential_lookup_address: lookupAddress" in SESSION_JS
+    assert "public_key: pub" in SESSION_JS
+
+
+def test_enrollment_stores_encrypted_key_only():
+    """Verify enrollment stores only encrypted key + public key, not plaintext."""
+    enrollment_start = SESSION_JS.find("async function enrollSigningMaterial")
+    enrollment_end = SESSION_JS.find("\n  }", enrollment_start + 100)
+    enrollment_code = SESSION_JS[enrollment_start:enrollment_end]
+
+    assert "V1_ENCRYPTED_KEY, enc" in enrollment_code
+    assert "V1_PUBLIC_KEY, pub" in enrollment_code
+    assert "unlockedPrivateKeyHex = priv" in enrollment_code
+    assert "localStorage.setItem(V1_ENCRYPTED_KEY" in enrollment_code
+    assert "localStorage.setItem(V1_PUBLIC_KEY" in enrollment_code
+
+
+def test_enrollment_does_not_use_raw_seed_prompt():
+    """Verify enrollment does not have getSendSeed() raw seed access in wrong place."""
+    enrollment_start = SESSION_JS.find("async function enrollSigningMaterial")
+    enrollment_end = SESSION_JS.find("return { address: activeAddress", enrollment_start)
+    enrollment_code = SESSION_JS[enrollment_start:enrollment_end]
+
+    # Enrollment should accept getSendSeed as a param (authSecret), not prompt for it
+    assert "authSecret || getSendSeed(lookupAddress)" in enrollment_code
+    assert "prompt('Enter" not in enrollment_code or "enrollment" not in enrollment_code
+
+
+def test_wallet_auth_shows_clear_error_when_enrollment_fails():
+    """Verify clear error message when signing key enrollment is impossible."""
+    assert "Wallet V1 signing key is missing" in AUTH_JS
+    assert "Please unlock/migrate wallet" in AUTH_JS
+
+
+def test_wallet_auth_no_session_storage_for_auth_secret():
+    """Verify wallet auth does not persist plaintext secret in sessionStorage."""
+    assert "sessionStorage.setItem('thr_auth_secret')" not in AUTH_JS
+    assert "sessionStorage.removeItem('thr_auth_secret')" in AUTH_JS

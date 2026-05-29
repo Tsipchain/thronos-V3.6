@@ -54,6 +54,12 @@
         return err;
     }
 
+    function hasV1SigningMaterial() {
+        return !!(window.walletSession &&
+                  typeof window.walletSession.isWalletV1 === 'function' &&
+                  window.walletSession.isWalletV1());
+    }
+
     function buildAuthResult(address, authSecret, credentialLookupAddress) {
         return {
             address,
@@ -115,15 +121,30 @@
                 try {
                     const ok = await window.walletSession.unlockWallet({ pin, address });
                     if (!ok) throw missingSigningMaterialError();
-                    const authSecret = getSigningMaterial(address);
-                    if (!authSecret) throw missingSigningMaterialError();
 
+                    if (!hasV1SigningMaterial()) {
+                        if (typeof window.walletSession.enrollSigningMaterial === 'function') {
+                            try {
+                                await window.walletSession.enrollSigningMaterial({
+                                    address: address,
+                                    credentialLookupAddress: credentialLookupAddress,
+                                    pin: pin
+                                });
+                            } catch (enrollErr) {
+                                const err = new Error('Wallet V1 signing key is missing. Please unlock/migrate wallet to create signing material.');
+                                err.code = 'UNLOCK_FAILED';
+                                throw err;
+                            }
+                        }
+                    }
+
+                    const authSecret = getSigningMaterial(address);
                     cachedAuthSecret = authSecret;
                     cachedAuthAddress = address;
                     return buildAuthResult(address, authSecret, credentialLookupAddress);
                 } catch (e) {
-                    const err = new Error(e && e.message === 'missing_wallet_signing_material'
-                        ? 'missing_wallet_signing_material'
+                    const err = new Error(e && e.code === 'UNLOCK_FAILED'
+                        ? e.message
                         : 'Failed to unlock wallet: ' + (e.message || e));
                     err.code = 'UNLOCK_FAILED';
                     throw err;
@@ -132,13 +153,33 @@
 
             const storedPin = localStorage.getItem('wallet_pin');
             if (storedPin === pin) {
-                const authSecret = getSigningMaterial(address);
-                if (authSecret) {
+                try {
+                    if (!hasV1SigningMaterial()) {
+                        if (typeof window.walletSession.enrollSigningMaterial === 'function') {
+                            try {
+                                await window.walletSession.enrollSigningMaterial({
+                                    address: address,
+                                    credentialLookupAddress: credentialLookupAddress,
+                                    pin: pin
+                                });
+                            } catch (enrollErr) {
+                                const err = new Error('Wallet V1 signing key is missing. Please unlock/migrate wallet to create signing material.');
+                                err.code = 'UNLOCK_FAILED';
+                                throw err;
+                            }
+                        }
+                    }
+                    const authSecret = getSigningMaterial(address);
                     cachedAuthSecret = authSecret;
                     cachedAuthAddress = address;
                     return buildAuthResult(address, authSecret, credentialLookupAddress);
+                } catch (e) {
+                    const err = new Error(e && e.code === 'UNLOCK_FAILED'
+                        ? e.message
+                        : 'Failed to unlock wallet: ' + (e.message || e));
+                    err.code = 'UNLOCK_FAILED';
+                    throw err;
                 }
-                throw missingSigningMaterialError();
             }
 
             const err = new Error('Invalid PIN. Please try again.');

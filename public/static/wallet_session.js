@@ -20,6 +20,7 @@
   function isBound(){ return localStorage.getItem(BOUND_KEY) === '1'; }
   function isLocked(){ return localStorage.getItem(LOCK_KEY) === '1'; }
 
+  function normalizeAddress(addr){ return (addr || '').toString().trim(); }
   function getAddress(){ return localStorage.getItem(V1_ADDRESS_KEY) || localStorage.getItem(ADDRESS_KEY) || ''; }
   function getActiveAddress(){ const info = getMigrationInfo(); return info.new_v1_address || getAddress(); }
   function setAddress(addr){ setItem(ADDRESS_KEY, addr ? addr.trim() : ''); }
@@ -177,6 +178,7 @@
   async function unlock(pinOrOptions){ const options = typeof pinOrOptions === 'string' ? {pin: pinOrOptions, prompt:false} : (pinOrOptions || {}); return unlockWallet(options); }
 
   function getPublicKey(){ return localStorage.getItem(V1_PUBLIC_KEY) || ''; }
+  function hasEncryptedPrivateKey(){ return !!localStorage.getItem(V1_ENCRYPTED_KEY); }
   function isWalletV1(){ return !!(localStorage.getItem(V1_PUBLIC_KEY) && localStorage.getItem(V1_ENCRYPTED_KEY)); }
 
   function canonicalTxMessage(txCore){
@@ -206,6 +208,41 @@
     const digestHex = await sha256Hex(canonicalTxMessage(txCore));
     const sig = await secp.sign(digestHex, unlockedPrivateKeyHex, { der: true });
     return typeof sig === 'string' ? sig : bytesToHex(sig);
+  }
+
+  async function enrollSigningMaterial({address, credentialLookupAddress, pin, authSecret} = {}){
+    const activeAddress = normalizeAddress(address || getActiveAddress());
+    const lookupAddress = normalizeAddress(credentialLookupAddress || getCredentialLookupAddress(activeAddress));
+    const legacySecret = authSecret || getSendSeed(lookupAddress) || getSendSeed(activeAddress);
+    if (!activeAddress || !lookupAddress || !legacySecret) throw new Error('missing_wallet_signing_material');
+    const unlockPin = pin || prompt('Wallet V1 signing upgrade required. Unlock with PIN to create encrypted V1 signing key.');
+    if (!unlockPin) throw new Error('wallet_locked');
+    const secp = await _ensureSecpLoaded();
+    if (!secp || !secp.getPublicKey || !secp.utils || !secp.sign) throw new Error('secp256k1_library_missing');
+    const privBytes = secp.utils.randomPrivateKey ? secp.utils.randomPrivateKey() : crypto.getRandomValues(new Uint8Array(32));
+    const priv = bytesToHex(privBytes);
+    const pub = bytesToHex(secp.getPublicKey(priv, true));
+    const enc = await encryptPrivateKeyHex(priv, unlockPin);
+    const res = await fetch('/api/v1/wallet/bind_public_key', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        address: activeAddress,
+        credential_lookup_address: lookupAddress,
+        public_key: pub,
+        auth_secret: legacySecret
+      })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) throw new Error(data.error || 'wallet_signing_enrollment_failed');
+    localStorage.setItem(V1_ENCRYPTED_KEY, enc);
+    localStorage.setItem(V1_PUBLIC_KEY, pub);
+    localStorage.setItem(V1_ADDRESS_KEY, activeAddress);
+    setPin(unlockPin);
+    setBound(true);
+    localStorage.setItem(LOCK_KEY, '0');
+    unlockedPrivateKeyHex = priv;
+    return { address: activeAddress, credentialLookupAddress: lookupAddress, publicKey: pub, binding: data.binding || data };
   }
 
   async function migrateLegacyWallet({oldAddress, sendSecret, pin, signedMigrationRequest} = {}){

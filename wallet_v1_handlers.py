@@ -1,8 +1,5 @@
 from flask import jsonify
-import json
 import os
-from datetime import datetime, UTC
-from pathlib import Path
 import wallet_v1_production_final as wallet_v1_prod
 from wallet_v1_activation import require_active_thr_address, AdmissionError
 from wallet_v1_migration import migrate_legacy_address, repair_migration, resolve_migration, _remaining_old_token_count
@@ -10,36 +7,6 @@ from wallet_v1_address_derivation import derive_thronos_address, validate_throno
 
 _WALLET_V1_LOADED = False
 _WALLET_V1_INIT_ERROR = None
-
-WALLET_V1_PUBLIC_KEY_BINDINGS_FILE = Path('data/wallet_v1_public_key_bindings.json')
-
-
-def _now_iso():
-    return datetime.now(UTC).isoformat().replace('+00:00', 'Z')
-
-
-def _load_public_key_bindings():
-    if not WALLET_V1_PUBLIC_KEY_BINDINGS_FILE.exists():
-        return {'bindings': {}}
-    try:
-        data = json.loads(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE.read_text())
-        if isinstance(data, dict) and isinstance(data.get('bindings'), dict):
-            return data
-    except Exception:
-        pass
-    return {'bindings': {}}
-
-
-def _save_public_key_bindings(data):
-    WALLET_V1_PUBLIC_KEY_BINDINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    WALLET_V1_PUBLIC_KEY_BINDINGS_FILE.write_text(json.dumps(data, indent=2, sort_keys=True))
-
-
-def _binding_addresses_related(address, credential_lookup_address):
-    if address == credential_lookup_address:
-        return True
-    rec = resolve_migration(credential_lookup_address)
-    return bool(rec and rec.get('new_v1_address') == address)
 
 
 def _require_repair_token(request):
@@ -161,42 +128,3 @@ def handle_wallet_migration_status(request):
         'ecosystem_bindings_repaired': bool(rec.get('ecosystem_bindings_repaired', False)),
         'music_bindings_repaired': bool(rec.get('music_bindings_repaired', False)),
     }), 200
-
-
-def handle_wallet_bind_public_key(request):
-    data = request.get_json() or {}
-    address = (data.get('address') or '').strip()
-    credential_lookup_address = (data.get('credential_lookup_address') or address).strip()
-    public_key = (data.get('public_key') or '').strip()
-    auth_secret = (data.get('auth_secret') or '').strip()
-    passphrase = (data.get('passphrase') or '').strip()
-
-    if not address or not credential_lookup_address or not public_key:
-        return jsonify({'ok': False, 'error': 'missing_binding_fields'}), 400
-    if not validate_thronos_address(address) or not validate_thronos_address(credential_lookup_address):
-        return jsonify({'ok': False, 'error': 'invalid_address'}), 400
-    if not _binding_addresses_related(address, credential_lookup_address):
-        return jsonify({'ok': False, 'error': 'credential_lookup_address_mismatch'}), 403
-    try:
-        public_key_address = derive_thronos_address(public_key)
-    except ValueError as ve:
-        return jsonify({'ok': False, 'error': 'invalid_public_key', 'detail': str(ve)}), 400
-
-    from server import validate_effective_auth
-    ok, _state, error_key = validate_effective_auth(credential_lookup_address, auth_secret, passphrase)
-    if not ok:
-        status = 400 if error_key in ('missing_auth_secret', 'passphrase_required') else 403
-        return jsonify({'ok': False, 'error': error_key or 'invalid_auth'}), status
-
-    store = _load_public_key_bindings()
-    binding = {
-        'address': address,
-        'credential_lookup_address': credential_lookup_address,
-        'public_key': public_key,
-        'public_key_address': public_key_address,
-        'bound_at': _now_iso(),
-        'proof': 'legacy_auth_secret',
-    }
-    store.setdefault('bindings', {})[address] = binding
-    _save_public_key_bindings(store)
-    return jsonify({'ok': True, 'binding': binding}), 200

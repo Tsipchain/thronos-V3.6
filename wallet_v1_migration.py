@@ -438,49 +438,55 @@ def _remaining_old_token_count(old_address):
 
 
 def _repair_music_bindings(old_address, new_v1_address):
-    """Repair live Decent Music bindings used by playlist/offline endpoints.
+    """Best-effort Decent Music binding repair via existing production hooks.
     Returns tuple: (music_bindings_repaired: bool, moved_refs: int, diagnostics: dict).
     """
     srv = _server()
+    # Primary explicit hook if production has one.
     hook = getattr(srv, 'repair_music_wallet_bindings', None)
     if callable(hook):
         out = hook(old_address, new_v1_address)
         if isinstance(out, dict):
-            moved_refs = int(out.get('music_moved_count', out.get('moved_refs', 0)) or 0)
-            return bool(out.get('ok', False)), moved_refs, {
-                'music_moved_count': moved_refs,
-                'music_playlist_moved_count': int(out.get('music_playlist_moved_count', 0) or 0),
-                'music_offline_moved_count': int(out.get('music_offline_moved_count', 0) or 0),
+            return bool(out.get('ok', False)), int(out.get('moved_refs', 0) or 0), {
                 'music_scanned_files': int(out.get('music_scanned_files', 0) or 0),
                 'music_repaired_files': int(out.get('music_repaired_files', 0) or 0),
                 'remaining_old_music_binding_count': int(out.get('remaining_old_music_binding_count', 0) or 0),
             }
-        return bool(out), 0, {'music_moved_count': 0, 'music_playlist_moved_count': 0, 'music_offline_moved_count': 0, 'music_scanned_files': 0, 'music_repaired_files': 0, 'remaining_old_music_binding_count': 0}
-
-    load_json = getattr(srv, 'load_json', None)
-    save_json = getattr(srv, 'save_json', None)
-    if not callable(load_json) and not callable(save_json):
-        return False, 0, {'music_moved_count': 0, 'music_playlist_moved_count': 0, 'music_offline_moved_count': 0, 'music_scanned_files': 0, 'music_repaired_files': 0, 'remaining_old_music_binding_count': 1}
-    if callable(load_json) and not callable(save_json):
-        raise MigrationError('missing_music_binding_write_source')
+        return bool(out), 0, {'music_scanned_files': 0, 'music_repaired_files': 0, 'remaining_old_music_binding_count': 0}
 
     moved = 0
-    playlist_moved = 0
-    offline_moved = 0
-    scanned_files = 0
-    repaired_files = 0
+    repaired_any = False
+    # File-driven fallback: update known music datasets when available.
+    load_json = getattr(srv, 'load_json', None)
+    save_json = getattr(srv, 'save_json', None)
 
+    # Production-facing fields that can bind wallets for Decent Music.
     binding_fields = {
         'wallet', 'wallet_address', 'thr_address', 'address',
         'owner', 'owner_address',
+        'creator', 'creator_address',
         'artist', 'artist_address', 'artist_wallet',
         'uploader', 'uploader_address',
         'payout_address', 'royalty_address',
         'user_address',
-        'listener_address', 'from', 'to',
     }
 
-    def _contains_music_binding(obj, target_addr, fields=binding_fields):
+    # Include broader known stores used by live routes/data.
+    file_consts = [
+        'MUSIC_ARTISTS_FILE',
+        'MUSIC_ARTIST_PROFILES_FILE',
+        'MUSIC_TRACKS_FILE',
+        'MUSIC_UPLOADS_FILE',
+        'MUSIC_PLAYLISTS_FILE',
+        'MUSIC_OFFLINE_FILE',
+        'MUSIC_OFFLINE_ITEMS_FILE',
+        'MUSIC_OFFLINE_PLAYLISTS_FILE',
+        'MUSIC_ENTITLEMENTS_FILE',
+        'MUSIC_REWARDS_FILE',
+        'MUSIC_ROYALTIES_FILE',
+    ]
+
+    def _contains_music_binding(obj, target_addr, fields):
         if isinstance(obj, dict):
             for k, v in obj.items():
                 if k in fields and v == target_addr:
@@ -491,6 +497,18 @@ def _repair_music_bindings(old_address, new_v1_address):
         if isinstance(obj, list):
             return any(_contains_music_binding(i, target_addr, fields) for i in obj)
         return False
+
+    files_with_old_refs = []
+    for c in file_consts:
+        fp = getattr(srv, c, None)
+        if not fp or not callable(load_json):
+            continue
+        rows = load_json(fp, []) or []
+        if _contains_music_binding(rows, old_address, binding_fields):
+            files_with_old_refs.append((c, fp))
+
+    if files_with_old_refs and (not callable(load_json) or not callable(save_json)):
+        raise MigrationError('missing_music_binding_write_source')
 
     def _rewrite(obj):
         nonlocal moved
@@ -505,150 +523,27 @@ def _repair_music_bindings(old_address, new_v1_address):
             for item in obj:
                 _rewrite(item)
 
-    # 1) Authoritative live SQLite playlist store used by /api/music/playlists.
-    get_conn = getattr(srv, '_get_ledger_db_connection', None)
-    use_sqlite = bool(getattr(srv, 'USE_SQLITE_LEDGER', False))
-    if use_sqlite and callable(get_conn):
-        scanned_files += 1
-        with get_conn() as conn:
-            old_rows = conn.execute(
-                'SELECT id FROM music_playlists WHERE owner_address = ?',
-                (old_address,),
-            ).fetchall()
-            old_ids = [row['id'] if hasattr(row, 'keys') else row[0] for row in old_rows]
-            for playlist_id in old_ids:
-                exists_new = conn.execute(
-                    'SELECT id FROM music_playlists WHERE id = ? AND owner_address = ?',
-                    (playlist_id, new_v1_address),
-                ).fetchone()
-                if exists_new:
-                    conn.execute('DELETE FROM music_playlists WHERE id = ? AND owner_address = ?', (playlist_id, old_address))
-                else:
-                    conn.execute(
-                        'UPDATE music_playlists SET owner_address = ? WHERE id = ? AND owner_address = ?',
-                        (new_v1_address, playlist_id, old_address),
-                    )
-                    playlist_moved += 1
-                    moved += 1
-            if old_ids:
-                repaired_files += 1
+    for c, fp in files_with_old_refs:
+        rows = load_json(fp, []) or []
+        before = json.dumps(rows, sort_keys=True)
+        _rewrite(rows)
+        after = json.dumps(rows, sort_keys=True)
+        if before != after:
+            save_json(fp, rows)
+            repaired_any = True
 
-    # 2) Live offline files used by /api/music/offline/<wallet>.
-    music_playlists_dir = getattr(srv, 'MUSIC_PLAYLISTS_DIR', None)
-    if music_playlists_dir:
-        from pathlib import Path as _Path
-        scanned_files += 1
-        old_file = _Path(music_playlists_dir) / f'{old_address}_offline.json'
-        new_file = _Path(music_playlists_dir) / f'{new_v1_address}_offline.json'
-        old_data = load_json(str(old_file), {'tracks': []}) or {'tracks': []}
-        old_tracks = list(old_data.get('tracks') or [])
-        if old_tracks:
-            new_data = load_json(str(new_file), {'tracks': []}) or {'tracks': []}
-            merged = list(new_data.get('tracks') or [])
-            added = 0
-            for item in old_tracks:
-                key = item.get('track_id') if isinstance(item, dict) else item
-                if isinstance(item, dict):
-                    _rewrite(item)
-                exists = any((x.get('track_id') if isinstance(x, dict) else x) == key for x in merged)
-                if not exists:
-                    merged.append(item)
-                    added += 1
-            new_data['tracks'] = merged
-            if old_data.get('updated_at'):
-                new_data['updated_at'] = old_data.get('updated_at')
-            save_json(str(new_file), new_data)
-            old_data['tracks'] = []
-            old_data['migrated_to'] = new_v1_address
-            save_json(str(old_file), old_data)
-            offline_moved += added
-            moved += added
+    remaining = 0
+    repaired_files = 0
+    for _, fp in files_with_old_refs:
+        rows = load_json(fp, []) or []
+        if _contains_music_binding(rows, old_address, binding_fields):
+            remaining += 1
+        else:
             repaired_files += 1
 
-    # 3) Registry tracks/artists/rewards/royalties and file-backed legacy stores.
-    registry_loader = getattr(srv, 'load_music_registry', None)
-    registry_saver = getattr(srv, 'save_music_registry', None)
-    if callable(registry_loader) and callable(registry_saver):
-        scanned_files += 1
-        registry = registry_loader() or {}
-        before = json.dumps(registry, sort_keys=True)
-        _rewrite(registry)
-        if json.dumps(registry, sort_keys=True) != before:
-            registry_saver(registry)
-            repaired_files += 1
-
-    reward_extra_fields = {'reward_address'}
-    file_consts = [
-        'MUSIC_ARTISTS_FILE',
-        'MUSIC_ARTIST_PROFILES_FILE',
-        'MUSIC_TRACKS_FILE',
-        'MUSIC_UPLOADS_FILE',
-        'MUSIC_PLAYLISTS_FILE',
-        'MUSIC_OFFLINE_FILE',
-        'MUSIC_OFFLINE_ITEMS_FILE',
-        'MUSIC_OFFLINE_PLAYLISTS_FILE',
-        'MUSIC_ENTITLEMENTS_FILE',
-        'MUSIC_REWARDS_FILE',
-        'MUSIC_ROYALTIES_FILE',
-    ]
-    if callable(load_json) and callable(save_json):
-        for c in file_consts:
-            fp = getattr(srv, c, None)
-            if not fp:
-                continue
-            rows = load_json(fp, []) or []
-            scan_fields = binding_fields | (reward_extra_fields if c in {'MUSIC_REWARDS_FILE'} else set())
-            if not _contains_music_binding(rows, old_address, scan_fields):
-                continue
-            scanned_files += 1
-            before = json.dumps(rows, sort_keys=True)
-            if c in {'MUSIC_REWARDS_FILE'}:
-                old_fields = binding_fields
-                binding_fields = binding_fields | reward_extra_fields
-                _rewrite(rows)
-                binding_fields = old_fields
-            else:
-                _rewrite(rows)
-            if json.dumps(rows, sort_keys=True) != before:
-                save_json(fp, rows)
-                repaired_files += 1
-
-    # Authoritative remaining checks mirror live endpoints.
-    remaining_playlist = 0
-    if use_sqlite and callable(get_conn):
-        with get_conn() as conn:
-            row = conn.execute('SELECT COUNT(*) AS c FROM music_playlists WHERE owner_address = ?', (old_address,)).fetchone()
-            remaining_playlist = int(row['c'] if hasattr(row, 'keys') else row[0])
-
-    remaining_offline = 0
-    if music_playlists_dir and callable(load_json):
-        from pathlib import Path as _Path
-        old_file = _Path(music_playlists_dir) / f'{old_address}_offline.json'
-        old_data = load_json(str(old_file), {'tracks': []}) or {'tracks': []}
-        remaining_offline = len(old_data.get('tracks') or [])
-
-    remaining_file_refs = 0
-    if callable(load_json):
-        for c in file_consts:
-            fp = getattr(srv, c, None)
-            if not fp:
-                continue
-            rows = load_json(fp, []) or []
-            scan_fields = binding_fields | (reward_extra_fields if c in {'MUSIC_REWARDS_FILE'} else set())
-            if _contains_music_binding(rows, old_address, scan_fields):
-                remaining_file_refs += 1
-    if callable(registry_loader):
-        registry = registry_loader() or {}
-        if _contains_music_binding(registry, old_address):
-            remaining_file_refs += 1
-
-    remaining = remaining_playlist + remaining_offline + remaining_file_refs
-    music_clean = remaining == 0
+    music_clean = (remaining == 0)
     return music_clean, moved, {
-        'music_moved_count': moved,
-        'music_playlist_moved_count': playlist_moved,
-        'music_offline_moved_count': offline_moved,
-        'music_scanned_files': scanned_files,
+        'music_scanned_files': len(files_with_old_refs),
         'music_repaired_files': repaired_files,
         'remaining_old_music_binding_count': remaining,
     }
@@ -1002,9 +897,7 @@ def repair_migration(old_address, new_v1_address):
         rec['status'] = 'repaired' if fully_migrated else 'failed'
         rec['repaired_at'] = _now()
         rec['music_bindings_repaired'] = bool(music_ok)
-        rec['music_moved_count'] = int((music_diag or {}).get('music_moved_count', music_moved) or 0)
-        rec['music_playlist_moved_count'] = int((music_diag or {}).get('music_playlist_moved_count', 0) or 0)
-        rec['music_offline_moved_count'] = int((music_diag or {}).get('music_offline_moved_count', 0) or 0)
+        rec['music_moved_count'] = int(music_moved or 0)
         rec['music_scanned_files'] = int((music_diag or {}).get('music_scanned_files', 0) or 0)
         rec['music_repaired_files'] = int((music_diag or {}).get('music_repaired_files', 0) or 0)
         rec['remaining_old_music_binding_count'] = int((music_diag or {}).get('remaining_old_music_binding_count', 0) or 0)
@@ -1039,8 +932,6 @@ def repair_migration(old_address, new_v1_address):
             'ecosystem_bindings_repaired': bool(rec.get('ecosystem_bindings_repaired', False)),
             'music_bindings_repaired': bool(rec.get('music_bindings_repaired', False)),
             'music_moved_count': int(rec.get('music_moved_count', 0) or 0),
-            'music_playlist_moved_count': int(rec.get('music_playlist_moved_count', 0) or 0),
-            'music_offline_moved_count': int(rec.get('music_offline_moved_count', 0) or 0),
             'music_scanned_files': int(rec.get('music_scanned_files', 0) or 0),
             'music_repaired_files': int(rec.get('music_repaired_files', 0) or 0),
             'remaining_old_music_binding_count': int(rec.get('remaining_old_music_binding_count', 0) or 0),

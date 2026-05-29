@@ -795,19 +795,15 @@ function buildApiUrl(path) {
 
 async function getActiveWalletAddress() {
     const ws = window.walletSession;
+    const base = (ws && typeof ws.getAddress === 'function' ? ws.getAddress() : localStorage.getItem('thr_address')) || '';
+    if (!base) return '';
     try {
-        if (ws && typeof ws.getActiveAddress === 'function') return ws.getActiveAddress() || '';
-        if (ws && typeof ws.getAddress === 'function') {
-            const base = ws.getAddress() || '';
-            if (ws && typeof ws.isMigrated === 'function' && ws.isMigrated() && typeof ws.getMigrationInfo === 'function') {
-                const m = ws.getMigrationInfo() || {};
-                if (m.new_v1_address) return m.new_v1_address;
-            }
-            return base;
+        if (ws && typeof ws.isMigrated === 'function' && ws.isMigrated() && typeof ws.getMigrationInfo === 'function') {
+            const m = ws.getMigrationInfo() || {};
+            if (m.new_v1_address) return m.new_v1_address;
         }
     } catch (_) {}
-    if (typeof window.__getActiveWalletAddressFromBase === 'function') return window.__getActiveWalletAddressFromBase() || '';
-    return localStorage.getItem('thr_address') || '';
+    return base;
 }
 
 // Initialize

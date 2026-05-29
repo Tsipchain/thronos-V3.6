@@ -420,31 +420,7 @@
 <script>
 const $ = id => document.getElementById(id);
 let nfts = [];
-let connectedWallet = getNftActiveWalletAddress();
-
-
-function getNftActiveWalletAddress() {
-    if (typeof window.getActiveWalletAddress === 'function') return window.getActiveWalletAddress() || '';
-    if (window.walletSession && typeof walletSession.getActiveAddress === 'function') return walletSession.getActiveAddress() || '';
-    if (window.walletSession && typeof walletSession.getAddress === 'function') return walletSession.getAddress() || '';
-    return localStorage.getItem('thr_address') || '';
-}
-
-async function requireNftWalletAuth(txCore) {
-    if (!window.WalletAuth || typeof WalletAuth.requireUnlockedWallet !== 'function') throw new Error('missing_wallet_signing_material');
-    const wallet = await WalletAuth.requireUnlockedWallet();
-    const publicKey = wallet.getPublicKey();
-    const signedTx = await wallet.signTransaction(txCore);
-    const signature = typeof signedTx === 'string' ? signedTx : signedTx && signedTx.signature;
-    return {
-        buyer_thr: wallet.address,
-        credential_lookup_address: wallet.credentialLookupAddress || wallet.address,
-        public_key: publicKey,
-        signed_tx: typeof signedTx === 'string' ? { ...txCore, public_key: publicKey, publicKey, signature } : signedTx,
-        signature,
-        auth_secret: wallet.authSecret || ''
-    };
-}
+let connectedWallet = localStorage.getItem('thr_address');
 
 function resolveNftImage(path) {
     if (!path) return '/static/img/thronos-token.png';
@@ -684,13 +660,25 @@ async function mintNFT() {
         return;
     }
 
-    let walletAuth;
-    try {
-        walletAuth = await WalletAuth.requireUnlockedWallet();
-        connectedWallet = walletAuth.address;
-    } catch (err) {
-        alert(err.message || 'missing_wallet_signing_material');
+    // Get auth secret from wallet session
+    const storedSecret = (window.walletSession && typeof window.walletSession.getSendSeed === 'function')
+        ? window.walletSession.getSendSeed()
+        : (localStorage.getItem('send_secret') || localStorage.getItem('send_seed') || localStorage.getItem('thr_secret'));
+    if (!storedSecret) {
+        alert('Wallet secret not found. Please reconnect your wallet with your send seed.');
         return;
+    }
+
+    // PIN confirmation before minting
+    const storedPin = localStorage.getItem('wallet_pin') ||
+        (window.walletSession && window.walletSession.getPin ? window.walletSession.getPin() : '');
+    if (storedPin) {
+        const enteredPin = prompt('🔐 Confirm PIN to mint NFT (1 THR fee):');
+        if (enteredPin === null) return;
+        if (enteredPin !== storedPin) {
+            alert('Wrong PIN.');
+            return;
+        }
     }
 
     const formData = new FormData();
@@ -700,9 +688,7 @@ async function mintNFT() {
     formData.append('price', price);
     formData.append('royalties', royalties);
     formData.append('creator', connectedWallet);
-    formData.append('credential_lookup_address', walletAuth.credentialLookupAddress || connectedWallet);
-    formData.append('public_key', walletAuth.getPublicKey());
-    formData.append('auth_secret', walletAuth.authSecret || '');
+    formData.append('auth_secret', storedSecret);
     if (imageFile) formData.append('image', imageFile);
 
     try {
@@ -758,38 +744,56 @@ function closeBuyModal() {
 }
 
 async function buyNFT(nftId) {
-    connectedWallet = getNftActiveWalletAddress();
     if (!connectedWallet) {
         alert('Please connect your wallet first');
         return;
     }
-    await executeBuyNFT(nftId);
+
+    // Get auth secret from wallet session (checks all storage keys)
+    const storedSecret = (window.walletSession && typeof window.walletSession.getSendSeed === 'function')
+        ? window.walletSession.getSendSeed()
+        : (localStorage.getItem('send_secret') || localStorage.getItem('send_seed') || localStorage.getItem('thr_secret'));
+    if (!storedSecret) {
+        // Show inline input instead of ugly prompt
+        const secretInput = document.createElement('div');
+        secretInput.innerHTML = `
+            <div style="margin-top: 15px; padding: 15px; background: #1a0f2e; border-radius: 8px; border: 1px solid #3d2066;">
+                <label style="color: #B366FF; display: block; margin-bottom: 8px;">
+                    <span class="lang-el">Εισάγετε το seed σας</span>
+                    <span class="lang-en">Enter your send seed</span>
+                </label>
+                <input type="password" id="buyAuthSecret" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #3d2066; background: #0f0a1a; color: #d7ffe6;">
+                <button onclick="confirmBuyNFT('${nftId}')" class="btn-primary" style="margin-top: 10px;">
+                    <span class="lang-el">Επιβεβαίωση Αγοράς</span>
+                    <span class="lang-en">Confirm Purchase</span>
+                </button>
+            </div>
+        `;
+        $('buyModalContent').appendChild(secretInput);
+        return;
+    }
+
+    await executeBuyNFT(nftId, storedSecret);
 }
 
-async function executeBuyNFT(nftId) {
+async function confirmBuyNFT(nftId) {
+    const authSecret = $('buyAuthSecret').value;
+    if (!authSecret) {
+        alert('Please enter your send seed');
+        return;
+    }
+    await executeBuyNFT(nftId, authSecret);
+}
+
+async function executeBuyNFT(nftId, authSecret) {
     try {
-        const nft = nfts.find(n => n.id === nftId) || {};
-        const txCore = {
-            from: getNftActiveWalletAddress(),
-            to: nft.owner || nft.owner_address || nft.creator || 'NFT_MARKETPLACE',
-            amount: Number(nft.price || 0),
-            token: 'THR',
-            nonce: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-            timestamp: new Date().toISOString()
-        };
-        const auth = await requireNftWalletAuth(txCore);
-        const res = await fetch('/api/nfts/buy', {
+        const res = await fetch('/api/v1/nfts/buy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 nft_id: nftId,
-                buyer_thr: auth.buyer_thr,
-                buyer: auth.buyer_thr,
-                credential_lookup_address: auth.credential_lookup_address,
-                public_key: auth.public_key,
-                signed_tx: auth.signed_tx,
-                signature: auth.signature,
-                auth_secret: auth.auth_secret
+                buyer: connectedWallet,
+                auth_secret: authSecret
             })
         });
         const data = await res.json();
@@ -799,10 +803,10 @@ async function executeBuyNFT(nftId) {
             closeBuyModal();
             loadNFTs();
         } else {
-            alert('Error: ' + (data.message || data.error || 'Unknown error'));
+            alert('Error: ' + (data.message || 'Unknown error'));
         }
     } catch (e) {
-        alert('Failed to buy NFT: ' + (e.message || 'missing_wallet_signing_material'));
+        alert('Failed to buy NFT: ' + e.message);
     }
 }
 

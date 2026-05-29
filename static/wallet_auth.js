@@ -35,8 +35,14 @@
   }
 
   function resolveCredentialLookupAddress(activeAddress) {
+    if (window.walletSession && typeof window.walletSession.getCredentialLookupAddress === 'function') {
+      try {
+        const lookup = window.walletSession.getCredentialLookupAddress(activeAddress);
+        if (lookup) return lookup;
+      } catch (_) {}
+    }
     const info = getMigrationInfo();
-    return info.old_address || info.new_v1_address || activeAddress || '';
+    return activeAddress || info.new_v1_address || info.old_address || '';
   }
 
   function resolveAuthSecret(lookupAddress, activeAddress) {

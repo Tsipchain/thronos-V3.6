@@ -27,3 +27,10 @@ def test_wallet_auth_fails_closed_without_signing_material_and_keeps_secret_memo
     assert "missing_wallet_signing_material" in text
     assert "sessionStorage.setItem('thr_auth_secret'" not in text
     assert 'sessionStorage.setItem("thr_auth_secret"' not in text
+
+
+def test_wallet_auth_prefers_session_lookup_then_active_address():
+    text = _read(STATIC_AUTH)
+    assert "getCredentialLookupAddress(activeAddress)" in text
+    assert "return activeAddress || info.new_v1_address || info.old_address || '';" in text
+    assert "return info.old_address || info.new_v1_address || activeAddress || '';" not in text

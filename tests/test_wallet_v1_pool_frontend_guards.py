@@ -40,3 +40,10 @@ def test_pools_send_v1_signed_auth_fields():
         "auth_secret",
     ]:
         assert field in text
+
+
+def test_pools_normalize_signed_transaction_result_to_string_signature():
+    text = _pools()
+    assert "const signedTx = await wallet.signTransaction(txCore);" in text
+    assert "const signature = typeof signedTx === 'string' ? signedTx : signedTx && signedTx.signature;" in text
+    assert "signed_tx: typeof signedTx === 'string' ? { ...txCore, public_key: publicKey, signature } : signedTx" in text

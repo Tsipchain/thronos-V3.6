@@ -244,12 +244,13 @@ async function requireSwapWalletAuth(txCore) {
     }
     const wallet = await WalletAuth.requireUnlockedWallet();
     const publicKey = wallet.getPublicKey();
-    const signature = await wallet.signTransaction(txCore);
+    const signedTx = await wallet.signTransaction(txCore);
+    const signature = typeof signedTx === 'string' ? signedTx : signedTx && signedTx.signature;
     return {
         trader_thr: wallet.address,
         credential_lookup_address: wallet.credentialLookupAddress || wallet.address,
         public_key: publicKey,
-        signed_tx: { ...txCore, public_key: publicKey, signature },
+        signed_tx: typeof signedTx === 'string' ? { ...txCore, public_key: publicKey, signature } : signedTx,
         signature,
         auth_secret: wallet.authSecret || ''
     };

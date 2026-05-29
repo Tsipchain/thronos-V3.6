@@ -1,7 +1,7 @@
 from flask import Blueprint, request
 from wallet_v1_handlers import (
     handle_tx_send, handle_address_derivation, handle_wallet_health,
-    handle_wallet_migrate, handle_wallet_migration_repair, handle_wallet_migration_status, init_wallet_v1_handler,
+    handle_wallet_migrate, handle_wallet_migration_repair, handle_wallet_migration_status, handle_wallet_bind_public_key, init_wallet_v1_handler,
 )
 
 wallet_v1_bp = Blueprint('wallet_v1', __name__, url_prefix='/api/v1')
@@ -23,6 +23,9 @@ def wallet_migration_repair(): return handle_wallet_migration_repair(request)
 
 @wallet_v1_bp.route('/wallet/migration/status', methods=['POST'])
 def wallet_migration_status(): return handle_wallet_migration_status(request)
+
+@wallet_v1_bp.route('/wallet/bind_public_key', methods=['POST'])
+def wallet_bind_public_key(): return handle_wallet_bind_public_key(request)
 
 
 def register_wallet_v1_routes(app, redis_client=None, node_role='master', read_only=False, sqlite_path=None):

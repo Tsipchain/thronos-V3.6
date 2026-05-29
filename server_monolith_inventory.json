@@ -1,0 +1,848 @@
+{
+  "metadata": {
+    "document_version": "1.0",
+    "generated_date": "2026-05-29",
+    "repository": "Tsipchain/thronos-V3.6",
+    "branch_scope": "main (origin/main) + local branch analysis",
+    "server_file": "server.py",
+    "server_line_count_main": 35920,
+    "server_line_count_local": 36163,
+    "total_endpoints": 495,
+    "total_endpoint_count_source": "grep -c '^@app.route' server.py"
+  },
+  "data_files": [
+    {
+      "id": "ledger",
+      "filename": "ledger.json",
+      "path": "/app/data/ledger.json",
+      "purpose": "Master THR balance ledger (address -> float balance)",
+      "access_pattern": "read-heavy, write on every transfer/mining/swap",
+      "critical": true,
+      "protection": "atomic_write_json()",
+      "readers": [
+        "GET /api/balance/<thr_addr>",
+        "GET /api/balances",
+        "GET /api/wallet/history",
+        "POST /api/wallet/send",
+        "POST /api/mining/submit",
+        "POST /api/v1/pools/swap"
+      ],
+      "writers": [
+        "POST /api/wallet/send",
+        "POST /api/mining/submit",
+        "POST /api/v1/pools/add_liquidity",
+        "POST /api/v1/pools/remove_liquidity",
+        "POST /api/v1/pools/swap",
+        "POST /api/music/tip",
+        "POST /api/gateway/webhook"
+      ]
+    },
+    {
+      "id": "chain",
+      "filename": "chain.json",
+      "path": "/app/data/phantom_tx_chain.json",
+      "purpose": "Transaction history and blockchain records",
+      "access_pattern": "read-heavy, write on every tx/block",
+      "critical": true,
+      "protection": "atomic_write_json()",
+      "readers": [
+        "GET /api/blocks",
+        "GET /api/transfers",
+        "GET /api/mempool",
+        "GET /api/tx_feed"
+      ],
+      "writers": [
+        "POST /api/mining/submit",
+        "POST /api/submit_block",
+        "POST /tx/submit",
+        "POST /api/v1/receive_block"
+      ]
+    },
+    {
+      "id": "pools",
+      "filename": "pools.json",
+      "path": "/app/data/pools.json",
+      "purpose": "AMM liquidity pools with provider shares and reserves",
+      "access_pattern": "read-heavy, write on LP changes",
+      "critical": true,
+      "protection": "atomic_write_json()",
+      "readers": [
+        "GET /api/v1/pools",
+        "GET /api/v1/pools/positions/<address>",
+        "GET /api/swap/quote"
+      ],
+      "writers": [
+        "POST /api/v1/pools",
+        "POST /api/v1/pools/add_liquidity",
+        "POST /api/v1/pools/remove_liquidity",
+        "POST /api/v1/pools/swap",
+        "POST /api/v1/wallet/liquidity-provider-migration"
+      ]
+    },
+    {
+      "id": "pledge_chain",
+      "filename": "pledge_chain.json",
+      "path": "/app/data/pledge_chain.json",
+      "purpose": "User pledge/deposit records",
+      "access_pattern": "read-moderate, write on new pledges",
+      "critical": false,
+      "protection": "atomic_write_json()",
+      "readers": [
+        "GET /api/pledge/status"
+      ],
+      "writers": [
+        "POST /pledge_submit"
+      ]
+    },
+    {
+      "id": "ai_credits_ledger",
+      "filename": "ai_credits_ledger.json",
+      "path": "/app/data/ai_credits_ledger.json",
+      "purpose": "AI service credit balances per wallet",
+      "access_pattern": "read-moderate, write on credit consumption",
+      "critical": false,
+      "protection": "Sqlite-backed via _load_ledger_from_sqlite()",
+      "readers": [
+        "GET /api/ai_credits"
+      ],
+      "writers": [
+        "POST /api/ai/chat",
+        "POST /api/ai_purchase_pack"
+      ]
+    },
+    {
+      "id": "l2e_ledger",
+      "filename": "l2e_ledger.json",
+      "path": "/app/data/l2e_ledger.json",
+      "purpose": "Learn-to-Earn course credit balances",
+      "access_pattern": "read-light, write on course completion",
+      "critical": false,
+      "protection": "ai_interaction_ledger module",
+      "readers": [
+        "GET /api/v1/l2e/balance/<thr_addr>"
+      ],
+      "writers": [
+        "POST /api/v1/courses/<course_id>/claim_reward"
+      ]
+    },
+    {
+      "id": "wbtc_ledger",
+      "filename": "wbtc_ledger.json",
+      "path": "/app/data/wbtc_ledger.json",
+      "purpose": "Wrapped Bitcoin cross-chain ledger",
+      "access_pattern": "read-light, write on bridge operations",
+      "critical": false,
+      "protection": "Sqlite-backed",
+      "readers": [
+        "GET /api/bridge/data"
+      ],
+      "writers": [
+        "POST /api/bridge/deposit",
+        "POST /api/bridge/burn",
+        "POST /api/bridge/withdraw"
+      ]
+    }
+  ],
+  "critical_constants": [
+    {
+      "name": "CORE_MINER_WALLET_DO_NOT_BIND",
+      "value": "THRa60e1cef9826da16a9b9c12f907614dacf49f74b",
+      "purpose": "Core/miner wallet that must NEVER be bound, migrated, transferred, or modified",
+      "line_defined": 10368,
+      "protection_level": "HARDCODED",
+      "endpoints_checking": [
+        "GET /api/v1/wallet/v1-split-diagnostics",
+        "POST /api/v1/wallet/liquidity-provider-migration",
+        "POST /api/v1/wallet/v1-split-consolidation",
+        "POST /api/v1/wallet/thr-reconciliation/repair"
+      ]
+    },
+    {
+      "name": "BURN_ADDRESS",
+      "value": "0x0",
+      "purpose": "Destination for all transaction fees",
+      "line_defined": 1404,
+      "protection_level": "CONSTANT",
+      "endpoints_checking": [
+        "POST /api/wallet/send",
+        "POST /api/mining/submit"
+      ]
+    },
+    {
+      "name": "AI_WALLET_ADDRESS",
+      "value": "env: THR_AI_AGENT_WALLET or THR_AI_AGENT_WALLET_V1",
+      "purpose": "AI agent autonomous wallet for service payments",
+      "line_defined": 1403,
+      "protection_level": "ENVIRONMENT",
+      "endpoints_checking": [
+        "POST /api/ai/chat",
+        "POST /api/ai_purchase_pack"
+      ]
+    }
+  ],
+  "endpoint_categories": {
+    "wallet_and_ledger": {
+      "count": 50,
+      "description": "Wallet balance, history, ledger management",
+      "endpoints": [
+        {
+          "path": "GET /api/balance/<thr_addr>",
+          "type": "query",
+          "risk_level": "LOW",
+          "admin_gated": false,
+          "mutations": [],
+          "dependencies": [
+            "ledger.json"
+          ]
+        },
+        {
+          "path": "POST /api/wallet/send",
+          "type": "mutation",
+          "risk_level": "CRITICAL",
+          "admin_gated": false,
+          "mutations": [
+            "ledger.json",
+            "chain.json"
+          ],
+          "dependencies": [
+            "wallet_v1_migration",
+            "signature_verification"
+          ]
+        },
+        {
+          "path": "GET /api/v1/wallet/v1-split-diagnostics",
+          "type": "query",
+          "risk_level": "LOW",
+          "admin_gated": false,
+          "mutations": [],
+          "dependencies": [
+            "ledger.json",
+            "pools.json",
+            "tx_feed"
+          ]
+        },
+        {
+          "path": "POST /api/v1/wallet/liquidity-provider-migration",
+          "type": "mutation",
+          "risk_level": "CRITICAL",
+          "admin_gated": true,
+          "mutations": [
+            "pools.json"
+          ],
+          "dependencies": [
+            "admin_auth",
+            "dry_run_safety"
+          ],
+          "pr_526": true
+        },
+        {
+          "path": "POST /api/v1/wallet/v1-split-consolidation",
+          "type": "proposal",
+          "risk_level": "HIGH",
+          "admin_gated": true,
+          "mutations": [],
+          "dependencies": [
+            "migration_proof_check"
+          ],
+          "pr_526": true
+        }
+      ]
+    },
+    "transaction_and_chain": {
+      "count": 30,
+      "description": "Blockchain, transactions, mining submissions",
+      "critical_endpoints": [
+        {
+          "path": "POST /api/mining/submit",
+          "risk_level": "CRITICAL",
+          "mutations": [
+            "ledger.json",
+            "chain.json"
+          ]
+        },
+        {
+          "path": "POST /api/submit_block",
+          "risk_level": "CRITICAL",
+          "mutations": [
+            "chain.json"
+          ]
+        }
+      ]
+    },
+    "tokens": {
+      "count": 35,
+      "description": "Token creation, minting, burning, transfers",
+      "critical_endpoints": [
+        {
+          "path": "POST /api/tokens/create",
+          "risk_level": "HIGH",
+          "mutations": [
+            "token_registry"
+          ]
+        },
+        {
+          "path": "POST /api/tokens/<symbol>/mint",
+          "risk_level": "CRITICAL",
+          "mutations": [
+            "ledger.json"
+          ]
+        }
+      ]
+    },
+    "liquidity_pools_and_swap": {
+      "count": 20,
+      "description": "DEX, AMM, liquidity provision",
+      "critical_endpoints": [
+        {
+          "path": "POST /api/v1/pools/swap",
+          "risk_level": "CRITICAL",
+          "mutations": [
+            "pools.json",
+            "ledger.json"
+          ]
+        }
+      ]
+    },
+    "music_and_royalties": {
+      "count": 50,
+      "description": "Music streaming, royalties, tips, playlists",
+      "critical_endpoints": [
+        {
+          "path": "POST /api/music/tip",
+          "risk_level": "MEDIUM",
+          "mutations": [
+            "ledger.json"
+          ]
+        }
+      ]
+    },
+    "ai_and_llm": {
+      "count": 70,
+      "description": "Chat, sessions, credits, models, providers",
+      "critical_endpoints": [
+        {
+          "path": "POST /api/ai/chat",
+          "risk_level": "HIGH",
+          "mutations": [
+            "ai_credits_ledger.json"
+          ]
+        }
+      ]
+    },
+    "learning_to_earn": {
+      "count": 80,
+      "description": "Courses, enrollment, certificates, quizzes, L2E tokens",
+      "critical_endpoints": [
+        {
+          "path": "POST /api/v1/courses/<course_id>/claim_reward",
+          "risk_level": "MEDIUM",
+          "mutations": [
+            "l2e_ledger.json"
+          ]
+        }
+      ]
+    },
+    "mining_and_heat_rewards": {
+      "count": 40,
+      "description": "GPU/CPU heat mining, Bitcoin mining, supply projections",
+      "critical_endpoints": []
+    },
+    "bridge_and_crosschain": {
+      "count": 25,
+      "description": "Cross-chain deposits, burns, withdrawals",
+      "critical_endpoints": []
+    },
+    "iot_and_smart_devices": {
+      "count": 20,
+      "description": "Device registration, readings, parking, autonomous requests",
+      "critical_endpoints": []
+    },
+    "verifyid_and_identity": {
+      "count": 15,
+      "description": "Attestation, identity verification, rewards",
+      "critical_endpoints": []
+    },
+    "nft_and_governance": {
+      "count": 30,
+      "description": "NFT minting, trading, burning, voting",
+      "critical_endpoints": []
+    },
+    "digital_legacy_and_inheritance": {
+      "count": 25,
+      "description": "Estate, wills, distribution, asset management",
+      "critical_endpoints": []
+    },
+    "admin_and_diagnostics": {
+      "count": 30,
+      "description": "Admin tools, health checks, reindexing",
+      "critical_endpoints": [
+        {
+          "path": "POST /api/admin/mint",
+          "risk_level": "CRITICAL",
+          "mutations": [
+            "ledger.json"
+          ]
+        }
+      ]
+    },
+    "fiat_gateway": {
+      "count": 20,
+      "description": "Stripe checkout, payments, fiat conversion",
+      "critical_endpoints": [
+        {
+          "path": "POST /api/gateway/webhook",
+          "risk_level": "CRITICAL",
+          "mutations": [
+            "ledger.json"
+          ]
+        }
+      ]
+    },
+    "networking_and_p2p": {
+      "count": 15,
+      "description": "Peer management, heartbeats, peer lists",
+      "critical_endpoints": []
+    },
+    "miscellaneous": {
+      "count": 50,
+      "description": "Static pages, UI routes, legacy endpoints",
+      "critical_endpoints": []
+    }
+  },
+  "critical_mutation_endpoints": [
+    {
+      "endpoint": "POST /api/wallet/send",
+      "method": "POST",
+      "data_modified": [
+        "ledger.json",
+        "chain.json"
+      ],
+      "admin_gated": false,
+      "dry_run_available": false,
+      "protections": [
+        "signature_verification",
+        "balance_check"
+      ],
+      "risk_level": "CRITICAL",
+      "notes": "Direct THR transfer; no amount cap"
+    },
+    {
+      "endpoint": "POST /api/mining/submit",
+      "method": "POST",
+      "data_modified": [
+        "ledger.json",
+        "chain.json"
+      ],
+      "admin_gated": false,
+      "dry_run_available": false,
+      "protections": [
+        "PoW_verification",
+        "difficulty_check"
+      ],
+      "risk_level": "CRITICAL",
+      "notes": "Creates new THR; inflation risk if PoW broken"
+    },
+    {
+      "endpoint": "POST /api/admin/mint",
+      "method": "POST",
+      "data_modified": [
+        "ledger.json"
+      ],
+      "admin_gated": true,
+      "dry_run_available": false,
+      "protections": [
+        "admin_auth"
+      ],
+      "risk_level": "CRITICAL",
+      "notes": "Direct THR minting; dangerous but admin-only"
+    },
+    {
+      "endpoint": "POST /api/v1/pools/swap",
+      "method": "POST",
+      "data_modified": [
+        "pools.json",
+        "ledger.json"
+      ],
+      "admin_gated": false,
+      "dry_run_available": false,
+      "protections": [
+        "slippage_check",
+        "user_signature"
+      ],
+      "risk_level": "CRITICAL",
+      "notes": "Price impact; impermanent loss risk"
+    },
+    {
+      "endpoint": "POST /api/tokens/create",
+      "method": "POST",
+      "data_modified": [
+        "token_registry"
+      ],
+      "admin_gated": false,
+      "dry_run_available": false,
+      "protections": [
+        "token_symbol_validation"
+      ],
+      "risk_level": "HIGH",
+      "notes": "New token creation; inflation risk"
+    },
+    {
+      "endpoint": "POST /api/v1/wallet/liquidity-provider-migration",
+      "method": "POST",
+      "data_modified": [
+        "pools.json"
+      ],
+      "admin_gated": true,
+      "dry_run_available": true,
+      "protections": [
+        "admin_auth",
+        "dry_run_default",
+        "core_wallet_check"
+      ],
+      "risk_level": "CRITICAL",
+      "notes": "PR #526 addition; migrates LP shares atomically",
+      "pr_526": true
+    },
+    {
+      "endpoint": "POST /api/gateway/webhook",
+      "method": "POST",
+      "data_modified": [
+        "ledger.json"
+      ],
+      "admin_gated": false,
+      "dry_run_available": false,
+      "protections": [
+        "webhook_signature_verification"
+      ],
+      "risk_level": "CRITICAL",
+      "notes": "Fiat deposit; external system trigger"
+    }
+  ],
+  "pr_526_analysis": {
+    "branch_name_github": "codex/remove-duplicate-wallet_session-accessors-eyiy0t",
+    "branch_name_local": "claude/sweet-goodall-0DJlS",
+    "mergeable_state": "dirty",
+    "changed_files_count": 19,
+    "total_additions": 2623,
+    "total_deletions": 398,
+    "server_py_additions_local": 243,
+    "server_py_deletions_local": 0,
+    "test_additions": 257,
+    "test_deletions": 0,
+    "status": "NOT MERGE READY",
+    "new_endpoints": [
+      {
+        "path": "GET /api/v1/wallet/v1-split-diagnostics",
+        "line": 10823,
+        "risk": "LOW",
+        "mutations": false,
+        "notes": "Diagnostic only, reads from ledger/pools/tx_feed"
+      },
+      {
+        "path": "POST /api/v1/wallet/liquidity-provider-migration",
+        "line": 10834,
+        "risk": "CRITICAL",
+        "mutations": true,
+        "protections": [
+          "admin_gated",
+          "dry_run_default",
+          "core_wallet_check"
+        ],
+        "data_modified": [
+          "pools.json"
+        ]
+      },
+      {
+        "path": "POST /api/v1/wallet/v1-split-consolidation",
+        "line": 10919,
+        "risk": "HIGH",
+        "mutations": false,
+        "protections": [
+          "admin_gated",
+          "migration_proof_required"
+        ],
+        "notes": "Proposal only, no auto-transfer"
+      }
+    ],
+    "new_helper_functions": [
+      {
+        "name": "_detect_first_v1_wallets_from_migration_events",
+        "line": 10740,
+        "purpose": "Query tx_feed for wallet_v1_migration events",
+        "risk": "LOW"
+      },
+      {
+        "name": "_build_split_diagnostics",
+        "line": 10761,
+        "purpose": "Comprehensive split wallet diagnostics builder",
+        "risk": "LOW"
+      }
+    ],
+    "test_coverage": {
+      "total_tests": 16,
+      "pre_existing": 6,
+      "new_tests": 10,
+      "all_passing": true,
+      "status": "PASSING"
+    },
+    "merge_blockers": [
+      {
+        "blocker": "Merge Conflict",
+        "severity": "CRITICAL",
+        "description": "mergeable_state=dirty; cannot auto-merge to main",
+        "action_required": "Manual rebase and conflict resolution"
+      },
+      {
+        "blocker": "Unvetted Frontend Changes",
+        "severity": "CRITICAL",
+        "description": "wallet_auth.js (+113/-10), wallet_session.js changes; no test coverage",
+        "action_required": "Code review + frontend test coverage before merge"
+      },
+      {
+        "blocker": "Scope Creep",
+        "severity": "CRITICAL",
+        "description": "19 files changed across multiple subsystems; violates surgical PR principle",
+        "action_required": "Isolate Wallet V1 changes from frontend/migration changes"
+      },
+      {
+        "blocker": "File Deletions Unaccounted",
+        "severity": "CRITICAL",
+        "description": "-398 lines deleted with no itemized explanation",
+        "action_required": "Create itemized diff report of all deletions"
+      },
+      {
+        "blocker": "No Conflict Resolution Visible",
+        "severity": "HIGH",
+        "description": "PR created 08:27:59Z, updated 09:04:05Z; dirty state unchanged",
+        "action_required": "Force-push clean rebase or create new clean PR"
+      }
+    ],
+    "recommendations": [
+      {
+        "option": "Option 1: Cherry-Pick Clean Additions (RECOMMENDED)",
+        "steps": [
+          "Extract server.py (+243) + test file (+257) changes from PR #526 local branch",
+          "Create new PR: claude/sweet-goodall-wallet-v1-clean",
+          "Push only 2 files",
+          "Fast-track merge to main",
+          "Later: Address frontend/migration changes in separate PR"
+        ],
+        "timeline": "Can merge immediately after code review"
+      },
+      {
+        "option": "Option 2: Full PR #526 Cleanup",
+        "steps": [
+          "Force-push clean rebase of PR #526",
+          "Delete all unvetted frontend changes",
+          "Add frontend test coverage",
+          "Resubmit for review"
+        ],
+        "timeline": "1-2 weeks with testing"
+      }
+    ]
+  },
+  "ecosystem_subsystem_dependencies": {
+    "wallet": {
+      "primary_files": [
+        "ledger.json"
+      ],
+      "read_frequency": "HIGH",
+      "write_frequency": "HIGH",
+      "mutation_endpoints": [
+        "POST /api/wallet/send",
+        "POST /api/wallet/activate",
+        "POST /api/v1/wallet/liquidity-provider-migration"
+      ]
+    },
+    "mining": {
+      "primary_files": [
+        "ledger.json",
+        "chain.json"
+      ],
+      "read_frequency": "HIGH",
+      "write_frequency": "HIGH",
+      "mutation_endpoints": [
+        "POST /api/mining/submit",
+        "POST /api/submit_block"
+      ]
+    },
+    "music": {
+      "primary_files": [
+        "ledger.json"
+      ],
+      "read_frequency": "MEDIUM",
+      "write_frequency": "MEDIUM",
+      "mutation_endpoints": [
+        "POST /api/music/tip",
+        "POST /api/music/session/start",
+        "POST /api/music/session/end"
+      ]
+    },
+    "l2e_courses": {
+      "primary_files": [
+        "l2e_ledger.json",
+        "ai_credits_ledger.json"
+      ],
+      "read_frequency": "MEDIUM",
+      "write_frequency": "MEDIUM",
+      "mutation_endpoints": [
+        "POST /api/v1/courses/<course_id>/claim_reward",
+        "POST /api/v1/courses/<course_id>/enroll"
+      ]
+    },
+    "liquidity_pools": {
+      "primary_files": [
+        "pools.json",
+        "ledger.json"
+      ],
+      "read_frequency": "MEDIUM",
+      "write_frequency": "MEDIUM",
+      "mutation_endpoints": [
+        "POST /api/v1/pools",
+        "POST /api/v1/pools/swap",
+        "POST /api/v1/pools/add_liquidity",
+        "POST /api/v1/wallet/liquidity-provider-migration"
+      ]
+    },
+    "bridge": {
+      "primary_files": [
+        "wbtc_ledger.json",
+        "chain.json"
+      ],
+      "read_frequency": "LOW",
+      "write_frequency": "LOW",
+      "mutation_endpoints": [
+        "POST /api/bridge/deposit",
+        "POST /api/bridge/burn",
+        "POST /api/bridge/withdraw"
+      ]
+    },
+    "ai": {
+      "primary_files": [
+        "ai_credits_ledger.json"
+      ],
+      "read_frequency": "MEDIUM",
+      "write_frequency": "MEDIUM",
+      "mutation_endpoints": [
+        "POST /api/ai/chat",
+        "POST /api/ai_purchase_pack"
+      ]
+    },
+    "wallet_v1_migration": {
+      "primary_files": [
+        "ledger.json",
+        "pools.json",
+        "pledge_chain.json"
+      ],
+      "read_frequency": "MEDIUM",
+      "write_frequency": "LOW",
+      "mutation_endpoints": [
+        "POST /api/v1/wallet/liquidity-provider-migration"
+      ],
+      "pr_526_new": true
+    }
+  },
+  "safeguard_inventory": {
+    "hard_constraints": [
+      {
+        "constraint": "CORE_MINER_WALLET_DO_NOT_BIND protected",
+        "enforced_in": [
+          "GET /api/v1/wallet/v1-split-diagnostics",
+          "POST /api/v1/wallet/liquidity-provider-migration",
+          "POST /api/v1/wallet/v1-split-consolidation",
+          "POST /api/v1/wallet/thr-reconciliation/repair"
+        ],
+        "status": "IMPLEMENTED"
+      },
+      {
+        "constraint": "Dry-run safety on LP migration",
+        "enforced_in": [
+          "POST /api/v1/wallet/liquidity-provider-migration"
+        ],
+        "default_value": "dry_run=true",
+        "status": "IMPLEMENTED"
+      },
+      {
+        "constraint": "Admin gating on mutations",
+        "enforced_in": [
+          "POST /api/v1/wallet/liquidity-provider-migration",
+          "POST /api/v1/wallet/v1-split-consolidation",
+          "POST /api/admin/mint"
+        ],
+        "check_function": "require_admin()",
+        "status": "IMPLEMENTED"
+      }
+    ],
+    "soft_constraints": [
+      {
+        "constraint": "Migration proof requirement",
+        "enforced_in": [
+          "POST /api/v1/wallet/v1-split-consolidation"
+        ],
+        "status": "IMPLEMENTED"
+      },
+      {
+        "constraint": "Atomic file writes",
+        "enforced_in": [
+          "atomic_write_json()"
+        ],
+        "protection_type": "consistency",
+        "status": "IMPLEMENTED"
+      }
+    ],
+    "missing_safeguards": [
+      {
+        "safeguard": "Transaction audit log",
+        "risk": "MEDIUM",
+        "recommendation": "Create immutable audit log separate from chain.json"
+      },
+      {
+        "safeguard": "Rollback mechanism",
+        "risk": "MEDIUM",
+        "recommendation": "Implement multi-file transaction support or version control"
+      },
+      {
+        "safeguard": "Automated backups",
+        "risk": "HIGH",
+        "recommendation": "Daily/hourly backups of ledger.json to separate storage"
+      },
+      {
+        "safeguard": "Balance validation",
+        "risk": "MEDIUM",
+        "recommendation": "Real-time balance validation; reject negative balances at write"
+      }
+    ]
+  },
+  "deployment_checklist": [
+    {
+      "check": "Verify server.py syntax",
+      "command": "python -m py_compile server.py",
+      "required": true
+    },
+    {
+      "check": "Run wallet V1 tests",
+      "command": "pytest tests/test_wallet_v1_thr_reconciliation.py -v",
+      "required": true
+    },
+    {
+      "check": "Verify core wallet references",
+      "command": "grep -n 'CORE_MINER_WALLET_DO_NOT_BIND' server.py",
+      "required": true
+    },
+    {
+      "check": "Test diagnostics endpoint",
+      "command": "curl -X GET 'http://localhost:5000/api/v1/wallet/v1-split-diagnostics?old_address=...'",
+      "required": true
+    },
+    {
+      "check": "Test LP migration dry-run",
+      "command": "curl -X POST 'http://localhost:5000/api/v1/wallet/liquidity-provider-migration' -d '{dry_run:true}'",
+      "required": true
+    },
+    {
+      "check": "Verify pools.json structure",
+      "command": "jq '.[] | {id, providers}' data/pools.json",
+      "required": true
+    }
+  ]
+}

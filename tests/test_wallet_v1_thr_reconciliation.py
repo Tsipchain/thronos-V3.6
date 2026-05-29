@@ -135,3 +135,260 @@ def test_core_miner_wallet_ignored_unless_explicitly_passed(monkeypatch):
 
     explicit = client.get(f"/api/v1/wallet/thr-reconciliation?old_address={CORE}&new_address={NEW}").get_json()
     assert "core_miner_wallet_explicitly_requested" in explicit["mismatch_flags"]
+
+
+def test_v1_split_diagnostics_detects_first_v1_wallet_with_thr(monkeypatch):
+    """Test that split diagnostics detect the first V1 wallet that received THR."""
+    first_v1 = "THR5E055A72DC04C10C18C3F74D17AB34CEE4A9BA24"
+    migration_txs = [
+        {
+            "type": "wallet_v1_migration",
+            "tx_id": "MIGRATE-1779560081-46301a-A9BA24",
+            "old_address": OLD,
+            "new_v1_address": first_v1,
+            "migrated_thr_amount": 14041.167132,
+            "status": "confirmed",
+        },
+        {
+            "type": "wallet_v1_migration",
+            "tx_id": "MIGRATE-1779560089-46301a-F00353",
+            "old_address": OLD,
+            "new_v1_address": NEW,
+            "migrated_thr_amount": 0.0,
+            "status": "confirmed",
+        },
+    ]
+    ledger = {OLD: 0.0, first_v1: 14041.167132, NEW: 6.4001}
+    client, _ledger = _install_reconciliation_fixtures(monkeypatch, ledger=ledger, txs=migration_txs)
+
+    res = client.get(f"/api/v1/wallet/v1-split-diagnostics?old_address={OLD}&current_v1_address={NEW}")
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["ok"] is True
+    assert body["old_address"] == OLD
+    assert body["current_v1_address"] == NEW
+    assert first_v1 in body["detected_first_v1_thr_wallets"]
+    assert body["first_v1_wallet_balances"][first_v1] == 14041.167132
+    assert body["current_v1_balance"] == 6.4001
+    assert len(body["migrated_thr_events"]) == 2
+
+
+def test_v1_split_diagnostics_detects_old_liquidity_positions(monkeypatch):
+    """Test that split diagnostics detect liquidity positions on old wallet."""
+    pools = [{
+        "id": "pool1",
+        "token_a": "THR",
+        "token_b": "7CEB",
+        "reserves_a": 1000.0,
+        "reserves_b": 2000.0,
+        "total_shares": 10.0,
+        "providers": {OLD: 2.0, NEW: 1.0},
+    }]
+    client, _ledger = _install_reconciliation_fixtures(monkeypatch, pools=pools)
+
+    res = client.get(f"/api/v1/wallet/v1-split-diagnostics?old_address={OLD}&current_v1_address={NEW}")
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["old_locked_thr_total"] == 200.0  # 2/10 * 1000 THR
+    assert body["current_locked_thr_total"] == 100.0  # 1/10 * 1000 THR
+    assert len(body["old_liquidity_positions"]) == 1
+    assert body["old_liquidity_positions"][0]["pool_id"] == "pool1"
+    assert body["old_liquidity_positions"][0]["locked_thr"] == 200.0
+
+
+def test_liquidity_provider_migration_dry_run_returns_proposal(monkeypatch):
+    """Test that LP migration dry-run returns proposal without mutations."""
+    pools = [{
+        "id": "pool1",
+        "token_a": "THR",
+        "token_b": "7CEB",
+        "reserves_a": 1000.0,
+        "reserves_b": 2000.0,
+        "total_shares": 10.0,
+        "providers": {OLD: 2.0, NEW: 1.0},
+    }]
+    client, _ledger = _install_reconciliation_fixtures(monkeypatch, pools=pools)
+    import server
+    calls = []
+    monkeypatch.setattr(server, "save_pools", lambda _pools: calls.append(_pools))
+
+    pools_before = [p.copy() for p in pools]
+    res = client.post(
+        "/api/v1/wallet/liquidity-provider-migration",
+        json={"old_address": OLD, "new_v1_address": NEW, "dry_run": True, "secret": server.ADMIN_SECRET},
+    )
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["ok"] is True
+    assert body["dry_run"] is True
+    assert body["mutation_performed"] is False
+    assert len(body["affected_pools"]) == 1
+    assert body["affected_pools"][0]["pool_id"] == "pool1"
+    assert body["affected_pools"][0]["user_shares"] == 2.0
+    assert calls == []  # save_pools should not be called for dry_run
+
+
+def test_liquidity_provider_migration_real_mutation_moves_shares(monkeypatch):
+    """Test that LP migration with dry_run=false moves provider ownership."""
+    pools = [{
+        "id": "pool1",
+        "token_a": "THR",
+        "token_b": "7CEB",
+        "reserves_a": 1000.0,
+        "reserves_b": 2000.0,
+        "total_shares": 10.0,
+        "providers": {OLD: 2.0, NEW: 0.0},
+    }]
+    client, _ledger = _install_reconciliation_fixtures(monkeypatch, pools=pools)
+    import server
+
+    captured_pools = []
+
+    def capture_save_pools(new_pools):
+        captured_pools.append(new_pools)
+
+    monkeypatch.setattr(server, "save_pools", capture_save_pools)
+
+    res = client.post(
+        "/api/v1/wallet/liquidity-provider-migration",
+        json={"old_address": OLD, "new_v1_address": NEW, "dry_run": False, "secret": server.ADMIN_SECRET},
+    )
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["ok"] is True
+    assert body["mutation_performed"] is True
+    assert body["dry_run"] is False
+
+    # Check that save_pools was called and pools were modified
+    assert len(captured_pools) == 1
+    updated_pool = captured_pools[0][0]
+    assert OLD not in updated_pool["providers"]
+    assert updated_pool["providers"][NEW] == 2.0
+    assert updated_pool["total_shares"] == 10.0
+    assert updated_pool["reserves_a"] == 1000.0  # Reserves unchanged
+
+
+def test_liquidity_provider_migration_is_idempotent(monkeypatch):
+    """Test that LP migration is idempotent."""
+    pools = [{
+        "id": "pool1",
+        "token_a": "THR",
+        "token_b": "7CEB",
+        "reserves_a": 1000.0,
+        "reserves_b": 2000.0,
+        "total_shares": 10.0,
+        "providers": {NEW: 2.0},  # Already migrated
+    }]
+    client, _ledger = _install_reconciliation_fixtures(monkeypatch, pools=pools)
+
+    res = client.get(f"/api/v1/wallet/v1-split-diagnostics?old_address={OLD}&current_v1_address={NEW}")
+    assert res.status_code == 200
+    body = res.get_json()
+    assert len(body["old_liquidity_positions"]) == 0
+
+
+def test_liquidity_provider_migration_blocks_core_miner_wallet(monkeypatch):
+    """Test that LP migration blocks core/miner wallet."""
+    pools = [{
+        "id": "pool1",
+        "token_a": "THR",
+        "token_b": "7CEB",
+        "reserves_a": 1000.0,
+        "reserves_b": 2000.0,
+        "total_shares": 10.0,
+        "providers": {CORE: 2.0},
+    }]
+    client, _ledger = _install_reconciliation_fixtures(monkeypatch, pools=pools)
+    import server
+
+    res = client.post(
+        "/api/v1/wallet/liquidity-provider-migration",
+        json={"old_address": CORE, "new_v1_address": NEW, "dry_run": True, "secret": server.ADMIN_SECRET},
+    )
+    assert res.status_code == 400
+    body = res.get_json()
+    assert "core_miner_wallet" in body["error"]
+
+
+def test_v1_split_consolidation_requires_proof_of_migration(monkeypatch):
+    """Test that consolidation requires proof of migration."""
+    first_v1 = "THR5E055A72DC04C10C18C3F74D17AB34CEE4A9BA24"
+    migration_txs = [
+        {
+            "type": "wallet_v1_migration",
+            "old_address": OLD,
+            "new_v1_address": first_v1,
+            "migrated_thr_amount": 14041.167132,
+            "status": "confirmed",
+        },
+    ]
+    client, _ledger = _install_reconciliation_fixtures(monkeypatch, txs=migration_txs)
+    import server
+
+    res = client.post(
+        "/api/v1/wallet/v1-split-consolidation",
+        json={"first_v1_wallet": first_v1, "current_v1_wallet": NEW, "dry_run": True, "secret": server.ADMIN_SECRET},
+    )
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["ok"] is True
+    assert body["proof"]["migrated_thr_amount"] == 14041.167132
+    assert body["proof"]["migration_source_old_address"] == OLD
+
+
+def test_v1_split_consolidation_rejects_unproven_wallet(monkeypatch):
+    """Test that consolidation rejects wallet without migration proof."""
+    fake_v1 = "THRFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+    client, _ledger = _install_reconciliation_fixtures(monkeypatch)
+    import server
+
+    res = client.post(
+        "/api/v1/wallet/v1-split-consolidation",
+        json={"first_v1_wallet": fake_v1, "current_v1_wallet": NEW, "dry_run": True, "secret": server.ADMIN_SECRET},
+    )
+    assert res.status_code == 400
+    body = res.get_json()
+    assert body["ok"] is False
+    assert "no_migration_proof_found" in body["error"]
+
+
+def test_v1_split_consolidation_dry_run_only(monkeypatch):
+    """Test that consolidation is dry-run only and returns proposal."""
+    first_v1 = "THR5E055A72DC04C10C18C3F74D17AB34CEE4A9BA24"
+    migration_txs = [
+        {
+            "type": "wallet_v1_migration",
+            "old_address": OLD,
+            "new_v1_address": first_v1,
+            "migrated_thr_amount": 14041.167132,
+            "status": "confirmed",
+        },
+    ]
+    client, _ledger = _install_reconciliation_fixtures(monkeypatch, txs=migration_txs)
+    import server
+    calls = []
+    monkeypatch.setattr(server, "save_json", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    res = client.post(
+        "/api/v1/wallet/v1-split-consolidation",
+        json={"first_v1_wallet": first_v1, "current_v1_wallet": NEW, "dry_run": True, "secret": server.ADMIN_SECRET},
+    )
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["ok"] is True
+    assert body["dry_run"] is True
+    assert body["mutation_performed"] is False
+    assert calls == []  # No mutations
+
+
+def test_v1_split_diagnostics_rejects_core_miner_wallet(monkeypatch):
+    """Test that split diagnostics rejects core/miner wallet."""
+    client, _ledger = _install_reconciliation_fixtures(monkeypatch)
+
+    res = client.get(f"/api/v1/wallet/v1-split-diagnostics?old_address={CORE}&current_v1_address={NEW}")
+    assert res.status_code == 400
+    body = res.get_json()
+    assert "core_miner_wallet" in body["error"]
+
+    res = client.get(f"/api/v1/wallet/v1-split-diagnostics?old_address={OLD}&current_v1_address={CORE}")
+    assert res.status_code == 400

@@ -80,10 +80,6 @@
     }
   }
 
-  function getAddress(){ return localStorage.getItem(V1_ADDRESS_KEY) || localStorage.getItem(ADDRESS_KEY) || ''; }
-  function setAddress(addr){ setItem(ADDRESS_KEY, addr ? addr.trim() : ''); }
-  function getSendSeed(){ return localStorage.getItem(SEND_SECRET_KEY) || localStorage.getItem(SEND_SEED_KEY) || localStorage.getItem(SEND_SEED_COMPAT_KEY) || ''; }
-  function setSendSeed(seed){ setItem(SEND_SECRET_KEY, seed ? seed.trim() : ''); setItem(SEND_SEED_KEY, seed ? seed.trim() : ''); setItem(SEND_SEED_COMPAT_KEY, seed ? seed.trim() : ''); }
   const getSendSecret = getSendSeed;
   const setSendSecret = setSendSeed;
   function getPin(){ return localStorage.getItem(PIN_KEY) || ''; }

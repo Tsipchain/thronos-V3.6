@@ -192,13 +192,6 @@ let poolPairs = [];
 let latestQuote = null;
 const KNOWN_BALANCE_SYMBOLS = ['THR', 'WBTC', 'L2E', 'JAM', 'LOUMIDIS', 'HPENNIS', 'CVT', '7CEB', 'MAR'];
 
-function getSwapActiveWalletAddress() {
-    if (typeof window.getActiveWalletAddress === 'function') return window.getActiveWalletAddress() || '';
-    if (window.walletSession && typeof walletSession.getActiveAddress === 'function') return walletSession.getActiveAddress() || '';
-    if (window.walletSession && typeof walletSession.getAddress === 'function') return walletSession.getAddress() || '';
-    return localStorage.getItem('thr_address') || '';
-}
-
 function setBalance(symbol, value) {
     if (!symbol) return;
     const normalized = symbol.toString().toUpperCase();
@@ -592,7 +585,7 @@ async function doSwap() {
         if (res.ok && data.status === 'success') {
             $('swapResult').style.color = '#0f0';
             $('swapResult').textContent = `✅ Swap Successful!\nTXID: ${data.tx_id}`;
-            await loadBalances(addr); // Refresh V1 active wallet UI
+            await loadBalances(addr);
             $('amountFrom').value = '';
             $('amountTo').value = '';
         } else {

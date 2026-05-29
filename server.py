@@ -32335,6 +32335,116 @@ def _delete_music_playlist(playlist_id: str, owner_address: str | None = None):
         conn.execute("DELETE FROM music_playlists WHERE id = ?", (playlist_id,))
     return True, ""
 
+
+
+def repair_music_wallet_bindings(old_address: str, new_v1_address: str) -> dict:
+    """Authoritative repair for live Decent Music playlist/offline stores."""
+    moved_refs = 0
+    playlist_moved = 0
+    offline_moved = 0
+    scanned_files = 0
+    repaired_files = 0
+    binding_fields = {
+        'wallet', 'wallet_address', 'thr_address', 'address',
+        'owner', 'owner_address', 'creator', 'creator_address',
+        'artist', 'artist_address', 'artist_wallet', 'uploader', 'uploader_address',
+        'payout_address', 'royalty_address', 'user_address', 'listener_address', 'from', 'to',
+    }
+
+    def rewrite(obj):
+        nonlocal moved_refs
+        if isinstance(obj, dict):
+            for k, v in list(obj.items()):
+                if k in binding_fields and v == old_address:
+                    obj[k] = new_v1_address
+                    moved_refs += 1
+                else:
+                    rewrite(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                rewrite(item)
+
+    def contains(obj):
+        if isinstance(obj, dict):
+            return any((k in binding_fields and v == old_address) or contains(v) for k, v in obj.items())
+        if isinstance(obj, list):
+            return any(contains(i) for i in obj)
+        return False
+
+    if USE_SQLITE_LEDGER:
+        scanned_files += 1
+        with _get_ledger_db_connection() as conn:
+            rows = conn.execute("SELECT id FROM music_playlists WHERE owner_address = ?", (old_address,)).fetchall()
+            playlist_ids = [row["id"] for row in rows]
+            for playlist_id in playlist_ids:
+                exists_new = conn.execute(
+                    "SELECT id FROM music_playlists WHERE id = ? AND owner_address = ?",
+                    (playlist_id, new_v1_address),
+                ).fetchone()
+                if exists_new:
+                    conn.execute("DELETE FROM music_playlists WHERE id = ? AND owner_address = ?", (playlist_id, old_address))
+                else:
+                    conn.execute(
+                        "UPDATE music_playlists SET owner_address = ? WHERE id = ? AND owner_address = ?",
+                        (new_v1_address, playlist_id, old_address),
+                    )
+                    playlist_moved += 1
+                    moved_refs += 1
+            if playlist_ids:
+                repaired_files += 1
+
+    scanned_files += 1
+    old_offline_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{old_address}_offline.json")
+    new_offline_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{new_v1_address}_offline.json")
+    old_offline = load_json(old_offline_file, {"tracks": []}) or {"tracks": []}
+    old_tracks = list(old_offline.get("tracks") or [])
+    if old_tracks:
+        new_offline = load_json(new_offline_file, {"tracks": []}) or {"tracks": []}
+        merged = list(new_offline.get("tracks") or [])
+        for item in old_tracks:
+            key = item.get("track_id") if isinstance(item, dict) else item
+            if isinstance(item, dict):
+                rewrite(item)
+            if not any((x.get("track_id") if isinstance(x, dict) else x) == key for x in merged):
+                merged.append(item)
+                offline_moved += 1
+                moved_refs += 1
+        new_offline["tracks"] = merged
+        if old_offline.get("updated_at"):
+            new_offline["updated_at"] = old_offline.get("updated_at")
+        save_json(new_offline_file, new_offline)
+        old_offline["tracks"] = []
+        old_offline["migrated_to"] = new_v1_address
+        save_json(old_offline_file, old_offline)
+        repaired_files += 1
+
+    scanned_files += 1
+    registry = load_music_registry()
+    before = json.dumps(registry, sort_keys=True)
+    rewrite(registry)
+    if json.dumps(registry, sort_keys=True) != before:
+        save_music_registry(registry)
+        repaired_files += 1
+
+    remaining_playlist = 0
+    if USE_SQLITE_LEDGER:
+        with _get_ledger_db_connection() as conn:
+            row = conn.execute("SELECT COUNT(*) AS c FROM music_playlists WHERE owner_address = ?", (old_address,)).fetchone()
+            remaining_playlist = int(row["c"] if row else 0)
+    remaining_offline = len((load_json(old_offline_file, {"tracks": []}) or {"tracks": []}).get("tracks") or [])
+    remaining_registry = 1 if contains(load_music_registry()) else 0
+    remaining = remaining_playlist + remaining_offline + remaining_registry
+    return {
+        "ok": remaining == 0,
+        "moved_refs": moved_refs,
+        "music_moved_count": moved_refs,
+        "music_playlist_moved_count": playlist_moved,
+        "music_offline_moved_count": offline_moved,
+        "music_scanned_files": scanned_files,
+        "music_repaired_files": repaired_files,
+        "remaining_old_music_binding_count": remaining,
+    }
+
 @app.route("/api/music/playlists/<wallet>", methods=["GET"])
 def api_music_get_playlists(wallet):
     """

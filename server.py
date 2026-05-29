@@ -10365,6 +10365,378 @@ def api_pool_rewards_alias():
 
 
 
+CORE_MINER_WALLET_DO_NOT_BIND = "THRa60e1cef9826da16a9b9c12f907614dacf49f74b"
+
+
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        if value in (None, ""):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _load_wallet_v1_migration_record(old_address: str, new_address: str) -> dict:
+    try:
+        from wallet_v1_migration import _load_map
+        rec = (_load_map() or {}).get(old_address) or {}
+        if isinstance(rec, dict) and rec.get("new_v1_address") == new_address:
+            return rec
+    except Exception:
+        pass
+    return {}
+
+
+def _first_numeric_from_record(record: dict, keys: tuple[str, ...]):
+    if not isinstance(record, dict):
+        return None
+    for key in keys:
+        if key in record and record.get(key) not in (None, ""):
+            return _safe_float(record.get(key))
+    for key in keys:
+        current = record
+        for part in key.split("."):
+            if not isinstance(current, dict) or part not in current:
+                current = None
+                break
+            current = current.get(part)
+        if current not in (None, ""):
+            return _safe_float(current)
+    return None
+
+
+def _tx_address_values(tx: dict, keys: tuple[str, ...]) -> set[str]:
+    out = set()
+    for key in keys:
+        value = tx.get(key)
+        if isinstance(value, str) and value:
+            out.add(value)
+    meta = tx.get("meta") if isinstance(tx.get("meta"), dict) else {}
+    metadata = tx.get("metadata") if isinstance(tx.get("metadata"), dict) else {}
+    for obj in (meta, metadata):
+        for key in keys:
+            value = obj.get(key)
+            if isinstance(value, str) and value:
+                out.add(value)
+    return out
+
+
+def _tx_is_pending(tx: dict) -> bool:
+    return str(tx.get("status") or "").lower() in {"pending", "queued", "mempool"} or bool(tx.get("pending"))
+
+
+def _tx_type_lower(tx: dict) -> str:
+    return str(tx.get("type") or tx.get("kind") or tx.get("category") or tx.get("event_type") or "").lower()
+
+
+def _tx_is_native_thr(tx: dict) -> bool:
+    symbol = tx.get("token") or tx.get("symbol") or tx.get("token_symbol") or tx.get("asset")
+    if symbol and _sanitize_asset_symbol(symbol) not in {"THR", ""}:
+        return False
+    t = _tx_type_lower(tx)
+    return not any(token in t for token in ("wbtc", "token_transfer", "token_mint", "token_burn"))
+
+
+def _tx_amount_value(tx: dict) -> float:
+    for key in ("amount", "amount_thr", "thr_amount", "value", "reward", "reward_thr"):
+        if key in tx:
+            return _safe_float(tx.get(key))
+    return 0.0
+
+
+def _liquidity_thr_amount_for_address(tx: dict, address: str) -> float:
+    if address not in _tx_address_values(tx, ("from", "to", "provider", "provider_thr", "wallet", "address")):
+        return 0.0
+    pool_event = tx.get("pool_event") if isinstance(tx.get("pool_event"), dict) else {}
+    amounts = tx.get("amounts") or pool_event.get("amounts")
+    total = 0.0
+    if isinstance(amounts, list):
+        for row in amounts:
+            if isinstance(row, dict) and _sanitize_asset_symbol(row.get("symbol") or row.get("token")) == "THR":
+                total += _safe_float(row.get("amount"))
+    if total:
+        return total
+    for token_key, amount_key in (("token_a", "amount_in"), ("token_b", "amount_out"), ("symbol_in", "amount_in"), ("symbol_in2", "amount_in2")):
+        if _sanitize_asset_symbol(tx.get(token_key)) == "THR":
+            total += _safe_float(tx.get(amount_key))
+    return total
+
+
+def _thr_transfer_amount_for_address(tx: dict, address: str, direction: str) -> float:
+    t = _tx_type_lower(tx)
+    if "liquidity" in t or "pool_add" in t or "pool_remove" in t:
+        amt = _liquidity_thr_amount_for_address(tx, address)
+        if direction == "out" and address in _tx_address_values(tx, ("from", "provider", "provider_thr")):
+            return amt
+        if direction == "in" and address in _tx_address_values(tx, ("to", "provider", "provider_thr")) and "remove" in t:
+            return amt
+        return 0.0
+    if not _tx_is_native_thr(tx):
+        return 0.0
+    amount = _tx_amount_value(tx)
+    if direction == "in" and address in _tx_address_values(tx, ("to", "recipient", "wallet", "address", "thr_address", "beneficiary")):
+        return amount
+    if direction == "out" and address in _tx_address_values(tx, ("from", "sender", "payer", "buyer", "provider", "trader")):
+        return amount
+    return 0.0
+
+
+def _reward_amount_for_address(tx: dict, address: str, reward_family: str) -> float:
+    t = _tx_type_lower(tx)
+    if reward_family == "mining" and not any(x in t for x in ("mining", "coinbase", "block_reward", "mint")):
+        return 0.0
+    if reward_family == "pool" and "pool" not in t:
+        return 0.0
+    if reward_family == "ai" and not ("ai" in t or "agent" in t or "pytheia" in t):
+        return 0.0
+    # Count rewards by recipient/owner fields only; a miner/core wallet appearing only as
+    # the block producer must not be mixed into a user's reconciliation.
+    recipient_fields = ("to", "recipient", "wallet", "address", "thr_address", "beneficiary", "provider_thr")
+    if address not in _tx_address_values(tx, recipient_fields):
+        return 0.0
+    return _tx_amount_value(tx)
+
+
+def _fee_burned_for_address(tx: dict, address: str) -> float:
+    payer_fields = ("from", "sender", "payer", "buyer", "provider", "provider_thr", "trader", "wallet", "address")
+    if address not in _tx_address_values(tx, payer_fields):
+        return 0.0
+    burned = 0.0
+    for key in ("fee_burned", "burned_thr", "burn_amount", "burned", "fee"):
+        burned += _safe_float(tx.get(key))
+    return burned
+
+
+def _pool_locked_thr_for_address(address: str) -> tuple[float, list[dict]]:
+    locked = 0.0
+    positions = []
+    for pool in load_pools() or []:
+        if not isinstance(pool, dict):
+            continue
+        providers = pool.get("providers") if isinstance(pool.get("providers"), dict) else {}
+        shares = _safe_float(providers.get(address))
+        total_shares = _safe_float(pool.get("total_shares"))
+        if shares <= 0 or total_shares <= 0:
+            continue
+        ratio = shares / total_shares
+        token_a = _sanitize_asset_symbol(pool.get("token_a"))
+        token_b = _sanitize_asset_symbol(pool.get("token_b"))
+        amount_a = round(_safe_float(pool.get("reserves_a")) * ratio, 6)
+        amount_b = round(_safe_float(pool.get("reserves_b")) * ratio, 6)
+        locked_thr = 0.0
+        if token_a == "THR":
+            locked_thr += amount_a
+        if token_b == "THR":
+            locked_thr += amount_b
+        if locked_thr <= 0:
+            continue
+        locked += locked_thr
+        positions.append({
+            "pool_id": pool.get("id"),
+            "token_a": token_a,
+            "token_b": token_b,
+            "user_shares": round(shares, 6),
+            "total_shares": round(total_shares, 6),
+            "share_percent": round(ratio * 100, 6),
+            "token_a_amount": amount_a,
+            "token_b_amount": amount_b,
+            "locked_thr": round(locked_thr, 6),
+        })
+    return round(locked, 6), positions
+
+
+def build_thr_reconciliation(old_address: str, new_address: str) -> dict:
+    ledger = load_json(LEDGER_FILE, {}) or {}
+    txs = _tx_feed(include_pending=True, include_bridge=True)
+    rec = _load_wallet_v1_migration_record(old_address, new_address)
+    old_current = _safe_float(ledger.get(old_address))
+    new_current = _safe_float(ledger.get(new_address))
+    moved_thr = _safe_float(rec.get("moved_thr_amount"))
+    migrated_thr = _safe_float(rec.get("migrated_thr_amount") or (rec.get("migration_tx") or {}).get("migrated_thr_amount"))
+    moved_thr_total = round(moved_thr + migrated_thr, 6)
+    repair_tx_ids = [v for v in (rec.get("repair_tx_id"), (rec.get("migration_tx") or {}).get("tx_id")) if v]
+    repair_events = []
+    if rec:
+        repair_events.append({
+            "source": "wallet_v1_migrations",
+            "status": rec.get("status"),
+            "migrated_thr_amount": migrated_thr,
+            "moved_thr_amount": moved_thr,
+            "repair_tx_id": rec.get("repair_tx_id"),
+            "assets_migrated": bool(rec.get("assets_migrated", False)),
+        })
+    for tx in txs:
+        if not isinstance(tx, dict):
+            continue
+        if _tx_type_lower(tx) == "wallet_v1_migration" and (
+            {old_address, new_address}
+            & _tx_address_values(tx, ("old_address", "new_v1_address", "from", "to", "wallet", "address"))
+        ):
+            repair_events.append(tx)
+            if tx.get("tx_id"):
+                repair_tx_ids.append(tx.get("tx_id"))
+    event_moved_thr = sum(
+        _safe_float(ev.get("moved_thr_amount") or ev.get("migrated_thr_amount"))
+        for ev in repair_events
+        if isinstance(ev, dict)
+    )
+    moved_thr_total = round(max(moved_thr_total, event_moved_thr), 6)
+
+    totals = {}
+    for label, address in (("old", old_address), ("new", new_address)):
+        totals[f"confirmed_incoming_thr_{label}"] = 0.0
+        totals[f"confirmed_outgoing_thr_{label}"] = 0.0
+        totals[f"pending_incoming_thr_{label}"] = 0.0
+        totals[f"pending_outgoing_thr_{label}"] = 0.0
+        totals[f"mining_rewards_to_{label}"] = 0.0
+        totals[f"pool_rewards_to_{label}"] = 0.0
+        totals[f"ai_rewards_to_{label}"] = 0.0
+        totals[f"fee_burned_from_{label}"] = 0.0
+        for tx in txs:
+            pending = _tx_is_pending(tx)
+            in_amt = _thr_transfer_amount_for_address(tx, address, "in")
+            out_amt = _thr_transfer_amount_for_address(tx, address, "out")
+            totals[("pending" if pending else "confirmed") + f"_incoming_thr_{label}"] += in_amt
+            totals[("pending" if pending else "confirmed") + f"_outgoing_thr_{label}"] += out_amt
+            if not pending:
+                totals[f"mining_rewards_to_{label}"] += _reward_amount_for_address(tx, address, "mining")
+                totals[f"pool_rewards_to_{label}"] += _reward_amount_for_address(tx, address, "pool")
+                totals[f"ai_rewards_to_{label}"] += _reward_amount_for_address(tx, address, "ai")
+            totals[f"fee_burned_from_{label}"] += _fee_burned_for_address(tx, address)
+    totals = {k: round(v, 6) for k, v in totals.items()}
+
+    pool_locked_old, positions_old = _pool_locked_thr_for_address(old_address)
+    pool_locked_new, positions_new = _pool_locked_thr_for_address(new_address)
+
+    old_pre = _first_numeric_from_record(rec, (
+        "old_pre_migration_thr_balance", "pre_migration.old_thr", "snapshot.old_thr", "old_thr_balance_before_migration",
+        "migrated_thr_amount", "migration_tx.migrated_thr_amount",
+    ))
+    new_pre_repair = _first_numeric_from_record(rec, (
+        "new_pre_repair_thr_balance", "pre_repair.new_thr", "snapshot.new_thr", "new_thr_balance_before_repair",
+    ))
+
+    mismatch_flags = []
+    if old_current > 0:
+        mismatch_flags.append("old_wallet_still_has_thr")
+    if moved_thr_total == 0 and old_pre and old_pre > 0:
+        mismatch_flags.append("old_pre_migration_thr_present_but_no_thr_moved")
+    has_pending_thr = any(
+        totals[key]
+        for key in (
+            "pending_incoming_thr_old", "pending_outgoing_thr_old",
+            "pending_incoming_thr_new", "pending_outgoing_thr_new",
+        )
+    )
+    if has_pending_thr:
+        mismatch_flags.append("pending_thr_activity_present")
+    if pool_locked_old or pool_locked_new:
+        mismatch_flags.append("thr_locked_in_liquidity_positions")
+    total_burn = round(totals["fee_burned_from_old"] + totals["fee_burned_from_new"], 6)
+    if total_burn:
+        mismatch_flags.append("wallet_related_fee_burn_detected")
+    if old_address == CORE_MINER_WALLET_DO_NOT_BIND or new_address == CORE_MINER_WALLET_DO_NOT_BIND:
+        mismatch_flags.append("core_miner_wallet_explicitly_requested")
+
+    suspected = 0.0
+    if old_pre is not None:
+        suspected = max(round(old_pre - moved_thr_total - old_current - pool_locked_old - totals["fee_burned_from_old"], 6), 0.0)
+    else:
+        old_net = totals["confirmed_incoming_thr_old"] - totals["confirmed_outgoing_thr_old"] - totals["fee_burned_from_old"]
+        suspected = max(round(old_net - old_current - moved_thr_total - pool_locked_old, 6), 0.0)
+    if suspected > 0:
+        mismatch_flags.append("suspected_missing_thr")
+
+    explanation = "Read-only THR reconciliation only; no balances were mutated."
+    if suspected > 0:
+        explanation += " Confirmed ledger/migration evidence suggests native THR may be missing from the migrated wallet."
+    if pool_locked_old or pool_locked_new:
+        explanation += " Some THR is accounted for as liquidity-pool locked value, not spendable wallet balance."
+    if total_burn:
+        explanation += " Wallet-related burned fees are separated from transferable balance."
+    if CORE_MINER_WALLET_DO_NOT_BIND not in {old_address, new_address}:
+        explanation += " The known core/miner wallet is ignored unless explicitly supplied as old_address or new_address."
+
+    return {
+        "ok": True,
+        "old_address": old_address,
+        "new_address": new_address,
+        "old_current_thr_balance": round(old_current, 6),
+        "new_current_thr_balance": round(new_current, 6),
+        "old_pre_migration_thr_balance_if_available": old_pre,
+        "new_pre_repair_thr_balance_if_available": new_pre_repair,
+        "moved_thr_amount_from_repair_records": moved_thr_total,
+        "repair_tx_ids": sorted(set(repair_tx_ids)),
+        "repair_events": repair_events,
+        **totals,
+        "pool_locked_thr_old": pool_locked_old,
+        "pool_locked_thr_new": pool_locked_new,
+        "liquidity_positions_old": positions_old,
+        "liquidity_positions_new": positions_new,
+        "total_burn_related_to_wallets": total_burn,
+        "native_ledger_source_used": str(LEDGER_FILE),
+        "balance_source_used": "LEDGER_FILE",
+        "mismatch_flags": sorted(set(mismatch_flags)),
+        "suspected_missing_thr_amount": suspected,
+        "explanation": explanation,
+    }
+
+
+@app.route("/api/v1/wallet/thr-reconciliation")
+def api_wallet_thr_reconciliation():
+    old_address = (request.args.get("old_address") or "").strip()
+    new_address = (request.args.get("new_address") or "").strip()
+    if not old_address or not new_address:
+        return jsonify({"ok": False, "error": "old_address_and_new_address_required"}), 400
+    return jsonify(build_thr_reconciliation(old_address, new_address)), 200
+
+
+@app.route("/api/v1/wallet/thr-reconciliation/repair", methods=["POST"])
+def api_wallet_thr_reconciliation_repair():
+    data = request.get_json(silent=True) or {}
+    denied = require_admin(data)
+    if denied is not None:
+        return denied
+    dry_run = data.get("dry_run", True)
+    if str(dry_run).lower() not in {"true", "1", "yes"} and dry_run is not True:
+        return jsonify({"ok": False, "error": "only_dry_run_supported"}), 400
+    old_address = (data.get("old_address") or request.args.get("old_address") or "").strip()
+    new_address = (data.get("new_address") or request.args.get("new_address") or "").strip()
+    if not old_address or not new_address:
+        return jsonify({"ok": False, "error": "old_address_and_new_address_required"}), 400
+    diag = build_thr_reconciliation(old_address, new_address)
+    proposed_amount = diag.get("suspected_missing_thr_amount", 0.0)
+    proposal = {
+        "ok": True,
+        "dry_run": True,
+        "mutation_performed": False,
+        "old_address": old_address,
+        "new_address": new_address,
+        "proposed_restore_amount": proposed_amount,
+        "source_ledger_or_event": diag.get("repair_events") or diag.get("native_ledger_source_used"),
+        "reason": "suspected_missing_thr" if proposed_amount else "no_provable_missing_thr",
+        "classification": {
+            "pending": bool(any(
+                diag.get(key)
+                for key in (
+                    "pending_incoming_thr_old", "pending_outgoing_thr_old",
+                    "pending_incoming_thr_new", "pending_outgoing_thr_new",
+                )
+            )),
+            "locked": bool(diag.get("pool_locked_thr_old") or diag.get("pool_locked_thr_new")),
+            "burned": bool(diag.get("total_burn_related_to_wallets")),
+            "truly_missing": bool(proposed_amount and not (
+                diag.get("pool_locked_thr_old")
+                or diag.get("pending_incoming_thr_old")
+                or diag.get("pending_outgoing_thr_old")
+            )),
+        },
+        "diagnostics": diag,
+    }
+    return jsonify(proposal), 200
+
+
 @app.route("/api/last_hash")
 def api_last_hash():
     return last_block_hash()

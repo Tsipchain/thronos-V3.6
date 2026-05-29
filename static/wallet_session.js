@@ -20,10 +20,61 @@
   function isBound(){ return localStorage.getItem(BOUND_KEY) === '1'; }
   function isLocked(){ return localStorage.getItem(LOCK_KEY) === '1'; }
 
+  function normalizeAddress(addr){ return (addr || '').toString().trim(); }
   function getAddress(){ return localStorage.getItem(V1_ADDRESS_KEY) || localStorage.getItem(ADDRESS_KEY) || ''; }
-  function setAddress(addr){ setItem(ADDRESS_KEY, addr ? addr.trim() : ''); }
-  function getSendSeed(){ return localStorage.getItem(SEND_SECRET_KEY) || localStorage.getItem(SEND_SEED_KEY) || localStorage.getItem(SEND_SEED_COMPAT_KEY) || ''; }
-  function setSendSeed(seed){ setItem(SEND_SECRET_KEY, seed ? seed.trim() : ''); setItem(SEND_SEED_KEY, seed ? seed.trim() : ''); setItem(SEND_SEED_COMPAT_KEY, seed ? seed.trim() : ''); }
+  function setAddress(addr){ setItem(ADDRESS_KEY, normalizeAddress(addr)); }
+
+  function getScopedCredential(address){
+    const addr = normalizeAddress(address);
+    if (!addr) return '';
+    const scopedKeys = [
+      `wallet_v1_send_secret:${addr}`,
+      `wallet_v1_send_seed:${addr}`,
+      `wallet_v1_secret:${addr}`,
+      `${SEND_SECRET_KEY}:${addr}`,
+      `${SEND_SEED_KEY}:${addr}`,
+      `${SEND_SEED_COMPAT_KEY}:${addr}`,
+      `wallet_v1_send_secret_${addr}`,
+      `wallet_v1_send_seed_${addr}`,
+      `${SEND_SECRET_KEY}_${addr}`,
+      `${SEND_SEED_KEY}_${addr}`,
+      `${SEND_SEED_COMPAT_KEY}_${addr}`
+    ];
+    for (const key of scopedKeys) {
+      const value = localStorage.getItem(key);
+      if (value) return value;
+    }
+    for (const key of ['wallet_v1_credentials', 'wallet_credentials', 'thr_wallet_credentials']) {
+      try {
+        const credentials = JSON.parse(localStorage.getItem(key) || '{}');
+        const record = credentials[addr] || credentials[addr.toLowerCase?.()] || null;
+        const value = typeof record === 'string' ? record : (record && (record.send_secret || record.sendSeed || record.send_seed || record.thr_secret));
+        if (value) return value;
+      } catch (_) {}
+    }
+    return '';
+  }
+
+  function getSendSeed(address){
+    const activeAddress = normalizeAddress(address || getAddress());
+    const migration = getMigrationInfo();
+    return getScopedCredential(activeAddress)
+      || getScopedCredential(migration.new_v1_address)
+      || getScopedCredential(migration.old_address)
+      || localStorage.getItem(SEND_SECRET_KEY)
+      || localStorage.getItem(SEND_SEED_KEY)
+      || localStorage.getItem(SEND_SEED_COMPAT_KEY)
+      || '';
+  }
+
+  function setSendSeed(seed, address){
+    const value = seed ? seed.trim() : '';
+    setItem(SEND_SECRET_KEY, value);
+    setItem(SEND_SEED_KEY, value);
+    setItem(SEND_SEED_COMPAT_KEY, value);
+    const addr = normalizeAddress(address || getAddress());
+    if (addr) setItem(`${SEND_SECRET_KEY}:${addr}`, value);
+  }
   const getSendSecret = getSendSeed;
   const setSendSecret = setSendSeed;
   function getPin(){ return localStorage.getItem(PIN_KEY) || ''; }

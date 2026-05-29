@@ -793,6 +793,31 @@
 let allPools = [];
 let selectedLockDays = 0;
 
+function getPoolActiveWalletAddress() {
+    if (typeof window.getActiveWalletAddress === 'function') return window.getActiveWalletAddress() || '';
+    if (window.walletSession && typeof walletSession.getActiveAddress === 'function') return walletSession.getActiveAddress() || '';
+    if (window.walletSession && typeof walletSession.getAddress === 'function') return walletSession.getAddress() || '';
+    return localStorage.getItem('thr_address') || '';
+}
+
+async function requirePoolWalletAuth(action, txCore) {
+    if (!window.WalletAuth || typeof WalletAuth.requireUnlockedWallet !== 'function') {
+        throw new Error('missing_wallet_signing_material');
+    }
+    const wallet = await WalletAuth.requireUnlockedWallet();
+    const publicKey = wallet.getPublicKey();
+    const signature = await wallet.signTransaction(txCore);
+    return {
+        provider_thr: wallet.address,
+        credential_lookup_address: wallet.credentialLookupAddress || wallet.address,
+        public_key: publicKey,
+        signed_tx: { ...txCore, public_key: publicKey, signature },
+        signature,
+        auth_secret: wallet.authSecret || '',
+        action
+    };
+}
+
 // Tab Management
 function showTab(tabName) {
     // Hide all tabs
@@ -947,8 +972,8 @@ function renderPools(pools, containerId) {
 
 // Render my pools - Enhanced version with positions
 async function renderMyPools() {
-    const wallet = walletSession.getAddress();
-    if (!wallet || !walletSession.isBound()) {
+    const wallet = getPoolActiveWalletAddress();
+    if (!wallet || (walletSession.isBound && !walletSession.isBound())) {
         document.getElementById('myPoolsEmpty').style.display = 'block';
         document.getElementById('portfolioSummary').style.display = 'none';
         document.getElementById('referralSection').style.display = 'none';
@@ -1154,7 +1179,8 @@ async function loadTokenOptions() {
 }
 
 async function getWalletBalanceMap(wallet) {
-    const res = await fetch(`/api/balances?address=${encodeURIComponent(wallet)}&show_zero=true`);
+    const activeWallet = wallet || getPoolActiveWalletAddress();
+    const res = await fetch(`/api/balances?address=${encodeURIComponent(activeWallet)}&show_zero=true`);
     if (!res.ok) {
         throw new Error('Wallet not connected');
     }
@@ -1183,18 +1209,15 @@ async function submitCreatePool(event) {
     const tokenB = document.getElementById('poolTokenB').value;
     const amountA = parseFloat(document.getElementById('poolAmountA').value);
     const amountB = parseFloat(document.getElementById('poolAmountB').value);
-    const provider = walletSession.getAddress();
-    const secret = walletSession.getSendSeed();
+    const provider = getPoolActiveWalletAddress();
     const messageDiv = document.getElementById('createPoolMessage');
 
-    if (!provider || !secret || !walletSession.isBound()) {
+    if (!provider || (walletSession.isBound && !walletSession.isBound())) {
         messageDiv.className = 'form-message error';
         messageDiv.textContent = 'Wallet not connected';
         messageDiv.style.display = 'block';
         return;
     }
-
-    if(!walletSession.requirePin('create pool')) return;
 
     if (tokenA === tokenB) {
         messageDiv.className = 'form-message error';
@@ -1225,17 +1248,30 @@ async function submitCreatePool(event) {
         return;
     }
 
-    const payload = {
-        token_a: tokenA,
-        token_b: tokenB,
-        amount_a: amountA,
-        amount_b: amountB,
-        provider_thr: provider,
-        auth_secret: secret,
-        lock_days: selectedLockDays
+    const txCore = {
+        from: provider,
+        to: 'POOL_CREATE',
+        amount: { token_a: tokenA, amount_a: amountA, token_b: tokenB, amount_b: amountB },
+        token: `${tokenA}/${tokenB}`,
+        nonce: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        timestamp: new Date().toISOString()
     };
 
     try {
+        const auth = await requirePoolWalletAuth('create pool', txCore);
+        const payload = {
+            token_a: tokenA,
+            token_b: tokenB,
+            amount_a: amountA,
+            amount_b: amountB,
+            provider_thr: auth.provider_thr,
+            credential_lookup_address: auth.credential_lookup_address,
+            public_key: auth.public_key,
+            signed_tx: auth.signed_tx,
+            signature: auth.signature,
+            auth_secret: auth.auth_secret,
+            lock_days: selectedLockDays
+        };
         const response = await fetch('/api/v1/pools', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1283,8 +1319,8 @@ async function addLiquidity(poolId) {
         return;
     }
 
-    const wallet = walletSession.getAddress();
-    if (!wallet || !walletSession.isBound()) {
+    const wallet = getPoolActiveWalletAddress();
+    if (!wallet || (walletSession.isBound && !walletSession.isBound())) {
         alert('Wallet not connected');
         return;
     }
@@ -1306,11 +1342,6 @@ async function addLiquidity(poolId) {
     if (!amountBInput || isNaN(amountBInput) || parseFloat(amountBInput) <= 0) return;
     const amountB = amountBInput;
 
-    const authSecret = walletSession.getSendSeed() || prompt('Enter your auth secret:');
-    if (!authSecret) return;
-
-    if(!walletSession.requirePin('add liquidity')) return;
-
     try {
         const balances = await getWalletBalanceMap(wallet);
         if ((balances[pool.token_a] || 0) < parseFloat(amountA) || (balances[pool.token_b] || 0) < parseFloat(amountB)) {
@@ -1325,6 +1356,15 @@ async function addLiquidity(poolId) {
     try {
         // Check for referrer in localStorage
         const referrer = localStorage.getItem('pool_referrer') || '';
+        const txCore = {
+            from: wallet,
+            to: poolId,
+            amount: { amount_a: parseFloat(amountA), amount_b: parseFloat(amountB) },
+            token: `${pool.token_a}/${pool.token_b}`,
+            nonce: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            timestamp: new Date().toISOString()
+        };
+        const auth = await requirePoolWalletAuth('add liquidity', txCore);
 
         const response = await fetch('/api/v1/pools/add_liquidity', {
             method: 'POST',
@@ -1333,8 +1373,12 @@ async function addLiquidity(poolId) {
                 pool_id: poolId,
                 amount_a: parseFloat(amountA),
                 amount_b: parseFloat(amountB),
-                provider_thr: wallet,
-                auth_secret: authSecret,
+                provider_thr: auth.provider_thr,
+                credential_lookup_address: auth.credential_lookup_address,
+                public_key: auth.public_key,
+                signed_tx: auth.signed_tx,
+                signature: auth.signature,
+                auth_secret: auth.auth_secret,
                 passphrase: '',
                 referrer: referrer  // Include referrer if available
             })
@@ -1369,8 +1413,8 @@ async function removeLiquidity(poolId) {
         return;
     }
 
-    const wallet = walletSession.getAddress();
-    if (!wallet || !walletSession.isBound()) {
+    const wallet = getPoolActiveWalletAddress();
+    if (!wallet || (walletSession.isBound && !walletSession.isBound())) {
         alert('Wallet not connected');
         return;
     }
@@ -1390,20 +1434,29 @@ async function removeLiquidity(poolId) {
         return;
     }
 
-    const authSecret = walletSession.getSendSeed() || prompt('Enter your auth secret:');
-    if (!authSecret) return;
-
-    if(!walletSession.requirePin('remove liquidity')) return;
-
     try {
+        const txCore = {
+            from: wallet,
+            to: poolId,
+            amount: parseFloat(shares),
+            token: 'POOL_SHARES',
+            nonce: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            timestamp: new Date().toISOString()
+        };
+        const auth = await requirePoolWalletAuth('remove liquidity', txCore);
+
         const response = await fetch('/api/v1/pools/remove_liquidity', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 pool_id: poolId,
                 shares: parseFloat(shares),
-                provider_thr: wallet,
-                auth_secret: authSecret,
+                provider_thr: auth.provider_thr,
+                credential_lookup_address: auth.credential_lookup_address,
+                public_key: auth.public_key,
+                signed_tx: auth.signed_tx,
+                signature: auth.signature,
+                auth_secret: auth.auth_secret,
                 passphrase: ''
             })
         });

@@ -190,10 +190,74 @@ let swapTokenBalances = {};
 let availableTokens = [];
 let poolPairs = [];
 let latestQuote = null;
+const KNOWN_BALANCE_SYMBOLS = ['THR', 'WBTC', 'L2E', 'JAM', 'LOUMIDIS', 'HPENNIS', 'CVT', '7CEB', 'MAR'];
+
+function getSwapActiveWalletAddress() {
+    if (typeof window.getActiveWalletAddress === 'function') return window.getActiveWalletAddress() || '';
+    if (window.walletSession && typeof walletSession.getActiveAddress === 'function') return walletSession.getActiveAddress() || '';
+    if (window.walletSession && typeof walletSession.getAddress === 'function') return walletSession.getAddress() || '';
+    return localStorage.getItem('thr_address') || '';
+}
+
+function setBalance(symbol, value) {
+    if (!symbol) return;
+    const normalized = symbol.toString().toUpperCase();
+    const amount = Number(value);
+    swapTokenBalances[normalized] = Number.isFinite(amount) ? amount : 0;
+}
+
+function absorbBalanceMap(map) {
+    if (!map || typeof map !== 'object' || Array.isArray(map)) return;
+    Object.entries(map).forEach(([symbol, value]) => {
+        if (value && typeof value === 'object') {
+            setBalance(value.symbol || symbol, value.balance ?? value.amount ?? value.value ?? 0);
+        } else {
+            setBalance(symbol, value);
+        }
+    });
+}
+
+function parseBalancePayload(data) {
+    swapTokenBalances = {};
+    KNOWN_BALANCE_SYMBOLS.forEach(symbol => { swapTokenBalances[symbol] = 0; });
+    if (Array.isArray(data.tokens)) {
+        data.tokens.forEach(t => setBalance(t.symbol, t.balance ?? t.amount ?? 0));
+    }
+    absorbBalanceMap(data.balances);
+    absorbBalanceMap(data.token_balances);
+    absorbBalanceMap(data.tokens_by_symbol);
+    if (typeof data.balance !== 'undefined') setBalance('THR', data.balance);
+    if (typeof data.thr_balance !== 'undefined') setBalance('THR', data.thr_balance);
+    if (typeof data.wbtc_balance !== 'undefined') setBalance('WBTC', data.wbtc_balance);
+    if (typeof data.l2e_balance !== 'undefined') setBalance('L2E', data.l2e_balance);
+    if (typeof data.jam_balance !== 'undefined') setBalance('JAM', data.jam_balance);
+    KNOWN_BALANCE_SYMBOLS.forEach(symbol => {
+        if (typeof data[symbol] !== 'undefined') setBalance(symbol, data[symbol]);
+        if (typeof data[symbol.toLowerCase()] !== 'undefined') setBalance(symbol, data[symbol.toLowerCase()]);
+    });
+    return swapTokenBalances;
+}
+
+async function requireSwapWalletAuth(txCore) {
+    if (!window.WalletAuth || typeof WalletAuth.requireUnlockedWallet !== 'function') {
+        throw new Error('missing_wallet_signing_material');
+    }
+    const wallet = await WalletAuth.requireUnlockedWallet();
+    const publicKey = wallet.getPublicKey();
+    const signature = await wallet.signTransaction(txCore);
+    return {
+        trader_thr: wallet.address,
+        credential_lookup_address: wallet.credentialLookupAddress || wallet.address,
+        public_key: publicKey,
+        signed_tx: { ...txCore, public_key: publicKey, signature },
+        signature,
+        auth_secret: wallet.authSecret || ''
+    };
+}
 
 document.addEventListener('DOMContentLoaded', async () => {
-    const addr = walletSession.getAddress();
-    if (!addr || !walletSession.isBound()) {
+    const addr = getSwapActiveWalletAddress();
+    if (!addr || (walletSession.isBound && !walletSession.isBound())) {
         $('walletWarning').style.display = 'block';
         $('swapBtn').disabled = true;
         $('swapBtn').textContent = "Connect Wallet";
@@ -206,14 +270,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 async function loadBalances(addr) {
     try {
-        const res = await fetch(`/api/balances?address=${encodeURIComponent(addr)}&show_zero=true`);
+        const activeAddress = addr || getSwapActiveWalletAddress();
+        const res = await fetch(`/api/balances?address=${encodeURIComponent(activeAddress)}&show_zero=true`);
         const data = await res.json();
-        swapTokenBalances = {};
-        if (data.tokens) {
-            data.tokens.forEach(t => {
-                swapTokenBalances[t.symbol] = Number(t.balance || 0);
-            });
-        }
+        parseBalancePayload(data || {});
         updateBalanceDisplays();
     } catch (e) {
         console.error("Load balance error:", e);
@@ -235,7 +295,7 @@ async function loadSwapCatalog() {
             poolPairs.push([pool.token_a.toUpperCase(), pool.token_b.toUpperCase()]);
         }
     });
-    availableTokens = Array.from(poolTokens).filter(sym => registry.has(sym));
+    availableTokens = Array.from(poolTokens).filter(sym => registry.has(sym) || KNOWN_BALANCE_SYMBOLS.includes(sym));
     availableTokens.sort();
 
     const selectFrom = $('symbolFrom');
@@ -369,18 +429,15 @@ async function calcTo() {
 }
 
 async function doSwap() {
-    const addr = walletSession.getAddress();
-    const secret = walletSession.getSendSeed();
+    const addr = getSwapActiveWalletAddress();
     const amount = parseFloat($('amountFrom').value);
     const tokenIn = $('symbolFrom').value;
     const tokenOut = $('symbolTo').value;
 
-    if (!addr || !secret || !walletSession.isBound()) {
+    if (!addr || (walletSession.isBound && !walletSession.isBound())) {
         alert("Wallet not connected");
         return;
     }
-
-    if(!walletSession.requirePin('swap')) return;
     
     if (!amount || amount <= 0) {
         alert("Enter a valid amount.");
@@ -396,12 +453,25 @@ async function doSwap() {
     $('swapResult').textContent = "";
     
     try {
+        const txCore = {
+            from: addr,
+            to: 'SWAP_EXECUTE',
+            amount,
+            token: tokenIn,
+            nonce: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            timestamp: new Date().toISOString()
+        };
+        const auth = await requireSwapWalletAuth(txCore);
         const res = await fetch('/api/swap/execute', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
-                trader_thr: addr,
-                auth_secret: secret,
+                trader_thr: auth.trader_thr,
+                credential_lookup_address: auth.credential_lookup_address,
+                public_key: auth.public_key,
+                signed_tx: auth.signed_tx,
+                signature: auth.signature,
+                auth_secret: auth.auth_secret,
                 token_in: tokenIn,
                 token_out: tokenOut,
                 amount_in: amount,
@@ -419,7 +489,7 @@ async function doSwap() {
         if (res.ok && data.status === 'success') {
             $('swapResult').style.color = '#0f0';
             $('swapResult').textContent = `✅ Swap Successful!\nTXID: ${data.tx_id}`;
-            await loadBalances(addr); // Refresh UI
+            await loadBalances(auth.trader_thr); // Refresh UI
             $('amountFrom').value = '';
             $('amountTo').value = '';
         } else {

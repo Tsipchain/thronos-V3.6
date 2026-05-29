@@ -2,29 +2,106 @@
 (function(window) {
   'use strict';
 
+  function fail(code) {
+    const err = new Error(code);
+    err.code = code.toUpperCase();
+    throw err;
+  }
+
+  function getMigrationInfo() {
+    try {
+      return window.walletSession && typeof window.walletSession.getMigrationInfo === 'function'
+        ? (window.walletSession.getMigrationInfo() || {})
+        : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function resolveActiveWalletAddress() {
+    if (typeof window.getActiveWalletAddress === 'function') {
+      const active = window.getActiveWalletAddress();
+      if (active) return active;
+    }
+    if (window.walletSession && typeof window.walletSession.getActiveAddress === 'function') {
+      const active = window.walletSession.getActiveAddress();
+      if (active) return active;
+    }
+    if (window.walletSession && typeof window.walletSession.getAddress === 'function') {
+      const active = window.walletSession.getAddress();
+      if (active) return active;
+    }
+    return localStorage.getItem('thr_address') || '';
+  }
+
+  function resolveCredentialLookupAddress(activeAddress) {
+    const info = getMigrationInfo();
+    return info.old_address || info.new_v1_address || activeAddress || '';
+  }
+
+  function resolveAuthSecret(lookupAddress, activeAddress) {
+    if (!window.walletSession || typeof window.walletSession.getSendSeed !== 'function') return '';
+    return window.walletSession.getSendSeed(lookupAddress)
+      || window.walletSession.getSendSeed(activeAddress)
+      || '';
+  }
+
   const WalletAuth = {
+    resolveActiveWalletAddress,
+    resolveCredentialLookupAddress,
+
     async requireUnlockedWallet() {
-      if (!window.walletSession) {
-        const err = new Error('wallet_session_missing'); err.code = 'WALLET_SESSION_MISSING'; throw err;
-      }
-      const address = window.walletSession.getAddress();
+      if (!window.walletSession) fail('wallet_session_missing');
+
+      let address = resolveActiveWalletAddress();
       if (!address) {
-        const err = new Error('Wallet not connected.'); err.code = 'WALLET_NOT_CONNECTED'; throw err;
+        const err = new Error('Wallet not connected.');
+        err.code = 'WALLET_NOT_CONNECTED';
+        throw err;
       }
+
       if (window.walletSession.isLocked && window.walletSession.isLocked()) {
         const pin = prompt('🔐 PIN (unlock Wallet V1):');
-        if (!pin) { const err = new Error('Wallet locked'); err.code = 'WALLET_LOCKED'; throw err; }
+        if (!pin) {
+          const err = new Error('Wallet locked');
+          err.code = 'WALLET_LOCKED';
+          throw err;
+        }
         const ok = await window.walletSession.unlockWallet({ pin, prompt: false });
-        if (!ok) { const err = new Error('Unlock failed'); err.code = 'UNLOCK_FAILED'; throw err; }
+        if (!ok) {
+          const err = new Error('Unlock failed');
+          err.code = 'UNLOCK_FAILED';
+          throw err;
+        }
+        address = resolveActiveWalletAddress() || address;
       }
+
+      const publicKey = window.walletSession.getPublicKey && window.walletSession.getPublicKey();
+      if (!publicKey || typeof window.walletSession.signTransaction !== 'function') {
+        fail('missing_wallet_signing_material');
+      }
+
+      const credentialLookupAddress = resolveCredentialLookupAddress(address);
+      const authSecret = resolveAuthSecret(credentialLookupAddress, address);
+
       return {
         address,
-        getPublicKey: () => window.walletSession.getPublicKey(),
-        signTransaction: (txCore) => window.walletSession.signTransaction(txCore)
+        authSecret,
+        credentialLookupAddress,
+        getPublicKey: () => publicKey,
+        signTransaction: async (txCore) => {
+          if (!txCore || typeof txCore !== 'object') fail('missing_wallet_signing_material');
+          try {
+            return await window.walletSession.signTransaction(txCore);
+          } catch (err) {
+            if (err && err.message === 'wallet_locked') throw err;
+            fail('missing_wallet_signing_material');
+          }
+        }
       };
     },
     isUnlocked() { return !!(window.walletSession && !window.walletSession.isLocked()); },
-    getAddress() { return window.walletSession?.getAddress?.() || null; },
+    getAddress() { return resolveActiveWalletAddress() || null; },
     lock() { if (window.walletSession?.lockWallet) window.walletSession.lockWallet(); },
     _autoLockTimer: null,
     _autoLockTimeout: 5 * 60 * 1000,

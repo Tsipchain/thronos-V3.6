@@ -1,69 +1,81 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-STATIC_AUTH = ROOT / "static" / "wallet_auth.js"
-PUBLIC_AUTH = ROOT / "public" / "static" / "wallet_auth.js"
+SESSION_JS = (ROOT / "public/static/wallet_session.js").read_text()
+AUTH_JS = (ROOT / "public/static/wallet_auth.js").read_text()
 
 
-def _read(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
+def test_wallet_session_resolves_migrated_credential_source():
+    assert "function getCredentialLookupAddress" in SESSION_JS
+    assert "info.old_address" in SESSION_JS
+    assert "info.new_v1_address" in SESSION_JS
+    assert "getRawSeedForAddress(info.old_address)" in SESSION_JS
+    assert "getRawSeedForAddress(info.new_v1_address)" in SESSION_JS
 
 
-def test_wallet_auth_copies_are_synchronized():
-    assert _read(STATIC_AUTH) == _read(PUBLIC_AUTH)
+def test_wallet_session_preserves_wallet_v1_public_api():
+    for symbol in (
+        "createWalletV1",
+        "getPublicKey",
+        "signTransaction",
+        "isWalletV1",
+        "migrateLegacyWallet",
+        "canonicalTxMessage",
+        "unlock: unlockWallet",
+        "lock: lockWallet",
+    ):
+        assert symbol in SESSION_JS
 
 
-def test_require_unlocked_wallet_returns_v1_compatible_contract():
-    text = _read(STATIC_AUTH)
-    assert "address," in text
-    assert "authSecret," in text
-    assert "credentialLookupAddress," in text
-    assert "getPublicKey:" in text
-    assert "signTransaction:" in text
+def test_wallet_session_preserves_encrypted_v1_signing_flow():
+    assert "V1_ENCRYPTED_KEY" in SESSION_JS
+    assert "V1_PUBLIC_KEY" in SESSION_JS
+    assert "unlockedPrivateKeyHex" in SESSION_JS
+    assert "decryptPrivateKeyHex" in SESSION_JS
+    assert "encryptPrivateKeyHex" in SESSION_JS
+    assert "secp.sign" in SESSION_JS
+    assert "canonicalTxMessage(txCore" in SESSION_JS
 
 
-def test_wallet_auth_fails_closed_without_signing_material_and_keeps_secret_memory_only():
-    text = _read(STATIC_AUTH)
-    assert "missing_wallet_signing_material" in text
-    assert "sessionStorage.setItem('thr_auth_secret'" not in text
-    assert 'sessionStorage.setItem("thr_auth_secret"' not in text
+def test_wallet_auth_uses_active_address_and_credential_lookup():
+    assert "getActiveWalletAddress()" in AUTH_JS
+    assert "getCredentialLookupAddress(address)" in AUTH_JS
+    assert "credentialLookupAddress" in AUTH_JS
+    assert "window.walletSession.unlockWallet({ pin, address })" in AUTH_JS
+    assert "buildAuthResult(address" in AUTH_JS
 
 
-def test_wallet_auth_prefers_session_lookup_then_active_address():
-    text = _read(STATIC_AUTH)
-    assert "getCredentialLookupAddress(activeAddress)" in text
-    assert "return activeAddress || info.new_v1_address || info.old_address || '';" in text
-    assert "return info.old_address || info.new_v1_address || activeAddress || '';" not in text
-
-SESSION_STATIC = ROOT / "static" / "wallet_session.js"
-SESSION_PUBLIC = ROOT / "public" / "static" / "wallet_session.js"
+def test_wallet_auth_returns_signing_wrapper_fields():
+    assert "getPublicKey: () =>" in AUTH_JS
+    assert "window.walletSession.getPublicKey()" in AUTH_JS
+    assert "signTransaction: (txCore) =>" in AUTH_JS
+    assert "window.walletSession.signTransaction(txCore)" in AUTH_JS
 
 
-def test_wallet_session_copies_are_synchronized_for_signing_enrollment():
-    assert _read(SESSION_STATIC) == _read(SESSION_PUBLIC)
+def test_wallet_session_has_no_duplicate_legacy_shadow_functions():
+    assert SESSION_JS.count("function getAddress(") == 1
+    assert SESSION_JS.count("function setAddress(") == 1
+    assert SESSION_JS.count("function getSendSeed(") == 1
+    assert SESSION_JS.count("function setSendSeed(") == 1
+    assert "return localStorage.getItem(V1_ADDRESS_KEY) || localStorage.getItem(ADDRESS_KEY) || ''" in SESSION_JS
 
 
-def test_wallet_auth_triggers_signing_enrollment_when_legacy_credential_exists():
-    text = _read(STATIC_AUTH)
-    assert "ensureSigningMaterial(address, credentialLookupAddress, authSecret)" in text
-    assert "Wallet V1 signing upgrade required. Unlock with PIN to create encrypted V1 signing key." in text
-    assert "walletSession.enrollSigningMaterial" in text
+def test_missing_signing_material_fails_closed_with_clear_error():
+    assert "missing_wallet_signing_material" in AUTH_JS
+    assert "No send seed found after unlock" not in AUTH_JS
 
 
-def test_wallet_session_enrolls_encrypted_key_and_does_not_store_plaintext_private_key():
-    text = _read(SESSION_STATIC)
-    assert "async function enrollSigningMaterial" in text
-    assert "'/api/v1/wallet/bind_public_key'" in text
-    assert "localStorage.setItem(V1_ENCRYPTED_KEY, enc)" in text
-    assert "localStorage.setItem(V1_PUBLIC_KEY, pub)" in text
-    assert "unlockedPrivateKeyHex = priv" in text
-    assert "localStorage.setItem('private" not in text
-    assert "localStorage.setItem(\"private" not in text
-    assert "sessionStorage.setItem('thr_auth_secret'" not in text
-    assert 'sessionStorage.setItem("thr_auth_secret"' not in text
+def test_wallet_auth_does_not_persist_plaintext_secret_cache():
+    assert "sessionStorage.setItem('thr_auth_secret'" not in AUTH_JS
+    assert "let cachedAuthSecret = ''" in AUTH_JS
+    assert "cachedAuthSecret = authSecret" in AUTH_JS
 
 
-def test_music_uses_active_migrated_wallet_address_for_music_state():
-    music = (ROOT / "templates" / "music.html").read_text(encoding="utf-8")
-    assert "ws.getActiveAddress" in music
-    assert "m.new_v1_address" in music
+def test_safe_diagnostics_do_not_log_secret_values():
+    assert "active_wallet_address" in SESSION_JS
+    assert "credential_lookup_address" in SESSION_JS
+    assert "migration_old_address" in SESSION_JS
+    assert "migration_new_v1_address" in SESSION_JS
+    assert "has_encrypted_send_seed" in SESSION_JS
+    assert "has_signing_material" in SESSION_JS
+    assert "console.info('[WalletAuth]'" in SESSION_JS

@@ -1130,7 +1130,7 @@ async function requirePoolWalletAuth(action, txCore) {
         credentialLookupAddress: auth.credentialLookupAddress,
         publicKey: auth.getPublicKey ? auth.getPublicKey() : '',
         signedTx,
-        signature: signedTx && signedTx.signature
+        signature: typeof signedTx === 'string' ? signedTx : signedTx && signedTx.signature
     };
 }
 

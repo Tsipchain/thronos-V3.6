@@ -1,10 +1,9 @@
 /**
- * PR-5a: Wallet Authentication Helper
+ * Wallet V1 Authentication Helper
  *
- * Provides PIN-based unlock for music mutations (tips, playlists).
- * Never prompts for auth_secret - uses session-based unlock.
+ * Provides PIN-based unlock for wallet mutations while keeping plaintext
+ * signing material in memory only for the page lifetime.
  */
-
 (function(window) {
     'use strict';
 
@@ -80,9 +79,7 @@
     const WalletAuth = {
         /**
          * Require unlocked wallet for mutations.
-         * Throws error codes: WALLET_NOT_CONNECTED, WALLET_LOCKED, UNLOCK_FAILED
-         *
-         * @returns {Promise<{address: string, authSecret: string, credentialLookupAddress: string}>}
+         * Throws error codes: WALLET_NOT_CONNECTED, WALLET_LOCKED, UNLOCK_FAILED.
          */
         async requireUnlockedWallet() {
             const address = getActiveWalletAddress();
@@ -95,13 +92,11 @@
             const credentialLookupAddress = getCredentialLookupAddress(address);
             logAuthDiagnostics(address);
 
-            // Check if already unlocked in memory for this active wallet.
             // Do not persist plaintext signing material in localStorage/sessionStorage.
             if (cachedAuthSecret && (!cachedAuthAddress || cachedAuthAddress === address || cachedAuthAddress === credentialLookupAddress)) {
                 return buildAuthResult(address, cachedAuthSecret, credentialLookupAddress);
             }
 
-            // Check if signing material is already available.
             const storedSecret = getSigningMaterial(address);
             if (storedSecret) {
                 cachedAuthSecret = storedSecret;
@@ -109,7 +104,6 @@
                 return buildAuthResult(address, storedSecret, credentialLookupAddress);
             }
 
-            // Wallet is locked - ask for PIN
             const pin = prompt('🔐 PIN (unlock wallet):');
             if (!pin) {
                 const err = new Error('Wallet is locked. Please unlock with your PIN.');
@@ -117,7 +111,6 @@
                 throw err;
             }
 
-            // Use existing walletSession unlock if available
             if (window.walletSession && typeof window.walletSession.unlockWallet === 'function') {
                 try {
                     const ok = await window.walletSession.unlockWallet({ pin, address });
@@ -137,7 +130,6 @@
                 }
             }
 
-            // Fallback: basic PIN verification (if walletSession not available)
             const storedPin = localStorage.getItem('wallet_pin');
             if (storedPin === pin) {
                 const authSecret = getSigningMaterial(address);
@@ -147,63 +139,38 @@
                     return buildAuthResult(address, authSecret, credentialLookupAddress);
                 }
                 throw missingSigningMaterialError();
-            } else {
-                const err = new Error('Invalid PIN. Please try again.');
-                err.code = 'UNLOCK_FAILED';
-                throw err;
             }
+
+            const err = new Error('Invalid PIN. Please try again.');
+            err.code = 'UNLOCK_FAILED';
+            throw err;
         },
 
-        /**
-         * Check if wallet is currently unlocked (without prompting)
-         * @returns {boolean}
-         */
         isUnlocked() {
             const address = getActiveWalletAddress();
-            return !!(
-                cachedAuthSecret ||
-                getSigningMaterial(address)
-            );
+            return !!(cachedAuthSecret || getSigningMaterial(address));
         },
 
-        /**
-         * Get address if connected (without auth check)
-         * @returns {string|null}
-         */
         getAddress() {
             return getActiveWalletAddress();
         },
 
-        /**
-         * PR-5g: Auto-lock timer
-         */
         _autoLockTimer: null,
-        _autoLockTimeout: 5 * 60 * 1000, // 5 minutes default
+        _autoLockTimeout: 5 * 60 * 1000,
 
-        /**
-         * Start auto-lock timer
-         */
         startAutoLock(timeoutMs = null) {
-            this.stopAutoLock(); // Clear any existing timer
-
+            this.stopAutoLock();
             const timeout = timeoutMs || this._autoLockTimeout;
-
             this._autoLockTimer = setTimeout(() => {
                 console.log('[WalletAuth] Auto-locking wallet after inactivity');
                 this.lock();
-
-                // Show notification if in browser
                 if (typeof showToast === 'function') {
                     showToast('Wallet locked due to inactivity');
                 }
             }, timeout);
-
             console.log(`[WalletAuth] Auto-lock timer started (${timeout / 1000}s)`);
         },
 
-        /**
-         * Stop auto-lock timer
-         */
         stopAutoLock() {
             if (this._autoLockTimer) {
                 clearTimeout(this._autoLockTimer);
@@ -211,30 +178,25 @@
             }
         },
 
-        /**
-         * Reset auto-lock timer (call on user activity)
-         */
         resetAutoLock() {
             if (this.isUnlocked()) {
                 this.startAutoLock();
             }
         },
 
-        /**
-         * Lock wallet (clear session secret)
-         */
         lock() {
             cachedAuthSecret = '';
             cachedAuthAddress = '';
             sessionStorage.removeItem('thr_auth_secret');
             sessionStorage.removeItem('thr_auth_secret_address');
+            if (window.walletSession && typeof window.walletSession.lockWallet === 'function') {
+                window.walletSession.lockWallet();
+            }
         }
     };
 
-    // Export to window
     window.WalletAuth = WalletAuth;
 
-    // PR-5g: Setup auto-lock on page load
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initAutoLock);
     } else {
@@ -242,12 +204,10 @@
     }
 
     function initAutoLock() {
-        // Start auto-lock if wallet is unlocked
         if (WalletAuth.isUnlocked()) {
             WalletAuth.startAutoLock();
         }
 
-        // Reset timer on user activity
         const activityEvents = ['mousedown', 'keypress', 'scroll', 'touchstart', 'click'];
         activityEvents.forEach(eventType => {
             document.addEventListener(eventType, () => {
@@ -255,16 +215,13 @@
             }, { passive: true });
         });
 
-        // Also reset on wallet operations
         const originalRequire = WalletAuth.requireUnlockedWallet;
         WalletAuth.requireUnlockedWallet = async function() {
             const result = await originalRequire.call(this);
-            // Start auto-lock after successful unlock
             WalletAuth.startAutoLock();
             return result;
         };
 
         console.log('[WalletAuth] Auto-lock initialized');
     }
-
 })(window);

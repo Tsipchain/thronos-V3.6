@@ -45,7 +45,7 @@ def test_swap_auth_uses_wallet_auth_signing_wrapper():
     assert "auth.getPublicKey ? auth.getPublicKey() : ''" in SWAP_HTML
     assert "auth.signTransaction ? await auth.signTransaction(txCore) : null" in SWAP_HTML
     assert "signed_tx: signedSwap" in SWAP_HTML
-    assert "signature: signedSwap && signedSwap.signature" in SWAP_HTML
+    assert "signature: typeof signedSwap === 'string' ? signedSwap : signedSwap && signedSwap.signature" in SWAP_HTML
     assert "missing_wallet_signing_material" in SWAP_HTML
 
 

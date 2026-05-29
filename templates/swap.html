@@ -508,7 +508,7 @@ async function doSwap() {
                 credential_lookup_address: auth.credentialLookupAddress || addr,
                 public_key: auth.getPublicKey ? auth.getPublicKey() : '',
                 signed_tx: signedSwap,
-                signature: signedSwap && signedSwap.signature,
+                signature: typeof signedSwap === 'string' ? signedSwap : signedSwap && signedSwap.signature,
                 auth_secret: auth.authSecret,
                 token_in: tokenIn,
                 token_out: tokenOut,

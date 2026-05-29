@@ -792,6 +792,20 @@ function buildApiUrl(path) {
     return `${API_BASE}${normalized}`;
 }
 
+
+async function getActiveWalletAddress() {
+    const ws = window.walletSession;
+    const base = (ws && typeof ws.getAddress === 'function' ? ws.getAddress() : localStorage.getItem('thr_address')) || '';
+    if (!base) return '';
+    try {
+        if (ws && typeof ws.isMigrated === 'function' && ws.isMigrated() && typeof ws.getMigrationInfo === 'function') {
+            const m = ws.getMigrationInfo() || {};
+            if (m.new_v1_address) return m.new_v1_address;
+        }
+    } catch (_) {}
+    return base;
+}
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     audioElement = document.getElementById('audioPlayer');
@@ -1034,7 +1048,7 @@ async function playTrack(trackId) {
 
     // Fallback to local player if GlobalMusicPlayer not available
     // Record play
-    const wallet = localStorage.getItem('thr_address');
+    const wallet = await getActiveWalletAddress();
     fetch(buildApiUrl(`/api/music/play/${trackId}`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1158,7 +1172,7 @@ async function tipArtist() {
 async function registerArtist(e) {
     e.preventDefault();
 
-    const wallet = localStorage.getItem('thr_address');
+    const wallet = await getActiveWalletAddress();
     if (!wallet) {
         showMessage('artistMessage', 'Please connect your wallet first!', 'error');
         return;
@@ -1216,7 +1230,7 @@ function handleCoverSelect(e) {
 async function uploadTrack(e) {
     e.preventDefault();
 
-    const wallet = localStorage.getItem('thr_address');
+    const wallet = await getActiveWalletAddress();
     if (!wallet) {
         showMessage('uploadMessage', 'Please connect your wallet first!', 'error');
         return;
@@ -1271,7 +1285,7 @@ async function uploadTrack(e) {
 }
 
 async function loadMyProfile() {
-    const wallet = localStorage.getItem('thr_address');
+    const wallet = await getActiveWalletAddress();
     if (!wallet) {
         document.getElementById('myArtistProfile').innerHTML = `
             <div class="empty-state">
@@ -1413,7 +1427,7 @@ async function syncLocalPlaylists(wallet, localPlaylists, remotePlaylists) {
     }
 }
 async function loadUploadPlaylists() {
-    const wallet = localStorage.getItem('thr_address');
+    const wallet = await getActiveWalletAddress();
     if (!wallet) {
         updateUploadPlaylistOptions();
         return;
@@ -1459,7 +1473,7 @@ function updateUploadPlaylistOptions() {
 }
 
 async function loadPlaylists() {
-    const wallet = localStorage.getItem('thr_address');
+    const wallet = await getActiveWalletAddress();
     if (!wallet) {
         document.getElementById('playlistsContainer').innerHTML = `
             <div class="empty-state">
@@ -1531,7 +1545,7 @@ function renderPlaylists() {
 }
 
 async function createNewPlaylist() {
-    const wallet = localStorage.getItem('thr_address');
+    const wallet = await getActiveWalletAddress();
     if (!wallet) {
         alert('Please connect your wallet first!');
         return;
@@ -1592,7 +1606,7 @@ async function createNewPlaylist() {
 async function deletePlaylist(playlistId) {
     if (!confirm('Are you sure you want to delete this playlist?')) return;
 
-    const wallet = localStorage.getItem('thr_address');
+    const wallet = await getActiveWalletAddress();
     try {
         const res = await fetch(buildApiUrl(`/api/music/playlists/${wallet}/${playlistId}`), {
             method: 'DELETE'
@@ -1613,7 +1627,7 @@ async function deletePlaylist(playlistId) {
 }
 
 async function viewPlaylist(playlistId) {
-    const wallet = localStorage.getItem('thr_address');
+    const wallet = await getActiveWalletAddress();
     try {
         const res = await fetch(buildApiUrl(`/api/music/playlists/${wallet}/${playlistId}`));
         const data = await res.json();
@@ -1713,7 +1727,7 @@ function repairTrackUrls(track) {
 }
 
 async function loadOfflineTracks() {
-    const wallet = localStorage.getItem('thr_address');
+    const wallet = await getActiveWalletAddress();
     if (!wallet) {
         document.getElementById('offlineTracksGrid').innerHTML = '';
         document.getElementById('offlineEmpty').style.display = 'block';
@@ -1741,7 +1755,7 @@ async function loadOfflineTracks() {
 }
 
 async function saveTrackOffline(trackId, sendTip = false) {
-    const wallet = localStorage.getItem('thr_address');
+    const wallet = await getActiveWalletAddress();
     if (!wallet) {
         alert('Please connect your wallet first!');
         return;
@@ -1776,7 +1790,7 @@ async function saveTrackOffline(trackId, sendTip = false) {
 }
 
 async function removeTrackOffline(trackId) {
-    const wallet = localStorage.getItem('thr_address');
+    const wallet = await getActiveWalletAddress();
     if (!confirm('Remove this track from offline storage?')) return;
 
     try {
@@ -1798,7 +1812,7 @@ async function removeTrackOffline(trackId) {
 
 // PR-5c: Show dropdown UI instead of prompts
 async function showTrackOptions(trackId) {
-    const wallet = localStorage.getItem('thr_address');
+    const wallet = await getActiveWalletAddress();
     if (!wallet) {
         alert('Please connect your wallet first!');
         return;
@@ -1892,7 +1906,7 @@ async function addTrackToPlaylistUI(trackId, playlistId) {
         const data = await res.json();
         if (data.ok) {
             alert('✅ Track added to playlist!');
-            const wallet = localStorage.getItem('thr_address');
+            const wallet = await getActiveWalletAddress();
             const localPlaylists = loadLocalPlaylists(wallet);
             const target = localPlaylists.find(p => (p.playlist_id || p.id) === playlistId);
             if (target) {
@@ -1992,7 +2006,7 @@ async function deleteTrack(trackId) {
 }
 
 async function addTrackToPlaylist(trackId, playlistId) {
-    const wallet = localStorage.getItem('thr_address');
+    const wallet = await getActiveWalletAddress();
 
     try {
         const res = await fetch(buildApiUrl(`/api/music/playlists/${wallet}/${playlistId}/add`), {
@@ -2014,5 +2028,5 @@ async function addTrackToPlaylist(trackId, playlistId) {
 </script>
 
 <!-- PR-5a: Wallet authentication helper for PIN-based unlock -->
-<script src="https://thrchain.vercel.app/static/wallet_auth.js"></script>
+<script src="{{ url_for('static', filename='wallet_auth.js') }}?v={{ build_id }}"></script>
 {% endblock %}

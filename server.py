@@ -4446,6 +4446,63 @@ def compute_swap_out(amount_in: float, reserve_in: float, reserve_out: float, fe
     return amount_out, fee_amount, price_impact
 
 
+
+def _pool_quote_leg(pool: dict, token_in: str, token_out: str, amount_in: float) -> dict | None:
+    a = _sanitize_asset_symbol(pool.get("token_a"))
+    b = _sanitize_asset_symbol(pool.get("token_b"))
+    reserve_a = float(pool.get("reserves_a", 0) or 0)
+    reserve_b = float(pool.get("reserves_b", 0) or 0)
+    if token_in == a and token_out == b:
+        reserve_in, reserve_out = reserve_a, reserve_b
+    elif token_in == b and token_out == a:
+        reserve_in, reserve_out = reserve_b, reserve_a
+    else:
+        return None
+    amount_out, fee, impact = compute_swap_out(amount_in, reserve_in, reserve_out, pool_fee_bps(pool))
+    if amount_out <= 0:
+        return None
+    return {
+        "amount_out": amount_out,
+        "fee": fee,
+        "fee_bps": pool_fee_bps(pool),
+        "price_impact": impact,
+        "pool_id": pool.get("id"),
+        "token_in": token_in,
+        "token_out": token_out,
+    }
+
+
+def quote_swap_route(token_in: str, token_out: str, amount_in: float) -> tuple[dict | None, str | None]:
+    token_in = _sanitize_asset_symbol(token_in)
+    token_out = _sanitize_asset_symbol(token_out)
+    if token_in == token_out:
+        return None, "same_token"
+
+    direct_pool, _ = get_pool_for_pair(token_in, token_out)
+    if direct_pool:
+        leg = _pool_quote_leg(direct_pool, token_in, token_out, amount_in)
+        if leg:
+            return {**leg, "route": [token_in, token_out], "legs": [leg]}, None
+
+    if token_in != "THR" and token_out != "THR":
+        pool_a, _ = get_pool_for_pair(token_in, "THR")
+        pool_b, _ = get_pool_for_pair("THR", token_out)
+        if pool_a and pool_b:
+            leg_a = _pool_quote_leg(pool_a, token_in, "THR", amount_in)
+            if leg_a:
+                leg_b = _pool_quote_leg(pool_b, "THR", token_out, leg_a["amount_out"])
+                if leg_b:
+                    return {
+                        "amount_out": leg_b["amount_out"],
+                        "fee": leg_a["fee"] + leg_b["fee"],
+                        "fee_bps": max(leg_a["fee_bps"], leg_b["fee_bps"]),
+                        "price_impact": leg_a["price_impact"] + leg_b["price_impact"],
+                        "route": [token_in, "THR", token_out],
+                        "legs": [leg_a, leg_b],
+                    }, None
+
+    return None, "no_swap_route"
+
 # Train-to-Earn API endpoints
 @app.route("/api/v1/train2earn/contribute", methods=["POST"])
 def api_train2earn_contribute():
@@ -8336,6 +8393,7 @@ def normalize_history_item(tx: dict) -> dict:
     return tx
 
 
+@app.route("/transfers", methods=["GET"])
 @app.route("/api/transfers", methods=["GET"])
 def api_transfers():
     """
@@ -8946,6 +9004,7 @@ def _build_wallet_history_fallback(address: str, limit: int, cursor: int) -> dic
     }
 
 
+@app.route("/history", methods=["GET"])
 @app.route("/api/wallet/history", methods=["GET"])
 def api_wallet_history():
     """
@@ -9018,6 +9077,17 @@ def api_wallet_history():
         "address": address,
         **payload,
     }), 200
+
+
+@app.route("/ledger", methods=["GET"])
+@app.route("/api/ledger", methods=["GET"])
+def api_ledger_alias():
+    wallet = (request.args.get("wallet") or request.args.get("address") or "").strip()
+    limit = min(request.args.get("limit", type=int, default=200), 500)
+    if wallet:
+        payload = _build_wallet_history(wallet, "", limit, 0)
+        return jsonify({"ok": True, "wallet": wallet, "ledger": payload.get("transactions", []), "summary": payload.get("summary", {})}), 200
+    return jsonify({"ok": True, "ledger": load_tx_log()[:limit]}), 200
 
 
 # NOTE: /wallet page hidden - use wallet widget in base.html instead
@@ -10207,6 +10277,92 @@ def mining_info():
 @app.route("/api/mining_info")
 def api_mining_info():
     return mining_info()
+
+@app.route("/api/mining/status")
+def api_mining_status():
+    return mining_info()
+
+
+def _wallet_reward_diagnostics(address: str) -> dict:
+    ledger = load_json(LEDGER_FILE, {})
+    all_txs = _tx_feed(include_pending=True, include_bridge=True)
+    related_addresses = {address}
+    reward_wallet_bindings = []
+    try:
+        from wallet_v1_migration import _load_map
+        for old, rec in (_load_map() or {}).items():
+            new = rec.get("new_v1_address")
+            if address in {old, new}:
+                related_addresses.update([a for a in (old, new) if a])
+                reward_wallet_bindings.append({"old_address": old, "new_v1_address": new, "status": rec.get("status")})
+    except Exception:
+        pass
+
+    def tx_addr(tx):
+        return {str(tx.get(k) or "") for k in ("from", "to", "thr_address", "miner", "wallet", "address", "provider_thr")}
+
+    mining_confirmed = mining_pending = pool_confirmed = pool_pending = agent_rewards = pytheia_rewards = 0.0
+    miner_seen = set()
+    for tx in all_txs:
+        if not isinstance(tx, dict) or not (tx_addr(tx) & related_addresses):
+            continue
+        t = str(tx.get("type") or tx.get("kind") or tx.get("category") or "").lower()
+        amount = float(tx.get("amount") or tx.get("reward") or tx.get("reward_thr") or 0.0)
+        pending = str(tx.get("status") or "").lower() == "pending" or bool(tx.get("pending"))
+        if tx.get("miner"):
+            miner_seen.add(tx.get("miner"))
+        if any(x in t for x in ("mining", "coinbase", "mint", "block_reward")):
+            if pending: mining_pending += amount
+            else: mining_confirmed += amount
+        if "pool" in t:
+            if pending: pool_pending += amount
+            else: pool_confirmed += amount
+        if "agent" in t or "ai_reward" in t:
+            agent_rewards += amount
+        if "pytheia" in t:
+            pytheia_rewards += amount
+
+    return {
+        "ok": True,
+        "address": address,
+        "related_addresses": sorted(related_addresses),
+        "confirmed_thr_balance": float(ledger.get(address, 0.0) or 0.0),
+        "mining_rewards_confirmed": round(mining_confirmed, 6),
+        "mining_rewards_pending": round(mining_pending, 6),
+        "pool_rewards_confirmed": round(pool_confirmed, 6),
+        "pool_rewards_pending": round(pool_pending, 6),
+        "agent_rewards": round(agent_rewards, 6),
+        "pytheia_rewards": round(pytheia_rewards, 6),
+        "reward_wallet_bindings": reward_wallet_bindings,
+        "miner_addresses_seen": sorted(a for a in miner_seen if a),
+    }
+
+
+@app.route("/api/v1/wallet/rewards/diagnostics")
+def api_wallet_rewards_diagnostics():
+    address = (request.args.get("address") or request.args.get("wallet") or "").strip()
+    if not address:
+        return jsonify({"ok": False, "error": "address_required"}), 400
+    return jsonify(_wallet_reward_diagnostics(address)), 200
+
+
+@app.route("/api/mining/rewards")
+def api_mining_rewards_alias():
+    address = (request.args.get("address") or request.args.get("wallet") or "").strip()
+    if not address:
+        return jsonify({"ok": False, "error": "address_required"}), 400
+    diag = _wallet_reward_diagnostics(address)
+    return jsonify({"ok": True, "address": address, "confirmed": diag["mining_rewards_confirmed"], "pending": diag["mining_rewards_pending"], "diagnostics": diag}), 200
+
+
+@app.route("/api/pool/rewards")
+def api_pool_rewards_alias():
+    address = (request.args.get("address") or request.args.get("wallet") or "").strip()
+    if not address:
+        return jsonify({"ok": False, "error": "address_required"}), 400
+    diag = _wallet_reward_diagnostics(address)
+    return jsonify({"ok": True, "address": address, "confirmed": diag["pool_rewards_confirmed"], "pending": diag["pool_rewards_pending"], "diagnostics": diag}), 200
+
 
 
 @app.route("/api/last_hash")
@@ -21477,9 +21633,14 @@ def api_swap_quote():
     if not is_swap_symbol_allowed(token_in) or not is_swap_symbol_allowed(token_out):
         return jsonify(status="error", message="Unsupported token"), 400
 
-    quote, err = quote_swap_route(token_in, token_out, amount_in)
+    try:
+        quote, err = quote_swap_route(token_in, token_out, amount_in)
+    except Exception as exc:
+        logger.exception("Swap quote failed")
+        return jsonify(ok=False, status="error", error="quote_failed", message=str(exc)), 500
     if err:
-        return jsonify(status="error", message=err), 400
+        status_code = 404 if err == "no_swap_route" else 400
+        return jsonify(ok=False, status="error", error=err, message=err), status_code
 
     return jsonify({
         "status": "success",
@@ -21491,6 +21652,7 @@ def api_swap_quote():
         "fee_bps": quote["fee_bps"],
         "price_impact": round(quote["price_impact"], 4),
         "route": quote["route"],
+        "legs": quote.get("legs", []),
         "price_in_thr_in": get_token_price_in_thr(token_in),
         "price_in_thr_out": get_token_price_in_thr(token_out),
     }), 200
@@ -21523,7 +21685,7 @@ def api_swap_execute():
 
     quote, err = quote_swap_route(token_in, token_out, amount_in)
     if err:
-        return jsonify(status="error", message=err), 400
+        return jsonify(ok=False, status="error", error=err, message=err), 400
     if quote["amount_out"] < min_amount_out:
         return jsonify(status="error", message="Slippage too high", expected_minimum=min_amount_out, actual_output=quote["amount_out"]), 400
 
@@ -32335,6 +32497,116 @@ def _delete_music_playlist(playlist_id: str, owner_address: str | None = None):
         conn.execute("DELETE FROM music_playlists WHERE id = ?", (playlist_id,))
     return True, ""
 
+
+
+def repair_music_wallet_bindings(old_address: str, new_v1_address: str) -> dict:
+    """Authoritative repair for live Decent Music playlist/offline stores."""
+    moved_refs = 0
+    playlist_moved = 0
+    offline_moved = 0
+    scanned_files = 0
+    repaired_files = 0
+    binding_fields = {
+        'wallet', 'wallet_address', 'thr_address', 'address',
+        'owner', 'owner_address', 'creator', 'creator_address',
+        'artist', 'artist_address', 'artist_wallet', 'uploader', 'uploader_address',
+        'payout_address', 'royalty_address', 'user_address', 'listener_address', 'from', 'to',
+    }
+
+    def rewrite(obj):
+        nonlocal moved_refs
+        if isinstance(obj, dict):
+            for k, v in list(obj.items()):
+                if k in binding_fields and v == old_address:
+                    obj[k] = new_v1_address
+                    moved_refs += 1
+                else:
+                    rewrite(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                rewrite(item)
+
+    def contains(obj):
+        if isinstance(obj, dict):
+            return any((k in binding_fields and v == old_address) or contains(v) for k, v in obj.items())
+        if isinstance(obj, list):
+            return any(contains(i) for i in obj)
+        return False
+
+    if USE_SQLITE_LEDGER:
+        scanned_files += 1
+        with _get_ledger_db_connection() as conn:
+            rows = conn.execute("SELECT id FROM music_playlists WHERE owner_address = ?", (old_address,)).fetchall()
+            playlist_ids = [row["id"] for row in rows]
+            for playlist_id in playlist_ids:
+                exists_new = conn.execute(
+                    "SELECT id FROM music_playlists WHERE id = ? AND owner_address = ?",
+                    (playlist_id, new_v1_address),
+                ).fetchone()
+                if exists_new:
+                    conn.execute("DELETE FROM music_playlists WHERE id = ? AND owner_address = ?", (playlist_id, old_address))
+                else:
+                    conn.execute(
+                        "UPDATE music_playlists SET owner_address = ? WHERE id = ? AND owner_address = ?",
+                        (new_v1_address, playlist_id, old_address),
+                    )
+                    playlist_moved += 1
+                    moved_refs += 1
+            if playlist_ids:
+                repaired_files += 1
+
+    scanned_files += 1
+    old_offline_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{old_address}_offline.json")
+    new_offline_file = os.path.join(MUSIC_PLAYLISTS_DIR, f"{new_v1_address}_offline.json")
+    old_offline = load_json(old_offline_file, {"tracks": []}) or {"tracks": []}
+    old_tracks = list(old_offline.get("tracks") or [])
+    if old_tracks:
+        new_offline = load_json(new_offline_file, {"tracks": []}) or {"tracks": []}
+        merged = list(new_offline.get("tracks") or [])
+        for item in old_tracks:
+            key = item.get("track_id") if isinstance(item, dict) else item
+            if isinstance(item, dict):
+                rewrite(item)
+            if not any((x.get("track_id") if isinstance(x, dict) else x) == key for x in merged):
+                merged.append(item)
+                offline_moved += 1
+                moved_refs += 1
+        new_offline["tracks"] = merged
+        if old_offline.get("updated_at"):
+            new_offline["updated_at"] = old_offline.get("updated_at")
+        save_json(new_offline_file, new_offline)
+        old_offline["tracks"] = []
+        old_offline["migrated_to"] = new_v1_address
+        save_json(old_offline_file, old_offline)
+        repaired_files += 1
+
+    scanned_files += 1
+    registry = load_music_registry()
+    before = json.dumps(registry, sort_keys=True)
+    rewrite(registry)
+    if json.dumps(registry, sort_keys=True) != before:
+        save_music_registry(registry)
+        repaired_files += 1
+
+    remaining_playlist = 0
+    if USE_SQLITE_LEDGER:
+        with _get_ledger_db_connection() as conn:
+            row = conn.execute("SELECT COUNT(*) AS c FROM music_playlists WHERE owner_address = ?", (old_address,)).fetchone()
+            remaining_playlist = int(row["c"] if row else 0)
+    remaining_offline = len((load_json(old_offline_file, {"tracks": []}) or {"tracks": []}).get("tracks") or [])
+    remaining_registry = 1 if contains(load_music_registry()) else 0
+    remaining = remaining_playlist + remaining_offline + remaining_registry
+    return {
+        "ok": remaining == 0,
+        "moved_refs": moved_refs,
+        "music_moved_count": moved_refs,
+        "music_playlist_moved_count": playlist_moved,
+        "music_offline_moved_count": offline_moved,
+        "music_scanned_files": scanned_files,
+        "music_repaired_files": repaired_files,
+        "remaining_old_music_binding_count": remaining,
+    }
+
 @app.route("/api/music/playlists/<wallet>", methods=["GET"])
 def api_music_get_playlists(wallet):
     """
@@ -33832,22 +34104,39 @@ def api_v1_nfts_mint():
     }), 201
 
 
+@app.route("/api/nfts/buy", methods=["POST"])
 @app.route("/api/v1/nfts/buy", methods=["POST"])
 def api_v1_nfts_buy():
     """Buy an NFT with THR payment, chain recording, and royalties."""
     data = request.get_json() or {}
     nft_id = data.get("nft_id", "").strip()
-    buyer = data.get("buyer", "").strip()
+    buyer = (data.get("buyer_thr") or data.get("buyer") or "").strip()
+    credential_lookup_address = (data.get("credential_lookup_address") or buyer).strip()
     auth_secret = data.get("auth_secret", "").strip()
     passphrase = data.get("passphrase", "").strip()
+    signed_tx = data.get("signed_tx") if isinstance(data.get("signed_tx"), dict) else None
 
     if not nft_id or not buyer:
         return jsonify({"status": "error", "message": "Missing required fields"}), 400
 
+    if signed_tx:
+        signed_tx = dict(signed_tx)
+        if data.get("public_key") and not signed_tx.get("publicKey"):
+            signed_tx["publicKey"] = data.get("public_key")
+        if data.get("signature") and not signed_tx.get("signature"):
+            signed_tx["signature"] = data.get("signature")
+        try:
+            import wallet_v1_production_final as wallet_v1_prod
+            valid_sig, sig_error = wallet_v1_prod.verify_signed_transaction_core(signed_tx)
+        except Exception as exc:
+            valid_sig, sig_error = False, str(exc)
+        if not valid_sig:
+            return jsonify({"status": "error", "message": "Invalid signature", "error": sig_error}), 400
+
     # --- Auth validation ---
-    ok, _, error_key = validate_effective_auth(buyer, auth_secret, passphrase)
+    ok, _, error_key = validate_effective_auth(credential_lookup_address, auth_secret, passphrase)
     if not ok:
-        return jsonify({"status": "error", "message": "Invalid auth"}), 403
+        return jsonify({"status": "error", "message": "Invalid auth", "error": error_key}), 403
 
     registry = load_nft_registry()
     nft = next((n for n in registry["nfts"] if n["id"] == nft_id), None)
@@ -35144,6 +35433,64 @@ except ImportError as e:
 except Exception as e:
     print(f"⚠ VerifyID Service initialization failed: {e}")
     _verify_service = None
+
+
+# ─── Wallet V1 Signing Key Binding ────────────────────────────────────────────
+WALLET_V1_PUBLIC_KEY_BINDINGS_FILE = os.path.join(DATA_DIR, "wallet_v1_public_key_bindings.json")
+
+
+def _wallet_v1_binding_addresses_related(address: str, credential_lookup_address: str) -> bool:
+    if address == credential_lookup_address:
+        return True
+    try:
+        from wallet_v1_migration import resolve_migration
+        rec = resolve_migration(credential_lookup_address)
+        return bool(rec and rec.get("new_v1_address") == address)
+    except Exception:
+        return False
+
+
+@app.route("/api/v1/wallet/bind_public_key", methods=["POST"])
+def api_v1_wallet_bind_public_key():
+    data = request.get_json() or {}
+    address = (data.get("address") or "").strip()
+    credential_lookup_address = (data.get("credential_lookup_address") or address).strip()
+    public_key = (data.get("public_key") or "").strip()
+    auth_secret = (data.get("auth_secret") or "").strip()
+    passphrase = (data.get("passphrase") or "").strip()
+
+    if not address or not credential_lookup_address or not public_key:
+        return jsonify({"ok": False, "error": "missing_binding_fields"}), 400
+    try:
+        from wallet_v1_address_derivation import derive_thronos_address, validate_thronos_address
+        if not validate_thronos_address(address) or not validate_thronos_address(credential_lookup_address):
+            return jsonify({"ok": False, "error": "invalid_address"}), 400
+        public_key_address = derive_thronos_address(public_key)
+    except ValueError as ve:
+        return jsonify({"ok": False, "error": "invalid_public_key", "detail": str(ve)}), 400
+
+    if not _wallet_v1_binding_addresses_related(address, credential_lookup_address):
+        return jsonify({"ok": False, "error": "credential_lookup_address_mismatch"}), 403
+
+    ok, _state, error_key = validate_effective_auth(credential_lookup_address, auth_secret, passphrase)
+    if not ok:
+        status = 400 if error_key in ("missing_auth_secret", "passphrase_required") else 403
+        return jsonify({"ok": False, "error": error_key or "invalid_auth"}), status
+
+    store = load_json(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE, {"bindings": {}})
+    if not isinstance(store, dict):
+        store = {"bindings": {}}
+    store.setdefault("bindings", {})[address] = {
+        "address": address,
+        "credential_lookup_address": credential_lookup_address,
+        "public_key": public_key,
+        "public_key_address": public_key_address,
+        "bound_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "proof": "legacy_auth_secret",
+    }
+    save_json(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE, store)
+    return jsonify({"ok": True, "binding": store["bindings"][address]}), 200
+
 
 # ─── Startup hooks ────────────────────────────────────────────────────────────
 # PR-XXX: Role-based initialization with clear logging

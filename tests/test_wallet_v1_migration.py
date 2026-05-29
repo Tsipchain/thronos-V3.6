@@ -799,3 +799,86 @@ def test_repeat_repair_stays_repaired_idempotent(monkeypatch, tmp_path):
     out2 = m.repair_migration('OLD', 'NEW')
     assert out2['status'] == 'repaired'
     assert out2['moved_token_count'] == 0
+
+
+def test_live_shaped_music_playlist_and_offline_stores_repaired(monkeypatch, tmp_path):
+    import sqlite3
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    s.bal = {'OLD': 0.0, 'NEW': 0.1}
+    s.tokens = {'WBTC': {'OLD': 0, 'NEW': 1}}
+    db = tmp_path / 'music.sqlite'
+    offline_dir = tmp_path / 'playlists'
+    offline_dir.mkdir()
+    s.USE_SQLITE_LEDGER = True
+    s.MUSIC_PLAYLISTS_DIR = str(offline_dir)
+    def conn():
+        c = sqlite3.connect(db)
+        c.row_factory = sqlite3.Row
+        c.execute('CREATE TABLE IF NOT EXISTS music_playlists (id TEXT PRIMARY KEY, owner_address TEXT, title TEXT, created_at TEXT, updated_at TEXT)')
+        c.execute('CREATE TABLE IF NOT EXISTS music_playlist_items (playlist_id TEXT, track_id TEXT, position INTEGER, added_at TEXT, PRIMARY KEY (playlist_id, track_id))')
+        return c
+    s._get_ledger_db_connection = conn
+    with conn() as c:
+        c.execute('INSERT INTO music_playlists VALUES (?,?,?,?,?)', ('pl1', 'OLD', 'tragourades', 'c', 'u'))
+        c.execute('INSERT INTO music_playlist_items VALUES (?,?,?,?)', ('pl1', 'track1', 1, 'a'))
+        c.execute('INSERT INTO music_playlist_items VALUES (?,?,?,?)', ('pl1', 'track2', 2, 'a'))
+    s._json[str(offline_dir / 'OLD_offline.json')] = {'tracks': ['EINAI-ARGA'], 'updated_at': 'old'}
+    s._json[str(offline_dir / 'NEW_offline.json')] = {'tracks': []}
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed","assets_migrated":false}},"index_new":{"NEW":"OLD"}}')
+
+    out = m.repair_migration('OLD', 'NEW')
+    assert out['music_bindings_repaired'] is True
+    assert out['music_playlist_moved_count'] == 1
+    assert out['music_offline_moved_count'] == 1
+    assert out['remaining_old_music_binding_count'] == 0
+    with conn() as c:
+        assert c.execute('SELECT COUNT(*) FROM music_playlists WHERE owner_address=?', ('OLD',)).fetchone()[0] == 0
+        new_rows = c.execute('SELECT title FROM music_playlists WHERE owner_address=?', ('NEW',)).fetchall()
+        assert [r[0] for r in new_rows] == ['tragourades']
+        assert c.execute('SELECT COUNT(*) FROM music_playlist_items WHERE playlist_id=?', ('pl1',)).fetchone()[0] == 2
+    assert s._json[str(offline_dir / 'OLD_offline.json')]['tracks'] == []
+    assert s._json[str(offline_dir / 'NEW_offline.json')]['tracks'] == ['EINAI-ARGA']
+
+
+def test_live_shaped_music_repair_is_idempotent(monkeypatch, tmp_path):
+    import sqlite3
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    s.bal = {'OLD': 0.0, 'NEW': 0.1}
+    s.tokens = {'WBTC': {'OLD': 0, 'NEW': 1}}
+    db = tmp_path / 'music.sqlite'
+    offline_dir = tmp_path / 'playlists'
+    offline_dir.mkdir()
+    s.USE_SQLITE_LEDGER = True
+    s.MUSIC_PLAYLISTS_DIR = str(offline_dir)
+    def conn():
+        c = sqlite3.connect(db)
+        c.row_factory = sqlite3.Row
+        c.execute('CREATE TABLE IF NOT EXISTS music_playlists (id TEXT PRIMARY KEY, owner_address TEXT, title TEXT, created_at TEXT, updated_at TEXT)')
+        c.execute('CREATE TABLE IF NOT EXISTS music_playlist_items (playlist_id TEXT, track_id TEXT, position INTEGER, added_at TEXT, PRIMARY KEY (playlist_id, track_id))')
+        return c
+    s._get_ledger_db_connection = conn
+    with conn() as c:
+        c.execute('INSERT INTO music_playlists VALUES (?,?,?,?,?)', ('pl1', 'OLD', 'tragourades', 'c', 'u'))
+    s._json[str(offline_dir / 'OLD_offline.json')] = {'tracks': ['EINAI-ARGA']}
+    s._json[str(offline_dir / 'NEW_offline.json')] = {'tracks': ['EINAI-ARGA']}
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed","assets_migrated":false}},"index_new":{"NEW":"OLD"}}')
+    m.repair_migration('OLD', 'NEW')
+    out2 = m.repair_migration('OLD', 'NEW')
+    assert out2['music_playlist_moved_count'] == 0
+    assert out2['music_offline_moved_count'] == 0
+    assert out2['remaining_old_music_binding_count'] == 0
+    assert s._json[str(offline_dir / 'NEW_offline.json')]['tracks'] == ['EINAI-ARGA']
+
+
+def test_music_repair_reports_false_when_live_old_data_remains(monkeypatch, tmp_path):
+    s = S(); _setup(monkeypatch, tmp_path, s)
+    def bad_hook(old, new):
+        return {'ok': False, 'moved_refs': 0, 'remaining_old_music_binding_count': 1, 'music_scanned_files': 1, 'music_repaired_files': 0}
+    s.repair_music_wallet_bindings = bad_hook
+    s.bal = {'OLD': 0.0, 'NEW': 0.1}
+    s.tokens = {'WBTC': {'OLD': 0, 'NEW': 1}}
+    (tmp_path/'m.json').write_text('{"migrations":{"OLD":{"old_address":"OLD","new_v1_address":"NEW","status":"failed","assets_migrated":false}},"index_new":{"NEW":"OLD"}}')
+    out = m.repair_migration('OLD', 'NEW')
+    assert out['music_bindings_repaired'] is False
+    assert out['remaining_old_music_binding_count'] == 1
+    assert out['status'] == 'failed'

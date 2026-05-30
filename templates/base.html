@@ -5177,6 +5177,9 @@ async function unlockWalletV1FromHeader(){
         showWalletContentSection();
         updateHeaderWalletUi();
         loadWalletBalances(true);
+        // Dispatch events to notify other pages of wallet unlock
+        window.dispatchEvent(new CustomEvent('thronos:wallet:v1:unlocked', { detail: { address: currentActive } }));
+        window.dispatchEvent(new Event('thronos:wallet:state-changed'));
         alert('Wallet unlocked successfully!');
     } catch(err) {
         console.error('[UnlockWallet] Failed:', err.message);

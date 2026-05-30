@@ -333,6 +333,34 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 });
 
+// Listen for wallet V1 unlock events from base.html
+window.addEventListener('thronos:wallet:v1:unlocked', async (e) => {
+    console.info('[SwapUI] Wallet V1 unlocked:', e.detail?.address?.substring(0, 10) + '...');
+    const addr = getSwapActiveWalletAddress();
+    if (addr) {
+        await Promise.all([loadBalances(addr), loadSwapCatalog()]);
+        setDefaultTokens();
+        calcTo();
+    }
+    updateSwapWalletUI();
+});
+
+// Listen for general wallet state changes
+window.addEventListener('thronos:wallet:state-changed', async () => {
+    console.info('[SwapUI] Wallet state changed, refreshing...');
+    const addr = getSwapActiveWalletAddress();
+    if (!isSwapWalletReady(addr)) {
+        $('walletWarning').style.display = 'block';
+        $('swapBtn').disabled = true;
+        $('swapBtn').textContent = "Connect Wallet";
+    } else {
+        await Promise.all([loadBalances(addr), loadSwapCatalog()]);
+        setDefaultTokens();
+        calcTo();
+        updateSwapWalletUI();
+    }
+});
+
 async function loadBalances(addr = getSwapActiveWalletAddress()) {
     try {
         if (!addr) return;

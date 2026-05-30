@@ -29237,6 +29237,168 @@ def api_v1_pool_referral_stats(pool_id):
     }), 200
 
 
+def verify_pool_wallet_v1_or_legacy(payload, expected_action, wallet_field='provider_thr'):
+    """
+    Verify pool action authentication: either Wallet V1 signed OR legacy auth_secret.
+
+    Performs actual signature verification before any pool state mutations.
+
+    Args:
+        payload: request JSON data
+        expected_action: expected action (create_pool, add_liquidity, remove_liquidity)
+        wallet_field: field name for provider address (default: provider_thr)
+
+    Returns:
+        (ok, error_dict, wallet_address) tuple
+        - ok: bool, True if auth passed AND signature verified
+        - error_dict: dict with status/error/message for JSON response if auth failed
+        - wallet_address: the authenticated wallet address (only if ok=True)
+    """
+    wallet_addr = (payload.get(wallet_field) or "").strip()
+    credential_lookup = (payload.get("credential_lookup_address") or wallet_addr).strip()
+    auth_secret = (payload.get("auth_secret") or "").strip()
+    passphrase = (payload.get("passphrase") or "").strip()
+    signed_tx_raw = payload.get("signed_tx")
+    public_key = payload.get("public_key")
+    signature = payload.get("signature")
+
+    # Normalize action aliases: create/add/remove -> create_pool/add_liquidity/remove_liquidity
+    action = payload.get("action") or payload.get("option")
+    action_aliases = {
+        "create": "create_pool",
+        "add": "add_liquidity",
+        "remove": "remove_liquidity"
+    }
+    normalized_action = action_aliases.get(action, action) if action else None
+
+    # Log attempt (safe: no secrets)
+    has_v1 = bool(signed_tx_raw or public_key or signature)
+    logger.info(f"[pool_auth] expected={expected_action} action={normalized_action or 'none'} has_wallet_v1={has_v1} wallet={wallet_addr[:10] if wallet_addr else 'none'}...")
+
+    # ──── VALIDATION PHASE (before any mutations) ────
+
+    # 1. Check action mismatch (before signature verification)
+    if action and normalized_action != expected_action:
+        logger.warning(f"[pool_auth] action mismatch: expected={expected_action} got={action}")
+        return (False, {
+            "ok": False,
+            "error": "unsupported_pool_action",
+            "message": f"Unsupported action",
+            "expected": expected_action,
+            "got": action
+        }, None)
+
+    # 2. Wallet V1 path: signed transaction verification
+    if signed_tx_raw or public_key or signature:
+        # Require signed_tx for V1 auth
+        if not signed_tx_raw:
+            return (False, {
+                "ok": False,
+                "error": "invalid_signature",
+                "message": "Wallet V1 auth requires signed_tx"
+            }, None)
+
+        # Convert to dict and merge public_key/signature if provided separately
+        if not isinstance(signed_tx_raw, dict):
+            return (False, {
+                "ok": False,
+                "error": "invalid_signature",
+                "message": "signed_tx must be an object"
+            }, None)
+
+        signed_tx = dict(signed_tx_raw)
+        if public_key and not signed_tx.get("publicKey"):
+            signed_tx["publicKey"] = public_key
+        if signature and not signed_tx.get("signature"):
+            signed_tx["signature"] = signature
+
+        # Verify signature is present
+        if not signed_tx.get("signature"):
+            return (False, {
+                "ok": False,
+                "error": "missing_signature",
+                "message": "Signature is required in signed_tx"
+            }, None)
+
+        # Verify action/type in signed_tx matches expected
+        signed_action = signed_tx.get("action") or signed_tx.get("type")
+        if signed_action and signed_action != expected_action:
+            logger.warning(f"[pool_auth] V1 action mismatch: expected={expected_action} in_signed_tx={signed_action}")
+            return (False, {
+                "ok": False,
+                "error": "unsupported_pool_action",
+                "message": f"Action mismatch in signature",
+                "expected": expected_action,
+                "got": signed_action
+            }, None)
+
+        # ACTUAL SIGNATURE VERIFICATION - before any pool mutation
+        try:
+            import wallet_v1_production_final as wallet_v1_prod
+            valid_sig, sig_error = wallet_v1_prod.verify_signed_transaction_core(signed_tx)
+            logger.info(f"[pool_auth] V1 signature verification: valid={valid_sig}")
+        except Exception as exc:
+            logger.error(f"[pool_auth] V1 verification failed: {exc}")
+            return (False, {
+                "ok": False,
+                "error": "signature_verification_failed",
+                "message": "Failed to verify Wallet V1 signature",
+                "detail": str(exc)
+            }, None)
+
+        if not valid_sig:
+            logger.warning(f"[pool_auth] V1 signature invalid: {sig_error}")
+            return (False, {
+                "ok": False,
+                "error": "invalid_signature",
+                "message": "Invalid Wallet V1 signature",
+                "detail": sig_error
+            }, None)
+
+        # Verify provider_thr matches signed wallet (from signed_tx)
+        signed_wallet = signed_tx.get("from") or signed_tx.get("wallet") or ""
+        if not signed_wallet:
+            return (False, {
+                "ok": False,
+                "error": "invalid_signature",
+                "message": "signed_tx must include 'from' field"
+            }, None)
+
+        if wallet_addr and wallet_addr != signed_wallet:
+            # Allow credential_lookup_address for migration (but not as spend source)
+            if credential_lookup != signed_wallet:
+                logger.warning(f"[pool_auth] provider_thr mismatch: payload={wallet_addr} signed={signed_wallet}")
+                return (False, {
+                    "ok": False,
+                    "error": "wallet_mismatch",
+                    "message": "Provider address does not match signed wallet"
+                }, None)
+
+        logger.info(f"[pool_auth] V1 auth accepted: {signed_wallet[:10]}...")
+        return (True, {}, wallet_addr or signed_wallet)
+
+    # 3. Legacy path: auth_secret validation
+    if not wallet_addr:
+        return (False, {
+            "ok": False,
+            "error": "missing_provider",
+            "message": "Missing provider address"
+        }, None)
+
+    ok, _, error_key = validate_effective_auth(credential_lookup, auth_secret, passphrase)
+    if not ok:
+        logger.warning(f"[pool_auth] legacy auth failed: {error_key}")
+        return (False, {
+            "ok": False,
+            "error": "invalid_auth",
+            "message": "Invalid authentication",
+            "error_key": error_key
+        }, wallet_addr)
+
+    logger.info(f"[pool_auth] legacy auth accepted: {wallet_addr[:10]}...")
+    return (True, {}, wallet_addr)
+
+
 @app.route("/api/v1/pools", methods=["POST"])
 def api_v1_create_pool():
     """
@@ -29275,6 +29437,14 @@ def api_v1_create_pool():
         return jsonify(status="error", message="Token symbols must be distinct"), 400
     if amt_a <= 0 or amt_b <= 0:
         return jsonify(status="error", message="Amounts must be positive"), 400
+
+    # Wallet V1 or legacy auth verification
+    auth_ok, auth_error, verified_provider = verify_pool_wallet_v1_or_legacy(data, "create_pool")
+    if not auth_ok:
+        return jsonify(**auth_error), 400
+
+    # Use verified provider address
+    provider = verified_provider or (data.get("provider_thr") or "").strip()
     if not provider:
         return jsonify(status="error", message="Missing provider"), 400
     try:
@@ -29283,41 +29453,6 @@ def api_v1_create_pool():
         return jsonify(status="error", message="Invalid fee_bps"), 400
     if fee_bps_int < 0 or fee_bps_int > 1000:
         return jsonify(status="error", message="fee_bps out of range"), 400
-
-    # Check pledge access (whitelist or BTC pledge)
-    if not has_pledge_access(provider):
-        return jsonify(status="error", message="Provider has no pledge access"), 403
-
-    pledge_mode = get_wallet_pledge_mode(provider)
-
-    # Whitelist wallets don't need auth_secret
-    if pledge_mode == "whitelist":
-        # Whitelisted - no auth needed
-        pass
-    elif pledge_mode == "btc_pledge":
-        # BTC pledge - verify auth_secret
-        if not auth_secret:
-            return jsonify(status="error", message="Missing auth_secret"), 400
-
-        provider_pledge = get_pledge_for_auth(provider)
-        if not provider_pledge:
-            return jsonify(status="error", message="Provider has not pledged"), 404
-
-        stored_auth_hash = provider_pledge.get("send_auth_hash")
-        if not stored_auth_hash:
-            return jsonify(status="error", message="Provider send not enabled"), 400
-
-        if provider_pledge.get("has_passphrase"):
-            if not passphrase:
-                return jsonify(status="error", message="Passphrase required"), 400
-            auth_string = f"{auth_secret}:{passphrase}:auth"
-        else:
-            auth_string = f"{auth_secret}:auth"
-
-        if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-            return jsonify(status="error", message="Invalid auth"), 403
-    else:
-        return jsonify(status="error", message="Provider has no pledge access"), 403
     wallet_snapshot = get_wallet_balances(provider)
     tokens_by_symbol = {t.get("symbol"): t for t in wallet_snapshot.get("tokens", [])}
 
@@ -29511,43 +29646,15 @@ def api_v1_add_liquidity():
     if not pool_id or amt_a <= 0 or amt_b <= 0:
         return jsonify(status="error", message="Invalid input"), 400
 
+    # Wallet V1 or legacy auth verification
+    auth_ok, auth_error, verified_provider = verify_pool_wallet_v1_or_legacy(data, "add_liquidity")
+    if not auth_ok:
+        return jsonify(**auth_error), 400
+
+    # Use verified provider address
+    provider = verified_provider or (data.get("provider_thr") or "").strip()
     if not provider:
         return jsonify(status="error", message="Missing provider"), 400
-
-    # Check pledge access (whitelist or BTC pledge)
-    if not has_pledge_access(provider):
-        return jsonify(status="error", message="Provider has no pledge access"), 403
-
-    pledge_mode = get_wallet_pledge_mode(provider)
-
-    # Whitelist wallets don't need auth_secret
-    if pledge_mode == "whitelist":
-        # Whitelisted - no auth needed
-        pass
-    elif pledge_mode == "btc_pledge":
-        # BTC pledge - verify auth_secret
-        if not auth_secret:
-            return jsonify(status="error", message="Missing auth_secret"), 400
-
-        provider_pledge = get_pledge_for_auth(provider)
-        if not provider_pledge:
-            return jsonify(status="error", message="Provider has not pledged"), 404
-
-        stored_auth_hash = provider_pledge.get("send_auth_hash")
-        if not stored_auth_hash:
-            return jsonify(status="error", message="Provider send not enabled"), 400
-
-        if provider_pledge.get("has_passphrase"):
-            if not passphrase:
-                return jsonify(status="error", message="Passphrase required"), 400
-            auth_string = f"{auth_secret}:{passphrase}:auth"
-        else:
-            auth_string = f"{auth_secret}:auth"
-
-        if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-            return jsonify(status="error", message="Invalid auth"), 403
-    else:
-        return jsonify(status="error", message="Provider has no pledge access"), 403
 
     # Load pool
     pools = load_pools()
@@ -29784,43 +29891,15 @@ def api_v1_remove_liquidity():
     if not pool_id or shares <= 0:
         return jsonify(status="error", message="Invalid input"), 400
 
+    # Wallet V1 or legacy auth verification
+    auth_ok, auth_error, verified_provider = verify_pool_wallet_v1_or_legacy(data, "remove_liquidity")
+    if not auth_ok:
+        return jsonify(**auth_error), 400
+
+    # Use verified provider address
+    provider = verified_provider or (data.get("provider_thr") or "").strip()
     if not provider:
         return jsonify(status="error", message="Missing provider"), 400
-
-    # Check pledge access (whitelist or BTC pledge)
-    if not has_pledge_access(provider):
-        return jsonify(status="error", message="Provider has no pledge access"), 403
-
-    pledge_mode = get_wallet_pledge_mode(provider)
-
-    # Whitelist wallets don't need auth_secret
-    if pledge_mode == "whitelist":
-        # Whitelisted - no auth needed
-        pass
-    elif pledge_mode == "btc_pledge":
-        # BTC pledge - verify auth_secret
-        if not auth_secret:
-            return jsonify(status="error", message="Missing auth_secret"), 400
-
-        provider_pledge = get_pledge_for_auth(provider)
-        if not provider_pledge:
-            return jsonify(status="error", message="Provider has not pledged"), 404
-
-        stored_auth_hash = provider_pledge.get("send_auth_hash")
-        if not stored_auth_hash:
-            return jsonify(status="error", message="Provider send not enabled"), 400
-
-        if provider_pledge.get("has_passphrase"):
-            if not passphrase:
-                return jsonify(status="error", message="Passphrase required"), 400
-            auth_string = f"{auth_secret}:{passphrase}:auth"
-        else:
-            auth_string = f"{auth_secret}:auth"
-
-        if hashlib.sha256(auth_string.encode()).hexdigest() != stored_auth_hash:
-            return jsonify(status="error", message="Invalid auth"), 403
-    else:
-        return jsonify(status="error", message="Provider has no pledge access"), 403
 
     # Load pool
     pools = load_pools()

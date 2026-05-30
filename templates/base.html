@@ -1603,6 +1603,31 @@
                 <div id="walletPanelDiagnostics" style="margin-top:15px; font-size:10px; color:#9f9; opacity:0.6; border-top:1px solid #114422; padding-top:10px;">
                     <div id="walletDiagnosticsContent"></div>
                 </div>
+
+                <!-- RECOVERY SECTION: Reset pointers and clear wallet -->
+                <div id="walletRecoverySection" style="margin-top:15px; border-top:1px solid #4a2222; padding-top:10px;">
+                    <button class="primary" style="background:#2a4a00; width:100%;" onclick="resetActiveWalletPointersFromHeader()">↺ Reset Active Wallet Pointers</button>
+                    <div style="font-size:10px; color:#9f9; opacity:0.6; margin-top:5px;">
+                        Clear stale address pointers and restore from migration record if available.
+                    </div>
+
+                    <div style="margin-top:10px;">
+                        <button class="primary" style="background:#4a2a00; width:100%;" onclick="toggleAdvancedRecoveryFromHeader()">⚠ Advanced Recovery</button>
+                    </div>
+
+                    <div id="walletAdvancedRecoveryZone" style="display:none; margin-top:10px; padding:10px; background:#2a1a1a; border:1px solid #8a4a4a;">
+                        <div style="color:#f99; font-weight:bold; font-size:11px; margin-bottom:8px;">DANGER ZONE</div>
+                        <div style="font-size:10px; color:#f99; margin-bottom:10px;">
+                            This will delete all wallet keys and encrypted material from this device.
+                            You will only be able to recover if you have a migration record or can re-enter your legacy address.
+                        </div>
+                        <div style="margin-bottom:8px;">
+                            <label style="font-size:10px; color:#9f9;">Type to confirm:</label>
+                            <input type="text" id="walletClearConfirmInput" placeholder="I UNDERSTAND" style="width:100%; padding:6px; background:#1a1a1a; border:1px solid #8a4a4a; color:#f99; margin-top:4px; font-size:10px;"/>
+                        </div>
+                        <button class="primary" style="background:#a a2a1a; width:100%; border:1px solid #f99; color:#f99;" onclick="clearAllWalletDataFromHeader()">⚡ Clear All Wallet Data</button>
+                    </div>
+                </div>
             </div>
 
             <div id="walletContentSection">
@@ -5214,6 +5239,50 @@ function restoreMigratedWalletFromHeader(){
     } catch(err) {
         console.error('[RestoreMigratedWallet] Restore failed:', err.message);
         alert('Restore failed: ' + (err.message || 'Unknown error'));
+    }
+}
+
+function resetActiveWalletPointersFromHeader(){
+    if (!walletSession.resetActiveWalletPointers) return alert('Reset API unavailable');
+    try {
+        console.info('[ResetActiveWalletPointers] Clearing stale address pointers');
+        const restored = walletSession.resetActiveWalletPointers();
+        console.info('[ResetActiveWalletPointers] Restored address:', restored.substring(0, 10) + '...');
+        updateHeaderWalletUi();
+        updateWalletPanelDiagnostics();
+        alert('Active wallet pointers reset. Address is now: ' + restored.substring(0, 10) + '...');
+    } catch(err) {
+        console.error('[ResetActiveWalletPointers] Reset failed:', err.message);
+        alert('Reset failed: ' + (err.message || 'Unknown error'));
+    }
+}
+
+function toggleAdvancedRecoveryFromHeader(){
+    const zone = document.getElementById('walletAdvancedRecoveryZone');
+    if (!zone) return;
+    zone.style.display = zone.style.display === 'none' ? 'block' : 'none';
+}
+
+function clearAllWalletDataFromHeader(){
+    const confirmInput = document.getElementById('walletClearConfirmInput');
+    if (!confirmInput || (confirmInput.value || '').trim() !== 'I UNDERSTAND') {
+        return alert('Type "I UNDERSTAND" to confirm wallet deletion.');
+    }
+
+    if (!walletSession.clearAllWalletData) return alert('Clear API unavailable');
+    try {
+        console.info('[ClearAllWalletData] Performing dangerous wallet clear');
+        walletSession.clearAllWalletData();
+        confirmInput.value = '';
+        const zone = document.getElementById('walletAdvancedRecoveryZone');
+        if (zone) zone.style.display = 'none';
+        updateHeaderWalletUi();
+        updateWalletPanelDiagnostics();
+        alert('All wallet data cleared. Page will refresh.');
+        location.reload();
+    } catch(err) {
+        console.error('[ClearAllWalletData] Clear failed:', err.message);
+        alert('Clear failed: ' + (err.message || 'Unknown error'));
     }
 }
 

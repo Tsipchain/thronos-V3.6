@@ -1530,5 +1530,19 @@ document.addEventListener('DOMContentLoaded', () => {
     loadTokenOptions();
     loadPools();
 });
+
+// Listen for wallet V1 unlock events from base.html
+window.addEventListener('thronos:wallet:v1:unlocked', async (e) => {
+    console.info('[PoolsUI] Wallet V1 unlocked:', e.detail?.address?.substring(0, 10) + '...');
+    loadTokenOptions();
+    loadPools();
+});
+
+// Listen for general wallet state changes
+window.addEventListener('thronos:wallet:state-changed', async () => {
+    console.info('[PoolsUI] Wallet state changed, refreshing...');
+    loadTokenOptions();
+    loadPools();
+});
 </script>
 {% endblock %}

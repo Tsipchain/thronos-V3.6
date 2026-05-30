@@ -13,6 +13,7 @@
 
   let customUnlockHandler = null;
   let unlockedPrivateKeyHex = null;
+  let unlockedForAddress = null; // Track which address the current in-memory key belongs to
 
   function setItem(key, value){ value ? localStorage.setItem(key, value) : localStorage.removeItem(key); }
   function readJson(key){ try { return JSON.parse(localStorage.getItem(key) || '{}'); } catch(_) { return {}; } }
@@ -101,7 +102,7 @@
   function getPin(){ return localStorage.getItem(PIN_KEY) || ''; }
   function setPin(pin){ setItem(PIN_KEY, pin ? pin.trim() : ''); }
 
-  function lockWallet(){ unlockedPrivateKeyHex = null; setBound(false); localStorage.setItem(LOCK_KEY, '1'); }
+  function lockWallet(){ unlockedPrivateKeyHex = null; unlockedForAddress = null; setBound(false); localStorage.setItem(LOCK_KEY, '1'); }
   function lock(){ return lockWallet(); }
   function setCustomUnlockHandler(fn){ customUnlockHandler = typeof fn === 'function' ? fn : null; }
 
@@ -177,17 +178,25 @@
     }
     const pin = options.pin || (options.prompt !== false ? prompt('Enter wallet PIN to unlock') : null);
     if (!pin) return false;
+    const activeAddr = options.address || getActiveAddress();
     const enc = localStorage.getItem(V1_ENCRYPTED_KEY);
     if (enc) {
-      try { unlockedPrivateKeyHex = await decryptPrivateKeyHex(enc, pin); setBound(true); localStorage.setItem(LOCK_KEY, '0'); return true; }
+      try { unlockedPrivateKeyHex = await decryptPrivateKeyHex(enc, pin); unlockedForAddress = activeAddr; setBound(true); localStorage.setItem(LOCK_KEY, '0'); return true; }
       catch(_) { return false; }
     }
-    const credentialAddress = getCredentialLookupAddress(options.address || getActiveAddress());
-    const hasLegacyCreds = !!(getActiveAddress() && getSendSeed(credentialAddress) && pin === getPin());
-    if (hasLegacyCreds) { setBound(true); localStorage.setItem(LOCK_KEY, '0'); return true; }
+    const credentialAddress = getCredentialLookupAddress(activeAddr);
+    const hasLegacyCreds = !!(activeAddr && getSendSeed(credentialAddress) && pin === getPin());
+    if (hasLegacyCreds) { unlockedForAddress = activeAddr; setBound(true); localStorage.setItem(LOCK_KEY, '0'); return true; }
     return false;
   }
   async function unlock(pinOrOptions){ const options = typeof pinOrOptions === 'string' ? {pin: pinOrOptions, prompt:false} : (pinOrOptions || {}); return unlockWallet(options); }
+
+  function isUnlockedFor(address){
+    // Check if the in-memory private key belongs to the given address
+    // Does not expose the private key itself
+    const normalized = (address || '').trim();
+    return !!(unlockedPrivateKeyHex && unlockedForAddress && unlockedForAddress === normalized);
+  }
 
   function getPublicKey(){ return localStorage.getItem(V1_PUBLIC_KEY) || ''; }
   function hasEncryptedPrivateKey(){ return !!localStorage.getItem(V1_ENCRYPTED_KEY); }
@@ -383,6 +392,7 @@
     hasSigningMaterial, getWalletAuthDiagnostics, logWalletAuthDiagnostics,
     getPin, setPin, isLocked, lockWallet, lock: lockWallet, unlockWallet, unlock: unlockWallet, unlock,
     setCustomUnlockHandler, isBound, setBound, disconnect, forgetDevice, clearSession, saveSession, requirePin,
+    isUnlockedFor,
     getDebugState, restoreToMigratedWallet, resetActiveWalletPointers, clearAllWalletData, isValidThrAddress
   };
 })(window);

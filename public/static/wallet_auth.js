@@ -98,6 +98,17 @@
             const credentialLookupAddress = getCredentialLookupAddress(address);
             logAuthDiagnostics(address);
 
+            // Check if wallet is already unlocked in this tab for this address
+            if (window.walletSession && typeof window.walletSession.isUnlockedFor === 'function' && window.walletSession.isUnlockedFor(address)) {
+                // Wallet is unlocked - return signing context without prompting
+                const storedSecret = getSigningMaterial(address);
+                if (storedSecret) {
+                    cachedAuthSecret = storedSecret;
+                    cachedAuthAddress = address;
+                    return buildAuthResult(address, storedSecret, credentialLookupAddress);
+                }
+            }
+
             // Do not persist plaintext signing material in localStorage/sessionStorage.
             if (cachedAuthSecret && (!cachedAuthAddress || cachedAuthAddress === address || cachedAuthAddress === credentialLookupAddress)) {
                 return buildAuthResult(address, cachedAuthSecret, credentialLookupAddress);

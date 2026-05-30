@@ -21,8 +21,24 @@
   function isLocked(){ return localStorage.getItem(LOCK_KEY) === '1'; }
 
   function normalizeAddress(addr){ return (addr || '').toString().trim(); }
+  function isValidThrAddress(addr){
+    const normalized = normalizeAddress(addr);
+    return normalized.startsWith('THR') && normalized.length >= 20 && normalized.length <= 100;
+  }
   function getAddress(){ return localStorage.getItem(V1_ADDRESS_KEY) || localStorage.getItem(ADDRESS_KEY) || ''; }
-  function getActiveAddress(){ const info = getMigrationInfo(); return info.new_v1_address || getAddress(); }
+  function getActiveAddress(){
+    const info = getMigrationInfo();
+    const v1_addr = localStorage.getItem(V1_ADDRESS_KEY);
+    const legacy_addr = localStorage.getItem(ADDRESS_KEY);
+
+    // Prefer in order: wallet_v1_address (if valid) > migration.new_v1_address > thr_address (if valid)
+    // This prevents stale/random addresses from being used
+    if (v1_addr && isValidThrAddress(v1_addr)) return v1_addr;
+    if (info.new_v1_address && isValidThrAddress(info.new_v1_address)) return info.new_v1_address;
+    if (legacy_addr && isValidThrAddress(legacy_addr)) return legacy_addr;
+    // Fallback: return first valid address or empty
+    return v1_addr || info.new_v1_address || legacy_addr || '';
+  }
   function setAddress(addr){ setItem(ADDRESS_KEY, addr ? addr.trim() : ''); }
 
   function scopedCredentialKeys(address){
@@ -285,6 +301,71 @@
     try { console.info('[WalletAuth]', getWalletAuthDiagnostics(address)); } catch(_) {}
   }
 
+  function getDebugState(){
+    // Safe diagnostics: NO secrets, NO PIN, NO seeds, NO keys
+    const info = getMigrationInfo();
+    const v1_addr = localStorage.getItem(V1_ADDRESS_KEY) || '';
+    const legacy_addr = localStorage.getItem(ADDRESS_KEY) || '';
+    const has_v1_encrypted = !!localStorage.getItem(V1_ENCRYPTED_KEY);
+    const has_v1_pubkey = !!localStorage.getItem(V1_PUBLIC_KEY);
+    const active = getActiveAddress();
+
+    return {
+      active_wallet: active,
+      wallet_v1_address: v1_addr,
+      thr_address: legacy_addr,
+      migration_new_v1_address: info.new_v1_address || '',
+      has_signing_material: hasSigningMaterial(active),
+      has_v1_encrypted_key: has_v1_encrypted,
+      has_v1_public_key: has_v1_pubkey,
+      is_bound: isBound(),
+      is_locked: isLocked(),
+      is_migrated: isMigrated()
+    };
+  }
+
+  function restoreToMigratedWallet(){
+    // Restore wallet_v1_address to migration.new_v1_address without creating new wallet
+    // Used when migrated wallet was lost but migration record still exists
+    const info = getMigrationInfo();
+    if (!info.new_v1_address) {
+      console.error('No migration record found to restore');
+      return false;
+    }
+    localStorage.setItem(V1_ADDRESS_KEY, info.new_v1_address);
+    // Also set legacy address pointer if it exists
+    if (isValidThrAddress(info.new_v1_address)) {
+      localStorage.setItem(ADDRESS_KEY, info.new_v1_address);
+    }
+    return true;
+  }
+
+  function resetActiveWalletPointers(){
+    // Clear only active wallet pointer keys, preserve encrypted material
+    localStorage.removeItem(ADDRESS_KEY);
+    localStorage.removeItem(V1_ADDRESS_KEY);
+    // Restore to migration if available
+    const info = getMigrationInfo();
+    if (info.new_v1_address && isValidThrAddress(info.new_v1_address)) {
+      localStorage.setItem(V1_ADDRESS_KEY, info.new_v1_address);
+    }
+    return getActiveAddress();
+  }
+
+  function clearAllWalletData(){
+    // Dangerous: clear wallet_v1_address, encrypted key, public key, etc
+    // Does NOT call backend
+    // Requires confirmation
+    localStorage.removeItem(ADDRESS_KEY);
+    localStorage.removeItem(V1_ADDRESS_KEY);
+    localStorage.removeItem(V1_ENCRYPTED_KEY);
+    localStorage.removeItem(V1_PUBLIC_KEY);
+    localStorage.removeItem(PIN_KEY);
+    unlockedPrivateKeyHex = null;
+    // Note: MIGRATION_META_KEY is kept for recovery reference only
+    return true;
+  }
+
   function disconnect(){ setBound(false); localStorage.setItem(LOCK_KEY, '1'); unlockedPrivateKeyHex = null; }
   function forgetDevice(){ [ADDRESS_KEY,SEND_SECRET_KEY,SEND_SEED_KEY,SEND_SEED_COMPAT_KEY,PIN_KEY,BOUND_KEY,LOCK_KEY,V1_ENCRYPTED_KEY,V1_PUBLIC_KEY,V1_ADDRESS_KEY,MIGRATION_META_KEY].forEach(k => localStorage.removeItem(k)); unlockedPrivateKeyHex = null; }
   function clearSession(){ forgetDevice(); }
@@ -301,6 +382,7 @@
     getCredentialLookupAddress, getSendSeed, setSendSeed, getSendSecret, setSendSecret,
     hasSigningMaterial, getWalletAuthDiagnostics, logWalletAuthDiagnostics,
     getPin, setPin, isLocked, lockWallet, lock: lockWallet, unlockWallet, unlock: unlockWallet, unlock,
-    setCustomUnlockHandler, isBound, setBound, disconnect, forgetDevice, clearSession, saveSession, requirePin
+    setCustomUnlockHandler, isBound, setBound, disconnect, forgetDevice, clearSession, saveSession, requirePin,
+    getDebugState, restoreToMigratedWallet, resetActiveWalletPointers, clearAllWalletData, isValidThrAddress
   };
 })(window);

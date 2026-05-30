@@ -7,6 +7,8 @@
 (function(window) {
     'use strict';
 
+    const VERSION = 'wallet-v1-state-sync-2026-05-30';
+
     function getActiveWalletAddress() {
         if (window.walletSession && typeof window.walletSession.getActiveAddress === 'function') {
             return window.walletSession.getActiveAddress() || null;
@@ -83,6 +85,7 @@
     let cachedAuthAddress = '';
 
     const WalletAuth = {
+        version: VERSION,
         /**
          * Require unlocked wallet for mutations.
          * Throws error codes: WALLET_NOT_CONNECTED, WALLET_LOCKED, UNLOCK_FAILED.

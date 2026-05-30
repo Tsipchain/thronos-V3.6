@@ -145,10 +145,66 @@
     setItem(SEND_SEED_COMPAT_KEY, seed ? seed.trim() : '');
   }
 
+  function normalizeAddress(addr){ return (addr || '').toString().trim(); }
   function getAddress(){ return localStorage.getItem(V1_ADDRESS_KEY) || localStorage.getItem(ADDRESS_KEY) || ''; }
+  function getActiveAddress(){ const info = getMigrationInfo(); return info.new_v1_address || getAddress(); }
   function setAddress(addr){ setItem(ADDRESS_KEY, addr ? addr.trim() : ''); }
-  function getSendSeed(){ return localStorage.getItem(SEND_SECRET_KEY) || localStorage.getItem(SEND_SEED_KEY) || localStorage.getItem(SEND_SEED_COMPAT_KEY) || ''; }
-  function setSendSeed(seed){ setItem(SEND_SECRET_KEY, seed ? seed.trim() : ''); setItem(SEND_SEED_KEY, seed ? seed.trim() : ''); setItem(SEND_SEED_COMPAT_KEY, seed ? seed.trim() : ''); }
+
+  function scopedCredentialKeys(address){
+    const normalized = (address || '').trim();
+    if (!normalized) return [];
+    return [
+      `wallet:${normalized}:send_secret`,
+      `wallet:${normalized}:send_seed`,
+      `send_secret:${normalized}`,
+      `send_seed:${normalized}`,
+      `thr_secret:${normalized}`,
+    ];
+  }
+
+  function getRawSeedForAddress(address){
+    for (const key of scopedCredentialKeys(address)) {
+      const value = localStorage.getItem(key);
+      if (value) return value;
+    }
+    return '';
+  }
+
+  function getMigrationInfo(){ return readJson(MIGRATION_META_KEY); }
+  function isMigrated(){ const info = getMigrationInfo(); return !!(info.old_address && info.new_v1_address); }
+
+  function getCredentialLookupAddress(address){
+    const active = (address || getActiveAddress() || getAddress() || '').trim();
+    const info = getMigrationInfo();
+    if (active && getRawSeedForAddress(active)) return active;
+    if (info.new_v1_address && getRawSeedForAddress(info.new_v1_address)) return info.new_v1_address;
+    if (info.old_address && getRawSeedForAddress(info.old_address)) return info.old_address;
+    return active || info.new_v1_address || info.old_address || '';
+  }
+
+  function getSendSeed(address){
+    const active = (address || getActiveAddress() || getAddress() || '').trim();
+    const info = getMigrationInfo();
+    const direct = getRawSeedForAddress(active);
+    if (direct) return direct;
+    const migrated = info.new_v1_address ? getRawSeedForAddress(info.new_v1_address) : '';
+    if (migrated) return migrated;
+    const legacy = info.old_address ? getRawSeedForAddress(info.old_address) : '';
+    if (legacy) return legacy;
+    return localStorage.getItem(SEND_SECRET_KEY) || localStorage.getItem(SEND_SEED_KEY) || localStorage.getItem(SEND_SEED_COMPAT_KEY) || '';
+  }
+
+  function setSendSeed(seed){
+    const value = seed ? seed.trim() : '';
+    setItem(SEND_SECRET_KEY, value);
+    setItem(SEND_SEED_KEY, value);
+    setItem(SEND_SEED_COMPAT_KEY, value);
+    const address = getCredentialLookupAddress(getActiveAddress());
+    if (address) {
+      scopedCredentialKeys(address).slice(0, 2).forEach(key => setItem(key, value));
+    }
+  }
+
   const getSendSecret = getSendSeed;
   const setSendSecret = setSendSeed;
   function getPin(){ return localStorage.getItem(PIN_KEY) || ''; }
@@ -158,8 +214,8 @@
   function lock(){ return lockWallet(); }
   function setCustomUnlockHandler(fn){ customUnlockHandler = typeof fn === 'function' ? fn : null; }
 
-  function hexToBytes(hex){ const out=[]; for(let i=0;i<hex.length;i+=2) out.push(parseInt(hex.slice(i,i+2),16)); return new Uint8Array(out); }
-  function bytesToHex(bytes){ return Array.from(bytes).map(b=>b.toString(16).padStart(2,'0')).join(''); }
+  function hexToBytes(hex){ const clean = String(hex || '').replace(/^0x/, ''); const out=[]; for(let i=0;i<clean.length;i+=2) out.push(parseInt(clean.slice(i,i+2),16)); return new Uint8Array(out); }
+  function bytesToHex(bytes){ return Array.from(bytes || []).map(b=>b.toString(16).padStart(2,'0')).join(''); }
   async function sha256Hex(s){ const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)); return bytesToHex(new Uint8Array(d)); }
   async function aesKeyFromPin(pin, salt){
     const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
@@ -192,10 +248,10 @@
   }
 
   async function deriveAddressFromPublicKey(publicKey){
-    const res = await fetch('/api/v1/address/derive', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({public_key: publicKey})});
+    const res = await fetch('/api/v1/address/derive', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({public_key: publicKey, compressed_public_key: publicKey})});
     const data = await res.json();
-    if (!res.ok || !data.address) throw new Error(data.error || 'address_derivation_failed');
-    return data.address;
+    if (!res.ok || !(data.address || data.thr_address)) throw new Error(data.error || 'address_derivation_failed');
+    return data.address || data.thr_address;
   }
 
   async function createWalletV1({pin} = {}){
@@ -203,8 +259,9 @@
     if (!secp || !secp.getPublicKey || !secp.utils || !secp.sign) throw new Error('secp256k1_library_missing');
     if (!pin) throw new Error('pin_required');
     const privBytes = secp.utils.randomPrivateKey ? secp.utils.randomPrivateKey() : crypto.getRandomValues(new Uint8Array(32));
-    const priv = bytesToHex(privBytes);
-    const pub = bytesToHex(secp.getPublicKey(priv, true));
+    const priv = typeof privBytes === 'string' ? privBytes.replace(/^0x/, '') : bytesToHex(privBytes);
+    const pubBytes = secp.getPublicKey(priv, true);
+    const pub = typeof pubBytes === 'string' ? pubBytes.replace(/^0x/, '') : bytesToHex(pubBytes);
     const address = await deriveAddressFromPublicKey(pub);
     const enc = await encryptPrivateKeyHex(priv, pin);
     localStorage.setItem(V1_ENCRYPTED_KEY, enc);
@@ -215,6 +272,10 @@
     localStorage.setItem(LOCK_KEY, '0');
     unlockedPrivateKeyHex = priv;
     return { address, publicKey: pub };
+  }
+
+  function hasSigningMaterial(address){
+    return !!(localStorage.getItem(V1_ENCRYPTED_KEY) || unlockedPrivateKeyHex || getSendSeed(address));
   }
 
   async function unlockWallet(options = {}){
@@ -277,7 +338,8 @@
       localStorage.setItem(LOCK_KEY, '0');
       return true;
     }
-    const hasLegacyCreds = !!(getAddress() && getSendSeed() && pin === getPin());
+    const credentialAddress = getCredentialLookupAddress(options.address || getActiveAddress());
+    const hasLegacyCreds = !!(getActiveAddress() && getSendSeed(credentialAddress) && pin === getPin());
     if (hasLegacyCreds) { setBound(true); localStorage.setItem(LOCK_KEY, '0'); return true; }
     return false;
   }
@@ -323,10 +385,28 @@
     }
   }
 
+  function getWalletAuthDiagnostics(address){
+    const info = getMigrationInfo();
+    const active = address || getActiveAddress();
+    const credential = getCredentialLookupAddress(active);
+    return {
+      active_wallet_address: active || '',
+      credential_lookup_address: credential || '',
+      migration_old_address: info.old_address || '',
+      migration_new_v1_address: info.new_v1_address || '',
+      has_encrypted_send_seed: !!localStorage.getItem(V1_ENCRYPTED_KEY),
+      has_signing_material: hasSigningMaterial(active),
+    };
+  }
+
+  function logWalletAuthDiagnostics(address){
+    try { console.info('[WalletAuth]', getWalletAuthDiagnostics(address)); } catch(_) {}
+  }
+
   function disconnect(){ setBound(false); localStorage.setItem(LOCK_KEY, '1'); unlockedPrivateKeyHex = null; }
-  function forgetDevice(){ [ADDRESS_KEY,SEND_SECRET_KEY,SEND_SEED_KEY,SEND_SEED_COMPAT_KEY,PIN_KEY,BOUND_KEY,LOCK_KEY,V1_ENCRYPTED_KEY,V1_PUBLIC_KEY,V1_ADDRESS_KEY,V1_MIGRATION_META].forEach(k => localStorage.removeItem(k)); unlockedPrivateKeyHex = null; }
+  function forgetDevice(){ [ADDRESS_KEY,SEND_SECRET_KEY,SEND_SEED_KEY,SEND_SEED_COMPAT_KEY,PIN_KEY,BOUND_KEY,LOCK_KEY,V1_ENCRYPTED_KEY,V1_PUBLIC_KEY,V1_ADDRESS_KEY,MIGRATION_META_KEY].forEach(k => localStorage.removeItem(k)); unlockedPrivateKeyHex = null; }
   function clearSession(){ forgetDevice(); }
-  function saveSession({address, sendSeed, pin, bound}){ setAddress(address || ''); setSendSeed(sendSeed || ''); setPin(pin || ''); setBound(bound !== undefined ? !!bound : !!(address && sendSeed)); if (address || sendSeed) localStorage.setItem(LOCK_KEY, '0'); }
+  function saveSession({address, sendSeed, pin, bound} = {}){ setAddress(address || ''); setSendSeed(sendSeed || ''); setPin(pin || ''); setBound(bound !== undefined ? !!bound : !!(address && sendSeed)); if (address || sendSeed) localStorage.setItem(LOCK_KEY, '0'); }
   function requirePin(actionLabel = 'continue'){ const stored = getPin(); if(!stored) return true; const entered = prompt(`Enter wallet PIN to ${actionLabel}`); if(entered === null) return false; if(entered !== stored){ alert('Wrong PIN.'); return false; } return true; }
 
   window.walletSession = {

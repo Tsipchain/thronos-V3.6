@@ -1,4 +1,9 @@
-/** Wallet V1 Authentication Helper */
+/**
+ * Wallet V1 Authentication Helper
+ *
+ * Provides PIN-based unlock for wallet mutations while keeping plaintext
+ * signing material in memory only for the page lifetime.
+ */
 (function(window) {
     'use strict';
 

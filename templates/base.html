@@ -6562,25 +6562,35 @@ let _globalTipTrack = null;  // Stores the track being tipped (from GlobalPlayer
 async function openGlobalTipModal(trackOverride) {
     const track = trackOverride || window.GlobalMusicPlayer?.getCurrentTrack?.();
     if (!track) { alert('No active track'); return; }
-    _globalTipTrack = track;  // Store for submitGlobalTip()
+    _globalTipTrack = track;
     try {
         const auth = _globalTipAuth || await window.WalletAuth.requireUnlockedWallet();
         _globalTipAuth = auth;
         const address = auth.address;
+        const credentialLookupAddress = auth.credentialLookupAddress || address;
+        const fetchAddress = credentialLookupAddress || address;
         const apiBase = typeof buildWalletMusicApiUrl === 'function'
             ? buildWalletMusicApiUrl('/api/balances')
             : '/api/balances';
-        const r = await fetch(`${apiBase}${apiBase.includes('?') ? '&' : '?'}address=${encodeURIComponent(address)}&show_zero=false`);
+        const r = await fetch(`${apiBase}${apiBase.includes('?') ? '&' : '?'}address=${encodeURIComponent(fetchAddress)}&show_zero=true`);
         const j = await r.json();
-        const balances = (j && j.balances) || {};
-        const items = Object.entries(balances)
-            .map(([symbol, balance]) => ({ symbol, balance: Number(balance || 0) }))
+        let tokens = [];
+        if (j && j.tokens && Array.isArray(j.tokens)) {
+            tokens = j.tokens;
+        } else if (j && j.balances && typeof j.balances === 'object') {
+            tokens = Object.entries(j.balances)
+                .map(([symbol, balance]) => ({ symbol, balance: Number(balance || 0) }));
+        } else if (j && j.data && j.data.tokens) {
+            tokens = j.data.tokens;
+        }
+        const items = tokens
+            .filter(t => t.symbol && typeof t.symbol === 'string')
+            .map(t => ({ symbol: t.symbol, balance: Number(t.balance || 0) }))
             .filter(x => x.balance > 0);
         _globalTipAssets = items;
         const sel = document.getElementById('globalTipAsset');
         sel.innerHTML = '';
-        // Always show THR first, then WBTC, then rest (crosschain-friendly order)
-        const sortOrder = ['THR', 'WBTC', 'L2E'];
+        const sortOrder = ['THR', 'WBTC', 'L2E', 'JAM', 'CVT', 'HPENNIS', 'LOUMIDIS', 'MAR', '7CEB'];
         items.sort((a, b) => {
             const ai = sortOrder.indexOf(a.symbol);
             const bi = sortOrder.indexOf(b.symbol);

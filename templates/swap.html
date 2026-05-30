@@ -335,8 +335,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 // Listen for wallet V1 unlock events from base.html
 window.addEventListener('thronos:wallet:v1:unlocked', async (e) => {
-    console.info('[SwapUI] Wallet V1 unlocked:', e.detail?.address?.substring(0, 10) + '...');
+    const eventAddr = e.detail?.address?.substring(0, 10) + '...' || 'unknown';
     const addr = getSwapActiveWalletAddress();
+    const isUnlocked = window.walletSession && typeof window.walletSession.isUnlockedFor === 'function' ? window.walletSession.isUnlockedFor(addr) : false;
+    console.info('[SwapUI] Wallet V1 unlocked event received:', { eventAddr, activeAddr: addr?.substring(0, 10) + '...', isUnlockedFor: isUnlocked });
     if (addr) {
         await Promise.all([loadBalances(addr), loadSwapCatalog()]);
         setDefaultTokens();
@@ -347,9 +349,11 @@ window.addEventListener('thronos:wallet:v1:unlocked', async (e) => {
 
 // Listen for general wallet state changes
 window.addEventListener('thronos:wallet:state-changed', async () => {
-    console.info('[SwapUI] Wallet state changed, refreshing...');
     const addr = getSwapActiveWalletAddress();
-    if (!isSwapWalletReady(addr)) {
+    const isReady = isSwapWalletReady(addr);
+    const isUnlocked = window.walletSession && typeof window.walletSession.isUnlockedFor === 'function' ? window.walletSession.isUnlockedFor(addr) : false;
+    console.info('[SwapUI] Wallet state changed event:', { activeAddr: addr?.substring(0, 10) + '...', isReady, isUnlockedFor: isUnlocked });
+    if (!isReady) {
         $('walletWarning').style.display = 'block';
         $('swapBtn').disabled = true;
         $('swapBtn').textContent = "Connect Wallet";

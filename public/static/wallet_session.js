@@ -1,4 +1,5 @@
 (function(window){
+  const VERSION = 'wallet-v1-state-sync-2026-05-30';
   const ADDRESS_KEY = 'thr_address';
   const SEND_SECRET_KEY = 'send_secret';
   const SEND_SEED_KEY = 'send_seed';
@@ -382,6 +383,7 @@
   function requirePin(actionLabel = 'continue'){ const stored = getPin(); if(!stored) return true; const entered = prompt(`Enter wallet PIN to ${actionLabel}`); if(entered === null) return false; if(entered !== stored){ alert('Wrong PIN.'); return false; } return true; }
 
   window.walletSession = {
+    version: VERSION,
     ADDRESS_KEY, SEND_SECRET_KEY, SEND_SEED_KEY, PIN_KEY, BOUND_KEY, LOCK_KEY,
     MIGRATION_META_KEY, V1_ENCRYPTED_KEY, V1_PUBLIC_KEY, V1_ADDRESS_KEY,
     getAddress, getActiveAddress, setAddress,

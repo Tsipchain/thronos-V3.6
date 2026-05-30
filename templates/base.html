@@ -5855,6 +5855,18 @@ function downloadCGMinerKit() {
 <script src="{{ asset_cdn_base|default('https://thrchain.vercel.app') }}/static/music_module.js?v={{ build_id }}"></script>
 
 <script>
+// Log wallet module versions for cache/state diagnostics
+if (window.walletSession && window.walletSession.version) {
+    console.info('[WalletV1] wallet_session version:', window.walletSession.version);
+} else {
+    console.warn('[WalletV1] wallet_session not loaded or version missing');
+}
+if (window.WalletAuth && window.WalletAuth.version) {
+    console.info('[WalletV1] wallet_auth version:', window.WalletAuth.version);
+} else {
+    console.warn('[WalletV1] wallet_auth not loaded or version missing');
+}
+
 // PR-5a: Init guard to prevent double initialization
 window.__walletWidgetInit = window.__walletWidgetInit || false;
 

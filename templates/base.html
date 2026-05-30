@@ -1558,13 +1558,23 @@
                     <option value="unlock">Unlock Wallet V1</option>
                     <option value="migrate">Migrate Legacy Wallet</option>
                 </select>
+
+                <!-- UNLOCK MODE: Only PIN + Unlock button -->
                 <div id="walletV1UnlockMode" style="display:none; margin-top:10px;">
                     <label for="walletWidgetUnlockPin">PIN</label>
                     <input type="password" id="walletWidgetUnlockPin" placeholder="Enter wallet PIN" />
                     <div class="wallet-modal-actions" style="margin-top:10px;">
                         <button class="primary" onclick="unlockWalletV1FromHeader()">Unlock Wallet V1</button>
                     </div>
+                    <div id="restoreMigratedWalletSection" style="display:none; margin-top:10px; border-top:1px solid #223344; padding-top:10px;">
+                        <button class="primary" style="background:#0a4a1a;" onclick="restoreMigratedWalletFromHeader()">↩ Use Migrated Wallet</button>
+                        <div style="font-size:11px; color:#9f9; opacity:0.7; margin-top:6px;">
+                            Restore to your previously migrated wallet address.
+                        </div>
+                    </div>
                 </div>
+
+                <!-- MIGRATE MODE: Legacy address + secret + new PIN + Migrate button -->
                 <div id="walletV1MigrateMode" style="display:none; margin-top:10px; border-top:1px solid #114422; padding-top:10px;">
                     <label for="walletWidgetLegacyAddress">Legacy THR Address</label>
                     <input type="text" id="walletWidgetLegacyAddress" placeholder="THR..." />
@@ -1576,13 +1586,22 @@
                         <button class="primary" onclick="migrateLegacyWalletFromHeader()">Migrate Legacy Wallet</button>
                     </div>
                 </div>
-                                <label for="walletWidgetPin">PIN (optional)</label>
-                <input type="password" id="walletWidgetPin" placeholder="4-8 digits" />
-                <div class="wallet-modal-actions" style="margin-top:10px;">
-                    <button class="primary" onclick="createWalletV1FromHeader()">Create Wallet V1</button>
+
+                <!-- CREATE MODE: Optional PIN + Create button only -->
+                <div id="walletV1CreateMode" style="margin-top:10px;">
+                    <label for="walletWidgetPin">PIN (optional)</label>
+                    <input type="password" id="walletWidgetPin" placeholder="4-8 digits" />
+                    <div class="wallet-modal-actions" style="margin-top:10px;">
+                        <button class="primary" onclick="createWalletV1FromHeader()">Create Wallet V1</button>
+                    </div>
+                    <div style="font-size:11px; color:#9f9; opacity:0.7; margin-top:6px;">
+                        Stored locally (wallet_v1_address, encrypted key material, wallet_pin).
+                    </div>
                 </div>
-                <div style="font-size:11px; color:#9f9; opacity:0.7; margin-top:6px;">
-                    Stored locally (wallet_v1_address, encrypted key material, wallet_pin).
+
+                <!-- DIAGNOSTICS: Safe state information (no secrets) -->
+                <div id="walletPanelDiagnostics" style="margin-top:15px; font-size:10px; color:#9f9; opacity:0.6; border-top:1px solid #114422; padding-top:10px;">
+                    <div id="walletDiagnosticsContent"></div>
                 </div>
             </div>
 
@@ -5050,41 +5069,119 @@ function switchWalletV1Mode(){
     const mode = document.getElementById('walletWidgetMode')?.value || 'create';
     const unlockEl = document.getElementById('walletV1UnlockMode');
     const migrateEl = document.getElementById('walletV1MigrateMode');
+    const createEl = document.getElementById('walletV1CreateMode');
+
+    // Mutually exclusive: show only the selected mode
     if (unlockEl) unlockEl.style.display = mode === 'unlock' ? 'block' : 'none';
     if (migrateEl) migrateEl.style.display = mode === 'migrate' ? 'block' : 'none';
+    if (createEl) createEl.style.display = mode === 'create' ? 'block' : 'none';
+
+    // Show restore button if migration exists and we're in unlock mode
+    updateRestoreMigratedWalletButton();
+    updateWalletPanelDiagnostics();
+}
+
+function updateRestoreMigratedWalletButton(){
+    if (!walletSession || !walletSession.getMigrationInfo) return;
+    const restoreSection = document.getElementById('restoreMigratedWalletSection');
+    if (!restoreSection) return;
+
+    const mode = document.getElementById('walletWidgetMode')?.value || 'create';
+    const migrationInfo = walletSession.getMigrationInfo();
+    const showRestore = mode === 'unlock' && migrationInfo && migrationInfo.new_v1_address;
+
+    restoreSection.style.display = showRestore ? 'block' : 'none';
+}
+
+function updateWalletPanelDiagnostics(){
+    if (!walletSession || !walletSession.getWalletAuthDiagnostics) return;
+    const diagnosticsEl = document.getElementById('walletDiagnosticsContent');
+    if (!diagnosticsEl) return;
+
+    try {
+        const diag = walletSession.getWalletAuthDiagnostics();
+        const mode = document.getElementById('walletWidgetMode')?.value || 'create';
+        const html = `
+Mode: ${mode} | Active: ${diag.active_wallet_address.substring(0, 10)}... | Signing: ${diag.has_signing_material ? 'yes' : 'no'}
+        `.trim();
+        diagnosticsEl.textContent = html;
+    } catch(_) {
+        diagnosticsEl.textContent = '';
+    }
 }
 
 async function createWalletV1FromHeader(){
     const pin = (document.getElementById('walletWidgetPin')?.value || '').trim();
     if (!pin) return alert('PIN is required.');
     if (!walletSession.createWalletV1) return alert('Wallet V1 unsupported in this build');
-    const created = await walletSession.createWalletV1({ pin });
-    walletSession.setBound(true);
-    showWalletContentSection();
-    updateHeaderWalletUi();
-    updateWalletUI();
-    loadWalletBalances(true);
-    if (typeof updateHeroButton === 'function') updateHeroButton(created.address);
+
+    try {
+        console.info('[CreateWallet] Starting create with PIN protection');
+        const created = await walletSession.createWalletV1({ pin });
+        console.info('[CreateWallet] Success:', created.address.substring(0, 10) + '...');
+        walletSession.setBound(true);
+        showWalletContentSection();
+        updateHeaderWalletUi();
+        updateWalletUI();
+        loadWalletBalances(true);
+        if (typeof updateHeroButton === 'function') updateHeroButton(created.address);
+        alert('Wallet V1 created successfully!');
+    } catch(err) {
+        console.error('[CreateWallet] Failed:', err.message);
+        alert('Failed to create wallet: ' + (err.message || 'Unknown error'));
+        // Do NOT update UI on failure - wallet state is preserved
+    }
 }
 
 async function unlockWalletV1FromHeader(){
     const pin = (document.getElementById('walletWidgetUnlockPin')?.value || '').trim();
-    const ok = await walletSession.unlock(pin);
-    if (!ok) return alert('Unlock failed');
-    walletSession.setBound(true);
-    showWalletContentSection();
-    updateHeaderWalletUi();
-    loadWalletBalances(true);
+    if (!pin) return alert('PIN is required to unlock.');
+
+    try {
+        console.info('[UnlockWallet] Attempting unlock with PIN');
+        const currentActive = walletSession.getActiveAddress ? walletSession.getActiveAddress() : '';
+        const ok = await walletSession.unlockWallet({ pin });
+
+        if (!ok) {
+            console.warn('[UnlockWallet] Unlock returned false - wrong PIN?');
+            return alert('Unlock failed - wrong PIN or wallet not found');
+        }
+
+        console.info('[UnlockWallet] Success:', currentActive.substring(0, 10) + '...');
+        walletSession.setBound(true);
+        showWalletContentSection();
+        updateHeaderWalletUi();
+        loadWalletBalances(true);
+        alert('Wallet unlocked successfully!');
+    } catch(err) {
+        console.error('[UnlockWallet] Failed:', err.message);
+        alert('Unlock failed: ' + (err.message || 'Unknown error'));
+        // Do NOT change wallet state on failure
+    }
 }
 
 async function migrateLegacyWalletFromHeader(){
     const oldAddress = (document.getElementById('walletWidgetLegacyAddress')?.value || '').trim();
     let sendSecret = (document.getElementById('walletWidgetLegacySecret')?.value || '').trim();
     const pin = (document.getElementById('walletWidgetMigratePin')?.value || '').trim();
+
+    // Validate required fields
     if (!oldAddress || !sendSecret || !pin) return alert('Legacy address, send secret and PIN are required.');
+
+    // Validate old address format (must start with THR and be reasonably long)
+    if (!oldAddress.startsWith('THR') || oldAddress.length < 20) {
+        return alert('Invalid legacy address format. Must start with THR and be at least 20 characters.');
+    }
+
     if (!walletSession.migrateLegacyWallet) return alert('Migration API unavailable');
     try {
+        // Log diagnostics before migration attempt
+        const diagnostics = walletSession.getWalletAuthDiagnostics ? walletSession.getWalletAuthDiagnostics() : {};
+        console.info('[MigrateLegacyWallet] Before migration:', { oldAddress: oldAddress.substring(0, 10) + '...', ...diagnostics });
+
         const result = await walletSession.migrateLegacyWallet({ oldAddress, sendSecret, pin });
+
+        // Only clear secret AFTER successful migration
         if (document.getElementById('walletWidgetLegacySecret')) document.getElementById('walletWidgetLegacySecret').value = '';
         localStorage.removeItem('send_secret');
         localStorage.removeItem('send_seed');
@@ -5094,8 +5191,29 @@ async function migrateLegacyWalletFromHeader(){
         updateHeaderWalletUi();
         loadWalletBalances(true);
         alert('Migration complete: ' + (result.new_v1_address || 'ok'));
+    } catch(err) {
+        console.error('[MigrateLegacyWallet] Migration failed:', err.message);
+        alert('Migration failed: ' + (err.message || 'Unknown error'));
+        // walletSession.migrateLegacyWallet handles rollback on failure
     } finally {
         sendSecret = '';
+    }
+}
+
+function restoreMigratedWalletFromHeader(){
+    if (!walletSession.restoreToMigratedWallet) return alert('Restore API unavailable');
+    const migrationInfo = walletSession.getMigrationInfo ? walletSession.getMigrationInfo() : {};
+    if (!migrationInfo.new_v1_address) return alert('No migration found to restore.');
+    try {
+        console.info('[RestoreMigratedWallet] Restoring to:', migrationInfo.new_v1_address.substring(0, 10) + '...');
+        walletSession.restoreToMigratedWallet();
+        showWalletContentSection();
+        updateHeaderWalletUi();
+        loadWalletBalances(true);
+        alert('Wallet restored to migrated address: ' + migrationInfo.new_v1_address.substring(0, 10) + '...');
+    } catch(err) {
+        console.error('[RestoreMigratedWallet] Restore failed:', err.message);
+        alert('Restore failed: ' + (err.message || 'Unknown error'));
     }
 }
 

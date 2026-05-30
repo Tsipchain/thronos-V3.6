@@ -800,25 +800,6 @@ function getPoolActiveWalletAddress() {
     return localStorage.getItem('thr_address') || '';
 }
 
-async function requirePoolWalletAuth(action, txCore) {
-    if (!window.WalletAuth || typeof WalletAuth.requireUnlockedWallet !== 'function') {
-        throw new Error('missing_wallet_signing_material');
-    }
-    const wallet = await WalletAuth.requireUnlockedWallet();
-    const publicKey = wallet.getPublicKey();
-    const signedTx = await wallet.signTransaction(txCore);
-    const signature = typeof signedTx === 'string' ? signedTx : signedTx && signedTx.signature;
-    return {
-        provider_thr: wallet.address,
-        credential_lookup_address: wallet.credentialLookupAddress || wallet.address,
-        public_key: publicKey,
-        signed_tx: typeof signedTx === 'string' ? { ...txCore, public_key: publicKey, signature } : signedTx,
-        signature,
-        auth_secret: wallet.authSecret || '',
-        action
-    };
-}
-
 // Tab Management
 function showTab(tabName) {
     // Hide all tabs
@@ -1314,24 +1295,20 @@ async function submitCreatePool(event) {
         public_key: poolAuth.publicKey,
         signed_tx: poolAuth.signedTx,
         signature: poolAuth.signature,
+        action: 'create_pool',
         lock_days: selectedLockDays
     };
 
     try {
-        const auth = await requirePoolWalletAuth('create pool', txCore);
-        const payload = {
-            token_a: tokenA,
-            token_b: tokenB,
-            amount_a: amountA,
-            amount_b: amountB,
-            provider_thr: auth.provider_thr,
-            credential_lookup_address: auth.credential_lookup_address,
-            public_key: auth.public_key,
-            signed_tx: auth.signed_tx,
-            signature: auth.signature,
-            auth_secret: auth.auth_secret,
-            lock_days: selectedLockDays
+        const diagnostics = {
+            active_wallet_address: provider,
+            credential_lookup_address: poolAuth.credentialLookupAddress || provider,
+            has_signing_material: !!(poolAuth.signature && poolAuth.signedTx),
+            action: 'create_pool',
+            endpoint: '/api/v1/pools'
         };
+        console.log('[CreatePool] Diagnostics:', diagnostics);
+
         const response = await fetch('/api/v1/pools', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1422,17 +1399,16 @@ async function addLiquidity(poolId) {
             amount_b: parseFloat(amountB)
         });
 
-        // Check for referrer in localStorage
         const referrer = localStorage.getItem('pool_referrer') || '';
-        const txCore = {
-            from: wallet,
-            to: poolId,
-            amount: { amount_a: parseFloat(amountA), amount_b: parseFloat(amountB) },
-            token: `${pool.token_a}/${pool.token_b}`,
-            nonce: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-            timestamp: new Date().toISOString()
+
+        const diagnostics = {
+            active_wallet_address: wallet,
+            credential_lookup_address: poolAuth.credentialLookupAddress || wallet,
+            has_signing_material: !!(poolAuth.signature && poolAuth.signedTx),
+            action: 'add_liquidity',
+            endpoint: '/api/v1/pools/add_liquidity'
         };
-        const auth = await requirePoolWalletAuth('add liquidity', txCore);
+        console.log('[AddLiquidity] Diagnostics:', diagnostics);
 
         const response = await fetch('/api/v1/pools/add_liquidity', {
             method: 'POST',
@@ -1447,8 +1423,9 @@ async function addLiquidity(poolId) {
                 public_key: poolAuth.publicKey,
                 signed_tx: poolAuth.signedTx,
                 signature: poolAuth.signature,
+                action: 'add_liquidity',
                 passphrase: '',
-                referrer: referrer  // Include referrer if available
+                referrer: referrer
             })
         });
 
@@ -1508,6 +1485,16 @@ async function removeLiquidity(poolId) {
             provider_thr: wallet,
             shares: parseFloat(shares)
         });
+
+        const diagnostics = {
+            active_wallet_address: wallet,
+            credential_lookup_address: poolAuth.credentialLookupAddress || wallet,
+            has_signing_material: !!(poolAuth.signature && poolAuth.signedTx),
+            action: 'remove_liquidity',
+            endpoint: '/api/v1/pools/remove_liquidity'
+        };
+        console.log('[RemoveLiquidity] Diagnostics:', diagnostics);
+
         const response = await fetch('/api/v1/pools/remove_liquidity', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

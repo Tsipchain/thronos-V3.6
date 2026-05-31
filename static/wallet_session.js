@@ -16,6 +16,13 @@
   let unlockedPrivateKeyHex = null;
   let unlockedForAddress = null; // Track which address the current in-memory key belongs to
 
+  const SYSTEM_WALLETS = {
+    'THR5DF27A86C477F381594E896F0E55357DEC5942BA': 'ai_game_wallet',
+    'THR_AI_AGENT_WALLET_V1': 'ai_agent_system',
+  };
+
+  let _ignoredSystemWalletSource = null;
+
   function setItem(key, value){ value ? localStorage.setItem(key, value) : localStorage.removeItem(key); }
   function readJson(key){ try { return JSON.parse(localStorage.getItem(key) || '{}'); } catch(_) { return {}; } }
   function setBound(v){ localStorage.setItem(BOUND_KEY, v ? '1' : '0'); }
@@ -27,19 +34,30 @@
     const normalized = normalizeAddress(addr);
     return normalized.startsWith('THR') && normalized.length >= 20 && normalized.length <= 100;
   }
+  function isSystemWalletAddress(addr){
+    const normalized = normalizeAddress(addr);
+    return SYSTEM_WALLETS.hasOwnProperty(normalized);
+  }
   function getAddress(){ return localStorage.getItem(V1_ADDRESS_KEY) || localStorage.getItem(ADDRESS_KEY) || ''; }
   function getActiveAddress(){
+    _ignoredSystemWalletSource = null;
     const info = getMigrationInfo();
     const v1_addr = localStorage.getItem(V1_ADDRESS_KEY);
     const legacy_addr = localStorage.getItem(ADDRESS_KEY);
 
-    // Prefer in order: wallet_v1_address (if valid) > migration.new_v1_address > thr_address (if valid)
-    // This prevents stale/random addresses from being used
-    if (v1_addr && isValidThrAddress(v1_addr)) return v1_addr;
-    if (info.new_v1_address && isValidThrAddress(info.new_v1_address)) return info.new_v1_address;
-    if (legacy_addr && isValidThrAddress(legacy_addr)) return legacy_addr;
-    // Fallback: return first valid address or empty
-    return v1_addr || info.new_v1_address || legacy_addr || '';
+    // Prefer in order: wallet_v1_address (if valid & not system) > migration.new_v1_address (if valid & not system) > thr_address (if valid & not system)
+    // Guard against system wallets being stored in localStorage or migration records
+    if (v1_addr && isValidThrAddress(v1_addr) && !isSystemWalletAddress(v1_addr)) return v1_addr;
+    if (v1_addr && isSystemWalletAddress(v1_addr)) _ignoredSystemWalletSource = 'wallet_v1_address';
+
+    if (info.new_v1_address && isValidThrAddress(info.new_v1_address) && !isSystemWalletAddress(info.new_v1_address)) return info.new_v1_address;
+    if (info.new_v1_address && isSystemWalletAddress(info.new_v1_address)) _ignoredSystemWalletSource = 'migration.new_v1_address';
+
+    if (legacy_addr && isValidThrAddress(legacy_addr) && !isSystemWalletAddress(legacy_addr)) return legacy_addr;
+    if (legacy_addr && isSystemWalletAddress(legacy_addr)) _ignoredSystemWalletSource = 'thr_address';
+
+    // Fallback: return first valid address (excluding system wallets) or empty
+    return '';
   }
   function setAddress(addr){ setItem(ADDRESS_KEY, addr ? addr.trim() : ''); }
 
@@ -330,7 +348,9 @@
       has_v1_public_key: has_v1_pubkey,
       is_bound: isBound(),
       is_locked: isLocked(),
-      is_migrated: isMigrated()
+      is_migrated: isMigrated(),
+      ignored_system_wallet: !!_ignoredSystemWalletSource,
+      ignored_system_wallet_source: _ignoredSystemWalletSource
     };
   }
 
@@ -395,6 +415,7 @@
     getPin, setPin, isLocked, lockWallet, lock: lockWallet, unlockWallet, unlock: unlockWallet, unlock,
     setCustomUnlockHandler, isBound, setBound, disconnect, forgetDevice, clearSession, saveSession, requirePin,
     isUnlockedFor,
-    getDebugState, restoreToMigratedWallet, resetActiveWalletPointers, clearAllWalletData, isValidThrAddress
+    getDebugState, restoreToMigratedWallet, resetActiveWalletPointers, clearAllWalletData, isValidThrAddress,
+    isSystemWalletAddress
   };
 })(window);

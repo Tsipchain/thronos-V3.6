@@ -33,19 +33,31 @@
         return localStorage.getItem('send_secret') || localStorage.getItem('send_seed') || localStorage.getItem('thr_secret') || '';
     }
 
-    function logAuthDiagnostics(address) {
+    function shortAddress(address) {
+        return address ? address.substring(0, 10) + '...' : '';
+    }
+
+    function hasRuntimeSigningMaterial(address) {
+        return !!(window.walletSession &&
+                  typeof window.walletSession.hasRuntimeSigningMaterial === 'function' &&
+                  window.walletSession.hasRuntimeSigningMaterial(address));
+    }
+
+    function hasEncryptedSeed() {
+        return !!(window.walletSession &&
+                  typeof window.walletSession.hasEncryptedPrivateKey === 'function' &&
+                  window.walletSession.hasEncryptedPrivateKey()) ||
+               !!localStorage.getItem('wallet_v1_encrypted_priv');
+    }
+
+    function logAuthDiagnostics(address, source = 'wallet_auth') {
         try {
-            if (window.walletSession && typeof window.walletSession.logWalletAuthDiagnostics === 'function') {
-                window.walletSession.logWalletAuthDiagnostics(address);
-                return;
-            }
             console.info('[WalletAuth]', {
-                active_wallet_address: address || '',
-                credential_lookup_address: getCredentialLookupAddress(address) || '',
-                migration_old_address: '',
-                migration_new_v1_address: '',
-                has_encrypted_send_seed: !!localStorage.getItem('encrypted_send_seed'),
-                has_signing_material: !!getSigningMaterial(address)
+                active_address_short: shortAddress(address),
+                has_encrypted_seed: hasEncryptedSeed(),
+                has_runtime_signing_material: hasRuntimeSigningMaterial(address),
+                is_locked: !!(window.walletSession && typeof window.walletSession.isLocked === 'function' && window.walletSession.isLocked()),
+                source: source
             });
         } catch (_) {}
     }
@@ -53,6 +65,12 @@
     function missingSigningMaterialError() {
         const err = new Error('missing_wallet_signing_material');
         err.code = 'UNLOCK_FAILED';
+        return err;
+    }
+
+    function walletLockedRelockRequiredError() {
+        const err = new Error('wallet_locked_reunlock_required');
+        err.code = 'WALLET_LOCKED_REUNLOCK_REQUIRED';
         return err;
     }
 
@@ -72,17 +90,27 @@
                     ? window.walletSession.getPublicKey()
                     : ''
             ),
-            signTransaction: (txCore) => {
+            signTransaction: async (txCore) => {
                 if (!window.walletSession || typeof window.walletSession.signTransaction !== 'function') {
                     throw missingSigningMaterialError();
                 }
-                return window.walletSession.signTransaction(txCore);
+                try {
+                    const signature = await window.walletSession.signTransaction(txCore);
+                    if (!signature) throw walletLockedRelockRequiredError();
+                    return signature;
+                } catch (err) {
+                    if (err && (err.message === 'wallet_locked' || err.code === 'WALLET_LOCKED_REUNLOCK_REQUIRED')) {
+                        throw walletLockedRelockRequiredError();
+                    }
+                    throw err;
+                }
             }
         };
     }
 
     let cachedAuthSecret = '';
     let cachedAuthAddress = '';
+    let cachedRuntimeSigningAddress = '';
 
     const WalletAuth = {
         version: VERSION,
@@ -90,7 +118,7 @@
          * Require unlocked wallet for mutations.
          * Throws error codes: WALLET_NOT_CONNECTED, WALLET_LOCKED, UNLOCK_FAILED.
          */
-        async requireUnlockedWallet() {
+        async requireUnlockedWallet(options = {}) {
             const address = getActiveWalletAddress();
             if (!address) {
                 const err = new Error('Wallet not connected. Please connect your wallet first.');
@@ -98,18 +126,18 @@
                 throw err;
             }
 
+            const source = options.source || 'wallet_auth';
             const credentialLookupAddress = getCredentialLookupAddress(address);
-            logAuthDiagnostics(address);
+            logAuthDiagnostics(address, source);
 
-            // Check if wallet is already unlocked in this tab for this address
-            if (window.walletSession && typeof window.walletSession.isUnlockedFor === 'function' && window.walletSession.isUnlockedFor(address)) {
-                // Wallet is unlocked - return signing context without prompting
-                const storedSecret = getSigningMaterial(address);
-                if (storedSecret) {
-                    cachedAuthSecret = storedSecret;
-                    cachedAuthAddress = address;
-                    return buildAuthResult(address, storedSecret, credentialLookupAddress);
-                }
+            // Check if Wallet V1 runtime signing material is already available in this tab.
+            if (hasRuntimeSigningMaterial(address)) {
+                cachedRuntimeSigningAddress = address;
+                return buildAuthResult(address, '', credentialLookupAddress);
+            }
+
+            if (cachedRuntimeSigningAddress && cachedRuntimeSigningAddress === address && hasRuntimeSigningMaterial(address)) {
+                return buildAuthResult(address, '', credentialLookupAddress);
             }
 
             // Do not persist plaintext signing material in localStorage/sessionStorage.
@@ -124,17 +152,20 @@
                 return buildAuthResult(address, storedSecret, credentialLookupAddress);
             }
 
+            if (hasEncryptedSeed() && window.walletSession && typeof window.walletSession.isLocked === 'function' && !window.walletSession.isLocked() && !hasRuntimeSigningMaterial(address)) {
+                if (typeof window.walletSession.lockWallet === 'function') window.walletSession.lockWallet();
+                logAuthDiagnostics(address, source);
+            }
+
             const pin = prompt('🔐 PIN (unlock wallet):');
             if (!pin) {
-                const err = new Error('Wallet is locked. Please unlock with your PIN.');
-                err.code = 'WALLET_LOCKED';
-                throw err;
+                throw walletLockedRelockRequiredError();
             }
 
             if (window.walletSession && typeof window.walletSession.unlockWallet === 'function') {
                 try {
                     const ok = await window.walletSession.unlockWallet({ pin, address });
-                    if (!ok) throw missingSigningMaterialError();
+                    if (!ok) throw walletLockedRelockRequiredError();
 
                     if (!hasV1SigningMaterial()) {
                         if (typeof window.walletSession.enrollSigningMaterial === 'function') {
@@ -152,11 +183,19 @@
                         }
                     }
 
+                    if (hasRuntimeSigningMaterial(address)) {
+                        cachedRuntimeSigningAddress = address;
+                        return buildAuthResult(address, '', credentialLookupAddress);
+                    }
                     const authSecret = getSigningMaterial(address);
-                    cachedAuthSecret = authSecret;
-                    cachedAuthAddress = address;
-                    return buildAuthResult(address, authSecret, credentialLookupAddress);
+                    if (authSecret) {
+                        cachedAuthSecret = authSecret;
+                        cachedAuthAddress = address;
+                        return buildAuthResult(address, authSecret, credentialLookupAddress);
+                    }
+                    throw walletLockedRelockRequiredError();
                 } catch (e) {
+                    if (e && e.code === 'WALLET_LOCKED_REUNLOCK_REQUIRED') throw e;
                     const err = new Error(e && e.code === 'UNLOCK_FAILED'
                         ? e.message
                         : 'Failed to unlock wallet: ' + (e.message || e));
@@ -183,11 +222,19 @@
                             }
                         }
                     }
+                    if (hasRuntimeSigningMaterial(address)) {
+                        cachedRuntimeSigningAddress = address;
+                        return buildAuthResult(address, '', credentialLookupAddress);
+                    }
                     const authSecret = getSigningMaterial(address);
-                    cachedAuthSecret = authSecret;
-                    cachedAuthAddress = address;
-                    return buildAuthResult(address, authSecret, credentialLookupAddress);
+                    if (authSecret) {
+                        cachedAuthSecret = authSecret;
+                        cachedAuthAddress = address;
+                        return buildAuthResult(address, authSecret, credentialLookupAddress);
+                    }
+                    throw walletLockedRelockRequiredError();
                 } catch (e) {
+                    if (e && e.code === 'WALLET_LOCKED_REUNLOCK_REQUIRED') throw e;
                     const err = new Error(e && e.code === 'UNLOCK_FAILED'
                         ? e.message
                         : 'Failed to unlock wallet: ' + (e.message || e));
@@ -203,7 +250,16 @@
 
         isUnlocked() {
             const address = getActiveWalletAddress();
-            return !!(cachedAuthSecret || getSigningMaterial(address));
+            return !!(hasRuntimeSigningMaterial(address) || cachedAuthSecret || getSigningMaterial(address));
+        },
+
+        hasRuntimeSigningMaterial(address = null) {
+            const active = address || getActiveWalletAddress();
+            return hasRuntimeSigningMaterial(active);
+        },
+
+        logDiagnostics(source = 'wallet_auth') {
+            logAuthDiagnostics(getActiveWalletAddress(), source);
         },
 
         getAddress() {
@@ -242,6 +298,7 @@
         lock() {
             cachedAuthSecret = '';
             cachedAuthAddress = '';
+            cachedRuntimeSigningAddress = '';
             sessionStorage.removeItem('thr_auth_secret');
             sessionStorage.removeItem('thr_auth_secret_address');
             if (window.walletSession && typeof window.walletSession.lockWallet === 'function') {
@@ -251,6 +308,21 @@
     };
 
     window.WalletAuth = WalletAuth;
+
+    window.addEventListener('thronos:wallet:v1:unlocked', (event) => {
+        const address = event && event.detail ? event.detail.address : getActiveWalletAddress();
+        if (address && hasRuntimeSigningMaterial(address)) {
+            cachedRuntimeSigningAddress = address;
+        }
+        logAuthDiagnostics(address, 'header');
+    });
+
+    window.addEventListener('thronos:wallet:state-changed', () => {
+        const address = getActiveWalletAddress();
+        if (!hasRuntimeSigningMaterial(address)) {
+            cachedRuntimeSigningAddress = '';
+        }
+    });
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initAutoLock);
@@ -271,8 +343,8 @@
         });
 
         const originalRequire = WalletAuth.requireUnlockedWallet;
-        WalletAuth.requireUnlockedWallet = async function() {
-            const result = await originalRequire.call(this);
+        WalletAuth.requireUnlockedWallet = async function(options = {}) {
+            const result = await originalRequire.call(this, options);
             WalletAuth.startAutoLock();
             return result;
         };

@@ -2,6 +2,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SWAP_HTML = (ROOT / "templates/swap.html").read_text()
+STATIC_AUTH = (ROOT / "static/wallet_auth.js").read_text()
 
 
 def test_swap_uses_migrated_active_wallet_for_balance_fetch():
@@ -39,13 +40,16 @@ def test_swap_button_uses_parsed_v1_balance_state():
 
 
 def test_swap_auth_uses_wallet_auth_signing_wrapper():
-    assert "window.WalletAuth.requireUnlockedWallet()" in SWAP_HTML
+    assert "window.WalletAuth.requireUnlockedWallet({ source: 'swap' })" in SWAP_HTML
     assert "auth.address || activeAddress" in SWAP_HTML
     assert "credential_lookup_address: auth.credentialLookupAddress || addr" in SWAP_HTML
     assert "auth.getPublicKey ? auth.getPublicKey() : ''" in SWAP_HTML
     assert "auth.signTransaction ? await auth.signTransaction(txCore) : null" in SWAP_HTML
-    assert "signed_tx: signedSwap" in SWAP_HTML
+    assert "signed_tx: signedSwapEnvelope" in SWAP_HTML
     assert "signature: typeof signedSwap === 'string' ? signedSwap : signedSwap && signedSwap.signature" in SWAP_HTML
+    assert "action: 'swap'" in SWAP_HTML
+    assert "option: 'swap'" in SWAP_HTML
+    assert "active_wallet_address: addr" in SWAP_HTML
     assert "missing_wallet_signing_material" in SWAP_HTML
 
 
@@ -54,3 +58,53 @@ def test_swap_does_not_use_legacy_hmac_session_helpers_in_action_path():
     assert "walletSession.getSendSeed()" not in SWAP_HTML
     # localStorage thr_address is allowed only inside the resolver fallback.
     assert SWAP_HTML.count("localStorage.getItem('thr_address')") == 1
+
+
+def test_swap_payload_posts_execute_with_action_option_and_signed_swap_action():
+    assert "fetch('/api/swap/execute'" in SWAP_HTML
+    assert "action: 'swap'" in SWAP_HTML
+    assert "option: 'swap'" in SWAP_HTML
+    assert "type: 'swap'" in SWAP_HTML
+    assert "signed_tx: signedSwapEnvelope" in SWAP_HTML
+
+
+def test_wallet_session_signing_falls_back_when_der_option_unsupported():
+    session = (ROOT / "static/wallet_session.js").read_text()
+    assert "function signDigestDerHex" in session
+    assert "option not supported" in session
+    assert "normalizeSignatureToDerHex(await secp.sign(digestHex, privateKeyHex))" in session
+
+
+def test_swap_legacy_helper_uses_swap_source_and_crypto_error_is_specific():
+    assert "WalletAuth.requireUnlockedWallet({ source: 'swap' })" in SWAP_HTML
+    session = (ROOT / "static/wallet_session.js").read_text()
+    assert "wallet_crypto_not_ready" in session
+
+
+def test_swap_wallet_ui_handler_is_defined_and_event_calls_are_guarded():
+    handler_pos = SWAP_HTML.index("function updateSwapWalletUI()")
+    unlocked_listener_pos = SWAP_HTML.index("thronos:wallet:v1:unlocked")
+    state_listener_pos = SWAP_HTML.index("thronos:wallet:state-changed")
+    assert handler_pos < unlocked_listener_pos
+    assert handler_pos < state_listener_pos
+    assert "if (typeof updateSwapWalletUI === 'function') updateSwapWalletUI();" in SWAP_HTML
+
+
+def test_swap_crypto_error_is_not_raw_sha256async_or_set_typeerror():
+    session = (ROOT / "static/wallet_session.js").read_text()
+    assert "cannot read properties" in session
+    assert "cannot set properties" in session
+    assert "wallet_crypto_not_ready" in session
+    assert "fetch('/api/swap/execute'" in SWAP_HTML
+
+
+def test_locked_swap_state_prompts_reunlock_before_signing_and_posting():
+    prompt_pos = STATIC_AUTH.index("const pin = prompt('🔐 PIN (unlock wallet):');")
+    unlock_pos = STATIC_AUTH.index("window.walletSession.unlockWallet({ pin, address })")
+    runtime_pos = STATIC_AUTH.index("if (hasRuntimeSigningMaterial(address))", unlock_pos)
+    sign_pos = SWAP_HTML.index("const signedSwap = auth.signTransaction")
+    post_pos = SWAP_HTML.index("fetch('/api/swap/execute'")
+    assert "const source = options.source || 'wallet_auth'" in STATIC_AUTH
+    assert "WalletAuth.requireUnlockedWallet({ source: 'swap' })" in SWAP_HTML
+    assert prompt_pos < unlock_pos < runtime_pos
+    assert sign_pos < post_pos

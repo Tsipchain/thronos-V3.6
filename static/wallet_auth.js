@@ -338,8 +338,8 @@
         });
 
         const originalRequire = WalletAuth.requireUnlockedWallet;
-        WalletAuth.requireUnlockedWallet = async function() {
-            const result = await originalRequire.call(this);
+        WalletAuth.requireUnlockedWallet = async function(options = {}) {
+            const result = await originalRequire.call(this, options);
             WalletAuth.startAutoLock();
             return result;
         };

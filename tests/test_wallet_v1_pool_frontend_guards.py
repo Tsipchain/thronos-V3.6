@@ -125,3 +125,10 @@ def test_static_wallet_session_synchronized():
     public_static_session = (ROOT / "public/static/wallet_session.js").read_text()
     assert static_session == public_static_session, \
         "static/wallet_session.js must match public/static/wallet_session.js"
+
+
+def test_walletauth_autolock_wrapper_preserves_pools_source():
+    auth = (ROOT / "static/wallet_auth.js").read_text()
+    assert "WalletAuth.requireUnlockedWallet = async function(options = {})" in auth
+    assert "originalRequire.call(this, options)" in auth
+    assert "window.WalletAuth.requireUnlockedWallet({ source: 'pools' })" in POOLS_HTML

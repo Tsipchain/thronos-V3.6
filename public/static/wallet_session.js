@@ -185,6 +185,21 @@
 
   function hexToBytes(hex){ const clean = String(hex || '').replace(/^0x/, ''); const out=[]; for(let i=0;i<clean.length;i+=2) out.push(parseInt(clean.slice(i,i+2),16)); return new Uint8Array(out); }
   function bytesToHex(bytes){ return Array.from(bytes || []).map(b=>b.toString(16).padStart(2,'0')).join(''); }
+  function toUint8Bytes(value){
+    if (!value) return new Uint8Array();
+    if (value instanceof Uint8Array) return value;
+    if (Array.isArray(value)) return new Uint8Array(value);
+    if (typeof value === 'string') return hexToBytes(value);
+    return new Uint8Array(value);
+  }
+  function concatBytes(parts){
+    const arrays = Array.from(parts || []).map(toUint8Bytes);
+    const total = arrays.reduce((sum, arr) => sum + arr.length, 0);
+    const out = new Uint8Array(total);
+    let offset = 0;
+    arrays.forEach((arr) => { out.set(arr, offset); offset += arr.length; });
+    return out;
+  }
   function bytesFromSignature(sig){
     if (!sig) return new Uint8Array();
     if (sig instanceof Uint8Array) return sig;
@@ -216,12 +231,42 @@
     if (bytes[0] === 0x30) return bytesToHex(bytes);
     return bytesToHex(derEncodeCompactSignature(bytes));
   }
+  async function ensureSecpAsyncCrypto(secp){
+    if (!secp || !crypto || !crypto.subtle) throw new Error('wallet_crypto_not_ready');
+    const sha256Async = async (...msgs) => new Uint8Array(await crypto.subtle.digest('SHA-256', concatBytes(msgs)));
+    const hmacSha256Async = async (key, ...msgs) => {
+      const cryptoKey = await crypto.subtle.importKey('raw', toUint8Bytes(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+      return new Uint8Array(await crypto.subtle.sign('HMAC', cryptoKey, concatBytes(msgs)));
+    };
+    secp.etc = secp.etc || {};
+    secp.hashes = secp.hashes || {};
+    if (!secp.etc.sha256Async) secp.etc.sha256Async = sha256Async;
+    if (!secp.etc.hmacSha256Async) secp.etc.hmacSha256Async = hmacSha256Async;
+    if (!secp.hashes.sha256Async) secp.hashes.sha256Async = sha256Async;
+    if (!secp.hashes.hmacSha256Async) secp.hashes.hmacSha256Async = hmacSha256Async;
+  }
+  function isSecpCryptoHelperError(err){
+    const msg = String((err && (err.message || err)) || '').toLowerCase();
+    return msg.includes('option not supported') || msg.includes('hmacsha256sync') || msg.includes('sha256sync') || msg.includes('hashes');
+  }
   async function signDigestDerHex(secp, digestHex, privateKeyHex){
     try {
+      await ensureSecpAsyncCrypto(secp);
+      if (typeof secp.signAsync === 'function') {
+        return normalizeSignatureToDerHex(await secp.signAsync(digestHex, privateKeyHex));
+      }
       return normalizeSignatureToDerHex(await secp.sign(digestHex, privateKeyHex, { der: true }));
     } catch (err) {
-      if (!err || !String(err.message || err).toLowerCase().includes('option not supported')) throw err;
-      return normalizeSignatureToDerHex(await secp.sign(digestHex, privateKeyHex));
+      if (!isSecpCryptoHelperError(err)) throw err;
+      try {
+        await ensureSecpAsyncCrypto(secp);
+        if (typeof secp.signAsync === 'function') {
+          return normalizeSignatureToDerHex(await secp.signAsync(digestHex, privateKeyHex));
+        }
+        return normalizeSignatureToDerHex(await secp.sign(digestHex, privateKeyHex));
+      } catch (_) {
+        throw new Error('wallet_crypto_not_ready');
+      }
     }
   }
   async function sha256Hex(s){ const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)); return bytesToHex(new Uint8Array(d)); }

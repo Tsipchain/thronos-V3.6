@@ -72,3 +72,9 @@ def test_wallet_session_signing_falls_back_when_der_option_unsupported():
     assert "function signDigestDerHex" in session
     assert "option not supported" in session
     assert "normalizeSignatureToDerHex(await secp.sign(digestHex, privateKeyHex))" in session
+
+
+def test_swap_legacy_helper_uses_swap_source_and_crypto_error_is_specific():
+    assert "WalletAuth.requireUnlockedWallet({ source: 'swap' })" in SWAP_HTML
+    session = (ROOT / "static/wallet_session.js").read_text()
+    assert "wallet_crypto_not_ready" in session

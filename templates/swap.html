@@ -235,7 +235,7 @@ async function requireSwapWalletAuth(txCore) {
     if (!window.WalletAuth || typeof WalletAuth.requireUnlockedWallet !== 'function') {
         throw new Error('missing_wallet_signing_material');
     }
-    const wallet = await WalletAuth.requireUnlockedWallet();
+    const wallet = await WalletAuth.requireUnlockedWallet({ source: 'swap' });
     const publicKey = wallet.getPublicKey();
     const signedTx = await wallet.signTransaction(txCore);
     const signature = typeof signedTx === 'string' ? signedTx : signedTx && signedTx.signature;

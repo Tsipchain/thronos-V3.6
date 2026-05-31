@@ -1122,15 +1122,16 @@ function getPoolActiveWalletAddress() {
 function isPoolWalletReady(addr) {
     if (!addr) return false;
     if (!window.walletSession || typeof window.walletSession.isBound !== 'function') return true;
-    return !!window.walletSession.isBound();
+    return true;
 }
 
 async function requirePoolWalletAuth(action, txCore) {
     if (!window.WalletAuth || typeof window.WalletAuth.requireUnlockedWallet !== 'function') {
         throw new Error('missing_wallet_signing_material');
     }
-    const auth = await window.WalletAuth.requireUnlockedWallet();
+    const auth = await window.WalletAuth.requireUnlockedWallet({ source: 'pools' });
     const signedTx = auth.signTransaction ? await auth.signTransaction(Object.assign({ type: action }, txCore || {})) : null;
+    if (!signedTx) throw new Error('wallet_locked_reunlock_required');
     return {
         address: auth.address || getPoolActiveWalletAddress(),
         authSecret: auth.authSecret,
@@ -1536,7 +1537,7 @@ window.addEventListener('thronos:wallet:v1:unlocked', async (e) => {
     const eventAddr = e.detail?.address?.substring(0, 10) + '...' || 'unknown';
     const addr = getPoolActiveWalletAddress();
     const isUnlocked = window.walletSession && typeof window.walletSession.isUnlockedFor === 'function' ? window.walletSession.isUnlockedFor(addr) : false;
-    console.info('[PoolsUI] Wallet V1 unlocked event received:', { eventAddr, activeAddr: addr?.substring(0, 10) + '...', isUnlockedFor: isUnlocked });
+    console.info('[PoolsUI] Wallet V1 unlocked event received:', 'eventAddr=', eventAddr, 'activeAddr=', addr?.substring(0, 10) + '...', 'isUnlockedFor=', isUnlocked);
     loadTokenOptions();
     loadPools();
 });

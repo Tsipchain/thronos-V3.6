@@ -1,0 +1,27 @@
+{
+  "name": "thronos-realestate",
+  "version": "1.0.0",
+  "description": "THRONOS Real Estate - Blockchain Sealed Properties with Digital Verification",
+  "private": true,
+  "workspaces": [
+    "seal-api",
+    "seal-sdk",
+    "smart-contracts"
+  ],
+  "scripts": {
+    "install-all": "npm install && npm install --workspace=seal-api && npm install --workspace=seal-sdk && npm install --workspace=smart-contracts",
+    "dev:api": "npm run dev --workspace=seal-api",
+    "dev:sdk": "npm run dev --workspace=seal-sdk",
+    "build:all": "npm run build --workspace=seal-api && npm run build --workspace=seal-sdk && npm run build --workspace=smart-contracts",
+    "test:all": "npm run test --workspace=seal-api && npm run test --workspace=seal-sdk && npm run test --workspace=smart-contracts"
+  },
+  "keywords": [
+    "blockchain",
+    "real-estate",
+    "digital-seals",
+    "property-verification",
+    "thronoschain"
+  ],
+  "author": "THRONOS Team",
+  "license": "MIT"
+}

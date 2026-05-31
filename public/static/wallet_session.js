@@ -239,35 +239,70 @@
     const container = getSecpContainer(secp, containerName);
     return container && typeof container[helperName] === 'function' ? container[helperName] : null;
   }
+  function canMutateSecpObject(obj){
+    return !!obj && typeof obj === 'object' && !(Object.isFrozen && Object.isFrozen(obj)) && (Object.isExtensible ? Object.isExtensible(obj) : true);
+  }
+  function ensureMutableSecpContainer(secp, key){
+    const existing = getSecpContainer(secp, key);
+    if (existing) return existing;
+    if (!canMutateSecpObject(secp)) return null;
+    try { secp[key] = {}; } catch (_) { return null; }
+    return getSecpContainer(secp, key);
+  }
+  function setSecpHelper(secp, containerName, helperName, helperFn){
+    if (readSecpHelper(secp, containerName, helperName)) return true;
+    const container = ensureMutableSecpContainer(secp, containerName);
+    if (!canMutateSecpObject(container)) return false;
+    try { container[helperName] = helperFn; } catch (_) { return false; }
+    return !!readSecpHelper(secp, containerName, helperName);
+  }
+  function getSecpCryptoDiagnostics(secp){
+    return {
+      has_secp: !!secp,
+      has_etc: !!getSecpContainer(secp, 'etc'),
+      has_utils: !!getSecpContainer(secp, 'utils'),
+      has_hashes: !!getSecpContainer(secp, 'hashes'),
+      is_frozen: !!(secp && Object.isFrozen && Object.isFrozen(secp))
+    };
+  }
+  function logSecpCryptoDiagnostics(secp){
+    if (typeof console !== 'undefined' && console.info) console.info('[WalletV1Crypto]', getSecpCryptoDiagnostics(secp));
+  }
   function getSubtleCrypto(){
     const webCrypto = (typeof crypto !== 'undefined' && crypto) || (typeof window !== 'undefined' && window.crypto) || (typeof globalThis !== 'undefined' && globalThis.crypto) || null;
     return webCrypto && webCrypto.subtle ? webCrypto.subtle : null;
   }
   async function ensureSecpAsyncCrypto(secp){
     const subtle = getSubtleCrypto();
-    if (!secp || !subtle) throw new Error('wallet_crypto_not_ready');
+    if (!secp || !subtle) { logSecpCryptoDiagnostics(secp); throw new Error('wallet_crypto_not_ready'); }
     const sha256Async = async (...msgs) => new Uint8Array(await subtle.digest('SHA-256', concatBytes(msgs)));
     const hmacSha256Async = async (key, ...msgs) => {
       const cryptoKey = await subtle.importKey('raw', toUint8Bytes(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
       return new Uint8Array(await subtle.sign('HMAC', cryptoKey, concatBytes(msgs)));
     };
-    if (!getSecpContainer(secp, 'etc')) secp.etc = {};
-    if (!getSecpContainer(secp, 'hashes')) secp.hashes = {};
-    if (!readSecpHelper(secp, 'etc', 'sha256Async')) secp.etc.sha256Async = sha256Async;
-    if (!readSecpHelper(secp, 'etc', 'hmacSha256Async')) secp.etc.hmacSha256Async = hmacSha256Async;
-    if (!readSecpHelper(secp, 'hashes', 'sha256Async')) secp.hashes.sha256Async = sha256Async;
-    if (!readSecpHelper(secp, 'hashes', 'hmacSha256Async')) secp.hashes.hmacSha256Async = hmacSha256Async;
+    const helpersReady = [
+      setSecpHelper(secp, 'etc', 'sha256Async', sha256Async),
+      setSecpHelper(secp, 'etc', 'hmacSha256Async', hmacSha256Async),
+      setSecpHelper(secp, 'hashes', 'sha256Async', sha256Async),
+      setSecpHelper(secp, 'hashes', 'hmacSha256Async', hmacSha256Async)
+    ].every(Boolean);
+    if (!helpersReady) { logSecpCryptoDiagnostics(secp); throw new Error('wallet_crypto_not_ready'); }
     if (!readSecpHelper(secp, 'utils', 'sha256') && !readSecpHelper(secp, 'hashes', 'sha256')) {
       // Noble v2 uses async helpers for nonce generation; keep sync slots untouched when unavailable.
     }
   }
   function isSecpCryptoHelperError(err){
     const msg = String((err && (err.message || err)) || '').toLowerCase();
-    return msg.includes('option not supported') || msg.includes('hmacsha256sync') || msg.includes('sha256sync') || msg.includes('hashes');
+    return msg.includes('option not supported') || msg.includes('hmacsha256sync') || msg.includes('sha256sync') || msg.includes('hashes') || msg.includes('wallet_crypto_not_ready') || msg.includes('cannot set properties') || msg.includes('cannot read properties');
+  }
+  async function tryNonMutatingAsyncSign(secp, digestHex, privateKeyHex){
+    if (!secp || typeof secp.signAsync !== 'function') throw new Error('wallet_crypto_not_ready');
+    return normalizeSignatureToDerHex(await secp.signAsync(digestHex, privateKeyHex));
   }
   async function signDigestDerHex(secp, digestHex, privateKeyHex){
     try {
-      await ensureSecpAsyncCrypto(secp);
+      try { await ensureSecpAsyncCrypto(secp); }
+      catch (setupErr) { return await tryNonMutatingAsyncSign(secp, digestHex, privateKeyHex); }
       if (typeof secp.signAsync === 'function') {
         return normalizeSignatureToDerHex(await secp.signAsync(digestHex, privateKeyHex));
       }
@@ -275,7 +310,8 @@
     } catch (err) {
       if (!isSecpCryptoHelperError(err)) throw err;
       try {
-        await ensureSecpAsyncCrypto(secp);
+        try { await ensureSecpAsyncCrypto(secp); }
+        catch (setupErr) { return await tryNonMutatingAsyncSign(secp, digestHex, privateKeyHex); }
         if (typeof secp.signAsync === 'function') {
           return normalizeSignatureToDerHex(await secp.signAsync(digestHex, privateKeyHex));
         }

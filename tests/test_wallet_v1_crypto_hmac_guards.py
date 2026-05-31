@@ -21,10 +21,10 @@ def test_secp_async_crypto_helpers_are_configured_in_both_session_bundles():
         assert "function ensureSecpAsyncCrypto(secp)" in content
         assert "function getSecpContainer(secp, key)" in content
         assert "function readSecpHelper(secp, containerName, helperName)" in content
-        assert "readSecpHelper(secp, 'etc', 'sha256Async')" in content
-        assert "readSecpHelper(secp, 'etc', 'hmacSha256Async')" in content
-        assert "readSecpHelper(secp, 'hashes', 'sha256Async')" in content
-        assert "readSecpHelper(secp, 'hashes', 'hmacSha256Async')" in content
+        assert "setSecpHelper(secp, 'etc', 'sha256Async', sha256Async)" in content
+        assert "setSecpHelper(secp, 'etc', 'hmacSha256Async', hmacSha256Async)" in content
+        assert "setSecpHelper(secp, 'hashes', 'sha256Async', sha256Async)" in content
+        assert "setSecpHelper(secp, 'hashes', 'hmacSha256Async', hmacSha256Async)" in content
         assert "readSecpHelper(secp, 'utils', 'sha256')" in content
         assert "readSecpHelper(secp, 'hashes', 'sha256')" in content
         assert "function getSubtleCrypto()" in content
@@ -46,7 +46,8 @@ def test_sign_digest_does_not_surface_option_or_hmac_errors():
         assert "option not supported" in content
         assert "hmacsha256sync" in content
         assert "sha256sync" in content
-        assert "Cannot read properties of undefined" in content
+        assert "cannot read properties" in content
+        assert "cannot set properties" in content
         assert "throw new Error('wallet_crypto_not_ready')" in content
 
 
@@ -56,8 +57,31 @@ def test_secp_runtime_shape_detection_is_fully_guarded():
         assert "window.noble && window.noble.secp256k1" in content
         assert "const container = secp && secp[key]" in content
         assert "container && typeof container[helperName] === 'function'" in content
-        assert "if (!getSecpContainer(secp, 'etc')) secp.etc = {}" in content
-        assert "if (!getSecpContainer(secp, 'hashes')) secp.hashes = {}" in content
+        assert "function canMutateSecpObject(obj)" in content
+        assert "function ensureMutableSecpContainer(secp, key)" in content
+        assert "try { secp[key] = {}; } catch (_) { return null; }" in content
+        assert "try { container[helperName] = helperFn; } catch (_) { return false; }" in content
+
+
+def test_secp_helper_assignment_does_not_target_undefined_containers():
+    for content in (STATIC_SESSION, PUBLIC_SESSION):
+        assert "secp.etc.sha256Async =" not in content
+        assert "secp.hashes.sha256Async =" not in content
+        assert "container[helperName] = helperFn" in content
+        assert "!canMutateSecpObject(secp)" in content
+        assert "!canMutateSecpObject(container)" in content
+
+
+def test_frozen_secp_diagnostics_and_non_mutating_fallback_are_present():
+    for content in (STATIC_SESSION, PUBLIC_SESSION):
+        assert "function getSecpCryptoDiagnostics(secp)" in content
+        assert "has_secp" in content
+        assert "has_etc" in content
+        assert "has_utils" in content
+        assert "has_hashes" in content
+        assert "is_frozen" in content
+        assert "function tryNonMutatingAsyncSign" in content
+        assert "return await tryNonMutatingAsyncSign(secp, digestHex, privateKeyHex)" in content
 
 
 def test_wallet_auth_autolock_wrapper_preserves_source_options_for_pools_and_swap():

@@ -2,6 +2,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SWAP_HTML = (ROOT / "templates/swap.html").read_text()
+STATIC_AUTH = (ROOT / "static/wallet_auth.js").read_text()
 
 
 def test_swap_uses_migrated_active_wallet_for_balance_fetch():
@@ -89,8 +90,21 @@ def test_swap_wallet_ui_handler_is_defined_and_event_calls_are_guarded():
     assert "if (typeof updateSwapWalletUI === 'function') updateSwapWalletUI();" in SWAP_HTML
 
 
-def test_swap_crypto_error_is_not_raw_sha256async_typeerror():
+def test_swap_crypto_error_is_not_raw_sha256async_or_set_typeerror():
     session = (ROOT / "static/wallet_session.js").read_text()
-    assert "Cannot read properties of undefined" in session
+    assert "cannot read properties" in session
+    assert "cannot set properties" in session
     assert "wallet_crypto_not_ready" in session
     assert "fetch('/api/swap/execute'" in SWAP_HTML
+
+
+def test_locked_swap_state_prompts_reunlock_before_signing_and_posting():
+    prompt_pos = STATIC_AUTH.index("const pin = prompt('🔐 PIN (unlock wallet):');")
+    unlock_pos = STATIC_AUTH.index("window.walletSession.unlockWallet({ pin, address })")
+    runtime_pos = STATIC_AUTH.index("if (hasRuntimeSigningMaterial(address))", unlock_pos)
+    sign_pos = SWAP_HTML.index("const signedSwap = auth.signTransaction")
+    post_pos = SWAP_HTML.index("fetch('/api/swap/execute'")
+    assert "const source = options.source || 'wallet_auth'" in STATIC_AUTH
+    assert "WalletAuth.requireUnlockedWallet({ source: 'swap' })" in SWAP_HTML
+    assert prompt_pos < unlock_pos < runtime_pos
+    assert sign_pos < post_pos

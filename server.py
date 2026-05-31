@@ -22030,6 +22030,130 @@ def api_swap_quote():
     }), 200
 
 
+SWAP_EXPECTED_ACTION = "swap"
+SWAP_ACTION_ALIASES = {
+    "swap": "swap",
+    "execute_swap": "swap",
+    "token_swap": "swap",
+    "swap_tokens": "swap",
+}
+
+
+def normalize_swap_action(action):
+    raw = (action or "").strip() if isinstance(action, str) else ""
+    return SWAP_ACTION_ALIASES.get(raw.lower(), raw.lower()) if raw else None
+
+
+def _short_wallet_address(address):
+    return f"{address[:10]}..." if address else ""
+
+
+def verify_swap_wallet_v1_or_legacy(payload, expected_action=SWAP_EXPECTED_ACTION):
+    """Verify swap auth before any swap state mutation."""
+    trader = (payload.get("trader_thr") or payload.get("from") or "").strip()
+    credential_lookup = (payload.get("credential_lookup_address") or trader).strip()
+    auth_secret = (payload.get("auth_secret") or "").strip()
+    passphrase = (payload.get("passphrase") or "").strip()
+    signed_tx_raw = payload.get("signed_tx")
+    public_key = (payload.get("public_key") or "").strip()
+    signature = (payload.get("signature") or "").strip()
+    raw_action = payload.get("action") or payload.get("option")
+    normalized_action = normalize_swap_action(raw_action)
+
+    signed_tx_action = None
+    if isinstance(signed_tx_raw, dict):
+        signed_tx_action = signed_tx_raw.get("action") or signed_tx_raw.get("type")
+        if not normalized_action:
+            normalized_action = normalize_swap_action(signed_tx_action)
+    elif not normalized_action:
+        normalized_action = expected_action
+
+    has_wallet_v1_fields = bool(signed_tx_raw or public_key or signature)
+    logger.info(
+        "[swap_auth] endpoint=/api/swap/execute expected_action=%s got_action=%s has_wallet_v1_fields=%s active=%s",
+        expected_action,
+        normalized_action or raw_action or signed_tx_action or "none",
+        has_wallet_v1_fields,
+        _short_wallet_address(trader),
+    )
+
+    if normalized_action and normalized_action != expected_action:
+        return False, {
+            "ok": False,
+            "status": "error",
+            "error": "unsupported_swap_action",
+            "message": "unsupported_swap_action",
+            "expected": expected_action,
+            "got": raw_action or signed_tx_action,
+        }, None
+
+    if has_wallet_v1_fields:
+        if not signed_tx_raw:
+            return False, {"ok": False, "status": "error", "error": "invalid_signature", "message": "Wallet V1 auth requires signed_tx"}, None
+        if not isinstance(signed_tx_raw, dict):
+            return False, {"ok": False, "status": "error", "error": "invalid_signature", "message": "signed_tx must be an object"}, None
+
+        signed_tx = dict(signed_tx_raw)
+        if public_key and not signed_tx.get("publicKey"):
+            signed_tx["publicKey"] = public_key
+        if signature and not signed_tx.get("signature"):
+            signed_tx["signature"] = signature
+        if normalized_action and not signed_tx.get("action"):
+            signed_tx["action"] = normalized_action
+
+        if not signed_tx.get("signature"):
+            return False, {"ok": False, "status": "error", "error": "missing_signature", "message": "Signature is required in signed_tx"}, None
+
+        signed_action_raw = signed_tx.get("action") or signed_tx.get("type")
+        signed_action = normalize_swap_action(signed_action_raw)
+        if signed_action != expected_action:
+            return False, {
+                "ok": False,
+                "status": "error",
+                "error": "unsupported_swap_action",
+                "message": "unsupported_swap_action",
+                "expected": expected_action,
+                "got": signed_action_raw,
+            }, None
+
+        try:
+            import wallet_v1_production_final as wallet_v1_prod
+            valid_sig, sig_error = wallet_v1_prod.verify_signed_transaction_core(signed_tx)
+        except Exception as exc:
+            logger.error("[swap_auth] V1 verification failed: %s", exc)
+            return False, {"ok": False, "status": "error", "error": "signature_verification_failed", "message": "Failed to verify Wallet V1 signature", "detail": str(exc)}, None
+
+        if not valid_sig:
+            return False, {"ok": False, "status": "error", "error": "invalid_signature", "message": "Invalid Wallet V1 signature", "detail": sig_error}, None
+
+        signed_wallet = (signed_tx.get("from") or signed_tx.get("wallet") or "").strip()
+        if not signed_wallet:
+            return False, {"ok": False, "status": "error", "error": "invalid_signature", "message": "signed_tx must include 'from' field"}, None
+        if trader and trader != signed_wallet:
+            return False, {"ok": False, "status": "error", "error": "wallet_mismatch", "message": "Trader address does not match signed wallet"}, None
+
+        return True, {}, trader or signed_wallet
+
+    if not trader:
+        return False, {"ok": False, "status": "error", "error": "missing_trader", "message": "Missing trader"}, None
+
+    ok, _, error_key = validate_effective_auth(trader, auth_secret, passphrase)
+    if not ok:
+        if error_key == "no_effective_pledge":
+            return False, {"status": "error", "message": "Trader has no effective pledge access", "error": error_key}, trader
+        if error_key == "missing_auth_secret":
+            return False, {"status": "error", "message": "Missing auth_secret", "error": error_key}, trader
+        if error_key == "missing_pledge":
+            return False, {"status": "error", "message": "Trader has not pledged", "error": error_key}, trader
+        if error_key == "send_not_enabled":
+            return False, {"status": "error", "message": "Trader send not enabled", "error": error_key}, trader
+        if error_key == "passphrase_required":
+            return False, {"status": "error", "message": "Passphrase required", "error": error_key}, trader
+        return False, {"status": "error", "message": "Invalid auth", "error": error_key or "invalid_auth"}, trader
+
+    return True, {}, trader
+
+
 @app.route("/api/swap/execute", methods=["POST"])
 def api_swap_execute():
     try:
@@ -22055,26 +22179,21 @@ def api_swap_execute():
     if not is_swap_symbol_allowed(token_in) or not is_swap_symbol_allowed(token_out):
         return jsonify(status="error", message="Unsupported token"), 400
 
+    auth_ok, auth_error, verified_trader = verify_swap_wallet_v1_or_legacy(data, SWAP_EXPECTED_ACTION)
+    if not auth_ok:
+        status_code = 400
+        if auth_error.get("error") in ("invalid_auth", "no_effective_pledge", "wallet_mismatch"):
+            status_code = 403
+        elif auth_error.get("error") == "missing_pledge":
+            status_code = 404
+        return jsonify(**auth_error), status_code
+    trader = verified_trader or trader
+
     quote, err = quote_swap_route(token_in, token_out, amount_in)
     if err:
         return jsonify(ok=False, status="error", error=err, message=err), 400
     if quote["amount_out"] < min_amount_out:
         return jsonify(status="error", message="Slippage too high", expected_minimum=min_amount_out, actual_output=quote["amount_out"]), 400
-
-    ok, _, error_key = validate_effective_auth(trader, auth_secret, passphrase)
-    if not ok:
-        if error_key == "no_effective_pledge":
-            return jsonify(status="error", message="Trader has no effective pledge access"), 403
-        if error_key == "missing_auth_secret":
-            return jsonify(status="error", message="Missing auth_secret"), 400
-        if error_key == "missing_pledge":
-            return jsonify(status="error", message="Trader has not pledged"), 404
-        if error_key == "send_not_enabled":
-            return jsonify(status="error", message="Trader send not enabled"), 400
-        if error_key == "passphrase_required":
-            return jsonify(status="error", message="Passphrase required"), 400
-        if error_key == "invalid_auth":
-            return jsonify(status="error", message="Invalid auth"), 403
 
     thr_ledger = load_json(LEDGER_FILE, {})
     wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})

@@ -110,10 +110,12 @@
     if (canonical) {
       localStorage.setItem(V1_ADDRESS_KEY, canonical);
       localStorage.setItem(ADDRESS_KEY, canonical);
+      if (unlockedPrivateKeyHex) unlockedForAddress = canonical;
       return canonical;
     }
     localStorage.setItem(V1_ADDRESS_KEY, normalized);
     localStorage.setItem(ADDRESS_KEY, normalized);
+    if (unlockedPrivateKeyHex) unlockedForAddress = normalized;
     return normalized;
   }
 
@@ -177,7 +179,7 @@
   function getPin(){ return localStorage.getItem(PIN_KEY) || ''; }
   function setPin(pin){ setItem(PIN_KEY, pin ? pin.trim() : ''); }
 
-  function lockWallet(){ unlockedPrivateKeyHex = null; unlockedForAddress = null; setBound(false); localStorage.setItem(LOCK_KEY, '1'); }
+  function lockWallet(){ unlockedPrivateKeyHex = null; unlockedForAddress = null; localStorage.setItem(LOCK_KEY, '1'); }
   function lock(){ return lockWallet(); }
   function setCustomUnlockHandler(fn){ customUnlockHandler = typeof fn === 'function' ? fn : null; }
 
@@ -266,11 +268,15 @@
   }
   async function unlock(pinOrOptions){ const options = typeof pinOrOptions === 'string' ? {pin: pinOrOptions, prompt:false} : (pinOrOptions || {}); return unlockWallet(options); }
 
+  function hasRuntimeSigningMaterial(address){
+    const normalized = normalizeAddress(address || getActiveAddress());
+    return !!(unlockedPrivateKeyHex && (!normalized || !unlockedForAddress || unlockedForAddress === normalized));
+  }
+
   function isUnlockedFor(address){
-    // Check if the in-memory private key belongs to the given address
-    // Does not expose the private key itself
-    const normalized = (address || '').trim();
-    return !!(unlockedPrivateKeyHex && unlockedForAddress && unlockedForAddress === normalized);
+    // Check if in-memory signing material belongs to the given address.
+    // Does not expose the private key itself.
+    return hasRuntimeSigningMaterial(address);
   }
 
   function getPublicKey(){ return localStorage.getItem(V1_PUBLIC_KEY) || ''; }
@@ -378,6 +384,8 @@
       migration_new_v1_address: info.new_v1_address || '',
       has_encrypted_send_seed: !!localStorage.getItem(V1_ENCRYPTED_KEY),
       has_signing_material: hasSigningMaterial(active),
+      has_runtime_signing_material: hasRuntimeSigningMaterial(active),
+      is_locked: isLocked(),
     };
   }
 
@@ -404,6 +412,7 @@
       wallet_identity_status: getWalletIdentityStatus(active),
       migration_new_v1_address: info.new_v1_address || '',
       has_signing_material: hasSigningMaterial(active),
+      has_runtime_signing_material: hasRuntimeSigningMaterial(active),
       has_v1_encrypted_key: has_v1_encrypted,
       has_v1_public_key: has_v1_pubkey,
       is_bound: isBound(),
@@ -472,7 +481,7 @@
     createWalletV1, getPublicKey, canonicalTxMessage, signTransaction,
     migrateLegacyWallet, encryptPrivateKeyHex, decryptPrivateKeyHex,
     getCredentialLookupAddress, getSendSeed, setSendSeed, getSendSecret, setSendSecret,
-    hasSigningMaterial, getWalletAuthDiagnostics, logWalletAuthDiagnostics,
+    hasSigningMaterial, hasRuntimeSigningMaterial, getWalletAuthDiagnostics, logWalletAuthDiagnostics,
     getPin, setPin, isLocked, lockWallet, lock: lockWallet, unlockWallet, unlock: unlockWallet, unlock,
     setCustomUnlockHandler, isBound, setBound, disconnect, forgetDevice, clearSession, saveSession, requirePin,
     isUnlockedFor,

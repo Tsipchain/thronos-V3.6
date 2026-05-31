@@ -279,6 +279,15 @@ function isSwapWalletReady(addr) {
     return true;
 }
 
+
+function updateSwapWalletUI() {
+    const addr = getSwapActiveWalletAddress();
+    const ready = isSwapWalletReady(addr);
+    const warning = $('walletWarning');
+    if (warning) warning.style.display = ready ? 'none' : 'block';
+    refreshSwapButtonState();
+}
+
 function applySwapBalance(symbol, value, balances) {
     const normalized = normalizeSwapSymbol(symbol);
     if (!normalized) return;
@@ -344,7 +353,7 @@ window.addEventListener('thronos:wallet:v1:unlocked', async (e) => {
         setDefaultTokens();
         calcTo();
     }
-    updateSwapWalletUI();
+    if (typeof updateSwapWalletUI === 'function') updateSwapWalletUI();
 });
 
 // Listen for general wallet state changes
@@ -361,7 +370,7 @@ window.addEventListener('thronos:wallet:state-changed', async () => {
         await Promise.all([loadBalances(addr), loadSwapCatalog()]);
         setDefaultTokens();
         calcTo();
-        updateSwapWalletUI();
+        if (typeof updateSwapWalletUI === 'function') updateSwapWalletUI();
     }
 });
 

@@ -132,3 +132,12 @@ def test_walletauth_autolock_wrapper_preserves_pools_source():
     assert "WalletAuth.requireUnlockedWallet = async function(options = {})" in auth
     assert "originalRequire.call(this, options)" in auth
     assert "window.WalletAuth.requireUnlockedWallet({ source: 'pools' })" in POOLS_HTML
+
+
+def test_pools_runtime_missing_state_is_relocked_before_prompting():
+    auth = (ROOT / "static/wallet_auth.js").read_text()
+    assert "hasEncryptedSeed() && window.walletSession" in auth
+    assert "!window.walletSession.isLocked()" in auth
+    assert "!hasRuntimeSigningMaterial(address)" in auth
+    assert "window.walletSession.lockWallet()" in auth
+    assert "logAuthDiagnostics(address, source)" in auth

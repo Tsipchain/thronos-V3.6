@@ -152,6 +152,11 @@
                 return buildAuthResult(address, storedSecret, credentialLookupAddress);
             }
 
+            if (hasEncryptedSeed() && window.walletSession && typeof window.walletSession.isLocked === 'function' && !window.walletSession.isLocked() && !hasRuntimeSigningMaterial(address)) {
+                if (typeof window.walletSession.lockWallet === 'function') window.walletSession.lockWallet();
+                logAuthDiagnostics(address, source);
+            }
+
             const pin = prompt('🔐 PIN (unlock wallet):');
             if (!pin) {
                 throw walletLockedRelockRequiredError();

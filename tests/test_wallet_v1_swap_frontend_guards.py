@@ -78,3 +78,19 @@ def test_swap_legacy_helper_uses_swap_source_and_crypto_error_is_specific():
     assert "WalletAuth.requireUnlockedWallet({ source: 'swap' })" in SWAP_HTML
     session = (ROOT / "static/wallet_session.js").read_text()
     assert "wallet_crypto_not_ready" in session
+
+
+def test_swap_wallet_ui_handler_is_defined_and_event_calls_are_guarded():
+    handler_pos = SWAP_HTML.index("function updateSwapWalletUI()")
+    unlocked_listener_pos = SWAP_HTML.index("thronos:wallet:v1:unlocked")
+    state_listener_pos = SWAP_HTML.index("thronos:wallet:state-changed")
+    assert handler_pos < unlocked_listener_pos
+    assert handler_pos < state_listener_pos
+    assert "if (typeof updateSwapWalletUI === 'function') updateSwapWalletUI();" in SWAP_HTML
+
+
+def test_swap_crypto_error_is_not_raw_sha256async_typeerror():
+    session = (ROOT / "static/wallet_session.js").read_text()
+    assert "Cannot read properties of undefined" in session
+    assert "wallet_crypto_not_ready" in session
+    assert "fetch('/api/swap/execute'" in SWAP_HTML

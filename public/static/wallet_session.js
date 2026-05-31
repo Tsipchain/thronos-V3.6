@@ -231,19 +231,35 @@
     if (bytes[0] === 0x30) return bytesToHex(bytes);
     return bytesToHex(derEncodeCompactSignature(bytes));
   }
+  function getSecpContainer(secp, key){
+    const container = secp && secp[key];
+    return container && typeof container === 'object' ? container : null;
+  }
+  function readSecpHelper(secp, containerName, helperName){
+    const container = getSecpContainer(secp, containerName);
+    return container && typeof container[helperName] === 'function' ? container[helperName] : null;
+  }
+  function getSubtleCrypto(){
+    const webCrypto = (typeof crypto !== 'undefined' && crypto) || (typeof window !== 'undefined' && window.crypto) || (typeof globalThis !== 'undefined' && globalThis.crypto) || null;
+    return webCrypto && webCrypto.subtle ? webCrypto.subtle : null;
+  }
   async function ensureSecpAsyncCrypto(secp){
-    if (!secp || !crypto || !crypto.subtle) throw new Error('wallet_crypto_not_ready');
-    const sha256Async = async (...msgs) => new Uint8Array(await crypto.subtle.digest('SHA-256', concatBytes(msgs)));
+    const subtle = getSubtleCrypto();
+    if (!secp || !subtle) throw new Error('wallet_crypto_not_ready');
+    const sha256Async = async (...msgs) => new Uint8Array(await subtle.digest('SHA-256', concatBytes(msgs)));
     const hmacSha256Async = async (key, ...msgs) => {
-      const cryptoKey = await crypto.subtle.importKey('raw', toUint8Bytes(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-      return new Uint8Array(await crypto.subtle.sign('HMAC', cryptoKey, concatBytes(msgs)));
+      const cryptoKey = await subtle.importKey('raw', toUint8Bytes(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+      return new Uint8Array(await subtle.sign('HMAC', cryptoKey, concatBytes(msgs)));
     };
-    secp.etc = secp.etc || {};
-    secp.hashes = secp.hashes || {};
-    if (!secp.etc.sha256Async) secp.etc.sha256Async = sha256Async;
-    if (!secp.etc.hmacSha256Async) secp.etc.hmacSha256Async = hmacSha256Async;
-    if (!secp.hashes.sha256Async) secp.hashes.sha256Async = sha256Async;
-    if (!secp.hashes.hmacSha256Async) secp.hashes.hmacSha256Async = hmacSha256Async;
+    if (!getSecpContainer(secp, 'etc')) secp.etc = {};
+    if (!getSecpContainer(secp, 'hashes')) secp.hashes = {};
+    if (!readSecpHelper(secp, 'etc', 'sha256Async')) secp.etc.sha256Async = sha256Async;
+    if (!readSecpHelper(secp, 'etc', 'hmacSha256Async')) secp.etc.hmacSha256Async = hmacSha256Async;
+    if (!readSecpHelper(secp, 'hashes', 'sha256Async')) secp.hashes.sha256Async = sha256Async;
+    if (!readSecpHelper(secp, 'hashes', 'hmacSha256Async')) secp.hashes.hmacSha256Async = hmacSha256Async;
+    if (!readSecpHelper(secp, 'utils', 'sha256') && !readSecpHelper(secp, 'hashes', 'sha256')) {
+      // Noble v2 uses async helpers for nonce generation; keep sync slots untouched when unavailable.
+    }
   }
   function isSecpCryptoHelperError(err){
     const msg = String((err && (err.message || err)) || '').toLowerCase();
@@ -269,7 +285,7 @@
       }
     }
   }
-  async function sha256Hex(s){ const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)); return bytesToHex(new Uint8Array(d)); }
+  async function sha256Hex(s){ const subtle = getSubtleCrypto(); if (!subtle) throw new Error('wallet_crypto_not_ready'); const d = await subtle.digest('SHA-256', new TextEncoder().encode(s)); return bytesToHex(new Uint8Array(d)); }
   async function aesKeyFromPin(pin, salt){
     const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
     return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:250000,hash:'SHA-256'}, material, {name:'AES-GCM',length:256}, false, ['encrypt','decrypt']);
@@ -289,7 +305,7 @@
   }
 
   function _getSecp(){
-    return window.nobleSecp256k1 || window.secp256k1 || window.nobleSecp256k1Lib || window.NobleSecp256k1 || null;
+    return window.nobleSecp256k1 || window.secp256k1 || (window.noble && window.noble.secp256k1) || window.nobleSecp256k1Lib || window.NobleSecp256k1 || null;
   }
 
   async function _ensureSecpLoaded(){
@@ -391,8 +407,15 @@
     const secp = await _ensureSecpLoaded();
     if (!secp || !secp.sign) throw new Error('secp256k1_library_missing');
     if (!unlockedPrivateKeyHex) throw new Error('wallet_locked');
-    const digestHex = await sha256Hex(canonicalTxMessage(txCore));
-    return signDigestDerHex(secp, digestHex, unlockedPrivateKeyHex);
+    try {
+      const digestHex = await sha256Hex(canonicalTxMessage(txCore));
+      return await signDigestDerHex(secp, digestHex, unlockedPrivateKeyHex);
+    } catch (err) {
+      if (isSecpCryptoHelperError(err) || String((err && (err.message || err)) || '').includes('Cannot read properties of undefined')) {
+        throw new Error('wallet_crypto_not_ready');
+      }
+      throw err;
+    }
   }
 
   async function enrollSigningMaterial({address, credentialLookupAddress, pin, authSecret} = {}){

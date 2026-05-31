@@ -19,12 +19,17 @@ def test_vendor_loader_uses_noble_secp256k1_v223():
 def test_secp_async_crypto_helpers_are_configured_in_both_session_bundles():
     for content in (STATIC_SESSION, PUBLIC_SESSION):
         assert "function ensureSecpAsyncCrypto(secp)" in content
-        assert "secp.etc.sha256Async" in content
-        assert "secp.etc.hmacSha256Async" in content
-        assert "secp.hashes.sha256Async" in content
-        assert "secp.hashes.hmacSha256Async" in content
-        assert "crypto.subtle.importKey('raw'" in content
-        assert "crypto.subtle.sign('HMAC'" in content
+        assert "function getSecpContainer(secp, key)" in content
+        assert "function readSecpHelper(secp, containerName, helperName)" in content
+        assert "readSecpHelper(secp, 'etc', 'sha256Async')" in content
+        assert "readSecpHelper(secp, 'etc', 'hmacSha256Async')" in content
+        assert "readSecpHelper(secp, 'hashes', 'sha256Async')" in content
+        assert "readSecpHelper(secp, 'hashes', 'hmacSha256Async')" in content
+        assert "readSecpHelper(secp, 'utils', 'sha256')" in content
+        assert "readSecpHelper(secp, 'hashes', 'sha256')" in content
+        assert "function getSubtleCrypto()" in content
+        assert "subtle.importKey('raw'" in content
+        assert "subtle.sign('HMAC'" in content
 
 
 def test_signing_prefers_async_signing_and_normalizes_der_hex():
@@ -41,7 +46,18 @@ def test_sign_digest_does_not_surface_option_or_hmac_errors():
         assert "option not supported" in content
         assert "hmacsha256sync" in content
         assert "sha256sync" in content
+        assert "Cannot read properties of undefined" in content
         assert "throw new Error('wallet_crypto_not_ready')" in content
+
+
+def test_secp_runtime_shape_detection_is_fully_guarded():
+    for content in (STATIC_SESSION, PUBLIC_SESSION):
+        assert "window.nobleSecp256k1 || window.secp256k1" in content
+        assert "window.noble && window.noble.secp256k1" in content
+        assert "const container = secp && secp[key]" in content
+        assert "container && typeof container[helperName] === 'function'" in content
+        assert "if (!getSecpContainer(secp, 'etc')) secp.etc = {}" in content
+        assert "if (!getSecpContainer(secp, 'hashes')) secp.hashes = {}" in content
 
 
 def test_wallet_auth_autolock_wrapper_preserves_source_options_for_pools_and_swap():
@@ -66,3 +82,9 @@ def test_no_secret_values_are_logged_by_crypto_or_auth_diagnostics():
         diagnostics = "\n".join(line for line in content.splitlines() if "console." in line or "[WalletAuth]" in line)
         forbidden = ["privateKey", "private_key", "auth_secret", "send_secret", "signature", "pin:", "PIN:"]
         assert not any(secret in diagnostics for secret in forbidden)
+
+
+def test_canonical_migrated_wallet_constant_remains_unchanged():
+    for content in (STATIC_SESSION, PUBLIC_SESSION):
+        assert "THR683318ACF083723B3EDFE6C0A30AD62670F00353" in content
+        assert "THRE85A3E0A09A57212CDB222A9BF5B6E07A9B820E4" not in content.split("VERIFIED_CANONICAL_V1_ADDRESS")[1].split(";", 1)[0]

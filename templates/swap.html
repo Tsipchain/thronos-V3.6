@@ -235,7 +235,7 @@ async function requireSwapWalletAuth(txCore) {
     if (!window.WalletAuth || typeof WalletAuth.requireUnlockedWallet !== 'function') {
         throw new Error('missing_wallet_signing_material');
     }
-    const wallet = await WalletAuth.requireUnlockedWallet();
+    const wallet = await WalletAuth.requireUnlockedWallet({ source: 'swap' });
     const publicKey = wallet.getPublicKey();
     const signedTx = await wallet.signTransaction(txCore);
     const signature = typeof signedTx === 'string' ? signedTx : signedTx && signedTx.signature;
@@ -276,7 +276,16 @@ function getSwapActiveWalletAddress() {
 function isSwapWalletReady(addr) {
     if (!addr) return false;
     if (!window.walletSession || typeof window.walletSession.isBound !== 'function') return true;
-    return !!window.walletSession.isBound();
+    return true;
+}
+
+
+function updateSwapWalletUI() {
+    const addr = getSwapActiveWalletAddress();
+    const ready = isSwapWalletReady(addr);
+    const warning = $('walletWarning');
+    if (warning) warning.style.display = ready ? 'none' : 'block';
+    refreshSwapButtonState();
 }
 
 function applySwapBalance(symbol, value, balances) {
@@ -338,13 +347,13 @@ window.addEventListener('thronos:wallet:v1:unlocked', async (e) => {
     const eventAddr = e.detail?.address?.substring(0, 10) + '...' || 'unknown';
     const addr = getSwapActiveWalletAddress();
     const isUnlocked = window.walletSession && typeof window.walletSession.isUnlockedFor === 'function' ? window.walletSession.isUnlockedFor(addr) : false;
-    console.info('[SwapUI] Wallet V1 unlocked event received:', { eventAddr, activeAddr: addr?.substring(0, 10) + '...', isUnlockedFor: isUnlocked });
+    console.info('[SwapUI] Wallet V1 unlocked event received:', 'eventAddr=', eventAddr, 'activeAddr=', addr?.substring(0, 10) + '...', 'isUnlockedFor=', isUnlocked);
     if (addr) {
         await Promise.all([loadBalances(addr), loadSwapCatalog()]);
         setDefaultTokens();
         calcTo();
     }
-    updateSwapWalletUI();
+    if (typeof updateSwapWalletUI === 'function') updateSwapWalletUI();
 });
 
 // Listen for general wallet state changes
@@ -361,7 +370,7 @@ window.addEventListener('thronos:wallet:state-changed', async () => {
         await Promise.all([loadBalances(addr), loadSwapCatalog()]);
         setDefaultTokens();
         calcTo();
-        updateSwapWalletUI();
+        if (typeof updateSwapWalletUI === 'function') updateSwapWalletUI();
     }
 });
 
@@ -579,25 +588,41 @@ async function doSwap() {
     $('swapResult').textContent = "";
     
     try {
-        const auth = await window.WalletAuth.requireUnlockedWallet();
+        const auth = await window.WalletAuth.requireUnlockedWallet({ source: 'swap' });
         const addr = auth.address || activeAddress;
         const txCore = {
             type: 'swap',
+            action: 'swap',
+            from: addr,
             trader_thr: addr,
+            to: tokenOut,
+            token: tokenIn,
+            amount: amount,
             token_in: tokenIn,
             token_out: tokenOut,
             amount_in: amount,
-            min_amount_out: latestQuote.amount_out
+            min_amount_out: latestQuote.amount_out,
+            nonce: `swap-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            timestamp: Math.floor(Date.now() / 1000)
         };
         const signedSwap = auth.signTransaction ? await auth.signTransaction(txCore) : null;
+        if (!signedSwap) throw new Error('wallet_locked_reunlock_required');
+        const signedSwapEnvelope = signedSwap && typeof signedSwap === 'object' ? signedSwap : {
+            ...txCore,
+            publicKey: auth.getPublicKey ? auth.getPublicKey() : '',
+            signature: signedSwap
+        };
         const res = await fetch('/api/swap/execute', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 trader_thr: addr,
+                active_wallet_address: addr,
                 credential_lookup_address: auth.credentialLookupAddress || addr,
+                action: 'swap',
+                option: 'swap',
                 public_key: auth.getPublicKey ? auth.getPublicKey() : '',
-                signed_tx: signedSwap,
+                signed_tx: signedSwapEnvelope,
                 signature: typeof signedSwap === 'string' ? signedSwap : signedSwap && signedSwap.signature,
                 auth_secret: auth.authSecret,
                 token_in: tokenIn,
@@ -627,8 +652,9 @@ async function doSwap() {
         }
     } catch (e) {
         $('swapResult').style.color = '#f00';
+        const relock = e && (e.message === 'wallet_locked_reunlock_required' || e.code === 'WALLET_LOCKED_REUNLOCK_REQUIRED');
         const missing = e && (e.message === 'missing_wallet_signing_material' || e.message?.includes('missing_wallet_signing_material'));
-        $('swapResult').textContent = `❌ Error: ${missing ? 'missing_wallet_signing_material' : e.message}`;
+        $('swapResult').textContent = `❌ Error: ${relock ? 'wallet_locked_reunlock_required' : (missing ? 'missing_wallet_signing_material' : e.message)}`;
     } finally {
         $('swapBtn').disabled = false;
         $('swapBtn').textContent = "Swap";

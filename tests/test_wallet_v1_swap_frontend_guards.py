@@ -68,6 +68,45 @@ def test_swap_payload_posts_execute_with_action_option_and_signed_swap_action():
     assert "signed_tx: signedSwapEnvelope" in SWAP_HTML
 
 
+def test_frontend_builds_canonical_signed_swap_txcore():
+    tx_start = SWAP_HTML.index("const txCore = {")
+    tx_end = SWAP_HTML.index("};", tx_start)
+    tx_code = SWAP_HTML[tx_start:tx_end]
+    for field in ("type: 'swap'", "action: 'swap'", "from: addr", "token_in: tokenInForSigning", "token_out: tokenOutForSigning", "amount_in: amountForSigning", "nonce:", "timestamp: String"):
+        assert field in tx_code
+    assert "trader_thr:" not in tx_code
+    assert "min_amount_out:" not in tx_code
+    assert "amount: amount" not in tx_code
+
+
+def test_frontend_signed_tx_envelope_wraps_exact_txcore_with_public_key_and_signature():
+    assert "const publicKey = auth.getPublicKey ? auth.getPublicKey() : ''" in SWAP_HTML
+    assert "...txCore," in SWAP_HTML
+    assert "publicKey," in SWAP_HTML
+    assert "signature: signedSwap" in SWAP_HTML
+    assert "amount_in: amountForSigning" in SWAP_HTML
+    assert "token_in: tokenInForSigning" in SWAP_HTML
+    assert "token_out: tokenOutForSigning" in SWAP_HTML
+
+
+def test_frontend_logs_only_safe_signed_swap_diagnostics():
+    assert "signed_fields: Object.keys(txCore)" in SWAP_HTML
+    assert "signature_format: getSignatureFormat" in SWAP_HTML
+    assert "public_key_format: getPublicKeyFormat" in SWAP_HTML
+    assert "active_address_short: shortSwapAddress" in SWAP_HTML
+    assert "from_address_short: shortSwapAddress" in SWAP_HTML
+    assert "credential_lookup_short: shortSwapAddress" in SWAP_HTML
+    assert "canonical_json_hash" in SWAP_HTML
+    diag_start = SWAP_HTML.index("console.info('[SwapAuth] Signed Wallet V1 swap:'")
+    diag_end = SWAP_HTML.index("});", diag_start)
+    diagnostics = SWAP_HTML[diag_start:diag_end]
+    assert "signature:" not in diagnostics
+    assert "public_key:" not in diagnostics
+    assert "publicKey:" not in diagnostics
+    assert "authSecret" not in diagnostics
+    assert "pin" not in diagnostics.lower()
+
+
 def test_wallet_session_signing_falls_back_when_der_option_unsupported():
     session = (ROOT / "static/wallet_session.js").read_text()
     assert "function signDigestDerHex" in session

@@ -1550,8 +1550,8 @@
             </div>
 
             <div id="walletLoginSection" class="wallet-popup-login" style="display:none;">
-                <label for="walletWidgetAddress">THR Address</label>
-                <input type="text" id="walletWidgetAddress" placeholder="THR..." />
+                <label for="walletWidgetThrAddress">THR Address</label>
+                <input type="text" id="walletWidgetThrAddress" placeholder="THR..." />
 <label for="walletWidgetMode">Mode</label>
                 <select id="walletWidgetMode" onchange="switchWalletV1Mode()" style="width:100%;padding:8px;background:#000;border:1px solid #00ff66;color:#00ff66;">
                     <option value="create">Create Wallet V1</option>
@@ -2356,16 +2356,21 @@ function getActiveWalletAddress() {
     const localAddr = localStorage.getItem('thr_address') || '';
     let active = localAddr;
     let migrationNew = '';
+    let ignoredSystemWallet = false;
     try {
         const ws = window.walletSession;
-        if (ws && typeof ws.getAddress === 'function') {
+        if (ws && typeof ws.getActiveAddress === 'function') {
+            active = ws.getActiveAddress() || active;
+        } else if (ws && typeof ws.getAddress === 'function') {
             active = ws.getAddress() || active;
         }
         if (ws && typeof ws.isMigrated === 'function' && ws.isMigrated() &&
             typeof ws.getMigrationInfo === 'function') {
             const info = ws.getMigrationInfo() || {};
             migrationNew = info.new_v1_address || '';
-            if (migrationNew) active = migrationNew;
+        }
+        if (ws && typeof ws.getDebugState === 'function') {
+            ignoredSystemWallet = !!ws.getDebugState().ignored_system_wallet;
         }
     } catch (_) {}
     if (!__activeWalletDiagPrinted) {
@@ -2374,6 +2379,7 @@ function getActiveWalletAddress() {
             active_wallet_address: active || '',
             local_storage_thr_address: localAddr || '',
             migration_new_v1_address: migrationNew || '',
+            ignored_system_wallet: ignoredSystemWallet,
         });
     }
     return active || '';
@@ -5035,7 +5041,7 @@ function showWalletLoginForm(){
     const contentSection = document.getElementById('walletContentSection');
     if(loginSection){
         loginSection.style.display = 'block';
-        const addrInput = document.getElementById('walletWidgetAddress');
+        const addrInput = document.getElementById('walletWidgetThrAddress');
                 const pinInput = document.getElementById('walletWidgetPin');
         if(addrInput) addrInput.value = walletSession.getAddress();
                 if(pinInput) pinInput.value = walletSession.getPin();
@@ -5162,23 +5168,43 @@ async function unlockWalletV1FromHeader(){
     const pin = (document.getElementById('walletWidgetUnlockPin')?.value || '').trim();
     if (!pin) return alert('PIN is required to unlock.');
 
+    const blockedSystemWalletAddress = 'THR5DF27A86C477F381594E896F0E55357DEC5942BA';
+    const isBlockedSystemWallet = (addr) => addr === blockedSystemWalletAddress ||
+        !!(walletSession.isSystemWalletAddress && walletSession.isSystemWalletAddress(addr));
+    const candidateAddress = (document.getElementById('walletWidgetThrAddress')?.value || '').trim();
+    if (!candidateAddress) return alert('wallet_address_required');
+    if (!walletSession.isValidThrAddress || !walletSession.isValidThrAddress(candidateAddress)) return alert('wallet_address_required');
+    if (isBlockedSystemWallet(candidateAddress)) {
+        return alert('system_wallet_not_allowed');
+    }
+
     try {
         console.info('[UnlockWallet] Attempting unlock with PIN');
-        const currentActive = walletSession.getActiveAddress ? walletSession.getActiveAddress() : '';
-        const ok = await walletSession.unlockWallet({ pin });
+        const ok = await walletSession.unlockWallet({ pin, address: candidateAddress });
 
         if (!ok) {
             console.warn('[UnlockWallet] Unlock returned false - wrong PIN?');
             return alert('Unlock failed - wrong PIN or wallet not found');
         }
 
-        console.info('[UnlockWallet] Success:', currentActive.substring(0, 10) + '...');
+        const address = (document.getElementById('walletWidgetThrAddress')?.value || candidateAddress).trim();
+        if (!address || !walletSession.isValidThrAddress || !walletSession.isValidThrAddress(address)) return alert('wallet_address_required');
+        if (isBlockedSystemWallet(address)) {
+            return alert('system_wallet_not_allowed');
+        }
+        if (walletSession.persistActiveUserAddress) {
+            walletSession.persistActiveUserAddress(address);
+        } else {
+            localStorage.setItem('wallet_v1_address', address);
+            localStorage.setItem('thr_address', address);
+        }
+        console.info('[UnlockWallet] Success:', address.substring(0, 10) + '...');
         walletSession.setBound(true);
         showWalletContentSection();
         updateHeaderWalletUi();
         loadWalletBalances(true);
         // Dispatch events to notify other pages of wallet unlock
-        window.dispatchEvent(new CustomEvent('thronos:wallet:v1:unlocked', { detail: { address: currentActive } }));
+        window.dispatchEvent(new CustomEvent('thronos:wallet:v1:unlocked', { detail: { address: address } }));
         window.dispatchEvent(new Event('thronos:wallet:state-changed'));
         alert('Wallet unlocked successfully!');
     } catch(err) {

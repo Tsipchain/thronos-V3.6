@@ -39,13 +39,16 @@ def test_swap_button_uses_parsed_v1_balance_state():
 
 
 def test_swap_auth_uses_wallet_auth_signing_wrapper():
-    assert "window.WalletAuth.requireUnlockedWallet()" in SWAP_HTML
+    assert "window.WalletAuth.requireUnlockedWallet({ source: 'swap' })" in SWAP_HTML
     assert "auth.address || activeAddress" in SWAP_HTML
     assert "credential_lookup_address: auth.credentialLookupAddress || addr" in SWAP_HTML
     assert "auth.getPublicKey ? auth.getPublicKey() : ''" in SWAP_HTML
     assert "auth.signTransaction ? await auth.signTransaction(txCore) : null" in SWAP_HTML
-    assert "signed_tx: signedSwap" in SWAP_HTML
+    assert "signed_tx: signedSwapEnvelope" in SWAP_HTML
     assert "signature: typeof signedSwap === 'string' ? signedSwap : signedSwap && signedSwap.signature" in SWAP_HTML
+    assert "action: 'swap'" in SWAP_HTML
+    assert "option: 'swap'" in SWAP_HTML
+    assert "active_wallet_address: addr" in SWAP_HTML
     assert "missing_wallet_signing_material" in SWAP_HTML
 
 
@@ -54,3 +57,24 @@ def test_swap_does_not_use_legacy_hmac_session_helpers_in_action_path():
     assert "walletSession.getSendSeed()" not in SWAP_HTML
     # localStorage thr_address is allowed only inside the resolver fallback.
     assert SWAP_HTML.count("localStorage.getItem('thr_address')") == 1
+
+
+def test_swap_payload_posts_execute_with_action_option_and_signed_swap_action():
+    assert "fetch('/api/swap/execute'" in SWAP_HTML
+    assert "action: 'swap'" in SWAP_HTML
+    assert "option: 'swap'" in SWAP_HTML
+    assert "type: 'swap'" in SWAP_HTML
+    assert "signed_tx: signedSwapEnvelope" in SWAP_HTML
+
+
+def test_wallet_session_signing_falls_back_when_der_option_unsupported():
+    session = (ROOT / "static/wallet_session.js").read_text()
+    assert "function signDigestDerHex" in session
+    assert "option not supported" in session
+    assert "normalizeSignatureToDerHex(await secp.sign(digestHex, privateKeyHex))" in session
+
+
+def test_swap_legacy_helper_uses_swap_source_and_crypto_error_is_specific():
+    assert "WalletAuth.requireUnlockedWallet({ source: 'swap' })" in SWAP_HTML
+    session = (ROOT / "static/wallet_session.js").read_text()
+    assert "wallet_crypto_not_ready" in session

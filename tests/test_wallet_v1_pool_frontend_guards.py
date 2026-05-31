@@ -16,7 +16,7 @@ def test_pool_actions_use_active_migrated_wallet_resolver():
 
 def test_pool_liquidity_actions_use_wallet_auth_signing_wrapper():
     assert "async function requirePoolWalletAuth" in POOLS_HTML
-    assert "window.WalletAuth.requireUnlockedWallet()" in POOLS_HTML
+    assert "window.WalletAuth.requireUnlockedWallet({ source: 'pools' })" in POOLS_HTML
     assert "auth.signTransaction ? await auth.signTransaction" in POOLS_HTML
     assert "auth.getPublicKey ? auth.getPublicKey() : ''" in POOLS_HTML
     assert "credential_lookup_address" in POOLS_HTML
@@ -125,3 +125,10 @@ def test_static_wallet_session_synchronized():
     public_static_session = (ROOT / "public/static/wallet_session.js").read_text()
     assert static_session == public_static_session, \
         "static/wallet_session.js must match public/static/wallet_session.js"
+
+
+def test_walletauth_autolock_wrapper_preserves_pools_source():
+    auth = (ROOT / "static/wallet_auth.js").read_text()
+    assert "WalletAuth.requireUnlockedWallet = async function(options = {})" in auth
+    assert "originalRequire.call(this, options)" in auth
+    assert "window.WalletAuth.requireUnlockedWallet({ source: 'pools' })" in POOLS_HTML

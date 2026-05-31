@@ -11,6 +11,8 @@
   const V1_ENCRYPTED_KEY = 'wallet_v1_encrypted_priv';
   const V1_PUBLIC_KEY = 'wallet_v1_public_key';
   const V1_ADDRESS_KEY = 'wallet_v1_address';
+  const VERIFIED_LEGACY_SOURCE_ADDRESS = 'THR79ca94a7eb70a6aa99d12d7fdb01446ef246301a';
+  const VERIFIED_CANONICAL_V1_ADDRESS = 'THR683318ACF083723B3EDFE6C0A30AD62670F00353';
 
   let customUnlockHandler = null;
   let unlockedPrivateKeyHex = null;
@@ -38,28 +40,84 @@
     const normalized = normalizeAddress(addr);
     return SYSTEM_WALLETS.hasOwnProperty(normalized);
   }
-  function getAddress(){ return localStorage.getItem(V1_ADDRESS_KEY) || localStorage.getItem(ADDRESS_KEY) || ''; }
+
+  function isVerifiedMigrationInfo(info){
+    const oldAddress = normalizeAddress(info && info.old_address);
+    const newAddress = normalizeAddress(info && info.new_v1_address);
+    if (oldAddress !== VERIFIED_LEGACY_SOURCE_ADDRESS || newAddress !== VERIFIED_CANONICAL_V1_ADDRESS) return false;
+    if (!isValidThrAddress(oldAddress) || !isValidThrAddress(newAddress)) return false;
+    if (isSystemWalletAddress(oldAddress) || isSystemWalletAddress(newAddress)) return false;
+    return !!(info.migration_tx_id || info.migrated_at || info.verified === true || info.status === 'verified' || info.status === 'completed');
+  }
+
+  function getCanonicalMigrationAddress(info){
+    const migrationInfo = info || getMigrationInfo();
+    return isVerifiedMigrationInfo(migrationInfo) ? VERIFIED_CANONICAL_V1_ADDRESS : '';
+  }
+
+  function getLegacySourceAddress(info){
+    const migrationInfo = info || getMigrationInfo();
+    return isVerifiedMigrationInfo(migrationInfo) ? VERIFIED_LEGACY_SOURCE_ADDRESS : '';
+  }
+
+  function getWalletOrigin(address){
+    const normalized = normalizeAddress(address || getActiveAddress());
+    const canonical = getCanonicalMigrationAddress();
+    if (normalized && isSystemWalletAddress(normalized)) return 'system';
+    if (canonical && normalized === canonical) return 'migrated';
+    if (normalized && normalized === normalizeAddress(localStorage.getItem(V1_ADDRESS_KEY)) && isValidThrAddress(normalized)) return 'ui_created';
+    return normalized ? 'unknown' : 'unknown';
+  }
+
+  function getWalletIdentityStatus(address){
+    const origin = getWalletOrigin(address);
+    if (origin === 'ui_created') return 'ui_created_empty';
+    return origin;
+  }
+
+  function getAddress(){ return getActiveAddress() || localStorage.getItem(V1_ADDRESS_KEY) || localStorage.getItem(ADDRESS_KEY) || ''; }
   function getActiveAddress(){
     _ignoredSystemWalletSource = null;
     const info = getMigrationInfo();
     const v1_addr = localStorage.getItem(V1_ADDRESS_KEY);
     const legacy_addr = localStorage.getItem(ADDRESS_KEY);
+    const canonical = getCanonicalMigrationAddress(info);
 
-    // Prefer in order: wallet_v1_address (if valid & not system) > migration.new_v1_address (if valid & not system) > thr_address (if valid & not system)
-    // Guard against system wallets being stored in localStorage or migration records
+    // Prefer verified migration mapping over UI-created wallets.
+    // THR79ca94a7eb70a6aa99d12d7fdb01446ef246301a canonically maps to THR683318ACF083723B3EDFE6C0A30AD62670F00353.
+    if (canonical) return canonical;
+
+    if (info.new_v1_address && isSystemWalletAddress(info.new_v1_address)) _ignoredSystemWalletSource = 'migration.new_v1_address';
+
+    // UI-created wallets are valid local wallets only when no verified migration identity exists.
     if (v1_addr && isValidThrAddress(v1_addr) && !isSystemWalletAddress(v1_addr)) return v1_addr;
     if (v1_addr && isSystemWalletAddress(v1_addr)) _ignoredSystemWalletSource = 'wallet_v1_address';
 
     if (info.new_v1_address && isValidThrAddress(info.new_v1_address) && !isSystemWalletAddress(info.new_v1_address)) return info.new_v1_address;
-    if (info.new_v1_address && isSystemWalletAddress(info.new_v1_address)) _ignoredSystemWalletSource = 'migration.new_v1_address';
 
     if (legacy_addr && isValidThrAddress(legacy_addr) && !isSystemWalletAddress(legacy_addr)) return legacy_addr;
     if (legacy_addr && isSystemWalletAddress(legacy_addr)) _ignoredSystemWalletSource = 'thr_address';
 
-    // Fallback: return first valid address (excluding system wallets) or empty
     return '';
   }
   function setAddress(addr){ setItem(ADDRESS_KEY, addr ? addr.trim() : ''); }
+
+  function persistActiveUserAddress(addr){
+    const normalized = normalizeAddress(addr);
+    if (!isValidThrAddress(normalized)) throw new Error('wallet_address_required');
+    if (isSystemWalletAddress(normalized)) throw new Error('system_wallet_not_allowed');
+    const canonical = getCanonicalMigrationAddress();
+    if (canonical) {
+      localStorage.setItem(V1_ADDRESS_KEY, canonical);
+      localStorage.setItem(ADDRESS_KEY, canonical);
+      if (unlockedPrivateKeyHex) unlockedForAddress = canonical;
+      return canonical;
+    }
+    localStorage.setItem(V1_ADDRESS_KEY, normalized);
+    localStorage.setItem(ADDRESS_KEY, normalized);
+    if (unlockedPrivateKeyHex) unlockedForAddress = normalized;
+    return normalized;
+  }
 
   function scopedCredentialKeys(address){
     const normalized = (address || '').trim();
@@ -121,7 +179,7 @@
   function getPin(){ return localStorage.getItem(PIN_KEY) || ''; }
   function setPin(pin){ setItem(PIN_KEY, pin ? pin.trim() : ''); }
 
-  function lockWallet(){ unlockedPrivateKeyHex = null; unlockedForAddress = null; setBound(false); localStorage.setItem(LOCK_KEY, '1'); }
+  function lockWallet(){ unlockedPrivateKeyHex = null; unlockedForAddress = null; localStorage.setItem(LOCK_KEY, '1'); }
   function lock(){ return lockWallet(); }
   function setCustomUnlockHandler(fn){ customUnlockHandler = typeof fn === 'function' ? fn : null; }
 
@@ -210,11 +268,15 @@
   }
   async function unlock(pinOrOptions){ const options = typeof pinOrOptions === 'string' ? {pin: pinOrOptions, prompt:false} : (pinOrOptions || {}); return unlockWallet(options); }
 
+  function hasRuntimeSigningMaterial(address){
+    const normalized = normalizeAddress(address || getActiveAddress());
+    return !!(unlockedPrivateKeyHex && (!normalized || !unlockedForAddress || unlockedForAddress === normalized));
+  }
+
   function isUnlockedFor(address){
-    // Check if the in-memory private key belongs to the given address
-    // Does not expose the private key itself
-    const normalized = (address || '').trim();
-    return !!(unlockedPrivateKeyHex && unlockedForAddress && unlockedForAddress === normalized);
+    // Check if in-memory signing material belongs to the given address.
+    // Does not expose the private key itself.
+    return hasRuntimeSigningMaterial(address);
   }
 
   function getPublicKey(){ return localStorage.getItem(V1_PUBLIC_KEY) || ''; }
@@ -322,6 +384,8 @@
       migration_new_v1_address: info.new_v1_address || '',
       has_encrypted_send_seed: !!localStorage.getItem(V1_ENCRYPTED_KEY),
       has_signing_material: hasSigningMaterial(active),
+      has_runtime_signing_material: hasRuntimeSigningMaterial(active),
+      is_locked: isLocked(),
     };
   }
 
@@ -342,8 +406,13 @@
       active_wallet: active,
       wallet_v1_address: v1_addr,
       thr_address: legacy_addr,
+      legacy_source_address: getLegacySourceAddress(info),
+      canonical_v1_address: getCanonicalMigrationAddress(info),
+      wallet_origin: getWalletOrigin(active),
+      wallet_identity_status: getWalletIdentityStatus(active),
       migration_new_v1_address: info.new_v1_address || '',
       has_signing_material: hasSigningMaterial(active),
+      has_runtime_signing_material: hasRuntimeSigningMaterial(active),
       has_v1_encrypted_key: has_v1_encrypted,
       has_v1_public_key: has_v1_pubkey,
       is_bound: isBound(),
@@ -407,15 +476,16 @@
     ADDRESS_KEY, SEND_SECRET_KEY, SEND_SEED_KEY, PIN_KEY, BOUND_KEY, LOCK_KEY,
     MIGRATION_META_KEY, V1_ENCRYPTED_KEY, V1_PUBLIC_KEY, V1_ADDRESS_KEY,
     getAddress, getActiveAddress, setAddress,
-    getMigrationInfo, isMigrated, isWalletV1,
+    getMigrationInfo, isMigrated, isVerifiedMigrationInfo, getCanonicalMigrationAddress, getLegacySourceAddress,
+    getWalletOrigin, getWalletIdentityStatus, isWalletV1,
     createWalletV1, getPublicKey, canonicalTxMessage, signTransaction,
     migrateLegacyWallet, encryptPrivateKeyHex, decryptPrivateKeyHex,
     getCredentialLookupAddress, getSendSeed, setSendSeed, getSendSecret, setSendSecret,
-    hasSigningMaterial, getWalletAuthDiagnostics, logWalletAuthDiagnostics,
+    hasSigningMaterial, hasRuntimeSigningMaterial, getWalletAuthDiagnostics, logWalletAuthDiagnostics,
     getPin, setPin, isLocked, lockWallet, lock: lockWallet, unlockWallet, unlock: unlockWallet, unlock,
     setCustomUnlockHandler, isBound, setBound, disconnect, forgetDevice, clearSession, saveSession, requirePin,
     isUnlockedFor,
     getDebugState, restoreToMigratedWallet, resetActiveWalletPointers, clearAllWalletData, isValidThrAddress,
-    isSystemWalletAddress
+    persistActiveUserAddress, isSystemWalletAddress
   };
 })(window);

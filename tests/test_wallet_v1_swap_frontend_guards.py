@@ -39,13 +39,16 @@ def test_swap_button_uses_parsed_v1_balance_state():
 
 
 def test_swap_auth_uses_wallet_auth_signing_wrapper():
-    assert "window.WalletAuth.requireUnlockedWallet()" in SWAP_HTML
+    assert "window.WalletAuth.requireUnlockedWallet({ source: 'swap' })" in SWAP_HTML
     assert "auth.address || activeAddress" in SWAP_HTML
     assert "credential_lookup_address: auth.credentialLookupAddress || addr" in SWAP_HTML
     assert "auth.getPublicKey ? auth.getPublicKey() : ''" in SWAP_HTML
     assert "auth.signTransaction ? await auth.signTransaction(txCore) : null" in SWAP_HTML
-    assert "signed_tx: signedSwap" in SWAP_HTML
+    assert "signed_tx: signedSwapEnvelope" in SWAP_HTML
     assert "signature: typeof signedSwap === 'string' ? signedSwap : signedSwap && signedSwap.signature" in SWAP_HTML
+    assert "action: 'swap'" in SWAP_HTML
+    assert "option: 'swap'" in SWAP_HTML
+    assert "active_wallet_address: addr" in SWAP_HTML
     assert "missing_wallet_signing_material" in SWAP_HTML
 
 

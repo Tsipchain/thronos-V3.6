@@ -61,6 +61,15 @@
   }
   function setAddress(addr){ setItem(ADDRESS_KEY, addr ? addr.trim() : ''); }
 
+  function persistActiveUserAddress(addr){
+    const normalized = normalizeAddress(addr);
+    if (!isValidThrAddress(normalized)) throw new Error('wallet_address_required');
+    if (isSystemWalletAddress(normalized)) throw new Error('system_wallet_not_allowed');
+    localStorage.setItem(V1_ADDRESS_KEY, normalized);
+    localStorage.setItem(ADDRESS_KEY, normalized);
+    return normalized;
+  }
+
   function scopedCredentialKeys(address){
     const normalized = (address || '').trim();
     if (!normalized) return [];
@@ -416,6 +425,6 @@
     setCustomUnlockHandler, isBound, setBound, disconnect, forgetDevice, clearSession, saveSession, requirePin,
     isUnlockedFor,
     getDebugState, restoreToMigratedWallet, resetActiveWalletPointers, clearAllWalletData, isValidThrAddress,
-    isSystemWalletAddress
+    persistActiveUserAddress, isSystemWalletAddress
   };
 })(window);

@@ -185,6 +185,45 @@
 
   function hexToBytes(hex){ const clean = String(hex || '').replace(/^0x/, ''); const out=[]; for(let i=0;i<clean.length;i+=2) out.push(parseInt(clean.slice(i,i+2),16)); return new Uint8Array(out); }
   function bytesToHex(bytes){ return Array.from(bytes || []).map(b=>b.toString(16).padStart(2,'0')).join(''); }
+  function bytesFromSignature(sig){
+    if (!sig) return new Uint8Array();
+    if (sig instanceof Uint8Array) return sig;
+    if (Array.isArray(sig)) return new Uint8Array(sig);
+    if (typeof sig === 'string') return hexToBytes(sig);
+    if (typeof sig.toDERRawBytes === 'function') return sig.toDERRawBytes();
+    if (typeof sig.toCompactRawBytes === 'function') return sig.toCompactRawBytes();
+    if (typeof sig.toRawBytes === 'function') return sig.toRawBytes();
+    return new Uint8Array();
+  }
+  function derInteger(bytes){
+    let start = 0;
+    while (start < bytes.length - 1 && bytes[start] === 0) start++;
+    let value = Array.from(bytes.slice(start));
+    if (!value.length) value = [0];
+    if (value[0] & 0x80) value.unshift(0);
+    return [0x02, value.length, ...value];
+  }
+  function derEncodeCompactSignature(bytes){
+    if (!bytes || bytes.length !== 64) return bytes;
+    const r = derInteger(bytes.slice(0, 32));
+    const s = derInteger(bytes.slice(32, 64));
+    return new Uint8Array([0x30, r.length + s.length, ...r, ...s]);
+  }
+  function normalizeSignatureToDerHex(sig){
+    if (sig && typeof sig.toDERHex === 'function') return sig.toDERHex();
+    const bytes = bytesFromSignature(sig);
+    if (!bytes.length) return '';
+    if (bytes[0] === 0x30) return bytesToHex(bytes);
+    return bytesToHex(derEncodeCompactSignature(bytes));
+  }
+  async function signDigestDerHex(secp, digestHex, privateKeyHex){
+    try {
+      return normalizeSignatureToDerHex(await secp.sign(digestHex, privateKeyHex, { der: true }));
+    } catch (err) {
+      if (!err || !String(err.message || err).toLowerCase().includes('option not supported')) throw err;
+      return normalizeSignatureToDerHex(await secp.sign(digestHex, privateKeyHex));
+    }
+  }
   async function sha256Hex(s){ const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)); return bytesToHex(new Uint8Array(d)); }
   async function aesKeyFromPin(pin, salt){
     const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
@@ -308,8 +347,7 @@
     if (!secp || !secp.sign) throw new Error('secp256k1_library_missing');
     if (!unlockedPrivateKeyHex) throw new Error('wallet_locked');
     const digestHex = await sha256Hex(canonicalTxMessage(txCore));
-    const sig = await secp.sign(digestHex, unlockedPrivateKeyHex, { der: true });
-    return typeof sig === 'string' ? sig : bytesToHex(sig);
+    return signDigestDerHex(secp, digestHex, unlockedPrivateKeyHex);
   }
 
   async function enrollSigningMaterial({address, credentialLookupAddress, pin, authSecret} = {}){

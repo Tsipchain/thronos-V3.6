@@ -57,3 +57,18 @@ def test_swap_does_not_use_legacy_hmac_session_helpers_in_action_path():
     assert "walletSession.getSendSeed()" not in SWAP_HTML
     # localStorage thr_address is allowed only inside the resolver fallback.
     assert SWAP_HTML.count("localStorage.getItem('thr_address')") == 1
+
+
+def test_swap_payload_posts_execute_with_action_option_and_signed_swap_action():
+    assert "fetch('/api/swap/execute'" in SWAP_HTML
+    assert "action: 'swap'" in SWAP_HTML
+    assert "option: 'swap'" in SWAP_HTML
+    assert "type: 'swap'" in SWAP_HTML
+    assert "signed_tx: signedSwapEnvelope" in SWAP_HTML
+
+
+def test_wallet_session_signing_falls_back_when_der_option_unsupported():
+    session = (ROOT / "static/wallet_session.js").read_text()
+    assert "function signDigestDerHex" in session
+    assert "option not supported" in session
+    assert "normalizeSignatureToDerHex(await secp.sign(digestHex, privateKeyHex))" in session

@@ -191,3 +191,21 @@ def test_legacy_path_allows_credential_lookup_address_without_v1_signature(monke
 
 def test_swap_math_unchanged():
     assert server.compute_swap_out(10, 1000, 1000, 30) == pytest.approx((9.871580343970614, 0.03, 1.9674832023733324))
+
+
+def test_wallet_v1_swap_never_returns_legacy_option_not_supported(accept_signature, swap_state):
+    res = post_swap(v1_payload(option="stake", signed_action="swap"))
+    body = res.get_json()
+    assert res.status_code == 400
+    assert body["error"] == "unsupported_swap_action"
+    assert body["expected"] == "swap"
+    assert body["got"] == "stake"
+    assert "option not supported" not in str(body).lower()
+    assert not swap_state["tx"]
+
+
+def test_server_has_no_generic_option_not_supported_swap_return():
+    server_source = Path(server.__file__).read_text()
+    swap_start = server_source.index('@app.route("/api/swap/execute"')
+    swap_end = server_source.index('# ─── Token Balances API', swap_start)
+    assert "option not supported" not in server_source[swap_start:swap_end].lower()

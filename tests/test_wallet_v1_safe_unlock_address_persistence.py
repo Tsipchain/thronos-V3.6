@@ -49,7 +49,7 @@ def test_successful_unlock_persists_thr_address():
 def test_successful_unlock_dispatches_events_with_detail_address():
     body = unlock_function()
     assert "thronos:wallet:v1:unlocked" in body
-    assert "detail: { address: address }" in body
+    assert "detail: { address: activeAddress }" in body
     assert "thronos:wallet:state-changed" in body
 
 

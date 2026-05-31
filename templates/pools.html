@@ -1536,7 +1536,7 @@ window.addEventListener('thronos:wallet:v1:unlocked', async (e) => {
     const eventAddr = e.detail?.address?.substring(0, 10) + '...' || 'unknown';
     const addr = getPoolActiveWalletAddress();
     const isUnlocked = window.walletSession && typeof window.walletSession.isUnlockedFor === 'function' ? window.walletSession.isUnlockedFor(addr) : false;
-    console.info('[PoolsUI] Wallet V1 unlocked event received:', { eventAddr, activeAddr: addr?.substring(0, 10) + '...', isUnlockedFor: isUnlocked });
+    console.info('[PoolsUI] Wallet V1 unlocked event received:', 'eventAddr=', eventAddr, 'activeAddr=', addr?.substring(0, 10) + '...', 'isUnlockedFor=', isUnlocked);
     loadTokenOptions();
     loadPools();
 });

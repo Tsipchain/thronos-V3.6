@@ -2356,6 +2356,9 @@ function getActiveWalletAddress() {
     const localAddr = localStorage.getItem('thr_address') || '';
     let active = localAddr;
     let migrationNew = '';
+    let legacySource = '';
+    let canonicalV1 = '';
+    let walletOrigin = 'unknown';
     let ignoredSystemWallet = false;
     try {
         const ws = window.walletSession;
@@ -2370,7 +2373,11 @@ function getActiveWalletAddress() {
             migrationNew = info.new_v1_address || '';
         }
         if (ws && typeof ws.getDebugState === 'function') {
-            ignoredSystemWallet = !!ws.getDebugState().ignored_system_wallet;
+            const debugState = ws.getDebugState();
+            legacySource = debugState.legacy_source_address || '';
+            canonicalV1 = debugState.canonical_v1_address || '';
+            walletOrigin = debugState.wallet_origin || 'unknown';
+            ignoredSystemWallet = !!debugState.ignored_system_wallet;
         }
     } catch (_) {}
     if (!__activeWalletDiagPrinted) {
@@ -2379,6 +2386,9 @@ function getActiveWalletAddress() {
             active_wallet_address: active || '',
             local_storage_thr_address: localAddr || '',
             migration_new_v1_address: migrationNew || '',
+            legacy_source_address: legacySource || '',
+            canonical_v1_address: canonicalV1 || '',
+            wallet_origin: walletOrigin,
             ignored_system_wallet: ignoredSystemWallet,
         });
     }
@@ -5192,19 +5202,20 @@ async function unlockWalletV1FromHeader(){
         if (isBlockedSystemWallet(address)) {
             return alert('system_wallet_not_allowed');
         }
+        let activeAddress = address;
         if (walletSession.persistActiveUserAddress) {
-            walletSession.persistActiveUserAddress(address);
+            activeAddress = walletSession.persistActiveUserAddress(address);
         } else {
             localStorage.setItem('wallet_v1_address', address);
             localStorage.setItem('thr_address', address);
         }
-        console.info('[UnlockWallet] Success:', address.substring(0, 10) + '...');
+        console.info('[UnlockWallet] Success:', activeAddress.substring(0, 10) + '...');
         walletSession.setBound(true);
         showWalletContentSection();
         updateHeaderWalletUi();
         loadWalletBalances(true);
         // Dispatch events to notify other pages of wallet unlock
-        window.dispatchEvent(new CustomEvent('thronos:wallet:v1:unlocked', { detail: { address: address } }));
+        window.dispatchEvent(new CustomEvent('thronos:wallet:v1:unlocked', { detail: { address: activeAddress } }));
         window.dispatchEvent(new Event('thronos:wallet:state-changed'));
         alert('Wallet unlocked successfully!');
     } catch(err) {

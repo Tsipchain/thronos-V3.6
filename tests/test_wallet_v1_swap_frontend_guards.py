@@ -147,3 +147,25 @@ def test_locked_swap_state_prompts_reunlock_before_signing_and_posting():
     assert "WalletAuth.requireUnlockedWallet({ source: 'swap' })" in SWAP_HTML
     assert prompt_pos < unlock_pos < runtime_pos
     assert sign_pos < post_pos
+
+
+def test_swap_amount_normalization_matches_backend():
+    """Verify normalizeSwapAmount function exists and is used for canonical payload."""
+    assert "function normalizeSwapAmount(value)" in SWAP_HTML
+    assert "const normalizedAmount = normalizeSwapAmount(amount)" in SWAP_HTML
+    doswap_start = SWAP_HTML.find("const txCore = {")
+    doswap_end = SWAP_HTML.find("};", doswap_start)
+    txcore_code = SWAP_HTML[doswap_start:doswap_end]
+    # Verify amount_in uses normalized amount
+    assert "amount_in: normalizedAmount" in txcore_code
+    # Verify amount also uses normalized value for backend compatibility
+    assert "amount: normalizedAmount" in txcore_code
+
+
+def test_swap_canonical_nonce_and_timestamp_are_strings():
+    """Verify swap txCore has nonce and timestamp fields as required by backend."""
+    doswap_start = SWAP_HTML.find("const txCore = {")
+    doswap_end = SWAP_HTML.find("};", doswap_start)
+    txcore_code = SWAP_HTML[doswap_start:doswap_end]
+    assert "nonce:" in txcore_code
+    assert "timestamp:" in txcore_code

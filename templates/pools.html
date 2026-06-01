@@ -1298,12 +1298,16 @@ async function submitCreatePool(event) {
     try {
         poolAuth = await requirePoolWalletAuth('create_pool', {
             from: provider,
+            to: `POOL_CREATE_${tokenA}_${tokenB}`,
             provider_thr: provider,
             token_a: tokenA,
             token_b: tokenB,
+            amount: String(amountA + amountB),
             amount_a: String(amountA),
             amount_b: String(amountB),
-            lock_days: selectedLockDays
+            lock_days: selectedLockDays,
+            nonce: `pool-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            timestamp: Math.floor(Date.now() / 1000)
         });
     } catch (err) {
         messageDiv.className = 'form-message error';
@@ -1422,10 +1426,14 @@ async function addLiquidity(poolId) {
     try {
         const poolAuth = await requirePoolWalletAuth('add_liquidity', {
             from: wallet,
+            to: poolId,
             pool_id: poolId,
             provider_thr: wallet,
+            amount: String(parseFloat(amountA) + parseFloat(amountB)),
             amount_a: String(parseFloat(amountA)),
-            amount_b: String(parseFloat(amountB))
+            amount_b: String(parseFloat(amountB)),
+            nonce: `pool-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            timestamp: Math.floor(Date.now() / 1000)
         });
 
         const referrer = localStorage.getItem('pool_referrer') || '';
@@ -1511,9 +1519,13 @@ async function removeLiquidity(poolId) {
     try {
         const poolAuth = await requirePoolWalletAuth('remove_liquidity', {
             from: wallet,
+            to: poolId,
             pool_id: poolId,
             provider_thr: wallet,
-            shares: String(parseFloat(shares))
+            amount: String(parseFloat(shares)),
+            shares: String(parseFloat(shares)),
+            nonce: `pool-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            timestamp: Math.floor(Date.now() / 1000)
         });
 
         const diagnostics = {

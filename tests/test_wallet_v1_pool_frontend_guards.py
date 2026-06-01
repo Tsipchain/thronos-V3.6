@@ -206,3 +206,27 @@ def test_pool_amounts_are_strings_in_canonical_payload():
     create_code = POOLS_HTML[create_start:create_end]
     assert "String(amountA)" in create_code
     assert "String(amountB)" in create_code
+
+
+def test_pool_signed_tx_includes_canonical_fields_to_and_amount():
+    """Verify pool signed_tx includes 'to' and 'amount' fields for backend verification."""
+    # Check add_liquidity
+    add_start = POOLS_HTML.find("requirePoolWalletAuth('add_liquidity'")
+    add_end = POOLS_HTML.find(");", add_start) + 2
+    add_code = POOLS_HTML[add_start:add_end]
+    assert "to: poolId" in add_code
+    assert "amount: String(parseFloat(amountA) + parseFloat(amountB))" in add_code
+
+    # Check remove_liquidity
+    remove_start = POOLS_HTML.find("requirePoolWalletAuth('remove_liquidity'")
+    remove_end = POOLS_HTML.find(");", remove_start) + 2
+    remove_code = POOLS_HTML[remove_start:remove_end]
+    assert "to: poolId" in remove_code
+    assert "amount: String(parseFloat(shares))" in remove_code
+
+    # Check create_pool
+    create_start = POOLS_HTML.find("requirePoolWalletAuth('create_pool'")
+    create_end = POOLS_HTML.find(");", create_start) + 2
+    create_code = POOLS_HTML[create_start:create_end]
+    assert "to: `POOL_CREATE_" in create_code
+    assert "amount: String(amountA + amountB)" in create_code

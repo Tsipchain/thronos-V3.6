@@ -49,6 +49,17 @@
   <script src="{{ url_for('static', filename='vendor/noble-secp256k1.min.js') }}?v={{ build_id }}"></script>
   <script src="{{ url_for('static', filename='wallet_session.js') }}?v={{ build_id }}"></script>
   <style>
+    /* Overflow Prevention - Prevent global horizontal scroll */
+    html, body {
+      box-sizing: border-box;
+      width: 100%;
+      max-width: 100%;
+      overflow-x: hidden;
+    }
+    *, *:before, *:after {
+      box-sizing: inherit;
+    }
+
     /* Global Styles */
     body {
       background-color: #000;
@@ -76,7 +87,7 @@
       margin: 0 auto;
       padding: 0 20px;
     }
-    
+
     /* Navigation Bar */
     .navbar {
       background: rgba(17, 17, 17, 0.85);
@@ -91,6 +102,9 @@
       flex-wrap: wrap;
       min-height: 82px;
       z-index: 3500;
+      width: 100%;
+      max-width: 100%;
+      overflow-x: hidden;
     }
 
     .nav-list {
@@ -138,19 +152,22 @@
       50% { box-shadow: 0 0 16px #ff9900, 0 0 24px #ff6600; }
     }
 
-    
-    /* Dropdown Menu */
+
+    /* Dropdown Menu - Prevent overflow expansion */
     .dropdown-content {
       display: none;
       position: absolute;
       background-color: #111;
       min-width: 180px;
+      max-width: calc(100vw - 20px);
       box-shadow: 0px 8px 16px 0px rgba(0,255,0,0.2);
       border: 1px solid #0f0;
       z-index: 3600;
       top: 100%;
       left: 0;
       pointer-events: auto;
+      right: auto;
+      overflow-x: hidden;
     }
 
     .dropdown-content a {
@@ -170,7 +187,7 @@
       display: block;
     }
     
-    /* Top Bar Controls */
+    /* Top Bar Controls - Constrain to viewport */
     .top-controls {
         position: absolute;
         top: 8px;
@@ -181,6 +198,8 @@
         flex-wrap: wrap;
         max-width: 360px;
         justify-content: flex-end;
+        max-width: calc(100vw - 40px);
+        overflow-x: hidden;
     }
     
     /* Wallet Status Indicator */
@@ -279,10 +298,11 @@
         border-image: linear-gradient(135deg, #d4af37 0%, #00ff66 50%, #ffd700 100%) 1;
         border-radius: 12px;
         padding: 15px;
-        min-width: 300px;
-        max-width: 360px;
+        min-width: 280px;
+        max-width: calc(100vw - 40px);
         box-shadow: 0 0 30px rgba(0, 255, 102, 0.3), 0 0 15px rgba(255, 215, 0, 0.2);
         z-index: 3800;
+        overflow-x: hidden;
         color: #e6ffe5;
         backdrop-filter: blur(10px);
         pointer-events: auto;
@@ -295,11 +315,14 @@
     .chain-tokens-widget{
         position: relative;
         width: 100%;
+        max-width: 100%;
+        overflow-x: hidden;
         background: linear-gradient(180deg, transparent 0%, rgba(0, 20, 10, 0.92) 20%, rgba(0, 30, 15, 0.98) 100%);
         border-top: 2px solid;
         border-image: linear-gradient(90deg, transparent, #00ff66, #ffd700, #00ff66, transparent) 1;
         backdrop-filter: blur(10px);
         padding: 10px 20px;
+        box-sizing: border-box;
     }
 
     .chain-tokens-footer-meta{
@@ -348,8 +371,10 @@
         border: 1px solid #0f0;
         border-radius: 12px;
         padding: 20px;
-        width: 340px;
+        width: min(340px, calc(100vw - 40px));
+        max-width: 100%;
         box-shadow: 0 0 20px rgba(0, 255, 102, 0.25);
+        overflow-x: hidden;
     }
     .wallet-modal h3 { margin-top: 0; }
     .wallet-modal label { display: block; margin-top: 10px; font-size: 0.9em; color: #9f9; }
@@ -385,11 +410,14 @@
         justify-content: space-between;
         flex-wrap: wrap;
         gap: 15px;
+        width: 100%;
+        overflow-x: hidden;
     }
     .chain-supply-box {
         display: flex;
         align-items: center;
         gap: 10px;
+        flex-shrink: 0;
     }
     .chain-supply-label {
         font-size: 10px;
@@ -406,13 +434,17 @@
         background-clip: text;
         filter: drop-shadow(0 0 5px rgba(0, 255, 102, 0.4));
     }
+    /* Token ticker - Allow internal scroll but constrain to viewport */
     .chain-tokens-scroll {
         display: flex;
         gap: 12px;
         overflow-x: auto;
+        overflow-y: hidden;
         flex: 1;
         padding: 5px 0;
         max-width: 70%;
+        min-width: 0;
+        scrollbar-width: thin;
     }
     .chain-token-pill {
         display: flex;
@@ -1231,6 +1263,7 @@
         position: absolute;
         background: #0a130e;
         min-width: 140px;
+        max-width: calc(100vw - 20px);
         box-shadow: 0 4px 20px rgba(0, 255, 102, 0.3);
         z-index: 3800;
         border: 1px solid #00ff66;

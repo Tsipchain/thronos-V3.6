@@ -17,6 +17,7 @@
   let customUnlockHandler = null;
   let unlockedPrivateKeyHex = null;
   let unlockedForAddress = null; // Track which address the current in-memory key belongs to
+  let lastSigningKeyMismatch = null; // Track mismatch details for UI recovery flow
 
   const SYSTEM_WALLETS = {
     'THR5DF27A86C477F381594E896F0E55357DEC5942BA': 'ai_game_wallet',
@@ -408,12 +409,29 @@
 
           if (activeNormalized && derivedNormalized && activeNormalized !== derivedNormalized) {
             // Mismatch: signing key does not belong to active wallet
-            throw new Error('wallet_signing_address_mismatch');
+            const err = new Error('wallet_signing_address_mismatch');
+            err.derived_address = derivedAddress;
+            err.active_address = activeAddr;
+            throw err;
           }
         } catch (bindingErr) {
-          if ((bindingErr.message || '').includes('wallet_signing_address_mismatch')) throw bindingErr;
+          if ((bindingErr.message || '').includes('wallet_signing_address_mismatch')) {
+            lastSigningKeyMismatch = {
+              derived_address: bindingErr.derived_address || '',
+              active_address: bindingErr.active_address || activeAddr,
+              timestamp: Date.now()
+            };
+            throw bindingErr;
+          }
           // If address derivation fails, still reject the unlock
-          throw new Error('wallet_signing_address_mismatch');
+          const err = new Error('wallet_signing_address_mismatch');
+          err.active_address = activeAddr;
+          lastSigningKeyMismatch = {
+            derived_address: '',
+            active_address: activeAddr,
+            timestamp: Date.now()
+          };
+          throw err;
         }
 
         unlockedPrivateKeyHex = decryptedPrivKeyHex;
@@ -663,6 +681,60 @@
     return true;
   }
 
+  function getSigningKeyMismatch(){
+    // Return mismatch details for UI recovery flow: {derived_address, active_address, timestamp}
+    return lastSigningKeyMismatch ? {...lastSigningKeyMismatch} : null;
+  }
+
+  function clearLocalSigningKey(){
+    // Remove encrypted signing material only, preserve active wallet address
+    localStorage.removeItem(V1_ENCRYPTED_KEY);
+    localStorage.removeItem(V1_PUBLIC_KEY);
+    localStorage.removeItem(PIN_KEY);
+    unlockedPrivateKeyHex = null;
+    lastSigningKeyMismatch = null;
+    localStorage.setItem(LOCK_KEY, '1');
+    return true;
+  }
+
+  async function importSigningKeyForAddress(privateKeyHex, pin, targetAddress) {
+    // Validate that imported key derives the target address before saving
+    // Returns {success: true} on success or {success: false, error: string} on failure
+    try {
+      if (!privateKeyHex || !pin || !targetAddress) {
+        return {success: false, error: 'Invalid parameters'};
+      }
+      const normalized = normalizeAddress(targetAddress);
+      if (isSystemWalletAddress(normalized)) {
+        return {success: false, error: 'Cannot import signing key for system wallet'};
+      }
+      // Derive public key and address from the imported key
+      const secp = await _ensureSecpLoaded();
+      if (!secp || !secp.getPublicKey) {
+        return {success: false, error: 'Cryptography library unavailable'};
+      }
+      const pubBytes = secp.getPublicKey(privateKeyHex, true);
+      const pubHex = typeof pubBytes === 'string' ? pubBytes.replace(/^0x/, '') : bytesToHex(pubBytes);
+      const derivedAddr = await deriveAddressFromPublicKey(pubHex);
+      const derivedNormalized = normalizeAddress(derivedAddr);
+      // Only allow if derived address matches target
+      if (derivedNormalized !== normalized) {
+        return {success: false, error: `Imported key derives ${derivedAddr} but target is ${targetAddress}`};
+      }
+      // Encrypt and save the key
+      const encrypted = await encryptPrivateKeyHex(privateKeyHex, pin);
+      localStorage.setItem(V1_ENCRYPTED_KEY, encrypted);
+      localStorage.setItem(V1_PUBLIC_KEY, pubHex);
+      localStorage.setItem(PIN_KEY, pin);
+      unlockedPrivateKeyHex = null;
+      lastSigningKeyMismatch = null;
+      localStorage.setItem(LOCK_KEY, '1');
+      return {success: true};
+    } catch (e) {
+      return {success: false, error: e && e.message ? e.message : 'Failed to import signing key'};
+    }
+  }
+
   function disconnect(){ setBound(false); localStorage.setItem(LOCK_KEY, '1'); unlockedPrivateKeyHex = null; }
   function forgetDevice(){ [ADDRESS_KEY,SEND_SECRET_KEY,SEND_SEED_KEY,SEND_SEED_COMPAT_KEY,PIN_KEY,BOUND_KEY,LOCK_KEY,V1_ENCRYPTED_KEY,V1_PUBLIC_KEY,V1_ADDRESS_KEY,MIGRATION_META_KEY].forEach(k => localStorage.removeItem(k)); unlockedPrivateKeyHex = null; }
   function clearSession(){ forgetDevice(); }
@@ -684,6 +756,7 @@
     setCustomUnlockHandler, isBound, setBound, disconnect, forgetDevice, clearSession, saveSession, requirePin,
     isUnlockedFor,
     getDebugState, restoreToMigratedWallet, resetActiveWalletPointers, clearAllWalletData, isValidThrAddress,
-    persistActiveUserAddress, isSystemWalletAddress
+    persistActiveUserAddress, isSystemWalletAddress,
+    getSigningKeyMismatch, clearLocalSigningKey, importSigningKeyForAddress
   };
 })(window);

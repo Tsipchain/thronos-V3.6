@@ -167,19 +167,42 @@ def test_pool_signed_txcore_includes_from_field():
         "removeLiquidity txCore must include 'from: wallet'"
 
 
-def test_require_pool_wallet_auth_wraps_signed_tx_envelope():
-    """Verify requirePoolWalletAuth always merges txCore fields into signed_tx envelope."""
+def test_require_pool_wallet_auth_does_not_mutate_signed_fields():
+    """Verify requirePoolWalletAuth builds canonical payload, signs it, and doesn't mutate signed fields."""
     require_start = POOLS_HTML.find("async function requirePoolWalletAuth")
     require_end = POOLS_HTML.find("\n}", require_start + 500)
     require_code = POOLS_HTML[require_start:require_end]
 
-    # Check that signedTxEnvelope is created
-    assert "signedTxEnvelope" in require_code
-    # Check that it ALWAYS spreads txCore fields (not conditionally)
-    assert "...(txCore || {})" in require_code
-    # Check that it merges wallet's signed_tx if it's an object
-    assert "typeof signedTx === 'object'" in require_code
-    # Check that it includes type, publicKey, signature fields
+    # Check that canonical payload is built with type and action
+    assert "const canonicalTxCore" in require_code
     assert "type: action" in require_code
-    assert "publicKey:" in require_code
-    assert "signature:" in require_code
+    assert "action: action" in require_code
+    # Check that signedTx is signed
+    assert "auth.signTransaction" in require_code
+    # Check that for objects, we preserve the signed_tx (don't rebuild)
+    assert "...signedTx" in require_code
+    # Check that publicKey is added without mutating signed fields
+    assert "publicKey: signedTx.publicKey || publicKey" in require_code
+
+
+def test_pool_amounts_are_strings_in_canonical_payload():
+    """Verify pool actions convert amounts to strings for canonical signing."""
+    # Check add_liquidity
+    add_start = POOLS_HTML.find("requirePoolWalletAuth('add_liquidity'")
+    add_end = POOLS_HTML.find(");", add_start) + 2
+    add_code = POOLS_HTML[add_start:add_end]
+    assert "String(parseFloat(amountA))" in add_code or "String(amountA)" in add_code
+    assert "String(parseFloat(amountB))" in add_code or "String(amountB)" in add_code
+
+    # Check remove_liquidity
+    remove_start = POOLS_HTML.find("requirePoolWalletAuth('remove_liquidity'")
+    remove_end = POOLS_HTML.find(");", remove_start) + 2
+    remove_code = POOLS_HTML[remove_start:remove_end]
+    assert "String(" in remove_code and "shares" in remove_code
+
+    # Check create_pool
+    create_start = POOLS_HTML.find("requirePoolWalletAuth('create_pool'")
+    create_end = POOLS_HTML.find(");", create_start) + 2
+    create_code = POOLS_HTML[create_start:create_end]
+    assert "String(amountA)" in create_code
+    assert "String(amountB)" in create_code

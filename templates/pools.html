@@ -1131,15 +1131,18 @@ async function requirePoolWalletAuth(action, txCore) {
     }
     const auth = await window.WalletAuth.requireUnlockedWallet({ source: 'pools' });
     const publicKey = auth.getPublicKey ? auth.getPublicKey() : '';
-    const signedTx = auth.signTransaction ? await auth.signTransaction(Object.assign({ type: action }, txCore || {})) : null;
+    const signInput = Object.assign({ type: action }, txCore || {});
+    const signedTx = auth.signTransaction ? await auth.signTransaction(signInput) : null;
     if (!signedTx) throw new Error('wallet_locked_reunlock_required');
 
-    // Wrap signed_tx as an object (canonical pool envelope)
-    const signedTxEnvelope = signedTx && typeof signedTx === 'object' ? signedTx : {
+    // Construct canonical pool envelope with all required fields
+    // Always merge txCore to ensure "from" and other canonical fields are preserved
+    const signedTxEnvelope = {
         ...(txCore || {}),
         type: action,
-        publicKey,
-        signature: signedTx
+        ...(typeof signedTx === 'object' ? signedTx : {}),
+        publicKey: publicKey || (typeof signedTx === 'object' && signedTx.publicKey ? signedTx.publicKey : ''),
+        signature: typeof signedTx === 'string' ? signedTx : (signedTx?.signature || signedTx)
     };
 
     return {

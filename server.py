@@ -22293,14 +22293,15 @@ def api_swap_execute():
     except Exception as exc:
         return jsonify(status="error", message=str(exc)), 500
 
-    if not token_in or not token_out or amount_in <= 0:
-        return jsonify(status="error", message="Invalid input"), 400
-    if not trader:
-        return jsonify(status="error", message="Missing trader"), 400
-    if not is_swap_symbol_allowed(token_in) or not is_swap_symbol_allowed(token_out):
-        return jsonify(status="error", message="Unsupported token"), 400
-
     try:
+        # Validate input parameters
+        if not token_in or not token_out or amount_in <= 0:
+            return jsonify(status="error", message="Invalid input"), 400
+        if not trader:
+            return jsonify(status="error", message="Missing trader"), 400
+        if not is_swap_symbol_allowed(token_in) or not is_swap_symbol_allowed(token_out):
+            return jsonify(status="error", message="Unsupported token"), 400
+
         # Wallet V1 or legacy auth verification
         auth_ok, auth_error, verified_trader = verify_swap_wallet_v1_or_legacy(data, SWAP_EXPECTED_ACTION)
         if not auth_ok:

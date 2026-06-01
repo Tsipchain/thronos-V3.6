@@ -168,18 +168,18 @@ def test_pool_signed_txcore_includes_from_field():
 
 
 def test_require_pool_wallet_auth_wraps_signed_tx_envelope():
-    """Verify requirePoolWalletAuth wraps string signatures as object envelope with from field."""
+    """Verify requirePoolWalletAuth always merges txCore fields into signed_tx envelope."""
     require_start = POOLS_HTML.find("async function requirePoolWalletAuth")
     require_end = POOLS_HTML.find("\n}", require_start + 500)
     require_code = POOLS_HTML[require_start:require_end]
 
     # Check that signedTxEnvelope is created
     assert "signedTxEnvelope" in require_code
-    # Check that it handles string signatures by wrapping them
-    assert "typeof signedTx === 'object'" in require_code
-    # Check that it spreads txCore fields
+    # Check that it ALWAYS spreads txCore fields (not conditionally)
     assert "...(txCore || {})" in require_code
-    # Check that it includes type, publicKey, signature
+    # Check that it merges wallet's signed_tx if it's an object
+    assert "typeof signedTx === 'object'" in require_code
+    # Check that it includes type, publicKey, signature fields
     assert "type: action" in require_code
-    assert "publicKey" in require_code
-    assert "signature: signedTx" in require_code
+    assert "publicKey:" in require_code
+    assert "signature:" in require_code

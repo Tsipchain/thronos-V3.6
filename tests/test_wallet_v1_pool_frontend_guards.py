@@ -141,3 +141,45 @@ def test_pools_runtime_missing_state_is_relocked_before_prompting():
     assert "!hasRuntimeSigningMaterial(address)" in auth
     assert "window.walletSession.lockWallet()" in auth
     assert "logAuthDiagnostics(address, source)" in auth
+
+
+def test_pool_signed_txcore_includes_from_field():
+    """Verify pool actions include 'from' field in signed txCore for Wallet V1 canonical format."""
+    # Create pool must include from
+    create_start = POOLS_HTML.find("requirePoolWalletAuth('create_pool'")
+    create_end = POOLS_HTML.find(");", create_start) + 2
+    create_code = POOLS_HTML[create_start:create_end]
+    assert "from: provider" in create_code, \
+        "submitCreatePool txCore must include 'from: provider'"
+
+    # Add liquidity must include from
+    add_start = POOLS_HTML.find("requirePoolWalletAuth('add_liquidity'")
+    add_end = POOLS_HTML.find(");", add_start) + 2
+    add_code = POOLS_HTML[add_start:add_end]
+    assert "from: wallet" in add_code, \
+        "addLiquidity txCore must include 'from: wallet'"
+
+    # Remove liquidity must include from
+    remove_start = POOLS_HTML.find("requirePoolWalletAuth('remove_liquidity'")
+    remove_end = POOLS_HTML.find(");", remove_start) + 2
+    remove_code = POOLS_HTML[remove_start:remove_end]
+    assert "from: wallet" in remove_code, \
+        "removeLiquidity txCore must include 'from: wallet'"
+
+
+def test_require_pool_wallet_auth_wraps_signed_tx_envelope():
+    """Verify requirePoolWalletAuth wraps string signatures as object envelope with from field."""
+    require_start = POOLS_HTML.find("async function requirePoolWalletAuth")
+    require_end = POOLS_HTML.find("\n}", require_start + 500)
+    require_code = POOLS_HTML[require_start:require_end]
+
+    # Check that signedTxEnvelope is created
+    assert "signedTxEnvelope" in require_code
+    # Check that it handles string signatures by wrapping them
+    assert "typeof signedTx === 'object'" in require_code
+    # Check that it spreads txCore fields
+    assert "...(txCore || {})" in require_code
+    # Check that it includes type, publicKey, signature
+    assert "type: action" in require_code
+    assert "publicKey" in require_code
+    assert "signature: signedTx" in require_code

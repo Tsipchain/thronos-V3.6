@@ -22300,91 +22300,93 @@ def api_swap_execute():
     if not is_swap_symbol_allowed(token_in) or not is_swap_symbol_allowed(token_out):
         return jsonify(status="error", message="Unsupported token"), 400
 
-    auth_ok, auth_error, verified_trader = verify_swap_wallet_v1_or_legacy(data, SWAP_EXPECTED_ACTION)
-    if not auth_ok:
-        status_code = 400
-        if auth_error.get("error") in ("invalid_auth", "no_effective_pledge", "wallet_mismatch"):
-            status_code = 403
-        elif auth_error.get("error") == "missing_pledge":
-            status_code = 404
-        return jsonify(**auth_error), status_code
-    trader = verified_trader or trader
-
-    quote, err = quote_swap_route(token_in, token_out, amount_in)
-    if err:
-        return jsonify(ok=False, status="error", error=err, message=err), 400
-    if quote["amount_out"] < min_amount_out:
-        return jsonify(status="error", message="Slippage too high", expected_minimum=min_amount_out, actual_output=quote["amount_out"]), 400
-
-    thr_ledger = load_json(LEDGER_FILE, {})
-    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
-    token_balances = load_token_balances()
-    pools = load_pools()
-
-    def get_balance(sym):
-        if sym == "THR":
-            return float(thr_ledger.get(trader, 0.0))
-        if sym == "WBTC":
-            return float(wbtc_ledger.get(trader, 0.0))
-        return float(token_balances.get(sym, {}).get(trader, 0.0))
-
-    if get_balance(token_in) < amount_in:
-        return jsonify(status="error", message=f"Insufficient {token_in} balance"), 400
-
-    def deduct(sym, amt):
-        if sym == "THR":
-            thr_ledger[trader] = round(float(thr_ledger.get(trader, 0.0)) - amt, 6)
-        elif sym == "WBTC":
-            wbtc_ledger[trader] = round(float(wbtc_ledger.get(trader, 0.0)) - amt, 8)
-        else:
-            token_balances.setdefault(sym, {})
-            token_balances[sym][trader] = round(float(token_balances[sym].get(trader, 0.0)) - amt, 6)
-
-    def credit(sym, amt):
-        if sym == "THR":
-            thr_ledger[trader] = round(float(thr_ledger.get(trader, 0.0)) + amt, 6)
-        elif sym == "WBTC":
-            wbtc_ledger[trader] = round(float(wbtc_ledger.get(trader, 0.0)) + amt, 8)
-        else:
-            token_balances.setdefault(sym, {})
-            token_balances[sym][trader] = round(float(token_balances[sym].get(trader, 0.0)) + amt, 6)
-
-    def apply_pool_swap(pool_id: str, in_token: str, out_token: str, amt_in: float) -> tuple[float, float, float]:
-        pool = next((p for p in pools if p.get("id") == pool_id), None)
-        if not pool:
-            return 0.0, 0.0, 0.0
-        a = _sanitize_asset_symbol(pool.get("token_a"))
-        b = _sanitize_asset_symbol(pool.get("token_b"))
-        reserves_a = float(pool.get("reserves_a", 0))
-        reserves_b = float(pool.get("reserves_b", 0))
-        fee_bps = pool_fee_bps(pool)
-        if in_token == a and out_token == b:
-            reserve_in, reserve_out = reserves_a, reserves_b
-            is_a_to_b = True
-        elif in_token == b and out_token == a:
-            reserve_in, reserve_out = reserves_b, reserves_a
-            is_a_to_b = False
-        else:
-            return 0.0, 0.0, 0.0
-        amt_out, fee_amount, price_impact = compute_swap_out(amt_in, reserve_in, reserve_out, fee_bps)
-        if amt_out <= 0:
-            return 0.0, 0.0, 0.0
-        if is_a_to_b:
-            pool["reserves_a"] = round(reserves_a + amt_in, 6)
-            pool["reserves_b"] = round(reserves_b - amt_out, 6)
-        else:
-            pool["reserves_b"] = round(reserves_b + amt_in, 6)
-            pool["reserves_a"] = round(reserves_a - amt_out, 6)
-
-        # Update Pytheia metrics
-        pool["volume_24h"] = float(pool.get("volume_24h", 0.0)) + amt_in
-        pool["volume_total"] = float(pool.get("volume_total", 0.0)) + amt_in
-        pool["fees_collected"] = float(pool.get("fees_collected", 0.0)) + fee_amount
-        pool["last_swap_time"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-
-        return amt_out, fee_amount, price_impact
-
     try:
+        # Wallet V1 or legacy auth verification
+        auth_ok, auth_error, verified_trader = verify_swap_wallet_v1_or_legacy(data, SWAP_EXPECTED_ACTION)
+        if not auth_ok:
+            status_code = 400
+            if auth_error.get("error") in ("invalid_auth", "no_effective_pledge", "wallet_mismatch"):
+                status_code = 403
+            elif auth_error.get("error") == "missing_pledge":
+                status_code = 404
+            return jsonify(**auth_error), status_code
+        trader = verified_trader or trader
+
+        # Get swap quote and route
+        quote, err = quote_swap_route(token_in, token_out, amount_in)
+        if err:
+            return jsonify(ok=False, status="error", error=err, message=err), 400
+        if quote["amount_out"] < min_amount_out:
+            return jsonify(status="error", message="Slippage too high", expected_minimum=min_amount_out, actual_output=quote["amount_out"]), 400
+
+        # Load state
+        thr_ledger = load_json(LEDGER_FILE, {})
+        wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+        token_balances = load_token_balances()
+        pools = load_pools()
+
+        def get_balance(sym):
+            if sym == "THR":
+                return float(thr_ledger.get(trader, 0.0))
+            if sym == "WBTC":
+                return float(wbtc_ledger.get(trader, 0.0))
+            return float(token_balances.get(sym, {}).get(trader, 0.0))
+
+        if get_balance(token_in) < amount_in:
+            return jsonify(status="error", message=f"Insufficient {token_in} balance"), 400
+
+        def deduct(sym, amt):
+            if sym == "THR":
+                thr_ledger[trader] = round(float(thr_ledger.get(trader, 0.0)) - amt, 6)
+            elif sym == "WBTC":
+                wbtc_ledger[trader] = round(float(wbtc_ledger.get(trader, 0.0)) - amt, 8)
+            else:
+                token_balances.setdefault(sym, {})
+                token_balances[sym][trader] = round(float(token_balances[sym].get(trader, 0.0)) - amt, 6)
+
+        def credit(sym, amt):
+            if sym == "THR":
+                thr_ledger[trader] = round(float(thr_ledger.get(trader, 0.0)) + amt, 6)
+            elif sym == "WBTC":
+                wbtc_ledger[trader] = round(float(wbtc_ledger.get(trader, 0.0)) + amt, 8)
+            else:
+                token_balances.setdefault(sym, {})
+                token_balances[sym][trader] = round(float(token_balances[sym].get(trader, 0.0)) + amt, 6)
+
+        def apply_pool_swap(pool_id: str, in_token: str, out_token: str, amt_in: float) -> tuple[float, float, float]:
+            pool = next((p for p in pools if p.get("id") == pool_id), None)
+            if not pool:
+                return 0.0, 0.0, 0.0
+            a = _sanitize_asset_symbol(pool.get("token_a"))
+            b = _sanitize_asset_symbol(pool.get("token_b"))
+            reserves_a = float(pool.get("reserves_a", 0))
+            reserves_b = float(pool.get("reserves_b", 0))
+            fee_bps = pool_fee_bps(pool)
+            if in_token == a and out_token == b:
+                reserve_in, reserve_out = reserves_a, reserves_b
+                is_a_to_b = True
+            elif in_token == b and out_token == a:
+                reserve_in, reserve_out = reserves_b, reserves_a
+                is_a_to_b = False
+            else:
+                return 0.0, 0.0, 0.0
+            amt_out, fee_amount, price_impact = compute_swap_out(amt_in, reserve_in, reserve_out, fee_bps)
+            if amt_out <= 0:
+                return 0.0, 0.0, 0.0
+            if is_a_to_b:
+                pool["reserves_a"] = round(reserves_a + amt_in, 6)
+                pool["reserves_b"] = round(reserves_b - amt_out, 6)
+            else:
+                pool["reserves_b"] = round(reserves_b + amt_in, 6)
+                pool["reserves_a"] = round(reserves_a - amt_out, 6)
+
+            pool["volume_24h"] = float(pool.get("volume_24h", 0.0)) + amt_in
+            pool["volume_total"] = float(pool.get("volume_total", 0.0)) + amt_in
+            pool["fees_collected"] = float(pool.get("fees_collected", 0.0)) + fee_amount
+            pool["last_swap_time"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+            return amt_out, fee_amount, price_impact
+
+        # Execute swap across route
         swap_trace = []
         running_in = amount_in
         total_fee = 0.0
@@ -22417,10 +22419,8 @@ def api_swap_execute():
         ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
         tx_id = f"SWAP-{int(time.time())}-{secrets.token_hex(4)}"
 
-        # For single-hop, pool_id is first pool; for multi-hop, include all pools in route
         primary_pool_id = swap_trace[0]["pool_id"] if swap_trace else None
 
-        # PR-2 Critical: Validate required pool_event fields before writing TX
         if not primary_pool_id or not token_in or not token_out or amount_in <= 0 or running_in <= 0:
             return jsonify(status="error", error="swap_execution_failed", message="Invalid pool_event data; swap aborted"), 400
 
@@ -22448,7 +22448,7 @@ def api_swap_execute():
                 "pool_id": primary_pool_id,
                 "fee": total_fee,
                 "price_impact": round(total_price_impact, 4),
-                "route": swap_trace,  # Include full route for multi-hop transparency
+                "route": swap_trace,
             },
             "route": swap_trace,
         }
@@ -22471,7 +22471,10 @@ def api_swap_execute():
     except KeyError as ke:
         return jsonify(status="error", error="pool_not_found", message=f"Missing pool field: {ke}"), 400
     except Exception as exc:
-        return jsonify(status="error", error="swap_execution_failed", message=str(exc)), 500
+        import traceback
+        tb = traceback.format_exc()
+        logger.error(f"[api_swap_execute] Unhandled exception: {exc}\n{tb}")
+        return jsonify(status="error", error="swap_execution_failed", message=str(exc), exception_type=type(exc).__name__), 500
 
 # ─── Token Balances API (NEW) ─────────────────────────────────────
 #

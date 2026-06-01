@@ -1281,6 +1281,7 @@ async function submitCreatePool(event) {
     let poolAuth;
     try {
         poolAuth = await requirePoolWalletAuth('create_pool', {
+            from: provider,
             provider_thr: provider,
             token_a: tokenA,
             token_b: tokenB,
@@ -1404,6 +1405,7 @@ async function addLiquidity(poolId) {
 
     try {
         const poolAuth = await requirePoolWalletAuth('add_liquidity', {
+            from: wallet,
             pool_id: poolId,
             provider_thr: wallet,
             amount_a: parseFloat(amountA),
@@ -1492,6 +1494,7 @@ async function removeLiquidity(poolId) {
 
     try {
         const poolAuth = await requirePoolWalletAuth('remove_liquidity', {
+            from: wallet,
             pool_id: poolId,
             provider_thr: wallet,
             shares: parseFloat(shares)

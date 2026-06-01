@@ -279,3 +279,24 @@ def test_server_has_no_generic_option_not_supported_swap_return():
     swap_start = server_source.index('@app.route("/api/swap/execute"')
     swap_end = server_source.index('# ─── Token Balances API', swap_start)
     assert "option not supported" not in server_source[swap_start:swap_end].lower()
+
+
+def test_swap_execute_returns_structured_errors_not_generic_500(accept_signature, swap_state, monkeypatch):
+    """Verify swap execute endpoint returns structured error codes, not generic server_error."""
+    # Simulate an exception in the wallet verification path
+    def fake_verify_fail(*args, **kwargs):
+        raise ValueError("Test verification error")
+
+    monkeypatch.setattr(server, "verify_swap_wallet_v1_or_legacy", fake_verify_fail)
+
+    res = post_swap(v1_payload())
+    body = res.get_json()
+
+    # Should return structured error, not generic server_error
+    assert "error" in body
+    assert body["error"] in ("swap_execution_failed", "invalid_swap_amount", "pool_not_found")
+    assert "message" in body
+    # Should include exception type for debugging
+    assert "exception_type" in body
+    # Should not have been mutated due to try-catch catching the error
+    assert not swap_state["tx"]

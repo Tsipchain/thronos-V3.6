@@ -279,3 +279,44 @@ def test_server_has_no_generic_option_not_supported_swap_return():
     swap_start = server_source.index('@app.route("/api/swap/execute"')
     swap_end = server_source.index('# ─── Token Balances API', swap_start)
     assert "option not supported" not in server_source[swap_start:swap_end].lower()
+
+
+def test_swap_execute_returns_structured_errors_not_generic_500(accept_signature, swap_state, monkeypatch):
+    """Verify swap execute endpoint catches exceptions and returns structured errors."""
+    # Simulate an exception in the wallet verification path
+    def fake_verify_fail(*args, **kwargs):
+        raise ValueError("Test verification error")
+
+    monkeypatch.setattr(server, "verify_swap_wallet_v1_or_legacy", fake_verify_fail)
+
+    res = post_swap(v1_payload())
+    body = res.get_json()
+
+    # Should return 500 with structured error fields, not Flask's generic "server_error"
+    assert res.status_code == 500
+    assert body.get("error") == "swap_execution_failed"
+    assert "message" in body
+    # Should include exception type for debugging
+    assert "exception_type" in body
+    # Should NOT have the generic Flask error format (error: "server_error", ok: false)
+    assert body.get("error") != "server_error"
+    # State should not have been mutated due to exception
+    assert not swap_state["tx"]
+
+
+def test_swap_execute_validates_input_in_try_catch(accept_signature, swap_state, monkeypatch):
+    """Verify validation checks are in try-catch to prevent unhandled exceptions."""
+    # Mock is_swap_symbol_allowed to throw an exception
+    def fake_symbol_check(sym):
+        raise RuntimeError("Token list load failed")
+
+    monkeypatch.setattr(server, "is_swap_symbol_allowed", fake_symbol_check)
+
+    res = post_swap(v1_payload())
+    body = res.get_json()
+
+    # Should catch the exception and return structured error, not Flask's generic 500
+    assert res.status_code == 500
+    assert body.get("error") == "swap_execution_failed"
+    assert "exception_type" in body
+    assert body.get("error") != "server_error"

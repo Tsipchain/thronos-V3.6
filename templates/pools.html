@@ -1130,14 +1130,24 @@ async function requirePoolWalletAuth(action, txCore) {
         throw new Error('missing_wallet_signing_material');
     }
     const auth = await window.WalletAuth.requireUnlockedWallet({ source: 'pools' });
+    const publicKey = auth.getPublicKey ? auth.getPublicKey() : '';
     const signedTx = auth.signTransaction ? await auth.signTransaction(Object.assign({ type: action }, txCore || {})) : null;
     if (!signedTx) throw new Error('wallet_locked_reunlock_required');
+
+    // Wrap signed_tx as an object (canonical pool envelope)
+    const signedTxEnvelope = signedTx && typeof signedTx === 'object' ? signedTx : {
+        ...(txCore || {}),
+        type: action,
+        publicKey,
+        signature: signedTx
+    };
+
     return {
         address: auth.address || getPoolActiveWalletAddress(),
         authSecret: auth.authSecret,
         credentialLookupAddress: auth.credentialLookupAddress,
-        publicKey: auth.getPublicKey ? auth.getPublicKey() : '',
-        signedTx,
+        publicKey,
+        signedTx: signedTxEnvelope,
         signature: typeof signedTx === 'string' ? signedTx : signedTx && signedTx.signature
     };
 }

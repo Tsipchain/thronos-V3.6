@@ -555,6 +555,23 @@ async function calcTo() {
     }
 }
 
+// Normalize swap amount for canonical signing (match backend normalization)
+function normalizeSwapAmount(value) {
+    try {
+        // Convert to string, parse as number, then to string to match backend Decimal normalization
+        const numValue = parseFloat(value);
+        if (!isFinite(numValue)) return '0';
+        const str = String(numValue);
+        // Remove trailing zeros after decimal point
+        if (str.includes('.')) {
+            return str.replace(/\.?0+$/, '');
+        }
+        return str;
+    } catch (e) {
+        return String(value || '0').trim();
+    }
+}
+
 async function doSwap() {
     const amount = parseFloat($('amountFrom').value);
     const tokenIn = normalizeSwapSymbol($('symbolFrom').value);
@@ -590,6 +607,9 @@ async function doSwap() {
     try {
         const auth = await window.WalletAuth.requireUnlockedWallet({ source: 'swap' });
         const addr = auth.address || activeAddress;
+        // Normalize amount for canonical signing (must match backend normalization)
+        const normalizedAmount = normalizeSwapAmount(amount);
+
         const txCore = {
             type: 'swap',
             action: 'swap',
@@ -597,13 +617,13 @@ async function doSwap() {
             trader_thr: addr,
             to: tokenOut,
             token: tokenIn,
-            amount: amount,
+            amount: normalizedAmount,
             token_in: tokenIn,
             token_out: tokenOut,
-            amount_in: amount,
+            amount_in: normalizedAmount,
             min_amount_out: latestQuote.amount_out,
             nonce: `swap-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-            timestamp: Math.floor(Date.now() / 1000)
+            timestamp: String(Math.floor(Date.now() / 1000))
         };
         const signedSwap = auth.signTransaction ? await auth.signTransaction(txCore) : null;
         if (!signedSwap) throw new Error('wallet_locked_reunlock_required');

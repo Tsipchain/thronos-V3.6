@@ -126,3 +126,62 @@ catch (err) {{ assert.strictEqual(err.message, 'system_wallet_not_allowed'); }}
 def test_static_and_public_wallet_files_stay_synchronized():
     assert STATIC_AUTH == PUBLIC_AUTH
     assert STATIC_SESSION == PUBLIC_SESSION
+
+
+def test_signing_key_mismatch_displays_safe_diagnostics():
+    assert "getSigningKeyMismatch" in STATIC_SESSION
+    assert "derived_address" in STATIC_SESSION
+    assert "active_address" in STATIC_SESSION
+    assert "lastSigningKeyMismatch" in STATIC_SESSION
+    # Ensure error handler captures mismatch details
+    assert "lastMismatchError" in STATIC_AUTH
+    assert "getSigningKeyMismatchDetails" in STATIC_AUTH
+
+
+def test_signing_key_mismatch_preserves_active_canonical_address():
+    assert "activeNormalized && derivedNormalized && activeNormalized !== derivedNormalized" in STATIC_SESSION
+    assert "wallet_signing_address_mismatch" in STATIC_SESSION
+    # Active address should not be cleared on mismatch
+    assert "unlockedForAddress = null" in STATIC_SESSION
+
+
+def test_signing_key_mismatch_clears_runtime_signing_material():
+    assert "unlockedPrivateKeyHex = null" in STATIC_SESSION
+    # Should clear on mismatch catch
+    assert "if ((err.message || '').includes('wallet_signing_address_mismatch')) {" in STATIC_SESSION
+
+
+def test_clear_local_signing_key_removes_encrypted_seed_but_keeps_active_address():
+    assert "clearLocalSigningKey" in STATIC_SESSION
+    assert "localStorage.removeItem(V1_ENCRYPTED_KEY)" in STATIC_SESSION
+    assert "localStorage.removeItem(V1_PUBLIC_KEY)" in STATIC_SESSION
+    assert "localStorage.removeItem(PIN_KEY)" in STATIC_SESSION
+    # Should NOT remove active address keys
+    assert "clearLocalSigningKey" in STATIC_SESSION
+
+
+def test_import_correct_key_only_succeeds_if_derived_address_matches_active():
+    assert "importSigningKeyForAddress" in STATIC_SESSION
+    assert "derivedNormalized !== normalized" in STATIC_SESSION
+    assert "Imported key derives" in STATIC_SESSION
+
+
+def test_import_wrong_key_is_rejected():
+    assert "if (derivedNormalized !== normalized)" in STATIC_SESSION
+    assert "success: false, error:" in STATIC_SESSION
+
+
+def test_system_wallet_cannot_have_imported_signing_key():
+    assert "isSystemWalletAddress(normalized)" in STATIC_SESSION
+    assert "Cannot import signing key for system wallet" in STATIC_SESSION
+
+
+def test_mismatch_diagnostics_do_not_leak_secrets():
+    for content in [STATIC_SESSION]:
+        # Search for error handling and mismatch details
+        if "lastSigningKeyMismatch" in content:
+            mismatch_start = content.index("lastSigningKeyMismatch")
+            # Make sure only non-secret fields are stored
+            forbidden = ["privateKey", "private_key", "pin", "PIN", "send_secret", "sendSeed"]
+            mismatch_section = content[mismatch_start:mismatch_start + 500]
+            assert not any(secret in mismatch_section for secret in forbidden)

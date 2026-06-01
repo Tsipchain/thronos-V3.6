@@ -111,6 +111,7 @@
     let cachedAuthSecret = '';
     let cachedAuthAddress = '';
     let cachedRuntimeSigningAddress = '';
+    let lastMismatchError = null;
 
     const WalletAuth = {
         version: VERSION,
@@ -197,8 +198,11 @@
                 } catch (e) {
                     if (e && e.code === 'WALLET_LOCKED_REUNLOCK_REQUIRED') throw e;
                     if (e && (e.message || '').includes('wallet_signing_address_mismatch')) {
+                        const mismatch = window.walletSession && typeof window.walletSession.getSigningKeyMismatch === 'function' ? window.walletSession.getSigningKeyMismatch() : null;
                         const err = new Error('Wallet signing key does not match the active wallet address. Please import or migrate the correct key for ' + shortAddress(address) + '.');
                         err.code = 'WALLET_SIGNING_ADDRESS_MISMATCH';
+                        err.mismatch = mismatch;
+                        lastMismatchError = {address: address, mismatch: mismatch, timestamp: Date.now()};
                         throw err;
                     }
                     const err = new Error(e && e.code === 'UNLOCK_FAILED'
@@ -309,6 +313,33 @@
             if (window.walletSession && typeof window.walletSession.lockWallet === 'function') {
                 window.walletSession.lockWallet();
             }
+        },
+
+        getSigningKeyMismatchDetails() {
+            return lastMismatchError ? {...lastMismatchError} : null;
+        },
+
+        clearLocalSigningKey() {
+            if (window.walletSession && typeof window.walletSession.clearLocalSigningKey === 'function') {
+                window.walletSession.clearLocalSigningKey();
+                lastMismatchError = null;
+                return true;
+            }
+            return false;
+        },
+
+        async importSigningKeyForAddress(privateKeyHex, pin, targetAddress) {
+            if (window.walletSession && typeof window.walletSession.importSigningKeyForAddress === 'function') {
+                const result = await window.walletSession.importSigningKeyForAddress(privateKeyHex, pin, targetAddress);
+                if (result.success) {
+                    lastMismatchError = null;
+                    cachedAuthSecret = '';
+                    cachedAuthAddress = '';
+                    cachedRuntimeSigningAddress = '';
+                }
+                return result;
+            }
+            return {success: false, error: 'Wallet session unavailable'};
         }
     };
 

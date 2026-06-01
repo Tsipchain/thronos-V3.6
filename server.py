@@ -22037,11 +22037,157 @@ SWAP_ACTION_ALIASES = {
     "token_swap": "swap",
     "swap_tokens": "swap",
 }
+SWAP_SIGNED_FIELDS = ("type", "action", "from", "token_in", "token_out", "amount_in", "nonce", "timestamp")
 
 
 def normalize_swap_action(action):
     raw = (action or "").strip() if isinstance(action, str) else ""
     return SWAP_ACTION_ALIASES.get(raw.lower(), raw.lower()) if raw else None
+
+
+def _normalize_signed_swap_amount(value):
+    try:
+        dec = Decimal(str(value))
+        normalized = format(dec.normalize(), "f")
+        if "." in normalized:
+            normalized = normalized.rstrip("0").rstrip(".")
+        return normalized or "0"
+    except Exception:
+        return str(value or "").strip()
+
+
+def _normalize_signed_swap_symbol(value):
+    return str(value or "").strip().upper()
+
+
+def _canonical_swap_signing_payload(signed_tx):
+    return {
+        "type": "swap",
+        "action": "swap",
+        "from": str(signed_tx.get("from") or "").strip(),
+        "token_in": _normalize_signed_swap_symbol(signed_tx.get("token_in")),
+        "token_out": _normalize_signed_swap_symbol(signed_tx.get("token_out")),
+        "amount_in": _normalize_signed_swap_amount(signed_tx.get("amount_in")),
+        "nonce": str(signed_tx.get("nonce") or ""),
+        "timestamp": str(signed_tx.get("timestamp") or ""),
+    }
+
+
+def canonical_swap_signing_json(signed_tx):
+    return json.dumps(_canonical_swap_signing_payload(signed_tx), sort_keys=True, separators=(",", ":"))
+
+
+def _canonical_swap_hash(signed_tx):
+    return hashlib.sha256(canonical_swap_signing_json(signed_tx).encode("utf-8")).hexdigest()
+
+
+def _swap_signature_format(signature_hex):
+    value = (signature_hex or "").strip()
+    if re.fullmatch(r"[0-9a-fA-F]{128}", value or ""):
+        return "compact"
+    if re.fullmatch(r"30[0-9a-fA-F]+", value or "") and len(value) % 2 == 0:
+        return "der"
+    return "unknown"
+
+
+def _swap_public_key_format(public_key_hex):
+    value = (public_key_hex or "").strip()
+    if re.fullmatch(r"(02|03)[0-9a-fA-F]{64}", value or ""):
+        return "compressed"
+    if re.fullmatch(r"04[0-9a-fA-F]{128}", value or ""):
+        return "uncompressed"
+    return "unknown"
+
+
+def _der_int_from_compact(part):
+    part = bytes(part)
+    part = part.lstrip(b"\x00") or b"\x00"
+    if part[0] & 0x80:
+        part = b"\x00" + part
+    return b"\x02" + bytes([len(part)]) + part
+
+
+def _compact_sig_to_der(signature_hex):
+    raw = bytes.fromhex(signature_hex)
+    if len(raw) != 64:
+        raise ValueError("compact_signature_must_be_64_bytes")
+    r = _der_int_from_compact(raw[:32])
+    s = _der_int_from_compact(raw[32:])
+    body = r + s
+    return b"\x30" + bytes([len(body)]) + body
+
+
+def _swap_signature_bytes(signature_hex):
+    fmt = _swap_signature_format(signature_hex)
+    if fmt == "der":
+        return bytes.fromhex(signature_hex), fmt
+    if fmt == "compact":
+        return _compact_sig_to_der(signature_hex), fmt
+    return b"", fmt
+
+
+def _swap_payload_mismatch(payload, signed_tx):
+    expected = {
+        "from": (payload.get("trader_thr") or payload.get("active_wallet_address") or "").strip(),
+        "token_in": _normalize_signed_swap_symbol(payload.get("token_in")),
+        "token_out": _normalize_signed_swap_symbol(payload.get("token_out")),
+        "amount_in": _normalize_signed_swap_amount(payload.get("amount_in")),
+    }
+    actual = _canonical_swap_signing_payload(signed_tx)
+    for field, expected_value in expected.items():
+        if expected_value and actual.get(field) != expected_value:
+            return field, expected_value, actual.get(field)
+    return None, None, None
+
+
+def verify_signed_swap_transaction(signed_tx):
+    missing = [field for field in SWAP_SIGNED_FIELDS if signed_tx.get(field) in (None, "")]
+    if missing:
+        return False, "signed_payload_mismatch", f"missing_fields:{','.join(missing)}"
+    if normalize_swap_action(signed_tx.get("type")) != SWAP_EXPECTED_ACTION or normalize_swap_action(signed_tx.get("action")) != SWAP_EXPECTED_ACTION:
+        return False, "unsupported_swap_action", "signed action/type must be swap"
+
+    signature = (signed_tx.get("signature") or "").strip()
+    public_key = (signed_tx.get("publicKey") or signed_tx.get("public_key") or "").strip()
+    signature_bytes, signature_format = _swap_signature_bytes(signature)
+    public_key_format = _swap_public_key_format(public_key)
+    diagnostics = {
+        "signed_fields": [field for field in SWAP_SIGNED_FIELDS if field in signed_tx],
+        "server_expected_fields": list(SWAP_SIGNED_FIELDS),
+        "signature_format": signature_format,
+        "public_key_format": public_key_format,
+        "active_address_short": _short_wallet_address(signed_tx.get("from") or ""),
+        "from_address_short": _short_wallet_address(signed_tx.get("from") or ""),
+        "credential_lookup_short": "",
+        "canonical_json_hash": _canonical_swap_hash(signed_tx),
+    }
+    logger.info("[swap_auth] signed swap diagnostics: %s", diagnostics)
+
+    if signature_format == "unknown":
+        return False, "invalid_signature_format", "signature must be DER hex or compact 64-byte hex"
+    if public_key_format == "unknown":
+        return False, "invalid_signature_format", "public key must be compressed or uncompressed hex"
+
+    try:
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.exceptions import InvalidSignature
+        public_key_obj = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256K1(), bytes.fromhex(public_key))
+        public_key_obj.verify(signature_bytes, canonical_swap_signing_json(signed_tx).encode("utf-8"), ec.ECDSA(hashes.SHA256()))
+    except InvalidSignature:
+        return False, "invalid_wallet_v1_signature", "invalid Wallet V1 signature"
+    except Exception as exc:
+        return False, "invalid_wallet_v1_signature", f"signature_verification_failed:{exc}"
+
+    try:
+        import wallet_v1_production_final as wallet_v1_prod
+        binding_ok, binding_error = wallet_v1_prod.verify_publickey_matches_address({"from": signed_tx.get("from"), "publicKey": public_key})
+        if not binding_ok:
+            return False, "signed_from_mismatch", binding_error
+    except Exception as exc:
+        return False, "signed_from_mismatch", f"address_binding_failed:{exc}"
+
+    return True, "", ""
 
 
 def _short_wallet_address(address):
@@ -22056,50 +22202,9 @@ def verify_swap_wallet_v1_or_legacy(payload, expected_action=SWAP_EXPECTED_ACTIO
     passphrase = (payload.get("passphrase") or "").strip()
     signed_tx_raw = payload.get("signed_tx")
     public_key = (payload.get("public_key") or "").strip()
-    signature = (payload.get("signature") or "").strip()
-    raw_action = payload.get("action") or payload.get("option")
-    normalized_action = normalize_swap_action(raw_action)
 
-    signed_tx_action = None
-    if isinstance(signed_tx_raw, dict):
-        signed_tx_action = signed_tx_raw.get("action") or signed_tx_raw.get("type")
-        if not normalized_action:
-            normalized_action = normalize_swap_action(signed_tx_action)
-    elif not normalized_action:
-        normalized_action = expected_action
-
-    has_wallet_v1_fields = bool(signed_tx_raw or public_key or signature)
-    logger.info(
-        "[swap_auth] endpoint=/api/swap/execute expected_action=%s got_action=%s has_wallet_v1_fields=%s active=%s",
-        expected_action,
-        normalized_action or raw_action or signed_tx_action or "none",
-        has_wallet_v1_fields,
-        _short_wallet_address(trader),
-    )
-
-    if normalized_action and normalized_action != expected_action:
-        return False, {
-            "ok": False,
-            "status": "error",
-            "error": "unsupported_swap_action",
-            "message": "unsupported_swap_action",
-            "expected": expected_action,
-            "got": raw_action or signed_tx_action,
-        }, None
-
-    if has_wallet_v1_fields:
-        if not signed_tx_raw:
-            return False, {"ok": False, "status": "error", "error": "invalid_signature", "message": "Wallet V1 auth requires signed_tx"}, None
-        if not isinstance(signed_tx_raw, dict):
-            return False, {"ok": False, "status": "error", "error": "invalid_signature", "message": "signed_tx must be an object"}, None
-
-        signed_tx = dict(signed_tx_raw)
-        if public_key and not signed_tx.get("publicKey"):
-            signed_tx["publicKey"] = public_key
-        if signature and not signed_tx.get("signature"):
-            signed_tx["signature"] = signature
-        if normalized_action and not signed_tx.get("action"):
-            signed_tx["action"] = normalized_action
+    if signed_tx_raw:
+        signed_tx = signed_tx_raw if isinstance(signed_tx_raw, dict) else {}
 
         if not signed_tx.get("signature"):
             return False, {"ok": False, "status": "error", "error": "missing_signature", "message": "Signature is required in signed_tx"}, None
@@ -22116,21 +22221,38 @@ def verify_swap_wallet_v1_or_legacy(payload, expected_action=SWAP_EXPECTED_ACTIO
                 "got": signed_action_raw,
             }, None
 
-        try:
-            import wallet_v1_production_final as wallet_v1_prod
-            valid_sig, sig_error = wallet_v1_prod.verify_signed_transaction_core(signed_tx)
-        except Exception as exc:
-            logger.error("[swap_auth] V1 verification failed: %s", exc)
-            return False, {"ok": False, "status": "error", "error": "signature_verification_failed", "message": "Failed to verify Wallet V1 signature", "detail": str(exc)}, None
-
-        if not valid_sig:
-            return False, {"ok": False, "status": "error", "error": "invalid_signature", "message": "Invalid Wallet V1 signature", "detail": sig_error}, None
-
         signed_wallet = (signed_tx.get("from") or signed_tx.get("wallet") or "").strip()
         if not signed_wallet:
-            return False, {"ok": False, "status": "error", "error": "invalid_signature", "message": "signed_tx must include 'from' field"}, None
+            return False, {"ok": False, "status": "error", "error": "signed_from_mismatch", "message": "signed_tx must include 'from' field"}, None
         if trader and trader != signed_wallet:
-            return False, {"ok": False, "status": "error", "error": "wallet_mismatch", "message": "Trader address does not match signed wallet"}, None
+            return False, {"ok": False, "status": "error", "error": "signed_from_mismatch", "message": "Trader address does not match signed wallet"}, None
+
+        mismatch_field, expected_value, actual_value = _swap_payload_mismatch(payload, signed_tx)
+        if mismatch_field:
+            return False, {
+                "ok": False,
+                "status": "error",
+                "error": "signed_payload_mismatch",
+                "message": "signed_payload_mismatch",
+                "field": mismatch_field,
+                "expected": expected_value,
+                "got": actual_value,
+            }, None
+
+        credential_lookup_short = _short_wallet_address(credential_lookup)
+        logger.info(
+            "[swap_auth] signed_fields=%s server_expected_fields=%s active=%s from=%s credential_lookup=%s canonical_json_hash=%s",
+            [field for field in SWAP_SIGNED_FIELDS if field in signed_tx],
+            list(SWAP_SIGNED_FIELDS),
+            _short_wallet_address(trader),
+            _short_wallet_address(signed_wallet),
+            credential_lookup_short,
+            _canonical_swap_hash(signed_tx),
+        )
+
+        valid_sig, sig_error_code, sig_error_detail = verify_signed_swap_transaction(signed_tx)
+        if not valid_sig:
+            return False, {"ok": False, "status": "error", "error": sig_error_code, "message": sig_error_code, "detail": sig_error_detail}, None
 
         return True, {}, trader or signed_wallet
 
@@ -22172,178 +22294,189 @@ def api_swap_execute():
     except Exception as exc:
         return jsonify(status="error", message=str(exc)), 500
 
-    if not token_in or not token_out or amount_in <= 0:
-        return jsonify(status="error", message="Invalid input"), 400
-    if not trader:
-        return jsonify(status="error", message="Missing trader"), 400
-    if not is_swap_symbol_allowed(token_in) or not is_swap_symbol_allowed(token_out):
-        return jsonify(status="error", message="Unsupported token"), 400
+    try:
+        # Validate input parameters
+        if not token_in or not token_out or amount_in <= 0:
+            return jsonify(status="error", message="Invalid input"), 400
+        if not trader:
+            return jsonify(status="error", message="Missing trader"), 400
+        if not is_swap_symbol_allowed(token_in) or not is_swap_symbol_allowed(token_out):
+            return jsonify(status="error", message="Unsupported token"), 400
 
-    auth_ok, auth_error, verified_trader = verify_swap_wallet_v1_or_legacy(data, SWAP_EXPECTED_ACTION)
-    if not auth_ok:
-        status_code = 400
-        if auth_error.get("error") in ("invalid_auth", "no_effective_pledge", "wallet_mismatch"):
-            status_code = 403
-        elif auth_error.get("error") == "missing_pledge":
-            status_code = 404
-        return jsonify(**auth_error), status_code
-    trader = verified_trader or trader
+        # Wallet V1 or legacy auth verification
+        auth_ok, auth_error, verified_trader = verify_swap_wallet_v1_or_legacy(data, SWAP_EXPECTED_ACTION)
+        if not auth_ok:
+            status_code = 400
+            if auth_error.get("error") in ("invalid_auth", "no_effective_pledge", "wallet_mismatch"):
+                status_code = 403
+            elif auth_error.get("error") == "missing_pledge":
+                status_code = 404
+            return jsonify(**auth_error), status_code
+        trader = verified_trader or trader
 
-    quote, err = quote_swap_route(token_in, token_out, amount_in)
-    if err:
-        return jsonify(ok=False, status="error", error=err, message=err), 400
-    if quote["amount_out"] < min_amount_out:
-        return jsonify(status="error", message="Slippage too high", expected_minimum=min_amount_out, actual_output=quote["amount_out"]), 400
+        # Get swap quote and route
+        quote, err = quote_swap_route(token_in, token_out, amount_in)
+        if err:
+            return jsonify(ok=False, status="error", error=err, message=err), 400
+        if quote["amount_out"] < min_amount_out:
+            return jsonify(status="error", message="Slippage too high", expected_minimum=min_amount_out, actual_output=quote["amount_out"]), 400
 
-    thr_ledger = load_json(LEDGER_FILE, {})
-    wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
-    token_balances = load_token_balances()
-    pools = load_pools()
+        # Load state
+        thr_ledger = load_json(LEDGER_FILE, {})
+        wbtc_ledger = load_json(WBTC_LEDGER_FILE, {})
+        token_balances = load_token_balances()
+        pools = load_pools()
 
-    def get_balance(sym):
-        if sym == "THR":
-            return float(thr_ledger.get(trader, 0.0))
-        if sym == "WBTC":
-            return float(wbtc_ledger.get(trader, 0.0))
-        return float(token_balances.get(sym, {}).get(trader, 0.0))
+        def get_balance(sym):
+            if sym == "THR":
+                return float(thr_ledger.get(trader, 0.0))
+            if sym == "WBTC":
+                return float(wbtc_ledger.get(trader, 0.0))
+            return float(token_balances.get(sym, {}).get(trader, 0.0))
 
-    if get_balance(token_in) < amount_in:
-        return jsonify(status="error", message=f"Insufficient {token_in} balance"), 400
+        if get_balance(token_in) < amount_in:
+            return jsonify(status="error", message=f"Insufficient {token_in} balance"), 400
 
-    def deduct(sym, amt):
-        if sym == "THR":
-            thr_ledger[trader] = round(float(thr_ledger.get(trader, 0.0)) - amt, 6)
-        elif sym == "WBTC":
-            wbtc_ledger[trader] = round(float(wbtc_ledger.get(trader, 0.0)) - amt, 8)
-        else:
-            token_balances.setdefault(sym, {})
-            token_balances[sym][trader] = round(float(token_balances[sym].get(trader, 0.0)) - amt, 6)
+        def deduct(sym, amt):
+            if sym == "THR":
+                thr_ledger[trader] = round(float(thr_ledger.get(trader, 0.0)) - amt, 6)
+            elif sym == "WBTC":
+                wbtc_ledger[trader] = round(float(wbtc_ledger.get(trader, 0.0)) - amt, 8)
+            else:
+                token_balances.setdefault(sym, {})
+                token_balances[sym][trader] = round(float(token_balances[sym].get(trader, 0.0)) - amt, 6)
 
-    def credit(sym, amt):
-        if sym == "THR":
-            thr_ledger[trader] = round(float(thr_ledger.get(trader, 0.0)) + amt, 6)
-        elif sym == "WBTC":
-            wbtc_ledger[trader] = round(float(wbtc_ledger.get(trader, 0.0)) + amt, 8)
-        else:
-            token_balances.setdefault(sym, {})
-            token_balances[sym][trader] = round(float(token_balances[sym].get(trader, 0.0)) + amt, 6)
+        def credit(sym, amt):
+            if sym == "THR":
+                thr_ledger[trader] = round(float(thr_ledger.get(trader, 0.0)) + amt, 6)
+            elif sym == "WBTC":
+                wbtc_ledger[trader] = round(float(wbtc_ledger.get(trader, 0.0)) + amt, 8)
+            else:
+                token_balances.setdefault(sym, {})
+                token_balances[sym][trader] = round(float(token_balances[sym].get(trader, 0.0)) + amt, 6)
 
-    def apply_pool_swap(pool_id: str, in_token: str, out_token: str, amt_in: float) -> tuple[float, float, float]:
-        pool = next((p for p in pools if p.get("id") == pool_id), None)
-        if not pool:
-            return 0.0, 0.0, 0.0
-        a = _sanitize_asset_symbol(pool.get("token_a"))
-        b = _sanitize_asset_symbol(pool.get("token_b"))
-        reserves_a = float(pool.get("reserves_a", 0))
-        reserves_b = float(pool.get("reserves_b", 0))
-        fee_bps = pool_fee_bps(pool)
-        if in_token == a and out_token == b:
-            reserve_in, reserve_out = reserves_a, reserves_b
-            is_a_to_b = True
-        elif in_token == b and out_token == a:
-            reserve_in, reserve_out = reserves_b, reserves_a
-            is_a_to_b = False
-        else:
-            return 0.0, 0.0, 0.0
-        amt_out, fee_amount, price_impact = compute_swap_out(amt_in, reserve_in, reserve_out, fee_bps)
-        if amt_out <= 0:
-            return 0.0, 0.0, 0.0
-        if is_a_to_b:
-            pool["reserves_a"] = round(reserves_a + amt_in, 6)
-            pool["reserves_b"] = round(reserves_b - amt_out, 6)
-        else:
-            pool["reserves_b"] = round(reserves_b + amt_in, 6)
-            pool["reserves_a"] = round(reserves_a - amt_out, 6)
+        def apply_pool_swap(pool_id: str, in_token: str, out_token: str, amt_in: float) -> tuple[float, float, float]:
+            pool = next((p for p in pools if p.get("id") == pool_id), None)
+            if not pool:
+                return 0.0, 0.0, 0.0
+            a = _sanitize_asset_symbol(pool.get("token_a"))
+            b = _sanitize_asset_symbol(pool.get("token_b"))
+            reserves_a = float(pool.get("reserves_a", 0))
+            reserves_b = float(pool.get("reserves_b", 0))
+            fee_bps = pool_fee_bps(pool)
+            if in_token == a and out_token == b:
+                reserve_in, reserve_out = reserves_a, reserves_b
+                is_a_to_b = True
+            elif in_token == b and out_token == a:
+                reserve_in, reserve_out = reserves_b, reserves_a
+                is_a_to_b = False
+            else:
+                return 0.0, 0.0, 0.0
+            amt_out, fee_amount, price_impact = compute_swap_out(amt_in, reserve_in, reserve_out, fee_bps)
+            if amt_out <= 0:
+                return 0.0, 0.0, 0.0
+            if is_a_to_b:
+                pool["reserves_a"] = round(reserves_a + amt_in, 6)
+                pool["reserves_b"] = round(reserves_b - amt_out, 6)
+            else:
+                pool["reserves_b"] = round(reserves_b + amt_in, 6)
+                pool["reserves_a"] = round(reserves_a - amt_out, 6)
 
-        # Update Pytheia metrics
-        pool["volume_24h"] = float(pool.get("volume_24h", 0.0)) + amt_in
-        pool["volume_total"] = float(pool.get("volume_total", 0.0)) + amt_in
-        pool["fees_collected"] = float(pool.get("fees_collected", 0.0)) + fee_amount
-        pool["last_swap_time"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+            pool["volume_24h"] = float(pool.get("volume_24h", 0.0)) + amt_in
+            pool["volume_total"] = float(pool.get("volume_total", 0.0)) + amt_in
+            pool["fees_collected"] = float(pool.get("fees_collected", 0.0)) + fee_amount
+            pool["last_swap_time"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+            return amt_out, fee_amount, price_impact
 
-        return amt_out, fee_amount, price_impact
+        # Execute swap across route
+        swap_trace = []
+        running_in = amount_in
+        total_fee = 0.0
+        total_price_impact = 0.0
+        for leg in quote["route"]:
+            out_amount, fee_amount, price_impact = apply_pool_swap(leg["pool_id"], leg["in_token"], leg["out_token"], running_in)
+            if out_amount <= 0:
+                return jsonify(status="error", error="swap_execution_failed", message="Swap failed due to liquidity"), 400
+            swap_trace.append({
+                "pool_id": leg["pool_id"],
+                "in_token": leg["in_token"],
+                "in_amount": running_in,
+                "out_token": leg["out_token"],
+                "out_amount": out_amount,
+                "fee": fee_amount,
+                "price_impact": round(price_impact, 4),
+            })
+            total_fee += fee_amount
+            total_price_impact += price_impact
+            running_in = out_amount
 
-    swap_trace = []
-    running_in = amount_in
-    total_fee = 0.0
-    total_price_impact = 0.0
-    for leg in quote["route"]:
-        out_amount, fee_amount, price_impact = apply_pool_swap(leg["pool_id"], leg["in_token"], leg["out_token"], running_in)
-        if out_amount <= 0:
-            return jsonify(status="error", message="Swap failed due to liquidity"), 400
-        swap_trace.append({
-            "pool_id": leg["pool_id"],
-            "in_token": leg["in_token"],
-            "in_amount": running_in,
-            "out_token": leg["out_token"],
-            "out_amount": out_amount,
-            "fee": fee_amount,
-            "price_impact": round(price_impact, 4),
-        })
-        total_fee += fee_amount
-        total_price_impact += price_impact
-        running_in = out_amount
+        deduct(token_in, amount_in)
+        credit(token_out, running_in)
+        save_json(LEDGER_FILE, thr_ledger)
+        save_json(WBTC_LEDGER_FILE, wbtc_ledger)
+        save_token_balances(token_balances)
+        save_pools(pools)
 
-    deduct(token_in, amount_in)
-    credit(token_out, running_in)
-    save_json(LEDGER_FILE, thr_ledger)
-    save_json(WBTC_LEDGER_FILE, wbtc_ledger)
-    save_token_balances(token_balances)
-    save_pools(pools)
+        chain = load_json(CHAIN_FILE, [])
+        ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        tx_id = f"SWAP-{int(time.time())}-{secrets.token_hex(4)}"
 
-    chain = load_json(CHAIN_FILE, [])
-    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-    tx_id = f"SWAP-{int(time.time())}-{secrets.token_hex(4)}"
+        primary_pool_id = swap_trace[0]["pool_id"] if swap_trace else None
 
-    # For single-hop, pool_id is first pool; for multi-hop, include all pools in route
-    primary_pool_id = swap_trace[0]["pool_id"] if swap_trace else None
+        if not primary_pool_id or not token_in or not token_out or amount_in <= 0 or running_in <= 0:
+            return jsonify(status="error", error="swap_execution_failed", message="Invalid pool_event data; swap aborted"), 400
 
-    # PR-2 Critical: Validate required pool_event fields before writing TX
-    if not primary_pool_id or not token_in or not token_out or amount_in <= 0 or running_in <= 0:
-        return jsonify(status="error", message="Invalid pool_event data; swap aborted"), 400
-
-    tx = {
-        "type": "pool_swap",
-        "kind": "swap",
-        "token_in": token_in,
-        "token_out": token_out,
-        "amount_in": amount_in,
-        "amount_out": running_in,
-        "fee": total_fee,
-        "price_impact": round(total_price_impact, 4),
-        "trader": trader,
-        "timestamp": ts,
-        "tx_id": tx_id,
-        "status": "confirmed",
-        "event_type": "SWAP",
-        "subtype": "swap",
-        "pool_id": primary_pool_id,
-        "pool_event": {
-            "in_token": token_in,
-            "in_amount": amount_in,
-            "out_token": token_out,
-            "out_amount": running_in,
-            "pool_id": primary_pool_id,
+        tx = {
+            "type": "pool_swap",
+            "kind": "swap",
+            "token_in": token_in,
+            "token_out": token_out,
+            "amount_in": amount_in,
+            "amount_out": running_in,
             "fee": total_fee,
             "price_impact": round(total_price_impact, 4),
-            "route": swap_trace,  # Include full route for multi-hop transparency
-        },
-        "route": swap_trace,
-    }
-    chain.append(tx)
-    save_json(CHAIN_FILE, chain)
-    update_last_block(tx, is_block=False)
-    persist_normalized_tx(tx)
+            "trader": trader,
+            "timestamp": ts,
+            "tx_id": tx_id,
+            "status": "confirmed",
+            "event_type": "SWAP",
+            "subtype": "swap",
+            "pool_id": primary_pool_id,
+            "pool_event": {
+                "in_token": token_in,
+                "in_amount": amount_in,
+                "out_token": token_out,
+                "out_amount": running_in,
+                "pool_id": primary_pool_id,
+                "fee": total_fee,
+                "price_impact": round(total_price_impact, 4),
+                "route": swap_trace,
+            },
+            "route": swap_trace,
+        }
+        chain.append(tx)
+        save_json(CHAIN_FILE, chain)
+        update_last_block(tx, is_block=False)
+        persist_normalized_tx(tx)
 
-    return jsonify(
-        status="success",
-        amount_in=amount_in,
-        amount_out=running_in,
-        fee=total_fee,
-        price_impact=f"{total_price_impact:.2f}%",
-        tx_id=tx_id,
-        route=swap_trace,
-    ), 200
+        return jsonify(
+            status="success",
+            amount_in=amount_in,
+            amount_out=running_in,
+            fee=total_fee,
+            price_impact=f"{total_price_impact:.2f}%",
+            tx_id=tx_id,
+            route=swap_trace,
+        ), 200
+    except ValueError as ve:
+        return jsonify(status="error", error="invalid_swap_amount", message=str(ve)), 400
+    except KeyError as ke:
+        return jsonify(status="error", error="pool_not_found", message=f"Missing pool field: {ke}"), 400
+    except Exception as exc:
+        import traceback
+        tb = traceback.format_exc()
+        logger.error(f"[api_swap_execute] Unhandled exception: {exc}\n{tb}")
+        return jsonify(status="error", error="swap_execution_failed", message=str(exc), exception_type=type(exc).__name__), 500
 
 # ─── Token Balances API (NEW) ─────────────────────────────────────
 #

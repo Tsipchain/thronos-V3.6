@@ -16,16 +16,16 @@ TRADER = "THR683318ACF083723B3EDFE6C0A30AD62670F00353"
 OTHER = "THRE85A3E0A09A57212CDB222A9BF5B6E07A9B820E4"
 
 
-def signed_swap(action="swap", from_addr=TRADER, with_signature=True):
+def signed_swap(action="swap", from_addr=TRADER, with_signature=True, amount="10", token_in="THR", token_out="WBTC"):
     tx = {
-        "from": from_addr,
-        "to": "WBTC",
-        "amount": 10,
-        "token": "THR",
-        "nonce": "nonce-1",
-        "timestamp": 1,
-        "action": action,
         "type": action,
+        "action": action,
+        "from": from_addr,
+        "token_in": token_in,
+        "token_out": token_out,
+        "amount_in": str(amount),
+        "nonce": "nonce-1",
+        "timestamp": "1",
         "publicKey": "02" + "1" * 64,
     }
     if with_signature:
@@ -56,7 +56,7 @@ def v1_payload(action=None, option=None, signed_action="swap", trader=TRADER, wi
 
 @pytest.fixture
 def accept_signature(monkeypatch):
-    monkeypatch.setattr(wallet_v1_prod, "verify_signed_transaction_core", lambda tx: (True, ""))
+    monkeypatch.setattr(server, "verify_signed_swap_transaction", lambda tx: (True, "", ""))
 
 
 @pytest.fixture
@@ -189,6 +189,76 @@ def test_legacy_path_allows_credential_lookup_address_without_v1_signature(monke
     assert calls == [(TRADER, "legacy-secret", "")]
 
 
+def _signed_real_swap(amount="10", token_in="THR", token_out="WBTC"):
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    key = ec.generate_private_key(ec.SECP256K1())
+    public_key = key.public_key()
+    public_hex = public_key.public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.CompressedPoint,
+    ).hex()
+    from_addr = wallet_v1_prod.derive_thronos_address(public_hex)
+    tx = signed_swap("swap", from_addr=from_addr, with_signature=False, amount=amount, token_in=token_in, token_out=token_out)
+    tx["publicKey"] = public_hex
+    signature = key.sign(server.canonical_swap_signing_json(tx).encode("utf-8"), ec.ECDSA(hashes.SHA256()))
+    tx["signature"] = signature.hex()
+    return from_addr, tx
+
+
+def test_backend_verifies_fixture_signed_with_same_canonical_payload():
+    from_addr, tx = _signed_real_swap(amount="10", token_in="THR", token_out="WBTC")
+    payload = {
+        "trader_thr": from_addr,
+        "active_wallet_address": from_addr,
+        "credential_lookup_address": from_addr,
+        "public_key": tx["publicKey"],
+        "signature": tx["signature"],
+        "signed_tx": tx,
+        "token_in": "THR",
+        "token_out": "WBTC",
+        "amount_in": "10",
+        "action": "swap",
+    }
+    ok, err, wallet = server.verify_swap_wallet_v1_or_legacy(payload)
+    assert ok is True
+    assert err == {}
+    assert wallet == from_addr
+
+
+def test_backend_rejects_changed_amount_after_signing():
+    from_addr, tx = _signed_real_swap(amount="10")
+    payload = {"trader_thr": from_addr, "signed_tx": tx, "token_in": "THR", "token_out": "WBTC", "amount_in": "11", "action": "swap"}
+    ok, err, wallet = server.verify_swap_wallet_v1_or_legacy(payload)
+    assert ok is False
+    assert err["error"] == "signed_payload_mismatch"
+    assert err["field"] == "amount_in"
+
+
+def test_backend_rejects_changed_token_after_signing():
+    from_addr, tx = _signed_real_swap(token_out="WBTC")
+    payload = {"trader_thr": from_addr, "signed_tx": tx, "token_in": "THR", "token_out": "7CEB", "amount_in": "10", "action": "swap"}
+    ok, err, wallet = server.verify_swap_wallet_v1_or_legacy(payload)
+    assert ok is False
+    assert err["error"] == "signed_payload_mismatch"
+    assert err["field"] == "token_out"
+
+
+def test_backend_rejects_changed_from_after_signing():
+    from_addr, tx = _signed_real_swap()
+    payload = {"trader_thr": OTHER, "signed_tx": tx, "token_in": "THR", "token_out": "WBTC", "amount_in": "10", "action": "swap"}
+    ok, err, wallet = server.verify_swap_wallet_v1_or_legacy(payload)
+    assert ok is False
+    assert err["error"] == "signed_from_mismatch"
+
+
+def test_signature_format_detection_is_explicit():
+    assert server._swap_signature_format("00" * 64) == "compact"
+    assert server._swap_signature_format("3044022000") == "der"
+    assert server._swap_signature_format("not-hex") == "unknown"
+
+
+
 def test_swap_math_unchanged():
     assert server.compute_swap_out(10, 1000, 1000, 30) == pytest.approx((9.871580343970614, 0.03, 1.9674832023733324))
 
@@ -209,3 +279,54 @@ def test_server_has_no_generic_option_not_supported_swap_return():
     swap_start = server_source.index('@app.route("/api/swap/execute"')
     swap_end = server_source.index('# ─── Token Balances API', swap_start)
     assert "option not supported" not in server_source[swap_start:swap_end].lower()
+
+
+def test_swap_execute_returns_structured_errors_not_generic_500(accept_signature, swap_state, monkeypatch):
+    """Verify swap execute endpoint catches exceptions and returns structured errors."""
+    # Simulate an exception in the wallet verification path
+    def fake_verify_fail(*args, **kwargs):
+        raise ValueError("Test verification error")
+
+    monkeypatch.setattr(server, "verify_swap_wallet_v1_or_legacy", fake_verify_fail)
+
+    res = post_swap(v1_payload())
+    body = res.get_json()
+
+    # Should return 500 with structured error fields, not Flask's generic "server_error"
+    assert res.status_code == 500
+    assert body.get("error") == "swap_execution_failed"
+    assert "message" in body
+    # Should include exception type for debugging
+    assert "exception_type" in body
+    # Should NOT have the generic Flask error format (error: "server_error", ok: false)
+    assert body.get("error") != "server_error"
+    # State should not have been mutated due to exception
+    assert not swap_state["tx"]
+
+
+def test_swap_execute_validates_input_in_try_catch(accept_signature, swap_state, monkeypatch):
+    """Verify validation checks are in try-catch to prevent unhandled exceptions."""
+    # Mock is_swap_symbol_allowed to throw an exception
+    def fake_symbol_check(sym):
+        raise RuntimeError("Token list load failed")
+
+    monkeypatch.setattr(server, "is_swap_symbol_allowed", fake_symbol_check)
+
+    res = post_swap(v1_payload())
+    body = res.get_json()
+
+    # Should catch the exception and return structured error, not Flask's generic 500
+    assert res.status_code == 500
+    assert body.get("error") == "swap_execution_failed"
+    assert "exception_type" in body
+    assert body.get("error") != "server_error"
+
+
+def test_swap_signed_fields_defined():
+    """Verify SWAP_SIGNED_FIELDS is defined at module level."""
+    assert hasattr(server, "SWAP_SIGNED_FIELDS")
+    assert isinstance(server.SWAP_SIGNED_FIELDS, tuple)
+    # Verify it includes the canonical fields
+    expected = ("type", "action", "from", "token_in", "token_out", "amount_in", "nonce", "timestamp")
+    assert set(server.SWAP_SIGNED_FIELDS) == set(expected)
+    assert len(server.SWAP_SIGNED_FIELDS) == len(expected)

@@ -395,8 +395,10 @@
     const activeAddr = options.address || getActiveAddress();
     const enc = localStorage.getItem(V1_ENCRYPTED_KEY);
     if (enc) {
+      let decryptSucceeded = false;
       try {
         const decryptedPrivKeyHex = await decryptPrivateKeyHex(enc, pin);
+        decryptSucceeded = true;
         // Validate that decrypted key belongs to the active canonical address
         try {
           const secp = await _ensureSecpLoaded();
@@ -408,27 +410,33 @@
           const derivedNormalized = normalizeAddress(derivedAddress);
 
           if (activeNormalized && derivedNormalized && activeNormalized !== derivedNormalized) {
-            // Mismatch: signing key does not belong to active wallet
-            const err = new Error('wallet_signing_address_mismatch');
+            // PIN succeeded but signing key does not belong to active wallet
+            const err = new Error('wallet_signing_key_does_not_match_active_address');
+            err.code = 'KEY_MISMATCH';
             err.derived_address = derivedAddress;
             err.active_address = activeAddr;
+            err.decrypt_succeeded = true;
             throw err;
           }
         } catch (bindingErr) {
-          if ((bindingErr.message || '').includes('wallet_signing_address_mismatch')) {
+          if ((bindingErr.message || '').includes('wallet_signing_key_does_not_match_active_address')) {
             lastSigningKeyMismatch = {
               derived_address: bindingErr.derived_address || '',
               active_address: bindingErr.active_address || activeAddr,
+              decrypt_succeeded: bindingErr.decrypt_succeeded || true,
               timestamp: Date.now()
             };
             throw bindingErr;
           }
           // If address derivation fails, still reject the unlock
-          const err = new Error('wallet_signing_address_mismatch');
+          const err = new Error('wallet_signing_key_does_not_match_active_address');
+          err.code = 'KEY_MISMATCH';
           err.active_address = activeAddr;
+          err.decrypt_succeeded = true;
           lastSigningKeyMismatch = {
             derived_address: '',
             active_address: activeAddr,
+            decrypt_succeeded: true,
             timestamp: Date.now()
           };
           throw err;
@@ -444,9 +452,10 @@
         // Clear any partially-cached material on error
         unlockedPrivateKeyHex = null;
         unlockedForAddress = null;
-        if ((err.message || '').includes('wallet_signing_address_mismatch')) {
+        if ((err.message || '').includes('wallet_signing_key_does_not_match_active_address')) {
           throw err;
         }
+        // PIN decryption failed - return false to allow fallback to legacy creds
         return false;
       }
     }

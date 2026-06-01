@@ -22384,87 +22384,94 @@ def api_swap_execute():
 
         return amt_out, fee_amount, price_impact
 
-    swap_trace = []
-    running_in = amount_in
-    total_fee = 0.0
-    total_price_impact = 0.0
-    for leg in quote["route"]:
-        out_amount, fee_amount, price_impact = apply_pool_swap(leg["pool_id"], leg["in_token"], leg["out_token"], running_in)
-        if out_amount <= 0:
-            return jsonify(status="error", message="Swap failed due to liquidity"), 400
-        swap_trace.append({
-            "pool_id": leg["pool_id"],
-            "in_token": leg["in_token"],
-            "in_amount": running_in,
-            "out_token": leg["out_token"],
-            "out_amount": out_amount,
-            "fee": fee_amount,
-            "price_impact": round(price_impact, 4),
-        })
-        total_fee += fee_amount
-        total_price_impact += price_impact
-        running_in = out_amount
+    try:
+        swap_trace = []
+        running_in = amount_in
+        total_fee = 0.0
+        total_price_impact = 0.0
+        for leg in quote["route"]:
+            out_amount, fee_amount, price_impact = apply_pool_swap(leg["pool_id"], leg["in_token"], leg["out_token"], running_in)
+            if out_amount <= 0:
+                return jsonify(status="error", error="swap_execution_failed", message="Swap failed due to liquidity"), 400
+            swap_trace.append({
+                "pool_id": leg["pool_id"],
+                "in_token": leg["in_token"],
+                "in_amount": running_in,
+                "out_token": leg["out_token"],
+                "out_amount": out_amount,
+                "fee": fee_amount,
+                "price_impact": round(price_impact, 4),
+            })
+            total_fee += fee_amount
+            total_price_impact += price_impact
+            running_in = out_amount
 
-    deduct(token_in, amount_in)
-    credit(token_out, running_in)
-    save_json(LEDGER_FILE, thr_ledger)
-    save_json(WBTC_LEDGER_FILE, wbtc_ledger)
-    save_token_balances(token_balances)
-    save_pools(pools)
+        deduct(token_in, amount_in)
+        credit(token_out, running_in)
+        save_json(LEDGER_FILE, thr_ledger)
+        save_json(WBTC_LEDGER_FILE, wbtc_ledger)
+        save_token_balances(token_balances)
+        save_pools(pools)
 
-    chain = load_json(CHAIN_FILE, [])
-    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-    tx_id = f"SWAP-{int(time.time())}-{secrets.token_hex(4)}"
+        chain = load_json(CHAIN_FILE, [])
+        ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        tx_id = f"SWAP-{int(time.time())}-{secrets.token_hex(4)}"
 
-    # For single-hop, pool_id is first pool; for multi-hop, include all pools in route
-    primary_pool_id = swap_trace[0]["pool_id"] if swap_trace else None
+        # For single-hop, pool_id is first pool; for multi-hop, include all pools in route
+        primary_pool_id = swap_trace[0]["pool_id"] if swap_trace else None
 
-    # PR-2 Critical: Validate required pool_event fields before writing TX
-    if not primary_pool_id or not token_in or not token_out or amount_in <= 0 or running_in <= 0:
-        return jsonify(status="error", message="Invalid pool_event data; swap aborted"), 400
+        # PR-2 Critical: Validate required pool_event fields before writing TX
+        if not primary_pool_id or not token_in or not token_out or amount_in <= 0 or running_in <= 0:
+            return jsonify(status="error", error="swap_execution_failed", message="Invalid pool_event data; swap aborted"), 400
 
-    tx = {
-        "type": "pool_swap",
-        "kind": "swap",
-        "token_in": token_in,
-        "token_out": token_out,
-        "amount_in": amount_in,
-        "amount_out": running_in,
-        "fee": total_fee,
-        "price_impact": round(total_price_impact, 4),
-        "trader": trader,
-        "timestamp": ts,
-        "tx_id": tx_id,
-        "status": "confirmed",
-        "event_type": "SWAP",
-        "subtype": "swap",
-        "pool_id": primary_pool_id,
-        "pool_event": {
-            "in_token": token_in,
-            "in_amount": amount_in,
-            "out_token": token_out,
-            "out_amount": running_in,
-            "pool_id": primary_pool_id,
+        tx = {
+            "type": "pool_swap",
+            "kind": "swap",
+            "token_in": token_in,
+            "token_out": token_out,
+            "amount_in": amount_in,
+            "amount_out": running_in,
             "fee": total_fee,
             "price_impact": round(total_price_impact, 4),
-            "route": swap_trace,  # Include full route for multi-hop transparency
-        },
-        "route": swap_trace,
-    }
-    chain.append(tx)
-    save_json(CHAIN_FILE, chain)
-    update_last_block(tx, is_block=False)
-    persist_normalized_tx(tx)
+            "trader": trader,
+            "timestamp": ts,
+            "tx_id": tx_id,
+            "status": "confirmed",
+            "event_type": "SWAP",
+            "subtype": "swap",
+            "pool_id": primary_pool_id,
+            "pool_event": {
+                "in_token": token_in,
+                "in_amount": amount_in,
+                "out_token": token_out,
+                "out_amount": running_in,
+                "pool_id": primary_pool_id,
+                "fee": total_fee,
+                "price_impact": round(total_price_impact, 4),
+                "route": swap_trace,  # Include full route for multi-hop transparency
+            },
+            "route": swap_trace,
+        }
+        chain.append(tx)
+        save_json(CHAIN_FILE, chain)
+        update_last_block(tx, is_block=False)
+        persist_normalized_tx(tx)
 
-    return jsonify(
-        status="success",
-        amount_in=amount_in,
-        amount_out=running_in,
-        fee=total_fee,
-        price_impact=f"{total_price_impact:.2f}%",
-        tx_id=tx_id,
-        route=swap_trace,
-    ), 200
+        return jsonify(
+            status="success",
+            amount_in=amount_in,
+            amount_out=running_in,
+            fee=total_fee,
+            price_impact=f"{total_price_impact:.2f}%",
+            tx_id=tx_id,
+            route=swap_trace,
+        ), 200
+    except ValueError as ve:
+        return jsonify(status="error", error="invalid_swap_amount", message=str(ve)), 400
+    except KeyError as ke:
+        return jsonify(status="error", error="pool_not_found", message=f"Missing pool field: {ke}"), 400
+    except Exception as exc:
+        return jsonify(status="error", error="swap_execution_failed", message=str(exc)), 500
 
 # ─── Token Balances API (NEW) ─────────────────────────────────────
 #

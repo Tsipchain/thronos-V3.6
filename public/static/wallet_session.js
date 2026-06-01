@@ -420,6 +420,27 @@
   function isWalletV1(){ return !!(localStorage.getItem(V1_PUBLIC_KEY) && localStorage.getItem(V1_ENCRYPTED_KEY)); }
 
   function canonicalTxMessage(txCore){
+    const txType = txCore.type || txCore.action;
+
+    // Swap transactions: use swap-specific canonical format matching server.py verification
+    if (txType === 'swap' || txType === 'execute_swap') {
+      const from = String(txCore.from || txCore.trader_thr || '').trim();
+      const tokenIn = String(txCore.token_in || txCore.token || 'THR').trim();
+      const tokenOut = String(txCore.token_out || '').trim();
+      const amountIn = String(txCore.amount_in || txCore.amount || '').trim();
+      const nonce = String(txCore.nonce || '').trim();
+      const timestamp = String(txCore.timestamp || '').trim();
+      // Alphabetically sorted: action, amount_in, from, nonce, timestamp, token_in, token_out, type
+      return '{"action":"swap","amount_in":' + JSON.stringify(amountIn)
+        + ',"from":' + JSON.stringify(from)
+        + ',"nonce":' + JSON.stringify(nonce)
+        + ',"timestamp":' + JSON.stringify(timestamp)
+        + ',"token_in":' + JSON.stringify(tokenIn)
+        + ',"token_out":' + JSON.stringify(tokenOut)
+        + ',"type":"swap"}';
+    }
+
+    // Generic transactions (pools, etc.): use generic canonical format
     const txForSigning = {
       from: txCore.from || txCore.trader_thr || txCore.provider_thr,
       to: txCore.to,

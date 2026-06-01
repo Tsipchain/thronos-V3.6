@@ -644,13 +644,34 @@
     // Used when migrated wallet was lost but migration record still exists
     const info = getMigrationInfo();
     if (!info.new_v1_address) {
-      console.error('No migration record found to restore');
-      return false;
+      const err = new Error('No migration record found to restore');
+      err.code = 'RESTORE_FAILED';
+      throw err;
     }
-    localStorage.setItem(V1_ADDRESS_KEY, info.new_v1_address);
+    const restoreAddr = normalizeAddress(info.new_v1_address);
+    // Block system wallets from being restored
+    if (isSystemWalletAddress(restoreAddr)) {
+      const err = new Error('system_wallet_not_allowed');
+      err.code = 'SYSTEM_WALLET_NOT_ALLOWED';
+      err.restore_candidate = restoreAddr;
+      throw err;
+    }
+    const activeAddr = getActiveAddress();
+    const canonical = getCanonicalMigrationAddress(info);
+    // Log diagnostic (no secrets)
+    try {
+      console.info('[RestoreToMigrated]', {
+        restore_candidate_short: restoreAddr.substring(0, 10) + '...',
+        active_address_short: activeAddr ? activeAddr.substring(0, 10) + '...' : 'none',
+        canonical_address_short: canonical ? canonical.substring(0, 10) + '...' : 'none',
+        status: 'restoring',
+        source: 'use_migrated_wallet'
+      });
+    } catch(_) {}
+    localStorage.setItem(V1_ADDRESS_KEY, restoreAddr);
     // Also set legacy address pointer if it exists
-    if (isValidThrAddress(info.new_v1_address)) {
-      localStorage.setItem(ADDRESS_KEY, info.new_v1_address);
+    if (isValidThrAddress(restoreAddr)) {
+      localStorage.setItem(ADDRESS_KEY, restoreAddr);
     }
     return true;
   }
@@ -659,10 +680,17 @@
     // Clear only active wallet pointer keys, preserve encrypted material
     localStorage.removeItem(ADDRESS_KEY);
     localStorage.removeItem(V1_ADDRESS_KEY);
-    // Restore to migration if available
+    // Restore to migration if available, but validate it's not a system wallet
     const info = getMigrationInfo();
     if (info.new_v1_address && isValidThrAddress(info.new_v1_address)) {
-      localStorage.setItem(V1_ADDRESS_KEY, info.new_v1_address);
+      const restoreAddr = normalizeAddress(info.new_v1_address);
+      // Block system wallets
+      if (!isSystemWalletAddress(restoreAddr)) {
+        localStorage.setItem(V1_ADDRESS_KEY, restoreAddr);
+      } else {
+        // System wallet in migration info - clear the bad migration pointer
+        localStorage.removeItem(MIGRATION_META_KEY);
+      }
     }
     return getActiveAddress();
   }

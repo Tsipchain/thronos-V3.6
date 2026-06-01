@@ -22196,8 +22196,9 @@ def _short_wallet_address(address):
 
 def verify_swap_wallet_v1_or_legacy(payload, expected_action=SWAP_EXPECTED_ACTION):
     """Verify swap auth before any swap state mutation."""
-    trader = (payload.get("trader_thr") or payload.get("from") or "").strip()
-    credential_lookup = (payload.get("credential_lookup_address") or trader).strip()
+    # Extract addresses from payload - normalize them
+    trader_raw = (payload.get("trader_thr") or payload.get("from") or "").strip()
+    credential_lookup_raw = (payload.get("credential_lookup_address") or trader_raw).strip()
     auth_secret = (payload.get("auth_secret") or "").strip()
     passphrase = (payload.get("passphrase") or "").strip()
     signed_tx_raw = payload.get("signed_tx")
@@ -22221,11 +22222,27 @@ def verify_swap_wallet_v1_or_legacy(payload, expected_action=SWAP_EXPECTED_ACTIO
                 "got": signed_action_raw,
             }, None
 
-        signed_wallet = (signed_tx.get("from") or signed_tx.get("wallet") or "").strip()
-        if not signed_wallet:
+        signed_wallet_raw = (signed_tx.get("from") or signed_tx.get("wallet") or "").strip()
+        if not signed_wallet_raw:
             return False, {"ok": False, "status": "error", "error": "signed_from_mismatch", "message": "signed_tx must include 'from' field"}, None
-        if trader and trader != signed_wallet:
-            return False, {"ok": False, "status": "error", "error": "signed_from_mismatch", "message": "Trader address does not match signed wallet"}, None
+
+        # Normalize addresses for comparison (strip, uppercase)
+        trader_normalized = trader_raw.upper().strip() if trader_raw else ""
+        signed_wallet_normalized = signed_wallet_raw.upper().strip()
+
+        # If trader_thr was not provided, use signed_tx.from
+        if not trader_raw:
+            trader = signed_wallet_raw
+        else:
+            trader = trader_raw
+            # Verify they match after normalization
+            if trader_normalized and trader_normalized != signed_wallet_normalized:
+                logger.warning(
+                    "[swap_auth] signed_from_mismatch: request_trader=%s signed_from=%s",
+                    _short_wallet_address(trader),
+                    _short_wallet_address(signed_wallet_raw)
+                )
+                return False, {"ok": False, "status": "error", "error": "signed_from_mismatch", "message": "Trader address does not match signed wallet"}, None
 
         mismatch_field, expected_value, actual_value = _swap_payload_mismatch(payload, signed_tx)
         if mismatch_field:
@@ -22239,13 +22256,14 @@ def verify_swap_wallet_v1_or_legacy(payload, expected_action=SWAP_EXPECTED_ACTIO
                 "got": actual_value,
             }, None
 
+        credential_lookup = credential_lookup_raw.upper().strip() if credential_lookup_raw else ""
         credential_lookup_short = _short_wallet_address(credential_lookup)
         logger.info(
             "[swap_auth] signed_fields=%s server_expected_fields=%s active=%s from=%s credential_lookup=%s canonical_json_hash=%s",
             [field for field in SWAP_SIGNED_FIELDS if field in signed_tx],
             list(SWAP_SIGNED_FIELDS),
             _short_wallet_address(trader),
-            _short_wallet_address(signed_wallet),
+            _short_wallet_address(signed_wallet_raw),
             credential_lookup_short,
             _canonical_swap_hash(signed_tx),
         )
@@ -22254,11 +22272,12 @@ def verify_swap_wallet_v1_or_legacy(payload, expected_action=SWAP_EXPECTED_ACTIO
         if not valid_sig:
             return False, {"ok": False, "status": "error", "error": sig_error_code, "message": sig_error_code, "detail": sig_error_detail}, None
 
-        return True, {}, trader or signed_wallet
+        return True, {}, trader
 
-    if not trader:
+    if not trader_raw:
         return False, {"ok": False, "status": "error", "error": "missing_trader", "message": "Missing trader"}, None
 
+    trader = trader_raw
     ok, _, error_key = validate_effective_auth(trader, auth_secret, passphrase)
     if not ok:
         if error_key == "no_effective_pledge":

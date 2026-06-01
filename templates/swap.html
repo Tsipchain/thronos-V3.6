@@ -279,30 +279,339 @@ function isSwapWalletReady(addr) {
     return true;
 }
 
-            token_in: tokenInForSigning,
-            token_out: tokenOutForSigning,
-            amount_in: amountForSigning,
+
+function updateSwapWalletUI() {
+    const addr = getSwapActiveWalletAddress();
+    const ready = isSwapWalletReady(addr);
+    const warning = $('walletWarning');
+    if (warning) warning.style.display = ready ? 'none' : 'block';
+    refreshSwapButtonState();
+}
+
+function applySwapBalance(symbol, value, balances) {
+    const normalized = normalizeSwapSymbol(symbol);
+    if (!normalized) return;
+    balances[normalized] = parseSwapBalanceValue(value);
+}
+
+function normalizeSwapBalances(data) {
+    const balances = {};
+    SWAP_KNOWN_SYMBOLS.forEach(sym => { balances[sym] = 0; });
+
+    if (Array.isArray(data.tokens)) {
+        data.tokens.forEach(token => {
+            applySwapBalance(token.symbol || token.token || token.ticker, token.balance ?? token.amount ?? token.value, balances);
+        });
+    }
+
+    ['balances', 'token_balances', 'tokens_by_symbol'].forEach(key => {
+        const entries = data[key];
+        if (!entries || Array.isArray(entries) || typeof entries !== 'object') return;
+        Object.entries(entries).forEach(([symbol, value]) => {
+            if (value && typeof value === 'object') {
+                applySwapBalance(symbol, value.balance ?? value.amount ?? value.value, balances);
+            } else {
+                applySwapBalance(symbol, value, balances);
+            }
+        });
+    });
+
+    if (data.THR !== undefined || data.thr !== undefined || data.balance !== undefined) {
+        applySwapBalance('THR', data.THR ?? data.thr ?? data.balance, balances);
+    }
+    if (data.WBTC !== undefined || data.wbtc !== undefined) {
+        applySwapBalance('WBTC', data.WBTC ?? data.wbtc, balances);
+    }
+    if (data.L2E !== undefined || data.l2e !== undefined) {
+        applySwapBalance('L2E', data.L2E ?? data.l2e, balances);
+    }
+
+    return balances;
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+    const addr = getSwapActiveWalletAddress();
+    if (!isSwapWalletReady(addr)) {
+        $('walletWarning').style.display = 'block';
+        $('swapBtn').disabled = true;
+        $('swapBtn').textContent = "Connect Wallet";
+    } else {
+        await Promise.all([loadBalances(addr), loadSwapCatalog()]);
+        setDefaultTokens();
+        calcTo();
+    }
+});
+
+// Listen for wallet V1 unlock events from base.html
+window.addEventListener('thronos:wallet:v1:unlocked', async (e) => {
+    const eventAddr = e.detail?.address?.substring(0, 10) + '...' || 'unknown';
+    const addr = getSwapActiveWalletAddress();
+    const isUnlocked = window.walletSession && typeof window.walletSession.isUnlockedFor === 'function' ? window.walletSession.isUnlockedFor(addr) : false;
+    console.info('[SwapUI] Wallet V1 unlocked event received:', 'eventAddr=', eventAddr, 'activeAddr=', addr?.substring(0, 10) + '...', 'isUnlockedFor=', isUnlocked);
+    if (addr) {
+        await Promise.all([loadBalances(addr), loadSwapCatalog()]);
+        setDefaultTokens();
+        calcTo();
+    }
+    if (typeof updateSwapWalletUI === 'function') updateSwapWalletUI();
+});
+
+// Listen for general wallet state changes
+window.addEventListener('thronos:wallet:state-changed', async () => {
+    const addr = getSwapActiveWalletAddress();
+    const isReady = isSwapWalletReady(addr);
+    const isUnlocked = window.walletSession && typeof window.walletSession.isUnlockedFor === 'function' ? window.walletSession.isUnlockedFor(addr) : false;
+    console.info('[SwapUI] Wallet state changed event:', { activeAddr: addr?.substring(0, 10) + '...', isReady, isUnlockedFor: isUnlocked });
+    if (!isReady) {
+        $('walletWarning').style.display = 'block';
+        $('swapBtn').disabled = true;
+        $('swapBtn').textContent = "Connect Wallet";
+    } else {
+        await Promise.all([loadBalances(addr), loadSwapCatalog()]);
+        setDefaultTokens();
+        calcTo();
+        if (typeof updateSwapWalletUI === 'function') updateSwapWalletUI();
+    }
+});
+
+async function loadBalances(addr = getSwapActiveWalletAddress()) {
+    try {
+        if (!addr) return;
+        const res = await fetch(`/api/balances?address=${encodeURIComponent(addr)}&show_zero=true`);
+        const data = await res.json();
+        swapTokenBalances = normalizeSwapBalances(data || {});
+        updateBalanceDisplays();
+    } catch (e) {
+        console.error("Load balance error:", e);
+    }
+}
+
+async function loadSwapCatalog() {
+    const [poolsRes, tokensRes] = await Promise.all([
+        fetch('/api/v1/pools').then(r => r.json()).catch(() => ({ pools: [] })),
+        fetch('/api/v1/tokens').then(r => r.json()).catch(() => ({ tokens: [] })),
+    ]);
+    const registry = new Map((tokensRes.tokens || []).map(t => [normalizeSwapSymbol(t.symbol), t]));
+    const poolTokens = new Set();
+    poolPairs = [];
+    (poolsRes.pools || []).forEach(pool => {
+        if (pool.token_a) poolTokens.add(normalizeSwapSymbol(pool.token_a));
+        if (pool.token_b) poolTokens.add(normalizeSwapSymbol(pool.token_b));
+        if (pool.token_a && pool.token_b) {
+            poolPairs.push([normalizeSwapSymbol(pool.token_a), normalizeSwapSymbol(pool.token_b)]);
+        }
+    });
+    availableTokens = Array.from(poolTokens).filter(sym => registry.has(sym) || KNOWN_BALANCE_SYMBOLS.includes(sym));
+    availableTokens.sort();
+
+    const selectFrom = $('symbolFrom');
+    const selectTo = $('symbolTo');
+    selectFrom.innerHTML = '';
+    selectTo.innerHTML = '';
+    availableTokens.forEach(sym => {
+        const optFrom = document.createElement('option');
+        optFrom.value = sym;
+        optFrom.textContent = sym;
+        selectFrom.appendChild(optFrom);
+
+        const optTo = document.createElement('option');
+        optTo.value = sym;
+        optTo.textContent = sym;
+        selectTo.appendChild(optTo);
+    });
+}
+
+function setDefaultTokens() {
+    const selectFrom = $('symbolFrom');
+    const selectTo = $('symbolTo');
+    if (availableTokens.includes('THR')) {
+        selectFrom.value = 'THR';
+    }
+    const fallbackTo = availableTokens.find(sym => sym !== selectFrom.value);
+    if (fallbackTo) {
+        selectTo.value = fallbackTo;
+    }
+    updateBalanceDisplays();
+    refreshToOptions();
+}
+
+function updateBalanceDisplays() {
+    const fromSymbol = normalizeSwapSymbol($('symbolFrom').value);
+    const toSymbol = normalizeSwapSymbol($('symbolTo').value);
+    const fromBal = swapTokenBalances[fromSymbol] || 0;
+    const toBal = swapTokenBalances[toSymbol] || 0;
+    $('balanceFrom').textContent = fromBal.toFixed(6);
+    $('balanceTo').textContent = toBal.toFixed(6);
+    refreshSwapButtonState();
+}
+
+function canRoute(fromToken, toToken) {
+    if (fromToken === toToken) return false;
+    const direct = poolPairs.some(pair =>
+        (pair[0] === fromToken && pair[1] === toToken) || (pair[1] === fromToken && pair[0] === toToken)
+    );
+    if (direct) return true;
+    const hasFromThr = poolPairs.some(pair =>
+        (pair[0] === fromToken && pair[1] === 'THR') || (pair[1] === fromToken && pair[0] === 'THR')
+    );
+    const hasToThr = poolPairs.some(pair =>
+        (pair[0] === toToken && pair[1] === 'THR') || (pair[1] === toToken && pair[0] === 'THR')
+    );
+    return hasFromThr && hasToThr;
+}
+
+function refreshToOptions() {
+    const selectTo = $('symbolTo');
+    const fromToken = normalizeSwapSymbol($('symbolFrom').value);
+    const previous = selectTo.value;
+    selectTo.innerHTML = '';
+    availableTokens.forEach(sym => {
+        if (sym === fromToken) return;
+        if (!canRoute(fromToken, sym)) return;
+        const opt = document.createElement('option');
+        opt.value = sym;
+        opt.textContent = sym;
+        selectTo.appendChild(opt);
+    });
+    if (previous && Array.from(selectTo.options).some(o => o.value === previous)) {
+        selectTo.value = previous;
+    } else if (selectTo.options.length > 0) {
+        selectTo.value = selectTo.options[0].value;
+    }
+}
+
+function flipTokens() {
+    const selectFrom = $('symbolFrom');
+    const selectTo = $('symbolTo');
+    const fromVal = selectFrom.value;
+    selectFrom.value = selectTo.value;
+    selectTo.value = fromVal;
+    const amtFrom = $('amountFrom').value;
+    $('amountFrom').value = $('amountTo').value;
+    $('amountTo').value = amtFrom;
+    updateBalanceDisplays();
+    refreshToOptions();
+    calcTo();
+}
+
+function onTokenChange() {
+    updateBalanceDisplays();
+    refreshToOptions();
+    calcTo();
+}
+
+function refreshSwapButtonState() {
+    const amount = parseFloat($('amountFrom').value) || 0;
+    const tokenIn = normalizeSwapSymbol($('symbolFrom').value);
+    const tokenOut = normalizeSwapSymbol($('symbolTo').value);
+    const fromBalance = swapTokenBalances[tokenIn] || 0;
+    const hasValidQuote = latestQuote && latestQuote.status === 'success';
+    const canSubmit = amount > 0 && tokenIn && tokenOut && tokenIn !== tokenOut && hasValidQuote && fromBalance >= amount;
+    $('swapBtn').disabled = !canSubmit;
+    if (amount > 0 && fromBalance < amount) {
+        $('swapResult').textContent = `Insufficient ${tokenIn} balance`;
+    }
+}
+
+async function calcTo() {
+    const fromVal = parseFloat($('amountFrom').value) || 0;
+    const tokenIn = normalizeSwapSymbol($('symbolFrom').value);
+    const tokenOut = normalizeSwapSymbol($('symbolTo').value);
+    latestQuote = null;
+    if (!fromVal || !tokenIn || !tokenOut || tokenIn === tokenOut) {
+        $('amountTo').value = '';
+        $('rateDisplay').textContent = '—';
+        $('swapBtn').disabled = true;
+        return;
+    }
+    if ((swapTokenBalances[tokenIn] || 0) < fromVal) {
+        $('amountTo').value = '';
+        $('rateDisplay').textContent = '—';
+        $('swapBtn').disabled = true;
+        $('swapResult').textContent = `Insufficient ${tokenIn} balance`;
+        return;
+    }
+    try {
+        const res = await fetch(`/api/swap/quote?token_in=${encodeURIComponent(tokenIn)}&token_out=${encodeURIComponent(tokenOut)}&amount_in=${encodeURIComponent(fromVal)}`);
+        const data = await res.json();
+        if (data.status !== 'success') {
+            $('amountTo').value = '';
+            $('rateDisplay').textContent = '—';
+            $('swapBtn').disabled = true;
+            $('swapResult').textContent = data.message || 'No liquidity';
+            return;
+        }
+        latestQuote = data;
+        $('amountTo').value = Number(data.amount_out).toFixed(6);
+        const rate = data.amount_out / fromVal;
+        $('rateDisplay').textContent = rate ? `1 ${tokenIn} = ${rate.toFixed(6)} ${tokenOut}` : '—';
+        $('swapResult').textContent = '';
+        refreshSwapButtonState();
+    } catch (e) {
+        $('amountTo').value = '';
+        $('rateDisplay').textContent = '—';
+        $('swapBtn').disabled = true;
+        console.error('Quote error', e);
+    }
+}
+
+async function doSwap() {
+    const amount = parseFloat($('amountFrom').value);
+    const tokenIn = normalizeSwapSymbol($('symbolFrom').value);
+    const tokenOut = normalizeSwapSymbol($('symbolTo').value);
+    const activeAddress = getSwapActiveWalletAddress();
+
+    if (!isSwapWalletReady(activeAddress)) {
+        alert("Wallet not connected");
+        return;
+    }
+    if (!window.WalletAuth || typeof window.WalletAuth.requireUnlockedWallet !== 'function') {
+        alert("missing_wallet_signing_material");
+        return;
+    }
+    
+    if (!amount || amount <= 0) {
+        alert("Enter a valid amount.");
+        return;
+    }
+    if ((swapTokenBalances[tokenIn] || 0) < amount) {
+        alert(`Insufficient ${tokenIn} balance.`);
+        return;
+    }
+    if (!latestQuote || latestQuote.status !== 'success') {
+        alert("No valid quote available.");
+        return;
+    }
+    
+    $('swapBtn').disabled = true;
+    $('swapBtn').innerHTML = '<span class="spinner"></span> Swapping...';
+    $('swapResult').textContent = "";
+    
+    try {
+        const auth = await window.WalletAuth.requireUnlockedWallet({ source: 'swap' });
+        const addr = auth.address || activeAddress;
+        const txCore = {
+            type: 'swap',
+            action: 'swap',
+            from: addr,
+            trader_thr: addr,
+            to: tokenOut,
+            token: tokenIn,
+            amount: amount,
+            token_in: tokenIn,
+            token_out: tokenOut,
+            amount_in: amount,
+            min_amount_out: latestQuote.amount_out,
             nonce: `swap-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-            timestamp: String(Math.floor(Date.now() / 1000))
+            timestamp: Math.floor(Date.now() / 1000)
         };
         const signedSwap = auth.signTransaction ? await auth.signTransaction(txCore) : null;
         if (!signedSwap) throw new Error('wallet_locked_reunlock_required');
-        const publicKey = auth.getPublicKey ? auth.getPublicKey() : '';
         const signedSwapEnvelope = signedSwap && typeof signedSwap === 'object' ? signedSwap : {
             ...txCore,
-            publicKey,
+            publicKey: auth.getPublicKey ? auth.getPublicKey() : '',
             signature: signedSwap
         };
-        const canonicalJsonHash = await hashCanonicalSwapPayload(txCore);
-        console.info('[SwapAuth] Signed Wallet V1 swap:', {
-            signed_fields: Object.keys(txCore),
-            signature_format: getSignatureFormat(signedSwapEnvelope.signature),
-            public_key_format: getPublicKeyFormat(publicKey),
-            active_address_short: shortSwapAddress(addr),
-            from_address_short: shortSwapAddress(txCore.from),
-            credential_lookup_short: shortSwapAddress(auth.credentialLookupAddress || addr),
-            canonical_json_hash: canonicalJsonHash
-        });
         const res = await fetch('/api/swap/execute', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -316,9 +625,9 @@ function isSwapWalletReady(addr) {
                 signed_tx: signedSwapEnvelope,
                 signature: typeof signedSwap === 'string' ? signedSwap : signedSwap && signedSwap.signature,
                 auth_secret: auth.authSecret,
-                token_in: tokenInForSigning,
-                token_out: tokenOutForSigning,
-                amount_in: amountForSigning,
+                token_in: tokenIn,
+                token_out: tokenOut,
+                amount_in: amount,
                 min_amount_out: latestQuote.amount_out
             })
         });

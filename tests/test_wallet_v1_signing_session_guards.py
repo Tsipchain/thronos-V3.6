@@ -185,3 +185,94 @@ def test_mismatch_diagnostics_do_not_leak_secrets():
             forbidden = ["privateKey", "private_key", "pin", "PIN", "send_secret", "sendSeed"]
             mismatch_section = content[mismatch_start:mismatch_start + 500]
             assert not any(secret in mismatch_section for secret in forbidden)
+
+
+def test_use_migrated_wallet_refuses_system_wallet():
+    assert "isSystemWalletAddress(restoreAddr)" in STATIC_SESSION
+    assert "system_wallet_not_allowed" in STATIC_SESSION
+    assert "SYSTEM_WALLET_NOT_ALLOWED" in STATIC_SESSION
+    migration_info = {
+        'old_address': 'THR79ca94a7eb70a6aa99d12d7fdb01446ef246301a',
+        'new_v1_address': SYSTEM,
+        'verified': True
+    }
+    run_wallet_session(f"""
+const migrationMeta = {json.dumps(migration_info)};
+localStorage.setItem('wallet_v1_migration_meta', JSON.stringify(migrationMeta));
+try {{
+    walletSession.restoreToMigratedWallet();
+    assert.fail('should reject system wallet');
+}} catch (err) {{
+    assert.strictEqual(err.code, 'SYSTEM_WALLET_NOT_ALLOWED');
+}}
+""")
+
+
+def test_active_canonical_address_preserved_when_bad_migrated_pointer_exists():
+    bad_migration_info = {
+        'old_address': 'THR79ca94a7eb70a6aa99d12d7fdb01446ef246301a',
+        'new_v1_address': SYSTEM,
+        'verified': True
+    }
+    run_wallet_session(f"""
+const activeAddr = {json.dumps(CANONICAL)};
+localStorage.setItem('wallet_v1_address', activeAddr);
+localStorage.setItem('thr_address', activeAddr);
+const badMigration = {json.dumps(bad_migration_info)};
+localStorage.setItem('wallet_v1_migration_meta', JSON.stringify(badMigration));
+try {{
+    walletSession.restoreToMigratedWallet();
+}} catch (err) {{
+    // Restore should fail, but active address should be preserved
+}}
+assert.strictEqual(walletSession.getActiveAddress(), activeAddr);
+assert.strictEqual(localStorage.getItem('wallet_v1_address'), activeAddr);
+""")
+
+
+def test_bad_migration_pointer_is_cleared_on_reset():
+    bad_migration_info = {
+        'old_address': 'THR79ca94a7eb70a6aa99d12d7fdb01446ef246301a',
+        'new_v1_address': SYSTEM,
+        'verified': True
+    }
+    run_wallet_session(f"""
+const activeAddr = {json.dumps(CANONICAL)};
+localStorage.setItem('wallet_v1_address', activeAddr);
+localStorage.setItem('thr_address', activeAddr);
+const badMigration = {json.dumps(bad_migration_info)};
+localStorage.setItem('wallet_v1_migration_meta', JSON.stringify(badMigration));
+// Verify bad migration is stored
+assert.strictEqual(walletSession.getMigrationInfo().new_v1_address, {json.dumps(SYSTEM)});
+walletSession.resetActiveWalletPointers();
+// Bad migration pointer should be cleared because it's a system wallet
+assert.strictEqual(localStorage.getItem('wallet_v1_migration_meta'), null);
+""")
+
+
+def test_verified_migration_mapping_still_works():
+    migration_info = {
+        'old_address': 'THR79ca94a7eb70a6aa99d12d7fdb01446ef246301a',
+        'new_v1_address': CANONICAL,
+        'migration_tx_id': 'proof',
+        'verified': True
+    }
+    run_wallet_session(f"""
+const migration = {json.dumps(migration_info)};
+localStorage.setItem('wallet_v1_migration_meta', JSON.stringify(migration));
+localStorage.setItem('wallet_v1_address', {json.dumps(UI_CREATED)});
+const result = walletSession.restoreToMigratedWallet();
+assert.strictEqual(result, true);
+assert.strictEqual(walletSession.getActiveAddress(), {json.dumps(CANONICAL)});
+""")
+
+
+def test_restore_migrated_wallet_safe_diagnostics():
+    assert "restore_candidate_short" in STATIC_SESSION
+    assert "active_address_short" in STATIC_SESSION
+    assert "canonical_address_short" in STATIC_SESSION
+    assert "source: 'use_migrated_wallet'" in STATIC_SESSION
+    # Diagnostics should not leak secrets
+    restore_section = STATIC_SESSION[STATIC_SESSION.index("RestoreToMigrated"):STATIC_SESSION.index("RestoreToMigrated") + 500]
+    forbidden = ["privateKey", "private_key", "pin", "PIN", "send_secret", "sendSeed", "auth_secret"]
+    assert not any(secret in restore_section for secret in forbidden)

@@ -5277,7 +5277,11 @@ function restoreMigratedWalletFromHeader(){
         loadWalletBalances(true);
         alert('Wallet restored to migrated address: ' + migrationInfo.new_v1_address.substring(0, 10) + '...');
     } catch(err) {
-        console.error('[RestoreMigratedWallet] Restore failed:', err.message);
+        console.error('[RestoreMigratedWallet] Restore failed:', err.code, err.message);
+        if (err.code === 'SYSTEM_WALLET_NOT_ALLOWED') {
+            alert('Cannot restore system wallet. Active wallet preserved.');
+            return;
+        }
         alert('Restore failed: ' + (err.message || 'Unknown error'));
     }
 }
@@ -5287,12 +5291,12 @@ function resetActiveWalletPointersFromHeader(){
     try {
         console.info('[ResetActiveWalletPointers] Clearing stale address pointers');
         const restored = walletSession.resetActiveWalletPointers();
-        console.info('[ResetActiveWalletPointers] Restored address:', restored.substring(0, 10) + '...');
+        console.info('[ResetActiveWalletPointers] Restored address:', restored ? restored.substring(0, 10) + '...' : 'none');
         updateHeaderWalletUi();
         updateWalletPanelDiagnostics();
-        alert('Active wallet pointers reset. Address is now: ' + restored.substring(0, 10) + '...');
+        alert('Active wallet pointers reset. Address is now: ' + (restored ? restored.substring(0, 10) + '...' : 'none'));
     } catch(err) {
-        console.error('[ResetActiveWalletPointers] Reset failed:', err.message);
+        console.error('[ResetActiveWalletPointers] Reset failed:', err.code, err.message);
         alert('Reset failed: ' + (err.message || 'Unknown error'));
     }
 }

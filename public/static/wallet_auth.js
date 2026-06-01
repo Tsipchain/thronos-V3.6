@@ -196,6 +196,11 @@
                     throw walletLockedRelockRequiredError();
                 } catch (e) {
                     if (e && e.code === 'WALLET_LOCKED_REUNLOCK_REQUIRED') throw e;
+                    if (e && (e.message || '').includes('wallet_signing_address_mismatch')) {
+                        const err = new Error('Wallet signing key does not match the active wallet address. Please import or migrate the correct key for ' + shortAddress(address) + '.');
+                        err.code = 'WALLET_SIGNING_ADDRESS_MISMATCH';
+                        throw err;
+                    }
                     const err = new Error(e && e.code === 'UNLOCK_FAILED'
                         ? e.message
                         : 'Failed to unlock wallet: ' + (e.message || e));

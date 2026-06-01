@@ -1131,18 +1131,31 @@ async function requirePoolWalletAuth(action, txCore) {
     }
     const auth = await window.WalletAuth.requireUnlockedWallet({ source: 'pools' });
     const publicKey = auth.getPublicKey ? auth.getPublicKey() : '';
-    const signInput = Object.assign({ type: action }, txCore || {});
-    const signedTx = auth.signTransaction ? await auth.signTransaction(signInput) : null;
+
+    // Build canonical pool signing payload (exact fields, exact order)
+    const canonicalTxCore = {
+        type: action,
+        action: action,
+        ...(txCore || {})
+    };
+
+    // Sign the exact canonical payload
+    const signedTx = auth.signTransaction ? await auth.signTransaction(canonicalTxCore) : null;
     if (!signedTx) throw new Error('wallet_locked_reunlock_required');
 
-    // Construct canonical pool envelope with all required fields
-    // Always merge txCore to ensure "from" and other canonical fields are preserved
-    const signedTxEnvelope = {
+    // Keep the signed transaction payload unchanged; add signature and publicKey
+    // Do NOT rebuild or mutate the signed fields
+    const signedTxEnvelope = typeof signedTx === 'object' ? {
+        ...signedTx,
+        publicKey: signedTx.publicKey || publicKey,
+        public_key: signedTx.public_key || publicKey  // Include both for compatibility
+    } : {
         ...(txCore || {}),
         type: action,
-        ...(typeof signedTx === 'object' ? signedTx : {}),
-        publicKey: publicKey || (typeof signedTx === 'object' && signedTx.publicKey ? signedTx.publicKey : ''),
-        signature: typeof signedTx === 'string' ? signedTx : (signedTx?.signature || signedTx)
+        action: action,
+        publicKey,
+        public_key: publicKey,
+        signature: signedTx
     };
 
     return {
@@ -1288,8 +1301,8 @@ async function submitCreatePool(event) {
             provider_thr: provider,
             token_a: tokenA,
             token_b: tokenB,
-            amount_a: amountA,
-            amount_b: amountB,
+            amount_a: String(amountA),
+            amount_b: String(amountB),
             lock_days: selectedLockDays
         });
     } catch (err) {
@@ -1411,8 +1424,8 @@ async function addLiquidity(poolId) {
             from: wallet,
             pool_id: poolId,
             provider_thr: wallet,
-            amount_a: parseFloat(amountA),
-            amount_b: parseFloat(amountB)
+            amount_a: String(parseFloat(amountA)),
+            amount_b: String(parseFloat(amountB))
         });
 
         const referrer = localStorage.getItem('pool_referrer') || '';
@@ -1500,7 +1513,7 @@ async function removeLiquidity(poolId) {
             from: wallet,
             pool_id: poolId,
             provider_thr: wallet,
-            shares: parseFloat(shares)
+            shares: String(parseFloat(shares))
         });
 
         const diagnostics = {

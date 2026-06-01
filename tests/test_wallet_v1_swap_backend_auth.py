@@ -320,3 +320,13 @@ def test_swap_execute_validates_input_in_try_catch(accept_signature, swap_state,
     assert body.get("error") == "swap_execution_failed"
     assert "exception_type" in body
     assert body.get("error") != "server_error"
+
+
+def test_swap_signed_fields_defined():
+    """Verify SWAP_SIGNED_FIELDS is defined at module level."""
+    assert hasattr(server, "SWAP_SIGNED_FIELDS")
+    assert isinstance(server.SWAP_SIGNED_FIELDS, tuple)
+    # Verify it includes the canonical fields
+    expected = ("type", "action", "from", "token_in", "token_out", "amount_in", "nonce", "timestamp")
+    assert set(server.SWAP_SIGNED_FIELDS) == set(expected)
+    assert len(server.SWAP_SIGNED_FIELDS) == len(expected)

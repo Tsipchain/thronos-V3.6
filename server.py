@@ -22037,6 +22037,7 @@ SWAP_ACTION_ALIASES = {
     "token_swap": "swap",
     "swap_tokens": "swap",
 }
+SWAP_SIGNED_FIELDS = ("type", "action", "from", "token_in", "token_out", "amount_in", "nonce", "timestamp")
 
 
 def normalize_swap_action(action):

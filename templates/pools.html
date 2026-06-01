@@ -1271,6 +1271,12 @@ async function submitCreatePool(event) {
     let poolAuth;
     try {
         poolAuth = await requirePoolWalletAuth('create_pool', {
+            from: provider,
+            to: `POOL_CREATE_${tokenA}_${tokenB}`,
+            amount: String(amountA + amountB),
+            token: 'THR',
+            nonce: `pool-create-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            timestamp: String(Math.floor(Date.now() / 1000)),
             provider_thr: provider,
             token_a: tokenA,
             token_b: tokenB,
@@ -1394,6 +1400,12 @@ async function addLiquidity(poolId) {
 
     try {
         const poolAuth = await requirePoolWalletAuth('add_liquidity', {
+            from: wallet,
+            to: poolId,
+            amount: String(parseFloat(amountA) + parseFloat(amountB)),
+            token: 'THR',
+            nonce: `pool-add-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            timestamp: String(Math.floor(Date.now() / 1000)),
             pool_id: poolId,
             provider_thr: wallet,
             amount_a: parseFloat(amountA),
@@ -1482,6 +1494,12 @@ async function removeLiquidity(poolId) {
 
     try {
         const poolAuth = await requirePoolWalletAuth('remove_liquidity', {
+            from: wallet,
+            to: poolId,
+            amount: String(parseFloat(shares)),
+            token: 'THR',
+            nonce: `pool-remove-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            timestamp: String(Math.floor(Date.now() / 1000)),
             pool_id: poolId,
             provider_thr: wallet,
             shares: parseFloat(shares)

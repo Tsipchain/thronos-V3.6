@@ -394,8 +394,43 @@
     const activeAddr = options.address || getActiveAddress();
     const enc = localStorage.getItem(V1_ENCRYPTED_KEY);
     if (enc) {
-      try { unlockedPrivateKeyHex = await decryptPrivateKeyHex(enc, pin); unlockedForAddress = activeAddr; setBound(true); localStorage.setItem(LOCK_KEY, '0'); return true; }
-      catch(_) { return false; }
+      try {
+        const decryptedPrivKeyHex = await decryptPrivateKeyHex(enc, pin);
+        // Validate that decrypted key belongs to the active canonical address
+        try {
+          const secp = await _ensureSecpLoaded();
+          if (!secp || !secp.getPublicKey) throw new Error('secp256k1_library_missing');
+          const pubBytes = secp.getPublicKey(decryptedPrivKeyHex, true);
+          const pubHex = typeof pubBytes === 'string' ? pubBytes.replace(/^0x/, '') : bytesToHex(pubBytes);
+          const derivedAddress = await deriveAddressFromPublicKey(pubHex);
+          const activeNormalized = normalizeAddress(activeAddr);
+          const derivedNormalized = normalizeAddress(derivedAddress);
+
+          if (activeNormalized && derivedNormalized && activeNormalized !== derivedNormalized) {
+            // Mismatch: signing key does not belong to active wallet
+            throw new Error('wallet_signing_address_mismatch');
+          }
+        } catch (bindingErr) {
+          if ((bindingErr.message || '').includes('wallet_signing_address_mismatch')) throw bindingErr;
+          // If address derivation fails, still reject the unlock
+          throw new Error('wallet_signing_address_mismatch');
+        }
+
+        unlockedPrivateKeyHex = decryptedPrivKeyHex;
+        unlockedForAddress = activeAddr;
+        setBound(true);
+        localStorage.setItem(LOCK_KEY, '0');
+        return true;
+      }
+      catch(err) {
+        // Clear any partially-cached material on error
+        unlockedPrivateKeyHex = null;
+        unlockedForAddress = null;
+        if ((err.message || '').includes('wallet_signing_address_mismatch')) {
+          throw err;
+        }
+        return false;
+      }
     }
     const credentialAddress = getCredentialLookupAddress(activeAddr);
     const hasLegacyCreds = !!(activeAddr && getSendSeed(credentialAddress) && pin === getPin());

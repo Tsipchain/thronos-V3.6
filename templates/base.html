@@ -5177,10 +5177,52 @@ function switchWalletV1Mode(){
     const migrateEl = document.getElementById('walletV1MigrateMode');
     const createEl = document.getElementById('walletV1CreateMode');
 
+    // Check if active wallet address exists - unlock only valid with active address
+    const activeAddress = walletSession.getActiveAddress ? walletSession.getActiveAddress() : null;
+    const hasActiveAddress = !!activeAddress;
+
+    // Disable Unlock mode if no active address exists
+    const unlockOption = document.querySelector('option[value="unlock"]');
+    if (unlockOption) {
+        unlockOption.disabled = !hasActiveAddress;
+    }
+
+    // If unlock is selected but no active address exists, auto-switch to create
+    let displayMode = mode;
+    if (mode === 'unlock' && !hasActiveAddress) {
+        displayMode = 'create';
+        const modeSelect = document.getElementById('walletWidgetMode');
+        if (modeSelect) modeSelect.value = 'create';
+    }
+
     // Mutually exclusive: show only the selected mode
-    if (unlockEl) unlockEl.style.display = mode === 'unlock' ? 'block' : 'none';
-    if (migrateEl) migrateEl.style.display = mode === 'migrate' ? 'block' : 'none';
-    if (createEl) createEl.style.display = mode === 'create' ? 'block' : 'none';
+    if (unlockEl) {
+        unlockEl.style.display = displayMode === 'unlock' ? 'block' : 'none';
+        if (displayMode === 'unlock' && !hasActiveAddress) {
+            // Safety net: hide unlock UI if no active address
+            unlockEl.style.display = 'none';
+        }
+    }
+    if (migrateEl) migrateEl.style.display = displayMode === 'migrate' ? 'block' : 'none';
+    if (createEl) createEl.style.display = displayMode === 'create' ? 'block' : 'none';
+
+    // Show import required message if no active address
+    if (!hasActiveAddress) {
+        const importMsg = document.getElementById('walletImportRequiredMsg');
+        if (!importMsg) {
+            const unlockMode = document.getElementById('walletV1UnlockMode');
+            if (unlockMode && unlockMode.parentElement) {
+                const msg = document.createElement('div');
+                msg.id = 'walletImportRequiredMsg';
+                msg.style.cssText = 'background:#1a1a1a; border:1px solid #ff9900; border-radius:8px; padding:12px; margin:10px 0; color:#ff9900; font-size:0.9em;';
+                msg.textContent = '⚠️ Import or migrate a wallet before unlocking.';
+                unlockMode.parentElement.insertBefore(msg, unlockMode);
+            }
+        }
+    } else {
+        const importMsg = document.getElementById('walletImportRequiredMsg');
+        if (importMsg) importMsg.remove();
+    }
 
     // Show restore button if migration exists and we're in unlock mode
     updateRestoreMigratedWalletButton();
@@ -5413,37 +5455,36 @@ async function unlockWalletV1FromHeader(){
     const pin = (document.getElementById('walletWidgetUnlockPin')?.value || '').trim();
     if (!pin) return alert('PIN is required to unlock.');
 
+    // CRITICAL: Check that an active wallet address exists before attempting unlock
+    // Unlock is only valid when an active address has been set via:
+    // - Import (key derivation → address)
+    // - Create (wallet generation → address)
+    // - Migrate (legacy → new address)
+    // - Restore (migration record → canonical address)
+    const activeAddress = walletSession.getActiveAddress ? walletSession.getActiveAddress() : null;
+    if (!activeAddress) {
+        console.error('[UnlockWallet] wallet_import_required - No active wallet address exists');
+        return alert('wallet_import_required\n\nImport or migrate a wallet before unlocking.');
+    }
+
     const blockedSystemWalletAddress = 'THR5DF27A86C477F381594E896F0E55357DEC5942BA';
     const isBlockedSystemWallet = (addr) => addr === blockedSystemWalletAddress ||
         !!(walletSession.isSystemWalletAddress && walletSession.isSystemWalletAddress(addr));
-    const candidateAddress = (document.getElementById('walletWidgetThrAddress')?.value || '').trim();
-    if (!candidateAddress) return alert('wallet_address_required');
-    if (!walletSession.isValidThrAddress || !walletSession.isValidThrAddress(candidateAddress)) return alert('wallet_address_required');
-    if (isBlockedSystemWallet(candidateAddress)) {
+
+    // Validate that the active address is the one we're unlocking for
+    if (isBlockedSystemWallet(activeAddress)) {
         return alert('system_wallet_not_allowed');
     }
 
     try {
-        console.info('[UnlockWallet] Attempting unlock with PIN');
-        const ok = await walletSession.unlockWallet({ pin, address: candidateAddress });
+        console.info('[UnlockWallet] Attempting unlock with PIN for active address:', activeAddress.substring(0, 10) + '...');
+        const ok = await walletSession.unlockWallet({ pin, address: activeAddress });
 
         if (!ok) {
             console.warn('[UnlockWallet] PIN decrypt failed - wrong PIN');
             return alert('Unlock failed - wrong PIN or wallet not found');
         }
 
-        const address = (document.getElementById('walletWidgetThrAddress')?.value || candidateAddress).trim();
-        if (!address || !walletSession.isValidThrAddress || !walletSession.isValidThrAddress(address)) return alert('wallet_address_required');
-        if (isBlockedSystemWallet(address)) {
-            return alert('system_wallet_not_allowed');
-        }
-        let activeAddress = address;
-        if (walletSession.persistActiveUserAddress) {
-            activeAddress = walletSession.persistActiveUserAddress(address);
-        } else {
-            localStorage.setItem('wallet_v1_address', address);
-            localStorage.setItem('thr_address', address);
-        }
         console.info('[UnlockWallet] Success:', activeAddress.substring(0, 10) + '...');
         walletSession.setBound(true);
         document.getElementById('walletWidgetUnlockPin').value = '';
@@ -5462,11 +5503,7 @@ async function unlockWalletV1FromHeader(){
         if (errMsg.includes('wallet_signing_key_does_not_match_active_address')) {
             console.error('[UnlockWallet] Key mismatch detected - stored key belongs to different address');
             document.getElementById('walletWidgetUnlockPin').value = '';
-            // Persist the candidate address so header shows "Unlock Wallet V1" not "Migrate"
-            if (!localStorage.getItem('wallet_v1_address') || localStorage.getItem('wallet_v1_address') !== candidateAddress) {
-                localStorage.setItem('wallet_v1_address', candidateAddress);
-                localStorage.setItem('thr_address', candidateAddress);
-            }
+            // Preserve active address on mismatch
             updateHeaderWalletUi();
             showKeyMismatchRecovery(err);
             return;

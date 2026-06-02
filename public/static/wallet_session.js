@@ -393,6 +393,13 @@
     const pin = options.pin || (options.prompt !== false ? prompt('Enter wallet PIN to unlock') : null);
     if (!pin) return false;
     const activeAddr = options.address || getActiveAddress();
+    // CRITICAL: Unlock requires an active/canonical wallet address
+    // User must import, create, migrate, or restore a wallet first
+    if (!activeAddr) {
+      const err = new Error('wallet_import_required');
+      err.code = 'WALLET_IMPORT_REQUIRED';
+      throw err;
+    }
     const enc = localStorage.getItem(V1_ENCRYPTED_KEY);
     if (enc) {
       let decryptSucceeded = false;

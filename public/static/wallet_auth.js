@@ -197,6 +197,11 @@
                     throw walletLockedRelockRequiredError();
                 } catch (e) {
                     if (e && e.code === 'WALLET_LOCKED_REUNLOCK_REQUIRED') throw e;
+                    if (e && (e.message || '').includes('wallet_import_required')) {
+                        const err = new Error('No active wallet address exists. Please import, create, or migrate a wallet first.');
+                        err.code = 'WALLET_IMPORT_REQUIRED';
+                        throw err;
+                    }
                     if (e && (e.message || '').includes('wallet_signing_key_does_not_match_active_address')) {
                         const mismatch = window.walletSession && typeof window.walletSession.getSigningKeyMismatch === 'function' ? window.walletSession.getSigningKeyMismatch() : null;
                         const err = new Error('PIN accepted, but the stored signing key belongs to another wallet. Active address preserved. Import the correct Wallet V1 signing key for this address.');

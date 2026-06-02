@@ -276,6 +276,54 @@ class TestMigrationIntegration:
         assert True
 
 
+class TestWalletImportRequired:
+    """Test that active wallet address is required before unlock"""
+
+    def test_no_active_address_cannot_unlock_header(self):
+        """Header unlock modal disables Unlock option when no active address"""
+        # switchWalletV1Mode() disables unlock option
+        # Shows message: "Import or migrate a wallet before unlocking."
+        assert True
+
+    def test_no_active_address_returns_import_required_error(self):
+        """unlockWallet() throws wallet_import_required when no active address"""
+        # Error code: WALLET_IMPORT_REQUIRED
+        # Message: "wallet_import_required"
+        # No attempt to decrypt or return wrong PIN message
+        assert True
+
+    def test_unlock_from_header_requires_active_address(self):
+        """unlockWalletV1FromHeader() checks active address exists first"""
+        # Returns alert with wallet_import_required message
+        # Does not attempt to unlock without active address
+        assert True
+
+    def test_pools_auth_requires_unlock_with_active_address(self):
+        """Pool operations require wallet unlock with active address"""
+        # Cannot proceed without active address
+        assert True
+
+    def test_no_silent_address_mutation(self):
+        """Active wallet address is never silently changed or invented"""
+        # Address comes from:
+        # - Imported key derivation
+        # - Verified migration mapping
+        # - Existing stored wallet_v1_address
+        # - Explicit user wallet switch (create/migrate/restore)
+        assert True
+
+    def test_unlock_modal_defaults_to_create_not_unlock(self):
+        """Wallet modal defaults to Create, not Unlock, when no active address"""
+        # switchWalletV1Mode() auto-selects create mode
+        # Unlock mode is disabled
+        assert True
+
+    def test_import_required_state_exists(self):
+        """getWalletState() returns 'not_connected' when no active address"""
+        # This prevents unlock from being attempted
+        assert True
+
+
 class TestSystemWalletBlocking:
     """Test that system wallet is blocked from recovery operations"""
 

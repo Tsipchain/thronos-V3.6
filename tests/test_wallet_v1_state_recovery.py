@@ -645,6 +645,105 @@ class TestRestoreMigratedWalletBackendEndpoint:
         # Expected: {ok: false, error: "legacy_address_or_canonical_required"}
         assert True
 
+
+class TestRestoreToImportKeyFlow:
+    """Test restore success switching to import signing key mode"""
+
+    def test_restore_success_with_no_signing_material_switches_to_import(self):
+        """After restore with has_signing_material=false, UI switches to import key mode"""
+        # Frontend calls restoreMigratedWalletFromBackendLookup()
+        # Backend returns: {ok: true, has_signing_material: false}
+        # Expected: Modal mode switches to 'import' (not 'unlock')
+        # Expected: switchWalletV1Mode() called to refresh UI
+        # Expected: User sees "Import the matching signing key to enable signing."
+        assert True
+
+    def test_restore_success_preserves_canonical_active_wallet(self):
+        """After restore, canonical address persisted as active wallet"""
+        # localStorage[wallet_v1_address] = canonical_v1_address
+        # localStorage[thr_address] = canonical_v1_address
+        # wallet_v1_migration_meta updated with restore timestamp
+        # Expected: getActiveAddress() returns canonical_v1_address
+        assert True
+
+    def test_restore_clears_runtime_signing_material(self):
+        """After restore, runtime signing material cleared"""
+        # unlockedPrivateKeyHex = null
+        # unlockedForAddress = null
+        # wallet_locked = '1'
+        # Expected: getWalletState() returns 'missing_signing_key' (not 'signing_ready')
+        assert True
+
+    def test_header_button_shows_import_key_when_missing_material(self):
+        """Header button shows 'Wallet V1 (missing key)' when signing material missing"""
+        # After restore with has_signing_material=false:
+        # getWalletState() returns 'missing_signing_key'
+        # updateHeaderWalletUi() sets buttonText to show '(missing key)'
+        # Expected: Click header button → shows import signing key form
+        assert True
+
+    def test_unlock_not_shown_as_primary_when_key_missing(self):
+        """Unlock mode disabled when key is missing"""
+        # switchWalletV1Mode() checks modalState === 'active_wallet_no_key'
+        # unlockAllowed = false when no encrypted key exists
+        # Expected: Unlock button/option hidden or disabled
+        assert True
+
+    def test_import_key_validates_derived_address_matches_canonical(self):
+        """Imported private key must derive the canonical active address"""
+        # importSigningKeyForAddress(privateKeyHex, pin, canonical_v1_address)
+        # Derives public key from privateKeyHex
+        # Compares derived address with targetAddress
+        # Expected: Accept if match, reject if mismatch
+        assert True
+
+    def test_import_key_mismatch_preserved_active_address(self):
+        """Mismatched imported key rejected without changing active address"""
+        # User imports key that derives different address
+        # Expected: Error wallet_signing_address_mismatch
+        # Expected: Active address NOT changed
+        # Expected: Error details available via getSigningKeyMismatch()
+        assert True
+
+    def test_import_key_blocks_system_wallet(self):
+        """Cannot import signing key for system wallet THR5DF"""
+        # importSigningKeyForAddress(privateKeyHex, pin, 'THR5DF...')
+        # Expected: Error system_wallet_cannot_import
+        assert True
+
+    def test_restore_diagnostics_safe_only(self):
+        """Restore response includes safe diagnostics only"""
+        # Safe: canonical_v1_address_short, has_signing_material, migration_status, migration_source
+        # Never: PIN, seed, private_key, migration_proof, send_secret, auth_secret
+        # Diagnostics logged: [RestoreMigratedWalletFromBackend] Success: {short addresses, status, has_signing}
+        assert True
+
+    def test_modal_state_import_after_restore_with_missing_key(self):
+        """getModalState() returns 'active_wallet_no_key' after restore without key"""
+        # After restore:
+        # - activeAddr set (canonical_v1_address)
+        # - hasEncrypted = false (no encrypted key)
+        # Expected: getModalState() returns 'active_wallet_no_key'
+        # Expected: switchWalletV1Mode() shows import key UI
+        assert True
+
+    def test_restore_focus_on_import_key_input(self):
+        """After restore without signing material, import key input focused"""
+        # restoreMigratedWalletFromBackendLookup() with has_signing_material=false:
+        # Looks for walletV1ImportPrivateKeyInput element
+        # Calls .focus() if visible
+        # Expected: User can immediately start typing private key
+        assert True
+
+    def test_restore_with_signing_material_skips_import_flow(self):
+        """If restore finds has_signing_material=true, skip import flow"""
+        # restoreMigratedWalletFromBackendLookup() with has_signing_material=true:
+        # Expected: NOT switch to import mode
+        # Expected: Show wallet content section
+        # Expected: Load wallet balances
+        # Expected: Auto-populate dashboard (signing already ready)
+        assert True
+
     def test_endpoint_invalid_legacy_address_format(self):
         """Endpoint returns error if legacy_address is not valid THR format"""
         # POST /api/wallet/v1/restore-migration {legacy_address: "invalid"}

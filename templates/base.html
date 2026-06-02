@@ -1668,11 +1668,11 @@
                         </p>
                     </div>
 
-                    <!-- Legacy/Pledge Credential Recovery -->
+                    <!-- Legacy/Pledge Credential Ownership Verification -->
                     <div id="walletV1LegacyRecoveryForm" style="background:#1a2a1a; border:1px solid #00ff66; border-radius:8px; padding:15px; margin:12px 0;">
-                        <h5 style="color:#00ff66; margin-top:0;">Recover Signing Key from Legacy/Pledge Credentials</h5>
+                        <h5 style="color:#00ff66; margin-top:0;">Verify Legacy/Pledge Ownership</h5>
                         <p style="font-size:0.85em; color:#9f9; margin-bottom:12px;">
-                            Enter your legacy wallet credentials to recover the signing key.
+                            Enter your legacy wallet credentials to verify you own this wallet. This confirms your identity but does not recover the signing key.
                         </p>
 
                         <div style="margin-bottom:10px;">
@@ -1706,8 +1706,8 @@
                         </div>
 
                         <div style="display:flex; gap:8px; margin-top:12px;">
-                            <button onclick="performLegacySigningKeyRecovery()" style="flex:1; padding:10px; background:#00aa66; color:#000; border:1px solid #00ff66; border-radius:6px; cursor:pointer; font-weight:bold;">
-                                ↩ Recover from Legacy Credentials
+                            <button onclick="performLegacyOwnershipVerification()" style="flex:1; padding:10px; background:#00aa66; color:#000; border:1px solid #00ff66; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                ✓ Verify Ownership
                             </button>
                             <button onclick="toggleAdvancedKeyImport()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
                                 Advanced Import
@@ -5631,7 +5631,7 @@ function toggleAdvancedKeyImport() {
     }
 }
 
-async function performLegacySigningKeyRecovery() {
+async function performLegacyOwnershipVerification() {
     const canonicalAddr = (document.getElementById('walletV1CanonicalAddr')?.value || '').trim();
     const legacyAddr = (document.getElementById('walletV1LegacyAddr')?.value || '').trim();
     const sendSecret = (document.getElementById('walletV1SendSecret')?.value || '').trim();
@@ -5645,10 +5645,10 @@ async function performLegacySigningKeyRecovery() {
     if (!pin.match(/^\d{4,8}$/)) return alert('PIN must be 4-8 digits');
 
     try {
-        console.log('[LegacyRecovery] Attempting recovery for:', canonicalAddr.substring(0, 10) + '...');
+        console.log('[OwnershipVerification] Verifying ownership for:', canonicalAddr.substring(0, 10) + '...');
 
-        // Call backend endpoint to recover signing key from legacy credentials
-        const response = await fetch('/api/wallet/v1/recover-signing-key', {
+        // Call backend endpoint to verify legacy credentials
+        const response = await fetch('/api/wallet/v1/verify-legacy-ownership', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -5662,30 +5662,29 @@ async function performLegacySigningKeyRecovery() {
 
         const result = await response.json();
         if (!result.ok) {
-            console.warn('[LegacyRecovery] Recovery failed:', result.error);
+            console.warn('[OwnershipVerification] Verification failed:', result.error);
 
             // Handle specific error codes
-            if (result.error === 'legacy_recovery_not_supported') {
-                alert('Legacy recovery is not available for this wallet.\n\nNo deterministic recovery path was found. Please use Advanced Import if you have a backup of your V1 private key.');
+            if (result.error === 'deterministic_recovery_unavailable') {
+                alert('Ownership verified, but deterministic signing key recovery is not available for this wallet.\n\nPlease use Advanced Import if you have a backup of your V1 private key.');
                 return;
-            } else if (result.error === 'recovery_credentials_invalid') {
-                alert('Invalid legacy credentials. Please verify your send_secret and other credentials.');
+            } else if (result.error === 'ownership_verification_failed') {
+                alert('Could not verify ownership. Please check your legacy credentials.');
                 return;
-            } else if (result.error === 'derived_address_mismatch') {
-                alert('Derived address does not match canonical address. Please verify your credentials.');
+            } else if (result.error === 'migration_not_found') {
+                alert('This wallet could not be found in migration records. Please verify your addresses.');
                 return;
             } else {
-                alert('Recovery failed: ' + (result.error || 'Unknown error'));
+                alert('Verification failed: ' + (result.error || 'Unknown error'));
                 return;
             }
         }
 
-        console.log('[LegacyRecovery] Backend verified recovery:', result.recovery_source);
+        console.log('[OwnershipVerification] Ownership verified. Recovery source:', result.recovery_source);
 
-        // Now derive the signing key client-side and encrypt it with the PIN
-        // The backend verified legacy credentials, but we handle key derivation/encryption locally
-        // For now, show success and guide user to import the key
-        alert('✓ Legacy credentials verified!\n\nThe system found your wallet in the ' + result.recovery_source + '.\n\nKey recovery for this wallet type requires additional setup. Contact support.');
+        // Ownership verified, but signing key recovery not deterministic
+        // User must provide backup key or use re-registration flow
+        alert('✓ Ownership verified!\n\nYour wallet was found in ' + result.recovery_source + '.\n\nTo re-enable signing, please use Advanced Import with a backup of your V1 private key.');
 
         // Clear form
         document.getElementById('walletV1SendSecret').value = '';
@@ -5693,8 +5692,8 @@ async function performLegacySigningKeyRecovery() {
         document.getElementById('walletV1RecoveryPin').value = '';
 
     } catch(err) {
-        console.error('[LegacyRecovery] Error:', err);
-        alert('Error: ' + (err.message || 'Recovery failed'));
+        console.error('[OwnershipVerification] Error:', err);
+        alert('Error: ' + (err.message || 'Verification failed'));
     }
 }
 
@@ -5862,7 +5861,7 @@ async function restoreMigratedWalletFromBackendLookup(){
             switchWalletV1Mode();
 
             // Show success message with next step
-            alert('Wallet restored: ' + result.canonical_v1_address.substring(0, 10) + '...\n\nRecover your signing key from legacy credentials or import a backup.');
+            alert('Wallet restored: ' + result.canonical_v1_address.substring(0, 10) + '...\n\nTo enable signing, verify your legacy ownership and then import a backup of your V1 private key.');
 
             showWalletLoginForm();
         }

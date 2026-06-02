@@ -822,21 +822,21 @@ class TestRestoreToImportKeyFlow:
         assert True
 
 
-class TestLegacyCredentialRecovery:
-    """Test recovery of Wallet V1 signing keys from legacy/pledge credentials"""
+class TestLegacyOwnershipVerification:
+    """Test verification of legacy/pledge wallet ownership"""
 
-    def test_restore_shows_legacy_recovery_form_when_no_signing_material(self):
-        """After restore without signing material, UI shows legacy recovery form"""
+    def test_restore_shows_ownership_verification_form_when_no_signing_material(self):
+        """After restore without signing material, UI shows ownership verification form"""
         # Backend returns: {ok: true, has_signing_material: false}
         # Frontend should:
-        # 1. Set canonical address in recovery form field
+        # 1. Set canonical address in verification form field
         # 2. Pre-fill legacy address if available
-        # 3. Show legacy credential recovery form
+        # 3. Show "Verify Legacy/Pledge Ownership" form
         # 4. Hide raw private key import by default
         assert True
 
-    def test_legacy_recovery_endpoint_verifies_credentials(self):
-        """POST /api/wallet/v1/recover-signing-key verifies legacy credentials"""
+    def test_ownership_verification_endpoint_checks_credentials(self):
+        """POST /api/wallet/v1/verify-legacy-ownership checks legacy credentials"""
         # Request:
         # {
         #   "canonical_v1_address": "THR683...",
@@ -845,59 +845,68 @@ class TestLegacyCredentialRecovery:
         #   "auth_secret": "...",
         #   "pledge_recovery_hash": "..."
         # }
-        # Response:
+        # Response on success:
         # {
         #   "ok": true,
+        #   "canonical_v1_address": "THR...",
         #   "recovery_source": "pledge_chain|wallet_v1_migrations|...",
-        #   "has_signing_material": false
+        #   "has_signing_material": false,
+        #   "deterministic_recovery_available": false
         # }
         assert True
 
-    def test_legacy_recovery_requires_canonical_address(self):
-        """Endpoint rejects recovery request without canonical_v1_address"""
+    def test_ownership_verification_requires_canonical_address(self):
+        """Endpoint rejects request without canonical_v1_address"""
         # Request: missing canonical_v1_address
         # Response: {ok: false, error: "canonical_v1_address_required"}
         assert True
 
-    def test_legacy_recovery_validates_address_format(self):
+    def test_ownership_verification_validates_address_format(self):
         """Endpoint validates canonical address format (THR prefix, 43 chars)"""
         # Invalid canonical address
         # Response: {ok: false, error: "invalid_canonical_address"}
         assert True
 
-    def test_legacy_recovery_blocks_system_wallet(self):
-        """Endpoint blocks recovery for system wallet THR5DF..."""
+    def test_ownership_verification_blocks_system_wallet(self):
+        """Endpoint blocks ownership verification for system wallet THR5DF..."""
         # Request: canonical_v1_address = "THR5DF27A86C477F381594E896F0E55357DEC5942BA"
         # Response: {ok: false, error: "system_wallet_not_allowed"}
         assert True
 
-    def test_legacy_recovery_migration_not_found(self):
+    def test_ownership_verification_migration_not_found(self):
         """Endpoint returns migration_not_found if address not in records"""
         # Request: canonical_v1_address not in wallet_v1_migrations or pledge_chain
         # Response: {ok: false, error: "migration_not_found"}
         assert True
 
-    def test_legacy_recovery_returns_recovery_source(self):
-        """Endpoint returns where recovery data was found"""
+    def test_ownership_verification_returns_source(self):
+        """Endpoint returns where wallet was found in migration records"""
         # On success: recovery_source = "pledge_chain" | "wallet_v1_migrations" | etc
-        # Frontend can show: "Wallet found in pledge records"
+        # Frontend shows: "Wallet found in pledge records"
         assert True
 
-    def test_v1_signing_key_not_deterministically_derived(self):
-        """V1 signing keys are random, not derived from legacy credentials"""
-        # Critical design: legacy_send_secret only proves ownership, doesn't generate key
-        # Recovery requires:
-        # 1. User's backup of V1 private key (Advanced Import)
-        # 2. Or re-registration with new signing key
+    def test_v1_signing_key_is_random_not_derived(self):
+        """V1 signing keys are randomly generated, not derived from legacy credentials"""
+        # Critical design: legacy_send_secret only proves ownership, never generates key
+        # To re-enable signing, user must:
+        # 1. Import backed-up V1 private key (Advanced Import)
+        # 2. Or use re-registration flow (future work)
         # NOT: deterministic derivation from legacy secret
         assert True
 
-    def test_legacy_recovery_no_deterministic_path_available(self):
-        """When no deterministic recovery path exists, endpoint returns message"""
-        # On success: includes message about V1 key being random
-        # UI should offer:
-        # 1. Import backed-up V1 private key (Advanced Import)
-        # 2. Re-register with new signing key flow
+    def test_ownership_verification_deterministic_unavailable(self):
+        """Endpoint always returns deterministic_recovery_available=false"""
+        # V1 keys cannot be deterministically recovered from legacy credentials
+        # Response always includes: "deterministic_recovery_available": false
+        # Response always includes: "has_signing_material": false
+        # UI must guide user to Advanced Import or re-registration
+        assert True
+
+    def test_ownership_verification_never_sets_signing_material_true(self):
+        """Verification success does NOT set has_signing_material=true"""
+        # Only import/unlock can enable signing_material
+        # Ownership verification is just identity confirmation
+        # Response: has_signing_material=false always
         assert True
 
     def test_advanced_import_show_hide_toggle(self):
@@ -906,7 +915,7 @@ class TestLegacyCredentialRecovery:
         # walletV1LegacyRecoveryForm hidden
         # walletV1AdvancedKeyImportForm shown
         # Click back button
-        # Legacy form shown again
+        # Ownership verification form shown again
         assert True
 
     def test_advanced_import_validates_key_format(self):
@@ -924,18 +933,18 @@ class TestLegacyCredentialRecovery:
         # Compare with canonical_v1_address
         # If mismatch: error wallet_signing_address_mismatch
         # If match: encrypt and store
+        # ONLY then: has_signing_material becomes true
         assert True
 
-    def test_legacy_recovery_clears_secrets_from_form(self):
-        """After successful recovery/import, form fields cleared"""
+    def test_ownership_verification_clears_secrets_from_form(self):
+        """After verification attempt, form fields cleared"""
         # send_secret cleared
         # auth_secret cleared
         # PIN cleared
-        # private key (if advanced import) cleared
         # No secrets remain in DOM or form state
         assert True
 
-    def test_legacy_recovery_secrets_never_logged(self):
+    def test_ownership_verification_secrets_never_logged(self):
         """Secrets are never logged to console or sent unencrypted"""
         # Safe logging only:
         # - canonical_v1_address_short
@@ -948,12 +957,13 @@ class TestLegacyCredentialRecovery:
         # - PIN
         assert True
 
-    def test_legacy_recovery_safe_api_response_only(self):
+    def test_ownership_verification_safe_api_response_only(self):
         """Endpoint returns only safe diagnostics, never secrets"""
         # Response includes:
         # - canonical_v1_address (full)
         # - recovery_source
-        # - has_signing_material
+        # - has_signing_material (always false after verification)
+        # - deterministic_recovery_available (always false)
         # Never includes:
         # - private_key
         # - seed

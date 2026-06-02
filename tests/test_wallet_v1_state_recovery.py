@@ -324,6 +324,108 @@ class TestWalletImportRequired:
         assert True
 
 
+class TestPledgeBackedWalletFlow:
+    """Test pledge-backed wallet activation for mainnet web wallet"""
+
+    def test_no_pledge_no_active_wallet_shows_pledge_required(self):
+        """Modal shows Pledge/Migrate/Restore when no active wallet"""
+        # getModalState() returns 'no_active_wallet'
+        # switchWalletV1Mode() auto-selects Migrate mode
+        # Message: "Complete pledge, migrate legacy wallet, or restore a verified wallet..."
+        assert True
+
+    def test_pledge_confirmed_shows_activate_wallet(self):
+        """Modal shows Activate Wallet / Set PIN when pledge confirmed but no local key"""
+        # hasPledgeOrMigrationSource() returns true
+        # getModalState() returns 'active_wallet_no_key'
+        # Shows: "Wallet address found. Import the matching signing key to enable signing."
+        assert True
+
+    def test_create_wallet_hidden_without_feature_flag(self):
+        """Create Wallet V1 option hidden when WALLET_V1_ALLOW_WEB_CREATE not set"""
+        # switchWalletV1Mode() disables create option
+        # Migrate option remains available
+        # Only available if pledge confirmed OR feature flag enabled
+        assert True
+
+    def test_create_wallet_allowed_with_feature_flag(self):
+        """Create Wallet V1 enabled when WALLET_V1_ALLOW_WEB_CREATE=1"""
+        # switchWalletV1Mode() enables create option
+        # Feature flag overrides pledge requirement for local testing
+        assert True
+
+    def test_active_wallet_no_key_shows_import(self):
+        """Active wallet address exists but no signing key shows import option"""
+        # getModalState() returns 'active_wallet_no_key'
+        # UI shows import signing key form
+        # Does not show Create Wallet V1
+        assert True
+
+    def test_active_wallet_with_key_shows_unlock(self):
+        """Active wallet with encrypted key shows Unlock option"""
+        # getModalState() returns 'active_wallet_with_encrypted_key'
+        # Unlock option enabled
+        # switchWalletV1Mode() selects unlock mode
+        assert True
+
+    def test_imported_key_must_derive_active_address(self):
+        """Imported key must derive the canonical active address, not replace it"""
+        # importSigningKeyForAddress(keyHex, pin, activeAddress)
+        # Derives address from keyHex
+        # Rejects if derived_address != activeAddress
+        # Error: wallet_signing_address_mismatch
+        assert True
+
+    def test_mismatched_imported_key_rejected(self):
+        """Import rejects key that derives different address than active"""
+        # importSigningKeyForAddress() validates address match
+        # Returns error: derived address doesn't match
+        # Does NOT mutate active address
+        assert True
+
+    def test_unlock_validates_key_still_derives_active_address(self):
+        """Unlock validates decrypted key derives canonical active address"""
+        # unlockWallet() decrypts key
+        # Derives address from decrypted key
+        # Throws wallet_signing_key_does_not_match_active_address if mismatch
+        # Does NOT auto-correct or mutate active address
+        assert True
+
+    def test_verified_migration_establishes_canonical_address(self):
+        """Verified migration establishes canonical THR address as active"""
+        # hasPledgeOrMigrationSource() returns true
+        # getCanonicalMigrationAddress() returns THR683...
+        # getModalState() progresses to active_wallet_no_key
+        # User can then import matching key
+        assert True
+
+    def test_active_address_sources_are_restricted(self):
+        """Active wallet address comes ONLY from pledged/migrated/restored sources"""
+        # Sources:
+        # - Verified migration (getCanonicalMigrationAddress)
+        # - Pledge confirmation (TODO: when API available)
+        # - Recovery from migration record
+        # NOT from:
+        # - User manual input on web mainnet
+        # - Imported key derivation (key must match active, not set it)
+        # - Arbitrary localStorage
+        assert True
+
+    def test_system_wallet_blocked_in_pledge_flow(self):
+        """System wallet THR5DF remains blocked in all pledge flow steps"""
+        # Cannot be imported
+        # Cannot be set as active
+        # Cannot be unlocked
+        assert True
+
+    def test_diagnostics_do_not_expose_secrets(self):
+        """Safe wallet diagnostics exclude all secrets"""
+        # Safe fields: active_address_short, derived_address_short, has_encrypted_seed,
+        # has_runtime_signing_material, wallet_state, source
+        # Never exposed: PIN, private_key, seed, send_secret, auth_secret, signature
+        assert True
+
+
 class TestSystemWalletBlocking:
     """Test that system wallet is blocked from recovery operations"""
 

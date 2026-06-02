@@ -5636,17 +5636,22 @@ async function restoreMigratedWalletFromBackendLookup(){
             // Refresh modal UI to show import signing key flow
             switchWalletV1Mode();
 
+            // Show import signing key form and recovery UI
+            showMissingSigningKeyRecovery();
+            showImportSigningKeyForm();
+
             // Show success message with next step
             alert('Wallet restored: ' + result.canonical_v1_address.substring(0, 10) + '...\n\nImport the matching signing key to enable signing.');
 
-            // Focus on import key input if visible
+            // Focus on import key input after brief delay
             setTimeout(() => {
-                const importKeyInput = document.getElementById('walletV1ImportPrivateKeyInput');
+                const importKeyInput = document.getElementById('importKeyHex');
                 if (importKeyInput && importKeyInput.offsetParent !== null) {
                     importKeyInput.focus();
                 }
-                showWalletLoginForm();
             }, 100);
+
+            showWalletLoginForm();
         }
 
         window.dispatchEvent(new Event('thronos:wallet:state-changed'));

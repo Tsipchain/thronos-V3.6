@@ -199,7 +199,7 @@
         max-width: 360px;
         justify-content: flex-end;
         max-width: calc(100vw - 40px);
-        overflow-x: hidden;
+        overflow: visible;
     }
     
     /* Wallet Status Indicator */
@@ -214,6 +214,8 @@
         align-items: center;
         gap: 6px;
         position: relative;
+        white-space: nowrap;
+        flex-shrink: 0;
     }
     .wallet-status:hover {
         background: #004400;
@@ -290,22 +292,27 @@
     .wallet-balance-popup {
         display: none;
         position: absolute;
-        top: 100%;
-        right: 0;
-        margin-top: 8px;
+        bottom: auto;
+        width: min(360px, calc(100vw - 48px));
+        max-width: calc(100vw - 48px);
         background: linear-gradient(135deg, #000000 0%, #071810 50%, #000000 100%);
         border: 2px solid;
         border-image: linear-gradient(135deg, #d4af37 0%, #00ff66 50%, #ffd700 100%) 1;
         border-radius: 12px;
         padding: 15px;
-        min-width: 280px;
-        max-width: calc(100vw - 40px);
         box-shadow: 0 0 30px rgba(0, 255, 102, 0.3), 0 0 15px rgba(255, 215, 0, 0.2);
-        z-index: 3800;
+        z-index: 3900;
+        overflow-y: auto;
         overflow-x: hidden;
         color: #e6ffe5;
         backdrop-filter: blur(10px);
         pointer-events: auto;
+        top: 100%;
+        right: 0;
+        margin-top: 8px;
+        max-height: 70vh;
+        box-sizing: border-box;
+        transform: translateX(0);
     }
     .music-modal.open {
         display: flex;
@@ -371,14 +378,16 @@
         border: 1px solid #0f0;
         border-radius: 12px;
         padding: 20px;
-        width: min(340px, calc(100vw - 40px));
+        width: min(360px, calc(100vw - 32px));
         max-width: 100%;
         box-shadow: 0 0 20px rgba(0, 255, 102, 0.25);
         overflow-x: hidden;
+        overflow-y: auto;
+        box-sizing: border-box;
     }
-    .wallet-modal h3 { margin-top: 0; }
+    .wallet-modal h3 { margin-top: 0; word-break: break-word; }
     .wallet-modal label { display: block; margin-top: 10px; font-size: 0.9em; color: #9f9; }
-    .wallet-modal input {
+    .wallet-modal input, .wallet-modal select, .wallet-modal textarea {
         width: 100%;
         padding: 10px;
         margin-top: 6px;
@@ -386,6 +395,8 @@
         color: #0f0;
         border: 1px solid #0f0;
         border-radius: 8px;
+        box-sizing: border-box;
+        word-break: break-word;
     }
     .wallet-modal-actions {
         display: flex;
@@ -5207,6 +5218,132 @@ async function createWalletV1FromHeader(){
     }
 }
 
+function showKeyMismatchRecovery(err) {
+    const mismatch = err && err.mismatch ? err.mismatch : null;
+    const activeAddr = walletSession.getActiveAddress ? walletSession.getActiveAddress() : localStorage.getItem('wallet_v1_address');
+    const derivedAddr = mismatch && mismatch.derived_address ? mismatch.derived_address : 'unknown';
+
+    const hasEncrypted = walletSession.hasEncryptedPrivateKey ? walletSession.hasEncryptedPrivateKey() : !!localStorage.getItem('wallet_v1_encrypted_priv');
+    const hasRuntime = walletSession.hasRuntimeSigningMaterial ? walletSession.hasRuntimeSigningMaterial(activeAddr) : false;
+
+    const shortActive = activeAddr ? activeAddr.substring(0, 10) + '...' : 'unknown';
+    const shortDerived = derivedAddr ? derivedAddr.substring(0, 10) + '...' : 'unknown';
+
+    const html = `
+    <div style="background:#1a1a1a; border:1px solid #ff6600; border-radius:12px; padding:20px; color:#fff; margin:20px 0;">
+        <h4 style="color:#ff9900; margin-top:0;">⚠️ Signing Key Mismatch</h4>
+        <p style="font-size:0.9em; line-height:1.5;">
+            PIN was accepted, but the stored signing key belongs to a different wallet.
+            <strong>Your active wallet (${shortActive}) is preserved.</strong>
+        </p>
+
+        <div style="background:#000; border:1px solid #666; border-radius:8px; padding:12px; margin:12px 0; font-size:0.85em; font-family:monospace;">
+            <div><span style="color:#9f9;">Active Address:</span> ${shortActive}</div>
+            <div><span style="color:#ff9900;">Derived Address:</span> ${shortDerived}</div>
+            <div><span style="color:#9f9;">Encrypted Seed:</span> ${hasEncrypted ? 'yes' : 'no'}</div>
+            <div><span style="color:#9f9;">Runtime Material:</span> ${hasRuntime ? 'yes' : 'no'}</div>
+        </div>
+
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <button onclick="clearMismatchedSigningKey()" style="flex:1; min-width:150px; padding:10px; background:#9c3c3c; color:#fff; border:1px solid #ff6600; border-radius:8px; cursor:pointer; font-size:0.9em;">
+                🗑️ Clear Mismatched Key
+            </button>
+            <button onclick="showImportSigningKeyForm()" style="flex:1; min-width:150px; padding:10px; background:#00a86b; color:#000; border:1px solid #00ff66; border-radius:8px; cursor:pointer; font-size:0.9em;">
+                📥 Import Correct Key
+            </button>
+        </div>
+    </div>
+    `;
+
+    const container = document.getElementById('walletV1UnlockMode');
+    if (container) {
+        const existing = container.querySelector('[data-mismatch-recovery]');
+        if (existing) existing.remove();
+        const div = document.createElement('div');
+        div.setAttribute('data-mismatch-recovery', '1');
+        div.innerHTML = html;
+        container.appendChild(div);
+    }
+}
+
+async function clearMismatchedSigningKey() {
+    const confirmed = confirm('This will remove the mismatched signing key from local storage.\nYour active wallet address will be preserved.\nContinue?');
+    if (!confirmed) return;
+
+    try {
+        if (window.WalletAuth && typeof window.WalletAuth.clearLocalSigningKey === 'function') {
+            window.WalletAuth.clearLocalSigningKey();
+            alert('Mismatched signing key cleared. You can now import the correct key.');
+            const recovery = document.querySelector('[data-mismatch-recovery]');
+            if (recovery) recovery.remove();
+        } else {
+            alert('Unable to clear signing key - API not available');
+        }
+    } catch(err) {
+        alert('Error clearing key: ' + (err.message || 'Unknown'));
+    }
+}
+
+function showImportSigningKeyForm() {
+    const form = `
+    <div style="background:#1a2a1a; border:1px solid #00ff66; border-radius:8px; padding:15px; margin:12px 0;">
+        <h5 style="color:#00ff66; margin-top:0;">Import Wallet V1 Signing Key</h5>
+        <label for="importKeyHex" style="display:block; font-size:0.9em; color:#9f9;">Private Key (Hex)</label>
+        <input type="password" id="importKeyHex" placeholder="64 hex characters" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:6px; margin:6px 0; font-size:0.85em; font-family:monospace;" />
+
+        <label for="importKeyPin" style="display:block; font-size:0.9em; color:#9f9; margin-top:10px;">PIN</label>
+        <input type="password" id="importKeyPin" placeholder="Wallet PIN" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:6px; margin:6px 0;" />
+
+        <div style="display:flex; gap:8px; margin-top:10px;">
+            <button onclick="performImportSigningKey()" style="flex:1; padding:10px; background:#00aa66; color:#000; border:1px solid #00ff66; border-radius:6px; cursor:pointer; font-weight:bold;">
+                ✓ Import Key
+            </button>
+            <button onclick="document.querySelector('[data-import-form]').remove()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
+                Cancel
+            </button>
+        </div>
+    </div>
+    `;
+
+    const recovery = document.querySelector('[data-mismatch-recovery]');
+    if (recovery) {
+        const existing = recovery.querySelector('[data-import-form]');
+        if (existing) existing.remove();
+        const div = document.createElement('div');
+        div.setAttribute('data-import-form', '1');
+        div.innerHTML = form;
+        recovery.appendChild(div);
+    }
+}
+
+async function performImportSigningKey() {
+    const keyHex = (document.getElementById('importKeyHex')?.value || '').trim();
+    const pin = (document.getElementById('importKeyPin')?.value || '').trim();
+    const targetAddr = walletSession.getActiveAddress ? walletSession.getActiveAddress() : localStorage.getItem('wallet_v1_address');
+
+    if (!keyHex || !pin) return alert('Private key and PIN are required');
+    if (!keyHex.match(/^[0-9a-fA-F]{64}$/)) return alert('Invalid key format. Must be 64 hex characters.');
+
+    try {
+        if (!window.WalletAuth || typeof window.WalletAuth.importSigningKeyForAddress !== 'function') {
+            return alert('Import API not available');
+        }
+
+        const result = await window.WalletAuth.importSigningKeyForAddress(keyHex, pin, targetAddr);
+        if (result.success) {
+            alert('✓ Signing key imported successfully!');
+            document.getElementById('importKeyHex').value = '';
+            document.getElementById('importKeyPin').value = '';
+            document.querySelector('[data-mismatch-recovery]').remove();
+        } else {
+            alert('Import failed: ' + (result.error || 'Unknown error'));
+        }
+    } catch(err) {
+        console.error('Import error:', err);
+        alert('Error: ' + (err.message || 'Import failed'));
+    }
+}
+
 async function unlockWalletV1FromHeader(){
     const pin = (document.getElementById('walletWidgetUnlockPin')?.value || '').trim();
     if (!pin) return alert('PIN is required to unlock.');
@@ -5252,8 +5389,15 @@ async function unlockWalletV1FromHeader(){
         window.dispatchEvent(new Event('thronos:wallet:state-changed'));
         alert('Wallet unlocked successfully!');
     } catch(err) {
-        console.error('[UnlockWallet] Failed:', err.message);
-        alert('Unlock failed: ' + (err.message || 'Unknown error'));
+        console.error('[UnlockWallet] Failed:', err.message, err.code);
+        const errMsg = err.message || 'Unknown error';
+
+        if (errMsg.includes('wallet_signing_key_does_not_match_active_address')) {
+            showKeyMismatchRecovery(err);
+            return;
+        }
+
+        alert('Unlock failed: ' + errMsg);
         // Do NOT change wallet state on failure
     }
 }
@@ -5373,11 +5517,13 @@ function updateHeaderWalletUi(){
     const hasWallet = bound && wallet;
     const walletPubKey = (walletSession.getPublicKey && walletSession.getPublicKey()) || '';
     const walletV1Capable = !!(walletSession.isWalletV1 && walletSession.isWalletV1() && walletPubKey);
+    const hasV1Address = !!(localStorage.getItem('wallet_v1_address'));
     const migrated = (walletSession.isMigrated && walletSession.isMigrated()) ? ' (migrated)' : '';
     const short = hasWallet ? ('V1 ' + wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4) + migrated) : 'Wallet V1';
+    const buttonText = walletV1Capable ? short : (hasV1Address ? 'Unlock Wallet V1' : 'Migrate to Wallet V1');
 
     if(statusEl){
-        document.getElementById('walletAddrShort').textContent = walletV1Capable ? short : 'Migrate to Wallet V1';
+        document.getElementById('walletAddrShort').textContent = buttonText;
         statusEl.style.display = 'flex';
         if(!statusEl.dataset.init){
             initWalletUiControls();

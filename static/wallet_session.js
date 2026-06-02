@@ -191,6 +191,89 @@
   function getMigrationInfo(){ return readJson(MIGRATION_META_KEY); }
   function isMigrated(){ const info = getMigrationInfo(); return !!(info.old_address && info.new_v1_address); }
 
+  async function restoreMigratedWallet(legacyAddress, migrationProof){
+    // Restore canonical V1 address from backend migration lookup
+    // Input: legacy/core THR address + optional migration proof (send_secret or migration tx id)
+    // Output: {ok: true, legacy_address, canonical_v1_address, migration_status, has_signing_material}
+    // Does NOT create, remigrate, or mutate canonical address
+    // Only persists canonical_v1_address returned by backend
+    try {
+      const normalized = normalizeAddress(legacyAddress);
+      if (!isValidThrAddress(normalized)) {
+        return {ok: false, error: 'Invalid legacy address format'};
+      }
+      if (isSystemWalletAddress(normalized)) {
+        return {ok: false, error: 'System wallets cannot be migrated'};
+      }
+
+      // Call backend to look up migration mapping
+      const response = await fetch('/api/wallet/v1/restore-migration', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          legacy_address: normalized,
+          migration_proof: migrationProof || '' // send_secret or migration tx id
+        })
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        return {
+          ok: false,
+          error: errData.error || `Backend error: ${response.status}`
+        };
+      }
+
+      const data = await response.json();
+      if (!data.ok) {
+        return {ok: false, error: data.error || 'Migration restore failed'};
+      }
+
+      // Validate response has canonical V1 address
+      const canonicalAddr = normalizeAddress(data.canonical_v1_address);
+      if (!isValidThrAddress(canonicalAddr)) {
+        return {ok: false, error: 'Backend returned invalid canonical address'};
+      }
+      if (isSystemWalletAddress(canonicalAddr)) {
+        return {ok: false, error: 'Backend returned system wallet address'};
+      }
+
+      // Persist canonical V1 address as active (do not remigrate)
+      localStorage.setItem(V1_ADDRESS_KEY, canonicalAddr);
+      localStorage.setItem(ADDRESS_KEY, canonicalAddr);
+
+      // Store migration info with restore metadata
+      const migrationInfo = {
+        ...getMigrationInfo(),
+        old_address: normalized,
+        new_v1_address: canonicalAddr,
+        migration_status: data.migration_status || 'confirmed',
+        restored_at: Date.now(),
+        restored_from: legacyAddress // For diagnostics only
+      };
+      localStorage.setItem(MIGRATION_META_KEY, JSON.stringify(migrationInfo));
+
+      // Clear any runtime signing material (must re-unlock or re-import for this canonical address)
+      unlockedPrivateKeyHex = null;
+      unlockedForAddress = null;
+      localStorage.setItem(LOCK_KEY, '1');
+
+      return {
+        ok: true,
+        legacy_address: normalized,
+        canonical_v1_address: canonicalAddr,
+        migration_status: data.migration_status || 'confirmed',
+        has_signing_material: data.has_signing_material || false,
+        wallet_origin: 'migration_restore'
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err && err.message ? err.message : 'Failed to restore migrated wallet'
+      };
+    }
+  }
+
   function getCredentialLookupAddress(address){
     const active = (address || getActiveAddress() || getAddress() || '').trim();
     const info = getMigrationInfo();
@@ -862,7 +945,7 @@
     getMigrationInfo, isMigrated, isVerifiedMigrationInfo, getCanonicalMigrationAddress, getLegacySourceAddress,
     getWalletOrigin, getWalletIdentityStatus, isWalletV1,
     createWalletV1, getPublicKey, canonicalTxMessage, signTransaction,
-    migrateLegacyWallet, encryptPrivateKeyHex, decryptPrivateKeyHex,
+    migrateLegacyWallet, restoreMigratedWallet, encryptPrivateKeyHex, decryptPrivateKeyHex,
     getCredentialLookupAddress, getSendSeed, setSendSeed, getSendSecret, setSendSecret,
     hasSigningMaterial, hasRuntimeSigningMaterial, getWalletAuthDiagnostics, logWalletAuthDiagnostics,
     getPin, setPin, isLocked, lockWallet, lock: lockWallet, unlockWallet, unlock: unlockWallet, unlock,

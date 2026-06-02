@@ -10737,6 +10737,73 @@ def api_wallet_thr_reconciliation_repair():
     return jsonify(proposal), 200
 
 
+@app.route("/api/wallet/v1/restore-migration", methods=["POST"])
+def api_wallet_v1_restore_migration():
+    """
+    Restore an existing migrated wallet from backend lookup.
+    Accepts legacy_address (required) and migration_proof (optional).
+    Looks up existing migration mapping without creating new wallets or mutating ledger.
+    Returns migration status with safe diagnostics only.
+    """
+    SYSTEM_WALLET_ADDRESS = "THR5DF27A86C477F381594E896F0E55357DEC5942BA"
+
+    def normalize_address(addr):
+        return (addr or "").strip().upper()
+
+    def is_system_wallet(addr):
+        return normalize_address(addr) == SYSTEM_WALLET_ADDRESS
+
+    data = request.get_json(silent=True) or {}
+    legacy_address = normalize_address(data.get("legacy_address", ""))
+    migration_proof = data.get("migration_proof", "")
+
+    if not legacy_address:
+        return jsonify({"ok": False, "error": "legacy_address_required"}), 400
+
+    if not validate_thr_address(legacy_address):
+        return jsonify({"ok": False, "error": "invalid_legacy_address_format"}), 400
+
+    if is_system_wallet(legacy_address):
+        return jsonify({"ok": False, "error": "system_wallet_cannot_be_restored"}), 400
+
+    try:
+        from wallet_v1_migration import _load_map
+        migration_map = _load_map() or {}
+        migration_record = migration_map.get(legacy_address) or {}
+
+        if not migration_record or "new_v1_address" not in migration_record:
+            return jsonify({"ok": False, "error": "migration_not_found"}), 404
+
+        canonical_v1_address = normalize_address(migration_record.get("new_v1_address"))
+
+        if not validate_thr_address(canonical_v1_address):
+            return jsonify({"ok": False, "error": "invalid_canonical_address_format"}), 500
+
+        if is_system_wallet(canonical_v1_address):
+            return jsonify({"ok": False, "error": "system_wallet_cannot_be_restored"}), 400
+
+        migration_status = migration_record.get("status") or "confirmed"
+        has_signing_material = bool(
+            migration_record.get("has_signing_material") or
+            migration_record.get("migration_tx_id") or
+            migration_record.get("verified")
+        )
+
+        return jsonify({
+            "ok": True,
+            "legacy_address": legacy_address,
+            "canonical_v1_address": canonical_v1_address,
+            "migration_status": migration_status,
+            "has_signing_material": has_signing_material,
+            "legacy_address_short": legacy_address[:10] + "...",
+            "canonical_v1_address_short": canonical_v1_address[:10] + "...",
+        }), 200
+
+    except Exception as e:
+        console_log(f"[wallet_v1_restore_migration] Error: {e}", level="error")
+        return jsonify({"ok": False, "error": "internal_error"}), 500
+
+
 @app.route("/api/last_hash")
 def api_last_hash():
     return last_block_hash()

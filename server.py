@@ -10741,9 +10741,10 @@ def api_wallet_thr_reconciliation_repair():
 def api_wallet_v1_restore_migration():
     """
     Restore an existing migrated wallet from backend lookup.
-    Accepts legacy_address (required) and migration_proof (optional).
+    Searches multiple sources: wallet_v1_migrations.json, pledge_chain, etc.
+    Accepts: legacy_address, canonical_v1_address, address, migration_proof (all optional)
     Looks up existing migration mapping without creating new wallets or mutating ledger.
-    Returns migration status with safe diagnostics only.
+    Returns migration status with safe diagnostics and migration_source.
     """
     SYSTEM_WALLET_ADDRESS = "THR5DF27A86C477F381594E896F0E55357DEC5942BA"
 
@@ -10755,48 +10756,73 @@ def api_wallet_v1_restore_migration():
 
     data = request.get_json(silent=True) or {}
     legacy_address = normalize_address(data.get("legacy_address", ""))
+    canonical_v1_address = normalize_address(data.get("canonical_v1_address", data.get("address", "")))
     migration_proof = data.get("migration_proof", "")
 
-    if not legacy_address:
-        return jsonify({"ok": False, "error": "legacy_address_required"}), 400
+    # At least one address must be provided
+    if not legacy_address and not canonical_v1_address:
+        return jsonify({"ok": False, "error": "legacy_address_or_canonical_required"}), 400
 
-    if not validate_thr_address(legacy_address):
+    # Validate provided addresses
+    if legacy_address and not validate_thr_address(legacy_address):
         return jsonify({"ok": False, "error": "invalid_legacy_address_format"}), 400
 
-    if is_system_wallet(legacy_address):
+    if canonical_v1_address and not validate_thr_address(canonical_v1_address):
+        return jsonify({"ok": False, "error": "invalid_canonical_address_format"}), 400
+
+    # Block system wallets
+    if legacy_address and is_system_wallet(legacy_address):
+        return jsonify({"ok": False, "error": "system_wallet_cannot_be_restored"}), 400
+
+    if canonical_v1_address and is_system_wallet(canonical_v1_address):
         return jsonify({"ok": False, "error": "system_wallet_cannot_be_restored"}), 400
 
     try:
-        from wallet_v1_migration import _load_map
-        migration_map = _load_map() or {}
-        migration_record = migration_map.get(legacy_address) or {}
+        from wallet_v1_migration import search_all_migration_sources
 
-        if not migration_record or "new_v1_address" not in migration_record:
-            return jsonify({"ok": False, "error": "migration_not_found"}), 404
-
-        canonical_v1_address = normalize_address(migration_record.get("new_v1_address"))
-
-        if not validate_thr_address(canonical_v1_address):
-            return jsonify({"ok": False, "error": "invalid_canonical_address_format"}), 500
-
-        if is_system_wallet(canonical_v1_address):
-            return jsonify({"ok": False, "error": "system_wallet_cannot_be_restored"}), 400
-
-        migration_status = migration_record.get("status") or "confirmed"
-        has_signing_material = bool(
-            migration_record.get("has_signing_material") or
-            migration_record.get("migration_tx_id") or
-            migration_record.get("verified")
+        # Search all available migration sources
+        result = search_all_migration_sources(
+            legacy_address=legacy_address,
+            canonical_v1_address=canonical_v1_address
         )
+
+        if not result:
+            return jsonify({
+                "ok": False,
+                "error": "migration_not_found",
+                "lookup_sources_checked": ["wallet_v1_migrations", "pledge_chain"]
+            }), 404
+
+        # Check for conflicts
+        if result.get("conflict"):
+            return jsonify({
+                "ok": False,
+                "error": result["conflict"],
+                "legacy_address_short": result["legacy_address"][:10] + "..." if result["legacy_address"] else None,
+                "canonical_v1_address_short": result["canonical_v1_address"][:10] + "..." if result["canonical_v1_address"] else None,
+                "lookup_sources_checked": result.get("lookup_sources_checked", [])
+            }), 400
+
+        # Final validation on result
+        final_legacy = normalize_address(result["legacy_address"])
+        final_canonical = normalize_address(result["canonical_v1_address"])
+
+        if not validate_thr_address(final_legacy) or not validate_thr_address(final_canonical):
+            return jsonify({"ok": False, "error": "invalid_address_in_migration_record"}), 500
+
+        if is_system_wallet(final_legacy) or is_system_wallet(final_canonical):
+            return jsonify({"ok": False, "error": "system_wallet_in_migration_record"}), 500
 
         return jsonify({
             "ok": True,
-            "legacy_address": legacy_address,
-            "canonical_v1_address": canonical_v1_address,
-            "migration_status": migration_status,
-            "has_signing_material": has_signing_material,
-            "legacy_address_short": legacy_address[:10] + "...",
-            "canonical_v1_address_short": canonical_v1_address[:10] + "...",
+            "legacy_address": final_legacy,
+            "canonical_v1_address": final_canonical,
+            "migration_status": result.get("migration_status", "confirmed"),
+            "migration_source": result.get("migration_source", "wallet_v1_migrations"),
+            "has_signing_material": result.get("has_signing_material", False),
+            "legacy_address_short": final_legacy[:10] + "...",
+            "canonical_v1_address_short": final_canonical[:10] + "...",
+            "lookup_sources_checked": result.get("lookup_sources_checked", []),
         }), 200
 
     except Exception as e:
@@ -10832,6 +10858,64 @@ def api_wallet_v1_routes():
             "total_wallet_routes": len(wallet_v1_routes)
         }), 200
     except Exception as e:
+        return jsonify({"ok": False, "error": "diagnostic_error"}), 500
+
+
+@app.route("/api/wallet/v1/migration-lookup-debug", methods=["GET"])
+def api_wallet_v1_migration_lookup_debug():
+    """
+    Diagnostic endpoint: debug migration lookup across all sources.
+    Safe diagnostics only - short addresses and source names, no secrets.
+    Query params: address (required), legacy_address, canonical_v1_address
+    """
+    def normalize_address(addr):
+        return (addr or "").strip().upper()
+
+    try:
+        address = normalize_address(request.args.get("address", ""))
+        legacy_address = normalize_address(request.args.get("legacy_address", ""))
+        canonical_v1_address = normalize_address(request.args.get("canonical_v1_address", ""))
+
+        # Use provided address as fallback
+        if not legacy_address and not canonical_v1_address and address:
+            legacy_address = address
+
+        if not legacy_address and not canonical_v1_address:
+            return jsonify({"ok": False, "error": "address_required"}), 400
+
+        if legacy_address and not validate_thr_address(legacy_address):
+            return jsonify({"ok": False, "error": "invalid_legacy_address"}), 400
+
+        if canonical_v1_address and not validate_thr_address(canonical_v1_address):
+            return jsonify({"ok": False, "error": "invalid_canonical_address"}), 400
+
+        from wallet_v1_migration import search_all_migration_sources
+
+        result = search_all_migration_sources(
+            legacy_address=legacy_address,
+            canonical_v1_address=canonical_v1_address
+        )
+
+        if result:
+            return jsonify({
+                "ok": True,
+                "found": True,
+                "legacy_address_short": result["legacy_address"][:10] + "...",
+                "canonical_v1_address_short": result["canonical_v1_address"][:10] + "...",
+                "migration_source": result.get("migration_source"),
+                "migration_status": result.get("migration_status"),
+                "lookup_sources_checked": result.get("lookup_sources_checked", []),
+                "has_signing_material": result.get("has_signing_material", False),
+            }), 200
+        else:
+            return jsonify({
+                "ok": True,
+                "found": False,
+                "lookup_sources_checked": ["wallet_v1_migrations", "pledge_chain"],
+            }), 200
+
+    except Exception as e:
+        console_log(f"[migration_lookup_debug] Error: {e}", level="error")
         return jsonify({"ok": False, "error": "diagnostic_error"}), 500
 
 

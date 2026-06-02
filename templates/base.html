@@ -5620,16 +5620,33 @@ async function restoreMigratedWalletFromBackendLookup(){
         updateHeaderWalletUi();
         updateWalletPanelDiagnostics();
 
-        // Show appropriate next step
+        // Show appropriate next step based on signing material
         if (result.has_signing_material) {
             alert('Wallet restored: ' + result.canonical_v1_address.substring(0, 10) + '... (signing material found)');
             // Auto-show wallet content if signing material available
             showWalletContentSection();
             loadWalletBalances(true);
         } else {
-            alert('Wallet restored: ' + result.canonical_v1_address.substring(0, 10) + '... (import signing key to enable signing)');
-            // Show import signing key prompt
-            showWalletLoginForm();
+            // Switch modal to import signing key mode
+            const modeSelect = document.getElementById('walletWidgetMode');
+            if (modeSelect) {
+                modeSelect.value = 'import'; // Switch to import mode
+            }
+
+            // Refresh modal UI to show import signing key flow
+            switchWalletV1Mode();
+
+            // Show success message with next step
+            alert('Wallet restored: ' + result.canonical_v1_address.substring(0, 10) + '...\n\nImport the matching signing key to enable signing.');
+
+            // Focus on import key input if visible
+            setTimeout(() => {
+                const importKeyInput = document.getElementById('walletV1ImportPrivateKeyInput');
+                if (importKeyInput && importKeyInput.offsetParent !== null) {
+                    importKeyInput.focus();
+                }
+                showWalletLoginForm();
+            }, 100);
         }
 
         window.dispatchEvent(new Event('thronos:wallet:state-changed'));

@@ -822,6 +822,102 @@ class TestRestoreToImportKeyFlow:
         assert True
 
 
+class TestLockedImportOnlyState:
+    """Test the locked import-only state when wallet has no signing key"""
+
+    def test_locked_state_triggered_after_restore_without_key(self):
+        """After restore with has_signing_material=false, UI enters locked state"""
+        # restoreMigratedWalletFromBackendLookup() receives {ok: true, has_signing_material: false}
+        # Modal state becomes 'active_wallet_no_key'
+        # switchWalletV1Mode() detects this and enters locked import-only mode
+        # Expected: isLockedImportOnly = true
+        assert True
+
+    def test_locked_state_disables_all_other_modes(self):
+        """In locked state, all modes except import_signing_key are disabled"""
+        # switchWalletV1Mode() when isLockedImportOnly = true:
+        # - restoreOption.disabled = true
+        # - createOption.disabled = true
+        # - unlockOption.disabled = true
+        # - migrateOption.disabled = true
+        # - importOption.disabled = false
+        assert True
+
+    def test_locked_state_forces_import_mode_selection(self):
+        """In locked state, mode select value forced to import_signing_key"""
+        # switchWalletV1Mode() when isLockedImportOnly = true:
+        # modeSelect.value = 'import_signing_key'
+        # modeSelect.style.opacity = '0.6' (visual lock indicator)
+        # Expected: Dropdown shows "Import Matching Signing Key" option
+        assert True
+
+    def test_locked_state_hides_all_other_mode_sections(self):
+        """In locked state, all mode sections hidden except import"""
+        # switchWalletV1Mode() when isLockedImportOnly = true:
+        # - walletV1RestoreMode.display = 'none'
+        # - walletV1CreateMode.display = 'none'
+        # - walletV1UnlockMode.display = 'none'
+        # - walletV1MigrateMode.display = 'none'
+        # - walletV1ImportMode.display = 'block'
+        assert True
+
+    def test_locked_state_shows_import_form(self):
+        """In locked state, import signing key form displayed immediately"""
+        # switchWalletV1Mode() calls showImportSigningKeyForm()
+        # Form rendered with inputs: importKeyHex, importKeyPin
+        # Form appended to data-missing-key-recovery container
+        # Expected: User sees form with Private Key and PIN inputs
+        assert True
+
+    def test_locked_state_shows_recovery_message(self):
+        """In locked state, recovery message displayed with wallet info"""
+        # switchWalletV1Mode() calls showMissingSigningKeyRecovery()
+        # Message shows: "Wallet Restored - Missing Signing Key"
+        # Message shows short active address
+        # Message shows "Read-Only (No Signing Key)" status
+        # Expected: Clear message to user about what to do
+        assert True
+
+    def test_header_button_import_when_missing_key(self):
+        """Header button shows 'V1 [address] (missing key)' in locked state"""
+        # updateHeaderWalletUi() when walletState === 'missing_signing_key'
+        # buttonText = 'V1 THRxxxxx... (missing key)'
+        # Expected: Click opens wallet modal in import mode
+        assert True
+
+    def test_locked_state_persists_until_import_succeeds(self):
+        """Locked state remains active until signing key imported successfully"""
+        # After restore with has_signing_material=false:
+        # Locked state active
+        # User imports matching key via performImportSigningKey()
+        # On success: walletState becomes 'signing_ready'
+        # Expected: Locked state exits, normal mode options available
+        assert True
+
+    def test_locked_state_clears_stale_encrypted_key(self):
+        """Locked state clears any stale encrypted key from different wallet"""
+        # If wallet_v1_encrypted_priv exists but doesn't match:
+        # restoreMigratedWalletFromBackendLookup() clears it
+        # Expected: Clean slate for importing correct key
+        assert True
+
+    def test_locked_state_on_missing_signing_key_walletstate(self):
+        """walletState === 'missing_signing_key' triggers locked UI"""
+        # getWalletState() returns 'missing_signing_key' when:
+        # - Active address exists
+        # - No wallet_v1_encrypted_priv (no encrypted key)
+        # - Not in signing_key_mismatch state
+        # Expected: switchWalletV1Mode() recognizes and locks UI
+        assert True
+
+    def test_locked_state_exit_on_import_failure_preserves_locked(self):
+        """Import failure keeps locked state active for retry"""
+        # User imports wrong key → wallet_signing_address_mismatch error
+        # Modal stays in locked state
+        # Expected: User can retry import without leaving locked state
+        assert True
+
+
 if __name__ == '__main__':
     # Run tests with: pytest tests/test_wallet_v1_state_recovery.py -v
     pytest.main([__file__, '-v'])

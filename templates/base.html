@@ -1602,6 +1602,7 @@
                     <option value="migrate">Migrate Legacy Wallet</option>
                     <option value="unlock">Unlock Wallet V1</option>
                     <option value="create">Create Wallet V1</option>
+                    <option value="import_signing_key">Import Matching Signing Key</option>
                 </select>
 
                 <!-- UNLOCK MODE: Only PIN + Unlock button -->
@@ -1656,6 +1657,17 @@
                     <div style="font-size:11px; color:#9f9; opacity:0.7; margin-top:6px;">
                         Stored locally (wallet_v1_address, encrypted key material, wallet_pin).
                     </div>
+                </div>
+
+                <!-- IMPORT SIGNING KEY MODE: Locked import-only state -->
+                <div id="walletV1ImportMode" style="display:none; margin-top:10px; border-top:1px solid #ff9900; padding-top:10px;">
+                    <div style="background:#1a1a1a; border:1px solid #ff9900; border-radius:8px; padding:15px; margin-bottom:10px;">
+                        <h5 style="color:#ff9900; margin-top:0;">⚠️ Wallet Restored - Missing Signing Key</h5>
+                        <p style="font-size:0.9em; line-height:1.5; color:#ccc;">
+                            Your wallet has been successfully restored. To enable signing and transactions, you must import the matching signing key.
+                        </p>
+                    </div>
+                    <div data-missing-key-recovery></div>
                 </div>
 
                 <!-- DIAGNOSTICS: Safe state information (no secrets) -->
@@ -5206,6 +5218,7 @@ function switchWalletV1Mode(){
     const migrateEl = document.getElementById('walletV1MigrateMode');
     const restoreEl = document.getElementById('walletV1RestoreMode');
     const createEl = document.getElementById('walletV1CreateMode');
+    const importEl = document.getElementById('walletV1ImportMode');
 
     // Get current modal state for pledge-backed wallet flow
     const modalState = walletSession.getModalState ? walletSession.getModalState() : 'no_active_wallet';
@@ -5213,54 +5226,69 @@ function switchWalletV1Mode(){
     const allowWebCreate = window.WALLET_V1_ALLOW_WEB_CREATE === true || window.WALLET_V1_ALLOW_WEB_CREATE === '1';
 
     // Determine which modes are allowed based on wallet state
-    const createAllowed = allowWebCreate || hasPledge; // Allow create if feature flag OR pledge confirmed
+    const createAllowed = allowWebCreate || hasPledge;
     const unlockAllowed = modalState === 'active_wallet_with_encrypted_key' || modalState === 'signing_ready';
     const importAllowed = modalState === 'active_wallet_no_key';
-    const restoreAllowed = modalState === 'no_active_wallet'; // Restore always available when no wallet
+    const restoreAllowed = modalState === 'no_active_wallet';
+
+    // When wallet has no signing key, force import-only mode (locked state)
+    const isLockedImportOnly = modalState === 'active_wallet_no_key';
 
     // Update mode select options visibility/disabled state
     const restoreOption = document.querySelector('option[value="restore"]');
     const createOption = document.querySelector('option[value="create"]');
     const unlockOption = document.querySelector('option[value="unlock"]');
     const migrateOption = document.querySelector('option[value="migrate"]');
+    const importOption = document.querySelector('option[value="import_signing_key"]');
+    const modeSelect = document.getElementById('walletWidgetMode');
 
-    if (restoreOption) restoreOption.disabled = !restoreAllowed;
-    if (createOption) createOption.disabled = !createAllowed;
-    if (unlockOption) unlockOption.disabled = !unlockAllowed;
-    if (migrateOption) migrateOption.disabled = false; // Migrate always available
+    // In locked import-only state, disable all other options
+    if (isLockedImportOnly) {
+        if (restoreOption) restoreOption.disabled = true;
+        if (createOption) createOption.disabled = true;
+        if (unlockOption) unlockOption.disabled = true;
+        if (migrateOption) migrateOption.disabled = true;
+        if (importOption) importOption.disabled = false;
+        if (modeSelect) {
+            modeSelect.value = 'import_signing_key';
+            modeSelect.style.opacity = '0.6'; // Visual indication of locked state
+        }
+    } else {
+        if (restoreOption) restoreOption.disabled = !restoreAllowed;
+        if (createOption) createOption.disabled = !createAllowed;
+        if (unlockOption) unlockOption.disabled = !unlockAllowed;
+        if (migrateOption) migrateOption.disabled = false;
+        if (importOption) importOption.disabled = !importAllowed;
+        if (modeSelect) modeSelect.style.opacity = '1'; // Normal state
+    }
 
     // Auto-select appropriate mode based on state
     let displayMode = mode;
-    const modeSelect = document.getElementById('walletWidgetMode');
 
-    if (modalState === 'no_active_wallet') {
-        // No active wallet - show restore/migrate options
-        displayMode = mode === 'restore' || mode === 'migrate' ? mode : 'restore';
-        if (modeSelect && !mode) modeSelect.value = 'restore'; // Default to restore
-    } else if (modalState === 'active_wallet_no_key') {
-        // Active wallet but no signing key - show import/restore prompt
-        displayMode = 'import'; // Special mode for import signing key
+    if (isLockedImportOnly) {
+        // Locked import-only state - force import_signing_key mode
+        displayMode = 'import_signing_key';
+
+        // Hide all other mode sections
+        if (restoreEl) restoreEl.style.display = 'none';
         if (createEl) createEl.style.display = 'none';
         if (unlockEl) unlockEl.style.display = 'none';
         if (migrateEl) migrateEl.style.display = 'none';
 
-        // Show import signing key UI
-        const importMsg = document.getElementById('walletActiveNoKeyMsg');
-        if (!importMsg) {
-            const container = document.getElementById('walletLoginSection');
-            if (container) {
-                const msg = document.createElement('div');
-                msg.id = 'walletActiveNoKeyMsg';
-                msg.style.cssText = 'background:#1a2a1a; border:1px solid #00ff66; border-radius:8px; padding:12px; margin:10px 0; color:#00ff66; font-size:0.9em;';
-                msg.innerHTML = '✓ Wallet address found. <strong>Import the matching signing key to enable signing.</strong>';
-                container.insertBefore(msg, container.firstChild);
-            }
-        }
-        return;
+        // Show import key form and recovery message
+        if (importEl) importEl.style.display = 'block';
+        showMissingSigningKeyRecovery();
+        showImportSigningKeyForm();
+
+        return; // Exit early for locked state
+    } else if (modalState === 'no_active_wallet') {
+        // No active wallet - show restore/migrate options
+        displayMode = mode === 'restore' || mode === 'migrate' ? mode : 'restore';
+        if (modeSelect && !mode) modeSelect.value = 'restore';
     } else if (unlockAllowed && mode === 'unlock') {
         displayMode = 'unlock';
-    } else if (importAllowed && mode === 'import') {
-        displayMode = 'import';
+    } else if (importAllowed && mode === 'import_signing_key') {
+        displayMode = 'import_signing_key';
     } else if (!createAllowed && mode === 'create') {
         displayMode = 'migrate';
         if (modeSelect) modeSelect.value = 'migrate';
@@ -5271,6 +5299,7 @@ function switchWalletV1Mode(){
     if (createEl) createEl.style.display = (displayMode === 'create' && createAllowed) ? 'block' : 'none';
     if (unlockEl) unlockEl.style.display = (displayMode === 'unlock' && unlockAllowed) ? 'block' : 'none';
     if (migrateEl) migrateEl.style.display = (displayMode === 'migrate') ? 'block' : 'none';
+    if (importEl) importEl.style.display = (displayMode === 'import_signing_key' && importAllowed) ? 'block' : 'none';
 
     // Show appropriate state message
     const existingMsgs = document.querySelectorAll('[data-wallet-state-msg]');

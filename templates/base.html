@@ -5363,7 +5363,7 @@ async function unlockWalletV1FromHeader(){
         const ok = await walletSession.unlockWallet({ pin, address: candidateAddress });
 
         if (!ok) {
-            console.warn('[UnlockWallet] Unlock returned false - wrong PIN?');
+            console.warn('[UnlockWallet] PIN decrypt failed - wrong PIN');
             return alert('Unlock failed - wrong PIN or wallet not found');
         }
 
@@ -5381,6 +5381,7 @@ async function unlockWalletV1FromHeader(){
         }
         console.info('[UnlockWallet] Success:', activeAddress.substring(0, 10) + '...');
         walletSession.setBound(true);
+        document.getElementById('walletWidgetUnlockPin').value = '';
         showWalletContentSection();
         updateHeaderWalletUi();
         loadWalletBalances(true);
@@ -5392,11 +5393,22 @@ async function unlockWalletV1FromHeader(){
         console.error('[UnlockWallet] Failed:', err.message, err.code);
         const errMsg = err.message || 'Unknown error';
 
+        // Key mismatch: PIN decrypt succeeded but address doesn't match
         if (errMsg.includes('wallet_signing_key_does_not_match_active_address')) {
+            console.error('[UnlockWallet] Key mismatch detected - stored key belongs to different address');
+            document.getElementById('walletWidgetUnlockPin').value = '';
+            // Persist the candidate address so header shows "Unlock Wallet V1" not "Migrate"
+            if (!localStorage.getItem('wallet_v1_address') || localStorage.getItem('wallet_v1_address') !== candidateAddress) {
+                localStorage.setItem('wallet_v1_address', candidateAddress);
+                localStorage.setItem('thr_address', candidateAddress);
+            }
+            updateHeaderWalletUi();
             showKeyMismatchRecovery(err);
             return;
         }
 
+        // Other unlock failures (wrong PIN, missing material, etc)
+        console.error('[UnlockWallet] Unlock error:', errMsg);
         alert('Unlock failed: ' + errMsg);
         // Do NOT change wallet state on failure
     }

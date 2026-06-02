@@ -140,7 +140,7 @@ def test_signing_key_mismatch_displays_safe_diagnostics():
 
 def test_signing_key_mismatch_preserves_active_canonical_address():
     assert "activeNormalized && derivedNormalized && activeNormalized !== derivedNormalized" in STATIC_SESSION
-    assert "wallet_signing_address_mismatch" in STATIC_SESSION
+    assert "wallet_signing_key_does_not_match_active_address" in STATIC_SESSION
     # Active address should not be cleared on mismatch
     assert "unlockedForAddress = null" in STATIC_SESSION
 
@@ -148,7 +148,7 @@ def test_signing_key_mismatch_preserves_active_canonical_address():
 def test_signing_key_mismatch_clears_runtime_signing_material():
     assert "unlockedPrivateKeyHex = null" in STATIC_SESSION
     # Should clear on mismatch catch
-    assert "if ((err.message || '').includes('wallet_signing_address_mismatch')) {" in STATIC_SESSION
+    assert "if ((err.message || '').includes('wallet_signing_key_does_not_match_active_address')) {" in STATIC_SESSION
 
 
 def test_clear_local_signing_key_removes_encrypted_seed_but_keeps_active_address():
@@ -276,3 +276,24 @@ def test_restore_migrated_wallet_safe_diagnostics():
     restore_section = STATIC_SESSION[STATIC_SESSION.index("RestoreToMigrated"):STATIC_SESSION.index("RestoreToMigrated") + 500]
     forbidden = ["privateKey", "private_key", "pin", "PIN", "send_secret", "sendSeed", "auth_secret"]
     assert not any(secret in restore_section for secret in forbidden)
+
+
+def test_pin_success_with_mismatched_derived_address_distinguished():
+    assert "wallet_signing_key_does_not_match_active_address" in STATIC_SESSION
+    assert "decrypt_succeeded" in STATIC_SESSION
+    assert "KEY_MISMATCH" in STATIC_SESSION
+
+
+def test_wallet_auth_handles_key_mismatch_error_code():
+    assert "wallet_signing_key_does_not_match_active_address" in STATIC_AUTH
+    assert "WALLET_SIGNING_KEY_MISMATCH" in STATIC_AUTH
+    assert "PIN accepted, but the stored signing key belongs to another wallet" in STATIC_AUTH
+
+
+def test_key_mismatch_preserves_active_canonical_address():
+    run_wallet_session(f"""
+const activeAddr = {json.dumps(CANONICAL)};
+localStorage.setItem('wallet_v1_address', activeAddr);
+localStorage.setItem('thr_address', activeAddr);
+assert.strictEqual(walletSession.getActiveAddress(), activeAddr);
+""")

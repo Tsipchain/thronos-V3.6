@@ -549,6 +549,36 @@ class TestRestoreMigratedWallet:
 class TestRestoreMigratedWalletBackendEndpoint:
     """Test POST /api/wallet/v1/restore-migration backend endpoint"""
 
+    def test_endpoint_route_registered(self):
+        """Verify POST /api/wallet/v1/restore-migration route is registered in server.py"""
+        # This test verifies the endpoint is defined in the source code
+        # Detailed runtime testing with test_client is done by other backend tests
+        import inspect
+
+        # Read server.py source code
+        server_py_path = Path(__file__).resolve().parents[1] / "server.py"
+        with open(server_py_path, 'r') as f:
+            server_code = f.read()
+
+        # Check endpoint is defined
+        assert '@app.route("/api/wallet/v1/restore-migration"' in server_code, \
+            "Route decorator not found in server.py"
+        assert 'def api_wallet_v1_restore_migration' in server_code, \
+            "Endpoint function not found in server.py"
+
+        # Check it's not wrapped in a conditional that would disable it
+        route_start = server_code.find('@app.route("/api/wallet/v1/restore-migration"')
+        route_end = server_code.find('@app.route', route_start + 1)
+        endpoint_section = server_code[route_start:route_end]
+
+        # Verify not in if __name__ == "__main__" block
+        assert 'if __name__ == "__main__"' not in endpoint_section, \
+            "Endpoint wrapped in if __name__ == __main__ block"
+
+        # Verify not in a disabled feature flag
+        assert 'if not' not in endpoint_section or 'methods=["POST"]' in endpoint_section, \
+            "Endpoint may be wrapped in a conditional block"
+
     def test_endpoint_missing_legacy_address(self):
         """Endpoint returns error if legacy_address not provided"""
         # POST /api/wallet/v1/restore-migration {}

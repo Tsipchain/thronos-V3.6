@@ -10804,6 +10804,37 @@ def api_wallet_v1_restore_migration():
         return jsonify({"ok": False, "error": "internal_error"}), 500
 
 
+@app.route("/api/wallet/v1/routes", methods=["GET"])
+def api_wallet_v1_routes():
+    """
+    Diagnostic endpoint: list registered wallet v1 routes.
+    Safe diagnostics only - route names and methods, no secrets.
+    """
+    try:
+        wallet_v1_routes = []
+        for rule in app.url_map.iter_rules():
+            route_str = str(rule)
+            if "/wallet/v1/" in route_str or "/api/wallet/" in route_str:
+                wallet_v1_routes.append({
+                    "route": route_str,
+                    "methods": sorted(list(rule.methods - {"HEAD", "OPTIONS"}))
+                })
+
+        restore_migration_found = any(
+            "/api/wallet/v1/restore-migration" in r["route"]
+            for r in wallet_v1_routes
+        )
+
+        return jsonify({
+            "ok": True,
+            "routes": sorted(wallet_v1_routes, key=lambda r: r["route"]),
+            "restore_migration_registered": restore_migration_found,
+            "total_wallet_routes": len(wallet_v1_routes)
+        }), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": "diagnostic_error"}), 500
+
+
 @app.route("/api/last_hash")
 def api_last_hash():
     return last_block_hash()

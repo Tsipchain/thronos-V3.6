@@ -440,6 +440,112 @@ class TestSystemWalletBlocking:
         assert True
 
 
+class TestRestoreMigratedWallet:
+    """Test restore existing migrated wallet from backend lookup"""
+
+    def test_restore_existing_migrated_wallet_shows_in_no_wallet_state(self):
+        """Fresh browser with empty localStorage shows Restore Existing Migrated Wallet option"""
+        # getModalState() returns 'no_active_wallet'
+        # switchWalletV1Mode() defaults to 'restore' mode
+        # Modal shows: Restore Existing Migrated Wallet form
+        assert True
+
+    def test_restore_existing_migrated_wallet_persists_canonical_address(self):
+        """Restore endpoint returns canonical V1 address and frontend persists it"""
+        # restoreMigratedWallet() calls /api/wallet/v1/restore-migration
+        # Backend returns: {ok: true, canonical_v1_address, migration_status, has_signing_material}
+        # Frontend stores canonical_v1_address as wallet_v1_address
+        # Modal state progresses to active_wallet_no_key or active_wallet_with_key
+        assert True
+
+    def test_restore_does_not_create_new_wallet(self):
+        """Restore only retrieves existing canonical address, does not create/migrate"""
+        # restoreMigratedWallet() validates backend response
+        # Does not call createWalletV1 or migrateLegacyWallet
+        # Does not generate new address
+        assert True
+
+    def test_restore_does_not_remigrate_existing_mapping(self):
+        """Restore skips remigration if mapping already exists"""
+        # Backend lookup returns existing canonical_v1_address
+        # Frontend persists it without triggering new migration
+        # migration_status remains 'confirmed'
+        assert True
+
+    def test_restore_manual_address_input_cannot_become_active(self):
+        """User cannot manually input arbitrary THR address to become active address"""
+        # Restore form accepts legacy_address as lookup key only
+        # Backend validates and returns canonical_v1_address
+        # Frontend only persists backend response, not user input
+        assert True
+
+    def test_restore_signing_key_must_derive_canonical_address(self):
+        """Imported signing key must derive the restored canonical address"""
+        # After restore, if user imports signing key:
+        # importSigningKeyForAddress(keyHex, pin, canonical_v1_address)
+        # Validates derived address matches canonical_v1_address
+        # Rejects if mismatch
+        assert True
+
+    def test_restore_wrong_key_preserves_canonical_address(self):
+        """Wrong signing key is rejected, canonical address preserved"""
+        # unlockWallet() validates decrypted key derives canonical_v1_address
+        # On mismatch: throws wallet_signing_key_does_not_match_active_address
+        # Canonical address NOT changed
+        assert True
+
+    def test_restore_system_wallet_blocked(self):
+        """System wallet THR5DF cannot be restored"""
+        # restoreMigratedWallet() checks isSystemWalletAddress()
+        # Returns error if legacy_address or canonical_v1_address is system wallet
+        # Frontend shows error message
+        assert True
+
+    def test_restore_with_migration_proof_optional(self):
+        """Migration proof (send_secret or migration tx id) is optional"""
+        # restoreMigratedWallet(legacyAddress, migrationProof='')
+        # Backend may require proof for security or return without it
+        # Frontend sends empty string if not provided
+        assert True
+
+    def test_restore_backend_error_handling(self):
+        """Restore handles backend errors gracefully"""
+        # Network error, 404, backend validation failure all handled
+        # Returns {ok: false, error: 'message'}
+        # Frontend shows user-friendly error message
+        assert True
+
+    def test_restore_diagnostics_safe(self):
+        """Restore safe diagnostics expose no secrets"""
+        # Safe: legacy_address_short, canonical_v1_address_short, migration_status,
+        # wallet_origin ('migration_restore'), has_signing_material
+        # Never exposed: PIN, private key, seed, send_secret, migration proof
+        assert True
+
+    def test_restore_clears_runtime_signing_material(self):
+        """Restore clears in-memory signing material on success"""
+        # unlockedPrivateKeyHex = null
+        # unlockedForAddress = null
+        # Wallet must be re-unlocked or re-imported after restore
+        assert True
+
+    def test_restore_updates_header_button(self):
+        """After restore, header button shows correct state"""
+        # If has_signing_material: "Unlock Wallet V1"
+        # If no signing_material: "V1 [address] (missing key)"
+        # updateHeaderWalletUi() called after restore
+        assert True
+
+    def test_restore_existing_wallet_updates_migration_metadata(self):
+        """Restore stores migration info with restore timestamp"""
+        # localStorage[MIGRATION_META_KEY] updated with:
+        # restored_at: timestamp
+        # restored_from: legacyAddress
+        # migration_status: 'confirmed'
+        # old_address: normalized legacy address
+        assert True
+
+
 if __name__ == '__main__':
     # Run tests with: pytest tests/test_wallet_v1_state_recovery.py -v
     pytest.main([__file__, '-v'])

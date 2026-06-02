@@ -1598,9 +1598,10 @@
                 <input type="text" id="walletWidgetThrAddress" placeholder="THR..." />
 <label for="walletWidgetMode">Mode</label>
                 <select id="walletWidgetMode" onchange="switchWalletV1Mode()" style="width:100%;padding:8px;background:#000;border:1px solid #00ff66;color:#00ff66;">
-                    <option value="create">Create Wallet V1</option>
-                    <option value="unlock">Unlock Wallet V1</option>
+                    <option value="restore">Restore Existing Migrated Wallet</option>
                     <option value="migrate">Migrate Legacy Wallet</option>
+                    <option value="unlock">Unlock Wallet V1</option>
+                    <option value="create">Create Wallet V1</option>
                 </select>
 
                 <!-- UNLOCK MODE: Only PIN + Unlock button -->
@@ -1615,6 +1616,20 @@
                         <div style="font-size:11px; color:#9f9; opacity:0.7; margin-top:6px;">
                             Restore to your previously migrated wallet address.
                         </div>
+                    </div>
+                </div>
+
+                <!-- RESTORE MODE: Restore existing migrated wallet from backend lookup -->
+                <div id="walletV1RestoreMode" style="display:none; margin-top:10px; border-top:1px solid #0a4a1a; padding-top:10px;">
+                    <div style="font-size:10px; color:#00ff66; background:#0a1a0a; padding:8px; border-radius:6px; margin-bottom:10px;">
+                        ✓ Restore a previously migrated wallet from your legacy address.
+                    </div>
+                    <label for="walletWidgetRestoreLegacyAddress">Legacy THR Address</label>
+                    <input type="text" id="walletWidgetRestoreLegacyAddress" placeholder="THR..." />
+                    <label for="walletWidgetRestoreMigrationProof">Migration Proof (optional: send secret or migration tx id)</label>
+                    <input type="password" id="walletWidgetRestoreMigrationProof" placeholder="send_secret or migration proof" />
+                    <div class="wallet-modal-actions" style="margin-top:10px;">
+                        <button class="primary" style="background:#0a6a2a;" onclick="restoreMigratedWalletFromBackendLookup()">Restore Migrated Wallet</button>
                     </div>
                 </div>
 
@@ -5186,9 +5201,10 @@ async function submitHeaderWalletLogin(){
 }
 
 function switchWalletV1Mode(){
-    const mode = document.getElementById('walletWidgetMode')?.value || 'create';
+    const mode = document.getElementById('walletWidgetMode')?.value || 'restore';
     const unlockEl = document.getElementById('walletV1UnlockMode');
     const migrateEl = document.getElementById('walletV1MigrateMode');
+    const restoreEl = document.getElementById('walletV1RestoreMode');
     const createEl = document.getElementById('walletV1CreateMode');
 
     // Get current modal state for pledge-backed wallet flow
@@ -5200,12 +5216,15 @@ function switchWalletV1Mode(){
     const createAllowed = allowWebCreate || hasPledge; // Allow create if feature flag OR pledge confirmed
     const unlockAllowed = modalState === 'active_wallet_with_encrypted_key' || modalState === 'signing_ready';
     const importAllowed = modalState === 'active_wallet_no_key';
+    const restoreAllowed = modalState === 'no_active_wallet'; // Restore always available when no wallet
 
     // Update mode select options visibility/disabled state
+    const restoreOption = document.querySelector('option[value="restore"]');
     const createOption = document.querySelector('option[value="create"]');
     const unlockOption = document.querySelector('option[value="unlock"]');
     const migrateOption = document.querySelector('option[value="migrate"]');
 
+    if (restoreOption) restoreOption.disabled = !restoreAllowed;
     if (createOption) createOption.disabled = !createAllowed;
     if (unlockOption) unlockOption.disabled = !unlockAllowed;
     if (migrateOption) migrateOption.disabled = false; // Migrate always available
@@ -5215,9 +5234,9 @@ function switchWalletV1Mode(){
     const modeSelect = document.getElementById('walletWidgetMode');
 
     if (modalState === 'no_active_wallet') {
-        // No active wallet - must pledge/migrate first
-        displayMode = 'migrate';
-        if (modeSelect) modeSelect.value = 'migrate';
+        // No active wallet - show restore/migrate options
+        displayMode = mode === 'restore' || mode === 'migrate' ? mode : 'restore';
+        if (modeSelect && !mode) modeSelect.value = 'restore'; // Default to restore
     } else if (modalState === 'active_wallet_no_key') {
         // Active wallet but no signing key - show import/restore prompt
         displayMode = 'import'; // Special mode for import signing key
@@ -5248,6 +5267,7 @@ function switchWalletV1Mode(){
     }
 
     // Show/hide mode sections based on state
+    if (restoreEl) restoreEl.style.display = (displayMode === 'restore' && restoreAllowed) ? 'block' : 'none';
     if (createEl) createEl.style.display = (displayMode === 'create' && createAllowed) ? 'block' : 'none';
     if (unlockEl) unlockEl.style.display = (displayMode === 'unlock' && unlockAllowed) ? 'block' : 'none';
     if (migrateEl) migrateEl.style.display = (displayMode === 'migrate') ? 'block' : 'none';
@@ -5262,7 +5282,10 @@ function switchWalletV1Mode(){
             const msg = document.createElement('div');
             msg.setAttribute('data-wallet-state-msg', '1');
             msg.style.cssText = 'background:#1a1a1a; border:1px solid #ff9900; border-radius:8px; padding:12px; margin:10px 0; color:#ff9900; font-size:0.9em;';
-            msg.textContent = '⚠️ Complete pledge, migrate legacy wallet, or restore a verified wallet before unlocking.';
+            const msgText = displayMode === 'restore'
+                ? '📥 Enter your legacy wallet address to restore the previously migrated V1 wallet.'
+                : '⚠️ Complete pledge, migrate legacy wallet, or restore a verified wallet before unlocking.';
+            msg.textContent = msgText;
             loginSection.insertBefore(msg, loginSection.firstChild);
         }
     }
@@ -5556,6 +5579,63 @@ async function unlockWalletV1FromHeader(){
         console.error('[UnlockWallet] Unlock error:', errMsg);
         alert('Unlock failed: ' + errMsg);
         // Do NOT change wallet state on failure
+    }
+}
+
+async function restoreMigratedWalletFromBackendLookup(){
+    // Restore canonical V1 address by querying backend migration lookup
+    // User has previously migrated but browser cache is empty
+    const legacyAddress = (document.getElementById('walletWidgetRestoreLegacyAddress')?.value || '').trim();
+    const migrationProof = (document.getElementById('walletWidgetRestoreMigrationProof')?.value || '').trim();
+
+    if (!legacyAddress) return alert('Legacy address is required');
+    if (!legacyAddress.startsWith('THR') || legacyAddress.length < 20) {
+        return alert('Invalid legacy address format. Must start with THR and be at least 20 characters.');
+    }
+
+    if (!walletSession.restoreMigratedWallet) return alert('Restore API unavailable');
+
+    try {
+        console.info('[RestoreMigratedWalletFromBackend] Restoring from legacy address:', legacyAddress.substring(0, 10) + '...');
+
+        const result = await walletSession.restoreMigratedWallet(legacyAddress, migrationProof);
+
+        if (!result.ok) {
+            return alert('Restore failed: ' + (result.error || 'Unknown error'));
+        }
+
+        // Clear input fields
+        const addrInput = document.getElementById('walletWidgetRestoreLegacyAddress');
+        const proofInput = document.getElementById('walletWidgetRestoreMigrationProof');
+        if (addrInput) addrInput.value = '';
+        if (proofInput) proofInput.value = '';
+
+        console.info('[RestoreMigratedWalletFromBackend] Success:', {
+            canonical_v1_address_short: result.canonical_v1_address.substring(0, 10) + '...',
+            migration_status: result.migration_status,
+            has_signing_material: result.has_signing_material
+        });
+
+        // Update UI to reflect restored state
+        updateHeaderWalletUi();
+        updateWalletPanelDiagnostics();
+
+        // Show appropriate next step
+        if (result.has_signing_material) {
+            alert('Wallet restored: ' + result.canonical_v1_address.substring(0, 10) + '... (signing material found)');
+            // Auto-show wallet content if signing material available
+            showWalletContentSection();
+            loadWalletBalances(true);
+        } else {
+            alert('Wallet restored: ' + result.canonical_v1_address.substring(0, 10) + '... (import signing key to enable signing)');
+            // Show import signing key prompt
+            showWalletLoginForm();
+        }
+
+        window.dispatchEvent(new Event('thronos:wallet:state-changed'));
+    } catch(err) {
+        console.error('[RestoreMigratedWalletFromBackend] Restore failed:', err.message);
+        alert('Restore failed: ' + (err.message || 'Unknown error'));
     }
 }
 

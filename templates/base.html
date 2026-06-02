@@ -213,7 +213,7 @@
         display: none;
         align-items: center;
         gap: 6px;
-        position: relative;
+        position: static;
         white-space: nowrap;
         flex-shrink: 0;
     }
@@ -291,28 +291,25 @@
     /* Wallet Balance Popup Widget */
     .wallet-balance-popup {
         display: none;
-        position: absolute;
+        position: fixed;
         bottom: auto;
-        width: min(360px, calc(100vw - 48px));
-        max-width: calc(100vw - 48px);
+        max-width: min(320px, calc(100vw - 32px));
         background: linear-gradient(135deg, #000000 0%, #071810 50%, #000000 100%);
         border: 2px solid;
         border-image: linear-gradient(135deg, #d4af37 0%, #00ff66 50%, #ffd700 100%) 1;
         border-radius: 12px;
         padding: 15px;
+        min-width: 280px;
         box-shadow: 0 0 30px rgba(0, 255, 102, 0.3), 0 0 15px rgba(255, 215, 0, 0.2);
-        z-index: 3900;
+        z-index: 3800;
         overflow-y: auto;
         overflow-x: hidden;
         color: #e6ffe5;
         backdrop-filter: blur(10px);
         pointer-events: auto;
-        top: 100%;
-        right: 0;
-        margin-top: 8px;
+        top: 70px;
+        right: 12px;
         max-height: 70vh;
-        box-sizing: border-box;
-        transform: translateX(0);
     }
     .music-modal.open {
         display: flex;
@@ -5363,7 +5360,7 @@ async function unlockWalletV1FromHeader(){
         const ok = await walletSession.unlockWallet({ pin, address: candidateAddress });
 
         if (!ok) {
-            console.warn('[UnlockWallet] Unlock returned false - wrong PIN?');
+            console.warn('[UnlockWallet] Unlock returned false - PIN decrypt failed');
             return alert('Unlock failed - wrong PIN or wallet not found');
         }
 
@@ -5381,6 +5378,7 @@ async function unlockWalletV1FromHeader(){
         }
         console.info('[UnlockWallet] Success:', activeAddress.substring(0, 10) + '...');
         walletSession.setBound(true);
+        document.getElementById('walletWidgetUnlockPin').value = '';
         showWalletContentSection();
         updateHeaderWalletUi();
         loadWalletBalances(true);
@@ -5392,11 +5390,20 @@ async function unlockWalletV1FromHeader(){
         console.error('[UnlockWallet] Failed:', err.message, err.code);
         const errMsg = err.message || 'Unknown error';
 
+        // Key mismatch: address doesn't match but PIN succeeded
         if (errMsg.includes('wallet_signing_key_does_not_match_active_address')) {
+            document.getElementById('walletWidgetUnlockPin').value = '';
+            // Persist the candidate address so header shows "Unlock Wallet V1" not "Migrate"
+            if (!localStorage.getItem('wallet_v1_address') || localStorage.getItem('wallet_v1_address') !== candidateAddress) {
+                localStorage.setItem('wallet_v1_address', candidateAddress);
+                localStorage.setItem('thr_address', candidateAddress);
+            }
+            updateHeaderWalletUi();
             showKeyMismatchRecovery(err);
             return;
         }
 
+        // Other unlock failures
         alert('Unlock failed: ' + errMsg);
         // Do NOT change wallet state on failure
     }

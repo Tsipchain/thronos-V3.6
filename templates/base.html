@@ -5096,11 +5096,25 @@ function showWalletLoginForm(){
     if(loginSection){
         loginSection.style.display = 'block';
         const addrInput = document.getElementById('walletWidgetThrAddress');
-                const pinInput = document.getElementById('walletWidgetPin');
+        const pinInput = document.getElementById('walletWidgetPin');
         if(addrInput) addrInput.value = walletSession.getAddress();
-                if(pinInput) pinInput.value = walletSession.getPin();
+        if(pinInput) pinInput.value = walletSession.getPin();
+
+        // Initialize wallet modal based on current state
         switchWalletV1Mode();
-        setTimeout(()=>{ if(pinInput) pinInput.focus(); }, 50);
+
+        // Focus on the relevant input for the current state
+        const modalState = walletSession.getModalState ? walletSession.getModalState() : 'no_active_wallet';
+        if (modalState === 'active_wallet_with_encrypted_key') {
+            // PIN unlock mode - focus on PIN input
+            setTimeout(()=>{ if(pinInput) pinInput.focus(); }, 50);
+        } else if (modalState === 'no_active_wallet') {
+            // Pledge/migrate mode - focus on legacy address
+            setTimeout(()=>{
+                const legacyAddrInput = document.getElementById('walletWidgetLegacyAddress');
+                if(legacyAddrInput) legacyAddrInput.focus();
+            }, 50);
+        }
     }
     if(contentSection) contentSection.style.display = 'none';
 }
@@ -5177,51 +5191,80 @@ function switchWalletV1Mode(){
     const migrateEl = document.getElementById('walletV1MigrateMode');
     const createEl = document.getElementById('walletV1CreateMode');
 
-    // Check if active wallet address exists - unlock only valid with active address
-    const activeAddress = walletSession.getActiveAddress ? walletSession.getActiveAddress() : null;
-    const hasActiveAddress = !!activeAddress;
+    // Get current modal state for pledge-backed wallet flow
+    const modalState = walletSession.getModalState ? walletSession.getModalState() : 'no_active_wallet';
+    const hasPledge = walletSession.hasPledgeOrMigrationSource ? walletSession.hasPledgeOrMigrationSource() : false;
+    const allowWebCreate = window.WALLET_V1_ALLOW_WEB_CREATE === true || window.WALLET_V1_ALLOW_WEB_CREATE === '1';
 
-    // Disable Unlock mode if no active address exists
+    // Determine which modes are allowed based on wallet state
+    const createAllowed = allowWebCreate || hasPledge; // Allow create if feature flag OR pledge confirmed
+    const unlockAllowed = modalState === 'active_wallet_with_encrypted_key' || modalState === 'signing_ready';
+    const importAllowed = modalState === 'active_wallet_no_key';
+
+    // Update mode select options visibility/disabled state
+    const createOption = document.querySelector('option[value="create"]');
     const unlockOption = document.querySelector('option[value="unlock"]');
-    if (unlockOption) {
-        unlockOption.disabled = !hasActiveAddress;
-    }
+    const migrateOption = document.querySelector('option[value="migrate"]');
 
-    // If unlock is selected but no active address exists, auto-switch to create
+    if (createOption) createOption.disabled = !createAllowed;
+    if (unlockOption) unlockOption.disabled = !unlockAllowed;
+    if (migrateOption) migrateOption.disabled = false; // Migrate always available
+
+    // Auto-select appropriate mode based on state
     let displayMode = mode;
-    if (mode === 'unlock' && !hasActiveAddress) {
-        displayMode = 'create';
-        const modeSelect = document.getElementById('walletWidgetMode');
-        if (modeSelect) modeSelect.value = 'create';
-    }
+    const modeSelect = document.getElementById('walletWidgetMode');
 
-    // Mutually exclusive: show only the selected mode
-    if (unlockEl) {
-        unlockEl.style.display = displayMode === 'unlock' ? 'block' : 'none';
-        if (displayMode === 'unlock' && !hasActiveAddress) {
-            // Safety net: hide unlock UI if no active address
-            unlockEl.style.display = 'none';
-        }
-    }
-    if (migrateEl) migrateEl.style.display = displayMode === 'migrate' ? 'block' : 'none';
-    if (createEl) createEl.style.display = displayMode === 'create' ? 'block' : 'none';
+    if (modalState === 'no_active_wallet') {
+        // No active wallet - must pledge/migrate first
+        displayMode = 'migrate';
+        if (modeSelect) modeSelect.value = 'migrate';
+    } else if (modalState === 'active_wallet_no_key') {
+        // Active wallet but no signing key - show import/restore prompt
+        displayMode = 'import'; // Special mode for import signing key
+        if (createEl) createEl.style.display = 'none';
+        if (unlockEl) unlockEl.style.display = 'none';
+        if (migrateEl) migrateEl.style.display = 'none';
 
-    // Show import required message if no active address
-    if (!hasActiveAddress) {
-        const importMsg = document.getElementById('walletImportRequiredMsg');
+        // Show import signing key UI
+        const importMsg = document.getElementById('walletActiveNoKeyMsg');
         if (!importMsg) {
-            const unlockMode = document.getElementById('walletV1UnlockMode');
-            if (unlockMode && unlockMode.parentElement) {
+            const container = document.getElementById('walletLoginSection');
+            if (container) {
                 const msg = document.createElement('div');
-                msg.id = 'walletImportRequiredMsg';
-                msg.style.cssText = 'background:#1a1a1a; border:1px solid #ff9900; border-radius:8px; padding:12px; margin:10px 0; color:#ff9900; font-size:0.9em;';
-                msg.textContent = '⚠️ Import or migrate a wallet before unlocking.';
-                unlockMode.parentElement.insertBefore(msg, unlockMode);
+                msg.id = 'walletActiveNoKeyMsg';
+                msg.style.cssText = 'background:#1a2a1a; border:1px solid #00ff66; border-radius:8px; padding:12px; margin:10px 0; color:#00ff66; font-size:0.9em;';
+                msg.innerHTML = '✓ Wallet address found. <strong>Import the matching signing key to enable signing.</strong>';
+                container.insertBefore(msg, container.firstChild);
             }
         }
-    } else {
-        const importMsg = document.getElementById('walletImportRequiredMsg');
-        if (importMsg) importMsg.remove();
+        return;
+    } else if (unlockAllowed && mode === 'unlock') {
+        displayMode = 'unlock';
+    } else if (importAllowed && mode === 'import') {
+        displayMode = 'import';
+    } else if (!createAllowed && mode === 'create') {
+        displayMode = 'migrate';
+        if (modeSelect) modeSelect.value = 'migrate';
+    }
+
+    // Show/hide mode sections based on state
+    if (createEl) createEl.style.display = (displayMode === 'create' && createAllowed) ? 'block' : 'none';
+    if (unlockEl) unlockEl.style.display = (displayMode === 'unlock' && unlockAllowed) ? 'block' : 'none';
+    if (migrateEl) migrateEl.style.display = (displayMode === 'migrate') ? 'block' : 'none';
+
+    // Show appropriate state message
+    const existingMsgs = document.querySelectorAll('[data-wallet-state-msg]');
+    existingMsgs.forEach(msg => msg.remove());
+
+    if (modalState === 'no_active_wallet') {
+        const loginSection = document.getElementById('walletLoginSection');
+        if (loginSection) {
+            const msg = document.createElement('div');
+            msg.setAttribute('data-wallet-state-msg', '1');
+            msg.style.cssText = 'background:#1a1a1a; border:1px solid #ff9900; border-radius:8px; padding:12px; margin:10px 0; color:#ff9900; font-size:0.9em;';
+            msg.textContent = '⚠️ Complete pledge, migrate legacy wallet, or restore a verified wallet before unlocking.';
+            loginSection.insertBefore(msg, loginSection.firstChild);
+        }
     }
 
     // Show restore button if migration exists and we're in unlock mode

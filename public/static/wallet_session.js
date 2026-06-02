@@ -76,6 +76,54 @@
     return origin;
   }
 
+  function hasPledgeOrMigrationSource(){
+    // Pledge-backed activation: Check if wallet has established its canonical address
+    // through pledge confirmation, verified migration, or recovery
+    const info = getMigrationInfo();
+    const canonical = getCanonicalMigrationAddress(info);
+    if (canonical) return true; // Verified migration
+
+    // TODO: Add pledge confirmation check when pledge API is available
+    // const pledge = getPledgeStatus();
+    // if (pledge && pledge.confirmed && pledge.canonical_address) return true;
+
+    return false;
+  }
+
+  function getModalState(){
+    // Wallet modal state machine for pledge-backed activation:
+    // Determines which options to show/hide in the wallet modal
+    const activeAddr = getActiveAddress();
+    const hasEncrypted = !!localStorage.getItem(V1_ENCRYPTED_KEY);
+    const hasRuntime = !!unlockedPrivateKeyHex;
+    const hasPledge = hasPledgeOrMigrationSource();
+
+    if (!activeAddr) {
+      // No active wallet address established
+      if (hasPledge) {
+        // Pledge confirmed but no wallet yet - user should set up signing key
+        return 'active_wallet_no_key';
+      }
+      // No pledge/migration/recovery - must establish one first
+      return 'no_active_wallet';
+    }
+
+    // Active address exists - check key material
+    if (!hasEncrypted) {
+      // No signing key stored locally
+      return 'active_wallet_no_key';
+    }
+
+    // Has active address and encrypted key
+    if (hasRuntime) {
+      // Key is unlocked in memory
+      return 'signing_ready';
+    }
+
+    // Key exists but not unlocked
+    return 'active_wallet_with_encrypted_key';
+  }
+
   function getAddress(){ return getActiveAddress() || localStorage.getItem(V1_ADDRESS_KEY) || localStorage.getItem(ADDRESS_KEY) || ''; }
   function getActiveAddress(){
     _ignoredSystemWalletSource = null;
@@ -822,6 +870,7 @@
     isUnlockedFor,
     getDebugState, restoreToMigratedWallet, resetActiveWalletPointers, clearAllWalletData, isValidThrAddress,
     persistActiveUserAddress, isSystemWalletAddress,
-    getSigningKeyMismatch, clearLocalSigningKey, importSigningKeyForAddress, getWalletState
+    getSigningKeyMismatch, clearLocalSigningKey, importSigningKeyForAddress, getWalletState,
+    hasPledgeOrMigrationSource, getModalState
   };
 })(window);

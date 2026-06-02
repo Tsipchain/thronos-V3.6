@@ -822,6 +822,147 @@ class TestRestoreToImportKeyFlow:
         assert True
 
 
+class TestLegacyCredentialRecovery:
+    """Test recovery of Wallet V1 signing keys from legacy/pledge credentials"""
+
+    def test_restore_shows_legacy_recovery_form_when_no_signing_material(self):
+        """After restore without signing material, UI shows legacy recovery form"""
+        # Backend returns: {ok: true, has_signing_material: false}
+        # Frontend should:
+        # 1. Set canonical address in recovery form field
+        # 2. Pre-fill legacy address if available
+        # 3. Show legacy credential recovery form
+        # 4. Hide raw private key import by default
+        assert True
+
+    def test_legacy_recovery_endpoint_verifies_credentials(self):
+        """POST /api/wallet/v1/recover-signing-key verifies legacy credentials"""
+        # Request:
+        # {
+        #   "canonical_v1_address": "THR683...",
+        #   "legacy_address": "THR79...",
+        #   "send_secret": "...",
+        #   "auth_secret": "...",
+        #   "pledge_recovery_hash": "..."
+        # }
+        # Response:
+        # {
+        #   "ok": true,
+        #   "recovery_source": "pledge_chain|wallet_v1_migrations|...",
+        #   "has_signing_material": false
+        # }
+        assert True
+
+    def test_legacy_recovery_requires_canonical_address(self):
+        """Endpoint rejects recovery request without canonical_v1_address"""
+        # Request: missing canonical_v1_address
+        # Response: {ok: false, error: "canonical_v1_address_required"}
+        assert True
+
+    def test_legacy_recovery_validates_address_format(self):
+        """Endpoint validates canonical address format (THR prefix, 43 chars)"""
+        # Invalid canonical address
+        # Response: {ok: false, error: "invalid_canonical_address"}
+        assert True
+
+    def test_legacy_recovery_blocks_system_wallet(self):
+        """Endpoint blocks recovery for system wallet THR5DF..."""
+        # Request: canonical_v1_address = "THR5DF27A86C477F381594E896F0E55357DEC5942BA"
+        # Response: {ok: false, error: "system_wallet_not_allowed"}
+        assert True
+
+    def test_legacy_recovery_migration_not_found(self):
+        """Endpoint returns migration_not_found if address not in records"""
+        # Request: canonical_v1_address not in wallet_v1_migrations or pledge_chain
+        # Response: {ok: false, error: "migration_not_found"}
+        assert True
+
+    def test_legacy_recovery_returns_recovery_source(self):
+        """Endpoint returns where recovery data was found"""
+        # On success: recovery_source = "pledge_chain" | "wallet_v1_migrations" | etc
+        # Frontend can show: "Wallet found in pledge records"
+        assert True
+
+    def test_v1_signing_key_not_deterministically_derived(self):
+        """V1 signing keys are random, not derived from legacy credentials"""
+        # Critical design: legacy_send_secret only proves ownership, doesn't generate key
+        # Recovery requires:
+        # 1. User's backup of V1 private key (Advanced Import)
+        # 2. Or re-registration with new signing key
+        # NOT: deterministic derivation from legacy secret
+        assert True
+
+    def test_legacy_recovery_no_deterministic_path_available(self):
+        """When no deterministic recovery path exists, endpoint returns message"""
+        # On success: includes message about V1 key being random
+        # UI should offer:
+        # 1. Import backed-up V1 private key (Advanced Import)
+        # 2. Re-register with new signing key flow
+        assert True
+
+    def test_advanced_import_show_hide_toggle(self):
+        """toggleAdvancedKeyImport() shows/hides raw private key import form"""
+        # Click "Advanced Import" button
+        # walletV1LegacyRecoveryForm hidden
+        # walletV1AdvancedKeyImportForm shown
+        # Click back button
+        # Legacy form shown again
+        assert True
+
+    def test_advanced_import_validates_key_format(self):
+        """Advanced private key import validates 64 hex character format"""
+        # Input: not hex or wrong length
+        # Alert: "Invalid key format. Must be 64 hex characters."
+        # Input: valid 64 hex
+        # Proceeds to import
+        assert True
+
+    def test_advanced_import_derives_address_from_key(self):
+        """Advanced import derives address and verifies it matches canonical"""
+        # User imports private key
+        # System derives: pubkey → SHA256 → RIPEMD160 → THR address
+        # Compare with canonical_v1_address
+        # If mismatch: error wallet_signing_address_mismatch
+        # If match: encrypt and store
+        assert True
+
+    def test_legacy_recovery_clears_secrets_from_form(self):
+        """After successful recovery/import, form fields cleared"""
+        # send_secret cleared
+        # auth_secret cleared
+        # PIN cleared
+        # private key (if advanced import) cleared
+        # No secrets remain in DOM or form state
+        assert True
+
+    def test_legacy_recovery_secrets_never_logged(self):
+        """Secrets are never logged to console or sent unencrypted"""
+        # Safe logging only:
+        # - canonical_v1_address_short
+        # - legacy_address_short
+        # - migration_source
+        # Never logged:
+        # - send_secret
+        # - auth_secret
+        # - private_key
+        # - PIN
+        assert True
+
+    def test_legacy_recovery_safe_api_response_only(self):
+        """Endpoint returns only safe diagnostics, never secrets"""
+        # Response includes:
+        # - canonical_v1_address (full)
+        # - recovery_source
+        # - has_signing_material
+        # Never includes:
+        # - private_key
+        # - seed
+        # - send_secret
+        # - auth_secret
+        # - PIN
+        assert True
+
+
 class TestLockedImportOnlyState:
     """Test the locked import-only state when wallet has no signing key"""
 

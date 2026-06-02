@@ -1659,14 +1659,89 @@
                     </div>
                 </div>
 
-                <!-- IMPORT SIGNING KEY MODE: Locked import-only state -->
+                <!-- IMPORT SIGNING KEY MODE: Locked import-only state with legacy recovery -->
                 <div id="walletV1ImportMode" style="display:none; margin-top:10px; border-top:1px solid #ff9900; padding-top:10px;">
                     <div style="background:#1a1a1a; border:1px solid #ff9900; border-radius:8px; padding:15px; margin-bottom:10px;">
                         <h5 style="color:#ff9900; margin-top:0;">⚠️ Wallet Restored - Missing Signing Key</h5>
                         <p style="font-size:0.9em; line-height:1.5; color:#ccc;">
-                            Your wallet has been successfully restored. To enable signing and transactions, you must import the matching signing key.
+                            Your wallet has been successfully restored. To enable signing and transactions, you must recover or import the matching signing key.
                         </p>
                     </div>
+
+                    <!-- Legacy/Pledge Credential Recovery -->
+                    <div id="walletV1LegacyRecoveryForm" style="background:#1a2a1a; border:1px solid #00ff66; border-radius:8px; padding:15px; margin:12px 0;">
+                        <h5 style="color:#00ff66; margin-top:0;">Recover Signing Key from Legacy/Pledge Credentials</h5>
+                        <p style="font-size:0.85em; color:#9f9; margin-bottom:12px;">
+                            Enter your legacy wallet credentials to recover the signing key.
+                        </p>
+
+                        <div style="margin-bottom:10px;">
+                            <label style="display:block; font-size:0.9em; color:#9f9; margin-bottom:4px;">Canonical Wallet V1 Address</label>
+                            <input type="text" id="walletV1CanonicalAddr" readonly style="width:100%; padding:10px; background:#000; color:#00ff66; border:1px solid #00ff66; border-radius:6px; font-size:0.85em; font-family:monospace;" />
+                        </div>
+
+                        <div style="margin-bottom:10px;">
+                            <label style="display:block; font-size:0.9em; color:#9f9; margin-bottom:4px;">Legacy THR Address</label>
+                            <input type="text" id="walletV1LegacyAddr" placeholder="THRxxxxxxxx..." style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:6px; font-size:0.85em;" />
+                        </div>
+
+                        <div style="margin-bottom:10px;">
+                            <label style="display:block; font-size:0.9em; color:#9f9; margin-bottom:4px;">Legacy Send Secret</label>
+                            <input type="password" id="walletV1SendSecret" placeholder="send_secret from pledge PDF" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:6px; font-size:0.85em;" />
+                        </div>
+
+                        <div style="margin-bottom:10px;">
+                            <label style="display:block; font-size:0.9em; color:#9f9; margin-bottom:4px;">Legacy Auth Secret (optional)</label>
+                            <input type="password" id="walletV1AuthSecret" placeholder="auth_secret or passphrase" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:6px; font-size:0.85em;" />
+                        </div>
+
+                        <div style="margin-bottom:10px;">
+                            <label style="display:block; font-size:0.9em; color:#9f9; margin-bottom:4px;">Pledge Recovery Hash/Proof (optional)</label>
+                            <input type="text" id="walletV1PledgeHash" placeholder="seed_hint or recovery proof" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:6px; font-size:0.85em;" />
+                        </div>
+
+                        <div style="margin-bottom:10px;">
+                            <label style="display:block; font-size:0.9em; color:#9f9; margin-bottom:4px;">New Wallet PIN</label>
+                            <input type="password" id="walletV1RecoveryPin" placeholder="4-8 digits" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:6px; font-size:0.85em;" />
+                        </div>
+
+                        <div style="display:flex; gap:8px; margin-top:12px;">
+                            <button onclick="performLegacySigningKeyRecovery()" style="flex:1; padding:10px; background:#00aa66; color:#000; border:1px solid #00ff66; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                ↩ Recover from Legacy Credentials
+                            </button>
+                            <button onclick="toggleAdvancedKeyImport()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
+                                Advanced Import
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Advanced: Raw Private Key Import (hidden by default) -->
+                    <div id="walletV1AdvancedKeyImportForm" style="display:none; background:#2a1a1a; border:1px solid #8a4a4a; border-radius:8px; padding:15px; margin:12px 0;">
+                        <h5 style="color:#ff9900; margin-top:0;">Advanced: Import Private Key</h5>
+                        <p style="font-size:0.85em; color:#9f9; margin-bottom:12px; opacity:0.7;">
+                            If you have a backup of your V1 private key, you can import it directly here.
+                        </p>
+
+                        <div style="margin-bottom:10px;">
+                            <label style="display:block; font-size:0.9em; color:#9f9; margin-bottom:4px;">Private Key (Hex)</label>
+                            <input type="password" id="walletV1AdvancedKeyHex" placeholder="64 hex characters" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #8a4a4a; border-radius:6px; font-size:0.85em; font-family:monospace;" />
+                        </div>
+
+                        <div style="margin-bottom:10px;">
+                            <label style="display:block; font-size:0.9em; color:#9f9; margin-bottom:4px;">PIN</label>
+                            <input type="password" id="walletV1AdvancedKeyPin" placeholder="4-8 digits" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #8a4a4a; border-radius:6px; font-size:0.85em;" />
+                        </div>
+
+                        <div style="display:flex; gap:8px; margin-top:12px;">
+                            <button onclick="performAdvancedKeyImport()" style="flex:1; padding:10px; background:#00aa66; color:#000; border:1px solid #8a4a4a; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                ✓ Import Private Key
+                            </button>
+                            <button onclick="toggleAdvancedKeyImport()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
+                                Back to Legacy Recovery
+                            </button>
+                        </div>
+                    </div>
+
                     <div data-missing-key-recovery></div>
                 </div>
 
@@ -5546,6 +5621,115 @@ async function performImportSigningKey() {
     }
 }
 
+function toggleAdvancedKeyImport() {
+    const advanced = document.getElementById('walletV1AdvancedKeyImportForm');
+    const legacy = document.getElementById('walletV1LegacyRecoveryForm');
+    if (advanced && legacy) {
+        const isHidden = advanced.style.display === 'none';
+        advanced.style.display = isHidden ? 'block' : 'none';
+        legacy.style.display = isHidden ? 'none' : 'block';
+    }
+}
+
+async function performLegacySigningKeyRecovery() {
+    const canonicalAddr = (document.getElementById('walletV1CanonicalAddr')?.value || '').trim();
+    const legacyAddr = (document.getElementById('walletV1LegacyAddr')?.value || '').trim();
+    const sendSecret = (document.getElementById('walletV1SendSecret')?.value || '').trim();
+    const authSecret = (document.getElementById('walletV1AuthSecret')?.value || '').trim();
+    const pledgeHash = (document.getElementById('walletV1PledgeHash')?.value || '').trim();
+    const pin = (document.getElementById('walletV1RecoveryPin')?.value || '').trim();
+
+    if (!canonicalAddr) return alert('Canonical address is required');
+    if (!legacyAddr && !sendSecret) return alert('Legacy address or send secret is required');
+    if (!pin) return alert('PIN is required');
+    if (!pin.match(/^\d{4,8}$/)) return alert('PIN must be 4-8 digits');
+
+    try {
+        console.log('[LegacyRecovery] Attempting recovery for:', canonicalAddr.substring(0, 10) + '...');
+
+        // Call backend endpoint to recover signing key from legacy credentials
+        const response = await fetch('/api/wallet/v1/recover-signing-key', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                canonical_v1_address: canonicalAddr,
+                legacy_address: legacyAddr,
+                send_secret: sendSecret,
+                auth_secret: authSecret,
+                pledge_recovery_hash: pledgeHash
+            })
+        });
+
+        const result = await response.json();
+        if (!result.ok) {
+            console.warn('[LegacyRecovery] Recovery failed:', result.error);
+
+            // Handle specific error codes
+            if (result.error === 'legacy_recovery_not_supported') {
+                alert('Legacy recovery is not available for this wallet.\n\nNo deterministic recovery path was found. Please use Advanced Import if you have a backup of your V1 private key.');
+                return;
+            } else if (result.error === 'recovery_credentials_invalid') {
+                alert('Invalid legacy credentials. Please verify your send_secret and other credentials.');
+                return;
+            } else if (result.error === 'derived_address_mismatch') {
+                alert('Derived address does not match canonical address. Please verify your credentials.');
+                return;
+            } else {
+                alert('Recovery failed: ' + (result.error || 'Unknown error'));
+                return;
+            }
+        }
+
+        console.log('[LegacyRecovery] Backend verified recovery:', result.recovery_source);
+
+        // Now derive the signing key client-side and encrypt it with the PIN
+        // The backend verified legacy credentials, but we handle key derivation/encryption locally
+        // For now, show success and guide user to import the key
+        alert('✓ Legacy credentials verified!\n\nThe system found your wallet in the ' + result.recovery_source + '.\n\nKey recovery for this wallet type requires additional setup. Contact support.');
+
+        // Clear form
+        document.getElementById('walletV1SendSecret').value = '';
+        document.getElementById('walletV1AuthSecret').value = '';
+        document.getElementById('walletV1RecoveryPin').value = '';
+
+    } catch(err) {
+        console.error('[LegacyRecovery] Error:', err);
+        alert('Error: ' + (err.message || 'Recovery failed'));
+    }
+}
+
+async function performAdvancedKeyImport() {
+    const keyHex = (document.getElementById('walletV1AdvancedKeyHex')?.value || '').trim();
+    const pin = (document.getElementById('walletV1AdvancedKeyPin')?.value || '').trim();
+    const targetAddr = walletSession.getActiveAddress ? walletSession.getActiveAddress() : localStorage.getItem('wallet_v1_address');
+
+    if (!keyHex || !pin) return alert('Private key and PIN are required');
+    if (!keyHex.match(/^[0-9a-fA-F]{64}$/)) return alert('Invalid key format. Must be 64 hex characters.');
+
+    try {
+        console.log('[AdvancedImport] Attempting import for:', targetAddr.substring(0, 10) + '...');
+
+        if (!window.WalletAuth || typeof window.WalletAuth.importSigningKeyForAddress !== 'function') {
+            return alert('Import API not available');
+        }
+
+        const result = await window.WalletAuth.importSigningKeyForAddress(keyHex, pin, targetAddr);
+        if (result.success) {
+            alert('✓ Signing key imported successfully!');
+            document.getElementById('walletV1AdvancedKeyHex').value = '';
+            document.getElementById('walletV1AdvancedKeyPin').value = '';
+            toggleAdvancedKeyImport();
+            updateHeaderWalletUi();
+            loadWalletBalances(true);
+        } else {
+            alert('Import failed: ' + (result.error || 'Unknown error'));
+        }
+    } catch(err) {
+        console.error('[AdvancedImport] Error:', err);
+        alert('Error: ' + (err.message || 'Import failed'));
+    }
+}
+
 async function unlockWalletV1FromHeader(){
     const pin = (document.getElementById('walletWidgetUnlockPin')?.value || '').trim();
     if (!pin) return alert('PIN is required to unlock.');
@@ -5656,29 +5840,29 @@ async function restoreMigratedWalletFromBackendLookup(){
             showWalletContentSection();
             loadWalletBalances(true);
         } else {
+            // Populate canonical address in legacy recovery form
+            const canonicalAddrField = document.getElementById('walletV1CanonicalAddr');
+            if (canonicalAddrField) {
+                canonicalAddrField.value = result.canonical_v1_address;
+            }
+
+            // Pre-fill legacy address if known
+            const legacyAddrField = document.getElementById('walletV1LegacyAddr');
+            if (legacyAddrField && legacyAddress) {
+                legacyAddrField.value = legacyAddress;
+            }
+
             // Switch modal to import signing key mode
             const modeSelect = document.getElementById('walletWidgetMode');
             if (modeSelect) {
-                modeSelect.value = 'import'; // Switch to import mode
+                modeSelect.value = 'import_signing_key'; // Switch to import mode
             }
 
             // Refresh modal UI to show import signing key flow
             switchWalletV1Mode();
 
-            // Show import signing key form and recovery UI
-            showMissingSigningKeyRecovery();
-            showImportSigningKeyForm();
-
             // Show success message with next step
-            alert('Wallet restored: ' + result.canonical_v1_address.substring(0, 10) + '...\n\nImport the matching signing key to enable signing.');
-
-            // Focus on import key input after brief delay
-            setTimeout(() => {
-                const importKeyInput = document.getElementById('importKeyHex');
-                if (importKeyInput && importKeyInput.offsetParent !== null) {
-                    importKeyInput.focus();
-                }
-            }, 100);
+            alert('Wallet restored: ' + result.canonical_v1_address.substring(0, 10) + '...\n\nRecover your signing key from legacy credentials or import a backup.');
 
             showWalletLoginForm();
         }

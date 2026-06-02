@@ -327,6 +327,13 @@
             return lastMismatchError ? {...lastMismatchError} : null;
         },
 
+        getWalletState() {
+            if (window.walletSession && typeof window.walletSession.getWalletState === 'function') {
+                return window.walletSession.getWalletState();
+            }
+            return 'not_connected';
+        },
+
         clearLocalSigningKey() {
             if (window.walletSession && typeof window.walletSession.clearLocalSigningKey === 'function') {
                 window.walletSession.clearLocalSigningKey();

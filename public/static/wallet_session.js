@@ -723,6 +723,27 @@
     return lastSigningKeyMismatch ? {...lastSigningKeyMismatch} : null;
   }
 
+  function getWalletState(){
+    // Returns wallet state: 'connected_readonly', 'locked', 'signing_ready', 'signing_key_mismatch', 'missing_signing_key', or 'not_connected'
+    const activeAddr = getActiveAddress();
+    if (!activeAddr) return 'not_connected';
+
+    // If there's a signing key mismatch recorded
+    if (lastSigningKeyMismatch) return 'signing_key_mismatch';
+
+    // Check for encrypted signing material
+    const hasEncryptedKey = !!localStorage.getItem(V1_ENCRYPTED_KEY);
+
+    // If no encrypted key material at all
+    if (!hasEncryptedKey) return 'missing_signing_key';
+
+    // If encrypted key exists, check if it's unlocked in memory
+    if (unlockedPrivateKeyHex) return 'signing_ready';
+
+    // Encrypted key exists but not unlocked
+    return 'locked';
+  }
+
   function clearLocalSigningKey(){
     // Remove encrypted signing material only, preserve active wallet address
     localStorage.removeItem(V1_ENCRYPTED_KEY);
@@ -794,6 +815,6 @@
     isUnlockedFor,
     getDebugState, restoreToMigratedWallet, resetActiveWalletPointers, clearAllWalletData, isValidThrAddress,
     persistActiveUserAddress, isSystemWalletAddress,
-    getSigningKeyMismatch, clearLocalSigningKey, importSigningKeyForAddress
+    getSigningKeyMismatch, clearLocalSigningKey, importSigningKeyForAddress, getWalletState
   };
 })(window);

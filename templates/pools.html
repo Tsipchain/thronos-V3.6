@@ -1129,6 +1129,27 @@ async function requirePoolWalletAuth(action, txCore) {
     if (!window.WalletAuth || typeof window.WalletAuth.requireUnlockedWallet !== 'function') {
         throw new Error('missing_wallet_signing_material');
     }
+
+    // Check wallet state - must be 'signing_ready' to perform pool operations
+    if (window.WalletAuth && typeof window.WalletAuth.getWalletState === 'function') {
+        const walletState = window.WalletAuth.getWalletState();
+        if (walletState === 'signing_key_mismatch') {
+            const err = new Error('Wallet signing key mismatch. Please recover your wallet signing material first.');
+            err.code = 'WALLET_SIGNING_KEY_RECOVERY_REQUIRED';
+            throw err;
+        }
+        if (walletState === 'missing_signing_key') {
+            const err = new Error('Wallet is missing signing key material. Please import a signing key first.');
+            err.code = 'WALLET_SIGNING_KEY_RECOVERY_REQUIRED';
+            throw err;
+        }
+        if (walletState === 'connected_readonly') {
+            const err = new Error('Wallet is read-only. Please create or import a signing key to perform pool operations.');
+            err.code = 'WALLET_SIGNING_KEY_RECOVERY_REQUIRED';
+            throw err;
+        }
+    }
+
     const auth = await window.WalletAuth.requireUnlockedWallet({ source: 'pools' });
     const publicKey = auth.getPublicKey ? auth.getPublicKey() : '';
 

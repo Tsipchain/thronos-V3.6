@@ -1067,3 +1067,125 @@ def resolve_migration(address):
         if rec.get('new_v1_address') == address:
             return rec
     return None
+
+
+def search_all_migration_sources(legacy_address=None, canonical_v1_address=None):
+    """
+    Search all migration sources (read-only) for a wallet migration.
+
+    Args:
+        legacy_address: Optional legacy wallet address to search for
+        canonical_v1_address: Optional canonical V1 address to search for
+
+    Returns:
+        {
+            "legacy_address": "...",
+            "canonical_v1_address": "...",
+            "migration_source": "wallet_v1_migrations|pledge_chain|reverse_lookup",
+            "migration_status": "confirmed|legacy_migrated|...",
+            "has_signing_material": bool,
+            "lookup_sources_checked": ["wallet_v1_migrations", "pledge_chain", ...],
+            "conflict": None or "ambiguous_canonical_addresses"
+        }
+        or
+        None if not found
+    """
+    def normalize(addr):
+        return (addr or "").strip().upper() if addr else None
+
+    legacy = normalize(legacy_address)
+    canonical = normalize(canonical_v1_address)
+    sources_checked = []
+    matches = {}  # Map of canonical -> {legacy, source, status}
+
+    try:
+        # Source 1: wallet_v1_migrations.json by legacy address
+        sources_checked.append("wallet_v1_migrations_legacy")
+        mmap = _load_map() or {}
+        if legacy and legacy in mmap:
+            rec = mmap[legacy]
+            if rec.get("new_v1_address"):
+                can_addr = normalize(rec.get("new_v1_address"))
+                matches[can_addr] = {
+                    "legacy": legacy,
+                    "source": "wallet_v1_migrations",
+                    "status": rec.get("status") or "confirmed",
+                    "has_signing_material": bool(
+                        rec.get("has_signing_material") or
+                        rec.get("migration_tx_id") or
+                        rec.get("verified")
+                    ),
+                }
+
+        # Source 2: wallet_v1_migrations.json by canonical address (reverse)
+        sources_checked.append("wallet_v1_migrations_reverse")
+        if canonical:
+            for old_addr, rec in mmap.items():
+                if normalize(rec.get("new_v1_address")) == canonical:
+                    matches[canonical] = {
+                        "legacy": normalize(old_addr),
+                        "source": "wallet_v1_migrations",
+                        "status": rec.get("status") or "confirmed",
+                        "has_signing_material": bool(
+                            rec.get("has_signing_material") or
+                            rec.get("migration_tx_id") or
+                            rec.get("verified")
+                        ),
+                    }
+                    break
+
+        # Source 3: pledge_chain records with migrated_to field
+        sources_checked.append("pledge_chain")
+        s = _server()
+        load_json = getattr(s, "load_json", None)
+        pledge_chain_path = getattr(s, "PLEDGE_CHAIN", None)
+        if callable(load_json) and pledge_chain_path:
+            pledges = load_json(pledge_chain_path, []) or []
+            for pledge in pledges:
+                pledge_addr = normalize(pledge.get("thr_address"))
+                migrated_to = normalize(pledge.get("migrated_to"))
+
+                # Check by legacy address
+                if legacy and pledge_addr == legacy and migrated_to:
+                    matches[migrated_to] = {
+                        "legacy": legacy,
+                        "source": "pledge_chain",
+                        "status": pledge.get("status") or "legacy_migrated",
+                        "has_signing_material": False,
+                    }
+
+                # Check by canonical address
+                if canonical and migrated_to == canonical:
+                    matches[canonical] = {
+                        "legacy": pledge_addr,
+                        "source": "pledge_chain",
+                        "status": pledge.get("status") or "legacy_migrated",
+                        "has_signing_material": False,
+                    }
+
+        # If we have matches, prefer wallet_v1_migrations over pledge_chain
+        if matches:
+            # Prefer verified migrations
+            best_match = None
+            for can_addr, match_info in matches.items():
+                if not best_match:
+                    best_match = (can_addr, match_info)
+                elif match_info["source"] == "wallet_v1_migrations" and best_match[1]["source"] != "wallet_v1_migrations":
+                    best_match = (can_addr, match_info)
+
+            if best_match:
+                can_addr, match_info = best_match
+                return {
+                    "legacy_address": match_info["legacy"],
+                    "canonical_v1_address": can_addr,
+                    "migration_source": match_info["source"],
+                    "migration_status": match_info["status"],
+                    "has_signing_material": match_info["has_signing_material"],
+                    "lookup_sources_checked": sources_checked,
+                    "conflict": "ambiguous_canonical_addresses" if len(matches) > 1 else None,
+                }
+
+    except Exception:
+        pass
+
+    return None

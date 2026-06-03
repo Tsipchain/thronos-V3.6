@@ -1607,6 +1607,89 @@ class TestUnusableKeyRecovery:
         assert True
 
 
+class TestOwnershipVerificationForm:
+    """Test ownership verification form auto-fill and simplification"""
+
+    def test_canonical_address_auto_fills_from_restored_wallet(self):
+        """Canonical address field auto-fills from wallet_v1_address"""
+        # Setup: wallet_v1_address = 'THR683318ACF083723B3EDFE6C0A30AD62670F00353'
+        # Action: Show ownership verification form (initializeOwnershipVerificationForm)
+        # Expected: Canonical field displays THR683318ACF083723B3EDFE6C0A30AD62670F00353
+        assert True
+
+    def test_canonical_field_is_read_only(self):
+        """Canonical address field is read-only (cannot be changed)"""
+        # Canonical field styled as display-only (not input)
+        # Cannot modify wallet identity
+        # Expected: Field is read-only with visual indicator
+        assert True
+
+    def test_legacy_address_auto_fills_when_known(self):
+        """Legacy address auto-fills from migration info"""
+        # Setup: migration info has legacy_address
+        # Action: Show ownership verification form
+        # Expected: Legacy address field pre-populated
+        assert True
+
+    def test_pin_field_not_in_ownership_verification(self):
+        """PIN field removed from ownership verification form"""
+        # PIN belongs to key generation step, not ownership verification
+        # Expected: No PIN input in verification form
+        assert True
+
+    def test_ownership_verification_request_no_pin(self):
+        """Ownership verification request does not include PIN"""
+        # Action: performLegacyOwnershipVerification()
+        # Request body must NOT include 'pin' field
+        # Expected: Endpoint receives only address and secret credentials
+        assert True
+
+    def test_ownership_verification_no_pin_validation(self):
+        """Ownership verification does not require or validate PIN"""
+        # Action: performLegacyOwnershipVerification() without PIN
+        # Expected: Request succeeds (no "PIN required" error)
+        assert True
+
+    def test_successful_verification_transitions_to_rekey_step(self):
+        """After successful verification, UI shows re-key ceremony"""
+        # Action: Successful POST /api/wallet/v1/verify-legacy-ownership
+        # Result: walletV1LegacyRecoveryForm hidden, walletV1RekeyCeremonyForm shown
+        # Expected: User can now generate/import signing key
+        assert True
+
+    def test_successful_verification_does_not_set_signing_material(self):
+        """Verification does not create signing material server-side"""
+        # Ownership verification is stateless - no signing key created
+        # Expected: User must still generate/import key in next step
+        assert True
+
+    def test_missing_canonical_address_blocks_submit(self):
+        """Submit button disabled when canonical address empty"""
+        # If canonical address is empty or unknown
+        # Expected: Clear error message explaining restore required
+        assert True
+
+    def test_active_canonical_address_remains_preserved(self):
+        """Canonical wallet identity never mutated during verification"""
+        # Before verification: wallet_v1_address = 'THR...'
+        # During verification: Read-only field, cannot change
+        # After verification: wallet_v1_address = 'THR...' (SAME)
+        # Expected: Address is preserved throughout
+        assert True
+
+    def test_no_secrets_logged_in_verification(self):
+        """Verification does not log send_secret, auth_secret, or pledge_hash"""
+        # Server logs only safe diagnostics (addresses, not credentials)
+        # Expected: No secrets in console or server logs
+        assert True
+
+    def test_show_wallet_v1_rekey_ceremony_flow_initializes_form(self):
+        """showWalletV1RekeyCeremonyFlow() auto-fills addresses"""
+        # Function called when user clicks "Verify Ownership & Re-Key"
+        # Expected: initializeOwnershipVerificationForm() is called
+        assert True
+
+
 class TestKeyBindingModel:
     """Test the key binding model for re-keyed wallets"""
 

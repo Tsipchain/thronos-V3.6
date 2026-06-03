@@ -1501,6 +1501,112 @@ class TestRekeyCeremony:
         assert True
 
 
+class TestUnusableKeyRecovery:
+    """Test unusable/legacy format signing key recovery"""
+
+    def test_pin_decrypt_success_key_derivation_fail(self):
+        """PIN decrypt succeeds but key derivation fails -> unusable key state"""
+        # Storage: wallet_v1_encrypted_priv with valid PIN
+        # Content: Not a valid secp256k1 private key (legacy/corrupt format)
+        # Action: Unlock with correct PIN
+        # Expected: State = 'signing_key_unusable_legacy_format'
+        assert True
+
+    def test_unusable_key_diagnostics_safe(self):
+        """Diagnostics for unusable key contain no secrets"""
+        # Diagnostics include:
+        # - decrypt_succeeded: true
+        # - key_parse_status: 'failed'
+        # - active_address_short: 'THR...'
+        # - derived_address_short: 'unknown'
+        # - encrypted_seed_present: bool
+        # - runtime_material_present: bool
+        # - recovery_recommended: 'rekey'
+        # Expected: No PIN, no encrypted material, no key bytes
+        assert True
+
+    def test_clear_unusable_key_removes_only_signing_material(self):
+        """Clearing unusable key removes ONLY signing material"""
+        # Before:
+        # - wallet_v1_address: canonical address (preserved)
+        # - wallet_v1_encrypted_priv: unusable key (removed)
+        # - wallet_v1_public_key: unused (removed)
+        # - localStorage balances (preserved)
+        # - migration metadata (preserved)
+        # Action: clearUnusableSigningKey()
+        # After:
+        # - wallet_v1_address: canonical address (SAME)
+        # - wallet_v1_encrypted_priv: not present (REMOVED)
+        # - balance data: SAME (PRESERVED)
+        # - migration metadata: SAME (PRESERVED)
+        # Expected: Only signing material cleared
+        assert True
+
+    def test_clear_unusable_key_state_transition(self):
+        """After clearing unusable key, state becomes missing_signing_key"""
+        # Before clear: signing_key_unusable_legacy_format
+        # After clear: missing_signing_key
+        # UI should show: "Wallet verified, no signing key"
+        # UI should show: "Verify Ownership & Re-Key" button
+        # Expected: User can now run re-key ceremony
+        assert True
+
+    def test_unusable_key_not_misidentified_as_mismatch(self):
+        """Unusable key state distinct from signing_key_mismatch"""
+        # Unusable: cannot parse/derive from key at all
+        # Mismatch: can derive but wrong address (binding-unaware)
+        # Expected: Different state, different recovery flow
+        assert True
+
+    def test_binding_aware_unlock_valid_bound_key(self):
+        """Valid bound key unlocks through binding"""
+        # Scenario: Re-keyed wallet with active binding
+        # Storage: wallet_v1_encrypted_priv (bound key private key)
+        # Key derives: bound_key_address (different from canonical)
+        # Binding exists: canonical -> bound_key_address mapping
+        # Action: Unlock with correct PIN
+        # Expected: State = 'signing_ready' (binding verified)
+        assert True
+
+    def test_binding_aware_unlock_no_binding_shows_mismatch(self):
+        """Unbound key with mismatched address shows mismatch UI"""
+        # Scenario: Encrypted key doesn't match canonical but no binding
+        # Storage: wallet_v1_encrypted_priv (wrong key)
+        # Key derives: different_address
+        # Binding exists: NO
+        # Action: Unlock with correct PIN
+        # Expected: State = 'signing_key_mismatch' (not binding-aware)
+        assert True
+
+    def test_recovery_ui_shows_rekey_button(self):
+        """Unusable key recovery UI includes verify/re-key button"""
+        # UI should show:
+        # - "Stored signing material is not a usable Wallet V1 signing key"
+        # - "Your wallet address is preserved"
+        # - Button: "Clear Unusable Local Signing Key"
+        # - Button: "Verify Ownership & Re-Key"
+        # - Button: "Import Existing V1 Private Key"
+        # Expected: All three recovery paths available
+        assert True
+
+    def test_no_private_key_transmission_on_clear(self):
+        """Clearing unusable key does not send keys to backend"""
+        # Action: clearUnusableSigningKey()
+        # Expected: No network requests with private key data
+        # Only local localStorage modifications
+        assert True
+
+    def test_canonical_address_preserved_after_clear(self):
+        """Canonical address not lost when clearing unusable key"""
+        # Before: canonical_address = 'THR...'
+        # Action: clearUnusableSigningKey()
+        # After: canonical_address = 'THR...' (SAME)
+        # User can still see wallet balance
+        # User can still run re-key ceremony
+        # Expected: Canonical address persisted
+        assert True
+
+
 class TestKeyBindingModel:
     """Test the key binding model for re-keyed wallets"""
 

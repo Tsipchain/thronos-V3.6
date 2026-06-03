@@ -36797,6 +36797,49 @@ def api_wallet_v1_rekey_approve():
         error_type = type(e).__name__
         return jsonify({"ok": False, "error": "rekey_approve_failed", "exception_type": error_type}), 500
 
+@app.route("/api/wallet/v1/key-binding/<address>", methods=["GET"])
+def api_wallet_v1_get_key_binding(address):
+    """Get active key binding for a canonical V1 address (binding-aware unlock check)"""
+    try:
+        canonical_addr = (address or "").strip().upper()
+
+        if not canonical_addr:
+            return jsonify({"ok": False, "error": "address_required"}), 400
+
+        if not validate_thr_address(canonical_addr):
+            return jsonify({"ok": False, "error": "invalid_address"}), 400
+
+        # Load key bindings
+        bindings = load_key_bindings()
+
+        # Find active binding for this address
+        binding = None
+        for b in bindings:
+            if (b.get("canonical_v1_address") == canonical_addr and
+                b.get("status") == "active"):
+                binding = b
+                break
+
+        if binding:
+            # Return binding without sensitive fields
+            return jsonify({
+                "ok": True,
+                "binding": {
+                    "canonical_v1_address": binding.get("canonical_v1_address"),
+                    "bound_key_address": binding.get("bound_key_address"),
+                    "active_public_key_hash": binding.get("active_public_key_hash"),
+                    "status": binding.get("status"),
+                    "rekey_event_id": binding.get("rekey_event_id"),
+                    "created_at": binding.get("created_at")
+                }
+            }), 200
+        else:
+            return jsonify({"ok": True, "binding": None}), 200
+
+    except Exception as e:
+        error_type = type(e).__name__
+        return jsonify({"ok": False, "error": "binding_lookup_failed", "exception_type": error_type}), 500
+
 
 if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")

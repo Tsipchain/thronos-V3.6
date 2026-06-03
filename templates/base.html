@@ -5793,36 +5793,68 @@ function toggleAdvancedKeyImport() {
     }
 }
 
-function initializeOwnershipVerificationForm() {
-    // Auto-fill canonical address from restored wallet
-    const canonicalAddr = walletSession.getActiveAddress ? walletSession.getActiveAddress() : localStorage.getItem('wallet_v1_address');
-
+async function initializeOwnershipVerificationForm() {
     const elem = document.getElementById('walletV1CanonicalAddr');
     if (!elem) return;
 
-    if (canonicalAddr && canonicalAddr !== 'loading...') {
-        // Canonical address resolved - set it and enable submit
-        if (elem.textContent !== undefined) {
-            elem.textContent = canonicalAddr;
-        } else {
-            elem.value = canonicalAddr;
-        }
-        // Enable Verify Ownership button
-        const submitBtn = document.querySelector('[onclick="performLegacyOwnershipVerification()"]');
-        if (submitBtn) {
-            submitBtn.disabled = false;
-            submitBtn.style.opacity = '1';
-            submitBtn.style.cursor = 'pointer';
-        }
+    // Disable button initially
+    const submitBtn = document.querySelector('[onclick="performLegacyOwnershipVerification()"]');
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.style.opacity = '0.5';
+        submitBtn.style.cursor = 'not-allowed';
+    }
+
+    // Show loading state
+    if (elem.textContent !== undefined) {
+        elem.textContent = 'loading...';
     } else {
-        // Canonical address not yet resolved - show loading state and disable submit
-        if (elem.textContent !== undefined) {
-            elem.textContent = 'loading...';
+        elem.value = 'loading...';
+    }
+
+    // Resolve canonical address with retry logic
+    try {
+        const result = await walletSession.resolveCanonicalWalletAddress({
+            maxAttempts: 10,
+            retryIntervalMs: 250,
+            debug: false
+        });
+
+        if (result.ok && result.canonical_v1_address) {
+            // Canonical address resolved - set it and enable submit
+            if (elem.textContent !== undefined) {
+                elem.textContent = result.canonical_v1_address;
+            } else {
+                elem.value = result.canonical_v1_address;
+            }
+            // Enable Verify Ownership button
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.style.opacity = '1';
+                submitBtn.style.cursor = 'pointer';
+            }
         } else {
-            elem.value = 'loading...';
+            // Could not resolve - show error state
+            if (elem.textContent !== undefined) {
+                elem.textContent = 'Not found';
+            } else {
+                elem.value = 'Not found';
+            }
+            // Keep button disabled
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.style.opacity = '0.5';
+                submitBtn.style.cursor = 'not-allowed';
+            }
+            console.warn('[OwnershipVerification] Could not resolve canonical address');
         }
-        // Disable Verify Ownership button
-        const submitBtn = document.querySelector('[onclick="performLegacyOwnershipVerification()"]');
+    } catch (err) {
+        console.error('[OwnershipVerification] Error resolving canonical address:', err);
+        if (elem.textContent !== undefined) {
+            elem.textContent = 'Error';
+        } else {
+            elem.value = 'Error';
+        }
         if (submitBtn) {
             submitBtn.disabled = true;
             submitBtn.style.opacity = '0.5';

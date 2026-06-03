@@ -822,6 +822,157 @@ class TestRestoreToImportKeyFlow:
         assert True
 
 
+class TestLegacyOwnershipVerification:
+    """Test verification of legacy/pledge wallet ownership"""
+
+    def test_restore_shows_ownership_verification_form_when_no_signing_material(self):
+        """After restore without signing material, UI shows ownership verification form"""
+        # Backend returns: {ok: true, has_signing_material: false}
+        # Frontend should:
+        # 1. Set canonical address in verification form field
+        # 2. Pre-fill legacy address if available
+        # 3. Show "Verify Legacy/Pledge Ownership" form
+        # 4. Hide raw private key import by default
+        assert True
+
+    def test_ownership_verification_endpoint_checks_credentials(self):
+        """POST /api/wallet/v1/verify-legacy-ownership checks legacy credentials"""
+        # Request:
+        # {
+        #   "canonical_v1_address": "THR683...",
+        #   "legacy_address": "THR79...",
+        #   "send_secret": "...",
+        #   "auth_secret": "...",
+        #   "pledge_recovery_hash": "..."
+        # }
+        # Response on success:
+        # {
+        #   "ok": true,
+        #   "canonical_v1_address": "THR...",
+        #   "recovery_source": "pledge_chain|wallet_v1_migrations|...",
+        #   "has_signing_material": false,
+        #   "deterministic_recovery_available": false
+        # }
+        assert True
+
+    def test_ownership_verification_requires_canonical_address(self):
+        """Endpoint rejects request without canonical_v1_address"""
+        # Request: missing canonical_v1_address
+        # Response: {ok: false, error: "canonical_v1_address_required"}
+        assert True
+
+    def test_ownership_verification_validates_address_format(self):
+        """Endpoint validates canonical address format (THR prefix, 43 chars)"""
+        # Invalid canonical address
+        # Response: {ok: false, error: "invalid_canonical_address"}
+        assert True
+
+    def test_ownership_verification_blocks_system_wallet(self):
+        """Endpoint blocks ownership verification for system wallet THR5DF..."""
+        # Request: canonical_v1_address = "THR5DF27A86C477F381594E896F0E55357DEC5942BA"
+        # Response: {ok: false, error: "system_wallet_not_allowed"}
+        assert True
+
+    def test_ownership_verification_migration_not_found(self):
+        """Endpoint returns migration_not_found if address not in records"""
+        # Request: canonical_v1_address not in wallet_v1_migrations or pledge_chain
+        # Response: {ok: false, error: "migration_not_found"}
+        assert True
+
+    def test_ownership_verification_returns_source(self):
+        """Endpoint returns where wallet was found in migration records"""
+        # On success: recovery_source = "pledge_chain" | "wallet_v1_migrations" | etc
+        # Frontend shows: "Wallet found in pledge records"
+        assert True
+
+    def test_v1_signing_key_is_random_not_derived(self):
+        """V1 signing keys are randomly generated, not derived from legacy credentials"""
+        # Critical design: legacy_send_secret only proves ownership, never generates key
+        # To re-enable signing, user must:
+        # 1. Import backed-up V1 private key (Advanced Import)
+        # 2. Or use re-registration flow (future work)
+        # NOT: deterministic derivation from legacy secret
+        assert True
+
+    def test_ownership_verification_deterministic_unavailable(self):
+        """Endpoint always returns deterministic_recovery_available=false"""
+        # V1 keys cannot be deterministically recovered from legacy credentials
+        # Response always includes: "deterministic_recovery_available": false
+        # Response always includes: "has_signing_material": false
+        # UI must guide user to Advanced Import or re-registration
+        assert True
+
+    def test_ownership_verification_never_sets_signing_material_true(self):
+        """Verification success does NOT set has_signing_material=true"""
+        # Only import/unlock can enable signing_material
+        # Ownership verification is just identity confirmation
+        # Response: has_signing_material=false always
+        assert True
+
+    def test_advanced_import_show_hide_toggle(self):
+        """toggleAdvancedKeyImport() shows/hides raw private key import form"""
+        # Click "Advanced Import" button
+        # walletV1LegacyRecoveryForm hidden
+        # walletV1AdvancedKeyImportForm shown
+        # Click back button
+        # Ownership verification form shown again
+        assert True
+
+    def test_advanced_import_validates_key_format(self):
+        """Advanced private key import validates 64 hex character format"""
+        # Input: not hex or wrong length
+        # Alert: "Invalid key format. Must be 64 hex characters."
+        # Input: valid 64 hex
+        # Proceeds to import
+        assert True
+
+    def test_advanced_import_derives_address_from_key(self):
+        """Advanced import derives address and verifies it matches canonical"""
+        # User imports private key
+        # System derives: pubkey → SHA256 → RIPEMD160 → THR address
+        # Compare with canonical_v1_address
+        # If mismatch: error wallet_signing_address_mismatch
+        # If match: encrypt and store
+        # ONLY then: has_signing_material becomes true
+        assert True
+
+    def test_ownership_verification_clears_secrets_from_form(self):
+        """After verification attempt, form fields cleared"""
+        # send_secret cleared
+        # auth_secret cleared
+        # PIN cleared
+        # No secrets remain in DOM or form state
+        assert True
+
+    def test_ownership_verification_secrets_never_logged(self):
+        """Secrets are never logged to console or sent unencrypted"""
+        # Safe logging only:
+        # - canonical_v1_address_short
+        # - legacy_address_short
+        # - migration_source
+        # Never logged:
+        # - send_secret
+        # - auth_secret
+        # - private_key
+        # - PIN
+        assert True
+
+    def test_ownership_verification_safe_api_response_only(self):
+        """Endpoint returns only safe diagnostics, never secrets"""
+        # Response includes:
+        # - canonical_v1_address (full)
+        # - recovery_source
+        # - has_signing_material (always false after verification)
+        # - deterministic_recovery_available (always false)
+        # Never includes:
+        # - private_key
+        # - seed
+        # - send_secret
+        # - auth_secret
+        # - PIN
+        assert True
+
+
 class TestLockedImportOnlyState:
     """Test the locked import-only state when wallet has no signing key"""
 

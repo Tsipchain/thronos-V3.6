@@ -10990,7 +10990,7 @@ def api_wallet_v1_verify_legacy_ownership():
     { "ok": false, "error": "..." } 400/404/500
     """
     try:
-        # TOKEN GATING: Check repair token if configured
+        # STAGE 1: TOKEN GATING
         if WALLET_V1_REPAIR_TOKEN_REQUIRED:
             # Check X-Wallet-V1-Repair-Token header first
             token_from_header = request.headers.get("X-Wallet-V1-Repair-Token", "").strip()
@@ -11003,44 +11003,51 @@ def api_wallet_v1_verify_legacy_ownership():
 
             # Check if token provided
             if not token_from_header:
-                app.logger.warning("[verify_legacy_ownership] Token missing - repair_token_required")
+                app.logger.warning("[verify_legacy_ownership] stage=token_check token_missing")
                 return jsonify({"ok": False, "error": "repair_token_required"}), 401
 
             # Check if token is valid (constant-time comparison)
             if not constant_time_compare(token_from_header, WALLET_V1_REPAIR_TOKEN):
-                app.logger.warning("[verify_legacy_ownership] Token invalid - invalid_repair_token")
+                app.logger.warning("[verify_legacy_ownership] stage=token_check token_invalid")
                 return jsonify({"ok": False, "error": "invalid_repair_token"}), 403
 
-        # TOKEN PASSED - Continue with verification
+        # STAGE 2: PARSE REQUEST BODY
         def normalize_address(addr):
             return (addr or "").strip().upper()
 
         data = request.get_json() or {}
         canonical_v1_address = normalize_address(data.get("canonical_v1_address", ""))
         legacy_address = normalize_address(data.get("legacy_address", ""))
+
+        # Extract secrets but NEVER log them
         send_secret = (data.get("send_secret") or "").strip()
         auth_secret = (data.get("auth_secret") or "").strip()
         pledge_recovery_hash = (data.get("pledge_recovery_hash") or "").strip()
 
-        # Log only safe diagnostics - never log secrets
+        # Log only safe diagnostics
         canonical_short = canonical_v1_address[:10] + "..." if canonical_v1_address else "unknown"
         legacy_short = legacy_address[:10] + "..." if legacy_address else "unknown"
         app.logger.info(
-            "[verify_legacy_ownership] Verification attempt",
+            "[verify_legacy_ownership] stage=parse_body",
             extra={"canonical_short": canonical_short, "legacy_short": legacy_short}
         )
 
-        # Validation
+        # STAGE 3: VALIDATE ADDRESSES
         if not canonical_v1_address:
+            app.logger.warning("[verify_legacy_ownership] stage=validation error=canonical_v1_address_required")
             return jsonify({"ok": False, "error": "canonical_v1_address_required"}), 400
 
         if not validate_thr_address(canonical_v1_address):
+            app.logger.warning("[verify_legacy_ownership] stage=validation error=invalid_canonical_address")
             return jsonify({"ok": False, "error": "invalid_canonical_address"}), 400
 
-        if is_system_wallet(canonical_v1_address):
+        # Check system wallet (inlined - no function call)
+        SYSTEM_WALLET_ADDRESS = "THR5DF27A86C477F381594E896F0E55357DEC5942BA"
+        if normalize_address(canonical_v1_address) == SYSTEM_WALLET_ADDRESS:
+            app.logger.warning("[verify_legacy_ownership] stage=validation error=system_wallet_not_allowed")
             return jsonify({"ok": False, "error": "system_wallet_not_allowed"}), 400
 
-        # Find wallet in migration records
+        # STAGE 4: LOOKUP MIGRATION RECORDS
         from wallet_v1_migration import search_all_migration_sources
 
         migration_result = search_all_migration_sources(
@@ -11049,12 +11056,13 @@ def api_wallet_v1_verify_legacy_ownership():
         )
 
         if not migration_result:
+            app.logger.warning("[verify_legacy_ownership] stage=ownership_lookup error=migration_not_found")
             return jsonify({"ok": False, "error": "migration_not_found"}), 404
 
-        # Log only safe diagnostics
+        # STAGE 5: BUILD SUCCESS RESPONSE
         recovery_source = migration_result.get("migration_source", "unknown")
         app.logger.info(
-            "[verify_legacy_ownership] Success",
+            "[verify_legacy_ownership] stage=response_build success",
             extra={"canonical_short": canonical_short, "recovery_source": recovery_source}
         )
 
@@ -11075,8 +11083,8 @@ def api_wallet_v1_verify_legacy_ownership():
         # Structured error response, never 500 without proper context
         error_type = type(e).__name__
         app.logger.error(
-            "[verify_legacy_ownership] Exception",
-            extra={"exception_type": error_type, "error_msg": str(e)[:100]}
+            "[verify_legacy_ownership] stage=exception",
+            extra={"exception_type": error_type, "error": str(e)[:100]}
         )
         return jsonify({
             "ok": False,

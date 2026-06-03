@@ -5796,14 +5796,37 @@ function toggleAdvancedKeyImport() {
 function initializeOwnershipVerificationForm() {
     // Auto-fill canonical address from restored wallet
     const canonicalAddr = walletSession.getActiveAddress ? walletSession.getActiveAddress() : localStorage.getItem('wallet_v1_address');
-    if (canonicalAddr) {
-        const elem = document.getElementById('walletV1CanonicalAddr');
-        if (elem) {
-            if (elem.textContent !== undefined) {
-                elem.textContent = canonicalAddr;
-            } else {
-                elem.value = canonicalAddr;
-            }
+
+    const elem = document.getElementById('walletV1CanonicalAddr');
+    if (!elem) return;
+
+    if (canonicalAddr && canonicalAddr !== 'loading...') {
+        // Canonical address resolved - set it and enable submit
+        if (elem.textContent !== undefined) {
+            elem.textContent = canonicalAddr;
+        } else {
+            elem.value = canonicalAddr;
+        }
+        // Enable Verify Ownership button
+        const submitBtn = document.querySelector('[onclick="performLegacyOwnershipVerification()"]');
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.style.opacity = '1';
+            submitBtn.style.cursor = 'pointer';
+        }
+    } else {
+        // Canonical address not yet resolved - show loading state and disable submit
+        if (elem.textContent !== undefined) {
+            elem.textContent = 'loading...';
+        } else {
+            elem.value = 'loading...';
+        }
+        // Disable Verify Ownership button
+        const submitBtn = document.querySelector('[onclick="performLegacyOwnershipVerification()"]');
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.style.opacity = '0.5';
+            submitBtn.style.cursor = 'not-allowed';
         }
     }
 
@@ -5822,16 +5845,18 @@ async function performLegacyOwnershipVerification() {
     const canonicalAddrElem = document.getElementById('walletV1CanonicalAddr');
     const canonicalAddr = (canonicalAddrElem?.textContent || canonicalAddrElem?.value || '').trim();
 
+    // Block submit if canonical address is loading or blank
+    if (!canonicalAddr || canonicalAddr === 'loading...') {
+        alert('Canonical wallet address is still loading.\nPlease wait a moment and try again.');
+        return;
+    }
+
     const legacyAddr = (document.getElementById('walletV1LegacyAddr')?.value || '').trim();
     const sendSecret = (document.getElementById('walletV1SendSecret')?.value || '').trim();
     const authSecret = (document.getElementById('walletV1AuthSecret')?.value || '').trim();
     const pledgeHash = (document.getElementById('walletV1PledgeHash')?.value || '').trim();
 
     // Validate required fields
-    if (!canonicalAddr) {
-        alert('Canonical wallet address could not be loaded.\nPlease restore your wallet first.');
-        return;
-    }
     if (!legacyAddr && !sendSecret) {
         alert('Please provide either:\n- Legacy THR Address\nOR\n- Legacy Send Secret');
         return;
@@ -5840,9 +5865,9 @@ async function performLegacyOwnershipVerification() {
     try {
         console.log('[OwnershipVerification] Verifying ownership for:', canonicalAddr.substring(0, 10) + '...');
 
-        // Call backend endpoint to verify legacy credentials
+        // Call user-facing ownership verification endpoint (NO repair token required)
         // NOTE: PIN is NOT sent - ownership verification does not enable signing
-        const response = await fetch('/api/wallet/v1/verify-legacy-ownership', {
+        const response = await fetch('/api/wallet/v1/ownership/verify', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -5850,7 +5875,7 @@ async function performLegacyOwnershipVerification() {
                 legacy_address: legacyAddr,
                 send_secret: sendSecret,
                 auth_secret: authSecret,
-                pledge_recovery_hash: pledgeHash
+                pledge_hash: pledgeHash
             })
         });
 
@@ -5874,7 +5899,17 @@ async function performLegacyOwnershipVerification() {
             }
         }
 
+        if (!result.ownership_verified) {
+            console.warn('[OwnershipVerification] Verification failed:', result.error);
+            alert('Could not verify ownership. Please check your legacy credentials.');
+            return;
+        }
+
         console.log('[OwnershipVerification] Ownership verified. Recovery source:', result.recovery_source);
+
+        // Store ownership_verification_id for re-key request (memory/session only, NOT localStorage)
+        window.walletV1OwnershipVerificationId = result.ownership_verification_id;
+        window.walletV1OwnershipVerificationExpires = result.expires_at;
 
         // Show success feedback
         alert('✓ Ownership verified!\n\nYour wallet identity is confirmed.\nYou are currently in read-only mode.\n\nNext: Generate or import a signing key to enable transactions.');
@@ -6085,17 +6120,17 @@ async function walletV1SubmitRekeyRequest() {
             headers['X-Wallet-V1-Repair-Token'] = token;
         }
 
+        const ownershipVerificationId = window.walletV1OwnershipVerificationId;
+        if (!ownershipVerificationId) {
+            return alert('Ownership verification ID not found. Please verify ownership first.');
+        }
+
         const response = await fetch('/api/wallet/v1/rekey/request', {
             method: 'POST',
             headers: headers,
             body: JSON.stringify({
                 canonical_v1_address: canonicalAddr,
-                legacy_address: legacyAddr,
-                ownership_proof: {
-                    send_secret: '', // Already verified
-                    auth_secret: '',
-                    pledge_hash: ''
-                },
+                ownership_verification_id: ownershipVerificationId,  // Link to verified ownership
                 new_public_key: publicKey,
                 new_key_address: signerAddress  // Address derived from new key (different from canonical)
             })

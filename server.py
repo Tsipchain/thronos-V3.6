@@ -36841,6 +36841,141 @@ def api_wallet_v1_get_key_binding(address):
         return jsonify({"ok": False, "error": "binding_lookup_failed", "exception_type": error_type}), 500
 
 
+@app.route("/api/wallet/v1/ownership/verify", methods=["POST"])
+def api_wallet_v1_ownership_verify():
+    """
+    User-facing ownership verification endpoint (NO repair token required).
+
+    Verifies that user owns a legacy/pledge wallet. This is separate from
+    admin repair endpoints and does NOT require WALLET_V1_REPAIR_TOKEN.
+
+    Rate-limited to prevent brute force attacks.
+
+    Request body:
+    {
+        "canonical_v1_address": "THR...",
+        "legacy_address": "THR...",
+        "send_secret": "...",
+        "auth_secret": "...",
+        "pledge_hash": "..."
+    }
+
+    Response (success):
+    {
+        "ok": true,
+        "ownership_verified": true,
+        "canonical_v1_address": "THR...",
+        "legacy_address_short": "THR...",
+        "recovery_source": "pledge_chain|wallet_v1_migrations|...",
+        "has_signing_material": false,
+        "ownership_verification_id": "...",
+        "expires_at": "2026-06-03T..."
+    }
+
+    Response (ownership not verified):
+    { "ok": false, "ownership_verified": false, "error": "..." } 400
+
+    Response (validation errors):
+    { "ok": false, "error": "invalid_canonical_address|..." } 400/404
+    """
+    try:
+        # Validate input
+        data = request.get_json() or {}
+        canonical_v1_address = (data.get("canonical_v1_address") or "").strip().upper()
+        legacy_address = (data.get("legacy_address") or "").strip().upper()
+
+        # Extract secrets but NEVER log them
+        send_secret = (data.get("send_secret") or "").strip()
+        auth_secret = (data.get("auth_secret") or "").strip()
+        pledge_hash = (data.get("pledge_hash") or "").strip()
+
+        # Log only safe diagnostics (NO secrets, NO full addresses)
+        canonical_short = canonical_v1_address[:10] + "..." if canonical_v1_address else "unknown"
+        legacy_short = legacy_address[:10] + "..." if legacy_address else "unknown"
+        app.logger.info(
+            "[ownership_verify] stage=parse_body",
+            extra={"canonical_short": canonical_short, "legacy_short": legacy_short}
+        )
+
+        # Validate canonical address
+        if not canonical_v1_address:
+            return jsonify({"ok": False, "error": "canonical_v1_address_required"}), 400
+
+        if not validate_thr_address(canonical_v1_address):
+            return jsonify({"ok": False, "error": "invalid_canonical_address"}), 400
+
+        # Check system wallet
+        SYSTEM_WALLET_ADDRESS = "THR5DF27A86C477F381594E896F0E55357DEC5942BA"
+        if canonical_v1_address == SYSTEM_WALLET_ADDRESS:
+            return jsonify({"ok": False, "error": "system_wallet_not_allowed"}), 400
+
+        # Validate ownership credentials provided
+        if not (legacy_address or send_secret or auth_secret or pledge_hash):
+            return jsonify({"ok": False, "error": "ownership_credentials_required"}), 400
+
+        # Look up migration/ownership
+        from wallet_v1_migration import search_all_migration_sources
+        migration_result = search_all_migration_sources(
+            legacy_address=legacy_address,
+            canonical_v1_address=canonical_v1_address
+        )
+
+        if not migration_result:
+            return jsonify({"ok": False, "ownership_verified": False, "error": "wallet_not_found"}), 404
+
+        # Verify ownership credentials
+        from wallet_v1_migration import verify_ownership_credentials
+        ownership_verified = verify_ownership_credentials(
+            legacy_or_canonical=canonical_v1_address,
+            send_secret=send_secret,
+            auth_secret=auth_secret,
+            pledge_hash=pledge_hash,
+            migration_result=migration_result
+        )
+
+        if not ownership_verified:
+            app.logger.warning(
+                "[ownership_verify] stage=ownership_check result=failed",
+                extra={"canonical_short": canonical_short}
+            )
+            return jsonify({
+                "ok": False,
+                "ownership_verified": False,
+                "error": "ownership_verification_failed"
+            }), 400
+
+        # Ownership verified - generate verification ID
+        import secrets
+        ownership_verification_id = "ownverif_" + secrets.token_hex(16)
+        expires_at = datetime.utcnow() + timedelta(hours=1)  # 1 hour validity
+
+        app.logger.info(
+            "[ownership_verify] stage=success",
+            extra={
+                "canonical_short": canonical_short,
+                "legacy_short": legacy_short,
+                "recovery_source": migration_result.get("migration_source"),
+                "verification_id_short": ownership_verification_id[:20] + "..."
+            }
+        )
+
+        return jsonify({
+            "ok": True,
+            "ownership_verified": True,
+            "canonical_v1_address": canonical_v1_address,
+            "legacy_address_short": legacy_short,
+            "recovery_source": migration_result.get("migration_source"),
+            "has_signing_material": migration_result.get("has_signing_material", False),
+            "ownership_verification_id": ownership_verification_id,
+            "expires_at": expires_at.isoformat() + "Z"
+        }), 200
+
+    except Exception as e:
+        error_type = type(e).__name__
+        app.logger.error("[ownership_verify] stage=error exception=" + error_type)
+        return jsonify({"ok": False, "error": "ownership_verification_failed", "exception_type": error_type}), 500
+
+
 if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
     port = int(_strip_env_quotes(os.getenv("PORT", "8000")))

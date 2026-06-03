@@ -1189,3 +1189,68 @@ def search_all_migration_sources(legacy_address=None, canonical_v1_address=None)
         pass
 
     return None
+
+
+def verify_ownership_credentials(legacy_or_canonical, send_secret="", auth_secret="", pledge_hash="", migration_result=None):
+    """
+    Verify ownership credentials for a wallet using legacy/pledge secrets.
+
+    Args:
+        legacy_or_canonical: Legacy address or canonical V1 address
+        send_secret: Legacy send_secret
+        auth_secret: Legacy auth_secret or passphrase
+        pledge_hash: Pledge recovery hash/proof
+        migration_result: Result from search_all_migration_sources (optional for optimization)
+
+    Returns:
+        True if ownership verified, False otherwise
+    """
+    if not migration_result:
+        migration_result = search_all_migration_sources(
+            legacy_address=legacy_or_canonical,
+            canonical_v1_address=legacy_or_canonical
+        )
+
+    if not migration_result:
+        return False
+
+    legacy_addr = migration_result.get("legacy_address")
+    canonical_addr = migration_result.get("canonical_v1_address")
+
+    if not legacy_addr:
+        return False
+
+    try:
+        # Try send_secret verification first
+        if send_secret:
+            try:
+                if verify_legacy_secret_once(legacy_addr, send_secret):
+                    return True
+            except Exception:
+                pass
+
+        # Try auth_secret verification
+        if auth_secret:
+            try:
+                if verify_legacy_secret_once(legacy_addr, auth_secret):
+                    return True
+            except Exception:
+                pass
+
+        # Try pledge_hash verification (if implemented in migration backend)
+        if pledge_hash:
+            try:
+                # Check if pledge_hash matches migration record
+                mmap = _load_map() or {}
+                rec = mmap.get(legacy_addr, {})
+                stored_pledge_hash = rec.get("pledge_hash", "")
+                if stored_pledge_hash and stored_pledge_hash == pledge_hash:
+                    return True
+            except Exception:
+                pass
+
+        # If any credential provided but none verified, ownership not confirmed
+        return False
+
+    except Exception:
+        return False

@@ -1428,6 +1428,12 @@ GATEWAY_ADDRESS   = "THR_FIAT_GATEWAY_V1"
 WALLET_V1_REPAIR_TOKEN = os.getenv("WALLET_V1_REPAIR_TOKEN", "").strip()
 WALLET_V1_REPAIR_TOKEN_REQUIRED = bool(WALLET_V1_REPAIR_TOKEN)
 
+# Feature flag for legacy wallet repair UI (admin-only mode)
+# When disabled (default), normal users don't see legacy recovery/restoration UI
+# Legacy wallets can still be repaired via admin endpoints with repair token
+# Set via environment: WALLET_V1_LEGACY_REPAIR_UI=1
+WALLET_V1_LEGACY_REPAIR_UI_ENABLED = _strip_env_quotes(os.getenv("WALLET_V1_LEGACY_REPAIR_UI", "0")).lower() in ("1", "true", "yes")
+
 # FIX 8: Initialize billing module (clean separation: Chat=credits, Architect=THR)
 import billing
 billing.init_billing(DATA_DIR, LEDGER_FILE, CHAIN_FILE, AI_CREDITS_FILE, AI_WALLET_ADDRESS)
@@ -10887,6 +10893,101 @@ def api_wallet_v1_routes():
         }), 200
     except Exception as e:
         return jsonify({"ok": False, "error": "diagnostic_error"}), 500
+
+
+@app.route("/api/wallet/v1/status", methods=["GET"])
+def api_wallet_v1_status():
+    """
+    Wallet V1 status endpoint for determining which UI flows should be shown.
+
+    Returns wallet mode:
+    - needs_pledge: No pledge wallet found
+    - pledge_pending: Pledge exists but not confirmed
+    - needs_key_setup: Pledge confirmed, canonical address exists, but no signing key
+    - locked: Signing key exists but wallet is locked
+    - signing_ready: Signing key exists and wallet is unlocked
+    - readonly: Wallet exists but no valid key binding/signing key
+
+    Query params:
+    - legacy_address: Optional legacy address to check
+    - canonical_address: Optional canonical address to check
+
+    Response:
+    {
+      ok: true,
+      has_pledge: true/false,
+      pledge_status: "none|pending|confirmed",
+      canonical_v1_address: "THR..." or null,
+      has_key_binding: true/false,
+      has_local_signing_key: unknown (client-side only),
+      mode: "needs_pledge|pledge_pending|needs_key_setup|locked|signing_ready|readonly",
+      legacy_repair_ui_enabled: true/false
+    }
+    """
+    try:
+        legacy_address = (request.args.get("legacy_address") or "").strip().upper()
+        canonical_address = (request.args.get("canonical_address") or "").strip().upper()
+
+        # Determine pledge status
+        has_pledge = False
+        pledge_status = "none"
+        canonical_v1_address = None
+
+        # Check migration/pledge records
+        from wallet_v1_migration import search_all_migration_sources
+        if canonical_address or legacy_address:
+            migration_result = search_all_migration_sources(
+                legacy_address=legacy_address,
+                canonical_v1_address=canonical_address
+            )
+            if migration_result:
+                has_pledge = True
+                pledge_status = "confirmed"  # If found in migration sources, it's confirmed
+                canonical_v1_address = migration_result.get("canonical_v1_address")
+
+        # Check for key bindings
+        has_key_binding = False
+        if canonical_v1_address:
+            bindings = load_key_bindings()
+            has_key_binding = any(
+                b.get("canonical_v1_address") == canonical_v1_address and
+                b.get("status") == "active"
+                for b in bindings
+            )
+
+        # Determine mode
+        mode = "needs_pledge"
+        if has_pledge:
+            if pledge_status == "confirmed":
+                if has_key_binding:
+                    mode = "locked"  # Binding exists, frontend determines if locked/unlocked
+                else:
+                    mode = "needs_key_setup"
+            else:
+                mode = "pledge_pending"
+        elif canonical_v1_address:
+            # Canonical exists but no pledge record - likely old/admin restored
+            mode = "readonly"
+
+        return jsonify({
+            "ok": True,
+            "has_pledge": has_pledge,
+            "pledge_status": pledge_status,
+            "canonical_v1_address": canonical_v1_address,
+            "has_key_binding": has_key_binding,
+            "has_local_signing_key": None,  # Unknown from server perspective
+            "mode": mode,
+            "legacy_repair_ui_enabled": WALLET_V1_LEGACY_REPAIR_UI_ENABLED
+        }), 200
+
+    except Exception as e:
+        error_type = type(e).__name__
+        app.logger.error("[wallet_v1_status] exception=" + error_type)
+        return jsonify({
+            "ok": False,
+            "error": "wallet_status_error",
+            "legacy_repair_ui_enabled": WALLET_V1_LEGACY_REPAIR_UI_ENABLED
+        }), 500
 
 
 @app.route("/api/wallet/v1/migration-lookup-debug", methods=["GET"])

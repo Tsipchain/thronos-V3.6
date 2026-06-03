@@ -5306,7 +5306,53 @@ function showWalletContentSection(){
     if(contentSection) contentSection.style.display = 'block';
 }
 
-function openHeaderWalletModal(){
+async function initializeWalletV1LegacyRepairUI() {
+    // Check if legacy repair UI should be shown based on feature flag
+    // This function determines visibility of restore/verify/rekey forms
+    try {
+        const response = await fetch('/api/wallet/v1/status');
+        const status = await response.json();
+
+        if (status.ok) {
+            const legacyRepairEnabled = status.legacy_repair_ui_enabled;
+            const legacyRecoveryForm = document.getElementById('walletV1LegacyRecoveryForm');
+            const advancedImportForm = document.getElementById('walletV1AdvancedKeyImportForm');
+
+            if (!legacyRepairEnabled) {
+                // Hide legacy recovery UI for normal users
+                if (legacyRecoveryForm) {
+                    legacyRecoveryForm.style.display = 'none';
+                }
+                if (advancedImportForm) {
+                    advancedImportForm.style.display = 'none';
+                }
+                console.log('[WalletV1] Legacy repair UI disabled - admin mode only');
+            } else {
+                // Show legacy recovery UI for admin
+                if (legacyRecoveryForm) {
+                    legacyRecoveryForm.style.display = 'block';
+                }
+                console.log('[WalletV1] Legacy repair UI enabled');
+            }
+        }
+    } catch (err) {
+        console.warn('[WalletV1] Could not check legacy repair UI status:', err);
+        // Default: hide legacy recovery UI unless feature flag is explicitly set
+        const legacyRecoveryForm = document.getElementById('walletV1LegacyRecoveryForm');
+        const advancedImportForm = document.getElementById('walletV1AdvancedKeyImportForm');
+        if (legacyRecoveryForm) {
+            legacyRecoveryForm.style.display = 'none';
+        }
+        if (advancedImportForm) {
+            advancedImportForm.style.display = 'none';
+        }
+    }
+}
+
+async function openHeaderWalletModal(){
+    // Initialize legacy repair UI visibility based on server feature flag
+    await initializeWalletV1LegacyRepairUI();
+
     const addr = walletSession.getAddress();
     const pin = walletSession.getPin();
     const walletState = walletSession.getWalletState ? walletSession.getWalletState() : 'not_connected';

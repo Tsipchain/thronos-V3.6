@@ -275,11 +275,20 @@ def verify_ecdsa_signature(signed_tx: Dict[str, Any]) -> Tuple[bool, str]:
 
 def verify_publickey_matches_address(signed_tx: Dict[str, Any]) -> Tuple[bool, str]:
     """
-    CRITICAL: Verify that publicKey derives to the address in tx.from
-    
+    CRITICAL: Verify that publicKey can sign for the address in tx.from
+
     Using CANONICAL address derivation (Bitcoin-style: SHA256→RIPEMD160).
-    
-    Prevents attacker from using valid signature + mismatched address.
+
+    Rules:
+    1. If publicKey derives to from_address directly → allow (standard case)
+    2. If not, check for active key binding (re-key ceremony case):
+       - from_address must have active key binding
+       - publicKey hash must match binding
+       - binding must be status='active'
+    3. Otherwise reject
+
+    Prevents attacker from using valid signature + mismatched address,
+    while allowing re-keyed wallets to sign with bound keys.
     """
     try:
         public_key_hex = signed_tx.get('publicKey')
@@ -291,14 +300,54 @@ def verify_publickey_matches_address(signed_tx: Dict[str, Any]) -> Tuple[bool, s
         # Derive address from public key using CANONICAL algorithm
         derived_address = derive_thronos_address(public_key_hex)
 
-        # Compare
-        if derived_address != from_address:
-            return (
-                False,
-                f"address_mismatch:derived_{derived_address}_vs_claimed_{from_address}",
-            )
+        # RULE 1: Check if key derives to the claimed address (standard case)
+        if derived_address == from_address:
+            return True, ""
 
-        return True, ""
+        # RULE 2: Check for active key binding (re-key ceremony case)
+        try:
+            import hashlib
+            public_key_hash = hashlib.sha256(public_key_hex.encode()).hexdigest()[:32]
+
+            # Load key bindings from server state
+            import os
+            import json
+            bindings_file = os.path.join(os.environ.get('DATA_DIR', 'data'), 'wallet_v1_key_bindings.json')
+
+            if os.path.exists(bindings_file):
+                with open(bindings_file, 'r') as f:
+                    bindings = json.load(f)
+
+                # Find active binding for this address
+                for binding in bindings:
+                    if (binding.get('canonical_v1_address') == from_address and
+                        binding.get('status') == 'active'):
+                        # Check if public key hash matches
+                        if binding.get('active_public_key_hash') == public_key_hash:
+                            # Key binding is valid
+                            bound_key_address = binding.get('bound_key_address', '')
+                            if derived_address == bound_key_address:
+                                # Hash matches and derived address matches binding
+                                return True, ""
+                            else:
+                                return (
+                                    False,
+                                    f"binding_address_mismatch:expected_{bound_key_address}_got_{derived_address}",
+                                )
+                        else:
+                            return (
+                                False,
+                                f"binding_key_hash_mismatch:no_matching_binding",
+                            )
+        except Exception as binding_check_err:
+            # Binding check failed, fall through to final error
+            pass
+
+        # No matching binding found
+        return (
+            False,
+            f"address_binding_invalid:derived_{derived_address}_vs_claimed_{from_address}_no_binding",
+        )
 
     except Exception as e:
         return False, f"address_binding_failed:{str(e)}"

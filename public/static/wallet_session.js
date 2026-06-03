@@ -511,6 +511,52 @@
     return { address, publicKey: pub };
   }
 
+  async function generateV1KeyPair(){
+    // Generate a new V1 key pair without storing it
+    // Returns {success: true, publicKey, address} or {success: false, error}
+    try {
+      const secp = await _ensureSecpLoaded();
+      if (!secp || !secp.getPublicKey || !secp.utils) {
+        return {success: false, error: 'secp256k1_library_missing'};
+      }
+
+      const privBytes = secp.utils.randomPrivateKey ? secp.utils.randomPrivateKey() : crypto.getRandomValues(new Uint8Array(32));
+      const priv = typeof privBytes === 'string' ? privBytes.replace(/^0x/, '') : bytesToHex(privBytes);
+      const pubBytes = secp.getPublicKey(priv, true);
+      const pub = typeof pubBytes === 'string' ? pubBytes.replace(/^0x/, '') : bytesToHex(pubBytes);
+
+      const address = await deriveAddressFromPublicKey(pub);
+
+      return {success: true, publicKey: pub, address: address, privateKey: priv};
+    } catch(err) {
+      return {success: false, error: err && err.message ? err.message : 'Failed to generate key pair'};
+    }
+  }
+
+  async function derivePublicKeyAndAddress(privateKeyHex){
+    // Derive public key and address from a private key hex string
+    // Returns {success: true, publicKey, address} or {success: false, error}
+    try {
+      if (!privateKeyHex || typeof privateKeyHex !== 'string') {
+        return {success: false, error: 'Invalid private key format'};
+      }
+
+      const secp = await _ensureSecpLoaded();
+      if (!secp || !secp.getPublicKey) {
+        return {success: false, error: 'secp256k1_library_missing'};
+      }
+
+      const pubBytes = secp.getPublicKey(privateKeyHex, true);
+      const pub = typeof pubBytes === 'string' ? pubBytes.replace(/^0x/, '') : bytesToHex(pubBytes);
+
+      const address = await deriveAddressFromPublicKey(pub);
+
+      return {success: true, publicKey: pub, address: address};
+    } catch(err) {
+      return {success: false, error: err && err.message ? err.message : 'Failed to derive public key and address'};
+    }
+  }
+
   function hasSigningMaterial(address){
     return !!(localStorage.getItem(V1_ENCRYPTED_KEY) || unlockedPrivateKeyHex || getSendSeed(address));
   }
@@ -954,6 +1000,7 @@
     getDebugState, restoreToMigratedWallet, resetActiveWalletPointers, clearAllWalletData, isValidThrAddress,
     persistActiveUserAddress, isSystemWalletAddress,
     getSigningKeyMismatch, clearLocalSigningKey, importSigningKeyForAddress, getWalletState,
-    hasPledgeOrMigrationSource, getModalState
+    hasPledgeOrMigrationSource, getModalState,
+    generateV1KeyPair, derivePublicKeyAndAddress
   };
 })(window);

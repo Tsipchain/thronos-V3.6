@@ -1742,6 +1742,83 @@
                         </div>
                     </div>
 
+                    <!-- Re-Key Ceremony Section (shown after ownership verification) -->
+                    <div id="walletV1RekeyCeremonyForm" style="display:none; background:#1a2a2a; border:1px solid #00aaff; border-radius:8px; padding:15px; margin:12px 0;">
+                        <h5 style="color:#00aaff; margin-top:0;">✓ Ownership Verified - Re-Key Ceremony</h5>
+                        <p style="font-size:0.85em; color:#0ff; margin-bottom:12px;">
+                            Your legacy wallet ownership has been verified. Now generate or import a signing key to complete recovery.
+                        </p>
+
+                        <!-- Generated Key Display -->
+                        <div id="walletV1GeneratedKeyDisplay" style="display:none; background:#000; border:1px solid #00aaff; border-radius:6px; padding:10px; margin-bottom:10px;">
+                            <div style="font-size:0.8em; color:#9ff; margin-bottom:8px;">
+                                <strong>Generated Public Key:</strong>
+                            </div>
+                            <input type="text" id="walletV1GeneratedPublicKey" readonly style="width:100%; padding:8px; background:#000; color:#0ff; border:1px solid #00aaff; border-radius:4px; font-size:0.75em; font-family:monospace; margin-bottom:8px;" />
+
+                            <div style="font-size:0.8em; color:#9ff; margin-bottom:4px;">
+                                <strong>Signer Address (derived from key):</strong>
+                            </div>
+                            <input type="text" id="walletV1GeneratedAddress" readonly style="width:100%; padding:8px; background:#000; color:#0ff; border:1px solid #00aaff; border-radius:4px; font-size:0.75em; font-family:monospace; margin-bottom:8px;" />
+
+                            <div style="font-size:0.75em; color:#9f9; margin-bottom:8px;">
+                                Wallet Identity (canonical): <span id="walletV1CanonicalAddrCheck" style="font-family:monospace; font-weight:bold;"></span>
+                            </div>
+                            <div style="font-size:0.75em; color:#9f9; margin-bottom:8px;">
+                                After approval, this key will be bound to sign for your canonical wallet.
+                            </div>
+                        </div>
+
+                        <!-- Key Generation/Import Buttons -->
+                        <div style="display:flex; gap:8px; margin-bottom:12px;">
+                            <button onclick="walletV1GenerateNewKey()" style="flex:1; padding:10px; background:#0066cc; color:#fff; border:1px solid #00aaff; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                🔑 Generate New Signing Key
+                            </button>
+                            <button onclick="toggleWalletV1ImportExisting()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
+                                Import Existing Key
+                            </button>
+                        </div>
+
+                        <!-- Existing Key Import (hidden by default) -->
+                        <div id="walletV1ImportExistingKeyForm" style="display:none; background:#1a1a2a; border:1px solid #8a6a4a; border-radius:6px; padding:10px; margin-bottom:12px;">
+                            <div style="margin-bottom:8px;">
+                                <label style="display:block; font-size:0.85em; color:#9f9; margin-bottom:4px;">Existing V1 Private Key (Hex)</label>
+                                <input type="password" id="walletV1ExistingKeyHex" placeholder="64 hex characters" style="width:100%; padding:8px; background:#000; color:#0f0; border:1px solid #8a6a4a; border-radius:4px; font-size:0.75em; font-family:monospace;" />
+                            </div>
+                            <div style="margin-bottom:8px;">
+                                <label style="display:block; font-size:0.85em; color:#9f9; margin-bottom:4px;">PIN</label>
+                                <input type="password" id="walletV1ExistingKeyPin" placeholder="4-8 digits" style="width:100%; padding:8px; background:#000; color:#0f0; border:1px solid #8a6a4a; border-radius:4px; font-size:0.75em;" />
+                            </div>
+                            <div style="display:flex; gap:8px;">
+                                <button onclick="walletV1ImportExistingKey()" style="flex:1; padding:8px; background:#00aa66; color:#000; border:1px solid #8a6a4a; border-radius:4px; cursor:pointer; font-weight:bold; font-size:0.85em;">
+                                    ✓ Import Key
+                                </button>
+                                <button onclick="toggleWalletV1ImportExisting()" style="flex:1; padding:8px; background:#666; color:#fff; border:1px solid #999; border-radius:4px; cursor:pointer; font-size:0.85em;">
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Re-Key Request Status -->
+                        <div id="walletV1RekeyStatusDisplay" style="display:none; background:#0a2a0a; border:1px solid #00ff66; border-radius:6px; padding:10px; margin-bottom:12px;">
+                            <div style="font-size:0.85em; color:#0ff; margin-bottom:6px;">
+                                <strong>Re-Key Status:</strong> <span id="walletV1RekeyStatus" style="color:#0f0;">pending</span>
+                            </div>
+                            <div id="walletV1RekeyEventId" style="font-size:0.75em; color:#9f9; font-family:monospace; margin-bottom:6px;"></div>
+                            <div id="walletV1RekeyCooldownInfo" style="font-size:0.75em; color:#9f9; display:none;"></div>
+                        </div>
+
+                        <!-- Submit Re-Key Request -->
+                        <div style="display:flex; gap:8px;">
+                            <button onclick="walletV1SubmitRekeyRequest()" id="walletV1SubmitRekeyBtn" style="flex:1; padding:10px; background:#0066cc; color:#fff; border:1px solid #00aaff; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                ⚡ Submit Re-Key Request
+                            </button>
+                            <button onclick="toggleWalletV1RekeySection()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+
                     <div data-missing-key-recovery></div>
                 </div>
 
@@ -5682,14 +5759,21 @@ async function performLegacyOwnershipVerification() {
 
         console.log('[OwnershipVerification] Ownership verified. Recovery source:', result.recovery_source);
 
-        // Ownership verified, but signing key recovery not deterministic
-        // User must provide backup key or use re-registration flow
-        alert('✓ Ownership verified!\n\nYour wallet was found in ' + result.recovery_source + '.\n\nTo re-enable signing, please use Advanced Import with a backup of your V1 private key.');
+        // Ownership verified successfully - show re-key ceremony
+        const canonicalAddr = document.getElementById('walletV1CanonicalAddr').value;
+        document.getElementById('walletV1CanonicalAddrCheck').textContent = canonicalAddr;
+
+        // Hide legacy recovery form, show re-key ceremony form
+        document.getElementById('walletV1LegacyRecoveryForm').style.display = 'none';
+        document.getElementById('walletV1AdvancedKeyImportForm').style.display = 'none';
+        document.getElementById('walletV1RekeyCeremonyForm').style.display = 'block';
 
         // Clear form
         document.getElementById('walletV1SendSecret').value = '';
         document.getElementById('walletV1AuthSecret').value = '';
         document.getElementById('walletV1RecoveryPin').value = '';
+
+        console.log('[OwnershipVerification] Showing re-key ceremony form for', canonicalAddr.substring(0, 10) + '...');
 
     } catch(err) {
         console.error('[OwnershipVerification] Error:', err);
@@ -5726,6 +5810,195 @@ async function performAdvancedKeyImport() {
     } catch(err) {
         console.error('[AdvancedImport] Error:', err);
         alert('Error: ' + (err.message || 'Import failed'));
+    }
+}
+
+// Re-Key Ceremony Functions
+function toggleWalletV1RekeySection() {
+    const form = document.getElementById('walletV1RekeyCeremonyForm');
+    const legacyForm = document.getElementById('walletV1LegacyRecoveryForm');
+    if (form.style.display === 'block') {
+        form.style.display = 'none';
+        legacyForm.style.display = 'block';
+    } else {
+        form.style.display = 'block';
+        legacyForm.style.display = 'none';
+    }
+}
+
+function toggleWalletV1ImportExisting() {
+    const importForm = document.getElementById('walletV1ImportExistingKeyForm');
+    if (importForm.style.display === 'block') {
+        importForm.style.display = 'none';
+    } else {
+        importForm.style.display = 'block';
+    }
+}
+
+async function walletV1GenerateNewKey() {
+    try {
+        console.log('[RekeyCeremony] Generating new V1 signing key...');
+
+        // Use wallet session to generate key pair and derive address
+        if (!walletSession.generateV1KeyPair) {
+            return alert('Key generation API not available');
+        }
+
+        const result = walletSession.generateV1KeyPair();
+        if (!result.success) {
+            return alert('Failed to generate key: ' + (result.error || 'Unknown error'));
+        }
+
+        const { publicKey, address } = result;
+
+        // Display generated key for verification
+        document.getElementById('walletV1GeneratedPublicKey').value = publicKey;
+        document.getElementById('walletV1GeneratedAddress').value = address;
+        document.getElementById('walletV1GeneratedKeyDisplay').style.display = 'block';
+
+        const canonicalAddr = document.getElementById('walletV1CanonicalAddr').value;
+        console.log('[RekeyCeremony] Generated key derives signer address: ' + address + ', canonical wallet: ' + canonicalAddr);
+
+        // Store for re-key request
+        // Note: address will be DIFFERENT from canonical (this is correct)
+        window.walletV1CurrentPublicKey = publicKey;
+        window.walletV1CurrentAddress = address;
+
+    } catch(err) {
+        console.error('[RekeyCeremony] Generation error:', err);
+        alert('Error: ' + (err.message || 'Failed to generate key'));
+    }
+}
+
+async function walletV1ImportExistingKey() {
+    const keyHex = (document.getElementById('walletV1ExistingKeyHex')?.value || '').trim();
+    const pin = (document.getElementById('walletV1ExistingKeyPin')?.value || '').trim();
+
+    if (!keyHex || !pin) return alert('Private key and PIN are required');
+    if (!keyHex.match(/^[0-9a-fA-F]{64}$/)) return alert('Invalid key format. Must be 64 hex characters.');
+    if (!pin.match(/^\d{4,8}$/)) return alert('PIN must be 4-8 digits');
+
+    try {
+        console.log('[RekeyCeremony] Importing existing V1 key...');
+
+        if (!walletSession.derivePublicKeyAndAddress) {
+            return alert('Key derivation API not available');
+        }
+
+        const result = walletSession.derivePublicKeyAndAddress(keyHex);
+        if (!result.success) {
+            return alert('Failed to import key: ' + (result.error || 'Unknown error'));
+        }
+
+        const { publicKey, address } = result;
+
+        // Display derived key for verification
+        document.getElementById('walletV1GeneratedPublicKey').value = publicKey;
+        document.getElementById('walletV1GeneratedAddress').value = address;
+        document.getElementById('walletV1GeneratedKeyDisplay').style.display = 'block';
+
+        const canonicalAddr = document.getElementById('walletV1CanonicalAddr').value;
+        console.log('[RekeyCeremony] Imported key derives signer address: ' + address + ', canonical wallet: ' + canonicalAddr);
+
+        // Store for re-key request
+        // Note: address will likely be DIFFERENT from canonical (this is correct for re-key)
+        window.walletV1CurrentPublicKey = publicKey;
+        window.walletV1CurrentAddress = address;
+        window.walletV1CurrentPrivateKey = keyHex; // For saving after approval
+
+        // Clear import form
+        document.getElementById('walletV1ExistingKeyHex').value = '';
+        document.getElementById('walletV1ExistingKeyPin').value = '';
+        toggleWalletV1ImportExisting();
+
+        console.log('[RekeyCeremony] Existing key imported successfully');
+
+    } catch(err) {
+        console.error('[RekeyCeremony] Import error:', err);
+        alert('Error: ' + (err.message || 'Failed to import key'));
+    }
+}
+
+async function walletV1SubmitRekeyRequest() {
+    const canonicalAddr = (document.getElementById('walletV1CanonicalAddr')?.value || '').trim();
+    const legacyAddr = (document.getElementById('walletV1LegacyAddr')?.value || '').trim();
+    const publicKey = window.walletV1CurrentPublicKey;
+    const signerAddress = window.walletV1CurrentAddress;
+
+    if (!publicKey || !signerAddress) {
+        return alert('Please generate or import a signing key first');
+    }
+
+    // Note: signerAddress will be DIFFERENT from canonicalAddr (this is correct)
+    // The backend will create a binding allowing signerAddress-derived key to sign for canonicalAddr
+
+    try {
+        console.log('[RekeyCeremony] Submitting re-key request...');
+
+        const token = localStorage.getItem('wallet_v1_repair_token') || '';
+        const headers = {
+            'Content-Type': 'application/json'
+        };
+        if (token) {
+            headers['X-Wallet-V1-Repair-Token'] = token;
+        }
+
+        const response = await fetch('/api/wallet/v1/rekey/request', {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify({
+                canonical_v1_address: canonicalAddr,
+                legacy_address: legacyAddr,
+                ownership_proof: {
+                    send_secret: '', // Already verified
+                    auth_secret: '',
+                    pledge_hash: ''
+                },
+                new_public_key: publicKey,
+                new_key_address: signerAddress  // Address derived from new key (different from canonical)
+            })
+        });
+
+        const result = await response.json();
+
+        if (!result.ok) {
+            console.warn('[RekeyCeremony] Rekey request failed:', result.error);
+
+            if (result.error === 'rekey_already_pending') {
+                alert('A re-key request is already pending for this wallet. Please wait for admin approval.');
+            } else if (result.error === 'rekey_cooldown_active') {
+                alert('This wallet has a re-key cooldown active. Try again after: ' + (result.cooldown_until || 'later'));
+            } else {
+                alert('Re-key request failed: ' + (result.error || 'Unknown error'));
+            }
+            return;
+        }
+
+        const eventId = result.event_id;
+        console.log('[RekeyCeremony] Re-key request created:', eventId);
+
+        // Display pending status
+        document.getElementById('walletV1RekeyStatusDisplay').style.display = 'block';
+        document.getElementById('walletV1RekeyStatus').textContent = result.status || 'pending';
+        document.getElementById('walletV1RekeyEventId').textContent = 'Event ID: ' + eventId;
+
+        if (result.cooldown_until) {
+            document.getElementById('walletV1RekeyCooldownInfo').textContent = 'Admin approval required. Cooldown until: ' + new Date(result.cooldown_until).toLocaleString();
+            document.getElementById('walletV1RekeyCooldownInfo').style.display = 'block';
+        }
+
+        // Disable submit button
+        document.getElementById('walletV1SubmitRekeyBtn').disabled = true;
+        document.getElementById('walletV1SubmitRekeyBtn').style.opacity = '0.5';
+
+        alert('✓ Re-key request submitted!\n\nEvent ID: ' + eventId + '\n\nAdmin approval required before key activation.');
+
+        // Store for later retrieval
+        localStorage.setItem('wallet_v1_rekey_event_id', eventId);
+
+    } catch(err) {
+        console.error('[RekeyCeremony] Error:', err);
+        alert('Error: ' + (err.message || 'Request failed'));
     }
 }
 

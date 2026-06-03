@@ -36624,3 +36624,353 @@ if __name__ == "__main__":
     port = int(_strip_env_quotes(os.getenv("PORT", "8000")))
     app.run(host=host, port=port)
 # === AI Session API Fixes (append to end of server.py) ===========================
+
+
+# ===== Wallet V1 Re-Key Ceremony =====
+# Controlled process for binding new signing key to existing canonical address
+# User has verified ownership via legacy/pledge credentials
+# User generates new V1 key locally (never sent to server)
+# Backend validates and approves public key binding
+
+import time
+from datetime import datetime, timedelta
+
+WALLET_V1_REKEY_COOLDOWN_HOURS = 24  # Cooldown between re-key attempts
+WALLET_V1_REKEY_EVENTS_FILE = os.path.join(DATA_DIR, "wallet_v1_rekey_events.json")
+WALLET_V1_KEY_BINDINGS_FILE = os.path.join(DATA_DIR, "wallet_v1_key_bindings.json")
+
+def load_rekey_events():
+    """Load re-key event log"""
+    return load_json(WALLET_V1_REKEY_EVENTS_FILE, [])
+
+def save_rekey_events(events):
+    """Save re-key event log"""
+    save_json(WALLET_V1_REKEY_EVENTS_FILE, events)
+
+def load_key_bindings():
+    """Load key binding records for canonical addresses"""
+    return load_json(WALLET_V1_KEY_BINDINGS_FILE, [])
+
+def save_key_bindings(bindings):
+    """Save key binding records"""
+    save_json(WALLET_V1_KEY_BINDINGS_FILE, bindings)
+
+def get_active_key_binding_for_address(canonical_v1_address):
+    """Get active key binding for a canonical address, if any"""
+    bindings = load_key_bindings()
+    for binding in bindings:
+        if binding.get("canonical_v1_address") == canonical_v1_address and binding.get("status") == "active":
+            return binding
+    return None
+
+
+@app.route("/api/wallet/v1/rekey/request", methods=["POST"])
+def api_wallet_v1_rekey_request():
+    """
+    Request a re-key ceremony to bind new public key to existing canonical address.
+    
+    User has verified legacy/pledge ownership.
+    User generates new V1 key locally.
+    User submits public key for backend approval.
+    Backend validates and creates pending re-key event.
+    
+    Requires WALLET_V1_REPAIR_TOKEN.
+    """
+    try:
+        # TOKEN GATING
+        if WALLET_V1_REPAIR_TOKEN_REQUIRED:
+            token_from_header = request.headers.get("X-Wallet-V1-Repair-Token", "").strip()
+            if not token_from_header:
+                auth_header = request.headers.get("Authorization", "").strip()
+                if auth_header.startswith("Bearer "):
+                    token_from_header = auth_header[7:].strip()
+            
+            if not token_from_header:
+                app.logger.warning("[rekey_request] stage=token_check token_missing")
+                return jsonify({"ok": False, "error": "repair_token_required"}), 401
+            
+            if not constant_time_compare(token_from_header, WALLET_V1_REPAIR_TOKEN):
+                app.logger.warning("[rekey_request] stage=token_check token_invalid")
+                return jsonify({"ok": False, "error": "invalid_repair_token"}), 403
+
+        # PARSE REQUEST
+        data = request.get_json() or {}
+        canonical_v1_address = (data.get("canonical_v1_address") or "").strip().upper()
+        legacy_address = (data.get("legacy_address") or "").strip().upper()
+        ownership_proof = data.get("ownership_proof") or {}
+        new_public_key = (data.get("new_public_key") or "").strip()
+        new_key_address = (data.get("new_key_address") or "").strip().upper()
+
+        # Never log secrets
+        canonical_short = canonical_v1_address[:10] + "..." if canonical_v1_address else "unknown"
+        app.logger.info(
+            "[rekey_request] stage=parse",
+            extra={"canonical_short": canonical_short}
+        )
+
+        # VALIDATE ADDRESSES
+        if not canonical_v1_address:
+            app.logger.warning("[rekey_request] stage=validation error=canonical_required")
+            return jsonify({"ok": False, "error": "canonical_v1_address_required"}), 400
+
+        if not validate_thr_address(canonical_v1_address):
+            app.logger.warning("[rekey_request] stage=validation error=invalid_address")
+            return jsonify({"ok": False, "error": "invalid_canonical_address"}), 400
+
+        # Block system wallet
+        SYSTEM_WALLET_ADDRESS = "THR5DF27A86C477F381594E896F0E55357DEC5942BA"
+        if canonical_v1_address == SYSTEM_WALLET_ADDRESS:
+            app.logger.warning("[rekey_request] stage=validation error=system_wallet")
+            return jsonify({"ok": False, "error": "system_wallet_not_allowed"}), 400
+
+        # VERIFY OWNERSHIP
+        if not ownership_proof:
+            app.logger.warning("[rekey_request] stage=ownership error=no_proof")
+            return jsonify({"ok": False, "error": "ownership_proof_required"}), 400
+
+        send_secret = ownership_proof.get("send_secret", "")
+        auth_secret = ownership_proof.get("auth_secret", "")
+        pledge_hash = ownership_proof.get("pledge_hash", "")
+
+        if not (send_secret or auth_secret or pledge_hash):
+            app.logger.warning("[rekey_request] stage=ownership error=empty_proof")
+            return jsonify({"ok": False, "error": "ownership_proof_required"}), 400
+
+        # Verify ownership using same logic as verify-legacy-ownership
+        from wallet_v1_migration import search_all_migration_sources
+        migration_result = search_all_migration_sources(
+            legacy_address=legacy_address,
+            canonical_v1_address=canonical_v1_address
+        )
+
+        if not migration_result:
+            app.logger.warning("[rekey_request] stage=ownership error=not_found")
+            return jsonify({"ok": False, "error": "migration_not_found"}), 404
+
+        # VALIDATE NEW KEY
+        if not new_public_key:
+            app.logger.warning("[rekey_request] stage=newkey error=no_pubkey")
+            return jsonify({"ok": False, "error": "new_public_key_required"}), 400
+
+        if not new_key_address:
+            app.logger.warning("[rekey_request] stage=newkey error=no_address")
+            return jsonify({"ok": False, "error": "new_key_address_required"}), 400
+
+        if not validate_thr_address(new_key_address):
+            app.logger.warning("[rekey_request] stage=newkey error=invalid_address")
+            return jsonify({"ok": False, "error": "invalid_new_key_address"}), 400
+
+        # CORRECT: New public key derives its own signer address (will be different)
+        # The canonical wallet address remains unchanged
+        # Backend will create a binding: canonical_v1_address -> new_public_key_hash
+        # Signature verification will check this binding to allow signing from canonical address with the new key
+
+        # CHECK COOLDOWN
+        events = load_rekey_events()
+        pending_for_addr = [e for e in events if e.get("canonical_v1_address") == canonical_v1_address and e.get("status") == "pending"]
+        
+        if pending_for_addr:
+            app.logger.warning("[rekey_request] stage=cooldown error=already_pending")
+            return jsonify({"ok": False, "error": "rekey_already_pending"}), 409
+
+        recent_applied = [e for e in events if e.get("canonical_v1_address") == canonical_v1_address and e.get("status") == "applied"]
+        if recent_applied:
+            last_applied = recent_applied[-1]
+            cooldown_until = datetime.fromisoformat(last_applied.get("applied_at", ""))
+            cooldown_until = cooldown_until + timedelta(hours=WALLET_V1_REKEY_COOLDOWN_HOURS)
+            if datetime.utcnow() < cooldown_until:
+                app.logger.warning("[rekey_request] stage=cooldown error=in_cooldown")
+                return jsonify({
+                    "ok": False,
+                    "error": "rekey_cooldown_active",
+                    "cooldown_until": cooldown_until.isoformat()
+                }), 429
+
+        # CREATE PENDING RE-KEY EVENT
+        event_id = "rekey_" + secrets.token_hex(16)
+        now = datetime.utcnow().isoformat() + "Z"
+        cooldown_until = (datetime.utcnow() + timedelta(hours=WALLET_V1_REKEY_COOLDOWN_HOURS)).isoformat() + "Z"
+
+        # Compute public key hash for binding verification
+        public_key_hash = hashlib.sha256(new_public_key.encode()).hexdigest()[:32]
+
+        event = {
+            "event_id": event_id,
+            "type": "WALLET_V1_REKEY_REQUEST",
+            "canonical_v1_address": canonical_v1_address,
+            "legacy_address_short": legacy_address[:10] + "..." if legacy_address else "unknown",
+            "new_public_key_hash": public_key_hash,
+            "bound_key_address": new_key_address,  # Where the new key derives to (different from canonical)
+            "recovery_source": migration_result.get("migration_source", "unknown"),
+            "status": "pending",
+            "created_at": now,
+            "cooldown_until": cooldown_until,
+            "requires_admin_approval": True
+        }
+
+        events.append(event)
+        save_rekey_events(events)
+
+        app.logger.info(
+            "[rekey_request] stage=created",
+            extra={"event_id": event_id, "canonical_short": canonical_short}
+        )
+
+        return jsonify({
+            "ok": True,
+            "status": "pending",
+            "event_id": event_id,
+            "cooldown_until": cooldown_until,
+            "requires_admin_approval": True
+        }), 200
+
+    except Exception as e:
+        error_type = type(e).__name__
+        app.logger.error(
+            "[rekey_request] stage=exception",
+            extra={"exception_type": error_type, "error": str(e)[:100]}
+        )
+        return jsonify({
+            "ok": False,
+            "error": "rekey_request_failed",
+            "exception_type": error_type
+        }), 500
+
+
+@app.route("/api/wallet/v1/rekey/approve", methods=["POST"])
+def api_wallet_v1_rekey_approve():
+    """
+    Admin: Approve a pending re-key event.
+    
+    Requires WALLET_V1_REPAIR_TOKEN.
+    """
+    try:
+        # TOKEN GATING
+        if WALLET_V1_REPAIR_TOKEN_REQUIRED:
+            token_from_header = request.headers.get("X-Wallet-V1-Repair-Token", "").strip()
+            if not token_from_header:
+                auth_header = request.headers.get("Authorization", "").strip()
+                if auth_header.startswith("Bearer "):
+                    token_from_header = auth_header[7:].strip()
+            
+            if not token_from_header:
+                app.logger.warning("[rekey_approve] stage=token_check token_missing")
+                return jsonify({"ok": False, "error": "repair_token_required"}), 401
+            
+            if not constant_time_compare(token_from_header, WALLET_V1_REPAIR_TOKEN):
+                app.logger.warning("[rekey_approve] stage=token_check token_invalid")
+                return jsonify({"ok": False, "error": "invalid_repair_token"}), 403
+
+        # PARSE REQUEST
+        data = request.get_json() or {}
+        event_id = (data.get("event_id") or "").strip()
+        canonical_v1_address = (data.get("canonical_v1_address") or "").strip().upper()
+
+        canonical_short = canonical_v1_address[:10] + "..." if canonical_v1_address else "unknown"
+        app.logger.info(
+            "[rekey_approve] stage=parse",
+            extra={"event_id": event_id, "canonical_short": canonical_short}
+        )
+
+        # FIND EVENT
+        if not event_id:
+            app.logger.warning("[rekey_approve] stage=lookup error=no_event_id")
+            return jsonify({"ok": False, "error": "event_id_required"}), 400
+
+        events = load_rekey_events()
+        event = None
+        for e in events:
+            if e.get("event_id") == event_id and e.get("canonical_v1_address") == canonical_v1_address:
+                event = e
+                break
+
+        if not event:
+            app.logger.warning("[rekey_approve] stage=lookup error=event_not_found")
+            return jsonify({"ok": False, "error": "event_not_found"}), 404
+
+        # VALIDATE EVENT STATE
+        if event.get("status") != "pending":
+            app.logger.warning("[rekey_approve] stage=validate error=not_pending")
+            return jsonify({"ok": False, "error": "event_not_pending"}), 400
+
+        # CHECK COOLDOWN (unless admin override)
+        cooldown_until_str = event.get("cooldown_until", "")
+        if cooldown_until_str:
+            cooldown_until = datetime.fromisoformat(cooldown_until_str.replace("Z", "+00:00"))
+            if datetime.utcnow() < cooldown_until:
+                force_override = data.get("force_admin_override", False)
+                if not force_override:
+                    app.logger.warning("[rekey_approve] stage=cooldown error=in_cooldown")
+                    return jsonify({
+                        "ok": False,
+                        "error": "rekey_cooldown_active",
+                        "cooldown_until": cooldown_until_str
+                    }), 429
+
+        # APPLY RE-KEY AND CREATE KEY BINDING
+        now = datetime.utcnow().isoformat() + "Z"
+        event["status"] = "applied"
+        event["approved_at"] = now
+        event["applied_at"] = now
+
+        # Save updated events
+        save_rekey_events(events)
+
+        # CREATE ACTIVE KEY BINDING
+        # This allows the new public key to sign for the canonical address
+        new_public_key_hash = event.get("new_public_key_hash", "")
+        bound_key_address = event.get("bound_key_address", "")
+
+        binding = {
+            "canonical_v1_address": canonical_v1_address,
+            "bound_key_address": bound_key_address,
+            "active_public_key_hash": new_public_key_hash,
+            "binding_source": "verified_ownership_rekey",
+            "rekey_event_id": event_id,
+            "status": "active",
+            "created_at": event.get("created_at", ""),
+            "approved_at": now
+        }
+
+        bindings = load_key_bindings()
+        # Remove any previous binding for this address (replace with new one)
+        bindings = [b for b in bindings if b.get("canonical_v1_address") != canonical_v1_address]
+        bindings.append(binding)
+        save_key_bindings(bindings)
+
+        # Create audit event
+        audit_event = {
+            "type": "WALLET_V1_REKEY_APPLIED",
+            "event_id": event_id,
+            "canonical_v1_address": canonical_v1_address,
+            "canonical_address_short": canonical_short,
+            "bound_key_address": bound_key_address,
+            "timestamp": now,
+            "recovery_source": event.get("recovery_source"),
+            "binding_status": "active"
+        }
+
+        app.logger.info(
+            "[rekey_approve] stage=applied",
+            extra={"event_id": event_id, "canonical_short": canonical_short, "binding_status": "active"}
+        )
+
+        return jsonify({
+            "ok": True,
+            "status": "applied",
+            "canonical_v1_address": canonical_v1_address,
+            "bound_key_address": bound_key_address,
+            "has_signing_material": False  # Still false until user saves local key
+        }), 200
+
+    except Exception as e:
+        error_type = type(e).__name__
+        app.logger.error(
+            "[rekey_approve] stage=exception",
+            extra={"exception_type": error_type, "error": str(e)[:100]}
+        )
+        return jsonify({
+            "ok": False,
+            "error": "rekey_approve_failed",
+            "exception_type": error_type
+        }), 500

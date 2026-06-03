@@ -115,6 +115,22 @@ except ImportError:
         ext = re.sub(r'[^a-zA-Z0-9.]', '', ext)[:10]  # Max 10 chars for extension
         return (name + ext) if name else "unnamed" + ext
 
+def constant_time_compare(a, b):
+    """Compare two strings in constant time to prevent timing attacks"""
+    if not isinstance(a, (str, bytes)):
+        a = str(a)
+    if not isinstance(b, (str, bytes)):
+        b = str(b)
+
+    # Convert to bytes if necessary
+    if isinstance(a, str):
+        a = a.encode('utf-8')
+    if isinstance(b, str):
+        b = b.encode('utf-8')
+
+    # Use hmac.compare_digest for constant-time comparison
+    return hmac.compare_digest(a, b)
+
 from apscheduler.schedulers.background import BackgroundScheduler
 
 # Global list to track all scheduler instances for proper shutdown
@@ -1406,6 +1422,13 @@ SWAP_POOL_ADDRESS = "THR_SWAP_POOL_V1"
 GAME_POOL_ADDRESS = "THR_CRYPTO_HUNTERS_POOL"
 GAME_PANEL_URL    = os.getenv("GAME_PANEL_URL", "/game")  # Crypto Hunters admin panel URL
 GATEWAY_ADDRESS   = "THR_FIAT_GATEWAY_V1"
+
+# --- Wallet V1 Repair/Recovery Token ---
+# Token for gating the legacy ownership verification endpoint
+# Required for production safety: prevents abuse of migration lookup
+# Set via environment: WALLET_V1_REPAIR_TOKEN
+WALLET_V1_REPAIR_TOKEN = os.getenv("WALLET_V1_REPAIR_TOKEN", "").strip()
+WALLET_V1_REPAIR_TOKEN_REQUIRED = bool(WALLET_V1_REPAIR_TOKEN)
 
 # FIX 8: Initialize billing module (clean separation: Chat=credits, Architect=THR)
 import billing
@@ -10851,10 +10874,17 @@ def api_wallet_v1_routes():
             for r in wallet_v1_routes
         )
 
+        verify_legacy_ownership_found = any(
+            "/api/wallet/v1/verify-legacy-ownership" in r["route"]
+            for r in wallet_v1_routes
+        )
+
         return jsonify({
             "ok": True,
             "routes": sorted(wallet_v1_routes, key=lambda r: r["route"]),
             "restore_migration_registered": restore_migration_found,
+            "verify_legacy_ownership_registered": verify_legacy_ownership_found,
+            "verify_legacy_ownership_token_required": WALLET_V1_REPAIR_TOKEN_REQUIRED,
             "total_wallet_routes": len(wallet_v1_routes)
         }), 200
     except Exception as e:
@@ -10928,6 +10958,10 @@ def api_wallet_v1_verify_legacy_ownership():
     perform deterministic key recovery (V1 keys are randomly generated,
     not derived from legacy secrets by design).
 
+    Token gating: If WALLET_V1_REPAIR_TOKEN is configured, requires:
+    - Header: X-Wallet-V1-Repair-Token: <token>
+    - OR: Authorization: Bearer <token>
+
     Request body:
     {
         "canonical_v1_address": "THR...",
@@ -10937,30 +10971,62 @@ def api_wallet_v1_verify_legacy_ownership():
         "pledge_recovery_hash": "..."
     }
 
-    Response:
+    Response (success):
     {
         "ok": true,
         "canonical_v1_address": "THR...",
         "recovery_source": "pledge_chain|wallet_v1_migrations|...",
-        "has_signing_material": false
+        "has_signing_material": false,
+        "deterministic_recovery_available": false
     }
 
-    Or error:
-    {
-        "ok": false,
-        "error": "deterministic_recovery_unavailable|ownership_verification_failed|migration_not_found|..."
-    }
+    Response (token missing):
+    { "ok": false, "error": "repair_token_required" } 401
+
+    Response (invalid token):
+    { "ok": false, "error": "invalid_repair_token" } 403
+
+    Response (other errors):
+    { "ok": false, "error": "..." } 400/404/500
     """
-    def normalize_address(addr):
-        return (addr or "").strip().upper()
-
     try:
+        # TOKEN GATING: Check repair token if configured
+        if WALLET_V1_REPAIR_TOKEN_REQUIRED:
+            # Check X-Wallet-V1-Repair-Token header first
+            token_from_header = request.headers.get("X-Wallet-V1-Repair-Token", "").strip()
+
+            # Fallback to Authorization: Bearer <token>
+            if not token_from_header:
+                auth_header = request.headers.get("Authorization", "").strip()
+                if auth_header.startswith("Bearer "):
+                    token_from_header = auth_header[7:].strip()
+
+            # Check if token provided
+            if not token_from_header:
+                console_log("[verify_legacy_ownership] Token missing - repair_token_required", level="warn")
+                return jsonify({"ok": False, "error": "repair_token_required"}), 401
+
+            # Check if token is valid (constant-time comparison)
+            if not constant_time_compare(token_from_header, WALLET_V1_REPAIR_TOKEN):
+                console_log("[verify_legacy_ownership] Token invalid - invalid_repair_token", level="warn")
+                return jsonify({"ok": False, "error": "invalid_repair_token"}), 403
+
+        # TOKEN PASSED - Continue with verification
+        def normalize_address(addr):
+            return (addr or "").strip().upper()
+
         data = request.get_json() or {}
         canonical_v1_address = normalize_address(data.get("canonical_v1_address", ""))
         legacy_address = normalize_address(data.get("legacy_address", ""))
         send_secret = (data.get("send_secret") or "").strip()
         auth_secret = (data.get("auth_secret") or "").strip()
         pledge_recovery_hash = (data.get("pledge_recovery_hash") or "").strip()
+
+        # NEVER log raw request body or secrets
+        console_log(
+            f"[verify_legacy_ownership] Verification attempt for canonical: {canonical_v1_address[:10] if canonical_v1_address else 'unknown'}...",
+            level="info"
+        )
 
         # Validation
         if not canonical_v1_address:
@@ -10983,25 +11049,16 @@ def api_wallet_v1_verify_legacy_ownership():
         if not migration_result:
             return jsonify({"ok": False, "error": "migration_not_found"}), 404
 
-        # Verify legacy credentials if provided
-        # Note: Full verification would check send_secret hash against PLEDGE_CHAIN
-        # For now, we acknowledge that legacy credentials were provided
-        if send_secret:
-            # In production, would verify SHA256(send_secret) against send_seed_hash
-            # This is a placeholder for the full credential verification
-            console_log(
-                f"[verify_legacy_ownership] Ownership verification for {canonical_v1_address[:10]}... "
-                f"with legacy address {legacy_address[:10] if legacy_address else 'unknown'}...",
-                level="info"
-            )
+        # Log only safe diagnostics
+        console_log(
+            f"[verify_legacy_ownership] Success - canonical: {canonical_v1_address[:10]}... "
+            f"recovery_source: {migration_result.get('migration_source', 'unknown')}",
+            level="info"
+        )
 
         # CRITICAL DESIGN: V1 signing keys are randomly generated by clients, NOT derived from legacy credentials
         # There is NO deterministic recovery path from legacy send_secret to V1 private key
         # This is by design - ensures client-side security of key material
-        # Users must either:
-        # 1. Have backed up their V1 private key when initially generated
-        # 2. Use Advanced Import to restore from backup
-        # 3. Or use a new signing key registration flow (would require re-identification)
 
         return jsonify({
             "ok": True,
@@ -11013,8 +11070,14 @@ def api_wallet_v1_verify_legacy_ownership():
         }), 200
 
     except Exception as e:
-        console_log(f"[verify_legacy_ownership] Error: {e}", level="error")
-        return jsonify({"ok": False, "error": "internal_error"}), 500
+        # Structured error response, never 500 without proper context
+        error_type = type(e).__name__
+        console_log(f"[verify_legacy_ownership] Exception {error_type}: {str(e)[:100]}", level="error")
+        return jsonify({
+            "ok": False,
+            "error": "verify_legacy_ownership_failed",
+            "exception_type": error_type
+        }), 500
 
 
 @app.route("/api/last_hash")

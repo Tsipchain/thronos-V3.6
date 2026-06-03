@@ -36624,6 +36624,7 @@ print(f"[STARTUP] {NODE_ROLE.upper()} node initialization complete.\n")
 WALLET_V1_REKEY_COOLDOWN_HOURS = 24
 WALLET_V1_REKEY_EVENTS_FILE = os.path.join(DATA_DIR, "wallet_v1_rekey_events.json")
 WALLET_V1_KEY_BINDINGS_FILE = os.path.join(DATA_DIR, "wallet_v1_key_bindings.json")
+WALLET_V1_OWNERSHIP_VERIFICATIONS_FILE = os.path.join(DATA_DIR, "wallet_v1_ownership_verifications.json")
 
 def load_rekey_events():
     return load_json(WALLET_V1_REKEY_EVENTS_FILE, [])
@@ -36636,6 +36637,12 @@ def load_key_bindings():
 
 def save_key_bindings(bindings):
     save_json(WALLET_V1_KEY_BINDINGS_FILE, bindings)
+
+def load_ownership_verifications():
+    return load_json(WALLET_V1_OWNERSHIP_VERIFICATIONS_FILE, [])
+
+def save_ownership_verifications(verifications):
+    save_json(WALLET_V1_OWNERSHIP_VERIFICATIONS_FILE, verifications)
 
 def get_active_key_binding_for_address(canonical_v1_address):
     bindings = load_key_bindings()
@@ -36666,7 +36673,7 @@ def api_wallet_v1_rekey_request():
         data = request.get_json() or {}
         canonical_v1_address = (data.get("canonical_v1_address") or "").strip().upper()
         legacy_address = (data.get("legacy_address") or "").strip().upper()
-        ownership_proof = data.get("ownership_proof") or {}
+        ownership_verification_id = (data.get("ownership_verification_id") or "").strip()
         new_public_key = (data.get("new_public_key") or "").strip()
         new_key_address = (data.get("new_key_address") or "").strip().upper()
 
@@ -36683,15 +36690,36 @@ def api_wallet_v1_rekey_request():
         if canonical_v1_address == SYSTEM_WALLET_ADDRESS:
             return jsonify({"ok": False, "error": "system_wallet_not_allowed"}), 400
 
-        if not ownership_proof:
-            return jsonify({"ok": False, "error": "ownership_proof_required"}), 400
+        # Validate ownership_verification_id
+        if not ownership_verification_id:
+            return jsonify({"ok": False, "error": "ownership_verification_id_required"}), 400
 
-        send_secret = ownership_proof.get("send_secret", "")
-        auth_secret = ownership_proof.get("auth_secret", "")
-        pledge_hash = ownership_proof.get("pledge_hash", "")
+        verifications = load_ownership_verifications()
+        verification_record = None
+        for v in verifications:
+            if v.get("ownership_verification_id") == ownership_verification_id:
+                verification_record = v
+                break
 
-        if not (send_secret or auth_secret or pledge_hash):
-            return jsonify({"ok": False, "error": "ownership_proof_required"}), 400
+        if not verification_record:
+            return jsonify({"ok": False, "error": "ownership_verification_not_found"}), 404
+
+        # Check if verification has expired
+        expires_at_str = verification_record.get("expires_at")
+        try:
+            expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+            if datetime.utcnow().replace(tzinfo=None) > expires_at.replace(tzinfo=None):
+                return jsonify({"ok": False, "error": "ownership_verification_expired"}), 400
+        except Exception:
+            return jsonify({"ok": False, "error": "ownership_verification_invalid"}), 400
+
+        # Check if verification matches the canonical address
+        if verification_record.get("canonical_v1_address") != canonical_v1_address:
+            return jsonify({"ok": False, "error": "ownership_verification_address_mismatch"}), 400
+
+        # Check if already consumed
+        if verification_record.get("consumed", False):
+            return jsonify({"ok": False, "error": "ownership_verification_already_used"}), 400
 
         from wallet_v1_migration import search_all_migration_sources
         migration_result = search_all_migration_sources(legacy_address=legacy_address, canonical_v1_address=canonical_v1_address)
@@ -36730,6 +36758,11 @@ def api_wallet_v1_rekey_request():
 
         events.append(event)
         save_rekey_events(events)
+
+        # Mark verification as consumed
+        verification_record["consumed"] = True
+        verification_record["consumed_at"] = datetime.utcnow().isoformat() + "Z"
+        save_ownership_verifications(verifications)
 
         return jsonify({"ok": True, "status": "pending", "event_id": event_id, "cooldown_until": cooldown_until}), 200
 
@@ -36944,10 +36977,22 @@ def api_wallet_v1_ownership_verify():
                 "error": "ownership_verification_failed"
             }), 400
 
-        # Ownership verified - generate verification ID
+        # Ownership verified - generate verification ID and persist it
         import secrets
         ownership_verification_id = "ownverif_" + secrets.token_hex(16)
         expires_at = datetime.utcnow() + timedelta(hours=1)  # 1 hour validity
+        expires_at_iso = expires_at.isoformat() + "Z"
+
+        # Store verification ID with canonical address and expiry
+        verifications = load_ownership_verifications()
+        verifications.append({
+            "ownership_verification_id": ownership_verification_id,
+            "canonical_v1_address": canonical_v1_address,
+            "created_at": datetime.utcnow().isoformat() + "Z",
+            "expires_at": expires_at_iso,
+            "consumed": False
+        })
+        save_ownership_verifications(verifications)
 
         app.logger.info(
             "[ownership_verify] stage=success",
@@ -36967,7 +37012,7 @@ def api_wallet_v1_ownership_verify():
             "recovery_source": migration_result.get("migration_source"),
             "has_signing_material": migration_result.get("has_signing_material", False),
             "ownership_verification_id": ownership_verification_id,
-            "expires_at": expires_at.isoformat() + "Z"
+            "expires_at": expires_at_iso
         }), 200
 
     except Exception as e:

@@ -1077,6 +1077,112 @@
   function saveSession({address, sendSeed, pin, bound} = {}){ setAddress(address || ''); setSendSeed(sendSeed || ''); setPin(pin || ''); setBound(bound !== undefined ? !!bound : !!(address && sendSeed)); if (address || sendSeed) localStorage.setItem(LOCK_KEY, '0'); }
   function requirePin(actionLabel = 'continue'){ const stored = getPin(); if(!stored) return true; const entered = prompt(`Enter wallet PIN to ${actionLabel}`); if(entered === null) return false; if(entered !== stored){ alert('Wrong PIN.'); return false; } return true; }
 
+  async function resolveCanonicalWalletAddress(options = {}) {
+    const maxAttempts = options.maxAttempts || 10;
+    const retryIntervalMs = options.retryIntervalMs || 250;
+    const debug = options.debug || false;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // Priority 1: WalletSession state
+      try {
+        const activeAddr = getActiveAddress();
+        if (activeAddr && isValidThrAddress(activeAddr) && !isSystemWalletAddress(activeAddr)) {
+          if (debug) console.log('[WalletV1] canonical resolver source: wallet_session.getActiveAddress (attempt ' + attempt + ')');
+          return {
+            ok: true,
+            canonical_v1_address: activeAddr,
+            source: 'wallet_session'
+          };
+        }
+      } catch(_) {}
+
+      // Priority 2: localStorage wallet_v1_address
+      try {
+        const stored = normalizeAddress(localStorage.getItem(V1_ADDRESS_KEY));
+        if (stored && isValidThrAddress(stored) && stored !== 'loading...' && !isSystemWalletAddress(stored)) {
+          if (debug) console.log('[WalletV1] canonical resolver source: localStorage.wallet_v1_address (attempt ' + attempt + ')');
+          return {
+            ok: true,
+            canonical_v1_address: stored,
+            source: 'localStorage'
+          };
+        }
+      } catch(_) {}
+
+      // Priority 3: localStorage canonical_v1_address
+      try {
+        const stored = normalizeAddress(localStorage.getItem('canonical_v1_address'));
+        if (stored && isValidThrAddress(stored) && stored !== 'loading...' && !isSystemWalletAddress(stored)) {
+          if (debug) console.log('[WalletV1] canonical resolver source: localStorage.canonical_v1_address (attempt ' + attempt + ')');
+          return {
+            ok: true,
+            canonical_v1_address: stored,
+            source: 'localStorage'
+          };
+        }
+      } catch(_) {}
+
+      // Priority 4: localStorage thr_address (fallback)
+      try {
+        const stored = normalizeAddress(localStorage.getItem(ADDRESS_KEY));
+        if (stored && isValidThrAddress(stored) && stored !== 'loading...' && !isSystemWalletAddress(stored)) {
+          if (debug) console.log('[WalletV1] canonical resolver source: localStorage.thr_address (attempt ' + attempt + ')');
+          return {
+            ok: true,
+            canonical_v1_address: stored,
+            source: 'localStorage'
+          };
+        }
+      } catch(_) {}
+
+      // Priority 5: sessionStorage from restored migration result
+      try {
+        const migrationMeta = localStorage.getItem(MIGRATION_META_KEY);
+        if (migrationMeta) {
+          const parsed = JSON.parse(migrationMeta);
+          const canonicalFromMeta = normalizeAddress(parsed.canonical_v1_address);
+          if (canonicalFromMeta && isValidThrAddress(canonicalFromMeta) && !isSystemWalletAddress(canonicalFromMeta)) {
+            if (debug) console.log('[WalletV1] canonical resolver source: migration_metadata (attempt ' + attempt + ')');
+            return {
+              ok: true,
+              canonical_v1_address: canonicalFromMeta,
+              source: 'migration_metadata'
+            };
+          }
+        }
+      } catch(_) {}
+
+      // Priority 6: Check wallet widget input if visible
+      try {
+        const walletInputField = document.getElementById('walletV1CanonicalAddr') ||
+                                document.getElementById('canonicalWalletAddress');
+        if (walletInputField && walletInputField.value) {
+          const widgetAddr = normalizeAddress(walletInputField.value);
+          if (widgetAddr && isValidThrAddress(widgetAddr) && widgetAddr !== 'loading...' && !isSystemWalletAddress(widgetAddr)) {
+            if (debug) console.log('[WalletV1] canonical resolver source: widget_input (attempt ' + attempt + ')');
+            return {
+              ok: true,
+              canonical_v1_address: widgetAddr,
+              source: 'widget_input'
+            };
+          }
+        }
+      } catch(_) {}
+
+      // Not found yet - wait and retry
+      if (attempt < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, retryIntervalMs));
+      }
+    }
+
+    // All attempts exhausted
+    if (debug) console.log('[WalletV1] canonical resolver exhausted all sources after ' + maxAttempts + ' attempts');
+    return {
+      ok: false,
+      error: 'canonical_address_not_found'
+    };
+  }
+
   window.walletSession = {
     version: VERSION,
     ADDRESS_KEY, SEND_SECRET_KEY, SEND_SEED_KEY, PIN_KEY, BOUND_KEY, LOCK_KEY,
@@ -1096,6 +1202,7 @@
     getSigningKeyMismatch, getUnusableKeyDiagnostics, clearLocalSigningKey, clearUnusableSigningKey,
     getActiveKeyBinding, importSigningKeyForAddress, getWalletState,
     hasPledgeOrMigrationSource, getModalState,
-    generateV1KeyPair, derivePublicKeyAndAddress
+    generateV1KeyPair, derivePublicKeyAndAddress,
+    resolveCanonicalWalletAddress
   };
 })(window);

@@ -5306,51 +5306,98 @@ function showWalletContentSection(){
     if(contentSection) contentSection.style.display = 'block';
 }
 
+function applyWalletV1ProductionMode(status) {
+    // Enforce production mode: hard-hide legacy repair UI when flag is false
+    // This function is called BEFORE showing modal content
+    const legacyRepairEnabled = status && status.legacy_repair_ui_enabled === true;
+
+    if (!legacyRepairEnabled) {
+        console.log('[WalletV1] production mode active: legacy repair UI hidden');
+
+        // Hard-hide all legacy/admin form containers
+        const restoreForm = document.getElementById('walletV1RestoreMode');
+        const migrateForm = document.getElementById('walletV1MigrateMode');
+        const legacyRecoveryForm = document.getElementById('walletV1LegacyRecoveryForm');
+        const advancedImportForm = document.getElementById('walletV1AdvancedKeyImportForm');
+        const rekeyForm = document.getElementById('walletV1RekeyCeremonyForm');
+
+        if (restoreForm) restoreForm.style.display = 'none';
+        if (migrateForm) migrateForm.style.display = 'none';
+        if (legacyRecoveryForm) legacyRecoveryForm.style.display = 'none';
+        if (advancedImportForm) advancedImportForm.style.display = 'none';
+        if (rekeyForm) rekeyForm.style.display = 'none';
+
+        // Hide advanced recovery button
+        const advancedRecoveryBtn = document.querySelector('[onclick*="toggleAdvancedRecovery"]');
+        if (advancedRecoveryBtn) advancedRecoveryBtn.style.display = 'none';
+
+        // Hide reset wallet pointers button (admin-only)
+        const resetWalletBtn = document.querySelector('[onclick*="resetActiveWalletPointers"]');
+        if (resetWalletBtn) resetWalletBtn.style.display = 'none';
+
+        // Remove legacy options from mode select
+        const modeSelect = document.getElementById('walletWidgetMode');
+        if (modeSelect) {
+            // Remove restore option
+            const restoreOption = modeSelect.querySelector('option[value="restore"]');
+            if (restoreOption) restoreOption.remove();
+
+            // Remove migrate option
+            const migrateOption = modeSelect.querySelector('option[value="migrate"]');
+            if (migrateOption) migrateOption.remove();
+
+            // Prevent defaulting to removed options
+            const currentValue = modeSelect.value;
+            if (currentValue === 'restore' || currentValue === 'migrate') {
+                // Find first available option
+                const firstOption = modeSelect.querySelector('option');
+                if (firstOption) {
+                    modeSelect.value = firstOption.value;
+                }
+            }
+        }
+
+        // Set correct default mode based on status.mode
+        if (status && status.mode === 'needs_pledge') {
+            // Do not show mode selector, only pledge CTA
+            if (modeSelect) modeSelect.style.display = 'none';
+            const pledgeLabel = document.querySelector('label[for="walletWidgetMode"]');
+            if (pledgeLabel) pledgeLabel.style.display = 'none';
+        }
+    } else {
+        console.log('[WalletV1] admin mode active: legacy repair UI visible');
+        // Show all legacy UI for admin
+        const restoreForm = document.getElementById('walletV1RestoreMode');
+        const migrateForm = document.getElementById('walletV1MigrateMode');
+        const legacyRecoveryForm = document.getElementById('walletV1LegacyRecoveryForm');
+        const advancedImportForm = document.getElementById('walletV1AdvancedKeyImportForm');
+
+        if (restoreForm) restoreForm.style.display = 'block';
+        if (migrateForm) migrateForm.style.display = 'block';
+        if (legacyRecoveryForm) legacyRecoveryForm.style.display = 'block';
+        if (advancedImportForm) advancedImportForm.style.display = 'block';
+    }
+}
+
 async function initializeWalletV1LegacyRepairUI() {
-    // Check if legacy repair UI should be shown based on feature flag
-    // This function determines visibility of restore/verify/rekey forms
+    // Fetch wallet status and apply production mode constraints
     try {
         const response = await fetch('/api/wallet/v1/status');
         const status = await response.json();
 
         if (status.ok) {
-            const legacyRepairEnabled = status.legacy_repair_ui_enabled;
-            const legacyRecoveryForm = document.getElementById('walletV1LegacyRecoveryForm');
-            const advancedImportForm = document.getElementById('walletV1AdvancedKeyImportForm');
-
-            if (!legacyRepairEnabled) {
-                // Hide legacy recovery UI for normal users
-                if (legacyRecoveryForm) {
-                    legacyRecoveryForm.style.display = 'none';
-                }
-                if (advancedImportForm) {
-                    advancedImportForm.style.display = 'none';
-                }
-                console.log('[WalletV1] Legacy repair UI disabled - admin mode only');
-            } else {
-                // Show legacy recovery UI for admin
-                if (legacyRecoveryForm) {
-                    legacyRecoveryForm.style.display = 'block';
-                }
-                console.log('[WalletV1] Legacy repair UI enabled');
-            }
+            applyWalletV1ProductionMode(status);
         }
     } catch (err) {
-        console.warn('[WalletV1] Could not check legacy repair UI status:', err);
-        // Default: hide legacy recovery UI unless feature flag is explicitly set
-        const legacyRecoveryForm = document.getElementById('walletV1LegacyRecoveryForm');
-        const advancedImportForm = document.getElementById('walletV1AdvancedKeyImportForm');
-        if (legacyRecoveryForm) {
-            legacyRecoveryForm.style.display = 'none';
-        }
-        if (advancedImportForm) {
-            advancedImportForm.style.display = 'none';
-        }
+        console.warn('[WalletV1] Could not fetch wallet status:', err);
+        // Default to production mode (safe default: hide legacy UI)
+        applyWalletV1ProductionMode({legacy_repair_ui_enabled: false});
     }
 }
 
 async function openHeaderWalletModal(){
-    // Initialize legacy repair UI visibility based on server feature flag
+    // CRITICAL: Apply production mode constraints FIRST, before showing any content
+    // This ensures legacy UI is hidden before modal is rendered
     await initializeWalletV1LegacyRepairUI();
 
     const addr = walletSession.getAddress();
@@ -5422,12 +5469,25 @@ async function submitHeaderWalletLogin(){
 }
 
 function switchWalletV1Mode(){
-    const mode = document.getElementById('walletWidgetMode')?.value || 'restore';
+    let mode = document.getElementById('walletWidgetMode')?.value || 'create';
     const unlockEl = document.getElementById('walletV1UnlockMode');
     const migrateEl = document.getElementById('walletV1MigrateMode');
     const restoreEl = document.getElementById('walletV1RestoreMode');
     const createEl = document.getElementById('walletV1CreateMode');
     const importEl = document.getElementById('walletV1ImportMode');
+
+    // Check production mode: if restore/migrate were removed, fallback to available option
+    const restoreOption = document.querySelector('option[value="restore"]');
+    const migrateOption = document.querySelector('option[value="migrate"]');
+    if (!restoreOption || !migrateOption) {
+        // In production mode - fallback to available option
+        if (mode === 'restore' || mode === 'migrate') {
+            const firstOption = document.querySelector('option');
+            if (firstOption) {
+                mode = firstOption.value || 'create';
+            }
+        }
+    }
 
     // Get current modal state for pledge-backed wallet flow
     const modalState = walletSession.getModalState ? walletSession.getModalState() : 'no_active_wallet';
@@ -5444,10 +5504,8 @@ function switchWalletV1Mode(){
     const isLockedImportOnly = modalState === 'active_wallet_no_key';
 
     // Update mode select options visibility/disabled state
-    const restoreOption = document.querySelector('option[value="restore"]');
     const createOption = document.querySelector('option[value="create"]');
     const unlockOption = document.querySelector('option[value="unlock"]');
-    const migrateOption = document.querySelector('option[value="migrate"]');
     const importOption = document.querySelector('option[value="import_signing_key"]');
     const modeSelect = document.getElementById('walletWidgetMode');
 
@@ -5491,9 +5549,11 @@ function switchWalletV1Mode(){
 
         return; // Exit early for locked state
     } else if (modalState === 'no_active_wallet') {
-        // No active wallet - show restore/migrate options
-        displayMode = mode === 'restore' || mode === 'migrate' ? mode : 'restore';
-        if (modeSelect && !mode) modeSelect.value = 'restore';
+        // No active wallet - show restore/migrate options (if available in production mode)
+        const restoreOpt = document.querySelector('option[value="restore"]');
+        const defaultMode = restoreOpt ? 'restore' : 'create';
+        displayMode = mode === 'restore' || mode === 'migrate' ? mode : defaultMode;
+        if (modeSelect && !mode) modeSelect.value = defaultMode;
     } else if (unlockAllowed && mode === 'unlock') {
         displayMode = 'unlock';
     } else if (importAllowed && mode === 'import_signing_key') {

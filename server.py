@@ -36975,6 +36975,117 @@ def api_wallet_v1_get_key_binding(address):
         return jsonify({"ok": False, "error": "binding_lookup_failed", "exception_type": error_type}), 500
 
 
+@app.route("/api/wallet/v1/key-binding/register", methods=["POST"])
+def api_wallet_v1_register_key_binding():
+    """
+    Register a new key binding for pledge-native wallet setup.
+
+    User-facing endpoint (NO repair token required).
+    Only allowed for confirmed pledge wallets.
+    Stores public key binding, never stores private key.
+
+    Request body:
+    {
+        "canonical_v1_address": "THR...",
+        "public_key": "...",
+        "bound_key_address": "THR..."
+    }
+
+    Response:
+    {
+        "ok": true,
+        "binding_created": true,
+        "canonical_v1_address": "THR...",
+        "bound_key_address": "THR...",
+        "public_key_hash": "...",
+        "created_at": "2026-06-04T..."
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        canonical_v1_address = (data.get("canonical_v1_address") or "").strip().upper()
+        public_key = (data.get("public_key") or "").strip()
+        bound_key_address = (data.get("bound_key_address") or "").strip().upper()
+
+        # Validate inputs
+        if not canonical_v1_address or not public_key or not bound_key_address:
+            return jsonify({"ok": False, "error": "missing_required_fields"}), 400
+
+        if not validate_thr_address(canonical_v1_address):
+            return jsonify({"ok": False, "error": "invalid_canonical_address"}), 400
+
+        if not validate_thr_address(bound_key_address):
+            return jsonify({"ok": False, "error": "invalid_bound_key_address"}), 400
+
+        # System wallet protection
+        SYSTEM_WALLET_ADDRESS = "THR5DF27A86C477F381594E896F0E55357DEC5942BA"
+        if canonical_v1_address == SYSTEM_WALLET_ADDRESS:
+            return jsonify({"ok": False, "error": "system_wallet_not_allowed"}), 400
+
+        # Verify pledge is confirmed for this canonical address
+        from wallet_v1_migration import search_all_migration_sources
+        migration_result = search_all_migration_sources(canonical_v1_address=canonical_v1_address)
+
+        if not migration_result:
+            return jsonify({"ok": False, "error": "wallet_not_found"}), 404
+
+        # Verify pledge is confirmed
+        pledge_status = migration_result.get("pledge_status")
+        if pledge_status != "confirmed":
+            return jsonify({"ok": False, "error": "pledge_not_confirmed"}), 403
+
+        # Check if binding already exists
+        bindings = load_key_bindings()
+        existing = any(
+            b.get("canonical_v1_address") == canonical_v1_address and
+            b.get("status") == "active"
+            for b in bindings
+        )
+
+        if existing:
+            return jsonify({"ok": False, "error": "key_binding_already_exists"}), 409
+
+        # Create binding with public key hash (never store private key)
+        public_key_hash = hashlib.sha256(public_key.encode()).hexdigest()[:32]
+        binding_id = "binding_" + secrets.token_hex(8)
+        now = datetime.utcnow().isoformat() + "Z"
+
+        new_binding = {
+            "binding_id": binding_id,
+            "canonical_v1_address": canonical_v1_address,
+            "bound_key_address": bound_key_address,
+            "active_public_key_hash": public_key_hash,
+            "status": "active",
+            "binding_source": "pledge_native_key_setup",
+            "created_at": now
+        }
+
+        bindings.append(new_binding)
+        save_key_bindings(bindings)
+
+        app.logger.info(
+            "[key_binding_register] stage=success",
+            extra={
+                "canonical_short": canonical_v1_address[:10] + "...",
+                "binding_source": "pledge_native_key_setup"
+            }
+        )
+
+        return jsonify({
+            "ok": True,
+            "binding_created": True,
+            "canonical_v1_address": canonical_v1_address,
+            "bound_key_address": bound_key_address,
+            "public_key_hash": public_key_hash,
+            "created_at": now
+        }), 201
+
+    except Exception as e:
+        error_type = type(e).__name__
+        app.logger.error("[key_binding_register] stage=error exception=" + error_type)
+        return jsonify({"ok": False, "error": "binding_registration_failed", "exception_type": error_type}), 500
+
+
 @app.route("/api/wallet/v1/ownership/verify", methods=["POST"])
 def api_wallet_v1_ownership_verify():
     """

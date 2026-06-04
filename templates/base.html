@@ -1594,9 +1594,23 @@
             </div>
 
             <div id="walletLoginSection" class="wallet-popup-login" style="display:none;">
-                <label for="walletWidgetThrAddress">THR Address</label>
+                <!-- PLEDGE ACTIVATION: Production mode CTA (no legacy repair UI) -->
+                <div id="walletV1PledgeActivationPanel" data-production-only="1" style="display:none; background:#1a2a1a; border:1px solid #00ff66; border-radius:8px; padding:15px; margin:12px 0;">
+                    <h5 style="color:#00ff66; margin-top:0;">🔓 Activate Wallet V1</h5>
+                    <p style="font-size:0.9em; line-height:1.5; color:#ccc; margin:10px 0;">
+                        Create a new Wallet V1 through our pledge activation process.
+                    </p>
+                    <div style="margin:12px 0;">
+                        <button class="primary" style="background:#0a6a1a; width:100%;" onclick="window.location.href='/pledge'">Go to Pledge Activation</button>
+                    </div>
+                    <p style="font-size:0.8em; color:#9f9; margin:8px 0;">
+                        After pledge confirmation, return here to set up your signing key.
+                    </p>
+                </div>
+
+                <label for="walletWidgetThrAddress" id="walletWidgetAddrLabel">THR Address</label>
                 <input type="text" id="walletWidgetThrAddress" placeholder="THR..." />
-<label for="walletWidgetMode">Mode</label>
+<label for="walletWidgetMode" id="walletWidgetModeLabel">Mode</label>
                 <select id="walletWidgetMode" onchange="switchWalletV1Mode()" style="width:100%;padding:8px;background:#000;border:1px solid #00ff66;color:#00ff66;">
                     <option value="restore">Restore Existing Migrated Wallet</option>
                     <option value="migrate">Migrate Legacy Wallet</option>
@@ -5607,9 +5621,21 @@ function switchWalletV1Mode(){
             const msg = document.createElement('div');
             msg.setAttribute('data-wallet-state-msg', '1');
             msg.style.cssText = 'background:#1a1a1a; border:1px solid #ff9900; border-radius:8px; padding:12px; margin:10px 0; color:#ff9900; font-size:0.9em;';
-            const msgText = displayMode === 'restore'
-                ? '📥 Enter your legacy wallet address to restore the previously migrated V1 wallet.'
-                : '⚠️ Complete pledge, migrate legacy wallet, or restore a verified wallet before unlocking.';
+
+            // Production mode: pledge-native messaging
+            const isProductionMode = document.body.classList.contains('wallet-v1-production-mode');
+            let msgText;
+
+            if (isProductionMode) {
+                // Production: promote pledge activation
+                msgText = '🔓 No Wallet V1 found. Complete pledge activation to create your wallet.';
+            } else {
+                // Admin mode: show all options
+                msgText = displayMode === 'restore'
+                    ? '📥 Enter your legacy wallet address to restore the previously migrated V1 wallet.'
+                    : '⚠️ Complete pledge, migrate legacy wallet, or restore a verified wallet before unlocking.';
+            }
+
             msg.textContent = msgText;
             loginSection.insertBefore(msg, loginSection.firstChild);
         }
@@ -5618,6 +5644,29 @@ function switchWalletV1Mode(){
     // Show restore button if migration exists and we're in unlock mode
     updateRestoreMigratedWalletButton();
     updateWalletPanelDiagnostics();
+
+    // Show pledge activation panel in production mode when no active wallet
+    const isProductionMode = document.body.classList.contains('wallet-v1-production-mode');
+    const pledgePanel = document.getElementById('walletV1PledgeActivationPanel');
+    const modeLabel = document.querySelector('label[for="walletWidgetMode"]');
+    const addrLabel = document.getElementById('walletWidgetAddrLabel');
+
+    if (pledgePanel) {
+        if (isProductionMode && modalState === 'no_active_wallet') {
+            // Production mode with no wallet: show pledge CTA
+            pledgePanel.style.display = 'block';
+            if (modeSelect) modeSelect.style.display = 'none';
+            if (modeLabel) modeLabel.style.display = 'none';
+            if (addrLabel) addrLabel.style.display = 'none';
+            if (modeSelect) modeSelect.parentElement.querySelector('input[type="text"]').style.display = 'none';
+        } else {
+            // Admin mode or wallet exists: hide pledge CTA
+            pledgePanel.style.display = 'none';
+            if (modeSelect) modeSelect.style.display = 'block';
+            if (modeLabel) modeLabel.style.display = 'block';
+            if (addrLabel) addrLabel.style.display = 'block';
+        }
+    }
 }
 
 function updateRestoreMigratedWalletButton(){
@@ -6607,15 +6656,20 @@ function updateHeaderWalletUi(){
     const migrated = (walletSession.isMigrated && walletSession.isMigrated()) ? ' (migrated)' : '';
     const short = hasWallet ? ('V1 ' + wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4) + migrated) : 'Wallet V1';
 
-    let buttonText = 'Migrate to Wallet V1';
+    // Check if production mode (legacy repair UI hidden)
+    const isProductionMode = document.body.classList.contains('wallet-v1-production-mode');
+
+    let buttonText = isProductionMode ? 'Activate Wallet' : 'Migrate to Wallet V1';
     if (hasWallet && walletSession.getWalletState) {
       const state = walletSession.getWalletState();
       if (state === 'signing_ready') {
         buttonText = short;
       } else if (state === 'signing_key_mismatch') {
         buttonText = 'V1 ' + wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4) + ' (key mismatch)';
+      } else if (state === 'signing_key_unusable_legacy_format') {
+        buttonText = 'V1 ' + wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4) + ' (setup key)';
       } else if (state === 'missing_signing_key') {
-        buttonText = 'V1 ' + wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4) + ' (missing key)';
+        buttonText = 'V1 ' + wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4) + ' (setup key)';
       } else if (state === 'locked') {
         buttonText = 'Unlock Wallet V1';
       } else if (state === 'connected_readonly') {

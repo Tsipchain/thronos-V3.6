@@ -1617,6 +1617,7 @@
                     <option value="unlock">Unlock Wallet V1</option>
                     <option value="create">Create Wallet V1</option>
                     <option value="import_signing_key">Import Matching Signing Key</option>
+                    <option value="admin_generate_signer" data-wallet-legacy-repair="1">🔐 [ADMIN] Generate Signer for Canonical Wallet</option>
                 </select>
 
                 <!-- UNLOCK MODE: Only PIN + Unlock button -->
@@ -1658,6 +1659,36 @@
                     <input type="password" id="walletWidgetMigratePin" placeholder="4-8 digits" />
                     <div class="wallet-modal-actions" style="margin-top:10px;">
                         <button class="primary" onclick="migrateLegacyWalletFromHeader()">Migrate Legacy Wallet</button>
+                    </div>
+                </div>
+
+                <!-- ADMIN SIGNER GENERATION: Generate V1 signer for existing canonical wallet -->
+                <div id="walletV1AdminGenerateSignerMode" data-wallet-legacy-repair="1" style="display:none; margin-top:10px; border-top:1px solid #00aaff; padding-top:10px;">
+                    <div style="background:#0a1a2a; border:1px solid #00aaff; border-radius:8px; padding:15px; margin-bottom:12px;">
+                        <h5 style="color:#00aaff; margin-top:0;">🔑 Generate V1 Signer for Existing Wallet</h5>
+                        <p style="font-size:0.9em; line-height:1.5; color:#ccc; margin-bottom:12px;">
+                            For admin use: Generate a new signing key for an existing canonical V1 address.
+                            This creates a new secp256k1 signer without requiring the user's legacy credentials.
+                        </p>
+
+                        <div style="margin-bottom:12px;">
+                            <label style="display:block; font-size:0.85em; color:#00aaff; margin-bottom:4px;">Canonical V1 Address</label>
+                            <input type="text" id="walletAdminCanonicalAddress" placeholder="THR..." style="width:100%; padding:8px; background:#000; color:#00aaff; border:1px solid #00aaff; border-radius:4px; font-size:0.9em; font-family:monospace;" />
+                        </div>
+
+                        <div style="margin-bottom:12px;">
+                            <label style="display:block; font-size:0.85em; color:#9f9; margin-bottom:4px;">Optional: Legacy Send Secret (for ownership verification)</label>
+                            <input type="password" id="walletAdminLegacySecret" placeholder="send_secret (optional)" style="width:100%; padding:8px; background:#000; color:#0f0; border:1px solid #8a8a8a; border-radius:4px; font-size:0.9em; font-family:monospace;" />
+                        </div>
+
+                        <div style="display:flex; gap:8px;">
+                            <button onclick="walletAdminGenerateSignerForCanonical()" style="flex:1; padding:10px; background:#0066cc; color:#fff; border:1px solid #00aaff; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                🔑 Generate Signer
+                            </button>
+                            <button onclick="walletAdminCancelGenerateSigner()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
+                                Cancel
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -5670,6 +5701,7 @@ function switchWalletV1Mode(){
     const restoreEl = document.getElementById('walletV1RestoreMode');
     const createEl = document.getElementById('walletV1CreateMode');
     const importEl = document.getElementById('walletV1ImportMode');
+    const adminSignerEl = document.getElementById('walletV1AdminGenerateSignerMode');
 
     // Check production mode: if restore/migrate were removed, fallback to available option
     const restoreOption = document.querySelector('option[value="restore"]');
@@ -5764,6 +5796,7 @@ function switchWalletV1Mode(){
     if (unlockEl) unlockEl.style.display = (displayMode === 'unlock' && unlockAllowed) ? 'block' : 'none';
     if (migrateEl) migrateEl.style.display = (displayMode === 'migrate') ? 'block' : 'none';
     if (importEl) importEl.style.display = (displayMode === 'import_signing_key' && importAllowed) ? 'block' : 'none';
+    if (adminSignerEl) adminSignerEl.style.display = (displayMode === 'admin_generate_signer') ? 'block' : 'none';
 
     // Show appropriate state message
     const existingMsgs = document.querySelectorAll('[data-wallet-state-msg]');
@@ -6972,6 +7005,157 @@ function restoreMigratedWalletFromHeader(){
         alert('Restore failed: ' + (err.message || 'Unknown error'));
     }
 }
+
+// ========== Admin Signer Generation for Existing Canonical Wallets ==========
+
+async function walletAdminGenerateSignerForCanonical() {
+    const canonicalAddr = (document.getElementById('walletAdminCanonicalAddress')?.value || '').trim();
+    const legacySecret = (document.getElementById('walletAdminLegacySecret')?.value || '').trim();
+
+    if (!canonicalAddr) return alert('Canonical V1 address is required');
+    if (!canonicalAddr.startsWith('THR') || canonicalAddr.length < 20) {
+        return alert('Invalid address format. Must be THR... (40+ chars)');
+    }
+
+    console.log('[AdminSignerGen] Generating signer for canonical wallet:', canonicalAddr.substring(0, 10) + '...');
+
+    try {
+        // Step 1: Generate new secp256k1 signer key client-side only
+        if (!walletSession.generateV1KeyPair) {
+            return alert('Key generation API not available');
+        }
+
+        const keyResult = await walletSession.generateV1KeyPair();
+        if (!keyResult.success) {
+            return alert('Failed to generate key: ' + (keyResult.error || 'Unknown error'));
+        }
+
+        const { publicKey, address: boundAddr, privateKey } = keyResult;
+
+        console.log('[AdminSignerGen] Generated signer:', {
+            publicKey: publicKey.substring(0, 16) + '...',
+            boundAddr: boundAddr.substring(0, 10) + '...',
+            canonical: canonicalAddr.substring(0, 10) + '...'
+        });
+
+        // Step 2: Ask for PIN to encrypt the private key
+        const pin = prompt('Enter PIN to encrypt signing key (4-8 digits):');
+        if (!pin) {
+            console.log('[AdminSignerGen] Cancelled by user');
+            return;
+        }
+
+        if (!pin.match(/^\d{4,8}$/)) {
+            return alert('PIN must be 4-8 digits');
+        }
+
+        // Step 3: Encrypt private key locally with PIN
+        if (!walletSession.encryptPrivateKeyHex) {
+            return alert('Encryption not available');
+        }
+
+        const encrypted = await walletSession.encryptPrivateKeyHex(privateKey, pin);
+        if (!encrypted) {
+            return alert('Failed to encrypt key');
+        }
+
+        console.log('[AdminSignerGen] Private key encrypted with PIN');
+
+        // Step 4: Save encrypted key locally
+        localStorage.setItem('wallet_v1_encrypted_priv', encrypted);
+        localStorage.setItem('wallet_v1_address', canonicalAddr);
+
+        // Step 5: Generate recovery kit
+        const recoveryKit = {
+            version: 'wallet-v1-recovery-kit',
+            canonical_v1_address: canonicalAddr,
+            bound_key_address: boundAddr,
+            public_key: publicKey,
+            encrypted_private_key_backup: encrypted,
+            created_at: new Date().toISOString(),
+            warning: 'Keep this file offline. It restores signing access. The private key is encrypted with your PIN.',
+            admin_generated: true,
+            generated_for: 'admin_signer_setup'
+        };
+
+        // Step 6: Show recovery kit for download
+        const kitJson = JSON.stringify(recoveryKit, null, 2);
+        const recoveryKitPreview = document.createElement('div');
+        recoveryKitPreview.style.cssText = 'background:#000; border:1px solid #00aaff; border-radius:4px; padding:10px; margin:10px 0; max-height:200px; overflow-y:auto; font-size:0.7em; color:#0f0; font-family:monospace;';
+        recoveryKitPreview.textContent = kitJson;
+
+        // Step 7: Register key binding with backend (public_key + bound_key_address only, NO private key)
+        console.log('[AdminSignerGen] Registering key binding with backend...');
+
+        const bindingResponse = await fetch('/api/wallet/v1/key-binding/register', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                canonical_v1_address: canonicalAddr,
+                public_key: publicKey,
+                bound_key_address: boundAddr
+            })
+        });
+
+        const bindingResult = await bindingResponse.json();
+
+        if (!bindingResult.ok) {
+            console.warn('[AdminSignerGen] Key binding failed:', bindingResult.error);
+            localStorage.removeItem('wallet_v1_encrypted_priv');
+            localStorage.removeItem('wallet_v1_address');
+            return alert('Key binding failed: ' + (bindingResult.error || 'Unknown error'));
+        }
+
+        console.log('[AdminSignerGen] Key binding registered successfully');
+
+        // Step 8: Show success and recovery kit
+        const message = `✓ Wallet V1 signer bound successfully!
+
+Canonical Address: ${canonicalAddr}
+Bound Signer Address: ${boundAddr}
+Public Key Hash: ${publicKey.substring(0, 16)}...
+
+Recovery Kit (keep offline):
+${kitJson}
+
+Save this recovery kit securely. It can restore access if the device is lost.`;
+
+        alert(message);
+
+        // Download recovery kit
+        const blob = new Blob([kitJson], {type: 'application/json'});
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'wallet-admin-signer-' + canonicalAddr.substring(0, 10) + '.json';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+
+        console.log('[AdminSignerGen] Complete - recovery kit downloaded');
+
+        // Clear form and hide admin panel
+        document.getElementById('walletAdminCanonicalAddress').value = '';
+        document.getElementById('walletAdminLegacySecret').value = '';
+        document.getElementById('walletV1AdminGenerateSignerMode').style.display = 'none';
+
+        updateHeaderWalletUi();
+
+    } catch(err) {
+        console.error('[AdminSignerGen] Error:', err);
+        alert('Error: ' + (err.message || 'Failed to generate signer'));
+    }
+}
+
+function walletAdminCancelGenerateSigner() {
+    document.getElementById('walletAdminCanonicalAddress').value = '';
+    document.getElementById('walletAdminLegacySecret').value = '';
+    document.getElementById('walletV1AdminGenerateSignerMode').style.display = 'none';
+    console.log('[AdminSignerGen] Cancelled');
+}
+
+// ========== End Admin Signer Generation ==========
 
 function resetActiveWalletPointersFromHeader(){
     if (!walletSession.resetActiveWalletPointers) return alert('Reset API unavailable');

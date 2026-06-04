@@ -7061,41 +7061,17 @@ async function walletAdminGenerateSignerForCanonical() {
 
         console.log('[AdminSignerGen] Private key encrypted with PIN');
 
-        // Step 4: Save encrypted key locally
-        localStorage.setItem('wallet_v1_encrypted_priv', encrypted);
-        localStorage.setItem('wallet_v1_address', canonicalAddr);
-
-        // Step 5: Generate recovery kit
-        const recoveryKit = {
-            version: 'wallet-v1-recovery-kit',
-            canonical_v1_address: canonicalAddr,
-            bound_key_address: boundAddr,
-            public_key: publicKey,
-            encrypted_private_key_backup: encrypted,
-            created_at: new Date().toISOString(),
-            warning: 'Keep this file offline. It restores signing access. The private key is encrypted with your PIN.',
-            admin_generated: true,
-            generated_for: 'admin_signer_setup'
-        };
-
-        // Step 6: Show recovery kit for download
-        const kitJson = JSON.stringify(recoveryKit, null, 2);
-        const recoveryKitPreview = document.createElement('div');
-        recoveryKitPreview.style.cssText = 'background:#000; border:1px solid #00aaff; border-radius:4px; padding:10px; margin:10px 0; max-height:200px; overflow-y:auto; font-size:0.7em; color:#0f0; font-family:monospace;';
-        recoveryKitPreview.textContent = kitJson;
-
-        // Step 7: Ask for repair token (admin authentication)
+        // Step 4: Ask for repair token (admin authentication)
         console.log('[AdminSignerGen] Admin mode: requesting repair token...');
 
         const repairToken = prompt('Enter WALLET_V1_REPAIR_TOKEN for admin authentication:');
         if (!repairToken) {
             console.log('[AdminSignerGen] Repair token not provided - cancelled');
-            localStorage.removeItem('wallet_v1_encrypted_priv');
-            localStorage.removeItem('wallet_v1_address');
+            // Clear sensitive data from memory (never persisted)
             return alert('Admin authentication required. Cannot proceed without repair token.');
         }
 
-        // Step 8: Register key binding with admin endpoint
+        // Step 5: Register key binding with admin endpoint
         console.log('[AdminSignerGen] Registering key binding via admin endpoint...');
 
         const bindingResponse = await fetch('/api/wallet/v1/key-binding/admin-register', {
@@ -7116,13 +7092,7 @@ async function walletAdminGenerateSignerForCanonical() {
 
         if (!bindingResult.ok) {
             console.warn('[AdminSignerGen] Key binding failed:', bindingResult.error);
-            localStorage.removeItem('wallet_v1_encrypted_priv');
-            localStorage.removeItem('wallet_v1_address');
-
-            // Clear repair token from memory
-            let tokenFromMemory = repairToken;
-            repairToken = null;
-
+            // On failure: clear sensitive data from memory, never persisted
             const errorMsg = bindingResult.error === 'invalid_repair_token'
                 ? 'Invalid repair token. Cannot proceed.'
                 : bindingResult.error === 'repair_token_required'
@@ -7134,8 +7104,23 @@ async function walletAdminGenerateSignerForCanonical() {
 
         console.log('[AdminSignerGen] Key binding registered successfully via admin endpoint');
 
-        // Clear repair token from memory
-        repairToken = null;
+        // Step 6: On success, save encrypted key and generate recovery kit
+        localStorage.setItem('wallet_v1_encrypted_priv', encrypted);
+        localStorage.setItem('wallet_v1_address', canonicalAddr);
+
+        const recoveryKit = {
+            version: 'wallet-v1-recovery-kit',
+            canonical_v1_address: canonicalAddr,
+            bound_key_address: boundAddr,
+            public_key: publicKey,
+            encrypted_private_key_backup: encrypted,
+            created_at: new Date().toISOString(),
+            warning: 'Keep this file offline. It restores signing access. The private key is encrypted with your PIN.',
+            admin_generated: true,
+            generated_for: 'admin_signer_setup'
+        };
+
+        const kitJson = JSON.stringify(recoveryKit, null, 2);
         const message = `✓ Admin signer bound successfully!
 
 Canonical Address: ${canonicalAddr}

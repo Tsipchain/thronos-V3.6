@@ -1794,6 +1794,54 @@
                             </button>
                         </div>
 
+                        <!-- PIN Entry for Key Setup (pledge-native) -->
+                        <div id="walletV1PinEntryForm" style="display:none; background:#1a1a2a; border:1px solid #00ff66; border-radius:6px; padding:12px; margin-bottom:12px;">
+                            <div style="font-size:0.85em; color:#0f0; margin-bottom:10px; font-weight:bold;">
+                                🔐 Secure Your Signing Key
+                            </div>
+                            <p style="font-size:0.8em; color:#9f9; margin-bottom:10px;">
+                                Enter a PIN to encrypt and save your key locally. You'll use this PIN to unlock and sign transactions.
+                            </p>
+                            <div style="margin-bottom:10px;">
+                                <label style="display:block; font-size:0.85em; color:#0f0; margin-bottom:4px;">PIN (4-8 digits)</label>
+                                <input type="password" id="walletV1NewKeyPin" placeholder="Enter 4-8 digits" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:4px; font-size:0.9em;" />
+                            </div>
+                            <div style="margin-bottom:12px;">
+                                <label style="display:block; font-size:0.85em; color:#0f0; margin-bottom:4px;">Confirm PIN</label>
+                                <input type="password" id="walletV1NewKeyPinConfirm" placeholder="Re-enter PIN" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:4px; font-size:0.9em;" />
+                            </div>
+                            <div style="font-size:0.75em; color:#9f9; margin-bottom:12px; padding:8px; background:#0a2a0a; border-left:2px solid #00ff66;">
+                                <strong>⚠️ Important:</strong> Your private key will never be sent to any server. It will only be encrypted locally with your PIN.
+                            </div>
+                            <div style="display:flex; gap:8px;">
+                                <button onclick="walletV1ConfirmAndEncryptKey()" style="flex:1; padding:10px; background:#00aa66; color:#000; border:1px solid #00ff66; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                    ✓ Encrypt & Save Key
+                                </button>
+                                <button onclick="walletV1CancelKeySetup()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Recovery Kit Display -->
+                        <div id="walletV1RecoveryKitDisplay" style="display:none; background:#0a2a0a; border:2px solid #00ff66; border-radius:6px; padding:15px; margin-bottom:12px;">
+                            <div style="font-size:0.9em; color:#0f0; margin-bottom:12px; font-weight:bold;">
+                                ✅ Key Setup Complete - Recovery Kit Generated
+                            </div>
+                            <p style="font-size:0.8em; color:#9f9; margin-bottom:12px;">
+                                Your signing key has been encrypted and saved. Download your recovery kit to restore access if you lose this device.
+                            </p>
+                            <div id="walletV1RecoveryKitPreview" style="background:#000; border:1px solid #00ff66; border-radius:4px; padding:10px; margin-bottom:12px; max-height:150px; overflow-y:auto; font-size:0.7em; color:#0f0; font-family:monospace;"></div>
+                            <div style="display:flex; gap:8px;">
+                                <button onclick="walletV1DownloadRecoveryKit()" style="flex:1; padding:10px; background:#00aa66; color:#000; border:1px solid #00ff66; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                    📥 Download Recovery Kit
+                                </button>
+                                <button onclick="walletV1CompleteKeySetup()" style="flex:1; padding:10px; background:#0066cc; color:#fff; border:1px solid #00aaff; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                    ✓ Done
+                                </button>
+                            </div>
+                        </div>
+
                         <!-- Existing Key Import (hidden by default) -->
                         <div id="walletV1ImportExistingKeyForm" style="display:none; background:#1a1a2a; border:1px solid #8a6a4a; border-radius:6px; padding:10px; margin-bottom:12px;">
                             <div style="margin-bottom:8px;">
@@ -1829,6 +1877,36 @@
                                 ⚡ Submit Re-Key Request
                             </button>
                             <button onclick="toggleWalletV1RekeySection()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Restore Recovery Kit Section -->
+                    <div id="walletV1RecoverKitRestoreForm" style="display:none; background:#1a2a1a; border:1px solid #ffaa00; border-radius:8px; padding:15px; margin:12px 0;">
+                        <h5 style="color:#ffaa00; margin-top:0;">📥 Restore from Recovery Kit</h5>
+                        <p style="font-size:0.85em; color:#ff9; margin-bottom:12px;">
+                            Upload or paste your recovery kit JSON to restore your signing key on this device.
+                        </p>
+                        <div style="margin-bottom:12px;">
+                            <label style="display:block; font-size:0.85em; color:#ff9; margin-bottom:6px;">Recovery Kit JSON</label>
+                            <textarea id="walletV1RecoveryKitInput" placeholder='Paste recovery kit JSON or upload file...' style="width:100%; height:100px; padding:10px; background:#000; color:#ff9; border:1px solid #ffaa00; border-radius:4px; font-size:0.75em; font-family:monospace;"></textarea>
+                        </div>
+                        <div style="margin-bottom:12px;">
+                            <label style="display:block; font-size:0.85em; color:#ff9; margin-bottom:6px;">PIN (to decrypt)</label>
+                            <input type="password" id="walletV1RecoveryKitPin" placeholder="Enter PIN" style="width:100%; padding:10px; background:#000; color:#ff9; border:1px solid #ffaa00; border-radius:4px; font-size:0.9em;" />
+                        </div>
+                        <div style="display:flex; gap:8px; margin-bottom:12px;">
+                            <button onclick="walletV1LoadRecoveryKitFile()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer; font-size:0.85em;">
+                                📂 Load File
+                            </button>
+                            <input type="file" id="walletV1RecoveryKitFileInput" accept=".json" style="display:none;" />
+                        </div>
+                        <div style="display:flex; gap:8px;">
+                            <button onclick="walletV1ProcessRecoveryKit()" style="flex:1; padding:10px; background:#ffaa00; color:#000; border:1px solid #ffaa00; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                ✓ Restore Key
+                            </button>
+                            <button onclick="walletV1CancelRestore()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
                                 Cancel
                             </button>
                         </div>
@@ -6228,35 +6306,40 @@ function toggleWalletV1ImportExisting() {
 
 async function walletV1GenerateNewKey() {
     try {
-        console.log('[RekeyCeremony] Generating new V1 signing key...');
+        console.log('[KeySetup] Generating new V1 signing key...');
 
         // Use wallet session to generate key pair and derive address
         if (!walletSession.generateV1KeyPair) {
             return alert('Key generation API not available');
         }
 
-        const result = walletSession.generateV1KeyPair();
+        const result = await walletSession.generateV1KeyPair();
         if (!result.success) {
             return alert('Failed to generate key: ' + (result.error || 'Unknown error'));
         }
 
-        const { publicKey, address } = result;
+        const { publicKey, address, privateKey } = result;
 
-        // Display generated key for verification
+        console.log('[KeySetup] Generated key derives address:', address);
+
+        // Store the generated key in memory (never on disk yet)
+        window.walletV1GeneratedPrivateKey = privateKey;
+        window.walletV1CurrentPublicKey = publicKey;
+        window.walletV1CurrentAddress = address;
+
+        // Display for verification
         document.getElementById('walletV1GeneratedPublicKey').value = publicKey;
         document.getElementById('walletV1GeneratedAddress').value = address;
         document.getElementById('walletV1GeneratedKeyDisplay').style.display = 'block';
 
-        const canonicalAddr = document.getElementById('walletV1CanonicalAddr').value;
-        console.log('[RekeyCeremony] Generated key derives signer address: ' + address + ', canonical wallet: ' + canonicalAddr);
+        // Show PIN entry form
+        document.getElementById('walletV1PinEntryForm').style.display = 'block';
+        document.getElementById('walletV1ImportExistingKeyForm').style.display = 'none';
 
-        // Store for re-key request
-        // Note: address will be DIFFERENT from canonical (this is correct)
-        window.walletV1CurrentPublicKey = publicKey;
-        window.walletV1CurrentAddress = address;
+        console.log('[KeySetup] Awaiting PIN entry to encrypt and save key');
 
     } catch(err) {
-        console.error('[RekeyCeremony] Generation error:', err);
+        console.error('[KeySetup] Generation error:', err);
         alert('Error: ' + (err.message || 'Failed to generate key'));
     }
 }
@@ -6392,6 +6475,222 @@ async function walletV1SubmitRekeyRequest() {
         alert('Error: ' + (err.message || 'Request failed'));
     }
 }
+
+// ========== Pledge-Native Key Setup Functions ==========
+
+async function walletV1ConfirmAndEncryptKey() {
+    const pin = (document.getElementById('walletV1NewKeyPin')?.value || '').trim();
+    const pinConfirm = (document.getElementById('walletV1NewKeyPinConfirm')?.value || '').trim();
+    const privateKey = window.walletV1GeneratedPrivateKey;
+    const publicKey = window.walletV1CurrentPublicKey;
+    const boundAddr = window.walletV1CurrentAddress;
+    const canonicalAddr = (document.getElementById('walletV1CanonicalAddr')?.value || '').trim();
+
+    // Validation
+    if (!pin || !pinConfirm) return alert('PIN is required');
+    if (pin !== pinConfirm) return alert('PINs do not match');
+    if (!pin.match(/^\d{4,8}$/)) return alert('PIN must be 4-8 digits');
+    if (!privateKey || !publicKey || !boundAddr) return alert('Key not generated - please try again');
+
+    try {
+        console.log('[KeySetup] Encrypting private key with PIN...');
+
+        // Encrypt the private key with PIN using wallet session
+        if (!walletSession.encryptPrivateKeyHex) {
+            return alert('Encryption not available');
+        }
+
+        const encrypted = await walletSession.encryptPrivateKeyHex(privateKey, pin);
+        if (!encrypted) {
+            return alert('Failed to encrypt key');
+        }
+
+        console.log('[KeySetup] Private key encrypted successfully');
+
+        // Save encrypted key locally
+        localStorage.setItem('wallet_v1_encrypted_priv', encrypted);
+
+        // Now register the binding with backend (public key + bound address, NO private key)
+        console.log('[KeySetup] Registering key binding with backend...');
+
+        const response = await fetch('/api/wallet/v1/key-binding/register', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                canonical_v1_address: canonicalAddr,
+                public_key: publicKey,
+                bound_key_address: boundAddr
+            })
+        });
+
+        const result = await response.json();
+
+        if (!result.ok) {
+            console.warn('[KeySetup] Key binding registration failed:', result.error);
+            // Clear the encrypted key since binding failed
+            localStorage.removeItem('wallet_v1_encrypted_priv');
+            return alert('Key binding failed: ' + (result.error || 'Unknown error'));
+        }
+
+        console.log('[KeySetup] Key binding registered successfully');
+
+        // Generate and display recovery kit
+        const recoveryKit = walletV1GenerateRecoveryKit(canonicalAddr, boundAddr, publicKey, encrypted);
+        window.walletV1CurrentRecoveryKit = recoveryKit;
+
+        // Show recovery kit
+        document.getElementById('walletV1RecoveryKitPreview').textContent = JSON.stringify(recoveryKit, null, 2);
+        document.getElementById('walletV1RecoveryKitDisplay').style.display = 'block';
+        document.getElementById('walletV1PinEntryForm').style.display = 'none';
+
+        // Clear PIN fields
+        document.getElementById('walletV1NewKeyPin').value = '';
+        document.getElementById('walletV1NewKeyPinConfirm').value = '';
+
+        alert('✓ Key encrypted and binding registered!\n\nDownload your recovery kit before closing.');
+
+    } catch(err) {
+        console.error('[KeySetup] Error:', err);
+        alert('Error: ' + (err.message || 'Failed to encrypt and register key'));
+    }
+}
+
+function walletV1CancelKeySetup() {
+    // Clear sensitive data
+    delete window.walletV1GeneratedPrivateKey;
+    delete window.walletV1CurrentPublicKey;
+    delete window.walletV1CurrentAddress;
+
+    // Clear forms
+    document.getElementById('walletV1PinEntryForm').style.display = 'none';
+    document.getElementById('walletV1GeneratedKeyDisplay').style.display = 'none';
+    document.getElementById('walletV1NewKeyPin').value = '';
+    document.getElementById('walletV1NewKeyPinConfirm').value = '';
+
+    console.log('[KeySetup] Cancelled');
+}
+
+function walletV1GenerateRecoveryKit(canonical, bound, publicKey, encryptedPrivateKey) {
+    return {
+        version: 'wallet-v1-recovery-kit',
+        canonical_v1_address: canonical,
+        bound_key_address: bound,
+        public_key: publicKey,
+        encrypted_private_key_backup: encryptedPrivateKey,
+        created_at: new Date().toISOString(),
+        warning: 'Keep this file offline. It restores signing access. The private key is encrypted with your PIN.'
+    };
+}
+
+function walletV1DownloadRecoveryKit() {
+    const kit = window.walletV1CurrentRecoveryKit;
+    if (!kit) return alert('Recovery kit not available');
+
+    const json = JSON.stringify(kit, null, 2);
+    const blob = new Blob([json], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'wallet-recovery-kit-' + kit.canonical_v1_address.substring(0, 10) + '.json';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    console.log('[KeySetup] Recovery kit downloaded');
+}
+
+function walletV1CompleteKeySetup() {
+    // Mark wallet as set up
+    localStorage.setItem('wallet_v1_setup_complete', '1');
+
+    // Clear recovery kit from memory
+    delete window.walletV1CurrentRecoveryKit;
+
+    // Hide setup UI
+    document.getElementById('walletV1RecoveryKitDisplay').style.display = 'none';
+    document.getElementById('walletV1RekeyCeremonyForm').style.display = 'none';
+
+    alert('✓ Wallet key setup complete!\n\nYou can now unlock your wallet with your PIN to sign transactions.');
+    updateHeaderWalletUi();
+}
+
+function walletV1LoadRecoveryKitFile() {
+    const input = document.getElementById('walletV1RecoveryKitFileInput');
+    input.click();
+    input.addEventListener('change', function() {
+        const file = this.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            document.getElementById('walletV1RecoveryKitInput').value = e.target.result;
+        };
+        reader.readAsText(file);
+    }, {once: true});
+}
+
+async function walletV1ProcessRecoveryKit() {
+    const kitJson = (document.getElementById('walletV1RecoveryKitInput')?.value || '').trim();
+    const pin = (document.getElementById('walletV1RecoveryKitPin')?.value || '').trim();
+
+    if (!kitJson || !pin) return alert('Recovery kit and PIN are required');
+
+    try {
+        const kit = JSON.parse(kitJson);
+
+        // Validate kit structure
+        if (kit.version !== 'wallet-v1-recovery-kit') {
+            return alert('Invalid recovery kit format');
+        }
+        if (!kit.canonical_v1_address || !kit.encrypted_private_key_backup) {
+            return alert('Recovery kit missing required fields');
+        }
+
+        console.log('[Restore] Processing recovery kit for:', kit.canonical_v1_address.substring(0, 10) + '...');
+
+        // Decrypt the private key with the provided PIN
+        if (!walletSession.decryptPrivateKeyHex) {
+            return alert('Decryption not available');
+        }
+
+        const decrypted = await walletSession.decryptPrivateKeyHex(kit.encrypted_private_key_backup, pin);
+        if (!decrypted) {
+            return alert('Failed to decrypt key - wrong PIN or corrupted kit');
+        }
+
+        console.log('[Restore] Key decrypted successfully');
+
+        // Save encrypted backup to local storage
+        localStorage.setItem('wallet_v1_encrypted_priv', kit.encrypted_private_key_backup);
+        localStorage.setItem('wallet_v1_address', kit.canonical_v1_address);
+
+        // Clear restore form
+        document.getElementById('walletV1RecoveryKitInput').value = '';
+        document.getElementById('walletV1RecoveryKitPin').value = '';
+        document.getElementById('walletV1RecoverKitRestoreForm').style.display = 'none';
+
+        alert('✓ Recovery kit restored successfully!\n\nYou can now unlock your wallet with your PIN.');
+        updateHeaderWalletUi();
+
+    } catch(err) {
+        console.error('[Restore] Error:', err);
+        if (err.message && err.message.includes('JSON')) {
+            return alert('Invalid JSON format');
+        }
+        alert('Error: ' + (err.message || 'Failed to restore kit'));
+    }
+}
+
+function walletV1CancelRestore() {
+    document.getElementById('walletV1RecoveryKitInput').value = '';
+    document.getElementById('walletV1RecoveryKitPin').value = '';
+    document.getElementById('walletV1RecoverKitRestoreForm').style.display = 'none';
+    console.log('[Restore] Cancelled');
+}
+
+// ========== End Pledge-Native Key Setup Functions ==========
 
 async function unlockWalletV1FromHeader(){
     const pin = (document.getElementById('walletWidgetUnlockPin')?.value || '').trim();

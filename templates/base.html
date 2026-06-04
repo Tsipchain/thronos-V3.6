@@ -5498,6 +5498,82 @@ function applyWalletV1ProductionMode(status) {
     }
 }
 
+// ========== Production Mode State Sanitizer ==========
+
+function sanitizeWalletV1ProductionState(status) {
+    // In production mode, purge stale legacy restore/migration state
+    // This prevents users from seeing stale UI from previous sessions
+    const legacyRepairEnabled = status && status.legacy_repair_ui_enabled === true;
+
+    if (legacyRepairEnabled) {
+        // Admin mode: don't sanitize, allow legacy state
+        console.log('[WalletV1] Admin mode - legacy state retained');
+        return {keysRemoved: 0, encryptedKeyPreserved: true};
+    }
+
+    // Production mode: sanitize stale legacy state
+    console.log('[WalletV1] Production mode - sanitizing stale legacy state...');
+
+    const staleKeys = [
+        'wallet_v1_restore_mode',          // Stale restore mode flag
+        'wallet_v1_migration_mode',        // Stale migration mode flag
+        'wallet_v1_legacy_source_address', // Stale legacy address
+        'wallet_v1_restore_address',       // Stale restore address
+        'wallet_v1_legacy_recovery_mode',  // Stale recovery mode
+        'wallet_v1_missing_key_mode',      // Stale missing key state
+        'wallet_legacy_address_input',     // Stale legacy address input
+        'wallet_restore_stage',            // Stale restore stage
+    ];
+
+    // Preserve keys that should remain
+    const encryptedKey = localStorage.getItem('wallet_v1_encrypted_priv');
+    const canonicalAddr = localStorage.getItem('wallet_v1_address');
+    const publicKey = localStorage.getItem('wallet_v1_public_key');
+
+    let sanitizedCount = 0;
+
+    // Remove stale keys from both storages
+    staleKeys.forEach(key => {
+        if (localStorage.getItem(key)) {
+            localStorage.removeItem(key);
+            sanitizedCount++;
+        }
+        if (sessionStorage.getItem(key)) {
+            sessionStorage.removeItem(key);
+            sanitizedCount++;
+        }
+    });
+
+    // If status indicates we have a canonical address but no key binding yet
+    if (status && status.canonical_v1_address && !status.has_key_binding) {
+        // Clear any stale "missing key" UI state from memory
+        window.walletV1StaleRestoreState = null;
+        window.walletV1StaleMigrationState = null;
+    }
+
+    // Verify wallet state matches API status - prevent stale restore mode
+    if (status && status.mode === 'needs_pledge') {
+        // No wallet - ensure we don't show restore/migrate UI
+        localStorage.removeItem('wallet_v1_restore_mode');
+        localStorage.removeItem('wallet_v1_migration_mode');
+        sanitizedCount += 2;
+    }
+
+    console.log('[WalletV1] Sanitized stale legacy state', {
+        keysRemoved: sanitizedCount,
+        encryptedKeyPreserved: !!encryptedKey,
+        canonicalAddrPreserved: !!canonicalAddr,
+        hasKeyBinding: status?.has_key_binding
+    });
+
+    return {
+        keysRemoved: sanitizedCount,
+        encryptedKeyPreserved: !!encryptedKey
+    };
+}
+
+// ========== End Production Mode State Sanitizer ==========
+
 async function initializeWalletV1LegacyRepairUI() {
     // Fetch wallet status and apply production mode constraints
     try {
@@ -8641,12 +8717,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         const response = await fetch('/api/wallet/v1/status');
         const status = await response.json();
         if (status.ok) {
+            // First sanitize stale legacy state in production mode
+            sanitizeWalletV1ProductionState(status);
+            // Then apply production mode UI constraints
             applyWalletV1ProductionMode(status);
         }
     } catch (err) {
         // Default to production mode (safe) if fetch fails
         console.warn('[WalletV1] Could not fetch status on DOMContentLoaded, defaulting to production mode');
-        applyWalletV1ProductionMode({legacy_repair_ui_enabled: false});
+        const safeStatus = {legacy_repair_ui_enabled: false};
+        sanitizeWalletV1ProductionState(safeStatus);
+        applyWalletV1ProductionMode(safeStatus);
     }
 });
 
@@ -8654,15 +8735,18 @@ document.addEventListener('DOMContentLoaded', async () => {
 const originalOpenModal = window.openHeaderWalletModal;
 if (originalOpenModal) {
     window.openHeaderWalletModal = async function() {
-        // Apply production mode before original logic
+        // Sanitize stale state and apply production mode before original logic
         try {
             const response = await fetch('/api/wallet/v1/status');
             const status = await response.json();
             if (status.ok) {
+                sanitizeWalletV1ProductionState(status);
                 applyWalletV1ProductionMode(status);
             }
         } catch (err) {
-            applyWalletV1ProductionMode({legacy_repair_ui_enabled: false});
+            const safeStatus = {legacy_repair_ui_enabled: false};
+            sanitizeWalletV1ProductionState(safeStatus);
+            applyWalletV1ProductionMode(safeStatus);
         }
         // Call original
         return originalOpenModal.apply(this, arguments);
@@ -8674,12 +8758,21 @@ const originalSwitchMode = window.switchWalletV1Mode;
 if (originalSwitchMode) {
     window.switchWalletV1Mode = function() {
         const result = originalSwitchMode.apply(this, arguments);
-        // Re-apply production mode after mode switch
+        // Re-apply production mode and sanitize after mode switch
         try {
             fetch('/api/wallet/v1/status')
                 .then(r => r.json())
-                .then(status => { if (status.ok) applyWalletV1ProductionMode(status); })
-                .catch(() => applyWalletV1ProductionMode({legacy_repair_ui_enabled: false}));
+                .then(status => {
+                    if (status.ok) {
+                        sanitizeWalletV1ProductionState(status);
+                        applyWalletV1ProductionMode(status);
+                    }
+                })
+                .catch(() => {
+                    const safeStatus = {legacy_repair_ui_enabled: false};
+                    sanitizeWalletV1ProductionState(safeStatus);
+                    applyWalletV1ProductionMode(safeStatus);
+                });
         } catch (_) {}
         return result;
     };

@@ -37086,6 +37086,136 @@ def api_wallet_v1_register_key_binding():
         return jsonify({"ok": False, "error": "binding_registration_failed", "exception_type": error_type}), 500
 
 
+@app.route("/api/wallet/v1/key-binding/admin-register", methods=["POST"])
+def api_wallet_v1_admin_register_key_binding():
+    """
+    Admin-only endpoint for binding signers to existing migrated core wallets.
+
+    Requires repair token for admin authentication.
+    Allows binding for legacy_migrated wallets (no pledge requirement).
+    Stores public key binding only, never stores private key.
+
+    Request headers:
+    X-Wallet-V1-Repair-Token: <WALLET_V1_REPAIR_TOKEN>
+
+    Request body:
+    {
+        "canonical_v1_address": "THR...",
+        "public_key": "...",
+        "bound_key_address": "THR...",
+        "reason": "core_wallet_repair_after_legacy_migration"
+    }
+
+    Response:
+    {
+        "ok": true,
+        "binding_created": true,
+        "canonical_v1_address": "THR...",
+        "bound_key_address": "THR...",
+        "public_key_hash": "...",
+        "created_at": "2026-06-04T..."
+    }
+    """
+    try:
+        # Step 1: Validate repair token
+        if WALLET_V1_REPAIR_TOKEN_REQUIRED:
+            token_from_header = request.headers.get("X-Wallet-V1-Repair-Token", "").strip()
+            if not token_from_header:
+                return jsonify({"ok": False, "error": "repair_token_required"}), 401
+
+            if not constant_time_compare(token_from_header, WALLET_V1_REPAIR_TOKEN):
+                return jsonify({"ok": False, "error": "invalid_repair_token"}), 403
+
+        # Step 2: Parse and validate inputs
+        data = request.get_json() or {}
+        canonical_v1_address = (data.get("canonical_v1_address") or "").strip().upper()
+        public_key = (data.get("public_key") or "").strip()
+        bound_key_address = (data.get("bound_key_address") or "").strip().upper()
+        reason = (data.get("reason") or "").strip()
+
+        if not canonical_v1_address or not public_key or not bound_key_address:
+            return jsonify({"ok": False, "error": "missing_required_fields"}), 400
+
+        if not validate_thr_address(canonical_v1_address):
+            return jsonify({"ok": False, "error": "invalid_canonical_address"}), 400
+
+        if not validate_thr_address(bound_key_address):
+            return jsonify({"ok": False, "error": "invalid_bound_key_address"}), 400
+
+        # Step 3: System wallet protection
+        SYSTEM_WALLET_ADDRESS = "THR5DF27A86C477F381594E896F0E55357DEC5942BA"
+        if canonical_v1_address == SYSTEM_WALLET_ADDRESS:
+            return jsonify({"ok": False, "error": "system_wallet_not_allowed"}), 400
+
+        # Step 4: Verify canonical wallet exists in migrations
+        from wallet_v1_migration import search_all_migration_sources
+        migration_result = search_all_migration_sources(canonical_v1_address=canonical_v1_address)
+
+        if not migration_result:
+            return jsonify({"ok": False, "error": "wallet_not_found"}), 404
+
+        # For admin repair, allow legacy_migrated wallets
+        # No pledge requirement - this is for existing migrated core wallets
+        migration_status = migration_result.get("migration_status", "")
+        if migration_status != "legacy_migrated" and not migration_result.get("has_migration_info"):
+            return jsonify({"ok": False, "error": "not_a_migrated_wallet"}), 400
+
+        # Step 5: Check if binding already exists
+        bindings = load_key_bindings()
+        existing = any(
+            b.get("canonical_v1_address") == canonical_v1_address and
+            b.get("status") == "active"
+            for b in bindings
+        )
+
+        if existing:
+            return jsonify({"ok": False, "error": "key_binding_already_exists"}), 409
+
+        # Step 6: Create binding with public key hash (never store private key)
+        public_key_hash = hashlib.sha256(public_key.encode()).hexdigest()[:32]
+        binding_id = "binding_" + secrets.token_hex(8)
+        now = datetime.utcnow().isoformat() + "Z"
+
+        new_binding = {
+            "binding_id": binding_id,
+            "canonical_v1_address": canonical_v1_address,
+            "bound_key_address": bound_key_address,
+            "active_public_key_hash": public_key_hash,
+            "status": "active",
+            "binding_source": "admin_repair_migrated_core_wallet",
+            "admin_reason": reason,
+            "created_at": now
+        }
+
+        bindings.append(new_binding)
+        save_key_bindings(bindings)
+
+        # Step 7: Safe logging (no sensitive data)
+        app.logger.info(
+            "[admin_key_binding_register] stage=success",
+            extra={
+                "canonical_short": canonical_v1_address[:10] + "...",
+                "binding_source": "admin_repair_migrated_core_wallet",
+                "reason": reason
+            }
+        )
+
+        # Step 8: Return success response
+        return jsonify({
+            "ok": True,
+            "binding_created": True,
+            "canonical_v1_address": canonical_v1_address,
+            "bound_key_address": bound_key_address,
+            "public_key_hash": public_key_hash,
+            "created_at": now
+        }), 201
+
+    except Exception as e:
+        error_type = type(e).__name__
+        app.logger.error("[admin_key_binding_register] stage=error exception=" + error_type)
+        return jsonify({"ok": False, "error": "admin_binding_registration_failed", "exception_type": error_type}), 500
+
+
 @app.route("/api/wallet/v1/ownership/verify", methods=["POST"])
 def api_wallet_v1_ownership_verify():
     """

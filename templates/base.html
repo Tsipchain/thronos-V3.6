@@ -7084,16 +7084,31 @@ async function walletAdminGenerateSignerForCanonical() {
         recoveryKitPreview.style.cssText = 'background:#000; border:1px solid #00aaff; border-radius:4px; padding:10px; margin:10px 0; max-height:200px; overflow-y:auto; font-size:0.7em; color:#0f0; font-family:monospace;';
         recoveryKitPreview.textContent = kitJson;
 
-        // Step 7: Register key binding with backend (public_key + bound_key_address only, NO private key)
-        console.log('[AdminSignerGen] Registering key binding with backend...');
+        // Step 7: Ask for repair token (admin authentication)
+        console.log('[AdminSignerGen] Admin mode: requesting repair token...');
 
-        const bindingResponse = await fetch('/api/wallet/v1/key-binding/register', {
+        const repairToken = prompt('Enter WALLET_V1_REPAIR_TOKEN for admin authentication:');
+        if (!repairToken) {
+            console.log('[AdminSignerGen] Repair token not provided - cancelled');
+            localStorage.removeItem('wallet_v1_encrypted_priv');
+            localStorage.removeItem('wallet_v1_address');
+            return alert('Admin authentication required. Cannot proceed without repair token.');
+        }
+
+        // Step 8: Register key binding with admin endpoint
+        console.log('[AdminSignerGen] Registering key binding via admin endpoint...');
+
+        const bindingResponse = await fetch('/api/wallet/v1/key-binding/admin-register', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Wallet-V1-Repair-Token': repairToken
+            },
             body: JSON.stringify({
                 canonical_v1_address: canonicalAddr,
                 public_key: publicKey,
-                bound_key_address: boundAddr
+                bound_key_address: boundAddr,
+                reason: 'core_wallet_repair_after_legacy_migration'
             })
         });
 
@@ -7103,13 +7118,25 @@ async function walletAdminGenerateSignerForCanonical() {
             console.warn('[AdminSignerGen] Key binding failed:', bindingResult.error);
             localStorage.removeItem('wallet_v1_encrypted_priv');
             localStorage.removeItem('wallet_v1_address');
-            return alert('Key binding failed: ' + (bindingResult.error || 'Unknown error'));
+
+            // Clear repair token from memory
+            let tokenFromMemory = repairToken;
+            repairToken = null;
+
+            const errorMsg = bindingResult.error === 'invalid_repair_token'
+                ? 'Invalid repair token. Cannot proceed.'
+                : bindingResult.error === 'repair_token_required'
+                ? 'Repair token required. Cannot proceed.'
+                : bindingResult.error || 'Unknown error';
+
+            return alert('Admin key binding failed: ' + errorMsg);
         }
 
-        console.log('[AdminSignerGen] Key binding registered successfully');
+        console.log('[AdminSignerGen] Key binding registered successfully via admin endpoint');
 
-        // Step 8: Show success and recovery kit
-        const message = `✓ Wallet V1 signer bound successfully!
+        // Clear repair token from memory
+        repairToken = null;
+        const message = `✓ Admin signer bound successfully!
 
 Canonical Address: ${canonicalAddr}
 Bound Signer Address: ${boundAddr}

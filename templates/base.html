@@ -1621,7 +1621,7 @@
                 </div>
 
                 <!-- RESTORE MODE: Restore existing migrated wallet from backend lookup -->
-                <div id="walletV1RestoreMode" style="display:none; margin-top:10px; border-top:1px solid #0a4a1a; padding-top:10px;">
+                <div id="walletV1RestoreMode" data-wallet-legacy-repair="1" style="display:none; margin-top:10px; border-top:1px solid #0a4a1a; padding-top:10px;">
                     <div style="font-size:10px; color:#00ff66; background:#0a1a0a; padding:8px; border-radius:6px; margin-bottom:10px;">
                         ✓ Restore a previously migrated wallet from your legacy address.
                     </div>
@@ -1635,7 +1635,7 @@
                 </div>
 
                 <!-- MIGRATE MODE: Legacy address + secret + new PIN + Migrate button -->
-                <div id="walletV1MigrateMode" style="display:none; margin-top:10px; border-top:1px solid #114422; padding-top:10px;">
+                <div id="walletV1MigrateMode" data-wallet-legacy-repair="1" style="display:none; margin-top:10px; border-top:1px solid #114422; padding-top:10px;">
                     <label for="walletWidgetLegacyAddress">Legacy THR Address</label>
                     <input type="text" id="walletWidgetLegacyAddress" placeholder="THR..." />
                     <label for="walletWidgetLegacySecret">Legacy Send Secret (migration only)</label>
@@ -1669,7 +1669,7 @@
                     </div>
 
                     <!-- Legacy/Pledge Credential Ownership Verification -->
-                    <div id="walletV1LegacyRecoveryForm" style="background:#1a2a1a; border:1px solid #00ff66; border-radius:8px; padding:15px; margin:12px 0;">
+                    <div id="walletV1LegacyRecoveryForm" data-wallet-legacy-repair="1" style="background:#1a2a1a; border:1px solid #00ff66; border-radius:8px; padding:15px; margin:12px 0;">
                         <h5 style="color:#00ff66; margin-top:0;">Verify Legacy/Pledge Ownership</h5>
                         <p style="font-size:0.85em; color:#9f9; margin-bottom:12px;">
                             Verify your legacy wallet ownership with your pledge credentials. This confirms your identity. PIN belongs to the next step (key generation).
@@ -1717,7 +1717,7 @@
                     </div>
 
                     <!-- Advanced: Raw Private Key Import (hidden by default) -->
-                    <div id="walletV1AdvancedKeyImportForm" style="display:none; background:#2a1a1a; border:1px solid #8a4a4a; border-radius:8px; padding:15px; margin:12px 0;">
+                    <div id="walletV1AdvancedKeyImportForm" data-wallet-legacy-repair="1" style="display:none; background:#2a1a1a; border:1px solid #8a4a4a; border-radius:8px; padding:15px; margin:12px 0;">
                         <h5 style="color:#ff9900; margin-top:0;">Advanced: Import Private Key</h5>
                         <p style="font-size:0.85em; color:#9f9; margin-bottom:12px; opacity:0.7;">
                             If you have a backup of your V1 private key, you can import it directly here.
@@ -1744,7 +1744,7 @@
                     </div>
 
                     <!-- Re-Key Ceremony Section (shown after ownership verification) -->
-                    <div id="walletV1RekeyCeremonyForm" style="display:none; background:#1a2a2a; border:1px solid #00aaff; border-radius:8px; padding:15px; margin:12px 0;">
+                    <div id="walletV1RekeyCeremonyForm" data-wallet-legacy-repair="1" style="display:none; background:#1a2a2a; border:1px solid #00aaff; border-radius:8px; padding:15px; margin:12px 0;">
                         <h5 style="color:#00aaff; margin-top:0;">✓ Ownership Verified - Re-Key Ceremony</h5>
                         <p style="font-size:0.85em; color:#0ff; margin-bottom:12px;">
                             Your legacy wallet ownership has been verified. Now generate or import a signing key to complete recovery.
@@ -1829,17 +1829,17 @@
                 </div>
 
                 <!-- RECOVERY SECTION: Reset pointers and clear wallet -->
-                <div id="walletRecoverySection" style="margin-top:15px; border-top:1px solid #4a2222; padding-top:10px;">
-                    <button class="primary" style="background:#2a4a00; width:100%;" onclick="resetActiveWalletPointersFromHeader()">↺ Reset Active Wallet Pointers</button>
+                <div id="walletRecoverySection" data-wallet-legacy-repair="1" style="margin-top:15px; border-top:1px solid #4a2222; padding-top:10px;">
+                    <button id="walletWidgetResetPointersBtn" class="primary" style="background:#2a4a00; width:100%;" onclick="resetActiveWalletPointersFromHeader()">↺ Reset Active Wallet Pointers</button>
                     <div style="font-size:10px; color:#9f9; opacity:0.6; margin-top:5px;">
                         Clear stale address pointers and restore from migration record if available.
                     </div>
 
                     <div style="margin-top:10px;">
-                        <button class="primary" style="background:#4a2a00; width:100%;" onclick="toggleAdvancedRecoveryFromHeader()">⚠ Advanced Recovery</button>
+                        <button id="walletWidgetAdvancedRecoveryBtn" class="primary" style="background:#4a2a00; width:100%;" onclick="toggleAdvancedRecoveryFromHeader()">⚠ Advanced Recovery</button>
                     </div>
 
-                    <div id="walletAdvancedRecoveryZone" style="display:none; margin-top:10px; padding:10px; background:#2a1a1a; border:1px solid #8a4a4a;">
+                    <div id="walletAdvancedRecoveryZone" data-wallet-legacy-repair="1" style="display:none; margin-top:10px; padding:10px; background:#2a1a1a; border:1px solid #8a4a4a;">
                         <div style="color:#f99; font-weight:bold; font-size:11px; margin-bottom:8px;">DANGER ZONE</div>
                         <div style="font-size:10px; color:#f99; margin-bottom:10px;">
                             This will delete all wallet keys and encrypted material from this device.
@@ -5307,49 +5307,66 @@ function showWalletContentSection(){
 }
 
 function applyWalletV1ProductionMode(status) {
-    // Enforce production mode: hard-hide legacy repair UI when flag is false
-    // This function is called BEFORE showing modal content
+    // Aggressive production mode enforcement: set body class CSS guard + JavaScript hiding
+    // CSS guard (body.wallet-v1-production-mode) provides first layer
+    // JavaScript provides second layer (option removal, diagnostics)
     const legacyRepairEnabled = status && status.legacy_repair_ui_enabled === true;
+    let hiddenLegacyElements = 0;
+    let removedLegacyOptions = 0;
 
     if (!legacyRepairEnabled) {
-        console.log('[WalletV1] production mode active: legacy repair UI hidden');
+        // Set body class for CSS guard
+        document.body.classList.add('wallet-v1-production-mode');
 
-        // Hard-hide all legacy/admin form containers
+        // Hard-hide all legacy/admin form containers by ID
         const restoreForm = document.getElementById('walletV1RestoreMode');
         const migrateForm = document.getElementById('walletV1MigrateMode');
         const legacyRecoveryForm = document.getElementById('walletV1LegacyRecoveryForm');
         const advancedImportForm = document.getElementById('walletV1AdvancedKeyImportForm');
         const rekeyForm = document.getElementById('walletV1RekeyCeremonyForm');
+        const recoverySection = document.getElementById('walletRecoverySection');
+        const advancedZone = document.getElementById('walletAdvancedRecoveryZone');
 
-        if (restoreForm) restoreForm.style.display = 'none';
-        if (migrateForm) migrateForm.style.display = 'none';
-        if (legacyRecoveryForm) legacyRecoveryForm.style.display = 'none';
-        if (advancedImportForm) advancedImportForm.style.display = 'none';
-        if (rekeyForm) rekeyForm.style.display = 'none';
+        if (restoreForm) { restoreForm.style.display = 'none'; hiddenLegacyElements++; }
+        if (migrateForm) { migrateForm.style.display = 'none'; hiddenLegacyElements++; }
+        if (legacyRecoveryForm) { legacyRecoveryForm.style.display = 'none'; hiddenLegacyElements++; }
+        if (advancedImportForm) { advancedImportForm.style.display = 'none'; hiddenLegacyElements++; }
+        if (rekeyForm) { rekeyForm.style.display = 'none'; hiddenLegacyElements++; }
+        if (recoverySection) { recoverySection.style.display = 'none'; hiddenLegacyElements++; }
+        if (advancedZone) { advancedZone.style.display = 'none'; hiddenLegacyElements++; }
 
-        // Hide advanced recovery button
-        const advancedRecoveryBtn = document.querySelector('[onclick*="toggleAdvancedRecovery"]');
-        if (advancedRecoveryBtn) advancedRecoveryBtn.style.display = 'none';
+        // Hide buttons by ID
+        const advancedRecoveryBtn = document.getElementById('walletWidgetAdvancedRecoveryBtn');
+        const resetWalletBtn = document.getElementById('walletWidgetResetPointersBtn');
+        if (advancedRecoveryBtn) { advancedRecoveryBtn.style.display = 'none'; hiddenLegacyElements++; }
+        if (resetWalletBtn) { resetWalletBtn.style.display = 'none'; hiddenLegacyElements++; }
 
-        // Hide reset wallet pointers button (admin-only)
-        const resetWalletBtn = document.querySelector('[onclick*="resetActiveWalletPointers"]');
-        if (resetWalletBtn) resetWalletBtn.style.display = 'none';
+        // Fallback: hide by selector if IDs not found
+        const advancedBySelector = document.querySelector('[onclick*="toggleAdvancedRecovery"]');
+        const resetBySelector = document.querySelector('[onclick*="resetActiveWalletPointers"]');
+        if (advancedBySelector && advancedBySelector !== advancedRecoveryBtn) { advancedBySelector.style.display = 'none'; hiddenLegacyElements++; }
+        if (resetBySelector && resetBySelector !== resetWalletBtn) { resetBySelector.style.display = 'none'; hiddenLegacyElements++; }
 
-        // Remove legacy options from mode select
+        // Remove legacy options from mode select (by value AND by text)
         const modeSelect = document.getElementById('walletWidgetMode');
         if (modeSelect) {
-            // Remove restore option
-            const restoreOption = modeSelect.querySelector('option[value="restore"]');
-            if (restoreOption) restoreOption.remove();
+            const options = modeSelect.querySelectorAll('option');
+            const legacyValues = ['restore', 'migrate', 'legacy', 'rekey'];
+            const legacyTexts = ['Restore Existing', 'Migrate Legacy', 'Verify Legacy', 'Advanced Import', 'Re-Key'];
 
-            // Remove migrate option
-            const migrateOption = modeSelect.querySelector('option[value="migrate"]');
-            if (migrateOption) migrateOption.remove();
+            options.forEach(option => {
+                const shouldRemove = legacyValues.includes(option.value) ||
+                                   legacyTexts.some(text => option.textContent.includes(text));
+                if (shouldRemove) {
+                    option.remove();
+                    removedLegacyOptions++;
+                }
+            });
 
             // Prevent defaulting to removed options
             const currentValue = modeSelect.value;
-            if (currentValue === 'restore' || currentValue === 'migrate') {
-                // Find first available option
+            const availableOptions = modeSelect.querySelectorAll('option');
+            if (!availableOptions.length || legacyValues.includes(currentValue)) {
                 const firstOption = modeSelect.querySelector('option');
                 if (firstOption) {
                     modeSelect.value = firstOption.value;
@@ -5364,18 +5381,28 @@ function applyWalletV1ProductionMode(status) {
             const pledgeLabel = document.querySelector('label[for="walletWidgetMode"]');
             if (pledgeLabel) pledgeLabel.style.display = 'none';
         }
+
+        console.log('[WalletV1] production mode enforced', {
+            hiddenLegacyElements: hiddenLegacyElements,
+            removedLegacyOptions: removedLegacyOptions
+        });
     } else {
-        console.log('[WalletV1] admin mode active: legacy repair UI visible');
-        // Show all legacy UI for admin
+        // Admin mode: remove production mode class and show legacy UI
+        document.body.classList.remove('wallet-v1-production-mode');
+
         const restoreForm = document.getElementById('walletV1RestoreMode');
         const migrateForm = document.getElementById('walletV1MigrateMode');
         const legacyRecoveryForm = document.getElementById('walletV1LegacyRecoveryForm');
         const advancedImportForm = document.getElementById('walletV1AdvancedKeyImportForm');
+        const recoverySection = document.getElementById('walletRecoverySection');
 
         if (restoreForm) restoreForm.style.display = 'block';
         if (migrateForm) migrateForm.style.display = 'block';
         if (legacyRecoveryForm) legacyRecoveryForm.style.display = 'block';
         if (advancedImportForm) advancedImportForm.style.display = 'block';
+        if (recoverySection) recoverySection.style.display = 'block';
+
+        console.log('[WalletV1] admin mode active: legacy repair UI visible');
     }
 }
 
@@ -7231,6 +7258,23 @@ if (typeof MusicModule === 'undefined') {
 </div>
 
 <style>
+/* Wallet V1 Production Mode CSS Guard */
+/* When body.wallet-v1-production-mode is set, hide ALL legacy/admin repair UI */
+body.wallet-v1-production-mode [data-wallet-legacy-repair],
+body.wallet-v1-production-mode #walletV1RestoreMode,
+body.wallet-v1-production-mode #walletV1MigrateMode,
+body.wallet-v1-production-mode #walletV1LegacyRecoveryForm,
+body.wallet-v1-production-mode #walletV1AdvancedKeyImportForm,
+body.wallet-v1-production-mode #walletV1RekeyCeremonyForm,
+body.wallet-v1-production-mode #walletWidgetResetPointersBtn,
+body.wallet-v1-production-mode #walletWidgetAdvancedRecoveryBtn,
+body.wallet-v1-production-mode [onclick*="toggleAdvancedRecovery"],
+body.wallet-v1-production-mode [onclick*="resetActiveWalletPointers"],
+body.wallet-v1-production-mode [onclick*="migrateLegacyWallet"],
+body.wallet-v1-production-mode [data-wallet-rekey-ceremony] {
+    display: none !important;
+}
+
 .global-music-player {
     position: fixed;
     bottom: 0;
@@ -8235,6 +8279,58 @@ window.addEventListener('beforeunload', () => {
         GlobalMusicPlayer.stopPositionSaving();
     }
 });
+</script>
+
+<script>
+// Wallet V1 Production Mode: Enforce on every page load
+document.addEventListener('DOMContentLoaded', async () => {
+    try {
+        const response = await fetch('/api/wallet/v1/status');
+        const status = await response.json();
+        if (status.ok) {
+            applyWalletV1ProductionMode(status);
+        }
+    } catch (err) {
+        // Default to production mode (safe) if fetch fails
+        console.warn('[WalletV1] Could not fetch status on DOMContentLoaded, defaulting to production mode');
+        applyWalletV1ProductionMode({legacy_repair_ui_enabled: false});
+    }
+});
+
+// Also enforce on wallet modal open (redundant but ensures coverage)
+const originalOpenModal = window.openHeaderWalletModal;
+if (originalOpenModal) {
+    window.openHeaderWalletModal = async function() {
+        // Apply production mode before original logic
+        try {
+            const response = await fetch('/api/wallet/v1/status');
+            const status = await response.json();
+            if (status.ok) {
+                applyWalletV1ProductionMode(status);
+            }
+        } catch (err) {
+            applyWalletV1ProductionMode({legacy_repair_ui_enabled: false});
+        }
+        // Call original
+        return originalOpenModal.apply(this, arguments);
+    };
+}
+
+// Enforce after mode switch
+const originalSwitchMode = window.switchWalletV1Mode;
+if (originalSwitchMode) {
+    window.switchWalletV1Mode = function() {
+        const result = originalSwitchMode.apply(this, arguments);
+        // Re-apply production mode after mode switch
+        try {
+            fetch('/api/wallet/v1/status')
+                .then(r => r.json())
+                .then(status => { if (status.ok) applyWalletV1ProductionMode(status); })
+                .catch(() => applyWalletV1ProductionMode({legacy_repair_ui_enabled: false}));
+        } catch (_) {}
+        return result;
+    };
+}
 </script>
 
 <div id="footer-sentinel" style="height:1px;"></div>

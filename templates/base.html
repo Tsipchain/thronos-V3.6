@@ -7061,11 +7061,53 @@ async function walletAdminGenerateSignerForCanonical() {
 
         console.log('[AdminSignerGen] Private key encrypted with PIN');
 
-        // Step 4: Save encrypted key locally
+        // Step 4: Ask for repair token (admin authentication)
+        console.log('[AdminSignerGen] Admin mode: requesting repair token...');
+
+        const repairToken = prompt('Enter WALLET_V1_REPAIR_TOKEN for admin authentication:');
+        if (!repairToken) {
+            console.log('[AdminSignerGen] Repair token not provided - cancelled');
+            // Clear sensitive data from memory (never persisted)
+            return alert('Admin authentication required. Cannot proceed without repair token.');
+        }
+
+        // Step 5: Register key binding with admin endpoint
+        console.log('[AdminSignerGen] Registering key binding via admin endpoint...');
+
+        const bindingResponse = await fetch('/api/wallet/v1/key-binding/admin-register', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Wallet-V1-Repair-Token': repairToken
+            },
+            body: JSON.stringify({
+                canonical_v1_address: canonicalAddr,
+                public_key: publicKey,
+                bound_key_address: boundAddr,
+                reason: 'core_wallet_repair_after_legacy_migration'
+            })
+        });
+
+        const bindingResult = await bindingResponse.json();
+
+        if (!bindingResult.ok) {
+            console.warn('[AdminSignerGen] Key binding failed:', bindingResult.error);
+            // On failure: clear sensitive data from memory, never persisted
+            const errorMsg = bindingResult.error === 'invalid_repair_token'
+                ? 'Invalid repair token. Cannot proceed.'
+                : bindingResult.error === 'repair_token_required'
+                ? 'Repair token required. Cannot proceed.'
+                : bindingResult.error || 'Unknown error';
+
+            return alert('Admin key binding failed: ' + errorMsg);
+        }
+
+        console.log('[AdminSignerGen] Key binding registered successfully via admin endpoint');
+
+        // Step 6: On success, save encrypted key and generate recovery kit
         localStorage.setItem('wallet_v1_encrypted_priv', encrypted);
         localStorage.setItem('wallet_v1_address', canonicalAddr);
 
-        // Step 5: Generate recovery kit
         const recoveryKit = {
             version: 'wallet-v1-recovery-kit',
             canonical_v1_address: canonicalAddr,
@@ -7078,38 +7120,8 @@ async function walletAdminGenerateSignerForCanonical() {
             generated_for: 'admin_signer_setup'
         };
 
-        // Step 6: Show recovery kit for download
         const kitJson = JSON.stringify(recoveryKit, null, 2);
-        const recoveryKitPreview = document.createElement('div');
-        recoveryKitPreview.style.cssText = 'background:#000; border:1px solid #00aaff; border-radius:4px; padding:10px; margin:10px 0; max-height:200px; overflow-y:auto; font-size:0.7em; color:#0f0; font-family:monospace;';
-        recoveryKitPreview.textContent = kitJson;
-
-        // Step 7: Register key binding with backend (public_key + bound_key_address only, NO private key)
-        console.log('[AdminSignerGen] Registering key binding with backend...');
-
-        const bindingResponse = await fetch('/api/wallet/v1/key-binding/register', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                canonical_v1_address: canonicalAddr,
-                public_key: publicKey,
-                bound_key_address: boundAddr
-            })
-        });
-
-        const bindingResult = await bindingResponse.json();
-
-        if (!bindingResult.ok) {
-            console.warn('[AdminSignerGen] Key binding failed:', bindingResult.error);
-            localStorage.removeItem('wallet_v1_encrypted_priv');
-            localStorage.removeItem('wallet_v1_address');
-            return alert('Key binding failed: ' + (bindingResult.error || 'Unknown error'));
-        }
-
-        console.log('[AdminSignerGen] Key binding registered successfully');
-
-        // Step 8: Show success and recovery kit
-        const message = `✓ Wallet V1 signer bound successfully!
+        const message = `✓ Admin signer bound successfully!
 
 Canonical Address: ${canonicalAddr}
 Bound Signer Address: ${boundAddr}

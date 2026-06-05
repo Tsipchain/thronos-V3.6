@@ -22958,8 +22958,11 @@ def api_swap_execute():
 
             token_in = (payload.get("token_in") or "").upper().strip()
             token_out = (payload.get("token_out") or "").upper().strip()
-            amount_in = float(payload.get("amount_in", 0))
-            min_amount_out = float(payload.get("min_amount_out", 0))
+            try:
+                amount_in = float(payload.get("amount_in", 0))
+                min_amount_out = float(payload.get("min_amount_out", 0))
+            except (TypeError, ValueError):
+                return jsonify(ok=False, status="error", error="invalid_amounts", message="Invalid amounts"), 400
         else:
             # Legacy format fallback for backward compatibility
             token_in = (data.get("token_in") or "").upper().strip()

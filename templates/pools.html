@@ -1457,9 +1457,12 @@ async function addLiquidity(poolId) {
         const referrer = localStorage.getItem('pool_referrer') || '';
 
         let response;
+        let triedCentralizedFormat = false;
+        let centralizedError = null;
 
         // If Wallet V1 is available and unlocked, use centralized signed request format
         if (canonicalAddr && hasRuntimeSigningMaterial) {
+            triedCentralizedFormat = true;
             try {
                 const payload = {
                     pool_id: poolId,
@@ -1475,13 +1478,20 @@ async function addLiquidity(poolId) {
                     body: JSON.stringify(signedRequest)
                 });
             } catch (e) {
-                // If new format fails, try legacy format below
-                console.warn('[AddLiquidity] Centralized format failed, trying legacy format:', e.message);
+                // If we have runtime signing material but centralized format fails, show error instead of falling back
+                console.warn('[AddLiquidity] Centralized format failed with runtime signing material:', e.message);
+                centralizedError = e;
                 response = null;
             }
         } else if (canonicalAddr && localStorage.getItem('wallet_v1_encrypted_priv')) {
             // Wallet V1 is available but locked
             alert(`❌ Unlock Wallet V1 first`);
+            return;
+        }
+
+        // If we tried centralized format but it failed, show error instead of falling back
+        if (triedCentralizedFormat && !response && centralizedError) {
+            alert(`❌ Wallet V1 signing error: ${centralizedError.message}`);
             return;
         }
 

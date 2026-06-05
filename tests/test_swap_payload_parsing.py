@@ -184,6 +184,54 @@ class TestErrorMessages:
             "Should have user-friendly error message"
 
 
+class TestAmountConversionErrorHandling:
+    """Test that invalid amount values return 400, not 500."""
+
+    def test_swap_wraps_float_conversion_in_try_except(self):
+        """Verify swap endpoint wraps float() in try/except for centralized format."""
+        server_file = Path(__file__).parent.parent / "server.py"
+        content = server_file.read_text()
+
+        # Find the centralized format section of swap endpoint
+        api_start = content.find("def api_swap_execute()")
+        centralized_section_start = content.find("if data.get(\"canonical_v1_address\")", api_start)
+        centralized_section_end = content.find("else:", centralized_section_start)
+        centralized_section = content[centralized_section_start:centralized_section_end]
+
+        # Must have try/except around float() calls
+        assert "try:" in centralized_section and "except" in centralized_section, \
+            "Should wrap float() conversion in try/except for centralized format"
+
+        # Check for float conversions
+        assert "float(payload.get(\"amount_in\"" in centralized_section, \
+            "Should convert amount_in to float"
+        assert "float(payload.get(\"min_amount_out\"" in centralized_section, \
+            "Should convert min_amount_out to float"
+
+    def test_swap_returns_400_on_invalid_amount(self):
+        """Verify swap returns 400 for invalid amounts."""
+        server_file = Path(__file__).parent.parent / "server.py"
+        content = server_file.read_text()
+
+        # Find the centralized format section
+        api_start = content.find("def api_swap_execute()")
+        centralized_end = content.find("else:", content.find("canonical_v1_address", api_start))
+        centralized_section = content[api_start:centralized_end]
+
+        # Find try/except for float conversion
+        float_try = centralized_section.find("try:")
+        float_try = centralized_section.find("try:", float_try + 5)  # Second try block
+        float_except = centralized_section.find("except", float_try)
+
+        assert float_try > 0 and float_except > float_try, \
+            "Should have try/except for float conversions"
+
+        # Check that it returns 400
+        error_response = centralized_section[float_except:float_except + 200]
+        assert "400" in error_response, \
+            "Should return 400 for invalid amounts"
+
+
 class TestNoFallbackOnPayloadError:
     """Test that invalid payload doesn't fall back to legacy."""
 

@@ -1449,51 +1449,88 @@ async function addLiquidity(poolId) {
     }
 
     try {
-        const poolAuth = await requirePoolWalletAuth('add_liquidity', {
-            from: wallet,
-            to: poolId,
-            amount: String(parseFloat(amountA) + parseFloat(amountB)),
-            token: 'THR',
-            nonce: `pool-add-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-            timestamp: String(Math.floor(Date.now() / 1000)),
-            pool_id: poolId,
-            provider_thr: wallet,
-            amount: String(parseFloat(amountA) + parseFloat(amountB)),
-            amount_a: String(parseFloat(amountA)),
-            amount_b: String(parseFloat(amountB)),
-            nonce: `pool-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-            timestamp: Math.floor(Date.now() / 1000)
-        });
-
+        // Check Wallet V1 unlock state first
+        const canonicalAddr = walletSession ? walletSession.getAddress() : null;
+        const hasRuntimeSigningMaterial = walletSession && walletSession.isUnlockedFor
+            ? walletSession.isUnlockedFor(canonicalAddr)
+            : false;
         const referrer = localStorage.getItem('pool_referrer') || '';
 
-        const diagnostics = {
-            active_wallet_address: wallet,
-            credential_lookup_address: poolAuth.credentialLookupAddress || wallet,
-            has_signing_material: !!(poolAuth.signature && poolAuth.signedTx),
-            action: 'add_liquidity',
-            endpoint: '/api/v1/pools/add_liquidity'
-        };
-        console.log('[AddLiquidity] Diagnostics:', diagnostics);
+        let response;
 
-        const response = await fetch('/api/v1/pools/add_liquidity', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+        // If Wallet V1 is available and unlocked, use centralized signed request format
+        if (canonicalAddr && hasRuntimeSigningMaterial) {
+            try {
+                const payload = {
+                    pool_id: poolId,
+                    amount_a: parseFloat(amountA),
+                    amount_b: parseFloat(amountB),
+                    referrer: referrer
+                };
+
+                const signedRequest = await walletV1BuildSignedRequest("add_liquidity", payload);
+                response = await fetch('/api/v1/pools/add_liquidity', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(signedRequest)
+                });
+            } catch (e) {
+                // If new format fails, try legacy format below
+                console.warn('[AddLiquidity] Centralized format failed, trying legacy format:', e.message);
+                response = null;
+            }
+        } else if (canonicalAddr && localStorage.getItem('wallet_v1_encrypted_priv')) {
+            // Wallet V1 is available but locked
+            alert(`❌ Unlock Wallet V1 first`);
+            return;
+        }
+
+        // Legacy format fallback or new format result
+        if (!response) {
+            const poolAuth = await requirePoolWalletAuth('add_liquidity', {
+                from: wallet,
+                to: poolId,
+                amount: String(parseFloat(amountA) + parseFloat(amountB)),
+                token: 'THR',
+                nonce: `pool-add-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+                timestamp: String(Math.floor(Date.now() / 1000)),
                 pool_id: poolId,
-                amount_a: parseFloat(amountA),
-                amount_b: parseFloat(amountB),
-                provider_thr: poolAuth.address || wallet,
-                auth_secret: poolAuth.authSecret,
+                provider_thr: wallet,
+                amount: String(parseFloat(amountA) + parseFloat(amountB)),
+                amount_a: String(parseFloat(amountA)),
+                amount_b: String(parseFloat(amountB)),
+                nonce: `pool-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+                timestamp: Math.floor(Date.now() / 1000)
+            });
+
+            const diagnostics = {
+                active_wallet_address: wallet,
                 credential_lookup_address: poolAuth.credentialLookupAddress || wallet,
-                public_key: poolAuth.publicKey,
-                signed_tx: poolAuth.signedTx,
-                signature: poolAuth.signature,
+                has_signing_material: !!(poolAuth.signature && poolAuth.signedTx),
                 action: 'add_liquidity',
-                passphrase: '',
-                referrer: referrer
-            })
-        });
+                endpoint: '/api/v1/pools/add_liquidity'
+            };
+            console.log('[AddLiquidity] Diagnostics:', diagnostics);
+
+            response = await fetch('/api/v1/pools/add_liquidity', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    pool_id: poolId,
+                    amount_a: parseFloat(amountA),
+                    amount_b: parseFloat(amountB),
+                    provider_thr: poolAuth.address || wallet,
+                    auth_secret: poolAuth.authSecret,
+                    credential_lookup_address: poolAuth.credentialLookupAddress || wallet,
+                    public_key: poolAuth.publicKey,
+                    signed_tx: poolAuth.signedTx,
+                    signature: poolAuth.signature,
+                    action: 'add_liquidity',
+                    passphrase: '',
+                    referrer: referrer
+                })
+            });
+        }
 
         const data = await response.json();
         console.log('[AddLiquidity] Response:', response.status, data);

@@ -22864,17 +22864,49 @@ def verify_swap_wallet_v1_or_legacy(payload, expected_action=SWAP_EXPECTED_ACTIO
 def api_swap_execute():
     try:
         data = request.get_json() or {}
-        token_in = (data.get("token_in") or "").upper().strip()
-        token_out = (data.get("token_out") or "").upper().strip()
-        trader = (data.get("trader_thr") or "").strip()
-        auth_secret = (data.get("auth_secret") or "").strip()
-        passphrase = (data.get("passphrase") or "").strip()
-        min_amount_out_raw = data.get("min_amount_out", 0)
-        try:
-            amount_in = float(data.get("amount_in", 0))
-            min_amount_out = float(min_amount_out_raw)
-        except (TypeError, ValueError):
-            return jsonify(status="error", message="Invalid amounts"), 400
+
+        # Try new centralized Wallet V1 signed request format first
+        if data.get("canonical_v1_address") and data.get("signature"):
+            verified = verify_wallet_v1_signed_request(data, "swap")
+            if not verified.get("ok"):
+                return jsonify(
+                    ok=False,
+                    status="error",
+                    error=verified.get("error"),
+                    message=verified.get("error")
+                ), 400
+
+            # Extract payload from verified request
+            trader = verified.get("canonical_v1_address")
+            payload = data.get("payload", {})
+            token_in = (payload.get("token_in") or "").upper().strip()
+            token_out = (payload.get("token_out") or "").upper().strip()
+            amount_in = float(payload.get("amount_in", 0))
+            min_amount_out = float(payload.get("min_amount_out", 0))
+        else:
+            # Legacy format fallback for backward compatibility
+            token_in = (data.get("token_in") or "").upper().strip()
+            token_out = (data.get("token_out") or "").upper().strip()
+            trader = (data.get("trader_thr") or "").strip()
+            auth_secret = (data.get("auth_secret") or "").strip()
+            passphrase = (data.get("passphrase") or "").strip()
+            min_amount_out_raw = data.get("min_amount_out", 0)
+            try:
+                amount_in = float(data.get("amount_in", 0))
+                min_amount_out = float(min_amount_out_raw)
+            except (TypeError, ValueError):
+                return jsonify(status="error", message="Invalid amounts"), 400
+
+            # Wallet V1 or legacy auth verification (legacy path)
+            auth_ok, auth_error, verified_trader = verify_swap_wallet_v1_or_legacy(data, SWAP_EXPECTED_ACTION)
+            if not auth_ok:
+                status_code = 400
+                if auth_error.get("error") in ("invalid_auth", "no_effective_pledge", "wallet_mismatch"):
+                    status_code = 403
+                elif auth_error.get("error") == "missing_pledge":
+                    status_code = 404
+                return jsonify(**auth_error), status_code
+            trader = verified_trader or trader
     except Exception as exc:
         return jsonify(status="error", message=str(exc)), 500
 
@@ -22886,17 +22918,6 @@ def api_swap_execute():
             return jsonify(status="error", message="Missing trader"), 400
         if not is_swap_symbol_allowed(token_in) or not is_swap_symbol_allowed(token_out):
             return jsonify(status="error", message="Unsupported token"), 400
-
-        # Wallet V1 or legacy auth verification
-        auth_ok, auth_error, verified_trader = verify_swap_wallet_v1_or_legacy(data, SWAP_EXPECTED_ACTION)
-        if not auth_ok:
-            status_code = 400
-            if auth_error.get("error") in ("invalid_auth", "no_effective_pledge", "wallet_mismatch"):
-                status_code = 403
-            elif auth_error.get("error") == "missing_pledge":
-                status_code = 404
-            return jsonify(**auth_error), status_code
-        trader = verified_trader or trader
 
         # Get swap quote and route
         quote, err = quote_swap_route(token_in, token_out, amount_in)
@@ -30453,7 +30474,23 @@ def api_v1_add_liquidity():
     """
     Add liquidity to an existing pool. Shares are minted proportionally.
 
-    Request body:
+    Request body (new format with Wallet V1):
+    {
+        "canonical_v1_address": "THR...",
+        "public_key": "...",
+        "signature": "...",
+        "signature_format": "secp256k1_compact",
+        "action": "add_liquidity",
+        "payload": {
+            "pool_id": "uuid...",
+            "amount_a": 100.0,
+            "amount_b": 0.01
+        },
+        "timestamp": "...",
+        "nonce": "..."
+    }
+
+    Legacy format also supported:
     {
         "pool_id": "uuid...",
         "amount_a": 100.0,
@@ -30464,31 +30501,60 @@ def api_v1_add_liquidity():
     }
     """
     data = request.get_json() or {}
-    pool_id = (data.get("pool_id") or "").strip()
-    amt_a_raw = data.get("amount_a", 0)
-    amt_b_raw = data.get("amount_b", 0)
-    provider = (data.get("provider_thr") or "").strip()
-    auth_secret = (data.get("auth_secret") or "").strip()
-    passphrase = (data.get("passphrase") or "").strip()
-    referrer = (data.get("referrer") or "").strip()  # Optional referral address
+
+    # Try new centralized Wallet V1 signed request format first
+    if data.get("canonical_v1_address") and data.get("signature"):
+        verified = verify_wallet_v1_signed_request(data, "add_liquidity")
+        if not verified.get("ok"):
+            return jsonify(
+                ok=False,
+                status="error",
+                error=verified.get("error"),
+                message=verified.get("error")
+            ), 400
+
+        # Extract payload from verified request
+        provider = verified.get("canonical_v1_address")
+        payload = data.get("payload", {})
+        pool_id = (payload.get("pool_id") or "").strip()
+        amt_a_raw = payload.get("amount_a", 0)
+        amt_b_raw = payload.get("amount_b", 0)
+        referrer = (payload.get("referrer") or "").strip()
+
+        try:
+            amt_a = float(amt_a_raw)
+            amt_b = float(amt_b_raw)
+        except (TypeError, ValueError):
+            return jsonify(status="error", message="Invalid amounts"), 400
+    else:
+        # Legacy format fallback for backward compatibility
+        pool_id = (data.get("pool_id") or "").strip()
+        amt_a_raw = data.get("amount_a", 0)
+        amt_b_raw = data.get("amount_b", 0)
+        provider = (data.get("provider_thr") or "").strip()
+        auth_secret = (data.get("auth_secret") or "").strip()
+        passphrase = (data.get("passphrase") or "").strip()
+        referrer = (data.get("referrer") or "").strip()  # Optional referral address
+
+        # Validate inputs
+        try:
+            amt_a = float(amt_a_raw)
+            amt_b = float(amt_b_raw)
+        except (TypeError, ValueError):
+            return jsonify(status="error", message="Invalid amounts"), 400
+
+        # Wallet V1 or legacy auth verification (legacy path)
+        auth_ok, auth_error, verified_provider = verify_pool_wallet_v1_or_legacy(data, "add_liquidity")
+        if not auth_ok:
+            return jsonify(**auth_error), 400
+
+        # Use verified provider address
+        provider = verified_provider or (data.get("provider_thr") or "").strip()
 
     # Validate inputs
-    try:
-        amt_a = float(amt_a_raw)
-        amt_b = float(amt_b_raw)
-    except (TypeError, ValueError):
-        return jsonify(status="error", message="Invalid amounts"), 400
-
     if not pool_id or amt_a <= 0 or amt_b <= 0:
         return jsonify(status="error", message="Invalid input"), 400
 
-    # Wallet V1 or legacy auth verification
-    auth_ok, auth_error, verified_provider = verify_pool_wallet_v1_or_legacy(data, "add_liquidity")
-    if not auth_ok:
-        return jsonify(**auth_error), 400
-
-    # Use verified provider address
-    provider = verified_provider or (data.get("provider_thr") or "").strip()
     if not provider:
         return jsonify(status="error", message="Missing provider"), 400
 

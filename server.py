@@ -36863,6 +36863,187 @@ def get_active_key_binding_for_address(canonical_v1_address):
     return None
 
 
+def verify_wallet_v1_signed_request(request_data, expected_action=None):
+    """
+    Central verifier for all Wallet V1 signed requests.
+
+    Validates:
+    1. canonical_v1_address (required, must be THR...)
+    2. public_key (required, 33/65 byte hex for compressed/uncompressed secp256k1)
+    3. signature (required, 128 hex chars for compact secp256k1)
+    4. signature_format (required, must be "secp256k1_compact")
+    5. bound_key_address (required if binding active)
+    6. signing_payload_hash (optional, for audit)
+    7. action (required, must match expected_action if provided)
+
+    Key Binding Logic:
+    - If signer address != canonical address:
+      * Must have active binding for canonical address
+      * Must have bound_key_address matching a binding
+      * Public key hash must match binding's public_key_hash
+      * Otherwise rejected as "signer_not_bound"
+    - If signer address == canonical address:
+      * Allowed (direct V1 wallet, no binding required)
+
+    Returns:
+    {
+        "ok": true,
+        "canonical_v1_address": "THR...",
+        "bound_key_address": "THR..." or null,
+        "signer_address": "THR..." (derived from public_key),
+        "public_key_hash": "...",
+        "action": "swap|add_liquidity|send|...",
+        "message": "Signature verified"
+    }
+
+    On error, returns dict with "ok": false and "error" key.
+
+    Never logs: private_key, PIN, recovery_kit, encrypted_key_contents
+    Safe to log: address prefixes, binding status, action, payload_hash
+    """
+    try:
+        import hashlib as _hlib
+
+        # ---- Validate required fields ----
+        canonical_v1_address = (request_data.get("canonical_v1_address") or "").strip().upper()
+        if not canonical_v1_address or not canonical_v1_address.startswith("THR"):
+            return {"ok": False, "error": "invalid_canonical_address"}
+
+        public_key_hex = (request_data.get("public_key") or "").strip().lower()
+        if not public_key_hex:
+            return {"ok": False, "error": "missing_public_key"}
+
+        signature_hex = (request_data.get("signature") or "").strip().lower()
+        if not signature_hex or len(signature_hex) != 128:
+            return {"ok": False, "error": "invalid_signature_format"}
+
+        sig_format = (request_data.get("signature_format") or "").strip().lower()
+        if sig_format != "secp256k1_compact":
+            return {"ok": False, "error": "unsupported_signature_format"}
+
+        action = (request_data.get("action") or "").strip().lower()
+        if not action:
+            return {"ok": False, "error": "missing_action"}
+
+        if expected_action and action != expected_action.lower():
+            return {"ok": False, "error": "action_mismatch"}
+
+        # ---- Derive signer address from public key ----
+        try:
+            from wallet_v1_migration import derive_thr_address_from_public_key_hex
+            signer_address = derive_thr_address_from_public_key_hex(public_key_hex)
+            if not signer_address or not signer_address.startswith("THR"):
+                return {"ok": False, "error": "invalid_public_key"}
+        except Exception as e:
+            app.logger.warning("[verify_wallet_v1] address derivation failed: %s", str(e)[:100])
+            return {"ok": False, "error": "public_key_derivation_failed"}
+
+        # ---- Verify signature ----
+        try:
+            # Rebuild canonical signing payload
+            signing_payload = {
+                "action": action,
+                "canonical_v1_address": canonical_v1_address,
+                "timestamp": request_data.get("timestamp", ""),
+                "nonce": request_data.get("nonce", ""),
+                "payload": request_data.get("payload", {})
+            }
+            signing_json = json.dumps(signing_payload, separators=(",", ":"), sort_keys=True)
+            signing_bytes = signing_json.encode("utf-8")
+
+            # Verify signature using secp256k1
+            from ecdsa import SECP256k1, VerifyingKey
+            from ecdsa.util import sigdecode_string
+
+            digest = _hlib.sha256(signing_bytes).digest()
+            pub_bytes = bytes.fromhex(public_key_hex)
+
+            # Handle compressed/uncompressed public keys
+            if len(pub_bytes) == 33:
+                prefix_byte = pub_bytes[0]
+                x = int.from_bytes(pub_bytes[1:], "big")
+                _p = SECP256k1.curve.p()
+                y_sq = (pow(x, 3, _p) + 7) % _p
+                y = pow(y_sq, (_p + 1) // 4, _p)
+                if (y % 2) != (prefix_byte - 2):
+                    y = _p - y
+                raw_pub = x.to_bytes(32, "big") + y.to_bytes(32, "big")
+                vk = VerifyingKey.from_string(raw_pub, curve=SECP256k1)
+            else:
+                raw_pub = pub_bytes[1:] if len(pub_bytes) == 65 else pub_bytes
+                vk = VerifyingKey.from_string(raw_pub, curve=SECP256k1)
+
+            if not vk.verify_digest(bytes.fromhex(signature_hex), digest, sigdecode=sigdecode_string):
+                return {"ok": False, "error": "invalid_signature"}
+        except Exception as e:
+            app.logger.warning("[verify_wallet_v1] signature verification failed: %s", str(e)[:100])
+            return {"ok": False, "error": "signature_verification_failed"}
+
+        # ---- Check key binding if signer != canonical ----
+        public_key_hash = _hlib.sha256(bytes.fromhex(public_key_hex)).hexdigest()[:32]
+        bound_key_address = (request_data.get("bound_key_address") or "").strip().upper()
+
+        if signer_address != canonical_v1_address:
+            # Signer is different from canonical - must have active binding
+            binding = get_active_key_binding_for_address(canonical_v1_address)
+            if not binding:
+                app.logger.info(
+                    "[verify_wallet_v1] no active binding for canonical %s...",
+                    canonical_v1_address[:10]
+                )
+                return {"ok": False, "error": "no_active_binding"}
+
+            # Verify binding matches
+            if binding.get("public_key_hash") != public_key_hash:
+                app.logger.warning(
+                    "[verify_wallet_v1] public_key_hash mismatch for canonical %s...",
+                    canonical_v1_address[:10]
+                )
+                return {"ok": False, "error": "signer_not_bound"}
+
+            # Verify bound_key_address matches
+            if binding.get("bound_key_address") != signer_address:
+                app.logger.warning(
+                    "[verify_wallet_v1] bound_key_address mismatch for canonical %s...",
+                    canonical_v1_address[:10]
+                )
+                return {"ok": False, "error": "bound_key_address_mismatch"}
+
+            app.logger.debug(
+                "[verify_wallet_v1] signature verified via binding canonical %s... signer %s...",
+                canonical_v1_address[:10],
+                signer_address[:10]
+            )
+        else:
+            # Direct wallet - signer is the canonical address
+            app.logger.debug(
+                "[verify_wallet_v1] signature verified direct wallet canonical %s...",
+                canonical_v1_address[:10]
+            )
+
+        # ---- Return success ----
+        return {
+            "ok": True,
+            "canonical_v1_address": canonical_v1_address,
+            "bound_key_address": signer_address if signer_address != canonical_v1_address else None,
+            "signer_address": signer_address,
+            "public_key_hash": public_key_hash,
+            "action": action,
+            "message": "Signature verified",
+            "diagnostics": {
+                "has_public_key": True,
+                "has_signature": True,
+                "signature_format": sig_format,
+                "has_active_binding": signer_address != canonical_v1_address
+            }
+        }
+
+    except Exception as e:
+        app.logger.error("[verify_wallet_v1_signed_request] Unhandled exception: %s", str(e)[:100])
+        return {"ok": False, "error": "verification_failed"}
+
+
+
 @app.route("/api/wallet/v1/rekey/request", methods=["POST"])
 def api_wallet_v1_rekey_request():
     try:

@@ -22913,7 +22913,15 @@ def api_swap_execute():
 
             # Extract payload from verified request
             trader = verified.get("canonical_v1_address")
-            payload = data.get("payload", {})
+            payload, payload_err = _extract_signed_payload(data)
+            if payload_err:
+                return jsonify(
+                    ok=False,
+                    status="error",
+                    error=payload_err,
+                    message=f"Invalid payload: {payload_err}"
+                ), 400
+
             token_in = (payload.get("token_in") or "").upper().strip()
             token_out = (payload.get("token_out") or "").upper().strip()
             amount_in = float(payload.get("amount_in", 0))
@@ -30550,7 +30558,15 @@ def api_v1_add_liquidity():
 
         # Extract payload from verified request
         provider = verified.get("canonical_v1_address")
-        payload = data.get("payload", {})
+        payload, payload_err = _extract_signed_payload(data)
+        if payload_err:
+            return jsonify(
+                ok=False,
+                status="error",
+                error=payload_err,
+                message=f"Invalid payload: {payload_err}"
+            ), 400
+
         pool_id = (payload.get("pool_id") or "").strip()
         amt_a_raw = payload.get("amount_a", 0)
         amt_b_raw = payload.get("amount_b", 0)
@@ -36999,6 +37015,36 @@ def _is_valid_secp256k1_public_key_hex(public_key_hex):
                 return False
 
     return False
+
+
+def _extract_signed_payload(request_data):
+    """
+    Safely extract and parse payload from signed request.
+    Handles payload as dict, JSON string, or missing.
+
+    Returns:
+        (payload_dict, error_message)
+        - On success: (dict, None)
+        - On error: (None, error_string)
+    """
+    payload = request_data.get("payload")
+
+    # Missing payload is OK - default to empty dict
+    if payload is None:
+        return {}, None
+
+    # If it's a string, try to parse as JSON
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (json.JSONDecodeError, ValueError):
+            return None, "invalid_payload_json"
+
+    # After parsing, must be a dict
+    if not isinstance(payload, dict):
+        return None, "invalid_payload_format"
+
+    return payload, None
 
 
 def verify_wallet_v1_signed_request(request_data, expected_action=None):

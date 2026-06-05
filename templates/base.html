@@ -5721,38 +5721,55 @@ function switchWalletV1Mode(){
     const hasPledge = walletSession.hasPledgeOrMigrationSource ? walletSession.hasPledgeOrMigrationSource() : false;
     const allowWebCreate = window.WALLET_V1_ALLOW_WEB_CREATE === true || window.WALLET_V1_ALLOW_WEB_CREATE === '1';
 
+    // Check if admin mode is enabled (legacy repair UI)
+    const adminModeEnabled = window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED === true || window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED === '1';
+
     // Determine which modes are allowed based on wallet state
     const createAllowed = allowWebCreate || hasPledge;
     const unlockAllowed = modalState === 'active_wallet_with_encrypted_key' || modalState === 'signing_ready';
     const importAllowed = modalState === 'active_wallet_no_key';
     const restoreAllowed = modalState === 'no_active_wallet';
+    const adminSignerAllowed = adminModeEnabled && modalState === 'active_wallet_no_key';
 
     // When wallet has no signing key, force import-only mode (locked state)
-    const isLockedImportOnly = modalState === 'active_wallet_no_key';
+    // BUT: allow admin_generate_signer mode if admin mode is enabled
+    const isLockedImportOnly = modalState === 'active_wallet_no_key' && !adminSignerAllowed;
 
     // Update mode select options visibility/disabled state
     const createOption = document.querySelector('option[value="create"]');
     const unlockOption = document.querySelector('option[value="unlock"]');
     const importOption = document.querySelector('option[value="import_signing_key"]');
+    const adminSignerOption = document.querySelector('option[value="admin_generate_signer"]');
     const modeSelect = document.getElementById('walletWidgetMode');
 
-    // In locked import-only state, disable all other options
+    // In locked import-only state, disable all other options (unless admin mode allows signer)
     if (isLockedImportOnly) {
         if (restoreOption) restoreOption.disabled = true;
         if (createOption) createOption.disabled = true;
         if (unlockOption) unlockOption.disabled = true;
         if (migrateOption) migrateOption.disabled = true;
         if (importOption) importOption.disabled = false;
+        if (adminSignerOption) adminSignerOption.disabled = true;
         if (modeSelect) {
             modeSelect.value = 'import_signing_key';
             modeSelect.style.opacity = '0.6'; // Visual indication of locked state
         }
+    } else if (adminSignerAllowed && modalState === 'active_wallet_no_key') {
+        // Admin mode with missing key: allow both import and admin signer
+        if (restoreOption) restoreOption.disabled = true;
+        if (createOption) createOption.disabled = true;
+        if (unlockOption) unlockOption.disabled = true;
+        if (migrateOption) migrateOption.disabled = true;
+        if (importOption) importOption.disabled = false;
+        if (adminSignerOption) adminSignerOption.disabled = false;
+        if (modeSelect) modeSelect.style.opacity = '1'; // Normal state
     } else {
         if (restoreOption) restoreOption.disabled = !restoreAllowed;
         if (createOption) createOption.disabled = !createAllowed;
         if (unlockOption) unlockOption.disabled = !unlockAllowed;
         if (migrateOption) migrateOption.disabled = false;
         if (importOption) importOption.disabled = !importAllowed;
+        if (adminSignerOption) adminSignerOption.disabled = !adminSignerAllowed;
         if (modeSelect) modeSelect.style.opacity = '1'; // Normal state
     }
 
@@ -5768,6 +5785,7 @@ function switchWalletV1Mode(){
         if (createEl) createEl.style.display = 'none';
         if (unlockEl) unlockEl.style.display = 'none';
         if (migrateEl) migrateEl.style.display = 'none';
+        if (adminSignerEl) adminSignerEl.style.display = 'none';
 
         // Show import key form and recovery message
         if (importEl) importEl.style.display = 'block';
@@ -5775,6 +5793,25 @@ function switchWalletV1Mode(){
         showImportSigningKeyForm();
 
         return; // Exit early for locked state
+    } else if (adminSignerAllowed && modalState === 'active_wallet_no_key') {
+        // Admin mode with missing key: show options and diagnostics
+        console.log('[AdminSignerMode] Enabled for missing key - legacy_repair_ui_enabled:', adminModeEnabled, 'admin_register_available: true');
+
+        // Set displayMode based on current selection
+        if (mode === 'admin_generate_signer') {
+            displayMode = 'admin_generate_signer';
+        } else {
+            displayMode = 'import_signing_key'; // Default to import
+        }
+
+        // Hide other sections
+        if (restoreEl) restoreEl.style.display = 'none';
+        if (createEl) createEl.style.display = 'none';
+        if (unlockEl) unlockEl.style.display = 'none';
+        if (migrateEl) migrateEl.style.display = 'none';
+
+        // Show missing key recovery message
+        showMissingSigningKeyRecovery();
     } else if (modalState === 'no_active_wallet') {
         // No active wallet - show restore/migrate options (if available in production mode)
         const restoreOpt = document.querySelector('option[value="restore"]');
@@ -5795,8 +5832,8 @@ function switchWalletV1Mode(){
     if (createEl) createEl.style.display = (displayMode === 'create' && createAllowed) ? 'block' : 'none';
     if (unlockEl) unlockEl.style.display = (displayMode === 'unlock' && unlockAllowed) ? 'block' : 'none';
     if (migrateEl) migrateEl.style.display = (displayMode === 'migrate') ? 'block' : 'none';
-    if (importEl) importEl.style.display = (displayMode === 'import_signing_key' && importAllowed) ? 'block' : 'none';
-    if (adminSignerEl) adminSignerEl.style.display = (displayMode === 'admin_generate_signer') ? 'block' : 'none';
+    if (importEl) importEl.style.display = (displayMode === 'import_signing_key' && (importAllowed || adminSignerAllowed)) ? 'block' : 'none';
+    if (adminSignerEl) adminSignerEl.style.display = (displayMode === 'admin_generate_signer' && adminSignerAllowed) ? 'block' : 'none';
 
     // Show appropriate state message
     const existingMsgs = document.querySelectorAll('[data-wallet-state-msg]');
@@ -8913,6 +8950,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         const response = await fetch('/api/wallet/v1/status');
         const status = await response.json();
         if (status.ok) {
+            // Set global flag for admin mode check in switchWalletV1Mode
+            window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = status.legacy_repair_ui_enabled || false;
             // First sanitize stale legacy state in production mode
             sanitizeWalletV1ProductionState(status);
             // Then apply production mode UI constraints
@@ -8922,6 +8961,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Default to production mode (safe) if fetch fails
         console.warn('[WalletV1] Could not fetch status on DOMContentLoaded, defaulting to production mode');
         const safeStatus = {legacy_repair_ui_enabled: false};
+        window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = false;
         sanitizeWalletV1ProductionState(safeStatus);
         applyWalletV1ProductionMode(safeStatus);
     }
@@ -8936,11 +8976,14 @@ if (originalOpenModal) {
             const response = await fetch('/api/wallet/v1/status');
             const status = await response.json();
             if (status.ok) {
+                // Set global flag for admin mode check in switchWalletV1Mode
+                window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = status.legacy_repair_ui_enabled || false;
                 sanitizeWalletV1ProductionState(status);
                 applyWalletV1ProductionMode(status);
             }
         } catch (err) {
             const safeStatus = {legacy_repair_ui_enabled: false};
+            window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = false;
             sanitizeWalletV1ProductionState(safeStatus);
             applyWalletV1ProductionMode(safeStatus);
         }
@@ -8960,12 +9003,15 @@ if (originalSwitchMode) {
                 .then(r => r.json())
                 .then(status => {
                     if (status.ok) {
+                        // Set global flag for admin mode check in switchWalletV1Mode
+                        window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = status.legacy_repair_ui_enabled || false;
                         sanitizeWalletV1ProductionState(status);
                         applyWalletV1ProductionMode(status);
                     }
                 })
                 .catch(() => {
                     const safeStatus = {legacy_repair_ui_enabled: false};
+                    window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = false;
                     sanitizeWalletV1ProductionState(safeStatus);
                     applyWalletV1ProductionMode(safeStatus);
                 });

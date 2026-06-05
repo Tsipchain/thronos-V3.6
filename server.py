@@ -21724,16 +21724,50 @@ def api_token_mint():
 def api_wallet_send():
     """
     Unified send endpoint for wallet extensions (Chrome, Firefox, Brave).
+    Supports both:
+    1. New centralized Wallet V1 signed request format (canonical_v1_address + signature)
+    2. Legacy format (auth_secret + passphrase)
     Routes to the appropriate handler based on token type.
     """
     data = request.get_json() or {}
-    token = (data.get("token") or "THR").upper()
-    from_addr = (data.get("from") or data.get("from_thr") or "").strip()
-    to_addr = (data.get("to") or data.get("to_thr") or "").strip()
-    amount = data.get("amount", 0)
-    secret = (data.get("secret") or data.get("auth_secret") or "").strip()
-    passphrase = (data.get("passphrase") or "").strip()
-    speed = (data.get("speed") or "fast").lower()
+
+    # Try new centralized Wallet V1 signed request format first
+    if data.get("canonical_v1_address") and data.get("signature"):
+        verified = verify_wallet_v1_signed_request(data, "send")
+        if not verified.get("ok"):
+            return jsonify(
+                ok=False,
+                status="error",
+                error=verified.get("error"),
+                message=verified.get("error")
+            ), 400
+
+        # Extract payload from verified request
+        from_addr = verified.get("canonical_v1_address")
+        payload, payload_err = _extract_signed_payload(data)
+        if payload_err:
+            return jsonify(
+                ok=False,
+                status="error",
+                error=payload_err,
+                message=f"Invalid payload: {payload_err}"
+            ), 400
+
+        token = (payload.get("token") or "THR").upper().strip()
+        to_addr = (payload.get("to") or "").strip()
+        amount = payload.get("amount", 0)
+        speed = (payload.get("speed") or "fast").lower()
+        secret = ""  # Not needed for signed requests
+        passphrase = ""  # Not needed for signed requests
+    else:
+        # Legacy format fallback for backward compatibility
+        token = (data.get("token") or "THR").upper()
+        from_addr = (data.get("from") or data.get("from_thr") or "").strip()
+        to_addr = (data.get("to") or data.get("to_thr") or "").strip()
+        amount = data.get("amount", 0)
+        secret = (data.get("secret") or data.get("auth_secret") or "").strip()
+        passphrase = (data.get("passphrase") or "").strip()
+        speed = (data.get("speed") or "fast").lower()
 
     if token == "THR":
         # Native THR send

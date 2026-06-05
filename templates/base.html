@@ -1593,6 +1593,11 @@
                 </div>
             </div>
 
+            <!-- Session Timer Display -->
+            <div id="walletSessionTimerDisplay" style="display:none; padding:8px 10px; margin:8px 0; background:#0a2a0a; border:1px solid #00ff66; border-radius:6px; font-size:0.85em; color:#00ff66; text-align:center; font-weight:bold;">
+                🔓 Unlocked: 15:00 remaining
+            </div>
+
             <div id="walletLoginSection" class="wallet-popup-login" style="display:none;">
                 <!-- PLEDGE ACTIVATION: Production mode CTA (no legacy repair UI) -->
                 <div id="walletV1PledgeActivationPanel" data-production-only="1" style="display:none; background:#1a2a1a; border:1px solid #00ff66; border-radius:8px; padding:15px; margin:12px 0;">
@@ -3531,6 +3536,8 @@ function walletV1HandleRecoveryKitRestore() {
                 if (statusEl) statusEl.innerHTML = '✓ Wallet restored! Unlocking...';
                 // Clear PIN from display
                 pinInput.value = '';
+                // Mark session as unlocked (PIN was valid for restore)
+                walletSessionSetUnlocked();
                 // Hide the form
                 setTimeout(() => {
                     const form = document.getElementById('walletV1RecoveryKitRestoreForm');
@@ -3554,6 +3561,8 @@ function walletV1HandleRecoveryKitRestore() {
                 if (statusEl) statusEl.innerHTML = '✓ Wallet restored! Unlocking...';
                 pinInput.value = '';
                 pasteInput.value = '';
+                // Mark session as unlocked (PIN was valid for restore)
+                walletSessionSetUnlocked();
                 setTimeout(() => {
                     const form = document.getElementById('walletV1RecoveryKitRestoreForm');
                     if (form) form.style.display = 'none';
@@ -3570,6 +3579,107 @@ function walletV1HandleRecoveryKitRestore() {
 
     if (statusEl) statusEl.innerHTML = '❌ Please upload or paste Recovery Kit';
 }
+
+// ========== Wallet V1 Session Management ==========
+
+const WALLET_SESSION_CONFIG = {
+    UNLOCK_DURATION_MINUTES: 15,  // PIN unlock valid for 15 min
+    INACTIVITY_TIMEOUT_MINUTES: 10,  // Auto-lock after 10 min inactivity
+    CHECK_INTERVAL_MS: 60000  // Check session every 1 min
+};
+
+function walletSessionSetUnlocked(pinEntryTime) {
+    /**
+     * Mark wallet as unlocked for PIN-based operations.
+     * Called after successful PIN unlock.
+     * Session stays active for UNLOCK_DURATION_MINUTES unless PIN expires.
+     */
+    const now = pinEntryTime || Date.now();
+    localStorage.setItem('wallet_session_unlock_time', now.toString());
+    localStorage.setItem('wallet_session_last_activity', now.toString());
+    console.log('[Session] PIN unlock initiated, valid for ' + WALLET_SESSION_CONFIG.UNLOCK_DURATION_MINUTES + ' minutes');
+}
+
+function walletSessionGetRemainingMinutes() {
+    /**
+     * Get remaining minutes in current PIN unlock session.
+     * Returns 0 if session expired or not active.
+     */
+    const unlockTime = parseInt(localStorage.getItem('wallet_session_unlock_time') || '0');
+    if (!unlockTime) return 0;
+
+    const now = Date.now();
+    const elapsedMs = now - unlockTime;
+    const remainingMs = (WALLET_SESSION_CONFIG.UNLOCK_DURATION_MINUTES * 60 * 1000) - elapsedMs;
+
+    if (remainingMs <= 0) {
+        localStorage.removeItem('wallet_session_unlock_time');
+        return 0;
+    }
+
+    return Math.ceil(remainingMs / 60000);
+}
+
+function walletSessionIsUnlocked() {
+    /**
+     * Check if wallet session is currently active (PIN unlock valid).
+     */
+    return walletSessionGetRemainingMinutes() > 0;
+}
+
+function walletSessionUpdateActivity() {
+    /**
+     * Update last activity time (called on user interaction).
+     * Used to track inactivity for auto-lock.
+     */
+    localStorage.setItem('wallet_session_last_activity', Date.now().toString());
+}
+
+function walletSessionClear() {
+    /**
+     * Clear session (logout/lock).
+     */
+    localStorage.removeItem('wallet_session_unlock_time');
+    localStorage.removeItem('wallet_session_last_activity');
+    console.log('[Session] Session cleared');
+}
+
+function walletSessionFormatTime(minutes) {
+    /**
+     * Format remaining time as "MM:SS".
+     */
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    if (hours > 0) {
+        return `${hours}:${String(mins).padStart(2, '0')}h`;
+    }
+    return `${String(mins).padStart(2, '0')}:00`;
+}
+
+function walletSessionUpdateTimerDisplay() {
+    /**
+     * Update session timer display in UI (called every minute).
+     */
+    const remaining = walletSessionGetRemainingMinutes();
+    const timerEl = document.getElementById('walletSessionTimerDisplay');
+
+    if (!timerEl) return;  // Timer element not in DOM
+
+    if (remaining > 0) {
+        timerEl.style.display = 'block';
+        timerEl.innerHTML = `🔓 Unlocked: ${walletSessionFormatTime(remaining)} remaining`;
+        timerEl.style.color = remaining > 5 ? '#00ff66' : '#ff6600';  // Warn when < 5 min
+    } else {
+        timerEl.style.display = 'none';
+    }
+}
+
+// Auto-update session timer every minute
+setInterval(walletSessionUpdateTimerDisplay, 60000);
+
+// Initial update on page load
+setTimeout(walletSessionUpdateTimerDisplay, 100);
+
 
 // ========== Wallet V1 Centralized Signed Requests ==========
 
@@ -7505,6 +7615,10 @@ async function unlockWalletV1FromHeader(){
         console.info('[UnlockWallet] Success:', activeAddress.substring(0, 10) + '...');
         walletSession.setBound(true);
         document.getElementById('walletWidgetUnlockPin').value = '';
+
+        // Mark session as unlocked (PIN valid for next 15 minutes)
+        walletSessionSetUnlocked();
+
         showWalletContentSection();
         updateHeaderWalletUi();
         loadWalletBalances(true);

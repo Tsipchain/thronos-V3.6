@@ -302,7 +302,7 @@ def _initialize_phase3_and_4():
         print("[Pythia] Pythia Node Manager not available")
     except Exception as e:
         _pythia_manager = None
-        logger.error(f"Failed to initialize Pythia Node Manager: {e}")
+        logger.warning(f"[STARTUP] Pythia Node Manager initialization failed: {e}")
 
     # Initialize Digital Legacy System (inheritance & asset management)
     try:
@@ -314,7 +314,7 @@ def _initialize_phase3_and_4():
         print("[Legacy] Digital Legacy System not available")
     except Exception as e:
         _legacy_manager = None
-        logger.error(f"Failed to initialize Digital Legacy: {e}")
+        logger.warning(f"[STARTUP] Digital Legacy System initialization failed: {e}")
 
     # Initialize Smart Contract Will System (NFT-based wills)
     try:
@@ -326,7 +326,7 @@ def _initialize_phase3_and_4():
         print("[Will] Smart Contract Will System not available")
     except Exception as e:
         _will_manager = None
-        logger.error(f"Failed to initialize Smart Contract Will: {e}")
+        logger.warning(f"[STARTUP] Smart Contract Will System initialization failed: {e}")
 
     # Initialize Multi-Sig Distribution System
     try:
@@ -338,7 +338,7 @@ def _initialize_phase3_and_4():
         print("[Distribution] Distribution System not available")
     except Exception as e:
         _distribution_manager = None
-        logger.error(f"Failed to initialize Distribution Manager: {e}")
+        logger.warning(f"[STARTUP] Distribution Manager initialization failed: {e}")
 
     # Initialize Charity Pool & Redistribution System
     try:
@@ -8908,10 +8908,12 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
         "total_iot_rewards": 0.0,
         "total_sent": 0.0,
         "total_received": 0.0,
+        "total_sentinel_spent": 0.0,
         "mining_count": 0,
         "ai_reward_count": 0,
         "music_tip_count": 0,
-        "iot_count": 0
+        "iot_count": 0,
+        "sentinel_count": 0
     }
 
     for tx in wallet_txs:
@@ -12017,6 +12019,39 @@ def api_replica_health():
         "scheduler_enabled": SCHEDULER_ENABLED,
         "heartbeat_enabled": HEARTBEAT_ENABLED,
         "master_url": MASTER_INTERNAL_URL,
+    }), 200
+
+
+@app.route("/api/legacy/health", methods=["GET"])
+def api_legacy_health():
+    """Health check for Digital Legacy systems."""
+    return jsonify({
+        "ok": True,
+        "digital_legacy_initialized": _legacy_manager is not None,
+        "smart_contract_will_manager": _will_manager is not None,
+        "digital_distribution_manager": _distribution_manager is not None,
+        "charity_pool_manager": _pool_manager is not None,
+        "cryptography_available": Fernet is not None,
+        "ts": int(time.time()),
+    }), 200
+
+
+@app.route("/api/legacy/routes", methods=["GET"])
+def api_legacy_routes():
+    """Diagnostic endpoint showing available legacy routes."""
+    routes = []
+    for rule in app.url_map.iter_rules():
+        if "legacy" in rule.rule.lower() or any(x in rule.rule.lower() for x in ["will", "distribution", "pool"]):
+            routes.append({
+                "endpoint": rule.endpoint,
+                "path": rule.rule,
+                "methods": list(rule.methods - {"HEAD", "OPTIONS"}),
+            })
+
+    return jsonify({
+        "ok": True,
+        "total_routes": len(routes),
+        "routes": routes,
     }), 200
 
 
@@ -36889,8 +36924,9 @@ if is_master():
         with app.app_context():
             _seed_tx_log_from_chain()
         print("[STARTUP] Transaction log seeded successfully.")
+        logger.info("[STARTUP] Transaction log seeded successfully")
     except Exception as exc:
-        logger.warning(f"[STARTUP] TX log seeding skipped: {exc}")
+        logger.warning(f"[STARTUP] TX log seeding failed (non-critical): {exc}")
 
 print(f"[STARTUP] {NODE_ROLE.upper()} node initialization complete.\n")
 

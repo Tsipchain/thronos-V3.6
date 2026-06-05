@@ -3354,12 +3354,12 @@ async function loadMusicTab() {
     // Check Wallet V1 music capability (active binding + unlocked runtime)
     const canUnlockMusic = await checkWalletV1MusicCapability(wallet);
 
-    // Check runtime unlock state (frontend only - encrypted key exists)
+    // Check runtime unlock state (Wallet V1 signing material, not legacy thr_secret)
     const hasEncryptedKey = localStorage.getItem('wallet_v1_encrypted_priv') !== null;
-    const isRuntimeUnlocked = localStorage.getItem('thr_secret') !== null;
+    const hasRuntimeSigningMaterial = walletSession.isUnlockedFor ? walletSession.isUnlockedFor(wallet) : false;
 
-    // Music unlocked if: backend confirms capability AND frontend has encrypted key AND runtime is unlocked
-    const isMusicUnlocked = canUnlockMusic && hasEncryptedKey && isRuntimeUnlocked;
+    // Music unlocked if: backend confirms capability AND frontend has encrypted key AND runtime signing material exists
+    const isMusicUnlocked = canUnlockMusic && hasEncryptedKey && hasRuntimeSigningMaterial;
 
     if (!isMusicUnlocked) {
         const lang = getCurrentLang();
@@ -3374,8 +3374,8 @@ async function loadMusicTab() {
             return;
         }
 
-        if (!isRuntimeUnlocked) {
-            // Wallet is locked
+        if (!hasRuntimeSigningMaterial) {
+            // Wallet is locked - no runtime signing material (V1 unlocked state required)
             const msg = isGreek
                 ? 'Ξεκλειδώστε το Wallet V1 για να ενεργοποιήσετε τη μουσική.'
                 : 'Unlock Wallet V1 to enable Music Level.';

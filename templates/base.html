@@ -3211,7 +3211,158 @@ async function checkWalletV1MusicCapability(canonicalAddress) {
     }
 }
 
-// ========== Placeholder: Signed Music Telemetry Architecture ==========
+// ========== Wallet V1 Centralized Signed Requests ==========
+
+async function walletV1BuildSignedRequest(action, payload) {
+    /**
+     * Build a signed request for Wallet V1 protected services.
+     *
+     * Returns:
+     * {
+     *   canonical_v1_address,
+     *   from: canonical_v1_address,
+     *   public_key,
+     *   bound_key_address,  // null if direct wallet
+     *   signature,          // 128 hex chars
+     *   signature_format,   // "secp256k1_compact"
+     *   signing_payload_hash,
+     *   action,
+     *   payload,
+     *   timestamp,
+     *   nonce
+     * }
+     *
+     * Throws if:
+     * - Wallet is locked (no runtime signing material)
+     * - No encrypted key exists
+     * - Invalid canonical address
+     * - No public key available
+     */
+
+    // Step 1: Check wallet state
+    if (!walletSession) {
+        throw new Error("Wallet session not available");
+    }
+
+    const canonicalAddr = walletSession.getAddress();
+    if (!canonicalAddr || !canonicalAddr.startsWith("THR")) {
+        throw new Error("Invalid canonical address");
+    }
+
+    // Step 2: Check if wallet V1 is unlocked (runtime signing material)
+    const hasRuntimeSigningMaterial = walletSession.isUnlockedFor ? walletSession.isUnlockedFor(canonicalAddr) : false;
+    if (!hasRuntimeSigningMaterial) {
+        // Wallet is locked or no signing material
+        const hasEncryptedKey = localStorage.getItem('wallet_v1_encrypted_priv') !== null;
+        if (hasEncryptedKey) {
+            throw new Error("Unlock Wallet V1 first");
+        } else {
+            throw new Error("Create or restore Wallet V1 signer first");
+        }
+    }
+
+    // Step 3: Get public key
+    const publicKey = walletSession.getPublicKey ? walletSession.getPublicKey() : localStorage.getItem('wallet_v1_public_key');
+    if (!publicKey) {
+        throw new Error("Public key not available");
+    }
+
+    // Step 4: Build canonical signing payload
+    const timestamp = new Date().toISOString();
+    const nonce = Math.random().toString(36).substring(2, 15);
+
+    const signingPayload = {
+        action: action.toLowerCase(),
+        canonical_v1_address: canonicalAddr,
+        timestamp: timestamp,
+        nonce: nonce,
+        payload: payload || {}
+    };
+
+    const signingJson = JSON.stringify(signingPayload, Object.keys(signingPayload).sort());
+    const signingHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(signingJson));
+    const signingPayloadHash = Array.from(new Uint8Array(signingHash))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+
+    // Step 5: Sign with runtime private key via walletSession
+    let signature = null;
+    if (walletSession.signMessage) {
+        try {
+            signature = await walletSession.signMessage(signingJson);
+        } catch (e) {
+            throw new Error("Failed to sign request: " + (e.message || "Unknown error"));
+        }
+    } else {
+        throw new Error("Signing not available");
+    }
+
+    // Ensure signature is 128 hex chars (64 bytes)
+    if (!signature || signature.length !== 128) {
+        throw new Error("Invalid signature format");
+    }
+
+    // Step 6: Get bound key address (for auditing)
+    let boundKeyAddress = null;
+    try {
+        const derived = walletSession.generateV1KeyPair ? await walletSession.generateV1KeyPair() : null;
+        if (derived && derived.address && derived.address !== canonicalAddr) {
+            boundKeyAddress = derived.address;
+        }
+    } catch (_) {
+        // Not available, that's ok
+    }
+
+    // Step 7: Return signed request
+    return {
+        canonical_v1_address: canonicalAddr,
+        from: canonicalAddr,
+        public_key: publicKey,
+        bound_key_address: boundKeyAddress,
+        signature: signature,
+        signature_format: "secp256k1_compact",
+        signing_payload_hash: signingPayloadHash,
+        action: action,
+        payload: payload,
+        timestamp: timestamp,
+        nonce: nonce
+    };
+}
+
+// Helper to call a protected service with signed request
+async function callWalletV1Service(action, endpoint, payload = {}, method = "POST") {
+    /**
+     * Call a Wallet V1 protected service endpoint.
+     *
+     * Automatically:
+     * - Builds signed request
+     * - Checks wallet unlock state before calling backend
+     * - Sends public_key + signature in request
+     * - Handles backend errors
+     *
+     * Throws if wallet locked or unavailable.
+     */
+    try {
+        const signedRequest = await walletV1BuildSignedRequest(action, payload);
+
+        const response = await fetch(endpoint, {
+            method: method,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(signedRequest)
+        });
+
+        const data = await response.json();
+        if (!response.ok && !data.ok) {
+            throw new Error(data.error || `Service error: ${response.status}`);
+        }
+
+        return data;
+    } catch (error) {
+        console.error(`[Wallet V1 Service] ${action} failed:`, error.message);
+        throw error;
+    }
+}
+
 // Future implementation for tracking music activity with Wallet V1 signing
 // Will collect:
 // - track_id: Track identifier

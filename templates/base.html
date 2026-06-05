@@ -3211,6 +3211,73 @@ async function checkWalletV1MusicCapability(canonicalAddress) {
     }
 }
 
+// ========== Wallet V1 Public Key Validation ==========
+
+function isValidSecp256k1PublicKeyHex(publicKey) {
+    /**
+     * Validate secp256k1 public key format:
+     * - Compressed: 02/03 + 64 hex chars (66 total)
+     * - Uncompressed: 04 + 128 hex chars (130 total)
+     */
+    if (!publicKey || typeof publicKey !== 'string') {
+        return false;
+    }
+
+    const hex = publicKey.toLowerCase();
+
+    // Check for compressed format: 02 or 03 prefix + 64 hex chars
+    if (hex.length === 66 && (hex.startsWith('02') || hex.startsWith('03'))) {
+        return /^[0-9a-f]{66}$/.test(hex);
+    }
+
+    // Check for uncompressed format: 04 prefix + 128 hex chars
+    if (hex.length === 130 && hex.startsWith('04')) {
+        return /^[0-9a-f]{130}$/.test(hex);
+    }
+
+    // Invalid format
+    return false;
+}
+
+function normalizeSecp256k1PublicKey(publicKey) {
+    /**
+     * Normalize public key to valid hex format.
+     * Returns valid public key hex or null if invalid.
+     */
+    if (!publicKey || typeof publicKey !== 'string') {
+        return null;
+    }
+
+    const hex = publicKey.toLowerCase().trim();
+
+    // Already valid compressed format
+    if (hex.length === 66 && (hex.startsWith('02') || hex.startsWith('03')) && /^[0-9a-f]{66}$/.test(hex)) {
+        return hex;
+    }
+
+    // Already valid uncompressed format
+    if (hex.length === 130 && hex.startsWith('04') && /^[0-9a-f]{130}$/.test(hex)) {
+        return hex;
+    }
+
+    // Try to clean up common issues
+    // Remove 0x prefix if present
+    let cleaned = hex.startsWith('0x') ? hex.substring(2) : hex;
+
+    // If it looks like a valid compressed key after cleanup
+    if (cleaned.length === 66 && (cleaned.startsWith('02') || cleaned.startsWith('03')) && /^[0-9a-f]{66}$/.test(cleaned)) {
+        return cleaned;
+    }
+
+    // If it looks like a valid uncompressed key after cleanup
+    if (cleaned.length === 130 && cleaned.startsWith('04') && /^[0-9a-f]{130}$/.test(cleaned)) {
+        return cleaned;
+    }
+
+    // Invalid - cannot normalize
+    return null;
+}
+
 // ========== Wallet V1 Centralized Signed Requests ==========
 
 async function walletV1BuildSignedRequest(action, payload) {
@@ -3261,11 +3328,30 @@ async function walletV1BuildSignedRequest(action, payload) {
         }
     }
 
-    // Step 3: Get public key
-    const publicKey = walletSession.getPublicKey ? walletSession.getPublicKey() : localStorage.getItem('wallet_v1_public_key');
-    if (!publicKey) {
-        throw new Error("Public key not available");
+    // Step 3: Get and validate public key
+    let publicKey = null;
+
+    // Try to get public key from runtime signing material first
+    if (walletSession.getPublicKey) {
+        try {
+            publicKey = walletSession.getPublicKey();
+        } catch (e) {
+            console.warn('[Wallet V1] Runtime public key retrieval failed:', e.message);
+        }
     }
+
+    // Fall back to localStorage if runtime key not available
+    if (!publicKey) {
+        publicKey = localStorage.getItem('wallet_v1_public_key');
+    }
+
+    // Normalize and validate public key
+    const normalizedPublicKey = normalizeSecp256k1PublicKey(publicKey);
+    if (!normalizedPublicKey || !isValidSecp256k1PublicKeyHex(normalizedPublicKey)) {
+        throw new Error("Invalid Wallet V1 public key. Restore Recovery Kit or regenerate signer.");
+    }
+
+    publicKey = normalizedPublicKey;
 
     // Step 4: Build canonical signing payload
     const timestamp = new Date().toISOString();
@@ -3363,6 +3449,8 @@ async function callWalletV1Service(action, endpoint, payload = {}, method = "POS
     }
 }
 
+// ========== Placeholder: Signed Music Telemetry Architecture ==========
+//
 // Future implementation for tracking music activity with Wallet V1 signing
 // Will collect:
 // - track_id: Track identifier
@@ -7388,6 +7476,7 @@ async function walletAdminGenerateSignerForCanonical() {
         // Step 6: On success, save encrypted key and generate recovery kit
         localStorage.setItem('wallet_v1_encrypted_priv', encrypted);
         localStorage.setItem('wallet_v1_address', canonicalAddr);
+        localStorage.setItem('wallet_v1_public_key', publicKey);
 
         const recoveryKit = {
             version: 'wallet-v1-recovery-kit',

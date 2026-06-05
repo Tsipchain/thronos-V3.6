@@ -36929,6 +36929,42 @@ def get_active_key_binding_for_address(canonical_v1_address):
     return None
 
 
+def _is_valid_secp256k1_public_key_hex(public_key_hex):
+    """
+    Validate secp256k1 public key format.
+
+    Valid formats:
+    - Compressed: 66 hex chars (02 or 03 prefix + 64 hex chars)
+    - Uncompressed: 130 hex chars (04 prefix + 128 hex chars)
+
+    Returns True if valid, False otherwise.
+    """
+    if not public_key_hex or not isinstance(public_key_hex, str):
+        return False
+
+    hex_str = public_key_hex.lower()
+
+    # Check for compressed format: 02 or 03 prefix + 64 hex chars (66 total)
+    if len(hex_str) == 66:
+        if (hex_str.startswith('02') or hex_str.startswith('03')):
+            try:
+                int(hex_str, 16)  # Verify it's valid hex
+                return True
+            except ValueError:
+                return False
+
+    # Check for uncompressed format: 04 prefix + 128 hex chars (130 total)
+    if len(hex_str) == 130:
+        if hex_str.startswith('04'):
+            try:
+                int(hex_str, 16)  # Verify it's valid hex
+                return True
+            except ValueError:
+                return False
+
+    return False
+
+
 def verify_wallet_v1_signed_request(request_data, expected_action=None):
     """
     Central verifier for all Wallet V1 signed requests.
@@ -36978,6 +37014,10 @@ def verify_wallet_v1_signed_request(request_data, expected_action=None):
         public_key_hex = (request_data.get("public_key") or "").strip().lower()
         if not public_key_hex:
             return {"ok": False, "error": "missing_public_key"}
+
+        # Validate public key format before attempting to use it
+        if not _is_valid_secp256k1_public_key_hex(public_key_hex):
+            return {"ok": False, "error": "invalid_public_key_format"}
 
         signature_hex = (request_data.get("signature") or "").strip().lower()
         if not signature_hex or len(signature_hex) != 128:

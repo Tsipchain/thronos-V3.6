@@ -11048,6 +11048,116 @@ def api_wallet_v1_migration_lookup_debug():
         return jsonify({"ok": False, "error": "diagnostic_error"}), 500
 
 
+@app.route("/api/wallet/v1/music/capability", methods=["GET"])
+def api_wallet_v1_music_capability():
+    """
+    Check if Wallet V1 can unlock music level.
+
+    Music level unlocks when:
+    1. canonical_v1_address is provided/exists
+    2. has_active_key_binding = true (key binding with status=active exists)
+    3. Frontend confirms: encrypted_local_key exists AND wallet runtime is unlocked
+
+    Query params:
+    - address: canonical_v1_address to check (required)
+
+    Response (Success):
+    {
+      "ok": true,
+      "canonical_v1_address": "THR...",
+      "has_active_binding": true,
+      "music_level_unlocked": true,
+      "reason": "wallet_v1_active_binding",
+      "diagnostics": {
+        "has_canonical_address": true,
+        "has_active_binding": true,
+        "has_encrypted_key": null,  # Frontend-side only
+        "has_runtime_signing_material": null,  # Frontend-side only
+        "music_unlocked": true
+      }
+    }
+
+    Response (No Binding):
+    {
+      "ok": true,
+      "canonical_v1_address": "THR...",
+      "has_active_binding": false,
+      "music_level_unlocked": false,
+      "reason": "no_active_binding",
+      "diagnostics": {
+        "has_canonical_address": true,
+        "has_active_binding": false,
+        "message": "Restore Recovery Kit or unlock this device to enable Music Level"
+      }
+    }
+
+    Response (No Address):
+    {
+      "ok": true,
+      "has_active_binding": false,
+      "music_level_unlocked": false,
+      "reason": "no_canonical_address"
+    }
+
+    Never logs: private_key, PIN, repair_token, recovery_kit, encrypted_key_contents
+    """
+    try:
+        address = (request.args.get("address") or "").strip().upper()
+
+        # No address provided
+        if not address or not address.startswith("THR"):
+            return jsonify({
+                "ok": True,
+                "has_active_binding": False,
+                "music_level_unlocked": False,
+                "reason": "no_canonical_address"
+            }), 200
+
+        # Check for active key binding
+        has_active_binding = False
+        bindings = load_key_bindings()
+        for binding in bindings:
+            if binding.get("canonical_v1_address") == address and binding.get("status") == "active":
+                has_active_binding = True
+                break
+
+        # Music unlocked if active binding exists
+        # Frontend will also check: encrypted_local_key exists AND wallet runtime unlocked
+        music_unlocked = has_active_binding
+
+        # Log diagnostic info (safe - no secrets)
+        app.logger.debug(
+            "[wallet_v1_music] Music capability check",
+            extra={
+                "address": address[:10] + "...",
+                "has_active_binding": has_active_binding,
+                "music_unlocked": music_unlocked
+            }
+        )
+
+        return jsonify({
+            "ok": True,
+            "canonical_v1_address": address,
+            "has_active_binding": has_active_binding,
+            "music_level_unlocked": music_unlocked,
+            "reason": "wallet_v1_active_binding" if music_unlocked else "no_active_binding",
+            "diagnostics": {
+                "has_canonical_address": True,
+                "has_active_binding": has_active_binding,
+                "has_encrypted_key": None,  # Frontend-side only
+                "has_runtime_signing_material": None,  # Frontend-side only
+                "music_level_unlocked": music_unlocked
+            }
+        }), 200
+
+    except Exception as e:
+        app.logger.error("[wallet_v1_music] Exception", extra={"error": str(e)[:100]})
+        return jsonify({
+            "ok": False,
+            "error": "capability_check_failed"
+        }), 500
+
+
 @app.route("/api/wallet/v1/verify-legacy-ownership", methods=["POST"])
 def api_wallet_v1_verify_legacy_ownership():
     """

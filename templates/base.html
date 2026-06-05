@@ -3182,6 +3182,69 @@ function switchWalletTab(tabName) {
     }
 }
 
+// ========== Wallet V1 Music Capability ==========
+
+async function checkWalletV1MusicCapability(canonicalAddress) {
+    if (!canonicalAddress || !canonicalAddress.startsWith('THR')) {
+        return false;
+    }
+
+    try {
+        const response = await fetch(`/api/wallet/v1/music/capability?address=${encodeURIComponent(canonicalAddress)}`);
+        if (!response.ok) {
+            console.warn('[Music] Capability check failed:', response.status);
+            return false;
+        }
+
+        const data = await response.json();
+        if (!data.ok) {
+            console.warn('[Music] Capability check error:', data.error);
+            return false;
+        }
+
+        const unlocked = data.music_level_unlocked === true && data.has_active_binding === true;
+        console.log('[Music] Capability check - address:', canonicalAddress.substring(0, 10) + '...', 'has_active_binding:', data.has_active_binding, 'music_unlocked:', unlocked);
+        return unlocked;
+    } catch (error) {
+        console.error('[Music] Capability check exception:', error);
+        return false;
+    }
+}
+
+// ========== Placeholder: Signed Music Telemetry Architecture ==========
+// Future implementation for tracking music activity with Wallet V1 signing
+// Will collect:
+// - track_id: Track identifier
+// - session_id: User session from MusicModal.getSessionId()
+// - timestamp: ISO 8601 timestamp
+// - play_duration: Seconds played
+// - device_type: Browser/Mobile detection
+// - canonical_v1_address: User's THR address
+// - optional coarse geohash: Only with user opt-in (not by default)
+//
+// Security:
+// - Never sends: private keys, PINs, recovery kit, encrypted key contents
+// - Requires active Wallet V1 binding (verified server-side)
+// - No raw location data without explicit consent
+//
+// Future endpoint: POST /api/wallet/v1/music/telemetry/track-play
+// Request signature: Signed with Wallet V1 signer for attestation
+//
+// Placeholder constants for future implementation:
+const MUSIC_TELEMETRY_SCHEMA_VERSION = "1.0";
+const MUSIC_TELEMETRY_REQUIRES_CONSENT = true;
+const MUSIC_TELEMETRY_FIELDS = {
+    track_id: "track identifier",
+    session_id: "user session identifier",
+    timestamp: "ISO 8601 timestamp",
+    play_duration: "seconds",
+    device_type: "browser|mobile",
+    canonical_v1_address: "THR...",
+    coarse_geohash: "optional with consent only"
+};
+// End placeholder
+
+
 // PR-5: Load and render music tab
 let musicModuleInitialized = false;
 let musicModuleCheckInterval = null;
@@ -3288,13 +3351,43 @@ async function loadMusicTab() {
         return;
     }
 
-    // Security: Check if wallet is unlocked (has send_secret)
-    const secret = localStorage.getItem('thr_secret');
-    if (!secret) {
+    // Check Wallet V1 music capability (active binding + unlocked runtime)
+    const canUnlockMusic = await checkWalletV1MusicCapability(wallet);
+
+    // Check runtime unlock state (Wallet V1 signing material, not legacy thr_secret)
+    const hasEncryptedKey = localStorage.getItem('wallet_v1_encrypted_priv') !== null;
+    const hasRuntimeSigningMaterial = walletSession.isUnlockedFor ? walletSession.isUnlockedFor(wallet) : false;
+
+    // Music unlocked if: backend confirms capability AND frontend has encrypted key AND runtime signing material exists
+    const isMusicUnlocked = canUnlockMusic && hasEncryptedKey && hasRuntimeSigningMaterial;
+
+    if (!isMusicUnlocked) {
         const lang = getCurrentLang();
         const isGreek = isGreekLang(lang);
-        const unlockMsg = isGreek ? 'Ξεκλειδώστε το πορτοφόλι σας για να δείτε τη μουσική.' : 'Unlock your wallet to view music.';
-        musicContent.innerHTML = `<div class="music-empty">${unlockMsg}</div>`;
+
+        if (!canUnlockMusic && !hasEncryptedKey) {
+            // No binding or no recovery kit
+            const msg = isGreek
+                ? 'Ανακτήστε Recovery Kit ή ξεκλειδώστε αυτήν τη συσκευή για να ενεργοποιήσετε τη μουσική.'
+                : 'Restore Recovery Kit or unlock this device to enable Music Level.';
+            musicContent.innerHTML = `<div class="music-empty">${msg}</div>`;
+            return;
+        }
+
+        if (!hasRuntimeSigningMaterial) {
+            // Wallet is locked - no runtime signing material (V1 unlocked state required)
+            const msg = isGreek
+                ? 'Ξεκλειδώστε το Wallet V1 για να ενεργοποιήσετε τη μουσική.'
+                : 'Unlock Wallet V1 to enable Music Level.';
+            musicContent.innerHTML = `<div class="music-empty">${msg}</div>`;
+            return;
+        }
+
+        // Other cases - show generic message
+        const msg = isGreek
+            ? 'Η μουσική δεν είναι διαθέσιμη.'
+            : 'Music Level not available.';
+        musicContent.innerHTML = `<div class="music-empty">${msg}</div>`;
         return;
     }
 

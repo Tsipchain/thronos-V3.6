@@ -1,0 +1,796 @@
+{% extends "base.html" %}
+
+{% block title %}🗺️ Wallet V1 Roadmap (Stage 3){% endblock %}
+
+{% block styles %}
+<style>
+    .v3-container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+    }
+
+    .v3-header {
+        text-align: center;
+        margin-bottom: 50px;
+        padding: 30px;
+        background: linear-gradient(135deg, rgba(0, 255, 102, 0.1) 0%, rgba(255, 102, 0, 0.1) 100%);
+        border: 2px solid #00ff66;
+        border-radius: 16px;
+    }
+
+    .v3-title {
+        font-size: 42px;
+        font-weight: bold;
+        background: linear-gradient(135deg, #00ff66 0%, #56ff9a 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        margin-bottom: 15px;
+    }
+
+    .v3-subtitle {
+        color: #56ff9a;
+        font-size: 16px;
+        max-width: 700px;
+        margin: 0 auto;
+        line-height: 1.6;
+    }
+
+    .v3-version-badge {
+        display: inline-block;
+        background: linear-gradient(135deg, #00ff66 0%, #56ff9a 100%);
+        color: #000;
+        padding: 10px 24px;
+        border-radius: 25px;
+        font-weight: bold;
+        font-size: 14px;
+        margin-bottom: 20px;
+    }
+
+    .v3-section {
+        margin-bottom: 40px;
+    }
+
+    .v3-section-title {
+        font-size: 28px;
+        color: #00ff66;
+        margin-bottom: 25px;
+        padding-bottom: 15px;
+        border-bottom: 2px solid #1a3b2e;
+        display: flex;
+        align-items: center;
+        gap: 15px;
+    }
+
+    .v3-feature-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 20px;
+        margin-bottom: 30px;
+    }
+
+    .v3-feature-card {
+        background: linear-gradient(135deg, rgba(10, 10, 10, 0.9) 0%, rgba(26, 59, 46, 0.2) 100%);
+        border: 1px solid #1a3b2e;
+        border-radius: 12px;
+        padding: 25px;
+        transition: all 0.3s;
+    }
+
+    .v3-feature-card:hover {
+        border-color: #00ff66;
+        box-shadow: 0 0 20px rgba(0, 255, 102, 0.2);
+        transform: translateY(-5px);
+    }
+
+    .v3-feature-icon {
+        font-size: 32px;
+        margin-bottom: 15px;
+    }
+
+    .v3-feature-name {
+        font-size: 18px;
+        color: #fff;
+        font-weight: 600;
+        margin-bottom: 10px;
+    }
+
+    .v3-feature-desc {
+        color: #888;
+        font-size: 13px;
+        line-height: 1.6;
+    }
+
+    .v3-status-badge {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: bold;
+        padding: 4px 12px;
+        border-radius: 15px;
+        margin-top: 12px;
+        text-transform: uppercase;
+    }
+
+    .v3-status-live { background: #00ff66; color: #000; }
+    .v3-status-in-progress { background: #ffd700; color: #000; }
+    .v3-status-planned { background: #ff6600; color: #fff; }
+    .v3-status-deprecated { background: #666; color: #fff; }
+
+    .v3-timeline-item {
+        background: linear-gradient(135deg, rgba(10, 10, 10, 0.9) 0%, rgba(26, 59, 46, 0.2) 100%);
+        border: 1px solid #1a3b2e;
+        border-radius: 12px;
+        padding: 25px;
+        margin-bottom: 20px;
+    }
+
+    .v3-timeline-item.live {
+        border-color: #00ff66;
+        box-shadow: 0 0 20px rgba(0, 255, 102, 0.15);
+    }
+
+    .v3-timeline-title {
+        font-size: 18px;
+        color: #00ff66;
+        font-weight: 600;
+        margin-bottom: 10px;
+    }
+
+    .v3-timeline-desc {
+        color: #888;
+        font-size: 13px;
+        line-height: 1.6;
+    }
+
+    .v3-roadmap-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-bottom: 30px;
+    }
+
+    .v3-roadmap-table th,
+    .v3-roadmap-table td {
+        padding: 15px;
+        text-align: left;
+        border-bottom: 1px solid #1a3b2e;
+    }
+
+    .v3-roadmap-table th {
+        background: rgba(0, 255, 102, 0.1);
+        color: #00ff66;
+        font-weight: 600;
+    }
+
+    .v3-roadmap-table tr:hover {
+        background: rgba(0, 255, 102, 0.05);
+    }
+
+    .v3-roadmap-table .module-name {
+        font-weight: 600;
+        color: #fff;
+    }
+
+    .v3-roadmap-table .status {
+        text-align: center;
+    }
+
+    .v3-architecture-box {
+        background: linear-gradient(135deg, rgba(0, 255, 102, 0.1) 0%, rgba(0, 0, 0, 0.5) 100%);
+        border: 2px solid #00ff66;
+        border-radius: 12px;
+        padding: 25px;
+        margin-bottom: 30px;
+    }
+
+    .v3-architecture-title {
+        font-size: 20px;
+        color: #00ff66;
+        margin-bottom: 15px;
+        font-weight: 600;
+    }
+
+    .v3-architecture-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+    }
+
+    .v3-architecture-list li {
+        padding: 10px 0;
+        padding-left: 30px;
+        position: relative;
+        color: #d7ffe6;
+        line-height: 1.6;
+    }
+
+    .v3-architecture-list li:before {
+        content: '→';
+        position: absolute;
+        left: 0;
+        color: #00ff66;
+        font-weight: bold;
+    }
+
+    .v3-phase-comparison {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 30px;
+        margin: 30px 0;
+    }
+
+    .v3-phase-box {
+        background: linear-gradient(135deg, rgba(10, 10, 10, 0.9) 0%, rgba(26, 59, 46, 0.2) 100%);
+        border: 1px solid #1a3b2e;
+        border-radius: 12px;
+        padding: 25px;
+    }
+
+    .v3-phase-box.completed {
+        border-color: #00ff66;
+    }
+
+    .v3-phase-label {
+        font-size: 12px;
+        font-weight: bold;
+        color: #00ff66;
+        text-transform: uppercase;
+        margin-bottom: 10px;
+    }
+
+    .v3-phase-title {
+        font-size: 20px;
+        color: #fff;
+        font-weight: 600;
+        margin-bottom: 15px;
+    }
+
+    .v3-phase-features {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+    }
+
+    .v3-phase-features li {
+        padding: 8px 0;
+        color: #888;
+        font-size: 13px;
+        line-height: 1.5;
+    }
+
+    .v3-phase-features li:before {
+        content: '✓';
+        color: #00ff66;
+        font-weight: bold;
+        margin-right: 8px;
+    }
+
+    @media (max-width: 768px) {
+        .v3-phase-comparison {
+            grid-template-columns: 1fr;
+        }
+
+        .v3-feature-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .v3-title {
+            font-size: 28px;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="v3-container">
+    <!-- Header -->
+    <div class="v3-header">
+        <div class="v3-version-badge">Stage 3 • Wallet V1 Architecture (Feb 2026)</div>
+        <h1 class="v3-title">🔐 Wallet V1 Secure Signing Architecture</h1>
+        <p class="v3-subtitle">
+            Canonical addresses with bound signers, PIN-protected recovery kits, and cryptographically signed service requests.
+            Complete migration of swap, pools, and roadmap for send, bridge, AI, IoT, and music.
+        </p>
+    </div>
+
+    <!-- Phase 1: Core (Complete) -->
+    <div class="v3-section">
+        <div class="v3-section-title">
+            <span>✓</span> Phase 1: Wallet V1 Core Foundation
+        </div>
+        <p style="color: #888; margin-bottom: 20px;">
+            <strong>Status: LIVE</strong> • Canonical addresses, bound signers, Recovery Kits, PIN/Passkey-ready unlock
+        </p>
+
+        <div class="v3-feature-grid">
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">📌</div>
+                <div class="v3-feature-name">Canonical V1 Address</div>
+                <div class="v3-feature-desc">
+                    User's primary THR... wallet. All binding and service requests verified against this address.
+                </div>
+                <div class="v3-status-badge v3-status-live">Live</div>
+            </div>
+
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">🔑</div>
+                <div class="v3-feature-name">Bound Signer Wallets</div>
+                <div class="v3-feature-desc">
+                    New signing key bound to canonical address via public_key_hash. Enables multi-device and delegated signing.
+                </div>
+                <div class="v3-status-badge v3-status-live">Live</div>
+            </div>
+
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">🛡️</div>
+                <div class="v3-feature-name">PIN Protected Keys</div>
+                <div class="v3-feature-desc">
+                    Private key encrypted with user PIN. Runtime unlock maintains signing material in session memory only.
+                </div>
+                <div class="v3-status-badge v3-status-live">Live</div>
+            </div>
+
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">📦</div>
+                <div class="v3-feature-name">Recovery Kit</div>
+                <div class="v3-feature-desc">
+                    JSON backup with encrypted private key, canonical address, and restoration metadata. Downloaded securely.
+                </div>
+                <div class="v3-status-badge v3-status-live">Live</div>
+            </div>
+
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">🔓</div>
+                <div class="v3-feature-name">Passkey-Ready Unlock</div>
+                <div class="v3-feature-desc">
+                    PIN or passkey (FaceID/Fingerprint) unlocks signing material. Session-scoped runtime decryption.
+                </div>
+                <div class="v3-status-badge v3-status-in-progress">Passkey Next</div>
+            </div>
+
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">🏛️</div>
+                <div class="v3-feature-name">Admin Signer Binding</div>
+                <div class="v3-feature-desc">
+                    Admins can generate binding for existing migrated core wallets. Proper order: bind first, save after.
+                </div>
+                <div class="v3-status-badge v3-status-live">Live</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Phase 2: Signed Services (In Progress) -->
+    <div class="v3-section">
+        <div class="v3-section-title">
+            <span>⚡</span> Phase 2: Cryptographically Signed Service Requests
+        </div>
+        <p style="color: #888; margin-bottom: 20px;">
+            <strong>Status: 40% complete</strong> • Swap & Pools live, Send/Bridge/AI/IoT/Music in progress
+        </p>
+
+        <div class="v3-architecture-box">
+            <div class="v3-architecture-title">Architecture: Centralized Signed Requests</div>
+            <ul class="v3-architecture-list">
+                <li><strong>Frontend:</strong> walletV1BuildSignedRequest() builds canonical payload with timestamp, nonce, signature</li>
+                <li><strong>Signature Format:</strong> secp256k1_compact (128 hex chars, ECDSA SHA256)</li>
+                <li><strong>Public Key Format:</strong> Compressed (02/03 + 64 hex) or uncompressed (04 + 128 hex)</li>
+                <li><strong>Validation:</strong> Client-side format check + backend signature verification</li>
+                <li><strong>Binding Check:</strong> Backend verifies public_key_hash against active bindings</li>
+                <li><strong>Direct Wallets:</strong> Signer == canonical still supported for direct V1 wallets</li>
+            </ul>
+        </div>
+
+        <div class="v3-feature-grid">
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">💱</div>
+                <div class="v3-feature-name">Swap Signing</div>
+                <div class="v3-feature-desc">
+                    POST /api/swap/execute accepts signed swap requests. Validates canonical wallet and signature.
+                </div>
+                <div class="v3-status-badge v3-status-live">Live</div>
+            </div>
+
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">🏊</div>
+                <div class="v3-feature-name">Pools Signing</div>
+                <div class="v3-feature-desc">
+                    POST /api/v1/pools/add_liquidity accepts signed pool requests. Bound signers verified against binding.
+                </div>
+                <div class="v3-status-badge v3-status-live">Live</div>
+            </div>
+
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">📤</div>
+                <div class="v3-feature-name">Send Signing</div>
+                <div class="v3-feature-desc">
+                    POST /api/wallet/send accepts signed send requests. Migration in progress.
+                </div>
+                <div class="v3-status-badge v3-status-planned">Next</div>
+            </div>
+
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">🌉</div>
+                <div class="v3-feature-name">Bridge Signing</div>
+                <div class="v3-feature-desc">
+                    BTC burn and mint operations via signed requests. Planned.
+                </div>
+                <div class="v3-status-badge v3-status-planned">Planned</div>
+            </div>
+
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">🤖</div>
+                <div class="v3-feature-name">AI Credits Signing</div>
+                <div class="v3-feature-desc">
+                    AI model requests with signed credential spend. Planned.
+                </div>
+                <div class="v3-status-badge v3-status-planned">Planned</div>
+            </div>
+
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">📡</div>
+                <div class="v3-feature-name">IoT Telemetry Signing</div>
+                <div class="v3-feature-desc">
+                    GPS/parking/sensor submissions with signed attestation. Planned.
+                </div>
+                <div class="v3-status-badge v3-status-planned">Planned</div>
+            </div>
+
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">🎵</div>
+                <div class="v3-feature-name">Music Telemetry</div>
+                <div class="v3-feature-desc">
+                    Track plays with opt-in location telemetry. Placeholder ready, signing implementation next.
+                </div>
+                <div class="v3-status-badge v3-status-planned">Planned</div>
+            </div>
+        </div>
+
+        <!-- Public Key Normalization -->
+        <div class="v3-architecture-box">
+            <div class="v3-architecture-title">Public Key Format Validation</div>
+            <ul class="v3-architecture-list">
+                <li><strong>Frontend Validation:</strong> isValidSecp256k1PublicKeyHex() checks 66 or 130 hex chars</li>
+                <li><strong>Normalization:</strong> normalizeSecp256k1PublicKey() removes 0x prefix, validates hex</li>
+                <li><strong>Client-Side Block:</strong> Invalid format blocked before backend call with clear error message</li>
+                <li><strong>Backend Validation:</strong> _is_valid_secp256k1_public_key_hex() validates format before signature check</li>
+                <li><strong>Error Response:</strong> Returns specific "invalid_public_key_format" error for clarity</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Phase 3: Mining V1 (Planned) -->
+    <div class="v3-section">
+        <div class="v3-section-title">
+            <span>⛏️</span> Phase 3: Mining V1 Pledge-Native Miner Kit
+        </div>
+        <p style="color: #888; margin-bottom: 20px;">
+            <strong>Status: PLANNED</strong> • Reward destination = canonical_v1_address
+        </p>
+
+        <div class="v3-architecture-box">
+            <div class="v3-architecture-title">Miner Kit Architecture</div>
+            <ul class="v3-architecture-list">
+                <li><strong>Pledge System:</strong> New miners pledge THR → canonical_v1_address as reward destination</li>
+                <li><strong>Worker Format:</strong> &lt;canonical_v1_address&gt;.&lt;worker_name&gt; (e.g., THR6...@worker1)</li>
+                <li><strong>Stratum Proxy:</strong> Full ASIC support via Stratum protocol (mining pool compatible)</li>
+                <li><strong>CPU Miner:</strong> Built-in fallback miner for testing</li>
+                <li><strong>Reward Split:</strong> Pool fee + reward_to_miner + reward_to_ai + fee_burned</li>
+                <li><strong>Legacy Wallets:</strong> Must bind admin signer before mining (security)</li>
+            </ul>
+        </div>
+
+        <div class="v3-feature-grid">
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">📥</div>
+                <div class="v3-feature-name">Miner Kit Download</div>
+                <div class="v3-feature-desc">
+                    ASIC config, Stratum endpoints, worker format guide. Auto-populated with user's canonical address.
+                </div>
+                <div class="v3-status-badge v3-status-planned">Planned</div>
+            </div>
+
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">⛓️</div>
+                <div class="v3-feature-name">Stratum Protocol</div>
+                <div class="v3-feature-desc">
+                    Full Stratum difficulty adjustment, share validation, and reward accounting.
+                </div>
+                <div class="v3-status-badge v3-status-planned">Planned</div>
+            </div>
+
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">💰</div>
+                <div class="v3-feature-name">Direct Rewards</div>
+                <div class="v3-feature-desc">
+                    Block rewards paid directly to canonical_v1_address. Bound signers inherit reward rights.
+                </div>
+                <div class="v3-status-badge v3-status-planned">Planned</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Phase 4: Digital Legacy (Planned) -->
+    <div class="v3-section">
+        <div class="v3-section-title">
+            <span>🏛️</span> Phase 4: Digital Legacy & Inheritance Management
+        </div>
+        <p style="color: #888; margin-bottom: 20px;">
+            <strong>Status: FOUNDATION READY</strong> • Will, heirs, guardians, asset claim/release
+        </p>
+
+        <div class="v3-feature-grid">
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">📜</div>
+                <div class="v3-feature-name">Digital Will</div>
+                <div class="v3-feature-desc">
+                    NFT-based smart contract will. Encrypted asset inventory, heir beneficiaries, access conditions.
+                </div>
+                <div class="v3-status-badge v3-status-planned">Planned</div>
+            </div>
+
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">👥</div>
+                <div class="v3-feature-name">Heir Management</div>
+                <div class="v3-feature-desc">
+                    Designate heirs with share percentages. Multi-sig approval flow for asset release.
+                </div>
+                <div class="v3-status-badge v3-status-planned">Planned</div>
+            </div>
+
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">🔐</div>
+                <div class="v3-feature-name">Guardian/Notary Approval</div>
+                <div class="v3-feature-desc">
+                    Multi-sig guardian signatures required for will opening and asset release.
+                </div>
+                <div class="v3-status-badge v3-status-planned">Planned</div>
+            </div>
+
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">💎</div>
+                <div class="v3-feature-name">Asset Inventory</div>
+                <div class="v3-feature-desc">
+                    Encrypted catalog of crypto, cold storage, real estate, bank accounts, NFTs, domains.
+                </div>
+                <div class="v3-status-badge v3-status-planned">Planned</div>
+            </div>
+
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">🌍</div>
+                <div class="v3-feature-name">Charity Pool</div>
+                <div class="v3-feature-desc">
+                    Unclaimed assets automatically transfer to charity pool for schools, housing, ecosystem.
+                </div>
+                <div class="v3-status-badge v3-status-planned">Planned</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Phase 5: Bridge & BTC (Planned) -->
+    <div class="v3-section">
+        <div class="v3-section-title">
+            <span>🌉</span> Phase 5: Bridge / Bitcoin Integration
+        </div>
+        <p style="color: #888; margin-bottom: 20px;">
+            <strong>Status: WATCHER LIVE, VAULT PLANNED</strong> • Burn-to-mint, future Bodcoind integration
+        </p>
+
+        <div class="v3-feature-grid">
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">👀</div>
+                <div class="v3-feature-name">BTC Watcher</div>
+                <div class="v3-feature-desc">
+                    Monitors BTC blockchain for deposits to bridge address. Mints equivalent WBTC on Thronos.
+                </div>
+                <div class="v3-status-badge v3-status-live">Live</div>
+            </div>
+
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">🔒</div>
+                <div class="v3-feature-name">Multi-Sig Vault</div>
+                <div class="v3-feature-desc">
+                    Multi-signature vault for bridge assets. Security and accountability for BTC custody.
+                </div>
+                <div class="v3-status-badge v3-status-planned">Planned</div>
+            </div>
+
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">🔥</div>
+                <div class="v3-feature-name">Burn-to-Mint</div>
+                <div class="v3-feature-desc">
+                    Burn WBTC on Thronos → claim BTC from vault. Atomic settlement with notary signatures.
+                </div>
+                <div class="v3-status-badge v3-status-planned">Planned</div>
+            </div>
+
+            <div class="v3-feature-card">
+                <div class="v3-feature-icon">⚙️</div>
+                <div class="v3-feature-name">Bodcoind Integration</div>
+                <div class="v3-feature-desc">
+                    Future: Full Bitcoin node on Thronos for decentralized bridge without external watcher.
+                </div>
+                <div class="v3-status-badge v3-status-planned">Future</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Phase 6: Pythia AI Oracle (Planned) -->
+    <div class="v3-section">
+        <div class="v3-section-title">
+            <span>🔮</span> Phase 6: Pythia AI Oracle & Intelligence
+        </div>
+        <p style="color: #888; margin-bottom: 20px;">
+            <strong>Status: FOUNDATION READY</strong> • Oracle, liquidity agent, risk monitor
+        </p>
+
+        <div class="v3-architecture-box">
+            <div class="v3-architecture-title">Pythia Architecture</div>
+            <ul class="v3-architecture-list">
+                <li><strong>Oracle:</strong> Price feeds, on-chain data, risk metrics from external sources</li>
+                <li><strong>Liquidity Agent:</strong> Monitor and rebalance liquidity pools, adjust fees, predict slippage</li>
+                <li><strong>Network Risk Monitor:</strong> Real-time blockchain health, validator/miner status, security alerts</li>
+                <li><strong>Route Intelligence:</strong> Optimal swap routes, bridge price feeds, transaction routing</li>
+                <li><strong>Music/IoT Intelligence:</strong> Opt-in telemetry analysis for ecosystem insights</li>
+                <li><strong>Privacy:</strong> Aggregated analytics only, no raw location or personal data</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Module Status Table -->
+    <div class="v3-section">
+        <div class="v3-section-title">
+            <span>📊</span> Complete Module Inventory & Status
+        </div>
+
+        <table class="v3-roadmap-table">
+            <thead>
+                <tr>
+                    <th>Module</th>
+                    <th>Category</th>
+                    <th>Status</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- Core Modules -->
+                <tr>
+                    <td class="module-name">Wallet V1 Core</td>
+                    <td>Core</td>
+                    <td class="status"><span class="v3-status-badge v3-status-live">Live</span></td>
+                    <td>Canonical address, bound signer, PIN, Recovery Kit</td>
+                </tr>
+                <tr>
+                    <td class="module-name">Swap</td>
+                    <td>DeFi</td>
+                    <td class="status"><span class="v3-status-badge v3-status-live">Live</span></td>
+                    <td>Token swap with signed requests</td>
+                </tr>
+                <tr>
+                    <td class="module-name">Pools</td>
+                    <td>DeFi</td>
+                    <td class="status"><span class="v3-status-badge v3-status-live">Live</span></td>
+                    <td>AMM liquidity pools with signed add/remove</td>
+                </tr>
+                <tr>
+                    <td class="module-name">Send</td>
+                    <td>Services</td>
+                    <td class="status"><span class="v3-status-badge v3-status-planned">Planned</span></td>
+                    <td>Wallet send with signed requests (migration in progress)</td>
+                </tr>
+                <tr>
+                    <td class="module-name">Bridge</td>
+                    <td>Bridge</td>
+                    <td class="status"><span class="v3-status-badge v3-status-live">Live (Watcher)</span></td>
+                    <td>BTC watcher live, vault and burn-to-mint planned</td>
+                </tr>
+                <tr>
+                    <td class="module-name">AI Credits</td>
+                    <td>Services</td>
+                    <td class="status"><span class="v3-status-badge v3-status-planned">Planned</span></td>
+                    <td>Signed AI model requests with credit spend</td>
+                </tr>
+                <tr>
+                    <td class="module-name">IoT Telemetry</td>
+                    <td>Services</td>
+                    <td class="status"><span class="v3-status-badge v3-status-planned">Planned</span></td>
+                    <td>GPS/parking with signed attestation</td>
+                </tr>
+                <tr>
+                    <td class="module-name">Music Telemetry</td>
+                    <td>Services</td>
+                    <td class="status"><span class="v3-status-badge v3-status-planned">Placeholder</span></td>
+                    <td>Track plays with opt-in location, placeholder ready</td>
+                </tr>
+                <tr>
+                    <td class="module-name">Mining V1</td>
+                    <td>Mining</td>
+                    <td class="status"><span class="v3-status-badge v3-status-planned">Planned</span></td>
+                    <td>Pledge-native miner kit, Stratum, rewards to canonical</td>
+                </tr>
+                <tr>
+                    <td class="module-name">Digital Legacy</td>
+                    <td>Legacy</td>
+                    <td class="status"><span class="v3-status-badge v3-status-planned">Planned</span></td>
+                    <td>Digital will, heirs, guardian approval, asset inventory</td>
+                </tr>
+                <tr>
+                    <td class="module-name">Charity Pool</td>
+                    <td>Legacy</td>
+                    <td class="status"><span class="v3-status-badge v3-status-planned">Planned</span></td>
+                    <td>Unclaimed assets to schools, housing, charity</td>
+                </tr>
+                <tr>
+                    <td class="module-name">Pythia Oracle</td>
+                    <td>AI/Oracle</td>
+                    <td class="status"><span class="v3-status-badge v3-status-planned">Planned</span></td>
+                    <td>Price feeds, liquidity agent, risk monitor</td>
+                </tr>
+                <tr>
+                    <td class="module-name">VerifyID</td>
+                    <td>Services</td>
+                    <td class="status"><span class="v3-status-badge v3-status-live">Live</span></td>
+                    <td>Identity verification service</td>
+                </tr>
+                <tr>
+                    <td class="module-name">L2E</td>
+                    <td>Services</td>
+                    <td class="status"><span class="v3-status-badge v3-status-live">Live</span></td>
+                    <td>Learn-to-Earn platform with certificates</td>
+                </tr>
+                <tr>
+                    <td class="module-name">Music Economy</td>
+                    <td>Services</td>
+                    <td class="status"><span class="v3-status-badge v3-status-live">Live</span></td>
+                    <td>Artist registration, uploads, royalties, tips</td>
+                </tr>
+                <tr>
+                    <td class="module-name">Crypto Hunters</td>
+                    <td>Services</td>
+                    <td class="status"><span class="v3-status-badge v3-status-live">Live</span></td>
+                    <td>P2E game with geolocation and NFT drops</td>
+                </tr>
+                <tr>
+                    <td class="module-name">Mobile Wallet</td>
+                    <td>Client</td>
+                    <td class="status"><span class="v3-status-badge v3-status-live">Live</span></td>
+                    <td>React Native iOS/Android/Web support</td>
+                </tr>
+                <tr>
+                    <td class="module-name">Chrome Extension</td>
+                    <td>Client</td>
+                    <td class="status"><span class="v3-status-badge v3-status-live">Live</span></td>
+                    <td>Browser wallet and dApp provider</td>
+                </tr>
+                <tr>
+                    <td class="module-name">Smart Contracts</td>
+                    <td>Core</td>
+                    <td class="status"><span class="v3-status-badge v3-status-live">Live</span></td>
+                    <td>EVM Solidity smart contracts</td>
+                </tr>
+                <tr>
+                    <td class="module-name">Governance</td>
+                    <td>Core</td>
+                    <td class="status"><span class="v3-status-badge v3-status-planned">Planned</span></td>
+                    <td>On-chain governance, voting, proposals</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Quick Links -->
+    <div style="text-align: center; margin-top: 50px; padding-top: 30px; border-top: 1px solid #1a3b2e;">
+        <p style="color: #888; margin-bottom: 20px;">
+            Want to see the full picture? Check the main roadmap or Whitepaper.
+        </p>
+        <a href="/roadmap" style="display: inline-block; background: linear-gradient(135deg, #ff6600 0%, #ffd700 100%); color: #000; padding: 12px 24px; border-radius: 25px; font-weight: bold; text-decoration: none; margin: 0 10px;">
+            📍 Main Roadmap
+        </a>
+        <a href="/whitepaper" style="display: inline-block; background: linear-gradient(135deg, #00ff66 0%, #56ff9a 100%); color: #000; padding: 12px 24px; border-radius: 25px; font-weight: bold; text-decoration: none; margin: 0 10px;">
+            📜 Whitepaper
+        </a>
+        <a href="/api/roadmap/status" style="display: inline-block; background: linear-gradient(135deg, #5C9FFF 0%, #00ff66 100%); color: #000; padding: 12px 24px; border-radius: 25px; font-weight: bold; text-decoration: none; margin: 0 10px;">
+            📊 API Status
+        </a>
+    </div>
+</div>
+{% endblock %}

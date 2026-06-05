@@ -9344,6 +9344,163 @@ def whitepaper_page():
 def roadmap_page():
     return render_template("roadmap.html")
 
+@app.route("/roadmap/v3")
+@app.route("/roadmap/wallet-v1")
+def roadmap_v3_page():
+    """Wallet V1 Architecture roadmap - Stage 3"""
+    return render_template("roadmap_v3.html")
+
+@app.route("/api/roadmap/status", methods=["GET"])
+def api_roadmap_status():
+    """Return module status for all Thronos services."""
+    status = {
+        "ok": True,
+        "version": "3.6",
+        "stage": "Stage 3 - Wallet V1 Architecture",
+        "modules": {
+            "core": {
+                "wallet_v1": {
+                    "status": "live",
+                    "description": "Canonical address, bound signer, PIN, Recovery Kit",
+                    "endpoints": ["/api/wallet/v1/rekey/*"]
+                },
+                "blockchain": {
+                    "status": "live",
+                    "description": "SHA256 PoW, blocks, ledger, mining"
+                },
+                "smart_contracts": {
+                    "status": "live",
+                    "description": "EVM Solidity smart contracts"
+                }
+            },
+            "defi": {
+                "swap": {
+                    "status": "live",
+                    "description": "Token swap with signed requests",
+                    "endpoints": ["/api/swap/execute"]
+                },
+                "pools": {
+                    "status": "live",
+                    "description": "AMM liquidity pools with signed requests",
+                    "endpoints": ["/api/v1/pools/add_liquidity", "/api/v1/pools/remove_liquidity"]
+                },
+                "tokens": {
+                    "status": "live",
+                    "description": "Custom token creation, transfer, burn, mint"
+                }
+            },
+            "services": {
+                "send": {
+                    "status": "in_progress",
+                    "description": "Wallet send with signed requests (migration in progress)",
+                    "endpoints": ["/api/wallet/send"]
+                },
+                "ai_credits": {
+                    "status": "planned",
+                    "description": "AI model requests with signed credential spend"
+                },
+                "iot_telemetry": {
+                    "status": "planned",
+                    "description": "GPS/parking submissions with signed attestation",
+                    "endpoints": ["/api/iot/*"]
+                },
+                "music_telemetry": {
+                    "status": "placeholder",
+                    "description": "Track plays with opt-in location telemetry",
+                    "endpoints": ["/api/wallet/v1/music/telemetry/track-play"]
+                },
+                "l2e": {
+                    "status": "live",
+                    "description": "Learn-to-Earn platform with certificates",
+                    "endpoints": ["/api/l2e/*", "/courses"]
+                },
+                "music": {
+                    "status": "live",
+                    "description": "Artist registration, uploads, royalties, tips",
+                    "endpoints": ["/music", "/api/music/*"]
+                },
+                "crypto_hunters": {
+                    "status": "live",
+                    "description": "P2E game with geolocation and NFT drops",
+                    "endpoints": ["/crypto-hunters", "/api/hunters/*"]
+                },
+                "verifyid": {
+                    "status": "live",
+                    "description": "Identity verification service"
+                }
+            },
+            "bridge": {
+                "btc_watcher": {
+                    "status": "live",
+                    "description": "BTC watcher service for deposits",
+                    "endpoints": ["/api/bridge/*"]
+                },
+                "burn_to_mint": {
+                    "status": "planned",
+                    "description": "WBTC burning for BTC withdrawal"
+                },
+                "vault": {
+                    "status": "planned",
+                    "description": "Multi-sig vault for bridge assets"
+                }
+            },
+            "mining": {
+                "mining_v1": {
+                    "status": "planned",
+                    "description": "Pledge-native miner kit, Stratum, rewards to canonical",
+                    "features": ["miner_kit_download", "stratum_protocol", "direct_rewards"]
+                }
+            },
+            "legacy": {
+                "digital_legacy": {
+                    "status": "planned",
+                    "description": "Digital will, heirs, guardian approval, asset inventory",
+                    "endpoints": ["/api/legacy/health", "/api/legacy/routes"]
+                },
+                "charity_pool": {
+                    "status": "planned",
+                    "description": "Unclaimed assets to schools, housing, charity"
+                }
+            },
+            "ai_oracle": {
+                "pythia": {
+                    "status": "planned",
+                    "description": "Price feeds, liquidity agent, risk monitor"
+                }
+            },
+            "clients": {
+                "mobile_wallet": {
+                    "status": "live",
+                    "description": "React Native iOS/Android/Web support"
+                },
+                "chrome_extension": {
+                    "status": "live",
+                    "description": "Browser wallet and dApp provider"
+                },
+                "web_wallet": {
+                    "status": "live",
+                    "description": "Web-based wallet and dashboard"
+                }
+            }
+        },
+        "progress": {
+            "phase_1_core": 100,
+            "phase_2_signed_services": 40,
+            "phase_3_mining_v1": 0,
+            "phase_4_digital_legacy": 0,
+            "phase_5_bridge": 30,
+            "phase_6_pythia_ai": 0
+        },
+        "status_legend": {
+            "live": "Fully implemented and in production",
+            "in_progress": "Currently being implemented",
+            "planned": "On roadmap for future implementation",
+            "placeholder": "Skeleton implemented, full logic pending",
+            "deprecated": "No longer maintained"
+        }
+    }
+    return jsonify(status), 200
+
 @app.route("/downloads")
 @app.route("/apps")
 @app.route("/wallet/download")

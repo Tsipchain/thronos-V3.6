@@ -22205,7 +22205,18 @@ def verify_swap_wallet_v1_or_legacy(payload, expected_action=SWAP_EXPECTED_ACTIO
     public_key = (payload.get("public_key") or "").strip()
 
     if signed_tx_raw:
-        signed_tx = signed_tx_raw if isinstance(signed_tx_raw, dict) else {}
+        # Defensively handle signed_tx that might be string JSON or dict
+        if isinstance(signed_tx_raw, dict):
+            signed_tx = signed_tx_raw
+        elif isinstance(signed_tx_raw, str):
+            try:
+                signed_tx = json.loads(signed_tx_raw)
+                if not isinstance(signed_tx, dict):
+                    signed_tx = {}
+            except (json.JSONDecodeError, ValueError):
+                return False, {"ok": False, "status": "error", "error": "invalid_signed_tx_format", "message": "signed_tx must be a valid JSON object or dict"}, None
+        else:
+            signed_tx = {}
 
         if not signed_tx.get("signature"):
             return False, {"ok": False, "status": "error", "error": "missing_signature", "message": "Signature is required in signed_tx"}, None

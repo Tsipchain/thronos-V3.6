@@ -6018,35 +6018,6 @@ function initWalletUiControls(){
     }, 100);
 }
 
-function showWalletLoginForm(){
-    const loginSection = document.getElementById('walletLoginSection');
-    const contentSection = document.getElementById('walletContentSection');
-    if(loginSection){
-        loginSection.style.display = 'block';
-        const addrInput = document.getElementById('walletWidgetThrAddress');
-        const pinInput = document.getElementById('walletWidgetPin');
-        if(addrInput) addrInput.value = walletSession.getAddress();
-        if(pinInput) pinInput.value = walletSession.getPin();
-
-        // Initialize wallet modal based on current state
-        switchWalletV1Mode();
-
-        // Focus on the relevant input for the current state
-        const modalState = walletSession.getModalState ? walletSession.getModalState() : 'no_active_wallet';
-        if (modalState === 'active_wallet_with_encrypted_key') {
-            // PIN unlock mode - focus on PIN input
-            setTimeout(()=>{ if(pinInput) pinInput.focus(); }, 50);
-        } else if (modalState === 'no_active_wallet') {
-            // Pledge/migrate mode - focus on legacy address
-            setTimeout(()=>{
-                const legacyAddrInput = document.getElementById('walletWidgetLegacyAddress');
-                if(legacyAddrInput) legacyAddrInput.focus();
-            }, 50);
-        }
-    }
-    if(contentSection) contentSection.style.display = 'none';
-}
-
 function showWalletContentSection(){
     const loginSection = document.getElementById('walletLoginSection');
     const contentSection = document.getElementById('walletContentSection');

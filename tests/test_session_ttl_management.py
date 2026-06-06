@@ -66,11 +66,22 @@ class TestSessionUnlockTimestamp:
         wallet_js = Path(__file__).parent.parent / "static" / "wallet_session.js"
         content = wallet_js.read_text()
 
-        unlock_start = content.find("unlockedPrivateKeyHex = decryptedPrivKeyHex")
-        unlock_context = content[unlock_start:unlock_start + 500]
+        # Find occurrences of the pattern and check that at least one has unlockedAtTime nearby
+        pattern = "unlockedPrivateKeyHex = decryptedPrivKeyHex"
+        found_with_timestamp = False
+        pos = 0
+        while True:
+            unlock_start = content.find(pattern, pos)
+            if unlock_start < 0:
+                break
+            unlock_context = content[unlock_start:unlock_start + 500]
+            if "unlockedAtTime" in unlock_context:
+                found_with_timestamp = True
+                break
+            pos = unlock_start + len(pattern)
 
-        assert "unlockedAtTime" in unlock_context, \
-            "unlockWallet should set unlock timestamp"
+        assert found_with_timestamp, \
+            "unlockWallet should set unlock timestamp (unlockedAtTime = Date.now() after assignment)"
 
 
 class TestSessionExpiryDetection:

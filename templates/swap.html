@@ -603,8 +603,64 @@ async function doSwap() {
     $('swapBtn').disabled = true;
     $('swapBtn').innerHTML = '<span class="spinner"></span> Swapping...';
     $('swapResult').textContent = "";
-    
+
     try {
+        // Check Wallet V1 unlock state first
+        const canonicalAddr = walletSession ? walletSession.getAddress() : null;
+        const hasRuntimeSigningMaterial = walletSession && walletSession.isUnlockedFor
+            ? walletSession.isUnlockedFor(canonicalAddr)
+            : false;
+
+        // If Wallet V1 is available and unlocked, use centralized signed request format
+        if (canonicalAddr && hasRuntimeSigningMaterial) {
+            const normalizedAmount = normalizeSwapAmount(amount);
+            const payload = {
+                token_in: tokenIn,
+                token_out: tokenOut,
+                amount_in: normalizedAmount,
+                min_amount_out: latestQuote.amount_out
+            };
+
+            try {
+                const signedRequest = await walletV1BuildSignedRequest("swap", payload);
+                const res = await fetch('/api/swap/execute', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(signedRequest)
+                });
+                const rawText = await res.text();
+                let data = {};
+                try {
+                    data = rawText ? JSON.parse(rawText) : {};
+                } catch (e) {
+                    data = { status: 'error', message: rawText || `HTTP ${res.status}` };
+                }
+
+                if (res.ok && (data.status === 'success' || data.ok)) {
+                    $('swapResult').style.color = '#0f0';
+                    $('swapResult').textContent = `✅ Swap Successful!\nTXID: ${data.tx_id || 'confirmed'}`;
+                    await loadBalances(canonicalAddr);
+                    $('amountFrom').value = '';
+                    $('amountTo').value = '';
+                } else {
+                    $('swapResult').style.color = '#f00';
+                    const statusLine = res.status ? `HTTP ${res.status}` : 'Error';
+                    $('swapResult').textContent = `❌ ${statusLine}: ${data.message || data.error || rawText || 'Unknown error'}`;
+                }
+                return;
+            } catch (e) {
+                // If new format fails, try legacy format below
+                console.warn('[Swap] Centralized format failed, trying legacy format:', e.message);
+            }
+        } else if (canonicalAddr && localStorage.getItem('wallet_v1_encrypted_priv')) {
+            // Wallet V1 is available but locked
+            $('swapResult').style.color = '#f00';
+            $('swapResult').textContent = `❌ Unlock Wallet V1 first`;
+            $('swapBtn').disabled = false;
+            return;
+        }
+
+        // Legacy format fallback
         const auth = await window.WalletAuth.requireUnlockedWallet({ source: 'swap' });
         const addr = auth.address || activeAddress;
         // Normalize amount for canonical signing (must match backend normalization)

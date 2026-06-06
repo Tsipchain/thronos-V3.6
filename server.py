@@ -41,7 +41,7 @@ import qrcode
 import io
 import numpy as np
 import wave
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Tuple, Optional
 from PIL import Image
 
@@ -114,6 +114,22 @@ except ImportError:
         name = re.sub(r'[^a-zA-Z0-9_.-]', '_', name)[:100]  # Max 100 chars
         ext = re.sub(r'[^a-zA-Z0-9.]', '', ext)[:10]  # Max 10 chars for extension
         return (name + ext) if name else "unnamed" + ext
+
+def constant_time_compare(a, b):
+    """Compare two strings in constant time to prevent timing attacks"""
+    if not isinstance(a, (str, bytes)):
+        a = str(a)
+    if not isinstance(b, (str, bytes)):
+        b = str(b)
+
+    # Convert to bytes if necessary
+    if isinstance(a, str):
+        a = a.encode('utf-8')
+    if isinstance(b, str):
+        b = b.encode('utf-8')
+
+    # Use hmac.compare_digest for constant-time comparison
+    return hmac.compare_digest(a, b)
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -286,7 +302,7 @@ def _initialize_phase3_and_4():
         print("[Pythia] Pythia Node Manager not available")
     except Exception as e:
         _pythia_manager = None
-        logger.error(f"Failed to initialize Pythia Node Manager: {e}")
+        logger.warning(f"[STARTUP] Pythia Node Manager initialization failed: {e}")
 
     # Initialize Digital Legacy System (inheritance & asset management)
     try:
@@ -298,7 +314,7 @@ def _initialize_phase3_and_4():
         print("[Legacy] Digital Legacy System not available")
     except Exception as e:
         _legacy_manager = None
-        logger.error(f"Failed to initialize Digital Legacy: {e}")
+        logger.warning(f"[STARTUP] Digital Legacy System initialization failed: {e}")
 
     # Initialize Smart Contract Will System (NFT-based wills)
     try:
@@ -310,7 +326,7 @@ def _initialize_phase3_and_4():
         print("[Will] Smart Contract Will System not available")
     except Exception as e:
         _will_manager = None
-        logger.error(f"Failed to initialize Smart Contract Will: {e}")
+        logger.warning(f"[STARTUP] Smart Contract Will System initialization failed: {e}")
 
     # Initialize Multi-Sig Distribution System
     try:
@@ -322,7 +338,7 @@ def _initialize_phase3_and_4():
         print("[Distribution] Distribution System not available")
     except Exception as e:
         _distribution_manager = None
-        logger.error(f"Failed to initialize Distribution Manager: {e}")
+        logger.warning(f"[STARTUP] Distribution Manager initialization failed: {e}")
 
     # Initialize Charity Pool & Redistribution System
     try:
@@ -548,8 +564,6 @@ def load_history(session_id):
 def serve_static(filename):
     return send_from_directory(os.path.join(BASE_DIR, "static"), filename)
 
-if __name__ == '__main__':
-    app.run(debug=True)
 
 ## ----------------------------------------
 # Optional EVM / DEX routes (wallet, swaps, liquidity)
@@ -1406,6 +1420,19 @@ SWAP_POOL_ADDRESS = "THR_SWAP_POOL_V1"
 GAME_POOL_ADDRESS = "THR_CRYPTO_HUNTERS_POOL"
 GAME_PANEL_URL    = os.getenv("GAME_PANEL_URL", "/game")  # Crypto Hunters admin panel URL
 GATEWAY_ADDRESS   = "THR_FIAT_GATEWAY_V1"
+
+# --- Wallet V1 Repair/Recovery Token ---
+# Token for gating the legacy ownership verification endpoint
+# Required for production safety: prevents abuse of migration lookup
+# Set via environment: WALLET_V1_REPAIR_TOKEN
+WALLET_V1_REPAIR_TOKEN = os.getenv("WALLET_V1_REPAIR_TOKEN", "").strip()
+WALLET_V1_REPAIR_TOKEN_REQUIRED = bool(WALLET_V1_REPAIR_TOKEN)
+
+# Feature flag for legacy wallet repair UI (admin-only mode)
+# When disabled (default), normal users don't see legacy recovery/restoration UI
+# Legacy wallets can still be repaired via admin endpoints with repair token
+# Set via environment: WALLET_V1_LEGACY_REPAIR_UI=1
+WALLET_V1_LEGACY_REPAIR_UI_ENABLED = _strip_env_quotes(os.getenv("WALLET_V1_LEGACY_REPAIR_UI", "0")).lower() in ("1", "true", "yes")
 
 # FIX 8: Initialize billing module (clean separation: Chat=credits, Architect=THR)
 import billing
@@ -8881,10 +8908,12 @@ def _collect_wallet_history_transactions(address: str, category_filter: str):
         "total_iot_rewards": 0.0,
         "total_sent": 0.0,
         "total_received": 0.0,
+        "total_sentinel_spent": 0.0,
         "mining_count": 0,
         "ai_reward_count": 0,
         "music_tip_count": 0,
-        "iot_count": 0
+        "iot_count": 0,
+        "sentinel_count": 0
     }
 
     for tx in wallet_txs:
@@ -10737,6 +10766,544 @@ def api_wallet_thr_reconciliation_repair():
     return jsonify(proposal), 200
 
 
+@app.route("/api/wallet/v1/restore-migration", methods=["POST"])
+def api_wallet_v1_restore_migration():
+    """
+    Restore an existing migrated wallet from backend lookup.
+    Searches multiple sources: wallet_v1_migrations.json, pledge_chain, etc.
+    Accepts: legacy_address, canonical_v1_address, address, migration_proof (all optional)
+    Looks up existing migration mapping without creating new wallets or mutating ledger.
+    Returns migration status with safe diagnostics and migration_source.
+    """
+    SYSTEM_WALLET_ADDRESS = "THR5DF27A86C477F381594E896F0E55357DEC5942BA"
+
+    def normalize_address(addr):
+        return (addr or "").strip().upper()
+
+    def is_system_wallet(addr):
+        return normalize_address(addr) == SYSTEM_WALLET_ADDRESS
+
+    data = request.get_json(silent=True) or {}
+    legacy_address = normalize_address(data.get("legacy_address", ""))
+    canonical_v1_address = normalize_address(data.get("canonical_v1_address", data.get("address", "")))
+    migration_proof = data.get("migration_proof", "")
+
+    # At least one address must be provided
+    if not legacy_address and not canonical_v1_address:
+        return jsonify({"ok": False, "error": "legacy_address_or_canonical_required"}), 400
+
+    # Validate provided addresses
+    if legacy_address and not validate_thr_address(legacy_address):
+        return jsonify({"ok": False, "error": "invalid_legacy_address_format"}), 400
+
+    if canonical_v1_address and not validate_thr_address(canonical_v1_address):
+        return jsonify({"ok": False, "error": "invalid_canonical_address_format"}), 400
+
+    # Block system wallets
+    if legacy_address and is_system_wallet(legacy_address):
+        return jsonify({"ok": False, "error": "system_wallet_cannot_be_restored"}), 400
+
+    if canonical_v1_address and is_system_wallet(canonical_v1_address):
+        return jsonify({"ok": False, "error": "system_wallet_cannot_be_restored"}), 400
+
+    try:
+        from wallet_v1_migration import search_all_migration_sources
+
+        # Search all available migration sources
+        result = search_all_migration_sources(
+            legacy_address=legacy_address,
+            canonical_v1_address=canonical_v1_address
+        )
+
+        if not result:
+            return jsonify({
+                "ok": False,
+                "error": "migration_not_found",
+                "lookup_sources_checked": ["wallet_v1_migrations", "pledge_chain"]
+            }), 404
+
+        # Check for conflicts
+        if result.get("conflict"):
+            return jsonify({
+                "ok": False,
+                "error": result["conflict"],
+                "legacy_address_short": result["legacy_address"][:10] + "..." if result["legacy_address"] else None,
+                "canonical_v1_address_short": result["canonical_v1_address"][:10] + "..." if result["canonical_v1_address"] else None,
+                "lookup_sources_checked": result.get("lookup_sources_checked", [])
+            }), 400
+
+        # Final validation on result
+        final_legacy = normalize_address(result["legacy_address"])
+        final_canonical = normalize_address(result["canonical_v1_address"])
+
+        if not validate_thr_address(final_legacy) or not validate_thr_address(final_canonical):
+            return jsonify({"ok": False, "error": "invalid_address_in_migration_record"}), 500
+
+        if is_system_wallet(final_legacy) or is_system_wallet(final_canonical):
+            return jsonify({"ok": False, "error": "system_wallet_in_migration_record"}), 500
+
+        return jsonify({
+            "ok": True,
+            "legacy_address": final_legacy,
+            "canonical_v1_address": final_canonical,
+            "migration_status": result.get("migration_status", "confirmed"),
+            "migration_source": result.get("migration_source", "wallet_v1_migrations"),
+            "has_signing_material": result.get("has_signing_material", False),
+            "legacy_address_short": final_legacy[:10] + "...",
+            "canonical_v1_address_short": final_canonical[:10] + "...",
+            "lookup_sources_checked": result.get("lookup_sources_checked", []),
+        }), 200
+
+    except Exception as e:
+        app.logger.error("[wallet_v1_restore_migration] Error", extra={"error": str(e)[:100]})
+        return jsonify({"ok": False, "error": "internal_error"}), 500
+
+
+@app.route("/api/wallet/v1/routes", methods=["GET"])
+def api_wallet_v1_routes():
+    """
+    Diagnostic endpoint: list registered wallet v1 routes.
+    Safe diagnostics only - route names and methods, no secrets.
+    """
+    try:
+        wallet_v1_routes = []
+        for rule in app.url_map.iter_rules():
+            route_str = str(rule)
+            if "/wallet/v1/" in route_str or "/api/wallet/" in route_str:
+                wallet_v1_routes.append({
+                    "route": route_str,
+                    "methods": sorted(list(rule.methods - {"HEAD", "OPTIONS"}))
+                })
+
+        restore_migration_found = any(
+            "/api/wallet/v1/restore-migration" in r["route"]
+            for r in wallet_v1_routes
+        )
+
+        verify_legacy_ownership_found = any(
+            "/api/wallet/v1/verify-legacy-ownership" in r["route"]
+            for r in wallet_v1_routes
+        )
+
+        return jsonify({
+            "ok": True,
+            "routes": sorted(wallet_v1_routes, key=lambda r: r["route"]),
+            "restore_migration_registered": restore_migration_found,
+            "verify_legacy_ownership_registered": verify_legacy_ownership_found,
+            "verify_legacy_ownership_token_required": WALLET_V1_REPAIR_TOKEN_REQUIRED,
+            "total_wallet_routes": len(wallet_v1_routes)
+        }), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": "diagnostic_error"}), 500
+
+
+@app.route("/api/wallet/v1/status", methods=["GET"])
+def api_wallet_v1_status():
+    """
+    Wallet V1 status endpoint for determining which UI flows should be shown.
+
+    Returns wallet mode:
+    - needs_pledge: No pledge wallet found
+    - pledge_pending: Pledge exists but not confirmed
+    - needs_key_setup: Pledge confirmed, canonical address exists, but no signing key
+    - locked: Signing key exists but wallet is locked
+    - signing_ready: Signing key exists and wallet is unlocked
+    - readonly: Wallet exists but no valid key binding/signing key
+
+    Query params:
+    - legacy_address: Optional legacy address to check
+    - canonical_address: Optional canonical address to check
+
+    Response:
+    {
+      ok: true,
+      has_pledge: true/false,
+      pledge_status: "none|pending|confirmed",
+      canonical_v1_address: "THR..." or null,
+      has_key_binding: true/false,
+      has_local_signing_key: unknown (client-side only),
+      mode: "needs_pledge|pledge_pending|needs_key_setup|locked|signing_ready|readonly",
+      legacy_repair_ui_enabled: true/false
+    }
+    """
+    try:
+        legacy_address = (request.args.get("legacy_address") or "").strip().upper()
+        canonical_address = (request.args.get("canonical_address") or "").strip().upper()
+
+        # Determine pledge status
+        has_pledge = False
+        pledge_status = "none"
+        canonical_v1_address = None
+
+        # Check migration/pledge records
+        from wallet_v1_migration import search_all_migration_sources
+        if canonical_address or legacy_address:
+            migration_result = search_all_migration_sources(
+                legacy_address=legacy_address,
+                canonical_v1_address=canonical_address
+            )
+            if migration_result:
+                has_pledge = True
+                pledge_status = "confirmed"  # If found in migration sources, it's confirmed
+                canonical_v1_address = migration_result.get("canonical_v1_address")
+
+        # Check for key bindings
+        has_key_binding = False
+        if canonical_v1_address:
+            bindings = load_key_bindings()
+            has_key_binding = any(
+                b.get("canonical_v1_address") == canonical_v1_address and
+                b.get("status") == "active"
+                for b in bindings
+            )
+
+        # Determine mode
+        mode = "needs_pledge"
+        if has_pledge:
+            if pledge_status == "confirmed":
+                if has_key_binding:
+                    mode = "locked"  # Binding exists, frontend determines if locked/unlocked
+                else:
+                    mode = "needs_key_setup"
+            else:
+                mode = "pledge_pending"
+        elif canonical_v1_address:
+            # Canonical exists but no pledge record - likely old/admin restored
+            mode = "readonly"
+
+        return jsonify({
+            "ok": True,
+            "has_pledge": has_pledge,
+            "pledge_status": pledge_status,
+            "canonical_v1_address": canonical_v1_address,
+            "has_key_binding": has_key_binding,
+            "has_local_signing_key": None,  # Unknown from server perspective
+            "mode": mode,
+            "legacy_repair_ui_enabled": WALLET_V1_LEGACY_REPAIR_UI_ENABLED
+        }), 200
+
+    except Exception as e:
+        error_type = type(e).__name__
+        app.logger.error("[wallet_v1_status] exception=" + error_type)
+        return jsonify({
+            "ok": False,
+            "error": "wallet_status_error",
+            "legacy_repair_ui_enabled": WALLET_V1_LEGACY_REPAIR_UI_ENABLED
+        }), 500
+
+
+@app.route("/api/wallet/v1/migration-lookup-debug", methods=["GET"])
+def api_wallet_v1_migration_lookup_debug():
+    """
+    Diagnostic endpoint: debug migration lookup across all sources.
+    Safe diagnostics only - short addresses and source names, no secrets.
+    Query params: address (required), legacy_address, canonical_v1_address
+    """
+    def normalize_address(addr):
+        return (addr or "").strip().upper()
+
+    try:
+        address = normalize_address(request.args.get("address", ""))
+        legacy_address = normalize_address(request.args.get("legacy_address", ""))
+        canonical_v1_address = normalize_address(request.args.get("canonical_v1_address", ""))
+
+        # Use provided address as fallback
+        if not legacy_address and not canonical_v1_address and address:
+            legacy_address = address
+
+        if not legacy_address and not canonical_v1_address:
+            return jsonify({"ok": False, "error": "address_required"}), 400
+
+        if legacy_address and not validate_thr_address(legacy_address):
+            return jsonify({"ok": False, "error": "invalid_legacy_address"}), 400
+
+        if canonical_v1_address and not validate_thr_address(canonical_v1_address):
+            return jsonify({"ok": False, "error": "invalid_canonical_address"}), 400
+
+        from wallet_v1_migration import search_all_migration_sources
+
+        result = search_all_migration_sources(
+            legacy_address=legacy_address,
+            canonical_v1_address=canonical_v1_address
+        )
+
+        if result:
+            return jsonify({
+                "ok": True,
+                "found": True,
+                "legacy_address_short": result["legacy_address"][:10] + "...",
+                "canonical_v1_address_short": result["canonical_v1_address"][:10] + "...",
+                "migration_source": result.get("migration_source"),
+                "migration_status": result.get("migration_status"),
+                "lookup_sources_checked": result.get("lookup_sources_checked", []),
+                "has_signing_material": result.get("has_signing_material", False),
+            }), 200
+        else:
+            return jsonify({
+                "ok": True,
+                "found": False,
+                "lookup_sources_checked": ["wallet_v1_migrations", "pledge_chain"],
+            }), 200
+
+    except Exception as e:
+        app.logger.error("[migration_lookup_debug] Error", extra={"error": str(e)[:100]})
+        return jsonify({"ok": False, "error": "diagnostic_error"}), 500
+
+
+@app.route("/api/wallet/v1/music/capability", methods=["GET"])
+def api_wallet_v1_music_capability():
+    """
+    Check if Wallet V1 can unlock music level.
+
+    Music level unlocks when:
+    1. canonical_v1_address is provided/exists
+    2. has_active_key_binding = true (key binding with status=active exists)
+    3. Frontend confirms: encrypted_local_key exists AND wallet runtime is unlocked
+
+    Query params:
+    - address: canonical_v1_address to check (required)
+
+    Response (Success):
+    {
+      "ok": true,
+      "canonical_v1_address": "THR...",
+      "has_active_binding": true,
+      "music_level_unlocked": true,
+      "reason": "wallet_v1_active_binding",
+      "diagnostics": {
+        "has_canonical_address": true,
+        "has_active_binding": true,
+        "has_encrypted_key": null,  # Frontend-side only
+        "has_runtime_signing_material": null,  # Frontend-side only
+        "music_unlocked": true
+      }
+    }
+
+    Response (No Binding):
+    {
+      "ok": true,
+      "canonical_v1_address": "THR...",
+      "has_active_binding": false,
+      "music_level_unlocked": false,
+      "reason": "no_active_binding",
+      "diagnostics": {
+        "has_canonical_address": true,
+        "has_active_binding": false,
+        "message": "Restore Recovery Kit or unlock this device to enable Music Level"
+      }
+    }
+
+    Response (No Address):
+    {
+      "ok": true,
+      "has_active_binding": false,
+      "music_level_unlocked": false,
+      "reason": "no_canonical_address"
+    }
+
+    Never logs: private_key, PIN, repair_token, recovery_kit, encrypted_key_contents
+    """
+    try:
+        address = (request.args.get("address") or "").strip().upper()
+
+        # No address provided
+        if not address or not address.startswith("THR"):
+            return jsonify({
+                "ok": True,
+                "has_active_binding": False,
+                "music_level_unlocked": False,
+                "reason": "no_canonical_address"
+            }), 200
+
+        # Check for active key binding
+        has_active_binding = False
+        bindings = load_key_bindings()
+        for binding in bindings:
+            if binding.get("canonical_v1_address") == address and binding.get("status") == "active":
+                has_active_binding = True
+                break
+
+        # Music unlocked if active binding exists
+        # Frontend will also check: encrypted_local_key exists AND wallet runtime unlocked
+        music_unlocked = has_active_binding
+
+        # Log diagnostic info (safe - no secrets)
+        app.logger.debug(
+            "[wallet_v1_music] Music capability check",
+            extra={
+                "address": address[:10] + "...",
+                "has_active_binding": has_active_binding,
+                "music_unlocked": music_unlocked
+            }
+        )
+
+        return jsonify({
+            "ok": True,
+            "canonical_v1_address": address,
+            "has_active_binding": has_active_binding,
+            "music_level_unlocked": music_unlocked,
+            "reason": "wallet_v1_active_binding" if music_unlocked else "no_active_binding",
+            "diagnostics": {
+                "has_canonical_address": True,
+                "has_active_binding": has_active_binding,
+                "has_encrypted_key": None,  # Frontend-side only
+                "has_runtime_signing_material": None,  # Frontend-side only
+                "music_level_unlocked": music_unlocked
+            }
+        }), 200
+
+    except Exception as e:
+        app.logger.error("[wallet_v1_music] Exception", extra={"error": str(e)[:100]})
+        return jsonify({
+            "ok": False,
+            "error": "capability_check_failed"
+        }), 500
+
+
+@app.route("/api/wallet/v1/verify-legacy-ownership", methods=["POST"])
+def api_wallet_v1_verify_legacy_ownership():
+    """
+    Verify that user owns a legacy/pledge wallet.
+
+    This endpoint confirms ownership via legacy credentials but does NOT
+    perform deterministic key recovery (V1 keys are randomly generated,
+    not derived from legacy secrets by design).
+
+    Token gating: If WALLET_V1_REPAIR_TOKEN is configured, requires:
+    - Header: X-Wallet-V1-Repair-Token: <token>
+    - OR: Authorization: Bearer <token>
+
+    Request body:
+    {
+        "canonical_v1_address": "THR...",
+        "legacy_address": "THR...",
+        "send_secret": "...",
+        "auth_secret": "...",
+        "pledge_recovery_hash": "..."
+    }
+
+    Response (success):
+    {
+        "ok": true,
+        "canonical_v1_address": "THR...",
+        "recovery_source": "pledge_chain|wallet_v1_migrations|...",
+        "has_signing_material": false,
+        "deterministic_recovery_available": false
+    }
+
+    Response (token missing):
+    { "ok": false, "error": "repair_token_required" } 401
+
+    Response (invalid token):
+    { "ok": false, "error": "invalid_repair_token" } 403
+
+    Response (other errors):
+    { "ok": false, "error": "..." } 400/404/500
+    """
+    try:
+        # STAGE 1: TOKEN GATING
+        if WALLET_V1_REPAIR_TOKEN_REQUIRED:
+            # Check X-Wallet-V1-Repair-Token header first
+            token_from_header = request.headers.get("X-Wallet-V1-Repair-Token", "").strip()
+
+            # Fallback to Authorization: Bearer <token>
+            if not token_from_header:
+                auth_header = request.headers.get("Authorization", "").strip()
+                if auth_header.startswith("Bearer "):
+                    token_from_header = auth_header[7:].strip()
+
+            # Check if token provided
+            if not token_from_header:
+                app.logger.warning("[verify_legacy_ownership] stage=token_check token_missing")
+                return jsonify({"ok": False, "error": "repair_token_required"}), 401
+
+            # Check if token is valid (constant-time comparison)
+            if not constant_time_compare(token_from_header, WALLET_V1_REPAIR_TOKEN):
+                app.logger.warning("[verify_legacy_ownership] stage=token_check token_invalid")
+                return jsonify({"ok": False, "error": "invalid_repair_token"}), 403
+
+        # STAGE 2: PARSE REQUEST BODY
+        def normalize_address(addr):
+            return (addr or "").strip().upper()
+
+        data = request.get_json() or {}
+        canonical_v1_address = normalize_address(data.get("canonical_v1_address", ""))
+        legacy_address = normalize_address(data.get("legacy_address", ""))
+
+        # Extract secrets but NEVER log them
+        send_secret = (data.get("send_secret") or "").strip()
+        auth_secret = (data.get("auth_secret") or "").strip()
+        pledge_recovery_hash = (data.get("pledge_recovery_hash") or "").strip()
+
+        # Log only safe diagnostics
+        canonical_short = canonical_v1_address[:10] + "..." if canonical_v1_address else "unknown"
+        legacy_short = legacy_address[:10] + "..." if legacy_address else "unknown"
+        app.logger.info(
+            "[verify_legacy_ownership] stage=parse_body",
+            extra={"canonical_short": canonical_short, "legacy_short": legacy_short}
+        )
+
+        # STAGE 3: VALIDATE ADDRESSES
+        if not canonical_v1_address:
+            app.logger.warning("[verify_legacy_ownership] stage=validation error=canonical_v1_address_required")
+            return jsonify({"ok": False, "error": "canonical_v1_address_required"}), 400
+
+        if not validate_thr_address(canonical_v1_address):
+            app.logger.warning("[verify_legacy_ownership] stage=validation error=invalid_canonical_address")
+            return jsonify({"ok": False, "error": "invalid_canonical_address"}), 400
+
+        # Check system wallet (inlined - no function call)
+        SYSTEM_WALLET_ADDRESS = "THR5DF27A86C477F381594E896F0E55357DEC5942BA"
+        if normalize_address(canonical_v1_address) == SYSTEM_WALLET_ADDRESS:
+            app.logger.warning("[verify_legacy_ownership] stage=validation error=system_wallet_not_allowed")
+            return jsonify({"ok": False, "error": "system_wallet_not_allowed"}), 400
+
+        # STAGE 4: LOOKUP MIGRATION RECORDS
+        from wallet_v1_migration import search_all_migration_sources
+
+        migration_result = search_all_migration_sources(
+            legacy_address=legacy_address,
+            canonical_v1_address=canonical_v1_address
+        )
+
+        if not migration_result:
+            app.logger.warning("[verify_legacy_ownership] stage=ownership_lookup error=migration_not_found")
+            return jsonify({"ok": False, "error": "migration_not_found"}), 404
+
+        # STAGE 5: BUILD SUCCESS RESPONSE
+        recovery_source = migration_result.get("migration_source", "unknown")
+        app.logger.info(
+            "[verify_legacy_ownership] stage=response_build success",
+            extra={"canonical_short": canonical_short, "recovery_source": recovery_source}
+        )
+
+        # CRITICAL DESIGN: V1 signing keys are randomly generated by clients, NOT derived from legacy credentials
+        # There is NO deterministic recovery path from legacy send_secret to V1 private key
+        # This is by design - ensures client-side security of key material
+
+        return jsonify({
+            "ok": True,
+            "canonical_v1_address": migration_result["canonical_v1_address"],
+            "legacy_address": migration_result.get("legacy_address"),
+            "recovery_source": recovery_source,
+            "has_signing_material": False,  # Always false - ownership verification doesn't recover keys
+            "deterministic_recovery_available": False
+        }), 200
+
+    except Exception as e:
+        # Structured error response, never 500 without proper context
+        error_type = type(e).__name__
+        app.logger.error(
+            "[verify_legacy_ownership] stage=exception",
+            extra={"exception_type": error_type, "error": str(e)[:100]}
+        )
+        return jsonify({
+            "ok": False,
+            "error": "verify_legacy_ownership_failed",
+            "exception_type": error_type
+        }), 500
+
+
 @app.route("/api/last_hash")
 def api_last_hash():
     return last_block_hash()
@@ -11452,6 +12019,39 @@ def api_replica_health():
         "scheduler_enabled": SCHEDULER_ENABLED,
         "heartbeat_enabled": HEARTBEAT_ENABLED,
         "master_url": MASTER_INTERNAL_URL,
+    }), 200
+
+
+@app.route("/api/legacy/health", methods=["GET"])
+def api_legacy_health():
+    """Health check for Digital Legacy systems."""
+    return jsonify({
+        "ok": True,
+        "digital_legacy_initialized": _legacy_manager is not None,
+        "smart_contract_will_manager": _will_manager is not None,
+        "digital_distribution_manager": _distribution_manager is not None,
+        "charity_pool_manager": _pool_manager is not None,
+        "cryptography_available": Fernet is not None,
+        "ts": int(time.time()),
+    }), 200
+
+
+@app.route("/api/legacy/routes", methods=["GET"])
+def api_legacy_routes():
+    """Diagnostic endpoint showing available legacy routes."""
+    routes = []
+    for rule in app.url_map.iter_rules():
+        if "legacy" in rule.rule.lower() or any(x in rule.rule.lower() for x in ["will", "distribution", "pool"]):
+            routes.append({
+                "endpoint": rule.endpoint,
+                "path": rule.rule,
+                "methods": list(rule.methods - {"HEAD", "OPTIONS"}),
+            })
+
+    return jsonify({
+        "ok": True,
+        "total_routes": len(routes),
+        "routes": routes,
     }), 200
 
 
@@ -22310,17 +22910,49 @@ def verify_swap_wallet_v1_or_legacy(payload, expected_action=SWAP_EXPECTED_ACTIO
 def api_swap_execute():
     try:
         data = request.get_json() or {}
-        token_in = (data.get("token_in") or "").upper().strip()
-        token_out = (data.get("token_out") or "").upper().strip()
-        trader = (data.get("trader_thr") or "").strip()
-        auth_secret = (data.get("auth_secret") or "").strip()
-        passphrase = (data.get("passphrase") or "").strip()
-        min_amount_out_raw = data.get("min_amount_out", 0)
-        try:
-            amount_in = float(data.get("amount_in", 0))
-            min_amount_out = float(min_amount_out_raw)
-        except (TypeError, ValueError):
-            return jsonify(status="error", message="Invalid amounts"), 400
+
+        # Try new centralized Wallet V1 signed request format first
+        if data.get("canonical_v1_address") and data.get("signature"):
+            verified = verify_wallet_v1_signed_request(data, "swap")
+            if not verified.get("ok"):
+                return jsonify(
+                    ok=False,
+                    status="error",
+                    error=verified.get("error"),
+                    message=verified.get("error")
+                ), 400
+
+            # Extract payload from verified request
+            trader = verified.get("canonical_v1_address")
+            payload = data.get("payload", {})
+            token_in = (payload.get("token_in") or "").upper().strip()
+            token_out = (payload.get("token_out") or "").upper().strip()
+            amount_in = float(payload.get("amount_in", 0))
+            min_amount_out = float(payload.get("min_amount_out", 0))
+        else:
+            # Legacy format fallback for backward compatibility
+            token_in = (data.get("token_in") or "").upper().strip()
+            token_out = (data.get("token_out") or "").upper().strip()
+            trader = (data.get("trader_thr") or "").strip()
+            auth_secret = (data.get("auth_secret") or "").strip()
+            passphrase = (data.get("passphrase") or "").strip()
+            min_amount_out_raw = data.get("min_amount_out", 0)
+            try:
+                amount_in = float(data.get("amount_in", 0))
+                min_amount_out = float(min_amount_out_raw)
+            except (TypeError, ValueError):
+                return jsonify(status="error", message="Invalid amounts"), 400
+
+            # Wallet V1 or legacy auth verification (legacy path)
+            auth_ok, auth_error, verified_trader = verify_swap_wallet_v1_or_legacy(data, SWAP_EXPECTED_ACTION)
+            if not auth_ok:
+                status_code = 400
+                if auth_error.get("error") in ("invalid_auth", "no_effective_pledge", "wallet_mismatch"):
+                    status_code = 403
+                elif auth_error.get("error") == "missing_pledge":
+                    status_code = 404
+                return jsonify(**auth_error), status_code
+            trader = verified_trader or trader
     except Exception as exc:
         return jsonify(status="error", message=str(exc)), 500
 
@@ -22332,17 +22964,6 @@ def api_swap_execute():
             return jsonify(status="error", message="Missing trader"), 400
         if not is_swap_symbol_allowed(token_in) or not is_swap_symbol_allowed(token_out):
             return jsonify(status="error", message="Unsupported token"), 400
-
-        # Wallet V1 or legacy auth verification
-        auth_ok, auth_error, verified_trader = verify_swap_wallet_v1_or_legacy(data, SWAP_EXPECTED_ACTION)
-        if not auth_ok:
-            status_code = 400
-            if auth_error.get("error") in ("invalid_auth", "no_effective_pledge", "wallet_mismatch"):
-                status_code = 403
-            elif auth_error.get("error") == "missing_pledge":
-                status_code = 404
-            return jsonify(**auth_error), status_code
-        trader = verified_trader or trader
 
         # Get swap quote and route
         quote, err = quote_swap_route(token_in, token_out, amount_in)
@@ -29899,7 +30520,23 @@ def api_v1_add_liquidity():
     """
     Add liquidity to an existing pool. Shares are minted proportionally.
 
-    Request body:
+    Request body (new format with Wallet V1):
+    {
+        "canonical_v1_address": "THR...",
+        "public_key": "...",
+        "signature": "...",
+        "signature_format": "secp256k1_compact",
+        "action": "add_liquidity",
+        "payload": {
+            "pool_id": "uuid...",
+            "amount_a": 100.0,
+            "amount_b": 0.01
+        },
+        "timestamp": "...",
+        "nonce": "..."
+    }
+
+    Legacy format also supported:
     {
         "pool_id": "uuid...",
         "amount_a": 100.0,
@@ -29910,31 +30547,60 @@ def api_v1_add_liquidity():
     }
     """
     data = request.get_json() or {}
-    pool_id = (data.get("pool_id") or "").strip()
-    amt_a_raw = data.get("amount_a", 0)
-    amt_b_raw = data.get("amount_b", 0)
-    provider = (data.get("provider_thr") or "").strip()
-    auth_secret = (data.get("auth_secret") or "").strip()
-    passphrase = (data.get("passphrase") or "").strip()
-    referrer = (data.get("referrer") or "").strip()  # Optional referral address
+
+    # Try new centralized Wallet V1 signed request format first
+    if data.get("canonical_v1_address") and data.get("signature"):
+        verified = verify_wallet_v1_signed_request(data, "add_liquidity")
+        if not verified.get("ok"):
+            return jsonify(
+                ok=False,
+                status="error",
+                error=verified.get("error"),
+                message=verified.get("error")
+            ), 400
+
+        # Extract payload from verified request
+        provider = verified.get("canonical_v1_address")
+        payload = data.get("payload", {})
+        pool_id = (payload.get("pool_id") or "").strip()
+        amt_a_raw = payload.get("amount_a", 0)
+        amt_b_raw = payload.get("amount_b", 0)
+        referrer = (payload.get("referrer") or "").strip()
+
+        try:
+            amt_a = float(amt_a_raw)
+            amt_b = float(amt_b_raw)
+        except (TypeError, ValueError):
+            return jsonify(status="error", message="Invalid amounts"), 400
+    else:
+        # Legacy format fallback for backward compatibility
+        pool_id = (data.get("pool_id") or "").strip()
+        amt_a_raw = data.get("amount_a", 0)
+        amt_b_raw = data.get("amount_b", 0)
+        provider = (data.get("provider_thr") or "").strip()
+        auth_secret = (data.get("auth_secret") or "").strip()
+        passphrase = (data.get("passphrase") or "").strip()
+        referrer = (data.get("referrer") or "").strip()  # Optional referral address
+
+        # Validate inputs
+        try:
+            amt_a = float(amt_a_raw)
+            amt_b = float(amt_b_raw)
+        except (TypeError, ValueError):
+            return jsonify(status="error", message="Invalid amounts"), 400
+
+        # Wallet V1 or legacy auth verification (legacy path)
+        auth_ok, auth_error, verified_provider = verify_pool_wallet_v1_or_legacy(data, "add_liquidity")
+        if not auth_ok:
+            return jsonify(**auth_error), 400
+
+        # Use verified provider address
+        provider = verified_provider or (data.get("provider_thr") or "").strip()
 
     # Validate inputs
-    try:
-        amt_a = float(amt_a_raw)
-        amt_b = float(amt_b_raw)
-    except (TypeError, ValueError):
-        return jsonify(status="error", message="Invalid amounts"), 400
-
     if not pool_id or amt_a <= 0 or amt_b <= 0:
         return jsonify(status="error", message="Invalid input"), 400
 
-    # Wallet V1 or legacy auth verification
-    auth_ok, auth_error, verified_provider = verify_pool_wallet_v1_or_legacy(data, "add_liquidity")
-    if not auth_ok:
-        return jsonify(**auth_error), 400
-
-    # Use verified provider address
-    provider = verified_provider or (data.get("provider_thr") or "").strip()
     if not provider:
         return jsonify(status="error", message="Missing provider"), 400
 
@@ -36269,13 +36935,879 @@ if is_master():
         with app.app_context():
             _seed_tx_log_from_chain()
         print("[STARTUP] Transaction log seeded successfully.")
+        logger.info("[STARTUP] Transaction log seeded successfully")
     except Exception as exc:
-        logger.warning(f"[STARTUP] TX log seeding skipped: {exc}")
+        logger.warning(f"[STARTUP] TX log seeding failed (non-critical): {exc}")
 
 print(f"[STARTUP] {NODE_ROLE.upper()} node initialization complete.\n")
+
+
+# ===== Wallet V1 Re-Key Ceremony =====
+# Controlled process for binding new signing key to existing canonical address
+
+WALLET_V1_REKEY_COOLDOWN_HOURS = 24
+WALLET_V1_REKEY_EVENTS_FILE = os.path.join(DATA_DIR, "wallet_v1_rekey_events.json")
+WALLET_V1_KEY_BINDINGS_FILE = os.path.join(DATA_DIR, "wallet_v1_key_bindings.json")
+WALLET_V1_OWNERSHIP_VERIFICATIONS_FILE = os.path.join(DATA_DIR, "wallet_v1_ownership_verifications.json")
+
+def load_rekey_events():
+    return load_json(WALLET_V1_REKEY_EVENTS_FILE, [])
+
+def save_rekey_events(events):
+    save_json(WALLET_V1_REKEY_EVENTS_FILE, events)
+
+def load_key_bindings():
+    return load_json(WALLET_V1_KEY_BINDINGS_FILE, [])
+
+def save_key_bindings(bindings):
+    save_json(WALLET_V1_KEY_BINDINGS_FILE, bindings)
+
+def load_ownership_verifications():
+    return load_json(WALLET_V1_OWNERSHIP_VERIFICATIONS_FILE, [])
+
+def save_ownership_verifications(verifications):
+    save_json(WALLET_V1_OWNERSHIP_VERIFICATIONS_FILE, verifications)
+
+def get_active_key_binding_for_address(canonical_v1_address):
+    bindings = load_key_bindings()
+    for binding in bindings:
+        if binding.get("canonical_v1_address") == canonical_v1_address and binding.get("status") == "active":
+            return binding
+    return None
+
+
+def _is_valid_secp256k1_public_key_hex(public_key_hex):
+    """
+    Validate secp256k1 public key format.
+
+    Valid formats:
+    - Compressed: 66 hex chars (02 or 03 prefix + 64 hex chars)
+    - Uncompressed: 130 hex chars (04 prefix + 128 hex chars)
+
+    Returns True if valid, False otherwise.
+    """
+    if not public_key_hex or not isinstance(public_key_hex, str):
+        return False
+
+    hex_str = public_key_hex.lower()
+
+    # Check for compressed format: 02 or 03 prefix + 64 hex chars (66 total)
+    if len(hex_str) == 66:
+        if (hex_str.startswith('02') or hex_str.startswith('03')):
+            try:
+                int(hex_str, 16)  # Verify it's valid hex
+                return True
+            except ValueError:
+                return False
+
+    # Check for uncompressed format: 04 prefix + 128 hex chars (130 total)
+    if len(hex_str) == 130:
+        if hex_str.startswith('04'):
+            try:
+                int(hex_str, 16)  # Verify it's valid hex
+                return True
+            except ValueError:
+                return False
+
+    return False
+
+
+def verify_wallet_v1_signed_request(request_data, expected_action=None):
+    """
+    Central verifier for all Wallet V1 signed requests.
+
+    Validates:
+    1. canonical_v1_address (required, must be THR...)
+    2. public_key (required, 33/65 byte hex for compressed/uncompressed secp256k1)
+    3. signature (required, 128 hex chars for compact secp256k1)
+    4. signature_format (required, must be "secp256k1_compact")
+    5. bound_key_address (required if binding active)
+    6. signing_payload_hash (optional, for audit)
+    7. action (required, must match expected_action if provided)
+
+    Key Binding Logic:
+    - If signer address != canonical address:
+      * Must have active binding for canonical address
+      * Must have bound_key_address matching a binding
+      * Public key hash must match binding's public_key_hash
+      * Otherwise rejected as "signer_not_bound"
+    - If signer address == canonical address:
+      * Allowed (direct V1 wallet, no binding required)
+
+    Returns:
+    {
+        "ok": true,
+        "canonical_v1_address": "THR...",
+        "bound_key_address": "THR..." or null,
+        "signer_address": "THR..." (derived from public_key),
+        "public_key_hash": "...",
+        "action": "swap|add_liquidity|send|...",
+        "message": "Signature verified"
+    }
+
+    On error, returns dict with "ok": false and "error" key.
+
+    Never logs: private_key, PIN, recovery_kit, encrypted_key_contents
+    Safe to log: address prefixes, binding status, action, payload_hash
+    """
+    try:
+        import hashlib as _hlib
+
+        # ---- Validate required fields ----
+        canonical_v1_address = (request_data.get("canonical_v1_address") or "").strip().upper()
+        if not canonical_v1_address or not canonical_v1_address.startswith("THR"):
+            return {"ok": False, "error": "invalid_canonical_address"}
+
+        public_key_hex = (request_data.get("public_key") or "").strip().lower()
+        if not public_key_hex:
+            return {"ok": False, "error": "missing_public_key"}
+
+        # Validate public key format before attempting to use it
+        if not _is_valid_secp256k1_public_key_hex(public_key_hex):
+            return {"ok": False, "error": "invalid_public_key_format"}
+
+        signature_hex = (request_data.get("signature") or "").strip().lower()
+        if not signature_hex or len(signature_hex) != 128:
+            return {"ok": False, "error": "invalid_signature_format"}
+
+        sig_format = (request_data.get("signature_format") or "").strip().lower()
+        if sig_format != "secp256k1_compact":
+            return {"ok": False, "error": "unsupported_signature_format"}
+
+        action = (request_data.get("action") or "").strip().lower()
+        if not action:
+            return {"ok": False, "error": "missing_action"}
+
+        if expected_action and action != expected_action.lower():
+            return {"ok": False, "error": "action_mismatch"}
+
+        # ---- Derive signer address from public key ----
+        try:
+            from wallet_v1_migration import derive_thr_address_from_public_key_hex
+            signer_address = derive_thr_address_from_public_key_hex(public_key_hex)
+            if not signer_address or not signer_address.startswith("THR"):
+                return {"ok": False, "error": "invalid_public_key"}
+        except Exception as e:
+            app.logger.warning("[verify_wallet_v1] address derivation failed: %s", str(e)[:100])
+            return {"ok": False, "error": "public_key_derivation_failed"}
+
+        # ---- Verify signature ----
+        try:
+            # Rebuild canonical signing payload
+            signing_payload = {
+                "action": action,
+                "canonical_v1_address": canonical_v1_address,
+                "timestamp": request_data.get("timestamp", ""),
+                "nonce": request_data.get("nonce", ""),
+                "payload": request_data.get("payload", {})
+            }
+            signing_json = json.dumps(signing_payload, separators=(",", ":"), sort_keys=True)
+            signing_bytes = signing_json.encode("utf-8")
+
+            # Verify signature using secp256k1
+            from ecdsa import SECP256k1, VerifyingKey
+            from ecdsa.util import sigdecode_string
+
+            digest = _hlib.sha256(signing_bytes).digest()
+            pub_bytes = bytes.fromhex(public_key_hex)
+
+            # Handle compressed/uncompressed public keys
+            if len(pub_bytes) == 33:
+                prefix_byte = pub_bytes[0]
+                x = int.from_bytes(pub_bytes[1:], "big")
+                _p = SECP256k1.curve.p()
+                y_sq = (pow(x, 3, _p) + 7) % _p
+                y = pow(y_sq, (_p + 1) // 4, _p)
+                if (y % 2) != (prefix_byte - 2):
+                    y = _p - y
+                raw_pub = x.to_bytes(32, "big") + y.to_bytes(32, "big")
+                vk = VerifyingKey.from_string(raw_pub, curve=SECP256k1)
+            else:
+                raw_pub = pub_bytes[1:] if len(pub_bytes) == 65 else pub_bytes
+                vk = VerifyingKey.from_string(raw_pub, curve=SECP256k1)
+
+            if not vk.verify_digest(bytes.fromhex(signature_hex), digest, sigdecode=sigdecode_string):
+                return {"ok": False, "error": "invalid_signature"}
+        except Exception as e:
+            app.logger.warning("[verify_wallet_v1] signature verification failed: %s", str(e)[:100])
+            return {"ok": False, "error": "signature_verification_failed"}
+
+        # ---- Check key binding if signer != canonical ----
+        public_key_hash = _hlib.sha256(bytes.fromhex(public_key_hex)).hexdigest()[:32]
+        bound_key_address = (request_data.get("bound_key_address") or "").strip().upper()
+
+        if signer_address != canonical_v1_address:
+            # Signer is different from canonical - must have active binding
+            binding = get_active_key_binding_for_address(canonical_v1_address)
+            if not binding:
+                app.logger.info(
+                    "[verify_wallet_v1] no active binding for canonical %s...",
+                    canonical_v1_address[:10]
+                )
+                return {"ok": False, "error": "no_active_binding"}
+
+            # Verify binding matches
+            if binding.get("public_key_hash") != public_key_hash:
+                app.logger.warning(
+                    "[verify_wallet_v1] public_key_hash mismatch for canonical %s...",
+                    canonical_v1_address[:10]
+                )
+                return {"ok": False, "error": "signer_not_bound"}
+
+            # Verify bound_key_address matches
+            if binding.get("bound_key_address") != signer_address:
+                app.logger.warning(
+                    "[verify_wallet_v1] bound_key_address mismatch for canonical %s...",
+                    canonical_v1_address[:10]
+                )
+                return {"ok": False, "error": "bound_key_address_mismatch"}
+
+            app.logger.debug(
+                "[verify_wallet_v1] signature verified via binding canonical %s... signer %s...",
+                canonical_v1_address[:10],
+                signer_address[:10]
+            )
+        else:
+            # Direct wallet - signer is the canonical address
+            app.logger.debug(
+                "[verify_wallet_v1] signature verified direct wallet canonical %s...",
+                canonical_v1_address[:10]
+            )
+
+        # ---- Return success ----
+        return {
+            "ok": True,
+            "canonical_v1_address": canonical_v1_address,
+            "bound_key_address": signer_address if signer_address != canonical_v1_address else None,
+            "signer_address": signer_address,
+            "public_key_hash": public_key_hash,
+            "action": action,
+            "message": "Signature verified",
+            "diagnostics": {
+                "has_public_key": True,
+                "has_signature": True,
+                "signature_format": sig_format,
+                "has_active_binding": signer_address != canonical_v1_address
+            }
+        }
+
+    except Exception as e:
+        app.logger.error("[verify_wallet_v1_signed_request] Unhandled exception: %s", str(e)[:100])
+        return {"ok": False, "error": "verification_failed"}
+
+
+
+@app.route("/api/wallet/v1/rekey/request", methods=["POST"])
+def api_wallet_v1_rekey_request():
+    try:
+        if WALLET_V1_REPAIR_TOKEN_REQUIRED:
+            token_from_header = request.headers.get("X-Wallet-V1-Repair-Token", "").strip()
+            if not token_from_header:
+                auth_header = request.headers.get("Authorization", "").strip()
+                if auth_header.startswith("Bearer "):
+                    token_from_header = auth_header[7:].strip()
+
+            if not token_from_header:
+                app.logger.warning("[rekey_request] stage=token_check token_missing")
+                return jsonify({"ok": False, "error": "repair_token_required"}), 401
+
+            if not constant_time_compare(token_from_header, WALLET_V1_REPAIR_TOKEN):
+                app.logger.warning("[rekey_request] stage=token_check token_invalid")
+                return jsonify({"ok": False, "error": "invalid_repair_token"}), 403
+
+        data = request.get_json() or {}
+        canonical_v1_address = (data.get("canonical_v1_address") or "").strip().upper()
+        legacy_address = (data.get("legacy_address") or "").strip().upper()
+        ownership_verification_id = (data.get("ownership_verification_id") or "").strip()
+        new_public_key = (data.get("new_public_key") or "").strip()
+        new_key_address = (data.get("new_key_address") or "").strip().upper()
+
+        canonical_short = canonical_v1_address[:10] + "..." if canonical_v1_address else "unknown"
+        app.logger.info("[rekey_request] stage=parse", extra={"canonical_short": canonical_short})
+
+        if not canonical_v1_address:
+            return jsonify({"ok": False, "error": "canonical_v1_address_required"}), 400
+
+        if not validate_thr_address(canonical_v1_address):
+            return jsonify({"ok": False, "error": "invalid_canonical_address"}), 400
+
+        SYSTEM_WALLET_ADDRESS = "THR5DF27A86C477F381594E896F0E55357DEC5942BA"
+        if canonical_v1_address == SYSTEM_WALLET_ADDRESS:
+            return jsonify({"ok": False, "error": "system_wallet_not_allowed"}), 400
+
+        # Validate ownership_verification_id
+        if not ownership_verification_id:
+            return jsonify({"ok": False, "error": "ownership_verification_id_required"}), 400
+
+        verifications = load_ownership_verifications()
+        verification_record = None
+        for v in verifications:
+            if v.get("ownership_verification_id") == ownership_verification_id:
+                verification_record = v
+                break
+
+        if not verification_record:
+            return jsonify({"ok": False, "error": "ownership_verification_not_found"}), 404
+
+        # Check if verification has expired
+        expires_at_str = verification_record.get("expires_at")
+        try:
+            expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+            if datetime.utcnow().replace(tzinfo=None) > expires_at.replace(tzinfo=None):
+                return jsonify({"ok": False, "error": "ownership_verification_expired"}), 400
+        except Exception:
+            return jsonify({"ok": False, "error": "ownership_verification_invalid"}), 400
+
+        # Check if verification matches the canonical address
+        if verification_record.get("canonical_v1_address") != canonical_v1_address:
+            return jsonify({"ok": False, "error": "ownership_verification_address_mismatch"}), 400
+
+        # Check if already consumed
+        if verification_record.get("consumed", False):
+            return jsonify({"ok": False, "error": "ownership_verification_already_used"}), 400
+
+        from wallet_v1_migration import search_all_migration_sources
+        migration_result = search_all_migration_sources(legacy_address=legacy_address, canonical_v1_address=canonical_v1_address)
+
+        if not migration_result:
+            return jsonify({"ok": False, "error": "migration_not_found"}), 404
+
+        if not new_public_key:
+            return jsonify({"ok": False, "error": "new_public_key_required"}), 400
+
+        if not new_key_address:
+            return jsonify({"ok": False, "error": "new_key_address_required"}), 400
+
+        if not validate_thr_address(new_key_address):
+            return jsonify({"ok": False, "error": "invalid_new_key_address"}), 400
+
+        events = load_rekey_events()
+        if any(e for e in events if e.get("canonical_v1_address") == canonical_v1_address and e.get("status") == "pending"):
+            return jsonify({"ok": False, "error": "rekey_already_pending"}), 409
+
+        event_id = "rekey_" + secrets.token_hex(16)
+        now = datetime.utcnow().isoformat() + "Z"
+        cooldown_until = (datetime.utcnow() + timedelta(hours=WALLET_V1_REKEY_COOLDOWN_HOURS)).isoformat() + "Z"
+        public_key_hash = hashlib.sha256(new_public_key.encode()).hexdigest()[:32]
+
+        event = {
+            "event_id": event_id,
+            "type": "WALLET_V1_REKEY_REQUEST",
+            "canonical_v1_address": canonical_v1_address,
+            "bound_key_address": new_key_address,
+            "new_public_key_hash": public_key_hash,
+            "status": "pending",
+            "created_at": now,
+            "cooldown_until": cooldown_until
+        }
+
+        events.append(event)
+        save_rekey_events(events)
+
+        # Mark verification as consumed
+        verification_record["consumed"] = True
+        verification_record["consumed_at"] = datetime.utcnow().isoformat() + "Z"
+        save_ownership_verifications(verifications)
+
+        return jsonify({"ok": True, "status": "pending", "event_id": event_id, "cooldown_until": cooldown_until}), 200
+
+    except Exception as e:
+        error_type = type(e).__name__
+        return jsonify({"ok": False, "error": "rekey_request_failed", "exception_type": error_type}), 500
+
+
+@app.route("/api/wallet/v1/rekey/approve", methods=["POST"])
+def api_wallet_v1_rekey_approve():
+    try:
+        if WALLET_V1_REPAIR_TOKEN_REQUIRED:
+            token_from_header = request.headers.get("X-Wallet-V1-Repair-Token", "").strip()
+            if not token_from_header:
+                auth_header = request.headers.get("Authorization", "").strip()
+                if auth_header.startswith("Bearer "):
+                    token_from_header = auth_header[7:].strip()
+
+            if not token_from_header:
+                return jsonify({"ok": False, "error": "repair_token_required"}), 401
+
+            if not constant_time_compare(token_from_header, WALLET_V1_REPAIR_TOKEN):
+                return jsonify({"ok": False, "error": "invalid_repair_token"}), 403
+
+        data = request.get_json() or {}
+        event_id = (data.get("event_id") or "").strip()
+        canonical_v1_address = (data.get("canonical_v1_address") or "").strip().upper()
+
+        if not event_id:
+            return jsonify({"ok": False, "error": "event_id_required"}), 400
+
+        events = load_rekey_events()
+        event = next((e for e in events if e.get("event_id") == event_id and e.get("canonical_v1_address") == canonical_v1_address), None)
+
+        if not event:
+            return jsonify({"ok": False, "error": "event_not_found"}), 404
+
+        if event.get("status") != "pending":
+            return jsonify({"ok": False, "error": "event_not_pending"}), 400
+
+        now = datetime.utcnow().isoformat() + "Z"
+        event["status"] = "applied"
+        event["approved_at"] = now
+        save_rekey_events(events)
+
+        binding = {
+            "canonical_v1_address": canonical_v1_address,
+            "bound_key_address": event.get("bound_key_address", ""),
+            "active_public_key_hash": event.get("new_public_key_hash", ""),
+            "binding_source": "verified_ownership_rekey",
+            "rekey_event_id": event_id,
+            "status": "active",
+            "created_at": event.get("created_at", ""),
+            "approved_at": now
+        }
+
+        bindings = load_key_bindings()
+        bindings = [b for b in bindings if b.get("canonical_v1_address") != canonical_v1_address]
+        bindings.append(binding)
+        save_key_bindings(bindings)
+
+        return jsonify({"ok": True, "status": "applied", "canonical_v1_address": canonical_v1_address, "bound_key_address": binding["bound_key_address"], "has_signing_material": False}), 200
+
+    except Exception as e:
+        error_type = type(e).__name__
+        return jsonify({"ok": False, "error": "rekey_approve_failed", "exception_type": error_type}), 500
+
+@app.route("/api/wallet/v1/key-binding/<address>", methods=["GET"])
+def api_wallet_v1_get_key_binding(address):
+    """Get active key binding for a canonical V1 address (binding-aware unlock check)"""
+    try:
+        canonical_addr = (address or "").strip().upper()
+
+        if not canonical_addr:
+            return jsonify({"ok": False, "error": "address_required"}), 400
+
+        if not validate_thr_address(canonical_addr):
+            return jsonify({"ok": False, "error": "invalid_address"}), 400
+
+        # Load key bindings
+        bindings = load_key_bindings()
+
+        # Find active binding for this address
+        binding = None
+        for b in bindings:
+            if (b.get("canonical_v1_address") == canonical_addr and
+                b.get("status") == "active"):
+                binding = b
+                break
+
+        if binding:
+            # Return binding without sensitive fields
+            return jsonify({
+                "ok": True,
+                "binding": {
+                    "canonical_v1_address": binding.get("canonical_v1_address"),
+                    "bound_key_address": binding.get("bound_key_address"),
+                    "active_public_key_hash": binding.get("active_public_key_hash"),
+                    "status": binding.get("status"),
+                    "rekey_event_id": binding.get("rekey_event_id"),
+                    "created_at": binding.get("created_at")
+                }
+            }), 200
+        else:
+            return jsonify({"ok": True, "binding": None}), 200
+
+    except Exception as e:
+        error_type = type(e).__name__
+        return jsonify({"ok": False, "error": "binding_lookup_failed", "exception_type": error_type}), 500
+
+
+@app.route("/api/wallet/v1/key-binding/register", methods=["POST"])
+def api_wallet_v1_register_key_binding():
+    """
+    Register a new key binding for pledge-native wallet setup.
+
+    User-facing endpoint (NO repair token required).
+    Only allowed for confirmed pledge wallets.
+    Stores public key binding, never stores private key.
+
+    Request body:
+    {
+        "canonical_v1_address": "THR...",
+        "public_key": "...",
+        "bound_key_address": "THR..."
+    }
+
+    Response:
+    {
+        "ok": true,
+        "binding_created": true,
+        "canonical_v1_address": "THR...",
+        "bound_key_address": "THR...",
+        "public_key_hash": "...",
+        "created_at": "2026-06-04T..."
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        canonical_v1_address = (data.get("canonical_v1_address") or "").strip().upper()
+        public_key = (data.get("public_key") or "").strip()
+        bound_key_address = (data.get("bound_key_address") or "").strip().upper()
+
+        # Validate inputs
+        if not canonical_v1_address or not public_key or not bound_key_address:
+            return jsonify({"ok": False, "error": "missing_required_fields"}), 400
+
+        if not validate_thr_address(canonical_v1_address):
+            return jsonify({"ok": False, "error": "invalid_canonical_address"}), 400
+
+        if not validate_thr_address(bound_key_address):
+            return jsonify({"ok": False, "error": "invalid_bound_key_address"}), 400
+
+        # System wallet protection
+        SYSTEM_WALLET_ADDRESS = "THR5DF27A86C477F381594E896F0E55357DEC5942BA"
+        if canonical_v1_address == SYSTEM_WALLET_ADDRESS:
+            return jsonify({"ok": False, "error": "system_wallet_not_allowed"}), 400
+
+        # Verify pledge is confirmed for this canonical address
+        from wallet_v1_migration import search_all_migration_sources
+        migration_result = search_all_migration_sources(canonical_v1_address=canonical_v1_address)
+
+        if not migration_result:
+            return jsonify({"ok": False, "error": "wallet_not_found"}), 404
+
+        # Verify pledge is confirmed
+        pledge_status = migration_result.get("pledge_status")
+        if pledge_status != "confirmed":
+            return jsonify({"ok": False, "error": "pledge_not_confirmed"}), 403
+
+        # Check if binding already exists
+        bindings = load_key_bindings()
+        existing = any(
+            b.get("canonical_v1_address") == canonical_v1_address and
+            b.get("status") == "active"
+            for b in bindings
+        )
+
+        if existing:
+            return jsonify({"ok": False, "error": "key_binding_already_exists"}), 409
+
+        # Create binding with public key hash (never store private key)
+        public_key_hash = hashlib.sha256(public_key.encode()).hexdigest()[:32]
+        binding_id = "binding_" + secrets.token_hex(8)
+        now = datetime.utcnow().isoformat() + "Z"
+
+        new_binding = {
+            "binding_id": binding_id,
+            "canonical_v1_address": canonical_v1_address,
+            "bound_key_address": bound_key_address,
+            "active_public_key_hash": public_key_hash,
+            "status": "active",
+            "binding_source": "pledge_native_key_setup",
+            "created_at": now
+        }
+
+        bindings.append(new_binding)
+        save_key_bindings(bindings)
+
+        app.logger.info(
+            "[key_binding_register] stage=success",
+            extra={
+                "canonical_short": canonical_v1_address[:10] + "...",
+                "binding_source": "pledge_native_key_setup"
+            }
+        )
+
+        return jsonify({
+            "ok": True,
+            "binding_created": True,
+            "canonical_v1_address": canonical_v1_address,
+            "bound_key_address": bound_key_address,
+            "public_key_hash": public_key_hash,
+            "created_at": now
+        }), 201
+
+    except Exception as e:
+        error_type = type(e).__name__
+        app.logger.error("[key_binding_register] stage=error exception=" + error_type)
+        return jsonify({"ok": False, "error": "binding_registration_failed", "exception_type": error_type}), 500
+
+
+@app.route("/api/wallet/v1/key-binding/admin-register", methods=["POST"])
+def api_wallet_v1_admin_register_key_binding():
+    """
+    Admin-only endpoint for binding signers to existing migrated core wallets.
+
+    Requires repair token for admin authentication.
+    Allows binding for legacy_migrated wallets (no pledge requirement).
+    Stores public key binding only, never stores private key.
+
+    Request headers:
+    X-Wallet-V1-Repair-Token: <WALLET_V1_REPAIR_TOKEN>
+
+    Request body:
+    {
+        "canonical_v1_address": "THR...",
+        "public_key": "...",
+        "bound_key_address": "THR...",
+        "reason": "core_wallet_repair_after_legacy_migration"
+    }
+
+    Response:
+    {
+        "ok": true,
+        "binding_created": true,
+        "canonical_v1_address": "THR...",
+        "bound_key_address": "THR...",
+        "public_key_hash": "...",
+        "created_at": "2026-06-04T..."
+    }
+    """
+    try:
+        # Step 1: Validate repair token
+        if WALLET_V1_REPAIR_TOKEN_REQUIRED:
+            token_from_header = request.headers.get("X-Wallet-V1-Repair-Token", "").strip()
+            if not token_from_header:
+                return jsonify({"ok": False, "error": "repair_token_required"}), 401
+
+            if not constant_time_compare(token_from_header, WALLET_V1_REPAIR_TOKEN):
+                return jsonify({"ok": False, "error": "invalid_repair_token"}), 403
+
+        # Step 2: Parse and validate inputs
+        data = request.get_json() or {}
+        canonical_v1_address = (data.get("canonical_v1_address") or "").strip().upper()
+        public_key = (data.get("public_key") or "").strip()
+        bound_key_address = (data.get("bound_key_address") or "").strip().upper()
+        reason = (data.get("reason") or "").strip()
+
+        if not canonical_v1_address or not public_key or not bound_key_address:
+            return jsonify({"ok": False, "error": "missing_required_fields"}), 400
+
+        if not validate_thr_address(canonical_v1_address):
+            return jsonify({"ok": False, "error": "invalid_canonical_address"}), 400
+
+        if not validate_thr_address(bound_key_address):
+            return jsonify({"ok": False, "error": "invalid_bound_key_address"}), 400
+
+        # Step 3: System wallet protection
+        SYSTEM_WALLET_ADDRESS = "THR5DF27A86C477F381594E896F0E55357DEC5942BA"
+        if canonical_v1_address == SYSTEM_WALLET_ADDRESS:
+            return jsonify({"ok": False, "error": "system_wallet_not_allowed"}), 400
+
+        # Step 4: Verify canonical wallet exists in migrations
+        from wallet_v1_migration import search_all_migration_sources
+        migration_result = search_all_migration_sources(canonical_v1_address=canonical_v1_address)
+
+        if not migration_result:
+            return jsonify({"ok": False, "error": "wallet_not_found"}), 404
+
+        # For admin repair, allow legacy_migrated wallets
+        # No pledge requirement - this is for existing migrated core wallets
+        migration_status = migration_result.get("migration_status", "")
+        if migration_status != "legacy_migrated" and not migration_result.get("has_migration_info"):
+            return jsonify({"ok": False, "error": "not_a_migrated_wallet"}), 400
+
+        # Step 5: Check if binding already exists
+        bindings = load_key_bindings()
+        existing = any(
+            b.get("canonical_v1_address") == canonical_v1_address and
+            b.get("status") == "active"
+            for b in bindings
+        )
+
+        if existing:
+            return jsonify({"ok": False, "error": "key_binding_already_exists"}), 409
+
+        # Step 6: Create binding with public key hash (never store private key)
+        public_key_hash = hashlib.sha256(public_key.encode()).hexdigest()[:32]
+        binding_id = "binding_" + secrets.token_hex(8)
+        now = datetime.utcnow().isoformat() + "Z"
+
+        new_binding = {
+            "binding_id": binding_id,
+            "canonical_v1_address": canonical_v1_address,
+            "bound_key_address": bound_key_address,
+            "active_public_key_hash": public_key_hash,
+            "status": "active",
+            "binding_source": "admin_repair_migrated_core_wallet",
+            "admin_reason": reason,
+            "created_at": now
+        }
+
+        bindings.append(new_binding)
+        save_key_bindings(bindings)
+
+        # Step 7: Safe logging (no sensitive data)
+        app.logger.info(
+            "[admin_key_binding_register] stage=success",
+            extra={
+                "canonical_short": canonical_v1_address[:10] + "...",
+                "binding_source": "admin_repair_migrated_core_wallet",
+                "reason": reason
+            }
+        )
+
+        # Step 8: Return success response
+        return jsonify({
+            "ok": True,
+            "binding_created": True,
+            "canonical_v1_address": canonical_v1_address,
+            "bound_key_address": bound_key_address,
+            "public_key_hash": public_key_hash,
+            "created_at": now
+        }), 201
+
+    except Exception as e:
+        error_type = type(e).__name__
+        app.logger.error("[admin_key_binding_register] stage=error exception=" + error_type)
+        return jsonify({"ok": False, "error": "admin_binding_registration_failed", "exception_type": error_type}), 500
+
+
+@app.route("/api/wallet/v1/ownership/verify", methods=["POST"])
+def api_wallet_v1_ownership_verify():
+    """
+    User-facing ownership verification endpoint (NO repair token required).
+
+    Verifies that user owns a legacy/pledge wallet. This is separate from
+    admin repair endpoints and does NOT require WALLET_V1_REPAIR_TOKEN.
+
+    Rate-limited to prevent brute force attacks.
+
+    Request body:
+    {
+        "canonical_v1_address": "THR...",
+        "legacy_address": "THR...",
+        "send_secret": "...",
+        "auth_secret": "...",
+        "pledge_hash": "..."
+    }
+
+    Response (success):
+    {
+        "ok": true,
+        "ownership_verified": true,
+        "canonical_v1_address": "THR...",
+        "legacy_address_short": "THR...",
+        "recovery_source": "pledge_chain|wallet_v1_migrations|...",
+        "has_signing_material": false,
+        "ownership_verification_id": "...",
+        "expires_at": "2026-06-03T..."
+    }
+
+    Response (ownership not verified):
+    { "ok": false, "ownership_verified": false, "error": "..." } 400
+
+    Response (validation errors):
+    { "ok": false, "error": "invalid_canonical_address|..." } 400/404
+    """
+    try:
+        # Validate input
+        data = request.get_json() or {}
+        canonical_v1_address = (data.get("canonical_v1_address") or "").strip().upper()
+        legacy_address = (data.get("legacy_address") or "").strip().upper()
+
+        # Extract secrets but NEVER log them
+        send_secret = (data.get("send_secret") or "").strip()
+        auth_secret = (data.get("auth_secret") or "").strip()
+        pledge_hash = (data.get("pledge_hash") or "").strip()
+
+        # Log only safe diagnostics (NO secrets, NO full addresses)
+        canonical_short = canonical_v1_address[:10] + "..." if canonical_v1_address else "unknown"
+        legacy_short = legacy_address[:10] + "..." if legacy_address else "unknown"
+        app.logger.info(
+            "[ownership_verify] stage=parse_body",
+            extra={"canonical_short": canonical_short, "legacy_short": legacy_short}
+        )
+
+        # Validate canonical address
+        if not canonical_v1_address:
+            return jsonify({"ok": False, "error": "canonical_v1_address_required"}), 400
+
+        if not validate_thr_address(canonical_v1_address):
+            return jsonify({"ok": False, "error": "invalid_canonical_address"}), 400
+
+        # Check system wallet
+        SYSTEM_WALLET_ADDRESS = "THR5DF27A86C477F381594E896F0E55357DEC5942BA"
+        if canonical_v1_address == SYSTEM_WALLET_ADDRESS:
+            return jsonify({"ok": False, "error": "system_wallet_not_allowed"}), 400
+
+        # Validate ownership credentials provided
+        if not (legacy_address or send_secret or auth_secret or pledge_hash):
+            return jsonify({"ok": False, "error": "ownership_credentials_required"}), 400
+
+        # Look up migration/ownership
+        from wallet_v1_migration import search_all_migration_sources
+        migration_result = search_all_migration_sources(
+            legacy_address=legacy_address,
+            canonical_v1_address=canonical_v1_address
+        )
+
+        if not migration_result:
+            return jsonify({"ok": False, "ownership_verified": False, "error": "wallet_not_found"}), 404
+
+        # Verify ownership credentials
+        from wallet_v1_migration import verify_ownership_credentials
+        ownership_verified = verify_ownership_credentials(
+            legacy_or_canonical=canonical_v1_address,
+            send_secret=send_secret,
+            auth_secret=auth_secret,
+            pledge_hash=pledge_hash,
+            migration_result=migration_result
+        )
+
+        if not ownership_verified:
+            app.logger.warning(
+                "[ownership_verify] stage=ownership_check result=failed",
+                extra={"canonical_short": canonical_short}
+            )
+            return jsonify({
+                "ok": False,
+                "ownership_verified": False,
+                "error": "ownership_verification_failed"
+            }), 400
+
+        # Ownership verified - generate verification ID and persist it
+        import secrets
+        ownership_verification_id = "ownverif_" + secrets.token_hex(16)
+        expires_at = datetime.utcnow() + timedelta(hours=1)  # 1 hour validity
+        expires_at_iso = expires_at.isoformat() + "Z"
+
+        # Store verification ID with canonical address and expiry
+        verifications = load_ownership_verifications()
+        verifications.append({
+            "ownership_verification_id": ownership_verification_id,
+            "canonical_v1_address": canonical_v1_address,
+            "created_at": datetime.utcnow().isoformat() + "Z",
+            "expires_at": expires_at_iso,
+            "consumed": False
+        })
+        save_ownership_verifications(verifications)
+
+        app.logger.info(
+            "[ownership_verify] stage=success",
+            extra={
+                "canonical_short": canonical_short,
+                "legacy_short": legacy_short,
+                "recovery_source": migration_result.get("migration_source"),
+                "verification_id_short": ownership_verification_id[:20] + "..."
+            }
+        )
+
+        return jsonify({
+            "ok": True,
+            "ownership_verified": True,
+            "canonical_v1_address": canonical_v1_address,
+            "legacy_address_short": legacy_short,
+            "recovery_source": migration_result.get("migration_source"),
+            "has_signing_material": migration_result.get("has_signing_material", False),
+            "ownership_verification_id": ownership_verification_id,
+            "expires_at": expires_at_iso
+        }), 200
+
+    except Exception as e:
+        error_type = type(e).__name__
+        app.logger.error("[ownership_verify] stage=error exception=" + error_type)
+        return jsonify({"ok": False, "error": "ownership_verification_failed", "exception_type": error_type}), 500
+
 
 if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
     port = int(_strip_env_quotes(os.getenv("PORT", "8000")))
     app.run(host=host, port=port)
-# === AI Session API Fixes (append to end of server.py) ===========================

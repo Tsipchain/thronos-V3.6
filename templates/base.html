@@ -7209,7 +7209,44 @@ async function walletV1SubmitRekeyRequest() {
             })
         });
 
-        const result = await response.json();
+function detectMissingSigningKeyState(){
+    /**
+     * Detect if wallet has encrypted key but no runtime material.
+     * This is the "missing signing key" state that should show Recovery Kit as primary.
+     */
+    if(!walletSession || !walletSession.getWalletAuthDiagnostics) return false;
+    try {
+        const diag = walletSession.getWalletAuthDiagnostics();
+        // Missing signing key = has encrypted key but no runtime material
+        return diag.has_encrypted_send_seed && !diag.has_runtime_signing_material;
+    } catch(_) {
+        return false;
+    }
+}
+
+function showWalletLoginForm(){
+    const loginSection = document.getElementById('walletLoginSection');
+    const contentSection = document.getElementById('walletContentSection');
+    if(loginSection){
+        loginSection.style.display = 'block';
+        const addrInput = document.getElementById('walletWidgetThrAddress');
+                const pinInput = document.getElementById('walletWidgetPin');
+        if(addrInput) addrInput.value = walletSession.getAddress();
+                if(pinInput) pinInput.value = walletSession.getPin();
+
+        // AUTO-DETECT: If missing signing key → force "unlock" mode as primary
+        const modeSelect = document.getElementById('walletWidgetMode');
+        const hasMissingKey = detectMissingSigningKeyState();
+        if(hasMissingKey && modeSelect) {
+            modeSelect.value = 'unlock';
+            console.info('[RecoveryKit] Auto-detected missing signing key state, forcing unlock mode');
+        }
+
+        switchWalletV1Mode();
+        setTimeout(()=>{ if(pinInput) pinInput.focus(); }, 50);
+    }
+    if(contentSection) contentSection.style.display = 'none';
+}
 
         if (!result.ok) {
             console.warn('[RekeyCeremony] Rekey request failed:', result.error);

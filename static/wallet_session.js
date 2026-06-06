@@ -17,7 +17,10 @@
   let customUnlockHandler = null;
   let unlockedPrivateKeyHex = null;
   let unlockedForAddress = null; // Track which address the current in-memory key belongs to
+  let unlockedAtTime = null; // Timestamp when wallet was unlocked (for 15-min TTL)
   let lastSigningKeyMismatch = null; // Track mismatch details for UI recovery flow
+
+  const SESSION_TTL_MS = 15 * 60 * 1000; // 15 minutes in milliseconds
 
   const SYSTEM_WALLETS = {
     'THR5DF27A86C477F381594E896F0E55357DEC5942BA': 'ai_game_wallet',
@@ -180,7 +183,7 @@
   function getPin(){ return localStorage.getItem(PIN_KEY) || ''; }
   function setPin(pin){ setItem(PIN_KEY, pin ? pin.trim() : ''); }
 
-  function lockWallet(){ unlockedPrivateKeyHex = null; unlockedForAddress = null; localStorage.setItem(LOCK_KEY, '1'); }
+  function lockWallet(){ unlockedPrivateKeyHex = null; unlockedForAddress = null; unlockedAtTime = null; localStorage.setItem(LOCK_KEY, '1'); }
   function lock(){ return lockWallet(); }
   function setCustomUnlockHandler(fn){ customUnlockHandler = typeof fn === 'function' ? fn : null; }
 
@@ -377,6 +380,7 @@
     setBound(true);
     localStorage.setItem(LOCK_KEY, '0');
     unlockedPrivateKeyHex = priv;
+    unlockedAtTime = Date.now(); // Start 15-min TTL
     return { address, publicKey: pub };
   }
 
@@ -444,6 +448,7 @@
 
         unlockedPrivateKeyHex = decryptedPrivKeyHex;
         unlockedForAddress = activeAddr;
+        unlockedAtTime = Date.now(); // Start 15-min TTL
         setBound(true);
         localStorage.setItem(LOCK_KEY, '0');
         return true;
@@ -452,6 +457,7 @@
         // Clear any partially-cached material on error
         unlockedPrivateKeyHex = null;
         unlockedForAddress = null;
+        unlockedAtTime = null;
         if ((err.message || '').includes('wallet_signing_key_does_not_match_active_address')) {
           throw err;
         }
@@ -466,8 +472,36 @@
   }
   async function unlock(pinOrOptions){ const options = typeof pinOrOptions === 'string' ? {pin: pinOrOptions, prompt:false} : (pinOrOptions || {}); return unlockWallet(options); }
 
+  function isSessionExpired(){
+    // Check if 15-minute TTL has expired
+    if (!unlockedAtTime) return false;
+    const elapsedMs = Date.now() - unlockedAtTime;
+    const isExpired = elapsedMs >= SESSION_TTL_MS;
+    if (isExpired && unlockedPrivateKeyHex) {
+      // Auto-lock when TTL expires
+      unlockedPrivateKeyHex = null;
+      unlockedForAddress = null;
+      unlockedAtTime = null;
+      localStorage.setItem(LOCK_KEY, '1');
+    }
+    return isExpired;
+  }
+
+  function getSessionTimeRemaining(){
+    // Return milliseconds remaining in session (0 if expired or not unlocked)
+    if (!unlockedAtTime || !unlockedPrivateKeyHex) return 0;
+    const elapsedMs = Date.now() - unlockedAtTime;
+    const remaining = Math.max(0, SESSION_TTL_MS - elapsedMs);
+    if (remaining <= 0) {
+      isSessionExpired(); // Trigger auto-lock
+      return 0;
+    }
+    return remaining;
+  }
+
   function hasRuntimeSigningMaterial(address){
     const normalized = normalizeAddress(address || getActiveAddress());
+    if (isSessionExpired()) return false; // Auto-lock if TTL expired
     return !!(unlockedPrivateKeyHex && (!normalized || !unlockedForAddress || unlockedForAddress === normalized));
   }
 
@@ -569,6 +603,7 @@
     setBound(true);
     localStorage.setItem(LOCK_KEY, '0');
     unlockedPrivateKeyHex = priv;
+    unlockedAtTime = Date.now(); // Start 15-min TTL
     return { address: activeAddress, credentialLookupAddress: lookupAddress, publicKey: pub, binding: data.binding || data };
   }
 
@@ -714,6 +749,8 @@
     localStorage.removeItem(V1_PUBLIC_KEY);
     localStorage.removeItem(PIN_KEY);
     unlockedPrivateKeyHex = null;
+    unlockedForAddress = null;
+    unlockedAtTime = null;
     // Note: MIGRATION_META_KEY is kept for recovery reference only
     return true;
   }
@@ -729,6 +766,8 @@
     localStorage.removeItem(V1_PUBLIC_KEY);
     localStorage.removeItem(PIN_KEY);
     unlockedPrivateKeyHex = null;
+    unlockedForAddress = null;
+    unlockedAtTime = null;
     lastSigningKeyMismatch = null;
     localStorage.setItem(LOCK_KEY, '1');
     return true;
@@ -764,6 +803,8 @@
       localStorage.setItem(V1_PUBLIC_KEY, pubHex);
       localStorage.setItem(PIN_KEY, pin);
       unlockedPrivateKeyHex = null;
+      unlockedForAddress = null;
+      unlockedAtTime = null;
       lastSigningKeyMismatch = null;
       localStorage.setItem(LOCK_KEY, '1');
       return {success: true};
@@ -772,8 +813,8 @@
     }
   }
 
-  function disconnect(){ setBound(false); localStorage.setItem(LOCK_KEY, '1'); unlockedPrivateKeyHex = null; }
-  function forgetDevice(){ [ADDRESS_KEY,SEND_SECRET_KEY,SEND_SEED_KEY,SEND_SEED_COMPAT_KEY,PIN_KEY,BOUND_KEY,LOCK_KEY,V1_ENCRYPTED_KEY,V1_PUBLIC_KEY,V1_ADDRESS_KEY,MIGRATION_META_KEY].forEach(k => localStorage.removeItem(k)); unlockedPrivateKeyHex = null; }
+  function disconnect(){ setBound(false); localStorage.setItem(LOCK_KEY, '1'); unlockedPrivateKeyHex = null; unlockedForAddress = null; unlockedAtTime = null; }
+  function forgetDevice(){ [ADDRESS_KEY,SEND_SECRET_KEY,SEND_SEED_KEY,SEND_SEED_COMPAT_KEY,PIN_KEY,BOUND_KEY,LOCK_KEY,V1_ENCRYPTED_KEY,V1_PUBLIC_KEY,V1_ADDRESS_KEY,MIGRATION_META_KEY].forEach(k => localStorage.removeItem(k)); unlockedPrivateKeyHex = null; unlockedForAddress = null; unlockedAtTime = null; }
   function clearSession(){ forgetDevice(); }
   function saveSession({address, sendSeed, pin, bound} = {}){ setAddress(address || ''); setSendSeed(sendSeed || ''); setPin(pin || ''); setBound(bound !== undefined ? !!bound : !!(address && sendSeed)); if (address || sendSeed) localStorage.setItem(LOCK_KEY, '0'); }
   function requirePin(actionLabel = 'continue'){ const stored = getPin(); if(!stored) return true; const entered = prompt(`Enter wallet PIN to ${actionLabel}`); if(entered === null) return false; if(entered !== stored){ alert('Wrong PIN.'); return false; } return true; }
@@ -789,6 +830,7 @@
     migrateLegacyWallet, encryptPrivateKeyHex, decryptPrivateKeyHex,
     getCredentialLookupAddress, getSendSeed, setSendSeed, getSendSecret, setSendSecret,
     hasSigningMaterial, hasRuntimeSigningMaterial, getWalletAuthDiagnostics, logWalletAuthDiagnostics,
+    isSessionExpired, getSessionTimeRemaining,
     getPin, setPin, isLocked, lockWallet, lock: lockWallet, unlockWallet, unlock: unlockWallet, unlock,
     setCustomUnlockHandler, isBound, setBound, disconnect, forgetDevice, clearSession, saveSession, requirePin,
     isUnlockedFor,

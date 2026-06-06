@@ -18,6 +18,7 @@
   let unlockedPrivateKeyHex = null;
   let unlockedForAddress = null; // Track which address the current in-memory key belongs to
   let lastSigningKeyMismatch = null; // Track mismatch details for UI recovery flow
+  let lastUnusableKeyDiagnostics = null; // Track unusable/legacy format key diagnostics
 
   const SYSTEM_WALLETS = {
     'THR5DF27A86C477F381594E896F0E55357DEC5942BA': 'ai_game_wallet',
@@ -74,6 +75,54 @@
     const origin = getWalletOrigin(address);
     if (origin === 'ui_created') return 'ui_created_empty';
     return origin;
+  }
+
+  function hasPledgeOrMigrationSource(){
+    // Pledge-backed activation: Check if wallet has established its canonical address
+    // through pledge confirmation, verified migration, or recovery
+    const info = getMigrationInfo();
+    const canonical = getCanonicalMigrationAddress(info);
+    if (canonical) return true; // Verified migration
+
+    // TODO: Add pledge confirmation check when pledge API is available
+    // const pledge = getPledgeStatus();
+    // if (pledge && pledge.confirmed && pledge.canonical_address) return true;
+
+    return false;
+  }
+
+  function getModalState(){
+    // Wallet modal state machine for pledge-backed activation:
+    // Determines which options to show/hide in the wallet modal
+    const activeAddr = getActiveAddress();
+    const hasEncrypted = !!localStorage.getItem(V1_ENCRYPTED_KEY);
+    const hasRuntime = !!unlockedPrivateKeyHex;
+    const hasPledge = hasPledgeOrMigrationSource();
+
+    if (!activeAddr) {
+      // No active wallet address established
+      if (hasPledge) {
+        // Pledge confirmed but no wallet yet - user should set up signing key
+        return 'active_wallet_no_key';
+      }
+      // No pledge/migration/recovery - must establish one first
+      return 'no_active_wallet';
+    }
+
+    // Active address exists - check key material
+    if (!hasEncrypted) {
+      // No signing key stored locally
+      return 'active_wallet_no_key';
+    }
+
+    // Has active address and encrypted key
+    if (hasRuntime) {
+      // Key is unlocked in memory
+      return 'signing_ready';
+    }
+
+    // Key exists but not unlocked
+    return 'active_wallet_with_encrypted_key';
   }
 
   function getAddress(){ return getActiveAddress() || localStorage.getItem(V1_ADDRESS_KEY) || localStorage.getItem(ADDRESS_KEY) || ''; }
@@ -142,6 +191,89 @@
 
   function getMigrationInfo(){ return readJson(MIGRATION_META_KEY); }
   function isMigrated(){ const info = getMigrationInfo(); return !!(info.old_address && info.new_v1_address); }
+
+  async function restoreMigratedWallet(legacyAddress, migrationProof){
+    // Restore canonical V1 address from backend migration lookup
+    // Input: legacy/core THR address + optional migration proof (send_secret or migration tx id)
+    // Output: {ok: true, legacy_address, canonical_v1_address, migration_status, has_signing_material}
+    // Does NOT create, remigrate, or mutate canonical address
+    // Only persists canonical_v1_address returned by backend
+    try {
+      const normalized = normalizeAddress(legacyAddress);
+      if (!isValidThrAddress(normalized)) {
+        return {ok: false, error: 'Invalid legacy address format'};
+      }
+      if (isSystemWalletAddress(normalized)) {
+        return {ok: false, error: 'System wallets cannot be migrated'};
+      }
+
+      // Call backend to look up migration mapping
+      const response = await fetch('/api/wallet/v1/restore-migration', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          legacy_address: normalized,
+          migration_proof: migrationProof || '' // send_secret or migration tx id
+        })
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        return {
+          ok: false,
+          error: errData.error || `Backend error: ${response.status}`
+        };
+      }
+
+      const data = await response.json();
+      if (!data.ok) {
+        return {ok: false, error: data.error || 'Migration restore failed'};
+      }
+
+      // Validate response has canonical V1 address
+      const canonicalAddr = normalizeAddress(data.canonical_v1_address);
+      if (!isValidThrAddress(canonicalAddr)) {
+        return {ok: false, error: 'Backend returned invalid canonical address'};
+      }
+      if (isSystemWalletAddress(canonicalAddr)) {
+        return {ok: false, error: 'Backend returned system wallet address'};
+      }
+
+      // Persist canonical V1 address as active (do not remigrate)
+      localStorage.setItem(V1_ADDRESS_KEY, canonicalAddr);
+      localStorage.setItem(ADDRESS_KEY, canonicalAddr);
+
+      // Store migration info with restore metadata
+      const migrationInfo = {
+        ...getMigrationInfo(),
+        old_address: normalized,
+        new_v1_address: canonicalAddr,
+        migration_status: data.migration_status || 'confirmed',
+        restored_at: Date.now(),
+        restored_from: legacyAddress // For diagnostics only
+      };
+      localStorage.setItem(MIGRATION_META_KEY, JSON.stringify(migrationInfo));
+
+      // Clear any runtime signing material (must re-unlock or re-import for this canonical address)
+      unlockedPrivateKeyHex = null;
+      unlockedForAddress = null;
+      localStorage.setItem(LOCK_KEY, '1');
+
+      return {
+        ok: true,
+        legacy_address: normalized,
+        canonical_v1_address: canonicalAddr,
+        migration_status: data.migration_status || 'confirmed',
+        has_signing_material: data.has_signing_material || false,
+        wallet_origin: 'migration_restore'
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err && err.message ? err.message : 'Failed to restore migrated wallet'
+      };
+    }
+  }
 
   function getCredentialLookupAddress(address){
     const active = (address || getActiveAddress() || getAddress() || '').trim();
@@ -380,6 +512,52 @@
     return { address, publicKey: pub };
   }
 
+  async function generateV1KeyPair(){
+    // Generate a new V1 key pair without storing it
+    // Returns {success: true, publicKey, address} or {success: false, error}
+    try {
+      const secp = await _ensureSecpLoaded();
+      if (!secp || !secp.getPublicKey || !secp.utils) {
+        return {success: false, error: 'secp256k1_library_missing'};
+      }
+
+      const privBytes = secp.utils.randomPrivateKey ? secp.utils.randomPrivateKey() : crypto.getRandomValues(new Uint8Array(32));
+      const priv = typeof privBytes === 'string' ? privBytes.replace(/^0x/, '') : bytesToHex(privBytes);
+      const pubBytes = secp.getPublicKey(priv, true);
+      const pub = typeof pubBytes === 'string' ? pubBytes.replace(/^0x/, '') : bytesToHex(pubBytes);
+
+      const address = await deriveAddressFromPublicKey(pub);
+
+      return {success: true, publicKey: pub, address: address, privateKey: priv};
+    } catch(err) {
+      return {success: false, error: err && err.message ? err.message : 'Failed to generate key pair'};
+    }
+  }
+
+  async function derivePublicKeyAndAddress(privateKeyHex){
+    // Derive public key and address from a private key hex string
+    // Returns {success: true, publicKey, address} or {success: false, error}
+    try {
+      if (!privateKeyHex || typeof privateKeyHex !== 'string') {
+        return {success: false, error: 'Invalid private key format'};
+      }
+
+      const secp = await _ensureSecpLoaded();
+      if (!secp || !secp.getPublicKey) {
+        return {success: false, error: 'secp256k1_library_missing'};
+      }
+
+      const pubBytes = secp.getPublicKey(privateKeyHex, true);
+      const pub = typeof pubBytes === 'string' ? pubBytes.replace(/^0x/, '') : bytesToHex(pubBytes);
+
+      const address = await deriveAddressFromPublicKey(pub);
+
+      return {success: true, publicKey: pub, address: address};
+    } catch(err) {
+      return {success: false, error: err && err.message ? err.message : 'Failed to derive public key and address'};
+    }
+  }
+
   function hasSigningMaterial(address){
     return !!(localStorage.getItem(V1_ENCRYPTED_KEY) || unlockedPrivateKeyHex || getSendSeed(address));
   }
@@ -393,48 +571,93 @@
     const pin = options.pin || (options.prompt !== false ? prompt('Enter wallet PIN to unlock') : null);
     if (!pin) return false;
     const activeAddr = options.address || getActiveAddress();
+    // CRITICAL: Unlock requires an active/canonical wallet address
+    // User must import, create, migrate, or restore a wallet first
+    if (!activeAddr) {
+      const err = new Error('wallet_import_required');
+      err.code = 'WALLET_IMPORT_REQUIRED';
+      throw err;
+    }
     const enc = localStorage.getItem(V1_ENCRYPTED_KEY);
     if (enc) {
       let decryptSucceeded = false;
       try {
         const decryptedPrivKeyHex = await decryptPrivateKeyHex(enc, pin);
         decryptSucceeded = true;
-        // Validate that decrypted key belongs to the active canonical address
+
+        // Try to derive public key and address from decrypted material
+        let keyDerivationSucceeded = false;
+        let derivedAddress = '';
+        let derivedPublicKey = '';
+
         try {
           const secp = await _ensureSecpLoaded();
           if (!secp || !secp.getPublicKey) throw new Error('secp256k1_library_missing');
-          const pubBytes = secp.getPublicKey(decryptedPrivKeyHex, true);
-          const pubHex = typeof pubBytes === 'string' ? pubBytes.replace(/^0x/, '') : bytesToHex(pubBytes);
-          const derivedAddress = await deriveAddressFromPublicKey(pubHex);
-          const activeNormalized = normalizeAddress(activeAddr);
-          const derivedNormalized = normalizeAddress(derivedAddress);
 
-          if (activeNormalized && derivedNormalized && activeNormalized !== derivedNormalized) {
-            // PIN succeeded but signing key does not belong to active wallet
-            const err = new Error('wallet_signing_key_does_not_match_active_address');
-            err.code = 'KEY_MISMATCH';
-            err.derived_address = derivedAddress;
-            err.active_address = activeAddr;
-            err.decrypt_succeeded = true;
-            throw err;
+          const pubBytes = secp.getPublicKey(decryptedPrivKeyHex, true);
+          derivedPublicKey = typeof pubBytes === 'string' ? pubBytes.replace(/^0x/, '') : bytesToHex(pubBytes);
+          derivedAddress = await deriveAddressFromPublicKey(derivedPublicKey);
+          keyDerivationSucceeded = true;
+        } catch (derivErr) {
+          // Key derivation failed - mark as unusable/legacy format
+          keyDerivationSucceeded = false;
+          // Store diagnostics for recovery UI
+          lastUnusableKeyDiagnostics = {
+            decrypt_succeeded: true,
+            key_parse_status: 'failed',
+            active_address_short: activeAddr ? activeAddr.substring(0, 10) + '...' : 'unknown',
+            derived_address_short: 'unknown',
+            encrypted_seed_present: !!enc,
+            runtime_material_present: !!unlockedPrivateKeyHex,
+            recovery_recommended: 'rekey',
+            error: derivErr && derivErr.message ? derivErr.message : 'Failed to derive public key/address',
+            timestamp: Date.now()
+          };
+          const err = new Error('wallet_signing_key_unusable_or_legacy_format');
+          err.code = 'KEY_UNUSABLE';
+          err.decrypt_succeeded = true;
+          err.key_parse_status = 'failed';
+          throw err;
+        }
+
+        // Key derivation succeeded - check if it matches active address or binding
+        const activeNormalized = normalizeAddress(activeAddr);
+        const derivedNormalized = normalizeAddress(derivedAddress);
+
+        if (activeNormalized && derivedNormalized && activeNormalized === derivedNormalized) {
+          // Direct match - standard case
+          unlockedPrivateKeyHex = decryptedPrivKeyHex;
+          unlockedForAddress = activeAddr;
+          setBound(true);
+          localStorage.setItem(LOCK_KEY, '0');
+          return true;
+        }
+
+        // Address mismatch - check for active binding (re-key ceremony case)
+        if (activeNormalized && derivedNormalized && activeNormalized !== derivedNormalized) {
+          // Try to verify through binding
+          try {
+            const binding = await getActiveKeyBinding(activeAddr);
+            if (binding && binding.bound_key_address && derivedNormalized === normalizeAddress(binding.bound_key_address)) {
+              // Binding exists and matches derived address - binding-aware unlock
+              unlockedPrivateKeyHex = decryptedPrivKeyHex;
+              unlockedForAddress = activeAddr;
+              setBound(true);
+              localStorage.setItem(LOCK_KEY, '0');
+              return true;
+            }
+          } catch (bindingCheckErr) {
+            // Binding check failed, fall through to mismatch error
           }
-        } catch (bindingErr) {
-          if ((bindingErr.message || '').includes('wallet_signing_key_does_not_match_active_address')) {
-            lastSigningKeyMismatch = {
-              derived_address: bindingErr.derived_address || '',
-              active_address: bindingErr.active_address || activeAddr,
-              decrypt_succeeded: bindingErr.decrypt_succeeded || true,
-              timestamp: Date.now()
-            };
-            throw bindingErr;
-          }
-          // If address derivation fails, still reject the unlock
+
+          // No matching binding - generic key mismatch
           const err = new Error('wallet_signing_key_does_not_match_active_address');
           err.code = 'KEY_MISMATCH';
+          err.derived_address = derivedAddress;
           err.active_address = activeAddr;
           err.decrypt_succeeded = true;
           lastSigningKeyMismatch = {
-            derived_address: '',
+            derived_address: derivedAddress,
             active_address: activeAddr,
             decrypt_succeeded: true,
             timestamp: Date.now()
@@ -452,7 +675,8 @@
         // Clear any partially-cached material on error
         unlockedPrivateKeyHex = null;
         unlockedForAddress = null;
-        if ((err.message || '').includes('wallet_signing_key_does_not_match_active_address')) {
+        if ((err.message || '').includes('wallet_signing_key_does_not_match_active_address') ||
+            (err.message || '').includes('wallet_signing_key_unusable_or_legacy_format')) {
           throw err;
         }
         // PIN decryption failed - return false to allow fallback to legacy creds
@@ -723,6 +947,81 @@
     return lastSigningKeyMismatch ? {...lastSigningKeyMismatch} : null;
   }
 
+  function getUnusableKeyDiagnostics(){
+    // Return safe diagnostics for unusable/legacy format key (no secrets, no PIN, no keys)
+    return lastUnusableKeyDiagnostics ? {...lastUnusableKeyDiagnostics} : null;
+  }
+
+  async function getActiveKeyBinding(canonicalAddress){
+    // Check if active key binding exists for canonical address (backend lookup)
+    // Returns {bound_key_address, status, ...} or null if no binding
+    try {
+      const normalized = normalizeAddress(canonicalAddress);
+      if (!normalized) return null;
+
+      // Call backend to get binding info
+      const response = await fetch(`/api/wallet/v1/key-binding/${encodeURIComponent(normalized)}`);
+      if (!response.ok) return null;
+
+      const data = await response.json();
+      if (data && data.ok && data.binding && data.binding.status === 'active') {
+        return data.binding;
+      }
+      return null;
+    } catch(_) {
+      // Network error or binding endpoint unavailable - binding not available
+      return null;
+    }
+  }
+
+  async function clearUnusableSigningKey(){
+    // Remove ONLY unusable signing material, NOT wallet identity/balance
+    // Safe to remove: encrypted key, runtime key, session cache
+    // Must preserve: canonical_v1_address, balances, migration metadata, pledge data
+    try {
+      // Remove local signing material
+      localStorage.removeItem(V1_ENCRYPTED_KEY);
+      localStorage.removeItem(V1_PUBLIC_KEY);
+      unlockedPrivateKeyHex = null;
+      unlockedForAddress = null;
+
+      // Clear mismatch/unusable diagnostics
+      lastSigningKeyMismatch = null;
+      lastUnusableKeyDiagnostics = null;
+
+      // Lock the wallet
+      localStorage.setItem(LOCK_KEY, '1');
+
+      return {success: true, message: 'Unusable signing key cleared'};
+    } catch(err) {
+      return {success: false, error: err && err.message ? err.message : 'Failed to clear unusable key'};
+    }
+  }
+
+  function getWalletState(){
+    // Returns wallet state: 'connected_readonly', 'locked', 'signing_ready', 'signing_key_mismatch', 'signing_key_unusable_legacy_format', 'missing_signing_key', or 'not_connected'
+    const activeAddr = getActiveAddress();
+    if (!activeAddr) return 'not_connected';
+
+    // If there's an unusable/legacy format key recorded
+    if (lastUnusableKeyDiagnostics) return 'signing_key_unusable_legacy_format';
+
+    // If there's a signing key mismatch recorded
+    if (lastSigningKeyMismatch) return 'signing_key_mismatch';
+
+    // Check for encrypted signing material
+    const hasEncryptedKey = !!localStorage.getItem(V1_ENCRYPTED_KEY);
+
+    // If no encrypted key material at all
+    if (!hasEncryptedKey) return 'missing_signing_key';
+
+    // If encrypted key exists, check if it's unlocked in memory
+    if (unlockedPrivateKeyHex) return 'signing_ready';
+
+    // Encrypted key exists but not unlocked
+    return 'locked';
+  }
+
   function clearLocalSigningKey(){
     // Remove encrypted signing material only, preserve active wallet address
     localStorage.removeItem(V1_ENCRYPTED_KEY);
@@ -778,6 +1077,112 @@
   function saveSession({address, sendSeed, pin, bound} = {}){ setAddress(address || ''); setSendSeed(sendSeed || ''); setPin(pin || ''); setBound(bound !== undefined ? !!bound : !!(address && sendSeed)); if (address || sendSeed) localStorage.setItem(LOCK_KEY, '0'); }
   function requirePin(actionLabel = 'continue'){ const stored = getPin(); if(!stored) return true; const entered = prompt(`Enter wallet PIN to ${actionLabel}`); if(entered === null) return false; if(entered !== stored){ alert('Wrong PIN.'); return false; } return true; }
 
+  async function resolveCanonicalWalletAddress(options = {}) {
+    const maxAttempts = options.maxAttempts || 10;
+    const retryIntervalMs = options.retryIntervalMs || 250;
+    const debug = options.debug || false;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // Priority 1: WalletSession state
+      try {
+        const activeAddr = getActiveAddress();
+        if (activeAddr && isValidThrAddress(activeAddr) && !isSystemWalletAddress(activeAddr)) {
+          if (debug) console.log('[WalletV1] canonical resolver source: wallet_session.getActiveAddress (attempt ' + attempt + ')');
+          return {
+            ok: true,
+            canonical_v1_address: activeAddr,
+            source: 'wallet_session'
+          };
+        }
+      } catch(_) {}
+
+      // Priority 2: localStorage wallet_v1_address
+      try {
+        const stored = normalizeAddress(localStorage.getItem(V1_ADDRESS_KEY));
+        if (stored && isValidThrAddress(stored) && stored !== 'loading...' && !isSystemWalletAddress(stored)) {
+          if (debug) console.log('[WalletV1] canonical resolver source: localStorage.wallet_v1_address (attempt ' + attempt + ')');
+          return {
+            ok: true,
+            canonical_v1_address: stored,
+            source: 'localStorage'
+          };
+        }
+      } catch(_) {}
+
+      // Priority 3: localStorage canonical_v1_address
+      try {
+        const stored = normalizeAddress(localStorage.getItem('canonical_v1_address'));
+        if (stored && isValidThrAddress(stored) && stored !== 'loading...' && !isSystemWalletAddress(stored)) {
+          if (debug) console.log('[WalletV1] canonical resolver source: localStorage.canonical_v1_address (attempt ' + attempt + ')');
+          return {
+            ok: true,
+            canonical_v1_address: stored,
+            source: 'localStorage'
+          };
+        }
+      } catch(_) {}
+
+      // Priority 4: localStorage thr_address (fallback)
+      try {
+        const stored = normalizeAddress(localStorage.getItem(ADDRESS_KEY));
+        if (stored && isValidThrAddress(stored) && stored !== 'loading...' && !isSystemWalletAddress(stored)) {
+          if (debug) console.log('[WalletV1] canonical resolver source: localStorage.thr_address (attempt ' + attempt + ')');
+          return {
+            ok: true,
+            canonical_v1_address: stored,
+            source: 'localStorage'
+          };
+        }
+      } catch(_) {}
+
+      // Priority 5: sessionStorage from restored migration result
+      try {
+        const migrationMeta = localStorage.getItem(MIGRATION_META_KEY);
+        if (migrationMeta) {
+          const parsed = JSON.parse(migrationMeta);
+          const canonicalFromMeta = normalizeAddress(parsed.canonical_v1_address);
+          if (canonicalFromMeta && isValidThrAddress(canonicalFromMeta) && !isSystemWalletAddress(canonicalFromMeta)) {
+            if (debug) console.log('[WalletV1] canonical resolver source: migration_metadata (attempt ' + attempt + ')');
+            return {
+              ok: true,
+              canonical_v1_address: canonicalFromMeta,
+              source: 'migration_metadata'
+            };
+          }
+        }
+      } catch(_) {}
+
+      // Priority 6: Check wallet widget input if visible
+      try {
+        const walletInputField = document.getElementById('walletV1CanonicalAddr') ||
+                                document.getElementById('canonicalWalletAddress');
+        if (walletInputField && walletInputField.value) {
+          const widgetAddr = normalizeAddress(walletInputField.value);
+          if (widgetAddr && isValidThrAddress(widgetAddr) && widgetAddr !== 'loading...' && !isSystemWalletAddress(widgetAddr)) {
+            if (debug) console.log('[WalletV1] canonical resolver source: widget_input (attempt ' + attempt + ')');
+            return {
+              ok: true,
+              canonical_v1_address: widgetAddr,
+              source: 'widget_input'
+            };
+          }
+        }
+      } catch(_) {}
+
+      // Not found yet - wait and retry
+      if (attempt < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, retryIntervalMs));
+      }
+    }
+
+    // All attempts exhausted
+    if (debug) console.log('[WalletV1] canonical resolver exhausted all sources after ' + maxAttempts + ' attempts');
+    return {
+      ok: false,
+      error: 'canonical_address_not_found'
+    };
+  }
+
   window.walletSession = {
     version: VERSION,
     ADDRESS_KEY, SEND_SECRET_KEY, SEND_SEED_KEY, PIN_KEY, BOUND_KEY, LOCK_KEY,
@@ -786,7 +1191,7 @@
     getMigrationInfo, isMigrated, isVerifiedMigrationInfo, getCanonicalMigrationAddress, getLegacySourceAddress,
     getWalletOrigin, getWalletIdentityStatus, isWalletV1,
     createWalletV1, getPublicKey, canonicalTxMessage, signTransaction,
-    migrateLegacyWallet, encryptPrivateKeyHex, decryptPrivateKeyHex,
+    migrateLegacyWallet, restoreMigratedWallet, encryptPrivateKeyHex, decryptPrivateKeyHex,
     getCredentialLookupAddress, getSendSeed, setSendSeed, getSendSecret, setSendSecret,
     hasSigningMaterial, hasRuntimeSigningMaterial, getWalletAuthDiagnostics, logWalletAuthDiagnostics,
     getPin, setPin, isLocked, lockWallet, lock: lockWallet, unlockWallet, unlock: unlockWallet, unlock,
@@ -794,6 +1199,10 @@
     isUnlockedFor,
     getDebugState, restoreToMigratedWallet, resetActiveWalletPointers, clearAllWalletData, isValidThrAddress,
     persistActiveUserAddress, isSystemWalletAddress,
-    getSigningKeyMismatch, clearLocalSigningKey, importSigningKeyForAddress
+    getSigningKeyMismatch, getUnusableKeyDiagnostics, clearLocalSigningKey, clearUnusableSigningKey,
+    getActiveKeyBinding, importSigningKeyForAddress, getWalletState,
+    hasPledgeOrMigrationSource, getModalState,
+    generateV1KeyPair, derivePublicKeyAndAddress,
+    resolveCanonicalWalletAddress
   };
 })(window);

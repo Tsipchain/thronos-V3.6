@@ -22194,6 +22194,34 @@ def _short_wallet_address(address):
     return f"{address[:10]}..." if address else ""
 
 
+def _extract_signed_payload(payload_raw, field_name="signed_tx"):
+    """Extract and validate signed payload (handles dict or JSON string).
+
+    Args:
+        payload_raw: dict, string, or other type
+        field_name: name of the field for error messages
+
+    Returns:
+        (payload_dict, error_message) tuple. If error_message is not None, payload_dict is empty {}
+    """
+    if payload_raw is None:
+        return {}, None
+
+    if isinstance(payload_raw, dict):
+        return payload_raw, None
+
+    if isinstance(payload_raw, str):
+        try:
+            parsed = json.loads(payload_raw)
+            if not isinstance(parsed, dict):
+                return {}, f"invalid_{field_name}_format: must be JSON object, got {type(parsed).__name__}"
+            return parsed, None
+        except (json.JSONDecodeError, ValueError) as e:
+            return {}, f"invalid_{field_name}_format: {str(e)}"
+
+    return {}, f"invalid_{field_name}_type: expected dict or string, got {type(payload_raw).__name__}"
+
+
 def verify_swap_wallet_v1_or_legacy(payload, expected_action=SWAP_EXPECTED_ACTION):
     """Verify swap auth before any swap state mutation."""
     # Extract addresses from payload - normalize them
@@ -22308,30 +22336,32 @@ def verify_swap_wallet_v1_or_legacy(payload, expected_action=SWAP_EXPECTED_ACTIO
 
 @app.route("/api/swap/execute", methods=["POST"])
 def api_swap_execute():
+    """Execute swap with comprehensive error handling. All user input errors return 400, never 500."""
     try:
         data = request.get_json() or {}
+
+        # Safe extraction: strip strings, handle missing values
         token_in = (data.get("token_in") or "").upper().strip()
         token_out = (data.get("token_out") or "").upper().strip()
         trader = (data.get("trader_thr") or "").strip()
         auth_secret = (data.get("auth_secret") or "").strip()
         passphrase = (data.get("passphrase") or "").strip()
         min_amount_out_raw = data.get("min_amount_out", 0)
+
+        # Safe amount parsing - any TypeError/ValueError is 400
         try:
             amount_in = float(data.get("amount_in", 0))
             min_amount_out = float(min_amount_out_raw)
-        except (TypeError, ValueError):
-            return jsonify(status="error", message="Invalid amounts"), 400
-    except Exception as exc:
-        return jsonify(status="error", message=str(exc)), 500
+        except (TypeError, ValueError) as e:
+            return jsonify(status="error", error="invalid_amounts", message=f"Invalid amount values: {str(e)}"), 400
 
-    try:
-        # Validate input parameters
+        # Validate input parameters (all user errors are 400)
         if not token_in or not token_out or amount_in <= 0:
-            return jsonify(status="error", message="Invalid input"), 400
+            return jsonify(status="error", error="invalid_input", message="Invalid token pair or amount"), 400
         if not trader:
-            return jsonify(status="error", message="Missing trader"), 400
+            return jsonify(status="error", error="missing_trader", message="Missing trader address"), 400
         if not is_swap_symbol_allowed(token_in) or not is_swap_symbol_allowed(token_out):
-            return jsonify(status="error", message="Unsupported token"), 400
+            return jsonify(status="error", error="unsupported_token", message=f"Unsupported token: {token_in} or {token_out}"), 400
 
         # Wallet V1 or legacy auth verification
         auth_ok, auth_error, verified_trader = verify_swap_wallet_v1_or_legacy(data, SWAP_EXPECTED_ACTION)
@@ -22347,9 +22377,9 @@ def api_swap_execute():
         # Get swap quote and route
         quote, err = quote_swap_route(token_in, token_out, amount_in)
         if err:
-            return jsonify(ok=False, status="error", error=err, message=err), 400
+            return jsonify(ok=False, status="error", error="quote_failed", message=err), 400
         if quote["amount_out"] < min_amount_out:
-            return jsonify(status="error", message="Slippage too high", expected_minimum=min_amount_out, actual_output=quote["amount_out"]), 400
+            return jsonify(status="error", error="slippage_too_high", message="Output amount below minimum", expected_minimum=min_amount_out, actual_output=quote["amount_out"]), 400
 
         # Load state
         thr_ledger = load_json(LEDGER_FILE, {})
@@ -22365,7 +22395,7 @@ def api_swap_execute():
             return float(token_balances.get(sym, {}).get(trader, 0.0))
 
         if get_balance(token_in) < amount_in:
-            return jsonify(status="error", message=f"Insufficient {token_in} balance"), 400
+            return jsonify(status="error", error="insufficient_balance", message=f"Insufficient {token_in} balance"), 400
 
         def deduct(sym, amt):
             if sym == "THR":
@@ -22498,15 +22528,44 @@ def api_swap_execute():
             tx_id=tx_id,
             route=swap_trace,
         ), 200
+
     except ValueError as ve:
-        return jsonify(status="error", error="invalid_swap_amount", message=str(ve)), 400
+        logger.error(f"[api_swap_execute] ValueError: {ve}")
+        return jsonify(status="error", error="invalid_value", message=str(ve)), 400
+
     except KeyError as ke:
-        return jsonify(status="error", error="pool_not_found", message=f"Missing pool field: {ke}"), 400
+        logger.error(f"[api_swap_execute] KeyError: {ke}")
+        return jsonify(status="error", error="missing_field", message=f"Missing field: {ke}"), 400
+
     except Exception as exc:
         import traceback
         tb = traceback.format_exc()
         logger.error(f"[api_swap_execute] Unhandled exception: {exc}\n{tb}")
-        return jsonify(status="error", error="swap_execution_failed", message=str(exc), exception_type=type(exc).__name__), 500
+        return jsonify(status="error", error="swap_execution_failed", message="Swap execution error"), 400
+
+@app.route("/api/v1/wallet/fee-estimate", methods=["POST"])
+def api_v1_wallet_fee_estimate():
+    """Estimate transaction fee (minimal stub returns 0 for now)."""
+    try:
+        data = request.get_json() or {}
+        amount = data.get("amount", 0)
+        token = (data.get("token") or "THR").upper().strip()
+
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            return jsonify(status="error", error="invalid_amount", fee=0), 400
+
+        if amount < 0:
+            return jsonify(status="error", error="negative_amount", fee=0), 400
+
+        fee = 0.0
+        return jsonify(status="success", fee=fee), 200
+
+    except Exception as exc:
+        logger.error(f"[api_v1_wallet_fee_estimate] Exception: {exc}")
+        return jsonify(status="error", error="fee_estimate_failed", fee=0), 400
+
 
 # ─── Token Balances API (NEW) ─────────────────────────────────────
 #

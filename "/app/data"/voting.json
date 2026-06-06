@@ -1,0 +1,65 @@
+{
+  "polls": [
+    {
+      "id": "feature_pvp",
+      "title": {
+        "en": "PvP Battle Arena",
+        "el": "Αρένα Μάχης PvP"
+      },
+      "description": {
+        "en": "Add player vs player combat zones",
+        "el": "Προσθήκη ζωνών μάχης παίκτη εναντίον παίκτη"
+      },
+      "votes": 0
+    },
+    {
+      "id": "feature_guilds",
+      "title": {
+        "en": "Guild System",
+        "el": "Σύστημα Συντεχνιών"
+      },
+      "description": {
+        "en": "Form teams and compete together",
+        "el": "Δημιουργήστε ομάδες και ανταγωνιστείτε μαζί"
+      },
+      "votes": 0
+    },
+    {
+      "id": "feature_nft",
+      "title": {
+        "en": "NFT Collectibles",
+        "el": "Συλλεκτικά NFT"
+      },
+      "description": {
+        "en": "Earn unique NFT rewards",
+        "el": "Κερδίστε μοναδικές ανταμοιβές NFT"
+      },
+      "votes": 0
+    },
+    {
+      "id": "feature_staking",
+      "title": {
+        "en": "THR Staking Rewards",
+        "el": "Ανταμοιβές Staking THR"
+      },
+      "description": {
+        "en": "Stake THR to earn passive rewards",
+        "el": "Κάντε stake THR για παθητικές ανταμοιβές"
+      },
+      "votes": 0
+    },
+    {
+      "id": "feature_second_peer",
+      "title": {
+        "en": "Second Peer Node",
+        "el": "Δεύτερος Κόμβος Peer"
+      },
+      "description": {
+        "en": "Deploy a second peer node to improve redundancy and reliability in the Crypto Hunters game network.",
+        "el": "Εγκατάσταση δεύτερου κόμβου peer για βελτίωση της αξιοπιστίας και ανθεκτικότητας του δικτύου του παιχνιδιού Crypto Hunters."
+      },
+      "votes": 0
+    }
+  ],
+  "votes": {}
+}

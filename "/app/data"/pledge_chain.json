@@ -1,0 +1,13 @@
+[
+  {
+    "btc_address": "SYSTEM_AI_RESERVE",
+    "pledge_text": "Thronos AI Agent Genesis Allocation",
+    "timestamp": "2026-06-06 19:46:16 UTC",
+    "pledge_hash": "AI_GENESIS_ae1d1fa2038ec4a5",
+    "thr_address": "\"THR24d877dd21c6b0c9d8a702f24842fc34052a5689\"",
+    "send_seed_hash": "0b370dced24555d67d6a48f60b848555d9ead5e687b1cb6b792c684735af84fb",
+    "send_auth_hash": "5c00c16bc600d4231c57d0093533b7a496c1df7f777df4a4140a992fa4c9a403",
+    "has_passphrase": false,
+    "is_system": true
+  }
+]

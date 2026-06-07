@@ -776,6 +776,28 @@ APP_GIT_SHA     = (
     or "unknown"
 )
 
+# Build fingerprint for production verification
+def _get_git_commit_short():
+    """Get short git SHA from repo if available."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=BASE_DIR,
+            capture_output=True,
+            text=True,
+            timeout=1
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except:
+        pass
+    return APP_GIT_SHA[:7] if APP_GIT_SHA and APP_GIT_SHA != "unknown" else "unknown"
+
+GIT_COMMIT_SHORT = _get_git_commit_short()
+BUILD_TIMESTAMP = str(int(time.time()))
+BUILD_ID = f"{GIT_COMMIT_SHORT}-{BUILD_TIMESTAMP}"
+
 AI_LOG_API_KEY = os.getenv("AI_LOG_API_KEY", os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW"))
 
 DATA_DIR = os.getenv("MUSIC_VOLUME", os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data")))
@@ -11402,9 +11424,24 @@ def api_health():
         "last_hash": CHAIN_META.get("last_hash") or "0" * 64,
         "ts": int(now),
         "version": APP_VERSION,
+        "build_id": BUILD_ID,
+        "git_commit": GIT_COMMIT_SHORT,
+        "build_time": BUILD_TIMESTAMP,
     }
     HEALTH_CACHE.update({"ts": now, "data": payload})
     return jsonify(payload), 200
+
+
+@app.route("/api/build", methods=["GET"])
+def api_build():
+    """Quick endpoint to check build/commit information."""
+    return jsonify({
+        "ok": True,
+        "build_id": BUILD_ID,
+        "git_commit": GIT_COMMIT_SHORT,
+        "build_time": int(BUILD_TIMESTAMP),
+        "version": APP_VERSION,
+    }), 200
 
 
 @app.route("/health", methods=["GET", "OPTIONS"])

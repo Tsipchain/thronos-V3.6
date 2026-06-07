@@ -25692,6 +25692,16 @@ def api_wallet_activate():
     ), 200
 
 
+@app.route("/api/wallet/v1/status", methods=["GET"])
+def api_wallet_v1_status():
+    """
+    Backward-compatibility endpoint for /api/wallet/v1/status.
+    Redirects to /api/wallet/status with same parameters.
+    """
+    # Simply forward to the current endpoint
+    return api_wallet_status()
+
+
 @app.route("/api/wallet/status", methods=["GET"])
 def api_wallet_status():
     """

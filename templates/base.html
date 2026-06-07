@@ -2465,6 +2465,19 @@
 </div>
 
 <script>
+// Defensive function stubs to prevent "undefined" crashes if called before definition
+// These will be overwritten by the real definitions later in the script
+if (typeof showWalletLoginForm === 'undefined') {
+    window.showWalletLoginForm = function() {
+        console.warn('[REGRESSION] showWalletLoginForm called before definition - using fallback');
+        // Fallback: try to show the login form by looking for DOM elements
+        const loginSection = document.getElementById('walletLoginSection');
+        if (loginSection) loginSection.style.display = 'block';
+        const contentSection = document.getElementById('walletContentSection');
+        if (contentSection) contentSection.style.display = 'none';
+    };
+}
+
 // Global Language Logic
     window.LANG_SEQUENCE = window.LANG_SEQUENCE || ['gr', 'en', 'ja', 'es', 'ru'];
 const LANGUAGE_CLASS_MAP = {

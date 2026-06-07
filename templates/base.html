@@ -6263,6 +6263,7 @@ async function openHeaderWalletModal(){
         setWalletOpen(true);
         showWalletLoginForm();
         setTimeout(() => {
+            initializeOwnershipVerificationForm();
             const diagnostics = walletSession.getUnusableKeyDiagnostics ? walletSession.getUnusableKeyDiagnostics() : null;
             showUnusableKeyRecovery(diagnostics);
         }, 100);
@@ -6273,6 +6274,7 @@ async function openHeaderWalletModal(){
         setWalletOpen(true);
         showWalletLoginForm();
         setTimeout(() => {
+            initializeOwnershipVerificationForm();
             const err = {mismatch: walletSession.getSigningKeyMismatch ? walletSession.getSigningKeyMismatch() : null};
             showKeyMismatchRecovery(err);
         }, 100);
@@ -6283,6 +6285,7 @@ async function openHeaderWalletModal(){
         setWalletOpen(true);
         showWalletLoginForm();
         setTimeout(() => {
+            initializeOwnershipVerificationForm();
             showMissingSigningKeyRecovery();
         }, 100);
         return;
@@ -6308,6 +6311,8 @@ async function openHeaderWalletModal(){
     setWalletOpen(true);
     if(!walletSession.isBound()){
         showWalletLoginForm();
+        // Initialize ownership verification form (resolves canonical address from "loading...")
+        setTimeout(() => initializeOwnershipVerificationForm(), 50);
     } else {
         showWalletContentSection();
         loadWalletBalances(true);
@@ -6851,13 +6856,21 @@ async function initializeOwnershipVerificationForm() {
         elem.value = 'loading...';
     }
 
-    // Resolve canonical address with retry logic
+    // Resolve canonical address with retry logic and timeout
     try {
-        const result = await walletSession.resolveCanonicalWalletAddress({
-            maxAttempts: 10,
-            retryIntervalMs: 250,
-            debug: false
-        });
+        // Add 3-second timeout to prevent indefinite waiting
+        const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Address resolution timeout')), 3000)
+        );
+
+        const result = await Promise.race([
+            walletSession.resolveCanonicalWalletAddress({
+                maxAttempts: 10,
+                retryIntervalMs: 250,
+                debug: false
+            }),
+            timeoutPromise
+        ]);
 
         if (result.ok && result.canonical_v1_address) {
             // Canonical address resolved - set it and enable submit

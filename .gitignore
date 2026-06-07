@@ -18,3 +18,12 @@ node_modules/
 *.png
 !system_architecture.png
 !btc_pledge_qr.png
+
+# Credentials & secrets - NEVER commit
+**/ai_agent_credentials.json
+**/ai_sessions.json
+**/*credentials*.json
+**/*secrets*.json
+**/*auth*.json
+.env
+.env.local

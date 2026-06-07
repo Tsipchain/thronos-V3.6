@@ -210,15 +210,24 @@ class TestSwapFrontendNoFallback:
         swap_html = Path(__file__).parent.parent / "templates" / "swap.html"
         content = swap_html.read_text()
 
-        # Find the swap execution function
-        exec_start = content.find("async function doSwap()")
-        if exec_start < 0:
-            exec_start = content.find("function doSwap()")
-        exec_end = content.find("finally", exec_start) + 100
-        exec_body = content[exec_start:exec_end]
+        # Find the error handler after V1 signing attempt
+        fallback_check = content.find("Wallet V1 signing failed")
+        assert fallback_check > 0, "Should have explicit check for V1 signing failure"
 
-        # Should have requireUnlockedWallet call
-        assert "requireUnlockedWallet" in exec_body, "Should require unlocked wallet"
+        # Verify that after V1 signing attempt, if it fails, we return (don't fallback)
+        # Check that the error path returns instead of falling through to legacy
+        v1_error_section = content[fallback_check:fallback_check + 300]
+        assert "return" in v1_error_section, "Should return on V1 signing failure (no fallback)"
+
+        # Verify that when hasRuntimeSigningMaterial is true and fails, there's NO comment about trying legacy
+        # (The old code said "trying legacy format", the new code should NOT say that)
+        legacy_fallback_comment = content.find("trying legacy format")
+        if legacy_fallback_comment > 0:
+            # Check if it's in the V1 error handler section
+            v1_section_start = content.find("if (canonicalAddr && hasRuntimeSigningMaterial)")
+            v1_section_end = content.find("} else if", v1_section_start)
+            v1_block = content[v1_section_start:v1_section_end]
+            assert "trying legacy format" not in v1_block, "Should NOT attempt legacy fallback when V1 material exists"
 
     def test_swap_html_payload_format_consistent(self):
         """Verify swap.html uses consistent centralized format."""

@@ -649,8 +649,11 @@ async function doSwap() {
                 }
                 return;
             } catch (e) {
-                // If new format fails, try legacy format below
-                console.warn('[Swap] Centralized format failed, trying legacy format:', e.message);
+                // CRITICAL: V1 signing failed - do NOT fallback to legacy when V1 material exists
+                $('swapResult').style.color = '#f00';
+                $('swapResult').textContent = `❌ Wallet V1 signing failed: ${e.message}`;
+                console.error('[Swap] Wallet V1 centralized signing failed:', e.message);
+                return;
             }
         } else if (canonicalAddr && localStorage.getItem('wallet_v1_encrypted_priv')) {
             // Wallet V1 is available but locked

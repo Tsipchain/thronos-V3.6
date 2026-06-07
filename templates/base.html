@@ -6583,7 +6583,7 @@ async function createWalletV1FromHeader(){
     }
 }
 
-function showKeyMismatchRecovery(err) {
+async function showKeyMismatchRecovery(err) {
     const mismatch = err && err.mismatch ? err.mismatch : null;
     const activeAddr = walletSession.getActiveAddress ? walletSession.getActiveAddress() : localStorage.getItem('wallet_v1_address');
     const derivedAddr = mismatch && mismatch.derived_address ? mismatch.derived_address : 'unknown';
@@ -6594,24 +6594,76 @@ function showKeyMismatchRecovery(err) {
     const shortActive = activeAddr ? activeAddr.substring(0, 10) + '...' : 'unknown';
     const shortDerived = derivedAddr ? derivedAddr.substring(0, 10) + '...' : 'unknown';
 
+    // CHECK BINDING: Is this a bound signer that should be accepted?
+    let bindingStatus = 'checking...';
+    let isValidBinding = false;
+    try {
+        const bindingResp = await fetch(`/api/wallet/v1/key-binding/${encodeURIComponent(activeAddr)}`);
+        const bindingData = await bindingResp.json();
+        if (bindingData.ok && bindingData.binding && bindingData.binding.bound_key_address) {
+            const boundKeyAddr = (bindingData.binding.bound_key_address || '').toUpperCase();
+            const derivedAddrNorm = (derivedAddr || '').toUpperCase();
+            isValidBinding = (boundKeyAddr === derivedAddrNorm);
+            bindingStatus = isValidBinding ? 'valid binding (bound signer)' : 'binding exists but derived address doesn\'t match';
+        } else {
+            bindingStatus = 'no binding registered';
+        }
+    } catch (bindErr) {
+        console.warn('[KeyMismatch] Binding check failed:', bindErr.message);
+        bindingStatus = 'binding check failed';
+    }
+
+    // If binding is valid, ACCEPT the key as bound signer (not an error)
+    if (isValidBinding) {
+        const html = `
+        <div style="background:#1a2a1a; border:1px solid #00ff66; border-radius:12px; padding:20px; color:#fff; margin:20px 0;">
+            <h4 style="color:#00ff66; margin-top:0;">✅ Bound Signer Recognized</h4>
+            <p style="font-size:0.9em; line-height:1.5;">
+                The signing key is a bound signer for your wallet (canonical: <strong>${shortActive}</strong>).
+                This is valid for authorized signer scenarios.
+            </p>
+            <div style="background:#000; border:1px solid #0a4a1a; border-radius:8px; padding:12px; margin:12px 0; font-size:0.85em; font-family:monospace;">
+                <div><span style="color:#9f9;">Canonical Address:</span> ${shortActive}</div>
+                <div><span style="color:#00ff66;">Bound Signer Address:</span> ${shortDerived}</div>
+                <div><span style="color:#9f9;">Status:</span> ${bindingStatus}</div>
+            </div>
+            <p style="font-size:0.9em; color:#00ff66;">✓ Key has been unlocked. You can now sign transactions.</p>
+        </div>
+        `;
+        const container = document.getElementById('walletV1UnlockMode');
+        if (container) {
+            const existing = container.querySelector('[data-mismatch-recovery]');
+            if (existing) existing.remove();
+            const div = document.createElement('div');
+            div.setAttribute('data-mismatch-recovery', '1');
+            div.innerHTML = html;
+            container.appendChild(div);
+        }
+        return;
+    }
+
+    // Otherwise: TRUE MISMATCH - derived address doesn't match any binding
     const html = `
     <div style="background:#1a1a1a; border:1px solid #ff6600; border-radius:12px; padding:20px; color:#fff; margin:20px 0;">
-        <h4 style="color:#ff9900; margin-top:0;">⚠️ Signing Key Mismatch</h4>
+        <h4 style="color:#ff9900; margin-top:0;">⚠️ Signing Key Mismatch (Not Bound)</h4>
         <p style="font-size:0.9em; line-height:1.5;">
-            PIN was accepted, but the stored signing key belongs to a different wallet.
-            <strong>Your active wallet (${shortActive}) is preserved.</strong>
+            PIN was accepted, but this signing key is NOT authorized for your wallet.
+            The derived address (${shortDerived}) doesn't match your canonical wallet (${shortActive}) and is not registered as a bound signer.
         </p>
 
         <div style="background:#000; border:1px solid #666; border-radius:8px; padding:12px; margin:12px 0; font-size:0.85em; font-family:monospace;">
-            <div><span style="color:#9f9;">Active Address:</span> ${shortActive}</div>
-            <div><span style="color:#ff9900;">Derived Address:</span> ${shortDerived}</div>
+            <div><span style="color:#9f9;">Canonical Address:</span> ${shortActive}</div>
+            <div><span style="color:#ff9900;">Derived Address (from key):</span> ${shortDerived}</div>
+            <div><span style="color:#ff9900;">Binding Status:</span> ${bindingStatus}</div>
             <div><span style="color:#9f9;">Encrypted Seed:</span> ${hasEncrypted ? 'yes' : 'no'}</div>
-            <div><span style="color:#9f9;">Runtime Material:</span> ${hasRuntime ? 'yes' : 'no'}</div>
         </div>
 
+        <p style="font-size:0.85em; color:#ffaa00; margin:10px 0;">
+            💡 <strong>Recovery Options:</strong>
+        </p>
         <div style="display:flex; gap:10px; flex-wrap:wrap;">
             <button onclick="clearMismatchedSigningKey()" style="flex:1; min-width:150px; padding:10px; background:#9c3c3c; color:#fff; border:1px solid #ff6600; border-radius:8px; cursor:pointer; font-size:0.9em;">
-                🗑️ Clear Mismatched Key
+                🗑️ Clear This Key
             </button>
             <button onclick="showImportSigningKeyForm()" style="flex:1; min-width:150px; padding:10px; background:#00a86b; color:#000; border:1px solid #00ff66; border-radius:8px; cursor:pointer; font-size:0.9em;">
                 📥 Import Correct Key

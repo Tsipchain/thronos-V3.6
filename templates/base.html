@@ -6214,18 +6214,37 @@ function sanitizeWalletV1ProductionState(status) {
 
 // ========== End Production Mode State Sanitizer ==========
 
+// Helper: Safely fetch wallet status with active address
+async function fetchWalletStatusWithAddress() {
+    try {
+        // Get active wallet address from session
+        const activeAddr = window.walletSession && window.walletSession.getAddress ? window.walletSession.getAddress() : null;
+
+        // If no active address, return safe default (don't make request)
+        if (!activeAddr) {
+            console.warn('[WalletV1] No active address - skipping status fetch, using safe default');
+            return {ok: false, legacy_repair_ui_enabled: false};
+        }
+
+        // Call endpoint with required address parameter
+        const response = await fetch(`/api/wallet/v1/status?address=${encodeURIComponent(activeAddr)}`);
+        const status = await response.json();
+        return status || {ok: false, legacy_repair_ui_enabled: false};
+    } catch (err) {
+        console.warn('[WalletV1] Could not fetch wallet status:', err.message);
+        // Default to production mode (safe) on error
+        return {ok: false, legacy_repair_ui_enabled: false};
+    }
+}
+
 async function initializeWalletV1LegacyRepairUI() {
     // Fetch wallet status and apply production mode constraints
-    try {
-        const response = await fetch('/api/wallet/v1/status');
-        const status = await response.json();
+    const status = await fetchWalletStatusWithAddress();
 
-        if (status.ok) {
-            applyWalletV1ProductionMode(status);
-        }
-    } catch (err) {
-        console.warn('[WalletV1] Could not fetch wallet status:', err);
-        // Default to production mode (safe default: hide legacy UI)
+    if (status.ok) {
+        applyWalletV1ProductionMode(status);
+    } else {
+        // Safe default when status unavailable: production mode
         applyWalletV1ProductionMode({legacy_repair_ui_enabled: false});
     }
 }
@@ -9598,20 +9617,18 @@ window.addEventListener('beforeunload', () => {
 <script>
 // Wallet V1 Production Mode: Enforce on every page load
 document.addEventListener('DOMContentLoaded', async () => {
-    try {
-        const response = await fetch('/api/wallet/v1/status');
-        const status = await response.json();
-        if (status.ok) {
-            // Set global flag for admin mode check in switchWalletV1Mode
-            window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = status.legacy_repair_ui_enabled || false;
-            // First sanitize stale legacy state in production mode
-            sanitizeWalletV1ProductionState(status);
-            // Then apply production mode UI constraints
-            applyWalletV1ProductionMode(status);
-        }
-    } catch (err) {
-        // Default to production mode (safe) if fetch fails
-        console.warn('[WalletV1] Could not fetch status on DOMContentLoaded, defaulting to production mode');
+    // Fetch wallet status with required address parameter
+    const status = await fetchWalletStatusWithAddress();
+
+    if (status.ok) {
+        // Set global flag for admin mode check in switchWalletV1Mode
+        window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = status.legacy_repair_ui_enabled || false;
+        // First sanitize stale legacy state in production mode
+        sanitizeWalletV1ProductionState(status);
+        // Then apply production mode UI constraints
+        applyWalletV1ProductionMode(status);
+    } else {
+        // Default to production mode (safe) - no address or fetch failed
         const safeStatus = {legacy_repair_ui_enabled: false};
         window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = false;
         sanitizeWalletV1ProductionState(safeStatus);
@@ -9624,16 +9641,14 @@ const originalOpenModal = window.openHeaderWalletModal;
 if (originalOpenModal) {
     window.openHeaderWalletModal = async function() {
         // Sanitize stale state and apply production mode before original logic
-        try {
-            const response = await fetch('/api/wallet/v1/status');
-            const status = await response.json();
-            if (status.ok) {
-                // Set global flag for admin mode check in switchWalletV1Mode
-                window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = status.legacy_repair_ui_enabled || false;
-                sanitizeWalletV1ProductionState(status);
-                applyWalletV1ProductionMode(status);
-            }
-        } catch (err) {
+        const status = await fetchWalletStatusWithAddress();
+        if (status.ok) {
+            // Set global flag for admin mode check in switchWalletV1Mode
+            window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = status.legacy_repair_ui_enabled || false;
+            sanitizeWalletV1ProductionState(status);
+            applyWalletV1ProductionMode(status);
+        } else {
+            // Safe default when no address or fetch fails
             const safeStatus = {legacy_repair_ui_enabled: false};
             window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = false;
             sanitizeWalletV1ProductionState(safeStatus);
@@ -9650,24 +9665,27 @@ if (originalSwitchMode) {
     window.switchWalletV1Mode = function() {
         const result = originalSwitchMode.apply(this, arguments);
         // Re-apply production mode and sanitize after mode switch
-        try {
-            fetch('/api/wallet/v1/status')
-                .then(r => r.json())
-                .then(status => {
-                    if (status.ok) {
-                        // Set global flag for admin mode check in switchWalletV1Mode
-                        window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = status.legacy_repair_ui_enabled || false;
-                        sanitizeWalletV1ProductionState(status);
-                        applyWalletV1ProductionMode(status);
-                    }
-                })
-                .catch(() => {
+        fetchWalletStatusWithAddress()
+            .then(status => {
+                if (status.ok) {
+                    // Set global flag for admin mode check in switchWalletV1Mode
+                    window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = status.legacy_repair_ui_enabled || false;
+                    sanitizeWalletV1ProductionState(status);
+                    applyWalletV1ProductionMode(status);
+                } else {
+                    // Safe default
                     const safeStatus = {legacy_repair_ui_enabled: false};
                     window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = false;
                     sanitizeWalletV1ProductionState(safeStatus);
                     applyWalletV1ProductionMode(safeStatus);
-                });
-        } catch (_) {}
+                }
+            })
+            .catch(() => {
+                const safeStatus = {legacy_repair_ui_enabled: false};
+                window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = false;
+                sanitizeWalletV1ProductionState(safeStatus);
+                applyWalletV1ProductionMode(safeStatus);
+            });
         return result;
     };
 }

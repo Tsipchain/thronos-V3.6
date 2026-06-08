@@ -6335,9 +6335,20 @@ function switchWalletV1Mode(){
         // Wallet missing signing key: Recovery Kit (restore) is primary
         displayMode = 'restore';
 
-        // Show recovery kit and import sections, hide others
-        if (restoreEl) restoreEl.style.display = 'block';
-        if (importEl) importEl.style.display = 'block';
+        // In production mode: show ONLY Recovery Kit (walletV1ImportMode)
+        // In admin mode: show both Recovery Kit and Legacy Restore options
+        const isProductionMode = !adminModeEnabled;
+
+        if (isProductionMode) {
+            // Production: show Recovery Kit only (NOT legacy migration)
+            if (restoreEl) restoreEl.style.display = 'none';    // Hide legacy migration
+            if (importEl) importEl.style.display = 'block';     // Show Recovery Kit (PRIMARY)
+        } else {
+            // Admin mode: show both options
+            if (restoreEl) restoreEl.style.display = 'block';   // Show legacy migration
+            if (importEl) importEl.style.display = 'block';     // Show Recovery Kit
+        }
+
         if (createEl) createEl.style.display = 'none';
         if (unlockEl) unlockEl.style.display = 'none';
         if (migrateEl) migrateEl.style.display = 'none';

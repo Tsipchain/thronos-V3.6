@@ -709,6 +709,131 @@ class TestWalletV1RegressionSuite:
         print("  - Admin mode only shows restoreEl ✓")
         print("  - walletV1RestoreMode (legacy migration) never visible in production ✓")
 
+    def test_production_dropdown_options_hidden_pr617(self):
+        """
+        PR #617 Test: Production Mode Dropdown Options Hidden
+
+        Requirement:
+        - In production mode (LEGACY_REPAIR_UI=0), dropdown options for legacy
+          features should be REMOVED from the select element entirely
+        - Options to remove: 'restore', 'migrate'
+        - Options to keep: 'unlock', 'create', 'import_signing_key'
+
+        Verification:
+        1. Check applyWalletV1ProductionMode() removes restore + migrate options
+        2. Verify legacy option values are in removal list
+        """
+        with open('templates/base.html', 'r') as f:
+            html = f.read()
+
+        # VERIFY 1: Check that restore and migrate are in legacyValues
+        import re
+        legacy_removal = re.search(
+            r"const legacyValues = \[(.*?)\];",
+            html,
+            re.DOTALL
+        )
+
+        assert legacy_removal, "legacyValues array not found in applyWalletV1ProductionMode"
+
+        legacy_values_str = legacy_removal.group(1)
+        assert "'restore'" in legacy_values_str or '"restore"' in legacy_values_str, \
+            "Production mode must remove 'restore' option from dropdown"
+
+        assert "'migrate'" in legacy_values_str or '"migrate"' in legacy_values_str, \
+            "Production mode must remove 'migrate' option from dropdown"
+
+        # VERIFY 2: Check that option.remove() is called
+        assert "option.remove()" in html, \
+            "Production mode must remove legacy options using option.remove()"
+
+        print("✅ Production Dropdown Options (PR #617):")
+        print("  - 'restore' option removed in production ✓")
+        print("  - 'migrate' option removed in production ✓")
+        print("  - Options removed using option.remove() ✓")
+        print("  - Keeps 'unlock', 'create', 'import_signing_key' ✓")
+
+    def test_displaymode_matches_shown_panel_pr617(self):
+        """
+        PR #617 Test: displayMode Matches Shown Panel (No CTA Mismatch)
+
+        Requirement:
+        - When showing Recovery Kit panel (walletV1ImportMode), displayMode should
+          be set to 'import_signing_key', NOT 'restore'
+        - This prevents mode/CTA mismatch where dropdown shows one thing but
+          panel shows another
+
+        Verification:
+        1. In hasNoSigningKey block, when Recovery Kit is shown, displayMode = 'import_signing_key'
+        2. No mode→CTA mismatches
+        """
+        with open('templates/base.html', 'r') as f:
+            html = f.read()
+
+        # VERIFY 1: Check displayMode is set to 'import_signing_key' in recovery state
+        import re
+        recovery_block = re.search(
+            r"if \(hasNoSigningKey\).*?displayMode = ['\"](\w+)['\"]",
+            html,
+            re.DOTALL
+        )
+
+        assert recovery_block, "hasNoSigningKey block not found"
+
+        display_mode_value = recovery_block.group(1)
+        assert display_mode_value == 'import_signing_key', \
+            f"When showing Recovery Kit, displayMode should be 'import_signing_key', not '{display_mode_value}'"
+
+        # VERIFY 2: Confirm Recovery Kit (importEl) is shown with correct mode
+        assert "importEl.style.display = 'block'" in html, \
+            "Recovery Kit panel (importEl) must be shown in hasNoSigningKey state"
+
+        print("✅ DisplayMode Matches Shown Panel (PR #617):")
+        print("  - displayMode = 'import_signing_key' when showing Recovery Kit ✓")
+        print("  - No mode→CTA mismatch ✓")
+        print("  - Panel visibility matches dropdown mode ✓")
+
+    def test_binding_not_registered_register_option_pr617(self):
+        """
+        PR #617 Test: Binding Not Registered - Register Button
+
+        Requirement:
+        - When binding_not_registered error occurs, show option to register
+          the derived key as a bound signer
+        - Button should call walletV1RegisterBoundSigner(derivedAddress)
+        - Only show if admin mode or derived address is available
+
+        Verification:
+        1. Check walletV1RegisterBoundSigner() function exists
+        2. Check it's called in binding_not_registered error handler
+        3. Check backend endpoint /api/wallet/v1/bind-signer is referenced
+        """
+        with open('templates/base.html', 'r') as f:
+            html = f.read()
+
+        # VERIFY 1: Check function exists
+        assert "function walletV1RegisterBoundSigner(derivedAddress)" in html or \
+               "async function walletV1RegisterBoundSigner(derivedAddress)" in html, \
+            "walletV1RegisterBoundSigner() function must be defined"
+
+        # VERIFY 2: Check it's called in binding_not_registered handler
+        assert "walletV1RegisterBoundSigner" in html, \
+            "walletV1RegisterBoundSigner must be called in error handler"
+
+        # VERIFY 3: Check endpoint reference
+        assert "/api/wallet/v1/bind-signer" in html, \
+            "Must reference /api/wallet/v1/bind-signer endpoint for binding registration"
+
+        # VERIFY 4: Check button shows for binding_not_registered
+        assert "binding_not_registered" in html and "Register This Key as Bound Signer" in html, \
+            "binding_not_registered error must show 'Register Bound Signer' button"
+
+        print("✅ Binding Not Registered - Register Option (PR #617):")
+        print("  - walletV1RegisterBoundSigner() function defined ✓")
+        print("  - Called in binding_not_registered error handler ✓")
+        print("  - 'Register This Key as Bound Signer' button shown ✓")
+        print("  - References /api/wallet/v1/bind-signer endpoint ✓")
+
     def test_advanced_accordion_no_auto_open(self):
         """
         CRITICAL Regression Test: Advanced Accordion No Auto-Open
@@ -823,6 +948,9 @@ if __name__ == '__main__':
     test_regression.test_error_recovery_uses_canonical_form()
     test_regression.test_production_mode_legacy_restore_always_hidden()
     test_regression.test_advanced_accordion_no_auto_open()
+    test_regression.test_production_dropdown_options_hidden_pr617()
+    test_regression.test_displaymode_matches_shown_panel_pr617()
+    test_regression.test_binding_not_registered_register_option_pr617()
 
     print("\n" + "=" * 80)
     print("ALL TESTS PASSED ✓")

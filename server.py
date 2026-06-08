@@ -36331,6 +36331,43 @@ def api_v1_wallet_bind_public_key():
     return jsonify({"ok": True, "binding": store["bindings"][address]}), 200
 
 
+@app.route("/api/wallet/v1/key-binding/<address>", methods=["GET"])
+def api_wallet_v1_key_binding(address):
+    """
+    Get binding status for a canonical wallet address.
+    Frontend uses this to determine if a derived address is a bound signer.
+
+    Returns: {ok: bool, binding: {address, public_key_address, bound_at, ...} or null}
+    """
+    from wallet_v1_address_derivation import validate_thronos_address
+
+    address = (address or "").strip().upper()
+    if not validate_thronos_address(address):
+        return jsonify({"ok": False, "error": "invalid_address"}), 400
+
+    try:
+        store = load_json(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE, {"bindings": {}})
+        binding = store.get("bindings", {}).get(address)
+
+        if binding:
+            return jsonify({
+                "ok": True,
+                "binding": {
+                    "address": binding.get("address"),
+                    "bound_key_address": binding.get("public_key_address"),  # Derived from bound public key
+                    "status": "active",
+                    "bound_at": binding.get("bound_at")
+                }
+            }), 200
+        else:
+            return jsonify({
+                "ok": True,
+                "binding": None  # No binding exists
+            }), 200
+    except Exception as err:
+        return jsonify({"ok": False, "error": "binding_lookup_failed"}), 400
+
+
 # ─── Startup hooks ────────────────────────────────────────────────────────────
 # PR-XXX: Role-based initialization with clear logging
 print(f"\n[STARTUP] Initializing {NODE_ROLE.upper()} node...")

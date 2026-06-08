@@ -6736,72 +6736,21 @@ function showMissingSigningKeyRecovery() {
     }
 }
 
+function focusCanonicalImportForm() {
+    const details = document.querySelector('details[aria-label="walletV1AdvancedImport"]');
+    if (details) {
+        details.open = true;
+        const input = document.getElementById('walletV1ImportKeyHex');
+        if (input) {
+            input.focus();
+            input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    }
+}
+
+// Alias for backward compatibility with error recovery UI
 function showImportSigningKeyForm() {
-    const form = `
-    <div style="background:#1a2a1a; border:1px solid #00ff66; border-radius:8px; padding:15px; margin:12px 0;">
-        <h5 style="color:#00ff66; margin-top:0;">Import Wallet V1 Signing Key</h5>
-        <label for="importKeyHex" style="display:block; font-size:0.9em; color:#9f9;">Private Key (Hex)</label>
-        <input type="password" id="importKeyHex" placeholder="64 hex characters" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:6px; margin:6px 0; font-size:0.85em; font-family:monospace;" />
-
-        <label for="importKeyPin" style="display:block; font-size:0.9em; color:#9f9; margin-top:10px;">PIN</label>
-        <input type="password" id="importKeyPin" placeholder="Wallet PIN" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:6px; margin:6px 0;" />
-
-        <div style="display:flex; gap:8px; margin-top:10px;">
-            <button onclick="performImportSigningKey()" style="flex:1; padding:10px; background:#00aa66; color:#000; border:1px solid #00ff66; border-radius:6px; cursor:pointer; font-weight:bold;">
-                ✓ Import Key
-            </button>
-            <button onclick="closeImportSigningKeyForm()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
-                Cancel
-            </button>
-        </div>
-    </div>
-    `;
-
-    const recovery = document.querySelector('[data-mismatch-recovery]') || document.querySelector('[data-missing-key-recovery]');
-    if (recovery) {
-        const existing = recovery.querySelector('[data-import-form]');
-        if (existing) existing.remove();
-        const div = document.createElement('div');
-        div.setAttribute('data-import-form', '1');
-        div.innerHTML = form;
-        recovery.appendChild(div);
-    }
-}
-
-function closeImportSigningKeyForm() {
-    const form = document.querySelector('[data-import-form]');
-    if (form) form.remove();
-}
-
-async function performImportSigningKey() {
-    const keyHex = (document.getElementById('importKeyHex')?.value || '').trim();
-    const pin = (document.getElementById('importKeyPin')?.value || '').trim();
-    const targetAddr = walletSession.getActiveAddress ? walletSession.getActiveAddress() : localStorage.getItem('wallet_v1_address');
-
-    if (!keyHex || !pin) return alert('Private key and PIN are required');
-    if (!keyHex.match(/^[0-9a-fA-F]{64}$/)) return alert('Invalid key format. Must be 64 hex characters.');
-
-    try {
-        if (!window.WalletAuth || typeof window.WalletAuth.importSigningKeyForAddress !== 'function') {
-            return alert('Import API not available');
-        }
-
-        const result = await window.WalletAuth.importSigningKeyForAddress(keyHex, pin, targetAddr);
-        if (result.success) {
-            alert('✓ Signing key imported successfully!');
-            document.getElementById('importKeyHex').value = '';
-            document.getElementById('importKeyPin').value = '';
-            const recovery = document.querySelector('[data-mismatch-recovery]') || document.querySelector('[data-missing-key-recovery]');
-            if (recovery) recovery.remove();
-            updateHeaderWalletUi();
-            loadWalletBalances(true);
-        } else {
-            alert('Import failed: ' + (result.error || 'Unknown error'));
-        }
-    } catch(err) {
-        console.error('Import error:', err);
-        alert('Error: ' + (err.message || 'Import failed'));
-    }
+    focusCanonicalImportForm();
 }
 
 
@@ -7075,20 +7024,52 @@ async function performCanonicalImportSigningKey() {
     try {
         console.log('[ImportSigningKey] Importing private key...');
 
+        // Get target address (active wallet)
+        const targetAddr = walletSession.getActiveAddress ? walletSession.getActiveAddress() : localStorage.getItem('wallet_v1_address');
+
+        if (!targetAddr) {
+            return alert('No active wallet address found');
+        }
+
+        // Try wallet_auth import first (for error recovery context)
+        if (window.WalletAuth && typeof window.WalletAuth.importSigningKeyForAddress === 'function') {
+            const result = await window.WalletAuth.importSigningKeyForAddress(keyHex, pin, targetAddr);
+            if (result.success) {
+                alert('✓ Signing key imported successfully!');
+                // Clear form
+                document.getElementById('walletV1ImportKeyHex').value = '';
+                document.getElementById('walletV1ImportKeyPin').value = '';
+                // Collapse accordion
+                const details = document.querySelector('details[aria-label="walletV1AdvancedImport"]');
+                if (details) details.open = false;
+                // Clean up error recovery UI
+                const recovery = document.querySelector('[data-mismatch-recovery]') || document.querySelector('[data-missing-key-recovery]');
+                if (recovery) recovery.remove();
+                // Update UI
+                updateHeaderWalletUi();
+                loadWalletBalances(true);
+                return;
+            } else {
+                alert('Import failed: ' + (result.error || 'Unknown error'));
+                return;
+            }
+        }
+
+        // Fallback: manual derivation (for re-key ceremony context)
         if (!walletSession.derivePublicKeyAndAddress) {
             return alert('Key derivation API not available');
         }
 
-        const result = walletSession.derivePublicKeyAndAddress(keyHex);
-        if (!result.success) {
-            return alert('Failed to import key: ' + (result.error || 'Unknown error'));
+        const derivResult = walletSession.derivePublicKeyAndAddress(keyHex);
+        if (!derivResult.success) {
+            return alert('Failed to import key: ' + (derivResult.error || 'Unknown error'));
         }
 
-        const { publicKey, address } = result;
-        const canonicalAddr = document.getElementById('walletV1CanonicalAddr')?.value || '';
+        const { publicKey, address } = derivResult;
 
-        console.log('[ImportSigningKey] Derived signer address: ' + address + ', canonical: ' + canonicalAddr);
+        console.log('[ImportSigningKey] Derived signer address: ' + address + ', target: ' + targetAddr);
 
+        // Store for re-key ceremony
         window.walletV1CurrentPublicKey = publicKey;
         window.walletV1CurrentAddress = address;
         window.walletV1CurrentPrivateKey = keyHex;

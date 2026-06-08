@@ -6039,7 +6039,8 @@ function showWalletContentSection(){
 }
 
 function applyWalletV1ProductionMode(status) {
-    // Aggressive production mode enforcement: set body class CSS guard + JavaScript hiding
+    // Production mode enforcement: remove LEGACY/ADMIN features, but keep Recovery Kit restore
+    // Recovery Kit restore (restore mode) is PRIMARY feature for users without signing material
     // CSS guard (body.wallet-v1-production-mode) provides first layer
     // JavaScript provides second layer (option removal, diagnostics)
     const legacyRepairEnabled = status && status.legacy_repair_ui_enabled === true;
@@ -6050,16 +6051,18 @@ function applyWalletV1ProductionMode(status) {
         // Set body class for CSS guard
         document.body.classList.add('wallet-v1-production-mode');
 
-        // Hard-hide all legacy/admin form containers by ID
-        const restoreForm = document.getElementById('walletV1RestoreMode');
-        const migrateForm = document.getElementById('walletV1MigrateMode');
+        // Hide LEGACY/ADMIN form containers by ID, but NOT Recovery Kit restore
+        // Recovery Kit restore is the PRIMARY feature for users without signing key
+        const migrateForm = document.getElementById('walletV1MigrateMode');  // Legacy migrate
         const legacyRecoveryForm = document.getElementById('walletV1LegacyRecoveryForm');
-        const advancedImportForm = document.getElementById('walletV1AdvancedKeyImportForm');
-        const rekeyForm = document.getElementById('walletV1RekeyCeremonyForm');
-        const recoverySection = document.getElementById('walletRecoverySection');
-        const advancedZone = document.getElementById('walletAdvancedRecoveryZone');
+        const advancedImportForm = document.getElementById('walletV1AdvancedKeyImportForm');  // Advanced admin
+        const rekeyForm = document.getElementById('walletV1RekeyCeremonyForm');  // Admin feature
+        const recoverySection = document.getElementById('walletRecoverySection');  // Legacy recovery
+        const advancedZone = document.getElementById('walletAdvancedRecoveryZone');  // Admin zone
 
-        if (restoreForm) { restoreForm.style.display = 'none'; hiddenLegacyElements++; }
+        // NOTE: walletV1RestoreMode is the Recovery Kit restore - KEEP IT VISIBLE
+        // It's the primary way users unlock after pledge/migration
+
         if (migrateForm) { migrateForm.style.display = 'none'; hiddenLegacyElements++; }
         if (legacyRecoveryForm) { legacyRecoveryForm.style.display = 'none'; hiddenLegacyElements++; }
         if (advancedImportForm) { advancedImportForm.style.display = 'none'; hiddenLegacyElements++; }
@@ -6067,7 +6070,7 @@ function applyWalletV1ProductionMode(status) {
         if (recoverySection) { recoverySection.style.display = 'none'; hiddenLegacyElements++; }
         if (advancedZone) { advancedZone.style.display = 'none'; hiddenLegacyElements++; }
 
-        // Hide buttons by ID
+        // Hide buttons by ID - admin features only
         const advancedRecoveryBtn = document.getElementById('walletWidgetAdvancedRecoveryBtn');
         const resetWalletBtn = document.getElementById('walletWidgetResetPointersBtn');
         if (advancedRecoveryBtn) { advancedRecoveryBtn.style.display = 'none'; hiddenLegacyElements++; }
@@ -6079,12 +6082,13 @@ function applyWalletV1ProductionMode(status) {
         if (advancedBySelector && advancedBySelector !== advancedRecoveryBtn) { advancedBySelector.style.display = 'none'; hiddenLegacyElements++; }
         if (resetBySelector && resetBySelector !== resetWalletBtn) { resetBySelector.style.display = 'none'; hiddenLegacyElements++; }
 
-        // Remove legacy options from mode select (by value AND by text)
+        // Remove LEGACY options from mode select (NOT restore - that's Recovery Kit)
         const modeSelect = document.getElementById('walletWidgetMode');
         if (modeSelect) {
             const options = modeSelect.querySelectorAll('option');
-            const legacyValues = ['restore', 'migrate', 'legacy', 'rekey'];
-            const legacyTexts = ['Restore Existing', 'Migrate Legacy', 'Verify Legacy', 'Advanced Import', 'Re-Key'];
+            // IMPORTANT: 'restore' option is Recovery Kit restore (primary feature), NOT legacy
+            const legacyValues = ['migrate', 'legacy', 'rekey'];  // Removed 'restore' - it's not legacy
+            const legacyTexts = ['Migrate Legacy', 'Verify Legacy', 'Advanced Import', 'Re-Key'];
 
             options.forEach(option => {
                 const shouldRemove = legacyValues.includes(option.value) ||
@@ -6361,12 +6365,13 @@ function switchWalletV1Mode(){
     const createAllowed = allowWebCreate || hasPledge;
     const unlockAllowed = modalState === 'active_wallet_with_encrypted_key' || modalState === 'signing_ready';
     const importAllowed = modalState === 'active_wallet_no_key';
-    const restoreAllowed = modalState === 'no_active_wallet';
+    const restoreAllowed = modalState === 'no_active_wallet' || modalState === 'active_wallet_no_key';  // Both states allow restore (Recovery Kit)
     const adminSignerAllowed = adminModeEnabled && modalState === 'active_wallet_no_key';
 
-    // When wallet has no signing key, force import-only mode (locked state)
-    // BUT: allow admin_generate_signer mode if admin mode is enabled
-    const isLockedImportOnly = modalState === 'active_wallet_no_key' && !adminSignerAllowed;
+    // When wallet has no signing key AND in production mode, force import-only would hide Recovery Kit
+    // Instead, allow BOTH import and restore, with restore as primary when not admin mode
+    // const isLockedImportOnly = modalState === 'active_wallet_no_key' && !adminSignerAllowed;
+    const hasNoSigningKey = modalState === 'active_wallet_no_key';
 
     // Update mode select options visibility/disabled state
     const createOption = document.querySelector('option[value="create"]');
@@ -6375,28 +6380,25 @@ function switchWalletV1Mode(){
     const adminSignerOption = document.querySelector('option[value="admin_generate_signer"]');
     const modeSelect = document.getElementById('walletWidgetMode');
 
-    // In locked import-only state, disable all other options (unless admin mode allows signer)
-    if (isLockedImportOnly) {
-        if (restoreOption) restoreOption.disabled = true;
+    // When wallet has no signing key: Recovery Kit (restore) is PRIMARY, import is secondary
+    // Admin mode: allow both restore, import, and admin signer
+    if (hasNoSigningKey) {
+        // Wallet missing signing key: show Recovery Kit and import options
+        if (restoreOption) restoreOption.disabled = false;  // Recovery Kit is ALWAYS available
         if (createOption) createOption.disabled = true;
         if (unlockOption) unlockOption.disabled = true;
         if (migrateOption) migrateOption.disabled = true;
-        if (importOption) importOption.disabled = false;
-        if (adminSignerOption) adminSignerOption.disabled = true;
-        if (modeSelect) {
-            modeSelect.value = 'import_signing_key';
-            modeSelect.style.opacity = '0.6'; // Visual indication of locked state
-        }
-    } else if (adminSignerAllowed && modalState === 'active_wallet_no_key') {
-        // Admin mode with missing key: allow both import and admin signer
-        if (restoreOption) restoreOption.disabled = true;
-        if (createOption) createOption.disabled = true;
-        if (unlockOption) unlockOption.disabled = true;
-        if (migrateOption) migrateOption.disabled = true;
-        if (importOption) importOption.disabled = false;
-        if (adminSignerOption) adminSignerOption.disabled = false;
+        if (importOption) importOption.disabled = false;    // Import is secondary option
+        if (adminSignerOption) adminSignerOption.disabled = !adminSignerAllowed;
         if (modeSelect) modeSelect.style.opacity = '1'; // Normal state
+
+        // DEFAULT to restore (Recovery Kit) unless admin mode is explicitly selected
+        if (!mode || mode === 'import_signing_key' || mode === 'admin_generate_signer') {
+            // Auto-select restore if current mode is disabled/import-only
+            mode = 'restore';
+        }
     } else {
+        // Normal state: allow all applicable modes
         if (restoreOption) restoreOption.disabled = !restoreAllowed;
         if (createOption) createOption.disabled = !createAllowed;
         if (unlockOption) unlockOption.disabled = !unlockAllowed;
@@ -6409,12 +6411,13 @@ function switchWalletV1Mode(){
     // Auto-select appropriate mode based on state
     let displayMode = mode;
 
-    if (isLockedImportOnly) {
-        // Locked import-only state - force import_signing_key mode
-        displayMode = 'import_signing_key';
+    if (hasNoSigningKey) {
+        // Wallet missing signing key: Recovery Kit (restore) is primary
+        displayMode = 'restore';
 
-        // Hide all other mode sections
-        if (restoreEl) restoreEl.style.display = 'none';
+        // Show recovery kit and import sections, hide others
+        if (restoreEl) restoreEl.style.display = 'block';
+        if (importEl) importEl.style.display = 'block';
         if (createEl) createEl.style.display = 'none';
         if (unlockEl) unlockEl.style.display = 'none';
         if (migrateEl) migrateEl.style.display = 'none';
@@ -6528,6 +6531,13 @@ function switchWalletV1Mode(){
             if (modeLabel) modeLabel.style.display = 'block';
             if (addrLabel) addrLabel.style.display = 'block';
         }
+    }
+
+    // Update mode label when wallet has no signing key
+    if (hasNoSigningKey && modeLabel) {
+        modeLabel.textContent = 'Unlock Method';
+    } else if (modeLabel) {
+        modeLabel.textContent = 'Mode';
     }
 }
 

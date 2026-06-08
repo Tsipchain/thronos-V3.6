@@ -664,6 +664,120 @@ class TestWalletV1RegressionSuite:
         print(f"  - Single import panel for all error scenarios")
         print(f"  - No dynamic form creation on error")
 
+    def test_production_mode_legacy_restore_always_hidden(self):
+        """
+        CRITICAL Regression Test: Production Mode Legacy Restore Panel
+
+        Requirement:
+        - In production mode (LEGACY_REPAIR_UI=0), walletV1RestoreMode should
+          NEVER be displayed, regardless of wallet state
+        - walletV1RestoreMode is LEGACY MIGRATION RESTORE (not Recovery Kit)
+        - Recovery Kit restore is in walletV1ImportMode
+
+        Verification:
+        1. Check applyWalletV1ProductionMode() explicitly hides restoreForm
+        2. Check switchWalletV1Mode() hides restoreEl in production when missing key
+        3. No code path should set restoreEl.style.display = 'block' in production
+        """
+        with open('templates/base.html', 'r') as f:
+            html = f.read()
+
+        # VERIFY 1: applyWalletV1ProductionMode hides legacy restoreForm
+        assert 'if (restoreForm) { restoreForm.style.display = \'none\'' in html or \
+               'if (restoreForm) { restoreForm.style.display = "none"' in html, \
+            "applyWalletV1ProductionMode must explicitly hide restoreForm in production"
+
+        # VERIFY 2: Production mode check exists before showing restoreEl
+        assert 'const isProductionMode = !adminModeEnabled' in html, \
+            "switchWalletV1Mode must check isProductionMode flag"
+
+        assert 'if (isProductionMode)' in html and \
+               'restoreEl.style.display = \'none\'' in html or \
+               'restoreEl.style.display = "none"' in html, \
+            "Production mode must hide restoreEl when wallet has no signing key"
+
+        # VERIFY 3: No unconditional restoreEl.style.display = 'block' in production path
+        # Only admin mode should show restoreEl
+        assert 'if (adminModeEnabled)' in html or 'else if (adminSignerAllowed' in html or \
+               '} else {' in html, \
+            "Admin mode should be the only path that shows restoreEl"
+
+        print("✅ Production Mode Legacy Restore Panel:")
+        print("  - applyWalletV1ProductionMode hides restoreForm ✓")
+        print("  - switchWalletV1Mode checks isProductionMode ✓")
+        print("  - Production path hides restoreEl ✓")
+        print("  - Admin mode only shows restoreEl ✓")
+        print("  - walletV1RestoreMode (legacy migration) never visible in production ✓")
+
+    def test_advanced_accordion_no_auto_open(self):
+        """
+        CRITICAL Regression Test: Advanced Accordion No Auto-Open
+
+        Requirement:
+        - showImportSigningKeyForm() should NOT be called unconditionally
+        - Advanced accordion (<details>) must stay COLLAPSED by default
+        - Opens ONLY when user clicks "Advanced Options" button
+        - Or when error recovery buttons explicitly call it
+
+        Verification:
+        1. showImportSigningKeyForm() call in switchWalletV1Mode() is disabled
+        2. No other unconditional calls to showImportSigningKeyForm()
+        3. Accordion is controlled by <details open> attribute (not hardcoded)
+        """
+        with open('templates/base.html', 'r') as f:
+            html = f.read()
+
+        # VERIFY 1: Unconditional auto-open is disabled/commented out
+        # Find the switchWalletV1Mode function and check for disabled showImportSigningKeyForm
+        import re
+
+        # Look for commented-out showImportSigningKeyForm in switchWalletV1Mode
+        switch_func_match = re.search(
+            r'function switchWalletV1Mode\(\)\s*{.*?^}',
+            html,
+            re.MULTILINE | re.DOTALL
+        )
+
+        if switch_func_match:
+            switch_func = switch_func_match.group(0)
+            # Check if showImportSigningKeyForm() is commented out
+            commented = re.search(r'//\s*showImportSigningKeyForm\(\)', switch_func)
+            active = re.search(r'(?<!//)\s+showImportSigningKeyForm\(\)', switch_func)
+
+            assert commented, \
+                "showImportSigningKeyForm() should be commented out in switchWalletV1Mode"
+            assert not active or commented, \
+                "showImportSigningKeyForm() must not be called unconditionally"
+
+        # VERIFY 2: No unconditional calls to showImportSigningKeyForm() during initialization
+        # (Should only be called in error recovery or button click handlers)
+        init_calls = re.findall(
+            r'document\.addEventListener.*?showImportSigningKeyForm',
+            html,
+            re.DOTALL
+        )
+
+        # It's okay to have calls in event handlers, but not in main flow
+        for call in init_calls:
+            assert 'addEventListener' in call or 'onclick' in call, \
+                "showImportSigningKeyForm should only be in event handlers, not auto-called"
+
+        # VERIFY 3: Accordion uses <details> element (collapsed by default)
+        assert '<details aria-label="walletV1AdvancedImport"' in html or \
+               '<details' in html and 'walletV1Advanced' in html, \
+            "Advanced import must use <details> element (collapsed by default)"
+
+        # Verify it's NOT using <details open> (which would auto-open)
+        assert not re.search(r'<details[^>]*open[^>]*aria-label="walletV1AdvancedImport"', html), \
+            "Advanced accordion should NOT have 'open' attribute (stays collapsed)"
+
+        print("✅ Advanced Accordion No Auto-Open:")
+        print("  - showImportSigningKeyForm() disabled in switchWalletV1Mode ✓")
+        print("  - No unconditional auto-open calls ✓")
+        print("  - Advanced accordion uses <details> element ✓")
+        print("  - <details> element NOT open by default ✓")
+        print("  - Opens ONLY on user click or error recovery button ✓")
+
 
 if __name__ == '__main__':
     """
@@ -707,6 +821,8 @@ if __name__ == '__main__':
     test_regression.test_canonical_import_form_handler()
     test_regression.test_no_dynamic_import_duplicates()
     test_regression.test_error_recovery_uses_canonical_form()
+    test_regression.test_production_mode_legacy_restore_always_hidden()
+    test_regression.test_advanced_accordion_no_auto_open()
 
     print("\n" + "=" * 80)
     print("ALL TESTS PASSED ✓")

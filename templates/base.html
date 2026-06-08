@@ -1751,87 +1751,33 @@
                         </div>
                     </div>
 
-                    <!-- ADVANCED: Legacy recovery tools (hidden by default) -->
-                    <button id="walletV1AdvancedRecoveryToggle" onclick="walletV1ShowAdvancedRecovery()" style="width:100%; padding:10px; margin:12px 0; background:#333; color:#ccc; border:1px solid #666; border-radius:6px; cursor:pointer; font-size:0.9em;">
-                        ▸ Advanced Recovery Options (Legacy/Manual)
-                    </button>
+                    <!-- CANONICAL ADVANCED: Import Private Key (hidden by default) -->
+                    <details aria-label="walletV1AdvancedImport" style="margin:12px 0;">
+                        <summary style="padding:10px; background:#333; color:#ccc; border:1px solid #666; border-radius:6px; cursor:pointer; font-size:0.9em;">
+                            ⌥ Advanced: Import Private Key (Hex) [Optional]
+                        </summary>
+                        <div style="background:#1a1a2a; border:1px solid #8a6a4a; border-radius:6px; padding:12px; margin-top:8px;">
+                            <p style="font-size:0.85em; color:#9f9; margin-bottom:10px;">
+                                If you have a backup of your V1 private key hex, you can import it directly here.
+                            </p>
 
-                    <div id="walletV1AdvancedRecoverySection" style="display:none;">
-
-                    <!-- Legacy/Pledge Credential Ownership Verification -->
-                    <div id="walletV1LegacyRecoveryForm" data-wallet-legacy-repair="1" style="background:#1a2a1a; border:1px solid #00ff66; border-radius:8px; padding:15px; margin:12px 0;">
-                        <h5 style="color:#00ff66; margin-top:0;">Verify Legacy/Pledge Ownership</h5>
-                        <p style="font-size:0.85em; color:#9f9; margin-bottom:12px;">
-                            Verify your legacy wallet ownership with your pledge credentials. This confirms your identity. PIN belongs to the next step (key generation).
-                        </p>
-
-                        <div style="margin-bottom:10px;">
-                            <label style="display:block; font-size:0.9em; color:#9f9; margin-bottom:4px;">Wallet Identity (Canonical V1 Address)</label>
-                            <div style="background:#0a0a0a; border:2px solid #00ff66; border-radius:6px; padding:10px; color:#00ff66; font-size:0.85em; font-family:monospace; font-weight:bold; word-break:break-all;">
-                                <span id="walletV1CanonicalAddr" style="color:#00ff66;">loading...</span>
+                            <div style="margin-bottom:10px;">
+                                <label style="display:block; font-size:0.85em; color:#9f9; margin-bottom:4px;">Private Key (Hex)</label>
+                                <input type="password" id="walletV1ImportKeyHex" placeholder="64 hex characters" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #8a6a4a; border-radius:6px; font-size:0.85em; font-family:monospace;" />
                             </div>
-                            <p style="font-size:0.75em; color:#6f6; margin-top:4px;">This is your wallet identity. It cannot be changed.</p>
+
+                            <div style="margin-bottom:10px;">
+                                <label style="display:block; font-size:0.85em; color:#9f9; margin-bottom:4px;">PIN</label>
+                                <input type="password" id="walletV1ImportKeyPin" placeholder="4-8 digits" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #8a6a4a; border-radius:6px; font-size:0.85em;" />
+                            </div>
+
+                            <div style="display:flex; gap:8px;">
+                                <button onclick="performCanonicalImportSigningKey()" style="flex:1; padding:10px; background:#00aa66; color:#000; border:1px solid #8a6a4a; border-radius:6px; cursor:pointer; font-weight:bold; font-size:0.85em;">
+                                    ✓ Import Key
+                                </button>
+                            </div>
                         </div>
-
-                        <div style="margin-bottom:10px;">
-                            <label style="display:block; font-size:0.9em; color:#9f9; margin-bottom:4px;">Legacy THR Address</label>
-                            <input type="text" id="walletV1LegacyAddr" placeholder="THRxxxxxxxx..." style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:6px; font-size:0.85em;" />
-                        </div>
-
-                        <div style="margin-bottom:10px;">
-                            <label style="display:block; font-size:0.9em; color:#9f9; margin-bottom:4px;">Legacy Send Secret</label>
-                            <input type="password" id="walletV1SendSecret" placeholder="send_secret from pledge PDF" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:6px; font-size:0.85em;" />
-                        </div>
-
-                        <div style="margin-bottom:10px;">
-                            <label style="display:block; font-size:0.9em; color:#9f9; margin-bottom:4px;">Legacy Auth Secret (optional)</label>
-                            <input type="password" id="walletV1AuthSecret" placeholder="auth_secret or passphrase" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:6px; font-size:0.85em;" />
-                        </div>
-
-                        <div style="margin-bottom:10px;">
-                            <label style="display:block; font-size:0.9em; color:#9f9; margin-bottom:4px;">Pledge Recovery Hash/Proof (optional)</label>
-                            <input type="text" id="walletV1PledgeHash" placeholder="seed_hint or recovery proof" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:6px; font-size:0.85em;" />
-                        </div>
-
-                        <!-- PIN field hidden - PIN belongs to key generation step only -->
-                        <input type="hidden" id="walletV1RecoveryPin" value="" />
-
-                        <div style="display:flex; gap:8px; margin-top:12px;">
-                            <button onclick="performLegacyOwnershipVerification()" style="flex:1; padding:10px; background:#00aa66; color:#000; border:1px solid #00ff66; border-radius:6px; cursor:pointer; font-weight:bold;">
-                                ✓ Verify Ownership
-                            </button>
-                            <button onclick="toggleAdvancedKeyImport()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
-                                Advanced Import
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- Advanced: Raw Private Key Import (hidden by default) -->
-                    <div id="walletV1AdvancedKeyImportForm" data-wallet-legacy-repair="1" style="display:none; background:#2a1a1a; border:1px solid #8a4a4a; border-radius:8px; padding:15px; margin:12px 0;">
-                        <h5 style="color:#ff9900; margin-top:0;">Advanced: Import Private Key</h5>
-                        <p style="font-size:0.85em; color:#9f9; margin-bottom:12px; opacity:0.7;">
-                            If you have a backup of your V1 private key, you can import it directly here.
-                        </p>
-
-                        <div style="margin-bottom:10px;">
-                            <label style="display:block; font-size:0.9em; color:#9f9; margin-bottom:4px;">Private Key (Hex)</label>
-                            <input type="password" id="walletV1AdvancedKeyHex" placeholder="64 hex characters" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #8a4a4a; border-radius:6px; font-size:0.85em; font-family:monospace;" />
-                        </div>
-
-                        <div style="margin-bottom:10px;">
-                            <label style="display:block; font-size:0.9em; color:#9f9; margin-bottom:4px;">PIN</label>
-                            <input type="password" id="walletV1AdvancedKeyPin" placeholder="4-8 digits" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #8a4a4a; border-radius:6px; font-size:0.85em;" />
-                        </div>
-
-                        <div style="display:flex; gap:8px; margin-top:12px;">
-                            <button onclick="performAdvancedKeyImport()" style="flex:1; padding:10px; background:#00aa66; color:#000; border:1px solid #8a4a4a; border-radius:6px; cursor:pointer; font-weight:bold;">
-                                ✓ Import Private Key
-                            </button>
-                            <button onclick="toggleAdvancedKeyImport()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
-                                Back to Legacy Recovery
-                            </button>
-                        </div>
-                    </div>
+                    </details>
 
                     <!-- Re-Key Ceremony Section (shown after ownership verification) -->
                     <div id="walletV1RekeyCeremonyForm" data-wallet-legacy-repair="1" style="display:none; background:#1a2a2a; border:1px solid #00aaff; border-radius:8px; padding:15px; margin:12px 0;">
@@ -1860,13 +1806,10 @@
                             </div>
                         </div>
 
-                        <!-- Key Generation/Import Buttons -->
-                        <div style="display:flex; gap:8px; margin-bottom:12px;">
-                            <button onclick="walletV1GenerateNewKey()" style="flex:1; padding:10px; background:#0066cc; color:#fff; border:1px solid #00aaff; border-radius:6px; cursor:pointer; font-weight:bold;">
+                        <!-- Key Generation Button -->
+                        <div style="margin-bottom:12px;">
+                            <button onclick="walletV1GenerateNewKey()" style="width:100%; padding:10px; background:#0066cc; color:#fff; border:1px solid #00aaff; border-radius:6px; cursor:pointer; font-weight:bold;">
                                 🔑 Generate New Signing Key
-                            </button>
-                            <button onclick="toggleWalletV1ImportExisting()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
-                                Import Existing Key
                             </button>
                         </div>
 
@@ -1918,25 +1861,6 @@
                             </div>
                         </div>
 
-                        <!-- Existing Key Import (hidden by default) -->
-                        <div id="walletV1ImportExistingKeyForm" style="display:none; background:#1a1a2a; border:1px solid #8a6a4a; border-radius:6px; padding:10px; margin-bottom:12px;">
-                            <div style="margin-bottom:8px;">
-                                <label style="display:block; font-size:0.85em; color:#9f9; margin-bottom:4px;">Existing V1 Private Key (Hex)</label>
-                                <input type="password" id="walletV1ExistingKeyHex" placeholder="64 hex characters" style="width:100%; padding:8px; background:#000; color:#0f0; border:1px solid #8a6a4a; border-radius:4px; font-size:0.75em; font-family:monospace;" />
-                            </div>
-                            <div style="margin-bottom:8px;">
-                                <label style="display:block; font-size:0.85em; color:#9f9; margin-bottom:4px;">PIN</label>
-                                <input type="password" id="walletV1ExistingKeyPin" placeholder="4-8 digits" style="width:100%; padding:8px; background:#000; color:#0f0; border:1px solid #8a6a4a; border-radius:4px; font-size:0.75em;" />
-                            </div>
-                            <div style="display:flex; gap:8px;">
-                                <button onclick="walletV1ImportExistingKey()" style="flex:1; padding:8px; background:#00aa66; color:#000; border:1px solid #8a6a4a; border-radius:4px; cursor:pointer; font-weight:bold; font-size:0.85em;">
-                                    ✓ Import Key
-                                </button>
-                                <button onclick="toggleWalletV1ImportExisting()" style="flex:1; padding:8px; background:#666; color:#fff; border:1px solid #999; border-radius:4px; cursor:pointer; font-size:0.85em;">
-                                    Cancel
-                                </button>
-                            </div>
-                        </div>
 
                         <!-- Re-Key Request Status -->
                         <div id="walletV1RekeyStatusDisplay" style="display:none; background:#0a2a0a; border:1px solid #00ff66; border-radius:6px; padding:10px; margin-bottom:12px;">
@@ -6880,15 +6804,6 @@ async function performImportSigningKey() {
     }
 }
 
-function toggleAdvancedKeyImport() {
-    const advanced = document.getElementById('walletV1AdvancedKeyImportForm');
-    const legacy = document.getElementById('walletV1LegacyRecoveryForm');
-    if (advanced && legacy) {
-        const isHidden = advanced.style.display === 'none';
-        advanced.style.display = isHidden ? 'block' : 'none';
-        legacy.style.display = isHidden ? 'none' : 'block';
-    }
-}
 
 async function initializeOwnershipVerificationForm() {
     const elem = document.getElementById('walletV1CanonicalAddr');
@@ -7073,37 +6988,6 @@ async function performLegacyOwnershipVerification() {
     }
 }
 
-async function performAdvancedKeyImport() {
-    const keyHex = (document.getElementById('walletV1AdvancedKeyHex')?.value || '').trim();
-    const pin = (document.getElementById('walletV1AdvancedKeyPin')?.value || '').trim();
-    const targetAddr = walletSession.getActiveAddress ? walletSession.getActiveAddress() : localStorage.getItem('wallet_v1_address');
-
-    if (!keyHex || !pin) return alert('Private key and PIN are required');
-    if (!keyHex.match(/^[0-9a-fA-F]{64}$/)) return alert('Invalid key format. Must be 64 hex characters.');
-
-    try {
-        console.log('[AdvancedImport] Attempting import for:', targetAddr.substring(0, 10) + '...');
-
-        if (!window.WalletAuth || typeof window.WalletAuth.importSigningKeyForAddress !== 'function') {
-            return alert('Import API not available');
-        }
-
-        const result = await window.WalletAuth.importSigningKeyForAddress(keyHex, pin, targetAddr);
-        if (result.success) {
-            alert('✓ Signing key imported successfully!');
-            document.getElementById('walletV1AdvancedKeyHex').value = '';
-            document.getElementById('walletV1AdvancedKeyPin').value = '';
-            toggleAdvancedKeyImport();
-            updateHeaderWalletUi();
-            loadWalletBalances(true);
-        } else {
-            alert('Import failed: ' + (result.error || 'Unknown error'));
-        }
-    } catch(err) {
-        console.error('[AdvancedImport] Error:', err);
-        alert('Error: ' + (err.message || 'Import failed'));
-    }
-}
 
 // Re-Key Ceremony Functions
 function toggleWalletV1RekeySection() {
@@ -7140,14 +7024,6 @@ function showWalletV1RekeyCeremonyFlow() {
     initializeOwnershipVerificationForm();
 }
 
-function toggleWalletV1ImportExisting() {
-    const importForm = document.getElementById('walletV1ImportExistingKeyForm');
-    if (importForm.style.display === 'block') {
-        importForm.style.display = 'none';
-    } else {
-        importForm.style.display = 'block';
-    }
-}
 
 async function walletV1GenerateNewKey() {
     try {
@@ -7179,7 +7055,6 @@ async function walletV1GenerateNewKey() {
 
         // Show PIN entry form
         document.getElementById('walletV1PinEntryForm').style.display = 'block';
-        document.getElementById('walletV1ImportExistingKeyForm').style.display = 'none';
 
         console.log('[KeySetup] Awaiting PIN entry to encrypt and save key');
 
@@ -7189,16 +7064,16 @@ async function walletV1GenerateNewKey() {
     }
 }
 
-async function walletV1ImportExistingKey() {
-    const keyHex = (document.getElementById('walletV1ExistingKeyHex')?.value || '').trim();
-    const pin = (document.getElementById('walletV1ExistingKeyPin')?.value || '').trim();
+async function performCanonicalImportSigningKey() {
+    const keyHex = (document.getElementById('walletV1ImportKeyHex')?.value || '').trim();
+    const pin = (document.getElementById('walletV1ImportKeyPin')?.value || '').trim();
 
     if (!keyHex || !pin) return alert('Private key and PIN are required');
     if (!keyHex.match(/^[0-9a-fA-F]{64}$/)) return alert('Invalid key format. Must be 64 hex characters.');
     if (!pin.match(/^\d{4,8}$/)) return alert('PIN must be 4-8 digits');
 
     try {
-        console.log('[RekeyCeremony] Importing existing V1 key...');
+        console.log('[ImportSigningKey] Importing private key...');
 
         if (!walletSession.derivePublicKeyAndAddress) {
             return alert('Key derivation API not available');
@@ -7210,30 +7085,25 @@ async function walletV1ImportExistingKey() {
         }
 
         const { publicKey, address } = result;
+        const canonicalAddr = document.getElementById('walletV1CanonicalAddr')?.value || '';
 
-        // Display derived key for verification
-        document.getElementById('walletV1GeneratedPublicKey').value = publicKey;
-        document.getElementById('walletV1GeneratedAddress').value = address;
-        document.getElementById('walletV1GeneratedKeyDisplay').style.display = 'block';
+        console.log('[ImportSigningKey] Derived signer address: ' + address + ', canonical: ' + canonicalAddr);
 
-        const canonicalAddr = document.getElementById('walletV1CanonicalAddr').value;
-        console.log('[RekeyCeremony] Imported key derives signer address: ' + address + ', canonical wallet: ' + canonicalAddr);
-
-        // Store for re-key request
-        // Note: address will likely be DIFFERENT from canonical (this is correct for re-key)
         window.walletV1CurrentPublicKey = publicKey;
         window.walletV1CurrentAddress = address;
-        window.walletV1CurrentPrivateKey = keyHex; // For saving after approval
+        window.walletV1CurrentPrivateKey = keyHex;
 
-        // Clear import form
-        document.getElementById('walletV1ExistingKeyHex').value = '';
-        document.getElementById('walletV1ExistingKeyPin').value = '';
-        toggleWalletV1ImportExisting();
+        // Clear and collapse form
+        document.getElementById('walletV1ImportKeyHex').value = '';
+        document.getElementById('walletV1ImportKeyPin').value = '';
+        const details = document.querySelector('details[aria-label="walletV1AdvancedImport"]');
+        if (details) details.open = false;
 
-        console.log('[RekeyCeremony] Existing key imported successfully');
+        alert('✓ Key imported successfully. Signer address: ' + address);
+        console.log('[ImportSigningKey] Key imported successfully');
 
     } catch(err) {
-        console.error('[RekeyCeremony] Import error:', err);
+        console.error('[ImportSigningKey] Error:', err);
         alert('Error: ' + (err.message || 'Failed to import key'));
     }
 }
